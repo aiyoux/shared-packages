@@ -354,10 +354,10 @@
   }
 
   function normalizeDisplayAs(next: DateInformation): DisplayAsValue {
-    const raw = next.ds ?? next.display_as;
-    if (raw === 'mi' || raw === 'Minor') return 'mi';
-    if (raw === 'sm' || raw === 'Mini') return 'sm';
-    if (raw === 'n' || raw === 'None') return 'n';
+    const raw = next.ds;
+    if (raw === 'mi') return 'mi';
+    if (raw === 'sm') return 'sm';
+    if (raw === 'n') return 'n';
     return 'mj';
   }
 
@@ -387,25 +387,16 @@
   }
 
   function cloneDraftForSave(next: DateInformation): DateInformation {
-    const window = next.relevance ?? next.rl;
+    // Canonical SHORT form only (is / ds / rl / po).
+    const window = next.rl;
     const hasWindow = Boolean(window && (window.before || window.after));
-    const pin = Boolean(next.pin_when_overdue ?? next.po);
     return {
       value: cloneTimeReference(next.value),
-      is_status: Boolean(next.is_status ?? next.is),
+      is: Boolean(next.is),
       ...(next.offset_enabled ? { offset_enabled: true } : {}),
-      ...(next.display_as ? { display_as: next.display_as } : {}),
       ...(next.ds ? { ds: next.ds } : {}),
-      // Canonical relevance window; legacy rv/ri are intentionally not written
-      // back (the resolver reads `relevance` first and legacy as fallback).
-      ...(hasWindow
-        ? {
-            relevance: structuredClone(window),
-            rl: structuredClone(window)
-          }
-        : {}),
-      pin_when_overdue: pin,
-      po: pin
+      ...(hasWindow ? { rl: structuredClone(window) } : {}),
+      ...(next.po ? { po: true } : {})
     };
   }
 
@@ -697,14 +688,7 @@
     const before = choiceToBound(relevanceBefore, beforeCustomValue, beforeCustomUnit);
     const after = choiceToBound(relevanceAfter, afterCustomValue, afterCustomUnit);
 
-    // Clear legacy scalars — the canonical window supersedes them.
-    delete editor.draft.relevance_duration_minutes;
-    delete editor.draft.rv;
-    delete editor.draft.relevance_infinite;
-    delete editor.draft.ri;
-
     if (!before && !after) {
-      delete editor.draft.relevance;
       delete editor.draft.rl;
       return;
     }
@@ -713,13 +697,11 @@
       ...(before ? { before } : {}),
       ...(after ? { after } : {})
     };
-    editor.draft.relevance = window;
     editor.draft.rl = window;
   });
 
   $effect(() => {
     editor.draft.ds = displayAsValue;
-    editor.draft.display_as = displayAsValue;
   });
 
   $effect(() => {
@@ -949,7 +931,7 @@
     </div>
 
     <div class="flex flex-col gap-2">
-      <Checkbox bind:checked={editor.draft.pin_when_overdue} hint="Pins the item at the top once its scheduled time passes, regardless of the after window.">
+      <Checkbox bind:checked={editor.draft.po} hint="Pins the item at the top once its scheduled time passes, regardless of the after window.">
         Keep pinned if overdue
       </Checkbox>
     </div>

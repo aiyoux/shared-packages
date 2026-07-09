@@ -31,15 +31,16 @@
   role="radiogroup"
   aria-label={ariaLabel}
   class={cn(
-    'inline-flex items-center gap-1 rounded-[calc(var(--radius-sm)+0.1rem)] border border-border/25 bg-background p-0.5',
+    'inline-flex items-center gap-1 border border-border/25 bg-background p-0.5',
     fullWidth && 'grid w-full auto-cols-fr grid-flow-col',
     className
   )}
+  style="border-radius: calc(var(--radius-sm, 6px) + 2px);"
 >
   {#each options as option (String(option.value))}
     {@const isSelected = value === option.value}
     {@const buttonClasses = cn(
-      'inline-flex items-center justify-center gap-1.5 rounded-[var(--radius-sm)] px-2 py-1 text-[11px] font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:cursor-not-allowed disabled:opacity-45',
+      'inline-flex items-center justify-center gap-1.5 rounded-[var(--radius-sm)] px-2.5 py-1 text-xs font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:cursor-not-allowed disabled:opacity-45',
       fullWidth && 'min-w-0 w-full',
       isSelected
         ? 'bg-primary/15 text-primary font-semibold'

@@ -15,12 +15,12 @@ import type { DatePickerValue } from './date-picker.ts';
 export type AnchorType = 'nw' | 'up' | 'pr';
 export type ParentOffsetUnit = 'minute' | 'hour' | 'day' | 'month' | 'year';
 
+// Canonical SHORT form only (is / ds / rl / po) — see DateInformation in
+// module-sdk types.ts. The editor reads canonical short input and emits short.
 function blankDateInformation(): DateInformation {
   return {
     value: {},
-    is_status: false,
-    relevance_infinite: false,
-    pin_when_overdue: false
+    is: false
   };
 }
 
@@ -31,26 +31,11 @@ function cloneDateInformation(initial: DateInformation | null | undefined): Date
 
   return {
     value: cloneTimeReference(initial.value),
-    is_status: Boolean(initial.is_status ?? initial.is),
+    is: Boolean(initial.is),
     ...(initial.offset_enabled ? { offset_enabled: true } : {}),
-    ...(initial.display_as ? { display_as: initial.display_as } : {}),
     ...(initial.ds ? { ds: initial.ds } : {}),
-    ...(typeof (initial.relevance_duration_minutes ?? initial.rv) === 'number'
-      ? {
-          relevance_duration_minutes: initial.relevance_duration_minutes ?? initial.rv,
-          rv: initial.rv ?? initial.relevance_duration_minutes
-        }
-      : {}),
-    relevance_infinite: Boolean(initial.relevance_infinite ?? initial.ri),
-    ri: Boolean(initial.ri ?? initial.relevance_infinite),
-    pin_when_overdue: Boolean(initial.pin_when_overdue ?? initial.po),
-    po: Boolean(initial.po ?? initial.pin_when_overdue),
-    ...(initial.relevance ?? initial.rl
-      ? (() => {
-          const window = structuredClone((initial.relevance ?? initial.rl)!);
-          return { relevance: window, rl: window };
-        })()
-      : {})
+    ...(initial.po ? { po: true } : {}),
+    ...(initial.rl ? { rl: structuredClone(initial.rl) } : {})
   };
 }
 
