@@ -1,4 +1,5 @@
 import type { AppRuntime } from '../sync/runtime.ts';
+import { readRef, readRefList } from '../module-refs.ts';
 import type { Item } from '../types.ts';
 import { asDate, asFiniteNumber, normalizeCurrency, normalizeRecordId } from '../scheduler.ts';
 
@@ -88,7 +89,23 @@ export function shoppingListConfig(item: Item): ShoppingListConfig | null {
 
 export function shoppingLineItemConfig(item: Item): ShoppingLineItemConfig | null {
   const value = shoppingModuleSettings(item).line_item;
-  return value && typeof value === 'object' ? (value as ShoppingLineItemConfig) : null;
+  if (!value || typeof value !== 'object') return null;
+  // Record references live under the reserved refs object (module-refs.ts);
+  // surface them flat so downstream logic keeps one shape.
+  const ns = value as Record<string, unknown>;
+  const flat = (key: string) => (ns[key] as string | null | undefined) ?? null;
+  return {
+    ...(ns as ShoppingLineItemConfig),
+    list_id: readRef(ns, 'list_id') ?? flat('list_id'),
+    inventory_stock_item_id: readRef(ns, 'inventory_stock_item_id') ?? flat('inventory_stock_item_id'),
+    medication_record_id: readRef(ns, 'medication_record_id') ?? flat('medication_record_id'),
+    food_template_id: readRef(ns, 'food_template_id') ?? flat('food_template_id'),
+    recipe_id: readRef(ns, 'recipe_id') ?? flat('recipe_id'),
+    inventory_transaction_id: readRef(ns, 'inventory_transaction_id') ?? flat('inventory_transaction_id'),
+    source_record_ids: readRefList(ns, 'source_record_ids').length > 0
+      ? readRefList(ns, 'source_record_ids')
+      : (Array.isArray(ns.source_record_ids) ? (ns.source_record_ids as string[]) : [])
+  };
 }
 
 function normalizeListStatus(value: unknown): ShoppingListStatus {

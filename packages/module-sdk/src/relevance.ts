@@ -42,33 +42,20 @@ export interface ResolvedRelevance {
 }
 
 /**
- * Read an item's relevance window, preferring the canonical `relevance`/`rl`
- * field and falling back to the legacy `rv`/`ri` scalars. Returns `undefined`
- * when the item carries no relevance intent of its own (so the caller can fall
- * through to user defaults).
+ * Read an item's canonical relevance window (`rl`). Returns `undefined` when
+ * the item carries no relevance intent of its own (so the caller can fall
+ * through to user defaults). Legacy rv/ri are folded into `rl` at persistence.
  */
 export function readRelevanceWindow(info: DateInformation): RelevanceWindow | undefined {
-  const explicit = info.relevance ?? info.rl;
+  // Canonical short form only: rv/ri were folded into `rl` at persistence
+  // (canonicalizeDateInformation) and by the one-off migration.
+  const explicit = info.rl;
   if (explicit && (explicit.before || explicit.after)) return explicit;
-
-  const infinite = info.relevance_infinite === true || info.ri === true;
-  if (infinite) {
-    return { before: { type: 'inf' }, after: { type: 'inf' } };
-  }
-
-  const minutes = info.relevance_duration_minutes ?? info.rv;
-  if (typeof minutes === 'number' && Number.isFinite(minutes)) {
-    return {
-      before: { type: 'dur', minutes },
-      after: { type: 'dur', minutes }
-    };
-  }
-
   return undefined;
 }
 
 export function readPinWhenOverdue(info: DateInformation): boolean {
-  return info.pin_when_overdue === true || info.po === true;
+  return info.po === true;
 }
 
 function pickBound(

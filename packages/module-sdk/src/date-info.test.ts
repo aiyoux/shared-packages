@@ -13,7 +13,7 @@ import {
 } from './date-info.ts';
 
 const info: DateInformation = {
-  is_status: false,
+  is: false,
   value: { y: { s: { type: 'ba', v: 2026 } } }
 };
 
@@ -53,18 +53,18 @@ describe('date-info helpers', () => {
     expect(result[1]).toBe(additionals[1]);
   });
 
-  it('normalizes display and status aliases', () => {
+  it('normalizes display and status from canonical short fields', () => {
     expect(normalizeDisplayAs('Major')).toBe('mj');
     expect(normalizeDisplayAs('sm')).toBe('sm');
-    expect(displayAsOf({ ...info, display_as: 'Mini' })).toBe('sm');
+    expect(displayAsOf({ ...info, ds: 'sm' })).toBe('sm');
     expect(isStatus({ ...info, is: true })).toBe(true);
   });
 
-  it('reads relevance flags with long and short aliases', () => {
-    expect(relevanceMinutes({ ...info, rv: 30 })).toBe(30);
+  it('reads relevance flags from the canonical rl window', () => {
+    expect(relevanceMinutes({ ...info, rl: { before: { type: 'dur', minutes: 30 }, after: { type: 'dur', minutes: 30 } } })).toBe(30);
     expect(relevanceMinutes(info, 45)).toBe(45);
     expect(relevanceMinutes(info)).toBe(1440);
-    expect(isRelevanceInfinite({ ...info, ri: true })).toBe(true);
+    expect(isRelevanceInfinite({ ...info, rl: { before: { type: 'inf' }, after: { type: 'inf' } } })).toBe(true);
     expect(pinWhenOverdue({ ...info, po: true })).toBe(true);
   });
 });

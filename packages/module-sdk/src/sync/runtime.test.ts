@@ -121,7 +121,10 @@ describe('runtime snapshot reconciliation helpers', () => {
       {
         type: 'RecordPatchAdditionals',
         id: 'records:1',
-        additionals: [{ id: 'p1', type: 'pg', prog_type: { ch: 't' }, computed: false }]
+        additionals: [{ id: 'p1', type: 'pg', prog_type: { ch: 't' }, computed: false }],
+        // Merge-shaped: upserts by id + explicit removals (omission never deletes).
+        removedIds: undefined,
+        merge: true
       },
       { type: 'RecordPatchModuleSettings', id: 'records:1', moduleSettings: { status: 'done' } }
     ]);

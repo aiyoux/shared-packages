@@ -311,6 +311,7 @@ export function deriveOptimisticLiveMessages(kind: OpKind, payload: unknown): Li
     id?: unknown;
     text?: unknown;
     additionals?: unknown;
+    removed_additional_ids?: unknown;
     custom_color?: unknown;
     show_as_header?: unknown;
     module_settings?: unknown;
@@ -331,11 +332,19 @@ export function deriveOptimisticLiveMessages(kind: OpKind, payload: unknown): Li
   if (typeof update.show_as_header === 'boolean') {
     messages.push({ type: 'RecordPatchHeader', id, isHeader: update.show_as_header });
   }
-  if (Array.isArray(update.additionals)) {
+  if (Array.isArray(update.additionals) || Array.isArray(update.removed_additional_ids)) {
+    // UpdateRecord payloads are merge-shaped (upserts + explicit removals) —
+    // the applier merges into the cached array rather than replacing it, so
+    // replaying queued ops (late-joining tabs, reload) can't resurrect the
+    // old whole-array semantics.
     messages.push({
       type: 'RecordPatchAdditionals',
       id,
-      additionals: update.additionals as AdditionalWithId[]
+      additionals: (Array.isArray(update.additionals) ? update.additionals : []) as AdditionalWithId[],
+      removedIds: Array.isArray(update.removed_additional_ids)
+        ? (update.removed_additional_ids as unknown[]).map(String)
+        : undefined,
+      merge: true
     });
   }
   if (update.module_settings && typeof update.module_settings === 'object') {

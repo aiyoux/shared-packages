@@ -1,12 +1,12 @@
 import type { CacheItem } from './cache/types.ts';
-import type { Item } from './types.ts';
+import type { FetchedItem } from './types.ts';
 
 export type OptimisticCacheItemOverrides = Partial<
   Pick<CacheItem, 'is_temp' | 'dirty' | 'sync_status' | 'has_parent' | 'settings' | 'version' | 'created' | 'updated'>
 >;
 
 export function optimisticCacheItemFromItem(
-  item: Item,
+  item: FetchedItem,
   overrides: OptimisticCacheItemOverrides = {}
 ): CacheItem {
   return {
@@ -20,6 +20,7 @@ export function optimisticCacheItemFromItem(
     dirty: true,
     sync_status: 'pending',
     additionals: item.additionals,
+    computed_additionals: item.computed_additionals,
     settings: item.settings as Record<string, unknown> | undefined,
     module_settings: item.module_settings,
     permissions: item.permissions,

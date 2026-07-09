@@ -11,13 +11,15 @@
  * SurrealDB at CLONE_PARITY_DB_URL (default: http://127.0.0.1:8000) and diffs the resulting records, edges and
  * group memberships (normalised by copied_from_record, ignoring ids/times).
  *
- * Requires SurrealDB on CLONE_PARITY_DB_URL / :8000. When unreachable the whole suite is skipped
- * so ordinary `npm test` / CI without a DB stays green. Run explicitly with:
+ * Requires SurrealDB on CLONE_PARITY_DB_URL / :8000 AND a modular-app
+ * checkout for the surql runtime (see surql-workspace.ts). When either is
+ * missing the whole suite is skipped so ordinary `npm test` / CI without a DB
+ * stays green. Run explicitly with:
  *   npm run test:clone-parity
  */
 import { beforeAll, afterAll, describe, expect, it, vi } from 'vitest';
-import fs from 'node:fs/promises';
 import path from 'node:path';
+import { loadManifestRuntime, resolveSurqlWorkspaceRoot } from './surql-workspace.ts';
 
 // Persistence is IndexedDB-backed; no-op it so the engine runs in node and
 // pushes the in-memory queued op straight to the DB (mirrors engine.test.ts).
@@ -32,7 +34,7 @@ vi.mock('../cache/persist.ts', () => ({
 const DB_URL = process.env.CLONE_PARITY_DB_URL ?? 'http://127.0.0.1:8000';
 const NS = 'db';
 const DB = `clone_parity_${Date.now()}`;
-const WORKSPACE_ROOT = path.resolve(__dirname, '../../../../../..');
+const WORKSPACE_ROOT = resolveSurqlWorkspaceRoot(__dirname);
 
 let token = '';
 
@@ -106,42 +108,21 @@ function lastResult(payload: any[]): any {
   return null;
 }
 
-async function loadManifestRuntime(): Promise<void> {
-  const manifestPath = path.join(WORKSPACE_ROOT, 'surql/manifest.toml');
-  const toml = await fs.readFile(manifestPath, 'utf8');
-  // Only [[runtime]] entries are loadable functions/schema, in manifest order.
-  // Other sections ([[test]], [[cleanup]], …) must be ignored.
-  const paths: string[] = [];
-  let inRuntime = false;
-  for (const line of toml.split('\n')) {
-    const section = line.match(/^\s*\[\[(\w+)\]\]/);
-    if (section) { inRuntime = section[1] === 'runtime'; continue; }
-    if (!inRuntime) continue;
-    const m = line.match(/^\s*path\s*=\s*"([^"]+)"/);
-    if (m) paths.push(m[1]);
-  }
-  for (const rel of paths) {
-    const file = path.join(WORKSPACE_ROOT, rel);
-    const body = await fs.readFile(file, 'utf8').catch(() => null);
-    if (body) await sql(body);
-  }
-}
-
 beforeAll(async () => {
-  if (!dbReachable) return;
+  if (!dbReachable || !WORKSPACE_ROOT) return;
   token = await signin();
   await sql(`DEFINE NAMESPACE IF NOT EXISTS ${NS};`, { ns: false });
   await sql(`USE NS ${NS}; DEFINE DATABASE IF NOT EXISTS ${DB};`, { ns: false });
-  await loadManifestRuntime();
+  await loadManifestRuntime(WORKSPACE_ROOT, sql);
 }, 120_000);
 
 afterAll(async () => {
-  if (dbReachable) {
+  if (dbReachable && WORKSPACE_ROOT) {
     await sql(`REMOVE DATABASE ${DB};`).catch(() => {});
   }
 });
 
-describe.skipIf(!dbReachable || process.env.SKIP_CLONE_PARITY === '1')('clone parity: server vs client', () => {
+describe.skipIf(!dbReachable || !WORKSPACE_ROOT || process.env.SKIP_CLONE_PARITY === '1')('clone parity: server vs client', () => {
   it('produces structurally identical clone trees across all three clone_setting modes', async () => {
     // ---- Seed a template tree -------------------------------------------------
     // root (container) ─ A (default, in scope GRP)
@@ -208,8 +189,10 @@ describe.skipIf(!dbReachable || process.env.SKIP_CLONE_PARITY === '1')('clone pa
     // ---- Client path (real applyExecTemplateAction + real engine) -------------
     const { createAppCache } = await import('../cache/store.svelte.ts');
     const { createSyncEngine } = await import('./engine.ts');
+    // module-exec lives in the app repo, not this package — reach it through
+    // the resolved workspace root (same reason as the surql manifest).
     const { applyExecTemplateAction } = await import(
-      '../../../../../module-exec/src/exec-apply-template-action.ts'
+      path.join(WORKSPACE_ROOT!, 'repos/module-exec/src/exec-apply-template-action.ts')
     );
 
     const cache = createAppCache();

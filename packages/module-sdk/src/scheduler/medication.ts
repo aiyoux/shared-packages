@@ -1,4 +1,5 @@
 import type { Item } from '../types.ts';
+import { readRef } from '../module-refs.ts';
 import type { ScheduleCompilerContext, ProjectedOccurrence, ProjectionQuery, ProjectionWindow } from '../scheduler.ts';
 import {
   medicationModuleSettings,
@@ -64,10 +65,11 @@ export function deriveMedicationStates(
   for (const item of items) {
       const medication = medicationModuleSettings(item).medication;
       if (!medication || typeof medication !== 'object') continue;
-      const config = medication as MedicationScheduleConfig;
+      const config = medication as MedicationScheduleConfig & Record<string, unknown>;
       if (config.active === false) continue;
 
-      const linkedStockId = normalizeRecordId(config.inventory_stock_item_id ?? null);
+      // Record references live under the reserved refs object (module-refs.ts).
+      const linkedStockId = normalizeRecordId(readRef(config, 'inventory_stock_item_id') ?? config.inventory_stock_item_id ?? null);
       const linkedStock = linkedStockId ? stockStates.get(linkedStockId) : null;
       const unitsOnHand =
         linkedStock?.current_quantity ?? asFiniteNumber(config.current_units_on_hand ?? null);

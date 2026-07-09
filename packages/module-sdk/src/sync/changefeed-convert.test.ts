@@ -57,6 +57,14 @@ describe('recordCoreFromRow', () => {
   it('rejects non-records ids', () => {
     expect(recordCoreFromRow({ id: 'graph_child_of:x' })).toBeNull();
   });
+  it('carries computed_additionals (mergeItem strips absent keys — same hazard as lineage)', () => {
+    const value = [{ id: 'c1', type: 'pg', prog_type: { ch: 't' }, computed: true }];
+    const core = recordCoreFromRow({ id: 'records:r1', text: 'hi', computed_additionals: value });
+    expect(core?.computed_additionals).toEqual(value);
+    // Non-array garbage is dropped rather than poisoning the cache shape.
+    const junk = recordCoreFromRow({ id: 'records:r2', text: 'x', computed_additionals: 'nope' });
+    expect(junk?.computed_additionals).toBeUndefined();
+  });
   it('omits absent timestamps so mergeItem preserves cached values', () => {
     const core = recordCoreFromRow({ id: 'records:r1', text: 't' });
     expect(core?.created).toBeUndefined();

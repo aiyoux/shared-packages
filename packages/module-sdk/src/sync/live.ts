@@ -32,7 +32,15 @@ export type LiveBusMsg =
   | { type: 'RecordPatchColor'; id: string; color: number }
   | { type: 'RecordPatchHeader'; id: string; isHeader: boolean }
   | { type: 'RecordPatchModuleSettings'; id: string; moduleSettings: Record<string, unknown> }
-  | { type: 'RecordPatchAdditionals'; id: string; additionals: AdditionalWithId[] }
+  | {
+      type: 'RecordPatchAdditionals';
+      id: string;
+      /** merge=true: per-id upserts; merge absent: legacy full-array replace. */
+      additionals: AdditionalWithId[];
+      /** Ids to delete (merge mode) — omission never deletes. */
+      removedIds?: string[];
+      merge?: boolean;
+    }
   | { type: 'RecordSyncStatus'; id: string; status: string; error?: string }
   /**
    * Mirror a sync-engine Op lifecycle change to other tabs. The reactive ops

@@ -24,11 +24,13 @@ function serverAcceptsTransactionAdditional(tx: any): boolean {
   return currency !== '' && Number.isFinite(amountMinor) && amountMinor >= 0 && (dc === 'debit' || dc === 'credit');
 }
 
+// Mirrors fn::is_valid_account_balance_additional: client-authored
+// account_balance entries must be account MARKERS (mode: 'rollup', non-empty
+// currency, no value fields). The balance VALUE is server-owned.
 function serverAcceptsAccountBalanceAdditional(ab: any): boolean {
   if (!ab || ab.type !== 'account_balance') return false;
   const currency = String(ab.currency ?? '').toUpperCase();
-  const computed = ab.computed === true;
-  return currency !== '' && computed;
+  return currency !== '' && ab.mode === 'rollup' && ab.balance_minor === undefined;
 }
 
 describe('money ledger derivation', () => {
@@ -40,6 +42,14 @@ describe('money ledger derivation', () => {
         additionals: [
           {
             id: 'bal-1',
+            type: 'account_balance',
+            mode: 'rollup',
+            currency: 'USD'
+          } as any
+        ],
+        computed_additionals: [
+          {
+            id: 'bal-v-1',
             type: 'account_balance',
             currency: 'USD',
             balance_minor: 0,
@@ -439,10 +449,13 @@ describe('money ⇄ server balance-propagation contract', () => {
     expect(serverAcceptsTransactionAdditional(tx)).toBe(true);
   });
 
-  it('emits a computed account_balance additional the server materializes onto accounts', () => {
-    const balance = buildAccountBalanceAdditional({ currency: 'usd', balance_minor: 0 });
-    expect(serverAcceptsAccountBalanceAdditional(balance)).toBe(true);
-    expect((balance as any).computed).toBe(true);
+  it('emits an account_balance MARKER the server accepts (value stays server-owned)', () => {
+    const marker = buildAccountBalanceAdditional({ currency: 'usd' });
+    expect(serverAcceptsAccountBalanceAdditional(marker)).toBe(true);
+    expect((marker as any).mode).toBe('rollup');
+    expect((marker as any).currency).toBe('USD');
+    expect((marker as any).computed).toBeUndefined();
+    expect((marker as any).balance_minor).toBeUndefined();
   });
 
   it('rejects malformed transaction additionals (guards against silent rollup breakage)', () => {
@@ -455,7 +468,7 @@ describe('money ⇄ server balance-propagation contract', () => {
   });
 
   it('rejects a non-computed account_balance (server only rolls up computed:true)', () => {
-    expect(serverAcceptsAccountBalanceAdditional({ type: 'account_balance', currency: 'USD', computed: false })).toBe(false);
-    expect(serverAcceptsAccountBalanceAdditional({ type: 'account_balance', currency: '', computed: true })).toBe(false);
+    expect(serverAcceptsAccountBalanceAdditional({ type: 'account_balance', currency: 'USD', balance_minor: 5, computed: true })).toBe(false);
+    expect(serverAcceptsAccountBalanceAdditional({ type: 'account_balance', currency: '', mode: 'rollup' })).toBe(false);
   });
 });

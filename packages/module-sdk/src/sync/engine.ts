@@ -7,6 +7,8 @@ import type { LogLevel } from './logger.ts';
 import { createLogger } from './logger.ts';
 import { buildSurrealStatement } from './surrealql.ts';
 import { MINUTE_MS } from '../time.ts';
+import { mergeAdditionalsLocal } from '../additionals-mutate.ts';
+import type { AdditionalWithId } from '../types.ts';
 
 export interface SyncEngineConfig {
   url: string;
@@ -106,9 +108,38 @@ function normalizeDateAdditionalForSurreal(additional: unknown): unknown {
   };
 }
 
+function stampPayloadAdditionals(payload: unknown, kind: OpKind): void {
+  if (!payload || typeof payload !== 'object') return;
+  const stampList = (value: unknown) => {
+    if (!Array.isArray(value)) return;
+    const nowIso = new Date().toISOString();
+    for (const entry of value) {
+      if (entry && typeof entry === 'object' && (entry as Record<string, unknown>).updated_at == null) {
+        (entry as Record<string, unknown>).updated_at = nowIso;
+      }
+    }
+  };
+  if (kind === 'UpdateRecord' || kind === 'CreateRecord') {
+    stampList((payload as Record<string, unknown>).additionals);
+  } else if (kind === 'UpdateRecordsBatch') {
+    const records = (payload as { records?: unknown }).records;
+    if (Array.isArray(records)) {
+      for (const record of records) {
+        if (record && typeof record === 'object') stampList((record as Record<string, unknown>).additionals);
+      }
+    }
+  }
+}
+
 function normalizeAdditionalsForSurreal(value: unknown): unknown {
   if (!Array.isArray(value)) return value;
-  return value.map((additional) => normalizeDateAdditionalForSurreal(additional));
+  // Server-computed entries must never be queued: rollup values live in the
+  // server-owned computed_additionals field, and the ingress chokepoint
+  // (fn::fix_additional_ids) would strip them anyway. Filtering here keeps
+  // payloads honest and optimistic derivations consistent.
+  return value
+    .filter((additional) => !(additional && typeof additional === 'object' && (additional as Record<string, unknown>).computed === true))
+    .map((additional) => normalizeDateAdditionalForSurreal(additional));
 }
 
 function is_statement_result(value: unknown): value is SurrealSqlStatement {
@@ -332,6 +363,12 @@ function assertNever(_value: never): never {
   throw new Error('Unhandled live bus message');
 }
 
+// Structural graph/op keys remapped ANYWHERE in a payload. Module-specific
+// record references do NOT belong here: inside module_settings, references
+// live under reserved `refs: {}` objects whose every string value (and string
+// array element) is remapped blindly — see ref_child_scope below and
+// module-refs.ts. This replaces the old ever-growing per-module key whitelist,
+// whose forgotten entries left temp ids dangling forever.
 const REFERENCE_ID_KEYS = new Set([
   'id',
   'in',
@@ -349,19 +386,32 @@ const REFERENCE_ID_KEYS = new Set([
   'tempId',
   'realId',
   'groupId',
-  'memberId',
-  'list_id',
-  'account_id',
-  'stock_item_id',
-  'inventory_stock_item_id',
-  'inventory_transaction_id',
-  'source_record_id',
-  'source_recipe_id',
-  'source_template_id',
-  'source_planned_id'
+  'memberId'
 ]);
 
-function rewrite_reference_ids(value: unknown, oldId: string, newId: string): boolean {
+/**
+ * Traversal scope for reference remapping:
+ *  - 'default':  structural whitelist applies; entering a `module_settings`
+ *                key switches to 'settings'.
+ *  - 'settings': module-private blob — NOTHING is remapped except inside a
+ *                reserved `refs` object.
+ *  - 'refs':     every string value / string array element is a record ref.
+ */
+type RefScope = 'default' | 'settings' | 'refs';
+
+function ref_child_scope(scope: RefScope, key: string): RefScope {
+  if (scope === 'default') return key === 'module_settings' ? 'settings' : 'default';
+  if (scope === 'settings') return key === 'refs' ? 'refs' : 'settings';
+  return 'refs';
+}
+
+function is_ref_slot(scope: RefScope, key: string): boolean {
+  if (scope === 'refs') return true;
+  if (scope === 'settings') return false;
+  return REFERENCE_ID_KEYS.has(key);
+}
+
+function rewrite_reference_ids(value: unknown, oldId: string, newId: string, scope: RefScope = 'default'): boolean {
   if (!value || typeof value !== 'object') {
     return false;
   }
@@ -369,36 +419,47 @@ function rewrite_reference_ids(value: unknown, oldId: string, newId: string): bo
   let changed = false;
 
   if (Array.isArray(value)) {
+    // Inside a refs object, string array elements are record refs too
+    // (e.g. shopping line_item refs.source_record_ids).
+    if (scope === 'refs') {
+      for (let index = 0; index < value.length; index += 1) {
+        if (value[index] === oldId) {
+          value[index] = newId;
+          changed = true;
+        }
+      }
+    }
     for (const entry of value) {
-      changed = rewrite_reference_ids(entry, oldId, newId) || changed;
+      changed = rewrite_reference_ids(entry, oldId, newId, scope) || changed;
     }
     return changed;
   }
 
   const record = value as Record<string, unknown>;
   for (const [key, entry] of Object.entries(record)) {
-    if (typeof entry === 'string' && entry === oldId && REFERENCE_ID_KEYS.has(key)) {
+    if (typeof entry === 'string' && entry === oldId && is_ref_slot(scope, key)) {
       record[key] = newId;
       changed = true;
       continue;
     }
 
     if (entry && typeof entry === 'object') {
-      changed = rewrite_reference_ids(entry, oldId, newId) || changed;
+      changed = rewrite_reference_ids(entry, oldId, newId, ref_child_scope(scope, key)) || changed;
     }
   }
 
   return changed;
 }
 
-function has_reference_id(value: unknown, targetId: string): boolean {
+function has_reference_id(value: unknown, targetId: string, scope: RefScope = 'default'): boolean {
   if (!value || typeof value !== 'object') {
     return false;
   }
 
   if (Array.isArray(value)) {
+    if (scope === 'refs' && value.some((entry) => entry === targetId)) return true;
     for (const entry of value) {
-      if (has_reference_id(entry, targetId)) return true;
+      if (has_reference_id(entry, targetId, scope)) return true;
     }
     return false;
   }
@@ -407,12 +468,12 @@ function has_reference_id(value: unknown, targetId: string): boolean {
   for (const key in record) {
     if (Object.hasOwn(record, key)) {
       const entry = record[key];
-      if (typeof entry === 'string' && entry === targetId && REFERENCE_ID_KEYS.has(key)) {
+      if (typeof entry === 'string' && entry === targetId && is_ref_slot(scope, key)) {
         return true;
       }
 
       if (entry && typeof entry === 'object') {
-        if (has_reference_id(entry, targetId)) return true;
+        if (has_reference_id(entry, targetId, ref_child_scope(scope, key))) return true;
       }
     }
   }
@@ -433,14 +494,19 @@ function collect_intra_batch_reference_paths(
   value: unknown,
   tempIdToIdx: Map<string, number>,
   path = '',
-  out: Array<{ path: string; targetIdx: number }> = []
+  out: Array<{ path: string; targetIdx: number }> = [],
+  scope: RefScope = 'default'
 ): Array<{ path: string; targetIdx: number }> {
   if (!value || typeof value !== 'object') return out;
 
   if (Array.isArray(value)) {
-    value.forEach((entry, index) =>
-      collect_intra_batch_reference_paths(entry, tempIdToIdx, `${path}[${index}]`, out)
-    );
+    value.forEach((entry, index) => {
+      if (scope === 'refs' && typeof entry === 'string' && tempIdToIdx.has(entry)) {
+        out.push({ path: `${path}[${index}]`, targetIdx: tempIdToIdx.get(entry)! });
+        return;
+      }
+      collect_intra_batch_reference_paths(entry, tempIdToIdx, `${path}[${index}]`, out, scope);
+    });
     return out;
   }
 
@@ -451,41 +517,46 @@ function collect_intra_batch_reference_paths(
       typeof entry === 'string' &&
       key !== 'id' &&
       key !== 'tempId' &&
-      REFERENCE_ID_KEYS.has(key) &&
+      is_ref_slot(scope, key) &&
       tempIdToIdx.has(entry)
     ) {
       out.push({ path: childPath, targetIdx: tempIdToIdx.get(entry)! });
       continue;
     }
     if (entry && typeof entry === 'object') {
-      collect_intra_batch_reference_paths(entry, tempIdToIdx, childPath, out);
+      collect_intra_batch_reference_paths(entry, tempIdToIdx, childPath, out, ref_child_scope(scope, key));
     }
   }
 
   return out;
 }
 
-function collect_temp_reference_ids(value: unknown, found = new Set<string>()): Set<string> {
+function collect_temp_reference_ids(value: unknown, found = new Set<string>(), scope: RefScope = 'default'): Set<string> {
   if (!value || typeof value !== 'object') {
     return found;
   }
 
   if (Array.isArray(value)) {
+    if (scope === 'refs') {
+      for (const entry of value) {
+        if (typeof entry === 'string' && entry.startsWith('temp:')) found.add(entry);
+      }
+    }
     for (const entry of value) {
-      collect_temp_reference_ids(entry, found);
+      collect_temp_reference_ids(entry, found, scope);
     }
     return found;
   }
 
   const record = value as Record<string, unknown>;
   for (const [key, entry] of Object.entries(record)) {
-    if (typeof entry === 'string' && entry.startsWith('temp:') && REFERENCE_ID_KEYS.has(key)) {
+    if (typeof entry === 'string' && entry.startsWith('temp:') && is_ref_slot(scope, key)) {
       found.add(entry);
       continue;
     }
 
     if (entry && typeof entry === 'object') {
-      collect_temp_reference_ids(entry, found);
+      collect_temp_reference_ids(entry, found, ref_child_scope(scope, key));
     }
   }
 
@@ -638,6 +709,10 @@ export function createSyncEngine(
       typeof (cache as any).clonePlain === 'function'
         ? (cache as any).clonePlain(payload)
         : payload;
+    // Stamp per-entry updated_at NOW (queue = edit time), not at flush: an
+    // offline queue can drain hours later, and fn::merge_additionals' per-id
+    // LWW must see when the user actually edited, not when the op arrived.
+    stampPayloadAdditionals(plainPayload, kind);
     const op: Op = {
       id: generate_op_id(),
       kind,
@@ -775,6 +850,21 @@ export function createSyncEngine(
       // is authoritative and typed as a SurrealDB datetime.
       delete content.created;
       delete content.updated;
+      // The record's own identity is assigned by SurrealDB — `CREATE records
+      // CONTENT` with no `id` yields a server-assigned random id, which
+      // `temp_ids` (below) reads back and `cache.remap_id` pairs with the
+      // caller's `record.tempId`. Strip any `id` the caller put on `content`
+      // (optimistic clones carry `id: temp:…` as the local placeholder + the
+      // intra-batch reference key is tracked separately via `record.tempId`).
+      // Without this, SurrealDB persists the temp string as the record id →
+      // permanent `records:`temp:⟨uuid⟩`` rows (records is SCHEMALESS, so it
+      // accepts the string id and backtick-quotes it). Mirrors build_op_vars
+      // (CreateRecord, line ~2008) and buildUpdateRecordsBatchSql (line ~1300).
+      delete content.id;
+      // Server-owned rollup values must not be cloned from the cached source
+      // item — the server re-derives them (fn::recompute_computed_additionals
+      // + edge kicks) once the batch's records and edges exist.
+      delete content.computed_additionals;
       vars[varName] = {
         ...content,
         // Retry-idempotency key (NOT echo suppression — see note near
@@ -794,6 +884,9 @@ export function createSyncEngine(
       lines.push(`  UPDATE $r_id_${index} MERGE { created: time::now(), updated: time::now() };`);
       lines.push(`  IF $r_${index}.additionals != NONE {`);
       lines.push(`    UPDATE $r_id_${index} SET additionals = fn::fix_additional_ids($r_${index}.additionals);`);
+      // Self-derive rollup marker values (computed entries never arrive from
+      // the client). Parent-side recomputes happen via the edge kicks.
+      lines.push(`    fn::recompute_computed_additionals($r_id_${index});`);
       lines.push(`  };`);
       if (recordPerms && recordPerms.length > 0) {
         const permsVarName = `perms_${index}`;
@@ -1295,6 +1388,8 @@ export function createSyncEngine(
       if (Array.isArray(content.additionals)) {
         content.additionals = normalizeAdditionalsForSurreal(content.additionals);
       }
+      // Server-owned field — never part of a client MERGE body.
+      delete (content as Record<string, unknown>).computed_additionals;
       // `id` is the UPDATE target — never part of the MERGE body (SurrealDB
       // rejects an `id` field when a specific record is targeted).
       delete (content as Record<string, unknown>).id;
@@ -1888,6 +1983,7 @@ export function createSyncEngine(
           UPDATE $created.id MERGE { created: time::now(), updated: time::now() };
           IF $created.additionals != NONE {
             UPDATE $created.id SET additionals = fn::fix_additional_ids($created.additionals);
+            fn::recompute_computed_additionals($created.id);
           };
           IF $perms != NONE AND $perms != NULL AND array::len($perms) > 0 {
             UPDATE $created.id MERGE { permissions: $perms.map(|$p| { r: $p.r, u: type::record($p.u) }) };
@@ -1900,18 +1996,28 @@ export function createSyncEngine(
         // round trip so computed ancestors recalculate atomically. Server-side
         // events don't fire on records UPDATE by design (see progress.surql),
         // so this call is the only thing that keeps computed parents in sync.
+        // Additionals travel OUTSIDE $payload ($incoming_additionals /
+        // $removed_additional_ids, peeled in build_op_vars): the leading
+        // MERGE $payload must never whole-array overwrite the stored array —
+        // fn::merge_additionals applies the per-id tombstone merge instead
+        // (upserts by id + explicit removals; omission never deletes).
         return `
           LET $before_additionals = (SELECT VALUE additionals FROM type::record($id))[0];
           UPDATE type::record($id) MERGE $payload;
           UPDATE type::record($id) MERGE { updated: time::now() };
-          IF $payload.additionals != NONE {
-            UPDATE type::record($id) SET additionals = fn::fix_additional_ids($payload.additionals);
+          IF $incoming_additionals != NONE OR $removed_additional_ids != NONE {
+            UPDATE type::record($id) SET additionals = fn::merge_additionals(
+              additionals,
+              IF $incoming_additionals = NONE { [] } ELSE { fn::fix_additional_ids($incoming_additionals) },
+              $removed_additional_ids
+            );
           };
           IF $perms != NONE AND $perms != NULL AND array::len($perms) > 0 {
             UPDATE type::record($id) MERGE { permissions: $perms.map(|$p| { r: $p.r, u: type::record($p.u) }) };
           };
-          IF $payload.additionals != NONE {
+          IF $incoming_additionals != NONE OR $removed_additional_ids != NONE {
             LET $after_additionals = (SELECT VALUE additionals FROM type::record($id))[0];
+            fn::recompute_computed_additionals(type::record($id));
             fn::propagate_progress_change(type::record($id));
             fn::propagate_duration_change(type::record($id));
             fn::propagate_distance_change(type::record($id));
@@ -1994,6 +2100,8 @@ export function createSyncEngine(
     // permission check (see comment in `build_op_sql` for `CreateRecord`).
     // The follow-up cast happens in SQL via `$perms` after the row exists.
     let perms: unknown = undefined;
+    let incomingAdditionals: unknown = undefined;
+    let removedAdditionalIds: unknown = undefined;
     if (op.kind === 'CreateRecord' || op.kind === 'UpdateRecord') {
       if (Array.isArray(sanitized.permissions)) {
         perms = normalizePermissionsForSurreal(sanitized.permissions, `${op.kind}.permissions`);
@@ -2001,6 +2109,23 @@ export function createSyncEngine(
       }
       if (Array.isArray(sanitized.additionals)) {
         sanitized.additionals = normalizeAdditionalsForSurreal(sanitized.additionals);
+      }
+      // computed_additionals is server-owned: a client copy in the payload
+      // would be persisted verbatim by CREATE / UPDATE MERGE and clobber the
+      // server's rollup values. Never send it.
+      delete sanitized.computed_additionals;
+    }
+    if (op.kind === 'UpdateRecord') {
+      // Peel additionals OUT of the MERGE body: the leading `UPDATE … MERGE
+      // $payload` would whole-array overwrite before fn::merge_additionals
+      // runs. They travel as dedicated vars instead (see build_op_sql).
+      if (Array.isArray(sanitized.additionals)) {
+        incomingAdditionals = sanitized.additionals;
+        delete sanitized.additionals;
+      }
+      if (Array.isArray(sanitized.removed_additional_ids)) {
+        removedAdditionalIds = (sanitized.removed_additional_ids as unknown[]).map(String);
+        delete sanitized.removed_additional_ids;
       }
     }
 
@@ -2076,7 +2201,9 @@ export function createSyncEngine(
       out: payload?.out,
       order: payload?.order,
       op_id: op.id,
-      perms
+      perms,
+      incoming_additionals: incomingAdditionals,
+      removed_additional_ids: removedAdditionalIds
     };
   }
 
@@ -2157,7 +2284,18 @@ export function createSyncEngine(
         cache.patch_item_module_settings(msg.id, msg.moduleSettings);
         break;
       case 'RecordPatchAdditionals':
-        cache.patch_item_additionals(msg.id, msg.additionals);
+        if (msg.merge) {
+          // Merge-shaped optimistic patch (mirrors fn::merge_additionals):
+          // upsert by id into the cached array, then apply explicit removals.
+          // The cache patch itself stays full-array.
+          const cached = cache.getItem(msg.id) as { additionals?: AdditionalWithId[] } | undefined;
+          cache.patch_item_additionals(
+            msg.id,
+            mergeAdditionalsLocal(cached?.additionals, msg.additionals, msg.removedIds ?? [])
+          );
+        } else {
+          cache.patch_item_additionals(msg.id, msg.additionals);
+        }
         break;
       case 'RecordSyncStatus':
         cache.update_sync_status(msg.id, msg.status as any);

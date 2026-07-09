@@ -4,7 +4,21 @@ export interface Item {
   text: string;
   markup?: string;
   children?: string[];
+  /**
+   * User-authored typed entries. NEVER contains server-computed values —
+   * rollup opt-in is an authored `mode: 'rollup'` marker entry, and the
+   * derived value lives in `computed_additionals`. The sync ingress
+   * (fn::fix_additional_ids) strips any `computed: true` entry a client
+   * sends.
+   */
   additionals?: AdditionalWithId[];
+  /**
+   * Server-owned rollup values (pg/duration/distance/stock_level/
+   * account_balance with `computed: true`). Read-only on the client: written
+   * exclusively by the server rollup modules; any client write is ignored.
+   * Read via `readComputedAdditionals` — never hand-roll access.
+   */
+  computed_additionals?: AdditionalWithId[];
   has_parent?: boolean;
   show_as_header?: boolean;
   parent?: string;
@@ -42,11 +56,25 @@ export interface Item {
   custom_color?: number;
   settings?: ItemSettings;
   module_settings?: Record<string, unknown>;
-  // Fetch result items (inlined or as IDs)
-  graph_children?: Item[];
+}
+
+/**
+ * A record as returned by a fetch/graph query — the stored `Item` plus the
+ * relation fields that only exist when a query explicitly joined them
+ * (`AS grouping`, `AS connections`, graph traversals, permission joins).
+ *
+ * Functions that need loaded relations must take `FetchedItem`, not `Item`,
+ * so the type system tracks which fetch paths hydrated them: on a plain
+ * `Item` these fields don't exist at all, and on a `FetchedItem` `undefined`
+ * means "not loaded by this query" — which is NOT the same as "empty".
+ * (See the permission-enrichment gotcha: some fetch paths join `user_public`
+ * for username/avatar and some don't.)
+ */
+export interface FetchedItem extends Item {
+  graph_children?: FetchedItem[];
   permissions?: ItemPermissions[];
-  grouping?: Item[];
-  connections?: Item[];
+  grouping?: FetchedItem[];
+  connections?: FetchedItem[];
 }
 
 export interface ItemSettings {
@@ -65,7 +93,29 @@ export interface ItemPermissions {
   user_icon_small?: string;
 }
 
+/**
+ * Authored opt-in to a server-side rollup: the record's derived value of the
+ * marked type is computed from descendants into `computed_additionals`. The
+ * marker carries the user CONFIG only (base type, weight, unit, currency…),
+ * never a value.
+ */
+export type RollupMarkerAdditional = {
+  type: 'pg' | 'duration' | 'distance' | 'stock_level' | 'account_balance';
+  mode: 'rollup';
+  weight?: number;
+  desc?: string | null;
+  /** pg: configured base/fallback progress type. */
+  base_prog_type?: { ch?: string; pct?: number };
+  /** pg: 'usr' (own base) or 'par' (inherit closest parent's type). */
+  offset_base?: 'usr' | 'par';
+  /** duration/distance: display unit for the computed value. */
+  unit?: string;
+  /** account_balance: the declared account currency. */
+  currency?: string;
+};
+
 export type AdditionalValue =
+  | RollupMarkerAdditional
   | { type: 'pg'; prog_type: { ch?: string; pct?: number }; weight?: number; computed?: boolean; desc?: string | null }
   | { type: 'date'; date_info: DateInformation; source_additional_id?: string }
   | { type: 'distance'; value: number; unit: string; meters: number; computed?: boolean; desc?: string | null }
@@ -78,10 +128,20 @@ export type AdditionalWithId = AdditionalValue & {
   id: string;
 };
 
-// Date specific additionals
+// Date specific additionals.
+//
+// CANONICAL SHORT FORM ONLY. The stored (DB) and in-code shape uses the short
+// field names exclusively: `is` (status), `ds` (display), `rl` (relevance
+// window), `po` (pin-when-overdue). The legacy LONG fields (is_status /
+// display_as / relevance / relevance_duration_minutes / relevance_infinite /
+// pin_when_overdue) and the `rv`/`ri` scalars are DEAD everywhere except the
+// single canonicalizer (`canonicalizeDateInformation` in
+// time-reference-normalize.ts, input typed `LegacyDateInfoInput`). The server
+// ingress (fn::canonicalize_date_info) and a one-off migration guarantee the
+// DB never stores the long form, so all readers assume short.
 export interface DateInformation {
   value: TimeReference;
-  is_status: boolean;
+  /** Status flag (this date represents a status milestone). */
   is?: boolean;
   /**
    * UI intent marker for anchor-relative dates. A zero-day offset resolves the
@@ -89,24 +149,17 @@ export interface DateInformation {
    * explicitly enabled when `value` itself cannot distinguish those states.
    */
   offset_enabled?: boolean;
-  display_as?: 'Major' | 'Minor' | 'Mini' | 'None' | 'mj' | 'mi' | 'sm' | 'n';
+  /** Display prominence: Major / Minor / Mini / None. */
   ds?: 'mj' | 'mi' | 'sm' | 'n';
-  relevance_duration_minutes?: number;
-  rv?: number;
-  relevance_infinite?: boolean;
-  ri?: boolean;
-  pin_when_overdue?: boolean;
-  po?: boolean;
   /**
-   * Canonical relevance model (supersedes the legacy `rv`/`ri` scalars). Holds a
-   * separate bound for the `before` (how early the item surfaces, relative to
-   * its resolved start) and `after` (how long it lingers, relative to its
-   * resolved end) sides. Legacy scalars are still read when this is absent — see
-   * `readRelevanceWindow` in `relevance.ts`.
+   * Relevance window: separate bounds for the `before` (how early the item
+   * surfaces, relative to its resolved start) and `after` (how long it lingers,
+   * relative to its resolved end) sides. Supersedes the legacy rv/ri scalars,
+   * which the canonicalizer folds into this.
    */
-  relevance?: RelevanceWindow;
-  /** Short alias for `relevance`, mirroring the rv/ri short-field convention. */
   rl?: RelevanceWindow;
+  /** Pin the item while overdue. */
+  po?: boolean;
 }
 
 export type RelevancePeriodUnit = 'day' | 'week' | 'month' | 'year';

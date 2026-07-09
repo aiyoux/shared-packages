@@ -102,6 +102,9 @@ export function recordCoreFromRow(row: Record<string, any>): CacheItem | null {
     custom_color: typeof row.custom_color === 'number' ? row.custom_color : undefined,
     module_settings: typeof row.module_settings === 'object' && row.module_settings ? row.module_settings : undefined,
     additionals: Array.isArray(row.additionals) ? row.additionals : undefined,
+    // Server-owned rollup values — must ride along or mergeItem strips them
+    // (same hazard as copied_from_record below).
+    computed_additionals: Array.isArray(row.computed_additionals) ? row.computed_additionals : undefined,
     // Clone/template lineage MUST be carried — mergeItem deletes any key
     // absent from the incoming payload, so omitting these strips lineage
     // from every record on every update (broke VWT clone matching).

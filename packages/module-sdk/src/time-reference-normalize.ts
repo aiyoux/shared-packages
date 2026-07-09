@@ -2,7 +2,8 @@ import type {
   TimeReference,
   BaseOrVagueReference,
   StartOrEnd,
-  DateInformation
+  DateInformation,
+  RelevanceWindow
 } from './types.ts';
 import {
   VAGUE_MINUTES,
@@ -180,6 +181,55 @@ export function cleanupEmptyFields(value: TimeReference): TimeReference {
 }
 
 // ---------------------------------------------------------------------------
+// Ordering
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve a start/end minute-of-day pair to comparable values for ordering
+ * checks. Concrete refs compare by value. Two vague refs compare by their
+ * bucket midpoints (`VAGUE_MINUTES[code].base`), so Night → Evening counts as
+ * reversed even though the raw ranges overlap. A vague ref paired with a
+ * concrete one uses its most permissive range bound, so a pair is only flagged
+ * when no valid interpretation exists (e.g. 4:40 PM → "Afternoon" is fine
+ * because Afternoon runs until 6 PM). Offset refs are anchored at resolve time
+ * and cannot be ordered statically, so they yield null, as does any missing
+ * ref.
+ */
+export function comparableMinuteBounds(
+  start: BaseOrVagueReference<string, number> | undefined,
+  end: BaseOrVagueReference<string, number> | undefined
+): { start: number; end: number } | null {
+  if (!start || !end) return null;
+  if (start.type === 'ba' && end.type === 'ba') {
+    return { start: start.v, end: end.v };
+  }
+  if (start.type === 'vg' && end.type === 'vg') {
+    const s = VAGUE_MINUTES[start.t as VagueMinuteCode];
+    const e = VAGUE_MINUTES[end.t as VagueMinuteCode];
+    if (!s || !e) return null;
+    return { start: s.base, end: e.base };
+  }
+  if (start.type === 'vg' && end.type === 'ba') {
+    const s = VAGUE_MINUTES[start.t as VagueMinuteCode];
+    return s ? { start: s.range[0], end: end.v } : null;
+  }
+  if (start.type === 'ba' && end.type === 'vg') {
+    const e = VAGUE_MINUTES[end.t as VagueMinuteCode];
+    return e ? { start: start.v, end: e.range[1] } : null;
+  }
+  return null;
+}
+
+/** True when both minute refs are present, orderable, and reversed. */
+export function isMinutePairReversed(
+  start: BaseOrVagueReference<string, number> | null | undefined,
+  end: BaseOrVagueReference<string, number> | null | undefined
+): boolean {
+  const bounds = comparableMinuteBounds(start ?? undefined, end ?? undefined);
+  return bounds !== null && bounds.end < bounds.start;
+}
+
+// ---------------------------------------------------------------------------
 // Validation
 // ---------------------------------------------------------------------------
 
@@ -281,45 +331,22 @@ export function validateTimeReferenceStructure(
     }
   }
 
-  // End-before-start checks (only when deterministically comparable)
-  const startYear = getSideRef(value, 'y', 's');
-  const startMonth = getSideRef(value, 'm', 's');
-  const startWeek = getSideRef(value, 'w', 's');
-  const startDay = getSideRef(value, 'd', 's');
-  const startMinute = getSideRef(value, 'i', 's');
-  const endYear = getSideRef(value, 'y', 'e');;
-  const endMonth = getSideRef(value, 'm', 'e');
-  const endWeek = getSideRef(value, 'w', 'e');
-  const endDay = getSideRef(value, 'd', 'e');
-  const endMinute = getSideRef(value, 'i', 'e');
-
-  // Build comparable values for base refs only
-  function baValue(ref: BaseOrVagueReference<string, number> | undefined): number | null {
-    return ref?.type === 'ba' ? ref.v : null;
-  }
-
-  const sy = baValue(startYear);
-  const sm = baValue(startMonth);
-  const sw = baValue(startWeek);
-  const sd = baValue(startDay);
-  const si = baValue(startMinute);
-  const ey = baValue(endYear) ?? sy;
-  const em = baValue(endMonth) ?? sm;
-  const hasEndMinute = endMinute !== undefined;
-  const ew = baValue(endWeek) ?? sw;
-  const ed = baValue(endDay) ?? (hasEndMinute ? sd : null);
-  // When no explicit end minute is authored, the end instant inherits the start
-  // minute (a point-in-time event), mirroring how ey/em/ew/ed fall back to the
-  // start side above. Without this, a single-day event with only a start time
-  // compared its start time against an implicit end of 00:00 on the same day and
-  // falsely tripped end_before_start — which disabled the calendar create button
-  // the moment a time was added.
-  const ei = baValue(endMinute) ?? si;
-
-  const comparable = extractDateWindow(value);
-  if (comparable && (ed !== null || ew !== null || em !== null || ey !== null || endMinute !== undefined)) {
-    const startTs = new Date(comparable.start).setHours(si !== null ? Math.floor(si / 60) : 0, si !== null ? si % 60 : 0, 0, 0);
-    const endTs = new Date(comparable.end).setHours(ei !== null ? Math.floor(ei / 60) : 0, ei !== null ? ei % 60 : 0, 0, 0);
+  // End-before-start check: only when an explicit end is authored and the
+  // date window is deterministically comparable. extractDateWindow inherits
+  // missing end date refs from the start side (matching how persistence trims
+  // redundant end year/month), so trimmed multi-day refs resolve correctly.
+  const window = extractDateWindow(value);
+  if (window && hasExplicitEnd(value)) {
+    const startMinuteRef = getSideRef(value, 'i', 's');
+    const endMinuteRef = getSideRef(value, 'i', 'e');
+    // When no explicit end minute is authored, the end instant inherits the
+    // start minute (a point-in-time event). Without this, a single-day event
+    // with only a start time compared its start time against an implicit end
+    // of 00:00 on the same day and falsely tripped end_before_start — which
+    // disabled the calendar create button the moment a time was added.
+    const bounds = comparableMinuteBounds(startMinuteRef, endMinuteRef ?? startMinuteRef);
+    const startTs = new Date(window.start).setHours(0, bounds?.start ?? 0, 0, 0);
+    const endTs = new Date(window.end).setHours(0, bounds?.end ?? 0, 0, 0);
     if (endTs < startTs) {
       issues.push({
         code: 'end_before_start',
@@ -359,48 +386,31 @@ function sanitizeVagueReferences(value: TimeReference): TimeReference {
 }
 
 function pruneInvalidEndReferences(value: TimeReference): TimeReference {
-  // Remove end values that are structurally invalid (e.g. end before start)
-  // This is already covered by validation, but we do a light cleanup here.
-  const sy = getSideRef(value, 'y', 's');
-  const sm = getSideRef(value, 'm', 's');
-  const sw = getSideRef(value, 'w', 's');
-  const sd = getSideRef(value, 'd', 's');
-  const si = getSideRef(value, 'i', 's');
-  const ey = getSideRef(value, 'y', 'e');
-  const em = getSideRef(value, 'm', 'e');
-  const ew = getSideRef(value, 'w', 'e');
-  const ed = getSideRef(value, 'd', 'e');
-  const ei = getSideRef(value, 'i', 'e');
+  // Persistence-time safety net behind validateTimeReferenceStructure (which
+  // UIs use to reject bad input): drop end refs that would place the end
+  // before the start instead of failing the whole write. Uses the same
+  // comparison rules as validation so the two can never disagree.
+  const window = extractDateWindow(value);
+  if (!window) return value;
 
-  function baValue(ref: BaseOrVagueReference<string, number> | undefined): number | null {
-    return ref?.type === 'ba' ? ref.v : null;
-  }
-
-  const syv = baValue(sy);
-  const smv = baValue(sm);
-  const swv = baValue(sw);
-  const sdv = baValue(sd);
-  const siv = baValue(si);
-  const eyv = baValue(ey);
-  const emv = baValue(em);
-  const ewv = baValue(ew);
-  const edv = baValue(ed);
-  const eiv = baValue(ei);
-
-  if (syv !== null && eyv !== null && eyv < syv) {
+  if (hasExplicitEndDate(value) && window.end.getTime() < window.start.getTime()) {
     setSideRef(value, 'y', 'e', undefined);
-  }
-  if (smv !== null && emv !== null && (eyv === syv || eyv === null) && emv < smv) {
     setSideRef(value, 'm', 'e', undefined);
-  }
-  if (swv !== null && ewv !== null && (eyv === syv || eyv === null) && (emv === smv || emv === null) && ewv < swv) {
     setSideRef(value, 'w', 'e', undefined);
-  }
-  if (sdv !== null && edv !== null && (eyv === syv || eyv === null) && (emv === smv || emv === null) && (ewv === swv || ewv === null) && edv < sdv) {
     setSideRef(value, 'd', 'e', undefined);
   }
-  if (siv !== null && eiv !== null && (eyv === syv || eyv === null) && (emv === smv || emv === null) && (edv === sdv || edv === null) && eiv < siv) {
-    setSideRef(value, 'i', 'e', undefined);
+
+  const startMinuteRef = getSideRef(value, 'i', 's');
+  const endMinuteRef = getSideRef(value, 'i', 'e');
+  if (endMinuteRef) {
+    // Only a same-day end minute can be reversed; across days the end minute
+    // is legitimately allowed to be earlier than the start minute. Recompute
+    // the window because the date prune above may have changed the end day.
+    const pruned = extractDateWindow(value);
+    const sameDay = pruned !== null && pruned.end.getTime() === pruned.start.getTime();
+    if (sameDay && isMinutePairReversed(startMinuteRef, endMinuteRef)) {
+      setSideRef(value, 'i', 'e', undefined);
+    }
   }
 
   return value;
@@ -478,6 +488,71 @@ export function restoreVagueReferences(
   return next;
 }
 
+/**
+ * Legacy date-info shape accepted ONLY by canonicalizeDateInformation: carries
+ * both the canonical SHORT fields (is / ds / rl / po) and the deprecated LONG
+ * fields (is_status / display_as / relevance / relevance_duration_minutes /
+ * relevance_infinite / pin_when_overdue) plus the rv/ri scalars. This is the
+ * single place either form is read; everywhere else in the codebase reads the
+ * short canonical DateInformation.
+ */
+export interface LegacyDateInfoInput extends DateInformation {
+  is_status?: boolean;
+  display_as?: string;
+  relevance?: RelevanceWindow;
+  relevance_duration_minutes?: number;
+  relevance_infinite?: boolean;
+  pin_when_overdue?: boolean;
+  rv?: number;
+  ri?: boolean;
+}
+
+function normalizeDisplayCode(value: unknown): 'mj' | 'mi' | 'sm' | 'n' | undefined {
+  if (value === 'Major' || value === 'mj') return 'mj';
+  if (value === 'Minor' || value === 'mi') return 'mi';
+  if (value === 'Mini' || value === 'sm') return 'sm';
+  if (value === 'None' || value === 'n') return 'n';
+  return undefined;
+}
+
+/**
+ * Collapse a date_info to its canonical SHORT form: `is`, `ds`, `rl`, `po`
+ * (rv/ri fold into `rl`). Long fields and rv/ri are dropped. This is the one
+ * client-side canonicalizer — the DB stores short-only (server ingress
+ * fn::canonicalize_date_info + the one-off migration guarantee it), so readers
+ * everywhere else assume short.
+ */
+export function canonicalizeDateInformation(input: LegacyDateInfoInput | DateInformation): DateInformation {
+  const legacy = input as LegacyDateInfoInput;
+  const out: DateInformation = {
+    value: input.value,
+    is: Boolean(legacy.is ?? legacy.is_status ?? false)
+  };
+  if (typeof input.offset_enabled === 'boolean') out.offset_enabled = input.offset_enabled;
+
+  const ds = normalizeDisplayCode(legacy.ds ?? legacy.display_as);
+  if (ds) out.ds = ds;
+
+  // Relevance: prefer the rl/relevance object; else fold ri/rv scalars into rl.
+  let rl = legacy.rl ?? legacy.relevance;
+  if (!rl || (!rl.before && !rl.after)) {
+    const infinite = legacy.relevance_infinite === true || legacy.ri === true;
+    const minutes = legacy.relevance_duration_minutes ?? legacy.rv;
+    if (infinite) {
+      rl = { before: { type: 'inf' }, after: { type: 'inf' } };
+    } else if (typeof minutes === 'number' && Number.isFinite(minutes)) {
+      rl = { before: { type: 'dur', minutes }, after: { type: 'dur', minutes } };
+    } else {
+      rl = undefined;
+    }
+  }
+  if (rl) out.rl = rl;
+
+  if (legacy.pin_when_overdue === true || legacy.po === true) out.po = true;
+
+  return out;
+}
+
 export function normalizeDateInformationForPersistence(
   dateInfo: DateInformation,
   options: NormalizeDateInformationForPersistenceOptions = {}
@@ -488,7 +563,7 @@ export function normalizeDateInformationForPersistence(
 
   if (output === 'preserve') {
     next.value = normalizeTimeReference(sourceValue, options.timeReference);
-    return next;
+    return canonicalizeDateInformation(next);
   }
 
   const resolveNow = options.resolveNow ?? new Date();
@@ -518,7 +593,7 @@ export function normalizeDateInformationForPersistence(
   if (dateOnly) {
     delete next.value.i;
   }
-  return next;
+  return canonicalizeDateInformation(next);
 }
 
 // ---------------------------------------------------------------------------
@@ -716,15 +791,12 @@ export function cloneDateInformation(
         m: { s: { type: 'ba', v: fallbackDate.getMonth() + 1 } },
         d: { s: { type: 'ba', v: fallbackDate.getDate() } }
       },
-      is_status: false,
       is: false,
-      ds: 'mj',
-      display_as: 'mj'
+      ds: 'mj'
     };
   }
   return {
     value: {},
-    is_status: false,
     is: false
   };
 }
@@ -736,10 +808,8 @@ export function defaultCalendarDateInfo(date: Date): DateInformation {
       m: { s: { type: 'ba', v: date.getMonth() + 1 } },
       d: { s: { type: 'ba', v: date.getDate() } }
     },
-    is_status: false,
     is: false,
-    ds: 'mj',
-    display_as: 'mj'
+    ds: 'mj'
   };
 }
 
@@ -749,9 +819,7 @@ export function applyDisplayFlags(
 ): DateInformation {
   return {
     ...dateInfo,
-    is_status: session.formIsStatus ?? dateInfo.is_status ?? false,
     is: session.formIsStatus ?? dateInfo.is ?? false,
-    ds: session.formIsMinor ? 'mi' : 'mj',
-    display_as: session.formIsMinor ? 'mi' : 'mj'
+    ds: session.formIsMinor ? 'mi' : 'mj'
   };
 }

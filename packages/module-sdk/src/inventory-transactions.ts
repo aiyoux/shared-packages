@@ -1,4 +1,5 @@
 import { optimisticCacheItemFromItem } from './optimistic-cache.ts';
+import { refsObject } from './module-refs.ts';
 import { buildQuantityDeltaAdditional } from './scheduler/inventory.ts';
 import type { AppRuntime } from './sync/runtime.ts';
 import type { Item } from './types.ts';
@@ -80,10 +81,11 @@ export function queueInventoryTransaction(args: QueueInventoryTransactionArgs): 
     module_settings: {
       inventory_module: {
         stock_transaction: {
-          stock_item_id: stockItemId,
+          // Record references live under the reserved refs object so the
+          // sync engine's temp-id remap sees them (module-refs.ts).
+          ...refsObject({ stock_item_id: stockItemId, source_record_id: sourceRecordId ?? null }),
           transacted_at: new Date().toISOString(),
           transaction_kind: kind,
-          source_record_id: sourceRecordId ?? null,
           note: note ?? null
         }
       }

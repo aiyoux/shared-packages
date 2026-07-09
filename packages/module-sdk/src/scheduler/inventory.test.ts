@@ -14,8 +14,11 @@ import type { Item } from '../types.ts';
 function serverAcceptsQuantityDelta(qd: any): boolean {
   return Boolean(qd) && qd.type === 'quantity_delta' && typeof qd.delta === 'number';
 }
-function serverAcceptsComputedStockLevel(sl: any): boolean {
-  return Boolean(sl) && sl.type === 'stock_level' && sl.computed === true;
+// Mirrors fn::has_computed_stock_level: the authored opt-in is a
+// `mode: 'rollup'` MARKER (the computed VALUE lives server-side in
+// computed_additionals and is never client-emitted).
+function serverAcceptsStockLevelMarker(sl: any): boolean {
+  return Boolean(sl) && sl.type === 'stock_level' && sl.mode === 'rollup';
 }
 
 const ctx = { now: new Date('2026-04-22T00:00:00.000Z'), query: { now: new Date('2026-04-22T00:00:00.000Z') } } as any;
@@ -35,16 +38,20 @@ function tx(id: string, stockId: string, delta: number, kind = 'restock', at = '
 }
 
 describe('inventory ⇄ server stock-rollup contract', () => {
-  it('emits quantity_delta and computed stock_level additionals the server accepts', () => {
+  it('emits quantity_delta values and a stock_level rollup marker the server accepts', () => {
     expect(serverAcceptsQuantityDelta(buildQuantityDeltaAdditional(5))).toBe(true);
     expect(serverAcceptsQuantityDelta(buildQuantityDeltaAdditional(-2.5))).toBe(true);
-    expect(serverAcceptsComputedStockLevel(buildStockLevelAdditional(0))).toBe(true);
+    const marker = buildStockLevelAdditional();
+    expect(serverAcceptsStockLevelMarker(marker)).toBe(true);
+    // Never a value, never computed — those are server-owned.
+    expect((marker as any).computed).toBeUndefined();
+    expect((marker as any).current_quantity).toBeUndefined();
   });
 
   it('rejects malformed additionals (guards against silent rollup breakage)', () => {
     expect(serverAcceptsQuantityDelta({ type: 'quantity_delta', delta: 'lots' })).toBe(false);
     expect(serverAcceptsQuantityDelta({ type: 'stock_level', delta: 1 })).toBe(false);
-    expect(serverAcceptsComputedStockLevel({ type: 'stock_level', computed: false })).toBe(false);
+    expect(serverAcceptsStockLevelMarker({ type: 'stock_level', computed: true, current_quantity: 3 })).toBe(false);
   });
 });
 
@@ -77,7 +84,10 @@ describe('inventory pure-sum derivation (path b)', () => {
 
   it('reads the server-materialized stock_level as a cross-check', () => {
     const stock = stockItem('records:s');
-    (stock as any).additionals = [buildStockLevelAdditional(42)];
+    (stock as any).additionals = [buildStockLevelAdditional()];
+    (stock as any).computed_additionals = [
+      { id: 'sl-1', type: 'stock_level', current_quantity: 42, computed: true }
+    ];
     const [state] = deriveInventoryStockStates([stock, tx('records:t1', 'records:s', 7)], ctx);
     // Client sum stays authoritative (transactions are loaded); the materialized
     // value is surfaced separately for rollup-only consumers.

@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import {
   cloneTimeReference,
+  comparableMinuteBounds,
+  isMinutePairReversed,
   hasExplicitEnd,
   hasExplicitStartDate,
   validateTimeReferenceStructure,
@@ -70,7 +72,7 @@ describe('time-reference-normalize', () => {
   describe('normalizeDateInformationForPersistence', () => {
     it('preserves single vague times when converting to relative offsets', () => {
       const result = normalizeDateInformationForPersistence({
-        is_status: false,
+        is: false,
         offset_enabled: true,
         value: {
           d: { s: { type: 'of', v: 0, a: 'up' } },
@@ -94,7 +96,7 @@ describe('time-reference-normalize', () => {
 
     it('preserves single vague times when converting to absolute refs', () => {
       const result = normalizeDateInformationForPersistence({
-        is_status: false,
+        is: false,
         value: {
           y: { s: { type: 'ba', v: 2026 } },
           m: { s: { type: 'ba', v: 4 } },
@@ -115,7 +117,7 @@ describe('time-reference-normalize', () => {
 
     it('keeps authored ends explicit', () => {
       const result = normalizeDateInformationForPersistence({
-        is_status: false,
+        is: false,
         value: {
           d: {
             s: { type: 'of', v: 0, a: 'up' },
@@ -155,6 +157,36 @@ describe('time-reference-normalize', () => {
         d: { s: { type: 'ba', v: 13 } }
       };
       expect(hasExplicitStartDate(tr)).toBe(true);
+    });
+  });
+
+  describe('minute pair ordering', () => {
+    it('compares concrete refs by value', () => {
+      expect(comparableMinuteBounds({ type: 'ba', v: 600 }, { type: 'ba', v: 540 })).toEqual({ start: 600, end: 540 });
+      expect(isMinutePairReversed({ type: 'ba', v: 600 }, { type: 'ba', v: 540 })).toBe(true);
+      expect(isMinutePairReversed({ type: 'ba', v: 540 }, { type: 'ba', v: 600 })).toBe(false);
+    });
+
+    it('compares vague refs by bucket midpoint', () => {
+      expect(isMinutePairReversed({ type: 'vg', t: 'ni' }, { type: 'vg', t: 'ev' })).toBe(true);
+      expect(isMinutePairReversed({ type: 'vg', t: 'mo' }, { type: 'vg', t: 'ev' })).toBe(false);
+      // Equal buckets are a point-in-time, not reversed.
+      expect(isMinutePairReversed({ type: 'vg', t: 'no' }, { type: 'vg', t: 'no' })).toBe(false);
+    });
+
+    it('uses permissive bounds for mixed pairs', () => {
+      // 4:40 PM → Afternoon (until 6 PM): valid interpretation exists.
+      expect(isMinutePairReversed({ type: 'ba', v: 1000 }, { type: 'vg', t: 'af' })).toBe(false);
+      // 10:30 PM → Evening (until 10 PM): impossible.
+      expect(isMinutePairReversed({ type: 'ba', v: 1350 }, { type: 'vg', t: 'ev' })).toBe(true);
+      // Morning (from 7 AM) → 5 AM: impossible.
+      expect(isMinutePairReversed({ type: 'vg', t: 'mo' }, { type: 'ba', v: 300 })).toBe(true);
+    });
+
+    it('returns null for missing or offset refs', () => {
+      expect(comparableMinuteBounds(undefined, { type: 'ba', v: 540 })).toBeNull();
+      expect(comparableMinuteBounds({ type: 'of', v: 60, a: 'up' }, { type: 'ba', v: 540 })).toBeNull();
+      expect(isMinutePairReversed(null, { type: 'ba', v: 540 })).toBe(false);
     });
   });
 
@@ -312,6 +344,78 @@ describe('time-reference-normalize', () => {
       const result = validateTimeReferenceStructure(tr, { allowOffsets: true });
       expect(result.valid).toBe(true);
     });
+
+    it('rejects a reversed vague time pair (Night → Evening)', () => {
+      const tr: TimeReference = {
+        y: { s: { type: 'ba', v: 2026 } },
+        m: { s: { type: 'ba', v: 7 } },
+        d: { s: { type: 'ba', v: 3 } },
+        i: { s: { type: 'vg', t: 'ni' }, e: { type: 'vg', t: 'ev' } }
+      };
+      const result = validateTimeReferenceStructure(tr);
+      expect(result.valid).toBe(false);
+      expect(result.issues.some((i) => i.code === 'end_before_start')).toBe(true);
+    });
+
+    it('accepts an ordered vague time pair (Morning → Evening)', () => {
+      const tr: TimeReference = {
+        y: { s: { type: 'ba', v: 2026 } },
+        m: { s: { type: 'ba', v: 7 } },
+        d: { s: { type: 'ba', v: 3 } },
+        i: { s: { type: 'vg', t: 'mo' }, e: { type: 'vg', t: 'ev' } }
+      };
+      expect(validateTimeReferenceStructure(tr).valid).toBe(true);
+    });
+
+    it('rejects a concrete start after a vague end with no valid interpretation', () => {
+      // 10:30 PM start, "Evening" end — Evening runs at latest until 10 PM.
+      const tr: TimeReference = {
+        y: { s: { type: 'ba', v: 2026 } },
+        m: { s: { type: 'ba', v: 7 } },
+        d: { s: { type: 'ba', v: 3 } },
+        i: { s: { type: 'ba', v: 1350 }, e: { type: 'vg', t: 'ev' } }
+      };
+      const result = validateTimeReferenceStructure(tr);
+      expect(result.valid).toBe(false);
+      expect(result.issues.some((i) => i.code === 'end_before_start')).toBe(true);
+    });
+
+    it('accepts a concrete start inside a vague end bucket', () => {
+      // 4:40 PM start, "Afternoon" end — Afternoon runs until 6 PM.
+      const tr: TimeReference = {
+        y: { s: { type: 'ba', v: 2026 } },
+        m: { s: { type: 'ba', v: 7 } },
+        d: { s: { type: 'ba', v: 3 } },
+        i: { s: { type: 'ba', v: 1000 }, e: { type: 'vg', t: 'af' } }
+      };
+      expect(validateTimeReferenceStructure(tr).valid).toBe(true);
+    });
+
+    it('rejects a vague start after a concrete end', () => {
+      // "Morning" start (earliest 7 AM), 5 AM end.
+      const tr: TimeReference = {
+        y: { s: { type: 'ba', v: 2026 } },
+        m: { s: { type: 'ba', v: 7 } },
+        d: { s: { type: 'ba', v: 3 } },
+        i: { s: { type: 'vg', t: 'mo' }, e: { type: 'ba', v: 300 } }
+      };
+      const result = validateTimeReferenceStructure(tr);
+      expect(result.valid).toBe(false);
+      expect(result.issues.some((i) => i.code === 'end_before_start')).toBe(true);
+    });
+
+    it('accepts an overnight range on trimmed multi-day refs', () => {
+      // Persistence trims end year/month equal to the start, so a reloaded
+      // Jul 10 10 PM → Jul 12 8 AM event looks like this. The end minute is
+      // before the start minute but the end day is later.
+      const tr: TimeReference = {
+        y: { s: { type: 'ba', v: 2026 } },
+        m: { s: { type: 'ba', v: 7 } },
+        d: { s: { type: 'ba', v: 10 }, e: { type: 'ba', v: 12 } },
+        i: { s: { type: 'ba', v: 1320 }, e: { type: 'ba', v: 480 } }
+      };
+      expect(validateTimeReferenceStructure(tr).valid).toBe(true);
+    });
   });
 
   describe('normalizeTimeReference', () => {
@@ -373,6 +477,52 @@ describe('time-reference-normalize', () => {
       const result = normalizeTimeReference(tr);
       expect(result.i?.e).toBeUndefined();
       expect(result.i?.s).toEqual({ type: 'ba', v: 600 });
+    });
+
+    it('prunes a reversed vague time pair on same day (Night → Evening)', () => {
+      const tr: TimeReference = {
+        y: { s: { type: 'ba', v: 2026 } },
+        m: { s: { type: 'ba', v: 7 } },
+        d: { s: { type: 'ba', v: 3 } },
+        i: { s: { type: 'vg', t: 'ni' }, e: { type: 'vg', t: 'ev' } }
+      };
+      const result = normalizeTimeReference(tr);
+      expect(result.i?.e).toBeUndefined();
+      expect(result.i?.s).toEqual({ type: 'vg', t: 'ni' });
+    });
+
+    it('keeps an ordered vague time pair', () => {
+      const tr: TimeReference = {
+        y: { s: { type: 'ba', v: 2026 } },
+        m: { s: { type: 'ba', v: 7 } },
+        d: { s: { type: 'ba', v: 3 } },
+        i: { s: { type: 'vg', t: 'mo' }, e: { type: 'vg', t: 'ev' } }
+      };
+      const result = normalizeTimeReference(tr);
+      expect(result.i?.e).toEqual({ type: 'vg', t: 'ev' });
+    });
+
+    it('keeps an overnight end minute on a multi-day range', () => {
+      const tr: TimeReference = {
+        y: { s: { type: 'ba', v: 2026 } },
+        m: { s: { type: 'ba', v: 7 } },
+        d: { s: { type: 'ba', v: 10 }, e: { type: 'ba', v: 12 } },
+        i: { s: { type: 'ba', v: 1320 }, e: { type: 'ba', v: 480 } }
+      };
+      const result = normalizeTimeReference(tr);
+      expect(result.d?.e).toEqual({ type: 'ba', v: 12 });
+      expect(result.i?.e).toEqual({ type: 'ba', v: 480 });
+    });
+
+    it('prunes all end date refs when the end day is before the start day', () => {
+      const tr: TimeReference = {
+        y: { s: { type: 'ba', v: 2026 } },
+        m: { s: { type: 'ba', v: 7 } },
+        d: { s: { type: 'ba', v: 10 }, e: { type: 'ba', v: 8 } }
+      };
+      const result = normalizeTimeReference(tr);
+      expect(result.d?.e).toBeUndefined();
+      expect(result.d?.s).toEqual({ type: 'ba', v: 10 });
     });
 
     it('does not mutate input', () => {
@@ -501,7 +651,7 @@ describe('time-reference-normalize', () => {
       expect(info.value.m?.s).toEqual({ type: 'ba', v: 5 });
       expect(info.value.d?.s).toEqual({ type: 'ba', v: 13 });
       expect(info.value.i).toBeUndefined();
-      expect(info.is_status).toBe(false);
+      expect(info.is).toBe(false);
       expect(info.ds).toBe('mj');
     });
   });
@@ -510,10 +660,11 @@ describe('time-reference-normalize', () => {
     it('preserves value and applies status/minor flags', () => {
       const info = defaultCalendarDateInfo(new Date(2026, 4, 13));
       const result = applyDisplayFlags(info, { formIsStatus: true, formIsMinor: true });
-      expect(result.is_status).toBe(true);
       expect(result.is).toBe(true);
       expect(result.ds).toBe('mi');
-      expect(result.display_as).toBe('mi');
+      // Long fields are dead — never emitted.
+      expect((result as Record<string, unknown>).is_status).toBeUndefined();
+      expect((result as Record<string, unknown>).display_as).toBeUndefined();
       expect(result.value).toEqual(info.value);
     });
   });

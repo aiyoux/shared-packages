@@ -163,6 +163,7 @@ export {
 } from './optimistic-cache.ts';
 export {
   isProgressAdditional,
+  isRollupProgressMarker,
   getProgressAdditionalData,
   createProgressAdditional,
   patchProgressAdditional,
@@ -175,6 +176,35 @@ export {
   type ProgressShape,
   type CreateProgressOptions
 } from './progress-additional.ts';
+
+export {
+  readComputedAdditionals,
+  readComputedAdditional,
+  isRollupMarker,
+  resolveAdditionalForDisplay
+} from './computed-additionals.ts';
+
+export {
+  applyAdditionalsMutation,
+  mergeAdditionalsLocal,
+  stampAdditionalUpdatedAt,
+  type AdditionalsMutation,
+  type AdditionalsMutationResult
+} from './additionals-mutate.ts';
+
+export {
+  validateAdditionals,
+  validateAdditionalEnvelope,
+  additionalValidators
+} from './additional-validate.ts';
+
+export {
+  readRef,
+  readRefList,
+  setRef,
+  deleteRef,
+  refsObject
+} from './module-refs.ts';
 
 export {
   resolveStart,
@@ -198,9 +228,13 @@ export {
   isOffset,
   refsEqual,
   cleanupEmptyFields,
+  comparableMinuteBounds,
+  isMinutePairReversed,
   validateTimeReferenceStructure,
   normalizeTimeReference,
   normalizeDateInformationForPersistence,
+  canonicalizeDateInformation,
+  type LegacyDateInfoInput,
   hasAnyMinuteReference,
   shouldTreatAsDateOnlyForPersistence,
   restoreVagueReferences,

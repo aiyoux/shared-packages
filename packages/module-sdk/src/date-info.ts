@@ -65,12 +65,17 @@ export function setDateAdditionalValue(
 }
 
 export function isStatus(info: DateInformation): boolean {
-  return info.is_status === true || (info as { is?: boolean }).is === true;
+  return info.is === true;
 }
 
 export function relevanceMinutes(info: DateInformation, userDefault?: number | null): number {
-  const explicit = info.relevance_duration_minutes ?? info.rv;
-  if (typeof explicit === 'number' && Number.isFinite(explicit)) return explicit;
+  // Canonical: relevance lives in `rl`; a symmetric dur window maps back to a
+  // scalar minutes for legacy callers.
+  const before = info.rl?.before;
+  const after = info.rl?.after;
+  if (before?.type === 'dur' && after?.type === 'dur' && before.minutes === after.minutes) {
+    return before.minutes;
+  }
   if (typeof userDefault === 'number' && Number.isFinite(userDefault) && userDefault >= 0) {
     return userDefault;
   }
@@ -78,13 +83,13 @@ export function relevanceMinutes(info: DateInformation, userDefault?: number | n
 }
 
 export function isRelevanceInfinite(info: DateInformation): boolean {
-  return info.relevance_infinite === true || info.ri === true;
+  return info.rl?.before?.type === 'inf' && info.rl?.after?.type === 'inf';
 }
 
 export function pinWhenOverdue(info: DateInformation): boolean {
-  return info.pin_when_overdue === true || info.po === true;
+  return info.po === true;
 }
 
 export function displayAsOf(info: DateInformation): DisplayAs {
-  return normalizeDisplayAs(info.display_as ?? info.ds);
+  return normalizeDisplayAs(info.ds);
 }

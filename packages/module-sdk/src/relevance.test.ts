@@ -5,11 +5,12 @@ import {
   readRelevanceWindow,
   resolveRelevance
 } from './relevance.ts';
+import { canonicalizeDateInformation } from './time-reference-normalize.ts';
 
 const MIN = 60_000;
 
-function infoWith(extra: Partial<DateInformation>, value: TimeReference = {}): DateInformation {
-  return { value, is_status: false, ...extra };
+function infoWith(extra: Record<string, unknown>, value: TimeReference = {}): DateInformation {
+  return { value, is: false, ...extra } as DateInformation;
 }
 
 // A resolved window: Wed 2026-04-15, 09:00–10:00 local.
@@ -22,52 +23,63 @@ describe('readRelevanceWindow (legacy → canonical)', () => {
     expect(readRelevanceWindow(infoWith({}))).toBeUndefined();
   });
 
-  it('maps legacy rv to a symmetric dur window', () => {
-    expect(readRelevanceWindow(infoWith({ rv: 60 }))).toEqual({
+  it('reads the canonical rl window', () => {
+    const window: RelevanceWindow = { before: { type: 'cal', unit: 'week' }, after: { type: 'dur', minutes: 30 } };
+    expect(readRelevanceWindow(infoWith({ rl: window }))).toBe(window);
+  });
+});
+
+describe('canonicalizeDateInformation — legacy relevance folding', () => {
+  it('folds legacy rv / relevance_duration_minutes into a symmetric dur rl', () => {
+    expect(canonicalizeDateInformation(infoWith({ rv: 60 })).rl).toEqual({
       before: { type: 'dur', minutes: 60 },
       after: { type: 'dur', minutes: 60 }
     });
-    expect(readRelevanceWindow(infoWith({ relevance_duration_minutes: 90 }))).toEqual({
+    expect(canonicalizeDateInformation(infoWith({ relevance_duration_minutes: 90 })).rl).toEqual({
       before: { type: 'dur', minutes: 90 },
       after: { type: 'dur', minutes: 90 }
     });
   });
 
-  it('maps legacy ri to infinite on both sides', () => {
-    expect(readRelevanceWindow(infoWith({ ri: true }))).toEqual({
+  it('folds legacy ri / relevance_infinite into inf on both sides', () => {
+    expect(canonicalizeDateInformation(infoWith({ ri: true })).rl).toEqual({
       before: { type: 'inf' },
       after: { type: 'inf' }
     });
   });
 
-  it('prefers the canonical relevance/rl field over legacy scalars', () => {
+  it('prefers the rl/relevance object over legacy scalars and drops long fields', () => {
     const window: RelevanceWindow = { before: { type: 'cal', unit: 'week' }, after: { type: 'dur', minutes: 30 } };
-    expect(readRelevanceWindow(infoWith({ relevance: window, rv: 60 }))).toBe(window);
-    expect(readRelevanceWindow(infoWith({ rl: window }))).toBe(window);
+    const out = canonicalizeDateInformation(infoWith({ rl: window, rv: 60 }));
+    expect(out.rl).toEqual(window);
+    // long fields and scalars are gone
+    expect((out as Record<string, unknown>).relevance).toBeUndefined();
+    expect((out as Record<string, unknown>).rv).toBeUndefined();
+    expect((out as Record<string, unknown>).relevance_duration_minutes).toBeUndefined();
   });
 });
 
 describe('resolveRelevance — bound resolution', () => {
   it('dur bounds offset from start/end by minutes', () => {
-    const r = resolveRelevance(infoWith({ relevance: { before: { type: 'dur', minutes: 30 }, after: { type: 'dur', minutes: 45 } } }), resolved);
+    const r = resolveRelevance(infoWith({ rl: { before: { type: 'dur', minutes: 30 }, after: { type: 'dur', minutes: 45 } } }), resolved);
     expect(r.beforeStart).toBe(start.getTime() - 30 * MIN);
     expect(r.afterEnd).toBe(end.getTime() + 45 * MIN);
   });
 
   it('inf bounds are unbounded', () => {
-    const r = resolveRelevance(infoWith({ relevance: { before: { type: 'inf' }, after: { type: 'inf' } } }), resolved);
+    const r = resolveRelevance(infoWith({ rl: { before: { type: 'inf' }, after: { type: 'inf' } } }), resolved);
     expect(r.beforeStart).toBe(-Infinity);
     expect(r.afterEnd).toBe(Infinity);
   });
 
   it('cal:day snaps before→midnight of start, after→last ms of end day', () => {
-    const r = resolveRelevance(infoWith({ relevance: { before: { type: 'cal', unit: 'day' }, after: { type: 'cal', unit: 'day' } } }), resolved);
+    const r = resolveRelevance(infoWith({ rl: { before: { type: 'cal', unit: 'day' }, after: { type: 'cal', unit: 'day' } } }), resolved);
     expect(r.beforeStart).toBe(new Date(2026, 3, 15, 0, 0, 0, 0).getTime());
     expect(r.afterEnd).toBe(new Date(2026, 3, 16, 0, 0, 0, 0).getTime() - 1);
   });
 
   it('cal:week snaps to the Monday-started week containing the anchor (default mode)', () => {
-    const r = resolveRelevance(infoWith({ relevance: { before: { type: 'cal', unit: 'week' }, after: { type: 'cal', unit: 'week' } } }), resolved);
+    const r = resolveRelevance(infoWith({ rl: { before: { type: 'cal', unit: 'week' }, after: { type: 'cal', unit: 'week' } } }), resolved);
     // Wed Apr 15 2026 → week is Mon Apr 13 .. Sun Apr 19.
     expect(r.beforeStart).toBe(new Date(2026, 3, 13, 0, 0, 0, 0).getTime());
     expect(r.afterEnd).toBe(new Date(2026, 3, 20, 0, 0, 0, 0).getTime() - 1);
@@ -76,7 +88,7 @@ describe('resolveRelevance — bound resolution', () => {
   it('cal:week honors a custom week-start (row mode, Sunday)', () => {
     const value: TimeReference = { wm: 'row', ws: 0 };
     const r = resolveRelevance(
-      infoWith({ relevance: { before: { type: 'cal', unit: 'week' } } }, value),
+      infoWith({ rl: { before: { type: 'cal', unit: 'week' } } }, value),
       { start: new Date(2026, 3, 15, 9, 0), end: new Date(2026, 3, 15, 10, 0) }
     );
     // Sunday-started week containing Wed Apr 15 → Sun Apr 12.
@@ -85,20 +97,19 @@ describe('resolveRelevance — bound resolution', () => {
 
   it('cal:month snaps to month edges (handles month length)', () => {
     const feb = { start: new Date(2026, 1, 10, 9, 0), end: new Date(2026, 1, 10, 10, 0) };
-    const r = resolveRelevance(infoWith({ relevance: { before: { type: 'cal', unit: 'month' }, after: { type: 'cal', unit: 'month' } } }), feb);
+    const r = resolveRelevance(infoWith({ rl: { before: { type: 'cal', unit: 'month' }, after: { type: 'cal', unit: 'month' } } }), feb);
     expect(r.beforeStart).toBe(new Date(2026, 1, 1, 0, 0, 0, 0).getTime());
     // 2026 is not a leap year → Feb has 28 days; exclusive end = Mar 1.
     expect(r.afterEnd).toBe(new Date(2026, 2, 1, 0, 0, 0, 0).getTime() - 1);
   });
 
   it('cal:year snaps to year edges', () => {
-    const r = resolveRelevance(infoWith({ relevance: { before: { type: 'cal', unit: 'year' }, after: { type: 'cal', unit: 'year' } } }), resolved);
+    const r = resolveRelevance(infoWith({ rl: { before: { type: 'cal', unit: 'year' }, after: { type: 'cal', unit: 'year' } } }), resolved);
     expect(r.beforeStart).toBe(new Date(2026, 0, 1, 0, 0, 0, 0).getTime());
     expect(r.afterEnd).toBe(new Date(2027, 0, 1, 0, 0, 0, 0).getTime() - 1);
   });
 
-  it('reads pinWhenOverdue from legacy aliases', () => {
-    expect(resolveRelevance(infoWith({ pin_when_overdue: true }), resolved).pinWhenOverdue).toBe(true);
+  it('reads pinWhenOverdue from the canonical po flag', () => {
     expect(resolveRelevance(infoWith({ po: true }), resolved).pinWhenOverdue).toBe(true);
     expect(resolveRelevance(infoWith({}), resolved).pinWhenOverdue).toBe(false);
   });
@@ -112,7 +123,7 @@ describe('resolveRelevance — per-side fallback chain', () => {
 
   it('item bound wins over user default, per side', () => {
     const r = resolveRelevance(
-      infoWith({ relevance: { before: { type: 'dur', minutes: 10 } } }),
+      infoWith({ rl: { before: { type: 'dur', minutes: 10 } } }),
       resolved,
       userDefaults
     );
@@ -148,8 +159,8 @@ describe('resolveRelevance — per-side fallback chain', () => {
     expect(r.afterEnd).toBe(new Date(2026, 3, 16, 0, 0, 0, 0).getTime() - 1);
   });
 
-  it('legacy rv item still resolves symmetrically (back-compat)', () => {
-    const r = resolveRelevance(infoWith({ rv: 60 }), resolved, userDefaults);
+  it('a symmetric dur rl resolves symmetrically', () => {
+    const r = resolveRelevance(infoWith({ rl: { before: { type: 'dur', minutes: 60 }, after: { type: 'dur', minutes: 60 } } }), resolved, userDefaults);
     expect(r.beforeStart).toBe(start.getTime() - 60 * MIN);
     expect(r.afterEnd).toBe(end.getTime() + 60 * MIN);
   });

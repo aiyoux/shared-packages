@@ -13,6 +13,14 @@ export interface CacheItem {
   is_temp: boolean;
   permissions?: ItemPermissions[];
   additionals?: AdditionalWithId[];
+  /**
+   * Server-owned rollup values — read-only mirror of records.computed_additionals.
+   * Like copied_from_record below: mergeItem deletes any key absent from an
+   * incoming payload, so EVERY record source feeding the cache (fetch cores,
+   * changefeed-convert's RecordUpsert core, snapshot) MUST carry this field or
+   * rollup values silently vanish from the UI on the next merge.
+   */
+  computed_additionals?: AdditionalWithId[];
   settings?: Record<string, unknown>;
   module_settings?: Record<string, unknown>;
   version?: number;

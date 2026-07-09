@@ -1,4 +1,6 @@
 import type { AppRuntime } from '../sync/runtime.ts';
+import { readComputedAdditional } from '../computed-additionals.ts';
+import { readRef } from '../module-refs.ts';
 import type { AdditionalWithId, Item } from '../types.ts';
 import {
   asDate,
@@ -89,7 +91,15 @@ export function moneyAccountConfig(item: Item): MoneyAccountConfig | null {
 
 export function financialTransactionConfig(item: Item): FinancialTransactionConfig | null {
   const config = moneyModuleSettings(item).financial_transaction;
-  return config && typeof config === 'object' ? (config as FinancialTransactionConfig) : null;
+  if (!config || typeof config !== 'object') return null;
+  // Record references live under the reserved refs object (module-refs.ts);
+  // surface them flat so downstream logic keeps one shape.
+  const ns = config as Record<string, unknown>;
+  return {
+    ...(ns as FinancialTransactionConfig),
+    account_id: readRef(ns, 'account_id') ?? (ns.account_id as string | null | undefined) ?? null,
+    source_record_id: readRef(ns, 'source_record_id') ?? (ns.source_record_id as string | null | undefined) ?? null
+  };
 }
 
 // Money always resolves to a concrete currency, defaulting to USD.
@@ -122,12 +132,7 @@ function recordTimestamp(item: Item): string | null {
 }
 
 function accountBalanceAdditional(item: Item, currency: string): AdditionalWithId | null {
-  return item.additionals?.find((additional) => {
-    const raw = additional as Record<string, unknown>;
-    return raw.type === 'account_balance'
-      && raw.computed === true
-      && normalizeCurrency(raw.currency, '') === currency;
-  }) ?? null;
+  return readComputedAdditional(item, 'account_balance', currency);
 }
 
 export function buildTransactionAdditional(args: {
@@ -145,18 +150,21 @@ export function buildTransactionAdditional(args: {
   } as AdditionalWithId;
 }
 
+/**
+ * Authored account MARKER: declares the record an account for the given
+ * currency. The server accumulates the actual balance VALUE (per currency)
+ * into the server-owned computed_additionals field — clients never write it.
+ */
 export function buildAccountBalanceAdditional(args: {
   currency: string;
-  balance_minor?: number;
   id?: string;
 }): AdditionalWithId {
   return {
     id: args.id ?? crypto.randomUUID(),
     type: 'account_balance',
-    currency: normalizeCurrency(args.currency),
-    balance_minor: Math.round(args.balance_minor ?? 0),
-    computed: true
-  } as AdditionalWithId;
+    mode: 'rollup',
+    currency: normalizeCurrency(args.currency)
+  } as unknown as AdditionalWithId;
 }
 
 export function postedAdditionalsForFinancialTransaction(

@@ -1,4 +1,6 @@
 import type { AppRuntime } from '../sync/runtime.ts';
+import { readComputedAdditional } from '../computed-additionals.ts';
+import { readRef } from '../module-refs.ts';
 import type { AdditionalWithId, Item } from '../types.ts';
 import type { ScheduleCompilerContext, ProjectedOccurrence, StockSignal, ProjectionWindow, ProjectionQuery } from '../scheduler.ts';
 import {
@@ -50,12 +52,16 @@ export function buildQuantityDeltaAdditional(delta: number, id?: string): Additi
   return { id: id ?? crypto.randomUUID(), type: 'quantity_delta', delta } as unknown as AdditionalWithId;
 }
 
-export function buildStockLevelAdditional(currentQuantity = 0, id?: string): AdditionalWithId {
+/**
+ * Authored rollup MARKER declaring the item a stock item: the server derives
+ * the `stock_level` VALUE from descendant quantity_delta additionals into the
+ * server-owned computed_additionals field (read via readComputedAdditional).
+ */
+export function buildStockLevelAdditional(id?: string): AdditionalWithId {
   return {
     id: id ?? crypto.randomUUID(),
     type: 'stock_level',
-    current_quantity: currentQuantity,
-    computed: true
+    mode: 'rollup'
   } as unknown as AdditionalWithId;
 }
 
@@ -70,9 +76,7 @@ function quantityDeltaAdditional(item: Item): Record<string, unknown> | null {
 }
 
 function stockLevelAdditional(item: Item): Record<string, unknown> | null {
-  return (item.additionals?.find(
-    (additional) => (additional as any).type === 'stock_level' && (additional as any).computed === true
-  ) as Record<string, unknown> | undefined) ?? null;
+  return (readComputedAdditional(item, 'stock_level') as Record<string, unknown> | null) ?? null;
 }
 
 export interface InventoryStockTransaction {
@@ -112,9 +116,15 @@ export function inventoryStockItemConfig(item: Item): InventoryStockItemConfig |
 
 export function inventoryTransactionConfig(item: Item): InventoryStockTransactionConfig | null {
   const config = inventoryModuleSettings(item).stock_transaction;
-  return config && typeof config === 'object'
-    ? (config as InventoryStockTransactionConfig)
-    : null;
+  if (!config || typeof config !== 'object') return null;
+  // Record references live under the reserved refs object (module-refs.ts);
+  // surface them flat so downstream logic keeps one shape.
+  const ns = config as Record<string, unknown>;
+  return {
+    ...(ns as InventoryStockTransactionConfig),
+    stock_item_id: readRef(ns, 'stock_item_id') ?? (ns.stock_item_id as string | null | undefined) ?? null,
+    source_record_id: readRef(ns, 'source_record_id') ?? (ns.source_record_id as string | null | undefined) ?? null
+  };
 }
 
 export function collectInventoryTransactionItems(

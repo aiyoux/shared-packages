@@ -60,6 +60,10 @@ export function patchDateAdditional<T extends AdditionalWithId | Record<string, 
     type: 'date',
     date_info: data.date_info
   };
+  // Fresh per-id LWW stamp at queue time: a modified entry that kept its old
+  // updated_at would lose fn::merge_additionals to any concurrent write
+  // (queueOp only stamps entries lacking updated_at).
+  delete topLevel.updated_at;
 
   if (typeof data.source_additional_id === 'string') {
     topLevel.source_additional_id = data.source_additional_id;

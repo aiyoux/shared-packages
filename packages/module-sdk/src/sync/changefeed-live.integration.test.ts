@@ -8,20 +8,20 @@
  *   2. A clone missed while disconnected is recovered by cursor replay
  *      (fn::sync_pull via connection.runCatchup) — not a full resync.
  *
- * Requires SurrealDB on :8000. Skipped when unreachable so ordinary
- * `npm test` / CI without a DB stays green. Run explicitly with:
- *   npx vitest run repos/shared-packages/packages/module-sdk/src/sync/changefeed-live.integration.test.ts
+ * Requires SurrealDB on :8000 AND a modular-app checkout for the surql
+ * runtime (see surql-workspace.ts). Skipped when either is missing so
+ * ordinary `npm test` / CI without them stays green. Run explicitly with:
+ *   npx vitest run src/sync/changefeed-live.integration.test.ts
  */
 import { beforeAll, afterAll, describe, expect, it } from 'vitest';
-import fs from 'node:fs/promises';
-import path from 'node:path';
 import { createSurrealLiveConnection } from './surrealdb-live.ts';
 import type { LiveBusMsg } from './live.ts';
+import { loadManifestRuntime, resolveSurqlWorkspaceRoot } from './surql-workspace.ts';
 
 const DB_URL = 'http://127.0.0.1:8000';
 const NS = 'db';
 const DB = `cf_live_${Date.now()}`;
-const WORKSPACE_ROOT = path.resolve(__dirname, '../../../../../..');
+const WORKSPACE_ROOT = resolveSurqlWorkspaceRoot(__dirname);
 
 let token = '';
 
@@ -66,23 +66,6 @@ async function sql(query: string, opts: { ns?: boolean } = {}): Promise<any[]> {
   return payload;
 }
 
-async function loadManifestRuntime(): Promise<void> {
-  const toml = await fs.readFile(path.join(WORKSPACE_ROOT, 'surql/manifest.toml'), 'utf8');
-  const paths: string[] = [];
-  let inRuntime = false;
-  for (const line of toml.split('\n')) {
-    const section = line.match(/^\s*\[\[(\w+)\]\]/);
-    if (section) { inRuntime = section[1] === 'runtime'; continue; }
-    if (!inRuntime) continue;
-    const m = line.match(/^\s*path\s*=\s*"([^"]+)"/);
-    if (m) paths.push(m[1]);
-  }
-  for (const rel of paths) {
-    const body = await fs.readFile(path.join(WORKSPACE_ROOT, rel), 'utf8').catch(() => null);
-    if (body) await sql(body);
-  }
-}
-
 function until(pred: () => boolean, timeoutMs = 8000, stepMs = 50): Promise<void> {
   return new Promise((resolve, reject) => {
     const started = Date.now();
@@ -96,18 +79,18 @@ function until(pred: () => boolean, timeoutMs = 8000, stepMs = 50): Promise<void
 }
 
 beforeAll(async () => {
-  if (!dbReachable) return;
+  if (!dbReachable || !WORKSPACE_ROOT) return;
   token = await signin();
   await sql(`DEFINE NAMESPACE IF NOT EXISTS ${NS};`, { ns: false });
   await sql(`USE NS ${NS}; DEFINE DATABASE IF NOT EXISTS ${DB};`, { ns: false });
-  await loadManifestRuntime();
+  await loadManifestRuntime(WORKSPACE_ROOT, sql);
 }, 120_000);
 
 afterAll(async () => {
-  if (dbReachable) await sql(`REMOVE DATABASE ${DB};`).catch(() => {});
+  if (dbReachable && WORKSPACE_ROOT) await sql(`REMOVE DATABASE ${DB};`).catch(() => {});
 });
 
-describe.skipIf(!dbReachable)('changefeed live sync (real DB)', () => {
+describe.skipIf(!dbReachable || !WORKSPACE_ROOT)('changefeed live sync (real DB)', () => {
   it('a server batch clone arrives as ONE consolidated batch, not a per-row flood', async () => {
     const received: LiveBusMsg[] = [];
     let lastCursor: string | undefined;

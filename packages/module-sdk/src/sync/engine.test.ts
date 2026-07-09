@@ -294,6 +294,138 @@ describe('createSyncEngine', () => {
     expect(body).toContain('UPDATE type::record($id) MERGE $payload');
   });
 
+  it('peels additionals out of the MERGE body and routes them through fn::merge_additionals', async () => {
+    const cache = createCacheStub();
+    const liveBus = createBusStub();
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue([{ status: 'OK', result: null }])
+    } as unknown as Response);
+
+    const engine = createSyncEngine(cache as any, liveBus as any, {
+      url: 'http://localhost:8000',
+      namespace: 'app',
+      storageNamespace: 'test-sync',
+      database: 'main',
+      token: 'token',
+      scopes: []
+    });
+
+    engine.queueOp('UpdateRecord', {
+      id: 'records:1',
+      additionals: [{ id: 'a1', type: 'pg', prog_type: { ch: 't' } }],
+      removed_additional_ids: ['b2']
+    });
+    await engine.pushOps();
+
+    const body = String((fetchMock.mock.calls[0]?.[1] as RequestInit | undefined)?.body);
+    // Merge fn is invoked with the dedicated vars…
+    expect(body).toContain('fn::merge_additionals(');
+    expect(body).toContain('$incoming_additionals');
+    expect(body).toContain('$removed_additional_ids');
+    expect(body).toContain('LET $removed_additional_ids = ["b2"];');
+    // …and the MERGE body carries NEITHER field (a whole-array MERGE write
+    // would clobber the per-id merge).
+    const payloadLine = body.split('\n').find((line) => line.startsWith('LET $payload = '));
+    expect(payloadLine).toBeDefined();
+    expect(payloadLine).not.toContain('"additionals"');
+    expect(payloadLine).not.toContain('removed_additional_ids');
+    // Queue-time updated_at stamping (edit time, not flush time).
+    const incomingLine = body.split('\n').find((line) => line.startsWith('LET $incoming_additionals = '));
+    expect(incomingLine).toContain('"updated_at"');
+  });
+
+  it('refuses to send server-owned computed_additionals in any record payload', async () => {
+    const cache = createCacheStub();
+    const liveBus = createBusStub();
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue([{ status: 'OK', result: null }])
+    } as unknown as Response);
+
+    const engine = createSyncEngine(cache as any, liveBus as any, {
+      url: 'http://localhost:8000',
+      namespace: 'app',
+      storageNamespace: 'test-sync',
+      database: 'main',
+      token: 'token',
+      scopes: []
+    });
+
+    engine.queueOp('UpdateRecord', {
+      id: 'records:1',
+      text: 'hi',
+      computed_additionals: [{ id: 'c1', type: 'pg', prog_type: { ch: 't' }, computed: true }]
+    });
+    await engine.pushOps();
+
+    const body = String((fetchMock.mock.calls[0]?.[1] as RequestInit | undefined)?.body);
+    // The MERGE body must not carry the server-owned field (the SQL text
+    // legitimately references fn::recompute_computed_additionals).
+    const payloadLine = body.split('\n').find((line) => line.startsWith('LET $payload = '));
+    expect(payloadLine).toBeDefined();
+    expect(payloadLine).not.toContain('computed_additionals');
+  });
+
+  it('remaps temp ids ONLY inside module_settings refs objects (not plain module_settings keys)', async () => {
+    const cache = createCacheStub();
+    const liveBus = createBusStub();
+    const engine = createSyncEngine(cache as any, liveBus as any, {
+      url: 'http://localhost:8000',
+      namespace: 'app',
+      storageNamespace: 'test-sync',
+      database: 'main',
+      token: 'token',
+      scopes: []
+    });
+
+    const op = engine.queueOp('UpdateRecord', {
+      id: 'records:line',
+      module_settings: {
+        shopping_module: {
+          line_item: {
+            // These MUST remap (reserved refs object)…
+            refs: { list_id: 'temp:list', source_record_ids: ['temp:src', 'records:keep'] },
+            // …this MUST NOT (a plain module_settings key, even though the key
+            // name looks reference-y) — a module blob is opaque to the remapper.
+            list_id: 'temp:list'
+          }
+        }
+      }
+    });
+
+    engine.applyRemote({ type: 'TempIdRemap', tempId: 'temp:list', realId: 'records:real-list' } as any);
+    engine.applyRemote({ type: 'TempIdRemap', tempId: 'temp:src', realId: 'records:real-src' } as any);
+
+    const line = (op.payload as any).module_settings.shopping_module.line_item;
+    expect(line.refs.list_id).toBe('records:real-list');
+    expect(line.refs.source_record_ids).toEqual(['records:real-src', 'records:keep']);
+    // The plain (non-refs) key is left untouched — it is module-private data.
+    expect(line.list_id).toBe('temp:list');
+  });
+
+  it('keeps remapping structural graph keys outside module_settings', async () => {
+    const cache = createCacheStub();
+    const liveBus = createBusStub();
+    const engine = createSyncEngine(cache as any, liveBus as any, {
+      url: 'http://localhost:8000',
+      namespace: 'app',
+      storageNamespace: 'test-sync',
+      database: 'main',
+      token: 'token',
+      scopes: []
+    });
+
+    const op = engine.queueOp('AddChild', { id: 'temp:edge', parent: 'temp:p', child: 'temp:c' });
+    engine.applyRemote({ type: 'TempIdRemap', tempId: 'temp:p', realId: 'records:p' } as any);
+
+    expect((op.payload as any).parent).toBe('records:p');
+    // untouched sibling still temp
+    expect((op.payload as any).child).toBe('temp:c');
+  });
+
   it('keeps DeleteTree scoped to record subtree deletion and uses RemoveChild for graph edges', async () => {
     const cache = createCacheStub();
     const liveBus = createBusStub();
