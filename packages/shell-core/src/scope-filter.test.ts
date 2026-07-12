@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import {
   buildScopeSurql,
   chooseScopeStrategy,
+  decodeMultiScopeParam,
   decodeScopeFilter,
+  encodeMultiScopeParam,
   encodeScopeFilter,
   evaluateFilter,
   type ScopeFilter
@@ -61,6 +63,83 @@ describe('scope filter URL encoding', () => {
   it('returns an empty filter for invalid input', () => {
     expect(decodeScopeFilter('b64=not-valid')).toEqual({ strategy: 'auto', root: null });
     expect(encodeScopeFilter({ strategy: 'auto', root: { kind: 'in', ids: [] } })).toBeNull();
+  });
+});
+
+describe('multi-scope envelope', () => {
+  const inFilter = (ids: string[]): ScopeFilter => ({
+    strategy: 'auto',
+    root: { kind: 'in', ids }
+  });
+
+  it('round-trips per-connection filters for known keys', () => {
+    const param = {
+      byConnection: {
+        connA: inFilter(['a', 'b']),
+        connB: { strategy: 'bottom-up', root: { kind: 'not_in', ids: ['c'] } }
+      }
+    };
+    const encoded = encodeMultiScopeParam(param);
+    expect(encoded).toMatch(/^v2\./);
+    const decoded = decodeMultiScopeParam(encoded, ['connA', 'connB']);
+    expect(decoded.byConnection.connA).toEqual(inFilter(['a', 'b']));
+    expect(decoded.byConnection.connB).toEqual({
+      strategy: 'bottom-up',
+      root: { kind: 'not_in', ids: ['c'] }
+    });
+  });
+
+  it('drops segments for unknown connection keys (leak fix)', () => {
+    const param = {
+      byConnection: {
+        connA: inFilter(['a']),
+        connX: inFilter(['x'])
+      }
+    };
+    const encoded = encodeMultiScopeParam(param);
+    const decoded = decodeMultiScopeParam(encoded, ['connA', 'connB']);
+    expect(Object.keys(decoded.byConnection)).toEqual(['connA']);
+    expect(decoded.byConnection.connX).toBeUndefined();
+  });
+
+  it("connA's segment never bleeds into connB's state", () => {
+    const param = { byConnection: { connA: inFilter(['a', 'b']) } };
+    const encoded = encodeMultiScopeParam(param);
+    const decoded = decodeMultiScopeParam(encoded, ['connA', 'connB']);
+    // connB has no segment of its own → it is simply absent (not poisoned by connA).
+    expect(decoded.byConnection.connB).toBeUndefined();
+    expect(decoded.byConnection.connA).toEqual(inFilter(['a', 'b']));
+  });
+
+  it('omits inactive filters from the envelope and returns null when all empty', () => {
+    expect(
+      encodeMultiScopeParam({
+        byConnection: {
+          connA: { strategy: 'auto', root: null },
+          connB: { strategy: 'auto', root: { kind: 'in', ids: [] } }
+        }
+      })
+    ).toBeNull();
+  });
+
+  it('decodes non-v2 input to empty (old links dead by design)', () => {
+    expect(decodeMultiScopeParam('in:a,b', ['connA'])).toEqual({ byConnection: {} });
+    expect(decodeMultiScopeParam('s=bottom-up;not_in:c', ['connA'])).toEqual({ byConnection: {} });
+  });
+
+  it('decodes malformed v2 input to empty', () => {
+    expect(decodeMultiScopeParam('v2.!!!not-base64!!!', ['connA'])).toEqual({ byConnection: {} });
+    expect(decodeMultiScopeParam('v2.' + btoa('[1,2,3]'), ['connA'])).toEqual({ byConnection: {} });
+    expect(decodeMultiScopeParam('v2.', ['connA'])).toEqual({ byConnection: {} });
+    expect(decodeMultiScopeParam(null, ['connA'])).toEqual({ byConnection: {} });
+    expect(decodeMultiScopeParam(undefined, ['connA'])).toEqual({ byConnection: {} });
+  });
+
+  it('drops non-string segment values defensively', () => {
+    const obj = { connA: 123, connB: { nested: 'object' } };
+    const encoded = 'v2.' + Buffer.from(JSON.stringify(obj), 'utf8').toString('base64');
+    const decoded = decodeMultiScopeParam(encoded, ['connA', 'connB']);
+    expect(decoded.byConnection).toEqual({});
   });
 });
 

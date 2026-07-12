@@ -156,6 +156,55 @@ export function decodeScopeFilter(input: string | null | undefined): ScopeFilter
   return normaliseFilter({ root, strategy });
 }
 
+// --- multi-connection envelope -----------------------------------------------
+//
+// v2 URL envelope: `scp=v2.<base64url(JSON { [connKey]: encodeScopeFilter(filter) })>`.
+// Each segment is keyed by connectionKey so a filter applies only to its own
+// connection (no cross-connection poisoning on switch). Segments for connections
+// the caller doesn't know are DROPPED on decode (the leak/stray-state fix).
+// Non-`v2.` input decodes empty — old single-filter links are dead by design.
+
+export interface MultiScopeParam {
+  byConnection: Record<string, ScopeFilter>;
+}
+
+// Returns null when no connection has an active filter (so the `scp` param is
+// deleted rather than carried empty).
+export function encodeMultiScopeParam(p: MultiScopeParam): string | null {
+  const out: Record<string, string> = {};
+  for (const [key, filter] of Object.entries(p.byConnection)) {
+    const enc = encodeScopeFilter(filter); // null for inactive/empty filters
+    if (enc !== null) out[key] = enc;
+  }
+  if (Object.keys(out).length === 0) return null;
+  return 'v2.' + base64UrlEncode(JSON.stringify(out));
+}
+
+// Unknown keys (not in `knownConnectionKeys`) are dropped. Malformed input
+// (non-v2, bad base64, non-object JSON) → empty `byConnection`.
+export function decodeMultiScopeParam(
+  input: string | null | undefined,
+  knownConnectionKeys: string[]
+): MultiScopeParam {
+  if (!input || !input.startsWith('v2.')) return { byConnection: {} };
+  const known = new Set(knownConnectionKeys);
+  try {
+    const obj = JSON.parse(base64UrlDecode(input.slice(3)));
+    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) {
+      return { byConnection: {} };
+    }
+    const byConnection: Record<string, ScopeFilter> = {};
+    for (const [key, val] of Object.entries(obj)) {
+      if (!known.has(key)) continue; // drop unknown connection
+      if (typeof val !== 'string') continue;
+      byConnection[key] = decodeScopeFilter(val);
+    }
+    return { byConnection };
+  } catch {
+    return { byConnection: {} };
+  }
+}
+
 // --- client-side evaluation --------------------------------------------------
 //
 // Used to filter cached items in-memory (e.g. recent items list) without a
