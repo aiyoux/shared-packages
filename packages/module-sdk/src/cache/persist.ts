@@ -1,6 +1,6 @@
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
 import type { CacheItem, ChildEdge, AppliesEdge } from './types.ts';
-import { DAY_MS } from '../time.ts';
+import { DAY_MS } from '@modular-app/ui/date';
 
 interface ModularAppDB extends DBSchema {
   items: {
@@ -175,29 +175,93 @@ export async function getCacheDb(namespace: string): Promise<IDBPDatabase<Modula
   return db;
 }
 
-export async function cleanupStaleDatabases(keepNamespaces: string[]): Promise<void> {
-  if (!indexedDB.databases) return;
+/**
+ * Count pending + inflight ops in a cache DB by its full DB name, without
+ * caching the connection. Used by `cleanupStaleDatabases` to refuse destroying
+ * a DB that still holds unsynced work (the M4 data-loss guard). Returns 0 on
+ * any open/parse failure so a corrupt or inaccessible DB still gets cleaned
+ * rather than silently retained forever.
+ */
+async function countPendingOpsIn(rawNs: string, dbName: string): Promise<number> {
+  try {
+    const cached = dbInstances.get(rawNs);
+    let db: IDBPDatabase<ModularAppDB>;
+    let ownClose = false;
+    if (cached) {
+      db = cached;
+    } else {
+      db = await openDB<ModularAppDB>(dbName, DB_VERSION);
+      ownClose = true;
+    }
+    try {
+      const index = db.transaction('oplog').store.index('by-status');
+      const [pending, inflight] = await Promise.all([
+        index.count('pending'),
+        index.count('inflight')
+      ]);
+      return pending + inflight;
+    } finally {
+      if (ownClose) db.close();
+    }
+  } catch {
+    return 0;
+  }
+}
+
+export interface CleanupSkippedDB {
+  namespace: string;
+  pendingCount: number;
+}
+
+export interface CleanupResult {
+  /** Databases NOT deleted because they held pending/inflight ops. */
+  skippedWithPendingOps: CleanupSkippedDB[];
+}
+
+export async function cleanupStaleDatabases(
+  keepNamespaces: string[],
+  options?: { force?: string[] }
+): Promise<CleanupResult> {
+  const result: CleanupResult = { skippedWithPendingOps: [] };
+  if (!indexedDB.databases) return result;
   const databases = await indexedDB.databases();
   const keepSet = new Set(keepNamespaces.map(ns => `${DB_PREFIX}${ns}`));
-  
-  for (const dbInfo of databases) {
-    if (dbInfo.name && dbInfo.name.startsWith(DB_PREFIX) && !keepSet.has(dbInfo.name)) {
-      const rawNs = dbInfo.name.substring(DB_PREFIX.length);
-      if (dbInstances.has(rawNs)) {
-        dbInstances.get(rawNs)!.close();
-        dbInstances.delete(rawNs);
-      }
+  const forceSet = new Set((options?.force ?? []).map(ns => `${DB_PREFIX}${ns}`));
 
-      const deleted = await deleteDatabaseByName(dbInfo.name);
-      if (deleted) {
+  for (const dbInfo of databases) {
+    if (!dbInfo.name || !dbInfo.name.startsWith(DB_PREFIX) || keepSet.has(dbInfo.name)) {
+      continue;
+    }
+    const rawNs = dbInfo.name.substring(DB_PREFIX.length);
+
+    // Guard (M4 data-loss protection): never destroy a DB holding
+    // pending/inflight ops unless the caller explicitly forces it (a
+    // user-confirmed "Discard & sign out"). Surface skips so the app can
+    // warn the user their unsynced changes were preserved.
+    if (!forceSet.has(dbInfo.name)) {
+      const pendingCount = await countPendingOpsIn(rawNs, dbInfo.name);
+      if (pendingCount > 0) {
+        result.skippedWithPendingOps.push({ namespace: rawNs, pendingCount });
         continue;
       }
-
-      const db = await openDB<ModularAppDB>(dbInfo.name, DB_VERSION);
-      await clearDatabaseContents(db);
-      db.close();
     }
+
+    if (dbInstances.has(rawNs)) {
+      dbInstances.get(rawNs)!.close();
+      dbInstances.delete(rawNs);
+    }
+
+    const deleted = await deleteDatabaseByName(dbInfo.name);
+    if (deleted) {
+      continue;
+    }
+
+    const db = await openDB<ModularAppDB>(dbInfo.name, DB_VERSION);
+    await clearDatabaseContents(db);
+    db.close();
   }
+
+  return result;
 }
 
 /**

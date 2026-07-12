@@ -900,6 +900,127 @@ describe('createSyncEngine', () => {
     expect(cache.notify_sync_idle).toHaveBeenCalledTimes(1);
   });
 
+  it('batches many group/applies relation deltas into one op writing to groups and appliesto', async () => {
+    const cache = createCacheStub();
+    const liveBus = createBusStub();
+    const fetchMock = vi.mocked(fetch);
+
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue([
+        {
+          status: 'OK',
+          result: {
+            addedGroups: [
+              { id: 'groups:g1', in: 'records:grp1', out: 'records:event-1' },
+              { id: 'groups:g2', in: 'records:grp2', out: 'records:event-1' }
+            ],
+            addedApplies: [
+              { id: 'appliesto:a1', in: 'records:event-1', out: 'records:conn-1' }
+            ]
+          }
+        }
+      ])
+    } as unknown as Response);
+
+    const engine = createSyncEngine(cache as any, liveBus as any, {
+      url: 'http://localhost:8000',
+      namespace: 'app',
+      storageNamespace: 'test-sync',
+      database: 'main',
+      token: 'token',
+      scopes: []
+    });
+
+    engine.queueOp('UpdateRelationsBatch', {
+      addGroups: [
+        { src: 'records:grp1', dst: 'records:event-1' },
+        { src: 'records:grp2', dst: 'records:event-1' }
+      ],
+      removeGroups: [{ id: 'groups:old-1' }],
+      addApplies: [{ src: 'records:event-1', dst: 'records:conn-1' }],
+      removeApplies: [{ id: 'appliesto:old-1' }]
+    });
+    await engine.pushOps();
+
+    // ONE op → ONE HTTP request. This is the fix for the calendar APPLY TEMPLATE
+    // op storm (previously N AddGrouping/RemoveGrouping/AddApplies/RemoveApplies
+    // ops, each its own transaction — the SDK has no coalescing).
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const body = (fetchMock.mock.calls[0]?.[1] as RequestInit | undefined)?.body;
+    expect(typeof body).toBe('string');
+    // Writes only to the schema-defined tables — never the phantom `applies` table.
+    expect(body).toContain('RELATE $ag_0_s->groups->$ag_0_d');
+    expect(body).toContain('RELATE $aa_0_s->appliesto->$aa_0_d');
+    expect(body).not.toContain('->applies->');
+    // Idempotency guards on both add kinds (replay-safe; mirrors AddGrouping).
+    expect(body).toContain('SELECT * FROM groups WHERE in = $ag_0_s AND out = $ag_0_d LIMIT 1');
+    expect(body).toContain('SELECT * FROM appliesto WHERE in = $aa_0_s AND out = $aa_0_d LIMIT 1');
+    // Removes are plain idempotent DELETEs of the concrete edge ids.
+    expect(body).toContain('DELETE type::record($rg_0)');
+    expect(body).toContain('DELETE type::record($ra_0)');
+    // Single consolidated RETURN carrying the added edges for local apply.
+    expect(body).toContain('RETURN { addedGroups: [$ag_0, $ag_1], addedApplies: [$aa_0] };');
+
+    // Both added groups upserted into the child-edge cache (in=group, out=member).
+    expect(cache.upsert_graph_child_of_edge).toHaveBeenCalledWith(
+      'groups:g1', 'records:event-1', 'records:grp1', 0, false, undefined, null
+    );
+    expect(cache.upsert_graph_child_of_edge).toHaveBeenCalledWith(
+      'groups:g2', 'records:event-1', 'records:grp2', 0, false, undefined, null
+    );
+    // Added applies edge upserted into the applies-edge cache.
+    expect(cache.upsert_applies_edge).toHaveBeenCalledWith(
+      'appliesto:a1', 'records:event-1', 'records:conn-1', undefined
+    );
+    // Removals applied from the payload ids (idempotent cache removes).
+    expect(cache.remove_graph_child).toHaveBeenCalledWith('groups:old-1');
+    expect(cache.remove_applies_edge).toHaveBeenCalledWith('appliesto:old-1');
+    // Broadcasts to sibling tabs for immediacy (changefeed also delivers idempotently).
+    expect(liveBus.broadcast).toHaveBeenCalledWith(expect.objectContaining({ type: 'GraphChildBatchUpsert' }));
+    expect(liveBus.broadcast).toHaveBeenCalledWith({
+      type: 'AppliesUpsert', edgeId: 'appliesto:a1', srcId: 'records:event-1', dstId: 'records:conn-1', moduleData: undefined
+    });
+    expect(liveBus.broadcast).toHaveBeenCalledWith({ type: 'GraphChildDelete', edgeId: 'groups:old-1' });
+    expect(liveBus.broadcast).toHaveBeenCalledWith({ type: 'AppliesDelete', edgeId: 'appliesto:old-1' });
+    // Op drained from the queue.
+    expect(engine.getPendingOps()).toHaveLength(0);
+    expect(cache.notify_sync_idle).toHaveBeenCalledTimes(1);
+  });
+
+  it('writes applies edges idempotently to the schema appliesto table, not the phantom applies table', async () => {
+    const cache = createCacheStub();
+    const liveBus = createBusStub();
+    const fetchMock = vi.mocked(fetch);
+
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue([
+        { status: 'OK', result: [{ id: 'appliesto:edge-1', in: 'records:src', out: 'records:dst' }] }
+      ])
+    } as unknown as Response);
+
+    const engine = createSyncEngine(cache as any, liveBus as any, {
+      url: 'http://localhost:8000',
+      namespace: 'app',
+      storageNamespace: 'test-sync',
+      database: 'main',
+      token: 'token',
+      scopes: []
+    });
+
+    engine.queueOp('AddApplies', { src: 'records:src', dst: 'records:dst' });
+    await engine.pushOps();
+
+    const body = (fetchMock.mock.calls[0]?.[1] as RequestInit | undefined)?.body;
+    expect(typeof body).toBe('string');
+    // Schema-defined table only (appliesto has the changefeed/permissions/indexes;
+    // the legacy `->applies->` form wrote to a phantom table that never persisted).
+    expect(body).toContain('RELATE $s->appliesto->$d');
+    expect(body).toContain('SELECT * FROM appliesto WHERE in = $s AND out = $d LIMIT 1');
+    expect(body).not.toContain('->applies->');
+  });
+
   it('rewrites referenced temp ids across pending op payload shapes after a remap', () => {
     const cache = createCacheStub();
     const liveBus = createBusStub();
@@ -1476,5 +1597,364 @@ describe('createSyncEngine', () => {
 
     expect(fetchMock).not.toHaveBeenCalled();
     expect(engine.getPendingOps()).toHaveLength(1);
+  });
+});
+
+describe('sync engine push scheduler', () => {
+  const engineConfig = {
+    url: 'http://localhost:8000',
+    namespace: 'app',
+    storageNamespace: 'test-sync',
+    database: 'main',
+    token: 'token',
+    scopes: []
+  };
+
+  function okResponse(result: unknown = null): Response {
+    return {
+      ok: true,
+      json: vi.fn().mockResolvedValue([{ status: 'OK', result }])
+    } as unknown as Response;
+  }
+
+  function conflictResponse(): Response {
+    return {
+      ok: true,
+      json: vi.fn().mockResolvedValue([{ status: 'ERR', detail: 'read or write conflict' }])
+    } as unknown as Response;
+  }
+
+  /** fetch mock that parks every call until the test resolves it, keyed by body. */
+  function deferredFetch() {
+    const calls: Array<{ body: string; resolve: (response: Response) => void }> = [];
+    const impl = (_url: unknown, init?: { body?: unknown }) =>
+      new Promise<Response>((resolve) => {
+        calls.push({ body: String(init?.body ?? ''), resolve });
+      });
+    return { calls, impl };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    loadPendingOpsMock.mockResolvedValue([]);
+    loadAllOpsMock.mockResolvedValue([]);
+    persistOpMock.mockResolvedValue(undefined);
+    deleteOpMock.mockResolvedValue(undefined);
+    updateOpStatusMock.mockResolvedValue(undefined);
+    vi.stubGlobal('fetch', vi.fn());
+  });
+
+  it('pushes independent ops concurrently, capped at 4 in flight', async () => {
+    const cache = createCacheStub();
+    const liveBus = createBusStub();
+    const fetchMock = vi.mocked(fetch);
+    const { calls, impl } = deferredFetch();
+    fetchMock.mockImplementation(impl as any);
+
+    const engine = createSyncEngine(cache as any, liveBus as any, engineConfig);
+    for (let index = 0; index < 6; index += 1) {
+      engine.queueOp('UpdateRecord', { id: `records:r${index}`, text: `t${index}` });
+    }
+    const push = engine.pushOps();
+
+    // All 4 slots fill without any response having arrived — the old serial
+    // drain would sit at 1 here.
+    await vi.waitFor(() => expect(calls.length).toBe(4));
+    calls[0].resolve(okResponse());
+    // A settle frees the slot for the 5th op.
+    await vi.waitFor(() => expect(calls.length).toBe(5));
+    for (let index = 1; index < calls.length; index += 1) calls[index].resolve(okResponse());
+    await vi.waitFor(() => expect(calls.length).toBe(6));
+    calls[5].resolve(okResponse());
+    // Post-drain marker cleanup is one more HTTP call.
+    await vi.waitFor(() => expect(calls.length).toBe(7));
+    calls[6].resolve(okResponse());
+    await push;
+    expect(engine.getPendingOps()).toHaveLength(0);
+  });
+
+  it('keeps ops targeting the same record strictly FIFO while unrelated ops overlap', async () => {
+    const cache = createCacheStub();
+    const liveBus = createBusStub();
+    const fetchMock = vi.mocked(fetch);
+    const { calls, impl } = deferredFetch();
+    fetchMock.mockImplementation(impl as any);
+
+    const engine = createSyncEngine(cache as any, liveBus as any, engineConfig);
+    engine.queueOp('UpdateRecord', { id: 'records:A', text: 'a-first' });
+    engine.queueOp('UpdateRecord', { id: 'records:A', text: 'a-second' });
+    engine.queueOp('UpdateRecord', { id: 'records:B', text: 'b' });
+    const push = engine.pushOps();
+
+    // First A-op and the unrelated B-op go out; the second A-op is gated.
+    await vi.waitFor(() => expect(calls.length).toBe(2));
+    expect(calls.some((call) => call.body.includes('a-first'))).toBe(true);
+    expect(calls.some((call) => call.body.includes('b'))).toBe(true);
+    expect(calls.some((call) => call.body.includes('a-second'))).toBe(false);
+
+    calls.find((call) => call.body.includes('a-first'))!.resolve(okResponse());
+    await vi.waitFor(() => expect(calls.some((call) => call.body.includes('a-second'))).toBe(true));
+
+    for (const call of calls) {
+      if (!call.body.includes('a-first')) call.resolve(okResponse());
+    }
+    await vi.waitFor(() => expect(calls.length).toBe(4));
+    calls[3].resolve(okResponse());
+    await push;
+    expect(engine.getPendingOps()).toHaveLength(0);
+  });
+
+  it('releases a temp-id dependent within the SAME drain once its producer accepts', async () => {
+    const cache = createCacheStub();
+    const liveBus = createBusStub();
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockImplementation(async (_url: unknown, init?: { body?: unknown }) => {
+      const body = String(init?.body ?? '');
+      if (body.includes('CREATE records')) return okResponse([{ id: 'records:real1' }]);
+      return okResponse(null);
+    });
+
+    const engine = createSyncEngine(cache as any, liveBus as any, engineConfig);
+    engine.queueOp('CreateRecord', { id: 'temp:X', text: 'new' });
+    engine.queueOp('AddChild', { child: 'temp:X', parent: 'records:p', order: 0 });
+    await engine.pushOps();
+
+    // The old drain exited after the create and parked the AddChild until the
+    // next ~30s sync-loop tick. Now it flushes in the same drain, rewritten.
+    expect(engine.getPendingOps()).toHaveLength(0);
+    const addChildCall = vi
+      .mocked(fetch)
+      .mock.calls.find(([, init]) => String((init as any)?.body).includes('graph_child_of'));
+    expect(addChildCall).toBeTruthy();
+    expect(String((addChildCall![1] as any).body)).toContain('records:real1');
+    expect(String((addChildCall![1] as any).body)).not.toContain('temp:X');
+  });
+
+  it('defers an op whose temp id has no producer in the drain, without a network attempt', async () => {
+    const cache = createCacheStub();
+    const liveBus = createBusStub();
+    const fetchMock = vi.mocked(fetch);
+
+    const engine = createSyncEngine(cache as any, liveBus as any, engineConfig);
+    engine.queueOp('AddChild', { child: 'temp:missing', parent: 'records:p' });
+    await engine.pushOps();
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    const pending = engine.getPendingOps();
+    expect(pending).toHaveLength(1);
+    expect(pending[0].last_error).toContain('waiting for temp ids: temp:missing');
+  });
+
+  it('cascade-rejects dependents whose temp-id producer is rejected in the drain', async () => {
+    const cache = createCacheStub();
+    const liveBus = createBusStub();
+    const fetchMock = vi.mocked(fetch);
+    // Every attempt fails hard: the producer (already at retries=4) crosses
+    // MAX_RETRIES and is rejected.
+    fetchMock.mockResolvedValue({
+      ok: false,
+      status: 500,
+      statusText: 'Internal Server Error',
+      text: vi.fn().mockResolvedValue('')
+    } as unknown as Response);
+
+    const now = Date.now();
+    loadPendingOpsMock.mockResolvedValue([
+      {
+        id: 'op_producer',
+        kind: 'CreateRecord',
+        payload: { id: 'temp:X', text: 'x' },
+        status: 'pending',
+        created: now,
+        retries: 4,
+        last_error: 'Sync failed: Internal Server Error',
+        last_attempt_at: 0,
+        updated: now
+      },
+      {
+        id: 'op_dependent',
+        kind: 'AddChild',
+        payload: { child: 'temp:X', parent: 'records:p', optimisticEdgeId: 'temp-edge:e1' },
+        status: 'pending',
+        created: now,
+        retries: 0,
+        updated: now
+      }
+    ]);
+
+    const engine = createSyncEngine(cache as any, liveBus as any, engineConfig);
+    await engine.pushOps();
+
+    expect(engine.getPendingOps()).toHaveLength(0);
+    // Producer's optimistic record and the dependent's optimistic edge are
+    // both rolled back; the dependent explains why it was rejected.
+    expect(cache.removeItem).toHaveBeenCalledWith('temp:X');
+    expect(cache.remove_graph_child).toHaveBeenCalledWith('temp-edge:e1');
+    expect(persistOpMock).toHaveBeenCalledWith(
+      'test-sync',
+      expect.objectContaining({
+        id: 'op_dependent',
+        status: 'rejected',
+        last_error: expect.stringContaining('temp:X')
+      })
+    );
+  });
+
+  it('treats DeleteTree as a barrier: nothing straddles it', async () => {
+    const cache = createCacheStub();
+    const liveBus = createBusStub();
+    const fetchMock = vi.mocked(fetch);
+    const { calls, impl } = deferredFetch();
+    fetchMock.mockImplementation(impl as any);
+
+    const engine = createSyncEngine(cache as any, liveBus as any, engineConfig);
+    engine.queueOp('UpdateRecord', { id: 'records:A', text: 'before-delete' });
+    engine.queueOp('DeleteTree', { id: 'records:B' });
+    engine.queueOp('UpdateRecord', { id: 'records:C', text: 'after-delete' });
+    const push = engine.pushOps();
+
+    await vi.waitFor(() => expect(calls.length).toBe(1));
+    expect(calls[0].body).toContain('before-delete');
+
+    calls[0].resolve(okResponse());
+    await vi.waitFor(() => expect(calls.length).toBe(2));
+    expect(calls[1].body).toContain('delete_and_children');
+    expect(calls.some((call) => call.body.includes('after-delete'))).toBe(false);
+
+    calls[1].resolve(okResponse());
+    await vi.waitFor(() => expect(calls.length).toBe(3));
+    expect(calls[2].body).toContain('after-delete');
+
+    calls[2].resolve(okResponse());
+    await vi.waitFor(() => expect(calls.length).toBe(4)); // marker cleanup
+    calls[3].resolve(okResponse());
+    await push;
+    expect(engine.getPendingOps()).toHaveLength(0);
+  });
+
+  it('same-tick pushOps calls share ONE drain: a gated dependent is not deferred by a racing drain', async () => {
+    // Regression: the lock used to be claimed only after an await, so two
+    // pushOps entering in the same tick both passed the null-check and ran
+    // overlapping drains. The second drain saw the producer as inflight (not
+    // pending), concluded the dependent's temp id had no producer, and
+    // deferred it — stranding it for the next tick.
+    const cache = createCacheStub();
+    const liveBus = createBusStub();
+    const fetchMock = vi.mocked(fetch);
+    const { calls, impl } = deferredFetch();
+    fetchMock.mockImplementation(impl as any);
+
+    const engine = createSyncEngine(cache as any, liveBus as any, engineConfig);
+    engine.queueOp('CreateRecord', { id: 'temp:X', text: 'x' });
+    engine.queueOp('AddChild', { child: 'temp:X', parent: 'records:p' });
+    const firstPush = engine.pushOps();
+    const secondPush = engine.pushOps();
+
+    // Only the producer goes out; the dependent is gated in the same drain,
+    // and no racing drain has marked it deferred.
+    await vi.waitFor(() => expect(calls.length).toBe(1));
+    expect(persistOpMock).not.toHaveBeenCalledWith(
+      'test-sync',
+      expect.objectContaining({ last_error: expect.stringContaining('waiting for temp ids') })
+    );
+
+    calls[0].resolve(okResponse([{ id: 'records:real1' }]));
+    await vi.waitFor(() => expect(calls.length).toBe(2)); // dependent released in-drain
+    expect(calls[1].body).toContain('records:real1');
+    calls[1].resolve(okResponse());
+    await vi.waitFor(() => expect(calls.length).toBe(3)); // marker cleanup
+    calls[2].resolve(okResponse());
+    await Promise.all([firstPush, secondPush]);
+    expect(engine.getPendingOps()).toHaveLength(0);
+  });
+
+  it('cancelOp removes a queued op and cascades to its temp-id dependents', () => {
+    const cache = createCacheStub();
+    const liveBus = createBusStub();
+
+    const engine = createSyncEngine(cache as any, liveBus as any, engineConfig);
+    const producer = engine.queueOp('CreateRecord', { id: 'temp:X', text: 'x' });
+    const dependent = engine.queueOp('AddChild', {
+      child: 'temp:X',
+      parent: 'records:p',
+      optimisticEdgeId: 'temp-edge:e1'
+    });
+    const unrelated = engine.queueOp('UpdateRecord', { id: 'records:other', text: 'keep' });
+
+    expect(engine.cancelOp(producer.id)).toBe(true);
+
+    expect(engine.getPendingOps().map((op) => op.id)).toEqual([unrelated.id]);
+    expect(cache.removeItem).toHaveBeenCalledWith('temp:X');
+    expect(cache.remove_graph_child).toHaveBeenCalledWith('temp-edge:e1');
+    expect(deleteOpMock).toHaveBeenCalledWith('test-sync', producer.id);
+    expect(deleteOpMock).toHaveBeenCalledWith('test-sync', dependent.id);
+    expect(liveBus.broadcast).toHaveBeenCalledWith({ type: 'OpCancel', id: producer.id });
+    expect(liveBus.broadcast).toHaveBeenCalledWith({ type: 'OpCancel', id: dependent.id });
+
+    expect(engine.cancelOp('op_unknown')).toBe(false);
+  });
+
+  it('cancelOp refuses an inflight op', async () => {
+    const cache = createCacheStub();
+    const liveBus = createBusStub();
+    const fetchMock = vi.mocked(fetch);
+    const { calls, impl } = deferredFetch();
+    fetchMock.mockImplementation(impl as any);
+
+    const engine = createSyncEngine(cache as any, liveBus as any, engineConfig);
+    const op = engine.queueOp('UpdateRecord', { id: 'records:A', text: 'a' });
+    const push = engine.pushOps();
+    await vi.waitFor(() => expect(calls.length).toBe(1));
+
+    expect(engine.cancelOp(op.id)).toBe(false);
+
+    calls[0].resolve(okResponse());
+    await vi.waitFor(() => expect(calls.length).toBe(2)); // marker cleanup
+    calls[1].resolve(okResponse());
+    await push;
+  });
+
+  it('applyRemote OpCancel prunes the local oplog copy of a pending op', () => {
+    const cache = createCacheStub();
+    const liveBus = createBusStub();
+
+    const engine = createSyncEngine(cache as any, liveBus as any, engineConfig);
+    const op = engine.queueOp('CreateRecord', { id: 'temp:X', text: 'x' });
+    engine.applyRemote({ type: 'OpCancel', id: op.id } as any);
+
+    expect(engine.getPendingOps()).toHaveLength(0);
+    expect(cache.removeItem).toHaveBeenCalledWith('temp:X');
+  });
+
+  it('retries a conflict-failed op at its own backoff expiry, without a sync-loop tick', async () => {
+    vi.useFakeTimers();
+    try {
+      const cache = createCacheStub();
+      const liveBus = createBusStub();
+      const fetchMock = vi.mocked(fetch);
+      fetchMock.mockResolvedValueOnce(conflictResponse()).mockResolvedValue(okResponse(null));
+
+      const engine = createSyncEngine(cache as any, liveBus as any, engineConfig);
+      // The retry wake only arms while a sync loop is active (as in
+      // production); its base 30s tick is far beyond what we advance here.
+      const stopLoop = engine.startSyncLoop();
+      try {
+        const op = engine.queueOp('UpdateRecord', { id: 'records:A', text: 'a' });
+        await engine.pushOps();
+
+        // Failed retryably; backing off on the fast conflict curve
+        // (500ms + deterministic jitter < 750ms), NOT the 5s error curve.
+        expect(op.status).toBe('pending');
+        expect(op.retries).toBe(1);
+
+        // No explicit pushOps, no 30s tick — the armed retry wake fires it.
+        await vi.advanceTimersByTimeAsync(1000);
+        expect(engine.getPendingOps()).toHaveLength(0);
+      } finally {
+        stopLoop();
+      }
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

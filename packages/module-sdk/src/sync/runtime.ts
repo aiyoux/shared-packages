@@ -1,6 +1,6 @@
 import { createAppCache, type AppCache } from '../cache/store.svelte.ts';
 import { hydrateCache, createCachePersistence } from '../cache/hydration.ts';
-import { deleteRuntimeState, getRuntimeState, loadScopeSyncState, persistScopeSyncState, setRuntimeState } from '../cache/persist.ts';
+import { deleteRuntimeState, getRuntimeState, loadScopeSyncState, persistScopeSyncState, setRuntimeState, getPendingOps as loadPendingOps, type PersistedOp } from '../cache/persist.ts';
 import { createLeaderElection, type LeaderElection } from './leader.svelte.ts';
 import { createLiveBus, type LiveBus, type LeaderRpcCall, type LiveBusMsg } from './live.ts';
 import { createSyncEngine, type SyncEngine, fetchWithTimeout } from './engine.ts';
@@ -38,6 +38,13 @@ export interface RuntimeConfig extends SurrealDbLiveConfig {
    * letting the user stare at a permanently-empty list.
    */
   onSchemaIssue?: (issue: RuntimeSchemaIssue) => void;
+  /**
+   * Optional override for the push-scheduler concurrency cap (default 4).
+   * Escape hatch only — the default is deliberately conservative. Under the
+   * active/warm runtime lifecycle the number of LIVE runtimes is small, so the
+   * aggregate push load stays bounded without a global semaphore.
+   */
+  pushConcurrency?: number;
 }
 
 export interface AppRuntime {
@@ -49,12 +56,21 @@ export interface AppRuntime {
   start: () => Promise<void>;
   destroy: () => void;
   queueAndWake: (kind: OpKind, payload: unknown) => void;
+  /** Cancel a QUEUED (pending) sync op; returns false for inflight/unknown ops. */
+  cancelOp: (opId: string) => boolean;
   updateScopes: (scopes: string[]) => void;
   getActiveScopes: () => string[];
   fetchAndCache: (call: LeaderRpcCall, timeoutMs?: number) => Promise<any[]>;
   // True while a namespace-scope resync (coarse snapshot + edge catch-up) is
   // in flight. Subscribers skip corrective slice mutations on coarse upserts.
   isResyncing: () => boolean;
+  /**
+   * Persisted pending + inflight ops for this runtime's IDB namespace. This is
+   * the source of truth for data-loss guards (M4): it works for BOTH live and
+   * warm/stopped runtimes, unlike the in-memory `engine.getPendingOps()` which
+   * is only populated while the engine is running and excludes inflight ops.
+   */
+  getPendingOps: () => Promise<PersistedOp[]>;
 }
 
 const LIVE_CATCHUP_REQUIRED_KEY = 'live.catchup.required';
@@ -423,7 +439,8 @@ export function createAppRuntime(config: RuntimeConfig): AppRuntime {
     token: config.token,
     getToken: config.getToken,
     scopes: initialScopes,
-    logLevel
+    logLevel,
+    pushConcurrency: config.pushConcurrency
   });
   
   let syncLoopStop: (() => void) | null = null;
@@ -1624,6 +1641,11 @@ export function createAppRuntime(config: RuntimeConfig): AppRuntime {
     }
     if (leaderElection.isLeader) {
       restartLeaderLiveConnection('visibilitychange');
+      // A single mobile tab IS the leader, and mobile background throttling
+      // freezes the sync-loop timer — so ops queued/backing-off while hidden
+      // sit until that throttled timer finally fires. Flush explicitly on
+      // return to foreground (followers already do, via followerActivate).
+      void engine.pushOps();
     } else {
       void resyncActiveScopes('follower', false);
       followerActivate();
@@ -1634,6 +1656,8 @@ export function createAppRuntime(config: RuntimeConfig): AppRuntime {
     if (destroyed) return;
     if (leaderElection.isLeader) {
       restartLeaderLiveConnection('window-focus');
+      // See handleVisibilityChange — the leader must self-flush on foreground.
+      void engine.pushOps();
     } else {
       followerActivate();
     }
@@ -1726,12 +1750,16 @@ export function createAppRuntime(config: RuntimeConfig): AppRuntime {
     start,
     destroy,
     queueAndWake,
+    cancelOp: (opId: string) => engine.cancelOp(opId),
     updateScopes,
     getActiveScopes: () => [...activeScopes],
     fetchAndCache,
     // True while a namespace-scope resync (coarse `SELECT * FROM records`
     // snapshot + edge catch-up) is in flight. Subscribers use this to skip
     // corrective slice mutations on the coarse upserts (cold edge cache).
-    isResyncing: () => resyncDepth > 0
+    isResyncing: () => resyncDepth > 0,
+    // Persisted pending + inflight ops for this namespace (M4 data-loss guard).
+    // Reads IDB directly so it's correct even when the engine isn't running.
+    getPendingOps: () => loadPendingOps(config.isolationKey)
   };
 }

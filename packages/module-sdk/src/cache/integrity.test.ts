@@ -102,6 +102,34 @@ describe('AppCache Invariants Integrity', () => {
     expect(cache.itemMeta.get('records:ABC')?.sync_status).toBe('accepted');
   });
 
+  it('resolves applies edges bidirectionally and keeps both indexes in sync', () => {
+    cache.normalizeItem({ id: 'records:src', text: 'Source', is_temp: false, dirty: false, sync_status: 'accepted' });
+    cache.normalizeItem({ id: 'records:dst', text: 'Destination', is_temp: false, dirty: false, sync_status: 'accepted' });
+
+    cache.upsert_applies_edge('applies:src-dst', 'records:src', 'records:dst');
+
+    // Outgoing (src → dst) and incoming (dst ← src) both resolve to the same edge.
+    expect(cache.get_applies_for_source('records:src')).toHaveLength(1);
+    expect(cache.get_applies_for_source('records:src')[0].dst_id).toBe('records:dst');
+    expect(cache.get_applies_for_dest('records:dst')).toHaveLength(1);
+    expect(cache.get_applies_for_dest('records:dst')[0].src_id).toBe('records:src');
+
+    // Reverse directions are empty — the edge is directed, just indexed both ways.
+    expect(cache.get_applies_for_source('records:dst')).toHaveLength(0);
+    expect(cache.get_applies_for_dest('records:src')).toHaveLength(0);
+
+    // Remap the destination: the dest index must follow to the new id.
+    cache.remap_id('records:dst', 'records:dst2');
+    expect(cache.get_applies_for_dest('records:dst')).toHaveLength(0);
+    expect(cache.get_applies_for_dest('records:dst2')).toHaveLength(1);
+    expect(cache.get_applies_for_source('records:src')[0].dst_id).toBe('records:dst2');
+
+    // Removing the edge cleans both indexes.
+    cache.remove_applies_edge('applies:src-dst');
+    expect(cache.get_applies_for_source('records:src')).toHaveLength(0);
+    expect(cache.get_applies_for_dest('records:dst2')).toHaveLength(0);
+  });
+
   it('collapses optimistic temp child edges when the durable graph edge arrives', () => {
     cache.normalizeItem({ id: 'records:parent', text: 'Parent', is_temp: false, dirty: false, sync_status: 'accepted' });
     cache.normalizeItem({ id: 'temp:child', text: 'Child', is_temp: true, dirty: true, sync_status: 'pending' });

@@ -221,3 +221,71 @@ describe('isItemInScope parent-walk fallback', () => {
     cache.clear();
   });
 });
+
+/**
+ * getRecordKey (store.svelte.ts) reverse-parses a `scope_bucket_key` to recover
+ * the {scope, bucket} for an item. The function had zero callers so the
+ * first-colon split bug was latent; M8 wires the first caller, so this locks
+ * the last-colon parse against regression. The same `records:<id>:YYYY-MM-DD`
+ * key that broke the naive split must round-trip to the full record-id scope
+ * and the bare date bucket.
+ */
+describe('getRecordKey last-colon parse (M2/M8)', () => {
+  it('recovers the full record-id scope and bare-date bucket for a record-scoped slice', () => {
+    const cache = createAppCache();
+    cache.normalizeItem({
+      id: 'records:item-1',
+      text: 'A',
+      is_temp: false,
+      dirty: false,
+      sync_status: 'accepted'
+    });
+    cache.record_scope_bucket_items('records:abc', '2026-07-05', ['records:item-1']);
+
+    const key = cache.getRecordKey('records:item-1');
+    expect(key).toEqual({
+      scope: 'records:abc',
+      bucket: '2026-07-05',
+      id: 'records:item-1'
+    });
+
+    // Explicitly the bug shape: the naive `key.split(':')` returned
+    // { scope: 'records', bucket: 'abc' } — neither field is correct.
+    expect(key?.scope).not.toBe('records');
+    expect(key?.bucket).not.toBe('abc');
+    cache.clear();
+  });
+
+  it('returns null for an item with no slice and for an unknown item', () => {
+    const cache = createAppCache();
+    cache.normalizeItem({
+      id: 'records:lonely',
+      text: 'L',
+      is_temp: false,
+      dirty: false,
+      sync_status: 'accepted'
+    });
+    expect(cache.getRecordKey('records:lonely')).toBeNull();
+    expect(cache.getRecordKey('records:missing')).toBeNull();
+    cache.clear();
+  });
+
+  it('handles a scope id whose own id part also contains no colon (plain scope)', () => {
+    const cache = createAppCache();
+    cache.normalizeItem({
+      id: 'records:item-2',
+      text: 'B',
+      is_temp: false,
+      dirty: false,
+      sync_status: 'accepted'
+    });
+    // scope without a `records:` prefix — still a single trailing `:bucket`.
+    cache.record_scope_bucket_items('plan', '2026-07-06', ['records:item-2']);
+    expect(cache.getRecordKey('records:item-2')).toEqual({
+      scope: 'plan',
+      bucket: '2026-07-06',
+      id: 'records:item-2'
+    });
+    cache.clear();
+  });
+});

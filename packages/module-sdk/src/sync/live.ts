@@ -49,6 +49,12 @@ export type LiveBusMsg =
    */
   | { type: 'OpUpsert'; op: Op }
   | { type: 'OpRemove'; id: string }
+  /**
+   * A tab cancelled a queued op. Receivers must prune it from their in-memory
+   * oplog (the shared-IDB delete alone can't stop a tab that already loaded
+   * the op from pushing it) and roll back their optimistic cache rows.
+   */
+  | { type: 'OpCancel'; id: string }
   | { type: 'SyncWake' }
   /**
    * A foreground follower asking the current (likely backgrounded) leader to

@@ -135,7 +135,8 @@ export type OpKind =
   | 'DeleteTree'
   | 'UpdateEdge'
   | 'CreateTreeBatch'
-  | 'UpdateRecordsBatch';
+  | 'UpdateRecordsBatch'
+  | 'UpdateRelationsBatch';
 
 export interface CreateTreeBatchRecord {
   tempId: string;
@@ -226,6 +227,33 @@ export interface UpdateRecordsBatchPayload {
    * `records` event per row — see LIVE SYNC ARCHITECTURE in surrealdb-live.ts.
    */
   records: UpdateRecordsBatchRecord[];
+}
+
+/**
+ * Batched group/applies relation deltas for an EXISTING record. Collapses what
+ * would otherwise be N `AddGrouping`/`RemoveGrouping`/`AddApplies`/
+ * `RemoveApplies` ops (N HTTP transactions — the SDK has no coalescing) into a
+ * single op / single SQL transaction. The prime mover: editing a calendar event
+ * and applying a template that changes many `groups` memberships at once.
+ *
+ * Adds are idempotent on replay (each RELATE is guarded by an `in`/`out`
+ * existence check, mirroring the individual `AddGrouping` op); removes are
+ * plain `DELETE type::record($id)` (idempotent against an already-deleted edge).
+ * Edges are NOT tagged with `_sync_op_id` — idempotency comes from the `in`/`out`
+ * guard, not the op-id marker, so this kind is excluded from `shouldStampMarker`.
+ * Each RELATE/DELETE emits its own changefeed event (no `skip_changefeed`), so
+ * live propagation to other tabs/devices is identical to the per-op path — only
+ * the op count and HTTP request count drop.
+ */
+export interface UpdateRelationsBatchPayload {
+  /** `RELATE <group>->groups-><member>` deltas. `src` is the group, `dst` the member. */
+  addGroups: { src: string; dst: string }[];
+  /** `DELETE groups:<id>` — concrete `groups:` edge ids from the cache. */
+  removeGroups: { id: string }[];
+  /** `RELATE <src>->appliesto-><dst>` deltas. */
+  addApplies: { src: string; dst: string }[];
+  /** `DELETE appliesto:<id>` — concrete `appliesto:` edge ids from the cache. */
+  removeApplies: { id: string }[];
 }
 
 export type OpStatus = 'pending' | 'inflight' | 'accepted' | 'rejected';

@@ -1,4 +1,4 @@
-import type { Op, OpKind, CreateTreeBatchPayload, UpdateRecordsBatchPayload, CloneSetting } from '../cache/types.ts';
+import type { Op, OpKind, CreateTreeBatchPayload, UpdateRecordsBatchPayload, UpdateRelationsBatchPayload, CloneSetting } from '../cache/types.ts';
 import type { LiveBus, LiveBusMsg } from './live.ts';
 import type { AppCache } from '../cache/store.svelte.ts';
 import { persistOp, deleteOp, updateOpStatus, getPendingOps as loadPendingOps, getAllOps as loadAllOps } from '../cache/persist.ts';
@@ -20,6 +20,13 @@ export interface SyncEngineConfig {
   logLevel?: LogLevel;
   /** Lazy token provider. When set, takes precedence over the static `token` field. */
   getToken?: () => Promise<string>;
+  /**
+   * Optional override for the push-scheduler concurrency cap (default 4). Escape
+   * hatch for runtimes expected to push a lot of independent ops; the default
+   * is intentionally conservative to avoid storming the server or exhausting
+   * mobile connection pools.
+   */
+  pushConcurrency?: number;
 }
 
 async function resolveToken(config: SyncEngineConfig): Promise<string> {
@@ -531,6 +538,46 @@ function collect_intra_batch_reference_paths(
   return out;
 }
 
+/**
+ * Collect EVERY reference-slot string in a payload (temp or real). These are
+ * the "structural keys" the push scheduler uses for same-target FIFO ordering:
+ * queued ops whose key sets intersect run in queue order relative to each
+ * other, while disjoint ops push concurrently. Over-collection is safe (it
+ * only adds ordering); under-collection is not — so this reuses the same
+ * ref-slot traversal as the temp-id remapper rather than a per-kind key list.
+ */
+function collect_reference_ids(value: unknown, found = new Set<string>(), scope: RefScope = 'default'): Set<string> {
+  if (!value || typeof value !== 'object') {
+    return found;
+  }
+
+  if (Array.isArray(value)) {
+    if (scope === 'refs') {
+      for (const entry of value) {
+        if (typeof entry === 'string' && entry.length > 0) found.add(entry);
+      }
+    }
+    for (const entry of value) {
+      collect_reference_ids(entry, found, scope);
+    }
+    return found;
+  }
+
+  const record = value as Record<string, unknown>;
+  for (const [key, entry] of Object.entries(record)) {
+    if (typeof entry === 'string' && entry.length > 0 && is_ref_slot(scope, key)) {
+      found.add(entry);
+      continue;
+    }
+
+    if (entry && typeof entry === 'object') {
+      collect_reference_ids(entry, found, ref_child_scope(scope, key));
+    }
+  }
+
+  return found;
+}
+
 function collect_temp_reference_ids(value: unknown, found = new Set<string>(), scope: RefScope = 'default'): Set<string> {
   if (!value || typeof value !== 'object') {
     return found;
@@ -587,6 +634,28 @@ export function createSyncEngine(
   const MAX_RETRIES = 5;
   const BASE_BACKOFF_MS = 5000;
   const MAX_BACKOFF_MS = 300000;
+  // Retryable SurrealDB transaction conflicts get a much shorter, jittered
+  // backoff curve than genuine failures: they're expected under concurrent
+  // pushes (ancestor propagation racing server-side events) and resolve on
+  // re-attempt, so waiting seconds for them is pure stall.
+  const CONFLICT_BASE_BACKOFF_MS = 500;
+  const CONFLICT_MAX_BACKOFF_MS = 5000;
+  // Concurrency cap for the push scheduler. High enough that a burst drains in
+  // parallel, low enough not to storm the server with conflicting transactions
+  // or exhaust mobile connection pools. `config.pushConcurrency` overrides it
+  // as an escape hatch (RuntimeConfig.pushConcurrency).
+  const MAX_CONCURRENT_PUSHES = config.pushConcurrency ?? 4;
+
+  // One-shot timer armed after a drain that leaves ops backing off, firing at
+  // the earliest per-op eligibility. Without it, retries only happen when the
+  // ~30s sync-loop tick lands — a single transient failure used to park an op
+  // for up to 30s (two for ~60s) regardless of its actual backoff.
+  let retryWakeTimer: ReturnType<typeof setTimeout> | null = null;
+
+  // Ops cancelled by the user (or a sibling tab via OpCancel) while a drain
+  // was holding references to them. The scheduler consults this before
+  // launching a node so a cancelled op is never pushed.
+  const cancelledOpIds = new Set<string>();
 
   // NOTE: client-side self-echo suppression (ownSyncOpIds / markOwnSyncOp /
   // isOwnSyncOp) was REMOVED with the move to the changefeed subscription.
@@ -603,7 +672,9 @@ export function createSyncEngine(
     liveBus.broadcast({ type: 'OpUpsert', op });
   }
 
-  function scheduleRemoveSyncOp(opId: string, delayMs = 10000): void {
+  // Keep a settled op visible briefly so the panel can show completion, but
+  // not so long that it reads as "still hanging" (it sat 10s originally).
+  function scheduleRemoveSyncOp(opId: string, delayMs = 3000): void {
     setTimeout(() => {
       removeSyncOp(config.storageNamespace, opId);
       liveBus.broadcast({ type: 'OpRemove', id: opId });
@@ -641,9 +712,64 @@ export function createSyncEngine(
     );
   }
 
+  // Deterministic per-op jitter (0-249ms) so retrying conflict ops don't
+  // re-collide in lockstep. Derived from the op id (not Math.random) so an
+  // op's eligibility instant is stable across repeated opEligibleNow checks.
+  function jitterForOp(opId: string): number {
+    let hash = 0;
+    for (let index = 0; index < opId.length; index += 1) {
+      hash = (hash * 31 + opId.charCodeAt(index)) | 0;
+    }
+    return Math.abs(hash) % 250;
+  }
+
+  function backoffForOp(op: Op): number {
+    if (op.retries <= 0) return 0;
+    if (op.last_error && isRetryableSyncError(op.last_error)) {
+      return (
+        Math.min(
+          CONFLICT_BASE_BACKOFF_MS * Math.pow(2, Math.min(op.retries - 1, 3)),
+          CONFLICT_MAX_BACKOFF_MS
+        ) + jitterForOp(op.id)
+      );
+    }
+    return backoffForRetries(op.retries);
+  }
+
   function opEligibleNow(op: Op, now: number): boolean {
     if (op.retries <= 0) return true;
-    return now - (op.last_attempt_at ?? 0) >= backoffForRetries(op.retries);
+    return now - (op.last_attempt_at ?? 0) >= backoffForOp(op);
+  }
+
+  /**
+   * Arm (or re-arm) the retry wake at the earliest eligibility instant among
+   * backing-off pending ops. No-op when nothing is backing off. The timer just
+   * kicks pushOps — the per-op eligibility filter there decides what actually
+   * goes out.
+   */
+  function armRetryWake(): void {
+    if (retryWakeTimer) {
+      clearTimeout(retryWakeTimer);
+      retryWakeTimer = null;
+    }
+    // Only arm while a sync loop is active (leaders — including the only tab
+    // on mobile — always run one; see runtime.ts). A loop-less follower's
+    // backing-off ops live in shared IDB, so the leader's own wake/tick
+    // retries them; gating here keeps bare engines (tests, teardown races)
+    // from leaving stray timers that outlive their fetch context.
+    if (!syncLoopWake) return;
+    const now = Date.now();
+    let soonest = Number.POSITIVE_INFINITY;
+    for (const op of oplog) {
+      if (op.status !== 'pending' || op.retries <= 0) continue;
+      soonest = Math.min(soonest, (op.last_attempt_at ?? 0) + backoffForOp(op));
+    }
+    if (!Number.isFinite(soonest)) return;
+    const delay = Math.max(soonest - now, 250);
+    retryWakeTimer = setTimeout(() => {
+      retryWakeTimer = null;
+      void pushOps();
+    }, delay);
   }
 
   /** Load pending ops from IndexedDB on startup so they survive page refresh. */
@@ -745,53 +871,68 @@ export function createSyncEngine(
       return;
     }
 
-    // Capture ops queued by sleeping/background followers into shared IndexedDB
-    const persisted = await loadPendingOps(config.storageNamespace);
-    const existingIds = new Set(oplog.map(op => op.id));
-    for (const raw of persisted) {
-      if (!existingIds.has(raw.id)) {
-        const op: Op = {
-          id: raw.id,
-          kind: raw.kind as OpKind,
-          payload: raw.payload,
-          status: 'pending',
-          created: raw.created,
-          retries: raw.retries,
-          last_error: raw.last_error,
-          last_attempt_at: raw.last_attempt_at,
-          updated: raw.updated
-        };
-        oplog.push(op);
-        existingIds.add(raw.id);
-        publishOp(op);
-      }
-    }
+    // Claim the lock SYNCHRONOUSLY, before the first await. The lock used to
+    // be assigned only after the loadPendingOps await below, so two pushOps
+    // entering in the same tick (queueAndWake fires one per queued op) BOTH
+    // passed the null-check above and ran overlapping drains — each queued op
+    // briefly got its own drain, defeating the single-drain invariant the
+    // scheduler's ordering guarantees are built on.
+    let releaseLock!: () => void;
+    syncPromise = new Promise<void>((resolve) => {
+      releaseLock = resolve;
+    });
 
-    // Per-op backoff: attempt only ops that are eligible now (never-tried, or
-    // past their own retry backoff). Ops still backing off stay pending and are
-    // retried by a later pushOps()/sync-loop tick — they no longer block the
-    // eligible ones.
-    const now = Date.now();
-    const pending = oplog.filter(op => op.status === 'pending' && opEligibleNow(op, now));
-    if (pending.length === 0) return;
-    syncWasBusy = true;
-    logger.debug(`pushing ${pending.length} pending ops`);
-
-    // executePush only processes THIS snapshot. Ops queued while the push is
-    // in flight (the rapid-fire user-action case — e.g. checking off several
-    // exec items in quick succession) are NOT in `pending`, and the
-    // `if (syncPromise) { await; return; }` lock above made their own
-    // pushOps() calls no-ops. Remember the snapshot ids so we can detect such
-    // late arrivals and drain them once the lock is released, instead of
-    // stranding them until the next ~30s sync-loop tick.
-    const snapshotIds = new Set(pending.map(op => op.id));
-    // Reset right before we take ownership; any collision from here on is work
-    // that arrived DURING this push and must be drained when it finishes.
-    pushRequestedDuringFlight = false;
-    syncPromise = executePush(pending);
+    let snapshotIds = new Set<string>();
     try {
-      await syncPromise;
+      // Capture ops queued by sleeping/background followers into shared IndexedDB
+      const persisted = await loadPendingOps(config.storageNamespace);
+      const existingIds = new Set(oplog.map(op => op.id));
+      for (const raw of persisted) {
+        // A cancelled op can transiently reappear from IDB (the cancelling tab's
+        // delete may not have committed yet) — never re-import it.
+        if (cancelledOpIds.has(raw.id)) continue;
+        if (!existingIds.has(raw.id)) {
+          const op: Op = {
+            id: raw.id,
+            kind: raw.kind as OpKind,
+            payload: raw.payload,
+            status: 'pending',
+            created: raw.created,
+            retries: raw.retries,
+            last_error: raw.last_error,
+            last_attempt_at: raw.last_attempt_at,
+            updated: raw.updated
+          };
+          oplog.push(op);
+          existingIds.add(raw.id);
+          publishOp(op);
+        }
+      }
+
+      // Per-op backoff: attempt only ops that are eligible now (never-tried, or
+      // past their own retry backoff). Ops still backing off stay pending and
+      // are retried by the retry wake / a later pushOps() — they no longer
+      // block the eligible ones.
+      const now = Date.now();
+      const pending = oplog.filter(op => op.status === 'pending' && opEligibleNow(op, now));
+      if (pending.length === 0) return;
+      syncWasBusy = true;
+      logger.debug(`pushing ${pending.length} pending ops`);
+
+      // executePush only processes THIS snapshot. Ops queued while the push is
+      // in flight (the rapid-fire user-action case — e.g. checking off several
+      // exec items in quick succession) are NOT in `pending`, and the
+      // `if (syncPromise) { await; return; }` lock above made their own
+      // pushOps() calls no-ops. Remember the snapshot ids so we can detect such
+      // late arrivals and drain them once the lock is released, instead of
+      // stranding them until the next ~30s sync-loop tick.
+      snapshotIds = new Set(pending.map(op => op.id));
+      // Reset right before we take ownership; any collision from here on is work
+      // that arrived DURING this push and must be drained when it finishes.
+      pushRequestedDuringFlight = false;
+      await executePush(pending);
     } finally {
+      releaseLock();
       syncPromise = null;
       if (
         syncWasBusy &&
@@ -819,7 +960,12 @@ export function createSyncEngine(
       oplog.some(op => op.status === 'pending' && !snapshotIds.has(op.id) && opEligibleNow(op, Date.now()))
     ) {
       await pushOps();
+      return;
     }
+
+    // Ops still backing off retry at their own eligibility instant, not at the
+    // next ~30s sync-loop tick (which stays as a safety net only).
+    armRetryWake();
   }
 
   function buildTreeBatchSql(op: Op, payload: CreateTreeBatchPayload): { sql: string; vars: Record<string, unknown> } {
@@ -1321,18 +1467,7 @@ export function createSyncEngine(
         // would leave phantom `temp:` rows in the cache (and IDB) that no
         // subsequent reconcile will ever clear, since they're not in the
         // server's record set but also have no temp→real remap.
-        for (const tempEdgeId of payload.optimisticTempEdgeIds ?? []) {
-          cache.remove_graph_child(tempEdgeId);
-        }
-        for (const tempGroupEdgeId of payload.optimisticGroupTempEdgeIds ?? []) {
-          cache.remove_graph_child(tempGroupEdgeId);
-        }
-        for (const tempAppliesEdgeId of payload.optimisticAppliesTempEdgeIds ?? []) {
-          cache.remove_applies_edge(tempAppliesEdgeId);
-        }
-        for (const tempId of payload.optimisticTempIds ?? []) {
-          cache.removeItem(tempId);
-        }
+        rollbackTreeBatchOptimistic(payload);
         await persistAndPublish(op);
         logger.warn(
           `rejected op id=${op.id} kind=CreateTreeBatch${retryableConflict ? ' after repeated transaction conflicts' : ''}`,
@@ -1587,74 +1722,502 @@ export function createSyncEngine(
     }
   }
 
+  /**
+   * SQL for `UpdateRelationsBatch` — one transaction carrying every group/applies
+   * add/remove delta for an existing record. Collapses what would otherwise be N
+   * `AddGrouping`/`RemoveGrouping`/`AddApplies`/`RemoveApplies` ops (N HTTP
+   * transactions; the SDK has no coalescing) into a single op.
+   *
+   * Adds are idempotent on replay (each RELATE guarded by an `in`/`out` existence
+   * check, mirroring the individual `AddGrouping` op); removes are plain
+   * `DELETE type::record($id)` (idempotent). Edges are NOT tagged with
+   * `_sync_op_id` — idempotency comes from the `in`/`out` guard — and we do NOT
+   * set `skip_changefeed`, so each RELATE/DELETE emits its own changefeed event
+   * and live propagation is identical to the per-op path. Only the op count and
+   * HTTP request count drop.
+   */
+  function buildRelationsBatchSql(
+    op: Op,
+    payload: UpdateRelationsBatchPayload
+  ): { sql: string; vars: Record<string, unknown> } {
+    const vars: Record<string, unknown> = {};
+    const lines: string[] = [];
+
+    payload.addGroups.forEach((g, i) => {
+      const s = `ag_${i}_s`;
+      const d = `ag_${i}_d`;
+      vars[s] = g.src;
+      vars[d] = g.dst;
+      // Idempotency guard mirrors AddGrouping: if the groups edge already
+      // exists (in=group, out=member), return it instead of creating a duplicate.
+      lines.push(`  LET $ag_${i}_s = type::record($${s});`);
+      lines.push(`  LET $ag_${i}_d = type::record($${d});`);
+      lines.push(`  LET $ag_${i}_ex = (SELECT * FROM groups WHERE in = $ag_${i}_s AND out = $ag_${i}_d LIMIT 1)[0];`);
+      lines.push(`  LET $ag_${i} = IF $ag_${i}_ex != NONE { $ag_${i}_ex } ELSE { (RELATE $ag_${i}_s->groups->$ag_${i}_d)[0] };`);
+    });
+
+    payload.removeGroups.forEach((r, i) => {
+      const id = `rg_${i}`;
+      vars[id] = r.id;
+      lines.push(`  DELETE type::record($${id});`);
+    });
+
+    payload.addApplies.forEach((a, i) => {
+      const s = `aa_${i}_s`;
+      const d = `aa_${i}_d`;
+      vars[s] = a.src;
+      vars[d] = a.dst;
+      // Idempotency guard mirrors AddApplies (corrected to the `appliesto` table
+      // — the schema-defined table with a changefeed; the legacy `->applies->`
+      // form wrote to a phantom table). See offline_sync.surql add_applies.
+      lines.push(`  LET $aa_${i}_s = type::record($${s});`);
+      lines.push(`  LET $aa_${i}_d = type::record($${d});`);
+      lines.push(`  LET $aa_${i}_ex = (SELECT * FROM appliesto WHERE in = $aa_${i}_s AND out = $aa_${i}_d LIMIT 1)[0];`);
+      lines.push(`  LET $aa_${i} = IF $aa_${i}_ex != NONE { $aa_${i}_ex } ELSE { (RELATE $aa_${i}_s->appliesto->$aa_${i}_d)[0] };`);
+    });
+
+    payload.removeApplies.forEach((r, i) => {
+      const id = `ra_${i}`;
+      vars[id] = r.id;
+      lines.push(`  DELETE type::record($${id});`);
+    });
+
+    const addedGroupRefs = payload.addGroups.map((_, i) => `$ag_${i}`).join(', ');
+    const addedAppliesRefs = payload.addApplies.map((_, i) => `$aa_${i}`).join(', ');
+    lines.push(`  RETURN { addedGroups: [${addedGroupRefs}], addedApplies: [${addedAppliesRefs}] };`);
+
+    return { sql: lines.join('\n'), vars };
+  }
+
+  /** Extract the `{ addedGroups, addedApplies }` RETURN of a relations batch. */
+  function extractRelationsBatchResult(
+    statements: SurrealSqlStatement[]
+  ): { addedGroups: any[]; addedApplies: any[] } | null {
+    for (let index = statements.length - 1; index >= 0; index -= 1) {
+      const r = statements[index].result as any;
+      if (
+        r &&
+        typeof r === 'object' &&
+        !Array.isArray(r) &&
+        Array.isArray(r.addedGroups) &&
+        Array.isArray(r.addedApplies)
+      ) {
+        return { addedGroups: r.addedGroups, addedApplies: r.addedApplies };
+      }
+    }
+    return null;
+  }
+
+  async function runRelationsBatch(op: Op, acceptedMarkerOpIds: Set<string>): Promise<void> {
+    const payload = op.payload as UpdateRelationsBatchPayload | undefined;
+    if (
+      !payload ||
+      !Array.isArray(payload.addGroups) ||
+      !Array.isArray(payload.removeGroups) ||
+      !Array.isArray(payload.addApplies) ||
+      !Array.isArray(payload.removeApplies)
+    ) {
+      op.status = 'rejected';
+      op.last_error = 'UpdateRelationsBatch payload missing relation arrays';
+      await persistAndPublish(op);
+      return;
+    }
+    const totalChanges =
+      payload.addGroups.length +
+      payload.removeGroups.length +
+      payload.addApplies.length +
+      payload.removeApplies.length;
+    if (totalChanges === 0) {
+      // Nothing to do — accept as a no-op without a round trip.
+      op.status = 'accepted';
+      op.updated = Date.now();
+      oplog = oplog.filter(o => o.id !== op.id);
+      await persistAndPublish(op);
+      await deleteOp(config.storageNamespace, op.id).catch(() => {});
+      publishOp(op);
+      scheduleRemoveSyncOp(op.id);
+      return;
+    }
+
+    op.status = 'inflight';
+    op.last_attempt_at = Date.now();
+    op.last_error = undefined;
+    publishOp(op);
+    inflightOps.set(op.id, op);
+
+    try {
+      const { sql, vars } = buildRelationsBatchSql(op, payload);
+      const token = await resolveToken(config);
+      const statement = buildSurrealStatement(sql, vars);
+      let response = await fetchWithTimeout(`${config.url}/sql`, {
+        method: 'POST',
+        headers: {
+          'accept': 'application/json',
+          'content-type': 'text/plain',
+          'surreal-ns': config.namespace,
+          'surreal-db': config.database,
+          'authorization': `Bearer ${token}`
+        },
+        body: statement
+      });
+
+      if (response.status === 401 && config.getToken) {
+        logger.warn(`401 on relations batch op ${op.id}; retrying with fresh token`);
+        const freshToken = await config.getToken();
+        response = await fetchWithTimeout(`${config.url}/sql`, {
+          method: 'POST',
+          headers: {
+            'accept': 'application/json',
+            'content-type': 'text/plain',
+            'surreal-ns': config.namespace,
+            'surreal-db': config.database,
+            'authorization': `Bearer ${freshToken}`
+          },
+          body: statement
+        });
+      }
+
+      if (!response.ok) {
+        const body = await response.text().catch(() => '');
+        logger.warn(`UpdateRelationsBatch HTTP ${response.status} body: ${body.slice(0, 800)}`);
+        logger.debug(`UpdateRelationsBatch failing SQL:\n${statement.slice(0, 1500)}`);
+        throw new Error(`Sync failed: ${response.statusText}`);
+      }
+
+      const resJson = await response.json();
+      const evaluation = evaluate_sql_response(resJson);
+      const final = extractRelationsBatchResult(evaluation.statements);
+      // final may be null if every add short-circuited to an existing edge that
+      // the SELECT returned as NONE-shaped — tolerate it and fall back to empty.
+      const addedGroupsRows = final?.addedGroups ?? [];
+      const addedAppliesRows = final?.addedApplies ?? [];
+
+      // Normalize added groups edges (in=group, out=member → parent_id=group,
+      // child_id=member — same mapping as runTreeBatch for `groups:` edges).
+      const normalizedGroupEdges: any[] = [];
+      for (const edge of addedGroupsRows) {
+        if (!edge || typeof edge !== 'object') continue;
+        const edgeId = normalizeThingString((edge as any).id);
+        const groupId = normalizeThingString((edge as any).in);
+        const memberId = normalizeThingString((edge as any).out);
+        if (!edgeId || !groupId || !memberId) continue;
+        normalizedGroupEdges.push({
+          edge_id: edgeId,
+          parent_id: groupId,
+          child_id: memberId,
+          order: typeof (edge as any).order === 'number' ? (edge as any).order : 0,
+          is_key_parent: false,
+          module_data: typeof (edge as any).module_data === 'object' && (edge as any).module_data !== null
+            ? (edge as any).module_data
+            : undefined,
+          clone_setting: null
+        });
+      }
+
+      const normalizedAppliesEdges: any[] = [];
+      for (const edge of addedAppliesRows) {
+        if (!edge || typeof edge !== 'object') continue;
+        const edgeId = normalizeThingString((edge as any).id);
+        const srcId = normalizeThingString((edge as any).in);
+        const dstId = normalizeThingString((edge as any).out);
+        if (!edgeId || !srcId || !dstId) continue;
+        normalizedAppliesEdges.push({
+          edge_id: edgeId,
+          src_id: srcId,
+          dst_id: dstId,
+          module_data: typeof (edge as any).module_data === 'object' && (edge as any).module_data !== null
+            ? (edge as any).module_data
+            : undefined
+        });
+      }
+
+      // Mark accepted before async cache mutation (mirrors single-op + batch patterns).
+      op.status = 'accepted';
+      op.updated = Date.now();
+      inflightOps.delete(op.id);
+      oplog = oplog.filter(o => o.id !== op.id);
+      failureCount = 0;
+      // No _sync_op_id tagging on these edges, so no marker to clean — but keep
+      // the op id out of the marker set for consistency with the accept flow.
+      void acceptedMarkerOpIds;
+      await persistAndPublish(op);
+
+      // Apply server-confirmed added edges to the local cache and broadcast to
+      // sibling tabs for immediacy (the changefeed also delivers idempotently).
+      if (normalizedGroupEdges.length > 0) {
+        for (const e of normalizedGroupEdges) {
+          cache.upsert_graph_child_of_edge(e.edge_id, e.child_id, e.parent_id, e.order, e.is_key_parent, e.module_data, e.clone_setting);
+        }
+        liveBus.broadcast({ type: 'GraphChildBatchUpsert', edges: normalizedGroupEdges });
+      }
+      if (normalizedAppliesEdges.length > 0) {
+        for (const e of normalizedAppliesEdges) {
+          cache.upsert_applies_edge(e.edge_id, e.src_id, e.dst_id, e.module_data);
+          liveBus.broadcast({ type: 'AppliesUpsert', edgeId: e.edge_id, srcId: e.src_id, dstId: e.dst_id, moduleData: e.module_data });
+        }
+      }
+
+      // Apply removals from the payload ids (authoritative — the server DELETE
+      // is idempotent and the cache remove is a no-op if the edge wasn't cached).
+      for (const r of payload.removeGroups) {
+        cache.remove_graph_child(r.id);
+        liveBus.broadcast({ type: 'GraphChildDelete', edgeId: r.id });
+      }
+      for (const r of payload.removeApplies) {
+        cache.remove_applies_edge(r.id);
+        liveBus.broadcast({ type: 'AppliesDelete', edgeId: r.id });
+      }
+
+      await deleteOp(config.storageNamespace, op.id).catch(() => {});
+      publishOp(op);
+      scheduleRemoveSyncOp(op.id);
+      logger.debug(
+        `accepted op id=${op.id} kind=UpdateRelationsBatch addedGroups=${normalizedGroupEdges.length} addedApplies=${normalizedAppliesEdges.length} removedGroups=${payload.removeGroups.length} removedApplies=${payload.removeApplies.length}`
+      );
+    } catch (error) {
+      failureCount++;
+      op.retries++;
+      inflightOps.delete(op.id);
+      const retryableConflict = isRetryableSyncError(error);
+      const maxRetries = retryableConflict ? Number.POSITIVE_INFINITY : MAX_RETRIES;
+      const errMsg = error instanceof Error ? error.message : String(error);
+      op.last_error = errMsg;
+      op.last_attempt_at = Date.now();
+
+      if (op.retries >= maxRetries) {
+        op.status = 'rejected';
+        await persistAndPublish(op);
+        logger.warn(
+          `rejected op id=${op.id} kind=UpdateRelationsBatch${retryableConflict ? ' after repeated transaction conflicts' : ''}`,
+          error
+        );
+      } else {
+        op.status = 'pending';
+        await persistAndPublish(op);
+        if (retryableConflict) {
+          logger.info(`retrying op id=${op.id} kind=UpdateRelationsBatch after transaction conflict attempt=${op.retries}`);
+        } else {
+          logger.warn(`retrying op id=${op.id} kind=UpdateRelationsBatch attempt=${op.retries}`, error);
+        }
+      }
+    }
+  }
+
+  /** Temp ids this op will create when accepted (it is their "producer"). */
+  function producedTempIds(op: Op): string[] {
+    if (op.kind === 'CreateRecord') {
+      const id = (op.payload as { id?: unknown } | undefined)?.id;
+      return typeof id === 'string' && id.startsWith('temp:') ? [id] : [];
+    }
+    if (op.kind === 'CreateTreeBatch') {
+      const records = (op.payload as CreateTreeBatchPayload | undefined)?.records;
+      if (!Array.isArray(records)) return [];
+      return records
+        .map((record) => record.tempId)
+        .filter((tempId): tempId is string => typeof tempId === 'string' && tempId.startsWith('temp:'));
+    }
+    return [];
+  }
+
+  /** Temp ids the op references but does not itself create. */
+  function unresolvedTempIdsFor(op: Op): string[] {
+    if (op.kind === 'CreateRecord') return [];
+    const refs = Array.from(collect_temp_reference_ids(op.payload));
+    if (op.kind === 'CreateTreeBatch') {
+      const ownTempIds = new Set(
+        ((op.payload as CreateTreeBatchPayload | undefined)?.records ?? []).map((record) => record.tempId)
+      );
+      return refs.filter((tempId) => !ownTempIds.has(tempId));
+    }
+    return refs;
+  }
+
+  /**
+   * The op references temp ids whose producer isn't in this drain (still
+   * backing off, or queued on another tab). Leave it pending for a later
+   * drain — a producer accept rewrites its payload via rewriteOplogId.
+   */
+  async function deferOpForTempIds(op: Op, unresolvedTempIds: string[]): Promise<void> {
+    const lastError = `waiting for temp ids: ${unresolvedTempIds.join(', ')}`;
+    const alreadyDeferred = op.status === 'pending' && op.last_error === lastError;
+    op.status = 'pending';
+    op.last_error = lastError;
+    if (!alreadyDeferred) {
+      await persistAndPublish(op);
+      logger.debug(
+        `deferred op id=${op.id} kind=${op.kind}; waiting for temp ids ${unresolvedTempIds.join(', ')}`
+      );
+    }
+  }
+
+  /**
+   * The op depends on temp ids whose producer was REJECTED — they will never
+   * resolve, so the op can never be pushed. Reject it too (rolling back its
+   * optimistic rows) instead of leaving it deferred forever.
+   */
+  async function cascadeRejectForTempIds(op: Op, rejectedRefs: string[]): Promise<void> {
+    op.status = 'rejected';
+    op.last_error = `dependency rejected: ${rejectedRefs.join(', ')} will never be created`;
+    rollbackOptimisticForRejection(op);
+    await persistAndPublish(op);
+    logger.warn(
+      `rejected op id=${op.id} kind=${op.kind}; its temp id dependency was rejected: ${rejectedRefs.join(', ')}`
+    );
+  }
+
+  function runOpNode(op: Op, acceptedMarkerOpIds: Set<string>): Promise<void> {
+    if (op.kind === 'CreateTreeBatch') return runTreeBatch(op, acceptedMarkerOpIds);
+    if (op.kind === 'UpdateRecordsBatch') return runRecordsBatch(op, acceptedMarkerOpIds);
+    if (op.kind === 'UpdateRelationsBatch') return runRelationsBatch(op, acceptedMarkerOpIds);
+    return runSingleOp(op, acceptedMarkerOpIds);
+  }
+
+  /**
+   * Concurrent, dependency-aware drain of one pending snapshot.
+   *
+   * Replaces the old strictly-serial loop (one HTTP round trip at a time, so a
+   * burst's tail op waited for the SUM of every round trip before it, and one
+   * hung request stalled the whole queue). Only ordering that actually matters
+   * is kept, as graph edges; everything else pushes concurrently up to
+   * MAX_CONCURRENT_PUSHES:
+   *
+   *  - same-target FIFO: ops whose structural key sets intersect (any shared
+   *    record/edge reference — collect_reference_ids) run in queue order;
+   *  - temp-id production: an op referencing temp:X shares that key with the
+   *    CreateRecord/CreateTreeBatch that creates it (queued first), so it
+   *    orders after its producer — which rewrites dependent payloads via
+   *    rewriteOplogId BEFORE settling;
+   *  - DeleteTree is a full barrier: it deletes server-side descendants the
+   *    client can't cheaply enumerate into keys, so nothing may straddle it.
+   *
+   * The graph is acyclic by construction (every edge points from an earlier
+   * queued op to a later one), so the pump below always terminates.
+   *
+   * Temp-id resolution is re-checked when a node is released: producer
+   * accepted → payload already rewritten, run it; producer still pending
+   * (failed, backing off) → defer to a later drain; producer rejected →
+   * cascade-reject, the temp id will never exist.
+   */
   async function executePush(initialPending: Op[]): Promise<void> {
-    let pending = [...initialPending];
-    let madeProgress = true;
     const acceptedMarkerOpIds = new Set<string>();
 
-    while (madeProgress && pending.length > 0) {
-      madeProgress = false;
-      const currentBatch = [...pending];
-      pending = [];
+    interface SchedulerNode {
+      op: Op;
+      deps: Set<string>;
+      dependents: Set<string>;
+      state: 'waiting' | 'running' | 'settled';
+    }
 
-      for (const op of currentBatch) {
-      if (op.kind === 'CreateTreeBatch') {
-        // Defer if the batch references temp ids it does not itself create
-        // (e.g. a purchase batch pointing at a stock item from a pending
-        // CreateRecord); the remap rewrite will resolve them.
-        const batchPayload = op.payload as CreateTreeBatchPayload | undefined;
-        const ownTempIds = new Set(
-          (batchPayload?.records ?? []).map((record) => record.tempId)
-        );
-        const unresolvedBatchTempIds = Array.from(
-          collect_temp_reference_ids(op.payload)
-        ).filter((tempId) => !ownTempIds.has(tempId));
-        if (unresolvedBatchTempIds.length > 0) {
-          const lastError = `waiting for temp ids: ${unresolvedBatchTempIds.join(', ')}`;
-          const alreadyDeferred = op.status === 'pending' && op.last_error === lastError;
-          op.status = 'pending';
-          op.last_error = lastError;
-          if (!alreadyDeferred) {
-            await persistAndPublish(op);
-            logger.debug(
-              `deferred op id=${op.id} kind=${op.kind}; waiting for temp ids ${unresolvedBatchTempIds.join(', ')}`
-            );
+    const nodes = new Map<string, SchedulerNode>();
+    const lastOpForKey = new Map<string, string>();
+    let barrierId: string | null = null;
+
+    for (const op of initialPending) {
+      const node: SchedulerNode = { op, deps: new Set(), dependents: new Set(), state: 'waiting' };
+      nodes.set(op.id, node);
+      if (op.kind === 'DeleteTree') {
+        for (const other of nodes.values()) {
+          if (other.op.id === op.id) continue;
+          node.deps.add(other.op.id);
+          other.dependents.add(op.id);
+        }
+        barrierId = op.id;
+      } else {
+        if (barrierId) {
+          node.deps.add(barrierId);
+          nodes.get(barrierId)!.dependents.add(op.id);
+        }
+        for (const key of collect_reference_ids(op.payload)) {
+          const previous = lastOpForKey.get(key);
+          if (previous && previous !== op.id) {
+            node.deps.add(previous);
+            nodes.get(previous)!.dependents.add(op.id);
           }
-          pending.push(op);
-          continue;
         }
-        await runTreeBatch(op, acceptedMarkerOpIds);
-        continue;
       }
-
-      if (op.kind === 'UpdateRecordsBatch') {
-        await runRecordsBatch(op, acceptedMarkerOpIds);
-        continue;
+      for (const key of collect_reference_ids(op.payload)) {
+        lastOpForKey.set(key, op.id);
       }
+    }
 
-      const unresolvedTempIds =
-        op.kind === 'CreateRecord' ? [] : Array.from(collect_temp_reference_ids(op.payload));
-      if (unresolvedTempIds.length > 0) {
-        const lastError = `waiting for temp ids: ${unresolvedTempIds.join(', ')}`;
-        const alreadyDeferred = op.status === 'pending' && op.last_error === lastError;
-        op.status = 'pending';
-        op.last_error = lastError;
-        if (!alreadyDeferred) {
-          await persistAndPublish(op);
-          logger.debug(
-            `deferred op id=${op.id} kind=${op.kind}; waiting for temp ids ${unresolvedTempIds.join(', ')}`
-          );
+    // Temp ids whose producer settled as rejected during THIS drain.
+    const rejectedTempIds = new Set<string>();
+
+    await new Promise<void>((resolveAll) => {
+      const readyQueue: SchedulerNode[] = [];
+      for (const node of nodes.values()) {
+        if (node.deps.size === 0) readyQueue.push(node);
+      }
+      let running = 0;
+
+      const settleNode = (node: SchedulerNode) => {
+        node.state = 'settled';
+        if (node.op.status === 'rejected') {
+          for (const tempId of producedTempIds(node.op)) rejectedTempIds.add(tempId);
         }
-        pending.push(op);
-        continue;
-      }
+        for (const dependentId of node.dependents) {
+          const dependent = nodes.get(dependentId);
+          if (!dependent || dependent.state !== 'waiting') continue;
+          dependent.deps.delete(node.op.id);
+          if (dependent.deps.size === 0) readyQueue.push(dependent);
+        }
+      };
 
+      const launch = (node: SchedulerNode, task: () => Promise<void>) => {
+        node.state = 'running';
+        running += 1;
+        void task()
+          .catch((e) => logger.error(`op runner crashed id=${node.op.id} kind=${node.op.kind}`, e))
+          .finally(() => {
+            running -= 1;
+            settleNode(node);
+            pump();
+          });
+      };
+
+      const pump = () => {
+        // cap is `config.pushConcurrency ?? 4` (see MAX_CONCURRENT_PUSHES).
+        while (running < MAX_CONCURRENT_PUSHES && readyQueue.length > 0) {
+          const node = readyQueue.shift()!;
+          if (node.state !== 'waiting') continue;
+          const op = node.op;
+
+          // Cancelled (or otherwise no longer pending) while waiting in this
+          // drain — settle without a network attempt so dependents release.
+          if (cancelledOpIds.has(op.id) || op.status !== 'pending') {
+            settleNode(node);
+            continue;
+          }
+
+          const unresolved = unresolvedTempIdsFor(op);
+          if (unresolved.length > 0) {
+            const rejectedRefs = unresolved.filter((tempId) => rejectedTempIds.has(tempId));
+            if (rejectedRefs.length > 0) {
+              launch(node, () => cascadeRejectForTempIds(op, rejectedRefs));
+            } else {
+              launch(node, () => deferOpForTempIds(op, unresolved));
+            }
+            continue;
+          }
+
+          launch(node, () => runOpNode(op, acceptedMarkerOpIds));
+        }
+        if (running === 0 && readyQueue.length === 0) resolveAll();
+      };
+
+      pump();
+    });
+
+    await cleanupSyncMarkers(Array.from(acceptedMarkerOpIds));
+  }
+
+  async function runSingleOp(op: Op, acceptedMarkerOpIds: Set<string>): Promise<void> {
       const sql = build_op_sql(op);
       if (!sql) {
         op.status = 'rejected';
         op.last_error = `unknown op kind: ${op.kind}`;
         await persistAndPublish(op);
-        continue;
+        return;
       }
 
       op.status = 'inflight';
@@ -1720,7 +2283,6 @@ export function createSyncEngine(
               cache.remap_id(oldId, newId);
               await rewriteOplogId(oldId, newId);
               liveBus.broadcast({ type: 'TempIdRemap', tempId: oldId, realId: newId });
-              madeProgress = true;
             }
           }
 
@@ -1810,11 +2372,7 @@ export function createSyncEngine(
             logger.warn(`retrying op id=${op.id} kind=${op.kind} attempt=${op.retries}`, error);
           }
         }
-        }
       }
-    }
-
-    await cleanupSyncMarkers(Array.from(acceptedMarkerOpIds));
   }
 
   function shouldStampMarker(kind: OpKind): boolean {
@@ -1846,6 +2404,7 @@ export function createSyncEngine(
       UPDATE records UNSET _sync_op_id WHERE _sync_op_id IN $op_ids;
       UPDATE graph_child_of UNSET _sync_op_id WHERE _sync_op_id IN $op_ids;
       UPDATE groups UNSET _sync_op_id WHERE _sync_op_id IN $op_ids;
+      UPDATE appliesto UNSET _sync_op_id WHERE _sync_op_id IN $op_ids;
     `;
     try {
       const token = await resolveToken(config);
@@ -1871,7 +2430,27 @@ export function createSyncEngine(
     }
   }
 
+  /** Drop the optimistic rows a CreateTreeBatch wrote at queue time. */
+  function rollbackTreeBatchOptimistic(payload: CreateTreeBatchPayload): void {
+    for (const tempEdgeId of payload.optimisticTempEdgeIds ?? []) {
+      cache.remove_graph_child(tempEdgeId);
+    }
+    for (const tempGroupEdgeId of payload.optimisticGroupTempEdgeIds ?? []) {
+      cache.remove_graph_child(tempGroupEdgeId);
+    }
+    for (const tempAppliesEdgeId of payload.optimisticAppliesTempEdgeIds ?? []) {
+      cache.remove_applies_edge(tempAppliesEdgeId);
+    }
+    for (const tempId of payload.optimisticTempIds ?? []) {
+      cache.removeItem(tempId);
+    }
+  }
+
   function rollbackOptimisticForRejection(op: Op): void {
+    if (op.kind === 'CreateTreeBatch') {
+      rollbackTreeBatchOptimistic(op.payload as CreateTreeBatchPayload);
+      return;
+    }
     const payload = op.payload as Record<string, unknown> | undefined;
     if (!payload) return;
     const targetId = typeof payload.id === 'string' ? payload.id : undefined;
@@ -1892,6 +2471,48 @@ export function createSyncEngine(
     if ((op.kind === 'AddGrouping' || op.kind === 'AddApplies') &&
         typeof payload.optimisticEdgeId === 'string') {
       cache.remove_graph_child?.(payload.optimisticEdgeId);
+    }
+  }
+
+  /**
+   * User-initiated cancel of a QUEUED (pending) op. Inflight ops are refused —
+   * the request is already on the wire and the server may have applied it, so
+   * "cancelling" one would just desync the local view.
+   *
+   * Cancelling removes the op everywhere (memory, IndexedDB, reactive store,
+   * sibling tabs via OpCancel) and rolls back the optimistic rows it created.
+   * For update-shaped ops there is no before-image to restore — cancel means
+   * "don't sync this"; the local edit stays until the next server refresh.
+   *
+   * Cascade: pending ops referencing temp ids this op would have created can
+   * never resolve, so they are cancelled too.
+   */
+  function cancelOp(opId: string): boolean {
+    const op = oplog.find((o) => o.id === opId);
+    if (!op || op.status !== 'pending' || inflightOps.has(opId)) return false;
+    cancelInternal(op);
+    return true;
+  }
+
+  function cancelInternal(op: Op): void {
+    cancelledOpIds.add(op.id);
+    oplog = oplog.filter((o) => o.id !== op.id);
+    rollbackOptimisticForRejection(op);
+    void deleteOp(config.storageNamespace, op.id).catch(() => {});
+    removeSyncOp(config.storageNamespace, op.id);
+    // OpCancel prunes sibling tabs' in-memory oplogs (the shared-IDB delete
+    // alone can't — a tab that already loaded the op would still push it) and
+    // doubles as the store removal broadcast.
+    liveBus.broadcast({ type: 'OpCancel', id: op.id });
+    logger.info(`cancelled op id=${op.id} kind=${op.kind}`);
+
+    const tempIds = producedTempIds(op);
+    if (tempIds.length === 0) return;
+    for (const dependent of [...oplog]) {
+      if (dependent.status !== 'pending') continue;
+      if (tempIds.some((tempId) => has_reference_id(dependent.payload, tempId))) {
+        cancelInternal(dependent);
+      }
     }
   }
 
@@ -2081,7 +2702,23 @@ export function createSyncEngine(
       case 'RemoveGrouping':
         return 'DELETE type::record($id)';
       case 'AddApplies':
-        return 'LET $s = type::record($src); LET $d = type::record($dst); RELATE $s->applies->$d CONTENT $payload';
+        // Use the schema-defined `appliesto` table (with `appliesto_changefeed`,
+        // permissions, and indexes) — NOT a phantom `applies` table. The legacy
+        // `->applies->` form wrote to a table that doesn't exist in the schema,
+        // so edges never propagated live, weren't readable via `->appliesto->`
+        // queries, and never entered `cache.appliesEdges`. Mirrors the server
+        // offline_sync add_applies path and `CreateTreeBatch.appliesEdges`.
+        // Idempotency guard mirrors `AddGrouping` so a replayed/duplicate op
+        // returns the existing edge instead of creating a second one.
+        return `
+          LET $s = type::record($src);
+          LET $d = type::record($dst);
+          LET $existing = (SELECT * FROM appliesto WHERE in = $s AND out = $d LIMIT 1)[0];
+          IF $existing != NONE {
+            RETURN $existing;
+          };
+          RELATE $s->appliesto->$d CONTENT $payload
+        `;
       case 'RemoveApplies':
         return 'DELETE type::record($id)';
       case 'UpdateEdge':
@@ -2306,6 +2943,20 @@ export function createSyncEngine(
       case 'OpRemove':
         removeSyncOp(config.storageNamespace, msg.id);
         break;
+      case 'OpCancel': {
+        // Another tab cancelled this op. Prune our in-memory copy (the
+        // canceller already deleted it from shared IDB) and roll back the
+        // optimistic rows in OUR cache too — optimistic patches were
+        // broadcast cross-tab at queue time.
+        const cancelled = oplog.find((o) => o.id === msg.id);
+        if (cancelled && cancelled.status === 'pending') {
+          cancelledOpIds.add(msg.id);
+          oplog = oplog.filter((o) => o.id !== msg.id);
+          rollbackOptimisticForRejection(cancelled);
+        }
+        removeSyncOp(config.storageNamespace, msg.id);
+        break;
+      }
       case 'AppliesUpsert':
         {
           const existing = cache.appliesEdges.get(msg.edgeId);
@@ -2392,6 +3043,12 @@ export function createSyncEngine(
     function handleOnline() {
       failureCount = 0; // Reset backoff logic intentionally to clear queue
       idlePolls = 0;    // Wake the loop out of idle backoff
+      // Ops that failed during the outage are mid-backoff; without this reset
+      // the eligibility filter would skip them all and this "eager" push would
+      // be a no-op, stranding them until the next tick.
+      for (const op of oplog) {
+        if (op.status === 'pending' && op.retries > 0) op.last_attempt_at = 0;
+      }
       pushOps();
       // Re-arm the next tick at the base interval (no-op if a tick is in flight;
       // its end-of-tick schedule() call will use idlePolls=0).
@@ -2416,6 +3073,10 @@ export function createSyncEngine(
     return () => {
       stopped = true;
       if (timer) clearTimeout(timer);
+      if (retryWakeTimer) {
+        clearTimeout(retryWakeTimer);
+        retryWakeTimer = null;
+      }
       if (typeof window !== 'undefined') {
         window.removeEventListener('online', handleOnline);
       }
@@ -2437,6 +3098,7 @@ export function createSyncEngine(
   return {
     queueOp,
     pushOps,
+    cancelOp,
     initialize,
     applyRemote,
     startSyncLoop,

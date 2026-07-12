@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import 'fake-indexeddb/auto';
-import { persistItem, loadAllItems, persistAppliesEdge, loadScopeSyncState, persistScopeSyncState, cleanupStaleDatabases, deleteRuntimeState, getMeta, getRuntimeState, loadAllMeta, setRuntimeState } from './persist.ts';
+import { persistItem, loadAllItems, persistAppliesEdge, loadScopeSyncState, persistScopeSyncState, cleanupStaleDatabases, persistOp, getPendingOps, deleteRuntimeState, getMeta, getRuntimeState, loadAllMeta, setRuntimeState } from './persist.ts';
 import { createAppCache } from './store.svelte.ts';
 import { hydrateCache, createCachePersistence } from './hydration.ts';
 import type { CacheItem } from './types.ts';
@@ -21,7 +21,9 @@ describe('Cache Persistence & Isolation', () => {
   });
 
   afterEach(async () => {
-    // Optional cleanup
+    // Restore spies so mocked `indexedDB.databases`/`deleteDatabase` from one
+    // test don't leak into the next (several tests below spy on these).
+    vi.restoreAllMocks();
   });
 
   it('namespaces IndexedDB correctly (cross-account isolation)', async () => {
@@ -211,5 +213,85 @@ describe('Cache Persistence & Isolation', () => {
     expect(databasesSpy).toHaveBeenCalledTimes(1);
     expect(deleteDatabaseSpy).toHaveBeenCalledTimes(1);
     expect(deleteDatabaseSpy).toHaveBeenCalledWith('modular-app-cache-stale-1');
+  });
+
+  it('skips databases with pending ops and reports them (M4 data-loss guard)', async () => {
+    const ns = 'm2-skip';
+    // Seed a pending op so the namespace is "dirty" (unsynced work in flight).
+    await persistOp(ns, {
+      id: 'op-pending-1',
+      kind: 'UpdateRecord',
+      payload: {},
+      status: 'pending',
+      created: Date.now(),
+      retries: 0
+    });
+
+    const databasesSpy = vi
+      .spyOn(indexedDB, 'databases')
+      .mockResolvedValue([{ name: `modular-app-cache-${ns}` }] as IDBDatabaseInfo[]);
+    const deleteSpy = vi.spyOn(indexedDB, 'deleteDatabase');
+
+    const result = await cleanupStaleDatabases([]);
+
+    expect(deleteSpy).not.toHaveBeenCalled();
+    expect(result.skippedWithPendingOps).toEqual([
+      { namespace: ns, pendingCount: 1 }
+    ]);
+
+    databasesSpy.mockRestore();
+    deleteSpy.mockRestore();
+  });
+
+  it('forces deletion of databases with pending ops when forced', async () => {
+    const ns = 'm2-force';
+    await persistOp(ns, {
+      id: 'op-pending-2',
+      kind: 'UpdateRecord',
+      payload: {},
+      status: 'inflight',
+      created: Date.now(),
+      retries: 0
+    });
+
+    const databasesSpy = vi
+      .spyOn(indexedDB, 'databases')
+      .mockResolvedValue([{ name: `modular-app-cache-${ns}` }] as IDBDatabaseInfo[]);
+    const deleteSpy = vi.spyOn(indexedDB, 'deleteDatabase');
+
+    const result = await cleanupStaleDatabases([], { force: [ns] });
+
+    expect(deleteSpy).toHaveBeenCalledWith(`modular-app-cache-${ns}`);
+    expect(result.skippedWithPendingOps).toEqual([]);
+
+    databasesSpy.mockRestore();
+    deleteSpy.mockRestore();
+  });
+
+  it('deletes databases whose ops are all settled (no pending/inflight)', async () => {
+    const ns = 'm2-clean';
+    await persistOp(ns, {
+      id: 'op-accepted-1',
+      kind: 'UpdateRecord',
+      payload: {},
+      status: 'accepted',
+      created: Date.now(),
+      retries: 0
+    });
+    // Sanity: getPendingOps sees only pending+inflight, so accepted ops don't count.
+    expect(await getPendingOps(ns)).toHaveLength(0);
+
+    const databasesSpy = vi
+      .spyOn(indexedDB, 'databases')
+      .mockResolvedValue([{ name: `modular-app-cache-${ns}` }] as IDBDatabaseInfo[]);
+    const deleteSpy = vi.spyOn(indexedDB, 'deleteDatabase');
+
+    const result = await cleanupStaleDatabases([]);
+
+    expect(deleteSpy).toHaveBeenCalledWith(`modular-app-cache-${ns}`);
+    expect(result.skippedWithPendingOps).toEqual([]);
+
+    databasesSpy.mockRestore();
+    deleteSpy.mockRestore();
   });
 });

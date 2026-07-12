@@ -50,6 +50,11 @@ export function createAppCache() {
   let childrenByParent = new Map<string, Set<string>>();
   let parentsByChild = new Map<string, Set<string>>();
   let appliesBySource = new Map<string, Set<string>>();
+  // Reverse index of applies edges by destination. Maintained alongside
+  // appliesBySource so applies-to links can be resolved bidirectionally:
+  // get_applies_for_source walks outgoing (src→dst) edges, get_applies_for_dest
+  // walks incoming (dst←src) edges. Both directions are rendered in the tree.
+  let appliesByDest = new Map<string, Set<string>>();
 
   // Children batch mode: defers epoch bumps during bulk child operations
   // to prevent O(n) reactive re-renders (ported from wisewords)
@@ -159,20 +164,31 @@ export function createAppCache() {
     }
   }
 
-  function add_applies_index(srcId: string, edgeId: string) {
-    let set = appliesBySource.get(srcId);
-    if (!set) {
-      set = new Set();
-      appliesBySource.set(srcId, set);
+  function add_applies_index(srcId: string, dstId: string, edgeId: string) {
+    let srcSet = appliesBySource.get(srcId);
+    if (!srcSet) {
+      srcSet = new Set();
+      appliesBySource.set(srcId, srcSet);
     }
-    set.add(edgeId);
+    srcSet.add(edgeId);
+    let dstSet = appliesByDest.get(dstId);
+    if (!dstSet) {
+      dstSet = new Set();
+      appliesByDest.set(dstId, dstSet);
+    }
+    dstSet.add(edgeId);
   }
 
-  function remove_applies_index(srcId: string, edgeId: string) {
-    const set = appliesBySource.get(srcId);
-    if (set) {
-      set.delete(edgeId);
-      if (set.size === 0) appliesBySource.delete(srcId);
+  function remove_applies_index(srcId: string, dstId: string, edgeId: string) {
+    const srcSet = appliesBySource.get(srcId);
+    if (srcSet) {
+      srcSet.delete(edgeId);
+      if (srcSet.size === 0) appliesBySource.delete(srcId);
+    }
+    const dstSet = appliesByDest.get(dstId);
+    if (dstSet) {
+      dstSet.delete(edgeId);
+      if (dstSet.size === 0) appliesByDest.delete(dstId);
     }
   }
 
@@ -295,7 +311,7 @@ export function createAppCache() {
       module_data: moduleData
     };
     appliesEdges.set(edgeId, edge);
-    add_applies_index(srcId, edgeId);
+    add_applies_index(srcId, dstId, edgeId);
     bumpEpoch(srcId);
     bumpEpoch(dstId);
     bump_scope_bucket_write_epoch();
@@ -306,7 +322,7 @@ export function createAppCache() {
     const edge = appliesEdges.get(edgeId);
     if (edge) {
       appliesEdges.delete(edgeId);
-      remove_applies_index(edge.src_id, edgeId);
+      remove_applies_index(edge.src_id, edge.dst_id, edgeId);
       bumpEpoch(edge.src_id);
       bumpEpoch(edge.dst_id);
       bump_scope_bucket_write_epoch();
@@ -459,13 +475,44 @@ export function createAppCache() {
     return result;
   }
 
+  /**
+   * Reverse-direction applies lookup: returns applies edges where `dstId` is the
+   * destination, i.e. records that "apply to" `dstId`. Paired with
+   * {@link get_applies_for_source} so applies-to links can be rendered
+   * bidirectionally (outgoing "Related" + incoming "Related to this").
+   */
+  function get_applies_for_dest(dstId: string): AppliesEdge[] {
+    epochs.get(dstId); // Register Svelte 5 dependency
+    const result: AppliesEdge[] = [];
+    const set = appliesByDest.get(dstId);
+    if (set) {
+      for (const edgeId of set) {
+        const edge = appliesEdges.get(edgeId);
+        if (edge) result.push(edge);
+      }
+    }
+    return result;
+  }
+
   function getRecordKey(itemId: string): RecordKey | null {
     const item = items.get(itemId);
     if (!item) return null;
     for (const [key, slice] of scopeBucketSlices.entries()) {
       if (slice.item_ids.has(itemId)) {
-        const [scope, bucket] = key.split(':');
-        return { scope, bucket, id: itemId };
+        // Slice key is `${scope}:${bucket}` where `bucket` is a YYYY-MM-DD
+        // date (no colons) but `scope` is a record id like `records:<id>` that
+        // DOES contain a colon. Split on the LAST ':' only — a naive
+        // `key.split(':')` mis-parses `records:<id>:2026-07-04` as
+        // scope=`records`, bucket=`<id>` (see the CalendarPage lastIndexOf
+        // note). Nothing currently calls this, so the bug was latent; M8 wires
+        // the first caller, this keeps it correct-by-construction.
+        const lastColon = key.lastIndexOf(':');
+        if (lastColon === -1) continue;
+        return {
+          scope: key.slice(0, lastColon),
+          bucket: key.slice(lastColon + 1),
+          id: itemId
+        };
       }
     }
     return null;
@@ -488,7 +535,7 @@ export function createAppCache() {
     for (const [edgeId, edge] of appliesEdges.entries()) {
       if (edge.src_id === id || edge.dst_id === id) {
         appliesEdges.delete(edgeId);
-        remove_applies_index(edge.src_id, edgeId);
+        remove_applies_index(edge.src_id, edge.dst_id, edgeId);
         emit({ type: 'AppliesDelete', edgeId });
       }
     }
@@ -647,13 +694,15 @@ export function createAppCache() {
     for (const [edgeId, edge] of appliesEdges.entries()) {
       let changed = false;
       if (edge.src_id === oldId) {
-        remove_applies_index(oldId, edgeId);
+        remove_applies_index(oldId, edge.dst_id, edgeId);
         edge.src_id = newId;
-        add_applies_index(newId, edgeId);
+        add_applies_index(newId, edge.dst_id, edgeId);
         changed = true;
       }
       if (edge.dst_id === oldId) {
+        remove_applies_index(edge.src_id, oldId, edgeId);
         edge.dst_id = newId;
+        add_applies_index(edge.src_id, newId, edgeId);
         changed = true;
       }
       if (changed) {
@@ -689,6 +738,7 @@ export function createAppCache() {
     epochs.clear();
     childrenByParent = new Map();
     appliesBySource = new Map();
+    appliesByDest = new Map();
     bump_scope_bucket_write_epoch();
     bump_generation();
     emit({ type: 'Clear' });
@@ -749,6 +799,7 @@ export function createAppCache() {
     get_children_for_parent,
     get_parents_for_child,
     get_applies_for_source,
+    get_applies_for_dest,
     getRecordKey,
     removeItem,
     batch_upsert,
