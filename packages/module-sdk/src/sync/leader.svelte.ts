@@ -21,6 +21,7 @@ export function createLeaderElection(isolationKey: string) {
       tabId: 'server',
       leaderSessionId: 0,
       release: () => {},
+      resumeAcquire: () => {},
       yieldLeadership: () => {},
       destroy: () => {},
       onChange: () => () => {}
@@ -78,6 +79,22 @@ export function createLeaderElection(isolationKey: string) {
   }
 
   /**
+   * Re-arm `acquireLock()` after a `release()` — the release-and-stay-released
+   * pairing used by the active/warm runtime lifecycle. `release()` (suspend)
+   * aborts the controller and drops out of the queue permanently; this method
+   * creates a fresh controller and re-enters the queue so the runtime can
+   * become leader again on `resume()`. No-op if already acquiring/holding or
+   * if destroyed. Distinct from `yieldLeadership()`, which re-acquires
+   * immediately (used to defer to a foreground tab, not to pause).
+   */
+  function resumeAcquire() {
+    if (destroyed) return;
+    if (!abortController.signal.aborted) return; // already acquiring or holding
+    abortController = new AbortController();
+    acquireLock();
+  }
+
+  /**
    * Hand leadership to another waiting context (e.g. a foreground tab) without
    * permanently giving it up. Release the held Web Lock and immediately rejoin
    * the request queue at the back: any tab already waiting on the lock is ahead
@@ -113,6 +130,7 @@ export function createLeaderElection(isolationKey: string) {
     get tabId() { return myTabId; },
     get leaderSessionId() { return leaderSessionId; },
     release: releaseLeadership,
+    resumeAcquire,
     yieldLeadership,
     destroy,
     onChange(handler: () => void) {

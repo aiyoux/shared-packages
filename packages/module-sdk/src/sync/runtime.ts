@@ -55,6 +55,25 @@ export interface AppRuntime {
   isolationKey: string;
   start: () => Promise<void>;
   destroy: () => void;
+  /**
+   * Transition this runtime to WARM: release leadership for this DB (another
+   * tab may take it), stop the sync loop, and disconnect the live WebSocket.
+   * The cache, cache persistence, live bus, leader listener, and visibility/
+   * focus listeners all stay alive — so resuming is cheap (no re-hydration).
+   * Implemented by delegating to the existing leader-transition orchestrator:
+   * `release()` fires the `onChange` follower-branch which tears down the live
+   * connection and sync loop. Idempotent; no-op if destroyed.
+   */
+  pause: () => void;
+  /**
+   * Transition this runtime back to LIVE: re-acquire leadership; the existing
+   * `onChange` leader-branch recreates the live connection, restarts the sync
+   * loop, and (via `onReady`) runs changefeed catch-up to replay any changes
+   * that landed while warm. Idempotent; no-op if destroyed. If another tab
+   * holds this DB's lock, this runtime stays a follower and broadcasts
+   * `RequestLeadership` to nudge a backgrounded leader to yield.
+   */
+  resume: () => void;
   queueAndWake: (kind: OpKind, payload: unknown) => void;
   /** Cancel a QUEUED (pending) sync op; returns false for inflight/unknown ops. */
   cancelOp: (opId: string) => boolean;
@@ -1692,6 +1711,41 @@ export function createAppRuntime(config: RuntimeConfig): AppRuntime {
     cache.clear();
   }
 
+  /**
+   * WARM transition. Delegates to the leader-transition orchestrator: releasing
+   * the lock fires the `onChange` follower-branch (defined in `start()`), which
+   * disconnects the live connection and stops the sync loop. The orchestrator
+   * is the single source of truth for live/loop lifecycle, so pause/resume avoid
+   * duplicating that logic (and avoid racy `isLeader` checks after async lock
+   * acquisition). Cache, persistence, bus, and listeners are untouched.
+   *
+   * When the runtime owns its leader election (per-isolationKey, the default),
+   * `release()` aborts the lock permanently and stays out — another tab may
+   * lead this DB. When leadership is injected/shared, `release()` affects the
+   * shared instance; the host is responsible for not pausing a shared leader.
+   */
+  function pause() {
+    if (destroyed) return;
+    leaderElection.release();
+  }
+
+  /**
+   * LIVE transition. Re-arms leadership acquisition; the `onChange` leader-branch
+   * (in `start()`) recreates the live connection, restarts the sync loop, and
+   * runs changefeed catch-up when the lock is (re)won. Mirrors
+   * `restartLeaderLiveConnection`: `markLiveCatchupRequired(true)` forces gap
+   * replay even if the persisted cursor looked current. `followerActivate()`
+   * is a no-op once we're leader (single-tab, immediate); if we queued behind
+   * another tab it broadcasts `RequestLeadership` to nudge a backgrounded
+   * leader to yield to this foreground tab.
+   */
+  function resume() {
+    if (destroyed) return;
+    void markLiveCatchupRequired(true);
+    leaderElection.resumeAcquire();
+    followerActivate();
+  }
+
   function queueAndWake(kind: OpKind, payload: unknown) {
     // Enqueue an op transaction
     engine.queueOp(kind, payload);
@@ -1749,6 +1803,8 @@ export function createAppRuntime(config: RuntimeConfig): AppRuntime {
     isolationKey: config.isolationKey,
     start,
     destroy,
+    pause,
+    resume,
     queueAndWake,
     cancelOp: (opId: string) => engine.cancelOp(opId),
     updateScopes,

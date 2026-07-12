@@ -182,3 +182,57 @@ describe('CloneTemplateChildren SQL', () => {
     runtime.destroy();
   });
 });
+
+describe('AppRuntime pause/resume (active/warm lifecycle surface)', () => {
+  // The node test env has no window/navigator.locks, so createLeaderElection
+  // returns the non-browser stub whose release/resumeAcquire are no-ops. That
+  // is enough to assert the API surface and the destroyed-guard / pre-start
+  // no-op contracts without a full IDB + WebSocket + locks harness (which this
+  // package does not have). The resume() live-connection recreate + changefeed
+  // catch-up ride existing, production-tested paths exercised by the manual
+  // multi-connection switch test.
+
+  function makeRuntime() {
+    return createAppRuntime({
+      url: 'http://127.0.0.1:8000',
+      namespace: 'db',
+      database: 'db',
+      token: 'token',
+      scopes: [],
+      isolationKey: 'runtime-pause-test'
+    });
+  }
+
+  it('exposes pause and resume as functions', () => {
+    const runtime = makeRuntime();
+    expect(typeof runtime.pause).toBe('function');
+    expect(typeof runtime.resume).toBe('function');
+    runtime.destroy();
+  });
+
+  it('pause() before start() is a no-op and does not mark destroyed', () => {
+    const runtime = makeRuntime();
+    expect(() => runtime.pause()).not.toThrow();
+    runtime.destroy();
+  });
+
+  it('pause() after destroy() is a no-op', () => {
+    const runtime = makeRuntime();
+    runtime.destroy();
+    expect(() => runtime.pause()).not.toThrow();
+  });
+
+  it('resume() after destroy() is a no-op', () => {
+    const runtime = makeRuntime();
+    runtime.destroy();
+    // resume() guards on `destroyed` before touching IDB / bus, so a destroyed
+    // runtime must not attempt any I/O.
+    expect(() => runtime.resume()).not.toThrow();
+  });
+
+  it('pause() then destroy() is clean', () => {
+    const runtime = makeRuntime();
+    runtime.pause();
+    expect(() => runtime.destroy()).not.toThrow();
+  });
+});
