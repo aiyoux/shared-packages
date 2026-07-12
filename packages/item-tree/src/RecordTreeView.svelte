@@ -1,6 +1,7 @@
 <script lang="ts">
-  import { sanitizeSvg, PartialReference, Badge } from "@modular-app/ui";
+  import { sanitizeSvg, Badge } from "@modular-app/ui";
   import {
+    PartialReference,
     type AppRuntime,
     type Item,
     isProgressAdditional,
@@ -48,8 +49,11 @@
     draggable = false,
     editable = false,
     showAdditionals = true,
+    additionalsPlacement = 'inline',
+    additionalLabelFor = null,
     showGraphParents = false,
     showGroupingParents = false,
+    showAppliesTo = false,
     showActions = false,
     hydrateRoot = true,
     badgePlacement = 'inline',
@@ -89,12 +93,37 @@
     draggable?: boolean;
     editable?: boolean;
     showAdditionals?: boolean;
+    /**
+     * Where additionals badges render. 'inline' (default) places them as a
+     * compact right-hand column on the row; 'below-label' stacks them as a
+     * wrapping row beneath the label (legacy-style, more prominent, no tight
+     * truncation) — paired with showAppliesTo which also renders below the label.
+     */
+    additionalsPlacement?: 'inline' | 'below-label';
+    /**
+     * Module-supplied labeler for additionals badges, forwarded to TreeAdditionals.
+     * Lets module-defined additional types (scripture, publication, food_nutrition,
+     * …) render readable badges without item-tree depending on any module. Called
+     * before the built-in handlers; return null to defer.
+     */
+    additionalLabelFor?: ((additional: any) => string | null) | null;
     showGraphParents?: boolean;
     showGroupingParents?: boolean;
+    /**
+     * Render "applies to" links beneath the node label. Bidirectional: outgoing
+     * links (records this item applies to) are labelled "Related", incoming links
+     * (records that apply to this item) are labelled "Related to this". Both
+     * directions are resolved from the cache's applies-edge store — outgoing via
+     * get_applies_for_source, incoming via get_applies_for_dest — and each link
+     * navigates through {@link linkHref}. Unlinking is intentionally not exposed
+     * here; it lives on the /records/settings page.
+     */
+    showAppliesTo?: boolean;
     showActions?: boolean;
     hydrateRoot?: boolean;
     badgePlacement?: 'inline' | 'below-label';
-    labelLines?: 1 | 2;
+    /** 1 = single-line ellipsis (default), 2 = clamp at 2 lines, 0 = wrap freely. */
+    labelLines?: 1 | 2 | 0;
     /**
      * When true, render the tree in a more compact style: smaller label
      * text and tighter row padding. Useful for side-panel tree views where
@@ -218,6 +247,21 @@
       .filter((p): p is Item => !!p)
   );
 
+  // Applies-to links, resolved bidirectionally. Outgoing = records this item
+  // applies to (src_id is this node); incoming = records that apply to this
+  // item (dst_id is this node). Both are rendered beneath the label when
+  // showAppliesTo is set.
+  let appliesOutgoingItems = $derived(
+    (runtime?.cache.get_applies_for_source(id) ?? [])
+      .map((e) => runtime?.cache.getItem(e.dst_id) as Item | undefined)
+      .filter((p): p is Item => !!p)
+  );
+  let appliesIncomingItems = $derived(
+    (runtime?.cache.get_applies_for_dest(id) ?? [])
+      .map((e) => runtime?.cache.getItem(e.src_id) as Item | undefined)
+      .filter((p): p is Item => !!p)
+  );
+
   // Expansion: when a shared controller is supplied it owns the state (and
   // persists it); otherwise each node keeps its own ephemeral flag.
   let localExpanded = $state(false);
@@ -295,6 +339,10 @@
     // "done" treatment without anyone toggling it explicitly.
     const completeClass = progressIsComplete ? 'line-through opacity-60' : '';
     const base = `block ${sizeClass} font-medium leading-tight ${isHeader ? 'font-bold' : ''} ${completeClass}`;
+    // labelLines: 0 = wrap freely (no clamp), 2 = clamp at 2 lines, 1 = single-line ellipsis.
+    if (labelLines === 0) {
+      return `${base} break-words`;
+    }
     if (labelLines > 1) {
       return `${base} overflow-hidden break-words`;
     }
@@ -302,8 +350,10 @@
   }
 
   function labelStyle(): string | undefined {
-    if (labelLines <= 1) return undefined;
-    return '-webkit-box-orient: vertical; display: -webkit-box; -webkit-line-clamp: 2;';
+    if (labelLines === 2) {
+      return '-webkit-box-orient: vertical; display: -webkit-box; -webkit-line-clamp: 2;';
+    }
+    return undefined;
   }
 
   $effect(() => {
@@ -994,7 +1044,7 @@
             </div>
           {/if}
 
-          <div class="flex items-center gap-1 min-w-0 overflow-hidden">
+          <div class={`flex gap-1 min-w-0 overflow-hidden ${labelLines === 0 ? 'items-baseline' : 'items-center'}`}>
             {#if showGroupingParents && groupingParentItems.length > 0}
               {#each groupingParentItems as group (group.id)}
                 <a
@@ -1097,11 +1147,52 @@
               <span class="truncate">{itemBadge.label}</span>
             </span>
           {/if}
+
+          {#if showAdditionals && !isEditing && additionalsPlacement === 'below-label'}
+            <TreeAdditionals additionals={item.additionals} {runtime} itemId={id} placement="below-label" labelFor={additionalLabelFor} />
+          {/if}
+
+          {#if showAppliesTo && !isEditing && (appliesOutgoingItems.length > 0 || appliesIncomingItems.length > 0)}
+            {#if appliesOutgoingItems.length > 0}
+              <div class="flex flex-wrap items-center gap-1 mt-1">
+                <span class="text-sm leading-none text-muted-foreground/70">Related</span>
+                {#each appliesOutgoingItems as target (target.id)}
+                  <a
+                    href={linkHref?.(target.id) ?? `/records/${target.id.replace(/^records:/, '')}`}
+                    class="text-sm leading-none text-muted-foreground border-b border-dashed border-muted-foreground/40 hover:text-foreground hover:border-foreground/40 transition-colors"
+                    onclick={(e) => {
+                      e.stopPropagation();
+                      if (activeDragZone) e.preventDefault();
+                    }}
+                  >
+                    {target.text || 'Untitled'}
+                  </a>
+                {/each}
+              </div>
+            {/if}
+            {#if appliesIncomingItems.length > 0}
+              <div class="flex flex-wrap items-center gap-1 mt-1">
+                <span class="text-sm leading-none text-muted-foreground/70">Related to this</span>
+                {#each appliesIncomingItems as source (source.id)}
+                  <a
+                    href={linkHref?.(source.id) ?? `/records/${source.id.replace(/^records:/, '')}`}
+                    class="text-sm leading-none text-muted-foreground border-b border-dashed border-muted-foreground/40 hover:text-foreground hover:border-foreground/40 transition-colors"
+                    onclick={(e) => {
+                      e.stopPropagation();
+                      if (activeDragZone) e.preventDefault();
+                    }}
+                  >
+                    {source.text || 'Untitled'}
+                  </a>
+                {/each}
+              </div>
+            {/if}
+          {/if}
         </div>
 
-        <!-- Additionals badges -->
-        {#if showAdditionals && !isEditing}
-          <TreeAdditionals additionals={item.additionals} {runtime} itemId={id} />
+        <!-- Additionals badges (inline right-column placement) -->
+        {#if showAdditionals && !isEditing && additionalsPlacement === 'inline'}
+          <TreeAdditionals additionals={item.additionals} {runtime} itemId={id} labelFor={additionalLabelFor} />
         {/if}
 
         <!-- Row action buttons. Keep them inline so selected-row actions feel
@@ -1223,8 +1314,11 @@
             {draggable}
             {editable}
             {showAdditionals}
+            {additionalsPlacement}
+            {additionalLabelFor}
             {showGraphParents}
             {showGroupingParents}
+            {showAppliesTo}
             {showActions}
             {expansion}
             {onFocus}

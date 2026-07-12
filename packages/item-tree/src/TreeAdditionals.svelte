@@ -5,16 +5,41 @@
   let {
     additionals = [],
     runtime = null,
-    itemId = null
+    itemId = null,
+    placement = 'inline',
+    labelFor = null
   }: {
     additionals?: any[];
     runtime?: AppRuntime | null | undefined;
     itemId?: string | null;
+    /** 'inline' = compact right-column (truncated, shrink-0); 'below-label' = wrapping row beneath the label. */
+    placement?: 'inline' | 'below-label';
+    /**
+     * Module-supplied labeler. Called first, before the built-in labelForAdditional;
+     * a non-null string wins. This is how module-defined additional types (e.g.
+     * scripture, publication, food_nutrition) get readable badges without item-tree
+     * depending on any module. Return null to defer to the built-in handler.
+     */
+    labelFor?: ((additional: any) => string | null) | null;
   } = $props();
+
+  function resolveLabel(additional: any): string | null {
+    const override = labelFor?.(additional);
+    if (override != null) return override;
+    return labelForAdditional(additional);
+  }
 
   function formatCurrency(minor: number, currency: string): string {
     const major = (minor / 100).toFixed(2);
     return `${currency} ${major}`;
+  }
+
+  /** Universal net: turn a type slug like "timeline_settings" into "Timeline settings"
+   *  so every additional type — including module config/metadata types with no value
+   *  field — renders *something* rather than vanishing. Module-aware value formatting
+   *  is supplied by the consumer via the `labelFor` override (called before this). */
+  function humanizeType(type: string): string {
+    return type.replace(/_/g, ' ').replace(/^\w/, (c) => c.toUpperCase());
   }
 
   function labelForAdditional(additional: any): string | null {
@@ -130,18 +155,24 @@
     if (typeof value === 'number' || typeof value === 'boolean') {
       return String(value);
     }
+    // Universal net (see humanizeType): never render nothing. A type slug is
+    // always available on a well-formed additional, so this guarantees coverage
+    // of every additional type without item-tree knowing about any module.
+    if (typeof type === 'string' && type.length > 0) {
+      return humanizeType(type);
+    }
     return null;
   }
 </script>
 
 {#if additionals && additionals.length > 0}
-  <div class="flex items-center gap-1 overflow-hidden shrink-0">
+  <div class={placement === 'below-label' ? 'flex flex-wrap items-center gap-1 mt-1' : 'flex items-center gap-1 overflow-hidden shrink-0'}>
     {#each additionals as add (add.id ?? add.type)}
       {#if !isProgressAdditional(add)}
-        {@const label = labelForAdditional(add)}
+        {@const label = resolveLabel(add)}
         {#if label}
           <div
-            class="text-[0.65rem] px-1.5 py-0.5 rounded bg-[var(--color-muted)] text-[var(--color-foreground)] flex items-center max-w-[80px] truncate"
+            class="text-[0.65rem] px-1.5 py-0.5 rounded bg-[var(--color-muted)] text-[var(--color-foreground)] flex items-center {placement === 'below-label' ? 'max-w-[200px]' : 'max-w-[80px]'} truncate"
             title={add.type}
           >
             <span class="truncate">{label}</span>
