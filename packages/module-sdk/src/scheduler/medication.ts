@@ -14,7 +14,7 @@ import {
   reminderRulesForItem,
   itemScopeIds
 } from '../scheduler.ts';
-import { DAY_MS, HOUR_MS } from '../time.ts';
+import { DAY_MS, HOUR_MS } from '@modular-app/ui/date';
 import { deriveInventoryStockStates, type InventoryDerivedStockState } from './inventory.ts';
 
 export interface MedicationScheduleConfig {

@@ -272,3 +272,83 @@ export function patchProgressAdditional<T extends AdditionalWithId | Record<stri
 
   return { ...rest, ...replacement } as T;
 }
+
+/**
+ * Set the manual value of a progress additional (check state or percentage),
+ * preserving kind, weight, and desc. Always produces a clean MANUAL entry —
+ * any leftover `mode: 'rollup'` marker fields are stripped so the server
+ * doesn't treat the result as a rollup again. The id is preserved.
+ *
+ * For a rollup marker, callers should switch to manual via
+ * `setProgressAdditionalComputed(additional, false)` first; this helper is
+ * meant for the manual-value editing path.
+ */
+export function setProgressAdditionalValue<T extends AdditionalWithId | Record<string, any>>(
+  additional: T,
+  value: CheckProgressValue | number
+): T {
+  const shape = readProgressAdditional(additional);
+  if (!shape) return additional;
+  const replacement = createProgressAdditional({
+    kind: shape.kind,
+    value,
+    computed: false,
+    weight: shape.weight,
+    desc: shape.desc
+  }) as any;
+  const { t, d, c, p, mode, base_prog_type, offset_base, computed, updated_at, ...rest } = additional as any;
+  replacement.id = rest.id ?? replacement.id;
+  return { ...rest, ...replacement } as T;
+}
+
+/**
+ * Rebuild a progress additional preserving kind, value, computed-ness, and
+ * marker extras (`offset_base`) while applying `weight`/`desc` overrides. Used
+ * by `setProgressAdditionalWeight` / `setProgressAdditionalDesc`. The id is
+ * preserved and legacy short fields + `updated_at` are dropped so the rebuilt
+ * entry gets a fresh client-clock stamp at queue time.
+ */
+function rebuildProgress<T extends AdditionalWithId | Record<string, any>>(
+  additional: T,
+  overrides: { weight?: number; desc?: string | null }
+): T {
+  const shape = readProgressAdditional(additional);
+  if (!shape) return additional;
+  const replacement = createProgressAdditional({
+    kind: shape.kind,
+    value: shape.value,
+    computed: shape.computed,
+    weight:
+      overrides.weight !== undefined
+        ? Number.isFinite(overrides.weight) ? Number(overrides.weight) : 100
+        : shape.weight,
+    desc: overrides.desc !== undefined ? overrides.desc : shape.desc
+  }) as any;
+  const { t, d, c, p, updated_at, ...rest } = additional as any;
+  replacement.id = rest.id ?? replacement.id;
+  return { ...rest, ...replacement } as T;
+}
+
+/**
+ * Set the relative weight of a progress additional (its contribution to a
+ * computed parent). Preserves kind, value, computed-ness, desc, id, and — for
+ * rollup markers — `offset_base`.
+ */
+export function setProgressAdditionalWeight<T extends AdditionalWithId | Record<string, any>>(
+  additional: T,
+  weight: number
+): T {
+  return rebuildProgress(additional, { weight });
+}
+
+/**
+ * Set the optional human-readable description of a progress additional.
+ * Pass `null` to clear. Preserves kind, value, computed-ness, weight, id, and
+ * marker extras.
+ */
+export function setProgressAdditionalDesc<T extends AdditionalWithId | Record<string, any>>(
+  additional: T,
+  desc: string | null
+): T {
+  return rebuildProgress(additional, { desc });
+}

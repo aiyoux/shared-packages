@@ -1,4 +1,5 @@
-import type { AdditionalWithId, DateInformation, Item } from './types.ts';
+import type { AdditionalWithId, Item } from './types.ts';
+import type { DateInformation } from '@modular-app/ui/date';
 import { getDateAdditionalData, isDateAdditional, patchDateAdditionalInfo } from './date-additional.ts';
 
 export type DisplayAs = 'mj' | 'mi' | 'sm' | 'n';

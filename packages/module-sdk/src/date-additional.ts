@@ -1,4 +1,5 @@
-import type { AdditionalWithId, DateInformation } from './types.ts';
+import type { AdditionalWithId } from './types.ts';
+import type { DateInformation } from '@modular-app/ui/date';
 
 /**
  * Helpers for reading/writing the "date" additional.

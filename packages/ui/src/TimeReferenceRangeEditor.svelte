@@ -5,14 +5,14 @@
     BaseOrVagueReference,
     TimeReferenceValidationResult,
     TimeReferenceField
-  } from '@modular-app/module-sdk';
+  } from './date';
   import {
     cleanupEmptyFields,
     cloneTimeReference,
     refsEqual,
     setSideRef,
     validateTimeReferenceStructure
-  } from '@modular-app/module-sdk';
+  } from './date';
   import DatePicker from './DatePicker.svelte';
   import TimePicker from './TimePicker.svelte';
   import TimeStackBuilder from './TimeStackBuilder.svelte';

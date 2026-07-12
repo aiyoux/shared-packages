@@ -18,6 +18,12 @@ export interface OperationRecord {
   subjectIds: string[];
   dedupeKey: string | null;
   dismissible: boolean;
+  /**
+   * Present when the underlying work can still be called off (e.g. a queued —
+   * not yet inflight — sync op). The feed renders a Cancel button that invokes
+   * it. Distinct from `dismissible`, which merely hides a settled entry.
+   */
+  cancel?: (() => void) | null;
   count: number;
   firstAt: number;
   lastAt: number;
@@ -37,6 +43,7 @@ export interface OperationInput {
   subjectIds?: string[];
   dedupeKey?: string | null;
   dismissible?: boolean;
+  cancel?: (() => void) | null;
   profileId?: string;
 }
 
@@ -77,6 +84,7 @@ function makeOperationRecord(input: OperationInput, id: string, now: number): Op
     subjectIds: [...(input.subjectIds ?? [])],
     dedupeKey: input.dedupeKey ?? null,
     dismissible: input.dismissible ?? true,
+    cancel: input.cancel ?? null,
     count: 1,
     firstAt: now,
     lastAt: now,
@@ -145,6 +153,7 @@ export function pushOperation(input: OperationInput): string {
       context: input.context ?? matched.context,
       subjectIds: input.subjectIds ? [...input.subjectIds] : matched.subjectIds,
       dismissible: input.dismissible ?? matched.dismissible,
+      cancel: input.cancel !== undefined ? input.cancel : matched.cancel,
       dedupeKey: input.dedupeKey ?? matched.dedupeKey,
       count: matched.count + 1,
       lastAt: now

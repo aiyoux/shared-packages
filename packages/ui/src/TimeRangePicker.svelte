@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { StartOrEnd, VagueMinuteCode, BaseOrVagueReference } from '@modular-app/module-sdk';
+  import type { StartOrEnd, VagueMinuteCode, BaseOrVagueReference } from './date';
   import TimePicker from './TimePicker.svelte';
   import Checkbox from './Checkbox.svelte';
 

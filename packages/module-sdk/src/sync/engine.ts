@@ -6,7 +6,7 @@ import { setSyncOp, removeSyncOp } from './ops-store.svelte.ts';
 import type { LogLevel } from './logger.ts';
 import { createLogger } from './logger.ts';
 import { buildSurrealStatement } from './surrealql.ts';
-import { MINUTE_MS } from '../time.ts';
+import { MINUTE_MS } from '@modular-app/ui/date';
 import { mergeAdditionalsLocal } from '../additionals-mutate.ts';
 import type { AdditionalWithId } from '../types.ts';
 

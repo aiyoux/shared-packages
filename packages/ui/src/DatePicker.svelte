@@ -5,7 +5,7 @@
     VagueDayCode,
     VagueMonthCode,
     VagueYearCode
-  } from '@modular-app/module-sdk';
+  } from './date';
   import {
     VAGUE_DAYS,
     VAGUE_DAY_ORDER,
@@ -15,7 +15,7 @@
     vagueMonthValue,
     weekCountFor,
     type WeekModeCode
-  } from '@modular-app/module-sdk';
+  } from './date';
   import DateRangeCalendar from './DateRangeCalendar.svelte';
   import type { DateRangeValue } from './date-range.ts';
   import { sameDay, stripTime } from './date-range.ts';

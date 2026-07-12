@@ -1,9 +1,9 @@
 <script lang="ts">
   import { X } from '@lucide/svelte';
-  import { MINUTE_MS } from '@modular-app/module-sdk';
+  import { MINUTE_MS } from '@modular-app/ui/date';
   import OperationStatusBadge from './OperationStatusBadge.svelte';
   import { dismissOperation, type OperationRecord } from './operation-feed.svelte.js';
-  import { cn } from './utils.ts';
+  import { cn } from '@modular-app/ui';
 
   type Variant = 'panel' | 'inline' | 'strip';
 
@@ -88,6 +88,17 @@
               {/if}
             </div>
 
+            {#if operation.cancel}
+              <button
+                type="button"
+                class="rounded-[var(--radius-sm)] border border-[var(--color-border)] px-2 py-1 text-[11px] font-medium text-[var(--color-muted-foreground)] transition hover:border-[var(--color-destructive)]/60 hover:text-[var(--color-destructive)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-primary)]"
+                onclick={() => operation.cancel?.()}
+                aria-label="Cancel operation"
+                title="Cancel this queued operation"
+              >
+                Cancel
+              </button>
+            {/if}
             {#if operation.dismissible}
               <button
                 type="button"

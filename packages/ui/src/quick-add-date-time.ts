@@ -1,5 +1,5 @@
-import type { BaseOrVagueReference, TimeReference, VagueMinuteCode, VagueMonthCode } from '@modular-app/module-sdk';
-import { cleanupEmptyFields, cloneTimeReference, firstDayOfWeek } from '@modular-app/module-sdk';
+import type { BaseOrVagueReference, TimeReference, VagueMinuteCode, VagueMonthCode } from './date';
+import { cleanupEmptyFields, cloneTimeReference, firstDayOfWeek } from './date';
 
 export type QuickAddDateTimePresetKind =
   | 'today-morning'

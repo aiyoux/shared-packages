@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { VagueYearCode, VagueMonthCode } from '@modular-app/module-sdk';
+  import type { VagueYearCode, VagueMonthCode } from './date';
 
   let {
     month_selector_open = $bindable(),

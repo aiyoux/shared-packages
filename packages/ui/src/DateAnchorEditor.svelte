@@ -19,8 +19,8 @@
 
 <script lang="ts">
   import { untrack } from 'svelte';
-  import type { BaseOrVagueReference, DateInformation, RelevanceBound, RelevanceWindow, ResolveContext, StartOrEnd, TimeReference } from '@modular-app/module-sdk';
-  import { cloneTimeReference, readRelevanceWindow } from '@modular-app/module-sdk';
+  import type { BaseOrVagueReference, DateInformation, RelevanceBound, RelevanceWindow, ResolveContext, StartOrEnd, TimeReference } from './date';
+  import { cloneTimeReference, readRelevanceWindow } from './date';
   import {
     DateAnchorEditorState,
     type AnchorType
@@ -931,7 +931,7 @@
     </div>
 
     <div class="flex flex-col gap-2">
-      <Checkbox bind:checked={editor.draft.po} hint="Pins the item at the top once its scheduled time passes, regardless of the after window.">
+      <Checkbox bind:checked={editor.keepPinnedIfOverdue} hint="Pins the item at the top once its scheduled time passes, regardless of the after window.">
         Keep pinned if overdue
       </Checkbox>
     </div>

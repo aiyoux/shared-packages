@@ -1,7 +1,7 @@
 <script lang="ts">
   import { LoaderCircle, CheckCircle2, AlertCircle, Ban } from '@lucide/svelte';
   import type { OperationStatus } from './operation-feed.svelte.js';
-  import { cn } from './utils.ts';
+  import { cn } from '@modular-app/ui';
 
   let {
     status,

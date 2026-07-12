@@ -1,11 +1,11 @@
 <script lang="ts">
-  import type { BaseOrVagueReference, VagueMinuteCode } from '@modular-app/module-sdk';
+  import type { BaseOrVagueReference, VagueMinuteCode } from './date';
   import {
     VAGUE_MINUTES,
     VAGUE_MINUTE_ORDER,
     vagueMinuteForMinuteOfDay,
     vagueMinuteValue
-  } from '@modular-app/module-sdk';
+  } from './date';
   import Button from './Button.svelte';
   import SegmentedControl from './SegmentedControl.svelte';
   import { cn } from './utils.ts';

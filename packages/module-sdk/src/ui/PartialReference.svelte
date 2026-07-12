@@ -1,6 +1,7 @@
 <script lang="ts">
-  import type { AppRuntime, Item } from '@modular-app/module-sdk';
-  import { cn } from './utils.ts';
+  import type { AppRuntime } from '../sync/runtime.ts';
+  import type { Item } from '../types.ts';
+  import { cn } from '@modular-app/ui';
 
   let {
     runtime,

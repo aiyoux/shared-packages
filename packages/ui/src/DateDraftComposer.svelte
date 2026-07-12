@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { DateInformation, ResolveContext } from '@modular-app/module-sdk';
+  import type { DateInformation, ResolveContext } from './date';
   import DateAnchorEditor from './DateAnchorEditor.svelte';
   import Button from './Button.svelte';
   import type { Snippet } from 'svelte';

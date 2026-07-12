@@ -1,8 +1,8 @@
 import type { AppRuntime } from './sync/runtime.ts';
 import type { Item } from './types.ts';
 import { getDateAdditionalData, isDateAdditional } from './date-additional.ts';
-import { resolveTimeWindow, type DateScopeKind } from './time-reference.ts';
-import { DAY_MS, HOUR_MS, MINUTE_MS } from './time.ts';
+import { resolveTimeWindow, type DateScopeKind } from '@modular-app/ui/date';
+import { DAY_MS, HOUR_MS, MINUTE_MS } from '@modular-app/ui/date';
 
 import {
   deriveInventoryStockState,

@@ -109,7 +109,9 @@ export { createLogger, type LogLevel } from './sync/logger.ts';
 export { logLevelForProfile, type ProfileClass } from './sync/log-level.ts';
 export { buildSurrealQuery, buildSurrealStatement, extractQueryRows } from './sync/surrealql.ts';
 export * from './utils.ts';
-export * from './vague-time.ts';
+// Date model (types + helpers) now lives in @modular-app/ui/date; re-exported
+// here so existing `import { TimeReference, cloneTimeReference, MINUTE_MS, ... } from '@modular-app/module-sdk'` keeps working.
+export * from '@modular-app/ui/date';
 export * from './scheduler.ts';
 export { resolveTemplateAdditionals, templateResolveContext, collectCloneRegion, collectTemplateCloneVisits } from './template-clone.ts';
 export type {
@@ -151,13 +153,6 @@ export {
   type DisplayAs
 } from './date-info.ts';
 export {
-  BUILTIN_RELEVANCE,
-  readPinWhenOverdue,
-  readRelevanceWindow,
-  resolveRelevance,
-  type ResolvedRelevance
-} from './relevance.ts';
-export {
   optimisticCacheItemFromItem,
   type OptimisticCacheItemOverrides
 } from './optimistic-cache.ts';
@@ -170,12 +165,34 @@ export {
   readProgressAdditional,
   setProgressAdditionalComputed,
   setProgressAdditionalKind,
+  setProgressAdditionalValue,
+  setProgressAdditionalWeight,
+  setProgressAdditionalDesc,
   type ProgressAdditionalData,
   type CheckProgressValue,
   type ProgressKind,
   type ProgressShape,
   type CreateProgressOptions
 } from './progress-additional.ts';
+export {
+  isMeasureAdditional,
+  isRollupMeasureMarker,
+  readMeasureAdditional,
+  createMeasureAdditional,
+  setMeasureComputed,
+  setMeasureValue,
+  setMeasureUnit,
+  setMeasureWeight,
+  setMeasureDesc,
+  toCanonical,
+  fromCanonical,
+  DISTANCE_UNITS,
+  DURATION_UNITS,
+  type MeasureKind,
+  type MeasureUnit,
+  type MeasureShape,
+  type CreateMeasureOptions
+} from './measure-additional.ts';
 
 export {
   readComputedAdditionals,
@@ -206,87 +223,37 @@ export {
   refsObject
 } from './module-refs.ts';
 
-export {
-  resolveStart,
-  resolveEnd,
-  resolveTimeWindow,
-  explicitTimeReference,
-  relativeTimeReference,
-  materializeTimeReference,
-  hasAnyDateField,
-  type DateScopeKind,
-  type ResolvedTimeWindow,
-  type ResolveContext
-} from './time-reference.ts';
-
-export {
-  cloneTimeReference,
-  getSideRef,
-  setSideRef,
-  isVague,
-  isBase,
-  isOffset,
-  refsEqual,
-  cleanupEmptyFields,
-  comparableMinuteBounds,
-  isMinutePairReversed,
-  validateTimeReferenceStructure,
-  normalizeTimeReference,
-  normalizeDateInformationForPersistence,
-  canonicalizeDateInformation,
-  type LegacyDateInfoInput,
-  hasAnyMinuteReference,
-  shouldTreatAsDateOnlyForPersistence,
-  restoreVagueReferences,
-  hasExplicitEnd,
-  hasExplicitStartDate,
-  hasExplicitStartTime,
-  hasExplicitEndDate,
-  hasExplicitEndTime,
-  formatDateReferenceLabel,
-  formatTimeReferenceLabel,
-  formatTimeReferenceRangeLabel,
-  cloneDateInformation,
-  defaultCalendarDateInfo,
-  applyDisplayFlags,
-  type TimeReferenceField,
-  type TimeReferenceSide,
-  type TimeReferenceValidationIssue,
-  type TimeReferenceValidationResult,
-  type NormalizeTimeReferenceOptions,
-  type NormalizeDateInformationForPersistenceOptions,
-  type FormatTimeReferenceOptions
-} from './time-reference-normalize.ts';
-export {
-  MINUTE_MS,
-  HOUR_MS,
-  DAY_MS,
-  WEEK_MS,
-  days_between,
-  number_from_given_day,
-  days_in_month,
-  is_leap_year,
-  days_in_year,
-  extract_start_date,
-  extract_end_date,
-  extract_start_minute,
-  extract_end_minute,
-  extract_start_minute_like,
-  extract_end_minute_like
-} from './time.ts';
-export {
-  addDays as add_days,
-  dateFromDayOfYear,
-  extractDateSide,
-  extractDateWindow,
-  firstDayOfWeek,
-  isoWeekCount,
-  isoWeekStart,
-  resolvedWeekRangeForRef,
-  weekCountFor,
-  weekModeFor,
-  weekRangeFor,
-  weekStartFor,
-  type DateSide
-} from './time-week.ts';
 export * from './dashboard.ts';
+
+// Modular-app domain UI components + operation-feedback store. These lived in
+// @modular-app/ui but were modular-app-specific (they depend on this package's
+// record/additional model), so they moved here to let @modular-app/ui stay
+// dependency-free. Re-exported so existing
+// `import { ProgressEditor, pushOperation, ... } from '@modular-app/module-sdk'` works.
+export { default as PartialReference } from './ui/PartialReference.svelte';
+export { default as ApplyTemplatePopover } from './ui/ApplyTemplatePopover.svelte';
+export { default as ProgressEditor } from './ui/ProgressEditor.svelte';
+export { default as MeasureEditor } from './ui/MeasureEditor.svelte';
+export { default as TransactionEditor } from './ui/TransactionEditor.svelte';
+export { default as QuantityDeltaEditor } from './ui/QuantityDeltaEditor.svelte';
+export { default as OperationFeedList } from './ui/OperationFeedList.svelte';
+export { default as OperationStatusBadge } from './ui/OperationStatusBadge.svelte';
+export { default as OperationStatusIndicator } from './ui/OperationStatusIndicator.svelte';
+export {
+  createOperation,
+  pushOperation,
+  updateOperation,
+  completeOperation,
+  failOperation,
+  dismissOperation,
+  clearOperations,
+  getOperations,
+  isOperationActiveStatus,
+  matchesOperationStage,
+  type OperationInput,
+  type OperationQuery,
+  type OperationRecord,
+  type OperationStage,
+  type OperationStatus,
+  type OperationSurface
+} from './ui/operation-feed.svelte.ts';

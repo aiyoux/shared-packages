@@ -14,10 +14,10 @@
  * not call this — verbatim copy is the absence of resolution, not a second
  * code path.
  */
-import type { Item, TimeReference, StartOrEnd } from './types.ts';
+import type { Item } from './types.ts';
+import type { TimeReference, StartOrEnd, ResolveContext } from '@modular-app/ui/date';
 import type { CloneSetting } from './cache/types.ts';
-import type { ResolveContext } from './time-reference.ts';
-import { resolveStart, materializeTimeReference } from './time-reference.ts';
+import { resolveStart, materializeTimeReference } from '@modular-app/ui/date';
 import { isDateAdditional, getDateAdditionalData, patchDateAdditional } from './date-additional.ts';
 
 export function templateResolveContext(anchor: Date, parentResolved: Date | null): ResolveContext {

@@ -1,4 +1,4 @@
-import type { BaseOrVagueReference, VagueDayCode, VagueMonthCode, VagueYearCode, WeekModeCode } from '@modular-app/module-sdk';
+import type { BaseOrVagueReference, VagueDayCode, VagueMonthCode, VagueYearCode, WeekModeCode } from './date';
 
 export interface DatePickerValue {
   d?: BaseOrVagueReference<VagueDayCode, number>;

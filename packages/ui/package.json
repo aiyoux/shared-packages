@@ -12,6 +12,10 @@
       "svelte": "./src/index.ts",
       "default": "./src/index.ts"
     },
+    "./date": {
+      "svelte": "./src/date/index.ts",
+      "default": "./src/date/index.ts"
+    },
     "./ShellFrame.svelte": "./src/ShellFrame.svelte"
   },
   "scripts": {
@@ -19,7 +23,6 @@
   },
   "dependencies": {
     "@lucide/svelte": "^0.554.0",
-    "@modular-app/module-sdk": "^0.1.0",
     "@types/dompurify": "^3.0.5",
     "clsx": "^2.1.1",
     "dompurify": "^3.4.3",

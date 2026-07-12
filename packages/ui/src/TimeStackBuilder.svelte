@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { BaseOrVagueReference, TimeReference, WeekModeCode } from '@modular-app/module-sdk';
+  import type { BaseOrVagueReference, TimeReference, WeekModeCode } from './date';
   import {
     VAGUE_MINUTES,
     VAGUE_MINUTE_ORDER,
@@ -7,7 +7,7 @@
     VAGUE_DAY_ORDER,
     VAGUE_MONTHS,
     VAGUE_MONTH_ORDER
-  } from '@modular-app/module-sdk';
+  } from './date';
   import Button from './Button.svelte';
   import NumberInput from './NumberInput.svelte';
   import SegmentedControl from './SegmentedControl.svelte';

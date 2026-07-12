@@ -41,7 +41,7 @@
     type VagueYearCode,
     type VagueMonthCode,
     type VagueDayCode
-  } from '@modular-app/module-sdk';
+  } from './date';
 
   type GridCell = {
     date: Date;

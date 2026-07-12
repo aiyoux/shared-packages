@@ -1,4 +1,4 @@
-import type { DateInformation } from '@modular-app/module-sdk';
+import type { DateInformation } from './date';
 
 export type DateDisplayStyle = 'mj' | 'mi' | 'sm' | 'n';
 

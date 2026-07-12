@@ -11,7 +11,7 @@
     type VagueYearCode,
     type VagueMonthCode,
     type VagueDayCode
-  } from '@modular-app/module-sdk';
+  } from './date';
 
   let {
     value = $bindable<DateRangeValue>({ start: null, end: null }),

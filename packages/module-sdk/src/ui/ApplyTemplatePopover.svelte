@@ -8,10 +8,8 @@
 </script>
 
 <script lang="ts">
-  import type { Item } from '@modular-app/module-sdk';
-  import type { DatePickerValue } from './date-picker.js';
-  import DatePicker from './DatePicker.svelte';
-  import Checkbox from './Checkbox.svelte';
+  import type { Item } from '../types.ts';
+  import { DatePicker, Checkbox, type DatePickerValue } from '@modular-app/ui';
 
   let {
     title = 'Apply a template',

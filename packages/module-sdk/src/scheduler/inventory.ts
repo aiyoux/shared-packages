@@ -17,7 +17,7 @@ import {
   computePriority,
   reminderRulesForItem
 } from '../scheduler.ts';
-import { DAY_MS, HOUR_MS } from '../time.ts';
+import { DAY_MS, HOUR_MS } from '@modular-app/ui/date';
 
 export interface InventoryStockItemConfig {
   reorder_point?: number | null;

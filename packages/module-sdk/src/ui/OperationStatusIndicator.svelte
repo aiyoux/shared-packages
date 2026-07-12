@@ -1,9 +1,9 @@
 <script lang="ts">
   import { CheckCircle2, AlertCircle, X } from '@lucide/svelte';
-  import Popover from './Popover.svelte';
+  import { Popover } from '@modular-app/ui';
   import OperationFeedList from './OperationFeedList.svelte';
   import { getOperations, isOperationActiveStatus, type OperationRecord } from './operation-feed.svelte.js';
-  import { cn } from './utils.js';
+  import { cn } from '@modular-app/ui';
 
   let {
     scope,

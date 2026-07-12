@@ -8,8 +8,8 @@ import type {
   VagueMinuteCode,
   VagueMonthCode,
   VagueYearCode
-} from '@modular-app/module-sdk';
-import { cloneTimeReference, hasAnyDateField, resolveEnd, resolveStart, days_between, explicitTimeReference } from '@modular-app/module-sdk';
+} from './date';
+import { cloneTimeReference, hasAnyDateField, resolveEnd, resolveStart, days_between, explicitTimeReference } from './date';
 import type { DatePickerValue } from './date-picker.ts';
 
 export type AnchorType = 'nw' | 'up' | 'pr';
@@ -132,6 +132,18 @@ export class DateAnchorEditorState {
 
   get hasExplicitEndBoundary(): boolean {
     return this.hasExplicitEnd();
+  }
+
+  get keepPinnedIfOverdue(): boolean {
+    return Boolean(this.draft.po);
+  }
+
+  set keepPinnedIfOverdue(next: boolean) {
+    if (next) {
+      this.draft.po = true;
+    } else {
+      delete this.draft.po;
+    }
   }
 
   get parentOffset(): { value: number; unit: ParentOffsetUnit } {

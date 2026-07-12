@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { AdditionalWithId, DateInformation, Item } from './types.ts';
+import type { AdditionalWithId, Item } from './types.ts';
+import type { DateInformation } from '@modular-app/ui/date';
 import {
   displayAsOf,
   getDateInfo,

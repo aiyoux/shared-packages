@@ -7,12 +7,16 @@
     "access": "public"
   },
   "exports": {
-    ".": "./src/index.ts"
+    ".": {
+      "svelte": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
   },
   "scripts": {
     "yalc:publish": "yalc publish"
   },
   "dependencies": {
+    "@modular-app/ui": "^0.1.0",
     "idb": "^8.0.0"
   },
   "devDependencies": {

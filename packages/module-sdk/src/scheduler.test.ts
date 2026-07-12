@@ -19,7 +19,7 @@ import {
 } from './scheduler/medication.ts';
 
 import type { Item } from './types.ts';
-import { HOUR_MS } from './time.ts';
+import { HOUR_MS } from '@modular-app/ui/date';
 
 function itemWithDate(id: string, iso: string): Item {
   const start = new Date(iso);

@@ -8,14 +8,14 @@
     Sparkles,
     X
   } from '@lucide/svelte';
-  import type { TimeReference, VagueDayCode, VagueMinuteCode, VagueMonthCode } from '@modular-app/module-sdk';
+  import type { TimeReference, VagueDayCode, VagueMinuteCode, VagueMonthCode } from './date';
   import {
     cleanupEmptyFields,
     formatTimeReferenceRangeLabel,
     VAGUE_DAYS,
     VAGUE_MINUTES,
     VAGUE_MONTHS
-  } from '@modular-app/module-sdk';
+  } from './date';
   import Button from './Button.svelte';
   import Popover from './Popover.svelte';
   import TimeReferenceRangeEditor from './TimeReferenceRangeEditor.svelte';

@@ -1,3 +1,8 @@
+// Date model (types + helpers) — reusable, dependency-free. Re-exported here
+// so consumers of @modular-app/ui get the date vocabulary alongside the
+// pickers, and so @modular-app/module-sdk can re-export it via ./date.
+export * from './date/index.ts';
+
 export { default as ShellFrame } from './ShellFrame.svelte';
 export { default as Button } from './Button.svelte';
 export { default as Input } from './Input.svelte';
@@ -26,9 +31,6 @@ export { default as DateDraftComposer } from './DateDraftComposer.svelte';
 export { DateAnchorEditorState, type AnchorType } from './DateAnchorEditorState.svelte.js';
 export { default as OverlayHost } from './OverlayHost.svelte';
 export { default as VelocityScroller } from './VelocityScroller.svelte';
-export { default as OperationFeedList } from './OperationFeedList.svelte';
-export { default as OperationStatusBadge } from './OperationStatusBadge.svelte';
-export { default as OperationStatusIndicator } from './OperationStatusIndicator.svelte';
 export { default as ResizableSidePanel } from './ResizableSidePanel.svelte';
 export { default as MobileBottomTray } from './MobileBottomTray.svelte';
 export { default as TimeStackBuilder } from './TimeStackBuilder.svelte';
@@ -51,24 +53,6 @@ export {
   getActiveOverlay,
   type OverlayDescriptor
 } from './overlay-state.svelte.js';
-export {
-  createOperation,
-  pushOperation,
-  updateOperation,
-  completeOperation,
-  failOperation,
-  dismissOperation,
-  clearOperations,
-  getOperations,
-  isOperationActiveStatus,
-  matchesOperationStage,
-  type OperationInput,
-  type OperationQuery,
-  type OperationRecord,
-  type OperationStage,
-  type OperationStatus,
-  type OperationSurface
-} from './operation-feed.svelte.js';
 export type { TabItem } from './tabs.js';
 export type { SegmentedControlOption } from './segmented-control.js';
 export type { RadioGroupOption } from './radio-group.js';
@@ -76,6 +60,4 @@ export type { SelectOption } from './select.js';
 export type { DateRangeValue, DateRangeSelection } from './date-range.js';
 export type { DatePickerValue } from './date-picker.js';
 export type { ResizableSidePanelHandleVariant } from './ResizableSidePanel.types.ts';
-export { default as ApplyTemplatePopover } from './ApplyTemplatePopover.svelte';
-export { default as PartialReference } from './PartialReference.svelte';
 export { default as DeleteConfirmOverlay } from './DeleteConfirmOverlay.svelte';
