@@ -218,8 +218,8 @@
       d: { s: { type: 'ba', v: 15 } },
       i: { s: { type: 'vg', t: 'mo' } }
     },
-    is_status: false,
-    relevance_duration_minutes: 1440
+    is: false,
+    rl: { before: { type: 'dur', minutes: 1440 }, after: { type: 'dur', minutes: 1440 } }
   });
   let dateAnchorAdvancedValue = $state<DateInformation>({
     value: {
@@ -228,18 +228,17 @@
       d: { s: { type: 'vg', t: 'em' }, e: { type: 'vg', t: 'lm' } },
       i: { s: { type: 'vg', t: 'mo' }, e: { type: 'ba', v: 17 * 60 + 30 } }
     },
-    is_status: true,
-    display_as: 'mi',
-    relevance_duration_minutes: 4320,
-    pin_when_overdue: true
+    is: true,
+    ds: 'mi',
+    rl: { before: { type: 'dur', minutes: 4320 }, after: { type: 'dur', minutes: 4320 } },
+    po: true
   });
   let dateAnchorRadarValue = $state<DateInformation>({
     value: {},
-    is_status: false,
-    display_as: 'mj',
-    relevance_duration_minutes: 240,
-    relevance_infinite: false,
-    pin_when_overdue: true
+    is: false,
+    ds: 'mj',
+    rl: { before: { type: 'dur', minutes: 240 }, after: { type: 'dur', minutes: 240 } },
+    po: true
   });
   let dateAnchorCloneValue = $state<DateInformation>({
     value: {
@@ -248,9 +247,9 @@
       d: { s: { type: 'vg', t: 'fh' }, e: { type: 'vg', t: 'sh' } },
       i: { s: { type: 'vg', t: 'af' }, e: { type: 'vg', t: 'ev' } }
     },
-    is_status: false,
-    display_as: 'sm',
-    relevance_duration_minutes: 10080
+    is: false,
+    ds: 'sm',
+    rl: { before: { type: 'dur', minutes: 10080 }, after: { type: 'dur', minutes: 10080 } }
   });
   let checkboxChecked = $state(true);
   let checkboxIndeterminate = $state(false);
