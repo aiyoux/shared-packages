@@ -46,6 +46,7 @@ export {
 } from './quick-add-date-time.js';
 export { sanitizeSvg } from './sanitize.ts';
 export { cn } from './utils.js';
+export { getConnectionColor } from './connection-color.ts';
 export {
   openOverlay,
   closeOverlay,
