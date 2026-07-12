@@ -80,7 +80,9 @@
     defaultChildAdditional = null,
     defaultExpanded = undefined,
     customRow = undefined,
-    unstyledWrapper = false
+    unstyledWrapper = false,
+    loadState = $bindable<'loading' | 'ready' | 'not-found' | 'error'>('ready'),
+    onNotFound = null
   }: {
     id: string;
     runtime: AppRuntime | null | undefined;
@@ -208,6 +210,17 @@
      * so that the customRow can dictate layout (e.g. using CSS Grid).
      */
     unstyledWrapper?: boolean;
+    /**
+     * Reflects the root node's (level 0) hydration state. Bound by hosts that need to
+     * distinguish "still loading" from "definitely not on this runtime" (e.g. to probe
+     * other connections). Stays 'ready' for non-root nodes, which never fetch.
+     */
+    loadState?: 'loading' | 'ready' | 'not-found' | 'error';
+    /**
+     * Fired once when the root record resolves as not-found (empty fetch result) or
+     * errors. Lets a host react to a missing record without polling the bindable.
+     */
+    onNotFound?: (() => void) | null;
   } = $props();
 
   let item = $derived(runtime?.cache.getItem(id) as Item | undefined ?? null);
@@ -379,6 +392,7 @@
     if (!hydrateRoot || !rt || !rootId || level !== 0) return;
 
     const requestId = ++treeLoadSeq;
+    loadState = 'loading';
     void rt
       .fetchAndCache(
         {
@@ -392,8 +406,22 @@
         },
         15000
       )
+      .then((result: unknown[]) => {
+        // A newer fetch has superseded this one; ignore the stale result.
+        if (requestId !== treeLoadSeq) return;
+        if (Array.isArray(result) && result.length > 0) {
+          loadState = 'ready';
+        } else {
+          // Genuine not-found on this runtime — surface it so hosts can probe
+          // other connections instead of sitting on the pulsing placeholder.
+          loadState = 'not-found';
+          onNotFound?.();
+        }
+      })
       .catch(() => {
         if (requestId !== treeLoadSeq) return;
+        loadState = 'error';
+        onNotFound?.();
       });
   });
 
