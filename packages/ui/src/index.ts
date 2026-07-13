@@ -11,6 +11,7 @@ export { default as TopProgressBar } from './TopProgressBar.svelte';
 export { default as Checkbox } from './Checkbox.svelte';
 export { default as RadioGroup } from './RadioGroup.svelte';
 export { default as Select } from './Select.svelte';
+export { default as ConnectionScopeSelect } from './ConnectionScopeSelect.svelte';
 export { default as NumberInput } from './NumberInput.svelte';
 export { default as DateRangeCalendar } from './DateRangeCalendar.svelte';
 export { default as DateRangePicker } from './DateRangePicker.svelte';
@@ -58,6 +59,13 @@ export type { TabItem } from './tabs.js';
 export type { SegmentedControlOption } from './segmented-control.js';
 export type { RadioGroupOption } from './radio-group.js';
 export type { SelectOption } from './select.js';
+export type { ConnectionScopeSelectGroup, ConnectionScopeSelectScope } from './connection-scope-select.ts';
+export {
+  COMPOSITE_SEPARATOR,
+  ALL_SCOPES_SENTINEL,
+  buildScopeSelectionToken,
+  parseScopeSelectionToken
+} from './connection-scope-select.ts';
 export type { DateRangeValue, DateRangeSelection } from './date-range.js';
 export type { DatePickerValue } from './date-picker.js';
 export type { ResizableSidePanelHandleVariant } from './ResizableSidePanel.types.ts';
