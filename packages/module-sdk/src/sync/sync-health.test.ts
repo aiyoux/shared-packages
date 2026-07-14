@@ -65,16 +65,35 @@ describe('sync-health store', () => {
     expect(getSyncHealth('another-never-touched-ns').status).toBe('online');
   });
 
-  it('a read auto-vivifies the namespace, and a later write to a DIFFERENT status is still recorded', () => {
-    // getSyncHealth auto-vivifies (bucketFor) so a reactive $derived that
-    // reads a namespace before anything has ever happened to it still has a
-    // real map entry to be notified through later. Confirms that
-    // auto-vivification doesn't interfere with a genuine subsequent
-    // transition to a status that DIFFERS from the vivified default.
-    vi.stubGlobal('navigator', { onLine: true }); // vivifies as 'online'
+  it('a read does NOT persist a default — a later write to a DIFFERENT status is still recorded', () => {
+    // getSyncHealth must not auto-vivify: it is called from `$derived` blocks,
+    // and writing to the SvelteMap during a derivation throws Svelte 5's
+    // state_unsafe_mutation (dev mode) and aborts the flush. So a read before
+    // any write returns a synthesized default but leaves the map empty; the
+    // first real write (setStatus) still creates the entry. Confirms a read
+    // doesn't interfere with a genuine subsequent transition to a status that
+    // DIFFERS from the synthesized default.
+    vi.stubGlobal('navigator', { onLine: true }); // synthesized default 'online'
     expect(getSyncHealth(NS).status).toBe('online');
     markSyncOffline(NS);
     expect(getSyncHealth(NS).status).toBe('offline');
+    expect(getSyncHealth(NS).lastUnhealthyAt).not.toBeNull();
+  });
+
+  it('getSyncHealth does NOT persist the default across navigator.onLine flips (no auto-vivify)', () => {
+    // The regression that broke the calendar's dev-mode reactivity: an earlier
+    // version auto-vivified on read, so the first getSyncHealth STORED a
+    // default built from the then-current navigator.onLine. Flipping
+    // navigator.onLine afterward and reading the SAME namespace would then
+    // return the STALE stored default instead of re-synthesizing — proving an
+    // entry was persisted. With the no-write fix, no entry is stored, so the
+    // second read re-synthesizes from the new navigator.onLine.
+    vi.stubGlobal('navigator', { onLine: true });
+    expect(getSyncHealth(NS).status).toBe('online');
+    vi.stubGlobal('navigator', { onLine: false });
+    expect(getSyncHealth(NS).status).toBe('offline');
+    // Still no real entry: a later write is the first real observation.
+    markSyncOffline(NS);
     expect(getSyncHealth(NS).lastUnhealthyAt).not.toBeNull();
   });
 });

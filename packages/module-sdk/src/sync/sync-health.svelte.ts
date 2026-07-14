@@ -47,35 +47,35 @@ function defaultHealth(): SyncHealthState {
 }
 
 /**
- * Always returns a REAL, stored entry for the namespace — auto-vivifying a
- * default one on first access. Mirrors the `bucketFor` pattern in
- * ops-store.svelte.ts / fetch-store.svelte.ts: a reactive consumer must read
- * an entry that ACTUALLY EXISTS in the SvelteMap (not a value synthesized on
- * the fly and discarded), so that a namespace transitions from "absent" to
- * "present" at most once — from then on every update is a value change on an
- * EXISTING key, which is unambiguously the case SvelteMap is built to track.
- * Read-only: used by `getSyncHealth`, NOT by `setStatus` below — see its
- * comment for why the write path must compare against genuinely-recorded
- * state instead of a synthesized default.
+ * Reactive read of a namespace's health — call inside a `$derived`/`$effect`
+ * to track it. Returns the stored entry, or a synthesized `defaultHealth()`
+ * when the namespace has never been written.
+ *
+ * Deliberately does NOT auto-vivify (it must not write to the SvelteMap): this
+ * function is called from `$derived` blocks (e.g. the host layout's
+ * `activeHealthStatus`), and mutating reactive state inside a derivation
+ * throws Svelte 5's `state_unsafe_mutation` in dev mode — which aborts the
+ * flush and breaks every other reactive update in the same tick (the calendar's
+ * "Add Event" create-tab open and day-cell selection both died this way).
+ * Reactivity is preserved without a write because `stores.get(namespace)` on a
+ * `SvelteMap` subscribes the caller to that key even when it is absent, so the
+ * absent→present transition (the first `setStatus` write) still re-runs
+ * consumers. The write path (`setStatus` below) creates the real entry on the
+ * first genuine observation.
  */
-function bucketFor(namespace: string): SyncHealthState {
-  let entry = stores.get(namespace);
-  if (!entry) {
-    entry = defaultHealth();
-    stores.set(namespace, entry);
-  }
-  return entry;
+export function getSyncHealth(namespace: string): SyncHealthState {
+  return stores.get(namespace) ?? defaultHealth();
 }
 
 function setStatus(namespace: string, status: SyncHealthStatus): void {
-  // Deliberately reads the map directly (not via bucketFor): comparing
-  // against a synthesized default would let the FIRST-EVER observation for a
-  // namespace silently no-op whenever it happens to match that guess (e.g.
-  // navigator.onLine is true, the engine's first-ever markSyncHealthy also
-  // says 'online') — the exact write-skip bug this function was already
-  // rewritten once to fix. `current` here is `undefined` only when NEITHER a
-  // read nor a write has ever touched this namespace; in every other case
-  // (including after a read auto-vivified it) it holds the last real value.
+  // Reads the map directly. `current` is `undefined` only when no write has
+  // ever touched this namespace — getSyncHealth deliberately does NOT
+  // auto-vivify, so a first-ever read leaves the map empty. Comparing against
+  // a synthesized default here would let the FIRST-EVER observation silently
+  // no-op whenever it matches the guess (e.g. navigator.onLine is true and the
+  // first markSyncHealthy also says 'online') — the exact write-skip bug this
+  // was already rewritten once to fix. Treat undefined as "no real entry yet"
+  // and always write the first real observation.
   const current = stores.get(namespace);
   if (current && current.status === status) return;
   const now = Date.now();
@@ -99,11 +99,6 @@ export function markSyncDegraded(namespace: string): void {
 /** `navigator.onLine` reports false, or a push was skipped because of it. */
 export function markSyncOffline(namespace: string): void {
   setStatus(namespace, 'offline');
-}
-
-/** Reactive read — call inside a `$derived`/`$effect` to track this namespace's health. */
-export function getSyncHealth(namespace: string): SyncHealthState {
-  return bucketFor(namespace);
 }
 
 export function clearSyncHealth(namespace: string): void {
