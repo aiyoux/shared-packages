@@ -11,6 +11,7 @@ function harness(overrides: Partial<ChangefeedCatchupDeps> = {}) {
     runCatchup: vi.fn(async (s: string) => `${s}+1`),
     resync: vi.fn(async () => { calls.push('resync'); }),
     markCaughtUp: vi.fn(async () => { calls.push('markCaughtUp'); }),
+    sweepGhosts: vi.fn(async () => { calls.push('sweepGhosts'); }),
     onWarn: vi.fn(),
     ...overrides
   };
@@ -28,6 +29,9 @@ describe('runChangefeedCatchup — cold start (no persisted cursor)', () => {
     expect(h.deps.markCaughtUp).toHaveBeenCalledOnce();
     // resync must happen before the seed is persisted.
     expect(h.calls).toEqual(['resync', 'persist:seed-cursor', 'markCaughtUp']);
+    // Ghost sweep is a fallback-only step — a cold start has no prior cursor
+    // to have gone stale, so there's nothing to sweep for.
+    expect(h.deps.sweepGhosts).not.toHaveBeenCalled();
   });
 
   it('tolerates a seed failure (non-fatal): warns, still marks caught up, no persist', async () => {
@@ -95,7 +99,34 @@ describe('runChangefeedCatchup — warm reconnect (cursor present)', () => {
     expect(h.deps.seedCursor).toHaveBeenCalledOnce();
     expect(h.deps.persistCursor).toHaveBeenCalledWith('seed-cursor');
     expect(h.deps.markCaughtUp).toHaveBeenCalledOnce();
-    // Order matters: clear before resync; mark caught up last.
-    expect(h.calls).toEqual(['clearCursor', 'resync', 'persist:seed-cursor', 'markCaughtUp']);
+    // A fallback resync (unlike cold start) DOES run the ghost sweep — the
+    // coarse resync snapshot never evicts, so a genuine delete that happened
+    // during the gap would otherwise linger forever.
+    expect(h.deps.sweepGhosts).toHaveBeenCalledOnce();
+    // Order matters: clear before resync; sweep after resync, before re-seed; mark caught up last.
+    expect(h.calls).toEqual(['clearCursor', 'resync', 'sweepGhosts', 'persist:seed-cursor', 'markCaughtUp']);
+  });
+
+  it('a sweepGhosts failure is non-fatal: warns, still re-seeds and marks caught up', async () => {
+    const h = harness({
+      loadPersistedCursor: vi.fn(async () => 'cur-1'),
+      runCatchup: vi.fn(async () => { throw new Error('pull failed'); }),
+      sweepGhosts: vi.fn(async () => { throw new Error('sweep boom'); })
+    });
+    await h.runChangefeedCatchup();
+    expect(h.deps.onWarn).toHaveBeenCalledWith(expect.stringContaining('ghost'), expect.any(Error));
+    expect(h.deps.seedCursor).toHaveBeenCalledOnce();
+    expect(h.deps.persistCursor).toHaveBeenCalledWith('seed-cursor');
+    expect(h.deps.markCaughtUp).toHaveBeenCalledOnce();
+  });
+
+  it('sweepGhosts is optional — omitting it is safe', async () => {
+    const h = harness({
+      loadPersistedCursor: vi.fn(async () => 'cur-1'),
+      runCatchup: vi.fn(async () => { throw new Error('pull failed'); }),
+      sweepGhosts: undefined
+    });
+    await expect(h.runChangefeedCatchup()).resolves.toBeUndefined();
+    expect(h.deps.markCaughtUp).toHaveBeenCalledOnce();
   });
 });

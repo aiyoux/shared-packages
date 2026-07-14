@@ -28,6 +28,17 @@ export interface ChangefeedCatchupDeps {
   resync: () => Promise<void>;
   /** Clear the "catch-up required" flag once converged. */
   markCaughtUp: () => Promise<void>;
+  /**
+   * Targeted eviction of cached records that no longer exist server-side,
+   * run ONLY after a fallback resync (not on cold start). The coarse
+   * namespace snapshot behind `resync()` deliberately never evicts (it's
+   * permission-narrowed under record-auth — see applyRecordSnapshot's note),
+   * so a genuine server-side DELETE that happened during a gap (a stale
+   * cursor past the retention floor, or any other replay failure) would
+   * otherwise leave a ghost record in the cache forever. Optional so callers
+   * that don't have a cheap per-id existence check can omit it.
+   */
+  sweepGhosts?: () => Promise<void>;
   onWarn?: (msg: string, error: unknown) => void;
 }
 
@@ -64,6 +75,11 @@ export function createChangefeedCatchup(deps: ChangefeedCatchupDeps) {
         deps.onWarn?.('failed to clear poisoned changefeed cursor', clearErr);
       }
       await deps.resync();
+      try {
+        await deps.sweepGhosts?.();
+      } catch (sweepErr) {
+        deps.onWarn?.('ghost record sweep failed after fallback resync', sweepErr);
+      }
       try {
         const seed = await deps.seedCursor();
         if (seed) await deps.persistCursor(seed);

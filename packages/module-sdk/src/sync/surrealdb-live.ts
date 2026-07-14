@@ -139,9 +139,26 @@ export function createSurrealLiveConnection(
     disconnect();
   }
 
+  // Reconnect the instant the browser reports connectivity, instead of
+  // waiting out whatever exponential-backoff delay was in flight when we
+  // went offline (up to MAX_RECONNECT_DELAY = 30s + jitter). A no-op if
+  // already connected/connecting (`ws` is set as soon as `connect()` opens
+  // the socket, before the handshake completes) — this only short-circuits a
+  // pending *scheduled* retry.
+  function handleOnline() {
+    if (destroyed || ws) return;
+    if (reconnectTimeout) {
+      clearTimeout(reconnectTimeout);
+      reconnectTimeout = null;
+    }
+    reconnectAttempts = 0;
+    connect();
+  }
+
   if (typeof window !== 'undefined') {
     window.addEventListener('pagehide', handlePageUnload);
     window.addEventListener('beforeunload', handlePageUnload);
+    window.addEventListener('online', handleOnline);
   }
 
   function resolveReady() {
@@ -404,7 +421,7 @@ export function createSurrealLiveConnection(
   async function syncPull(
     since: string | undefined,
     limit: number
-  ): Promise<{ changes: unknown[]; new_cursor?: unknown }> {
+  ): Promise<{ changes: unknown[]; new_cursor?: unknown; oldest_cursor?: unknown }> {
     const sql =
       `LET $s = IF $since = NONE OR $since = NULL { NONE } ELSE { type::uuid($since) }; ` +
       `RETURN fn::sync_pull($s, $limit);`;
@@ -413,7 +430,8 @@ export function createSurrealLiveConnection(
     const obj = Array.isArray(ret) ? ret[0] : ret;
     return {
       changes: obj && Array.isArray(obj.changes) ? obj.changes : [],
-      new_cursor: obj?.new_cursor
+      new_cursor: obj?.new_cursor,
+      oldest_cursor: obj?.oldest_cursor
     };
   }
 
@@ -443,6 +461,7 @@ export function createSurrealLiveConnection(
     if (typeof window !== 'undefined') {
       window.removeEventListener('pagehide', handlePageUnload);
       window.removeEventListener('beforeunload', handlePageUnload);
+      window.removeEventListener('online', handleOnline);
     }
     if (reconnectTimeout) {
       clearTimeout(reconnectTimeout);

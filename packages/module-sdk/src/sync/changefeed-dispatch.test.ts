@@ -181,3 +181,62 @@ describe('runCatchup — paged cursor replay', () => {
     expect(await h.runCatchup('orig')).toBe('orig');
   });
 });
+
+describe('runCatchup — gap detection (M9)', () => {
+  it('throws when the persisted cursor predates the retention floor', async () => {
+    const h = harness({
+      syncPull: vi.fn(async () => ({
+        changes: [{ table_name: 'records', action: 'CREATE', payload: { after: { id: 'records:x' } } }],
+        new_cursor: 'c2',
+        oldest_cursor: 'c5' // since ('c1') < oldest_cursor ('c5') — a gap
+      }))
+    });
+    await expect(h.runCatchup('c1')).rejects.toThrow(/changefeed gap/);
+    // Nothing from the (possibly incomplete) page should have been applied —
+    // the caller is expected to fall back to a full resync instead.
+    expect(h.emitted).toEqual([]);
+  });
+
+  it('does NOT throw when the cursor is at or after the retention floor', async () => {
+    const h = harness({
+      syncPull: vi.fn(async () => ({
+        changes: [],
+        new_cursor: 'c5',
+        oldest_cursor: 'c5' // since === oldest_cursor: still within retention
+      }))
+    });
+    await expect(h.runCatchup('c5')).resolves.toBe('c5');
+  });
+
+  it('cold start (since=undefined) never triggers the gap check', async () => {
+    // A cold start has no persisted cursor to compare — createChangefeedCatchup
+    // routes that case through a full resync directly and never calls
+    // runCatchup at all, but this guards runCatchup itself against a false
+    // positive if ever called with since=undefined.
+    const h = harness({
+      syncPull: vi.fn(async () => ({ changes: [], new_cursor: undefined, oldest_cursor: 'c5' }))
+    });
+    await expect(h.runCatchup(undefined)).resolves.toBeUndefined();
+  });
+
+  it('only checks the gap on the FIRST page, not subsequent ones', async () => {
+    // Page 1 is a FULL page (500 rows) so the paging loop continues to page 2
+    // instead of treating it as the last (partial) page — matching the
+    // "pages until drained" test above.
+    const pages = [
+      {
+        changes: Array.from({ length: 500 }, (_, i) => ({ table_name: 'records', action: 'CREATE', cursor_id: `c${i}`, payload: { after: { id: `records:a_${i}` } } })),
+        new_cursor: 'c2',
+        oldest_cursor: 'c1'
+      },
+      // A later page reporting a "newer" oldest_cursor (e.g. a concurrent
+      // purge) must not retroactively fail an already-in-progress replay.
+      { changes: [{ table_name: 'records', action: 'CREATE', payload: { after: { id: 'records:b' } } }], new_cursor: 'c3', oldest_cursor: 'c99' }
+    ];
+    let call = 0;
+    const h = harness({ syncPull: vi.fn(async () => pages[call++]) });
+    // First page's oldest_cursor ('c1') <= since ('c1'), no gap.
+    await expect(h.runCatchup('c1')).resolves.toBe('c3');
+    expect(h.emitted).toHaveLength(501);
+  });
+});

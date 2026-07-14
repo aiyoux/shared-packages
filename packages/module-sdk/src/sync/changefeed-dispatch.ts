@@ -27,7 +27,7 @@ export interface ChangefeedDispatchDeps {
   syncPull: (
     since: string | undefined,
     limit: number
-  ) => Promise<{ changes: unknown[]; new_cursor?: unknown }>;
+  ) => Promise<{ changes: unknown[]; new_cursor?: unknown; oldest_cursor?: unknown }>;
   /** Deliver one converted bus message to the cache/fan-out. */
   emit: (msg: LiveBusMsg) => void;
   /** Persist the changefeed high-water mark (debounced by the caller). */
@@ -133,12 +133,31 @@ export function createChangefeedDispatcher(deps: ChangefeedDispatchDeps) {
    * `since` (paged), applying each through the SAME dispatchChangeRow pipeline
    * as the live stream — so a payload-less (TTL-stripped) entry transparently
    * falls back to an id re-fetch. Returns the final cursor to persist.
+   *
+   * Throws if the FIRST page reveals `since` predates the server's retention
+   * floor (`oldest_cursor` — see fn::sync_pull / fn::purge_old_changes): the
+   * entries between `since` and the floor were already purged, so a "clean"
+   * paged replay from here would silently skip a gap instead of catching up.
+   * The caller (changefeed-catchup.ts) already falls back to a full resync on
+   * ANY thrown error, so this reuses that existing recovery path rather than
+   * introducing a second control-flow shape.
    */
   async function runCatchup(since: string | undefined): Promise<string | undefined> {
     let cursor = since;
     for (let page = 0; page < MAX_CATCHUP_PAGES; page++) {
       if (deps.isStopped?.()) break;
-      const { changes, new_cursor } = await deps.syncPull(cursor, SYNC_PULL_PAGE);
+      const { changes, new_cursor, oldest_cursor } = await deps.syncPull(cursor, SYNC_PULL_PAGE);
+
+      if (page === 0 && cursor !== undefined) {
+        const oldest = normalizeLiveThing(oldest_cursor)
+          ?? (typeof oldest_cursor === 'string' ? oldest_cursor : undefined);
+        if (oldest && cursor < oldest) {
+          throw new Error(
+            `changefeed gap: cursor ${cursor} predates the retention floor (${oldest}); entries were purged before this device could catch up`
+          );
+        }
+      }
+
       const rows = Array.isArray(changes) ? changes : [];
       if (rows.length === 0) break;
       for (const row of rows) {

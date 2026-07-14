@@ -95,6 +95,15 @@ export {
   totalActiveFetchCount,
   type FetchRecord
 } from './sync/fetch-store.svelte.ts';
+export {
+  markSyncHealthy,
+  markSyncDegraded,
+  markSyncOffline,
+  getSyncHealth,
+  clearSyncHealth,
+  type SyncHealthStatus,
+  type SyncHealthState
+} from './sync/sync-health.svelte.ts';
 export * from './cache/persist.ts';
 export {
   createLiveBus,

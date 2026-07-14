@@ -3,7 +3,7 @@ import { hydrateCache, createCachePersistence } from '../cache/hydration.ts';
 import { deleteRuntimeState, getRuntimeState, loadScopeSyncState, persistScopeSyncState, setRuntimeState, getPendingOps as loadPendingOps, type PersistedOp } from '../cache/persist.ts';
 import { createLeaderElection, type LeaderElection } from './leader.svelte.ts';
 import { createLiveBus, type LiveBus, type LeaderRpcCall, type LiveBusMsg } from './live.ts';
-import { createSyncEngine, type SyncEngine, fetchWithTimeout } from './engine.ts';
+import { createSyncEngine, type SyncEngine, fetchWithTimeout, SYNC_PUSH_TIMEOUT_MS } from './engine.ts';
 import { createSurrealLiveConnection, type SurrealLiveConnection, type SurrealDbLiveConfig } from './surrealdb-live.ts';
 import { createChangefeedCatchup } from './changefeed-catchup.ts';
 import type { OpKind } from '../cache/types.ts';
@@ -12,6 +12,7 @@ import { createLogger } from './logger.ts';
 import { buildSurrealStatement, extractQueryRows } from './surrealql.ts';
 import { emitSyncTrace } from './trace.ts';
 import { startFetch, endFetch } from './fetch-store.svelte.ts';
+import { markSyncHealthy, markSyncDegraded } from './sync-health.svelte.ts';
 import type { AdditionalWithId } from '../types.ts';
 
 export interface RuntimeSchemaIssue {
@@ -75,8 +76,30 @@ export interface AppRuntime {
    */
   resume: () => void;
   queueAndWake: (kind: OpKind, payload: unknown) => void;
+  /**
+   * M12: gate/ungate writes without pausing the runtime. Set true when the
+   * host's auth guard treats a locally-expired session as read-only-offline
+   * (see queueAndWake); reads/resync/live continue normally either way.
+   */
+  setReadOnly: (value: boolean) => void;
+  isReadOnly: () => boolean;
   /** Cancel a QUEUED (pending) sync op; returns false for inflight/unknown ops. */
   cancelOp: (opId: string) => boolean;
+  /**
+   * Retry a REJECTED sync op (resets retries/backoff, re-queues as pending).
+   * Returns false if the op is unknown or not currently rejected. See the
+   * KNOWN LIMITATION note on `SyncEngine.retryOp` — optimistic rows rolled
+   * back on rejection are not re-created until the retried op re-accepts.
+   */
+  retryOp: (opId: string) => Promise<boolean>;
+  /**
+   * Resolve a `conflicted` sync op (see `SyncEngine.resolveConflict`):
+   * 'take-theirs' adopts the server's current row and drops the local edit;
+   * 'keep-mine' re-baselines the op's CAS check on the row we just saw and
+   * re-queues it as an explicit forced overwrite. Returns false if the op
+   * is unknown or not currently conflicted.
+   */
+  resolveConflict: (opId: string, resolution: 'keep-mine' | 'take-theirs') => Promise<boolean>;
   updateScopes: (scopes: string[]) => void;
   getActiveScopes: () => string[];
   fetchAndCache: (call: LeaderRpcCall, timeoutMs?: number) => Promise<any[]>;
@@ -326,6 +349,25 @@ export function collectStaleAppliesEdgeIds(
   return staleIds;
 }
 
+/**
+ * Ghost-record diff for the post-gap sweep (M9): cached record ids that a
+ * targeted per-id existence probe did NOT find server-side. Unlike the
+ * coarse namespace snapshot (which deliberately never evicts — see
+ * applyRecordSnapshot's note), a targeted "do these specific ids still
+ * exist" query IS an authoritative deletion signal: it asks about ids the
+ * client already believes exist, so permission-narrowing can't produce a
+ * false "missing" the way scanning the whole table can (a group-shared
+ * record the coarse scan drops is still found here because we ask for it by
+ * id specifically). `probedIds` should already exclude optimistic/temp rows
+ * (they don't exist server-side by design, not because they were deleted).
+ */
+export function computeGhostRecordIds(
+  probedIds: readonly string[],
+  foundIds: ReadonlySet<string>
+): string[] {
+  return probedIds.filter((id) => !foundIds.has(id));
+}
+
 export function deriveOptimisticLiveMessages(kind: OpKind, payload: unknown): LiveBusMsg[] {
   // A batched multi-record update fans out to the same per-record optimistic
   // patches a single UpdateRecord would, so sibling tabs reflect the change
@@ -478,6 +520,14 @@ export function createAppRuntime(config: RuntimeConfig): AppRuntime {
   // while the edge cache is cold — see CalendarPage sync_item_to_buckets.
   let resyncDepth = 0;
   let destroyed = false;
+  // M12: set true when the host's auth guard finds the local session expired
+  // while offline (no way to actually re-authenticate right now). Cached
+  // reads keep working — only queueAndWake is gated, so a stale/dead JWT is
+  // never used to attempt a write the server would reject anyway, and no op
+  // sits queued forever behind a session that can't be renewed until the
+  // user is back online and re-signs-in. Purely a write gate: it does not
+  // pause/stop the runtime (resync/live stay as they are).
+  let readOnly = false;
   let liveCatchupRequired = false;
   // First resync after start() is always authoritative — IDB state survives
   // across page loads and may contain ghosts left by past bugs that no live
@@ -549,6 +599,43 @@ export function createAppRuntime(config: RuntimeConfig): AppRuntime {
     return typeof seed === 'string' && seed.length > 0 ? seed : undefined;
   }
 
+  // Post-gap ghost sweep (M9): probe cached, non-optimistic record ids
+  // directly by id and evict any the server no longer has. Chunked to stay
+  // well under SurrealDB's practical statement-size limits for a large
+  // cache. Only ever invoked from the changefeed-catchup fallback branch
+  // (a detected gap or a failed precise replay) — NOT on every resync, since
+  // the coarse namespace snapshot behind a normal resync is permission-
+  // narrowed and evicting from IT would drop group-shared, off-screen
+  // records that genuinely still exist (see applyRecordSnapshot's note).
+  const GHOST_SWEEP_CHUNK_SIZE = 500;
+  async function sweepGhostRecords(): Promise<void> {
+    const probedIds = cache
+      .getAllItems()
+      .filter((item) => !item.is_temp)
+      .map((item) => item.id);
+    if (probedIds.length === 0) return;
+
+    const foundIds = new Set<string>();
+    for (let i = 0; i < probedIds.length; i += GHOST_SWEEP_CHUNK_SIZE) {
+      const chunk = probedIds.slice(i, i + GHOST_SWEEP_CHUNK_SIZE);
+      const rows = extractQueryRows(
+        await executeQuery('SELECT VALUE id FROM <array<record>>$ids', { ids: chunk })
+      );
+      for (const row of rows) {
+        const id = normalizeThingLike(row);
+        if (id) foundIds.add(id);
+      }
+    }
+
+    const ghostIds = computeGhostRecordIds(probedIds, foundIds);
+    for (const id of ghostIds) {
+      cache.removeItem(id);
+    }
+    if (ghostIds.length > 0) {
+      logger.info(`ghost sweep evicted ${ghostIds.length} record(s) no longer present server-side`);
+    }
+  }
+
   // Gap recovery on (re)connect — see changefeed-catchup.ts for the contract.
   async function runChangefeedCatchup(source: 'leader' | 'follower') {
     if (!liveConn) return;
@@ -561,6 +648,7 @@ export function createAppRuntime(config: RuntimeConfig): AppRuntime {
       runCatchup: (since) => conn.runCatchup(since),
       resync: () => resyncActiveScopes(source, true),
       markCaughtUp: () => markLiveCatchupRequired(false),
+      sweepGhosts: sweepGhostRecords,
       onWarn: (msg, e) => logger.warn(msg, e)
     });
     await run();
@@ -669,7 +757,24 @@ export function createAppRuntime(config: RuntimeConfig): AppRuntime {
       try {
         return await fetchWithTimeout(httpUrl, directInit);
       } catch (error) {
+        // SSR / non-browser: there is no /api/runtime/sql proxy to fall back to.
         if (typeof window === 'undefined') throw error;
+        // A timeout (AbortController abort) must NOT fall back to the proxy.
+        // The original POST may still be executing server-side, and re-POSTing
+        // the identical mutation through the proxy would execute it a second
+        // time — e.g. a slow CloneTemplateChildren producing a duplicate tree.
+        // Only genuine network-level failures (fetch throws TypeError) are safe
+        // to retry through the proxy; everything else is rethrown.
+        const errName = (error as { name?: string } | null | undefined)?.name;
+        if (
+          errName === 'AbortError' ||
+          (typeof DOMException !== 'undefined' && error instanceof DOMException && error.name === 'AbortError')
+        ) {
+          throw new Error(`HTTP query timeout after ${SYNC_PUSH_TIMEOUT_MS}ms`);
+        }
+        if (!(error instanceof TypeError)) {
+          throw error;
+        }
         return await fetchWithTimeout('/api/runtime/sql', {
           method: 'POST',
           headers: {
@@ -714,19 +819,68 @@ export function createAppRuntime(config: RuntimeConfig): AppRuntime {
     return extractQueryRows(queryResult);
   }
 
-  async function fetchGroupingEdgesForScopes(_scopes: string[]): Promise<any[]> {
+  async function fetchGroupingEdgesForScopes(scopes: string[]): Promise<any[]> {
     // Fetch both hierarchy edges (graph_child_of) and many-to-many grouping (groups)
     // to match the wisewords schema.
-    const [childEdges, groupEdges] = await Promise.all([
-      executeQuery('SELECT * FROM graph_child_of').then(extractQueryRows),
-      executeQuery('SELECT * FROM groups').then(extractQueryRows)
-    ]);
-    return [...childEdges, ...groupEdges];
+    if (!scopes || scopes.length === 0) {
+      // Unscoped: whole-table snapshot (compat — used when no exec scope is selected).
+      const [childEdges, groupEdges] = await Promise.all([
+        executeQuery('SELECT * FROM graph_child_of').then(extractQueryRows),
+        executeQuery('SELECT * FROM groups').then(extractQueryRows)
+      ]);
+      return [...childEdges, ...groupEdges];
+    }
+    // Scoped: restrict to edges touching the scope's subtree. Compute the member
+    // id set once via the canonical subtree walker, then run TWO indexed queries
+    // per table (in INSIDE / out INSIDE) — never an OR of both, which degrades to
+    // a full TableScan that re-evaluates the opaque record-auth closure per row.
+    // Merge the sub-queries with array::concat so the batch returns a single
+    // result array (extractQueryRows' findLast picks it up); dedupe by edge id
+    // client-side (an edge with both endpoints in the set appears in both halves).
+    const sql = `
+      LET $roots = <array<record>>$scopes;
+      LET $members = fn::find_all_child_records_any_type($roots, [], {}, [], NONE, NONE);
+      LET $ids = array::distinct(array::concat($roots, $members));
+      SELECT * FROM array::concat(
+        (SELECT * FROM graph_child_of WHERE in INSIDE $ids),
+        (SELECT * FROM graph_child_of WHERE out INSIDE $ids),
+        (SELECT * FROM groups WHERE in INSIDE $ids),
+        (SELECT * FROM groups WHERE out INSIDE $ids)
+      );
+    `;
+    const rows = extractQueryRows(await executeQuery(sql, { scopes }));
+    return dedupeEdgeRowsById(rows);
   }
 
-  async function fetchAppliesEdgesForScopes(_scopes: string[]): Promise<any[]> {
-    const queryResult = await executeQuery('SELECT * FROM appliesto');
-    return extractQueryRows(queryResult);
+  async function fetchAppliesEdgesForScopes(scopes: string[]): Promise<any[]> {
+    if (!scopes || scopes.length === 0) {
+      const queryResult = await executeQuery('SELECT * FROM appliesto');
+      return extractQueryRows(queryResult);
+    }
+    const sql = `
+      LET $roots = <array<record>>$scopes;
+      LET $members = fn::find_all_child_records_any_type($roots, [], {}, [], NONE, NONE);
+      LET $ids = array::distinct(array::concat($roots, $members));
+      SELECT * FROM array::concat(
+        (SELECT * FROM appliesto WHERE in INSIDE $ids),
+        (SELECT * FROM appliesto WHERE out INSIDE $ids)
+      );
+    `;
+    const rows = extractQueryRows(await executeQuery(sql, { scopes }));
+    return dedupeEdgeRowsById(rows);
+  }
+
+  function dedupeEdgeRowsById(rows: any[]): any[] {
+    const seen = new Set<string>();
+    const out: any[] = [];
+    for (const row of rows) {
+      const id = typeof row?.id === 'string' ? row.id : (row?.id?.id ?? null);
+      if (!id) { out.push(row); continue; }
+      if (seen.has(id)) continue;
+      seen.add(id);
+      out.push(row);
+    }
+    return out;
   }
 
   type RecordGraphFetchCall =
@@ -1230,6 +1384,14 @@ export function createAppRuntime(config: RuntimeConfig): AppRuntime {
           // recreated by fn::group_for_clone won't include the user's exec
           // scope. Join each top-level clone to it, preserving structural
           // planner metadata from the source root edge (e.g. Section).
+          //
+          // ORDERING DEPENDENCY: this scope-join runs AFTER fn::clone_from_source_array
+          // has cleared the clone skip-flags and emitted the single BATCH_CLONE
+          // notification. The RELATEs here carry no skip_changefeed, so each new
+          // scope->groups edge emits its own changefeed entry — correct, since
+          // these edges are brand-new (not part of the cloned template subtree)
+          // and clients must receive them individually. Keep this block after
+          // the clone + opId tag; do not move it before fn::clone_from_source_array.
           scopeJoin = `
             LET $scope = type::record($scopeRid);
             LET $source_group_edges = (SELECT in, module_data FROM graph_child_of WHERE out = $root AND in INSIDE $sources);
@@ -1249,13 +1411,31 @@ export function createAppRuntime(config: RuntimeConfig): AppRuntime {
         const sourcesExpr = call.includeRoot
           ? `[$root]`
           : `(SELECT VALUE id FROM $root<-graph_child_of<-records)`;
+        // Idempotency guard: if a prior attempt already tagged records with this
+        // op_id (it completed server-side despite a client timeout), return the
+        // existing top-level clone ids and skip the clone entirely. Mirrors the
+        // queued-op guard in engine.ts buildTreeBatchSql. Only top-level clones
+        // are tagged; cloned edges flow to clients via the changefeed payload.
+        const opIdProvided = typeof call.opId === 'string' && call.opId.length > 0;
+        if (opIdProvided) {
+          vars.op_id = call.opId;
+        }
+        const idempotencyPrologue = opIdProvided
+          ? `LET $existing = (SELECT VALUE id FROM records WHERE _sync_op_id = $op_id);
+             IF array::len($existing) > 0 { RETURN $existing };`
+          : '';
+        const opIdTag = opIdProvided
+          ? `IF array::len($new) > 0 { UPDATE $new SET _sync_op_id = $op_id };`
+          : '';
         const sql = `
           LET $root = type::record($rid);
+          ${idempotencyPrologue}
           LET $sources = ${sourcesExpr};
           LET $new_rows = IF array::len($sources) > 0 {
             fn::clone_from_source_array($sources, ${anchorExpr}, ${overrideExpr})
           } ELSE { [] };
           LET $new = (SELECT VALUE new_id FROM $new_rows);
+          ${opIdTag}
           ${scopeJoin}
           RETURN $new;
         `;
@@ -1406,6 +1586,10 @@ export function createAppRuntime(config: RuntimeConfig): AppRuntime {
       onCursorAdvance: onChangefeedCursorAdvance,
       onReady: () => {
         if (sessionId && leaderElection.leaderSessionId !== sessionId) return;
+        // A successful handshake is as strong a "we're reachable" signal as a
+        // successful push — surface it immediately rather than waiting for
+        // the next write.
+        markSyncHealthy(config.isolationKey);
         // Precise changefeed gap recovery (cursor replay), replacing the
         // blunt full resync. Cold start still does one full resync inside.
         void runChangefeedCatchup('leader');
@@ -1415,6 +1599,7 @@ export function createAppRuntime(config: RuntimeConfig): AppRuntime {
         if (sessionId && leaderElection.leaderSessionId !== sessionId) return;
         if (reason === 'unexpected') {
           void markLiveCatchupRequired(true);
+          markSyncDegraded(config.isolationKey);
         }
       }
     });
@@ -1747,6 +1932,11 @@ export function createAppRuntime(config: RuntimeConfig): AppRuntime {
   }
 
   function queueAndWake(kind: OpKind, payload: unknown) {
+    if (readOnly) {
+      logger.warn(`queueAndWake(${kind}) dropped: runtime is read-only (expired session, offline)`);
+      return;
+    }
+
     // Enqueue an op transaction
     engine.queueOp(kind, payload);
     emitSyncTrace(`runtime:${config.isolationKey}`, 'queue-op', {
@@ -1806,7 +1996,11 @@ export function createAppRuntime(config: RuntimeConfig): AppRuntime {
     pause,
     resume,
     queueAndWake,
+    setReadOnly: (value: boolean) => { readOnly = value; },
+    isReadOnly: () => readOnly,
     cancelOp: (opId: string) => engine.cancelOp(opId),
+    retryOp: (opId: string) => engine.retryOp(opId),
+    resolveConflict: (opId: string, resolution: 'keep-mine' | 'take-theirs') => engine.resolveConflict(opId, resolution),
     updateScopes,
     getActiveScopes: () => [...activeScopes],
     fetchAndCache,

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { createSyncEngine, isRetryableSyncError } from './engine.ts';
+import { createSyncEngine, isRetryableSyncError, isNetworkSyncError } from './engine.ts';
 
 const { persistOpMock, deleteOpMock, updateOpStatusMock, loadPendingOpsMock, loadAllOpsMock } = vi.hoisted(() => ({
   persistOpMock: vi.fn(),
@@ -1624,6 +1624,24 @@ describe('sync engine push scheduler', () => {
     } as unknown as Response;
   }
 
+  // build_op_vars always returns this fixed 13-key shape for every
+  // single-op-kind op, regardless of op.kind. buildSurrealStatement inlines
+  // each combinedVars entry as its own top-level `LET $x = …;` statement
+  // ahead of a batch envelope's `{ }` blocks, and the HTTP /sql response
+  // carries one {status:'OK', result:null} entry per top-level statement —
+  // so a REAL batch-envelope response has `13 * opCount` leading "LET-prefix
+  // noise" entries before the actual per-op block results (runBatchEnvelope
+  // skips exactly that many). Mocked responses in these tests must include
+  // that same leading noise to exercise the real slicing logic.
+  const VARS_PER_OP = 13;
+  function batchResponse(perOpResults: unknown[]): Response {
+    const letPrefixNoise = Array.from({ length: VARS_PER_OP * perOpResults.length }, () => ({ status: 'OK', result: null }));
+    return {
+      ok: true,
+      json: vi.fn().mockResolvedValue([...letPrefixNoise, ...perOpResults])
+    } as unknown as Response;
+  }
+
   /** fetch mock that parks every call until the test resolves it, keyed by body. */
   function deferredFetch() {
     const calls: Array<{ body: string; resolve: (response: Response) => void }> = [];
@@ -1644,7 +1662,7 @@ describe('sync engine push scheduler', () => {
     vi.stubGlobal('fetch', vi.fn());
   });
 
-  it('pushes independent ops concurrently, capped at 4 in flight', async () => {
+  it('batches independent ops into ONE combined request (M10)', async () => {
     const cache = createCacheStub();
     const liveBus = createBusStub();
     const fetchMock = vi.mocked(fetch);
@@ -1657,23 +1675,102 @@ describe('sync engine push scheduler', () => {
     }
     const push = engine.pushOps();
 
-    // All 4 slots fill without any response having arrived — the old serial
-    // drain would sit at 1 here.
-    await vi.waitFor(() => expect(calls.length).toBe(4));
-    calls[0].resolve(okResponse());
-    // A settle frees the slot for the 5th op.
-    await vi.waitFor(() => expect(calls.length).toBe(5));
-    for (let index = 1; index < calls.length; index += 1) calls[index].resolve(okResponse());
-    await vi.waitFor(() => expect(calls.length).toBe(6));
-    calls[5].resolve(okResponse());
+    // All 6 are independent, single-op-kind, and well under
+    // BATCH_ENVELOPE_SIZE (25) — they combine into ONE request instead of
+    // one-per-op (the old MAX_CONCURRENT_PUSHES=4-at-a-time behavior this
+    // replaces — see "no server spam on reconnect" in the offline audit).
+    await vi.waitFor(() => expect(calls.length).toBe(1));
+    for (let index = 0; index < 6; index += 1) {
+      expect(calls[0].body).toContain(`t${index}`);
+    }
+
+    calls[0].resolve(batchResponse(Array.from({ length: 6 }, () => ({ status: 'OK', result: null }))));
+
     // Post-drain marker cleanup is one more HTTP call.
-    await vi.waitFor(() => expect(calls.length).toBe(7));
-    calls[6].resolve(okResponse());
+    await vi.waitFor(() => expect(calls.length).toBe(2));
+    calls[1].resolve(okResponse());
     await push;
     expect(engine.getPendingOps()).toHaveLength(0);
   });
 
-  it('keeps ops targeting the same record strictly FIFO while unrelated ops overlap', async () => {
+  it('caps concurrent batch envelopes at MAX_CONCURRENT_PUSHES when the backlog exceeds BATCH_ENVELOPE_SIZE', async () => {
+    const cache = createCacheStub();
+    const liveBus = createBusStub();
+    const fetchMock = vi.mocked(fetch);
+    const { calls, impl } = deferredFetch();
+    fetchMock.mockImplementation(impl as any);
+
+    const engine = createSyncEngine(cache as any, liveBus as any, engineConfig);
+    // 130 independent ops → ceil(130/25) = 6 envelopes, so the 5th/6th must
+    // wait for one of the first 4 (the concurrency cap) to free a slot.
+    for (let index = 0; index < 130; index += 1) {
+      engine.queueOp('UpdateRecord', { id: `records:r${index}`, text: `t${index}` });
+    }
+    const push = engine.pushOps();
+
+    await vi.waitFor(() => expect(calls.length).toBe(4));
+    // A 5th envelope must not launch until one of the 4 settles.
+    await new Promise((r) => setTimeout(r, 10));
+    expect(calls.length).toBe(4);
+
+    for (let i = 0; i < 4; i++) {
+      calls[i].resolve(batchResponse(Array.from({ length: 25 }, () => ({ status: 'OK', result: null }))));
+    }
+    await vi.waitFor(() => expect(calls.length).toBe(6)); // remaining 2 envelopes (25+5 ops)
+    calls[4].resolve(batchResponse(Array.from({ length: 25 }, () => ({ status: 'OK', result: null }))));
+    calls[5].resolve(batchResponse(Array.from({ length: 5 }, () => ({ status: 'OK', result: null }))));
+    await vi.waitFor(() => expect(calls.length).toBe(7)); // marker cleanup
+    calls[6].resolve(okResponse());
+    await push;
+    expect(engine.getPendingOps()).toHaveLength(0);
+  }, 10000);
+
+  it('a batch-mate\'s error is isolated: siblings in the same envelope still succeed', async () => {
+    const cache = createCacheStub();
+    const liveBus = createBusStub();
+    const fetchMock = vi.mocked(fetch);
+    // 3 ops in the batch: first OK, second ERR, third OK — SurrealDB
+    // isolates block errors per top-level statement (verified against a
+    // live instance), so this shape is what a real mixed-outcome envelope
+    // response looks like.
+    fetchMock.mockResolvedValue(batchResponse([
+      { status: 'OK', result: null },
+      { status: 'ERR', detail: 'permission denied' },
+      { status: 'OK', result: null }
+    ]));
+
+    const engine = createSyncEngine(cache as any, liveBus as any, engineConfig);
+    engine.queueOp('UpdateRecord', { id: 'records:ok1', text: 'a' });
+    engine.queueOp('UpdateRecord', { id: 'records:bad', text: 'b' });
+    engine.queueOp('UpdateRecord', { id: 'records:ok2', text: 'c' });
+    await engine.pushOps();
+
+    const pending = engine.getPendingOps();
+    expect(pending).toHaveLength(1);
+    expect((pending[0].payload as any).id).toBe('records:bad');
+    expect(pending[0].last_error).toContain('permission denied');
+  });
+
+  it('exactly one ready batchable op skips the envelope path (no batching benefit)', async () => {
+    const cache = createCacheStub();
+    const liveBus = createBusStub();
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValue(okResponse());
+
+    const engine = createSyncEngine(cache as any, liveBus as any, engineConfig);
+    engine.queueOp('UpdateRecord', { id: 'records:solo', text: 'x' });
+    await engine.pushOps();
+
+    // First call is the op itself; the second (UpdateRecord is a
+    // shouldStampMarker kind) is the post-accept cleanupSyncMarkers call.
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const body = String((fetchMock.mock.calls[0]?.[1] as any)?.body ?? '');
+    // The solo path sends the op's SQL directly — not wrapped in a `{ }`
+    // batch-envelope block.
+    expect(body.startsWith('{')).toBe(false);
+  });
+
+  it('keeps ops targeting the same record strictly FIFO while unrelated ops overlap (batched)', async () => {
     const cache = createCacheStub();
     const liveBus = createBusStub();
     const fetchMock = vi.mocked(fetch);
@@ -1686,20 +1783,24 @@ describe('sync engine push scheduler', () => {
     engine.queueOp('UpdateRecord', { id: 'records:B', text: 'b' });
     const push = engine.pushOps();
 
-    // First A-op and the unrelated B-op go out; the second A-op is gated.
+    // a-first and the unrelated b op are BOTH ready and batchable, so they
+    // combine into ONE envelope request; a-second is gated behind a-first
+    // (same-key FIFO) and is not part of it.
+    await vi.waitFor(() => expect(calls.length).toBe(1));
+    expect(calls[0].body).toContain('a-first');
+    expect(calls[0].body).toContain('b');
+    expect(calls[0].body).not.toContain('a-second');
+
+    calls[0].resolve(batchResponse([{ status: 'OK', result: null }, { status: 'OK', result: null }]));
+
+    // a-second becomes ready once a-first settles, and launches solo (it's
+    // the only batchable op ready at that point).
     await vi.waitFor(() => expect(calls.length).toBe(2));
-    expect(calls.some((call) => call.body.includes('a-first'))).toBe(true);
-    expect(calls.some((call) => call.body.includes('b'))).toBe(true);
-    expect(calls.some((call) => call.body.includes('a-second'))).toBe(false);
+    expect(calls[1].body).toContain('a-second');
+    calls[1].resolve(okResponse());
 
-    calls.find((call) => call.body.includes('a-first'))!.resolve(okResponse());
-    await vi.waitFor(() => expect(calls.some((call) => call.body.includes('a-second'))).toBe(true));
-
-    for (const call of calls) {
-      if (!call.body.includes('a-first')) call.resolve(okResponse());
-    }
-    await vi.waitFor(() => expect(calls.length).toBe(4));
-    calls[3].resolve(okResponse());
+    await vi.waitFor(() => expect(calls.length).toBe(3)); // marker cleanup
+    calls[2].resolve(okResponse());
     await push;
     expect(engine.getPendingOps()).toHaveLength(0);
   });
@@ -1956,5 +2057,348 @@ describe('sync engine push scheduler', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('offline resilience (M7)', () => {
+  const engineConfig = {
+    url: 'http://localhost:8000',
+    namespace: 'app',
+    storageNamespace: 'test-sync',
+    database: 'main',
+    token: 'token',
+    scopes: []
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    loadPendingOpsMock.mockResolvedValue([]);
+    loadAllOpsMock.mockResolvedValue([]);
+    persistOpMock.mockResolvedValue(undefined);
+    deleteOpMock.mockResolvedValue(undefined);
+    updateOpStatusMock.mockResolvedValue(undefined);
+    vi.stubGlobal('fetch', vi.fn());
+  });
+
+  it('classifies fetch/network failures distinctly from server rejections', () => {
+    expect(isNetworkSyncError(new TypeError('Failed to fetch'))).toBe(true);
+    const abortError = new Error('The operation was aborted');
+    abortError.name = 'AbortError';
+    expect(isNetworkSyncError(abortError)).toBe(true);
+    expect(isNetworkSyncError(new Error('permission denied'))).toBe(false);
+    expect(isNetworkSyncError('not an error object')).toBe(false);
+  });
+
+  it('never rejects (or rolls back) an op failing for network reasons, past the standard retry cap', async () => {
+    vi.useFakeTimers();
+    try {
+      const cache = createCacheStub();
+      const liveBus = createBusStub();
+      const fetchMock = vi.mocked(fetch);
+      // Every attempt fails as a network error — the shape fetch() itself
+      // throws for DNS/connection failures or an offline browser.
+      fetchMock.mockRejectedValue(new TypeError('Failed to fetch'));
+
+      const engine = createSyncEngine(cache as any, liveBus as any, engineConfig);
+      engine.queueOp('CreateRecord', {
+        id: 'temp:1',
+        text: 'optimistic node',
+        is_temp: true,
+        sync_status: 'pending'
+      });
+
+      // 8 attempts — well past MAX_RETRIES (5) — each pushed past the
+      // network backoff ceiling (NETWORK_MAX_BACKOFF_MS = 60s).
+      for (let attempt = 0; attempt < 8; attempt++) {
+        await engine.pushOps();
+        vi.setSystemTime(Date.now() + 61_000);
+      }
+
+      const pending = engine.getPendingOps();
+      expect(pending).toHaveLength(1);
+      expect(pending[0].status).toBe('pending');
+      expect(pending[0].retries).toBe(8);
+      expect(pending[0].last_error_kind).toBe('network');
+      // The optimistic temp row must survive — rollback only happens on
+      // genuine rejection, which a network-classified op never reaches.
+      expect(cache.removeItem).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('still rejects a genuine server-side failure at the standard retry cap', async () => {
+    vi.useFakeTimers();
+    try {
+      const cache = createCacheStub();
+      const liveBus = createBusStub();
+      const fetchMock = vi.mocked(fetch);
+      fetchMock.mockResolvedValue({
+        ok: false,
+        status: 400,
+        statusText: 'Bad Request',
+        text: vi.fn().mockResolvedValue('validation failed')
+      } as unknown as Response);
+
+      const engine = createSyncEngine(cache as any, liveBus as any, engineConfig);
+      engine.queueOp('CreateRecord', {
+        id: 'temp:2',
+        text: 'bad node',
+        is_temp: true,
+        sync_status: 'pending'
+      });
+
+      for (let attempt = 0; attempt < 6; attempt++) {
+        await engine.pushOps();
+        vi.setSystemTime(Date.now() + 301_000);
+      }
+
+      expect(engine.getPendingOps()).toHaveLength(0);
+      expect(persistOpMock).toHaveBeenLastCalledWith(
+        'test-sync',
+        expect.objectContaining({
+          status: 'rejected',
+          last_error_kind: 'server',
+          retries: 5
+        })
+      );
+      expect(cache.removeItem).toHaveBeenCalledWith('temp:2');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('skips a push attempt entirely when navigator reports offline, without touching retries', async () => {
+    vi.stubGlobal('navigator', { onLine: false });
+    try {
+      const cache = createCacheStub();
+      const liveBus = createBusStub();
+      const fetchMock = vi.mocked(fetch);
+
+      const engine = createSyncEngine(cache as any, liveBus as any, engineConfig);
+      engine.queueOp('UpdateRecord', { id: 'records:A', text: 'a' });
+      await engine.pushOps();
+
+      expect(fetchMock).not.toHaveBeenCalled();
+      const pending = engine.getPendingOps();
+      expect(pending).toHaveLength(1);
+      expect(pending[0].retries).toBe(0);
+      expect(pending[0].last_attempt_at).toBeUndefined();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('retryOp resurrects a rejected op as pending with reset retries, and it can then sync', async () => {
+    vi.useFakeTimers();
+    try {
+      const cache = createCacheStub();
+      const liveBus = createBusStub();
+      const fetchMock = vi.mocked(fetch);
+      fetchMock.mockResolvedValue({
+        ok: false,
+        status: 400,
+        statusText: 'Bad Request',
+        text: vi.fn().mockResolvedValue('validation failed')
+      } as unknown as Response);
+
+      const engine = createSyncEngine(cache as any, liveBus as any, engineConfig);
+      const op = engine.queueOp('UpdateRecord', { id: 'records:B', text: 'b' });
+
+      for (let attempt = 0; attempt < 6; attempt++) {
+        await engine.pushOps();
+        vi.setSystemTime(Date.now() + 301_000);
+      }
+      expect(engine.getPendingOps()).toHaveLength(0); // rejected, off the pending list
+
+      // Retrying an unknown/non-rejected op id is a no-op.
+      expect(await engine.retryOp('op_does_not_exist')).toBe(false);
+
+      fetchMock.mockResolvedValue({
+        ok: true,
+        json: vi.fn().mockResolvedValue([{ status: 'OK', result: { id: 'records:B' } }])
+      } as unknown as Response);
+
+      expect(await engine.retryOp(op.id)).toBe(true);
+      // retryOp resets retries/backoff and persists that BEFORE firing its
+      // background push — this call is guaranteed to have happened by the
+      // time retryOp's own await resolves, regardless of how fast the
+      // (mocked, instant-under-fake-timers) follow-up push then settles.
+      expect(persistOpMock).toHaveBeenCalledWith(
+        'test-sync',
+        expect.objectContaining({
+          id: op.id,
+          status: 'pending',
+          retries: 0,
+          last_error: undefined,
+          last_error_kind: undefined
+        })
+      );
+
+      // retryOp fires its own push in the background; awaiting pushOps()
+      // again either joins that in-flight drain (via the lock) or, if it has
+      // already settled, runs a fresh no-op — either way it's deterministic
+      // without relying on real-time polling under fake timers.
+      await engine.pushOps();
+      expect(engine.getPendingOps()).toHaveLength(0);
+      expect(deleteOpMock).toHaveBeenCalledWith('test-sync', op.id);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('conflict detection (M10b)', () => {
+  const engineConfig = {
+    url: 'http://localhost:8000',
+    namespace: 'app',
+    storageNamespace: 'test-sync',
+    database: 'main',
+    token: 'token',
+    scopes: []
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    loadPendingOpsMock.mockResolvedValue([]);
+    loadAllOpsMock.mockResolvedValue([]);
+    persistOpMock.mockResolvedValue(undefined);
+    deleteOpMock.mockResolvedValue(undefined);
+    updateOpStatusMock.mockResolvedValue(undefined);
+    vi.stubGlobal('fetch', vi.fn());
+  });
+
+  function conflictMarkerResponse(current: Record<string, unknown> | null, extra: Record<string, unknown> = {}): Response {
+    return {
+      ok: true,
+      json: vi.fn().mockResolvedValue([{ status: 'OK', result: { conflict: true, current, op_id: 'irrelevant', ...extra } }])
+    } as unknown as Response;
+  }
+
+  it('queueOp captures base_updated from the cache at queue time, not flush time', () => {
+    const cache = createCacheStub();
+    (cache as any).getItem = vi.fn().mockReturnValue({ id: 'records:A', updated: '2026-01-01T00:00:00.000Z' });
+    const liveBus = createBusStub();
+    const engine = createSyncEngine(cache as any, liveBus as any, engineConfig);
+
+    const op = engine.queueOp('UpdateRecord', { id: 'records:A', text: 'edited' });
+    expect((op.payload as any)._base_updated).toBe('2026-01-01T00:00:00.000Z');
+  });
+
+  it('queueOp leaves base_updated null when the target is not in cache (no baseline to compare)', () => {
+    const cache = createCacheStub();
+    (cache as any).getItem = vi.fn().mockReturnValue(undefined);
+    const liveBus = createBusStub();
+    const engine = createSyncEngine(cache as any, liveBus as any, engineConfig);
+
+    const op = engine.queueOp('UpdateRecord', { id: 'records:unknown', text: 'edited' });
+    expect((op.payload as any)._base_updated).toBeNull();
+  });
+
+  it('a {conflict:true} response marks the op conflicted (not accepted/rejected) and does not roll back optimistic state', async () => {
+    const cache = createCacheStub();
+    const liveBus = createBusStub();
+    const fetchMock = vi.mocked(fetch);
+    const serverCurrent = { id: 'records:A', text: 'server-text', updated: '2026-02-01T00:00:00.000Z' };
+    fetchMock.mockResolvedValue(conflictMarkerResponse(serverCurrent, { conflicted_fields: ['text'] }));
+
+    const engine = createSyncEngine(cache as any, liveBus as any, engineConfig);
+    const op = engine.queueOp('UpdateRecord', { id: 'records:A', text: 'client-text', _base_updated: '2020-01-01T00:00:00.000Z' });
+    await engine.pushOps();
+
+    expect(engine.getPendingOps()).toHaveLength(0);
+    const conflicted = engine.getConflictedOps();
+    expect(conflicted).toHaveLength(1);
+    expect(conflicted[0].id).toBe(op.id);
+    expect(conflicted[0].conflictCurrent).toEqual(serverCurrent);
+    expect(cache.removeItem).not.toHaveBeenCalled();
+    expect(cache.update_sync_status).toHaveBeenCalledWith('records:A', 'conflicted');
+    // A conflict is a successful round-trip (server reachable, answered) —
+    // must not be misclassified as a network/server failure.
+    expect(persistOpMock).toHaveBeenLastCalledWith(
+      'test-sync',
+      expect.objectContaining({ status: 'conflicted', last_error_kind: 'conflict' })
+    );
+  });
+
+  it('resolveConflict(take-theirs) adopts the server row into the cache and drops the op', async () => {
+    const cache = createCacheStub();
+    const liveBus = createBusStub();
+    const fetchMock = vi.mocked(fetch);
+    const serverCurrent = { id: 'records:A', text: 'server-text', updated: '2026-02-01T00:00:00.000Z' };
+    fetchMock.mockResolvedValue(conflictMarkerResponse(serverCurrent));
+
+    const engine = createSyncEngine(cache as any, liveBus as any, engineConfig);
+    const op = engine.queueOp('UpdateRecord', { id: 'records:A', text: 'client-text', _base_updated: '2020-01-01T00:00:00.000Z' });
+    await engine.pushOps();
+    expect(engine.getConflictedOps()).toHaveLength(1);
+
+    const resolved = await engine.resolveConflict(op.id, 'take-theirs');
+    expect(resolved).toBe(true);
+    expect(engine.getConflictedOps()).toHaveLength(0);
+    expect(cache.normalizeItem).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'records:A', text: 'server-text', dirty: false, sync_status: 'accepted' })
+    );
+    expect(deleteOpMock).toHaveBeenCalledWith('test-sync', op.id);
+  });
+
+  it('resolveConflict(take-theirs) with deleted:true drops the local record instead of adopting one', async () => {
+    const cache = createCacheStub();
+    const liveBus = createBusStub();
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValue(conflictMarkerResponse(null, { deleted: true }));
+
+    const engine = createSyncEngine(cache as any, liveBus as any, engineConfig);
+    const op = engine.queueOp('UpdateRecord', { id: 'records:A', text: 'too-late', _base_updated: '2020-01-01T00:00:00.000Z' });
+    await engine.pushOps();
+    expect(engine.getConflictedOps()).toHaveLength(1);
+
+    const resolved = await engine.resolveConflict(op.id, 'take-theirs');
+    expect(resolved).toBe(true);
+    expect(cache.removeItem).toHaveBeenCalledWith('records:A');
+    expect(cache.normalizeItem).not.toHaveBeenCalled();
+  });
+
+  it('resolveConflict(keep-mine) re-baselines base_updated from the conflict current row and re-queues as pending', async () => {
+    const cache = createCacheStub();
+    const liveBus = createBusStub();
+    const fetchMock = vi.mocked(fetch);
+    const serverCurrent = { id: 'records:A', text: 'server-text', updated: '2026-02-01T00:00:00.000Z' };
+    fetchMock.mockResolvedValue(conflictMarkerResponse(serverCurrent));
+
+    const engine = createSyncEngine(cache as any, liveBus as any, engineConfig);
+    const op = engine.queueOp('UpdateRecord', { id: 'records:A', text: 'client-text', _base_updated: '2020-01-01T00:00:00.000Z' });
+    await engine.pushOps();
+    expect(engine.getConflictedOps()).toHaveLength(1);
+
+    // Switch the mock to accept on the retry so we can observe the re-queue
+    // used the fresh baseline rather than checking the SQL string directly.
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue([{ status: 'OK', result: { id: 'records:A', text: 'client-text' } }])
+    } as unknown as Response);
+
+    const resolved = await engine.resolveConflict(op.id, 'keep-mine');
+    expect(resolved).toBe(true);
+    expect(persistOpMock).toHaveBeenCalledWith(
+      'test-sync',
+      expect.objectContaining({
+        id: op.id,
+        status: 'pending',
+        payload: expect.objectContaining({ _base_updated: serverCurrent.updated })
+      })
+    );
+
+    await engine.pushOps();
+    expect(engine.getPendingOps()).toHaveLength(0);
+    expect(engine.getConflictedOps()).toHaveLength(0);
+  });
+
+  it('resolveConflict returns false for an unknown or already-settled op id', async () => {
+    const cache = createCacheStub();
+    const liveBus = createBusStub();
+    vi.stubGlobal('fetch', vi.fn());
+    const engine = createSyncEngine(cache as any, liveBus as any, engineConfig);
+    expect(await engine.resolveConflict('op_does_not_exist', 'take-theirs')).toBe(false);
   });
 });

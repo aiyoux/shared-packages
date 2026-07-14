@@ -9,6 +9,7 @@ import { buildSurrealStatement } from './surrealql.ts';
 import { MINUTE_MS } from '@modular-app/ui/date';
 import { mergeAdditionalsLocal } from '../additionals-mutate.ts';
 import type { AdditionalWithId } from '../types.ts';
+import { markSyncHealthy, markSyncDegraded, markSyncOffline } from './sync-health.svelte.ts';
 
 export interface SyncEngineConfig {
   url: string;
@@ -38,7 +39,7 @@ function generate_op_id(): string {
   return `op_${crypto.randomUUID()}`;
 }
 
-const SYNC_PUSH_TIMEOUT_MS = 30_000;
+export const SYNC_PUSH_TIMEOUT_MS = 30_000;
 
 export function fetchWithTimeout(
   url: string,
@@ -244,6 +245,36 @@ function extract_returned_record(statements: SurrealSqlStatement[]): Record<stri
   return null;
 }
 
+interface ConflictMarker {
+  current: Record<string, unknown> | null;
+  deleted: boolean;
+  conflictedFields?: string[];
+}
+
+/**
+ * Scans a successful (non-error) SQL response for the `{ conflict: true, ... }`
+ * business-logic marker `build_op_sql`'s field-stamps CAS check RETURNs for
+ * UpdateRecord/DeleteTree. This is NOT an error path — evaluate_sql_response
+ * already ran and found no statement-level error — it's a normal 200 whose
+ * payload says "not applied, here's why." Checked from the END of the
+ * statements array, mirroring extract_returned_record, since the conflict
+ * RETURN (when present) is the block's final statement.
+ */
+function extractConflictMarker(statements: SurrealSqlStatement[]): ConflictMarker | null {
+  for (let index = statements.length - 1; index >= 0; index -= 1) {
+    const result = statements[index].result;
+    if (result && typeof result === 'object' && !Array.isArray(result) && (result as { conflict?: unknown }).conflict === true) {
+      const marker = result as { current?: unknown; deleted?: unknown; conflicted_fields?: unknown };
+      return {
+        current: marker.current && typeof marker.current === 'object' ? (marker.current as Record<string, unknown>) : null,
+        deleted: marker.deleted === true,
+        conflictedFields: Array.isArray(marker.conflicted_fields) ? marker.conflicted_fields.map(String) : undefined
+      };
+    }
+  }
+  return null;
+}
+
 function normalizeReturnedGraphEdge(row: Record<string, unknown> | null) {
   if (!row) return null;
 
@@ -364,6 +395,30 @@ export function isRetryableSyncError(error: unknown): boolean {
     normalized.includes('transaction can be retried') ||
     normalized.includes('this transaction can be retried')
   );
+}
+
+/**
+ * True for errors that mean "we couldn't reach the server" — a failed
+ * `fetch()`, an aborted request (the 30s `fetchWithTimeout` circuit-breaker),
+ * or an offline browser — as opposed to a genuine server-side rejection (bad
+ * SQL, validation, 4xx). These must retry forever, like `isRetryableSyncError`
+ * conflicts: an op queued while offline used to burn all `MAX_RETRIES`
+ * attempts in ~2.5 minutes of backoff and get permanently REJECTED (with its
+ * optimistic rows rolled back) even though the user simply hadn't reconnected
+ * yet. Must be called with the raw caught error (not a persisted string) —
+ * classification relies on `instanceof`/`.name`, which only survive at the
+ * original catch site.
+ */
+export function isNetworkSyncError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const name = (error as { name?: unknown }).name;
+  if (name === 'AbortError') return true;
+  // fetch() rejects with a TypeError for network-level failures (DNS,
+  // connection refused, offline) — never for a bug in our own code, which
+  // would not originate from the fetchWithTimeout() call sites that raise
+  // these.
+  if (error instanceof TypeError) return true;
+  return false;
 }
 
 function assertNever(_value: never): never {
@@ -640,11 +695,67 @@ export function createSyncEngine(
   // re-attempt, so waiting seconds for them is pure stall.
   const CONFLICT_BASE_BACKOFF_MS = 500;
   const CONFLICT_MAX_BACKOFF_MS = 5000;
+  // Network-shaped failures (offline, fetch failure, timeout) get their own
+  // curve: longer than conflicts (a dead connection won't resolve in
+  // milliseconds) but capped well under the genuine-failure ceiling above, so
+  // a reconnect is noticed promptly instead of waiting out a multi-minute
+  // backoff earned while still offline.
+  const NETWORK_BASE_BACKOFF_MS = 5000;
+  const NETWORK_MAX_BACKOFF_MS = 60000;
   // Concurrency cap for the push scheduler. High enough that a burst drains in
   // parallel, low enough not to storm the server with conflicting transactions
   // or exhaust mobile connection pools. `config.pushConcurrency` overrides it
   // as an escape hatch (RuntimeConfig.pushConcurrency).
   const MAX_CONCURRENT_PUSHES = config.pushConcurrency ?? 4;
+
+  // Batched push envelope (M10): a reconnect after being offline can leave
+  // dozens of independent single-record ops queued. Firing each as its own
+  // HTTP request is the "server spam on reconnect" the offline audit flagged.
+  // Instead, up to BATCH_ENVELOPE_SIZE simultaneously-ready, independent ops
+  // are combined into ONE multi-statement /sql request (each op wrapped in
+  // its own `{ }` block — SurrealDB block-scopes LET vars and isolates
+  // errors per top-level statement, confirmed empirically: one block
+  // throwing does not affect sibling blocks' results in the same request).
+  // Still capped by MAX_CONCURRENT_PUSHES (one batch = one concurrency slot,
+  // same as one single op) and additionally paced by MIN_LAUNCH_INTERVAL_MS
+  // between successive network launches so a 200-op backlog can't fire its
+  // ~8 batches back-to-back in the same tick.
+  const BATCH_ENVELOPE_SIZE = 25;
+  const MIN_LAUNCH_INTERVAL_MS = 200;
+  let lastNetworkLaunchAt = 0;
+
+  function sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  /** Await this immediately before every outgoing sync fetch to enforce MIN_LAUNCH_INTERVAL_MS pacing. */
+  async function paceNextLaunch(): Promise<void> {
+    const now = Date.now();
+    const nextSlot = Math.max(now, lastNetworkLaunchAt + MIN_LAUNCH_INTERVAL_MS);
+    lastNetworkLaunchAt = nextSlot;
+    const wait = nextSlot - now;
+    if (wait > 0) await sleep(wait);
+  }
+
+  /**
+   * Ops eligible to join a combined batch envelope: exactly the ones
+   * runSingleOp already handles as one self-contained statement. The three
+   * batch-shaped ops (CreateTreeBatch/UpdateRecordsBatch/UpdateRelationsBatch)
+   * are themselves already single consolidated requests covering many
+   * records, so batching them together adds complexity (their SQL bodies
+   * assume they own the whole statement, e.g. `$existing` idempotency guards
+   * keyed off the FULL op) for little benefit — they stay on the individual
+   * path. DeleteTree is a scheduler barrier and is never ready alongside
+   * other ops anyway.
+   */
+  function isBatchableOpKind(kind: OpKind): boolean {
+    return (
+      kind !== 'CreateTreeBatch' &&
+      kind !== 'UpdateRecordsBatch' &&
+      kind !== 'UpdateRelationsBatch' &&
+      kind !== 'DeleteTree'
+    );
+  }
 
   // One-shot timer armed after a drain that leaves ops backing off, firing at
   // the earliest per-op eligibility. Without it, retries only happen when the
@@ -692,8 +803,10 @@ export function createSyncEngine(
       created: op.created,
       retries: op.retries,
       last_error: op.last_error,
+      last_error_kind: op.last_error_kind,
       last_attempt_at: op.last_attempt_at,
-      updated: op.updated
+      updated: op.updated,
+      conflictCurrent: op.conflictCurrent
     }).catch((e) => logger.error('failed to persist op', e));
   }
 
@@ -725,11 +838,24 @@ export function createSyncEngine(
 
   function backoffForOp(op: Op): number {
     if (op.retries <= 0) return 0;
-    if (op.last_error && isRetryableSyncError(op.last_error)) {
+    // `last_error_kind` is stamped at catch time going forward; ops loaded
+    // from IDB before this field existed fall back to the old text-matching
+    // heuristic so an in-flight conflict-backoff op doesn't regress.
+    const kind: 'network' | 'conflict' | 'server' =
+      op.last_error_kind ?? (op.last_error && isRetryableSyncError(op.last_error) ? 'conflict' : 'server');
+    if (kind === 'conflict') {
       return (
         Math.min(
           CONFLICT_BASE_BACKOFF_MS * Math.pow(2, Math.min(op.retries - 1, 3)),
           CONFLICT_MAX_BACKOFF_MS
+        ) + jitterForOp(op.id)
+      );
+    }
+    if (kind === 'network') {
+      return (
+        Math.min(
+          NETWORK_BASE_BACKOFF_MS * Math.pow(2, Math.min(op.retries - 1, 4)),
+          NETWORK_MAX_BACKOFF_MS
         ) + jitterForOp(op.id)
       );
     }
@@ -791,6 +917,7 @@ export function createSyncEngine(
           created: raw.created,
           retries: raw.retries,
           last_error: raw.last_error,
+          last_error_kind: raw.last_error_kind as Op['last_error_kind'],
           last_attempt_at: raw.last_attempt_at,
           updated: raw.updated
         };
@@ -811,6 +938,7 @@ export function createSyncEngine(
             created: raw.created,
             retries: raw.retries,
             last_error: raw.last_error,
+            last_error_kind: raw.last_error_kind as Op['last_error_kind'],
             last_attempt_at: raw.last_attempt_at,
             updated: raw.updated
           });
@@ -839,6 +967,19 @@ export function createSyncEngine(
     // offline queue can drain hours later, and fn::merge_additionals' per-id
     // LWW must see when the user actually edited, not when the op arrived.
     stampPayloadAdditionals(plainPayload, kind);
+    // Capture the client's last-seen server `updated` for the target NOW
+    // (queue time), not at flush — that's the baseline field_stamps CAS
+    // conflict detection compares against server-side. A record absent from
+    // the cache (never fetched) has no baseline, so `_base_updated` stays
+    // undefined/null and the server skips the conflict check entirely for
+    // this op rather than false-flagging every field as conflicted.
+    if ((kind === 'UpdateRecord' || kind === 'DeleteTree') && plainPayload && typeof plainPayload === 'object') {
+      const targetId = (plainPayload as Record<string, unknown>).id;
+      if (typeof targetId === 'string' && !('_base_updated' in (plainPayload as Record<string, unknown>))) {
+        const cached = typeof (cache as any).getItem === 'function' ? cache.getItem(targetId) : undefined;
+        (plainPayload as Record<string, unknown>)._base_updated = cached?.updated ?? null;
+      }
+    }
     const op: Op = {
       id: generate_op_id(),
       kind,
@@ -900,6 +1041,7 @@ export function createSyncEngine(
             created: raw.created,
             retries: raw.retries,
             last_error: raw.last_error,
+            last_error_kind: raw.last_error_kind as Op['last_error_kind'],
             last_attempt_at: raw.last_attempt_at,
             updated: raw.updated
           };
@@ -916,6 +1058,22 @@ export function createSyncEngine(
       const now = Date.now();
       const pending = oplog.filter(op => op.status === 'pending' && opEligibleNow(op, now));
       if (pending.length === 0) return;
+
+      // The browser reports no network at all: don't burn a single retry
+      // attempt against any of these ops (network-classified or not — a
+      // never-tried op would otherwise take its first failed attempt here
+      // and start backing off for no reason). Leave everything pending as-is;
+      // the sync loop's `online` handler resets backoff and re-invokes
+      // pushOps() the instant connectivity returns, so nothing waits out a
+      // stale timer either. `navigator.onLine === false` is the one reading
+      // of this flag that's actually trustworthy (browsers rarely claim
+      // "offline" incorrectly, unlike the reverse).
+      if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+        markSyncOffline(config.storageNamespace);
+        logger.debug(`skipping push: navigator reports offline (${pending.length} op(s) remain queued)`);
+        return;
+      }
+
       syncWasBusy = true;
       logger.debug(`pushing ${pending.length} pending ops`);
 
@@ -1376,6 +1534,7 @@ export function createSyncEngine(
       inflightOps.delete(op.id);
       oplog = oplog.filter(o => o.id !== op.id);
       failureCount = 0;
+      markSyncHealthy(config.storageNamespace);
       acceptedMarkerOpIds.add(op.id);
       await persistAndPublish(op);
 
@@ -1455,10 +1614,13 @@ export function createSyncEngine(
       op.retries++;
       inflightOps.delete(op.id);
       const retryableConflict = isRetryableSyncError(error);
-      const maxRetries = retryableConflict ? Number.POSITIVE_INFINITY : MAX_RETRIES;
+      const networkError = !retryableConflict && isNetworkSyncError(error);
+      const maxRetries = (retryableConflict || networkError) ? Number.POSITIVE_INFINITY : MAX_RETRIES;
       const errMsg = error instanceof Error ? error.message : String(error);
       op.last_error = errMsg;
+      op.last_error_kind = retryableConflict ? 'conflict' : networkError ? 'network' : 'server';
       op.last_attempt_at = Date.now();
+      if (networkError) markSyncDegraded(config.storageNamespace);
 
       if (op.retries >= maxRetries) {
         op.status = 'rejected';
@@ -1478,6 +1640,8 @@ export function createSyncEngine(
         await persistAndPublish(op);
         if (retryableConflict) {
           logger.info(`retrying op id=${op.id} kind=CreateTreeBatch after transaction conflict attempt=${op.retries}`);
+        } else if (networkError) {
+          logger.info(`retrying op id=${op.id} kind=CreateTreeBatch after network error attempt=${op.retries}`);
         } else {
           logger.warn(`retrying op id=${op.id} kind=CreateTreeBatch attempt=${op.retries}`, error);
         }
@@ -1679,6 +1843,7 @@ export function createSyncEngine(
       inflightOps.delete(op.id);
       oplog = oplog.filter(o => o.id !== op.id);
       failureCount = 0;
+      markSyncHealthy(config.storageNamespace);
       acceptedMarkerOpIds.add(op.id);
       await persistAndPublish(op);
 
@@ -1698,10 +1863,13 @@ export function createSyncEngine(
       op.retries++;
       inflightOps.delete(op.id);
       const retryableConflict = isRetryableSyncError(error);
-      const maxRetries = retryableConflict ? Number.POSITIVE_INFINITY : MAX_RETRIES;
+      const networkError = !retryableConflict && isNetworkSyncError(error);
+      const maxRetries = (retryableConflict || networkError) ? Number.POSITIVE_INFINITY : MAX_RETRIES;
       const errMsg = error instanceof Error ? error.message : String(error);
       op.last_error = errMsg;
+      op.last_error_kind = retryableConflict ? 'conflict' : networkError ? 'network' : 'server';
       op.last_attempt_at = Date.now();
+      if (networkError) markSyncDegraded(config.storageNamespace);
 
       if (op.retries >= maxRetries) {
         op.status = 'rejected';
@@ -1715,6 +1883,8 @@ export function createSyncEngine(
         await persistAndPublish(op);
         if (retryableConflict) {
           logger.info(`retrying op id=${op.id} kind=UpdateRecordsBatch after transaction conflict attempt=${op.retries}`);
+        } else if (networkError) {
+          logger.info(`retrying op id=${op.id} kind=UpdateRecordsBatch after network error attempt=${op.retries}`);
         } else {
           logger.warn(`retrying op id=${op.id} kind=UpdateRecordsBatch attempt=${op.retries}`, error);
         }
@@ -1937,6 +2107,7 @@ export function createSyncEngine(
       inflightOps.delete(op.id);
       oplog = oplog.filter(o => o.id !== op.id);
       failureCount = 0;
+      markSyncHealthy(config.storageNamespace);
       // No _sync_op_id tagging on these edges, so no marker to clean — but keep
       // the op id out of the marker set for consistency with the accept flow.
       void acceptedMarkerOpIds;
@@ -1979,10 +2150,13 @@ export function createSyncEngine(
       op.retries++;
       inflightOps.delete(op.id);
       const retryableConflict = isRetryableSyncError(error);
-      const maxRetries = retryableConflict ? Number.POSITIVE_INFINITY : MAX_RETRIES;
+      const networkError = !retryableConflict && isNetworkSyncError(error);
+      const maxRetries = (retryableConflict || networkError) ? Number.POSITIVE_INFINITY : MAX_RETRIES;
       const errMsg = error instanceof Error ? error.message : String(error);
       op.last_error = errMsg;
+      op.last_error_kind = retryableConflict ? 'conflict' : networkError ? 'network' : 'server';
       op.last_attempt_at = Date.now();
+      if (networkError) markSyncDegraded(config.storageNamespace);
 
       if (op.retries >= maxRetries) {
         op.status = 'rejected';
@@ -1996,6 +2170,8 @@ export function createSyncEngine(
         await persistAndPublish(op);
         if (retryableConflict) {
           logger.info(`retrying op id=${op.id} kind=UpdateRelationsBatch after transaction conflict attempt=${op.retries}`);
+        } else if (networkError) {
+          logger.info(`retrying op id=${op.id} kind=UpdateRelationsBatch after network error attempt=${op.retries}`);
         } else {
           logger.warn(`retrying op id=${op.id} kind=UpdateRelationsBatch attempt=${op.retries}`, error);
         }
@@ -2175,11 +2351,73 @@ export function createSyncEngine(
           });
       };
 
+      // M10: launches SEVERAL nodes as one combined batch envelope request.
+      // Counts as ONE concurrency slot (like a single launch) since it's one
+      // HTTP round trip; each node settles independently once the envelope's
+      // per-op results have been applied (runBatchEnvelope never leaves a
+      // node's op.status unresolved).
+      const launchBatch = (batchNodes: SchedulerNode[], task: () => Promise<void>) => {
+        for (const node of batchNodes) node.state = 'running';
+        running += 1;
+        void task()
+          .catch((e) => logger.error(`batch runner crashed ids=${batchNodes.map((n) => n.op.id).join(',')}`, e))
+          .finally(() => {
+            running -= 1;
+            for (const node of batchNodes) settleNode(node);
+            pump();
+          });
+      };
+
       const pump = () => {
         // cap is `config.pushConcurrency ?? 4` (see MAX_CONCURRENT_PUSHES).
         while (running < MAX_CONCURRENT_PUSHES && readyQueue.length > 0) {
+          // Drop stale (already-settled) entries from the front.
+          while (readyQueue.length > 0 && readyQueue[0].state !== 'waiting') readyQueue.shift();
+          if (readyQueue.length === 0) break;
+
+          // Gather a batchable run from the FRONT of the queue: single-op-kind,
+          // not cancelled, no unresolved temp-id deps. Stops at the first node
+          // that doesn't qualify (it — and everything behind it — is handled
+          // by the existing per-node path below, on this or a later pump()
+          // call) or once BATCH_ENVELOPE_SIZE is reached.
+          const group: SchedulerNode[] = [];
+          while (readyQueue.length > 0 && group.length < BATCH_ENVELOPE_SIZE) {
+            const candidate = readyQueue[0];
+            if (candidate.state !== 'waiting') {
+              readyQueue.shift();
+              continue;
+            }
+            if (
+              !isBatchableOpKind(candidate.op.kind) ||
+              cancelledOpIds.has(candidate.op.id) ||
+              candidate.op.status !== 'pending' ||
+              unresolvedTempIdsFor(candidate.op).length > 0
+            ) {
+              break;
+            }
+            group.push(candidate);
+            readyQueue.shift();
+          }
+
+          if (group.length >= 2) {
+            launchBatch(group, () => runBatchEnvelope(group.map((n) => n.op), acceptedMarkerOpIds));
+            continue;
+          }
+
+          if (group.length === 1) {
+            // Exactly one batchable op was ready — no batching benefit.
+            // Already shifted out above; its eligibility was just re-verified
+            // during the scan, so run it directly via the single-op path.
+            const node = group[0];
+            launch(node, () => runOpNode(node.op, acceptedMarkerOpIds));
+            continue;
+          }
+
+          // group.length === 0: the node now at the front is non-batchable
+          // (a batch-kind op or DeleteTree), cancelled, or temp-blocked —
+          // the ONLY path that handles cancel-settle / cascade-reject / defer.
+          if (readyQueue.length === 0) break;
           const node = readyQueue.shift()!;
-          if (node.state !== 'waiting') continue;
           const op = node.op;
 
           // Cancelled (or otherwise no longer pending) while waiting in this
@@ -2211,6 +2449,188 @@ export function createSyncEngine(
     await cleanupSyncMarkers(Array.from(acceptedMarkerOpIds));
   }
 
+  function markOpInflight(op: Op): void {
+    op.status = 'inflight';
+    op.last_attempt_at = Date.now();
+    op.last_error = undefined;
+    publishOp(op);
+    inflightOps.set(op.id, op);
+  }
+
+  /**
+   * Success-path application for one single-op-kind op, given its ALREADY
+   * PARSED response JSON. Shared verbatim by the solo path (runSingleOp,
+   * where resJson is the full per-op multi-statement response) and the
+   * batched path (runBatchEnvelope, where resJson is a one-element array
+   * wrapping just that op's `{ }` block result — evaluate_sql_response
+   * doesn't care which, it just scans for errors and finds the RETURNed row).
+   */
+  async function applySingleOpSuccess(
+    op: Op,
+    resJson: unknown,
+    acceptedMarkerOpIds: Set<string>
+  ): Promise<void> {
+    const evaluation = evaluate_sql_response(resJson);
+    if (op.kind === 'UpdateRecord' || op.kind === 'DeleteTree') {
+      const conflict = extractConflictMarker(evaluation.statements);
+      if (conflict) {
+        await applyConflictResult(op, conflict);
+        return;
+      }
+    }
+    op.status = 'accepted';
+    op.updated = Date.now();
+    inflightOps.delete(op.id);
+    oplog = oplog.filter(o => o.id !== op.id);
+    failureCount = 0;
+    markSyncHealthy(config.storageNamespace);
+    if (shouldStampMarker(op.kind)) {
+      acceptedMarkerOpIds.add(op.id);
+    }
+    // Persist the accepted terminal state before any async remap work.
+    // Otherwise another runtime/tab can reload this same op from IDB as
+    // pending/inflight and replay a non-idempotent create while this
+    // instance is still rewriting temp references.
+    await persistAndPublish(op);
+
+    // 1. Authoritative Temp Remapping
+    if (op.kind === 'CreateRecord') {
+      const newId = evaluation.createdRecordId;
+      const oldId = extractTargetId(op.payload);
+      if (newId && oldId && typeof newId === 'string' && oldId !== newId) {
+        cache.remap_id(oldId, newId);
+        await rewriteOplogId(oldId, newId);
+        liveBus.broadcast({ type: 'TempIdRemap', tempId: oldId, realId: newId });
+      }
+    }
+
+    // 1b. DeleteTree confirmed — remove the record locally now that the
+    // server has deleted it. Callers no longer remove optimistically at
+    // queue time (so a pending delete can show its indicator and can't be
+    // resurrected by a refetch racing server indexing), so this accept is
+    // the authoritative local removal. The originating tab's own
+    // live-stream echo is filtered, so relying on it would leave the row
+    // until a refresh; other tabs/devices still get the changefeed delete.
+    if (op.kind === 'DeleteTree') {
+      const delId = extractTargetId(op.payload);
+      if (delId) cache.removeItem(delId);
+    }
+
+    // 2. Feedback Accepted
+    const targetId = selectAcceptedTargetId(op, evaluation.createdRecordId);
+    if (targetId) cache.update_sync_status?.(targetId, 'accepted');
+    const returnedRecord = extract_returned_record(evaluation.statements);
+    if (returnedRecord && typeof returnedRecord.id === 'string' && returnedRecord.id.startsWith('records:')) {
+      const rr = returnedRecord as any;
+      const core = {
+        ...rr,
+        id: returnedRecord.id,
+        created: typeof rr.created === 'string' ? rr.created : (rr.created != null ? String(rr.created) : undefined),
+        updated: typeof rr.updated === 'string' ? rr.updated : (rr.updated != null ? String(rr.updated) : undefined),
+        is_temp: false,
+        dirty: false,
+        sync_status: 'accepted'
+      } as any;
+      cache.normalizeItem(core);
+      liveBus.broadcast({ type: 'RecordUpsert', core });
+    }
+    const returnedEdge = normalizeReturnedGraphEdge(returnedRecord);
+    if (returnedEdge) {
+      cache.upsert_graph_child_of_edge(
+        returnedEdge.edge_id,
+        returnedEdge.child_id,
+        returnedEdge.parent_id,
+        returnedEdge.order,
+        returnedEdge.is_key_parent,
+        returnedEdge.module_data
+      );
+      liveBus.broadcast({ type: 'GraphChildUpsert', edge: returnedEdge });
+    }
+
+    // Drop from durable queue; keep in reactive store briefly so UI can show completion.
+    await deleteOp(config.storageNamespace, op.id).catch(() => {});
+    publishOp(op);
+    scheduleRemoveSyncOp(op.id);
+    logger.debug(`accepted op id=${op.id} kind=${op.kind}`);
+  }
+
+  /**
+   * The field-stamps CAS check in build_op_sql found the target changed
+   * since this op's `base_updated` baseline (or the target was deleted) and
+   * did NOT apply the write. This is a genuine round-trip success (the
+   * server is reachable and answered), so — unlike handleSingleOpFailure —
+   * failureCount/health stay on the happy path. The op is marked
+   * 'conflicted' and stays in oplog/IDB (excluded from getPendingOps, so it
+   * never auto-retries and never blocks the scheduler) until the caller
+   * resolves it via resolveConflict. Left OUT of scheduleRemoveSyncOp's
+   * auto-fade — unlike an accepted op, a conflict needs the user to notice
+   * and act on it (M11 surfaces it in the activity feed).
+   */
+  async function applyConflictResult(op: Op, conflict: ConflictMarker): Promise<void> {
+    op.status = 'conflicted';
+    op.updated = Date.now();
+    op.conflictCurrent = conflict.current;
+    op.last_error = conflict.deleted
+      ? 'Target was deleted since your last sync'
+      : `Changed since your last sync: ${conflict.conflictedFields?.join(', ') || 'unknown fields'}`;
+    op.last_error_kind = 'conflict';
+    inflightOps.delete(op.id);
+    failureCount = 0;
+    markSyncHealthy(config.storageNamespace);
+
+    const targetId = extractTargetId(op.payload);
+    if (targetId) cache.update_sync_status?.(targetId, 'conflicted');
+
+    await persistAndPublish(op);
+    publishOp(op);
+    logger.warn(
+      `conflict on op id=${op.id} kind=${op.kind}${conflict.deleted ? ' (target deleted)' : ` fields=${conflict.conflictedFields?.join(',')}`}`
+    );
+  }
+
+  /** Failure-path handling for one single-op-kind op. Shared by the solo and batched launch paths. */
+  async function handleSingleOpFailure(op: Op, error: unknown): Promise<void> {
+    failureCount++;
+    op.retries++;
+    inflightOps.delete(op.id);
+    const targetId = extractTargetId(op.payload);
+    const retryableConflict = isRetryableSyncError(error);
+    const networkError = !retryableConflict && isNetworkSyncError(error);
+    const maxRetries = (retryableConflict || networkError) ? Number.POSITIVE_INFINITY : MAX_RETRIES;
+    const errMsg = error instanceof Error ? error.message : String(error);
+    op.last_error = errMsg;
+    op.last_error_kind = retryableConflict ? 'conflict' : networkError ? 'network' : 'server';
+    op.last_attempt_at = Date.now();
+    if (networkError) markSyncDegraded(config.storageNamespace);
+
+    if (op.retries >= maxRetries) {
+      op.status = 'rejected';
+      if (targetId) cache.update_sync_status?.(targetId, 'rejected');
+      // Drop optimistic temp rows that the rejected op had spawned: a
+      // temp:* record (from CreateRecord) or a temp-edge:* edge (from
+      // AddChild) will never receive a temp→real remap, so without
+      // explicit cleanup they sit in the cache/IDB forever and look like
+      // ghost items on next page load.
+      rollbackOptimisticForRejection(op);
+      await persistAndPublish(op);
+      logger.warn(
+        `rejected op id=${op.id} kind=${op.kind}${retryableConflict ? ' after repeated transaction conflicts' : ''}`,
+        error
+      );
+    } else {
+      op.status = 'pending';
+      if (targetId) cache.update_sync_status?.(targetId, 'pending');
+      await persistAndPublish(op);
+      if (retryableConflict) {
+        logger.info(`retrying op id=${op.id} kind=${op.kind} after transaction conflict attempt=${op.retries}`);
+      } else if (networkError) {
+        logger.info(`retrying op id=${op.id} kind=${op.kind} after network error attempt=${op.retries}`);
+      } else {
+        logger.warn(`retrying op id=${op.id} kind=${op.kind} attempt=${op.retries}`, error);
+      }
+    }
+  }
+
   async function runSingleOp(op: Op, acceptedMarkerOpIds: Set<string>): Promise<void> {
       const sql = build_op_sql(op);
       if (!sql) {
@@ -2220,15 +2640,12 @@ export function createSyncEngine(
         return;
       }
 
-      op.status = 'inflight';
-      op.last_attempt_at = Date.now();
-      op.last_error = undefined;
-      publishOp(op);
-      inflightOps.set(op.id, op);
+      markOpInflight(op);
 
       try {
         const token = await resolveToken(config);
         const statement = buildSurrealStatement(sql, build_op_vars(op));
+        await paceNextLaunch();
         let response = await fetchWithTimeout(`${config.url}/sql`, {
           method: 'POST',
           headers: {
@@ -2260,119 +2677,147 @@ export function createSyncEngine(
 
         if (response.ok) {
           const resJson = await response.json();
-          const evaluation = evaluate_sql_response(resJson);
-          op.status = 'accepted';
-          op.updated = Date.now();
-          inflightOps.delete(op.id);
-          oplog = oplog.filter(o => o.id !== op.id);
-          failureCount = 0;
-          if (shouldStampMarker(op.kind)) {
-            acceptedMarkerOpIds.add(op.id);
-          }
-          // Persist the accepted terminal state before any async remap work.
-          // Otherwise another runtime/tab can reload this same op from IDB as
-          // pending/inflight and replay a non-idempotent create while this
-          // instance is still rewriting temp references.
-          await persistAndPublish(op);
-
-          // 1. Authoritative Temp Remapping
-          if (op.kind === 'CreateRecord') {
-            const newId = evaluation.createdRecordId;
-            const oldId = extractTargetId(op.payload);
-            if (newId && oldId && typeof newId === 'string' && oldId !== newId) {
-              cache.remap_id(oldId, newId);
-              await rewriteOplogId(oldId, newId);
-              liveBus.broadcast({ type: 'TempIdRemap', tempId: oldId, realId: newId });
-            }
-          }
-
-          // 1b. DeleteTree confirmed — remove the record locally now that the
-          // server has deleted it. Callers no longer remove optimistically at
-          // queue time (so a pending delete can show its indicator and can't be
-          // resurrected by a refetch racing server indexing), so this accept is
-          // the authoritative local removal. The originating tab's own
-          // live-stream echo is filtered, so relying on it would leave the row
-          // until a refresh; other tabs/devices still get the changefeed delete.
-          if (op.kind === 'DeleteTree') {
-            const delId = extractTargetId(op.payload);
-            if (delId) cache.removeItem(delId);
-          }
-
-          // 2. Feedback Accepted
-          const targetId = selectAcceptedTargetId(op, evaluation.createdRecordId);
-          if (targetId) cache.update_sync_status?.(targetId, 'accepted');
-          const returnedRecord = extract_returned_record(evaluation.statements);
-          if (returnedRecord && typeof returnedRecord.id === 'string' && returnedRecord.id.startsWith('records:')) {
-            const rr = returnedRecord as any;
-            const core = {
-              ...rr,
-              id: returnedRecord.id,
-              created: typeof rr.created === 'string' ? rr.created : (rr.created != null ? String(rr.created) : undefined),
-              updated: typeof rr.updated === 'string' ? rr.updated : (rr.updated != null ? String(rr.updated) : undefined),
-              is_temp: false,
-              dirty: false,
-              sync_status: 'accepted'
-            } as any;
-            cache.normalizeItem(core);
-            liveBus.broadcast({ type: 'RecordUpsert', core });
-          }
-          const returnedEdge = normalizeReturnedGraphEdge(returnedRecord);
-          if (returnedEdge) {
-            cache.upsert_graph_child_of_edge(
-              returnedEdge.edge_id,
-              returnedEdge.child_id,
-              returnedEdge.parent_id,
-              returnedEdge.order,
-              returnedEdge.is_key_parent,
-              returnedEdge.module_data
-            );
-            liveBus.broadcast({ type: 'GraphChildUpsert', edge: returnedEdge });
-          }
-
-          // Drop from durable queue; keep in reactive store briefly so UI can show completion.
-          await deleteOp(config.storageNamespace, op.id).catch(() => {});
-          publishOp(op);
-          scheduleRemoveSyncOp(op.id);
-          logger.debug(`accepted op id=${op.id} kind=${op.kind}`);
+          await applySingleOpSuccess(op, resJson, acceptedMarkerOpIds);
         } else {
           throw new Error(`Sync failed: ${response.statusText}`);
         }
       } catch (error) {
-        failureCount++;
-        op.retries++;
-        inflightOps.delete(op.id);
-        const targetId = extractTargetId(op.payload);
-        const retryableConflict = isRetryableSyncError(error);
-        const maxRetries = retryableConflict ? Number.POSITIVE_INFINITY : MAX_RETRIES;
-        const errMsg = error instanceof Error ? error.message : String(error);
-        op.last_error = errMsg;
-        op.last_attempt_at = Date.now();
-
-        if (op.retries >= maxRetries) {
-          op.status = 'rejected';
-          if (targetId) cache.update_sync_status?.(targetId, 'rejected');
-          // Drop optimistic temp rows that the rejected op had spawned: a
-          // temp:* record (from CreateRecord) or a temp-edge:* edge (from
-          // AddChild) will never receive a temp→real remap, so without
-          // explicit cleanup they sit in the cache/IDB forever and look like
-          // ghost items on next page load.
-          rollbackOptimisticForRejection(op);
-          await persistAndPublish(op);
-          logger.warn(
-            `rejected op id=${op.id} kind=${op.kind}${retryableConflict ? ' after repeated transaction conflicts' : ''}`,
-            error
-          );
-        } else {
-          op.status = 'pending';
-          if (targetId) cache.update_sync_status?.(targetId, 'pending');
-          await persistAndPublish(op);
-          if (retryableConflict) {
-            logger.info(`retrying op id=${op.id} kind=${op.kind} after transaction conflict attempt=${op.retries}`);
-          } else {
-            logger.warn(`retrying op id=${op.id} kind=${op.kind} attempt=${op.retries}`, error);
-          }
-        }
+        await handleSingleOpFailure(op, error);
       }
+  }
+
+  /**
+   * Build the `{ }`-scoped block for one op inside a combined batch envelope.
+   * Reuses `build_op_sql`/`build_op_vars` UNCHANGED — the op's own SQL body
+   * text is never rewritten — and only adds an outer LET-rebinding preamble
+   * so the (per-batch-unique) namespaced vars are visible under the plain
+   * names that body already references. Namespacing prevents collisions when
+   * multiple ops of the same kind (e.g. two UpdateRecords, both internally
+   * using `$id`/`$payload`) are concatenated into one request.
+   */
+  function wrapOpForBatchEnvelope(op: Op, index: number): { sql: string; vars: Record<string, unknown> } | null {
+    const body = build_op_sql(op);
+    if (!body) return null;
+    const rawVars = build_op_vars(op);
+    const prefix = `b${index}_`;
+    const vars: Record<string, unknown> = {};
+    const rebinds: string[] = [];
+    for (const [key, value] of Object.entries(rawVars)) {
+      const namespacedKey = `${prefix}${key}`;
+      vars[namespacedKey] = value;
+      rebinds.push(`LET $${key} = $${namespacedKey};`);
+    }
+    const sql = `{\n${rebinds.join('\n')}\n${body}\n}`;
+    return { sql, vars };
+  }
+
+  /**
+   * Combined multi-statement push for several independent, simultaneously-
+   * ready single-op-kind ops (see BATCH_ENVELOPE_SIZE / isBatchableOpKind).
+   * ONE HTTP request; each op's block settles independently (a thrown error
+   * inside one block does not affect sibling blocks' results — verified
+   * against SurrealDB directly), so one bad op in the batch never blocks or
+   * fails the others. Falls back to per-op handleSingleOpFailure for every
+   * op in the batch if the request itself fails at the network/HTTP level
+   * (never reached the server, so no op-specific result exists to parse).
+   */
+  async function runBatchEnvelope(ops: Op[], acceptedMarkerOpIds: Set<string>): Promise<void> {
+    const built: Array<{ op: Op; sql: string; vars: Record<string, unknown> } | null> = ops.map((op, index) => {
+      const wrapped = wrapOpForBatchEnvelope(op, index);
+      return wrapped ? { op, ...wrapped } : null;
+    });
+
+    for (let i = 0; i < ops.length; i++) {
+      if (built[i]) {
+        markOpInflight(ops[i]);
+      } else {
+        ops[i].status = 'rejected';
+        ops[i].last_error = `unknown op kind: ${ops[i].kind}`;
+        await persistAndPublish(ops[i]);
+      }
+    }
+
+    const entries = built.filter((b): b is { op: Op; sql: string; vars: Record<string, unknown> } => b !== null);
+    if (entries.length === 0) return;
+
+    const combinedSql = entries.map((e) => e.sql).join(';\n');
+    const combinedVars: Record<string, unknown> = {};
+    for (const e of entries) Object.assign(combinedVars, e.vars);
+
+    try {
+      const token = await resolveToken(config);
+      const statement = buildSurrealStatement(combinedSql, combinedVars);
+      await paceNextLaunch();
+      let response = await fetchWithTimeout(`${config.url}/sql`, {
+        method: 'POST',
+        headers: {
+          'accept': 'application/json',
+          'content-type': 'text/plain',
+          'surreal-ns': config.namespace,
+          'surreal-db': config.database,
+          'authorization': `Bearer ${token}`
+        },
+        body: statement
+      });
+
+      if (response.status === 401 && config.getToken) {
+        logger.warn(`401 on batch envelope (${entries.length} ops); retrying with fresh token`);
+        const freshToken = await config.getToken();
+        response = await fetchWithTimeout(`${config.url}/sql`, {
+          method: 'POST',
+          headers: {
+            'accept': 'application/json',
+            'content-type': 'text/plain',
+            'surreal-ns': config.namespace,
+            'surreal-db': config.database,
+            'authorization': `Bearer ${freshToken}`
+          },
+          body: statement
+        });
+      }
+
+      if (!response.ok) {
+        throw new Error(`Sync failed: ${response.statusText}`);
+      }
+
+      const resJson = await response.json();
+      const rawResults = Array.isArray(resJson) ? resJson : [resJson];
+      // buildSurrealStatement inlines every combinedVars entry as its OWN
+      // top-level `LET $x = …;` statement ahead of the `{ }` blocks (the
+      // HTTP /sql body is plain text — there's no separate RPC vars
+      // parameter to sidestep this) — and each of THOSE also produces a
+      // `{status:'OK', result:null}` entry in the response array, exactly
+      // like any other top-level statement. The block results are the LAST
+      // `entries.length` entries, in submission order; skip the LET-prefix
+      // noise ahead of them rather than indexing `rawResults` directly by
+      // op position (verified against a live SurrealDB instance — indexing
+      // without this offset silently grabbed LET-prefix nulls instead of
+      // each op's actual result).
+      const letPrefixCount = Object.keys(combinedVars).length;
+      const perOpResults = rawResults.slice(letPrefixCount);
+      logger.debug(`batch envelope settled ${entries.length} op(s) in one request`);
+
+      // Apply each op's own result/failure independently — one bad op must
+      // not affect its batch-mates (see the block-isolation note above).
+      await Promise.all(
+        entries.map(async ({ op }, i) => {
+          const entry = perOpResults[i];
+          try {
+            if (entry === undefined) {
+              throw new Error('batch envelope response missing an entry for this op');
+            }
+            await applySingleOpSuccess(op, [entry], acceptedMarkerOpIds);
+          } catch (error) {
+            await handleSingleOpFailure(op, error);
+          }
+        })
+      );
+    } catch (error) {
+      // Request-level failure (network/timeout/non-OK before any per-op
+      // result existed) — every op in the batch retries/rejects the same way
+      // a solo runSingleOp would for the same error.
+      await Promise.all(entries.map(({ op }) => handleSingleOpFailure(op, error)));
+    }
   }
 
   function shouldStampMarker(kind: OpKind): boolean {
@@ -2516,6 +2961,157 @@ export function createSyncEngine(
     }
   }
 
+  /**
+   * User-initiated retry of a REJECTED op (e.g. one that hit the finite
+   * `server`-kind retry cap — network/conflict-kind ops never reject in the
+   * first place, so this exists for genuine server-side rejections a user
+   * wants to attempt again, or a rejected op from a prior software version).
+   * Resets retries/backoff and re-queues it as pending.
+   *
+   * KNOWN LIMITATION: this does NOT re-create optimistic rows that were
+   * rolled back when the op was rejected (`rollbackOptimisticForRejection`) —
+   * e.g. a retried CreateRecord's temp preview will not reappear in the UI
+   * until the retried op actually accepts, at which point the real row is
+   * inserted directly. Re-deriving a full optimistic preview from the queued
+   * payload is out of scope here; document this rather than silently
+   * under-restoring it.
+   */
+  async function retryOp(opId: string): Promise<boolean> {
+    let op = oplog.find((o) => o.id === opId);
+    if (!op) {
+      // Rejected ops are NOT reloaded into the in-memory oplog by initialize()
+      // (which only hydrates pending/inflight) — after a page reload a
+      // rejected op lives only in IDB (and the ops-store, hydrated separately
+      // for display). Pull it in here so retry still works post-reload.
+      const all = await loadAllOps(config.storageNamespace);
+      const raw = all.find((entry) => entry.id === opId && entry.status === 'rejected');
+      if (!raw) return false;
+      op = {
+        id: raw.id,
+        kind: raw.kind as OpKind,
+        payload: raw.payload,
+        status: raw.status as Op['status'],
+        created: raw.created,
+        retries: raw.retries,
+        last_error: raw.last_error,
+        last_error_kind: raw.last_error_kind as Op['last_error_kind'],
+        last_attempt_at: raw.last_attempt_at,
+        updated: raw.updated
+      };
+      oplog.push(op);
+    }
+    if (op.status !== 'rejected') return false;
+
+    op.status = 'pending';
+    op.retries = 0;
+    op.last_error = undefined;
+    op.last_error_kind = undefined;
+    op.last_attempt_at = undefined;
+    cancelledOpIds.delete(op.id);
+    await persistAndPublish(op);
+    logger.info(`retrying rejected op id=${op.id} kind=${op.kind}`);
+    syncLoopWake?.();
+    void pushOps();
+    return true;
+  }
+
+  /**
+   * User-initiated resolution of a `conflicted` op (see applyConflictResult).
+   *
+   * - `take-theirs`: discard the local edit and adopt the server's current
+   *   row. UpdateRecord applies `conflictCurrent` to the cache directly;
+   *   DeleteTree does the same (the record survived — our delete didn't
+   *   happen, so the local view must catch up to whatever changed). A
+   *   `deleted: true` marker (target gone) has no `current` row to apply —
+   *   just drop the local copy.
+   * - `keep-mine`: re-stamp `_base_updated` from `conflictCurrent.updated`
+   *   (the row's state we're now explicitly overriding) and re-queue as
+   *   pending — an explicit forced overwrite that will pass the CAS check
+   *   on the next attempt.
+   *
+   * Mirrors retryOp's reload-from-IDB fallback: a conflicted op is not
+   * reloaded into the in-memory oplog by initialize() (only pending/inflight
+   * are), so after a page reload it lives only in IDB/the ops-store.
+   */
+  async function resolveConflict(opId: string, resolution: 'keep-mine' | 'take-theirs'): Promise<boolean> {
+    let op = oplog.find((o) => o.id === opId);
+    if (!op) {
+      const all = await loadAllOps(config.storageNamespace);
+      const raw = all.find((entry) => entry.id === opId && entry.status === 'conflicted');
+      if (!raw) return false;
+      op = {
+        id: raw.id,
+        kind: raw.kind as OpKind,
+        payload: raw.payload,
+        status: raw.status as Op['status'],
+        created: raw.created,
+        retries: raw.retries,
+        last_error: raw.last_error,
+        last_error_kind: raw.last_error_kind as Op['last_error_kind'],
+        last_attempt_at: raw.last_attempt_at,
+        updated: raw.updated,
+        conflictCurrent: raw.conflictCurrent
+      };
+      oplog.push(op);
+    }
+    if (op.status !== 'conflicted') return false;
+
+    const current = op.conflictCurrent;
+
+    if (resolution === 'take-theirs') {
+      const targetId = extractTargetId(op.payload);
+      if (current && typeof current.id === 'string') {
+        const rr = current as Record<string, unknown>;
+        const core = {
+          ...rr,
+          id: current.id,
+          created: typeof rr.created === 'string' ? rr.created : (rr.created != null ? String(rr.created) : undefined),
+          updated: typeof rr.updated === 'string' ? rr.updated : (rr.updated != null ? String(rr.updated) : undefined),
+          is_temp: false,
+          dirty: false,
+          sync_status: 'accepted'
+        } as any;
+        cache.normalizeItem(core);
+        liveBus.broadcast({ type: 'RecordUpsert', core });
+      } else if (targetId) {
+        // deleted: true (or no current row available) — nothing to adopt,
+        // the target is gone server-side, so drop our local copy too.
+        cache.removeItem(targetId);
+      }
+      oplog = oplog.filter((o) => o.id !== op!.id);
+      await deleteOp(config.storageNamespace, op.id).catch(() => {});
+      removeSyncOp(config.storageNamespace, op.id);
+      liveBus.broadcast({ type: 'OpRemove', id: op.id });
+      logger.info(`resolved conflict (take-theirs) op id=${op.id} kind=${op.kind}`);
+      return true;
+    }
+
+    // keep-mine: force our edit through by re-baselining on the row we just
+    // saw, then re-queue.
+    const newBaseUpdated =
+      current && typeof current.updated === 'string'
+        ? current.updated
+        : current?.updated != null
+          ? String(current.updated)
+          : null;
+    if (op.payload && typeof op.payload === 'object') {
+      (op.payload as Record<string, unknown>)._base_updated = newBaseUpdated;
+    }
+    op.status = 'pending';
+    op.retries = 0;
+    op.last_error = undefined;
+    op.last_error_kind = undefined;
+    op.last_attempt_at = undefined;
+    op.conflictCurrent = undefined;
+    const targetId = extractTargetId(op.payload);
+    if (targetId) cache.update_sync_status?.(targetId, 'pending');
+    await persistAndPublish(op);
+    logger.info(`resolved conflict (keep-mine) op id=${op.id} kind=${op.kind}`);
+    syncLoopWake?.();
+    void pushOps();
+    return true;
+  }
+
   function extractTargetId(payload: unknown): string | undefined {
     if (!payload || typeof payload !== 'object') {
       return undefined;
@@ -2622,34 +3218,84 @@ export function createSyncEngine(
         // MERGE $payload must never whole-array overwrite the stored array —
         // fn::merge_additionals applies the per-id tombstone merge instead
         // (upserts by id + explicit removals; omission never deletes).
+        // Field-stamps CAS conflict check: every write's target fields are
+        // compared against a per-field `field_stamps[F]` timestamp (falling
+        // back to the whole-record `updated` when a field has never been
+        // individually stamped — a conservative default that needs no
+        // separate backfill migration, since the fallback IS the effective
+        // default at query time). `$base_updated` is the client's last-seen
+        // `updated` for this record, captured at queue time (see queueOp);
+        // NONE means the client never had a baseline (e.g. never fetched
+        // this record), so the check is skipped rather than false-flagging
+        // every field. A conflict returns the current row instead of
+        // applying the write; the caller (applySingleOpSuccess) detects the
+        // `conflict: true` marker and routes to the conflicted-op path
+        // instead of accepting. Additionals are exempt — their own per-id
+        // `fn::merge_additionals` LWW remains the resolution mechanism.
+        // The conflict check and the write are branches of ONE top-level
+        // IF/ELSE statement rather than an early "IF conflict { RETURN }"
+        // guard: verified directly against SurrealDB that a top-level
+        // `RETURN` inside an `IF {}` block (not itself wrapped in an outer
+        // `{}`) does NOT skip the flat multi-statement body's LATER
+        // statements — only a `{}`-enclosing block's own RETURN does that
+        // (see wrapOpForBatchEnvelope, which DOES wrap in `{}` for the
+        // batched path). An early-RETURN guard here would have let the
+        // UPDATE run anyway even after reporting a conflict. Structuring as
+        // IF/ELSE with nothing following it sidesteps the whole question —
+        // correct in both the flat (solo) and `{}`-wrapped (batched) forms.
         return `
-          LET $before_additionals = (SELECT VALUE additionals FROM type::record($id))[0];
-          UPDATE type::record($id) MERGE $payload;
-          UPDATE type::record($id) MERGE { updated: time::now() };
-          IF $incoming_additionals != NONE OR $removed_additional_ids != NONE {
-            UPDATE type::record($id) SET additionals = fn::merge_additionals(
-              additionals,
-              IF $incoming_additionals = NONE { [] } ELSE { fn::fix_additional_ids($incoming_additionals) },
-              $removed_additional_ids
-            );
+          LET $current = (SELECT * FROM ONLY type::record($id));
+          // _sync_op_id is a client bookkeeping marker build_op_vars stamps
+          // onto every $payload (for LIVE echo-filtering), not a user edit —
+          // it's never in field_stamps, so leaving it in $written_fields
+          // would make it fall back to the whole-record $current.updated on
+          // EVERY write, silently turning per-field CAS into an
+          // any-prior-edit-anywhere CAS. Excluded from the conflict check.
+          LET $written_fields = IF $current = NONE { [] } ELSE {
+            object::keys($payload).filter(|$f| $f != '_sync_op_id')
           };
-          IF $perms != NONE AND $perms != NULL AND array::len($perms) > 0 {
-            UPDATE type::record($id) MERGE { permissions: $perms.map(|$p| { r: $p.r, u: type::record($p.u) }) };
+          LET $stamps = IF $current = NONE { {} } ELSE { $current.field_stamps ?? {} };
+          LET $conflicted_fields = IF $current = NONE OR $base_updated = NONE { [] } ELSE {
+            $written_fields.filter(|$f| ($stamps[$f] ?? $current.updated) > <datetime>$base_updated)
           };
-          IF $incoming_additionals != NONE OR $removed_additional_ids != NONE {
-            LET $after_additionals = (SELECT VALUE additionals FROM type::record($id))[0];
-            fn::recompute_computed_additionals(type::record($id));
-            fn::propagate_progress_change(type::record($id));
-            fn::propagate_duration_change(type::record($id));
-            fn::propagate_distance_change(type::record($id));
-            fn::propagate_stock_level_change(type::record($id));
-            fn::propagate_transaction_balance_from_additionals(
-              type::record($id),
-              $before_additionals,
-              $after_additionals
-            );
-          };
-          RETURN (SELECT * FROM ONLY type::record($id))
+          LET $is_conflict = $current = NONE OR array::len($conflicted_fields) > 0;
+          IF $is_conflict {
+            RETURN { conflict: true, deleted: $current = NONE, current: $current, conflicted_fields: $conflicted_fields, op_id: $op_id };
+          } ELSE {
+            LET $before_additionals = $current.additionals;
+            UPDATE type::record($id) MERGE $payload;
+            UPDATE type::record($id) MERGE { updated: time::now() };
+            IF array::len($written_fields) > 0 {
+              LET $now_stamp = time::now();
+              UPDATE type::record($id) SET field_stamps = object::from_entries(
+                array::concat(object::entries($stamps), $written_fields.map(|$f| [$f, $now_stamp]))
+              );
+            };
+            IF $incoming_additionals != NONE OR $removed_additional_ids != NONE {
+              UPDATE type::record($id) SET additionals = fn::merge_additionals(
+                additionals,
+                IF $incoming_additionals = NONE { [] } ELSE { fn::fix_additional_ids($incoming_additionals) },
+                $removed_additional_ids
+              );
+            };
+            IF $perms != NONE AND $perms != NULL AND array::len($perms) > 0 {
+              UPDATE type::record($id) MERGE { permissions: $perms.map(|$p| { r: $p.r, u: type::record($p.u) }) };
+            };
+            IF $incoming_additionals != NONE OR $removed_additional_ids != NONE {
+              LET $after_additionals = (SELECT VALUE additionals FROM type::record($id))[0];
+              fn::recompute_computed_additionals(type::record($id));
+              fn::propagate_progress_change(type::record($id));
+              fn::propagate_duration_change(type::record($id));
+              fn::propagate_distance_change(type::record($id));
+              fn::propagate_stock_level_change(type::record($id));
+              fn::propagate_transaction_balance_from_additionals(
+                type::record($id),
+                $before_additionals,
+                $after_additionals
+              );
+            };
+            RETURN (SELECT * FROM ONLY type::record($id));
+          }
         `;
       case 'AddChild':
         return `
@@ -2666,8 +3312,22 @@ export function createSyncEngine(
           RELATE $c->graph_child_of->$p CONTENT $payload
         `;
       case 'DeleteTree':
+        // Whole-record CAS: if the target was edited (by anyone) after this
+        // client's last-seen `updated`, surface a conflict instead of
+        // silently deleting a row the user hasn't seen the latest edits to.
+        // A target that's already gone ($current = NONE — e.g. a replayed
+        // or duplicate DeleteTree) is NOT a conflict: deleting an
+        // already-deleted row is the existing idempotent no-op behavior.
+        // See the UpdateRecord case above for why this is IF/ELSE (not an
+        // early-RETURN guard) — a flat top-level RETURN inside an IF block
+        // does not skip later statements in the SOLO (unbatched) push path.
         return `
-          fn::delete_and_children(type::record($id));
+          LET $current = (SELECT * FROM ONLY type::record($id));
+          IF $current != NONE AND $base_updated != NONE AND $current.updated > <datetime>$base_updated {
+            RETURN { conflict: true, current: $current, op_id: $op_id };
+          } ELSE {
+            fn::delete_and_children(type::record($id));
+          }
         `;
       case 'RemoveChild':
         return 'DELETE type::record($id)';
@@ -2739,6 +3399,13 @@ export function createSyncEngine(
     let perms: unknown = undefined;
     let incomingAdditionals: unknown = undefined;
     let removedAdditionalIds: unknown = undefined;
+    let baseUpdated: unknown = undefined;
+    if (op.kind === 'UpdateRecord' || op.kind === 'DeleteTree') {
+      if ('_base_updated' in sanitized) {
+        baseUpdated = sanitized._base_updated;
+        delete sanitized._base_updated;
+      }
+    }
     if (op.kind === 'CreateRecord' || op.kind === 'UpdateRecord') {
       if (Array.isArray(sanitized.permissions)) {
         perms = normalizePermissionsForSurreal(sanitized.permissions, `${op.kind}.permissions`);
@@ -2840,7 +3507,8 @@ export function createSyncEngine(
       op_id: op.id,
       perms,
       incoming_additionals: incomingAdditionals,
-      removed_additional_ids: removedAdditionalIds
+      removed_additional_ids: removedAdditionalIds,
+      base_updated: baseUpdated ?? null
     };
   }
 
@@ -3063,8 +3731,17 @@ export function createSyncEngine(
       if (!tickInFlight) schedule();
     }
 
+    // Flip the health signal to `offline` the instant the browser says so,
+    // rather than waiting for the next queued/ticked pushOps() call to notice
+    // (pushOps already checks navigator.onLine itself, so this listener's job
+    // is purely to make the UI-facing health store reflect reality promptly).
+    function handleOffline() {
+      markSyncOffline(config.storageNamespace);
+    }
+
     if (typeof window !== 'undefined') {
       window.addEventListener('online', handleOnline);
+      window.addEventListener('offline', handleOffline);
     }
 
     schedule();
@@ -3079,6 +3756,7 @@ export function createSyncEngine(
       }
       if (typeof window !== 'undefined') {
         window.removeEventListener('online', handleOnline);
+        window.removeEventListener('offline', handleOffline);
       }
       if (syncLoopWake === wake) {
         syncLoopWake = null;
@@ -3095,15 +3773,22 @@ export function createSyncEngine(
     return Array.from(inflightOps.values());
   }
 
+  function getConflictedOps(): Op[] {
+    return oplog.filter(op => op.status === 'conflicted');
+  }
+
   return {
     queueOp,
     pushOps,
     cancelOp,
+    retryOp,
+    resolveConflict,
     initialize,
     applyRemote,
     startSyncLoop,
     getPendingOps,
     getInflightOps,
+    getConflictedOps,
     get isRunning() { return syncPromise !== null; },
     get failureCount() { return failureCount; }
   };

@@ -122,6 +122,17 @@ export type LeaderRpcCall =
       targetScopeId?: string;
       anchor?: string;
       /**
+       * Optional idempotency key. When set, the server clone SQL first checks
+       * for records already tagged with this `_sync_op_id`; if any exist (a
+       * prior attempt completed despite a client-side timeout) it returns those
+       * ids and skips the clone entirely, preventing a duplicate tree on retry.
+       * Top-level clones are tagged with `_sync_op_id` after a successful clone
+       * (the field is not in the records changefeed's authored-change predicate,
+       * so tagging alone spawns no changefeed entry). Requires the
+       * `records_sync_op_id` index to avoid a full scan.
+       */
+      opId?: string;
+      /**
        * When true, clone `rootId` ITSELF (and its whole subtree) rather than
        * just its children. Default false = children-only (the template-apply
        * semantic, container root is not cloned). Used by the /records clone

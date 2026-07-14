@@ -57,7 +57,7 @@ export type CacheMutationEvent =
   | { type: 'Clear' }
   | { type: 'RecordSyncStatus'; id: string; status: SyncStatus };
 
-export type SyncStatus = 'pending' | 'inflight' | 'accepted' | 'rejected';
+export type SyncStatus = 'pending' | 'inflight' | 'accepted' | 'rejected' | 'conflicted';
 
 export interface ItemPermissions {
   role: 'owner' | 'editor-adv' | 'editor' | 'viewer';
@@ -256,7 +256,7 @@ export interface UpdateRelationsBatchPayload {
   removeApplies: { id: string }[];
 }
 
-export type OpStatus = 'pending' | 'inflight' | 'accepted' | 'rejected';
+export type OpStatus = 'pending' | 'inflight' | 'accepted' | 'rejected' | 'conflicted';
 
 export interface Op {
   id: string;
@@ -267,9 +267,27 @@ export interface Op {
   created: number;
   retries: number;
   last_error?: string;
+  /**
+   * Classification of `last_error`, stamped at catch time (not re-derived from
+   * the persisted string later — error object shape, e.g. TypeError/AbortError,
+   * is only reliable at the original catch site). Drives which backoff curve
+   * `backoffForOp` uses and whether the op is exempt from `MAX_RETRIES`:
+   * `network` (offline / fetch failure / timeout) and `conflict` (SurrealDB
+   * transaction conflict) both retry forever; `server` (validation, bad SQL,
+   * genuine rejection) keeps the finite retry cap.
+   */
+  last_error_kind?: 'network' | 'conflict' | 'server';
   last_attempt_at?: number;
   /** epoch ms; refreshed on every status transition. */
   updated?: number;
+  /**
+   * Set only when `status === 'conflicted'`: the server's authoritative
+   * current row (or edge) at conflict time, as returned by the field-stamp
+   * CAS check in `build_op_sql`. Consumed by `resolveConflict` — 'take-theirs'
+   * applies this to the cache; 'keep-mine' re-stamps `base_updated` from its
+   * `updated` field and re-queues.
+   */
+  conflictCurrent?: Record<string, unknown> | null;
 }
 
 export function make_record_key(scope: string, bucket: string, id: string): RecordKey {

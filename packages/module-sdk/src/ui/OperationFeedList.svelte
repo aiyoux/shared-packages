@@ -99,6 +99,43 @@
                 Cancel
               </button>
             {/if}
+            {#if operation.retry}
+              <button
+                type="button"
+                class="rounded-[var(--radius-sm)] border border-[var(--color-border)] px-2 py-1 text-[11px] font-medium text-[var(--color-muted-foreground)] transition hover:border-[var(--color-primary)]/60 hover:text-[var(--color-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-primary)]"
+                onclick={() => operation.retry?.()}
+                aria-label="Retry operation"
+                title="Retry this failed operation"
+              >
+                Retry
+              </button>
+            {/if}
+            {#if operation.keepMine || operation.takeTheirs}
+              <div class={cn('flex gap-1.5', variant === 'strip' ? '' : 'shrink-0')}>
+                {#if operation.keepMine}
+                  <button
+                    type="button"
+                    class="rounded-[var(--radius-sm)] border border-amber-500/40 px-2 py-1 text-[11px] font-medium text-amber-300 transition hover:bg-amber-500/12 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-primary)]"
+                    onclick={() => operation.keepMine?.()}
+                    aria-label="Keep my edit, overwrite the server"
+                    title="Force your edit through, overwriting the other change"
+                  >
+                    Keep mine
+                  </button>
+                {/if}
+                {#if operation.takeTheirs}
+                  <button
+                    type="button"
+                    class="rounded-[var(--radius-sm)] border border-[var(--color-border)] px-2 py-1 text-[11px] font-medium text-[var(--color-muted-foreground)] transition hover:border-amber-500/60 hover:text-amber-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-primary)]"
+                    onclick={() => operation.takeTheirs?.()}
+                    aria-label="Discard my edit, take the server's version"
+                    title="Discard your edit and adopt the other change"
+                  >
+                    Take theirs
+                  </button>
+                {/if}
+              </div>
+            {/if}
             {#if operation.dismissible}
               <button
                 type="button"

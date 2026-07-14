@@ -54,8 +54,10 @@ interface ModularAppDB extends DBSchema {
       created: number;
       retries: number;
       last_error?: string;
+      last_error_kind?: string;
       last_attempt_at?: number;
       updated?: number;
+      conflictCurrent?: Record<string, unknown> | null;
     };
     indexes: { 'by-status': string };
   };
@@ -195,11 +197,12 @@ async function countPendingOpsIn(rawNs: string, dbName: string): Promise<number>
     }
     try {
       const index = db.transaction('oplog').store.index('by-status');
-      const [pending, inflight] = await Promise.all([
+      const [pending, inflight, conflicted] = await Promise.all([
         index.count('pending'),
-        index.count('inflight')
+        index.count('inflight'),
+        index.count('conflicted')
       ]);
-      return pending + inflight;
+      return pending + inflight + conflicted;
     } finally {
       if (ownClose) db.close();
     }
@@ -462,8 +465,10 @@ export interface PersistedOp {
   created: number;
   retries: number;
   last_error?: string;
+  last_error_kind?: string;
   last_attempt_at?: number;
   updated?: number;
+  conflictCurrent?: Record<string, unknown> | null;
 }
 
 export async function getPendingOps(namespace: string): Promise<PersistedOp[]> {
@@ -474,6 +479,18 @@ export async function getPendingOps(namespace: string): Promise<PersistedOp[]> {
     index.getAll('inflight')
   ]);
   return [...pending, ...inflight];
+}
+
+/**
+ * 'conflicted' ops never auto-retry (excluded from getPendingOps' drain
+ * set), but they ARE unsynced local work — a sign-out or destructive
+ * cleanup must treat them the same as pending/inflight ops for the M4
+ * data-loss guard, or a user could lose an edit they haven't resolved yet.
+ */
+export async function getConflictedOps(namespace: string): Promise<PersistedOp[]> {
+  const db = await getCacheDb(namespace);
+  const index = db.transaction('oplog').store.index('by-status');
+  return index.getAll('conflicted');
 }
 
 export async function getAllOps(namespace: string): Promise<PersistedOp[]> {

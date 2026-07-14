@@ -1,6 +1,6 @@
 import { SvelteMap } from 'svelte/reactivity';
 
-export type OperationStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'canceled';
+export type OperationStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'canceled' | 'conflicted';
 export type OperationSurface = 'activity-center' | 'inline';
 export type OperationStage = 'all' | 'active' | 'done' | 'failed';
 
@@ -24,6 +24,25 @@ export interface OperationRecord {
    * it. Distinct from `dismissible`, which merely hides a settled entry.
    */
   cancel?: (() => void) | null;
+  /**
+   * Present when a FAILED/rejected operation can be attempted again (e.g. a
+   * rejected sync op past its retry cap). The feed renders a Retry button
+   * that invokes it. Mutually exclusive with `cancel` in practice — a
+   * cancellable op is still queued, a retryable one has already settled.
+   */
+  retry?: (() => void) | null;
+  /**
+   * Present on a `conflicted` op (M10b field-stamps CAS conflict): resolves
+   * it by force-overwriting the server's row with the local edit. Mutually
+   * exclusive with `cancel`/`retry` — a conflicted op is settled, not queued
+   * or rejected. Always paired with `takeTheirs`.
+   */
+  keepMine?: (() => void) | null;
+  /**
+   * Present on a `conflicted` op: resolves it by discarding the local edit
+   * and adopting the server's current row. Always paired with `keepMine`.
+   */
+  takeTheirs?: (() => void) | null;
   count: number;
   firstAt: number;
   lastAt: number;
@@ -44,6 +63,9 @@ export interface OperationInput {
   dedupeKey?: string | null;
   dismissible?: boolean;
   cancel?: (() => void) | null;
+  retry?: (() => void) | null;
+  keepMine?: (() => void) | null;
+  takeTheirs?: (() => void) | null;
   profileId?: string;
 }
 
@@ -85,6 +107,9 @@ function makeOperationRecord(input: OperationInput, id: string, now: number): Op
     dedupeKey: input.dedupeKey ?? null,
     dismissible: input.dismissible ?? true,
     cancel: input.cancel ?? null,
+    retry: input.retry ?? null,
+    keepMine: input.keepMine ?? null,
+    takeTheirs: input.takeTheirs ?? null,
     count: 1,
     firstAt: now,
     lastAt: now,
@@ -126,7 +151,9 @@ export function isOperationActiveStatus(status: OperationStatus): boolean {
 export function matchesOperationStage(operation: OperationRecord, stage: OperationStage): boolean {
   if (stage === 'all') return true;
   if (stage === 'active') return isOperationActiveStatus(operation.status);
-  if (stage === 'failed') return operation.status === 'failed';
+  // 'conflicted' shares the 'failed' stage bucket — both need the user's
+  // attention and neither is active or settled-clean.
+  if (stage === 'failed') return operation.status === 'failed' || operation.status === 'conflicted';
   return operation.status === 'succeeded' || operation.status === 'canceled';
 }
 
@@ -154,6 +181,7 @@ export function pushOperation(input: OperationInput): string {
       subjectIds: input.subjectIds ? [...input.subjectIds] : matched.subjectIds,
       dismissible: input.dismissible ?? matched.dismissible,
       cancel: input.cancel !== undefined ? input.cancel : matched.cancel,
+      retry: input.retry !== undefined ? input.retry : matched.retry,
       dedupeKey: input.dedupeKey ?? matched.dedupeKey,
       count: matched.count + 1,
       lastAt: now

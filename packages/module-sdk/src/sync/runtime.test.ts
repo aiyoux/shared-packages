@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   buildScopeVariants,
   matchesScope,
@@ -6,6 +6,7 @@ import {
   collectScopedRecordIds,
   collectStaleGroupingEdgeIds,
   collectStaleAppliesEdgeIds,
+  computeGhostRecordIds,
   deriveOptimisticLiveMessages,
   createAppRuntime,
   normalizeRecordPermissions,
@@ -136,6 +137,28 @@ describe('runtime snapshot reconciliation helpers', () => {
   });
 });
 
+describe('computeGhostRecordIds (M9 post-gap sweep)', () => {
+  it('flags cached ids the server no longer has', () => {
+    const ghosts = computeGhostRecordIds(
+      ['records:a', 'records:b', 'records:c'],
+      new Set(['records:a', 'records:c'])
+    );
+    expect(ghosts).toEqual(['records:b']);
+  });
+
+  it('flags nothing when every probed id was found', () => {
+    expect(computeGhostRecordIds(['records:a', 'records:b'], new Set(['records:a', 'records:b']))).toEqual([]);
+  });
+
+  it('flags everything when the server found none of them', () => {
+    expect(computeGhostRecordIds(['records:a', 'records:b'], new Set())).toEqual(['records:a', 'records:b']);
+  });
+
+  it('is a no-op over an empty probe list', () => {
+    expect(computeGhostRecordIds([], new Set(['records:a']))).toEqual([]);
+  });
+});
+
 describe('CloneTemplateChildren SQL', () => {
   it('joins top-level clones to a target scope without per-clone provenance lookups', async () => {
     let postedSql = '';
@@ -234,5 +257,228 @@ describe('AppRuntime pause/resume (active/warm lifecycle surface)', () => {
     const runtime = makeRuntime();
     runtime.pause();
     expect(() => runtime.destroy()).not.toThrow();
+  });
+});
+
+describe('AppRuntime read-only gate (M12: expired-session offline)', () => {
+  function makeRuntime() {
+    return createAppRuntime({
+      url: 'http://127.0.0.1:8000',
+      namespace: 'db',
+      database: 'db',
+      token: 'token',
+      scopes: [],
+      isolationKey: 'runtime-readonly-test'
+    });
+  }
+
+  it('defaults to writable', () => {
+    const runtime = makeRuntime();
+    expect(runtime.isReadOnly()).toBe(false);
+    runtime.destroy();
+  });
+
+  it('setReadOnly toggles isReadOnly', () => {
+    const runtime = makeRuntime();
+    runtime.setReadOnly(true);
+    expect(runtime.isReadOnly()).toBe(true);
+    runtime.setReadOnly(false);
+    expect(runtime.isReadOnly()).toBe(false);
+    runtime.destroy();
+  });
+
+  it('queueAndWake is a no-op while read-only: no op is queued, no push attempted', () => {
+    const runtime = makeRuntime();
+    const queueOpSpy = vi.spyOn(runtime.engine, 'queueOp');
+    const pushOpsSpy = vi.spyOn(runtime.engine, 'pushOps').mockResolvedValue(undefined);
+
+    runtime.setReadOnly(true);
+    runtime.queueAndWake('UpdateRecord', { id: 'records:a', text: 'blocked' });
+
+    expect(queueOpSpy).not.toHaveBeenCalled();
+    expect(pushOpsSpy).not.toHaveBeenCalled();
+    runtime.destroy();
+  });
+
+  it('queueAndWake resumes queuing once read-only is cleared', () => {
+    const runtime = makeRuntime();
+    const queueOpSpy = vi.spyOn(runtime.engine, 'queueOp');
+    vi.spyOn(runtime.engine, 'pushOps').mockResolvedValue(undefined);
+
+    runtime.setReadOnly(true);
+    runtime.queueAndWake('UpdateRecord', { id: 'records:a', text: 'blocked' });
+    expect(queueOpSpy).not.toHaveBeenCalled();
+
+    runtime.setReadOnly(false);
+    runtime.queueAndWake('UpdateRecord', { id: 'records:a', text: 'allowed' });
+    expect(queueOpSpy).toHaveBeenCalledTimes(1);
+    runtime.destroy();
+  });
+});
+
+describe('CloneTemplateChildren opId idempotency guard', () => {
+  function makeRuntime() {
+    return createAppRuntime({
+      url: 'http://127.0.0.1:8000',
+      namespace: 'db',
+      database: 'db',
+      token: 'token',
+      scopes: [],
+      isolationKey: 'runtime-opid-test'
+    });
+  }
+
+  function mockFetchCapturingBody(returnRows: any[] = ['records:new_child']) {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
+      return new Response(JSON.stringify([{ result: returnRows }]), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    });
+  }
+
+  it('emits the _sync_op_id guard + tag when opId is provided', async () => {
+    let postedSql = '';
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
+      postedSql = typeof init?.body === 'string' ? init.body : '';
+      return new Response(JSON.stringify([{ result: ['records:new_child'] }]), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    });
+    const runtime = makeRuntime();
+    await runtime.fetchAndCache({
+      type: 'CloneTemplateChildren',
+      rootId: 'records:template_root',
+      opId: 'op-123',
+      anchor: '2026-04-21T00:00:00.000Z'
+    });
+    expect(postedSql).toContain('LET $op_id = "op-123"');
+    expect(postedSql).toContain('LET $existing = (SELECT VALUE id FROM records WHERE _sync_op_id = $op_id)');
+    expect(postedSql).toContain('IF array::len($existing) > 0 { RETURN $existing }');
+    expect(postedSql).toContain('UPDATE $new SET _sync_op_id = $op_id');
+    runtime.destroy();
+  });
+
+  it('omits the guard entirely when no opId is provided (compat)', async () => {
+    let postedSql = '';
+    mockFetchCapturingBody();
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
+      postedSql = typeof init?.body === 'string' ? init.body : '';
+      return new Response(JSON.stringify([{ result: ['records:new_child'] }]), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    });
+    const runtime = makeRuntime();
+    await runtime.fetchAndCache({
+      type: 'CloneTemplateChildren',
+      rootId: 'records:template_root',
+      anchor: '2026-04-21T00:00:00.000Z'
+    });
+    expect(postedSql).not.toContain('_sync_op_id');
+    runtime.destroy();
+  });
+});
+
+describe('executeQuery timeout / proxy-fallback handling', () => {
+  // The proxy-fallback + AbortError branches in executeQuery are browser-only
+  // (the catch rethrows immediately when `typeof window === 'undefined'`). The
+  // runtime is constructed in the node env (no window, so createLiveBus skips
+  // its storage listener), then `window` is defined only around the
+  // fetchAndCache call so executeQuery's catch takes the browser branch.
+  function makeRuntime() {
+    return createAppRuntime({
+      url: 'http://127.0.0.1:8000',
+      namespace: 'db',
+      database: 'db',
+      token: 'token',
+      scopes: [],
+      isolationKey: 'runtime-timeout-test'
+    });
+  }
+
+  async function withWindow<T>(fn: () => Promise<T>): Promise<T> {
+    const g = globalThis as { window?: unknown };
+    const saved = g.window;
+    g.window = {};
+    try {
+      return await fn();
+    } finally {
+      if (saved === undefined) delete g.window;
+      else g.window = saved;
+    }
+  }
+
+  it('an AbortError (timeout) throws a timeout Error and does NOT re-POST via the proxy', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
+      const u = String(url);
+      if (u.endsWith('/sql')) {
+        const err = new Error('aborted');
+        err.name = 'AbortError';
+        throw err;
+      }
+      throw new Error('proxy should not be called');
+    });
+    const runtime = makeRuntime();
+    await withWindow(() =>
+      expect(
+        runtime.fetchAndCache({
+          type: 'CloneTemplateChildren',
+          rootId: 'records:t',
+          anchor: '2026-04-21T00:00:00.000Z'
+        })
+      ).rejects.toThrow(/timeout after 30000ms/)
+    );
+    const proxyCalls = fetchSpy.mock.calls.filter(([u]) => String(u).includes('/api/runtime/sql'));
+    expect(proxyCalls).toHaveLength(0);
+    runtime.destroy();
+  });
+
+  it('a TypeError (network failure) falls back to the /api/runtime/sql proxy', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
+      const u = String(url);
+      if (u.includes('/api/runtime/sql')) {
+        return new Response(JSON.stringify([{ result: ['records:new_child'] }]), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+      // direct /sql endpoint: genuine network failure
+      throw new TypeError('fetch failed');
+    });
+    const runtime = makeRuntime();
+    const rows = await withWindow(() =>
+      runtime.fetchAndCache({
+        type: 'CloneTemplateChildren',
+        rootId: 'records:t',
+        anchor: '2026-04-21T00:00:00.000Z'
+      })
+    );
+    const proxyCalls = fetchSpy.mock.calls.filter(([u]) => String(u).includes('/api/runtime/sql'));
+    expect(proxyCalls.length).toBeGreaterThanOrEqual(1);
+    expect(rows).toEqual(['records:new_child']);
+    runtime.destroy();
+  });
+
+  it('rethrows non-AbortError, non-TypeError errors without proxy fallback', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
+      const u = String(url);
+      if (u.endsWith('/sql')) throw new Error('boom');
+      throw new Error('proxy should not be called');
+    });
+    const runtime = makeRuntime();
+    await withWindow(() =>
+      expect(
+        runtime.fetchAndCache({
+          type: 'CloneTemplateChildren',
+          rootId: 'records:t',
+          anchor: '2026-04-21T00:00:00.000Z'
+        })
+      ).rejects.toThrow('boom')
+    );
+    const proxyCalls = fetchSpy.mock.calls.filter(([u]) => String(u).includes('/api/runtime/sql'));
+    expect(proxyCalls).toHaveLength(0);
+    runtime.destroy();
   });
 });

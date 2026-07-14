@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { LoaderCircle, CheckCircle2, AlertCircle, Ban } from '@lucide/svelte';
+  import { LoaderCircle, CheckCircle2, AlertCircle, Ban, AlertTriangle } from '@lucide/svelte';
   import type { OperationStatus } from './operation-feed.svelte.js';
   import { cn } from '@modular-app/ui';
 
@@ -41,6 +41,11 @@
       label: 'Canceled',
       className: 'border-[var(--color-border)] bg-[var(--color-muted)] text-[var(--color-muted-foreground)]',
       icon: Ban
+    },
+    conflicted: {
+      label: 'Conflict',
+      className: 'border-amber-500/40 bg-amber-500/12 text-amber-300',
+      icon: AlertTriangle
     }
   };
 
