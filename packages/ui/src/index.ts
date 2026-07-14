@@ -66,6 +66,12 @@ export {
   buildScopeSelectionToken,
   parseScopeSelectionToken
 } from './connection-scope-select.ts';
+export {
+  buildCompositeId,
+  parseCompositeId,
+  isCompositeId,
+  assertCompositeId
+} from './composite-id.ts';
 export type { DateRangeValue, DateRangeSelection } from './date-range.js';
 export type { DatePickerValue } from './date-picker.js';
 export type { ResizableSidePanelHandleVariant } from './ResizableSidePanel.types.ts';
