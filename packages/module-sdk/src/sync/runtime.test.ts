@@ -74,20 +74,18 @@ describe('runtime snapshot reconciliation helpers', () => {
   });
 
   it('prunes every cached edge whose id is absent from the namespace-wide snapshot', () => {
-    // The snapshot fetch is namespace-wide (SELECT * FROM <edge_table>), so
-    // any cached edge id missing from the fetched set is authoritatively
-    // stale — including edges with endpoints that don't intersect the active
-    // scope, which is how ghost edges from past bugs (e.g. the MoveChild
-    // in/out swap) used to survive reconcile.
-    const scopedRecordIds = new Set(['records:a', 'records:b']);
-
+    // Unscoped (`scoped = false`): the snapshot fetch is namespace-wide
+    // (SELECT * FROM <edge_table>), so any cached edge id missing from the
+    // fetched set is authoritatively stale — including edges with endpoints
+    // that don't intersect the active scope, which is how ghost edges from past
+    // bugs (e.g. the MoveChild in/out swap) used to survive reconcile.
     const staleGrouping = collectStaleGroupingEdgeIds(
       [
         { edge_id: 'grouping:keep', parent_id: 'records:a', child_id: 'records:b' },
         { edge_id: 'grouping:drop', parent_id: 'records:a', child_id: 'records:c' },
         { edge_id: 'grouping:ghost', parent_id: 'records:x', child_id: 'records:y' }
       ],
-      scopedRecordIds,
+      false,
       [{ id: 'grouping:keep' }]
     );
 
@@ -97,12 +95,48 @@ describe('runtime snapshot reconciliation helpers', () => {
         { edge_id: 'applies:drop', src_id: 'records:z', dst_id: 'records:a' },
         { edge_id: 'applies:ghost', src_id: 'records:x', dst_id: 'records:y' }
       ],
-      scopedRecordIds,
+      false,
       [{ id: 'applies:keep' }]
     );
 
     expect(staleGrouping.sort()).toEqual(['grouping:drop', 'grouping:ghost']);
     expect(staleApplies.sort()).toEqual(['applies:drop', 'applies:ghost']);
+  });
+
+  it('scoped reconcile keeps cross-scope edges and drops only in-scope stale edges', () => {
+    // Scoped (`scoped = true`): the fetch covers ONLY this scope's subtree, so
+    // an absent edge id is not automatically stale — cross-scope edges held in
+    // the persistent cache must survive (otherwise they're deleted and
+    // re-fetched on every scope switch). Only edges touching this scope's
+    // subtree (an endpoint among the fetched rows' endpoints) that aren't in
+    // the fetched set are stale.
+    const staleGrouping = collectStaleGroupingEdgeIds(
+      [
+        // in-scope, present -> keep
+        { edge_id: 'grouping:keep', parent_id: 'records:a', child_id: 'records:b' },
+        // in-scope (parent a), absent -> stale
+        { edge_id: 'grouping:drop', parent_id: 'records:a', child_id: 'records:c' },
+        // cross-scope (parent x, child y) -> keep
+        { edge_id: 'grouping:ghost', parent_id: 'records:x', child_id: 'records:y' }
+      ],
+      true,
+      [{ id: 'grouping:keep', in: 'records:b', out: 'records:a' }]
+    );
+
+    const staleApplies = collectStaleAppliesEdgeIds(
+      [
+        { edge_id: 'applies:keep', src_id: 'records:b', dst_id: 'records:c' },
+        // in-scope (src b), absent -> stale
+        { edge_id: 'applies:drop', src_id: 'records:b', dst_id: 'records:d' },
+        // cross-scope (src x, dst y) -> keep
+        { edge_id: 'applies:ghost', src_id: 'records:x', dst_id: 'records:y' }
+      ],
+      true,
+      [{ id: 'applies:keep', in: 'records:b', out: 'records:c' }]
+    );
+
+    expect(staleGrouping.sort()).toEqual(['grouping:drop']);
+    expect(staleApplies.sort()).toEqual(['applies:drop']);
   });
 
   it('derives optimistic live patch messages for UpdateRecord ops', () => {
@@ -202,6 +236,92 @@ describe('CloneTemplateChildren SQL', () => {
     expect(postedSql).not.toContain('SELECT VALUE copied_from_record FROM ONLY');
     expect(postedSql).not.toContain('LIMIT 1)[0]');
 
+    runtime.destroy();
+  });
+});
+
+describe('FetchRecordsByDateRange permission normalization (regression: remove one of two -> both gone)', () => {
+  it('renames stored { u, r } permissions to { user_id, role } and enriches with []', async () => {
+    // This is the calendar's actual date-range fetch. Unlike the other
+    // fetch cases in this file it used to return raw rows unnormalized, so
+    // a record's permissions kept the stored { u, r } shape -- which fails
+    // the calendar editor's user_id/role string filter and silently drops
+    // every permission entry, even before any save happens.
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify([
+          {
+            result: [
+              {
+                id: 'records:evt1',
+                text: 'hi',
+                permissions: [{ u: 'users:abc', r: 'editor', username: 'Alice', user_icon_small: 'img:abc' }]
+              },
+              { id: 'records:evt2', text: 'no perms', permissions: [] }
+            ]
+          }
+        ]),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      )
+    );
+
+    const runtime = createAppRuntime({
+      url: 'http://127.0.0.1:8000',
+      namespace: 'db',
+      database: 'db',
+      token: 'token',
+      scopes: [],
+      isolationKey: 'runtime-test-date-range'
+    });
+
+    const rows = await runtime.fetchAndCache({
+      type: 'FetchRecordsByDateRange',
+      scopes: [],
+      only_status: false,
+      year: 2026, month: 7, day: 15,
+      eyear: 2026, emonth: 7, eday: 15
+    } as any);
+
+    expect(rows).toEqual([
+      {
+        id: 'records:evt1',
+        text: 'hi',
+        permissions: [{ role: 'editor', user_id: 'users:abc', username: 'Alice', user_icon_small: 'img:abc' }]
+      },
+      { id: 'records:evt2', text: 'no perms', permissions: [] }
+    ]);
+
+    runtime.destroy();
+  });
+
+  it('projects [] rather than none for permission-less records in the outgoing SQL', async () => {
+    let postedSql = '';
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
+      postedSql = typeof init?.body === 'string' ? init.body : '';
+      return new Response(JSON.stringify([{ result: [] }]), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    });
+
+    const runtime = createAppRuntime({
+      url: 'http://127.0.0.1:8000',
+      namespace: 'db',
+      database: 'db',
+      token: 'token',
+      scopes: [],
+      isolationKey: 'runtime-test-date-range-2'
+    });
+
+    await runtime.fetchAndCache({
+      type: 'FetchRecordsByDateRange',
+      scopes: [],
+      only_status: false,
+      year: 2026, month: 7, day: 15,
+      eyear: 2026, emonth: 7, eday: 15
+    } as any);
+
+    expect(postedSql).toContain('} ELSE { [] }) AS permissions,');
     runtime.destroy();
   });
 });

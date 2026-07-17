@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
   normalizeLiveThing,
+  normalizeLiveRecordPermissions,
   parseSelectResult,
   recordCoreFromRow,
   childEdgeFromRow,
@@ -69,6 +70,41 @@ describe('recordCoreFromRow', () => {
     const core = recordCoreFromRow({ id: 'records:r1', text: 't' });
     expect(core?.created).toBeUndefined();
     expect(core?.updated).toBeUndefined();
+  });
+  it('normalizes a null permissions field to [] so a cleared record overwrites stale cached entries', () => {
+    // A full row with permissions explicitly NONE (JSON null) must clear the
+    // cache -- if this returned undefined instead, mergeItem would keep
+    // whatever permissions were cached before the clear (the regression this
+    // guards against).
+    const core = recordCoreFromRow({ id: 'records:r1', text: 't', permissions: null });
+    expect(core?.permissions).toEqual([]);
+  });
+  it('omits a genuinely absent permissions field so mergeItem preserves cached values', () => {
+    const core = recordCoreFromRow({ id: 'records:r1', text: 't' });
+    expect(core?.permissions).toBeUndefined();
+  });
+});
+
+describe('normalizeLiveRecordPermissions', () => {
+  it('maps stored {r,u[,username,user_icon_small]} to the enriched cache shape', () => {
+    expect(
+      normalizeLiveRecordPermissions([{ r: 'editor', u: 'users:abc', username: 'Alice', user_icon_small: 'img:abc' }])
+    ).toEqual([{ role: 'editor', user_id: 'users:abc', username: 'Alice', user_icon_small: 'img:abc' }]);
+  });
+  it('returns [] for an explicit null (SurrealDB NONE) -- an explicit clear, not "absent"', () => {
+    // permissions is a full-array-replace field with no merge/tombstone path,
+    // so a row explicitly carrying NONE must clear the cache, not preserve
+    // whatever was cached before (see recordCoreFromRow's [] test below).
+    expect(normalizeLiveRecordPermissions(null)).toEqual([]);
+  });
+  it('returns undefined for a genuinely absent value -- mergeItem preserves the cached value', () => {
+    expect(normalizeLiveRecordPermissions(undefined)).toBeUndefined();
+  });
+  it('returns [] for an already-empty array', () => {
+    expect(normalizeLiveRecordPermissions([])).toEqual([]);
+  });
+  it('drops malformed entries (missing role or user id) rather than poisoning the cache', () => {
+    expect(normalizeLiveRecordPermissions([{ r: 'editor' }, { u: 'users:abc' }, 'not-an-object'])).toEqual([]);
   });
 });
 

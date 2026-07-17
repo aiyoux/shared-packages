@@ -6,6 +6,7 @@ import { setSyncOp, removeSyncOp } from './ops-store.svelte.ts';
 import type { LogLevel } from './logger.ts';
 import { createLogger } from './logger.ts';
 import { buildSurrealStatement } from './surrealql.ts';
+import { recordCoreFromRow } from './changefeed-convert.ts';
 import { MINUTE_MS } from '@modular-app/ui/date';
 import { mergeAdditionalsLocal } from '../additionals-mutate.ts';
 import type { AdditionalWithId } from '../types.ts';
@@ -366,6 +367,40 @@ function normalizePermissionsForSurreal(value: unknown, context: string): { r: S
   }
   return value.map((permission, index) => normalizePermissionForSurreal(permission, `${context}[${index}]`));
 }
+
+// Permissions are stored on the record in the shape { r, u: <record> } (no
+// username / icon). Every FETCH path joins user_public to enrich them into
+// { r, u, username, user_icon_small } (see surql/runtime/standard_functions/
+// tree_ops.surql:26-33) before the row reaches the cache, where
+// recordCoreFromRow -> normalizeLiveRecordPermissions renames to
+// { role, user_id, username, user_icon_small }. The sync-push RETURN queries
+// (CreateRecord/UpdateRecord/batch) used a raw `SELECT *` that returned the
+// STORED { r, u } shape; the accept path then cached it un-enriched, so the
+// calendar permission editor (which filters on user_id/role strings) dropped
+// every permission after a save — the "remove one of two -> both gone" bug.
+// Re-using this projection in every RETURN makes the returned row
+// byte-identical to a fetch row. Overrides the `*`-projected `permissions`
+// field (an explicit `AS permissions` wins over `*`).
+//
+// The ELSE branch projects `[]`, not `NONE`, even though a record with no
+// permissions is stored as NONE (required for the records PERMISSIONS clause
+// — NONE means public; an explicitly-stored `[]` means "deny everyone,
+// including the owner", see the write-side comment below). recordCoreFromRow
+// -> normalizeLiveRecordPermissions treats a non-array value as "absent from
+// this (possibly partial) payload" and returns `undefined`, which mergeItem
+// then treats as "preserve the existing cached value" — correct for fields
+// that arrive in genuine partial diffs, but wrong here: permissions is a
+// full-array-replace field with no merge path, so a real transition to NONE
+// must clear the cache, not leave stale entries. Projecting `[]` (a defined
+// value) makes that clear reach the cache; the DB row itself stays NONE.
+const PERMISSIONS_ENRICH_PROJECTION = `(IF permissions != NONE {
+      permissions.map(|$p| {
+        u: $p.u,
+        r: $p.r,
+        username: (SELECT VALUE name FROM user_public WHERE user_id = $p.u LIMIT 1)[0],
+        user_icon_small: (SELECT VALUE user_icon_small FROM user_public WHERE user_id = $p.u LIMIT 1)[0]
+      })
+    } ELSE { [] }) AS permissions`;
 
 function evaluate_sql_response(payload: unknown) {
   const statements = collect_statement_results(payload);
@@ -1132,7 +1167,7 @@ export function createSyncEngine(
     payload.records.forEach((record, index) => tempIdToIdx.set(record.tempId, index));
 
     const lines: string[] = [];
-    lines.push('LET $existing = (SELECT * FROM records WHERE _sync_op_id = $op_id);');
+    lines.push(`LET $existing = (SELECT *, ${PERMISSIONS_ENRICH_PROJECTION} FROM records WHERE _sync_op_id = $op_id);`);
     lines.push('IF array::len($existing) > 0 {');
     lines.push('  RETURN { records: $existing, edges: (SELECT * FROM graph_child_of WHERE _sync_op_id = $op_id) };');
     lines.push('};');
@@ -1192,12 +1227,22 @@ export function createSyncEngine(
       // the client). Parent-side recomputes happen via the edge kicks.
       lines.push(`    fn::recompute_computed_additionals($r_id_${index});`);
       lines.push(`  };`);
-      if (recordPerms && recordPerms.length > 0) {
-        const permsVarName = `perms_${index}`;
-        vars[permsVarName] = recordPerms;
-        lines.push(
-          `  UPDATE $r_id_${index} MERGE { permissions: $${permsVarName}.map(|$p| { r: $p.r, u: type::record($p.u) }) };`
-        );
+      if (recordPerms != null) {
+        // Empty array is a deliberate "clear all permissions". `!= null`
+        // enters only when a `permissions` field was actually sent
+        // (recordPerms is undefined otherwise). Per the records PERMISSIONS
+        // clause, a stored [] denies everyone including the owner — only a
+        // stored NONE is public — so an empty incoming array writes NONE,
+        // not [].
+        if (recordPerms.length === 0) {
+          lines.push(`  UPDATE $r_id_${index} MERGE { permissions: NONE };`);
+        } else {
+          const permsVarName = `perms_${index}`;
+          vars[permsVarName] = recordPerms;
+          lines.push(
+            `  UPDATE $r_id_${index} MERGE { permissions: $${permsVarName}.map(|$p| { r: $p.r, u: type::record($p.u) }) };`
+          );
+        }
       }
     });
 
@@ -1371,7 +1416,7 @@ export function createSyncEngine(
     // guaranteed order) and rewrite queued ops that reference it.
     const tempIdRefs = payload.records.map((_, index) => `<string> $r_id_${index}`).join(', ');
     lines.push(
-      `RETURN { records: (SELECT * FROM records WHERE id IN [${recordIdRefs}]), edges: [${allEdgeRefs}], temp_ids: [${tempIdRefs}] };`
+      `RETURN { records: (SELECT *, ${PERMISSIONS_ENRICH_PROJECTION} FROM records WHERE id IN [${recordIdRefs}]), edges: [${allEdgeRefs}], temp_ids: [${tempIdRefs}] };`
     );
 
     return { sql: lines.join('\n'), vars };
@@ -1474,18 +1519,12 @@ export function createSyncEngine(
       const cores: any[] = [];
       for (const rec of final.records) {
         if (!rec || typeof rec !== 'object') continue;
-        const realId = normalizeThingString((rec as any).id);
-        if (!realId) continue;
-        const r = rec as any;
-        cores.push({
-          ...r,
-          id: realId,
-          created: typeof r.created === 'string' ? r.created : (r.created != null ? String(r.created) : undefined),
-          updated: typeof r.updated === 'string' ? r.updated : (r.updated != null ? String(r.updated) : undefined),
-          is_temp: false,
-          dirty: false,
-          sync_status: 'accepted'
-        });
+        // recordCoreFromRow normalizes the row to the cache shape (permissions
+        // {r,u} -> {role,user_id} + username/icon, dates, etc.) — byte-identical
+        // to a fetch. See applySingleOpSuccess for why the hand-built core was a
+        // permissions-vanish bug. Returns null for non-records rows.
+        const core = recordCoreFromRow(rec as Record<string, any>);
+        if (core) cores.push(core);
       }
 
       const normalizedEdges: any[] = [];
@@ -1662,7 +1701,7 @@ export function createSyncEngine(
     // touched row already carries `_sync_op_id`, so short-circuit and return
     // the current rows. (UPDATE … MERGE is itself idempotent; the guard is
     // here to keep fn::log_batch_clone from firing twice.)
-    lines.push('LET $existing = (SELECT * FROM records WHERE _sync_op_id = $op_id);');
+    lines.push(`LET $existing = (SELECT *, ${PERMISSIONS_ENRICH_PROJECTION} FROM records WHERE _sync_op_id = $op_id);`);
     lines.push('IF array::len($existing) > 0 {');
     lines.push('  RETURN { records: $existing, edges: [] };');
     lines.push('};');
@@ -1716,12 +1755,22 @@ export function createSyncEngine(
       lines.push(`  IF $${mergeVar}.additionals != NONE {`);
       lines.push(`    UPDATE $rt_${index} SET additionals = fn::fix_additional_ids($${mergeVar}.additionals);`);
       lines.push(`  };`);
-      if (recordPerms && recordPerms.length > 0) {
-        const permsVar = `perms_${index}`;
-        vars[permsVar] = recordPerms;
-        lines.push(
-          `  UPDATE $rt_${index} MERGE { permissions: $${permsVar}.map(|$p| { r: $p.r, u: type::record($p.u) }) };`
-        );
+      if (recordPerms != null) {
+        // Empty array is a deliberate "clear all permissions". `!= null`
+        // enters only when a `permissions` field was actually sent
+        // (recordPerms is undefined otherwise). Per the records PERMISSIONS
+        // clause, a stored [] denies everyone including the owner — only a
+        // stored NONE is public — so an empty incoming array writes NONE,
+        // not [].
+        if (recordPerms.length === 0) {
+          lines.push(`  UPDATE $rt_${index} MERGE { permissions: NONE };`);
+        } else {
+          const permsVar = `perms_${index}`;
+          vars[permsVar] = recordPerms;
+          lines.push(
+            `  UPDATE $rt_${index} MERGE { permissions: $${permsVar}.map(|$p| { r: $p.r, u: type::record($p.u) }) };`
+          );
+        }
       }
       // NOTE: progress/duration/distance/transaction propagation is
       // deliberately NOT run here. The only caller (anchorPlannerTemplateAction)
@@ -1745,7 +1794,7 @@ export function createSyncEngine(
     lines.push(`  fn::log_batch_clone($batch_record_ids, [], [], $batch_perms);`);
     lines.push(`  UPDATE $batch_record_ids SET skip_changefeed = NONE;`);
     lines.push(
-      `RETURN { records: (SELECT * FROM records WHERE id IN $batch_record_ids), edges: [] };`
+      `RETURN { records: (SELECT *, ${PERMISSIONS_ENRICH_PROJECTION} FROM records WHERE id IN $batch_record_ids), edges: [] };`
     );
 
     return { sql: lines.join('\n'), vars };
@@ -1824,18 +1873,12 @@ export function createSyncEngine(
       const cores: any[] = [];
       for (const rec of final.records) {
         if (!rec || typeof rec !== 'object') continue;
-        const realId = normalizeThingString((rec as any).id);
-        if (!realId) continue;
-        const r = rec as any;
-        cores.push({
-          ...r,
-          id: realId,
-          created: typeof r.created === 'string' ? r.created : (r.created != null ? String(r.created) : undefined),
-          updated: typeof r.updated === 'string' ? r.updated : (r.updated != null ? String(r.updated) : undefined),
-          is_temp: false,
-          dirty: false,
-          sync_status: 'accepted'
-        });
+        // recordCoreFromRow normalizes the row to the cache shape (permissions
+        // {r,u} -> {role,user_id} + username/icon, dates, etc.) — byte-identical
+        // to a fetch. See applySingleOpSuccess for why the hand-built core was a
+        // permissions-vanish bug. Returns null for non-records rows.
+        const core = recordCoreFromRow(rec as Record<string, any>);
+        if (core) cores.push(core);
       }
 
       op.status = 'accepted';
@@ -2521,18 +2564,21 @@ export function createSyncEngine(
     if (targetId) cache.update_sync_status?.(targetId, 'accepted');
     const returnedRecord = extract_returned_record(evaluation.statements);
     if (returnedRecord && typeof returnedRecord.id === 'string' && returnedRecord.id.startsWith('records:')) {
-      const rr = returnedRecord as any;
-      const core = {
-        ...rr,
-        id: returnedRecord.id,
-        created: typeof rr.created === 'string' ? rr.created : (rr.created != null ? String(rr.created) : undefined),
-        updated: typeof rr.updated === 'string' ? rr.updated : (rr.updated != null ? String(rr.updated) : undefined),
-        is_temp: false,
-        dirty: false,
-        sync_status: 'accepted'
-      } as any;
-      cache.normalizeItem(core);
-      liveBus.broadcast({ type: 'RecordUpsert', core });
+      // Route the returned row through recordCoreFromRow — the SAME function
+      // every fetch / changefeed path uses — so the cache gets the enriched,
+      // normalized record shape (permissions renamed {r,u} -> {role,user_id} +
+      // joined username/user_icon_small, additionals/dates normalized). The
+      // raw `SELECT * FROM ONLY` RETURN (see build_op_sql) carries permissions
+      // in the stored {r, u: <record>} shape; hand-building the core here (the
+      // old code) left the cache with raw-shape permissions, which the
+      // calendar permission editor filters out (it requires user_id/role
+      // strings) -> every save made permissions vanish from the UI until the
+      // next enriched refetch. recordCoreFromRow is byte-identical to a fetch.
+      const core = recordCoreFromRow(returnedRecord as Record<string, any>);
+      if (core) {
+        cache.normalizeItem(core);
+        liveBus.broadcast({ type: 'RecordUpsert', core });
+      }
     }
     const returnedEdge = normalizeReturnedGraphEdge(returnedRecord);
     if (returnedEdge) {
@@ -3061,18 +3107,11 @@ export function createSyncEngine(
     if (resolution === 'take-theirs') {
       const targetId = extractTargetId(op.payload);
       if (current && typeof current.id === 'string') {
-        const rr = current as Record<string, unknown>;
-        const core = {
-          ...rr,
-          id: current.id,
-          created: typeof rr.created === 'string' ? rr.created : (rr.created != null ? String(rr.created) : undefined),
-          updated: typeof rr.updated === 'string' ? rr.updated : (rr.updated != null ? String(rr.updated) : undefined),
-          is_temp: false,
-          dirty: false,
-          sync_status: 'accepted'
-        } as any;
-        cache.normalizeItem(core);
-        liveBus.broadcast({ type: 'RecordUpsert', core });
+        const core = recordCoreFromRow(current as Record<string, unknown>);
+        if (core) {
+          cache.normalizeItem(core);
+          liveBus.broadcast({ type: 'RecordUpsert', core });
+        }
       } else if (targetId) {
         // deleted: true (or no current row available) — nothing to adopt,
         // the target is gone server-side, so drop our local copy too.
@@ -3192,7 +3231,7 @@ export function createSyncEngine(
         // `build_op_vars` peels `permissions` off into the `$perms` var so the
         // first CREATE doesn't trip the same check.
         return `
-          LET $existing = (SELECT * FROM records WHERE _sync_op_id = $op_id LIMIT 1)[0];
+          LET $existing = (SELECT *, ${PERMISSIONS_ENRICH_PROJECTION} FROM records WHERE _sync_op_id = $op_id LIMIT 1)[0];
           IF $existing != NONE {
             RETURN $existing;
           };
@@ -3202,10 +3241,19 @@ export function createSyncEngine(
             UPDATE $created.id SET additionals = fn::fix_additional_ids($created.additionals);
             fn::recompute_computed_additionals($created.id);
           };
-          IF $perms != NONE AND $perms != NULL AND array::len($perms) > 0 {
-            UPDATE $created.id MERGE { permissions: $perms.map(|$p| { r: $p.r, u: type::record($p.u) }) };
+          IF $perms != NONE AND $perms != NULL {
+            // Empty array is a deliberate clear-all. The != NONE guard still
+            // skips when no permissions field was sent (untouched). A stored
+            // [] denies everyone including the owner (only a stored NONE is
+            // public, per the records PERMISSIONS clause), so an empty
+            // incoming array writes NONE, not [].
+            IF array::len($perms) = 0 {
+              UPDATE $created.id MERGE { permissions: NONE };
+            } ELSE {
+              UPDATE $created.id MERGE { permissions: $perms.map(|$p| { r: $p.r, u: type::record($p.u) }) };
+            };
           };
-          RETURN (SELECT * FROM ONLY $created.id)
+          RETURN (SELECT *, ${PERMISSIONS_ENRICH_PROJECTION} FROM ONLY $created.id)
         `;
       case 'UpdateRecord':
         // Same `permissions[*].u` cast as CreateRecord — see comment above.
@@ -3278,8 +3326,17 @@ export function createSyncEngine(
                 $removed_additional_ids
               );
             };
-            IF $perms != NONE AND $perms != NULL AND array::len($perms) > 0 {
-              UPDATE type::record($id) MERGE { permissions: $perms.map(|$p| { r: $p.r, u: type::record($p.u) }) };
+            IF $perms != NONE AND $perms != NULL {
+              // Empty array is a deliberate clear-all. The != NONE guard
+              // still skips when no permissions field was sent (untouched).
+              // A stored [] denies everyone including the owner (only a
+              // stored NONE is public, per the records PERMISSIONS clause),
+              // so an empty incoming array writes NONE, not [].
+              IF array::len($perms) = 0 {
+                UPDATE type::record($id) MERGE { permissions: NONE };
+              } ELSE {
+                UPDATE type::record($id) MERGE { permissions: $perms.map(|$p| { r: $p.r, u: type::record($p.u) }) };
+              };
             };
             IF $incoming_additionals != NONE OR $removed_additional_ids != NONE {
               LET $after_additionals = (SELECT VALUE additionals FROM type::record($id))[0];
@@ -3294,7 +3351,7 @@ export function createSyncEngine(
                 $after_additionals
               );
             };
-            RETURN (SELECT * FROM ONLY type::record($id));
+            RETURN (SELECT *, ${PERMISSIONS_ENRICH_PROJECTION} FROM ONLY type::record($id));
           }
         `;
       case 'AddChild':

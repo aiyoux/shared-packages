@@ -52,6 +52,13 @@ export function normalizeLiveThing(value: unknown): string | undefined {
 }
 
 export function normalizeLiveRecordPermissions(value: unknown): LiveRecordPermission[] | undefined {
+  // permissions is a full-array-replace field with no merge/tombstone path
+  // (unlike additionals), so an explicit `null` (SurrealDB NONE — the row
+  // carries this once all permissions are cleared) must overwrite the cache
+  // to an empty array rather than being treated as absent. A genuinely
+  // missing key (`value` is JS `undefined`) still means "preserve the
+  // cached value", matching every other field mapped in this module.
+  if (value === null) return [];
   if (!Array.isArray(value)) return undefined;
 
   const permissions: LiveRecordPermission[] = [];

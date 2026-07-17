@@ -524,6 +524,86 @@ describe('createSyncEngine', () => {
     });
   });
 
+  it('normalizes returned record permissions to the cache shape (regression: remove one of two -> both gone)', async () => {
+    // The RETURN query carries permissions in the STORED shape { r, u: <record> }
+    // (enriched with username/icon by the SQL projection, but field names are r/u).
+    // The accept path must route through recordCoreFromRow so the cache gets the
+    // normalized { role, user_id, username, user_icon_small } shape the UI expects.
+    // Previously the hand-built core cached raw { r, u } permissions, which the
+    // calendar editor filtered out (it requires user_id/role strings) -> every
+    // save made permissions vanish until the next enriched refetch.
+    const cache = createCacheStub();
+    const liveBus = createBusStub();
+    const fetchMock = vi.mocked(fetch);
+    const returnedRecord = {
+      id: 'records:1',
+      text: 'server truth',
+      permissions: [
+        { r: 'editor', u: 'users:abc', username: 'Alice', user_icon_small: 'img:abc' }
+      ]
+    };
+
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue([{ status: 'OK', result: returnedRecord }])
+    } as unknown as Response);
+
+    const engine = createSyncEngine(cache as any, liveBus as any, {
+      url: 'http://localhost:8000',
+      namespace: 'app',
+      storageNamespace: 'test-sync',
+      database: 'main',
+      token: 'token',
+      scopes: []
+    });
+
+    engine.queueOp('UpdateRecord', { id: 'records:1', text: 'edit' });
+    await engine.pushOps();
+
+    expect(cache.normalizeItem).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'records:1',
+        permissions: [{ role: 'editor', user_id: 'users:abc', username: 'Alice', user_icon_small: 'img:abc' }]
+      })
+    );
+  });
+
+  it('clears all permissions when an empty permissions array is sent', async () => {
+    // Dropping the array::len($perms) > 0 guard means an empty permissions
+    // array is no longer silently no-op'd -- the last permission can now be
+    // removed. It writes NONE (not []): the records PERMISSIONS clause
+    // treats a stored [] as "deny everyone including the owner", while NONE
+    // is the public baseline -- see the write-side comment in engine.ts.
+    const cache = createCacheStub();
+    const liveBus = createBusStub();
+    const fetchMock = vi.mocked(fetch);
+
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue([{ status: 'OK', result: [{ id: 'records:1' }] }])
+    } as unknown as Response);
+
+    const engine = createSyncEngine(cache as any, liveBus as any, {
+      url: 'http://localhost:8000',
+      namespace: 'app',
+      storageNamespace: 'test-sync',
+      database: 'main',
+      token: 'token',
+      scopes: []
+    });
+
+    engine.queueOp('UpdateRecord', { id: 'records:1', text: 'edit', permissions: [] });
+    await engine.pushOps();
+
+    const body = (fetchMock.mock.calls[0]?.[1] as RequestInit | undefined)?.body;
+    expect(typeof body).toBe('string');
+    // Empty array is no longer skipped (the guard no longer no-ops it), but
+    // it writes NONE rather than [] to avoid the ACL "deny everyone" trap.
+    expect(body).toContain('LET $perms = [];');
+    expect(body).toContain('IF array::len($perms) = 0 {');
+    expect(body).toContain('UPDATE type::record($id) MERGE { permissions: NONE };');
+  });
+
   it('builds relation writes with parameterized record ids that Surreal accepts in RELATE statements', async () => {
     const cache = createCacheStub();
     const liveBus = createBusStub();
@@ -661,8 +741,10 @@ describe('createSyncEngine', () => {
 
     const body = (fetchMock.mock.calls[0]?.[1] as RequestInit | undefined)?.body;
     expect(typeof body).toBe('string');
-    // Idempotency guard mirrors buildTreeBatchSql.
-    expect(body).toContain('LET $existing = (SELECT * FROM records WHERE _sync_op_id = $op_id);');
+    // Idempotency guard mirrors buildTreeBatchSql. The SELECT enriches
+    // permissions (user_public join) so the returned row matches a fetch.
+    expect(body).toContain('LET $existing = (SELECT *, (IF permissions != NONE {');
+    expect(body).toContain('AS permissions FROM records WHERE _sync_op_id = $op_id);');
     // Each row updated by record-id target ($var, never an inline literal).
     expect(body).toContain('LET $rt_0 = type::record($rid_0);');
     expect(body).toContain('UPDATE $rt_0 MERGE $u_0;');
@@ -772,7 +854,9 @@ describe('createSyncEngine', () => {
 
     const body = (fetchMock.mock.calls[0]?.[1] as RequestInit | undefined)?.body;
     expect(typeof body).toBe('string');
-    expect(body).toContain('SELECT * FROM records WHERE _sync_op_id = $op_id LIMIT 1');
+    // Idempotency guard SELECT enriches permissions (user_public join) so the
+    // returned row matches a fetch.
+    expect(body).toContain('AS permissions FROM records WHERE _sync_op_id = $op_id LIMIT 1');
     expect(body).toContain('CREATE records CONTENT $payload');
 
     expect(cache.remap_id).toHaveBeenCalledWith('temp:1', 'records:real-1');
@@ -2340,6 +2424,37 @@ describe('conflict detection (M10b)', () => {
       expect.objectContaining({ id: 'records:A', text: 'server-text', dirty: false, sync_status: 'accepted' })
     );
     expect(deleteOpMock).toHaveBeenCalledWith('test-sync', op.id);
+  });
+
+  it('resolveConflict(take-theirs) normalizes the adopted server row\'s permissions to the cache shape', async () => {
+    // Regression: the take-theirs branch used to hand-build its core (like the
+    // pre-fix applySingleOpSuccess), so an adopted server row's permissions
+    // kept the stored { r, u } shape -- which the calendar editor's
+    // user_id/role filter rejects, dropping every permission the moment a
+    // conflict on that record gets resolved this way.
+    const cache = createCacheStub();
+    const liveBus = createBusStub();
+    const fetchMock = vi.mocked(fetch);
+    const serverCurrent = {
+      id: 'records:A',
+      text: 'server-text',
+      updated: '2026-02-01T00:00:00.000Z',
+      permissions: [{ r: 'editor', u: 'users:abc', username: 'Alice', user_icon_small: 'img:abc' }]
+    };
+    fetchMock.mockResolvedValue(conflictMarkerResponse(serverCurrent));
+
+    const engine = createSyncEngine(cache as any, liveBus as any, engineConfig);
+    const op = engine.queueOp('UpdateRecord', { id: 'records:A', text: 'client-text', _base_updated: '2020-01-01T00:00:00.000Z' });
+    await engine.pushOps();
+
+    const resolved = await engine.resolveConflict(op.id, 'take-theirs');
+    expect(resolved).toBe(true);
+    expect(cache.normalizeItem).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'records:A',
+        permissions: [{ role: 'editor', user_id: 'users:abc', username: 'Alice', user_icon_small: 'img:abc' }]
+      })
+    );
   });
 
   it('resolveConflict(take-theirs) with deleted:true drops the local record instead of adopting one', async () => {

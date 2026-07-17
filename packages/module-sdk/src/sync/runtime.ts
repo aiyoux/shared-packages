@@ -298,19 +298,25 @@ export function collectScopedRecordIds(
   return ids;
 }
 
-// Edge snapshots are namespace-wide (see fetchGroupingEdgesForScopes /
-// fetchAppliesEdgesForScopes — they `SELECT * FROM <edge_table>` without a
-// scope filter). Any locally cached edge whose id isn't in the fetched set is
-// authoritative-stale and must be evicted, regardless of where its endpoints
-// point: dangling edges left behind by past bugs (e.g. the MoveChild in/out
-// swap that overwrote child_id with the parent id) and broken endpoint
-// references would otherwise survive every reconcile forever. The
-// `scopedRecordIds` argument is retained for API stability — callers still
-// pass it — but is no longer consulted.
+// Edge snapshot reconcile. Two modes:
+//  - Namespace-wide (`scoped = false`, used when no exec scope is selected): the
+//    fetch is `SELECT * FROM <edge_table>`, so any locally cached edge id absent
+//    from the fetched set is authoritative-stale and must be evicted, regardless
+//    of where its endpoints point — dangling edges left behind by past bugs
+//    (e.g. the MoveChild in/out swap that overwrote child_id with the parent id)
+//    would otherwise survive every reconcile forever.
+//  - Scoped (`scoped = true`, the normal exec case): the fetch covers ONLY this
+//    scope's subtree, so an absent edge id is NOT automatically stale — it may
+//    belong to another scope still held in the persistent cache. Evict only
+//    edges that touch THIS scope's subtree (at least one endpoint appears among
+//    the fetched rows' endpoints) yet aren't in the fetched set. Cross-scope
+//    edges are left untouched; deleting them on every load was pure churn (they
+//    re-appear on the next scope visit) and the per-edge delete storm locked the
+//    UI on cold load.
 export function collectStaleGroupingEdgeIds(
   localEdges: Iterable<{ edge_id: string; parent_id: string; child_id: string }>,
-  _scopedRecordIds: ReadonlySet<string>,
-  fetchedRows: Array<{ id?: unknown }>
+  scoped: boolean,
+  fetchedRows: Array<{ id?: unknown; in?: unknown; out?: unknown }>
 ): string[] {
   const fetchedIds = new Set(
     fetchedRows
@@ -318,20 +324,38 @@ export function collectStaleGroupingEdgeIds(
       .filter((id): id is string => Boolean(id))
   );
 
+  if (!scoped) {
+    const staleIds: string[] = [];
+    for (const edge of localEdges) {
+      if (!fetchedIds.has(edge.edge_id)) {
+        staleIds.push(edge.edge_id);
+      }
+    }
+    return staleIds;
+  }
+
+  const inScopeEndpoints = new Set<string>();
+  for (const row of fetchedRows) {
+    const i = typeof row?.in === 'string' ? row.in : (row?.in as { id?: unknown } | null | undefined)?.id;
+    const o = typeof row?.out === 'string' ? row.out : (row?.out as { id?: unknown } | null | undefined)?.id;
+    if (typeof i === 'string') inScopeEndpoints.add(i);
+    if (typeof o === 'string') inScopeEndpoints.add(o);
+  }
+
   const staleIds: string[] = [];
   for (const edge of localEdges) {
-    if (!fetchedIds.has(edge.edge_id)) {
+    if (fetchedIds.has(edge.edge_id)) continue;
+    if (inScopeEndpoints.has(edge.parent_id) || inScopeEndpoints.has(edge.child_id)) {
       staleIds.push(edge.edge_id);
     }
   }
-
   return staleIds;
 }
 
 export function collectStaleAppliesEdgeIds(
   localEdges: Iterable<{ edge_id: string; src_id: string; dst_id: string }>,
-  _scopedRecordIds: ReadonlySet<string>,
-  fetchedRows: Array<{ id?: unknown }>
+  scoped: boolean,
+  fetchedRows: Array<{ id?: unknown; in?: unknown; out?: unknown }>
 ): string[] {
   const fetchedIds = new Set(
     fetchedRows
@@ -339,13 +363,31 @@ export function collectStaleAppliesEdgeIds(
       .filter((id): id is string => Boolean(id))
   );
 
+  if (!scoped) {
+    const staleIds: string[] = [];
+    for (const edge of localEdges) {
+      if (!fetchedIds.has(edge.edge_id)) {
+        staleIds.push(edge.edge_id);
+      }
+    }
+    return staleIds;
+  }
+
+  const inScopeEndpoints = new Set<string>();
+  for (const row of fetchedRows) {
+    const i = typeof row?.in === 'string' ? row.in : (row?.in as { id?: unknown } | null | undefined)?.id;
+    const o = typeof row?.out === 'string' ? row.out : (row?.out as { id?: unknown } | null | undefined)?.id;
+    if (typeof i === 'string') inScopeEndpoints.add(i);
+    if (typeof o === 'string') inScopeEndpoints.add(o);
+  }
+
   const staleIds: string[] = [];
   for (const edge of localEdges) {
-    if (!fetchedIds.has(edge.edge_id)) {
+    if (fetchedIds.has(edge.edge_id)) continue;
+    if (inScopeEndpoints.has(edge.src_id) || inScopeEndpoints.has(edge.dst_id)) {
       staleIds.push(edge.edge_id);
     }
   }
-
   return staleIds;
 }
 
@@ -655,13 +697,17 @@ export function createAppRuntime(config: RuntimeConfig): AppRuntime {
   }
 
   function applyGroupingEdgeSnapshot(rows: any[]) {
+    // wisewords schema:
+    //   graph_child_of: in=child, out=parent  (key_parent flag on edge)
+    //   groups:         in=group_record, out=member_record
+    const edges: Array<{
+      edge_id: string; parent_id: string; child_id: string;
+      order: number; is_key_parent: boolean; module_data: any; clone_setting: any;
+    }> = [];
     for (const row of rows) {
       const edgeId = typeof row?.id === 'string' ? row.id : null;
       if (!edgeId) continue;
 
-      // wisewords schema:
-      //   graph_child_of: in=child, out=parent  (key_parent flag on edge)
-      //   groups:         in=group_record, out=member_record
       const isGraphChildOf = edgeId.startsWith('graph_child_of:');
 
       const rawIn  = typeof row?.in  === 'string' ? row.in  : row?.in?.id;
@@ -675,17 +721,22 @@ export function createAppRuntime(config: RuntimeConfig): AppRuntime {
         ? (typeof row.key_parent === 'boolean' ? row.key_parent : true)
         : false;
 
-      engine.applyRemote({
-        type: 'GraphChildUpsert',
-        edge: {
-          edge_id: edgeId,
-          parent_id: parentId,
-          child_id: childId,
-          order: typeof row.order === 'number' ? row.order : 0,
-          is_key_parent: isKeyParent,
-          module_data: typeof row.module_data === 'object' ? row.module_data : undefined
-        }
+      edges.push({
+        edge_id: edgeId,
+        parent_id: parentId,
+        child_id: childId,
+        order: typeof row.order === 'number' ? row.order : 0,
+        is_key_parent: isKeyParent,
+        module_data: typeof row.module_data === 'object' ? row.module_data : undefined,
+        clone_setting: null
       });
+    }
+    // One batched apply (the engine wraps it in begin/end_children_batch so the
+    // scopeBucketWriteEpoch bumps once for the whole snapshot, instead of once
+    // per edge — which re-triggered the O(cache) projectedItems derivation per
+    // edge on cold load).
+    if (edges.length > 0) {
+      engine.applyRemote({ type: 'GraphChildBatchUpsert', edges });
     }
   }
 
@@ -709,19 +760,17 @@ export function createAppRuntime(config: RuntimeConfig): AppRuntime {
     }
   }
 
-  function reconcileGroupingEdgeSnapshot(scopedRecordIds: ReadonlySet<string>, rows: any[]) {
-    const staleEdgeIds = collectStaleGroupingEdgeIds(cache.childrenEdges.values(), scopedRecordIds, rows);
-    for (const edgeId of staleEdgeIds) {
-      engine.applyRemote({ type: 'GraphChildDelete', edgeId });
-    }
-
+  function reconcileGroupingEdgeSnapshot(scoped: boolean, rows: any[]) {
+    const staleEdgeIds = collectStaleGroupingEdgeIds(cache.childrenEdges.values(), scoped, rows);
     if (staleEdgeIds.length > 0) {
+      // One batched delete instead of N per-edge GraphChildDelete dispatches.
+      engine.applyRemote({ type: 'GraphChildBatchDelete', edgeIds: staleEdgeIds });
       logger.debug(`snapshot reconciled ${staleEdgeIds.length} stale grouping edges`);
     }
   }
 
-  function reconcileAppliesEdgeSnapshot(scopedRecordIds: ReadonlySet<string>, rows: any[]) {
-    const staleEdgeIds = collectStaleAppliesEdgeIds(cache.appliesEdges.values(), scopedRecordIds, rows);
+  function reconcileAppliesEdgeSnapshot(scoped: boolean, rows: any[]) {
+    const staleEdgeIds = collectStaleAppliesEdgeIds(cache.appliesEdges.values(), scoped, rows);
     for (const edgeId of staleEdgeIds) {
       engine.applyRemote({ type: 'AppliesDelete', edgeId });
     }
@@ -819,55 +868,83 @@ export function createAppRuntime(config: RuntimeConfig): AppRuntime {
     return extractQueryRows(queryResult);
   }
 
+  // In-flight dedupe for edge snapshots. On cold boot, resyncActiveScopes and the
+  // actions page's FetchEdgesByScopes/FetchAppliesByScopes RPC both request the
+  // same scope set near-simultaneously, doubling those round trips. Coalesce
+  // concurrent identical requests into a single HTTP call. In-flight only (no
+  // result TTL) — a later, sequential call re-fetches, so freshness is unaffected.
+  const groupingEdgeFetchInFlight = new Map<string, Promise<any[]>>();
+  const appliesEdgeFetchInFlight = new Map<string, Promise<any[]>>();
+  function scopeKeyForEdges(scopes: string[]): string {
+    return scopes && scopes.length > 0 ? [...scopes].sort().join('|') : '__unscoped__';
+  }
+  function dedupedEdgeFetch(
+    inflight: Map<string, Promise<any[]>>,
+    key: string,
+    run: () => Promise<any[]>
+  ): Promise<any[]> {
+    const existing = inflight.get(key);
+    if (existing) return existing;
+    const p = run().finally(() => {
+      if (inflight.get(key) === p) inflight.delete(key);
+    });
+    inflight.set(key, p);
+    return p;
+  }
+
   async function fetchGroupingEdgesForScopes(scopes: string[]): Promise<any[]> {
     // Fetch both hierarchy edges (graph_child_of) and many-to-many grouping (groups)
     // to match the wisewords schema.
-    if (!scopes || scopes.length === 0) {
-      // Unscoped: whole-table snapshot (compat — used when no exec scope is selected).
-      const [childEdges, groupEdges] = await Promise.all([
-        executeQuery('SELECT * FROM graph_child_of').then(extractQueryRows),
-        executeQuery('SELECT * FROM groups').then(extractQueryRows)
-      ]);
-      return [...childEdges, ...groupEdges];
-    }
-    // Scoped: restrict to edges touching the scope's subtree. Compute the member
-    // id set once via the canonical subtree walker, then run TWO indexed queries
-    // per table (in INSIDE / out INSIDE) — never an OR of both, which degrades to
-    // a full TableScan that re-evaluates the opaque record-auth closure per row.
-    // Merge the sub-queries with array::concat so the batch returns a single
-    // result array (extractQueryRows' findLast picks it up); dedupe by edge id
-    // client-side (an edge with both endpoints in the set appears in both halves).
-    const sql = `
-      LET $roots = <array<record>>$scopes;
-      LET $members = fn::find_all_child_records_any_type($roots, [], {}, [], NONE, NONE);
-      LET $ids = array::distinct(array::concat($roots, $members));
-      SELECT * FROM array::concat(
-        (SELECT * FROM graph_child_of WHERE in INSIDE $ids),
-        (SELECT * FROM graph_child_of WHERE out INSIDE $ids),
-        (SELECT * FROM groups WHERE in INSIDE $ids),
-        (SELECT * FROM groups WHERE out INSIDE $ids)
-      );
-    `;
-    const rows = extractQueryRows(await executeQuery(sql, { scopes }));
-    return dedupeEdgeRowsById(rows);
+    return dedupedEdgeFetch(groupingEdgeFetchInFlight, scopeKeyForEdges(scopes), async () => {
+      if (!scopes || scopes.length === 0) {
+        // Unscoped: whole-table snapshot (compat — used when no exec scope is selected).
+        const [childEdges, groupEdges] = await Promise.all([
+          executeQuery('SELECT * FROM graph_child_of').then(extractQueryRows),
+          executeQuery('SELECT * FROM groups').then(extractQueryRows)
+        ]);
+        return [...childEdges, ...groupEdges];
+      }
+      // Scoped: restrict to edges touching the scope's subtree. Compute the member
+      // id set once via the canonical subtree walker, then run TWO indexed queries
+      // per table (in INSIDE / out INSIDE) — never an OR of both, which degrades to
+      // a full TableScan that re-evaluates the opaque record-auth closure per row.
+      // Merge the sub-queries with array::concat so the batch returns a single
+      // result array (extractQueryRows' findLast picks it up); dedupe by edge id
+      // client-side (an edge with both endpoints in the set appears in both halves).
+      const sql = `
+        LET $roots = <array<record>>$scopes;
+        LET $members = fn::find_all_child_records_any_type($roots, [], {}, [], NONE, NONE);
+        LET $ids = array::distinct(array::concat($roots, $members));
+        SELECT * FROM array::concat(
+          (SELECT * FROM graph_child_of WHERE in INSIDE $ids),
+          (SELECT * FROM graph_child_of WHERE out INSIDE $ids),
+          (SELECT * FROM groups WHERE in INSIDE $ids),
+          (SELECT * FROM groups WHERE out INSIDE $ids)
+        );
+      `;
+      const rows = extractQueryRows(await executeQuery(sql, { scopes }));
+      return dedupeEdgeRowsById(rows);
+    });
   }
 
   async function fetchAppliesEdgesForScopes(scopes: string[]): Promise<any[]> {
-    if (!scopes || scopes.length === 0) {
-      const queryResult = await executeQuery('SELECT * FROM appliesto');
-      return extractQueryRows(queryResult);
-    }
-    const sql = `
-      LET $roots = <array<record>>$scopes;
-      LET $members = fn::find_all_child_records_any_type($roots, [], {}, [], NONE, NONE);
-      LET $ids = array::distinct(array::concat($roots, $members));
-      SELECT * FROM array::concat(
-        (SELECT * FROM appliesto WHERE in INSIDE $ids),
-        (SELECT * FROM appliesto WHERE out INSIDE $ids)
-      );
-    `;
-    const rows = extractQueryRows(await executeQuery(sql, { scopes }));
-    return dedupeEdgeRowsById(rows);
+    return dedupedEdgeFetch(appliesEdgeFetchInFlight, scopeKeyForEdges(scopes), async () => {
+      if (!scopes || scopes.length === 0) {
+        const queryResult = await executeQuery('SELECT * FROM appliesto');
+        return extractQueryRows(queryResult);
+      }
+      const sql = `
+        LET $roots = <array<record>>$scopes;
+        LET $members = fn::find_all_child_records_any_type($roots, [], {}, [], NONE, NONE);
+        LET $ids = array::distinct(array::concat($roots, $members));
+        SELECT * FROM array::concat(
+          (SELECT * FROM appliesto WHERE in INSIDE $ids),
+          (SELECT * FROM appliesto WHERE out INSIDE $ids)
+        );
+      `;
+      const rows = extractQueryRows(await executeQuery(sql, { scopes }));
+      return dedupeEdgeRowsById(rows);
+    });
   }
 
   function dedupeEdgeRowsById(rows: any[]): any[] {
@@ -963,31 +1040,71 @@ export function createAppRuntime(config: RuntimeConfig): AppRuntime {
     if (includeChildren) {
       // graph_child_of: in=child, out=parent
       // groups: in=group_record, out=member_record
-      const childSql = `
-        SELECT * FROM array::concat(
-          (SELECT * FROM graph_child_of WHERE out INSIDE <array<record>>$parentIds),
-          (SELECT * FROM groups WHERE in INSIDE <array<record>>$parentIds)
-        );
-      `;
-      const directEdges = extractQueryRows(await executeQuery(childSql, { parentIds: ids }))
-        .map((row) => normalizeGraphEdgeRow(row as Record<string, unknown>))
-        .filter((row): row is NonNullable<ReturnType<typeof normalizeGraphEdgeRow>> => Boolean(row));
-      const visited = new Set<string>(ids);
-      let edgesToProcess = directEdges;
+      if (recursiveChildren) {
+        // Server-side recursion: collect the full descendant set in ONE query via
+        // the canonical subtree walker, then fetch all descendant records and all
+        // in-subtree edges in the same round trip. Empty filter {} walks BOTH
+        // groups and graph_child_of edges (mirroring the previous client BFS);
+        // do NOT use { is_grouper: false } here — that would drop groups members.
+        // Replaces a `while` loop that issued two HTTP round trips per depth level
+        // (a serial waterfall that blocked the actions route on deep trees).
+        const recursiveSql = `
+          LET $descendantIds = fn::find_all_child_records_any_type(<array<record>>$ids, [], {}, [], NONE, NONE);
+          LET $allIds = array::distinct(array::concat(<array<record>>$ids, $descendantIds));
+          LET $childRecords = (
+            SELECT *,
+              ${includeGrouping ? '(SELECT VALUE fn::object_with_field(fn::object_with_field(in.*, "is_template_container", is_template_container), "grouping", (SELECT VALUE fn::object_with_field(in.*, "is_template_container", is_template_container) FROM in<-groups)) FROM <-groups) AS grouping,' : ''}
+              ${includeConnections
+                ? `(SELECT *,
+                      (SELECT VALUE fn::object_with_field(fn::object_with_field(in.*, "is_template_container", is_template_container), "grouping", (SELECT VALUE fn::object_with_field(in.*, "is_template_container", is_template_container) FROM in<-groups)) FROM <-groups) AS grouping
+                    FROM array::concat(
+                      (SELECT * FROM <-appliesto<-records).filter(|$v| $v != none),
+                      (SELECT * FROM ->appliesto->records)
+            )) AS connections,`
+                : ''}
+              (SELECT * FROM <-graph_child_of WHERE key_parent = true LIMIT 1) AS parent_edges
+            FROM <array<record>>$descendantIds
+          );
+          LET $childEdges = (
+            SELECT * FROM array::concat(
+              (SELECT * FROM graph_child_of WHERE out INSIDE $allIds),
+              (SELECT * FROM groups WHERE in INSIDE $allIds)
+            )
+          );
+          RETURN [{ childRecords: $childRecords, childEdges: $childEdges }];
+        `;
+        const payload = extractQueryRows(await executeQuery(recursiveSql, { ids }))[0]
+          ?? { childRecords: [], childEdges: [] };
+        childRecords = (Array.isArray(payload.childRecords) ? payload.childRecords : [])
+          .map((row) => normalizeRecordRow(row as Record<string, unknown>))
+          .filter((row): row is Record<string, unknown> => Boolean(row));
+        childEdges = (Array.isArray(payload.childEdges) ? payload.childEdges : [])
+          .map((row) => normalizeGraphEdgeRow(row as Record<string, unknown>))
+          .filter((row): row is NonNullable<ReturnType<typeof normalizeGraphEdgeRow>> => Boolean(row));
+      } else {
+        // Direct children only (one level) — keep the existing 2-query shape.
+        const childSql = `
+          SELECT * FROM array::concat(
+            (SELECT * FROM graph_child_of WHERE out INSIDE <array<record>>$parentIds),
+            (SELECT * FROM groups WHERE in INSIDE <array<record>>$parentIds)
+          );
+        `;
+        const directEdges = extractQueryRows(await executeQuery(childSql, { parentIds: ids }))
+          .map((row) => normalizeGraphEdgeRow(row as Record<string, unknown>))
+          .filter((row): row is NonNullable<ReturnType<typeof normalizeGraphEdgeRow>> => Boolean(row));
+        childEdges.push(...directEdges);
 
-      while (edgesToProcess.length > 0) {
         const batchChildIds: string[] = [];
-        for (const edge of edgesToProcess) {
+        const visited = new Set<string>(ids);
+        for (const edge of directEdges) {
           const isGroupingEdge = typeof edge.id === 'string' && edge.id.startsWith('groups:');
           const childId = isGroupingEdge ? edge.out : edge.in;
           if (childId && !visited.has(childId)) {
             batchChildIds.push(childId);
             visited.add(childId);
           }
-          childEdges.push(edge);
         }
 
-        // Fetch the child records
         if (batchChildIds.length > 0) {
           const recordRows = extractQueryRows(
             await executeQuery(
@@ -1011,26 +1128,6 @@ export function createAppRuntime(config: RuntimeConfig): AppRuntime {
             .map((row) => normalizeRecordRow(row as Record<string, unknown>))
             .filter((row): row is Record<string, unknown> => Boolean(row));
           childRecords.push(...recordRows);
-        }
-
-        // Recurse into grandchildren if recursiveChildren
-        if (recursiveChildren && batchChildIds.length > 0) {
-          const nextEdges = extractQueryRows(
-            await executeQuery(
-              `
-                SELECT * FROM array::concat(
-                  (SELECT * FROM graph_child_of WHERE out INSIDE <array<record>>$parentIds),
-                  (SELECT * FROM groups WHERE in INSIDE <array<record>>$parentIds)
-                );
-              `,
-              { parentIds: batchChildIds }
-            )
-          )
-            .map((row) => normalizeGraphEdgeRow(row as Record<string, unknown>))
-            .filter((row): row is NonNullable<ReturnType<typeof normalizeGraphEdgeRow>> => Boolean(row));
-          edgesToProcess = nextEdges;
-        } else {
-          break;
         }
       }
     }
@@ -1178,19 +1275,20 @@ export function createAppRuntime(config: RuntimeConfig): AppRuntime {
       const cores = await fetchRecordsForScopes(scopes);
 
       if (abort.signal.aborted) return;
-      const scopedRecordIds = applyRecordSnapshot(engine, cores);
+      applyRecordSnapshot(engine, cores);
+      const edgeFetchScoped = scopes.length > 0;
 
       const edgeRows = await fetchGroupingEdgesForScopes(scopes);
 
       if (abort.signal.aborted) return;
       applyGroupingEdgeSnapshot(edgeRows);
-      reconcileGroupingEdgeSnapshot(scopedRecordIds, edgeRows);
+      reconcileGroupingEdgeSnapshot(edgeFetchScoped, edgeRows);
 
       const appliesRows = await fetchAppliesEdgesForScopes(scopes);
 
       if (abort.signal.aborted) return;
       applyAppliesEdgeSnapshot(appliesRows);
-      reconcileAppliesEdgeSnapshot(scopedRecordIds, appliesRows);
+      reconcileAppliesEdgeSnapshot(edgeFetchScoped, appliesRows);
       await persistScopeSyncMarkers(scopes, cores, edgeRows, appliesRows, source);
       await markLiveCatchupRequired(false);
       logger.debug(`resynced ${scopes.length} scopes as ${source}`);
@@ -1279,6 +1377,13 @@ export function createAppRuntime(config: RuntimeConfig): AppRuntime {
             -- mirroring fn::group_for_fetch. Without this the calendar's
             -- permission pills only have the raw { u, r } shape and fall back to
             -- showing the user record id with no avatar.
+            --
+            -- ELSE branch is [], not none: a record with no permissions is
+            -- stored as NONE (the records PERMISSIONS clause treats NONE as
+            -- public; an explicitly-stored [] denies everyone including the
+            -- owner), but the fetched/cached shape must be a defined array so
+            -- normalizeRecordRow -> normalizeRecordPermissions overwrites a
+            -- cleared record instead of the client treating it as absent.
             (IF $this.permissions != none {
               $this.permissions.map(|$p| {
                 u: $p.u,
@@ -1286,7 +1391,7 @@ export function createAppRuntime(config: RuntimeConfig): AppRuntime {
                 username: (SELECT VALUE name FROM user_public WHERE user_id = $p.u LIMIT 1)[0],
                 user_icon_small: (SELECT VALUE user_icon_small FROM user_public WHERE user_id = $p.u LIMIT 1)[0]
               })
-            } ELSE { none }) AS permissions,
+            } ELSE { [] }) AS permissions,
             (SELECT VALUE fn::object_with_field(fn::object_with_field(in.*, "is_template_container", is_template_container), "grouping", (SELECT VALUE fn::object_with_field(in.*, "is_template_container", is_template_container) FROM in<-groups)) FROM <-groups) AS grouping,
             (SELECT *, (SELECT VALUE fn::object_with_field(fn::object_with_field(in.*, "is_template_container", is_template_container), "grouping", (SELECT VALUE fn::object_with_field(in.*, "is_template_container", is_template_container) FROM in<-groups)) FROM <-groups) AS grouping FROM array::concat(
               (SELECT * FROM <-appliesto<-records).filter(|$v| $v != none),
@@ -1314,7 +1419,15 @@ export function createAppRuntime(config: RuntimeConfig): AppRuntime {
         // HTTP /sql with LET bindings returns [{result:null}, ..., {result:[...rows...]}].
         // Support both shapes.
         const cores = extractQueryRows(q);
-        return cores;
+        // normalizeRecordRow renames the stored { u, r } permission shape to
+        // { user_id, role } (+ username/user_icon_small passthrough). Without
+        // this, every permission entry on a calendar event fails the client's
+        // user_id/role string check and gets filtered out -- the record LOOKS
+        // permission-free even when it isn't, and any save re-sends an empty
+        // permissions array, silently wiping the real entries server-side.
+        return cores
+          .map((row) => normalizeRecordRow(row as Record<string, unknown>))
+          .filter((row): row is Record<string, unknown> => Boolean(row));
       }
       case 'FetchEdgesByScopes':
         return await fetchGroupingEdgesForScopes(call.scopes);
