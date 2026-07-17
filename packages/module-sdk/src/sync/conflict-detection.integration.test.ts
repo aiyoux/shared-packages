@@ -228,4 +228,49 @@ describe.skipIf(!dbReachable || process.env.SKIP_CONFLICT_DETECTION === '1')('fi
     const rows = await sql(`SELECT text FROM ONLY ${id};`);
     expect(rows[rows.length - 1]?.result?.text).toBe('client-wins');
   }, 30_000);
+
+  it('two consecutive client-driven UpdateRecord edits do not false-conflict (field_stamps must not race ahead of updated)', async () => {
+    // Regression test for a real production bug: the UpdateRecord SQL used
+    // to call time::now() separately for `updated` and for the
+    // `field_stamps` entries it writes in the SAME accept. SurrealDB
+    // evaluates time::now() per call (not frozen per statement/transaction),
+    // so field_stamps ended up a few hundred µs AHEAD of `updated`. Every
+    // following edit's `_base_updated` baseline is derived from the
+    // client's cached `updated` (see queueOp), so the CAS check
+    // `field_stamps[f] > base_updated` was true for the field JUST written —
+    // false-flagging every subsequent save as a conflict. Unlike the other
+    // cases in this file, no `_base_updated` is supplied manually here: the
+    // point is to exercise the engine's OWN auto-derived baseline
+    // (cache.getItem(id).updated) across two real accepted round-trips, the
+    // same path a user hits by saving an event, then editing it again.
+    const id = 'records:cd_g';
+    await sql(`CREATE ${id} SET text='v0', additionals=[], updated=time::now();`);
+    const initialRows = await sql(`SELECT * FROM ONLY ${id};`);
+    const initialRow = initialRows[initialRows.length - 1]?.result;
+
+    const { engine, cache } = await makeEngine();
+    cache.normalizeItem({
+      id,
+      text: initialRow.text,
+      additionals: [],
+      is_temp: false,
+      dirty: false,
+      sync_status: 'accepted',
+      created: initialRow.created,
+      updated: initialRow.updated
+    });
+
+    engine.queueOp('UpdateRecord', { id, text: 'v1' });
+    await engine.pushOps();
+    expect(engine.getConflictedOps()).toHaveLength(0);
+    expect(engine.getPendingOps()).toHaveLength(0);
+
+    engine.queueOp('UpdateRecord', { id, text: 'v2' });
+    await engine.pushOps();
+    expect(engine.getConflictedOps()).toHaveLength(0);
+    expect(engine.getPendingOps()).toHaveLength(0);
+
+    const rows = await sql(`SELECT text FROM ONLY ${id};`);
+    expect(rows[rows.length - 1]?.result?.text).toBe('v2');
+  }, 30_000);
 });

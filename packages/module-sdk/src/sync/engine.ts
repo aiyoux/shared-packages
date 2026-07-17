@@ -3311,10 +3311,22 @@ export function createSyncEngine(
             RETURN { conflict: true, deleted: $current = NONE, current: $current, conflicted_fields: $conflicted_fields, op_id: $op_id };
           } ELSE {
             LET $before_additionals = $current.additionals;
+            // Single shared timestamp for BOTH updated and this write's
+            // field_stamps entries -- time::now() is evaluated per call, not
+            // frozen for the statement/transaction, so two separate calls
+            // (as this used to do) leave field_stamps a few hundred microsecs
+            // AHEAD of updated. The next edit's CAS baseline is the client's
+            // last-seen updated (queueOp's _base_updated), so that skew made
+            // stamps[f] > base_updated true for literally the field just
+            // written, false-flagging every following save as a conflict
+            // (and un-resolvable via keep-mine, since re-baselining on
+            // current.updated reproduces the same stale-relative-to-stamps
+            // gap). One now_stamp used everywhere makes stamp == updated,
+            // which passes the strict greater-than check next time.
+            LET $now_stamp = time::now();
             UPDATE type::record($id) MERGE $payload;
-            UPDATE type::record($id) MERGE { updated: time::now() };
+            UPDATE type::record($id) MERGE { updated: $now_stamp };
             IF array::len($written_fields) > 0 {
-              LET $now_stamp = time::now();
               UPDATE type::record($id) SET field_stamps = object::from_entries(
                 array::concat(object::entries($stamps), $written_fields.map(|$f| [$f, $now_stamp]))
               );
