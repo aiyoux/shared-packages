@@ -10,6 +10,12 @@
     ".": {
       "svelte": "./src/index.ts",
       "default": "./src/index.ts"
+    },
+    "./scheduler": {
+      "default": "./src/scheduler.ts"
+    },
+    "./sync/surrealql": {
+      "default": "./src/sync/surrealql.ts"
     }
   },
   "scripts": {
