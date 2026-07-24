@@ -1,6 +1,8 @@
 # shared-packages
 
-Canonical source for the `@modular-app/*` packages (`packages/item-tree`, `packages/module-sdk`, `packages/shell-core`, `packages/ui`, `packages/component-library`). This is the **only editable copy** — every consumer app (`~/Code/modular-app`, `~/Code/sign-dictionary`, and any future ones) gets code from here via a pinned `yalc` checkout under its own `.yalc/@modular-app/<pkg>/`, never by editing that checkout directly. Those repos have a hook that blocks edits under `.yalc/` for exactly this reason.
+Canonical source for `@modular@shared-packages/ui` (`packages/ui`) — a generic UI component library plus its `date/` types-and-helpers subpath — and its dev/demo app (`packages/component-library`, not published). This is the **only editable copy** of `ui` — every consumer app (`~/Code/modular-app`, `~/Code/sign-dictionary`, and any future ones) gets it from here via a pinned `yalc` checkout under its own `.yalc/@modular@shared-packages/ui/`, never by editing that checkout directly. Those repos have a hook that blocks edits under `.yalc/` for exactly this reason.
+
+`module-sdk`, `item-tree`, and `shell-core` used to live here too but were modular-app-specific business logic (sync engine, offline cache, schedulers, record model) rather than shared UI-library code — they moved into `~/Code/modular-app` as first-party workspace packages (`repos/module-sdk`, `repos/item-tree`, `repos/shell-core`), edited directly there with no publish/pull cycle. Keep it that way: nothing app-specific belongs back in this repo.
 
 ## Workflow: publish, don't push
 

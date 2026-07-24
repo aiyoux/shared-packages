@@ -2,4 +2,8 @@ node_modules/
 packages/*/node_modules/
 packages/*/dist/
 packages/*/build/
+.svelte-kit/
+**/.svelte-kit/
+.wrangler/
+**/.wrangler/
 .DS_Store

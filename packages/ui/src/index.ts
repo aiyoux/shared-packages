@@ -1,5 +1,5 @@
 // Date model (types + helpers) — reusable, dependency-free. Re-exported here
-// so consumers of @modular-app/ui get the date vocabulary alongside the
+// so consumers of @modular@shared-packages/ui get the date vocabulary alongside the
 // pickers, and so @modular-app/module-sdk can re-export it via ./date.
 export * from './date/index.ts';
 

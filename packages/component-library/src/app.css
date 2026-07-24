@@ -6,7 +6,6 @@
 @source "../**/*.svelte.ts";
 @source "../../ui/src/**/*.svelte";
 @source "../../ui/src/**/*.svelte.ts";
-@source "../../../modular-app/repos/module-calendar/src/**/*.svelte";
 
 @custom-variant dark (&:is(.dark *));
 

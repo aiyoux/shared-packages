@@ -8,15 +8,15 @@
 
 <script lang="ts">
   import { ChevronDown, ChevronRight, FileText, PanelLeft, PanelLeftClose, Plus, X } from '@lucide/svelte';
-  import type { BaseOrVagueReference, DateInformation, ModulePageData, ResolveContext, TimeReference, VagueMinuteCode, WeekModeCode } from '@modular-app/module-sdk';
-  import { formatTimeReferenceRangeLabel } from '@modular-app/module-sdk';
-  import { Badge, Button, Checkbox, DateAnchorEditor, DatePicker, DateRangeCalendar, DateRangePicker, Label, MobileBottomTray, NumberInput, Pagination, QuickAddDateTimePopover, RadioGroup, ResizableSidePanel, SegmentedControl, Select, TimePicker, TimeReferenceRangeEditor, type DatePickerValue, type DateRangeValue } from '@modular-app/ui';
+  import type { BaseOrVagueReference, DateInformation, ResolveContext, TimeReference, VagueMinuteCode, WeekModeCode } from '@modular@shared-packages/ui/date';
+  import { formatTimeReferenceRangeLabel } from '@modular@shared-packages/ui/date';
+  import { Badge, Button, Checkbox, DateAnchorEditor, DatePicker, DateRangeCalendar, DateRangePicker, Label, MobileBottomTray, NumberInput, Pagination, QuickAddDateTimePopover, RadioGroup, ResizableSidePanel, SegmentedControl, Select, TimePicker, TimeReferenceRangeEditor, type DatePickerValue, type DateRangeValue } from '@modular@shared-packages/ui';
   import IconDay from '../icons/IconDay.svelte';
   import IconWeek from '../icons/IconWeek.svelte';
   import IconMonth from '../icons/IconMonth.svelte';
   import IconYear from '../icons/IconYear.svelte';
 
-  let { data }: { data: ModulePageData & { segments?: string[] } } = $props();
+  let { data }: { data: { segments?: string[] } } = $props();
 
   const pages = [
     {

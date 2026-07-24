@@ -5,15 +5,15 @@
     "packages/*"
   ],
   "scripts": {
-    "dev": "npm run dev --workspace @modular-app/component-library-app",
-    "build": "npm run build --workspace @modular-app/component-library-app",
-    "preview": "npm run preview --workspace @modular-app/component-library-app",
+    "dev": "npm run dev --workspace @shared-packages/component-library-app",
+    "build": "npm run build --workspace @shared-packages/component-library-app",
+    "preview": "npm run preview --workspace @shared-packages/component-library-app",
     "yalc:publish": "npm run yalc:publish --workspaces --if-present"
   },
   "devDependencies": {
     "yalc": "^1.0.0-pre.53"
   },
   "dependencies": {
-    "svelte": "^5.56.3"
+    "svelte": "^5.56.6"
   }
 }

@@ -50,7 +50,7 @@ The shell activity center intentionally shows both, but as separate sections.
 
 ## Store API
 
-Import from `@modular-app/ui`.
+Import from `@modular@shared-packages/ui`.
 
 ```ts
 import {
@@ -60,7 +60,7 @@ import {
   completeOperation,
   failOperation,
   getOperations
-} from '@modular-app/ui';
+} from '@modular@shared-packages/ui';
 ```
 
 Use the APIs this way:
@@ -80,7 +80,7 @@ Use the APIs this way:
 
 ## UI Building Blocks
 
-Shared renderers live in `@modular-app/ui`.
+Shared renderers live in `@modular@shared-packages/ui`.
 
 - [OperationFeedList.svelte](src/OperationFeedList.svelte)
   - Reusable list renderer for both panel and inline surfaces.
@@ -91,7 +91,7 @@ Use them like this:
 
 ```svelte
 <script lang="ts">
-  import { OperationFeedList, getOperations } from '@modular-app/ui';
+  import { OperationFeedList, getOperations } from '@modular@shared-packages/ui';
 
   const plannerInlineOperations = $derived(
     getOperations({

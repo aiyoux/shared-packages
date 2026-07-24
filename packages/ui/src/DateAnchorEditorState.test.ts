@@ -96,26 +96,17 @@ describe('DateAnchorEditorState', () => {
       after: { type: 'dur', minutes: 120 }
     };
     const editor = new DateAnchorEditorState({
-      is_status: false,
+      is: false,
       value: { d: { s: { type: 'of', v: 0, a: 'up' } } },
-      relevance: window
+      rl: window
     });
 
-    expect(editor.draft.relevance).toEqual(window);
     expect(editor.draft.rl).toEqual(window);
     // Cloned, not aliased — editing the draft must not mutate the input.
-    expect(editor.draft.relevance).not.toBe(window);
+    expect(editor.draft.rl).not.toBe(window);
   });
 
-  it('reconstructs a relevance window from legacy rv/ri scalars', () => {
-    const editor = new DateAnchorEditorState({
-      is_status: false,
-      value: { d: { s: { type: 'of', v: 0, a: 'up' } } },
-      rv: 60
-    });
-
-    // Legacy scalars survive the clone so readRelevanceWindow can normalize them.
-    expect(editor.draft.rv).toBe(60);
-    expect(editor.draft.relevance_duration_minutes).toBe(60);
-  });
+  // Folding legacy rv/ri scalars into rl is canonicalizeDateInformation's job
+  // (see date/relevance.test.ts), not this editor's — it clones canonical
+  // short-form input (is/ds/rl/po) as-is and does not resurrect long fields.
 });

@@ -29,19 +29,20 @@
 
   const variantClasses: Record<Variant, string> = {
     primary:
-      'border border-blue-600 bg-blue-600 text-white shadow-sm hover:opacity-95',
+      'border border-white/15 bg-indigo-600 text-white shadow-sm hover:bg-indigo-500 hover:border-white/30 hover:shadow-indigo-500/20 active:scale-[0.99]',
     secondary:
-      'border border-[var(--color-border)] bg-transparent text-[var(--color-foreground)] hover:bg-[var(--color-muted)]',
-    ghost: 'bg-transparent text-[var(--color-foreground)] hover:bg-[var(--color-muted)]',
+      'border border-white/10 bg-white/5 text-white hover:bg-white/10 hover:border-white/20 active:scale-[0.99]',
+    ghost:
+      'border border-white/8 bg-transparent text-zinc-300 hover:bg-white/5 hover:text-white hover:border-white/15 active:scale-[0.99]',
     danger:
-      'bg-[var(--color-destructive)] text-white hover:opacity-95'
+      'border border-white/15 bg-red-600 text-white shadow-sm hover:bg-red-500 hover:border-white/30 hover:shadow-red-500/20 active:scale-[0.99]'
   };
 
   const sizeClasses: Record<Size, string> = {
-    md: 'h-11 px-4 py-2 text-[var(--text-sm)]',
-    sm: 'h-9 rounded-[var(--radius-sm)] px-3 text-[var(--text-xsm)]',
-    lg: 'h-12 rounded-[var(--radius-md)] px-5 text-[var(--text-md)]',
-    icon: 'h-11 w-11 rounded-[var(--radius-md)]'
+    md: 'h-9 px-4 py-1.5 text-xs font-medium rounded-[6px]',
+    sm: 'h-7 rounded-[4px] px-2.5 text-[11px] font-medium',
+    lg: 'h-11 rounded-[8px] px-5 text-sm font-semibold',
+    icon: 'h-9 w-9 rounded-[6px]'
   };
 </script>
 
@@ -51,7 +52,7 @@
     {...rest}
     {onclick}
     class={cn(
-      'inline-flex appearance-none items-center justify-center gap-2 whitespace-nowrap rounded-[var(--radius-md)] font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-primary)] disabled:pointer-events-none disabled:opacity-50',
+      'inline-flex appearance-none items-center justify-center gap-2 whitespace-nowrap rounded-[6px] font-medium transition-all duration-150 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-indigo-400 disabled:pointer-events-none disabled:opacity-45 select-none',
       variantClasses[variant],
       sizeClasses[size],
       className
@@ -67,7 +68,7 @@
     disabled={disabled || loading}
     {onclick}
     class={cn(
-      'inline-flex appearance-none items-center justify-center gap-2 whitespace-nowrap rounded-[var(--radius-md)] font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-primary)] disabled:pointer-events-none disabled:opacity-50',
+      'inline-flex appearance-none items-center justify-center gap-2 whitespace-nowrap rounded-[6px] font-medium transition-all duration-150 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-indigo-400 disabled:pointer-events-none disabled:opacity-45 select-none',
       variantClasses[variant],
       sizeClasses[size],
       className
