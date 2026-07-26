@@ -76,3 +76,14 @@ export type { DateRangeValue, DateRangeSelection } from './date-range.js';
 export type { DatePickerValue } from './date-picker.js';
 export type { ResizableSidePanelHandleVariant } from './ResizableSidePanel.types.ts';
 export { default as DeleteConfirmOverlay } from './DeleteConfirmOverlay.svelte';
+export { default as Dialog } from './Dialog.svelte';
+export {
+  pushDialog,
+  popDialog,
+  isTopDialog,
+  getDialogDepth,
+  getModalBaseZ,
+  nextDialogTitleId,
+  __resetDialogStackForTests,
+  type DialogStackEntry
+} from './dialogStack.ts';
