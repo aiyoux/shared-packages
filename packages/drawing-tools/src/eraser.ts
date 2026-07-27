@@ -1,0 +1,2375 @@
+import type { PathData } from './types';
+import { parsePath, parseTranslate } from './path.ts';
+import { type MultiPolygon, type Polygon, type Ring } from 'polygon-clipping';
+import { difference, union } from './clipping.ts';
+import { getStroke } from 'perfect-freehand';
+import { generateId } from './id.ts';
+
+type Geometry = Polygon | MultiPolygon;
+type Point = { x: number; y: number };
+type FlatCommand = { type: string; x: number; y: number };
+type Interval = { start: number; end: number };
+
+/**
+ * How a freehand (perfect-freehand) stroke is erased in `split` mode:
+ * the eraser is subtracted from the committed outline polygon with
+ * polygon-clipping (`clip`). Pixel-exact, no reshape; cut ends follow the
+ * eraser shape. Reuses the hardened filled-shape branch. (The earlier
+ * `regenerate` and `cut` strategies were removed — both reshaped or glitched
+ * on self-overlapping outlines; clip is the only method now.)
+ */
+
+// ---- Clip-erase diagnostics (opt-in; see setClipDiagnosticsEnabled) ----
+// Every clip erase of a freehand stroke records an entry here (most recent 12),
+// each carrying the full emitted pieces (`d` + bbox + authArea + renderedArea +
+// dist-to-eraser) so a stray can be located geometrically. A piece is flagged
+// STRAY when its rendered nonzero area exceeds its authoritative area (a hole
+// filling solid) OR it's a tiny piece far from the eraser (a stray sliver).
+// To report: enable "Clip buffer" in the debug popover, erase where the stray
+// appears, then in the console run
+//   copy(JSON.stringify(window.__clipBuf))
+//
+// This is OFF by default and toggled on from the debug popover in dev builds.
+// It is genuinely expensive — it copies every emitted piece's full `d` string
+// on every freehand/clipDerived candidate — so leaving it on costs real time on
+// a dense erase (it is the `recordMs` counter in EraseStats).
+let clipDiagnosticsEnabled = false;
+/** Enable/disable the verbose per-piece clip diagnostics (`__clipBuf` + the
+ *  per-piece `d`/stray capture in `__lastClipDiag`). The cheap fields
+ *  (`bailReason`, `rejectReasons`, areas) are always recorded — regression tests
+ *  assert on them and they cost nothing. */
+export function setClipDiagnosticsEnabled(on: boolean) {
+    clipDiagnosticsEnabled = on;
+    if (!on) __clipBuf.length = 0;
+}
+export function areClipDiagnosticsEnabled() { return clipDiagnosticsEnabled; }
+
+let __clipBuf: unknown[] = [];
+export function getClipBuf() { return __clipBuf; }
+if (typeof window !== 'undefined') {
+    (window as unknown as Record<string, unknown>).__clipBuf = __clipBuf;
+}
+let __lastClipDiag: Record<string, unknown> | null = null;
+export function getLastClipDiag() { return __lastClipDiag; }
+
+// Records one clip-freehand erase. Always attaches the full stroke source +
+// eraser so the exact failing input can be replayed locally; attaches the full
+// emitted piece `d`s so the stray geometry is captured verbatim.
+function recordClipErase(path: PathData, eraserPoints: Point[], radius: number, diag: Record<string, unknown> | null) {
+    if (!clipDiagnosticsEnabled) return;
+    if (!diag) return;
+    const src = path.freehandSource;
+    const pieces = diag.pieces as Array<{ d: string; stray?: string }> | undefined;
+    const entry: Record<string, unknown> = {
+        radius,
+        eraserPoints,
+        transform: path.transform ?? null,
+        diag
+    };
+    if (src) entry.freehand = { points: src.points, options: src.options };
+    __clipBuf.push(entry);
+    if (__clipBuf.length > 12) __clipBuf.shift();
+    // Re-attach on every record so a hot-reload can never leave window.__clipBuf
+    // dangling (pointing at a stale, orphaned array from a previous module instance).
+    if (typeof window !== 'undefined') {
+        (window as unknown as Record<string, unknown>).__clipBuf = __clipBuf;
+    }
+    const flagged = (pieces || []).filter(p => p.stray);
+    if (flagged.length > 0) {
+        // eslint-disable-next-line no-console
+        console.warn(
+            `[CLIP-STRAY] ${flagged.length} stray piece(s) on this erase — ` +
+            `run copy(JSON.stringify(window.__clipBuf.at(-1))) and paste. ` +
+            flagged.map(p => p.stray).join(' | ')
+        );
+    }
+}
+
+// ---- Erase performance counters ----
+// Accumulated across one erase drag (reset on pointerdown, read anytime — the
+// debug popover polls it live via the store's eraseEditTick). Purely
+// diagnostic: never read by any drawing/erase logic, so it can't affect
+// correctness. Kept coarse-grained (a handful of counters + summed ms per
+// phase) rather than per-move detail, since the goal is "where does an erase
+// drag's time actually go", not a full profiler.
+export type EraseStats = {
+    /** Erase moves (pointer samples) processed since the last reset. */
+    moves: number;
+    /** Paths handed to splitOnePathByEraser (grid candidates, or every path
+     *  when the spatial grid is off) since the last reset. */
+    pathsChecked: number;
+    /** Rejected by the cheap pre-flatten bbox broadphase (no geometry work). */
+    bboxRejected: number;
+    /** Went through the closed-filled-path branch (polygon-clipping subject +
+     *  difference) — freehand strokes and their split pieces, plus filled
+     *  shapes. */
+    closedFilledChecked: number;
+    /** Rejected by closedPathMayIntersectEraser after the subject was built —
+     *  candidate touched the bbox but the eraser doesn't actually overlap it. */
+    mayIntersectRejected: number;
+    /** Subject-geometry builds (the union() over a path's rings) + total ms.
+     *  Counts CACHE MISSES only — subjects are cached per path identity
+     *  (subjectCache), so this should be ~one per path touched per drag, not
+     *  per move. A high count relative to grid candidates means paths are
+     *  being replaced (split) often, which is expected while actively cutting. */
+    subjectBuilds: number;
+    subjectMs: number;
+    /** safeDifference calls (the polygon-clipping subtract) + total ms. */
+    differenceCalls: number;
+    differenceMs: number;
+    /** Total ms inside splitClosedFilledPath — the difference call (already
+     *  counted in differenceMs) PLUS everything wrapped around it: the dropped-
+     *  hole repair pass, the per-polygon artifact guards (polygonWithinSubject /
+     *  polygonIsValidResult / polygonIsSpuriousFarPiece), and piece emission.
+     *  (closedFilledSplitMs − differenceMs) isolates the guard/repair cost. */
+    closedFilledSplitMs: number;
+    /** Total ms in recordClipErase — the __clipBuf diagnostic write (copies
+     *  every emitted piece's full `d` string into a ring buffer). Runs for
+     *  every freehand-or-clipDerived candidate every move; on a drawing made
+     *  mostly of already-split pieces that's nearly every candidate, so this
+     *  is pure diagnostic overhead worth knowing the cost of. */
+    recordMs: number;
+    /** localEraserRegion calls + total ms: per-candidate construction of the
+     *  eraser's swept region (scan the trail for segments reaching this path's
+     *  bbox, build a capsule per hit, union them). On a LONG trail this is the
+     *  other half of the drag-end cost besides the differences — the scan is
+     *  O(trail length) per candidate, and each local union is its own Martinez
+     *  call. `eraserRegionCachedHits` counts candidates that reused the
+     *  ctx-cached full-trail union instead of building their own. */
+    eraserRegionCalls: number;
+    eraserRegionMs: number;
+    eraserRegionCachedHits: number;
+    /** Vertex count of the full-trail eraser polygon (snapshot) — the size every
+     *  difference that uses it has to chew through. */
+    eraserPolygonVerts: number;
+    /** Total PathData pieces emitted by all splits since the last reset (a
+     *  proxy for how much the drawing is fragmenting as you erase). */
+    piecesEmitted: number;
+    /** Wall time of the store's erasePathsWithPoints calls (the true per-move
+     *  cost the user feels), summed since the last reset. */
+    totalMs: number;
+    /** Total paths in the document as of the most recent move (a snapshot, not
+     *  summed) — the O(N) side of the spatial-grid tradeoff. */
+    lastDocPathCount: number;
+    /** Grid query result size (candidates near the eraser) as of the most
+     *  recent move — only set when the spatial grid path ran. `-1` means the
+     *  grid wasn't used this move (fallback full-array path). Compare against
+     *  lastDocPathCount to judge whether the grid is actually narrowing the
+     *  work, or whether pathsChecked (post-lock-filter) is now cheap enough
+     *  that the store's own O(N) id-scan (idea #6) is the real ceiling. */
+    lastGridCandidates: number;
+};
+
+const zeroEraseStats = (): EraseStats => ({
+    moves: 0,
+    pathsChecked: 0,
+    bboxRejected: 0,
+    closedFilledChecked: 0,
+    mayIntersectRejected: 0,
+    subjectBuilds: 0,
+    subjectMs: 0,
+    differenceCalls: 0,
+    differenceMs: 0,
+    closedFilledSplitMs: 0,
+    recordMs: 0,
+    eraserRegionCalls: 0,
+    eraserRegionMs: 0,
+    eraserRegionCachedHits: 0,
+    eraserPolygonVerts: 0,
+    piecesEmitted: 0,
+    totalMs: 0,
+    lastDocPathCount: 0,
+    lastGridCandidates: -1
+});
+
+let eraseStats: EraseStats = zeroEraseStats();
+
+/** Zero every counter. Call at the start of an erase drag (pointerdown) so the
+ *  numbers reflect "this gesture", not the whole session. */
+export function resetEraseStats() {
+    eraseStats = zeroEraseStats();
+}
+
+/** A snapshot copy (not the live object) — safe to read from a reactive $effect
+ *  without aliasing internal state. */
+export function getEraseStats(): EraseStats {
+    return { ...eraseStats };
+}
+
+/** Record one store-level move's wall time. Called by sketchStore around each
+ *  erasePathsWithPoints call — the only place that knows a "move" boundary. */
+export function recordEraseMoveTime(ms: number) {
+    eraseStats.moves++;
+    eraseStats.totalMs += ms;
+}
+
+/** Record the document size and (if the spatial grid ran) its candidate-set
+ *  size for the move just completed. Snapshot, not accumulated — see
+ *  EraseStats.lastDocPathCount. */
+export function recordEraseGridInfo(docPathCount: number, gridCandidates: number) {
+    eraseStats.lastDocPathCount = docPathCount;
+    eraseStats.lastGridCandidates = gridCandidates;
+}
+
+
+
+const cubicAt = (p0: number, p1: number, p2: number, p3: number, t: number) => {
+    const mt = 1 - t;
+    return mt * mt * mt * p0 + 3 * mt * mt * t * p1 + 3 * mt * t * t * p2 + t * t * t * p3;
+};
+
+const quadAt = (p0: number, p1: number, p2: number, t: number) => {
+    const mt = 1 - t;
+    return mt * mt * p0 + 2 * mt * t * p1 + t * t * p2;
+};
+
+const distToSegmentSq = (px: number, py: number, vx: number, vy: number, wx: number, wy: number) => {
+    const l2 = (vx - wx) ** 2 + (vy - wy) ** 2;
+    if (l2 === 0) return (px - vx) ** 2 + (py - vy) ** 2;
+    let t = ((px - vx) * (wx - vx) + (py - vy) * (wy - vy)) / l2;
+    t = Math.max(0, Math.min(1, t));
+    return (px - (vx + t * (wx - vx))) ** 2 + (py - (vy + t * (wy - vy))) ** 2;
+};
+
+const addCircleInterval = (intervals: Interval[], a: Point, b: Point, center: Point, radius: number) => {
+    const vx = b.x - a.x;
+    const vy = b.y - a.y;
+    const fx = a.x - center.x;
+    const fy = a.y - center.y;
+    const aa = vx * vx + vy * vy;
+    if (aa === 0) {
+        if (fx * fx + fy * fy <= radius * radius) intervals.push({ start: 0, end: 1 });
+        return;
+    }
+
+    const bb = 2 * (fx * vx + fy * vy);
+    const cc = fx * fx + fy * fy - radius * radius;
+    const discriminant = bb * bb - 4 * aa * cc;
+    if (discriminant < 0) return;
+
+    const root = Math.sqrt(discriminant);
+    const t1 = (-bb - root) / (2 * aa);
+    const t2 = (-bb + root) / (2 * aa);
+    const start = Math.max(0, Math.min(t1, t2));
+    const end = Math.min(1, Math.max(t1, t2));
+    if (start <= end) intervals.push({ start, end });
+};
+
+const addStripInterval = (intervals: Interval[], a: Point, b: Point, c: Point, d: Point, radius: number) => {
+    const vx = b.x - a.x;
+    const vy = b.y - a.y;
+    const wx = d.x - c.x;
+    const wy = d.y - c.y;
+    const wLenSq = wx * wx + wy * wy;
+    if (wLenSq === 0) return;
+
+    const px = a.x - c.x;
+    const py = a.y - c.y;
+    const projA = (px * wx + py * wy) / wLenSq;
+    const projB = (vx * wx + vy * wy) / wLenSq;
+    const crossA = px * wy - py * wx;
+    const crossB = vx * wy - vy * wx;
+    const limit = radius * Math.sqrt(wLenSq);
+
+    let start = 0;
+    let end = 1;
+
+    const intersectLinearRange = (base: number, slope: number, min: number, max: number) => {
+        if (Math.abs(slope) < 1e-9) {
+            return base >= min && base <= max ? { start: 0, end: 1 } : null;
+        }
+
+        const t1 = (min - base) / slope;
+        const t2 = (max - base) / slope;
+        return { start: Math.min(t1, t2), end: Math.max(t1, t2) };
+    };
+
+    const projectionRange = intersectLinearRange(projA, projB, 0, 1);
+    const distanceRange = intersectLinearRange(crossA, crossB, -limit, limit);
+    if (!projectionRange || !distanceRange) return;
+
+    start = Math.max(start, projectionRange.start, distanceRange.start);
+    end = Math.min(end, projectionRange.end, distanceRange.end);
+
+    if (start <= end) intervals.push({ start: Math.max(0, start), end: Math.min(1, end) });
+};
+
+const mergeIntervals = (intervals: Interval[]) => {
+    const sorted = intervals
+        .map(interval => ({ start: Math.max(0, interval.start), end: Math.min(1, interval.end) }))
+        .filter(interval => interval.start <= interval.end)
+        .sort((a, b) => a.start - b.start);
+    const merged: Interval[] = [];
+
+    for (const interval of sorted) {
+        const last = merged[merged.length - 1];
+        if (!last || interval.start > last.end + 1e-6) {
+            merged.push(interval);
+        } else {
+            last.end = Math.max(last.end, interval.end);
+        }
+    }
+
+    return merged;
+};
+
+const intervalFullyCoversSegment = (intervals: Interval[]) => {
+    return intervals.length === 1 && intervals[0].start <= 1e-6 && intervals[0].end >= 1 - 1e-6;
+};
+
+const distToEraserPathSq = (point: Point, eraserPoints: Point[], eraserSegments: { a: Point; b: Point }[]) => {
+    let minSq = Infinity;
+
+    for (const p of eraserPoints) {
+        const distSq = (point.x - p.x) ** 2 + (point.y - p.y) ** 2;
+        if (distSq < minSq) minSq = distSq;
+    }
+
+    for (const { a, b } of eraserSegments) {
+        const distSq = distToSegmentSq(point.x, point.y, a.x, a.y, b.x, b.y);
+        if (distSq < minSq) minSq = distSq;
+    }
+
+    return minSq;
+};
+
+const preserveSmallRemainderInterval = (
+    a: Point,
+    b: Point,
+    eraserPoints: Point[],
+    eraserSegments: { a: Point; b: Point }[],
+    radius: number
+): Interval[] => {
+    const len = Math.sqrt((b.x - a.x) ** 2 + (b.y - a.y) ** 2);
+    if (len <= 1) return [{ start: 0, end: 1 }];
+
+    const keepLen = Math.min(len * 0.5, Math.max(1, radius * 0.25));
+    const keepT = keepLen / len;
+    const aDistSq = distToEraserPathSq(a, eraserPoints, eraserSegments);
+    const bDistSq = distToEraserPathSq(b, eraserPoints, eraserSegments);
+
+    if (aDistSq >= bDistSq) {
+        return [{ start: keepT, end: 1 }];
+    }
+
+    return [{ start: 0, end: 1 - keepT }];
+};
+
+const erasedIntervalsForSegment = (a: Point, b: Point, eraserPoints: Point[], eraserSegments: { a: Point; b: Point }[], radius: number, padding = 0) => {
+    const intervals: Interval[] = [];
+
+    for (const p of eraserPoints) {
+        addCircleInterval(intervals, a, b, p, radius);
+    }
+
+    for (const segment of eraserSegments) {
+        addCircleInterval(intervals, a, b, segment.a, radius);
+        addCircleInterval(intervals, a, b, segment.b, radius);
+        addStripInterval(intervals, a, b, segment.a, segment.b, radius);
+    }
+
+    const merged = mergeIntervals(intervals);
+    if (padding <= 0) return merged;
+
+    const len = Math.sqrt((b.x - a.x) ** 2 + (b.y - a.y) ** 2);
+    const paddingT = len > 0 ? padding / len : 0;
+    const padded = mergeIntervals(merged.map(interval => ({
+        start: interval.start - paddingT,
+        end: interval.end + paddingT
+    })));
+
+    const rawFullyErases = intervalFullyCoversSegment(merged);
+    const paddedFullyErases = intervalFullyCoversSegment(padded);
+
+    return paddedFullyErases && !rawFullyErases ? merged : padded;
+};
+
+const flattenPath = (d: string): FlatCommand[] => {
+    const commands = parsePath(d);
+    const flatCmds: FlatCommand[] = [];
+    let lastPt: Point | null = null;
+    let startPt: Point | null = null;
+    let lastCtrlPt: Point | null = null;
+
+    for (const cmd of commands) {
+        const type = cmd.type.toUpperCase();
+        if (type === 'M') {
+            lastPt = { x: cmd.args[0], y: cmd.args[1] };
+            startPt = lastPt;
+            flatCmds.push({ type: 'M', x: lastPt.x, y: lastPt.y });
+            lastCtrlPt = null;
+        } else if (type === 'L' && lastPt) {
+            lastPt = { x: cmd.args[0], y: cmd.args[1] };
+            flatCmds.push({ type: 'L', x: lastPt.x, y: lastPt.y });
+            lastCtrlPt = null;
+        } else if (type === 'C' && cmd.args.length >= 6 && lastPt) {
+            const p0x = lastPt.x, p0y = lastPt.y;
+            const p1x = cmd.args[0], p1y = cmd.args[1];
+            const p2x = cmd.args[2], p2y = cmd.args[3];
+            const p3x = cmd.args[4], p3y = cmd.args[5];
+            const chordLen = Math.sqrt((p3x - p0x) ** 2 + (p3y - p0y) ** 2);
+            const ctrlLen = Math.sqrt((p1x - p0x) ** 2 + (p1y - p0y) ** 2) +
+                Math.sqrt((p2x - p1x) ** 2 + (p2y - p1y) ** 2) +
+                Math.sqrt((p3x - p2x) ** 2 + (p3y - p2y) ** 2);
+            const steps = Math.max(4, Math.ceil((chordLen + ctrlLen) / 8));
+
+            for (let s = 1; s <= steps; s++) {
+                const t = s / steps;
+                flatCmds.push({ type: 'L', x: cubicAt(p0x, p1x, p2x, p3x, t), y: cubicAt(p0y, p1y, p2y, p3y, t) });
+            }
+            lastPt = { x: p3x, y: p3y };
+            lastCtrlPt = { x: p2x, y: p2y };
+        } else if (type === 'Q' && cmd.args.length >= 4 && lastPt) {
+            const p0x = lastPt.x, p0y = lastPt.y;
+            const p1x = cmd.args[0], p1y = cmd.args[1];
+            const p2x = cmd.args[2], p2y = cmd.args[3];
+            const chordLen = Math.sqrt((p2x - p0x) ** 2 + (p2y - p0y) ** 2);
+            const ctrlLen = Math.sqrt((p1x - p0x) ** 2 + (p1y - p0y) ** 2) + Math.sqrt((p2x - p1x) ** 2 + (p2y - p1y) ** 2);
+            const steps = Math.max(4, Math.ceil((chordLen + ctrlLen) / 8));
+
+            for (let s = 1; s <= steps; s++) {
+                const t = s / steps;
+                flatCmds.push({ type: 'L', x: quadAt(p0x, p1x, p2x, t), y: quadAt(p0y, p1y, p2y, t) });
+            }
+            lastPt = { x: p2x, y: p2y };
+            lastCtrlPt = { x: p1x, y: p1y };
+        } else if (type === 'S' && cmd.args.length >= 4 && lastPt) {
+            const p0x = lastPt.x, p0y = lastPt.y;
+            const p1x: number = lastCtrlPt ? 2 * p0x - lastCtrlPt.x : p0x;
+            const p1y: number = lastCtrlPt ? 2 * p0y - lastCtrlPt.y : p0y;
+            const p2x = cmd.args[0], p2y = cmd.args[1];
+            const p3x = cmd.args[2], p3y = cmd.args[3];
+            const chordLen = Math.sqrt((p3x - p0x) ** 2 + (p3y - p0y) ** 2);
+            const ctrlLen = Math.sqrt((p1x - p0x) ** 2 + (p1y - p0y) ** 2) + Math.sqrt((p2x - p1x) ** 2 + (p2y - p1y) ** 2) + Math.sqrt((p3x - p2x) ** 2 + (p3y - p2y) ** 2);
+            const steps = Math.max(4, Math.ceil((chordLen + ctrlLen) / 8));
+
+            for (let s = 1; s <= steps; s++) {
+                const t = s / steps;
+                flatCmds.push({ type: 'L', x: cubicAt(p0x, p1x, p2x, p3x, t), y: cubicAt(p0y, p1y, p2y, p3y, t) });
+            }
+            lastPt = { x: p3x, y: p3y };
+            lastCtrlPt = { x: p2x, y: p2y };
+        } else if (type === 'T' && cmd.args.length >= 2 && lastPt) {
+            const p0x = lastPt.x, p0y = lastPt.y;
+            const p1x: number = lastCtrlPt ? 2 * p0x - lastCtrlPt.x : p0x;
+            const p1y: number = lastCtrlPt ? 2 * p0y - lastCtrlPt.y : p0y;
+            const p2x = cmd.args[0], p2y = cmd.args[1];
+            const chordLen = Math.sqrt((p2x - p0x) ** 2 + (p2y - p0y) ** 2);
+            const ctrlLen = Math.sqrt((p1x - p0x) ** 2 + (p1y - p0y) ** 2) + Math.sqrt((p2x - p1x) ** 2 + (p2y - p1y) ** 2);
+            const steps = Math.max(4, Math.ceil((chordLen + ctrlLen) / 8));
+
+            for (let s = 1; s <= steps; s++) {
+                const t = s / steps;
+                flatCmds.push({ type: 'L', x: quadAt(p0x, p1x, p2x, t), y: quadAt(p0y, p1y, p2y, t) });
+            }
+            lastPt = { x: p2x, y: p2y };
+            lastCtrlPt = { x: p1x, y: p1y };
+        } else if (type === 'H' && lastPt) {
+            lastPt = { x: cmd.args[0], y: lastPt.y };
+            flatCmds.push({ type: 'L', x: lastPt.x, y: lastPt.y });
+            lastCtrlPt = null;
+        } else if (type === 'V' && lastPt) {
+            lastPt = { x: lastPt.x, y: cmd.args[0] };
+            flatCmds.push({ type: 'L', x: lastPt.x, y: lastPt.y });
+            lastCtrlPt = null;
+        } else if (type === 'Z' && lastPt && startPt) {
+            lastPt = startPt;
+            flatCmds.push({ type: 'L', x: lastPt.x, y: lastPt.y });
+            lastCtrlPt = null;
+        }
+    }
+
+    return flatCmds;
+};
+
+const pointBounds = (points: Point[]) => {
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const p of points) {
+        if (p.x < minX) minX = p.x;
+        if (p.y < minY) minY = p.y;
+        if (p.x > maxX) maxX = p.x;
+        if (p.y > maxY) maxY = p.y;
+    }
+    return { minX, minY, maxX, maxY };
+};
+
+// Cache of flattened commands + bbox + parsed translate per PathData, keyed by
+// object identity. A path's transform is immutable, so its translated flatCmds,
+// bbox and (tx,ty) are stable. The incremental erase model pushes untouched paths
+// through unchanged (same object), so after the first move that sees a path, every
+// later move reuses the cache — skipping parsePath + flattenPath AND the
+// parseTranslate regex (which previously ran once per path per move, the dominant
+// per-path cost on a dense drawing). Touched paths become new objects (cache miss
+// → recompute), but those are the few near the eraser. Entries are GC'd with their
+// path objects (WeakMap).
+const flattenCache = new WeakMap<PathData, { flatCmds: FlatCommand[]; bbox: { minX: number; minY: number; maxX: number; maxY: number } | null; tx: number; ty: number }>();
+const cachedFlatten = (path: PathData) => {
+    let entry = flattenCache.get(path);
+    if (!entry) {
+        const [tx, ty] = parseTranslate(path.transform);
+        const flatCmds = translateFlatCommands(flattenPath(path.d), tx, ty);
+        const bbox = flatCmds.length ? pointBounds(flatCmds.map(({ x, y }) => ({ x, y }))) : null;
+        entry = { flatCmds, bbox, tx, ty };
+        flattenCache.set(path, entry);
+    }
+    return entry;
+};
+
+const translateFlatCommands = (flatCmds: FlatCommand[], tx: number, ty: number) => {
+    if (tx === 0 && ty === 0) return flatCmds;
+    return flatCmds.map(cmd => ({ ...cmd, x: cmd.x + tx, y: cmd.y + ty }));
+};
+
+export function isClosedFilledPath(path: PathData) {
+    return !!(path.d.toUpperCase().includes('Z') && path.fill && path.fill !== 'none');
+}
+
+const closeRing = (points: Point[]): Ring => {
+    const ring: Ring = points.map(p => [p.x, p.y]);
+    const first = ring[0];
+    const last = ring[ring.length - 1];
+    if (first && last && (first[0] !== last[0] || first[1] !== last[1])) {
+        ring.push([first[0], first[1]]);
+    }
+    return ring;
+};
+
+const flatPathToRings = (flatCmds: FlatCommand[]): Ring[] => {
+    const rings: Ring[] = [];
+    let current: Point[] = [];
+
+    for (const cmd of flatCmds) {
+        if (cmd.type === 'M') {
+            if (current.length >= 3) rings.push(closeRing(current));
+            current = [{ x: cmd.x, y: cmd.y }];
+        } else if (cmd.type === 'L') {
+            const last = current[current.length - 1];
+            if (!last || Math.abs(last.x - cmd.x) >= 0.01 || Math.abs(last.y - cmd.y) >= 0.01) {
+                current.push({ x: cmd.x, y: cmd.y });
+            }
+        }
+    }
+
+    if (current.length >= 3) rings.push(closeRing(current));
+    return rings;
+};
+
+const ringCentroid = (ring: Ring) => {
+    const points = normalizedRingPoints(ring);
+    const sum = points.reduce((acc, [x, y]) => ({ x: acc.x + x, y: acc.y + y }), { x: 0, y: 0 });
+    return { x: sum.x / points.length, y: sum.y / points.length };
+};
+
+// A point strictly INSIDE a ring. Tries the centroid first (one point-in-polygon
+// test — correct for the common convex-ish hole), then falls back to grid-
+// scanning the ring's bbox for the first sample the ray-cast test accepts. The
+// fallback exists because a concave ring's centroid can fall OUTSIDE it (e.g.
+// the C-shaped gaps between crossing freehand strands).
+//
+// Memoized per ring object: the erase guards ask for the same subject holes'
+// interior points every move (the dropped-hole repair pass AND the detection
+// pass both ask), and with the subject geometry cached per path the ring
+// objects are stable across moves — so after the first move this is a WeakMap
+// hit instead of a bbox grid scan. The profiling counters showed these scans
+// inside "split guards/repair" as the single biggest erase cost.
+const interiorPointCache = new WeakMap<Ring, Point | null>();
+const interiorPointOfRing = (ring: Ring): Point | null => {
+    const cached = interiorPointCache.get(ring);
+    if (cached !== undefined) return cached;
+    const result = computeInteriorPointOfRing(ring);
+    interiorPointCache.set(ring, result);
+    return result;
+};
+
+const computeInteriorPointOfRing = (ring: Ring): Point | null => {
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const [x, y] of ring) {
+        if (x < minX) minX = x; if (y < minY) minY = y;
+        if (x > maxX) maxX = x; if (y > maxY) maxY = y;
+    }
+    if (!isFinite(minX)) return null;
+    const centroid = ringCentroid(ring);
+    if (pointInsidePolygon(centroid, ring)) return centroid;
+    const step = 2;
+    for (let y = minY + step / 2; y < maxY; y += step) {
+        for (let x = minX + step / 2; x < maxX; x += step) {
+            const p = { x, y };
+            if (pointInsidePolygon(p, ring)) return p;
+        }
+    }
+    return null;
+};
+
+// Subject fill geometry cached per path identity, same contract as
+// flattenCache: a path object's d/transform never mutate (splits emit new
+// objects), so its subject MultiPolygon is stable for the object's lifetime.
+// Before this cache the subject was rebuilt (union of all rings for freehand /
+// clip-derived paths) for EVERY candidate near the eraser on EVERY move — the
+// profiling counters showed thousands of rebuilds per drag on a dense drawing.
+// The subject is read-only downstream (difference/guards never mutate it), and
+// stable ring objects are what make interiorPointCache effective. `null` is a
+// valid cached value (unparseable geometry), so absence is `undefined`.
+const subjectCache = new WeakMap<PathData, MultiPolygon | null>();
+const cachedSubject = (path: PathData, flatCmds: FlatCommand[]): MultiPolygon | null => {
+    let entry = subjectCache.get(path);
+    if (entry === undefined) {
+        const t0 = performance.now();
+        entry = flatPathToFillGeometry(path, flatCmds);
+        eraseStats.subjectBuilds++;
+        eraseStats.subjectMs += performance.now() - t0;
+        subjectCache.set(path, entry);
+    }
+    return entry;
+};
+
+// Per-subject-polygon outer bboxes, keyed on the SUBJECT array (stable object
+// identity, since cachedSubject returns the same array every cache hit) rather
+// than the path — computed once ever per path's subject, not once per move and
+// not once per candidate result polygon (polygonIsValidResult runs once per
+// piece emitted, and a split can emit several). Read-only downstream.
+const subjectPolyBoundsCache = new WeakMap<MultiPolygon, { minX: number; minY: number; maxX: number; maxY: number }[]>();
+const cachedSubjectPolyBounds = (subject: MultiPolygon) => {
+    let bounds = subjectPolyBoundsCache.get(subject);
+    if (!bounds) {
+        bounds = subject.map(subjPoly => polygonOuterBounds(subjPoly));
+        subjectPolyBoundsCache.set(subject, bounds);
+    }
+    return bounds;
+};
+
+const flatPathToFillGeometry = (path: PathData, flatCmds: FlatCommand[]): MultiPolygon | null => {
+    const rings = flatPathToRings(flatCmds).filter(ring => ringArea(ring) >= 0.5);
+    if (rings.length === 0) return null;
+    if (rings.length === 1 || path.fillRule === 'evenodd') return [rings];
+
+    // Classify each ring as an outer-candidate or a hole-candidate by winding
+    // sign relative to the largest ring, then assign each hole to the
+    // SMALLEST outer that geometrically contains it — using a reliable
+    // interior sample (interiorPointOfRing), not the centroid, which can land
+    // outside a concave hole. This is real geometric containment, not a
+    // ring-order assumption, so it correctly separates two DIFFERENT
+    // situations that a naive "rings[0] is the outer, everything else is its
+    // hole" grouping conflates:
+    //   - a genuinely separate, non-overlapping solid region (e.g. a
+    //     self-crossing scribble with a disconnected loop, or any
+    //     multi-subpath freehand/clipDerived stroke) — this must stay its own
+    //     outer, or its entire area silently vanishes from the subject before
+    //     the eraser is even considered ("a piece disappears that the eraser
+    //     never touched" the moment ANY part of the same PathData is erased).
+    //   - a true nested hole (a real gap the ink wraps around) — this must
+    //     stay a hole of its containing outer, or it renders solid (the
+    //     "random part fills in when I erase" glitch).
+    // A homeless hole (contained by no outer — a concave/self-overlapping
+    // shape edge case) is dropped: pushing it as a standalone outer would
+    // render its region solid, which is wrong; dropping leaves it empty,
+    // which is what a hole should be.
+    const largestRing = rings.reduce((largest, ring) => ringArea(ring) > ringArea(largest) ? ring : largest, rings[0]);
+    const outerSign = Math.sign(signedRingArea(largestRing)) || 1;
+    const groups: Ring[][] = [];
+    const holes: Ring[] = [];
+
+    for (const ring of rings) {
+        const sign = Math.sign(signedRingArea(ring)) || outerSign;
+        if (sign === outerSign) {
+            groups.push([ring]);
+        } else {
+            holes.push(ring);
+        }
+    }
+
+    for (const hole of holes) {
+        const p = interiorPointOfRing(hole) || ringCentroid(hole);
+        let targetIndex = -1;
+        let targetArea = Infinity;
+
+        for (let i = 0; i < groups.length; i++) {
+            const outer = groups[i][0];
+            if (!pointInsidePolygon(p, outer)) continue;
+
+            const area = ringArea(outer);
+            if (area < targetArea) {
+                targetIndex = i;
+                targetArea = area;
+            }
+        }
+
+        if (targetIndex >= 0) {
+            groups[targetIndex].push(hole);
+        }
+        // else: homeless hole — drop it (see comment above).
+    }
+
+    if (groups.length === 0) return null;
+
+    // Freehand/clip-derived outlines additionally get each group run through
+    // `union()` — Martinez's own winding/geometry cleanup for a SINGLE solid
+    // (with its now-correctly-assigned holes), which resolves self-crossing
+    // segments within that one outer that the grouping above can't (grouping
+    // only decides which existing rings pair together; it can't fix a ring
+    // that self-intersects). Each group is unioned INDEPENDENTLY — critical,
+    // since unioning separate groups together is exactly the bug this
+    // replaced (a hole-shaped ring with no spatial overlap in a DIFFERENT
+    // group would be a no-op "hole" of the wrong outer, silently erasing it).
+    // Falls back to the plain grouped polygons for a group whose union throws
+    // or comes back empty (still correct, just without the extra cleanup).
+    const isFreehand = !!(path.freehandSource && path.freehandSource.points.length > 0) || !!path.clipDerived;
+    if (isFreehand) {
+        const cleanedGroups: Polygon[] = [];
+        for (const group of groups) {
+            let resolved: Polygon | undefined;
+            try {
+                const unified = union(group as Polygon);
+                if (unified && unified.length > 0) {
+                    const cleaned = unified
+                        .map(polygon => polygon.filter(ring => ring && ringArea(ring) >= 0.5))
+                        .filter(polygon => polygon.length > 0);
+                    if (cleaned.length === 1) resolved = cleaned[0];
+                    else if (cleaned.length > 1) {
+                        // A single outer's self-union produced multiple disjoint
+                        // pieces (rare, e.g. a figure-eight self-crossing outline) —
+                        // keep them all as separate groups.
+                        cleanedGroups.push(...cleaned);
+                        continue;
+                    }
+                }
+            } catch {
+                // fall through to the un-cleaned group below
+            }
+            cleanedGroups.push(resolved ?? group);
+        }
+        if (cleanedGroups.length > 0) return cleanedGroups;
+    }
+
+    return groups;
+};
+
+const circlePolygon = (center: Point, radius: number, steps = 40): Polygon => {
+    const points: Point[] = [];
+    for (let i = 0; i < steps; i++) {
+        const angle = (Math.PI * 2 * i) / steps;
+        points.push({
+            x: center.x + Math.cos(angle) * radius,
+            y: center.y + Math.sin(angle) * radius
+        });
+    }
+    return [closeRing(points)];
+};
+
+const capsulePolygon = (a: Point, b: Point, radius: number, steps = 20): Polygon => {
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const len = Math.sqrt(dx * dx + dy * dy);
+    if (len < 0.01) return circlePolygon(a, radius);
+
+    const angle = Math.atan2(dy, dx);
+    const points: Point[] = [];
+
+    for (let i = 0; i <= steps; i++) {
+        const t = -Math.PI / 2 + (Math.PI * i) / steps;
+        points.push({
+            x: b.x + Math.cos(angle + t) * radius,
+            y: b.y + Math.sin(angle + t) * radius
+        });
+    }
+
+    for (let i = 0; i <= steps; i++) {
+        const t = Math.PI / 2 + (Math.PI * i) / steps;
+        points.push({
+            x: a.x + Math.cos(angle + t) * radius,
+            y: a.y + Math.sin(angle + t) * radius
+        });
+    }
+
+    return [closeRing(points)];
+};
+
+const eraserGeometry = (eraserPoints: Point[], radius: number): Geometry | null => {
+    if (eraserPoints.length === 0) return null;
+
+    let geometry: Geometry = circlePolygon(eraserPoints[0], radius);
+    for (let i = 1; i < eraserPoints.length; i++) {
+        const shape = capsulePolygon(eraserPoints[i - 1], eraserPoints[i], radius);
+        geometry = union(geometry, shape) || geometry;
+    }
+
+    return geometry;
+};
+
+const eraserGeometryParts = (eraserPoints: Point[], radius: number): Polygon[] => {
+    if (eraserPoints.length === 0) return [];
+
+    const parts: Polygon[] = [circlePolygon(eraserPoints[0], radius)];
+    for (let i = 1; i < eraserPoints.length; i++) {
+        parts.push(capsulePolygon(eraserPoints[i - 1], eraserPoints[i], radius));
+    }
+
+    return parts;
+};
+
+/** The eraser's swept region as a WELL-FORMED MultiPolygon: the boolean union
+ *  of a start circle plus one capsule per trail segment — by construction the
+ *  exact shape the live preview paints (the trail stroked at width 2·radius
+ *  with round caps/joins), so the committed cut matches the preview along its
+ *  edges.
+ *
+ *  This deliberately does NOT use a perfect-freehand single-outline stroke:
+ *   - getStroke's smoothing/streamline pull the centerline off the true trail
+ *     (visible edge "adjustment" at commit), and
+ *   - even with those at 0, the single outline ring SELF-INTERSECTS whenever
+ *     the trail curls back within 2·radius of itself — completely ordinary
+ *     erasing behavior — and self-intersecting rings are undefined input for
+ *     polygon-clipping (Martinez), the prime suspect for its corrupted
+ *     differences (shatter/dropped-hole artifacts) on erase.
+ *  A union of simple convex parts is the library's happy path and its output
+ *  is always well-formed. One union per drag (the result is cached on the
+ *  EraserCtx) is affordable now that erasing clips once at pointerup instead
+ *  of once per pointer move. Falls back to the raw parts-as-multipolygon
+ *  (overlapping but individually well-formed rings, nonzero-equivalent) if the
+ *  union itself throws. */
+export const eraserOutlinePolygon = (eraserPoints: Point[], radius: number): MultiPolygon | null => {
+    if (eraserPoints.length === 0) return null;
+    if (eraserPoints.length === 1) return [circlePolygon(eraserPoints[0], radius)];
+
+    // Preferred path: trace the swept region's OUTLINE and self-resolve it.
+    //
+    // Feeding one capsule per segment to the clipper describes a ~4,800-vertex
+    // boundary with 92,407 input vertices — 95% of it interior detail that is
+    // computed and then discarded. Tracing the offset outline (see
+    // strokeOutlineRing) emits ~9,500 vertices for the same region and measured
+    // 658ms -> 30ms (21x) on a real 2149-point trail, with a rasterized
+    // difference of 0.0097% against the capsule union.
+    //
+    // Everything is grid-snapped to the same 0.1 grid safeDifference uses before
+    // clipping: a curving trail otherwise makes edges self-touch at
+    // near-degenerate coordinates that Martinez chokes on ("Unable to find
+    // segment … in SweepLine tree").
+    const deduped: Point[] = [eraserPoints[0]];
+    for (let i = 1; i < eraserPoints.length; i++) {
+        const p = eraserPoints[i], q = deduped[deduped.length - 1];
+        if (Math.abs(p.x - q.x) > 1e-9 || Math.abs(p.y - q.y) > 1e-9) deduped.push(p);
+    }
+    if (deduped.length === 1) return [circlePolygon(deduped[0], radius)];
+    // NOTE: Clipper2's native offsetter (InflatePathsD with round joins/caps) was
+    // measured as a replacement for strokeOutlineRing and REJECTED — it was ~3x
+    // slower for this step (9.8ms vs 3.5ms; it needs a separate union pass to
+    // clean and group its flat output, where the ring below needs one self-union)
+    // and diverged further from shipped output, not less. Finer arc tolerances
+    // made it worse, converging on a true circle and away from the arcs here.
+    try {
+        const resolved = union(roundPolygon([strokeOutlineRing(deduped, radius)]));
+        if (resolved && resolved.length > 0) return resolved;
+    } catch {
+        // fall through to the capsule union below
+    }
+
+    // Fallback: the capsule union. Slower, but a different construction, so it
+    // survives cases where the outline ring hits a degeneracy the clipper
+    // rejects.
+    const parts = eraserGeometryParts(eraserPoints, radius).map(roundPolygon);
+    const chunked = unionPolygonsChunked(parts);
+    if (chunked) return chunked;
+    // Chunked fold failed — try the single-call union before giving up.
+    try {
+        const unified = union(parts[0], ...parts.slice(1));
+        if (unified && unified.length > 0) return unified;
+    } catch {
+        // fall through
+    }
+    // Last resort: the raw parts. Both over-removal and a big slowdown are
+    // possible here, but reaching this means every union failed — vanishingly
+    // rare, and still better than dropping the erase entirely.
+    return parts;
+};
+
+const unionGeometryParts = (parts: Geometry[]) => {
+    if (parts.length === 0) return null;
+    return union(parts[0], ...parts.slice(1));
+};
+
+/** Douglas-Peucker simplification of an eraser trail. CURRENTLY UNUSED — kept
+ *  as a measured, ready-to-enable option (see buildEraserCtx).
+ *
+ *  A drag samples the pointer far more finely than the swept region needs: a
+ *  real capture had 2149 points over 10896px (median 4.5px apart) while the
+ *  eraser is 48px wide, so consecutive capsules overlap almost entirely. Every
+ *  extra point costs a capsule (~43 verts) in the union AND a scan step in
+ *  every pointDistToEraserPathSq call the guards make.
+ *
+ *  Enabling it at 0.05px took that capture's drag-end pass from 1025ms to 648ms.
+ *  It is off by default because, unlike the rest of the erase speedups, it is a
+ *  real geometric approximation: the swept region may shift by up to `epsilon`.
+ *  Measured cost was 207 differing pixels out of 3.58M versus 48 without it. */
+const simplifyTrail = (points: Point[], epsilon = 0.05): Point[] => {
+    if (points.length < 3) return points;
+    const keep = new Uint8Array(points.length);
+    keep[0] = 1;
+    keep[points.length - 1] = 1;
+    // Iterative (an explicit stack) rather than recursive: a long trail would
+    // otherwise risk blowing the call stack.
+    const stack: [number, number][] = [[0, points.length - 1]];
+    while (stack.length) {
+        const [i0, i1] = stack.pop()!;
+        if (i1 - i0 < 2) continue;
+        const a = points[i0], b = points[i1];
+        const dx = b.x - a.x, dy = b.y - a.y, l2 = dx * dx + dy * dy;
+        let best = -1, bestDist = epsilon;
+        for (let i = i0 + 1; i < i1; i++) {
+            const p = points[i];
+            let t = l2 ? ((p.x - a.x) * dx + (p.y - a.y) * dy) / l2 : 0;
+            t = t < 0 ? 0 : t > 1 ? 1 : t;
+            const ex = p.x - (a.x + t * dx), ey = p.y - (a.y + t * dy);
+            const d = Math.sqrt(ex * ex + ey * ey);
+            if (d > bestDist) { bestDist = d; best = i; }
+        }
+        if (best >= 0) { keep[best] = 1; stack.push([i0, best], [best, i1]); }
+    }
+    const out: Point[] = [];
+    for (let i = 0; i < points.length; i++) if (keep[i]) out.push(points[i]);
+    return out;
+};
+
+/** Angular resolution of the swept-outline arcs. Deliberately identical to the
+ *  capsule caps' (a semicircle in `capsulePolygon`'s default 20 steps), so the
+ *  outline approximates the true circular sweep exactly as finely as the capsule
+ *  union it replaces — measured, finer arcs actually diverge MORE from current
+ *  behaviour because they under-cover the true circle less than the caps do. */
+const OUTLINE_ARC_STEP = Math.PI / 20;
+
+const pushArcCW = (cx: number, cy: number, from: number, to: number, radius: number, out: Ring) => {
+    // Always sweep clockwise (negative), which is the direction the outline ring
+    // is traced in; `from`/`to` are absolute angles.
+    let d = to - from;
+    while (d > 0) d -= 2 * Math.PI;
+    const steps = Math.max(1, Math.ceil(Math.abs(d) / OUTLINE_ARC_STEP));
+    for (let i = 1; i < steps; i++) {
+        const a = from + d * i / steps;
+        out.push([cx + Math.cos(a) * radius, cy + Math.sin(a) * radius]);
+    }
+};
+
+/** The eraser's swept region as a single stroke OUTLINE ring, rather than a
+ *  union of one capsule per trail segment.
+ *
+ *  This is purely a performance construction — the region is the same Minkowski
+ *  sum either way — but the input size is radically smaller. A capsule carries
+ *  two full 20-step semicircular caps (~43 vertices) and consecutive caps are
+ *  buried inside their neighbours, so a real 2149-point trail fed 92,407
+ *  vertices into the clipper to describe a boundary of only ~4,800. Tracing the
+ *  offset outline instead emits ~2 vertices per trail point plus an arc only
+ *  where the trail actually turns: ~9,500 vertices, and the resolve dropped from
+ *  658ms to 30ms (21x) with a rasterized difference of 0.0097% against the
+ *  capsule union.
+ *
+ *  The ring self-intersects wherever the trail curls back within 2*radius, which
+ *  is ordinary erasing, so the caller must still run it through `union` to
+ *  resolve it into a well-formed MultiPolygon.
+ *
+ *  Join arcs go ONLY on the convex (outer) side of each turn. On the concave
+ *  side the two offset segments cross and the self-union resolves them; adding
+ *  an arc there instead carves a notch out of the swept region — that bug cost
+ *  0.26% of the eraser's coverage (ink left behind where the eraser passed). */
+const strokeOutlineRing = (points: Point[], radius: number): Ring => {
+    const n = points.length;
+    const ang: number[] = [];
+    for (let i = 1; i < n; i++) ang.push(Math.atan2(points[i].y - points[i - 1].y, points[i].x - points[i - 1].x));
+    // Sign of the turn at each interior vertex: >0 turns left, <0 turns right.
+    const cross: number[] = [];
+    for (let i = 1; i < ang.length; i++) {
+        cross.push(Math.cos(ang[i - 1]) * Math.sin(ang[i]) - Math.sin(ang[i - 1]) * Math.cos(ang[i]));
+    }
+
+    const ring: Ring = [];
+    // Left side, forward. Its outer side is a RIGHT turn (cross < 0).
+    for (let i = 0; i < ang.length; i++) {
+        const na = ang[i] + Math.PI / 2;
+        const p0 = points[i], p1 = points[i + 1];
+        ring.push([p0.x + Math.cos(na) * radius, p0.y + Math.sin(na) * radius]);
+        ring.push([p1.x + Math.cos(na) * radius, p1.y + Math.sin(na) * radius]);
+        if (i < ang.length - 1 && cross[i] < 0) pushArcCW(p1.x, p1.y, na, ang[i + 1] + Math.PI / 2, radius, ring);
+    }
+    // End cap.
+    const last = points[n - 1], aLast = ang[ang.length - 1];
+    pushArcCW(last.x, last.y, aLast + Math.PI / 2, aLast - Math.PI / 2, radius, ring);
+    // Right side, backward. Its outer side is a LEFT turn (cross > 0).
+    for (let i = ang.length - 1; i >= 0; i--) {
+        const na = ang[i] - Math.PI / 2;
+        const p0 = points[i], p1 = points[i + 1];
+        ring.push([p1.x + Math.cos(na) * radius, p1.y + Math.sin(na) * radius]);
+        ring.push([p0.x + Math.cos(na) * radius, p0.y + Math.sin(na) * radius]);
+        if (i > 0 && cross[i - 1] > 0) pushArcCW(p0.x, p0.y, na, ang[i - 1] - Math.PI / 2, radius, ring);
+    }
+    // Start cap, closing the ring.
+    const first = points[0], aFirst = ang[0];
+    pushArcCW(first.x, first.y, aFirst - Math.PI / 2, aFirst + Math.PI / 2, radius, ring);
+    ring.push([ring[0][0], ring[0][1]]);
+    return ring;
+};
+
+/** Union many polygons far faster than one giant `union(a, ...rest)` call.
+ *
+ *  Martinez's cost grows steeply with the number of simultaneous inputs, and on
+ *  a long trail the single call ALSO tends to hit a degeneracy and throw. Fold
+ *  in fixed-size batches, then merge the batch results: measured on a real 2149
+ *  capsule trail, 1185ms → 619ms for a bit-identical result. Inputs must already
+ *  be grid-snapped (see eraserOutlinePolygon) — that is what keeps it from
+ *  throwing. Returns null if any step fails, so callers can fall back. */
+const unionPolygonsChunked = (parts: Polygon[], chunk = 64): MultiPolygon | null => {
+    if (parts.length === 0) return null;
+    if (parts.length === 1) return [parts[0]];
+    try {
+        const merged: MultiPolygon[] = [];
+        for (let i = 0; i < parts.length; i += chunk) {
+            const group = parts.slice(i, i + chunk);
+            merged.push(group.length === 1 ? [group[0]] : union(group[0], ...group.slice(1)));
+        }
+        let acc = merged[0];
+        for (let i = 1; i < merged.length; i++) acc = union(acc, merged[i]);
+        return acc && acc.length > 0 ? acc : null;
+    } catch {
+        return null;
+    }
+};
+
+const isPolygon = (geometry: Geometry): geometry is Polygon => {
+    return typeof geometry[0]?.[0]?.[0] === 'number';
+};
+
+const normalizeMultiPolygon = (geometry: Geometry): MultiPolygon => {
+    return isPolygon(geometry) ? [geometry] : geometry;
+};
+
+const signedRingArea = (ring: Ring) => {
+    let area = 0;
+    for (let i = 0; i < ring.length - 1; i++) {
+        const [x1, y1] = ring[i];
+        const [x2, y2] = ring[i + 1];
+        area += x1 * y2 - x2 * y1;
+    }
+    return area / 2;
+};
+
+const ringArea = (ring: Ring) => {
+    return Math.abs(signedRingArea(ring));
+};
+
+// Filled area of a multipolygon: outer rings minus their holes. Used to detect
+// clipping corruption (a difference must not increase filled area).
+const multiPolygonFilledArea = (mp: MultiPolygon) => {
+    let area = 0;
+    for (const polygon of mp) {
+        if (!polygon[0]) continue;
+        area += ringArea(polygon[0]);
+        for (let i = 1; i < polygon.length; i++) area -= ringArea(polygon[i]);
+    }
+    return area;
+};
+
+const normalizedRingPoints = (ring: Ring) => {
+    return ring.length > 1 && ring[0][0] === ring[ring.length - 1][0] && ring[0][1] === ring[ring.length - 1][1]
+        ? ring.slice(0, -1)
+        : ring;
+};
+
+const ringToD = (ring: Ring) => {
+    const points = normalizedRingPoints(ring);
+    if (points.length < 3) return '';
+
+    let d = `M ${points[0][0].toFixed(1)} ${points[0][1].toFixed(1)}`;
+    for (let i = 1; i < points.length; i++) {
+        d += ` L ${points[i][0].toFixed(1)} ${points[i][1].toFixed(1)}`;
+    }
+    return `${d} Z`;
+};
+
+const polygonToD = (polygon: Polygon) => {
+    return polygon
+        .map(ringToD)
+        .filter(Boolean)
+        .join(' ');
+};
+
+const roundCoordinate = (value: number) => Math.round(value * 10) / 10;
+const roundPolygon = (polygon: Polygon): Polygon => {
+    return polygon.map(ring => ring.map(([x, y]) => [roundCoordinate(x), roundCoordinate(y)]));
+};
+
+const roundMultiPolygon = (multiPolygon: MultiPolygon): MultiPolygon => {
+    return multiPolygon.map(roundPolygon);
+};
+
+const safeDifference = (subject: MultiPolygon, clip: Geometry) => {
+    // Snap to a 0.1 grid before clipping. polygon-clipping (Martinez) is far more
+    // robust on grid-snapped input — full-precision floats produce near-degenerate
+    // vertices that occasionally yield corrupted/spurious output, especially in
+    // busy scenes. Output is already rounded to 0.1, so this changes nothing
+    // visible. Fall back to raw input, then to the unchanged subject, on error.
+    eraseStats.differenceCalls++;
+    const t0 = performance.now();
+    const clipMp = normalizeMultiPolygon(clip);
+    try {
+        try {
+            return difference(roundMultiPolygon(subject), roundMultiPolygon(clipMp));
+        } catch {
+            try {
+                return difference(subject, clipMp);
+            } catch {
+                return subject;
+            }
+        }
+    } finally {
+        eraseStats.differenceMs += performance.now() - t0;
+    }
+};
+
+const multiPolygonBounds = (mp: MultiPolygon) => {
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const polygon of mp) {
+        for (const [x, y] of polygon[0] || []) {
+            if (x < minX) minX = x;
+            if (y < minY) minY = y;
+            if (x > maxX) maxX = x;
+            if (y > maxY) maxY = y;
+        }
+    }
+    return { minX, minY, maxX, maxY };
+};
+
+const polygonOuterBounds = (polygon: Polygon) => {
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const [x, y] of polygon[0] || []) {
+        if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+        if (x < minX) minX = x;
+        if (y < minY) minY = y;
+        if (x > maxX) maxX = x;
+        if (y > maxY) maxY = y;
+    }
+    return { minX, minY, maxX, maxY };
+};
+
+// A difference result can only lie within the original shape. Any result polygon
+// outside the subject's bounds (or with non-finite coords) is a clipping artifact
+// — the "fill in an unrelated place" glitch — so it should be discarded.
+const polygonWithinSubject = (
+    polygon: Polygon,
+    subjectBounds: ReturnType<typeof multiPolygonBounds>,
+    eps = 1
+) => {
+    const b = polygonOuterBounds(polygon);
+    if (!Number.isFinite(b.minX)) return false;
+    return !(
+        b.minX > subjectBounds.maxX + eps ||
+        b.maxX < subjectBounds.minX - eps ||
+        b.minY > subjectBounds.maxY + eps ||
+        b.maxY < subjectBounds.minY - eps
+    );
+};
+
+// Stricter artifact detector than the bbox test above. polygon-clipping (Martinez)
+// can emit a spurious solid that passes the bounds + net-area guards — the
+// "unrelated section fills in" glitch — typically either refilling the just-erased
+// hole or appearing inside the subject's bbox but outside the actual subject
+// polygon. A legitimate difference piece is a subset of (subject − eraser), so:
+//   (1) a healthy fraction of its own vertices lie inside the subject solid
+//       (outer minus the subject's holes), and
+//   (2) no eraser centerline point lies in the piece's SOLID area (outer minus the
+//       piece's own holes). A legit notch/hole leaves the eraser zone empty, so the
+//       eraser points fall in a hole or outside the piece. A relocated fill puts
+//       the erased zone back into solid → caught. Accepts hole-punches (eraser in
+//       the hole), which a centroid-deep-in-eraser test would wrongly reject.
+//
+// (1) samples VERTICES, not the centroid: a valid sub-piece of a concave subject
+// (a noisy "spaghetti" outline) can have its centroid fall outside the shape in a
+// concave bay, which a centroid test would wrongly reject as an artifact. A legit
+// piece always has its cut-edge vertices inside the subject; a spurious fill that
+// sits outside the subject polygon (in a bay) has ~none.
+const polygonIsValidResult = (
+    polygon: Polygon,
+    subject: MultiPolygon,
+    eraserPoints: Point[],
+    /** Per-subject-polygon outer bboxes, precomputed by the caller (see
+     *  cachedSubjectPolyBounds) — subject is cached per path identity across
+     *  the whole drag, so its bounds are computed ONCE ever, not once per
+     *  candidate polygon per move. A sample outside a polygon's bbox skips the
+     *  O(ring) ray-cast entirely; point-in-polygon over big subject rings
+     *  dominated the guard cost in profiling, so every skipped ray-cast counts. */
+    subjectBounds: { minX: number; minY: number; maxX: number; maxY: number }[]
+): boolean => {
+    const outer = polygon[0];
+    if (!outer) return false;
+
+    // Most of a legit piece's vertices lie EXACTLY ON the subject boundary (the
+    // difference inherits the subject's edges, grid-snapped to 0.1 by
+    // safeDifference), where a strict point-in-polygon test is a coin flip. Test
+    // the vertex plus four small axis jitters — a boundary vertex has an inside
+    // neighbor, while an artifact vertex sitting genuinely outside the subject
+    // (in a concave bay) fails all five. Without the jitter, a long piece whose
+    // perimeter is mostly shared boundary can fail the 25% quorum and a REAL
+    // half of a cleanly-cut stroke gets discarded as an "artifact" (half the
+    // line silently vanishes on one erase pass).
+    const jitter = 0.2;
+    const insideSolid = (x: number, y: number): boolean => {
+        const p = { x, y };
+        for (let s = 0; s < subject.length; s++) {
+            const b = subjectBounds[s];
+            if (x < b.minX - jitter || x > b.maxX + jitter || y < b.minY - jitter || y > b.maxY + jitter) continue;
+            const subjPoly = subject[s];
+            if (!pointInsidePolygon(p, subjPoly[0])) continue;
+            let inHole = false;
+            for (let h = 1; h < subjPoly.length; h++) {
+                if (pointInsidePolygon(p, subjPoly[h])) { inHole = true; break; }
+            }
+            if (inHole) continue;
+            return true;
+        }
+        return false;
+    };
+    const vertexInsideSubject = (v: Ring[number]): boolean => {
+        // Plain test first; the four jitter samples only run when it misses
+        // (the boundary coin-flip case), so a clearly-inside vertex costs one
+        // ray-cast, not five.
+        return insideSolid(v[0], v[1]) ||
+            insideSolid(v[0] + jitter, v[1]) ||
+            insideSolid(v[0] - jitter, v[1]) ||
+            insideSolid(v[0], v[1] + jitter) ||
+            insideSolid(v[0], v[1] - jitter);
+    };
+
+    // Sample up to ~32 of the piece's outer-ring vertices. The total sample
+    // count is deterministic, so the quorum is known up front — stop as soon as
+    // it's reached (legit pieces, the overwhelmingly common case, pass after
+    // the first few samples instead of paying for all ~32).
+    const step = Math.max(1, Math.floor(outer.length / 32));
+    const planned = Math.ceil(outer.length / step);
+    // Legit pieces have ~half+ of vertices on a cut edge that lies inside the
+    // subject; a spurious fill outside the subject polygon has ~0. Require a
+    // healthy minority inside (>= 25%) to keep concave-but-valid pieces.
+    const required = Math.max(1, planned * 0.25);
+    let inside = 0;
+    for (let i = 0; i < outer.length; i += step) {
+        if (vertexInsideSubject(outer[i])) {
+            inside++;
+            if (inside >= required) break;
+        }
+    }
+    if (inside < required) return false;
+
+    const holes = polygon.slice(1);
+    const b = polygonOuterBounds(polygon);
+    for (const ep of eraserPoints) {
+        if (ep.x < b.minX || ep.x > b.maxX || ep.y < b.minY || ep.y > b.maxY) continue;
+        if (!pointInsidePolygon(ep, outer)) continue;
+        if (holes.some(hole => pointInsidePolygon(ep, hole))) continue;
+        return false;
+    }
+    return true;
+};
+
+const ringWithOppositeWinding = (ring: Ring, outer: Ring) => {
+    if (signedRingArea(ring) * signedRingArea(outer) < 0) return ring;
+    const points = [...normalizedRingPoints(ring)].reverse().map(([x, y]) => ({ x, y }));
+    return closeRing(points);
+};
+
+const pointDistToEraserPathSq = (point: Point, eraserPoints: Point[]) => {
+    let minSq = Infinity;
+    for (const p of eraserPoints) {
+        const distSq = (point.x - p.x) ** 2 + (point.y - p.y) ** 2;
+        if (distSq < minSq) minSq = distSq;
+    }
+
+    for (let i = 1; i < eraserPoints.length; i++) {
+        const a = eraserPoints[i - 1];
+        const b = eraserPoints[i];
+        const distSq = distToSegmentSq(point.x, point.y, a.x, a.y, b.x, b.y);
+        if (distSq < minSq) minSq = distSq;
+    }
+
+    return minSq;
+};
+
+// Does the eraser capsule genuinely cover the ENTIRE subject? A subject vertex
+// is covered when it lies within `radius` of the eraser centerline (the capsule
+// definition). Used as the gate for dropping a whole stroke on an empty clip
+// result: an empty difference is only a legitimate full-erase when every subject
+// vertex is inside the eraser. If any vertex is outside, the empty result is a
+// polygon-clipping failure (a shatter into sub-0.5 slivers on a self-overlapping
+// freehand outline, or a mayIntersect false positive) — the stroke must be kept,
+// not lost. The +1 tolerance absorbs the rounding between the strict capsule and
+// the getStroke outline the clipper actually used.
+const eraserCoversSubject = (subject: MultiPolygon, eraserPoints: Point[], radius: number): boolean => {
+    if (eraserPoints.length === 0) return false;
+    const radiusSq = (radius + 1) * (radius + 1);
+    for (const poly of subject) {
+        const outer = poly[0];
+        if (!outer) continue;
+        for (const v of outer) {
+            if (pointDistToEraserPathSq({ x: v[0], y: v[1] }, eraserPoints) > radiusSq) return false;
+        }
+    }
+    return true;
+};
+
+// Emits a difference-result polygon as an SVG path (nonzero fill). Every hole in
+// the result is a real gap (the difference is authoritative), so ALL holes are
+// emitted with winding opposite to the outer — dropping any hole would make
+// nonzero fill render that gap solid (the "stray fill in a random place" bug).
+const polygonToNonZeroD = (polygon: Polygon) => {
+    const outer = polygon[0];
+    if (!outer) return '';
+
+    const rings = [outer];
+    for (let i = 1; i < polygon.length; i++) {
+        rings.push(ringWithOppositeWinding(polygon[i], outer));
+    }
+
+    return polygonToD(rings);
+};
+
+const polygonIsTinyEraserRemnant = (polygon: Polygon, eraserPoints: Point[], radius: number, subjectArea: number) => {
+    const outer = polygon[0];
+    if (!outer) return true;
+
+    const area = ringArea(outer);
+    // What counts as "tiny dust" is bounded three ways, taking the SMALLEST:
+    //  - radius·radius·0.08: a crumb relative to the eraser, BUT this scales with
+    //    r², so a wide eraser (r=24 → 46px²) would treat a real 30px² survivor as
+    //    dust. That was a repro: a hook erase's two arms leave a genuine ~30px²
+    //    segment of a line surviving in the notch between them (it came out of
+    //    the difference, so it's real un-erased ink), which got discarded and
+    //    "a chunk in the middle of the erase vanished".
+    //  - subjectArea·0.25: never treat a meaningful fraction of the source shape
+    //    as dust (a small shape reduced to ~50% is not a crumb).
+    //  - 12px²: an ABSOLUTE ceiling. Dust is dust regardless of eraser size —
+    //    a 12px² piece is visible ink, not a rounding crumb. This caps the
+    //    r²-scaled term so wide erasers stop eating small real survivors while
+    //    still cleaning genuine sub-pixel slivers. (For r≤12, r²·0.08 ≤ 12, so
+    //    small erasers are unaffected.)
+    const maxTinyArea = Math.max(0.5, Math.min(radius * radius * 0.08, subjectArea * 0.25, 12));
+    if (area > maxTinyArea) return false;
+
+    const points = normalizedRingPoints(outer);
+    if (points.length === 0) return true;
+
+    // The definitive dust-vs-remainder discriminator: how far the piece REACHES
+    // beyond the eraser footprint. Genuine dust is a crumb the difference leaves
+    // hugging the cut edge — it lies ENTIRELY within the eraser footprint (every
+    // vertex within `radius` of the trail), poking out by at most a sliver. A
+    // real surviving remainder of a cut stroke — even a thin, low-area one whose
+    // area falls under the (radius-scaled) cap above — REACHES well past the
+    // footprint: its far end is the un-erased part of the stroke, sitting many
+    // units beyond `radius`. So if ANY vertex lies more than a small margin past
+    // the eraser radius, this is real ink, never dust.
+    //
+    // This replaced a "≥50% of vertices are near the eraser" heuristic that was
+    // a real repro's root cause: a wide eraser (r≈22, so the area cap is r²·0.08
+    // ≈ 39) cutting a thin line leaves remainders of only ~27–34 px² that reach
+    // ~33–36 px from the trail — clearly OUTSIDE the 22px footprint, unmistakably
+    // real ink — yet a thin sliver's cut end hugs the eraser closely enough that
+    // ≥50% of its vertices counted as "near", so the remainder was discarded as
+    // dust and a chunk of the line silently vanished on erase.
+    //
+    // The margin past `radius` is a small FIXED tolerance, NOT radius-scaled.
+    // A genuine dust crumb hugs the cut edge at maxDist ≈ radius (safeDifference
+    // snaps to a 0.1 grid and the capsule polygon is inscribed, so it slightly
+    // under-reaches radius); a real fragment reaches further. The tolerance only
+    // has to absorb rounding, so it's constant. A radius-SCALED margin
+    // (radius·0.15 ≈ 3.6px for r=24) was itself a repro's cause: two adjacent
+    // erases left a 10px² fragment reaching 27.3px from a 24px eraser — only
+    // 3.3px past the footprint, real ink the user expects to keep — yet
+    // 27.3 < 27.6 (the scaled margin) swallowed it as dust. A fixed +2.5 keeps
+    // that fragment while still discarding the ~2px caps a near-fully-erased
+    // sliver leaves (which must drop, not linger — see the negligible-remnant
+    // test).
+    const footprintMargin = radius + 2.5;
+    const footprintMarginSq = footprintMargin * footprintMargin;
+    for (const [x, y] of points) {
+        if (pointDistToEraserPathSq({ x, y }, eraserPoints) > footprintMarginSq) return false;
+    }
+
+    return true;
+};
+
+// Does the SUBJECT have a region that's genuinely far from the eraser (must
+// survive) yet is entirely ABSENT from the raw difference output — not
+// filtered out by our own tinyRing/tinyRemnant/etc guards (those all act on
+// polygons that exist in `polygons`), but never emitted by Martinez at all?
+//
+// This is a DIFFERENT failure mode than the "shatter into countless
+// sub-threshold slivers" one the other guards catch: instead of fragmenting a
+// survivor into dust (which shows up as many small entries in `polygons`,
+// summing close to the true remaining area), polygon-clipping can also just
+// silently OMIT a legitimate sub-region from its output on complex
+// self-intersecting input (routine for freehand/clipDerived geometry with
+// many holes) — there is no fragment to inspect, no area to sum, nothing for
+// the tinyRing/tinyRemnant/resultArea checks to see. A small resultArea from
+// an omission looks identical to a small resultArea from a genuine near-total
+// erase; only directly checking whether the untouched region actually made it
+// into the output tells them apart.
+//
+// Sampled along the ring's own VERTICES (up to ~24 per outer ring), NOT a
+// single interior point. A single interior sample (the first attempt at this
+// check) is blind to elongated/thin shapes: a long thin stroke can have its
+// eraser-touched end right next to a completely untouched far end within the
+// SAME polygon, and one grid-scanned interior point lands wherever it lands —
+// often in the touched portion, silently missing a substantial untouched
+// region elsewhere on the same outline. Sampling vertices spread along the
+// whole ring instead means the far, untouched portion always gets its own
+// samples regardless of where the touched portion is.
+//
+// Each sampled vertex sits exactly ON the subject boundary, where a strict
+// point-in-polygon test is a coin flip (same issue polygonIsValidResult
+// solves) — so test the vertex plus four small jitters, matching that
+// function's approach.
+const subjectHasOmittedSurvivor = (subject: MultiPolygon, polygons: MultiPolygon, eraserPoints: Point[], radius: number): boolean => {
+    const farSq = (radius * 2) * (radius * 2);
+    const jitter = 0.2;
+    const insideResult = (x: number, y: number): boolean => {
+        for (const rp of polygons) {
+            if (!pointInsidePolygon({ x, y }, rp[0])) continue;
+            if (rp.slice(1).some(h => pointInsidePolygon({ x, y }, h))) continue;
+            return true;
+        }
+        return false;
+    };
+    // Axis-only jitter is blind to an untouched AXIS-ALIGNED rectangular piece
+    // (the common case for a simple filled shape, or a straight-edge freehand
+    // capsule end): a square corner's axis-jittered samples all stay exactly
+    // on one of its two edges, never landing strictly inside, so an entirely
+    // untouched square could look "omitted" purely from corner geometry. The
+    // four diagonal offsets add a sample that moves off BOTH edges at once,
+    // landing inside for at least one corner regardless of the shape's
+    // orientation.
+    // A subject vertex that sits ON a kept piece's boundary edge is PRESERVED,
+    // not omitted — the result outline passes right through it. The fill-based
+    // jitter test above misses this at a SHARP far corner: every one of the 9
+    // samples lands on or just outside the two edges meeting at a narrow convex
+    // angle, so a legitimately-kept spike reads as "omitted" and the whole erase
+    // gets reverted (an under-erase: the eraser passes through the shape but the
+    // stroke is kept whole because one far corner failed the fill test). A
+    // difference inherits the subject's edges grid-snapped to 0.1, so a genuinely
+    // preserved vertex lands within ~0.15 of a result edge; 0.5 is a safe margin.
+    // A genuinely OMITTED region leaves no piece, so its far vertices are far
+    // from EVERY result edge (by the omitted region's own width) — this check
+    // can't rescue them, keeping the guard's real purpose intact.
+    const edgeEpsSq = 0.5 * 0.5;
+    const onResultEdge = (x: number, y: number): boolean => {
+        for (const rp of polygons) {
+            for (const ring of rp) {
+                for (let i = 0; i < ring.length - 1; i++) {
+                    if (distToSegmentSq(x, y, ring[i][0], ring[i][1], ring[i + 1][0], ring[i + 1][1]) <= edgeEpsSq) return true;
+                }
+            }
+        }
+        return false;
+    };
+    const vertexSurvives = (x: number, y: number): boolean =>
+        insideResult(x, y) ||
+        insideResult(x + jitter, y) || insideResult(x - jitter, y) ||
+        insideResult(x, y + jitter) || insideResult(x, y - jitter) ||
+        insideResult(x + jitter, y + jitter) || insideResult(x - jitter, y - jitter) ||
+        insideResult(x + jitter, y - jitter) || insideResult(x - jitter, y + jitter) ||
+        onResultEdge(x, y);
+
+    for (const subjPoly of subject) {
+        const outer = subjPoly[0];
+        if (!outer || outer.length < 2) continue;
+        const step = Math.max(1, Math.floor(outer.length / 24));
+        for (let i = 0; i < outer.length; i += step) {
+            const [x, y] = outer[i];
+            if (pointDistToEraserPathSq({ x, y }, eraserPoints) <= farSq) continue;
+            if (!vertexSurvives(x, y)) return true;
+        }
+    }
+    return false;
+};
+
+const splitClosedFilledPath = (
+    path: PathData,
+    flatCmds: FlatCommand[],
+    subject: MultiPolygon | null,
+    eraserPoints: Point[],
+    radius: number,
+    cleanupTinyRemnants = false,
+    /** The eraser's swept region (union of trail capsules — see
+     *  eraserOutlinePolygon) for this pass, if the caller already computed it.
+     *  When omitted, it's computed here. Hoisting it lets one union serve every
+     *  closed-filled candidate in a pass instead of one per candidate. */
+    precomputedEraserPolygon?: MultiPolygon | null
+): PathData[] | null => {
+    const eraserPolygon = precomputedEraserPolygon !== undefined
+        ? precomputedEraserPolygon
+        : eraserOutlinePolygon(eraserPoints, radius);
+    if (!subject || !eraserPolygon) {
+        if (path.freehandSource) __lastClipDiag = { bailReason: 'noSubject', subjectArea: subject ? multiPolygonFilledArea(subject) : 0 };
+        return [path];
+    }
+
+    // One difference for the whole eraser pass (see eraserOutlinePolygon). Fall
+    // back to the slow per-segment loop only if the single op fails — rare, and
+    // keeps erase correctness when it does.
+    let result: MultiPolygon;
+    try {
+        result = safeDifference(subject, eraserPolygon);
+    } catch {
+        result = subject;
+        for (const eraser of eraserGeometryParts(eraserPoints, radius)) {
+            result = safeDifference(result, eraser);
+            if (result.length === 0) break;
+        }
+    }
+    if (!result) return [];
+
+    const polygons = normalizeMultiPolygon(result);
+    // Clip-derived pieces get the same hardened guards as whole freehand
+    // outlines: without this, a stroke's FIRST split stripped freehandSource and
+    // every later erase of its pieces ran unguarded — a corrupted difference
+    // (dropped holes) then rendered a spurious solid over the erased region.
+    const isFreehand = !!(path.freehandSource && path.freehandSource.points.length > 0) || !!path.clipDerived;
+    // Per-result-polygon outer bboxes, computed ONCE and reused by the repair
+    // pass, the detection pass, and (for kept pieces) below — a point outside a
+    // polygon's bbox skips its O(ring) ray-cast entirely. Only needed on the
+    // isFreehand path (both hole passes below are gated on it); `polygons` here
+    // can carry deeply-holed pieces (backgrounds/bakes with 50+ rings), where
+    // these full-ring ray-casts were the dominant guard cost in profiling.
+    const resultBounds = isFreehand ? polygons.map(rp => polygonOuterBounds(rp)) : null;
+
+    // Repair dropped holes. polygon-clipping's `difference` occasionally returns a
+    // polygon MISSING an internal hole that the subject had (a Martinez artifact on
+    // self-overlapping freehand outlines). The hole's region then renders SOLID —
+    // the "fill in a random place" glitch, often far from the eraser. A dropped hole
+    // was not touched by the eraser (an erased hole is legitimately gone/modified),
+    // so its original ring is still exactly the correct gap. Re-attach it to the
+    // result polygon containing its centroid. This only re-punches a gap that was
+    // already empty in the subject — it never reshapes a surviving stroke.
+    if (isFreehand && resultBounds) {
+        const radiusSq = (radius + 1) * (radius + 1);
+        for (const subjPoly of subject) {
+            for (let h = 1; h < subjPoly.length; h++) {
+                const hole = subjPoly[h];
+                // Reliable interior sample (centroid can fall outside a concave hole).
+                const p = interiorPointOfRing(hole);
+                if (!p) continue;
+                // Eraser passed through the hole → its absence/change is expected.
+                if (pointDistToEraserPathSq(p, eraserPoints) <= radiusSq) continue;
+                // Still present? (the interior sample lands in some result hole)
+                let present = false;
+                for (let i = 0; i < polygons.length; i++) {
+                    const b = resultBounds[i];
+                    if (p.x < b.minX || p.x > b.maxX || p.y < b.minY || p.y > b.maxY) continue;
+                    const rp = polygons[i];
+                    for (let rh = 1; rh < rp.length; rh++) {
+                        if (pointInsidePolygon(p, rp[rh])) { present = true; break; }
+                    }
+                    if (present) break;
+                }
+                if (present) continue;
+                // Dropped: the interior sample landed in a result SOLID (the hole's
+                // region got filled) — re-attach the original hole ring to punch it
+                // back out. Single injection only (never a duplicate → winding stays
+                // correct), so this can't itself create a stray fill.
+                for (let i = 0; i < polygons.length; i++) {
+                    const b = resultBounds[i];
+                    if (p.x < b.minX || p.x > b.maxX || p.y < b.minY || p.y > b.maxY) continue;
+                    const rp = polygons[i];
+                    if (pointInsidePolygon(p, rp[0]) && !rp.some(r => r === hole)) {
+                        rp.push(hole);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    // A difference can only ever REMOVE area. If the result has more filled area
+    // than the subject, polygon-clipping corrupted the winding/holes (a region
+    // that should be empty filled solid) — the "section fills in" glitch. Bail and
+    // keep the original path rather than emit a corrupted fill.
+    const subjectArea = multiPolygonFilledArea(subject);
+    const resultArea = multiPolygonFilledArea(polygons);
+    if (subjectArea > 1 && resultArea > subjectArea * 1.02 + 1) {
+        if (path.freehandSource) __lastClipDiag = { bailReason: 'areaGuard', subjectArea, resultArea, polygonCount: polygons.length };
+        return null;
+    }
+
+    const subjectBounds = multiPolygonBounds(subject);
+    const nextPaths: PathData[] = [];
+    const minArea = 0.5;
+    // The strict subset test (polygonIsValidResult) is only applied to freehand
+    // outlines, where the relocated/in-bbox "section fills in" glitch shows up.
+    // Filled shapes (rectangles, baked faces) can have legit eraser-punched holes
+    // whose outer-ring centroid sits in the hole; for those the existing
+    // bbox + area guards are sufficient and stay as-is.
+    // True only when a polygon is discarded as a clipping *artifact* (out of
+    // bounds or failing the strict subset test) — not when it's a legit tiny
+    // remnant. If every polygon is an artifact, the difference is corrupt, so bail
+    // (return null) and let the caller fall back to a deterministic erase.
+    let sawArtifact = false;
+    const rejectReasons: string[] = [];
+    // Filled area discarded by the INTENTIONAL remnant cleanup (dust near the
+    // eraser). Deducted from resultArea in the empty-result decision below: area
+    // the cleanup deliberately dropped is accounted-for erasure, not evidence of
+    // a corrupted difference. Without this, a piece whose entire surviving
+    // remainder was judged remnant-dust (legal per polygonIsTinyEraserRemnant's
+    // own threshold, up to r²·0.08) could exceed the bail's stricter
+    // "negligible" threshold and revert the piece to FULL size — un-erasing it.
+    let remnantDiscardedArea = 0;
+    // Per-kept-piece diagnostic: the verbatim emitted `d`, plus the polygon kept
+    // for the post-loop dropped-hole check (the real stray signature — see below).
+    const pieces: { d: string; stray?: string }[] = [];
+    const keptPolygons: Polygon[] = [];
+    const keptBounds: { minX: number; minY: number; maxX: number; maxY: number }[] = [];
+    // Subject-polygon bboxes for polygonIsValidResult, cached per subject (see
+    // cachedSubjectPolyBounds) — computed once ever per path, not once per
+    // candidate polygon per move.
+    const subjectPolyBounds = isFreehand ? cachedSubjectPolyBounds(subject) : null;
+
+    for (let pi = 0; pi < polygons.length; pi++) {
+        const polygon = polygons[pi];
+        const outer = polygon[0];
+        if (!outer || ringArea(outer) < minArea) { rejectReasons.push('tinyRing'); continue; }
+        // Discard clipping artifacts that fall outside the original shape.
+        if (!polygonWithinSubject(polygon, subjectBounds)) { rejectReasons.push('outOfBbox'); if (isFreehand) sawArtifact = true; continue; }
+        // Discard spurious fills that pass the bbox/area guards but aren't a true
+        // subset of (subject − eraser) — the relocated/in-bbox "section fills in"
+        // glitch. This is the authoritative artifact test: it vertex-samples the
+        // piece against the actual subject geometry. A secondary "small AND far
+        // from the eraser" check used to run after this one, on the theory that
+        // a tiny distant piece was probably a Martinez artifact — but a real
+        // repro showed that profile is equally common for a LEGITIMATE small
+        // separate mark within the same multi-ring freehand/clipDerived stroke
+        // (a disconnected flourish or dot) that this eraser pass simply never
+        // reached. Once a piece passes the vertex-subset check here, "far from
+        // the eraser" isn't evidence of anything — it's just unerased ink.
+        if (isFreehand && !polygonIsValidResult(polygon, subject, eraserPoints, subjectPolyBounds!)) { rejectReasons.push('notSubset'); sawArtifact = true; continue; }
+        if (cleanupTinyRemnants && polygonIsTinyEraserRemnant(polygon, eraserPoints, radius, subjectArea)) {
+            rejectReasons.push('tinyRemnant');
+            remnantDiscardedArea += ringArea(outer);
+            continue;
+        }
+
+        const d = polygonToNonZeroD(polygon);
+        if (!d) { rejectReasons.push('noD'); continue; }
+
+        if (isFreehand) {
+            // `pieces` is purely diagnostic (it copies the full `d` of every
+            // emitted piece); keptPolygons/keptBounds are load-bearing — the
+            // omitted-survivor and dropped-hole checks read them.
+            if (clipDiagnosticsEnabled) pieces.push({ d });
+            keptPolygons.push(polygon);
+            keptBounds.push(resultBounds![pi]);
+        }
+
+        nextPaths.push({
+            ...path,
+            id: generateId(),
+            d,
+            fill: path.fill || 'none',
+            fillRule: path.fillRule === 'evenodd' ? path.fillRule : undefined,
+            freehandSource: undefined,
+            // Pieces are polygon-clipping output — mark them so later erases keep
+            // the freehand-grade guards + union reconstruction (see PathData).
+            clipDerived: true
+        });
+    }
+
+    // Dropped-hole detection: the difference can occasionally return a polygon
+    // MISSING an internal hole that the subject had (a polygon-clipping artifact).
+    // The hole's region then renders SOLID — the "fill in a random place" glitch —
+    // yet rendered area == authoritative area (both count the region solid), so the
+    // area/bbox/vertex guards can't see it. A subject hole is genuinely dropped iff
+    // its reliable interior sample (NOT the centroid, which can fall outside a
+    // concave hole) is un-erased AND lands in a kept piece's SOLID (in some kept
+    // outer, not in any kept hole). This stops false-positive warnings on concave
+    // holes whose centroid sits in solid.
+    // This pass only ANNOTATES the diagnostic pieces with a stray warning — the
+    // functional repair that re-punches dropped holes ran earlier — so it is
+    // skipped entirely unless the verbose diagnostics are on. It walks every
+    // subject hole doing point-in-polygon work, which is not free on a deeply
+    // holed background.
+    let droppedHoles: { cx: number; cy: number; area: number }[] = [];
+    if (isFreehand && clipDiagnosticsEnabled) {
+        const radiusSq = (radius + 1) * (radius + 1);
+        for (const subjPoly of subject) {
+            for (let h = 1; h < subjPoly.length; h++) {
+                const hole = subjPoly[h];
+                const p = interiorPointOfRing(hole);
+                if (!p) continue;
+                if (pointDistToEraserPathSq(p, eraserPoints) <= radiusSq) continue;
+                let inSolid = false;
+                for (let ki = 0; ki < keptPolygons.length; ki++) {
+                    const b = keptBounds[ki];
+                    if (p.x < b.minX || p.x > b.maxX || p.y < b.minY || p.y > b.maxY) continue;
+                    const kp = keptPolygons[ki];
+                    if (!pointInsidePolygon(p, kp[0])) continue;
+                    if (kp.slice(1).some(khole => pointInsidePolygon(p, khole))) continue;
+                    inSolid = true;
+                    break;
+                }
+                if (inSolid) droppedHoles.push({ cx: Math.round(p.x), cy: Math.round(p.y), area: Math.round(ringArea(hole)) });
+            }
+        }
+        if (droppedHoles.length > 0) {
+            for (const p of pieces) {
+                if (!p.stray) p.stray = `DROPPED_HOLE: ${droppedHoles.length} subject hole(s) now solid at ${droppedHoles.map(d => `(${d.cx},${d.cy})`).join(' ')}`;
+            }
+        }
+    }
+
+    // Does the subject have a genuinely untouched region that's entirely
+    // absent from the KEPT pieces — the final post-filter survivor set? This
+    // catches two distinct failure modes:
+    //   1. Martinez silently omits a disjoint region from its raw output (no
+    //      fragment to inspect), AND
+    //   2. Martinez DOES emit a region, but the per-piece filter loop
+    //      (polygonIsValidResult / polygonWithinSubject / tinyRing) incorrectly
+    //      discards it — e.g. a valid disconnected survivor from a
+    //      self-overlapping freehand stroke whose reshuffled boundary fails the
+    //      vertex-in-subject quorum or eraser-containment heuristic.
+    // Checking keptPolygons (the post-filter set) instead of raw `polygons`
+    // covers both: keptPolygons ⊆ polygons, so any omission from raw output is
+    // also absent from keptPolygons, and filter-introduced loss is ADDITIONALLY
+    // caught. The previous code checked raw `polygons`, which was blind to loss
+    // introduced by the filter loop — a valid piece present in raw output
+    // looked "not omitted" even after the filter discarded it.
+    // This must be checked regardless of whether OTHER pieces survived
+    // (nextPaths.length > 0): a real repro showed the near-side of a thin
+    // self-crossing freehand stroke surviving as a small kept piece (passing
+    // every per-piece guard, so nextPaths was non-empty) while a separate,
+    // disjoint, genuinely-untouched far portion of the SAME stroke vanished —
+    // the "some ink survives here, but a whole unrelated region silently
+    // disappears" glitch.
+    const omittedSurvivor = isFreehand && subjectHasOmittedSurvivor(subject, keptPolygons, eraserPoints, radius);
+    if (omittedSurvivor) {
+        if (isFreehand) __lastClipDiag = { bailReason: 'omittedSurvivor', subjectArea, resultArea, polygonCount: polygons.length, kept: nextPaths.length, rejectReasons, pieces };
+        return null;
+    }
+
+    if (nextPaths.length > 0) {
+        if (isFreehand) __lastClipDiag = { bailReason: 'ok', subjectArea, resultArea, polygonCount: polygons.length, kept: nextPaths.length, rejectReasons, pieces };
+        return nextPaths;
+    }
+    // The whole stroke is about to be dropped (nextPaths empty). That is
+    // correct in two cases:
+    //  - the eraser genuinely covered the entire subject (eraserCoversSubject)
+    //    — an unambiguous full-erase, or
+    //  - polygon-clipping's OWN raw result area (resultArea, computed above
+    //    from the difference's output BEFORE any of our per-piece guards ran)
+    //    is already negligible relative to the subject. That means the
+    //    difference legitimately reduced the stroke to dust — our per-piece
+    //    guards (tinyRing/tinyRemnant) then correctly discarded that dust —
+    //    not the Martinez failure mode described below, which instead leaves
+    //    a SUBSTANTIAL resultArea shattered into countless sub-threshold
+    //    fragments. `sawArtifact` (set only by outOfBbox/notSubset/spuriousFar
+    //    — the actual corruption signals) must also be clear, since any of
+    //    those catching something means a real survivor may have been
+    //    wrongly discarded.
+    //    Missing this case was a real bug: a piece that polygon-clipping
+    //    genuinely erased down to ~1% remaining area (which cleanupTinyRemnants
+    //    then correctly trimmed to nothing) got reverted to its FULL pristine
+    //    size just because the eraser capsule didn't touch literally every
+    //    vertex — "erasing over an already-mostly-erased shape makes it whole
+    //    again", which then LOOKS like ink reappearing once whatever was
+    //    hiding it is erased away later.
+    //  Otherwise (an artifact was seen, or the raw result is still a
+    //  meaningful area) an empty result is untrustworthy — it may be a
+    //  polygon-clipping failure: a shatter into sub-0.5 slivers (Martinez
+    //  artifact on self-overlapping freehand outlines) or a mayIntersect false
+    //  positive with no real overlap. Dropping would lose the whole stroke
+    //  ("a line just disappears when I erase part of it"), so keep the
+    //  original instead.
+    const covered = eraserCoversSubject(subject, eraserPoints, radius);
+    // Only area NOT already accounted for by the intentional remnant cleanup
+    // counts as suspicious. A remnant-cleaned piece can legitimately leave up
+    // to r²·0.08 of dust (polygonIsTinyEraserRemnant's own limit) — that area
+    // was LOCATION-VERIFIED near the eraser before being discarded, so it is
+    // trustworthy evidence of a real erase. Without the deduction,
+    // remnant-cleaned pieces got reverted to full size ("lines reappear when
+    // erasing over an already-erased region").
+    const unaccountedArea = Math.max(0, resultArea - remnantDiscardedArea);
+    // The unaccounted remainder (sub-minArea rings, unemittable pieces) is NOT
+    // location-verified, so its allowance must stay ABSOLUTE dust — a couple of
+    // crumb-slivers at most. This threshold was briefly proportional
+    // (min(r²·4, subject·0.25), i.e. hundreds of px²), which let a Martinez
+    // SHATTER — corrupt near-empty output from a mere graze, the very failure
+    // this bail exists to catch — pass as "legitimately erased" and delete an
+    // entire stroke the eraser barely touched.
+    const maxDustArea = Math.max(2, radius * radius * 0.05);
+    const resultNegligible = unaccountedArea <= maxDustArea;
+    // omittedSurvivor was already checked (and would have returned null)
+    // above, so it's known false here — no need to recheck it.
+    const genuinelyErased = covered || (!sawArtifact && resultNegligible);
+    if (isFreehand) {
+        __lastClipDiag = {
+            bailReason: covered ? 'fullyErased' : (sawArtifact ? 'allArtifacts' : (resultNegligible ? 'negligibleResult' : 'emptyNotCovered')),
+            subjectArea, resultArea, remnantDiscardedArea, polygonCount: polygons.length, rejectReasons, pieces
+        };
+    }
+    return genuinelyErased ? [] : null;
+};
+
+export const sourceStrokeToD = (source: NonNullable<PathData['freehandSource']>) => {
+    const outline = getStroke(source.points, { ...source.options, last: true });
+    if (outline.length === 0) return '';
+
+    const ring: Ring = outline.map(([x, y]) => [x, y]);
+    let flattened: MultiPolygon;
+    try {
+        flattened = union([closeRing(ring.map(([x, y]) => ({ x, y })))]);
+    } catch {
+        flattened = [[closeRing(ring.map(([x, y]) => ({ x: roundCoordinate(x), y: roundCoordinate(y) })))]]; 
+    }
+    return flattened
+        .map(polygonToD)
+        .filter(Boolean)
+        .join(' ');
+};
+
+const freehandSourceGeometry = (source: NonNullable<PathData['freehandSource']>): Geometry | null => {
+    const points = source.points.map(([x, y]) => ({ x, y }));
+    if (points.length === 0) return null;
+
+    const radius = Math.max(0.5, source.options.size / 2);
+    const parts: Geometry[] = [];
+
+    if (points.length === 1) {
+        parts.push(circlePolygon(points[0], radius));
+    } else {
+        for (let i = 1; i < points.length; i++) {
+            parts.push(capsulePolygon(points[i - 1], points[i], radius));
+        }
+    }
+
+    return unionGeometryParts(parts);
+};
+
+export function freehandSourceToPath(source: NonNullable<PathData['freehandSource']>) {
+    return sourceStrokeToD(source);
+}
+
+// Ring bounding box, memoized per ring object (same contract as
+// interiorPointCache: ring arrays are stable for their owner's lifetime).
+const ringBBoxCache = new WeakMap<Ring, { minX: number; minY: number; maxX: number; maxY: number }>();
+const ringBBox = (ring: Ring) => {
+    const cached = ringBBoxCache.get(ring);
+    if (cached) return cached;
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (let i = 0; i < ring.length; i++) {
+        const x = ring[i][0], y = ring[i][1];
+        if (x < minX) minX = x; if (y < minY) minY = y;
+        if (x > maxX) maxX = x; if (y > maxY) maxY = y;
+    }
+    const bb = { minX, minY, maxX, maxY };
+    ringBBoxCache.set(ring, bb);
+    return bb;
+};
+
+// Ray-cast point-in-ring, with a memoized bbox reject in front.
+//
+// The reject is EXACTLY equivalent, not an approximation: the loop wraps
+// (j = length-1), so the edge set is always a closed loop. A point outside the
+// y-range crosses no edge; one past maxX satisfies no `px < xIntersect`; one
+// before minX satisfies every crossing, and a closed loop crosses any horizontal
+// line an even number of times, so the toggles cancel. All three cases return
+// false either way. Boundary-equal points are NOT rejected (strict compares) —
+// they fall through to the full test.
+//
+// This is the hottest function in the erase pass (14% of total): the guards test
+// every eraser trail point against the same few rings, so without it the cost is
+// O(trailPoints × ringVerts). Reading y before x also skips the division and the
+// x reads entirely whenever the y-straddle test fails, which is most edges.
+const pointInsidePolygon = (point: Point, ring: Ring) => {
+    const px = point.x, py = point.y;
+    const bb = ringBBox(ring);
+    if (px < bb.minX || px > bb.maxX || py < bb.minY || py > bb.maxY) return false;
+    let inside = false;
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+        const vi = ring[i], vj = ring[j];
+        const yi = vi[1], yj = vj[1];
+        if ((yi > py) !== (yj > py)) {
+            const xi = vi[0], xj = vj[0];
+            if (px < (xj - xi) * (py - yi) / (yj - yi || 1e-9) + xi) inside = !inside;
+        }
+    }
+    return inside;
+};
+
+const pathBoundsOverlap = (pathBounds: ReturnType<typeof pointBounds>, eraserBounds: ReturnType<typeof pointBounds>, radius: number) => {
+    return !(pathBounds.maxX < eraserBounds.minX - radius || pathBounds.minX > eraserBounds.maxX + radius ||
+        pathBounds.maxY < eraserBounds.minY - radius || pathBounds.minY > eraserBounds.maxY + radius);
+};
+
+const closedPathMayIntersectEraser = (flatCmds: FlatCommand[], subject: MultiPolygon | null, eraserPoints: Point[], radius: number) => {
+    const pathPoints = flatCmds.map(({ x, y }) => ({ x, y }));
+    const pathBounds = pointBounds(pathPoints);
+    const eraserBounds = pointBounds(eraserPoints);
+    if (!pathBoundsOverlap(pathBounds, eraserBounds, radius)) return false;
+
+    if (subject) {
+        for (const p of eraserPoints) {
+            if (subject.some(polygon => pointInsidePolygon(p, polygon[0]))) return true;
+        }
+    }
+
+    const eraserSegments = eraserPoints.slice(1).map((p, i) => ({ a: eraserPoints[i], b: p }));
+    let prevPt: Point | null = null;
+    for (const fCmd of flatCmds) {
+        if (fCmd.type === 'M') {
+            prevPt = { x: fCmd.x, y: fCmd.y };
+        } else if (fCmd.type === 'L' && prevPt) {
+            const a = prevPt;
+            const b = { x: fCmd.x, y: fCmd.y };
+            if (erasedIntervalsForSegment(a, b, eraserPoints, eraserSegments, radius).length > 0) return true;
+            prevPt = b;
+        }
+    }
+
+    return false;
+};
+
+type PointP = Point & { p?: number };
+type FlatCommandP = FlatCommand & { p?: number };
+
+// Robust interval-based split of a polyline by the eraser. Geometric and
+// deterministic (no polygon clipping). Returns the kept sub-polylines, carrying
+// pressure so freehand outlines can be regenerated. Shared by plain strokes and
+// freehand centerline erasing.
+const splitFlatByEraser = (
+    flatCmds: FlatCommandP[],
+    sampledEraserPoints: Point[],
+    eraserSegments: { a: Point; b: Point }[],
+    effectiveRadius: number,
+    radius: number,
+    strokeRadius: number,
+    capPadding: number,
+    // Thin vector strokes trim gradually (keep a sliver until the eraser covers the
+    // full visible thickness) so repeated passes feel natural. Freehand strokes are
+    // thick and cut cleanly on the centerline — the trim logic would leave stray
+    // sliver dots near the cut — so they pass false.
+    preserveThinRemnant = true
+): { subPaths: PointP[][]; anyHit: boolean } => {
+    const effectiveRadiusSq = effectiveRadius * effectiveRadius;
+    const subPaths: PointP[][] = [];
+    let currentSubPath: PointP[] = [];
+    let anyHit = false;
+
+    const isInside = (cx: number, cy: number) => {
+        for (const p of sampledEraserPoints) {
+            if ((cx - p.x) ** 2 + (cy - p.y) ** 2 <= effectiveRadiusSq) return true;
+        }
+        for (const { a, b } of eraserSegments) {
+            if (distToSegmentSq(cx, cy, a.x, a.y, b.x, b.y) <= effectiveRadiusSq) return true;
+        }
+        return false;
+    };
+
+    const appendPoint = (pt: PointP) => {
+        if (currentSubPath.length > 0) {
+            const last = currentSubPath[currentSubPath.length - 1];
+            if (Math.abs(last.x - pt.x) < 0.01 && Math.abs(last.y - pt.y) < 0.01) return;
+        }
+        currentSubPath.push(pt);
+    };
+
+    const processSample = (pt: PointP) => {
+        if (isInside(pt.x, pt.y)) {
+            anyHit = true;
+            if (currentSubPath.length > 0) { subPaths.push(currentSubPath); currentSubPath = []; }
+        } else {
+            appendPoint(pt);
+        }
+    };
+
+    let prevPt: PointP | null = null;
+    for (const fCmd of flatCmds) {
+        if (fCmd.type === 'M') {
+            if (currentSubPath.length > 0) { subPaths.push(currentSubPath); currentSubPath = []; }
+            prevPt = { x: fCmd.x, y: fCmd.y, p: fCmd.p };
+            if (isInside(fCmd.x, fCmd.y)) anyHit = true;
+            else currentSubPath.push({ x: fCmd.x, y: fCmd.y, p: fCmd.p });
+        } else if (fCmd.type === 'L' && prevPt) {
+            const a = prevPt;
+            const b: PointP = { x: fCmd.x, y: fCmd.y, p: fCmd.p };
+
+            let erasedIntervals = erasedIntervalsForSegment(a, b, sampledEraserPoints, eraserSegments, effectiveRadius, capPadding);
+            if (preserveThinRemnant && intervalFullyCoversSegment(erasedIntervals)) {
+                const fullThicknessRadius = Math.max(0, radius - strokeRadius);
+                const fullThicknessIntervals = erasedIntervalsForSegment(a, b, sampledEraserPoints, eraserSegments, fullThicknessRadius);
+                if (!intervalFullyCoversSegment(fullThicknessIntervals)) {
+                    erasedIntervals = fullThicknessIntervals;
+                } else {
+                    erasedIntervals = preserveSmallRemainderInterval(a, b, sampledEraserPoints, eraserSegments, radius);
+                }
+            }
+            if (erasedIntervals.length > 0) {
+                anyHit = true;
+                const pa = a.p ?? 0.5;
+                const pb = b.p ?? 0.5;
+                const pointAt = (t: number): PointP => ({
+                    x: a.x + (b.x - a.x) * t,
+                    y: a.y + (b.y - a.y) * t,
+                    p: pa + (pb - pa) * t
+                });
+                let cursor = 0;
+
+                const appendKeptSegment = (start: number, end: number) => {
+                    if (end - start < 1e-6) return;
+                    if (currentSubPath.length === 0 || start > 1e-6) appendPoint(pointAt(start));
+                    appendPoint(pointAt(end));
+                };
+
+                for (const interval of erasedIntervals) {
+                    appendKeptSegment(cursor, interval.start);
+                    if (currentSubPath.length > 0) { subPaths.push(currentSubPath); currentSubPath = []; }
+                    cursor = Math.max(cursor, interval.end);
+                }
+                appendKeptSegment(cursor, 1);
+            } else {
+                processSample(b);
+            }
+            prevPt = b;
+        }
+    }
+
+    if (currentSubPath.length > 0) subPaths.push(currentSubPath);
+    return { subPaths, anyHit };
+};
+
+/** Move-shared eraser geometry, built once per erase pass and reused across
+ *  every path the broadphase surfaces. Hoisting this out of the per-path loop is
+ *  the difference between one resample/bounds/segments (and at most one getStroke)
+ *  per move vs. one per candidate. */
+export type EraserCtx = {
+    /** Original (unsampled) eraser points this pass. Used by helpers that index the
+     *  raw centerline (pointDistToEraserPathSq, recordClipErase). */
+    eraserPoints: Point[];
+    /** Resampled (sub-divided for capsule smoothness) eraser points. The clip and
+     *  flat-split branches operate on these. */
+    sampledEraserPoints: Point[];
+    eraserBounds: { minX: number; minY: number; maxX: number; maxY: number };
+    eraserSegments: { a: Point; b: Point }[];
+    radius: number;
+    /** Lazily-computed swept-region MultiPolygon (union of trail capsules —
+     *  see eraserOutlinePolygon). `undefined` = not yet computed this pass;
+     *  once computed (on the first closed-filled candidate that needs it) it's
+     *  reused for every later candidate. Flat-only erase passes never touch it,
+     *  so they pay no union. */
+    _eraserPolygon: MultiPolygon | null | undefined;
+};
+
+/** Build the pass-shared eraser context: resampled points, bounds, and
+ *  per-segment pairs. The expensive `eraserOutlinePolygon` (capsule union) is
+ *  NOT built here — it's computed lazily via `eraserPolygonFromCtx` on the
+ *  first closed-filled candidate that needs it, then reused for every candidate
+ *  this pass. Exported so the store can build one ctx per erase pass and split
+ *  each broadphase candidate via `splitOnePathByEraser` without re-running the
+ *  shared setup. */
+export const buildEraserCtx = (eraserPoints: Point[], radius: number): EraserCtx => {
+    // No resampling: every consumer is exact per straight segment (strips +
+    // endpoint circles for the interval math, one capsule per segment for the
+    // clip region), so subdividing segments only multiplies the vertex count
+    // that the capsule union and every Martinez difference then pay for.
+    //
+    // The trail is deliberately NOT simplified. Douglas-Peucker at 0.05px would
+    // cut a real 2149-point trail to ~1400 and buy another ~1.6x on the drag-end
+    // pass, but it is a genuine (if sub-pixel) geometric approximation: measured
+    // against the unsimplified result it moved 207 of 3.58M rasterized pixels
+    // versus 48 without it. The rest of the speedup here is exact, so the
+    // approximation is not worth taking by default — see simplifyTrail.
+    const simplified = eraserPoints;
+    return {
+        eraserPoints,
+        sampledEraserPoints: simplified,
+        eraserBounds: pointBounds(simplified),
+        eraserSegments: simplified.slice(1).map((p, i) => ({ a: simplified[i], b: p })),
+        radius,
+        _eraserPolygon: undefined,
+    };
+};
+
+const eraserPolygonFromCtx = (ctx: EraserCtx): MultiPolygon | null => {
+    if (ctx._eraserPolygon === undefined) {
+        ctx._eraserPolygon = eraserOutlinePolygon(ctx.sampledEraserPoints, ctx.radius);
+        eraseStats.eraserPolygonVerts = ctx._eraserPolygon
+            ? ctx._eraserPolygon.reduce((n, poly) => n + poly.reduce((m, ring) => m + ring.length, 0), 0)
+            : 0;
+    }
+    return ctx._eraserPolygon;
+};
+
+/** The eraser's swept region restricted to the trail segments that can
+ *  actually reach `bounds` (a path's bbox): a capsule is included iff its
+ *  segment's bbox intersects the bounds expanded by radius+1 — beyond that a
+ *  capsule provably cannot touch the path, so the difference result for THIS
+ *  path is identical to clipping against the full-trail union.
+ *
+ *  This is the whole-drag pass's perf linchpin: one drag-end pass clips every
+ *  candidate against the trail, and profiling showed the Martinez `difference`
+ *  itself dominating (~50ms per stroke against a ~1500-vertex full-trail
+ *  union, seconds total on a dense scene — the "page locks up at mouseup"
+ *  stall). A stroke only ever meets the few trail segments near it, so each
+ *  difference clips against a small local union instead.
+ *
+ *  Returns null when no trail segment reaches the bounds (caller carries the
+ *  path through untouched). */
+const localEraserRegion = (ctx: EraserCtx, bounds: { minX: number; minY: number; maxX: number; maxY: number }): MultiPolygon | null => {
+    const __t0 = performance.now();
+    try {
+        return localEraserRegionInner(ctx, bounds);
+    } finally {
+        eraseStats.eraserRegionCalls++;
+        eraseStats.eraserRegionMs += performance.now() - __t0;
+    }
+};
+
+const localEraserRegionInner = (ctx: EraserCtx, bounds: { minX: number; minY: number; maxX: number; maxY: number }): MultiPolygon | null => {
+    const pts = ctx.sampledEraserPoints;
+    const radius = ctx.radius;
+    if (pts.length === 0) return null;
+    const pad = radius + 1;
+    const minX = bounds.minX - pad, maxX = bounds.maxX + pad;
+    const minY = bounds.minY - pad, maxY = bounds.maxY + pad;
+
+    // Count reachable segments FIRST, with bbox tests only. The cached-full-union
+    // branch below throws away every capsule it was given, so building them up
+    // front allocated one polygon per trail segment per candidate path and then
+    // discarded the lot — on a long stroke over a few large paths that was
+    // thousands of dead polygons per pass (visible as capsulePolygon self-time
+    // and as GC pressure). The bbox test is the same one used below, so the
+    // branch decision and the resulting geometry are unchanged.
+    const reaches = (i: number) => {
+        const a = pts[i - 1], b = pts[i];
+        const sMinX = a.x < b.x ? a.x : b.x, sMaxX = a.x < b.x ? b.x : a.x;
+        const sMinY = a.y < b.y ? a.y : b.y, sMaxY = a.y < b.y ? b.y : a.y;
+        return !(sMaxX < minX || sMinX > maxX || sMaxY < minY || sMinY > maxY);
+    };
+    let included = 0;
+    for (let i = 1; i < pts.length; i++) if (reaches(i)) included++;
+    if (included > 0 && (included === pts.length - 1 || included > 64)) {
+        eraseStats.eraserRegionCachedHits++;
+        return eraserPolygonFromCtx(ctx);
+    }
+    const parts: Polygon[] = [];
+    for (let i = 1; i < pts.length; i++) {
+        if (reaches(i)) parts.push(capsulePolygon(pts[i - 1], pts[i], radius));
+    }
+    // Path spans the whole trail — use the ctx-cached full union instead of
+    // re-unioning identical parts per candidate (big strokes on a dense scene
+    // would otherwise pay the full union N times).
+    // Reuse the ctx-cached FULL-trail union rather than building a local one
+    // whenever this path needs most of the trail anyway. Capsules excluded above
+    // provably cannot reach this path's bbox, so clipping against the full union
+    // yields an identical difference — it is purely a cost choice. Building a big
+    // local union per candidate was a real drag-end cost: five large paths each
+    // spanning the trail paid five ~430ms unions (2149ms) where one shared build
+    // suffices. Small local regions (few capsules) are still built locally, since
+    // those are cheap and give the difference a smaller polygon to chew on.
+    if (parts.length === 0) {
+        // Single-point trail (click erase) with the point in reach.
+        const p = pts[0];
+        if (pts.length === 1 && p.x >= minX && p.x <= maxX && p.y >= minY && p.y <= maxY) {
+            return [circlePolygon(p, radius)];
+        }
+        return null;
+    }
+    try {
+        const unified = union(parts[0], ...parts.slice(1));
+        if (unified && unified.length > 0) return unified;
+    } catch {
+        // fall through — overlapping-but-well-formed parts still clip correctly
+    }
+    return parts;
+};
+
+/** Split a single path by the eraser described by `ctx`. Returns the PathData[]
+ *  to emit in this path's place: `[]` drops it (the old `continue` on
+ *  unparseable geometry), `[path]` carries it through untouched (same object,
+ *  so callers can detect a no-op with `pieces.length === 1 && pieces[0] === path`),
+ *  and a longer array is the split pieces. `candidates`/`sync` mirror the
+ *  `splitPathsByEraser` opts. This is the per-path body of `splitPathsByEraser`
+ *  factored out so the store can call it per broadphase candidate while building
+ *  `ctx` once per move; per-path split has no cross-path deps, so per-candidate
+ *  results are identical to a single full-array split. */
+export const splitOnePathByEraser = (
+    path: PathData,
+    ctx: EraserCtx,
+    isLayerLocked: (layerId?: string) => boolean = () => false,
+    candidates?: Set<string>,
+    sync?: { removed: PathData[]; added: PathData[] }
+): PathData[] => {
+    const { sampledEraserPoints, eraserBounds, eraserSegments, eraserPoints, radius } = ctx;
+
+    if (isLayerLocked(path.layerId)) return [path];
+
+    // Id-keyed broadphase: a path whose id isn't a candidate can't be hit this
+    // pass, so carry it through untouched. Falls back to "always a candidate"
+    // when no set is supplied (grid disabled / first build / store Pass 2 which
+    // pre-filtered by id already).
+    if (candidates && path.id && !candidates.has(path.id)) return [path];
+
+    eraseStats.pathsChecked++;
+
+    // Flattened commands + bbox + parsed translate, cached per path identity.
+    // Untouched paths keep their object across moves, so after the first
+    // encounter this is a single WeakMap lookup — no parsePath, no flattenPath,
+    // no parseTranslate regex (the per-path-per-move cost on a dense drawing).
+    const { flatCmds, bbox: pathBBox, tx, ty } = cachedFlatten(path);
+    if (flatCmds.length === 0 || !pathBBox) return [];
+    const pathBounds = pathBBox;
+    const hasTranslate = tx !== 0 || ty !== 0;
+
+    // Freehand strokes erase via the closed-filled-path branch below (polygon-
+    // clipping subtract on the committed outline). The `isFreehandPath` flag
+    // just selects the hardened freehand guards + diagnostics inside that branch.
+    const isFreehandPath = !!(path.freehandSource && path.freehandSource.points.length > 0);
+
+    const strokeRadius = (path.strokeWidth || 1) / 2;
+    const effectiveRadius = radius + strokeRadius;
+
+    // Pre-flatten broadphase: skip the whole path if its cached bbox can't
+    // reach the eraser capsule. The capsule extends `radius` beyond the eraser
+    // points; the path's own stroke adds `strokeRadius`.
+    const ex = radius + strokeRadius + 1;
+    if (pathBounds.maxX + ex < eraserBounds.minX || pathBounds.minX - ex > eraserBounds.maxX ||
+        pathBounds.maxY + ex < eraserBounds.minY || pathBounds.minY - ex > eraserBounds.maxY) {
+        eraseStats.bboxRejected++;
+        return [path];
+    }
+
+    // Genuine filled shapes (rectangles, baked mesh faces, …) — polygon
+    // clipping is the right tool here.
+    if (isClosedFilledPath(path)) {
+        eraseStats.closedFilledChecked++;
+        const splitPathMetadata = hasTranslate ? { ...path, transform: undefined } : path;
+        // Diagnostics cover clip-derived pieces too — piece re-erases were the
+        // unrecorded blind spot where corrupted differences went unnoticed.
+        const isClipFreehand = isFreehandPath || !!path.clipDerived;
+        // Subject geometry is eraser-independent AND path-immutable, so it's
+        // cached per path identity (see subjectCache) — one build per path
+        // lifetime, reused across every move of every drag. subjectBuilds in
+        // the perf counters now counts cache MISSES only.
+        const subject = cachedSubject(path, flatCmds);
+        if (!closedPathMayIntersectEraser(flatCmds, subject, sampledEraserPoints, radius)) {
+            eraseStats.mayIntersectRejected++;
+            return [path];
+        }
+        // Clip against only the trail segments that can reach THIS path's bbox
+        // (identical result to the full-trail union — see localEraserRegion).
+        // The whole-drag trail's full union made each Martinez difference ~50ms
+        // on a dense scene; the local region keeps each one small.
+        const eraserRegion = localEraserRegion(ctx, pathBounds);
+        if (!eraserRegion) return [path];
+        const __splitT0 = performance.now();
+        const split = splitClosedFilledPath(
+            splitPathMetadata,
+            flatCmds,
+            subject,
+            sampledEraserPoints,
+            radius,
+            eraserPoints.length > 1,
+            eraserRegion
+        );
+        eraseStats.closedFilledSplitMs += performance.now() - __splitT0;
+        let out: PathData[];
+        if (split) {
+            out = split;
+            eraseStats.piecesEmitted += split.length;
+            if (sync) {
+                sync.removed.push(path);
+                for (const s of split) sync.added.push(s);
+            }
+        } else {
+            // polygon-clipping totally bailed on this outline (every piece was an
+            // artifact). Keep the path unchanged rather than emit a corrupted fill —
+            // the per-piece artifact discard above handles the common spurious-fill
+            // case; a total bail just leaves this one stroke un-erased this pass.
+            if (isClipFreehand) {
+                // eslint-disable-next-line no-console
+                console.log('[CLIP] a stroke was left un-erased this pass (safe, no reshape).');
+            }
+            out = [splitPathMetadata];
+            // On a bail with a translate, splitPathMetadata is a NEW object
+            // (transform stripped) sharing the path's id — its bounds differ, so
+            // re-key the grid entry. Without translate splitPathMetadata === path,
+            // so nothing changed and no sync is needed.
+            if (sync && hasTranslate) {
+                sync.removed.push(path);
+                sync.added.push(splitPathMetadata);
+            }
+        }
+        if (isClipFreehand) {
+            const __recordT0 = performance.now();
+            recordClipErase(path, eraserPoints, radius, __lastClipDiag as Record<string, unknown> | null);
+            eraseStats.recordMs += performance.now() - __recordT0;
+        }
+        return out;
+    }
+
+    const capPadding = strokeRadius;
+
+    if (pathBounds.maxX < eraserBounds.minX - effectiveRadius || pathBounds.minX > eraserBounds.maxX + effectiveRadius ||
+        pathBounds.maxY < eraserBounds.minY - effectiveRadius || pathBounds.minY > eraserBounds.maxY + effectiveRadius) {
+        return [path];
+    }
+
+    const { subPaths, anyHit } = splitFlatByEraser(flatCmds, sampledEraserPoints, eraserSegments, effectiveRadius, radius, strokeRadius, capPadding);
+    if (!anyHit) return [path];
+
+    // anyHit ⇒ the original is replaced (split into pieces, or fully erased if
+    // no valid sub-path survives). Record the removal up front; each surviving
+    // piece is recorded as an addition as it is emitted.
+    if (sync) sync.removed.push(path);
+
+    const pieces: PathData[] = [];
+    for (const sub of subPaths) {
+        if (sub.length < 2) continue;
+
+        let d = `M ${sub[0].x.toFixed(1)} ${sub[0].y.toFixed(1)}`;
+        for (let i = 1; i < sub.length; i++) {
+            d += ` L ${sub[i].x.toFixed(1)} ${sub[i].y.toFixed(1)}`;
+        }
+
+        const piece = {
+            ...path,
+            id: generateId(),
+            d,
+            fill: path.fill || 'none',
+            transform: hasTranslate ? undefined : path.transform
+        };
+        pieces.push(piece);
+        if (sync) sync.added.push(piece);
+    }
+    eraseStats.piecesEmitted += pieces.length;
+    return pieces;
+};
+
+export function splitPathsByEraser(
+    currentPaths: PathData[],
+    eraserPoints: Point[],
+    radius: number,
+    isLayerLocked: (layerId?: string) => boolean = () => false,
+    opts?: {
+        /** Ids of paths the broadphase says could intersect the eraser this pass.
+         *  When provided, any path whose `id` is not in the set is carried through
+         *  untouched (skipped before any geometry work). Id-keyed so it survives
+         *  Svelte proxy re-wrapping of split pieces. */
+        candidates?: Set<string>;
+        /** When provided, records the originals removed and pieces added this pass
+         *  so the caller can patch its spatial index without a full rebuild. */
+        sync?: { removed: PathData[]; added: PathData[] };
+    }
+): PathData[] {
+    if (eraserPoints.length === 0) return currentPaths;
+
+    // Move-shared eraser geometry: one resample/bounds/segments (and at most one
+    // getStroke, lazily) per call, reused across every path via splitOnePathByEraser.
+    const ctx = buildEraserCtx(eraserPoints, radius);
+    const candidates = opts?.candidates;
+    const sync = opts?.sync;
+
+    const newPaths: PathData[] = [];
+    for (const path of currentPaths) {
+        const pieces = splitOnePathByEraser(path, ctx, isLayerLocked, candidates, sync);
+        if (pieces.length) newPaths.push(...pieces);
+    }
+    return newPaths;
+}
