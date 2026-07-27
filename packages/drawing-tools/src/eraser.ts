@@ -1,4 +1,4 @@
-import type { PathData } from './types';
+import type { PathData } from './types.ts';
 import { parsePath, parseTranslate } from './path.ts';
 import { type MultiPolygon, type Polygon, type Ring } from 'polygon-clipping';
 import { difference, union } from './clipping.ts';

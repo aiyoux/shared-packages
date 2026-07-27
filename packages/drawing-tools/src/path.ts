@@ -1,4 +1,4 @@
-import type { PathData } from './types';
+import type { PathData } from './types.ts';
 
 export interface PathCommand {
     type: string;

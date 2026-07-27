@@ -1,4 +1,4 @@
-import type { PathData } from './types';
+import type { PathData } from './types.ts';
 import { generateId } from './id.ts';
 
 export type BrushType = 'pen' | 'pencil' | 'highlighter';

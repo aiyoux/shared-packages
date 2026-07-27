@@ -1,8 +1,8 @@
 /// <reference lib="webworker" />
-import type { PathData } from './types';
-import { splitPathsByEraser, resetEraseStats, getEraseStats, setClipDiagnosticsEnabled, type EraseStats } from './eraser';
-import { setClipper2Module, setClipper2Enabled, isClipper2Active } from './clipping';
-import { buildEraseDelta, type EraseDelta } from './eraseDelta';
+import type { PathData } from './types.ts';
+import { splitPathsByEraser, resetEraseStats, getEraseStats, setClipDiagnosticsEnabled, type EraseStats } from './eraser.ts';
+import { setClipper2Module, setClipper2Enabled, isClipper2Active } from './clipping.ts';
+import { buildEraseDelta, type EraseDelta } from './eraseDelta.ts';
 
 /** Off-main-thread erase.
  *

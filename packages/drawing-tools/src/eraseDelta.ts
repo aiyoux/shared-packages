@@ -1,4 +1,4 @@
-import type { PathData } from './types';
+import type { PathData } from './types.ts';
 
 /** Positional erase diff — the undo payload for a split-erase pass.
  *

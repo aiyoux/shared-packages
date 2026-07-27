@@ -7,20 +7,21 @@
   "exports": {
     ".": {
       "types": "./src/index.ts",
-      "default": "./src/index.ts"
+      "default": "./dist/index.js"
     },
     "./worker": {
       "types": "./src/eraser.worker.ts",
       "default": "./src/eraser.worker.ts"
-    },
-    "./types": {
-      "types": "./src/types.ts",
-      "default": "./src/types.ts"
     }
   },
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./src/index.ts",
+  "files": ["dist", "src"],
   "scripts": {
+    "build": "esbuild src/index.ts --bundle --format=esm --outfile=dist/index.js --external:perfect-freehand --external:polygon-clipping --external:clipper2-wasm --sourcemap",
     "test": "node --experimental-test-module-mocks --test test/*.test.js test/*.test.ts",
-    "yalc:publish": "yalc publish"
+    "yalc:publish": "npm run build && yalc publish"
   },
   "dependencies": {
     "clipper2-wasm": "^0.4.0",
@@ -28,7 +29,9 @@
     "polygon-clipping": "^0.15.7"
   },
   "devDependencies": {
-    "@types/node": "^26.1.1"
+    "@types/node": "^26.1.1",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.7.3"
   },
   "engines": {
     "node": ">=22.7.0"

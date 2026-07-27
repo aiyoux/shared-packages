@@ -2,11 +2,11 @@
 // svg-sketcher and web_social_games. Pure logic + types; no Svelte, no DOM
 // (the worker is a separate entry — see package.json `exports["./worker"]`).
 
-export * from './types';
-export * from './id';
-export * from './path';
-export * from './brush';
-export * from './raster';
-export * from './clipping';
-export * from './eraseDelta';
-export * from './eraser';
+export * from './types.ts';
+export * from './id.ts';
+export * from './path.ts';
+export * from './brush.ts';
+export * from './raster.ts';
+export * from './clipping.ts';
+export * from './eraseDelta.ts';
+export * from './eraser.ts';

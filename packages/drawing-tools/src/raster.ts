@@ -1,4 +1,4 @@
-import type { PathData } from './types';
+import type { PathData } from './types.ts';
 
 /**
  * Canvas rasterizer for committed strokes. The vector PathData stays the source
