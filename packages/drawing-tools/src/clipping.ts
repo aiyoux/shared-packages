@@ -201,3 +201,15 @@ export const difference = (subject: Geom, ...clips: Geom[]): MultiPolygon => {
     }
     return polygonClipping.difference(subject as Polygon, ...(clips as Polygon[]));
 };
+
+/** The overlap between subject and clips — the mirror of `difference`. The fade
+ *  eraser keeps this part at a reduced opacity instead of removing it. */
+export const intersection = (subject: Geom, ...clips: Geom[]): MultiPolygon => {
+    if (isClipper2Active()) {
+        try {
+            const res = run(mod!.ClipType.Intersection, [asMulti(subject)], clips.map(asMulti));
+            if (res) return res;
+        } catch (err) { onFallback(err); }
+    }
+    return polygonClipping.intersection(subject as Polygon, ...(clips as Polygon[]));
+};

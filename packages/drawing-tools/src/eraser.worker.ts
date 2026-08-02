@@ -1,6 +1,6 @@
 /// <reference lib="webworker" />
 import type { PathData } from './types.ts';
-import { splitPathsByEraser, resetEraseStats, getEraseStats, setClipDiagnosticsEnabled, type EraseStats } from './eraser.ts';
+import { splitPathsByEraser, resetEraseStats, getEraseStats, setClipDiagnosticsEnabled, type EraseStats, type FadeOptions } from './eraser.ts';
 import { setClipper2Module, setClipper2Enabled, isClipper2Active } from './clipping.ts';
 import { buildEraseDelta, type EraseDelta } from './eraseDelta.ts';
 
@@ -30,6 +30,8 @@ export type EraseRequest = {
     /** A/B switch for the clipping engine, same reason as clipDiagnostics: this
      *  module instance is the worker's own, so the toggle rides the request. */
     useClipper2?: boolean;
+    /** Set by the fade eraser: ink under the eraser is dimmed rather than cut. */
+    fade?: FadeOptions;
 };
 
 export type EraseResponse =
@@ -96,7 +98,9 @@ self.onmessage = async (event: MessageEvent<EraseRequest>) => {
             req.eraserPoints,
             req.radius,
             isLayerLocked,
-            req.candidates ? { candidates: new Set(req.candidates), sync } : { sync }
+            req.candidates
+                ? { candidates: new Set(req.candidates), sync, fade: req.fade }
+                : { sync, fade: req.fade }
         );
         const changed = sync.removed.length > 0;
         const res: EraseResponse = {

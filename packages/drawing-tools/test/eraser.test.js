@@ -84,21 +84,54 @@ test('split eraser does not delete a short remaining open stroke just because ca
     assert.ok(pathMinMaxX(result[0].d).max > 0);
 });
 
-test('split eraser keeps a short open stroke until the eraser covers its full visible thickness', () => {
+test('split eraser leaves a short open stroke alone until the eraser reaches its centerline', () => {
+    // The cut threshold is the eraser radius measured to the CENTERLINE: at that
+    // distance the eraser has taken half the stroke's visible thickness, so
+    // cutting is the closest a centerline can get to what the preview shows.
+    // Beyond it the eraser is only shaving the flank and the ink stays.
     const paths = [{
         ...linePath('M 0 0 L 10 0'),
         strokeWidth: 2
     }];
-    const result = splitPathsByEraser(paths, [
-        { x: 6, y: 0 }
-    ], 6);
 
-    assert.equal(result.length, 1);
-    assert.equal(pathMinMaxX(result[0].d).min, 0);
-    assert.ok(pathMinMaxX(result[0].d).max > 0);
+    assert.deepEqual(
+        splitPathsByEraser(paths, [{ x: 5, y: 6.5 }], 6),
+        paths,
+        'the eraser has not reached the centerline yet'
+    );
+    // Touching the centerline: the eraser reaches it at a single point, so the
+    // stroke is cut there and both ends survive.
+    const atTheCenterline = splitPathsByEraser(paths, [{ x: 5, y: 6 }], 6);
+    assert.equal(atTheCenterline.length, 2);
+    assert.equal(pathMinMaxX(atTheCenterline[0].d).min, 0);
+    assert.equal(pathMinMaxX(atTheCenterline[1].d).max, 10);
 });
 
-test('split eraser trims a short remaining open stroke instead of deleting the whole chunk at once', () => {
+test('split eraser leaves no stub behind when it engulfs a short stroke', () => {
+    // The live drag preview drops everything under the eraser, so anything the
+    // committed pass leaves behind inside it reads as ink popping back on
+    // release. This used to keep a fragment at one end: the segment was fully
+    // covered, so a second "trim at the full-thickness radius" rule re-cut it a
+    // strokeRadius short of the first rule's cut and stranded the difference.
+    const paths = [{
+        ...linePath('M 0 0 L 10 0'),
+        strokeWidth: 2
+    }];
+
+    for (const radius of [5, 6, 8, 12]) {
+        assert.deepEqual(
+            splitPathsByEraser(paths, [{ x: 5, y: 0 }], radius),
+            [],
+            `radius ${radius} left a stub of an engulfed stroke behind`
+        );
+    }
+});
+
+test('split eraser deletes a segment lying entirely inside the eraser', () => {
+    // radius 6 - strokeRadius 1 = 5 covers the full 10-long segment end to end:
+    // the whole thing is under the eraser, so none of it may survive. Keeping a
+    // stub here is what made already-wiped fragments reappear when the drag
+    // ended, since the live preview drops everything the eraser passes over.
     const paths = [{
         ...linePath('M 0 0 L 10 0'),
         strokeWidth: 2
@@ -107,12 +140,32 @@ test('split eraser trims a short remaining open stroke instead of deleting the w
         { x: 5, y: 0 }
     ], 6);
 
-    assert.equal(result.length, 1);
-    assert.ok(pathMinMaxX(result[0].d).max - pathMinMaxX(result[0].d).min > 0);
-    assert.ok(pathMinMaxX(result[0].d).max - pathMinMaxX(result[0].d).min < 10);
+    assert.equal(result.length, 0, 'a fully-engulfed segment is erased outright');
 });
 
 test('split eraser does not miss radius-edge hits between sample positions', () => {
+    // The eraser lands exactly ON the cut radius (6 from the centerline) and
+    // between the polyline's own sample positions. A hit at the very edge of the
+    // threshold still has to register.
+    const paths = [{
+        ...linePath('M 0 0 L 103 0'),
+        strokeWidth: 3
+    }];
+    const result = splitPathsByEraser(paths, [
+        { x: 50, y: 6 }
+    ], 6);
+
+    assert.equal(result.length, 2);
+    assert.notEqual(result[0].d, paths[0].d);
+});
+
+test('split eraser leaves a line alone when the pass only clips its outer flank', () => {
+    // The reported "little holes in basic lines" bug. The eraser (radius 6) runs
+    // past a 3-wide line at 7.5 from its centerline: it reaches the ink's outer
+    // edge (7.5 - 1.5 = 6) and takes away nothing at all — the live preview,
+    // which subtracts the eraser from the rendered pixels, shows the line
+    // untouched. The committed pass used to sever it there, punching holes
+    // through lines the eraser had never visibly touched.
     const paths = [{
         ...linePath('M 0 0 L 103 0'),
         strokeWidth: 3
@@ -121,8 +174,51 @@ test('split eraser does not miss radius-edge hits between sample positions', () 
         { x: 50, y: 7.5 }
     ], 6);
 
-    assert.equal(result.length, 2);
-    assert.notEqual(result[0].d, paths[0].d);
+    assert.deepEqual(result, paths, 'a flank graze must not cut the line');
+});
+
+test('split eraser does not delete a whole run of line that a drag merely passes alongside', () => {
+    // The same bug at drag scale, and the shape of the actual report: a long
+    // eraser drag running PARALLEL to a line, close enough to graze its flank but
+    // never covering it. `preserveThinRemnant` decided each grazed segment
+    // survives — and the fallback arm then threw every one of those vertices away
+    // for sitting inside the eraser radius, deleting hundreds of px of line.
+    const line = {
+        ...linePath('M ' + Array.from({ length: 101 }, (_, i) => `${i * 4} 0`).join(' L ')),
+        strokeWidth: 4
+    };
+    const radius = 20;
+    // y = 22 = radius + strokeRadius: tangent to the ink's outer edge, so not a
+    // single pixel of the line is inside the eraser.
+    const trail = Array.from({ length: 60 }, (_, i) => ({ x: 40 + i * 5, y: 22 }));
+
+    const result = splitPathsByEraser([line], trail, radius);
+
+    assert.deepEqual(result, [line], 'the drag never touched the ink, so the line must be untouched');
+});
+
+test('split eraser cuts a line the drag actually runs over', () => {
+    // The counterpart to the graze tests: the same parallel drag, but ON the
+    // line, must still remove it. (A "keep everything" regression would pass the
+    // graze tests and break erasing entirely.)
+    const line = {
+        ...linePath('M ' + Array.from({ length: 101 }, (_, i) => `${i * 4} 0`).join(' L ')),
+        strokeWidth: 4
+    };
+    const trail = Array.from({ length: 60 }, (_, i) => ({ x: 40 + i * 5, y: 0 }));
+
+    const result = splitPathsByEraser([line], trail, 20);
+
+    const survivingX = result.flatMap(p => {
+        const { min, max } = pathMinMaxX(p.d);
+        return [min, max];
+    });
+    assert.ok(result.length > 0, 'the untouched ends survive');
+    assert.equal(
+        survivingX.some(x => x > 20 && x < 355),
+        false,
+        `ink survived under the drag: ${result.map(p => p.d).join(' | ')}`
+    );
 });
 
 test('split eraser includes H and V segment geometry in hit testing bounds', () => {
@@ -523,14 +619,22 @@ test('split eraser accounts for brush stroke width when hit testing highlighter 
         opacity: 0.35,
         blendMode: 'multiply'
     }];
-    const eraserPoints = [{ x: 50, y: 10 }];
 
-    const penResult = splitPathsByEraser(thinPen, eraserPoints, 3);
-    const highlighterResult = splitPathsByEraser(wideHighlighter, eraserPoints, 3);
+    // Far from both centerlines: nothing is cut, whatever the brush width. A
+    // small eraser skimming the flank of a fat highlighter must not sever the
+    // whole 20-wide band — it only shaves an edge the preview keeps showing.
+    const alongTheFlank = [{ x: 50, y: 10 }];
+    assert.deepEqual(splitPathsByEraser(thinPen, alongTheFlank, 3), thinPen);
+    assert.deepEqual(splitPathsByEraser(wideHighlighter, alongTheFlank, 3), wideHighlighter);
 
-    assert.deepEqual(penResult, thinPen);
+    // Over the centerline: both are cut, and the highlighter's material props
+    // ride along onto every piece.
+    const overTheLine = [{ x: 50, y: 0 }];
+    assert.equal(splitPathsByEraser(thinPen, overTheLine, 3).length, 2);
+    const highlighterResult = splitPathsByEraser(wideHighlighter, overTheLine, 3);
     assert.equal(highlighterResult.length, 2);
     assert.equal(highlighterResult.every(path => path.blendMode === 'multiply'), true);
+    assert.equal(highlighterResult.every(path => path.opacity === 0.35), true);
 });
 
 test('split eraser preserves highlighter material props when clipping filled freehand outlines', () => {
@@ -1070,9 +1174,11 @@ test('buildEraserCtx populates shared geometry; closed-filled candidates clip ag
     assert.ok(ctx.eraserSegments.length > 0, 'segments are populated');
 
     // Flat strokes split via interval math (no polygon clipping involved).
+    // This one lies 5 from the centreline of a radius-8 sweep spanning its whole
+    // length, so it is entirely inside the eraser and goes completely.
     const flat = linePath('M 0 -5 L 40 -5');
     const flatPieces = splitOnePathByEraser(flat, ctx, () => false);
-    assert.ok(flatPieces.length >= 1 && flatPieces[0] !== flat, 'flat stroke near the sweep is split');
+    assert.equal(flatPieces.length, 0, 'flat stroke inside the sweep is erased, not carried through');
 
     // Closed-filled candidates clip against the LOCAL portion of the trail
     // (localEraserRegion — capsules whose segment bbox can reach the path's

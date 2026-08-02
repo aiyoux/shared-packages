@@ -1,4 +1,5 @@
 import type { PathData } from './types.ts';
+import { ARGS_PER_COMMAND, parsePath, sampleArc } from './path.ts';
 
 /**
  * Canvas rasterizer for committed strokes. The vector PathData stays the source
@@ -73,14 +74,138 @@ export function drawPaths(ctx: CanvasRenderingContext2D, paths: PathData[]) {
 }
 
 /**
+ * Paint a path as an opaque occluder — the shape it covers, not the colour it
+ * paints. This is what the raster bucket fill floods against.
+ *
+ * Deliberately ignores `opacity` and `blendMode`: a 30%-opacity marker line is
+ * still a wall the paint bucket must not cross, and honouring the alpha would
+ * make it one only under some threshold settings. `fillRule` IS honoured,
+ * because a path's holes are genuinely not part of the shape.
+ *
+ * `minStrokeWidth` (in the same user units as the path) is a floor for stroke
+ * width. At low mask resolutions a thin stroke rasterises to a dotted line of
+ * partial-alpha pixels and the flood pours straight through it; widening it to
+ * at least one mask pixel is what keeps hairlines watertight.
+ *
+ * Shares the module's Path2D cache with `drawPath`, so the paths already
+ * rendered on screen cost nothing to re-parse here.
+ */
+export function drawPathBarrier(ctx: CanvasRenderingContext2D, p: PathData, minStrokeWidth = 0) {
+	const path = getPath2D(p);
+	ctx.save();
+	ctx.globalAlpha = 1;
+	ctx.globalCompositeOperation = 'source-over';
+	applyTransform(ctx, p.transform);
+	ctx.fillStyle = '#000';
+	ctx.strokeStyle = '#000';
+	if (p.fill && p.fill !== 'none') {
+		ctx.fill(path, (p.fillRule as CanvasFillRule) || 'nonzero');
+	}
+	if (p.stroke && p.stroke !== 'none' && p.strokeWidth) {
+		ctx.lineWidth = Math.max(p.strokeWidth, minStrokeWidth);
+		ctx.lineCap = 'round';
+		ctx.lineJoin = 'round';
+		ctx.stroke(path);
+	}
+	ctx.restore();
+}
+
+/** Does `d` contain an elliptical-arc command? `a`/`A` is the only alphabetic
+ *  path token using those letters (exponents use `e`/`E`), so a raw character
+ *  scan is a sound test — and a cheap one on the hot path, which is arc-free. */
+function hasArcCommand(d: string): boolean {
+	for (let i = 0; i < d.length; i++) {
+		const ch = d.charCodeAt(i);
+		if (ch === 65 || ch === 97) return true;
+	}
+	return false;
+}
+
+/**
+ * Exact bounds for a path containing arcs. The fast scanner below cannot do
+ * these: an arc command carries SEVEN args, of which only the last two are a
+ * point, so feeding them to an x/y alternation both mistakes radii and the
+ * large-arc/sweep FLAGS for coordinates and desynchronises the x/y phase for
+ * every number after it. On the baked cloud circles that produced a box barely
+ * overlapping the actual shape — which then silently broke the dirty-rect
+ * repaint (cleared pixels never repainted) and the erase spatial grid.
+ */
+function arcAwarePathBounds(d: string): { minX: number; minY: number; maxX: number; maxY: number } | null {
+	let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+	let curX = 0, curY = 0, startX = 0, startY = 0;
+	let seen = false;
+
+	const add = (x: number, y: number) => {
+		if (x < minX) minX = x;
+		if (x > maxX) maxX = x;
+		if (y < minY) minY = y;
+		if (y > maxY) maxY = y;
+		seen = true;
+	};
+
+	for (const cmd of parsePath(d)) {
+		const type = cmd.type.toUpperCase();
+		const rel = cmd.type !== type;
+		const stride = ARGS_PER_COMMAND[type];
+		if (stride === undefined) continue;
+
+		if (type === 'Z') {
+			curX = startX;
+			curY = startY;
+			continue;
+		}
+
+		for (let i = 0; i + stride <= cmd.args.length; i += stride) {
+			if (type === 'H') {
+				curX = rel ? curX + cmd.args[i] : cmd.args[i];
+			} else if (type === 'V') {
+				curY = rel ? curY + cmd.args[i] : cmd.args[i];
+			} else if (type === 'A') {
+				const endX = rel ? curX + cmd.args[i + 5] : cmd.args[i + 5];
+				const endY = rel ? curY + cmd.args[i + 6] : cmd.args[i + 6];
+				for (const pt of sampleArc(curX, curY, cmd.args[i], cmd.args[i + 1], cmd.args[i + 2], cmd.args[i + 3], cmd.args[i + 4], endX, endY)) {
+					add(pt.x, pt.y);
+				}
+				curX = endX;
+				curY = endY;
+			} else {
+				// M/L/T (2), C (6), S/Q (4) — every arg pair is a point, and the
+				// control points of a bezier bound its curve, so taking them all
+				// keeps this a safe superset.
+				for (let k = 0; k + 1 < stride; k += 2) {
+					add(rel ? curX + cmd.args[i + k] : cmd.args[i + k], rel ? curY + cmd.args[i + k + 1] : cmd.args[i + k + 1]);
+				}
+				curX = rel ? curX + cmd.args[i + stride - 2] : cmd.args[i + stride - 2];
+				curY = rel ? curY + cmd.args[i + stride - 1] : cmd.args[i + stride - 1];
+			}
+			add(curX, curY);
+			if (type === 'M' && i === 0) {
+				startX = curX;
+				startY = curY;
+			}
+		}
+	}
+
+	return seen && Number.isFinite(minX) ? { minX, minY, maxX, maxY } : null;
+}
+
+/**
  * Approximate bounding box of a path in its own coordinate space, derived from
  * the numeric coordinates in `d` (paths here are mostly M/L polylines, so this
  * is tight; for curves it's a loose but safe superset). Includes half the stroke
  * width as margin, plus any translate() from the transform.
+ *
+ * Arc-bearing paths take a command-aware slow path — see arcAwarePathBounds.
  */
 export function pathBounds(p: PathData): Rect | null {
 	const d = p.d;
 	const len = d.length;
+
+	if (hasArcCommand(d)) {
+		const b = arcAwarePathBounds(d);
+		if (!b) return null;
+		return finishBounds(p, b.minX, b.minY, b.maxX, b.maxY);
+	}
 	let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
 	let numCount = 0;
 	let i = 0;
@@ -116,6 +241,12 @@ export function pathBounds(p: PathData): Rect | null {
 	}
 
 	if (numCount < 2 || !Number.isFinite(minX)) return null;
+	return finishBounds(p, minX, minY, maxX, maxY);
+}
+
+/** Apply the translate() offset and the stroke-width margin. Shared so the fast
+ *  scanner and the arc-aware walk cannot drift apart. */
+function finishBounds(p: PathData, minX: number, minY: number, maxX: number, maxY: number): Rect {
 	let tx = 0, ty = 0;
 	if (p.transform) {
 		const t = TRANSLATE_RE.exec(p.transform);

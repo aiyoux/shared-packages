@@ -45,6 +45,114 @@ export function stringifyPath(commands: PathCommand[]): string {
     }).join(' ');
 }
 
+/** Number of args each command type consumes per repetition. Used to walk a
+ *  parsed `d` command-by-command instead of assuming every number is half of an
+ *  (x, y) pair — which is only true until an arc shows up (7 args, of which
+ *  just the last two are a point). */
+export const ARGS_PER_COMMAND: Record<string, number> = {
+    M: 2, L: 2, T: 2, H: 1, V: 1, C: 6, S: 4, Q: 4, A: 7, Z: 0
+};
+
+/**
+ * Sample an SVG elliptical arc as a polyline, endpoint parameterization →
+ * center parameterization per the SVG 1.1 implementation notes (F.6.5).
+ *
+ * Returns the points AFTER the start point (so a caller can append them
+ * directly to a run of line segments). `maxSegLen` caps the chord length of
+ * each emitted segment, matching how the bezier flatteners pick their step
+ * count.
+ *
+ * Baked 3D primitives (cloud puffs, glows, halos) are emitted as arc circles,
+ * so anything that reasons about path geometry — erasing, bounds — has to be
+ * able to turn these back into points. Without it an arc contributes only its
+ * start point, which reads as "the shape is a single dot at its left edge".
+ */
+export function sampleArc(
+    x1: number,
+    y1: number,
+    rx: number,
+    ry: number,
+    xAxisRotationDeg: number,
+    largeArcFlag: number,
+    sweepFlag: number,
+    x2: number,
+    y2: number,
+    maxSegLen = 8
+): { x: number; y: number }[] {
+    // Degenerate radii: the spec says treat the arc as a straight line.
+    if (!isFinite(rx) || !isFinite(ry) || rx === 0 || ry === 0) return [{ x: x2, y: y2 }];
+    if (x1 === x2 && y1 === y2) return [];
+
+    rx = Math.abs(rx);
+    ry = Math.abs(ry);
+    const phi = (xAxisRotationDeg * Math.PI) / 180;
+    const cosPhi = Math.cos(phi);
+    const sinPhi = Math.sin(phi);
+
+    const dx2 = (x1 - x2) / 2;
+    const dy2 = (y1 - y2) / 2;
+    const x1p = cosPhi * dx2 + sinPhi * dy2;
+    const y1p = -sinPhi * dx2 + cosPhi * dy2;
+
+    // Scale up radii that are too small to span the endpoints (F.6.6).
+    const lambda = (x1p * x1p) / (rx * rx) + (y1p * y1p) / (ry * ry);
+    if (lambda > 1) {
+        const s = Math.sqrt(lambda);
+        rx *= s;
+        ry *= s;
+    }
+
+    const rx2 = rx * rx;
+    const ry2 = ry * ry;
+    const num = rx2 * ry2 - rx2 * y1p * y1p - ry2 * x1p * x1p;
+    const den = rx2 * y1p * y1p + ry2 * x1p * x1p;
+    // max(0, …) guards the exact semicircle (endpoints a full diameter apart),
+    // where rounding can push `num` fractionally below zero and NaN the root.
+    // That is exactly how the baked circles are emitted, so it is the common
+    // case here, not an edge case.
+    const coef = (largeArcFlag !== sweepFlag ? 1 : -1) * Math.sqrt(Math.max(0, num / den));
+    const cxp = (coef * (rx * y1p)) / ry;
+    const cyp = (coef * -(ry * x1p)) / rx;
+    const cx = cosPhi * cxp - sinPhi * cyp + (x1 + x2) / 2;
+    const cy = sinPhi * cxp + cosPhi * cyp + (y1 + y2) / 2;
+
+    const angle = (ux: number, uy: number, vx: number, vy: number) => {
+        const dot = ux * vx + uy * vy;
+        const len = Math.sqrt((ux * ux + uy * uy) * (vx * vx + vy * vy));
+        const sign = ux * vy - uy * vx < 0 ? -1 : 1;
+        return sign * Math.acos(Math.min(1, Math.max(-1, dot / (len || 1e-12))));
+    };
+
+    const ux = (x1p - cxp) / rx;
+    const uy = (y1p - cyp) / ry;
+    const vx = (-x1p - cxp) / rx;
+    const vy = (-y1p - cyp) / ry;
+    const theta1 = angle(1, 0, ux, uy);
+    let dTheta = angle(ux, uy, vx, vy) % (Math.PI * 2);
+    if (!sweepFlag && dTheta > 0) dTheta -= Math.PI * 2;
+    if (sweepFlag && dTheta < 0) dTheta += Math.PI * 2;
+
+    // Step count from the approximate arc length, same 8px chord budget the
+    // cubic/quadratic flatteners use.
+    const arcLen = Math.abs(dTheta) * ((rx + ry) / 2);
+    const steps = Math.max(4, Math.ceil(arcLen / maxSegLen));
+
+    const points: { x: number; y: number }[] = [];
+    for (let i = 1; i <= steps; i++) {
+        const theta = theta1 + (dTheta * i) / steps;
+        const cosT = Math.cos(theta);
+        const sinT = Math.sin(theta);
+        points.push({
+            x: cx + rx * cosPhi * cosT - ry * sinPhi * sinT,
+            y: cy + rx * sinPhi * cosT + ry * cosPhi * sinT
+        });
+    }
+    // Land exactly on the declared endpoint rather than a rounded sample, so
+    // consecutive arcs (a circle is two of them) stay watertight.
+    points[points.length - 1] = { x: x2, y: y2 };
+    return points;
+}
+
 export function updatePathPoint(d: string, cmdIndex: number, argOffset: number, x: number, y: number): string {
     const commands = parsePath(d);
     const cmd = commands[cmdIndex];

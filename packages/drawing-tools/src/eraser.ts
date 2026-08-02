@@ -1,7 +1,7 @@
 import type { PathData } from './types.ts';
-import { parsePath, parseTranslate } from './path.ts';
+import { parsePath, parseTranslate, sampleArc } from './path.ts';
 import { type MultiPolygon, type Polygon, type Ring } from 'polygon-clipping';
-import { difference, union } from './clipping.ts';
+import { difference, intersection, union } from './clipping.ts';
 import { getStroke } from 'perfect-freehand';
 import { generateId } from './id.ts';
 
@@ -317,44 +317,6 @@ const intervalFullyCoversSegment = (intervals: Interval[]) => {
     return intervals.length === 1 && intervals[0].start <= 1e-6 && intervals[0].end >= 1 - 1e-6;
 };
 
-const distToEraserPathSq = (point: Point, eraserPoints: Point[], eraserSegments: { a: Point; b: Point }[]) => {
-    let minSq = Infinity;
-
-    for (const p of eraserPoints) {
-        const distSq = (point.x - p.x) ** 2 + (point.y - p.y) ** 2;
-        if (distSq < minSq) minSq = distSq;
-    }
-
-    for (const { a, b } of eraserSegments) {
-        const distSq = distToSegmentSq(point.x, point.y, a.x, a.y, b.x, b.y);
-        if (distSq < minSq) minSq = distSq;
-    }
-
-    return minSq;
-};
-
-const preserveSmallRemainderInterval = (
-    a: Point,
-    b: Point,
-    eraserPoints: Point[],
-    eraserSegments: { a: Point; b: Point }[],
-    radius: number
-): Interval[] => {
-    const len = Math.sqrt((b.x - a.x) ** 2 + (b.y - a.y) ** 2);
-    if (len <= 1) return [{ start: 0, end: 1 }];
-
-    const keepLen = Math.min(len * 0.5, Math.max(1, radius * 0.25));
-    const keepT = keepLen / len;
-    const aDistSq = distToEraserPathSq(a, eraserPoints, eraserSegments);
-    const bDistSq = distToEraserPathSq(b, eraserPoints, eraserSegments);
-
-    if (aDistSq >= bDistSq) {
-        return [{ start: keepT, end: 1 }];
-    }
-
-    return [{ start: 0, end: 1 - keepT }];
-};
-
 const erasedIntervalsForSegment = (a: Point, b: Point, eraserPoints: Point[], eraserSegments: { a: Point; b: Point }[], radius: number, padding = 0) => {
     const intervals: Interval[] = [];
 
@@ -464,6 +426,28 @@ const flattenPath = (d: string): FlatCommand[] => {
             }
             lastPt = { x: p2x, y: p2y };
             lastCtrlPt = { x: p1x, y: p1y };
+        } else if (type === 'A' && cmd.args.length >= 7 && lastPt) {
+            // Baked round primitives (cloud puffs, sun glows, halos) are emitted
+            // as arc circles — see svgBake.ts. Before this branch existed they
+            // flattened to their start point alone, so they had no rings, no
+            // fill subject, and the eraser could not touch them at all.
+            // `a` is relative (which is how they are emitted); `A` is absolute.
+            const isRelative = cmd.type === 'a';
+            let cur: Point = lastPt;
+            for (let i = 0; i + 6 < cmd.args.length; i += 7) {
+                const rx = cmd.args[i], ry = cmd.args[i + 1];
+                const rot = cmd.args[i + 2];
+                const largeArc = cmd.args[i + 3], sweep = cmd.args[i + 4];
+                const endX: number = isRelative ? cur.x + cmd.args[i + 5] : cmd.args[i + 5];
+                const endY: number = isRelative ? cur.y + cmd.args[i + 6] : cmd.args[i + 6];
+
+                for (const pt of sampleArc(cur.x, cur.y, rx, ry, rot, largeArc, sweep, endX, endY)) {
+                    flatCmds.push({ type: 'L', x: pt.x, y: pt.y });
+                }
+                cur = { x: endX, y: endY };
+            }
+            lastPt = cur;
+            lastCtrlPt = null;
         } else if (type === 'H' && lastPt) {
             lastPt = { x: cmd.args[0], y: lastPt.y };
             flatCmds.push({ type: 'L', x: lastPt.x, y: lastPt.y });
@@ -481,6 +465,12 @@ const flattenPath = (d: string): FlatCommand[] => {
 
     return flatCmds;
 };
+
+/** Re-serialize flattened commands (already in absolute space) back to a `d`.
+ *  Used when a path with a translate is re-issued unsplit: the flat commands
+ *  carry the translate baked in, so the transform has to be dropped with it. */
+const flatCmdsToD = (flatCmds: FlatCommand[]): string =>
+    flatCmds.map((c, i) => `${i === 0 || c.type === 'M' ? 'M' : 'L'} ${c.x.toFixed(1)} ${c.y.toFixed(1)}`).join(' ');
 
 const pointBounds = (points: Point[]) => {
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
@@ -519,6 +509,209 @@ const translateFlatCommands = (flatCmds: FlatCommand[], tx: number, ty: number) 
     if (tx === 0 && ty === 0) return flatCmds;
     return flatCmds.map(cmd => ({ ...cmd, x: cmd.x + tx, y: cmd.y + ty }));
 };
+
+/**
+ * Fade eraser policy. Rather than cutting ink away, each pass multiplies the
+ * opacity of whatever sits under the eraser, so repeated passes wear a stroke
+ * down the way a real rubber does.
+ *
+ * Opacity is QUANTIZED to a fixed ladder. Two reasons, both about keeping the
+ * document from exploding: neighbouring pieces that land on the same rung can
+ * be merged back into one path, and repeated passes converge onto rungs instead
+ * of generating an endless spread of distinct values. Anything that falls below
+ * the floor is dropped outright — otherwise a stroke never actually goes away
+ * and the path count only ever grows.
+ */
+export type FadeOptions = {
+    factor: number;
+    floor: number;
+    /** Whether scrubbing back and forth WITHOUT lifting the pointer keeps
+     *  wearing the ink down. The trail is cut into passes at each reversal and
+     *  each pass applies its own fade step, so a scrub darkens the gap the way
+     *  rubbing harder does. Off means one step per pointerdown→pointerup. */
+    accumulate?: boolean;
+    /**
+     * Treat ink stacked under the eraser as ONE body rather than a pile of
+     * independent strokes.
+     *
+     * Without this, each stroke steps down its own ladder. Three opaque strokes
+     * on top of each other faded once are each 0.55, but stacked they still
+     * composite to 1-(1-0.55)^3 = 0.91 — barely touched. Keep going and the top
+     * one thins out first, so the result reads as peeling layers apart rather
+     * than erasing: the lines underneath are revealed instead of removed.
+     *
+     * With it, each stroke is faded to whatever value makes the STACK land on
+     * the ladder: a = 1-(1-target)^(1/depth). The pile lightens together, which
+     * is what a real eraser does.
+     */
+    normalizeStack?: boolean;
+    /**
+     * Ids of pieces this SWEEP has already faded, added to as they are emitted.
+     *
+     * Fading is per pass: one sweep across the ink takes one step off it. That
+     * is easy when a whole sweep is committed at once, but a sweep committed in
+     * small pieces — which is what "apply while erasing" needs to keep the
+     * unshown tail short — would fade the overlap between consecutive pieces
+     * twice or three times over.
+     *
+     * A piece faded during this sweep is left alone for the rest of it. The
+     * untouched remainder of a split stroke is a different piece with a
+     * different id, so it still fades when the eraser reaches it; only ink that
+     * has already taken its step this sweep is immune.
+     */
+    alreadyFaded?: Set<string>;
+};
+
+export const DEFAULT_FADE: FadeOptions = { factor: 0.55, floor: 0.08, accumulate: true };
+
+/**
+ * Eraser intensity as a 1..5 dial, mapped to how much of the ink one pass takes.
+ * Gentler settings need more rungs to reach the floor, which is what makes a
+ * light rub feel gradual and a heavy one bite; the ladder quantization keeps
+ * every setting converging rather than trailing off into ever-fainter ink.
+ */
+export const FADE_INTENSITY_FACTORS: Record<number, number> = {
+    1: 0.8,
+    2: 0.68,
+    3: 0.55,
+    4: 0.42,
+    5: 0.3
+};
+
+export function fadeForIntensity(intensity: number, base: FadeOptions = DEFAULT_FADE): FadeOptions {
+    const clamped = Math.max(1, Math.min(5, Math.round(intensity)));
+    return { ...base, factor: FADE_INTENSITY_FACTORS[clamped] ?? base.factor };
+}
+
+/**
+ * Cut an eraser trail into individual passes, splitting wherever the stroke
+ * doubles back on itself.
+ *
+ * A single drag that scrubs to and fro is one trail, and unioning it means the
+ * second sweep over a spot changes nothing — the ink just sits at the first
+ * step. Splitting at the reversals turns that scrub back into the sequence of
+ * passes the user actually made.
+ *
+ * Reversal is measured against the pass's own heading and requires a real
+ * backtrack (`minBacktrack`, an eraser radius) before it counts, so hand jitter
+ * along a straight sweep does not shatter it into dozens of passes.
+ */
+export function splitTrailIntoPasses(points: Point[], minBacktrack: number): Point[][] {
+    if (points.length < 2) return [points];
+
+    const passes: Point[][] = [];
+    let current: Point[] = [points[0]];
+    let heading: { x: number; y: number } | null = null;
+    let forward = 0;
+    let backward = 0;
+
+    for (let i = 1; i < points.length; i++) {
+        const a = points[i - 1];
+        const b = points[i];
+        const vx = b.x - a.x;
+        const vy = b.y - a.y;
+        const len = Math.hypot(vx, vy);
+        current.push(b);
+        if (len < 1e-6) continue;
+
+        if (!heading) {
+            heading = { x: vx / len, y: vy / len };
+            forward = len;
+            backward = 0;
+            continue;
+        }
+
+        const along = vx * heading.x + vy * heading.y;
+        if (along < 0) backward -= along;
+        // Moving forward again bleeds off a little of the backtrack so a wobble
+        // part-way through a long sweep cannot slowly accumulate into a split.
+        else backward = Math.max(0, backward - along * 0.5);
+        if (along > 0) forward += along;
+
+        if (backward > minBacktrack && forward > minBacktrack) {
+            passes.push(current);
+            // The reversal point starts the next pass too, so coverage stays
+            // continuous across the seam.
+            current = [b];
+            heading = null;
+            forward = 0;
+            backward = 0;
+        }
+    }
+
+    if (current.length > 1) passes.push(current);
+    return passes.length > 0 ? passes : [points];
+}
+
+/** Opacity rungs, coarse enough that scrubbing converges quickly. */
+/**
+ * Opacity is quantized so repeated passes are REPEATABLE: two pieces faded the
+ * same number of times land on the same value and can be merged back into one
+ * path, instead of the document accumulating a spread of near-identical
+ * opacities.
+ *
+ * Two decimal places rather than a handful of fixed rungs. A coarse table made
+ * every intensity below ~0.7 collapse onto the same ladder, and its rounding
+ * compounded — each step re-multiplied an already-rounded value, so the commit
+ * drifted well below the smooth curve the preview draws.
+ */
+export function quantizeFade(opacity: number): number {
+    return Math.round(opacity * 100) / 100;
+}
+
+/** The opacity a piece takes after one pass of the fade eraser, or null when
+ *  it has worn away entirely. */
+export function fadedOpacity(current: number | undefined, fade: FadeOptions): number | null {
+    const base = current ?? 1;
+    const next = quantizeFade(base * fade.factor);
+    // Below the floor, or already on the bottom rung so the ladder cannot go
+    // any lower — either way the ink has worn through.
+    if (next < fade.floor || next >= base) return null;
+    return next;
+}
+
+/**
+ * The opacities a fully-opaque stroke lands on after each successive pass,
+ * ending in 0 once it wears through.
+ *
+ * The live preview needs this because it fades by compositing, which gives a
+ * CONTINUOUS `factor^n`, while the committed pass walks a quantized ladder and
+ * re-multiplies from each already-rounded rung. Those diverge fast — by the
+ * third pass the commit is ~28% darker than the preview, and on the fourth the
+ * preview still shows faint ink where the commit has deleted it. Driving the
+ * preview off this sequence instead keeps the two in step.
+ */
+export function fadeSequence(fade: FadeOptions, maxPasses = 16): number[] {
+    const out: number[] = [];
+    let current = 1;
+    for (let i = 0; i < maxPasses; i++) {
+        const next = fadedOpacity(current, fade);
+        if (next === null) { out.push(0); break; }
+        out.push(next);
+        current = next;
+    }
+    return out;
+}
+
+/**
+ * The opacity one path should take so that a stack `depth` deep composites to
+ * the next rung of the ladder. Falls back to the plain per-path step when the
+ * ink is not stacked.
+ */
+export function normalizedFadedOpacity(current: number | undefined, fade: FadeOptions, depth: number): number | null {
+    const a = current ?? 1;
+    if (!fade.normalizeStack || depth <= 1) return fadedOpacity(a, fade);
+
+    const composite = 1 - Math.pow(1 - a, depth);
+    const nextComposite = quantizeFade(composite * fade.factor);
+    if (nextComposite < fade.floor || nextComposite >= composite) return null;
+
+    const next = quantizeFade(1 - Math.pow(1 - nextComposite, 1 / depth));
+    // Guard the same two ways the unstacked ladder does: worn through, or unable
+    // to descend any further.
+    if (next < fade.floor || next >= a) return null;
+    return next;
+}
 
 export function isClosedFilledPath(path: PathData) {
     return !!(path.d.toUpperCase().includes('Z') && path.fill && path.fill !== 'none');
@@ -1937,16 +2130,11 @@ const splitFlatByEraser = (
     flatCmds: FlatCommandP[],
     sampledEraserPoints: Point[],
     eraserSegments: { a: Point; b: Point }[],
+    // Centerline distance at which the ink is cut — see `effectiveRadius` in
+    // splitOnePathByEraser for how it is chosen.
     effectiveRadius: number,
-    radius: number,
-    strokeRadius: number,
-    capPadding: number,
-    // Thin vector strokes trim gradually (keep a sliver until the eraser covers the
-    // full visible thickness) so repeated passes feel natural. Freehand strokes are
-    // thick and cut cleanly on the centerline — the trim logic would leave stray
-    // sliver dots near the cut — so they pass false.
-    preserveThinRemnant = true
-): { subPaths: PointP[][]; anyHit: boolean } => {
+    capPadding: number
+): { subPaths: PointP[][]; coveredSubPaths: PointP[][]; anyHit: boolean } => {
     const effectiveRadiusSq = effectiveRadius * effectiveRadius;
     const subPaths: PointP[][] = [];
     let currentSubPath: PointP[] = [];
@@ -1970,6 +2158,23 @@ const splitFlatByEraser = (
         currentSubPath.push(pt);
     };
 
+    // Covered runs are the mirror image of the kept ones: the stretches that
+    // fall UNDER the eraser. The clean-cut modes drop them; the fade eraser
+    // keeps them at a reduced opacity, so they are only collected on request.
+    const coveredSubPaths: PointP[][] = [];
+    let currentCovered: PointP[] = [];
+    const flushCovered = () => {
+        if (currentCovered.length > 1) coveredSubPaths.push(currentCovered);
+        currentCovered = [];
+    };
+    const appendCoveredPoint = (pt: PointP) => {
+        if (currentCovered.length > 0) {
+            const last = currentCovered[currentCovered.length - 1];
+            if (Math.abs(last.x - pt.x) < 0.01 && Math.abs(last.y - pt.y) < 0.01) return;
+        }
+        currentCovered.push(pt);
+    };
+
     const processSample = (pt: PointP) => {
         if (isInside(pt.x, pt.y)) {
             anyHit = true;
@@ -1983,6 +2188,7 @@ const splitFlatByEraser = (
     for (const fCmd of flatCmds) {
         if (fCmd.type === 'M') {
             if (currentSubPath.length > 0) { subPaths.push(currentSubPath); currentSubPath = []; }
+            flushCovered();
             prevPt = { x: fCmd.x, y: fCmd.y, p: fCmd.p };
             if (isInside(fCmd.x, fCmd.y)) anyHit = true;
             else currentSubPath.push({ x: fCmd.x, y: fCmd.y, p: fCmd.p });
@@ -1990,16 +2196,20 @@ const splitFlatByEraser = (
             const a = prevPt;
             const b: PointP = { x: fCmd.x, y: fCmd.y, p: fCmd.p };
 
-            let erasedIntervals = erasedIntervalsForSegment(a, b, sampledEraserPoints, eraserSegments, effectiveRadius, capPadding);
-            if (preserveThinRemnant && intervalFullyCoversSegment(erasedIntervals)) {
-                const fullThicknessRadius = Math.max(0, radius - strokeRadius);
-                const fullThicknessIntervals = erasedIntervalsForSegment(a, b, sampledEraserPoints, eraserSegments, fullThicknessRadius);
-                if (!intervalFullyCoversSegment(fullThicknessIntervals)) {
-                    erasedIntervals = fullThicknessIntervals;
-                } else {
-                    erasedIntervals = preserveSmallRemainderInterval(a, b, sampledEraserPoints, eraserSegments, radius);
-                }
-            }
+            // ONE rule for every segment: erase where the centerline is within
+            // `effectiveRadius`, padded by `capPadding` so the surviving round
+            // cap does not bulge back into the erased area.
+            //
+            // A second rule used to run alongside it — when a segment was fully
+            // covered it was re-cut at the "full visible thickness" radius
+            // (radius - strokeRadius) instead, meaning to nibble rather than cut
+            // clean through. Two rules on adjacent segments cut at positions up
+            // to strokeRadius apart, which is what left tiny islands of ink
+            // stranded at the ends of an erased run (a 2px dot beside a 2px hole
+            // on a 4px line) — visible cruft the drag preview never showed. The
+            // nibbling it was really compensating for now lives in the choice of
+            // `effectiveRadius` itself.
+            const erasedIntervals = erasedIntervalsForSegment(a, b, sampledEraserPoints, eraserSegments, effectiveRadius, capPadding);
             if (erasedIntervals.length > 0) {
                 anyHit = true;
                 const pa = a.p ?? 0.5;
@@ -2017,21 +2227,38 @@ const splitFlatByEraser = (
                     appendPoint(pointAt(end));
                 };
 
+                // Intervals can run past either end of the segment; the covered
+                // run only exists where they overlap it.
+                const appendCoveredSegment = (start: number, end: number) => {
+                    const s = Math.max(0, start);
+                    const e = Math.min(1, end);
+                    if (e - s < 1e-6) return;
+                    appendCoveredPoint(pointAt(s));
+                    appendCoveredPoint(pointAt(e));
+                };
+
                 for (const interval of erasedIntervals) {
+                    const keptBefore = interval.start - cursor > 1e-6;
                     appendKeptSegment(cursor, interval.start);
                     if (currentSubPath.length > 0) { subPaths.push(currentSubPath); currentSubPath = []; }
+                    // A surviving stretch breaks the run of covered ink.
+                    if (keptBefore) flushCovered();
+                    appendCoveredSegment(interval.start, interval.end);
                     cursor = Math.max(cursor, interval.end);
                 }
+                if (1 - cursor > 1e-6) flushCovered();
                 appendKeptSegment(cursor, 1);
             } else {
                 processSample(b);
+                flushCovered();
             }
             prevPt = b;
         }
     }
 
     if (currentSubPath.length > 0) subPaths.push(currentSubPath);
-    return { subPaths, anyHit };
+    flushCovered();
+    return { subPaths, coveredSubPaths, anyHit };
 };
 
 /** Move-shared eraser geometry, built once per erase pass and reused across
@@ -2054,6 +2281,12 @@ export type EraserCtx = {
      *  reused for every later candidate. Flat-only erase passes never touch it,
      *  so they pay no union. */
     _eraserPolygon: MultiPolygon | null | undefined;
+    /** When set, the pass FADES rather than cuts: whatever falls under the
+     *  eraser is kept at a reduced opacity instead of being removed. */
+    fade?: FadeOptions;
+    /** How deep the ink is stacked under this pass, measured once. Only used
+     *  when the fade is normalizing a stack. */
+    stackDepth?: number;
 };
 
 /** Build the pass-shared eraser context: resampled points, bounds, and
@@ -2063,7 +2296,58 @@ export type EraserCtx = {
  *  this pass. Exported so the store can build one ctx per erase pass and split
  *  each broadphase candidate via `splitOnePathByEraser` without re-running the
  *  shared setup. */
-export const buildEraserCtx = (eraserPoints: Point[], radius: number): EraserCtx => {
+/** Does this path paint the given point? */
+const pathCoversPoint = (path: PathData, x: number, y: number): boolean => {
+    const { flatCmds, bbox } = cachedFlatten(path);
+    if (!bbox || flatCmds.length === 0) return false;
+    const half = (path.strokeWidth || 1) / 2;
+    if (x < bbox.minX - half || x > bbox.maxX + half || y < bbox.minY - half || y > bbox.maxY + half) return false;
+
+    if (isClosedFilledPath(path)) {
+        const subject = cachedSubject(path, flatCmds);
+        return !!subject && subject.some(polygon => pointInsidePolygon({ x, y }, polygon[0]));
+    }
+    let prev: FlatCommand | null = null;
+    for (const cmd of flatCmds) {
+        if (cmd.type === 'M') { prev = cmd; continue; }
+        if (prev && distToSegmentSq(x, y, prev.x, prev.y, cmd.x, cmd.y) <= half * half) return true;
+        prev = cmd;
+    }
+    return false;
+};
+
+/**
+ * How many layers of ink sit on top of each other under this pass.
+ *
+ * Sampled along the trail rather than computed exactly: an exact answer needs
+ * every pair of covered paths intersected, and this only has to be right enough
+ * to pick the exponent that makes a stack lighten together. The MAXIMUM over
+ * the samples is taken because that is where the pile is deepest, and it is the
+ * deep part that otherwise refuses to look erased.
+ */
+export const estimateStackDepth = (
+    paths: PathData[],
+    eraserPoints: Point[],
+    isLayerLocked: (layerId?: string) => boolean,
+    candidates?: Set<string>
+): number => {
+    if (eraserPoints.length === 0) return 1;
+    const step = Math.max(1, Math.floor(eraserPoints.length / 8));
+    let deepest = 1;
+    for (let i = 0; i < eraserPoints.length; i += step) {
+        const { x, y } = eraserPoints[i];
+        let here = 0;
+        for (const path of paths) {
+            if (isLayerLocked(path.layerId)) continue;
+            if (candidates && path.id && !candidates.has(path.id)) continue;
+            if (pathCoversPoint(path, x, y)) here++;
+        }
+        if (here > deepest) deepest = here;
+    }
+    return deepest;
+};
+
+export const buildEraserCtx = (eraserPoints: Point[], radius: number, fade?: FadeOptions, stackDepth?: number): EraserCtx => {
     // No resampling: every consumer is exact per straight segment (strips +
     // endpoint circles for the interval math, one capsule per segment for the
     // clip region), so subdividing segments only multiplies the vertex count
@@ -2083,6 +2367,8 @@ export const buildEraserCtx = (eraserPoints: Point[], radius: number): EraserCtx
         eraserSegments: simplified.slice(1).map((p, i) => ({ a: simplified[i], b: p })),
         radius,
         _eraserPolygon: undefined,
+        fade,
+        stackDepth,
     };
 };
 
@@ -2223,7 +2509,27 @@ export const splitOnePathByEraser = (
     const isFreehandPath = !!(path.freehandSource && path.freehandSource.points.length > 0);
 
     const strokeRadius = (path.strokeWidth || 1) / 2;
-    const effectiveRadius = radius + strokeRadius;
+    // The centerline distance at which a cut happens. An open stroke is only ink
+    // where it is drawn — a band `strokeRadius` either side of the centerline —
+    // so the eraser meets it across a range of centerline distances:
+    //
+    //   d <= radius - strokeRadius   the eraser covers the ink's FULL thickness
+    //   d == radius                  it covers exactly half of it
+    //   d <= radius + strokeRadius   it just grazes the far flank
+    //
+    // A centerline can only be cut or not, so a threshold has to be picked
+    // somewhere in that range, and it bounds how far the committed result can
+    // differ from the live drag preview (which subtracts the eraser from the
+    // RENDERED pixels, and so shows a partly-covered stroke as a thinner one).
+    // `radius` — cut once more than half the thickness is gone — is the midpoint:
+    // it is wrong by at most strokeRadius either way.
+    //
+    // This used to be `radius + strokeRadius`, the far end of the range: an
+    // eraser that came near a line without removing a single pixel of it deleted
+    // the whole grazed run, so a drag that wandered close to other ink punched
+    // holes through lines it never visibly touched, and every cut ran half an ink
+    // width wider than the preview had shown.
+    const effectiveRadius = radius;
 
     // Pre-flatten broadphase: skip the whole path if its cached bbox can't
     // reach the eraser capsule. The capsule extends `radius` beyond the eraser
@@ -2258,6 +2564,40 @@ export const splitOnePathByEraser = (
         // on a dense scene; the local region keeps each one small.
         const eraserRegion = localEraserRegion(ctx, pathBounds);
         if (!eraserRegion) return [path];
+        // Fade mode on a filled shape: the part outside the eraser keeps its
+        // opacity, the overlap comes back dimmer. Same two halves as the clean
+        // cut, except the removed half is re-emitted rather than dropped.
+        if (ctx.fade && subject) {
+            const next = normalizedFadedOpacity(path.opacity, ctx.fade, ctx.stackDepth ?? 1);
+            const outside = splitClosedFilledPath(
+                splitPathMetadata, flatCmds, subject, sampledEraserPoints, radius,
+                eraserPoints.length > 1, eraserRegion
+            );
+            if (!outside) return [path];
+            const dimmed: PathData[] = [];
+            if (next !== null) {
+                let overlap: MultiPolygon = [];
+                try { overlap = intersection(subject, eraserRegion); } catch { overlap = []; }
+                for (const poly of normalizeMultiPolygon(overlap)) {
+                    const d = polygonToNonZeroD(roundPolygon(poly));
+                    if (!d) continue;
+                    dimmed.push({
+                        ...splitPathMetadata,
+                        id: generateId(),
+                        d,
+                        opacity: next,
+                        clipDerived: true
+                    });
+                }
+            }
+            const out = [...outside, ...dimmed];
+            if (sync) {
+                sync.removed.push(path);
+                for (const s of out) sync.added.push(s);
+            }
+            eraseStats.piecesEmitted += out.length;
+            return out;
+        }
         const __splitT0 = performance.now();
         const split = splitClosedFilledPath(
             splitPathMetadata,
@@ -2271,11 +2611,45 @@ export const splitOnePathByEraser = (
         eraseStats.closedFilledSplitMs += performance.now() - __splitT0;
         let out: PathData[];
         if (split) {
-            out = split;
-            eraseStats.piecesEmitted += split.length;
+            // A shape that is BOTH filled and stroked (baked cloud puffs, glows
+            // and halos are filled circles with an outline) cannot be erased as
+            // one path. Polygon-clipping the fill yields a new closed region,
+            // and stroking THAT traces the eraser's cut edge — drawing a fresh
+            // outline right where ink was supposed to be removed. That is the
+            // "inner lines" appearing inside an erased cloud.
+            //
+            // So decompose: the fill keeps the clipped geometry but loses its
+            // stroke, and the visible outline is re-derived by cutting the
+            // ORIGINAL rim as an open polyline. The rim can then only ever
+            // follow the shape's true boundary, never the cut.
+            const hasVisibleStroke = !!(path.stroke && path.stroke !== 'none' && (path.strokeWidth ?? 0) > 0);
+            if (hasVisibleStroke && !isClipFreehand) {
+                const fillPieces = split.map(s => ({ ...s, stroke: 'none' }));
+                const rim = splitFlatByEraser(
+                    flatCmds, sampledEraserPoints, eraserSegments,
+                    effectiveRadius, strokeRadius
+                );
+                const outlinePieces: PathData[] = [];
+                for (const sub of rim.subPaths) {
+                    if (sub.length < 2) continue;
+                    let d = `M ${sub[0].x.toFixed(1)} ${sub[0].y.toFixed(1)}`;
+                    for (let i = 1; i < sub.length; i++) d += ` L ${sub[i].x.toFixed(1)} ${sub[i].y.toFixed(1)}`;
+                    outlinePieces.push({
+                        ...path,
+                        id: generateId(),
+                        d,
+                        fill: 'none',
+                        transform: hasTranslate ? undefined : path.transform
+                    });
+                }
+                out = [...fillPieces, ...outlinePieces];
+            } else {
+                out = split;
+            }
+            eraseStats.piecesEmitted += out.length;
             if (sync) {
                 sync.removed.push(path);
-                for (const s of split) sync.added.push(s);
+                for (const s of out) sync.added.push(s);
             }
         } else {
             // polygon-clipping totally bailed on this outline (every piece was an
@@ -2311,8 +2685,23 @@ export const splitOnePathByEraser = (
         return [path];
     }
 
-    const { subPaths, anyHit } = splitFlatByEraser(flatCmds, sampledEraserPoints, eraserSegments, effectiveRadius, radius, strokeRadius, capPadding);
+    const { subPaths, coveredSubPaths, anyHit } = splitFlatByEraser(flatCmds, sampledEraserPoints, eraserSegments, effectiveRadius, capPadding);
     if (!anyHit) return [path];
+
+    const fade = ctx.fade;
+    // Fade mode: whatever the eraser covered comes back at a lower opacity
+    // instead of disappearing. When the eraser swallowed the path whole there
+    // is nothing to cut, so re-issue it unsplit — that keeps scrubbing over a
+    // stroke from multiplying the path count on every pass.
+    if (fade && subPaths.length === 0 && coveredSubPaths.length > 0) {
+        const next = normalizedFadedOpacity(path.opacity, fade, ctx.stackDepth ?? 1);
+        if (sync) sync.removed.push(path);
+        if (next === null) return [];
+        const worn = { ...path, id: generateId(), opacity: next, transform: hasTranslate ? undefined : path.transform, d: hasTranslate ? flatCmdsToD(flatCmds) : path.d };
+        if (sync) sync.added.push(worn);
+        eraseStats.piecesEmitted += 1;
+        return [worn];
+    }
 
     // anyHit ⇒ the original is replaced (split into pieces, or fully erased if
     // no valid sub-path survives). Record the removal up front; each surviving
@@ -2320,8 +2709,8 @@ export const splitOnePathByEraser = (
     if (sync) sync.removed.push(path);
 
     const pieces: PathData[] = [];
-    for (const sub of subPaths) {
-        if (sub.length < 2) continue;
+    const emit = (sub: PointP[], opacity?: number) => {
+        if (sub.length < 2) return;
 
         let d = `M ${sub[0].x.toFixed(1)} ${sub[0].y.toFixed(1)}`;
         for (let i = 1; i < sub.length; i++) {
@@ -2333,10 +2722,53 @@ export const splitOnePathByEraser = (
             id: generateId(),
             d,
             fill: path.fill || 'none',
-            transform: hasTranslate ? undefined : path.transform
+            transform: hasTranslate ? undefined : path.transform,
+            ...(opacity !== undefined ? { opacity } : {})
         };
         pieces.push(piece);
         if (sync) sync.added.push(piece);
+    };
+
+    if (fade) {
+        // The eraser band never lands in exactly the same place twice, so each
+        // pass would otherwise shave a hair-thin sliver off the neighbouring
+        // pieces at a slightly different opacity — and those accumulate. Runs
+        // below a pixel are visually meaningless, so they are absorbed into
+        // whichever side they came from instead of becoming their own path.
+        //
+        // The floor is at least `capPadding`, because a run that short is one the
+        // padding created: a piece from an earlier pass reaches capPadding beyond
+        // the covered band, so re-covering it leaves exactly that much sticking
+        // out — and erasedIntervalsForSegment drops the padding when it would
+        // swallow the piece whole, so no amount of further rubbing can ever reach
+        // it. Below this floor the sliver shares the band's fate instead of
+        // stranding a half-faded crumb at the edge of the gap forever.
+        const MIN_FADE_RUN = Math.max(1.5, capPadding + 0.1);
+        const runLength = (sub: PointP[]) => {
+            let len = 0;
+            for (let i = 1; i < sub.length; i++) len += Math.hypot(sub[i].x - sub[i - 1].x, sub[i].y - sub[i - 1].y);
+            return len;
+        };
+        const next = normalizedFadedOpacity(path.opacity, fade, ctx.stackDepth ?? 1);
+        for (const sub of subPaths) {
+            if (runLength(sub) >= MIN_FADE_RUN) { emit(sub); continue; }
+            // A surviving sliver shorter than the stroke is thick is DROPPED, not
+            // re-emitted at the band's opacity. Emitting it made a path barely
+            // longer than its own round caps, which renders as a filled DISC —
+            // scrub back and forth and the result is a row of translucent circles
+            // at assorted opacities instead of a clean band. The neighbouring
+            // runs' caps already cover the couple of units this gives up.
+        }
+        if (next !== null) {
+            for (const sub of coveredSubPaths) {
+                // Likewise a covered run too short to read as a line: leaving it
+                // at full opacity would plant a solid dot in the middle of the
+                // faded band.
+                if (runLength(sub) >= MIN_FADE_RUN) emit(sub, next);
+            }
+        }
+    } else {
+        for (const sub of subPaths) emit(sub);
     }
     eraseStats.piecesEmitted += pieces.length;
     return pieces;
@@ -2356,20 +2788,67 @@ export function splitPathsByEraser(
         /** When provided, records the originals removed and pieces added this pass
          *  so the caller can patch its spatial index without a full rebuild. */
         sync?: { removed: PathData[]; added: PathData[] };
+        /** Fade instead of cut: ink under the eraser is kept at a reduced
+         *  opacity, so repeated passes wear it away like a real rubber. */
+        fade?: FadeOptions;
     }
 ): PathData[] {
     if (eraserPoints.length === 0) return currentPaths;
 
-    // Move-shared eraser geometry: one resample/bounds/segments (and at most one
-    // getStroke, lazily) per call, reused across every path via splitOnePathByEraser.
-    const ctx = buildEraserCtx(eraserPoints, radius);
     const candidates = opts?.candidates;
     const sync = opts?.sync;
 
-    const newPaths: PathData[] = [];
-    for (const path of currentPaths) {
-        const pieces = splitOnePathByEraser(path, ctx, isLayerLocked, candidates, sync);
-        if (pieces.length) newPaths.push(...pieces);
+    // Measured once for the whole pass: the depth is a property of the artwork
+    // under the eraser, not of any single path.
+    const stackDepth = opts?.fade?.normalizeStack
+        ? estimateStackDepth(currentPaths, eraserPoints, isLayerLocked, candidates)
+        : 1;
+
+    const runPass = (paths: PathData[], points: Point[], passSync?: { removed: PathData[]; added: PathData[] }) => {
+        // Move-shared eraser geometry: one resample/bounds/segments (and at most one
+        // getStroke, lazily) per call, reused across every path via splitOnePathByEraser.
+        const ctx = buildEraserCtx(points, radius, opts?.fade, stackDepth);
+        const out: PathData[] = [];
+        for (const path of paths) {
+            const pieces = splitOnePathByEraser(path, ctx, isLayerLocked, candidates, passSync);
+            if (pieces.length) out.push(...pieces);
+        }
+        return out;
+    };
+
+    // A scrub that doubles back is several passes in one drag. Applying them in
+    // sequence is what makes rubbing harder actually wear the ink down further;
+    // unioned into one pass, the second sweep over a spot would change nothing.
+    const fade = opts?.fade;
+    if (fade?.accumulate) {
+        const passes = splitTrailIntoPasses(eraserPoints, radius);
+        if (passes.length > 1) {
+            let paths = currentPaths;
+            // Only the FIRST pass can trust the caller's candidate set: later
+            // passes run against pieces with fresh ids the set cannot name.
+            let first = true;
+            for (const pass of passes) {
+                const ctx = buildEraserCtx(pass, radius, fade, stackDepth);
+                const out: PathData[] = [];
+                for (const path of paths) {
+                    const pieces = splitOnePathByEraser(path, ctx, isLayerLocked, first ? candidates : undefined);
+                    if (pieces.length) out.push(...pieces);
+                }
+                paths = out;
+                first = false;
+            }
+            // Per-pass sync would record the intermediates, which the caller must
+            // never see. Diff the endpoints by object identity instead: anything
+            // carried through untouched is the SAME object on both sides.
+            if (sync) {
+                const survived = new Set(paths);
+                for (const p of currentPaths) if (!survived.has(p)) sync.removed.push(p);
+                const original = new Set(currentPaths);
+                for (const p of paths) if (!original.has(p)) sync.added.push(p);
+            }
+            return paths;
+        }
     }
-    return newPaths;
+
+    return runPass(currentPaths, eraserPoints, sync);
 }
