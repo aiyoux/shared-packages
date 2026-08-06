@@ -148,7 +148,13 @@ const run = (clipType: unknown, subjects: MultiPolygon[], clips: MultiPolygon[])
         clipStats.convertMs += t1 - t0;
         // NonZero matches how these polygons are authored and rendered (the
         // emitted `d` is filled nonzero), and how Martinez treats them.
-        if (!clipper.ExecutePoly(clipType, m.FillRule.NonZero, tree)) return null;
+        if (!clipper.ExecutePoly(clipType, m.FillRule.NonZero, tree)) {
+            // Silent engine failure: ExecutePoly returned no result. Count and
+            // warn once via onFallback so this path isn't invisible, then let
+            // the caller fall through to Martinez.
+            onFallback(new Error('Clipper2 ExecutePoly returned false'));
+            return null;
+        }
         const t2 = performance.now();
         clipStats.execMs += t2 - t1;
         const out: MultiPolygon = [];
@@ -174,6 +180,10 @@ let warned = false;
 const onFallback = (err: unknown) => {
     clipFallbacks.count++;
     clipFallbacks.lastError = err;
+    // Disable the fast path for the rest of the session so the log message
+    // matches reality: after one fallback, subsequent calls skip Clipper2
+    // entirely instead of re-trying run() (and re-failing) on every call.
+    setClipper2Enabled(false);
     if (!warned) {
         warned = true;
         // eslint-disable-next-line no-console

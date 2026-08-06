@@ -10,6 +10,18 @@ export interface EraserPath {
     id: string;
     d: string;
     strokeWidth: number;
+    /**
+     * How much of the ink under this stroke it takes away, 0..1. Omitted means
+     * all of it — the plain area eraser.
+     *
+     * A partial value is what makes a FADE erase possible without touching the
+     * ink: the stroke is stored as it was drawn and the ink underneath keeps its
+     * geometry, so rubbing the same spot again simply lays down another stroke
+     * and the two multiply. Cutting the ink instead — splitting every path the
+     * eraser crosses, pass after pass — is what shattered a much-erased area
+     * into hairline pieces.
+     */
+    alpha?: number;
 }
 
 export interface LayerData {

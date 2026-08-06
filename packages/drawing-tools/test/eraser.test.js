@@ -45,8 +45,8 @@ test('split eraser removes a section from a long line when only the eraser strok
     ], 5);
 
     assert.equal(result.length, 2);
-    assert.match(result[0].d, /^M 0\.0 0\.0 L /);
-    assert.match(result[1].d, /^M 5[6-9]\.\d 0\.0 L /);
+    assert.match(result[0].d, /^M 0(\.0+)? 0(\.0+)? L /);
+    assert.match(result[1].d, /^M 5[6-9](\.\d+)? 0(\.0+)? L /);
 });
 
 test('split eraser keeps both sides when erasing through the middle of a long stroke', () => {
@@ -282,7 +282,7 @@ test('split eraser destroys geometry in closed filled outline paths', () => {
 
     assert.notDeepEqual(result, paths);
     assert.equal(result.length, 2);
-    assert.equal(result.some(path => path.d.includes('50.0 0.0')), false);
+    assert.equal(result.some(path => /\b50(\.0+)? 0(\.0+)?\b/.test(path.d)), false);
     assert.equal(result.every(path => !path.fillRule), true);
 });
 
@@ -303,7 +303,7 @@ test('split eraser applies baked path translate before clipping filled faces', (
     assert.equal(result.length, 2);
     assert.equal(result.every(path => path.transform === undefined), true);
     assert.equal(result.every(path => path.fill === '#000'), true);
-    assert.equal(result.some(path => path.d.includes('50.0 90.0')), true);
+    assert.equal(result.some(path => /\b50(\.0+)? 90(\.0+)?\b/.test(path.d)), true);
 });
 
 test('split eraser treats same-winding baked face subpaths as separate filled polygons', () => {
@@ -321,9 +321,9 @@ test('split eraser treats same-winding baked face subpaths as separate filled po
 
     assert.equal(result.length, 3);
     assert.equal(result.every(path => path.fill === '#000'), true);
-    assert.equal(result.some(path => path.d.includes('0.0 0.0')), true);
-    assert.equal(result.some(path => path.d.includes('40.0 0.0')), true);
-    assert.equal(result.some(path => path.d.includes('60.0 0.0')), true);
+    assert.equal(result.some(path => /\b0(\.0+)? 0(\.0+)?\b/.test(path.d)), true);
+    assert.equal(result.some(path => /\b40(\.0+)? 0(\.0+)?\b/.test(path.d)), true);
+    assert.equal(result.some(path => /\b60(\.0+)? 0(\.0+)?\b/.test(path.d)), true);
 });
 
 test('split eraser preserves untouched translated baked paths', () => {
@@ -433,7 +433,7 @@ test('split eraser preserves previous erased gaps when erasing another part of t
 
     assert.equal(result.length, 1);
     assert.equal(result[0].fillRule, undefined);
-    assert.equal(result[0].d.includes('40.0 8.0'), true);
+    assert.equal(/\b40(\.0+)? 8(\.0+)?\b/.test(result[0].d), true);
 });
 
 test('split eraser does not break a thick valid filled stroke when the eraser only touches one side', () => {

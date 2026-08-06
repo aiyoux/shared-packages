@@ -9,6 +9,17 @@ export { default as Input } from './Input.svelte';
 export { default as Spinner } from './Spinner.svelte';
 export { default as TopProgressBar } from './TopProgressBar.svelte';
 export { default as Checkbox } from './Checkbox.svelte';
+export {
+  CHECKBOX_STATES,
+  CHECKBOX_STATE_LABELS,
+  DEFAULT_CHECKBOX_CYCLE,
+  FULL_CHECKBOX_CYCLE,
+  nextCheckboxState,
+  checkboxStateFromBoolean,
+  isCheckboxFilled,
+  checkboxAriaChecked,
+  type CheckboxState
+} from './checkbox.ts';
 export { default as RadioGroup } from './RadioGroup.svelte';
 export { default as Select } from './Select.svelte';
 export { default as ConnectionScopeSelect } from './ConnectionScopeSelect.svelte';
