@@ -643,15 +643,22 @@ const retracesOwnPath = (current: Point[], b: Point, minBacktrack: number): bool
  * backtrack (`minBacktrack`, an eraser radius) before it counts, so hand jitter
  * along a straight sweep does not shatter it into dozens of passes.
  *
- * Turning a sharp corner is NOT a second pass, and treating it as one is what
- * stamped a circle just after every hook: each pass is swept with a round cap,
- * so a seam laid down where the trail turns puts two caps — a whole disc of
- * double-strength erase — on ink the gesture only crossed once. Where the trail
- * genuinely comes back over itself that disc is buried inside the overlap of
- * the two legs and no one can see it; where the legs part company it is the
- * only doubled thing in the picture. So a reversal only splits when the trail
- * has actually returned to its own earlier path (`retracesOwnPath`); a corner
- * just re-aims the heading and carries on in the same pass.
+ * Two things about WHERE the cut goes decide whether a turn reads as a circle,
+ * and both of them come back to the round cap every pass is swept with:
+ *
+ *  - A corner the trail turns AWAY from is not a second pass at all. Seaming
+ *    there lands two caps' worth of double-strength erase on ink the gesture
+ *    crossed once, and with the legs parting company that disc is the only
+ *    doubled thing in the picture. So a reversal only splits once the trail has
+ *    genuinely come back over its own path (`retracesOwnPath`); a corner re-aims
+ *    the heading and carries on in the same sweep.
+ *  - When it does split, the cut goes at the APEX — the furthest point reached
+ *    before the trail turned — not at the point where the backtrack finally adds
+ *    up, which is a whole radius later. Cut at the later one and the tip beyond
+ *    the turn is covered by ONE pass while everything around it is covered by
+ *    two: a pale disc sitting exactly where the trail turned. Cut at the apex
+ *    and both passes cap there, so the tip is covered twice like the rest of the
+ *    overlap and there is no step to see.
  */
 export function splitTrailIntoPasses(points: Point[], minBacktrack: number): Point[][] {
     if (points.length < 2) return [points];
@@ -661,6 +668,9 @@ export function splitTrailIntoPasses(points: Point[], minBacktrack: number): Poi
     let heading: { x: number; y: number } | null = null;
     let forward = 0;
     let backward = 0;
+    /** Index in `current` of the furthest point reached before the backtrack now
+     *  under way began — where a split, if one comes, has to go. */
+    let apex = 0;
 
     for (let i = 1; i < points.length; i++) {
         const a = points[i - 1];
@@ -679,7 +689,12 @@ export function splitTrailIntoPasses(points: Point[], minBacktrack: number): Poi
         }
 
         const along = vx * heading.x + vy * heading.y;
-        if (along < 0) backward -= along;
+        if (along < 0) {
+            // `a` is where this backtrack turned round. Record it as it starts,
+            // since by the time it counts we are a radius past it.
+            if (backward === 0) apex = current.length - 2;
+            backward -= along;
+        }
         // Moving forward again bleeds off a little of the backtrack so a wobble
         // part-way through a long sweep cannot slowly accumulate into a split.
         else backward = Math.max(0, backward - along * 0.5);
@@ -694,13 +709,14 @@ export function splitTrailIntoPasses(points: Point[], minBacktrack: number): Poi
                 backward = 0;
                 continue;
             }
-            passes.push(current);
-            // The reversal point starts the next pass too, so coverage stays
-            // continuous across the seam.
-            current = [b];
+            // The apex belongs to both sides, so coverage stays continuous
+            // across the seam and the two caps land on the same spot.
+            passes.push(current.slice(0, apex + 1));
+            current = current.slice(apex);
             heading = null;
             forward = 0;
             backward = 0;
+            apex = 0;
         }
     }
 

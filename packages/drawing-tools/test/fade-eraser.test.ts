@@ -234,6 +234,17 @@ describe('fade eraser accumulation within one drag', () => {
 		assert.equal(passes.length, 2, `a retrace is two sweeps, got ${passes.length}`);
 	});
 
+	// Where the cut goes matters as much as whether there is one. The backtrack
+	// only ADDS UP to a radius well after the trail turned, and cutting there
+	// leaves the tip beyond the turn inside one pass while the ink around it is
+	// inside two — a disc of lighter ink stamped at the turn. Cut at the apex and
+	// both passes cap on the same point, so the tip matches its surroundings.
+	it('cuts a reversal at the apex, not a radius past it', () => {
+		const [first, second] = splitTrailIntoPasses(scrub(0, 200, 0, 2), 20);
+		assert.equal(first[first.length - 1].x, 200, 'the outward pass must end AT the turn');
+		assert.equal(second[0].x, 200, 'and the return must start there — the apex is shared');
+	});
+
 	it('fades further the more you scrub over the same spot', () => {
 		const opacityAfter = (sweeps: number) => {
 			const out = splitPathsByEraser(
