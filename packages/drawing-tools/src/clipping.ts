@@ -2,12 +2,16 @@ import polygonClipping, { type MultiPolygon, type Polygon, type Ring } from 'pol
 
 /** Boolean polygon ops for the eraser, with two interchangeable engines.
  *
- *  DEFAULT: polygon-clipping (Martinez, pure JS) — the engine every erase
- *  regression test and guard threshold was tuned against.
- *
- *  FAST PATH: Clipper2 compiled to WebAssembly, ~12x faster on the erase's
+ *  IN THE APP: Clipper2 compiled to WebAssembly, ~12x faster on the erase's
  *  dominant `difference` (17.4ms → 1.5ms measured on a real 2149-point captured
- *  stroke) and ~10x on the swept-outline self-union.
+ *  stroke) and ~10x on the swept-outline self-union. Once the worker has
+ *  installed it, it is the only engine that runs — a mid-session error does NOT
+ *  quietly hand the work to the slow one (see `onEngineError`).
+ *
+ *  OTHERWISE: polygon-clipping (Martinez, pure JS) — the engine every erase
+ *  regression test and guard threshold was tuned against. It runs wherever
+ *  Clipper2 was never installed (the Node test suite, SSR, a failed wasm fetch)
+ *  and when the debug popover switches engines deliberately to A/B a stroke.
  *
  *  Precision is NOT the trade here. Clipper2 clips on integer coordinates
  *  internally; ClipperD scales by `precision` decimal places, so the engine's
@@ -58,9 +62,33 @@ export const setClipper2Module = (m: unknown, decimalPrecision = 6) => {
 };
 
 /** Runtime A/B switch — lets the debug popover fall back to Martinez on-device
- *  without a rebuild, so the two engines can be compared on the same stroke. */
+ *  without a rebuild, so the two engines can be compared on the same stroke.
+ *  This is a DELIBERATE choice by whoever flips it; it is not the automatic
+ *  fallback, which is off (see `martinezFallback`). */
 export const setClipper2Enabled = (on: boolean) => { enabled = on; };
 export const isClipper2Active = () => !!mod && enabled;
+
+/**
+ * May a Clipper2 failure be answered by silently running Martinez instead?
+ *
+ * OFF. The automatic fallback kept biting: a single failed op used to hand the
+ * rest of the session to an engine an order of magnitude slower, and because it
+ * still produced correct-looking geometry there was nothing to see — erasing was
+ * simply, permanently, sluggish. Worse, an adapter that threw on EVERY call once
+ * made a validation run report "0.00000% identical" purely because it was
+ * comparing Martinez against itself.
+ *
+ * With it off, a Clipper2 error propagates: the erase worker replies `ok: false`
+ * and the main thread leaves the paths untouched. One erase visibly does nothing
+ * instead of every later erase quietly costing 12x — a failure you can act on.
+ *
+ * The Martinez path itself is untouched and still runs wherever Clipper2 was
+ * never installed, and {@link setMartinezFallbackEnabled} turns the automatic
+ * route back on if a build ever needs it.
+ */
+let martinezFallback = false;
+export const setMartinezFallbackEnabled = (on: boolean) => { martinezFallback = on; };
+export const isMartinezFallbackEnabled = () => martinezFallback;
 
 const asMulti = (g: Geom): MultiPolygon =>
     // A Polygon is Ring[]; a MultiPolygon is Polygon[]. The first element of a
@@ -132,7 +160,10 @@ const collectPolygons = (node: { count(): number; child(i: number): any }, out: 
 export const clipStats = { calls: 0, convertMs: 0, execMs: 0, readMs: 0 };
 export const resetClipStats = () => { clipStats.calls = 0; clipStats.convertMs = 0; clipStats.execMs = 0; clipStats.readMs = 0; };
 
-const run = (clipType: unknown, subjects: MultiPolygon[], clips: MultiPolygon[]): MultiPolygon | null => {
+/** Run one Clipper2 op. THROWS on engine failure — every caller already wraps
+ *  this in the one try/catch that decides what a failure means, so returning a
+ *  null nobody could attribute only made the failure easy to miss. */
+const run = (clipType: unknown, subjects: MultiPolygon[], clips: MultiPolygon[]): MultiPolygon => {
     const m = mod!;
     const owned: { delete(): void }[] = [];
     let clipper: InstanceType<Clipper2Module['ClipperD']> | null = null;
@@ -148,12 +179,10 @@ const run = (clipType: unknown, subjects: MultiPolygon[], clips: MultiPolygon[])
         clipStats.convertMs += t1 - t0;
         // NonZero matches how these polygons are authored and rendered (the
         // emitted `d` is filled nonzero), and how Martinez treats them.
+        // ExecutePoly answers false only on engine failure — an empty clip is a
+        // true with no children — so this is an error, not "nothing to do".
         if (!clipper.ExecutePoly(clipType, m.FillRule.NonZero, tree)) {
-            // Silent engine failure: ExecutePoly returned no result. Count and
-            // warn once via onFallback so this path isn't invisible, then let
-            // the caller fall through to Martinez.
-            onFallback(new Error('Clipper2 ExecutePoly returned false'));
-            return null;
+            throw new Error('Clipper2 ExecutePoly returned false');
         }
         const t2 = performance.now();
         clipStats.execMs += t2 - t1;
@@ -170,34 +199,41 @@ const run = (clipType: unknown, subjects: MultiPolygon[], clips: MultiPolygon[])
     }
 };
 
-/** Falling back is a safety net, but a SILENT one hides breakage: an early
- *  version of this adapter threw on every call and quietly ran Martinez, which
- *  made a validation run report "0.00000% identical" purely because it was
- *  comparing Martinez against itself. Warn once (and count) so a dead fast path
- *  cannot masquerade as a working one. */
+/** Counters for the debug popover, so a struggling engine leaves a trace even
+ *  when nothing visibly breaks. */
 export const clipFallbacks = { count: 0, lastError: null as unknown };
 let warned = false;
-const onFallback = (err: unknown) => {
+
+/**
+ * A Clipper2 op failed. Record it, say so once, and then — unless the automatic
+ * Martinez route has been switched on — rethrow.
+ *
+ * Rethrowing is the point. Swallowing it here is what let a broken fast path
+ * masquerade as a working one; the erase worker turns the throw into an
+ * `ok: false` reply, which leaves the drawing exactly as it was and shows up in
+ * the console instead of hiding in the frame budget.
+ */
+const onEngineError = (err: unknown): void => {
     clipFallbacks.count++;
     clipFallbacks.lastError = err;
-    // Disable the fast path for the rest of the session so the log message
-    // matches reality: after one fallback, subsequent calls skip Clipper2
-    // entirely instead of re-trying run() (and re-failing) on every call.
-    setClipper2Enabled(false);
     if (!warned) {
         warned = true;
         // eslint-disable-next-line no-console
-        console.warn('[CLIP] Clipper2 failed, falling back to Martinez for this session:', err);
+        console.warn(
+            martinezFallback
+                ? '[CLIP] Clipper2 failed, falling back to Martinez:'
+                : '[CLIP] Clipper2 failed and the Martinez fallback is off — this op will not be applied:',
+            err
+        );
     }
+    if (!martinezFallback) throw err;
 };
 
 export const union = (geom: Geom, ...geoms: Geom[]): MultiPolygon => {
     if (isClipper2Active()) {
         try {
-            const all = [asMulti(geom), ...geoms.map(asMulti)];
-            const res = run(mod!.ClipType.Union, all, []);
-            if (res) return res;
-        } catch (err) { onFallback(err); }
+            return run(mod!.ClipType.Union, [asMulti(geom), ...geoms.map(asMulti)], []);
+        } catch (err) { onEngineError(err); }
     }
     return polygonClipping.union(geom as Polygon, ...(geoms as Polygon[]));
 };
@@ -205,9 +241,8 @@ export const union = (geom: Geom, ...geoms: Geom[]): MultiPolygon => {
 export const difference = (subject: Geom, ...clips: Geom[]): MultiPolygon => {
     if (isClipper2Active()) {
         try {
-            const res = run(mod!.ClipType.Difference, [asMulti(subject)], clips.map(asMulti));
-            if (res) return res;
-        } catch (err) { onFallback(err); }
+            return run(mod!.ClipType.Difference, [asMulti(subject)], clips.map(asMulti));
+        } catch (err) { onEngineError(err); }
     }
     return polygonClipping.difference(subject as Polygon, ...(clips as Polygon[]));
 };
@@ -217,9 +252,8 @@ export const difference = (subject: Geom, ...clips: Geom[]): MultiPolygon => {
 export const intersection = (subject: Geom, ...clips: Geom[]): MultiPolygon => {
     if (isClipper2Active()) {
         try {
-            const res = run(mod!.ClipType.Intersection, [asMulti(subject)], clips.map(asMulti));
-            if (res) return res;
-        } catch (err) { onFallback(err); }
+            return run(mod!.ClipType.Intersection, [asMulti(subject)], clips.map(asMulti));
+        } catch (err) { onEngineError(err); }
     }
     return polygonClipping.intersection(subject as Polygon, ...(clips as Polygon[]));
 };
