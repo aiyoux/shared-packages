@@ -1,0 +1,79 @@
+{
+  "name": "@shared-packages/file-system",
+  "version": "0.1.0",
+  "private": false,
+  "type": "module",
+  "description": "Browser VFS (Dexie + OPFS), FileExplorer UI, and optional Backblaze B2 remote browser.",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "svelte": "./src/index.ts",
+      "import": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./ui": {
+      "types": "./src/ui/index.ts",
+      "svelte": "./src/ui/index.ts",
+      "import": "./src/ui/index.ts",
+      "default": "./src/ui/index.ts"
+    },
+    "./ui/driver": {
+      "types": "./src/ui/explorerDriver.ts",
+      "import": "./src/ui/explorerDriver.ts",
+      "default": "./src/ui/explorerDriver.ts"
+    },
+    "./ui/localExplorerDriver": {
+      "types": "./src/ui/localExplorerDriver.ts",
+      "import": "./src/ui/localExplorerDriver.ts",
+      "default": "./src/ui/localExplorerDriver.ts"
+    },
+    "./b2": {
+      "types": "./src/b2/index.ts",
+      "svelte": "./src/b2/index.ts",
+      "import": "./src/b2/index.ts",
+      "default": "./src/b2/index.ts"
+    }
+  },
+  "svelte": "./src/index.ts",
+  "types": "./src/index.ts",
+  "files": [
+    "src"
+  ],
+  "scripts": {
+    "test": "node --experimental-strip-types --import ./test/setup.mjs --import ./test/resolve-hook.mjs --test test/*.unit.test.ts",
+    "test:unit": "npm test",
+    "test:b2": "vitest run --config vitest.b2.config.ts",
+    "test:component": "vitest run --config vitest.config.ts",
+    "test:all": "npm run test && npm run test:b2 && npm run test:component",
+    "check": "tsc --noEmit -p tsconfig.json",
+    "yalc:publish": "yalc publish"
+  },
+  "dependencies": {
+    "@backblaze-labs/b2-sdk": "^0.2.0",
+    "dexie": "^4.4.4"
+  },
+  "peerDependencies": {
+    "svelte": "^5.0.0"
+  },
+  "peerDependenciesMeta": {
+    "svelte": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^7.0.0",
+    "@testing-library/svelte": "^5.2.8",
+    "@types/node": "^26.1.1",
+    "fake-indexeddb": "^6.0.0",
+    "jsdom": "^26.1.0",
+    "svelte": "^5.56.6",
+    "typescript": "^5.7.3",
+    "vitest": "^4.1.2"
+  },
+  "engines": {
+    "node": ">=22.7.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
