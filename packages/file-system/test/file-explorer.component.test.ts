@@ -29,6 +29,26 @@ describe('FileExplorer component', () => {
 		expect(screen.getByTestId('fe-breadcrumbs')).toBeTruthy();
 	});
 
+	it('shows storage persistence chip for local VFS and can hide it', async () => {
+		const { unmount } = render(FileExplorer, {
+			props: { mode: 'manage', vfs, variant: 'panel' }
+		});
+		const chip = await screen.findByTestId('fe-storage-persist');
+		expect(chip).toBeTruthy();
+		// jsdom: navigator.storage.persist is typically unsupported → not "loading" forever
+		await viWaitFor(() => {
+			const st = chip.getAttribute('data-status');
+			return st === 'unsupported' || st === 'best-effort' || st === 'persistent';
+		});
+		unmount();
+
+		render(FileExplorer, {
+			props: { mode: 'manage', vfs, variant: 'panel', showPersistence: false }
+		});
+		await screen.findByTestId('file-explorer');
+		expect(document.querySelector('[data-testid="fe-storage-persist"]')).toBeNull();
+	});
+
 	it('lists seeded files and greys out incompatible types under accept', async () => {
 		await vfs.writeFile({
 			parentId: null,

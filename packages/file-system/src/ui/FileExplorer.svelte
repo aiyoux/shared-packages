@@ -7,6 +7,7 @@
 		type ExplorerOpenTarget
 	} from './explorerDriver.js';
 	import { createLocalExplorerDriver } from './localExplorerDriver.js';
+	import StoragePersistenceStatus from './StoragePersistenceStatus.svelte';
 
 	export type ExplorerMode = 'manage' | 'open' | 'save' | 'browse';
 
@@ -21,6 +22,11 @@
 		driver?: ExplorerDriver;
 		/** Legacy: used when driver omitted. */
 		vfs?: VfsService;
+		/**
+		 * Show origin storage persistence chip (local Dexie/OPFS only).
+		 * Default true when backend is local; ignored for remote drivers.
+		 */
+		showPersistence?: boolean;
 		onOpen?: (entry: ExplorerOpenTarget) => void | Promise<void>;
 		onSave?: (args: {
 			parentId: string | null;
@@ -43,6 +49,7 @@
 		multiSelect = false,
 		driver: driverProp,
 		vfs: vfsProp,
+		showPersistence = true,
 		onOpen,
 		onSave,
 		onClose,
@@ -57,6 +64,11 @@
 		driverProp ?? createLocalExplorerDriver(vfsProp ?? getSharedVfs())
 	);
 	let caps = $derived(driver.capabilities);
+	/** Local SharedVFS instance when applicable (for persistence chip + meta). */
+	let localVfs = $derived(
+		driver.id === 'local' ? (vfsProp ?? getSharedVfs()) : null
+	);
+	let showPersistChip = $derived(showPersistence && driver.id === 'local' && !!localVfs);
 
 	$effect(() => {
 		if (driverProp) {
@@ -597,6 +609,9 @@
 			{/if}
 		</div>
 		<div class="fe-toolbar" data-testid="fe-toolbar">
+			{#if showPersistChip && localVfs}
+				<StoragePersistenceStatus vfs={localVfs} compact class="fe-persist-slot" />
+			{/if}
 			{#if mode === 'manage'}
 				{#if caps.supportsMkdir}
 					<button type="button" data-testid="fe-new-folder" onclick={() => (newFolderOpen = true)}>
