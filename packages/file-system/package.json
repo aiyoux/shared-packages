@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": false,
   "type": "module",
-  "description": "Browser VFS (Dexie + OPFS), FileExplorer UI, optional Backblaze B2 and rclone RC remote browsers.",
+  "description": "Browser VFS (Dexie + OPFS), FileExplorer UI, optional Backblaze B2, rclone RC, and local monitor remote browsers.",
   "exports": {
     ".": {
       "types": "./src/index.ts",
@@ -38,6 +38,17 @@
       "svelte": "./src/rclone/index.ts",
       "import": "./src/rclone/index.ts",
       "default": "./src/rclone/index.ts"
+    },
+    "./monitor": {
+      "types": "./src/monitor/index.ts",
+      "svelte": "./src/monitor/index.ts",
+      "import": "./src/monitor/index.ts",
+      "default": "./src/monitor/index.ts"
+    },
+    "./monitor/server": {
+      "types": "./src/monitor/proxyHandler.ts",
+      "import": "./src/monitor/proxyHandler.ts",
+      "default": "./src/monitor/proxyHandler.ts"
     }
   },
   "svelte": "./src/index.ts",

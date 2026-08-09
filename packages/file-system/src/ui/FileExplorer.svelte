@@ -372,6 +372,19 @@
 		void refresh(true, 'immediate');
 	});
 
+	/** Live backends (monitor watch): re-list open folder when driver signals change. */
+	$effect(() => {
+		const d = driver;
+		if (!d.subscribeChanges) return;
+		const unsub = d.subscribeChanges(() => {
+			// Soft refresh — keep selection when possible
+			void refresh(true, 'delay');
+		});
+		return () => {
+			unsub();
+		};
+	});
+
 	function rowActionable(n: ExplorerEntry): boolean {
 		if (showTrash) return true;
 		return isActionable(n as never, accept);
@@ -765,6 +778,15 @@
 			{#if showPersistChip && localVfs}
 				<StoragePersistenceStatus vfs={localVfs} compact class="fe-persist-slot" />
 			{/if}
+			{#if mode === 'manage' && caps.supportsSiblingOrder && !showTrash}
+				<span
+					class="fe-dnd-hint"
+					data-testid="fe-dnd-hint"
+					title="Drag a row before/after a sibling to reorder. Drop onto a folder to move into it."
+				>
+					Drag to reorder
+				</span>
+			{/if}
 			{#if mode === 'manage'}
 				{#if caps.supportsMkdir}
 					<button type="button" data-testid="fe-new-folder" onclick={() => (newFolderOpen = true)}>
@@ -1084,6 +1106,14 @@
 	}
 	.fe-toolbar button.active {
 		outline: 1px solid var(--fe-accent, #7cb7ff);
+	}
+	.fe-dnd-hint {
+		font-size: 0.72rem;
+		color: #94a3b8;
+		padding: 2px 6px;
+		border-radius: 6px;
+		border: 1px dashed #475569;
+		white-space: nowrap;
 	}
 	.fe-close {
 		font-size: 18px;

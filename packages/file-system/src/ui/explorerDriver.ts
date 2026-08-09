@@ -129,6 +129,17 @@ export interface ExplorerDriver {
 		parentId: ExplorerEntryId | null,
 		file: File
 	): Promise<ExplorerEntry>;
+	/**
+	 * Optional live-change subscription (e.g. monitor watch WebSocket).
+	 * FileExplorer re-lists the open folder when the listener fires.
+	 * Returns an unsubscribe function.
+	 */
+	subscribeChanges?(listener: () => void): () => void;
+	/**
+	 * Optional teardown when the driver is no longer held (close WS, etc.).
+	 * Driver caches should call this when the last ref is released.
+	 */
+	dispose?(): void;
 }
 
 /** Map VfsNode-like fields into ExplorerEntry. */
@@ -171,5 +182,5 @@ export function isLocalClass(driverId: string): boolean {
 }
 
 export function isRemoteClass(driverId: string): boolean {
-	return driverId === 'b2' || driverId === 'rclone';
+	return driverId === 'b2' || driverId === 'rclone' || driverId === 'monitor';
 }

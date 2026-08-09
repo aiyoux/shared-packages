@@ -11,7 +11,12 @@ const root = path.dirname(fileURLToPath(import.meta.url));
 export default defineConfig({
 	test: {
 		environment: 'node',
-		include: ['src/rclone/**/*.test.ts', 'src/ui/treeDnd/**/*.test.ts', 'src/memoryVfs.test.ts'],
+		include: [
+			'src/rclone/**/*.test.ts',
+			'src/monitor/**/*.test.ts',
+			'src/ui/treeDnd/**/*.test.ts',
+			'src/memoryVfs.test.ts'
+		],
 		setupFiles: ['./test/setup.mjs']
 	},
 	root

@@ -1,6 +1,6 @@
 <script lang="ts">
 	/** Storage backend kind for the hub connection switcher. */
-	export type ConnectionKind = 'local' | 'memory' | 'b2' | 'rclone';
+	export type ConnectionKind = 'local' | 'memory' | 'b2' | 'rclone' | 'monitor';
 
 	export type B2ProfileChip = {
 		id: string;
@@ -10,8 +10,9 @@
 		detail?: string;
 	};
 
-	/** Same chip shape as B2; kept as alias for callers wiring rclone. */
+	/** Same chip shape as B2; kept as alias for callers wiring rclone/monitor. */
 	export type RcloneProfileChip = B2ProfileChip;
+	export type MonitorProfileChip = B2ProfileChip;
 
 	interface Props {
 		/** Active selection: local | memory | profile id */
@@ -25,6 +26,8 @@
 		profiles?: B2ProfileChip[];
 		/** Saved rclone profiles — each becomes a join button */
 		rcloneProfiles?: RcloneProfileChip[];
+		/** Saved monitor profiles */
+		monitorProfiles?: MonitorProfileChip[];
 		/** True while a connect attempt is in flight — disables all chips */
 		busy?: boolean;
 		/**
@@ -32,12 +35,15 @@
 		 * When false, rclone UI is hidden; local + B2 remain.
 		 */
 		showRclone?: boolean;
+		/** Feature gate for monitor chips (`feature:monitorFiles`). */
+		showMonitor?: boolean;
 		/** Show In memory chip (tab-ephemeral VFS). Default true. */
 		showMemory?: boolean;
-		/** Select local, memory, or a profile id (B2 or rclone) */
+		/** Select local, memory, or a profile id (B2 / rclone / monitor) */
 		onSelect?: (id: 'local' | 'memory' | string) => void;
 		onConfigureB2?: () => void;
 		onConfigureRclone?: () => void;
+		onConfigureMonitor?: () => void;
 	}
 
 	let {
@@ -45,12 +51,15 @@
 		activeKind,
 		profiles = [],
 		rcloneProfiles = [],
+		monitorProfiles = [],
 		busy = false,
 		showRclone = true,
+		showMonitor = true,
 		showMemory = true,
 		onSelect,
 		onConfigureB2,
-		onConfigureRclone
+		onConfigureRclone,
+		onConfigureMonitor
 	}: Props = $props();
 
 	/** Resolved kind for active chip highlighting (back-compat when activeKind omitted). */
@@ -82,7 +91,7 @@
 			class:active={kind === 'memory'}
 			data-testid="conn-memory"
 			disabled={busy}
-			title="Tab-only storage — cleared when this tab closes"
+			title="Tab-only storage — cleared when this tab closes. Use Dual pane + Copy across to promote into This browser."
 			onclick={() => select('memory')}
 		>
 			In memory
@@ -183,6 +192,55 @@
 			}}
 		>
 			{rcloneProfiles.length ? 'Manage rclone' : 'rclone settings'}
+		</button>
+	{/if}
+
+	{#if showMonitor}
+		{#each monitorProfiles as p (p.id)}
+			<button
+				type="button"
+				class:active={kind === 'monitor' && activeId === p.id}
+				data-testid="conn-monitor-profile"
+				data-profile-id={p.id}
+				title={p.detail ? `${p.name} — ${p.detail}` : p.name}
+				disabled={busy}
+				onclick={() => select(p.id)}
+			>
+				<span class="chip-name">{p.name}</span>
+				{#if p.detail}
+					<span class="chip-detail">{p.detail}</span>
+				{/if}
+			</button>
+		{/each}
+
+		{#if monitorProfiles.length === 0}
+			<button
+				type="button"
+				class:active={kind === 'monitor'}
+				data-testid="conn-monitor"
+				disabled={busy}
+				onclick={() => {
+					if (busy) return;
+					onConfigureMonitor?.();
+				}}
+			>
+				monitor
+			</button>
+		{/if}
+
+		<button
+			type="button"
+			class="ghost"
+			data-testid="conn-monitor-config"
+			disabled={busy}
+			onclick={(e) => {
+				e.preventDefault();
+				e.stopPropagation();
+				if (busy) return;
+				onConfigureMonitor?.();
+			}}
+		>
+			{monitorProfiles.length ? 'Manage monitor' : 'monitor settings'}
 		</button>
 	{/if}
 </div>
