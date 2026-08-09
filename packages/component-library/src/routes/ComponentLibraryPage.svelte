@@ -7,10 +7,16 @@
 </script>
 
 <script lang="ts">
-  import { ChevronDown, ChevronRight, FileText, PanelLeft, PanelLeftClose, Plus, X } from '@lucide/svelte';
-  import type { BaseOrVagueReference, DateInformation, ResolveContext, TimeReference, VagueMinuteCode, WeekModeCode } from '@modular@shared-packages/ui/date';
-  import { formatTimeReferenceRangeLabel } from '@modular@shared-packages/ui/date';
-  import { Badge, Button, Checkbox, DateAnchorEditor, DatePicker, DateRangeCalendar, DateRangePicker, Label, MobileBottomTray, NumberInput, Pagination, QuickAddDateTimePopover, RadioGroup, ResizableSidePanel, SegmentedControl, Select, TimePicker, TimeReferenceRangeEditor, type DatePickerValue, type DateRangeValue } from '@modular@shared-packages/ui';
+  import ChevronDown from '@lucide/svelte/icons/chevron-down';
+import ChevronRight from '@lucide/svelte/icons/chevron-right';
+import FileText from '@lucide/svelte/icons/file-text';
+import PanelLeft from '@lucide/svelte/icons/panel-left';
+import PanelLeftClose from '@lucide/svelte/icons/panel-left-close';
+import Plus from '@lucide/svelte/icons/plus';
+import X from '@lucide/svelte/icons/x';
+  import type { BaseOrVagueReference, DateInformation, ResolveContext, TimeReference, VagueMinuteCode, WeekModeCode } from '@shared-packages/ui/date';
+  import { formatTimeReferenceRangeLabel } from '@shared-packages/ui/date';
+  import { Badge, Button, Checkbox, DateAnchorEditor, DatePicker, DateRangeCalendar, DateRangePicker, Label, MobileBottomTray, NumberInput, Pagination, QuickAddDateTimePopover, RadioGroup, ResizableSidePanel, SegmentedControl, Select, TimePicker, TimeReferenceRangeEditor, type DatePickerValue, type DateRangeValue } from '@shared-packages/ui';
   import IconDay from '../icons/IconDay.svelte';
   import IconWeek from '../icons/IconWeek.svelte';
   import IconMonth from '../icons/IconMonth.svelte';

@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { Ban, Check, Minus } from '@lucide/svelte';
+  import Ban from '@lucide/svelte/icons/ban';
+import Check from '@lucide/svelte/icons/check';
+import Minus from '@lucide/svelte/icons/minus';
   import { cn } from './utils.ts';
   import {
     CHECKBOX_STATE_LABELS,

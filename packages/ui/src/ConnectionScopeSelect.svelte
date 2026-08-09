@@ -7,7 +7,8 @@
   // both the multi-select calendar header (multiple=true) and the single-target
   // quick-add / DayEventsModal pickers (multiple=false, length-1 array). See
   // [[m7-aggregated-calendar]] and [[shared-packages-yalc-canonical-only]].
-  import { Check, ChevronDown } from '@lucide/svelte';
+  import Check from '@lucide/svelte/icons/check';
+import ChevronDown from '@lucide/svelte/icons/chevron-down';
   import Popover from './Popover.svelte';
   import { cn } from './utils.ts';
   import {

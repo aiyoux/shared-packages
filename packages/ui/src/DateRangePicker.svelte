@@ -1,7 +1,9 @@
 <script lang="ts">
   import Popover from './Popover.svelte';
   import DateRangeCalendar from './DateRangeCalendar.svelte';
-  import { Pencil, X, Plus } from '@lucide/svelte';
+  import Pencil from '@lucide/svelte/icons/pencil';
+import X from '@lucide/svelte/icons/x';
+import Plus from '@lucide/svelte/icons/plus';
   import type { DateRangeValue } from './date-range.ts';
   import { formatRangeLabel } from './date-range.ts';
   import {

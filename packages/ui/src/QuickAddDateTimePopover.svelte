@@ -1,13 +1,11 @@
 <script lang="ts">
-  import {
-    CalendarDays,
-    CalendarRange,
-    Check,
-    ChevronDown,
-    Clock3,
-    Sparkles,
-    X
-  } from '@lucide/svelte';
+  import CalendarDays from '@lucide/svelte/icons/calendar-days';
+import CalendarRange from '@lucide/svelte/icons/calendar-range';
+import Check from '@lucide/svelte/icons/check';
+import ChevronDown from '@lucide/svelte/icons/chevron-down';
+import Clock3 from '@lucide/svelte/icons/clock-3';
+import Sparkles from '@lucide/svelte/icons/sparkles';
+import X from '@lucide/svelte/icons/x';
   import type { TimeReference, VagueDayCode, VagueMinuteCode, VagueMonthCode } from './date';
   import {
     cleanupEmptyFields,

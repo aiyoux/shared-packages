@@ -1,6 +1,6 @@
 <script lang="ts">
   import { fade, scale } from 'svelte/transition';
-  import { X } from '@lucide/svelte';
+  import X from '@lucide/svelte/icons/x';
   import type { Snippet } from 'svelte';
   import {
     pushDialog,

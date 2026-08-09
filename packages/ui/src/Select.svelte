@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { Check, ChevronDown } from '@lucide/svelte';
+  import Check from '@lucide/svelte/icons/check';
+import ChevronDown from '@lucide/svelte/icons/chevron-down';
   import Popover from './Popover.svelte';
   import { cn } from './utils.ts';
   import type { SelectOption } from './select.ts';

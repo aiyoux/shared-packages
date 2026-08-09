@@ -1,6 +1,6 @@
 <script lang="ts">
   import { cn } from './utils.ts';
-  import { LoaderCircle } from '@lucide/svelte';
+  import LoaderCircle from '@lucide/svelte/icons/loader-circle';
 
   type Variant = 'primary' | 'secondary' | 'ghost' | 'danger';
   type Size = 'sm' | 'md' | 'lg' | 'icon';

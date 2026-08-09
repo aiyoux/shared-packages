@@ -1,6 +1,7 @@
 <script lang="ts">
   import { cn } from './utils.ts';
-  import { Eye, EyeOff } from '@lucide/svelte';
+  import Eye from '@lucide/svelte/icons/eye';
+import EyeOff from '@lucide/svelte/icons/eye-off';
 
   let {
     id,

@@ -11,9 +11,19 @@
     "yalc:publish": "npm run yalc:publish --workspaces --if-present"
   },
   "devDependencies": {
+    "wrangler": "^4.120.0",
     "yalc": "^1.0.0-pre.53"
   },
   "dependencies": {
+    "@lucide/svelte": "^0.554.0",
     "svelte": "^5.56.6"
+  },
+  "overrides": {
+    "@lucide/svelte": "^0.554.0"
+  },
+  "allowScripts": {
+    "esbuild@0.28.1": true,
+    "esbuild@0.25.12": true,
+    "workerd@1.20260714.1": true
   }
 }
