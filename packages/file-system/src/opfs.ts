@@ -1,7 +1,11 @@
 import { VfsError } from './types.js';
 
 export interface OpfsBlobStore {
-	writePartial(writeId: string, data: BufferSource | Blob): Promise<{ tmpPath: string; byteLength: number }>;
+	/** Accept Uint8Array explicitly — TS 5.7+ ArrayBufferLike generics break bare BufferSource. */
+	writePartial(
+		writeId: string,
+		data: BufferSource | Blob | Uint8Array
+	): Promise<{ tmpPath: string; byteLength: number }>;
 	promote(tmpPath: string, finalOpfsPath: string): Promise<void>;
 	writeAtomic(opfsPath: string, data: BufferSource | Blob): Promise<{ byteLength: number }>;
 	read(opfsPath: string): Promise<Uint8Array>;
@@ -56,7 +60,7 @@ export function createMemoryOpfs(): OpfsBlobStore {
 		},
 		async readBlob(opfsPath, contentType = 'application/octet-stream') {
 			const bytes = await this.read(opfsPath);
-			return new Blob([bytes], { type: contentType });
+			return new Blob([bytes as BlobPart], { type: contentType });
 		},
 		async remove(opfsPath) {
 			files.delete(opfsPath);
@@ -183,7 +187,7 @@ export function createOpfsBlobStore(rootDirName = 'shared-vfs'): OpfsBlobStore {
 		},
 		async readBlob(opfsPath, contentType = 'application/octet-stream') {
 			const bytes = await this.read(opfsPath);
-			return new Blob([bytes], { type: contentType });
+			return new Blob([bytes as BlobPart], { type: contentType });
 		},
 		async remove(opfsPath) {
 			try {

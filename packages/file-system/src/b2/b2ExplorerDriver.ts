@@ -47,7 +47,8 @@ const B2_CAPS: ExplorerCapabilities = {
 	supportsCopy: true,
 	supportsMkdir: true,
 	supportsUpload: true,
-	supportsDownload: true
+	supportsDownload: true,
+	supportsSiblingOrder: false
 };
 
 function sortFoldersFirst(entries: ExplorerEntry[]): ExplorerEntry[] {

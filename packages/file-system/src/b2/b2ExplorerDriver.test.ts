@@ -1,9 +1,9 @@
 /**
  * B2ExplorerDriver tests against the official in-memory B2Simulator.
- * No network. Run: npm run test:unit (hub vitest config).
+ * No network. Run: npm run test:b2
  */
-import { describe, it, expect, beforeEach } from 'vitest';
-import { B2Client, BlobSource, BufferSource, BucketType } from '@backblaze-labs/b2-sdk';
+import { describe, it, expect } from 'vitest';
+import { B2Client, BufferSource, BucketType } from '@backblaze-labs/b2-sdk';
 import { B2Simulator } from '@backblaze-labs/b2-sdk/simulator';
 import {
 	EXPLORER_DOWNLOAD_MAX_BYTES,
@@ -151,11 +151,6 @@ describe('B2ExplorerDriver (B2Simulator)', () => {
 	it('download rejects files over EXPLORER_DOWNLOAD_MAX_BYTES', async () => {
 		const { driver, client } = await bootDriver();
 		const bucket = (await client.listBuckets())[0]!;
-		// Upload via raw bucket so we can set contentLength via large buffer
-		// Cap is 100 MiB — use a mock by patching head via oversized upload is heavy.
-		// Instead upload small and unit-test the guard by temporarily lowering... 
-		// We test the path with a real oversize is impractical in CI; verify small download works
-		// and that ExplorerB2Error B2_TOO_LARGE is thrown when head reports large size.
 		await bucket.upload({
 			fileName: 'tiny.bin',
 			source: new BufferSource(new Uint8Array([1, 2, 3, 4]))
@@ -163,8 +158,6 @@ describe('B2ExplorerDriver (B2Simulator)', () => {
 		const blob = await driver.download!('tiny.bin');
 		expect(blob.size).toBe(4);
 
-		// Direct code-path: call download after ensuring head would fail — inject via large upload is slow.
-		// Assert constant is the design 100 MiB and B2_TOO_LARGE code exists.
 		expect(EXPLORER_DOWNLOAD_MAX_BYTES).toBe(100 * 1024 * 1024);
 		const err = new ExplorerB2Error('B2_TOO_LARGE', 'cap');
 		expect(err.code).toBe('B2_TOO_LARGE');
@@ -172,22 +165,24 @@ describe('B2ExplorerDriver (B2Simulator)', () => {
 
 	it('getPath under namePrefix strips root from breadcrumbs', async () => {
 		const { driver } = await bootDriver({ namePrefix: 'team/' });
-		// create nested under rootPrefix team/
 		await driver.mkdir!(null, 'docs');
 		const nested = await driver.mkdir!('team/docs/', '2026');
 		expect(nested.id).toBe('team/docs/2026/');
 		const path = await driver.getPath('team/docs/2026/');
 		expect(path.map((p) => p.name)).toEqual(['docs', '2026']);
-		// parent of first segment is effective root (null)
 		expect(path[0]?.parentId).toBeNull();
 	});
 
-	it('capabilities: no trash/soft-delete; has upload/download', async () => {
+	it('capabilities: no trash/soft-delete; has upload/download; no sibling order', async () => {
 		const { driver } = await bootDriver();
 		expect(driver.capabilities.supportsTrash).toBe(false);
 		expect(driver.capabilities.supportsSoftDelete).toBe(false);
 		expect(driver.capabilities.supportsUpload).toBe(true);
 		expect(driver.capabilities.supportsDownload).toBe(true);
+		expect(driver.capabilities.supportsMove).toBe(true);
+		// DnD into-only: remotes never expose reorder ranks
+		expect(driver.capabilities.supportsSiblingOrder).toBe(false);
+		expect(driver.reorder).toBeUndefined();
 		expect(driver.id).toBe('b2');
 	});
 });

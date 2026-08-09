@@ -1,7 +1,8 @@
 /**
  * Backend-agnostic FileExplorer driver contract.
- * Local wraps VfsService; B2 (hub) implements simple object browser ops.
+ * Local wraps VfsService; B2/rclone implement simple object browser ops.
  * @see docs/design/b2-file-explorer-connection.md
+ * @see docs/design/dnd-inmem-copy.md
  */
 import type { FileTypeId } from '../types.js';
 
@@ -27,6 +28,8 @@ export interface ExplorerEntry extends ExplorerOpenTarget {
 	size?: number;
 	updatedAt?: number;
 	contentType?: string;
+	/** Sibling rank when backend supports order. */
+	sortOrder?: number;
 	/** Backend-private (e.g. B2 fileId). Not for open-with. */
 	meta?: Record<string, unknown>;
 }
@@ -49,6 +52,11 @@ export interface ExplorerCapabilities {
 	supportsUpload: boolean;
 	/** Explicit download row/toolbar action. Local v1: false. B2: true. */
 	supportsDownload: boolean;
+	/**
+	 * When true: show before/after drop lines; same-parent DnD must call reorder().
+	 * Local durable + memory: true. B2 + rclone: false.
+	 */
+	supportsSiblingOrder: boolean;
 }
 
 /**
@@ -74,7 +82,7 @@ export interface ExplorerListResult {
 }
 
 export interface ExplorerDriver {
-	readonly id: 'local' | 'b2' | string;
+	readonly id: 'local' | 'memory' | 'b2' | 'rclone' | string;
 	readonly capabilities: ExplorerCapabilities;
 	ready(): Promise<void>;
 	list(opts: ExplorerListOptions): Promise<ExplorerListResult>;
@@ -88,6 +96,14 @@ export interface ExplorerDriver {
 	rename?(id: ExplorerEntryId, name: string): Promise<ExplorerEntry>;
 	move?(id: ExplorerEntryId, newParentId: ExplorerEntryId | null): Promise<void>;
 	copy?(id: ExplorerEntryId, newParentId: ExplorerEntryId | null): Promise<void>;
+	/**
+	 * MANDATORY when supportsSiblingOrder === true.
+	 * Same-parent rank write from full sibling set.
+	 */
+	reorder?(
+		id: ExplorerEntryId,
+		opts: { beforeId?: ExplorerEntryId | null; afterId?: ExplorerEntryId | null }
+	): Promise<void>;
 	/** Soft-trash when supportsSoftDelete; else hard delete (B2: all versions). */
 	delete(id: ExplorerEntryId): Promise<void>;
 	restore?(id: ExplorerEntryId): Promise<void>;
@@ -103,6 +119,16 @@ export interface ExplorerDriver {
 	 * Must reject if size > EXPLORER_DOWNLOAD_MAX_BYTES.
 	 */
 	download?(id: ExplorerEntryId): Promise<Blob>;
+	/** Optional: bytes for copy-across bridge (local/memory). */
+	readBlob?(id: ExplorerEntryId): Promise<Blob>;
+	/**
+	 * Optional write for copy-across into local/memory without enabling upload chrome
+	 * (`supportsUpload` may stay false).
+	 */
+	writeFile?(
+		parentId: ExplorerEntryId | null,
+		file: File
+	): Promise<ExplorerEntry>;
 }
 
 /** Map VfsNode-like fields into ExplorerEntry. */
@@ -115,6 +141,7 @@ export function nodeToEntry(n: {
 	size?: number;
 	updatedAt?: number;
 	contentType?: string;
+	sortOrder?: number;
 }): ExplorerEntry {
 	return {
 		id: n.id,
@@ -124,7 +151,8 @@ export function nodeToEntry(n: {
 		fileType: n.fileType,
 		size: n.size,
 		updatedAt: n.updatedAt,
-		contentType: n.contentType
+		contentType: n.contentType,
+		sortOrder: n.sortOrder
 	};
 }
 
@@ -136,4 +164,12 @@ export function applyListCap(entries: ExplorerEntry[]): ExplorerListResult {
 		};
 	}
 	return { entries, truncated: false };
+}
+
+export function isLocalClass(driverId: string): boolean {
+	return driverId === 'local' || driverId === 'memory';
+}
+
+export function isRemoteClass(driverId: string): boolean {
+	return driverId === 'b2' || driverId === 'rclone';
 }

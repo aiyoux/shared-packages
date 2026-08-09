@@ -65,4 +65,9 @@ export {
 } from './types.js';
 
 export { default as B2ConnectionForm } from './B2ConnectionForm.svelte';
-export { default as ConnectionSwitcher } from './ConnectionSwitcher.svelte';
+export {
+	default as ConnectionSwitcher,
+	type ConnectionKind,
+	type B2ProfileChip,
+	type RcloneProfileChip
+} from './ConnectionSwitcher.svelte';

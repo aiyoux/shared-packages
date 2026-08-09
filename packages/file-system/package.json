@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": false,
   "type": "module",
-  "description": "Browser VFS (Dexie + OPFS), FileExplorer UI, and optional Backblaze B2 remote browser.",
+  "description": "Browser VFS (Dexie + OPFS), FileExplorer UI, optional Backblaze B2 and rclone RC remote browsers.",
   "exports": {
     ".": {
       "types": "./src/index.ts",
@@ -32,6 +32,12 @@
       "svelte": "./src/b2/index.ts",
       "import": "./src/b2/index.ts",
       "default": "./src/b2/index.ts"
+    },
+    "./rclone": {
+      "types": "./src/rclone/index.ts",
+      "svelte": "./src/rclone/index.ts",
+      "import": "./src/rclone/index.ts",
+      "default": "./src/rclone/index.ts"
     }
   },
   "svelte": "./src/index.ts",
@@ -43,11 +49,14 @@
     "test": "node --experimental-strip-types --import ./test/setup.mjs --import ./test/resolve-hook.mjs --test test/*.unit.test.ts",
     "test:unit": "npm test",
     "test:b2": "vitest run --config vitest.b2.config.ts",
+    "test:rclone": "vitest run --config vitest.rclone.config.ts",
+    "test:tree-dnd": "vitest run --config vitest.rclone.config.ts src/ui/treeDnd",
     "test:component": "vitest run --config vitest.config.ts",
-    "test:all": "npm run test && npm run test:b2 && npm run test:component",
+    "test:all": "npm run test && npm run test:b2 && npm run test:rclone && npm run test:component",
     "check": "tsc --noEmit -p tsconfig.json",
     "yalc:publish": "yalc publish"
   },
+
   "dependencies": {
     "@backblaze-labs/b2-sdk": "^0.2.0",
     "dexie": "^4.4.4"
