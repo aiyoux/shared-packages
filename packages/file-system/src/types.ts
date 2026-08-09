@@ -30,6 +30,11 @@ export interface VfsNode {
 	/** Parent at trash time (hierarchy preserved via parentId). */
 	trashParentId?: string | null;
 	contentType?: string;
+	/**
+	 * Sibling rank within parent (active nodes). Lower sorts first.
+	 * Assigned on create/reorder; backfilled in Dexie schema v2.
+	 */
+	sortOrder?: number;
 }
 
 export interface BlobRef {
@@ -76,7 +81,8 @@ export interface VfsListOptions {
 	includeDeleted?: boolean;
 	/** Trash roots only (deleted, parent not deleted). */
 	trashOnly?: boolean;
-	sort?: 'name' | 'updatedAt';
+	/** Default historically `name`; ordered backends use `order`. */
+	sort?: 'name' | 'updatedAt' | 'order';
 }
 
 export interface MigrationStep {

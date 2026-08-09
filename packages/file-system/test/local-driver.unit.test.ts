@@ -20,6 +20,7 @@ describe('LocalExplorerDriver', () => {
 		assert.equal(drv.id, 'local');
 		assert.equal(drv.capabilities.supportsTrash, true);
 		assert.equal(drv.capabilities.supportsUpload, false);
+		assert.equal(drv.capabilities.supportsDownload, false);
 
 		await drv.mkdir!(null, 'Docs');
 		const listed = await drv.list({ parentId: null });
@@ -37,6 +38,55 @@ describe('LocalExplorerDriver', () => {
 		assert.ok(!active.entries.some((e) => e.id === file.id));
 		const trash = await drv.list({ parentId: null, trashOnly: true });
 		assert.ok(trash.entries.some((e) => e.id === file.id));
+	});
+
+	it('supportsSiblingOrder=true and mandatory reorder → vfs.reorder', async () => {
+		const vfs = createVfs({
+			dbName: `local-ord-${Date.now()}`,
+			memoryOpfs: true,
+			requestPersist: false
+		});
+		const drv = createLocalExplorerDriver(vfs);
+		assert.equal(drv.capabilities.supportsSiblingOrder, true);
+		assert.equal(typeof drv.reorder, 'function');
+
+		const a = await vfs.writeFile({ parentId: null, name: 'a.txt', body: 'a' });
+		const b = await vfs.writeFile({ parentId: null, name: 'b.txt', body: 'b' });
+		await drv.reorder!(b.id, { afterId: a.id });
+		const { entries } = await drv.list({ parentId: null });
+		const files = entries.filter((e) => e.kind === 'file');
+		assert.equal(files[0]?.name, 'b.txt');
+		assert.equal(files[1]?.name, 'a.txt');
+		assert.ok((files[0]?.sortOrder ?? 0) < (files[1]?.sortOrder ?? 0));
+	});
+
+	it('list uses sort order when supportsSiblingOrder', async () => {
+		const vfs = createVfs({
+			dbName: `local-list-ord-${Date.now()}`,
+			memoryOpfs: true,
+			requestPersist: false
+		});
+		const drv = createLocalExplorerDriver(vfs);
+		await vfs.writeFile({ parentId: null, name: 'z.txt', body: 'z' });
+		await vfs.writeFile({ parentId: null, name: 'a.txt', body: 'a' });
+		const { entries } = await drv.list({ parentId: null });
+		const files = entries.filter((e) => e.kind === 'file');
+		// creation order ranks, not name sort
+		assert.deepEqual(
+			files.map((e) => e.name),
+			['z.txt', 'a.txt']
+		);
+	});
+
+	it('stock local caps stay download/upload false (bridge must not flip)', async () => {
+		const vfs = createVfs({
+			dbName: `local-caps-${Date.now()}`,
+			memoryOpfs: true,
+			requestPersist: false
+		});
+		const drv = createLocalExplorerDriver(vfs);
+		assert.equal(drv.capabilities.supportsDownload, false);
+		assert.equal(drv.capabilities.supportsUpload, false);
 	});
 
 	it('apply list cap via EXPLORER_LIST_MAX_ENTRIES constant', () => {

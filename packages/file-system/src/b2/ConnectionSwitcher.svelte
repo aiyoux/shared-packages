@@ -1,5 +1,6 @@
 <script lang="ts">
-	export type ConnectionKind = 'local' | 'b2';
+	/** Storage backend kind for the hub connection switcher. */
+	export type ConnectionKind = 'local' | 'memory' | 'b2' | 'rclone';
 
 	export type B2ProfileChip = {
 		id: string;
@@ -9,27 +10,56 @@
 		detail?: string;
 	};
 
+	/** Same chip shape as B2; kept as alias for callers wiring rclone. */
+	export type RcloneProfileChip = B2ProfileChip;
+
 	interface Props {
-		/** Active selection: local browser or a specific B2 profile id */
-		activeId?: string | 'local';
+		/** Active selection: local | memory | profile id */
+		activeId?: string | 'local' | 'memory';
+		/**
+		 * Which backend is active when `activeId` is a profile id.
+		 * Defaults: `local` when activeId is `local`, `memory` when memory, else `b2`.
+		 */
+		activeKind?: ConnectionKind;
 		/** Saved B2 profiles — each becomes a join button */
 		profiles?: B2ProfileChip[];
-		/** True while a B2 connect attempt is in flight */
+		/** Saved rclone profiles — each becomes a join button */
+		rcloneProfiles?: RcloneProfileChip[];
+		/** True while a connect attempt is in flight — disables all chips */
 		busy?: boolean;
-		/** Select local or a profile id */
-		onSelect?: (id: 'local' | string) => void;
+		/**
+		 * Feature gate for rclone chips (`feature:rcloneFiles`).
+		 * When false, rclone UI is hidden; local + B2 remain.
+		 */
+		showRclone?: boolean;
+		/** Show In memory chip (tab-ephemeral VFS). Default true. */
+		showMemory?: boolean;
+		/** Select local, memory, or a profile id (B2 or rclone) */
+		onSelect?: (id: 'local' | 'memory' | string) => void;
 		onConfigureB2?: () => void;
+		onConfigureRclone?: () => void;
 	}
 
 	let {
 		activeId = 'local',
+		activeKind,
 		profiles = [],
+		rcloneProfiles = [],
 		busy = false,
+		showRclone = true,
+		showMemory = true,
 		onSelect,
-		onConfigureB2
+		onConfigureB2,
+		onConfigureRclone
 	}: Props = $props();
 
-	function select(id: 'local' | string) {
+	/** Resolved kind for active chip highlighting (back-compat when activeKind omitted). */
+	const kind = $derived<ConnectionKind>(
+		activeKind ??
+			(activeId === 'local' ? 'local' : activeId === 'memory' ? 'memory' : 'b2')
+	);
+
+	function select(id: 'local' | 'memory' | string) {
 		if (busy) return;
 		onSelect?.(id);
 	}
@@ -38,7 +68,7 @@
 <div class="conn-switch" data-testid="connection-switcher" role="group" aria-label="Storage connection">
 	<button
 		type="button"
-		class:active={activeId === 'local'}
+		class:active={kind === 'local'}
 		data-testid="conn-local"
 		disabled={busy}
 		onclick={() => select('local')}
@@ -46,10 +76,23 @@
 		This browser
 	</button>
 
+	{#if showMemory}
+		<button
+			type="button"
+			class:active={kind === 'memory'}
+			data-testid="conn-memory"
+			disabled={busy}
+			title="Tab-only storage — cleared when this tab closes"
+			onclick={() => select('memory')}
+		>
+			In memory
+		</button>
+	{/if}
+
 	{#each profiles as p (p.id)}
 		<button
 			type="button"
-			class:active={activeId === p.id}
+			class:active={kind === 'b2' && activeId === p.id}
 			data-testid="conn-b2-profile"
 			data-profile-id={p.id}
 			title={p.detail ? `${p.name} — ${p.detail}` : p.name}
@@ -64,10 +107,10 @@
 	{/each}
 
 	{#if profiles.length === 0}
-		<!-- No saved profiles yet — one control to open settings / prompt connect -->
+		<!-- No saved B2 profiles yet — one control to open settings / prompt connect -->
 		<button
 			type="button"
-			class:active={activeId !== 'local'}
+			class:active={kind === 'b2'}
 			data-testid="conn-b2"
 			disabled={busy}
 			onclick={() => {
@@ -87,11 +130,61 @@
 		onclick={(e) => {
 			e.preventDefault();
 			e.stopPropagation();
+			if (busy) return;
 			onConfigureB2?.();
 		}}
 	>
 		{profiles.length ? 'Manage B2' : 'B2 settings'}
 	</button>
+
+	{#if showRclone}
+		{#each rcloneProfiles as p (p.id)}
+			<button
+				type="button"
+				class:active={kind === 'rclone' && activeId === p.id}
+				data-testid="conn-rclone-profile"
+				data-profile-id={p.id}
+				title={p.detail ? `${p.name} — ${p.detail}` : p.name}
+				disabled={busy}
+				onclick={() => select(p.id)}
+			>
+				<span class="chip-name">{p.name}</span>
+				{#if p.detail}
+					<span class="chip-detail">{p.detail}</span>
+				{/if}
+			</button>
+		{/each}
+
+		{#if rcloneProfiles.length === 0}
+			<button
+				type="button"
+				class:active={kind === 'rclone'}
+				data-testid="conn-rclone"
+				disabled={busy}
+				onclick={() => {
+					if (busy) return;
+					onConfigureRclone?.();
+				}}
+			>
+				rclone
+			</button>
+		{/if}
+
+		<button
+			type="button"
+			class="ghost"
+			data-testid="conn-rclone-config"
+			disabled={busy}
+			onclick={(e) => {
+				e.preventDefault();
+				e.stopPropagation();
+				if (busy) return;
+				onConfigureRclone?.();
+			}}
+		>
+			{rcloneProfiles.length ? 'Manage rclone' : 'rclone settings'}
+		</button>
+	{/if}
 </div>
 
 <style>

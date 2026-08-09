@@ -8,8 +8,16 @@
 	} from './explorerDriver.js';
 	import { createLocalExplorerDriver } from './localExplorerDriver.js';
 	import StoragePersistenceStatus from './StoragePersistenceStatus.svelte';
+	import { createTreeDndSession, resolveDrop, zoneFromY, type DropZone } from './treeDnd/index.js';
 
 	export type ExplorerMode = 'manage' | 'open' | 'save' | 'browse';
+
+	export type ExplorerContext = {
+		parentId: string | null;
+		selectedIds: string[];
+		backend: string;
+		entries: ExplorerEntry[];
+	};
 
 	interface Props {
 		mode?: ExplorerMode;
@@ -34,6 +42,8 @@
 			entry?: ExplorerOpenTarget;
 		}) => void | Promise<void>;
 		onClose?: () => void;
+		/** Selection + open folder for dual-pane copy-across. */
+		onContextChange?: (ctx: ExplorerContext) => void;
 		variant?: 'panel' | 'dialog';
 		class?: string;
 		compatLibraryTestId?: boolean;
@@ -53,6 +63,7 @@
 		onOpen,
 		onSave,
 		onClose,
+		onContextChange,
 		variant = 'panel',
 		class: className = '',
 		compatLibraryTestId = false,
@@ -111,12 +122,154 @@
 	let uploadBusy = $state(false);
 	let fileInputEl: HTMLInputElement | undefined = $state();
 
+	/** Per-instance DnD session (dual-pane safe). */
+	const dnd = createTreeDndSession();
+	let dndTargetId = $state<string | null>(null);
+	let dndZone = $state<DropZone | null>(null);
+
+	// Cap-gated only — do not fold listBusy into the attribute or rows flicker
+	// non-draggable during refresh paint (and component tests race listBusy).
+	const dndEnabled = $derived(
+		mode === 'manage' && !showTrash && caps.supportsMove
+	);
+
+	// Notify parent of selection/folder without tracking unstable callback identity
+	let lastCtxKey = '';
+	$effect(() => {
+		const ids = [...selected].sort().join(',');
+		const key = `${driver.id}|${parentId ?? ''}|${ids}|${nodes.length}`;
+		if (key === lastCtxKey) return;
+		lastCtxKey = key;
+		onContextChange?.({
+			parentId,
+			selectedIds: [...selected],
+			backend: driver.id,
+			entries: nodes
+		});
+	});
+
 	function errMsg(e: unknown): string {
 		if (e instanceof VfsError) return e.code;
 		if (e && typeof e === 'object' && 'code' in e && typeof (e as { code: unknown }).code === 'string') {
 			return (e as { code: string }).code;
 		}
 		return e instanceof Error ? e.message : String(e);
+	}
+
+	function onRowDragStart(e: DragEvent, n: ExplorerEntry) {
+		if (!dndEnabled) {
+			e.preventDefault();
+			return;
+		}
+		// Interactive controls (checkbox / rename / buttons) must not start a row drag
+		const t = e.target as HTMLElement | null;
+		if (t?.closest?.('input, button, a, [contenteditable="true"]')) {
+			e.preventDefault();
+			return;
+		}
+		const ids =
+			selected.has(n.id) && selected.size > 0 ? [...selected] : [n.id];
+		dnd.startDrag(ids, parentId);
+		try {
+			e.dataTransfer?.setData('text/plain', ids.join(','));
+		} catch {
+			/* jsdom may lack full DataTransfer */
+		}
+		if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move';
+	}
+
+	function onRowDragOver(e: DragEvent, n: ExplorerEntry) {
+		if (!dnd.getState().active) return;
+		e.preventDefault();
+		const el = e.currentTarget as HTMLElement;
+		const rect = el.getBoundingClientRect();
+		let zone = zoneFromY({ top: rect.top, height: rect.height }, e.clientY);
+		if (!caps.supportsSiblingOrder) {
+			// into-only for remotes; force into when over folder, else ignore
+			if (n.kind !== 'folder') {
+				dnd.clearDropTarget();
+				dndTargetId = null;
+				dndZone = null;
+				return;
+			}
+			zone = 'into';
+		}
+		dnd.setDropTarget(n.id, zone);
+		dndTargetId = n.id;
+		dndZone = zone;
+		if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+	}
+
+	function onListDragOver(e: DragEvent) {
+		if (!dnd.getState().active) return;
+		// empty list / padding → drop into current parent
+		if ((e.target as HTMLElement).closest?.('.fe-row')) return;
+		e.preventDefault();
+		dnd.setDropTarget(null, 'into');
+		dndTargetId = null;
+		dndZone = 'into';
+	}
+
+	async function commitDndDrop(target: ExplorerEntry | null) {
+		const st = dnd.getState();
+		if (!st.active || !st.primaryId) {
+			dnd.stopDrag();
+			dndTargetId = null;
+			dndZone = null;
+			return;
+		}
+		const zone = st.zone;
+		const dragIds = st.dragIds;
+		try {
+			if (target) {
+				const resolved = resolveDrop({
+					dragIds,
+					target: { id: target.id, parentId: target.parentId, kind: target.kind },
+					zone,
+					supportsSiblingOrder: caps.supportsSiblingOrder
+				});
+				if (!resolved.ok) {
+					// silent no-op for unsupported remote before/after
+					return;
+				}
+				for (const id of dragIds) {
+					if (resolved.mode === 'move-into') {
+						if (id === resolved.newParentId) continue;
+						await driver.move?.(id, resolved.newParentId);
+					} else if (caps.supportsSiblingOrder && driver.reorder) {
+						const node = nodes.find((x) => x.id === id);
+						if (node && node.parentId !== resolved.newParentId) {
+							await driver.move?.(id, resolved.newParentId);
+						}
+						await driver.reorder(id, {
+							beforeId: resolved.beforeId,
+							afterId: resolved.afterId
+						});
+					}
+				}
+			} else if (zone === 'into' || zone === null) {
+				// drop on empty / list chrome → stay at parent (no-op) or no target
+			}
+			await refresh();
+		} catch (err) {
+			error = errMsg(err);
+		} finally {
+			dnd.stopDrag();
+			dndTargetId = null;
+			dndZone = null;
+		}
+	}
+
+	function onRowDrop(e: DragEvent, n: ExplorerEntry) {
+		e.preventDefault();
+		e.stopPropagation();
+		void commitDndDrop(n);
+	}
+
+	function onRowDragEnd() {
+		dnd.stopDrag();
+		dndTargetId = null;
+		dndZone = null;
 	}
 
 	function beginListBusy(opts?: { immediate?: boolean }) {
@@ -579,8 +732,8 @@
 <div
 	class="fe-root {variant} {className}"
 	data-testid={rootTestId}
-	data-fe-mode={mode}
 	data-fe-backend={driver.id}
+	data-fe-mode={mode}
 	role="dialog"
 	aria-label="File explorer"
 	tabindex="0"
@@ -702,6 +855,7 @@
 		data-testid="fe-list"
 		role="listbox"
 		aria-busy={listBusy ? 'true' : undefined}
+		ondragover={onListDragOver}
 	>
 		{#if initialLoad && nodes.length === 0}
 			<div class="fe-empty" data-testid="fe-loading">Loading…</div>
@@ -712,6 +866,15 @@
 		{:else}
 			{#each nodes as n, i (n.id)}
 				{@const actionable = rowActionable(n)}
+				{@const showBefore =
+					dndEnabled && caps.supportsSiblingOrder && dndTargetId === n.id && dndZone === 'before'}
+				{@const showAfter =
+					dndEnabled && caps.supportsSiblingOrder && dndTargetId === n.id && dndZone === 'after'}
+				{@const showInto =
+					dndEnabled && dndTargetId === n.id && dndZone === 'into' && n.kind === 'folder'}
+				{#if showBefore}
+					<div class="fe-dnd-line" data-testid="fe-dnd-line-before" aria-hidden="true"></div>
+				{/if}
 				<div
 					class="fe-row"
 					class:folder={n.kind === 'folder'}
@@ -719,14 +882,24 @@
 					class:incompatible={!actionable && n.kind === 'file'}
 					class:selected={selected.has(n.id)}
 					class:focused={i === focusIndex}
+					class:fe-dnd-into={showInto}
 					data-testid={n.kind === 'folder' ? 'fe-folder-row' : 'fe-file-row'}
+					data-fe-row-id={n.id}
+					data-fe-parent-id={n.parentId ?? ''}
+					data-fe-kind={n.kind}
+					data-fe-sort-order={n.sortOrder ?? ''}
 					data-file-type={n.fileType ?? ''}
 					data-id={n.id}
 					data-name={n.name}
+					draggable={dndEnabled}
 					aria-disabled={!actionable && n.kind === 'file' ? 'true' : undefined}
 					aria-selected={selected.has(n.id) || i === focusIndex}
 					role="option"
 					tabindex="-1"
+					ondragstart={(e) => onRowDragStart(e, n)}
+					ondragover={(e) => onRowDragOver(e, n)}
+					ondrop={(e) => onRowDrop(e, n)}
+					ondragend={onRowDragEnd}
 					onclick={() => {
 						if (listBusy) return;
 						focusIndex = i;
@@ -822,6 +995,9 @@
 						>
 					{/if}
 				</div>
+				{#if showAfter}
+					<div class="fe-dnd-line" data-testid="fe-dnd-line-after" aria-hidden="true"></div>
+				{/if}
 			{/each}
 		{/if}
 
@@ -986,6 +1162,16 @@
 	}
 	.fe-row.selected {
 		background: #2c3a4f;
+	}
+	.fe-dnd-line {
+		height: 2px;
+		margin: 0 0.5rem;
+		background: #38bdf8;
+		border-radius: 1px;
+	}
+	.fe-row.fe-dnd-into {
+		outline: 2px solid #38bdf8;
+		outline-offset: -2px;
 	}
 	.fe-row.focused {
 		outline: 1px solid #6ea8fe;

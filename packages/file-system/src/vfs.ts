@@ -169,6 +169,12 @@ export class VfsService {
 		rows.sort((a, b) => {
 			if (a.kind !== b.kind) return a.kind === 'folder' ? -1 : 1;
 			if (sort === 'updatedAt') return (b.updatedAt ?? 0) - (a.updatedAt ?? 0);
+			if (sort === 'order') {
+				const ao = a.sortOrder ?? Number.POSITIVE_INFINITY;
+				const bo = b.sortOrder ?? Number.POSITIVE_INFINITY;
+				if (ao !== bo) return ao - bo;
+				return a.name.localeCompare(b.name);
+			}
 			return a.name.localeCompare(b.name);
 		});
 		return rows;
@@ -215,6 +221,101 @@ export class VfsService {
 		return rows;
 	}
 
+	/** Active siblings sorted for order mid calculation (folders-first then sortOrder then name). */
+	private sortSiblingsForOrder(rows: VfsNode[]): VfsNode[] {
+		return [...rows].sort((a, b) => {
+			if (a.kind !== b.kind) return a.kind === 'folder' ? -1 : 1;
+			const ao = a.sortOrder ?? Number.POSITIVE_INFINITY;
+			const bo = b.sortOrder ?? Number.POSITIVE_INFINITY;
+			if (ao !== bo) return ao - bo;
+			return a.name.localeCompare(b.name);
+		});
+	}
+
+	private async nextAppendSortOrder(parentId: string | null): Promise<number> {
+		const siblings = this.sortSiblingsForOrder(await this.activeSiblings(parentId));
+		if (!siblings.length) return 0;
+		const last = siblings[siblings.length - 1]!;
+		const lastOrder = last.sortOrder ?? (siblings.length - 1) * 16384;
+		return lastOrder + 16384;
+	}
+
+	/**
+	 * Same-parent reorder by before/after anchors. Mid from full active siblings.
+	 * Rebalances entire sibling group when mid collapses.
+	 */
+	async reorder(
+		id: string,
+		opts: { beforeId?: string | null; afterId?: string | null } = {}
+	): Promise<VfsNode> {
+		await this.ready();
+		const { calculateMidOrder, needsRebalance, rebalanceOrders } = await import(
+			'./ui/treeDnd/order.js'
+		);
+		return this.db.transaction('rw', this.db.nodes, async () => {
+			const node = await this.db.nodes.get(id);
+			if (!node) throw new VfsError('NOT_FOUND');
+			if (node.deletedAt != null) throw new VfsError('TRASH_STATE');
+
+			const siblings = this.sortSiblingsForOrder(
+				await this.activeSiblings(node.parentId, id)
+			);
+			const beforeId = opts.beforeId ?? null;
+			const afterId = opts.afterId ?? null;
+
+			let beforeOrder: number | null = null;
+			let afterOrder: number | null = null;
+			if (beforeId) {
+				const b = siblings.find((s) => s.id === beforeId) ?? (await this.db.nodes.get(beforeId));
+				if (b && b.parentId === node.parentId) beforeOrder = b.sortOrder ?? 0;
+			}
+			if (afterId) {
+				const a = siblings.find((s) => s.id === afterId) ?? (await this.db.nodes.get(afterId));
+				if (a && a.parentId === node.parentId) afterOrder = a.sortOrder ?? 0;
+			}
+			// If only afterId: insert before that id → before=null, after=afterOrder
+			// If only beforeId: insert after that id → before=beforeOrder, after=null
+			// If both: between them
+			// If neither: append
+			if (!beforeId && !afterId && siblings.length) {
+				const last = siblings[siblings.length - 1]!;
+				beforeOrder = last.sortOrder ?? (siblings.length - 1) * 16384;
+				afterOrder = null;
+			}
+
+			let mid = calculateMidOrder(beforeOrder, afterOrder);
+			if (needsRebalance(mid, beforeOrder, afterOrder)) {
+				// Rebuild full group including moving node at desired index
+				const ordered = [...siblings];
+				let insertAt = ordered.length;
+				if (afterId) {
+					const i = ordered.findIndex((s) => s.id === afterId);
+					if (i >= 0) insertAt = i;
+				} else if (beforeId) {
+					const i = ordered.findIndex((s) => s.id === beforeId);
+					if (i >= 0) insertAt = i + 1;
+				}
+				ordered.splice(insertAt, 0, node);
+				const ranks = rebalanceOrders(ordered.length);
+				const now = Date.now();
+				for (let i = 0; i < ordered.length; i++) {
+					const n = ordered[i]!;
+					n.sortOrder = ranks[i];
+					n.updatedAt = now;
+					if (n.id === id) n.generation += 1;
+					await this.db.nodes.put(n);
+				}
+				return (await this.db.nodes.get(id))!;
+			}
+
+			node.sortOrder = mid;
+			node.updatedAt = Date.now();
+			node.generation += 1;
+			await this.db.nodes.put(node);
+			return node;
+		});
+	}
+
 	async ensureUniqueName(
 		parentId: string | null,
 		name: string,
@@ -254,6 +355,7 @@ export class VfsService {
 			const unique = await this.ensureUniqueName(parentId, clean, undefined, opts?.onConflict ?? 'rename');
 			const existing = await this.db.nodes.get(id);
 			if (existing) return existing;
+			const sortOrder = await this.nextAppendSortOrder(parentId);
 			const node: VfsNode = {
 				id,
 				parentId,
@@ -262,7 +364,8 @@ export class VfsService {
 				createdAt: now,
 				updatedAt: now,
 				generation: 1,
-				deletedAt: null
+				deletedAt: null,
+				sortOrder
 			};
 			await this.db.nodes.put(node);
 			return node;
@@ -320,6 +423,7 @@ export class VfsService {
 				owner,
 				expiresAt: now + this.graceMs
 			});
+			const sortOrder = await this.nextAppendSortOrder(input.parentId);
 			const node: VfsNode = {
 				id: nodeId,
 				parentId: input.parentId,
@@ -333,10 +437,12 @@ export class VfsService {
 				blobId,
 				meta: input.meta,
 				contentType,
-				deletedAt: null
+				deletedAt: null,
+				sortOrder
 			};
 			await this.db.nodes.put(node);
 		});
+
 
 		try {
 			const { tmpPath, byteLength } = await this.opfs.writePartial(writeId, bytes);
@@ -525,7 +631,11 @@ export class VfsService {
 		});
 	}
 
-	async move(id: string, newParentId: string | null, opts?: { name?: string }): Promise<VfsNode> {
+	async move(
+		id: string,
+		newParentId: string | null,
+		opts?: { name?: string; beforeId?: string | null; afterId?: string | null }
+	): Promise<VfsNode> {
 		await this.ready();
 		return this.db.transaction('rw', this.db.nodes, async () => {
 			const node = await this.db.nodes.get(id);
@@ -539,18 +649,33 @@ export class VfsService {
 				let walk: string | null = newParentId;
 				while (walk) {
 					if (walk === id) throw new VfsError('CYCLE', 'Cannot move folder into itself');
-					const p = await this.db.nodes.get(walk);
+					const p: VfsNode | undefined = await this.db.nodes.get(walk);
 					walk = p?.parentId ?? null;
 				}
 			}
 			const name = opts?.name ? sanitizeName(opts.name) : node.name;
 			const unique = await this.ensureUniqueName(newParentId, name, id, 'rename');
+			const sameParent = node.parentId === newParentId;
 			node.parentId = newParentId;
 			node.name = unique;
 			node.updatedAt = Date.now();
 			node.generation += 1;
+			if (!sameParent || opts?.beforeId != null || opts?.afterId != null) {
+				// append rank in new parent; precise before/after via reorder after put
+				const siblings = this.sortSiblingsForOrder(await this.activeSiblings(newParentId, id));
+				if (!siblings.length) node.sortOrder = 0;
+				else {
+					const last = siblings[siblings.length - 1]!;
+					node.sortOrder = (last.sortOrder ?? (siblings.length - 1) * 16384) + 16384;
+				}
+			}
 			await this.db.nodes.put(node);
 			return node;
+		}).then(async (moved) => {
+			if (opts?.beforeId != null || opts?.afterId != null) {
+				return this.reorder(id, { beforeId: opts.beforeId, afterId: opts.afterId });
+			}
+			return moved;
 		});
 	}
 

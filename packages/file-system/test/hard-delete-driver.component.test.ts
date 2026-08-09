@@ -22,7 +22,8 @@ function mockHardDeleteDriver(entries: ExplorerEntry[]): {
 			supportsCopy: true,
 			supportsMkdir: true,
 			supportsUpload: true,
-			supportsDownload: true
+			supportsDownload: true,
+			supportsSiblingOrder: false
 		},
 		async ready() {},
 		async list(): Promise<ExplorerListResult> {

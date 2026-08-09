@@ -21,5 +21,44 @@ export class SharedVfsDatabase extends Dexie {
 			meta: 'key',
 			leases: 'key, expiresAt'
 		});
+		// v2: sibling sortOrder field (no new index required). Backfill active siblings.
+		this.version(2)
+			.stores({
+				nodes:
+					'id, parentId, kind, fileType, name, updatedAt, deletedAt, [parentId+name], [parentId+deletedAt]',
+				blobRefs: 'id, opfsPath, createdAt',
+				drafts: 'id, appId, updatedAt',
+				meta: 'key',
+				leases: 'key, expiresAt'
+			})
+			.upgrade(async (tx) => {
+				const table = tx.table('nodes');
+				const all = (await table.toArray()) as Array<{
+					id: string;
+					parentId: string | null;
+					kind: string;
+					name: string;
+					deletedAt?: number | null;
+					sortOrder?: number;
+				}>;
+				const active = all.filter((n) => n.deletedAt == null);
+				const groups = new Map<string, typeof active>();
+				for (const n of active) {
+					const key = n.parentId ?? '__root__';
+					const g = groups.get(key) ?? [];
+					g.push(n);
+					groups.set(key, g);
+				}
+				const STEP = 16384;
+				for (const g of groups.values()) {
+					g.sort((a, b) => {
+						if (a.kind !== b.kind) return a.kind === 'folder' ? -1 : 1;
+						return a.name.localeCompare(b.name);
+					});
+					for (let i = 0; i < g.length; i++) {
+						await table.update(g[i]!.id, { sortOrder: i * STEP });
+					}
+				}
+			});
 	}
 }

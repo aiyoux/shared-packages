@@ -1,8 +1,9 @@
 /**
- * Local SharedVFS adapter for FileExplorer.
+ * Local SharedVFS (or MemoryVfsService) adapter for FileExplorer.
  */
-import type { VfsService } from '../vfs.js';
 import type { VfsNode } from '../types.js';
+import type { MemoryVfsService } from '../memoryVfs.js';
+import type { VfsService } from '../vfs.js';
 import {
 	applyListCap,
 	nodeToEntry,
@@ -22,32 +23,68 @@ const LOCAL_CAPS: ExplorerCapabilities = {
 	supportsCopy: true,
 	supportsMkdir: true,
 	supportsUpload: false,
-	supportsDownload: false
+	supportsDownload: false,
+	supportsSiblingOrder: true
 };
 
 function mapNodes(nodes: VfsNode[]): ExplorerEntry[] {
 	return nodes.map((n) => nodeToEntry(n));
 }
 
-export function createLocalExplorerDriver(vfs: VfsService): ExplorerDriver {
+/** Shared surface used by durable VfsService and MemoryVfsService. */
+export type LocalVfsLike = Pick<
+	VfsService,
+	| 'ready'
+	| 'list'
+	| 'getPath'
+	| 'mkdir'
+	| 'rename'
+	| 'move'
+	| 'copy'
+	| 'reorder'
+	| 'trash'
+	| 'restore'
+	| 'permanentDelete'
+	| 'emptyTrash'
+	| 'readBlob'
+> | MemoryVfsService;
+
+export type LocalExplorerDriverOptions = {
+	/** Driver id: `local` (default) or `memory`. */
+	id?: string;
+	/** Patch capabilities (e.g. memory download true). */
+	capabilitiesPatch?: Partial<ExplorerCapabilities>;
+};
+
+export function createLocalExplorerDriver(
+	vfs: LocalVfsLike,
+	opts?: LocalExplorerDriverOptions
+): ExplorerDriver {
+	const caps: ExplorerCapabilities = {
+		...LOCAL_CAPS,
+		...opts?.capabilitiesPatch
+	};
+	const id = opts?.id ?? 'local';
+
 	return {
-		id: 'local',
-		capabilities: LOCAL_CAPS,
+		id,
+		capabilities: caps,
 
 		async ready() {
 			await vfs.ready();
 		},
 
-		async list(opts: ExplorerListOptions): Promise<ExplorerListResult> {
+		async list(listOpts: ExplorerListOptions): Promise<ExplorerListResult> {
 			const nodes = await vfs.list({
-				parentId: opts.parentId,
-				trashOnly: opts.trashOnly
+				parentId: listOpts.parentId,
+				trashOnly: listOpts.trashOnly,
+				sort: caps.supportsSiblingOrder ? 'order' : 'name'
 			});
 			return applyListCap(mapNodes(nodes));
 		},
 
-		async getPath(id: ExplorerEntryId): Promise<ExplorerEntry[]> {
-			const path = await vfs.getPath(id);
+		async getPath(entryId: ExplorerEntryId): Promise<ExplorerEntry[]> {
+			const path = await vfs.getPath(entryId);
 			return mapNodes(path);
 		},
 
@@ -56,33 +93,61 @@ export function createLocalExplorerDriver(vfs: VfsService): ExplorerDriver {
 			return nodeToEntry(n);
 		},
 
-		async rename(id, name) {
-			const n = await vfs.rename(id, name);
+		async rename(entryId, name) {
+			const n = await vfs.rename(entryId, name);
 			return nodeToEntry(n);
 		},
 
-		async move(id, newParentId) {
-			await vfs.move(id, newParentId);
+		async move(entryId, newParentId) {
+			await vfs.move(entryId, newParentId);
 		},
 
-		async copy(id, newParentId) {
-			await vfs.copy(id, newParentId);
+		async copy(entryId, newParentId) {
+			await vfs.copy(entryId, newParentId);
 		},
 
-		async delete(id) {
-			await vfs.trash(id);
+		async reorder(entryId, reorderOpts) {
+			await vfs.reorder(entryId, reorderOpts);
 		},
 
-		async restore(id) {
-			await vfs.restore(id);
+		async delete(entryId) {
+			await vfs.trash(entryId);
 		},
 
-		async permanentDelete(id) {
-			await vfs.permanentDelete(id, { recursive: true });
+		async restore(entryId) {
+			await vfs.restore(entryId);
+		},
+
+		async permanentDelete(entryId) {
+			await vfs.permanentDelete(entryId, { recursive: true });
 		},
 
 		async emptyTrash() {
 			await vfs.emptyTrash();
+		},
+
+		async readBlob(entryId) {
+			return vfs.readBlob(entryId);
+		},
+
+		async download(entryId) {
+			return vfs.readBlob(entryId);
+		},
+
+		async writeFile(parentId, file) {
+			const body = new Uint8Array(await file.arrayBuffer());
+			const n = await (vfs as { writeFile: (i: {
+				parentId: string | null;
+				name: string;
+				body: Uint8Array;
+				contentType?: string;
+			}) => Promise<import('../types.js').VfsNode> }).writeFile({
+				parentId,
+				name: file.name,
+				body,
+				contentType: file.type || undefined
+			});
+			return nodeToEntry(n);
 		}
 	};
 }
