@@ -112,6 +112,16 @@
 	let busyToken = 0;
 	/** Ignore stale list() results when parentId/driver changes mid-flight. */
 	let refreshGen = 0;
+	/**
+	 * Consecutive failed silent refreshes. Silent failures are swallowed to keep
+	 * reconnects from flashing an error banner, so they need their own retry —
+	 * otherwise a failure on the last change of a burst leaves the list stale
+	 * with nothing left to trigger another attempt.
+	 */
+	let silentRetries = 0;
+	const SILENT_RETRY_LIMIT = 2;
+	const SILENT_RETRY_MS = 1_000;
+	let silentRetryTimer: ReturnType<typeof setTimeout> | null = null;
 
 	let newFolderOpen = $state(false);
 	let newFolderName = $state('New Folder');
@@ -313,6 +323,21 @@
 		showBusyOverlay = false;
 	}
 
+	function clearSilentRetry() {
+		if (silentRetryTimer) {
+			clearTimeout(silentRetryTimer);
+			silentRetryTimer = null;
+		}
+	}
+
+	function scheduleSilentRetry() {
+		clearSilentRetry();
+		silentRetryTimer = setTimeout(() => {
+			silentRetryTimer = null;
+			void refresh(true, 'delay', true);
+		}, SILENT_RETRY_MS);
+	}
+
 	/**
 	 * Reload list + breadcrumbs.
 	 * @param manageBusy - when false, caller owns begin/endListBusy (e.g. delete).
@@ -330,6 +355,8 @@
 		silent = false
 	) {
 		const gen = ++refreshGen;
+		// Any newer refresh subsumes a queued retry.
+		clearSilentRetry();
 		if (manageBusy && !silent) beginListBusy({ immediate: busyMode === 'immediate' });
 		// A background refresh must not clear an error the user hasn't addressed.
 		if (!silent) error = '';
@@ -364,12 +391,24 @@
 			listTruncated = nextTruncated;
 			breadcrumbs = nextCrumbs;
 			if (focusIndex >= nodes.length) focusIndex = nodes.length ? nodes.length - 1 : -1;
+			silentRetries = 0;
 		} catch (e) {
 			if (gen !== refreshGen) return;
-			// A failed background poll leaves the last good list up rather than
-			// replacing it with an error banner: the watch status already reports
-			// the connection, and reconnects would otherwise flash red repeatedly.
-			if (!silent) error = errMsg(e);
+			if (!silent) {
+				error = errMsg(e);
+			} else if (silentRetries < SILENT_RETRY_LIMIT) {
+				// A failed background poll keeps the last good list rather than
+				// flashing red on every reconnect — but a silent failure is also how
+				// the list goes stale without saying so. If this was the last change
+				// in a burst, nothing else will retry, so retry here.
+				silentRetries += 1;
+				scheduleSilentRetry();
+			} else {
+				// Persistently failing: staleness the user cannot see is worse than
+				// an error they can act on.
+				silentRetries = 0;
+				error = errMsg(e);
+			}
 		} finally {
 			// Only the latest refresh may clear busy
 			if (gen === refreshGen) {
@@ -387,6 +426,8 @@
 		void showTrash;
 		void mode;
 		void driver;
+		// A new folder does not inherit the last one's failure streak.
+		silentRetries = 0;
 		// Folder / backend context change: cover list immediately
 		void refresh(true, 'immediate');
 	});
@@ -402,6 +443,7 @@
 		});
 		return () => {
 			unsub();
+			clearSilentRetry();
 		};
 	});
 
