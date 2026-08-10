@@ -747,7 +747,7 @@
 	data-testid={rootTestId}
 	data-fe-backend={driver.id}
 	data-fe-mode={mode}
-	role="dialog"
+	role={variant === 'dialog' ? 'dialog' : 'group'}
 	aria-label="File explorer"
 	tabindex="0"
 	onkeydown={onListKeydown}
