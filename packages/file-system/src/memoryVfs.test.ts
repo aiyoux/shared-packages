@@ -105,4 +105,19 @@ describe('MemoryVfs fail-closed', () => {
 		const { entries } = await driver.list({ parentId: null });
 		expect(entries.some((e) => e.name === 'd')).toBe(true);
 	});
+
+	it('restore recursively restores trashed folder children', async () => {
+		const vfs = createMemoryVfs('rec-restore');
+		const fld = await vfs.mkdir(null, 'Folder');
+		const child = await vfs.writeFile({ parentId: fld.id, name: 'child.txt', body: 'hello' });
+		await vfs.trash(fld.id);
+
+		expect((await vfs.get(fld.id))?.deletedAt).not.toBeNull();
+		expect((await vfs.get(child.id))?.deletedAt).not.toBeNull();
+
+		await vfs.restore(fld.id);
+
+		expect((await vfs.get(fld.id))?.deletedAt).toBeNull();
+		expect((await vfs.get(child.id))?.deletedAt).toBeNull();
+	});
 });

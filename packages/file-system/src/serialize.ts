@@ -1,3 +1,5 @@
+import { VfsError } from './types.js';
+
 /** Serialize body for OPFS storage. */
 export async function serializeBody(
 	body: unknown,
@@ -19,7 +21,7 @@ export async function serializeBody(
 	if (ArrayBuffer.isView(body)) {
 		const view = body as ArrayBufferView;
 		return {
-			bytes: new Uint8Array(view.buffer, view.byteOffset, view.byteLength),
+			bytes: new Uint8Array(view.buffer.slice(view.byteOffset, view.byteOffset + view.byteLength)),
 			contentType: contentType ?? 'application/octet-stream'
 		};
 	}
@@ -31,5 +33,9 @@ export async function serializeBody(
 
 export function parseJsonBytes(bytes: Uint8Array): unknown {
 	const text = new TextDecoder().decode(bytes);
-	return JSON.parse(text);
+	try {
+		return JSON.parse(text);
+	} catch (e) {
+		throw new VfsError('OPFS_IO', `Corrupt JSON: ${e instanceof Error ? e.message : String(e)}`);
+	}
 }

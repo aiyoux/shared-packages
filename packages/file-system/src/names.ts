@@ -1,6 +1,6 @@
 import { VfsError } from './types.js';
 
-const INVALID = /[\\/:\0\u0000-\u001f]/;
+const INVALID = /[\\/:\0\u0000-\u001f]/g;
 
 export function sanitizeName(raw: string): string {
 	let n = raw.trim().normalize('NFC');

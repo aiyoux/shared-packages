@@ -388,12 +388,49 @@ export class MemoryVfsService {
 	}
 
 	async restore(id: string): Promise<void> {
-		const n = this.state.nodes.get(id);
-		if (!n) throw new VfsError('NOT_FOUND');
-		n.deletedAt = null;
-		n.sortOrder = this.nextAppend(n.parentId);
-		n.updatedAt = Date.now();
-		this.state.nodes.set(id, n);
+		const root = this.state.nodes.get(id);
+		if (!root) throw new VfsError('NOT_FOUND');
+		if (root.deletedAt == null) return;
+
+		// If parent is still trashed, reparent to root
+		if (root.parentId) {
+			const parent = this.state.nodes.get(root.parentId);
+			if (!parent || parent.deletedAt != null) {
+				const fallback = root.trashParentId ?? null;
+				if (fallback) {
+					const fb = this.state.nodes.get(fallback);
+					root.parentId = fb && fb.deletedAt == null ? fallback : null;
+				} else {
+					root.parentId = null;
+				}
+			}
+		}
+
+		// Collect root + all trashed descendants
+		const collect: VfsNode[] = [root];
+		if (root.kind === 'folder') {
+			const stack = [root.id];
+			while (stack.length) {
+				const pid = stack.pop()!;
+				for (const c of this.state.nodes.values()) {
+					if (c.parentId === pid && c.deletedAt != null) {
+						collect.push(c);
+						if (c.kind === 'folder') stack.push(c.id);
+					}
+				}
+			}
+		}
+
+		// Unique name on root only
+		root.name = this.ensureUnique(root.parentId, root.name, root.id, 'rename');
+
+		for (const n of collect) {
+			n.deletedAt = null;
+			n.trashParentId = null;
+			n.updatedAt = Date.now();
+			n.generation += 1;
+			this.state.nodes.set(n.id, n);
+		}
 	}
 
 	async permanentDelete(id: string, _opts?: { recursive?: boolean }): Promise<void> {

@@ -513,9 +513,29 @@ export class VfsService {
 		const owner = generateId('lease');
 		const now = Date.now();
 
-		const { tmpPath, byteLength } = await this.opfs.writePartial(writeId, bytes);
+		let tmpPath: string;
+		let byteLength: number;
 
 		try {
+			// First, validate the generation inside a read transaction
+			await this.db.transaction('r', this.db.nodes, async () => {
+				const cur = await this.db.nodes.get(id);
+				if (!cur) throw new VfsError('NOT_FOUND');
+				if (cur.deletedAt != null) throw new VfsError('TRASH_STATE');
+				if (!force && cur.generation !== expected) {
+					throw new VfsError('GENERATION_CONFLICT', 'File changed in another tab', {
+						expected,
+						actual: cur.generation
+					});
+				}
+			});
+
+			// Write to OPFS only after generation check passes
+			const partial = await this.opfs.writePartial(writeId, bytes);
+			tmpPath = partial.tmpPath;
+			byteLength = partial.byteLength;
+
+			// Now commit the metadata update (re-check generation inside rw txn)
 			await this.db.transaction('rw', this.db.nodes, this.db.blobRefs, this.db.leases, async () => {
 				const cur = await this.db.nodes.get(id);
 				if (!cur) throw new VfsError('NOT_FOUND');
@@ -543,10 +563,12 @@ export class VfsService {
 				await this.db.nodes.put(cur);
 			});
 		} catch (e) {
-			try {
-				await this.opfs.remove(tmpPath);
-			} catch {
-				/* ignore */
+			if (tmpPath!) {
+				try {
+					await this.opfs.remove(tmpPath);
+				} catch {
+					/* ignore */
+				}
 			}
 			throw e;
 		}

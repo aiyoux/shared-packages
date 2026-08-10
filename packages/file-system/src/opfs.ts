@@ -227,8 +227,20 @@ export function createOpfsBlobStore(rootDirName = 'shared-vfs'): OpfsBlobStore {
 			return out;
 		},
 		async listTmp() {
-			const paths = await this.listOrphans('tmp');
-			return paths.map((path) => ({ path, mtimeMs: Date.now() }));
+			const out: Array<{ path: string; mtimeMs?: number }> = [];
+			try {
+				const tmpDir = await resolveDir('tmp');
+				// @ts-expect-error async iterator
+				for await (const [name, handle] of tmpDir.entries()) {
+					if (handle.kind === 'file') {
+						const file = await (handle as FileSystemFileHandle).getFile();
+						out.push({ path: `tmp/${name}`, mtimeMs: file.lastModified });
+					}
+				}
+			} catch {
+				/* tmp dir may not exist yet */
+			}
+			return out;
 		},
 		async clearAll() {
 			try {
