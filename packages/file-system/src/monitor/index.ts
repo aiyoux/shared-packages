@@ -33,13 +33,6 @@ export {
 	type MonitorWatchedRoot
 } from './client.js';
 export {
-	handleMonitorApiProxy,
-	handleMonitorDownloadProxy,
-	type MonitorApiBody,
-	type MonitorApiResult,
-	type MonitorProxyFailure
-} from './proxyHandler.js';
-export {
 	closeCredentialsDbForTests,
 	deleteProfile,
 	getActiveProfileId,
@@ -68,9 +61,6 @@ export {
 	HUB_MONITOR_DB_NAME,
 	HUB_MONITOR_META,
 	HUB_MONITOR_STORE,
-	MONITOR_ALLOWED_PORTS,
-	assertMonitorProxyTargetUrl,
-	isLoopbackHostname,
 	normalizeMonitorRootPath,
 	validateMonitorProfileInput,
 	type HubMonitorMeta,

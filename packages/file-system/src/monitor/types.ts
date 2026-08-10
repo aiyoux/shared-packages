@@ -10,9 +10,6 @@ export const HUB_MONITOR_META = 'meta';
 /** Default local monitor URL (browser talks to this URL directly). */
 export const DEFAULT_MONITOR_BASE_URL = 'http://127.0.0.1:8300';
 
-/** @deprecated Direct mode accepts any http(s) URL; kept for proxy/legacy callers. */
-export const MONITOR_ALLOWED_PORTS = new Set([8300, 9847]);
-
 export type MonitorConnectionProfileV1 = {
 	v: 1;
 	id: string;
@@ -37,15 +34,6 @@ export type HubMonitorMeta = {
 };
 
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1', '[::1]']);
-
-export function isLoopbackHostname(host: string): boolean {
-	const h = host.trim().toLowerCase();
-	if (LOOPBACK_HOSTS.has(h)) return true;
-	if (h.startsWith('[') && h.endsWith(']')) {
-		return LOOPBACK_HOSTS.has(h.slice(1, -1)) || h === '[::1]';
-	}
-	return false;
-}
 
 /** Normalize absolute root path: trim, strip trailing slash (except `/`). */
 export function normalizeMonitorRootPath(raw: string): string {
@@ -93,31 +81,3 @@ export function validateMonitorProfileInput(input: {
 	return null;
 }
 
-export function assertMonitorProxyTargetUrl(
-	target: string
-): { ok: true; url: URL } | { ok: false; reason: string } {
-	let url: URL;
-	try {
-		url = new URL(target);
-	} catch {
-		return { ok: false, reason: 'Invalid target URL' };
-	}
-	if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-		return { ok: false, reason: 'Target must be http or https' };
-	}
-	if (url.username || url.password) {
-		return { ok: false, reason: 'Target must not include credentials' };
-	}
-	if (!isLoopbackHostname(url.hostname)) {
-		return { ok: false, reason: 'Target host must be loopback' };
-	}
-	const port = url.port
-		? Number(url.port)
-		: url.protocol === 'https:'
-			? 443
-			: 80;
-	if (!MONITOR_ALLOWED_PORTS.has(port)) {
-		return { ok: false, reason: `Target port not allowed (${port})` };
-	}
-	return { ok: true, url };
-}
