@@ -36,7 +36,7 @@ describe('rclone credentials store', () => {
 		await closeCredentialsDbForTests();
 	});
 
-	it('validates required fields and loopback baseUrl', () => {
+	it('validates required fields; allows any http(s) baseUrl', () => {
 		expect(
 			validateProfileInput({
 				name: '',
@@ -51,14 +51,15 @@ describe('rclone credentials store', () => {
 				rcPass: 'x'
 			})
 		).toMatch(/Remote|fs/i);
+		// Tunnel / remote hosts are allowed (browser talks directly)
 		expect(
 			validateProfileInput({
 				name: 'n',
 				fs: 'home:',
-				baseUrl: 'http://evil.com:7750',
+				baseUrl: 'https://rclone.example.com',
 				rcPass: 'x'
 			})
-		).toMatch(/loopback/i);
+		).toBeNull();
 		expect(
 			validateProfileInput({
 				name: 'n',
@@ -66,7 +67,7 @@ describe('rclone credentials store', () => {
 				baseUrl: 'http://127.0.0.1:22',
 				rcPass: 'x'
 			})
-		).toMatch(/port/i);
+		).toBeNull();
 		expect(
 			validateProfileInput({
 				name: 'n',
@@ -75,6 +76,14 @@ describe('rclone credentials store', () => {
 				rcPass: 'x'
 			})
 		).toBeNull();
+		expect(
+			validateProfileInput({
+				name: 'n',
+				fs: 'home:',
+				baseUrl: 'http://user:pass@127.0.0.1:7750',
+				rcPass: 'x'
+			})
+		).toMatch(/credentials/i);
 	});
 
 	it('normalizeRootPath rejects ..', () => {

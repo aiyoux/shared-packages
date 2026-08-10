@@ -7,10 +7,10 @@ export const HUB_RCLONE_DB_NAME = 'HubRclone';
 export const HUB_RCLONE_STORE = 'profiles';
 export const HUB_RCLONE_META = 'meta';
 
-/** Default loopback rcd URL (product v1). */
+/** Default local rcd URL (browser talks to this URL directly). */
 export const DEFAULT_RCLONE_BASE_URL = 'http://127.0.0.1:7750';
 
-/** Ports allowed for profile baseUrl (v1 product). */
+/** @deprecated Direct mode accepts any http(s) URL; kept for proxy/legacy callers. */
 export const RCLONE_ALLOWED_PORTS = new Set([7750]);
 
 export type RcloneConnectionProfileV1 = {
@@ -21,8 +21,8 @@ export type RcloneConnectionProfileV1 = {
 	/** Display name */
 	name: string;
 	/**
-	 * RC base URL — loopback only in v1 (default http://127.0.0.1:7750).
-	 * Never put secrets in the URL userinfo.
+	 * RC base URL the **browser** opens directly (loopback, SSH tunnel, etc.).
+	 * Default http://127.0.0.1:7750. Never put secrets in the URL userinfo.
 	 */
 	baseUrl: string;
 	/**
@@ -111,17 +111,7 @@ export function validateProfileInput(input: {
 	if (url.username || url.password) {
 		return 'Base URL must not include credentials';
 	}
-	if (!isLoopbackHostname(url.hostname)) {
-		return 'Base URL host must be loopback (127.0.0.1, localhost, ::1)';
-	}
-	const port = url.port
-		? Number(url.port)
-		: url.protocol === 'https:'
-			? 443
-			: 80;
-	if (!RCLONE_ALLOWED_PORTS.has(port)) {
-		return `Base URL port must be one of: ${[...RCLONE_ALLOWED_PORTS].join(', ')}`;
-	}
+	// Any host is allowed — browser connects directly (tunnel, LAN, loopback).
 
 	try {
 		normalizeRootPath(input.rootPath);

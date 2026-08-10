@@ -57,7 +57,7 @@ export type AcquireRcloneDriverOptions = {
 
 /**
  * Get a warm driver for this profile (create if needed).
- * Production path builds transport via {@link createRcClient} (same-origin proxy).
+ * Production path builds transport via {@link createRcClient} (direct to baseUrl).
  */
 export async function acquireRcloneDriver(
 	profile: RcloneConnectionProfileV1,

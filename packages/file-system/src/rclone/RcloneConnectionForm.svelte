@@ -147,10 +147,11 @@
 <div class="rclone-form" data-testid="rclone-connection-form">
 	<h3>rclone RC connection</h3>
 	<p class="hint">
-		RC credentials stay only in this browser (IndexedDB). Calls go through this hub to a
-		<strong>loopback</strong> <code>rclone rcd</code> (default
-		<code>http://127.0.0.1:7750</code>). Use the remote name from your local
-		<code>rclone.conf</code> as <strong>fs</strong> (e.g. <code>remote:</code>).
+		RC credentials stay only in this browser (IndexedDB). The browser talks
+		<strong>directly</strong> to the Base URL you set (local rcd, SSH tunnel, etc.;
+		default <code>http://127.0.0.1:7750</code>). rcd must allow CORS for this site.
+		Use the remote name from your <code>rclone.conf</code> as <strong>fs</strong>
+		(e.g. <code>remote:</code>).
 	</p>
 
 	{#if error}

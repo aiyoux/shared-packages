@@ -1,15 +1,13 @@
 /**
- * Browser-side rclone RC client.
- * Production: same-origin proxy paths. Tests: inject transport (simulator).
+ * Browser-side rclone RC client — talks **directly** to the profile base URL.
+ * No hub/Worker proxy. rcd must allow CORS from the Scratch Pad origin.
+ *
+ * Tests: inject `transport` (simulator) to skip network.
  */
 import type { RcloneCallResult, RcloneTransport } from './rcloneSimulator.js';
-import {
-	DEFAULT_RCLONE_DOWNLOAD_PROXY_PATH,
-	DEFAULT_RCLONE_RC_PROXY_PATH,
-	DEFAULT_RCLONE_UPLOAD_PROXY_PATH
-} from './rcAllowlist.js';
 import { mapRcloneError } from './errors.js';
 
+/** @deprecated Proxy paths unused in direct mode; kept for API compatibility. */
 export type RcloneProxyPaths = {
 	rc?: string;
 	upload?: string;
@@ -20,16 +18,16 @@ export type CreateRcClientOptions = {
 	/** RC Basic credentials (from IDB profile — never log). */
 	rcUser: string;
 	rcPass: string;
-	/** Upstream base URL stored on profile (loopback); sent to proxy for SSRF check. */
+	/** Upstream RC base URL from settings (any http(s) host the browser can reach). */
 	baseUrl: string;
+	/** Ignored — direct mode only. */
 	proxyPaths?: RcloneProxyPaths;
-	/** Inject full transport (simulator) — skips proxy. */
+	/** Inject full transport (simulator) — skips network. */
 	transport?: RcloneTransport;
 	fetchImpl?: typeof fetch;
 };
 
 function basicAuthHeader(user: string, pass: string): string {
-	// btoa for browser; Buffer for node tests
 	const token =
 		typeof btoa === 'function'
 			? btoa(`${user}:${pass}`)
@@ -37,33 +35,33 @@ function basicAuthHeader(user: string, pass: string): string {
 	return `Basic ${token}`;
 }
 
+function rcEndpoint(base: string, method: string): string {
+	const b = base.replace(/\/$/, '');
+	const m = method.replace(/^\//, '');
+	return `${b}/${m}`;
+}
+
 /**
  * Create an RC transport. When `transport` is provided (tests), it is returned as-is.
- * Otherwise calls same-origin proxies with Authorization + target baseUrl.
+ * Otherwise POSTs/GETs go straight to `baseUrl`.
  */
 export function createRcClient(opts: CreateRcClientOptions): RcloneTransport {
 	if (opts.transport) return opts.transport;
 
 	const fetchFn = opts.fetchImpl ?? fetch;
-	const rcPath = opts.proxyPaths?.rc ?? DEFAULT_RCLONE_RC_PROXY_PATH;
-	const uploadPath = opts.proxyPaths?.upload ?? DEFAULT_RCLONE_UPLOAD_PROXY_PATH;
-	const downloadPath = opts.proxyPaths?.download ?? DEFAULT_RCLONE_DOWNLOAD_PROXY_PATH;
+	const base = opts.baseUrl.replace(/\/$/, '');
 	const auth = basicAuthHeader(opts.rcUser, opts.rcPass);
 
 	return {
 		async call(method: string, params: Record<string, unknown> = {}) {
 			try {
-				const res = await fetchFn(rcPath, {
+				const res = await fetchFn(rcEndpoint(base, method), {
 					method: 'POST',
 					headers: {
 						'Content-Type': 'application/json',
 						Authorization: auth
 					},
-					body: JSON.stringify({
-						target: opts.baseUrl,
-						method,
-						params
-					})
+					body: JSON.stringify(params)
 				});
 				if (!res.ok) {
 					const text = await res.text().catch(() => '');
@@ -73,6 +71,13 @@ export function createRcClient(opts: CreateRcClientOptions): RcloneTransport {
 				}
 				return (await res.json()) as RcloneCallResult;
 			} catch (e) {
+				if (e instanceof TypeError) {
+					throw mapRcloneError(
+						new Error(
+							`Cannot reach rclone at ${base} (network/CORS). Is rcd running and allowing this origin?`
+						)
+					);
+				}
 				throw mapRcloneError(e);
 			}
 		},
@@ -85,7 +90,6 @@ export function createRcClient(opts: CreateRcClientOptions): RcloneTransport {
 					throw e;
 				}
 				const form = new FormData();
-				form.set('target', opts.baseUrl);
 				form.set('fs', uploadOpts.fs);
 				form.set('remote', uploadOpts.remote);
 				const blob =
@@ -97,7 +101,7 @@ export function createRcClient(opts: CreateRcClientOptions): RcloneTransport {
 									: uploadOpts.body
 							]);
 				form.set('file', blob, 'upload.bin');
-				const res = await fetchFn(uploadPath, {
+				const res = await fetchFn(rcEndpoint(base, 'operations/uploadfile'), {
 					method: 'POST',
 					headers: { Authorization: auth },
 					body: form,
@@ -116,22 +120,41 @@ export function createRcClient(opts: CreateRcClientOptions): RcloneTransport {
 				}
 				return {};
 			} catch (e) {
+				if (e instanceof TypeError) {
+					throw mapRcloneError(
+						new Error(
+							`Cannot reach rclone at ${base} (network/CORS). Is rcd running and allowing this origin?`
+						)
+					);
+				}
 				throw mapRcloneError(e);
 			}
 		},
 
 		async download(downloadOpts) {
 			try {
-				const q = new URLSearchParams({
-					target: opts.baseUrl,
-					fs: downloadOpts.fs,
-					remote: downloadOpts.remote
-				});
-				const res = await fetchFn(`${downloadPath}?${q}`, {
+				// Prefer rc-serve GET; fall back to operations/cat
+				const fs = downloadOpts.fs;
+				const remote = downloadOpts.remote.replace(/^\/+/, '');
+				const serveUrl = `${base}/[${encodeURIComponent(fs.replace(/:$/, '') + (fs.endsWith(':') ? ':' : ''))}]${remote.startsWith('/') ? remote : '/' + remote}`;
+				const headers: Record<string, string> = { Authorization: auth };
+
+				let res = await fetchFn(serveUrl, {
 					method: 'GET',
-					headers: { Authorization: auth },
+					headers,
 					signal: downloadOpts.signal
 				});
+				if (res.status === 404 || res.status === 405) {
+					res = await fetchFn(rcEndpoint(base, 'operations/cat'), {
+						method: 'POST',
+						headers: {
+							...headers,
+							'Content-Type': 'application/json'
+						},
+						body: JSON.stringify({ fs, remote: downloadOpts.remote }),
+						signal: downloadOpts.signal
+					});
+				}
 				if (!res.ok) {
 					const text = await res.text().catch(() => '');
 					const err = new Error(text || res.statusText) as Error & { status: number };
@@ -140,6 +163,13 @@ export function createRcClient(opts: CreateRcClientOptions): RcloneTransport {
 				}
 				return await res.blob();
 			} catch (e) {
+				if (e instanceof TypeError) {
+					throw mapRcloneError(
+						new Error(
+							`Cannot reach rclone at ${base} (network/CORS). Is rcd running and allowing this origin?`
+						)
+					);
+				}
 				throw mapRcloneError(e);
 			}
 		}
