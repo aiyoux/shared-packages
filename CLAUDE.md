@@ -1,6 +1,17 @@
 # shared-packages
 
-Canonical source for `@modular@shared-packages/ui` (`packages/ui`) — a generic UI component library plus its `date/` types-and-helpers subpath — and its dev/demo app (`packages/component-library`, not published). This is the **only editable copy** of `ui` — every consumer app (`~/Code/modular-app`, `~/Code/sign-dictionary`, and any future ones) gets it from here via a pinned `yalc` checkout under its own `.yalc/@modular@shared-packages/ui/`, never by editing that checkout directly. Those repos have a hook that blocks edits under `.yalc/` for exactly this reason.
+Canonical source for the published shared packages:
+
+| Package | Path | Consumers |
+|---------|------|-----------|
+| `@shared-packages/ui` | `packages/ui` | `~/Code/modular-app`, `~/Code/sign-dictionary` |
+| `@shared-packages/file-system` | `packages/file-system` | `~/Code/scratch-pad` (all worktrees) |
+
+Plus `packages/component-library`, the dev/demo app for `ui` (not published).
+
+This is the **only editable copy** of these packages. Every consumer gets them from here via a pinned `yalc` checkout under its own `.yalc/@shared-packages/<pkg>/`, never by editing that checkout directly. Consumers enforce this with a `PreToolUse` hook that blocks edits under `.yalc/`, a drift check wired into `npm run check`, and — in scratch-pad — a deploy gate, because a direct edit there appears to work and is then silently reverted by the next publish.
+
+That has already cost real work twice: a `module-sdk` scheduler rewrite in modular-app, and the `file-system` VFS work in scratch-pad (recursive trash restore, generation-check-before-write, `opfs.listTmp` mtimes, `serialize`'s defensive buffer copy, `sanitizeName`'s `/g` flag). The latter was recovered from stale consumer checkouts and now lives in `packages/file-system` — if those implementations look "extra" next to what you'd write, they are the correct ones.
 
 `module-sdk`, `item-tree`, and `shell-core` used to live here too but were modular-app-specific business logic (sync engine, offline cache, schedulers, record model) rather than shared UI-library code — they moved into `~/Code/modular-app` as first-party workspace packages (`repos/module-sdk`, `repos/item-tree`, `repos/shell-core`), edited directly there with no publish/pull cycle. Keep it that way: nothing app-specific belongs back in this repo.
 
