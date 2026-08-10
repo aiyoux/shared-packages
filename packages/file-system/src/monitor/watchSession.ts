@@ -37,6 +37,14 @@ export type WatchSessionOptions = {
 	/** Debounced when events arrive */
 	onChange: () => void;
 	debounceMs?: number;
+	/**
+	 * Ceiling on how long coalescing may delay `onChange` (default 1s, and never
+	 * below `debounceMs`). The debounce restarts on every event, so a sustained
+	 * write storm — a build, an `npm install` — would otherwise starve the
+	 * callback until the writes stopped, leaving the list visibly stale for as
+	 * long as the churn lasted.
+	 */
+	maxDebounceMs?: number;
 	/** Optional status for UI / e2e */
 	onStatus?: (status: WatchSessionStatus) => void;
 	/** fetch implementation (tests) */
@@ -104,6 +112,7 @@ function parseSseChunk(text: string): Array<{ event: string; data: string }> {
  */
 export function startWatchSession(opts: WatchSessionOptions): WatchSession {
 	const debounceMs = opts.debounceMs ?? 150;
+	const maxDebounceMs = Math.max(debounceMs, opts.maxDebounceMs ?? 1_000);
 	const watchdogMs = opts.watchdogMs ?? 30_000;
 	const maxReconnectAttempts = opts.maxReconnectAttempts ?? 12;
 	const maxReconnectDelayMs = opts.maxReconnectDelayMs ?? 10_000;
@@ -112,6 +121,8 @@ export function startWatchSession(opts: WatchSessionOptions): WatchSession {
 	let stopped = false;
 	let abortController: AbortController | null = null;
 	let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+	/** When the oldest un-delivered change arrived; 0 when nothing is pending. */
+	let pendingSince = 0;
 	let watchdogTimer: ReturnType<typeof setTimeout> | null = null;
 	let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 	let reconnectAttempt = 0;
@@ -121,13 +132,21 @@ export function startWatchSession(opts: WatchSessionOptions): WatchSession {
 		opts.onStatus?.(s);
 	};
 
+	/**
+	 * Coalesce bursts, but never wait longer than `maxDebounceMs` from the first
+	 * event still pending — under continuous churn the plain debounce never fired.
+	 */
 	const fireChange = () => {
 		if (stopped) return;
+		const now = Date.now();
+		if (pendingSince === 0) pendingSince = now;
+		const delay = Math.min(debounceMs, Math.max(0, maxDebounceMs - (now - pendingSince)));
 		if (debounceTimer) clearTimeout(debounceTimer);
 		debounceTimer = setTimeout(() => {
 			debounceTimer = null;
+			pendingSince = 0;
 			if (!stopped) opts.onChange();
-		}, debounceMs);
+		}, delay);
 	};
 
 	const clearTimers = () => {
@@ -135,6 +154,7 @@ export function startWatchSession(opts: WatchSessionOptions): WatchSession {
 			clearTimeout(debounceTimer);
 			debounceTimer = null;
 		}
+		pendingSince = 0;
 		if (watchdogTimer) {
 			clearTimeout(watchdogTimer);
 			watchdogTimer = null;

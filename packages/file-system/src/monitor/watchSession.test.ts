@@ -151,6 +151,50 @@ describe('startWatchSession', () => {
 		expect(session.getStatus()).toBe('closed');
 	});
 
+	it('still delivers changes during sustained churn (debounce cannot starve)', async () => {
+		const fetchMock = createControllableFetch();
+		const onChange = vi.fn();
+		const ensureRoot = vi.fn(async () => ({ root_id: 'root-1', path: '/tmp' }));
+
+		const session = startWatchSession({
+			baseUrl: 'http://127.0.0.1:8300',
+			rootPath: '/tmp',
+			ensureRoot,
+			onChange,
+			debounceMs: 40,
+			maxDebounceMs: 100,
+			fetchImpl: fetchMock as unknown as typeof fetch,
+		});
+
+		await vi.waitFor(() => expect(ensureRoot).toHaveBeenCalled());
+		fetchMock._emit!('watch.subscribed', { type: 'watch.subscribed', sub_id: 's1' });
+		// Drain the resync `onChange` that `subscribed` fires, so what the storm
+		// below asserts on is the storm's own delivery.
+		await vi.waitFor(() => expect(onChange).toHaveBeenCalled());
+		onChange.mockClear();
+
+		// A write storm: events closer together than debounceMs, so every event
+		// restarts the timer. Without the max-wait ceiling nothing is ever
+		// delivered until the storm stops.
+		let seq = 0;
+		const storm = setInterval(() => {
+			fetchMock._emit!('watch.event_batch', {
+				type: 'watch.event_batch',
+				sub_id: 's1',
+				seq: ++seq,
+				events: [{ kind: 'create', path: `/tmp/f${seq}`, rel_path: `f${seq}`, is_dir: false }],
+			});
+		}, 20);
+
+		try {
+			await vi.waitFor(() => expect(onChange).toHaveBeenCalled(), { timeout: 400 });
+		} finally {
+			clearInterval(storm);
+		}
+
+		session.stop();
+	});
+
 	it('reconnects after stream ends', async () => {
 		const fetchMock = createControllableFetch();
 		const ensureRoot = vi.fn(async () => ({ root_id: 'root-1', path: '/tmp' }));

@@ -317,13 +317,25 @@
 	 * Reload list + breadcrumbs.
 	 * @param manageBusy - when false, caller owns begin/endListBusy (e.g. delete).
 	 * @param busyMode - `immediate` covers folder/driver switches; `delay` for light ops.
+	 * @param silent - background refresh driven by a live backend, not by the user.
+	 *   Paints no busy chrome and skips the `ready()` probe: rows are keyed by id,
+	 *   so an unchanged list re-commits to the same DOM and the user sees nothing.
+	 *   Without this every watch event dimmed the list (`cursor: wait`, rows
+	 *   `pointer-events: none`, toolbar disabled) for the length of three round
+	 *   trips, which is what read as flicker under a stream of file changes.
 	 */
-	async function refresh(manageBusy = true, busyMode: 'delay' | 'immediate' = 'delay') {
+	async function refresh(
+		manageBusy = true,
+		busyMode: 'delay' | 'immediate' = 'delay',
+		silent = false
+	) {
 		const gen = ++refreshGen;
-		if (manageBusy) beginListBusy({ immediate: busyMode === 'immediate' });
-		error = '';
+		if (manageBusy && !silent) beginListBusy({ immediate: busyMode === 'immediate' });
+		// A background refresh must not clear an error the user hasn't addressed.
+		if (!silent) error = '';
 		try {
-			await driver.ready();
+			// The SSE stream arriving *is* the liveness probe for a silent refresh.
+			if (!silent) await driver.ready();
 			if (gen !== refreshGen) return;
 
 			let nextNodes: ExplorerEntry[];
@@ -354,12 +366,19 @@
 			if (focusIndex >= nodes.length) focusIndex = nodes.length ? nodes.length - 1 : -1;
 		} catch (e) {
 			if (gen !== refreshGen) return;
-			error = errMsg(e);
+			// A failed background poll leaves the last good list up rather than
+			// replacing it with an error banner: the watch status already reports
+			// the connection, and reconnects would otherwise flash red repeatedly.
+			if (!silent) error = errMsg(e);
 		} finally {
 			// Only the latest refresh may clear busy
-			if (gen !== refreshGen) return;
-			initialLoad = false;
-			if (manageBusy) await endListBusyAfterPaint();
+			if (gen === refreshGen) {
+				initialLoad = false;
+				// A silent refresh raises no chrome — but if it superseded one that
+				// did, that refresh bailed at this same guard, so clearing up is now
+				// this one's job or the overlay sticks.
+				if (manageBusy && (!silent || listBusy)) await endListBusyAfterPaint();
+			}
 		}
 	}
 
@@ -377,8 +396,9 @@
 		const d = driver;
 		if (!d.subscribeChanges) return;
 		const unsub = d.subscribeChanges(() => {
-			// Soft refresh — keep selection when possible
-			void refresh(true, 'delay');
+			// Silent — keeps selection, and paints no busy chrome for a change the
+			// user did not initiate.
+			void refresh(true, 'delay', true);
 		});
 		return () => {
 			unsub();
