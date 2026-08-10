@@ -143,8 +143,9 @@ describe('startWatchSession', () => {
 			fetchMock.mock.calls.some((c) => String(c[0]).includes('/v1/watch/ack'))
 		).toBe(false);
 
-		// Loopback requests carry the Local Network Access annotation.
-		expect((sseCall![1] as { targetAddressSpace?: string }).targetAddressSpace).toBe('local');
+		// Loopback requests carry the Local Network Access annotation. It must be
+		// `loopback`, not `local` — Chrome rejects a mismatched declaration.
+		expect((sseCall![1] as { targetAddressSpace?: string }).targetAddressSpace).toBe('loopback');
 
 		session.stop();
 		expect(session.getStatus()).toBe('closed');

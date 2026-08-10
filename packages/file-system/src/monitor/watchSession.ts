@@ -2,7 +2,7 @@
  * Browser-side watch via fetch-based SSE for monitor live list refresh.
  *
  * Consumes the SSE stream with `fetch()` + `ReadableStream` rather than
- * `EventSource`, because only `fetch` accepts `targetAddressSpace: 'local'` —
+ * `EventSource`, because only `fetch` accepts `targetAddressSpace` —
  * the annotation that lets an HTTPS page reach loopback under a single Local
  * Network Access grant instead of a warning per request. See `./localNetwork`.
  * (Neither transport is blocked as mixed content: loopback is a potentially
