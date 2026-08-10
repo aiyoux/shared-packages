@@ -15,6 +15,7 @@ export {
 	type WatchSessionStatus,
 	type WatchedRoot
 } from './watchSession.js';
+export { isLoopbackUrl, withLocalAddressSpace } from './localNetwork.js';
 export {
 	acquireMonitorDriver,
 	releaseMonitorDriver,
@@ -25,8 +26,6 @@ export {
 } from './monitorDriverCache.js';
 export {
 	createMonitorClient,
-	DEFAULT_MONITOR_PROXY_PATHS,
-	type MonitorProxyPaths,
 	type MonitorTransport,
 	type MonitorListEntry,
 	type MonitorListResult,

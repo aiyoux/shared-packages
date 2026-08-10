@@ -1,9 +1,12 @@
 /**
  * Browser client for monitor — talks **directly** to the profile base URL
- * (loopback, SSH tunnel hostname, etc.). No hub/Worker proxy.
+ * (loopback via SSH tunnel, etc.). No hub/Worker proxy: a Cloudflare Worker
+ * cannot reach the user's loopback, so the request has to come from the page.
  *
- * Monitor must allow CORS from the Scratch Pad origin (and WS for watch).
+ * Monitor must allow CORS from the Scratch Pad origin. Requests to loopback are
+ * additionally annotated for Local Network Access — see `./localNetwork`.
  */
+import { withLocalAddressSpace } from './localNetwork';
 
 export type MonitorListEntry = {
 	name: string;
@@ -41,19 +44,8 @@ export type MonitorTransport = {
 	/** Idempotent POST /v1/watch/roots */
 	watchAddRoot(path: string, recursive?: boolean): Promise<MonitorWatchedRoot>;
 	watchListRoots(): Promise<{ roots: MonitorWatchedRoot[] }>;
-	/** HTTP base URL (also used for WebSocket). */
+	/** HTTP base URL (also used for the SSE watch stream). */
 	baseUrl: string;
-};
-
-/** @deprecated Proxy paths are unused; kept for type compatibility with driver cache opts. */
-export type MonitorProxyPaths = {
-	api?: string;
-	download?: string;
-};
-
-export const DEFAULT_MONITOR_PROXY_PATHS: MonitorProxyPaths = {
-	api: '/api/monitor/api',
-	download: '/api/monitor/download'
 };
 
 function joinUrl(base: string, path: string): string {
@@ -64,8 +56,6 @@ function joinUrl(base: string, path: string): string {
 
 export function createMonitorClient(opts: {
 	baseUrl: string;
-	/** Ignored — direct mode only. Kept for API compatibility. */
-	proxyPaths?: MonitorProxyPaths;
 	fetchImpl?: typeof fetch;
 }): MonitorTransport {
 	const base = opts.baseUrl.replace(/\/$/, '');
@@ -74,11 +64,12 @@ export function createMonitorClient(opts: {
 	async function getJson(pathWithQuery: string): Promise<unknown> {
 		const ac = new AbortController();
 		const t = setTimeout(() => ac.abort(), 12_000);
+		const url = joinUrl(base, pathWithQuery);
 		try {
-			const res = await fetchFn(joinUrl(base, pathWithQuery), {
+			const res = await fetchFn(url, withLocalAddressSpace(url, {
 				method: 'GET',
 				signal: ac.signal
-			});
+			}));
 			const body = await res.json().catch(() => ({}));
 			if (!res.ok) {
 				const err =
@@ -111,23 +102,25 @@ export function createMonitorClient(opts: {
 	async function postJson(path: string, body: unknown): Promise<unknown> {
 		const ac = new AbortController();
 		const t = setTimeout(() => ac.abort(), 12_000);
+		const url = joinUrl(base, path);
 		try {
-			const res = await fetchFn(joinUrl(base, path), {
+			const res = await fetchFn(url, withLocalAddressSpace(url, {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
 				body: JSON.stringify(body),
 				signal: ac.signal
-			});
+			}));
 			const parsed = await res.json().catch(() => ({}));
 			if (!res.ok) {
-				const err = (parsed as { error?: { message?: string } | string }).error;
+				const err = (parsed as { error?: { message?: string; code?: string } | string }).error;
 				const msg =
 					typeof err === 'string'
 						? err
 						: err && typeof err === 'object' && 'message' in err
 							? String(err.message)
 							: res.statusText;
-				throw new Error(msg || `Monitor POST failed (${res.status})`);
+				const code = err && typeof err === 'object' && 'code' in err ? String(err.code) : '';
+				throw new Error(code ? `[${code}] ${msg}` : (msg || `Monitor POST failed (${res.status})`));
 			}
 			return parsed;
 		} catch (e) {
@@ -172,10 +165,11 @@ export function createMonitorClient(opts: {
 		async download(path: string) {
 			const ac = new AbortController();
 			const t = setTimeout(() => ac.abort(), 60_000);
+			const url = joinUrl(base, `/v1/fs/read?path=${encodeURIComponent(path)}`);
 			try {
 				const res = await fetchFn(
-					joinUrl(base, `/v1/fs/read?path=${encodeURIComponent(path)}`),
-					{ method: 'GET', signal: ac.signal }
+					url,
+					withLocalAddressSpace(url, { method: 'GET', signal: ac.signal })
 				);
 				if (!res.ok) {
 					const text = await res.text().catch(() => '');

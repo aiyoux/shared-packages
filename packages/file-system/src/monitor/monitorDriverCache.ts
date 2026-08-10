@@ -2,7 +2,7 @@
  * Warm cache of monitor explorer drivers keyed by profile id.
  */
 import type { ExplorerDriver } from '../ui/explorerDriver.js';
-import { createMonitorClient, type MonitorProxyPaths } from './client.js';
+import { createMonitorClient } from './client.js';
 import { createMonitorExplorerDriver } from './monitorExplorerDriver.js';
 import type { MonitorTransport } from './client.js';
 import type { MonitorConnectionProfileV1 } from './types.js';
@@ -60,7 +60,6 @@ function scheduleDispose(profileId: string) {
 
 export type AcquireMonitorDriverOptions = {
 	transport?: MonitorTransport;
-	proxyPaths?: MonitorProxyPaths;
 };
 
 export async function acquireMonitorDriver(
@@ -87,10 +86,7 @@ export async function acquireMonitorDriver(
 	const creating = (async () => {
 		const transport =
 			opts?.transport ??
-			createMonitorClient({
-				baseUrl: profile.baseUrl,
-				proxyPaths: opts?.proxyPaths
-			});
+			createMonitorClient({ baseUrl: profile.baseUrl });
 		const driver = await createMonitorExplorerDriver({ profile, transport });
 		await driver.ready();
 		return driver;

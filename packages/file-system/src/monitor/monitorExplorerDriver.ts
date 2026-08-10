@@ -1,6 +1,6 @@
 /**
  * Monitor local-fs browser driver (browser → profile baseUrl /v1/fs).
- * Read-only: list + download. Live list refresh via watch WebSocket.
+ * Read-only: list + download. Live list refresh via fetch-based SSE.
  * Open-with off (remote-class).
  */
 import {
@@ -87,7 +87,7 @@ export async function createMonitorExplorerDriver(
 
 	function ensureWatch() {
 		if (!enableWatch || watch) return;
-		if (typeof WebSocket === 'undefined') {
+		if (typeof fetch === 'undefined') {
 			watchStatus = 'off';
 			return;
 		}
@@ -113,7 +113,7 @@ export async function createMonitorExplorerDriver(
 
 		async ready() {
 			try {
-				// Browse-only probe — do not start WS here (subscribeChanges starts watch).
+				// Browse-only probe — do not start SSE here (subscribeChanges starts watch).
 				await transport.health();
 				await transport.stat(rootPath);
 			} catch (e) {
