@@ -25,7 +25,11 @@ import {
 } from './pathIds.js';
 import type { MonitorTransport } from './client.js';
 import { normalizeMonitorRootPath, type MonitorConnectionProfileV1 } from './types.js';
-import { startWatchSession, type WatchSession, type WatchSessionStatus } from './watchSession.js';
+import {
+	createMonitorWatchStream,
+	type MonitorWatchStream,
+	type WatchStreamStatus
+} from './watchStream.js';
 
 const MONITOR_CAPS: ExplorerCapabilities = {
 	supportsTrash: false,
@@ -55,7 +59,7 @@ export type MonitorExplorerDriverOptions = {
 
 export type MonitorExplorerDriver = ExplorerDriver & {
 	/** Live watch status for UI / e2e (`data-monitor-watch-status`) */
-	getWatchStatus(): WatchSessionStatus | 'off';
+	getWatchStatus(): WatchStreamStatus | 'off';
 };
 
 export async function createMonitorExplorerDriver(
@@ -71,36 +75,25 @@ export async function createMonitorExplorerDriver(
 		throw new ExplorerMonitorError('MONITOR_ERROR', 'Invalid rootPath');
 	}
 
-	const changeListeners = new Set<() => void>();
-	let watch: WatchSession | null = null;
-	let watchStatus: WatchSessionStatus | 'off' = enableWatch ? 'connecting' : 'off';
+	let watch: MonitorWatchStream | null = null;
+	let watchStatus: WatchStreamStatus | 'off' = enableWatch ? 'connecting' : 'off';
 
-	const notifyListeners = () => {
-		for (const l of changeListeners) {
-			try {
-				l();
-			} catch {
-				/* ignore listener errors */
-			}
-		}
-	};
-
-	function ensureWatch() {
-		if (!enableWatch || watch) return;
+	function ensureWatch(): MonitorWatchStream | null {
+		if (!enableWatch) return null;
 		if (typeof fetch === 'undefined') {
 			watchStatus = 'off';
-			return;
+			return null;
 		}
-		watch = startWatchSession({
-			baseUrl: transport.baseUrl,
-			rootPath,
-			ensureRoot: (path, recursive) => transport.watchAddRoot(path, recursive),
-			onChange: notifyListeners,
-			onStatus: (s) => {
-				watchStatus = s;
-			},
-			debounceMs: 120
-		});
+		if (!watch) {
+			watch = createMonitorWatchStream({
+				transport,
+				onStatus: (s) => {
+					watchStatus = s;
+				},
+				debounceMs: 120
+			});
+		}
+		return watch;
 	}
 
 	const driver: MonitorExplorerDriver = {
@@ -192,16 +185,17 @@ export async function createMonitorExplorerDriver(
 			}
 		},
 
-		subscribeChanges(listener: () => void) {
-			changeListeners.add(listener);
-			ensureWatch();
-			return () => {
-				changeListeners.delete(listener);
-			};
+		subscribeChanges(listener: () => void, scope?: { parentId: ExplorerEntryId | null }) {
+			const stream = ensureWatch();
+			if (!stream) return () => {};
+			// Watch the folder on screen, not the profile root: a recursive root
+			// watch costs inotify descriptors for the whole subtree and reports
+			// changes nobody is looking at. Panes and tree rows each subscribe their
+			// own folder; the stream shares one connection across all of them.
+			return stream.watchFolder(toAbsolutePath(rootPath, scope?.parentId ?? null), listener);
 		},
 
 		dispose() {
-			changeListeners.clear();
 			watch?.stop();
 			watch = null;
 			watchStatus = 'closed';

@@ -36,6 +36,20 @@ export type MonitorWatchedRoot = {
 	recursive?: boolean;
 };
 
+/** Body for `POST /v1/watch/subs`. */
+export type MonitorSubsRequest = {
+	/** From the stream's `watch.hello` frame. */
+	clientId: string;
+	subscribe?: Array<{ rootId: string; include?: string[] }>;
+	/** Root ids to drop. Applied before `subscribe`, so a swap fits in one call. */
+	unsubscribe?: string[];
+};
+
+export type MonitorSubsResult = {
+	subscribed: Array<{ root_id: string; sub_id: string; path: string }>;
+	unsubscribed: Array<{ root_id: string; sub_id: string }>;
+};
+
 export type MonitorTransport = {
 	list(path: string): Promise<MonitorListResult>;
 	stat(path: string): Promise<MonitorStatResult>;
@@ -44,6 +58,11 @@ export type MonitorTransport = {
 	/** Idempotent POST /v1/watch/roots */
 	watchAddRoot(path: string, recursive?: boolean): Promise<MonitorWatchedRoot>;
 	watchListRoots(): Promise<{ roots: MonitorWatchedRoot[] }>;
+	/**
+	 * POST /v1/watch/subs — change what an open stream watches without
+	 * reconnecting it, so navigating does not resync the folders you kept.
+	 */
+	watchUpdateSubs(req: MonitorSubsRequest): Promise<MonitorSubsResult>;
 	/** HTTP base URL (also used for the SSE watch stream). */
 	baseUrl: string;
 };
@@ -161,6 +180,16 @@ export function createMonitorClient(opts: {
 		},
 		async watchListRoots() {
 			return (await getJson('/v1/watch/roots')) as { roots: MonitorWatchedRoot[] };
+		},
+		async watchUpdateSubs(req) {
+			return (await postJson('/v1/watch/subs', {
+				client_id: req.clientId,
+				subscribe: (req.subscribe ?? []).map((s) => ({
+					root_id: s.rootId,
+					...(s.include ? { include: s.include } : {})
+				})),
+				unsubscribe: req.unsubscribe ?? []
+			})) as MonitorSubsResult;
 		},
 		async download(path: string) {
 			const ac = new AbortController();

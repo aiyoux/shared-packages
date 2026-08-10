@@ -130,11 +130,20 @@ export interface ExplorerDriver {
 		file: File
 	): Promise<ExplorerEntry>;
 	/**
-	 * Optional live-change subscription (e.g. monitor watch WebSocket).
-	 * FileExplorer re-lists the open folder when the listener fires.
-	 * Returns an unsubscribe function.
+	 * Optional live-change subscription (e.g. the monitor watch stream).
+	 * FileExplorer re-lists the open folder when the listener fires, and
+	 * re-subscribes when it navigates.
+	 *
+	 * `scope.parentId` is the folder on screen. A backend that can watch one
+	 * folder should watch that one — far cheaper than a recursive watch of
+	 * everything — and each mounted explorer (a dual pane, a tree row) subscribes
+	 * its own. Drivers with only a whole-backend signal may ignore it. Returns an
+	 * unsubscribe function.
 	 */
-	subscribeChanges?(listener: () => void): () => void;
+	subscribeChanges?(
+		listener: () => void,
+		scope?: { parentId: ExplorerEntryId | null }
+	): () => void;
 	/**
 	 * Optional teardown when the driver is no longer held (close WS, etc.).
 	 * Driver caches should call this when the last ref is released.

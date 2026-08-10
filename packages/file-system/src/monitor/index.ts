@@ -9,13 +9,19 @@ export {
 	type MonitorExplorerDriverOptions
 } from './monitorExplorerDriver.js';
 export {
-	startWatchSession,
-	type WatchSession,
-	type WatchSessionOptions,
-	type WatchSessionStatus,
-	type WatchedRoot
-} from './watchSession.js';
-export { isLoopbackUrl, withLocalAddressSpace } from './localNetwork.js';
+	createMonitorWatchStream,
+	parseSseChunk,
+	type MonitorWatchStream,
+	type MonitorWatchStreamOptions,
+	type WatchStreamStatus
+} from './watchStream.js';
+export { createCoalescer, type Coalescer, type CoalesceOptions } from './coalesce.js';
+export {
+	addressSpaceFor,
+	isLoopbackUrl,
+	withLocalAddressSpace,
+	type TargetAddressSpace
+} from './localNetwork.js';
 export {
 	acquireMonitorDriver,
 	releaseMonitorDriver,
@@ -30,6 +36,8 @@ export {
 	type MonitorListEntry,
 	type MonitorListResult,
 	type MonitorStatResult,
+	type MonitorSubsRequest,
+	type MonitorSubsResult,
 	type MonitorWatchedRoot
 } from './client.js';
 export {
