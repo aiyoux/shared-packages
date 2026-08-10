@@ -1,18 +1,9 @@
 /**
- * Browser client for monitor via same-origin hub proxy (avoids CORS + SSRF guard).
+ * Browser client for monitor — talks **directly** to the profile base URL
+ * (loopback, SSH tunnel hostname, etc.). No hub/Worker proxy.
+ *
+ * Monitor must allow CORS from the Scratch Pad origin (and WS for watch).
  */
-
-export type MonitorProxyPaths = {
-	/** JSON control plane (list/stat/health) */
-	api: string;
-	/** File download stream */
-	download: string;
-};
-
-export const DEFAULT_MONITOR_PROXY_PATHS: MonitorProxyPaths = {
-	api: '/api/monitor/api',
-	download: '/api/monitor/download'
-};
 
 export type MonitorListEntry = {
 	name: string;
@@ -47,44 +38,106 @@ export type MonitorTransport = {
 	stat(path: string): Promise<MonitorStatResult>;
 	download(path: string): Promise<Blob>;
 	health(): Promise<unknown>;
-	/** Idempotent POST /v1/watch/roots via hub proxy */
+	/** Idempotent POST /v1/watch/roots */
 	watchAddRoot(path: string, recursive?: boolean): Promise<MonitorWatchedRoot>;
 	watchListRoots(): Promise<{ roots: MonitorWatchedRoot[] }>;
-	/** HTTP base URL for direct WebSocket (loopback). */
+	/** HTTP base URL (also used for WebSocket). */
 	baseUrl: string;
 };
 
+/** @deprecated Proxy paths are unused; kept for type compatibility with driver cache opts. */
+export type MonitorProxyPaths = {
+	api?: string;
+	download?: string;
+};
+
+export const DEFAULT_MONITOR_PROXY_PATHS: MonitorProxyPaths = {
+	api: '/api/monitor/api',
+	download: '/api/monitor/download'
+};
+
+function joinUrl(base: string, path: string): string {
+	const b = base.replace(/\/$/, '');
+	const p = path.startsWith('/') ? path : `/${path}`;
+	return `${b}${p}`;
+}
+
 export function createMonitorClient(opts: {
 	baseUrl: string;
+	/** Ignored — direct mode only. Kept for API compatibility. */
 	proxyPaths?: MonitorProxyPaths;
 	fetchImpl?: typeof fetch;
 }): MonitorTransport {
 	const base = opts.baseUrl.replace(/\/$/, '');
-	const paths = opts.proxyPaths ?? DEFAULT_MONITOR_PROXY_PATHS;
 	const fetchFn = opts.fetchImpl ?? fetch;
 
-	async function apiCall(
-		op: string,
-		extra?: { path?: string; recursive?: boolean }
-	): Promise<unknown> {
+	async function getJson(pathWithQuery: string): Promise<unknown> {
 		const ac = new AbortController();
 		const t = setTimeout(() => ac.abort(), 12_000);
 		try {
-			const res = await fetchFn(paths.api, {
-				method: 'POST',
-				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({ target: base, op, ...extra }),
+			const res = await fetchFn(joinUrl(base, pathWithQuery), {
+				method: 'GET',
 				signal: ac.signal
 			});
 			const body = await res.json().catch(() => ({}));
 			if (!res.ok) {
-				const err = (body as { error?: string; code?: string }).error || res.statusText;
-				throw new Error(err || `Monitor ${op} failed (${res.status})`);
+				const err =
+					(body as { error?: { message?: string } | string }).error;
+				const msg =
+					typeof err === 'string'
+						? err
+						: err && typeof err === 'object' && 'message' in err
+							? String(err.message)
+							: res.statusText;
+				throw new Error(msg || `Monitor GET failed (${res.status})`);
 			}
 			return body;
 		} catch (e) {
 			if (e instanceof Error && e.name === 'AbortError') {
-				throw new Error(`Monitor ${op} timed out`);
+				throw new Error('Monitor request timed out');
+			}
+			// Failed to fetch often means CORS or offline
+			if (e instanceof TypeError) {
+				throw new Error(
+					`Cannot reach monitor at ${base} (network/CORS). Is it running and allowing this origin?`
+				);
+			}
+			throw e;
+		} finally {
+			clearTimeout(t);
+		}
+	}
+
+	async function postJson(path: string, body: unknown): Promise<unknown> {
+		const ac = new AbortController();
+		const t = setTimeout(() => ac.abort(), 12_000);
+		try {
+			const res = await fetchFn(joinUrl(base, path), {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify(body),
+				signal: ac.signal
+			});
+			const parsed = await res.json().catch(() => ({}));
+			if (!res.ok) {
+				const err = (parsed as { error?: { message?: string } | string }).error;
+				const msg =
+					typeof err === 'string'
+						? err
+						: err && typeof err === 'object' && 'message' in err
+							? String(err.message)
+							: res.statusText;
+				throw new Error(msg || `Monitor POST failed (${res.status})`);
+			}
+			return parsed;
+		} catch (e) {
+			if (e instanceof Error && e.name === 'AbortError') {
+				throw new Error('Monitor request timed out');
+			}
+			if (e instanceof TypeError) {
+				throw new Error(
+					`Cannot reach monitor at ${base} (network/CORS). Is it running and allowing this origin?`
+				);
 			}
 			throw e;
 		} finally {
@@ -95,28 +148,53 @@ export function createMonitorClient(opts: {
 	return {
 		baseUrl: base,
 		async list(path: string) {
-			return (await apiCall('list', { path })) as MonitorListResult;
+			return (await getJson(
+				`/v1/fs/list?path=${encodeURIComponent(path)}`
+			)) as MonitorListResult;
 		},
 		async stat(path: string) {
-			return (await apiCall('stat', { path })) as MonitorStatResult;
+			return (await getJson(
+				`/v1/fs/stat?path=${encodeURIComponent(path)}`
+			)) as MonitorStatResult;
 		},
 		async health() {
-			return apiCall('health');
+			return getJson('/v1/health');
 		},
 		async watchAddRoot(path: string, recursive = true) {
-			return (await apiCall('watch_add_root', { path, recursive })) as MonitorWatchedRoot;
+			return (await postJson('/v1/watch/roots', {
+				path,
+				recursive: recursive !== false
+			})) as MonitorWatchedRoot;
 		},
 		async watchListRoots() {
-			return (await apiCall('watch_list_roots')) as { roots: MonitorWatchedRoot[] };
+			return (await getJson('/v1/watch/roots')) as { roots: MonitorWatchedRoot[] };
 		},
 		async download(path: string) {
-			const q = new URLSearchParams({ target: base, path });
-			const res = await fetchFn(`${paths.download}?${q}`);
-			if (!res.ok) {
-				const t = await res.text().catch(() => '');
-				throw new Error(t || `Download failed (${res.status})`);
+			const ac = new AbortController();
+			const t = setTimeout(() => ac.abort(), 60_000);
+			try {
+				const res = await fetchFn(
+					joinUrl(base, `/v1/fs/read?path=${encodeURIComponent(path)}`),
+					{ method: 'GET', signal: ac.signal }
+				);
+				if (!res.ok) {
+					const text = await res.text().catch(() => '');
+					throw new Error(text || `Download failed (${res.status})`);
+				}
+				return res.blob();
+			} catch (e) {
+				if (e instanceof Error && e.name === 'AbortError') {
+					throw new Error('Monitor download timed out');
+				}
+				if (e instanceof TypeError) {
+					throw new Error(
+						`Cannot reach monitor at ${base} (network/CORS). Is it running and allowing this origin?`
+					);
+				}
+				throw e;
+			} finally {
+				clearTimeout(t);
 			}
-			return res.blob();
 		}
 	};
 }

@@ -7,10 +7,10 @@ export const HUB_MONITOR_DB_NAME = 'HubMonitor';
 export const HUB_MONITOR_STORE = 'profiles';
 export const HUB_MONITOR_META = 'meta';
 
-/** Default loopback monitor URL. */
+/** Default local monitor URL (browser talks to this URL directly). */
 export const DEFAULT_MONITOR_BASE_URL = 'http://127.0.0.1:8300';
 
-/** Ports allowed for profile baseUrl (v1 product). */
+/** @deprecated Direct mode accepts any http(s) URL; kept for proxy/legacy callers. */
 export const MONITOR_ALLOWED_PORTS = new Set([8300, 9847]);
 
 export type MonitorConnectionProfileV1 = {
@@ -18,7 +18,8 @@ export type MonitorConnectionProfileV1 = {
 	id: string;
 	name: string;
 	/**
-	 * Monitor base URL — loopback only (default http://127.0.0.1:8300).
+	 * Monitor base URL the **browser** opens directly (loopback, SSH tunnel,
+	 * public hostname, etc.). Default http://127.0.0.1:8300.
 	 * Never put secrets in the URL.
 	 */
 	baseUrl: string;
@@ -81,17 +82,7 @@ export function validateMonitorProfileInput(input: {
 	if (url.username || url.password) {
 		return 'Base URL must not include credentials';
 	}
-	if (!isLoopbackHostname(url.hostname)) {
-		return 'Base URL host must be loopback (127.0.0.1, localhost, ::1)';
-	}
-	const port = url.port
-		? Number(url.port)
-		: url.protocol === 'https:'
-			? 443
-			: 80;
-	if (!MONITOR_ALLOWED_PORTS.has(port)) {
-		return `Base URL port must be one of: ${[...MONITOR_ALLOWED_PORTS].join(', ')}`;
-	}
+	// Any host is allowed — browser connects directly (tunnel, LAN, loopback).
 
 	try {
 		normalizeMonitorRootPath(input.rootPath);

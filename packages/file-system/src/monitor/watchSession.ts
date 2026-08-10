@@ -1,8 +1,7 @@
 /**
  * Browser-side watch WebSocket for monitor live list refresh.
  *
- * REST (add root) goes through the hub proxy (CORS).
- * WebSocket connects directly to loopback monitor (no CORS preflight).
+ * REST (add root) and WebSocket both hit the profile base URL directly.
  */
 
 export type WatchedRoot = {

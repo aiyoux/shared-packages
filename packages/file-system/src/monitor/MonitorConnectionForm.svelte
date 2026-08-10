@@ -118,9 +118,10 @@
 
 <div class="mon-form" data-testid="monitor-connection-form">
 	<p class="lead">
-		Browse a local directory via the <strong>monitor</strong> service (loopback,
-		<code>/v1/fs</code>). Read-only. Default
-		<code>http://127.0.0.1:8300</code>.
+		Browse a directory via the <strong>monitor</strong> service
+		(<code>/v1/fs</code>). The browser talks to the Base URL you set (local,
+		SSH tunnel, etc.). Read-only. Default
+		<code>http://127.0.0.1:8300</code>. Monitor must allow CORS for this site.
 	</p>
 
 	{#if profiles.length}

@@ -1,5 +1,5 @@
 /**
- * Monitor local-fs browser driver (via hub proxy → monitor /v1/fs).
+ * Monitor local-fs browser driver (browser → profile baseUrl /v1/fs).
  * Read-only: list + download. Live list refresh via watch WebSocket.
  * Open-with off (remote-class).
  */

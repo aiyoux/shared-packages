@@ -14,7 +14,7 @@ export function mapMonitorError(e: unknown): ExplorerMonitorError {
 	if (/denied|403|not_allowed/i.test(msg))
 		return new ExplorerMonitorError('MONITOR_FORBIDDEN', msg);
 	if (/too.?large|413/i.test(msg)) return new ExplorerMonitorError('MONITOR_TOO_LARGE', msg);
-	if (/503|unavailable|fetch|network|ECONNREFUSED/i.test(msg))
+	if (/503|unavailable|fetch|network|ECONNREFUSED|CORS|Cannot reach monitor|timed out/i.test(msg))
 		return new ExplorerMonitorError('MONITOR_UNAVAILABLE', msg);
 	return new ExplorerMonitorError('MONITOR_ERROR', msg);
 }
@@ -23,7 +23,7 @@ export function formatMonitorErrorMessage(e: unknown): string {
 	const m = mapMonitorError(e);
 	switch (m.code) {
 		case 'MONITOR_UNAVAILABLE':
-			return 'Monitor service unavailable — is it running on loopback (e.g. :8300)?';
+			return 'Monitor unavailable — check Base URL, that the service is running, and CORS for this origin.';
 		case 'MONITOR_FORBIDDEN':
 			return 'Path not allowed by monitor config (check allowed_path_prefixes).';
 		case 'MONITOR_NOT_FOUND':
