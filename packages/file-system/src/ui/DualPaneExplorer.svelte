@@ -1,0 +1,998 @@
+<script lang="ts">
+	/**
+	 * Dual-pane file explorer with switchable backends (local / memory / b2 /
+	 * rclone / monitor) and copy-across between panes.
+	 *
+	 * Shared by the hub `/tools/files` page and the Connections `FileTransferPanel`
+	 * so the dual-pane + remote-connection + copy-across wiring is single-sourced.
+	 * Page-owned concerns are passed in as props:
+	 *   - `localDriver`: the durable local-class driver (hub: SharedVFS; CM: the
+	 *     CM library driver). The memory backend is the global in-memory VFS
+	 *     (`getMemoryVfs`), shared app-wide so received files are accessible
+	 *     everywhere.
+	 *   - `onOpen`: optional open-file handler (hub opens skch/ob3d/vrec).
+	 *   - `persistenceVfs`: optional VFS for the storage-persistence chip.
+	 *   - `tids`: per-page testid config so each consumer keeps its existing
+	 *     e2e selectors (defaults match the hub `/tools/files` page).
+	 *
+	 * Memory VFS is global (see memoryVfs.ts): it is NOT disposed on pagehide —
+	 * received files must survive SPA navigation between /tools/files and /cm.
+	 * A hard reload still empties it (the JS realm is torn down). The durable
+	 * `__VFS_TEST__` hook stays page-owned; this component only owns the
+	 * `__MEMORY_VFS_FILES__` (memory) and `__MONITOR_WATCH__` hooks.
+	 */
+	import { onMount, onDestroy } from 'svelte';
+	import { default as FileExplorer, type ExplorerContext } from './FileExplorer.svelte';
+	import { default as StoragePersistenceStatus } from './StoragePersistenceStatus.svelte';
+	import { type ExplorerDriver, type ExplorerOpenTarget } from './explorerDriver.js';
+	import { createMemoryExplorerDriver } from './memoryExplorerDriver.js';
+	// PaneId + DualPaneTids live in a .ts module so the ui barrel can re-export
+	// them without the *.svelte named-export limitation.
+	import { type PaneId, type DualPaneTids } from './dualPaneTypes.js';
+	import { canShowCopyAcross, copyAcross, CopyAcrossError } from './copyAcross.js';
+	import { getMemoryVfs, type MemoryVfsService, type VfsService } from '../index.js';
+	import {
+		B2ConnectionForm,
+		ConnectionSwitcher,
+		acquireB2Driver,
+		releaseB2Driver,
+		getProfile as getB2Profile,
+		listProfiles as listB2Profiles,
+		setActiveProfileId as setActiveB2ProfileId,
+		mapB2Error,
+		type B2ConnectionProfileV1,
+		type ConnectionKind
+	} from '../b2/index.js';
+	import {
+		RcloneConnectionForm,
+		acquireRcloneDriver,
+		releaseRcloneDriver,
+		getProfile as getRcloneProfile,
+		listProfiles as listRcloneProfiles,
+		setActiveProfileId as setActiveRcloneProfileId,
+		mapRcloneError,
+		type RcloneConnectionProfileV1
+	} from '../rclone/index.js';
+	import {
+		MonitorConnectionForm,
+		acquireMonitorDriver,
+		releaseMonitorDriver,
+		getProfile as getMonitorProfile,
+		listProfiles as listMonitorProfiles,
+		setActiveProfileId as setActiveMonitorProfileId,
+		mapMonitorError,
+		formatMonitorErrorMessage,
+		type MonitorConnectionProfileV1
+	} from '../monitor/index.js';
+
+	const defaultTids: DualPaneTids = {
+		body: 'files-body',
+		pane: (id) => `files-pane-${id}`,
+		paneChrome: (id) => `files-pane-chrome-${id}`,
+		paneLabel: (id) => `files-pane-label-${id}`,
+		explorerHost: () => undefined,
+		paneSub: () => undefined,
+		copyAcross: (id) => `fe-copy-across-${id}`,
+		copyAcrossError: 'fe-copy-across-error',
+		dualToggle: 'fe-dual-pane-toggle',
+		rcloneToggle: 'fe-rclone-feature-toggle',
+		monitorToggle: 'fe-monitor-feature-toggle',
+		persist: 'files-storage-persist'
+	};
+
+	type Props = {
+		localDriver: ExplorerDriver;
+		onOpen?: (entry: ExplorerOpenTarget) => void | Promise<void>;
+		persistenceVfs?: VfsService;
+		dualPaneKey?: string;
+		dualPaneDefault?: boolean;
+		memoryScope?: string;
+		/** Default backend for each pane on first mount. */
+		leftDefault?: ConnectionKind;
+		rightDefault?: ConnectionKind;
+		/** Hide the dual-pane / feature toggles row (e.g. CM is always dual). */
+		hideToggles?: boolean;
+		/** Notified when dual-pane toggles (so a page can widen its shell). */
+		onDualChange?: (dual: boolean) => void;
+		tids?: Partial<DualPaneTids>;
+	};
+
+	let {
+		localDriver,
+		onOpen,
+		persistenceVfs,
+		dualPaneKey = 'fe:dualPane',
+		dualPaneDefault = false,
+		memoryScope = 'files',
+		leftDefault = 'local',
+		rightDefault = 'local',
+		hideToggles = false,
+		onDualChange,
+		tids: tidsOverride = {}
+	}: Props = $props();
+
+	const tids: DualPaneTids = { ...defaultTids, ...tidsOverride };
+
+	const RCLONE_FEATURE_LS = 'feature:rcloneFiles';
+	const MONITOR_FEATURE_LS = 'feature:monitorFiles';
+
+	type PaneState = {
+		activeId: 'local' | 'memory' | string;
+		activeKind: ConnectionKind;
+		remoteDriver: ExplorerDriver | null;
+		memoryDriver: ExplorerDriver | null;
+		busy: boolean;
+		error: string;
+		showB2Form: boolean;
+		showRcloneForm: boolean;
+		showMonitorForm: boolean;
+		explorerKey: number;
+		/** Open folder + selection for copy-across */
+		ctx: ExplorerContext;
+	};
+
+	function emptyCtx(backend: string = 'local'): ExplorerContext {
+		return { parentId: null, selectedIds: [], backend, entries: [] };
+	}
+
+	function emptyPane(kind: ConnectionKind): PaneState {
+		return {
+			activeId: kind === 'memory' ? 'memory' : 'local',
+			activeKind: kind,
+			remoteDriver: null,
+			memoryDriver: null,
+			busy: false,
+			error: '',
+			showB2Form: false,
+			showRcloneForm: false,
+			showMonitorForm: false,
+			explorerKey: 0,
+			ctx: emptyCtx(kind)
+		};
+	}
+
+	let left = $state<PaneState>(emptyPane(leftDefault));
+	let right = $state<PaneState>(emptyPane(rightDefault));
+	let dualPane = $state(false);
+	let b2Profiles = $state<B2ConnectionProfileV1[]>([]);
+	let rcloneProfiles = $state<RcloneConnectionProfileV1[]>([]);
+	let monitorProfiles = $state<MonitorConnectionProfileV1[]>([]);
+	let showRclone = $state(false);
+	let showMonitor = $state(false);
+	/** Live watch status per pane (from monitor driver). */
+	let monitorWatchStatus = $state<Record<string, string>>({});
+	let watchPollTimer: ReturnType<typeof setInterval> | null = null;
+	let copyBusy = $state(false);
+	let copyError = $state('');
+	let memoryVfs: MemoryVfsService | null = null;
+
+	/** True when at least one visible pane is durable local browser storage. */
+	const showLocalPersist = $derived(
+		(left.activeKind === 'local' || (dualPane && right.activeKind === 'local')) &&
+			!!persistenceVfs
+	);
+
+	function getMemoryDriver(): ExplorerDriver {
+		if (!memoryVfs) memoryVfs = getMemoryVfs();
+		return createMemoryExplorerDriver(memoryVfs, {
+			capabilitiesPatch: {
+				supportsDownload: true,
+				supportsUpload: false
+			}
+		});
+	}
+
+	function installMemoryFilesHook(mem: MemoryVfsService): void {
+		const hook = {
+			vfs: mem,
+			scope: memoryScope,
+			list: (parentId: string | null) => mem.list({ parentId }),
+			get: (id: string) => mem.get(id),
+			readBlob: (id: string) => mem.readBlob(id),
+			dangerClearAll: () => mem.dangerClearAll()
+		};
+		(window as unknown as { __MEMORY_VFS_FILES__?: typeof hook }).__MEMORY_VFS_FILES__ = hook;
+	}
+
+	function paneState(id: PaneId): PaneState {
+		return id === 'left' ? left : right;
+	}
+	function setPane(id: PaneId, patch: Partial<PaneState>) {
+		if (id === 'left') left = { ...left, ...patch };
+		else right = { ...right, ...patch };
+	}
+	function activeDriver(p: PaneState): ExplorerDriver {
+		if (p.activeKind === 'memory') return p.memoryDriver ?? getMemoryDriver();
+		if (p.activeKind !== 'local' && p.remoteDriver) return p.remoteDriver;
+		return localDriver;
+	}
+	function releaseRemote(kind: ConnectionKind, profileId: string | null | undefined) {
+		if (!profileId || profileId === 'local' || profileId === 'memory') return;
+		if (kind === 'b2') releaseB2Driver(profileId);
+		else if (kind === 'rclone') releaseRcloneDriver(profileId);
+		else if (kind === 'monitor') releaseMonitorDriver(profileId);
+	}
+
+	async function reloadProfiles() {
+		b2Profiles = await listB2Profiles();
+		if (showRclone) rcloneProfiles = await listRcloneProfiles();
+		else rcloneProfiles = [];
+		if (showMonitor) monitorProfiles = await listMonitorProfiles();
+		else monitorProfiles = [];
+	}
+
+	const b2Chips = $derived(
+		b2Profiles.map((p) => ({
+			id: p.id,
+			name: p.name,
+			detail: p.namePrefix ? `${p.bucketName} · ${p.namePrefix}` : p.bucketName
+		}))
+	);
+	const rcloneChips = $derived(
+		rcloneProfiles.map((p) => ({
+			id: p.id,
+			name: p.name,
+			detail: p.rootPath ? `${p.fs} · ${p.rootPath}` : p.fs
+		}))
+	);
+	const monitorChips = $derived(
+		monitorProfiles.map((p) => ({ id: p.id, name: p.name, detail: p.rootPath }))
+	);
+
+	const showCopyAcross = $derived(
+		dualPane && canShowCopyAcross(left.ctx.backend || left.activeKind, right.ctx.backend || right.activeKind)
+	);
+
+	function readRcloneFeature(): boolean {
+		try {
+			const v = localStorage.getItem(RCLONE_FEATURE_LS);
+			if (import.meta.env.DEV) return v !== '0';
+			return v === '1';
+		} catch {
+			return Boolean(import.meta.env.DEV);
+		}
+	}
+	function setRcloneFeature(on: boolean) {
+		showRclone = on;
+		try {
+			localStorage.setItem(RCLONE_FEATURE_LS, on ? '1' : '0');
+		} catch {
+			/* ignore */
+		}
+		// Drop rclone panes when disabling the feature
+		if (!on) {
+			for (const id of ['left', 'right'] as PaneId[]) {
+				const p = paneState(id);
+				if (p.activeKind === 'rclone' || p.showRcloneForm) {
+					if (p.activeKind === 'rclone' && p.activeId !== 'local' && p.activeId !== 'memory') {
+						releaseRcloneDriver(p.activeId);
+					}
+					setPane(id, {
+						activeId: 'local',
+						activeKind: 'local',
+						remoteDriver: null,
+						showRcloneForm: false,
+						explorerKey: p.explorerKey + 1,
+						ctx: emptyCtx('local')
+					});
+				}
+			}
+			rcloneProfiles = [];
+		} else {
+			void reloadProfiles();
+		}
+	}
+	function readMonitorFeature(): boolean {
+		try {
+			const v = localStorage.getItem(MONITOR_FEATURE_LS);
+			if (import.meta.env.DEV) return v !== '0';
+			return v === '1';
+		} catch {
+			return Boolean(import.meta.env.DEV);
+		}
+	}
+	function setMonitorFeature(on: boolean) {
+		showMonitor = on;
+		try {
+			localStorage.setItem(MONITOR_FEATURE_LS, on ? '1' : '0');
+		} catch {
+			/* ignore */
+		}
+		if (!on) {
+			for (const id of ['left', 'right'] as PaneId[]) {
+				const p = paneState(id);
+				if (p.activeKind === 'monitor' || p.showMonitorForm) {
+					if (p.activeKind === 'monitor' && p.activeId !== 'local' && p.activeId !== 'memory') {
+						releaseMonitorDriver(p.activeId);
+					}
+					setPane(id, {
+						activeId: 'local',
+						activeKind: 'local',
+						remoteDriver: null,
+						showMonitorForm: false,
+						explorerKey: p.explorerKey + 1,
+						ctx: emptyCtx('local')
+					});
+				}
+			}
+			monitorProfiles = [];
+		} else {
+			void reloadProfiles();
+		}
+	}
+
+	onMount(() => {
+		try {
+			const stored = localStorage.getItem(dualPaneKey);
+			dualPane = stored === null ? dualPaneDefault : stored === '1';
+		} catch {
+			dualPane = dualPaneDefault;
+		}
+		onDualChange?.(dualPane);
+		showRclone = readRcloneFeature();
+		showMonitor = readMonitorFeature();
+		void reloadProfiles();
+		// Hub files memory singleton hook (separate from durable page-owned __VFS_TEST__).
+		// Memory is global/shared: NOT disposed on pagehide.
+		const mem = getMemoryVfs();
+		memoryVfs = mem;
+		void mem.ready().then(() => installMemoryFilesHook(mem));
+	});
+
+	onDestroy(() => {
+		if (watchPollTimer) {
+			clearInterval(watchPollTimer);
+			watchPollTimer = null;
+		}
+		// Release any held remote drivers on teardown (memory VFS is global: NOT disposed).
+		for (const id of ['left', 'right'] as PaneId[]) {
+			const p = paneState(id);
+			if (p.activeId !== 'local' && p.activeId !== 'memory') releaseRemote(p.activeKind, p.activeId);
+		}
+	});
+
+	function setDualPane(on: boolean) {
+		dualPane = on;
+		onDualChange?.(on);
+		try {
+			localStorage.setItem(dualPaneKey, on ? '1' : '0');
+		} catch {
+			/* ignore */
+		}
+		if (!on) {
+			const r = right;
+			if (r.activeId !== 'local' && r.activeId !== 'memory') {
+				releaseRemote(r.activeKind, r.activeId);
+			}
+			right = emptyPane(rightDefault);
+			copyError = '';
+		}
+	}
+
+	async function connectB2(id: PaneId, profile: B2ConnectionProfileV1) {
+		const p = paneState(id);
+		const prevId = p.activeId !== 'local' && p.activeId !== 'memory' ? p.activeId : null;
+		const prevKind = p.activeKind;
+		setPane(id, { busy: true, error: '', showRcloneForm: false, showMonitorForm: false });
+		try {
+			const driver = await acquireB2Driver(profile);
+			if (prevId && !(prevKind === 'b2' && prevId === profile.id)) {
+				releaseRemote(prevKind, prevId);
+			}
+			void setActiveB2ProfileId(profile.id);
+			setPane(id, {
+				remoteDriver: driver,
+				memoryDriver: null,
+				activeId: profile.id,
+				activeKind: 'b2',
+				showB2Form: false,
+				showRcloneForm: false,
+				showMonitorForm: false,
+				explorerKey: p.explorerKey + 1,
+				busy: false,
+				error: '',
+				ctx: emptyCtx('b2')
+			});
+		} catch (e) {
+			const mapped = mapB2Error(e);
+			setPane(id, { busy: false, error: mapped.message, showB2Form: true });
+		}
+	}
+
+	async function connectRclone(id: PaneId, profile: RcloneConnectionProfileV1) {
+		const p = paneState(id);
+		const prevId = p.activeId !== 'local' && p.activeId !== 'memory' ? p.activeId : null;
+		const prevKind = p.activeKind;
+		setPane(id, { busy: true, error: '', showB2Form: false, showMonitorForm: false });
+		try {
+			const driver = await acquireRcloneDriver(profile);
+			if (prevId && !(prevKind === 'rclone' && prevId === profile.id)) {
+				releaseRemote(prevKind, prevId);
+			}
+			void setActiveRcloneProfileId(profile.id);
+			setPane(id, {
+				remoteDriver: driver,
+				memoryDriver: null,
+				activeId: profile.id,
+				activeKind: 'rclone',
+				showB2Form: false,
+				showRcloneForm: false,
+				showMonitorForm: false,
+				explorerKey: p.explorerKey + 1,
+				busy: false,
+				error: '',
+				ctx: emptyCtx('rclone')
+			});
+		} catch (e) {
+			const mapped = mapRcloneError(e);
+			setPane(id, { busy: false, error: mapped.message, showRcloneForm: true });
+		}
+	}
+
+	function startWatchStatusPoll() {
+		if (watchPollTimer) return;
+		watchPollTimer = setInterval(() => {
+			const next: Record<string, string> = {};
+			for (const paneId of ['left', 'right'] as PaneId[]) {
+				const p = paneState(paneId);
+				if (p.activeKind !== 'monitor' || !p.remoteDriver) continue;
+				const d = p.remoteDriver as { getWatchStatus?: () => string };
+				next[paneId] = d.getWatchStatus?.() ?? 'off';
+			}
+			monitorWatchStatus = next;
+			// e2e probe
+			(window as unknown as { __MONITOR_WATCH__?: Record<string, string> }).__MONITOR_WATCH__ =
+				next;
+		}, 400);
+	}
+
+	async function connectMonitor(id: PaneId, profile: MonitorConnectionProfileV1) {
+		const p = paneState(id);
+		const prevId = p.activeId !== 'local' && p.activeId !== 'memory' ? p.activeId : null;
+		const prevKind = p.activeKind;
+		setPane(id, {
+			busy: true,
+			error: '',
+			showB2Form: false,
+			showRcloneForm: false,
+			showMonitorForm: false
+		});
+		try {
+			const driver = await acquireMonitorDriver(profile);
+			if (prevId && !(prevKind === 'monitor' && prevId === profile.id)) {
+				releaseRemote(prevKind, prevId);
+			}
+			void setActiveMonitorProfileId(profile.id);
+			setPane(id, {
+				remoteDriver: driver,
+				memoryDriver: null,
+				activeId: profile.id,
+				activeKind: 'monitor',
+				showB2Form: false,
+				showRcloneForm: false,
+				showMonitorForm: false,
+				explorerKey: p.explorerKey + 1,
+				busy: false,
+				error: '',
+				ctx: emptyCtx('monitor')
+			});
+			startWatchStatusPoll();
+		} catch (e) {
+			const mapped = mapMonitorError(e);
+			setPane(id, {
+				busy: false,
+				error: formatMonitorErrorMessage(mapped),
+				showMonitorForm: true
+			});
+		}
+	}
+
+	function connectMemory(id: PaneId) {
+		const p = paneState(id);
+		if (p.activeId !== 'local' && p.activeId !== 'memory') {
+			releaseRemote(p.activeKind, p.activeId);
+		}
+		const mem = getMemoryDriver();
+		installMemoryFilesHook(memoryVfs ?? getMemoryVfs());
+		setPane(id, {
+			activeId: 'memory',
+			activeKind: 'memory',
+			remoteDriver: null,
+			memoryDriver: mem,
+			showB2Form: false,
+			showRcloneForm: false,
+			showMonitorForm: false,
+			explorerKey: p.explorerKey + 1,
+			error: '',
+			ctx: emptyCtx('memory')
+		});
+	}
+
+	async function onSelectConnection(id: PaneId, selection: 'local' | 'memory' | string) {
+		const p = paneState(id);
+		if (selection === 'local') {
+			if (p.activeId !== 'local' && p.activeId !== 'memory') {
+				releaseRemote(p.activeKind, p.activeId);
+			}
+			setPane(id, {
+				activeId: 'local',
+				activeKind: 'local',
+				remoteDriver: null,
+				memoryDriver: null,
+				error: '',
+				showB2Form: false,
+				showRcloneForm: false,
+				showMonitorForm: false,
+				explorerKey: p.explorerKey + 1,
+				ctx: emptyCtx('local')
+			});
+			return;
+		}
+		if (selection === 'memory') {
+			connectMemory(id);
+			return;
+		}
+		if (p.activeId === selection && p.remoteDriver) return;
+
+		const rclone = showRclone ? await getRcloneProfile(selection) : undefined;
+		if (rclone) {
+			await connectRclone(id, rclone);
+			return;
+		}
+		const mon = showMonitor ? await getMonitorProfile(selection) : undefined;
+		if (mon) {
+			await connectMonitor(id, mon);
+			return;
+		}
+		const b2 = await getB2Profile(selection);
+		if (b2) {
+			await connectB2(id, b2);
+			return;
+		}
+		await reloadProfiles();
+		setPane(id, {
+			error: 'That connection was removed. Pick another or add one in settings.',
+			showB2Form: true
+		});
+	}
+
+	async function runCopyAcross(from: PaneId) {
+		if (!dualPane) return;
+		const src = paneState(from);
+		const dst = paneState(from === 'left' ? 'right' : 'left');
+		copyError = '';
+		copyBusy = true;
+		try {
+			const n = await copyAcross({
+				sourceDriver: activeDriver(src),
+				destDriver: activeDriver(dst),
+				selectedIds: src.ctx.selectedIds,
+				sourceEntries: src.ctx.entries,
+				destParentId: dst.ctx.parentId
+			});
+			// Remount dest explorer to refresh list
+			setPane(from === 'left' ? 'right' : 'left', {
+				explorerKey: dst.explorerKey + 1
+			});
+			if (n === 0) copyError = 'Nothing copied';
+		} catch (e) {
+			if (e instanceof CopyAcrossError) copyError = e.message;
+			else copyError = e instanceof Error ? e.message : String(e);
+		} finally {
+			copyBusy = false;
+		}
+	}
+
+	/**
+	 * Imperative refresh: remount a pane's `FileExplorer` so it re-lists. Used by
+	 * host pages that mutate a backend VFS outside copy-across (e.g. CM
+	 * "copy to library" writes to the durable library VFS directly).
+	 */
+	export function refreshPane(id: PaneId) {
+		const p = paneState(id);
+		setPane(id, { explorerKey: p.explorerKey + 1 });
+	}
+</script>
+
+{#snippet explorerPane(id: PaneId)}
+	<!-- Read $state panes directly so UI reacts (avoid stale {@const}). -->
+	{@const p = id === 'left' ? left : right}
+	{@const drv = activeDriver(p)}
+	{@const hostTid = tids.explorerHost(id)}
+	{@const subTid = tids.paneSub(id)}
+	<div class="files-pane" data-testid={tids.pane(id)} data-pane={id}>
+		<div class="pane-chrome" data-testid={tids.paneChrome(id)}>
+			<span class="pane-label" data-testid={tids.paneLabel(id)}>
+				{id === 'left' ? (dualPane ? 'Left' : 'Browser') : 'Right'}
+			</span>
+			<ConnectionSwitcher
+				activeId={p.activeId}
+				activeKind={p.activeKind}
+				profiles={b2Chips}
+				rcloneProfiles={rcloneChips}
+				monitorProfiles={monitorChips}
+				showRclone={showRclone}
+				showMonitor={showMonitor}
+				showMemory={true}
+				busy={p.busy}
+				onSelect={(sel) => onSelectConnection(id, sel)}
+				onConfigureB2={() => {
+					setPane(id, { showB2Form: true, showRcloneForm: false, showMonitorForm: false, error: '' });
+				}}
+				onConfigureRclone={() => {
+					setPane(id, { showRcloneForm: true, showB2Form: false, showMonitorForm: false, error: '' });
+				}}
+				onConfigureMonitor={() => {
+					setPane(id, { showMonitorForm: true, showB2Form: false, showRcloneForm: false, error: '' });
+				}}
+			/>
+			{#if showCopyAcross}
+				<button
+					type="button"
+					class="copy-across"
+					data-testid={tids.copyAcross(id)}
+					disabled={copyBusy || p.ctx.selectedIds.length === 0}
+					title="Copy selected items into the other pane's open folder"
+					onclick={() => runCopyAcross(id)}
+				>
+					{copyBusy ? 'Copying…' : 'Copy across'}
+				</button>
+			{/if}
+			{#if p.busy}
+				<span
+					class="busy"
+					data-testid={p.activeKind === 'monitor' || p.showMonitorForm
+						? `monitor-connecting-${id}`
+						: p.activeKind === 'rclone' || p.showRcloneForm
+							? `rclone-connecting-${id}`
+							: `b2-connecting-${id}`}
+				>
+					Connecting…
+				</span>
+			{/if}
+			{#if p.activeKind === 'b2'}
+				<span class="remote-badge" data-testid="b2-remote-badge-{id}">Remote · open-with off</span>
+			{:else if p.activeKind === 'rclone'}
+				<span class="remote-badge" data-testid="rclone-remote-badge-{id}">rclone · open-with off</span>
+			{:else if p.activeKind === 'monitor'}
+				<span class="remote-badge" data-testid="monitor-remote-badge-{id}"
+					>monitor · read-only · open-with off</span
+				>
+				<span
+					class="remote-badge mon-watch"
+					data-testid="monitor-watch-status-{id}"
+					data-status={monitorWatchStatus[id] ?? 'off'}
+					title="Live filesystem watch (monitor SSE)"
+				>
+					watch · {monitorWatchStatus[id] ?? 'off'}
+				</span>
+			{:else if p.activeKind === 'memory'}
+				<span class="remote-badge mem" data-testid="memory-badge-{id}">In memory · tab only</span>
+			{/if}
+			{#if subTid}
+				<span class="pane-sub" data-testid={subTid.testid}>{subTid.text}</span>
+			{/if}
+		</div>
+		{#if p.error}
+			<div
+				class="b2-error"
+				data-testid={p.activeKind === 'monitor' || p.showMonitorForm
+					? `monitor-connect-error-${id}`
+					: p.activeKind === 'rclone' || p.showRcloneForm
+						? `rclone-connect-error-${id}`
+						: `b2-connect-error-${id}`}
+				role="alert"
+			>
+				{p.error}
+			</div>
+		{/if}
+		{#if p.showB2Form}
+			<div class="pane-form" data-testid="b2-form-wrap-{id}">
+				<B2ConnectionForm
+					onConnected={async (profile) => {
+						await reloadProfiles();
+						await connectB2(id, profile);
+					}}
+					onDisconnected={() => {
+						const cur = id === 'left' ? left : right;
+						if (cur.activeKind === 'b2' && cur.activeId !== 'local') {
+							releaseB2Driver(cur.activeId);
+						}
+						setPane(id, {
+							remoteDriver: null,
+							activeId: 'local',
+							activeKind: 'local',
+							showB2Form: false,
+					explorerKey: cur.explorerKey + 1
+						});
+						void reloadProfiles();
+					}}
+					onCancel={() => setPane(id, { showB2Form: false })}
+				/>
+			</div>
+		{/if}
+		{#if p.showRcloneForm && showRclone}
+			<div class="pane-form" data-testid="rclone-form-wrap-{id}">
+				<RcloneConnectionForm
+					onConnected={async (profile) => {
+						await reloadProfiles();
+						await connectRclone(id, profile);
+					}}
+					onDisconnected={() => {
+						const cur = id === 'left' ? left : right;
+						if (cur.activeKind === 'rclone' && cur.activeId !== 'local') {
+							releaseRcloneDriver(cur.activeId);
+						}
+						setPane(id, {
+							remoteDriver: null,
+							activeId: 'local',
+					activeKind: 'local',
+					showRcloneForm: false,
+					explorerKey: cur.explorerKey + 1
+						});
+						void reloadProfiles();
+					}}
+					onCancel={() => setPane(id, { showRcloneForm: false })}
+				/>
+			</div>
+		{/if}
+		{#if p.showMonitorForm && showMonitor}
+			<div class="pane-form" data-testid="monitor-form-wrap-{id}">
+				<MonitorConnectionForm
+					onConnected={async (profile) => {
+						await reloadProfiles();
+						await connectMonitor(id, profile);
+					}}
+					onDisconnected={() => {
+						const cur = id === 'left' ? left : right;
+						if (cur.activeKind === 'monitor' && cur.activeId !== 'local') {
+							releaseMonitorDriver(cur.activeId);
+						}
+						setPane(id, {
+							remoteDriver: null,
+							activeId: 'local',
+							activeKind: 'local',
+							showMonitorForm: false,
+							explorerKey: cur.explorerKey + 1
+						});
+						void reloadProfiles();
+					}}
+					onCancel={() => setPane(id, { showMonitorForm: false })}
+				/>
+			</div>
+		{/if}
+		<div class="pane-explorer" data-testid={hostTid}>
+			{#key `${id}-${p.explorerKey}-${p.activeKind}-${p.activeId}`}
+				{#if p.activeKind === 'local'}
+					<!-- Page header owns the persistence chip; keep FE toolbar uncluttered. -->
+					<FileExplorer
+						mode="manage"
+						variant="panel"
+						driver={localDriver}
+						showPersistence={false}
+						onOpen={onOpen}
+						onContextChange={(ctx) => {
+							// Avoid full-pane rewrite storms — only patch ctx fields
+							if (id === 'left') left = { ...left, ctx };
+							else right = { ...right, ctx };
+						}}
+					/>
+				{:else}
+					<FileExplorer
+						mode="manage"
+						variant="panel"
+						driver={drv}
+						showPersistence={false}
+						onOpen={p.activeKind === 'memory' ? onOpen : undefined}
+						onContextChange={(ctx) => {
+							if (id === 'left') left = { ...left, ctx };
+							else right = { ...right, ctx };
+						}}
+					/>
+				{/if}
+			{/key}
+		</div>
+	</div>
+{/snippet}
+
+<div class="dpe-shell" class:dual={dualPane}>
+	{#if !hideToggles}
+		<div class="dpe-controls">
+			{#if showLocalPersist && persistenceVfs}
+				<div class="persist-wrap" data-testid={tids.persist}>
+					<StoragePersistenceStatus vfs={persistenceVfs} compact={false} pollMs={10_000} />
+				</div>
+			{/if}
+			<label
+				class="rclone-toggle"
+				class:active={showRclone}
+				title="Browse remotes via rclone rcd. Browser connects to the Base URL in settings (local or tunnel). Off by default in production. rcd must allow CORS."
+				data-testid={tids.rcloneToggle}
+			>
+				<input
+					type="checkbox"
+					checked={showRclone}
+					onchange={(e) => setRcloneFeature((e.currentTarget as HTMLInputElement).checked)}
+				/>
+				<span>rclone</span>
+			</label>
+			<label
+				class="rclone-toggle"
+				class:active={showMonitor}
+				title="Browse a directory via monitor (browser → Base URL in settings; default https://127.0.0.1:8300). Read-only. Off by default in production. Monitor must allow CORS."
+				data-testid={tids.monitorToggle}
+			>
+				<input
+					type="checkbox"
+					checked={showMonitor}
+					onchange={(e) => setMonitorFeature((e.currentTarget as HTMLInputElement).checked)}
+				/>
+				<span>monitor</span>
+			</label>
+			<button
+				type="button"
+				class="dual-toggle"
+				class:active={dualPane}
+				data-testid={tids.dualToggle}
+				aria-pressed={dualPane}
+				title={dualPane
+					? 'Show a single file tree'
+					: 'Two independent trees side by side. Copy across appears when at least one pane is local/memory.'}
+				onclick={() => setDualPane(!dualPane)}
+			>
+				{dualPane ? 'Single pane' : 'Dual pane'}
+			</button>
+			{#if copyError}
+				<span class="copy-err" data-testid={tids.copyAcrossError} role="alert">{copyError}</span>
+			{/if}
+		</div>
+	{/if}
+
+	<div class="files-body" class:dual={dualPane} data-testid={tids.body}>
+		{@render explorerPane('left')}
+		{#if dualPane}
+			{@render explorerPane('right')}
+		{/if}
+	</div>
+</div>
+
+<style>
+	.dpe-shell {
+		display: flex;
+		flex-direction: column;
+		gap: 0.75rem;
+		width: 100%;
+	}
+	.dpe-controls {
+		display: flex;
+		align-items: center;
+		gap: 0.75rem;
+		flex-wrap: wrap;
+	}
+	.persist-wrap {
+		display: inline-flex;
+		align-items: center;
+		margin-right: auto;
+	}
+	.dual-toggle,
+	.copy-across,
+	.rclone-toggle {
+		padding: 0.35rem 0.7rem;
+		border-radius: 8px;
+		border: 1px solid var(--border, #334155);
+		background: var(--surface, #1e293b);
+		color: inherit;
+		cursor: pointer;
+		font-size: 0.9rem;
+	}
+	.rclone-toggle {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.4rem;
+		user-select: none;
+	}
+	.rclone-toggle input {
+		margin: 0;
+	}
+	.dual-toggle.active,
+	.rclone-toggle.active {
+		outline: 2px solid #38bdf8;
+		outline-offset: 1px;
+	}
+	.copy-across:disabled {
+		opacity: 0.5;
+		cursor: not-allowed;
+	}
+	.copy-err {
+		color: #ffb4b4;
+		font-size: 0.85rem;
+	}
+	.busy {
+		font-size: 0.8rem;
+		opacity: 0.8;
+	}
+	.b2-error {
+		margin: 0;
+		padding: 0.4rem 0.65rem;
+		background: #4a2020;
+		color: #ffb4b4;
+		border-radius: 6px;
+		font-size: 0.85rem;
+	}
+	.remote-badge {
+		font-size: 0.75rem;
+		color: #7dd3fc;
+		white-space: nowrap;
+	}
+	.remote-badge.mem {
+		color: #c4b5fd;
+	}
+	.remote-badge.mon-watch {
+		color: #86efac;
+		text-transform: lowercase;
+	}
+	.pane-sub {
+		font-size: 0.72rem;
+		color: var(--text-muted, #94a3b8);
+	}
+	.files-body {
+		min-height: 420px;
+		border: 1px solid var(--border, #e2e8f0);
+		border-radius: 12px;
+		overflow: hidden;
+		background: var(--surface, #0f172a);
+		display: grid;
+		grid-template-columns: 1fr;
+	}
+	.files-body.dual {
+		grid-template-columns: 1fr 1fr;
+	}
+	.files-pane {
+		min-width: 0;
+		min-height: 420px;
+		display: flex;
+		flex-direction: column;
+	}
+	.files-body.dual .files-pane + .files-pane {
+		border-left: 1px solid var(--border, #334155);
+	}
+	.pane-chrome {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 0.5rem;
+		padding: 0.5rem 0.65rem;
+		border-bottom: 1px solid var(--border, #334155);
+	}
+	.pane-label {
+		font-size: 0.75rem;
+		font-weight: 650;
+		text-transform: uppercase;
+		letter-spacing: 0.04em;
+		opacity: 0.7;
+	}
+	.pane-form {
+		padding: 0 0.65rem;
+		border-bottom: 1px solid var(--border, #334155);
+		max-height: 50vh;
+		overflow: auto;
+	}
+	.pane-explorer {
+		flex: 1;
+		min-height: 0;
+		display: flex;
+		flex-direction: column;
+	}
+	.pane-explorer :global(.fe-root) {
+		flex: 1;
+		height: 100%;
+		min-height: 360px;
+		border: none;
+		border-radius: 0;
+	}
+	@media (max-width: 800px) {
+		.files-body.dual {
+			grid-template-columns: 1fr;
+		}
+	}
+</style>

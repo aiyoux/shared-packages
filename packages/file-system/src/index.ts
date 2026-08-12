@@ -7,5 +7,6 @@ export * from './db.js';
 export * from './persist.js';
 export * from './vfs.js';
 export * from './memoryVfs.js';
+export * from './transferRegistry.js';
 export * from './migrate/runAll.js';
 export { serializeBody, parseJsonBytes } from './serialize.js';

@@ -3,20 +3,20 @@ import {
 	clearAllMemoryVfsForTests,
 	createMemoryVfs,
 	disposeMemoryVfs,
-	getMemoryVfs
+	getMemoryVfs,
+	toVfsNodeLike
 } from './memoryVfs.js';
-import { createLocalExplorerDriver } from './ui/localExplorerDriver.js';
+import { createMemoryExplorerDriver } from './ui/memoryExplorerDriver.js';
 
-describe('MemoryVfs fail-closed', () => {
+describe('MemoryVfs fail-closed flat list', () => {
 	beforeEach(() => {
 		clearAllMemoryVfsForTests();
 	});
 
 	it('never opens IndexedDB', async () => {
 		const open = vi.spyOn(indexedDB, 'open');
-		const vfs = createMemoryVfs('files');
+		const vfs = createMemoryVfs();
 		await vfs.ready();
-		await vfs.mkdir(null, 'a');
 		await vfs.writeFile({ parentId: null, name: 'f.txt', body: 'x' });
 		expect(open).not.toHaveBeenCalled();
 		open.mockRestore();
@@ -24,14 +24,9 @@ describe('MemoryVfs fail-closed', () => {
 
 	it('never constructs SharedVfsDatabase path (no SharedVFS IDB name)', async () => {
 		const open = vi.spyOn(indexedDB, 'open');
-		const vfs = createMemoryVfs('no-shared');
+		const vfs = createMemoryVfs();
 		await vfs.writeFile({ parentId: null, name: 'x.bin', body: new Uint8Array([1, 2, 3]) });
-		await vfs.reorder(
-			(await vfs.list({ parentId: null }))[0]!.id,
-			{}
-		);
 		expect(open).not.toHaveBeenCalled();
-		// product path must not open SharedVFS / any db
 		for (const call of open.mock.calls) {
 			expect(String(call[0])).not.toMatch(/SharedVFS/i);
 		}
@@ -39,47 +34,41 @@ describe('MemoryVfs fail-closed', () => {
 	});
 
 	it('requestPersist surface is always false / memory', async () => {
-		const vfs = createMemoryVfs('persist');
+		const vfs = createMemoryVfs();
 		await vfs.ready();
 		expect(vfs.persistence.status).toBe('memory');
 		expect(vfs.persistence.requested).toBe(false);
 	});
 
-	it('isolates files vs cm scopes', async () => {
-		const files = getMemoryVfs('files');
-		const cm = getMemoryVfs('cm');
-		await files.mkdir(null, 'OnlyFiles');
-		const listCm = await cm.list({ parentId: null });
-		expect(listCm.some((n) => n.name === 'OnlyFiles')).toBe(false);
-		// same scope is singleton store
-		const files2 = getMemoryVfs('files');
-		const list = await files2.list({ parentId: null });
-		expect(list.some((n) => n.name === 'OnlyFiles')).toBe(true);
+	it('is a single global store — scope arg is ignored', async () => {
+		const a = getMemoryVfs('files');
+		const b = getMemoryVfs('cm');
+		await a.writeFile({ parentId: null, name: 'shared.txt', body: 'x' });
+		// both observe the same global list
+		const listA = await a.list({ parentId: null });
+		const listB = await b.list({ parentId: null });
+		expect(listA.some((n) => n.name === 'shared.txt')).toBe(true);
+		expect(listB.some((n) => n.name === 'shared.txt')).toBe(true);
+		expect((await getMemoryVfs().list({ parentId: null })).length).toBe(1);
 	});
 
-	it('dispose clears scope', async () => {
-		const vfs = getMemoryVfs('files');
-		await vfs.mkdir(null, 'gone');
-		disposeMemoryVfs('files');
-		const again = getMemoryVfs('files');
-		const list = await again.list({ parentId: null });
-		expect(list).toHaveLength(0);
+	it('dispose clears the global store', async () => {
+		const vfs = getMemoryVfs();
+		await vfs.writeFile({ parentId: null, name: 'gone.txt', body: 'x' });
+		disposeMemoryVfs();
+		const again = getMemoryVfs();
+		expect(await again.list({ parentId: null })).toHaveLength(0);
 	});
 
-	it('reorder changes list order', async () => {
-		const vfs = createMemoryVfs('ord');
-		const a = await vfs.writeFile({ parentId: null, name: 'a.txt', body: 'a' });
-		const b = await vfs.writeFile({ parentId: null, name: 'b.txt', body: 'b' });
-		// move b before a
-		await vfs.reorder(b.id, { afterId: a.id });
-		const list = await vfs.list({ parentId: null, sort: 'order' });
-		const names = list.filter((n) => n.kind === 'file').map((n) => n.name);
-		expect(names[0]).toBe('b.txt');
-		expect((list[0]?.sortOrder ?? 0) < (list[1]?.sortOrder ?? 0)).toBe(true);
+	it('has no folders — mkdir is not implemented', async () => {
+		const vfs = createMemoryVfs();
+		expect(typeof (vfs as unknown as { mkdir?: unknown }).mkdir).toBe('undefined');
+		expect(typeof (vfs as unknown as { trash?: unknown }).trash).toBe('undefined');
+		expect(typeof (vfs as unknown as { reorder?: unknown }).reorder).toBe('undefined');
 	});
 
 	it('CRUD round-trip body integrity in RAM', async () => {
-		const vfs = createMemoryVfs('crud');
+		const vfs = createMemoryVfs();
 		const f = await vfs.writeFile({
 			parentId: null,
 			name: 'payload.bin',
@@ -91,33 +80,82 @@ describe('MemoryVfs fail-closed', () => {
 		expect([...bytes]).toEqual([9, 8, 7]);
 	});
 
-	it('memory driver id and caps', async () => {
-		const vfs = createMemoryVfs('drv') as unknown as import('./vfs.js').VfsService;
-		const driver = createLocalExplorerDriver(vfs, {
-			id: 'memory',
-			capabilitiesPatch: { supportsDownload: true, supportsUpload: false }
-		});
-		expect(driver.id).toBe('memory');
-		expect(driver.capabilities.supportsSiblingOrder).toBe(true);
-		expect(driver.capabilities.supportsDownload).toBe(true);
-		await driver.ready();
-		await driver.mkdir!(null, 'd');
-		const { entries } = await driver.list({ parentId: null });
-		expect(entries.some((e) => e.name === 'd')).toBe(true);
+	it('list sorts by name and updatedAt', async () => {
+		const vfs = createMemoryVfs();
+		await vfs.writeFile({ parentId: null, name: 'b.txt', body: 'b' });
+		await vfs.writeFile({ parentId: null, name: 'a.txt', body: 'a' });
+		const byName = (await vfs.list({ parentId: null, sort: 'name' })).map((n) => n.name);
+		expect(byName).toEqual(['a.txt', 'b.txt']);
 	});
 
-	it('restore recursively restores trashed folder children', async () => {
-		const vfs = createMemoryVfs('rec-restore');
-		const fld = await vfs.mkdir(null, 'Folder');
-		const child = await vfs.writeFile({ parentId: fld.id, name: 'child.txt', body: 'hello' });
-		await vfs.trash(fld.id);
+	it('rename enforces unique names', async () => {
+		const vfs = createMemoryVfs();
+		const a = await vfs.writeFile({ parentId: null, name: 'a.txt', body: 'a' });
+		await vfs.writeFile({ parentId: null, name: 'b.txt', body: 'b' });
+		const renamed = await vfs.rename(a.id, 'b.txt');
+		expect(renamed.name).toBe('b (1).txt');
+	});
 
-		expect((await vfs.get(fld.id))?.deletedAt).not.toBeNull();
-		expect((await vfs.get(child.id))?.deletedAt).not.toBeNull();
+	it('updateFile honours generation CAS', async () => {
+		const vfs = createMemoryVfs();
+		const f = await vfs.writeFile({ parentId: null, name: 'f.txt', body: 'a' });
+		const gen = f.generation;
+		await expect(
+			vfs.updateFile(f.id, 'b', { expectedGeneration: gen + 1 })
+		).rejects.toThrow();
+		const updated = await vfs.updateFile(f.id, 'b', { expectedGeneration: gen });
+		expect(updated.generation).toBe(gen + 1);
+		expect(await vfs.readJson(f.id)).toBe('b');
+	});
 
-		await vfs.restore(fld.id);
+	it('delete removes the node and its blob', async () => {
+		const vfs = createMemoryVfs();
+		const f = await vfs.writeFile({ parentId: null, name: 'f.txt', body: 'a' });
+		await vfs.delete(f.id);
+		expect(await vfs.get(f.id)).toBeUndefined();
+		await expect(vfs.readBytes(f.id)).rejects.toThrow();
+	});
 
-		expect((await vfs.get(fld.id))?.deletedAt).toBeNull();
-		expect((await vfs.get(child.id))?.deletedAt).toBeNull();
+	it('memory driver id and caps (flat, no folders)', async () => {
+		const vfs = createMemoryVfs();
+		const driver = createMemoryExplorerDriver(vfs);
+		expect(driver.id).toBe('memory');
+		expect(driver.capabilities.supportsSiblingOrder).toBe(false);
+		expect(driver.capabilities.supportsMkdir).toBe(false);
+		expect(driver.capabilities.supportsDownload).toBe(true);
+		await driver.ready();
+		// Duck-typed file (jsdom's File lacks arrayBuffer in this env).
+		const file = {
+			name: 'note.txt',
+			type: 'text/plain',
+			arrayBuffer: async () => new TextEncoder().encode('hi').buffer
+		} as unknown as File;
+		await driver.writeFile!(null, file);
+		const { entries } = await driver.list({ parentId: null });
+		expect(entries).toHaveLength(1);
+		expect(entries[0]?.kind).toBe('file');
+		expect(entries[0]?.parentId).toBeNull();
+		// download path
+		const blob = await driver.download!(entries[0]!.id);
+		expect(new TextDecoder().decode(new Uint8Array(await blob.arrayBuffer()))).toBe('hi');
+		// delete path
+		await driver.delete(entries[0]!.id);
+		expect((await driver.list({ parentId: null })).entries).toHaveLength(0);
+	});
+
+	it('toVfsNodeLike produces a root-level file VfsNode shape', () => {
+		const node = toVfsNodeLike({
+			id: 'x',
+			parentId: null,
+			kind: 'file',
+			name: 'a.txt',
+			size: 1,
+			createdAt: 1,
+			updatedAt: 1,
+			generation: 1,
+			blobId: 'b'
+		});
+		expect(node.parentId).toBeNull();
+		expect(node.kind).toBe('file');
 	});
 });

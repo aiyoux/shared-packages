@@ -48,15 +48,53 @@ describe('RcloneConnectionForm', () => {
 		expect(await listProfiles()).toHaveLength(0);
 	});
 
-	it('form.loopback: non-loopback baseUrl rejected', async () => {
+	/**
+	 * Non-loopback hosts are ALLOWED by design since "rclone RC client talks
+	 * direct to baseUrl (no hub proxy)" — the browser opens the RC endpoint
+	 * itself, so a tunnel or LAN address is legitimate (see the explicit
+	 * "Any host is allowed" note in validateProfileInput). Loopback is still
+	 * enforced for the *server-side* proxy path by `rcAllowlist`, which has its
+	 * own tests; that is a different boundary.
+	 *
+	 * This test previously asserted the pre-change rule (reject non-loopback)
+	 * and had been failing ever since.
+	 */
+	it('form.host: non-loopback baseUrl is accepted (direct-connect model)', async () => {
 		render(RcloneConnectionForm, { props: {} });
 		await screen.findByTestId('rclone-connection-form');
 
 		await fireEvent.input(screen.getByTestId('rclone-name'), {
-			target: { value: 'Bad host' }
+			target: { value: 'Tunnelled host' }
 		});
 		await fireEvent.input(screen.getByTestId('rclone-base-url'), {
-			target: { value: 'http://example.com:7750' }
+			target: { value: 'https://rclone.example.com:7750' }
+		});
+		await fireEvent.input(screen.getByTestId('rclone-fs'), {
+			target: { value: 'remote:' }
+		});
+		await fireEvent.input(screen.getByTestId('rclone-user'), {
+			target: { value: 'user' }
+		});
+		await fireEvent.input(screen.getByTestId('rclone-pass'), {
+			target: { value: 'secret' }
+		});
+		await fireEvent.click(screen.getByTestId('rclone-save-only'));
+
+		await vi.waitFor(async () => expect(await listProfiles()).toHaveLength(1));
+		const [saved] = await listProfiles();
+		expect(saved.baseUrl).toBe('https://rclone.example.com:7750');
+		expect(screen.queryByTestId('rclone-form-error')).toBeNull();
+	});
+
+	it('form.validation: credentials embedded in baseUrl are rejected', async () => {
+		render(RcloneConnectionForm, { props: {} });
+		await screen.findByTestId('rclone-connection-form');
+
+		await fireEvent.input(screen.getByTestId('rclone-name'), {
+			target: { value: 'Creds in URL' }
+		});
+		await fireEvent.input(screen.getByTestId('rclone-base-url'), {
+			target: { value: 'http://user:pass@127.0.0.1:7750' }
 		});
 		await fireEvent.input(screen.getByTestId('rclone-fs'), {
 			target: { value: 'remote:' }
@@ -67,7 +105,7 @@ describe('RcloneConnectionForm', () => {
 		await fireEvent.click(screen.getByTestId('rclone-save-only'));
 
 		const err = await screen.findByTestId('rclone-form-error');
-		expect(err.textContent).toMatch(/loopback/i);
+		expect(err.textContent).toMatch(/credential/i);
 		expect(await listProfiles()).toHaveLength(0);
 	});
 

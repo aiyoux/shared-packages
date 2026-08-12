@@ -1,6 +1,16 @@
 export { default as FileExplorer } from './FileExplorer.svelte';
 export type { ExplorerMode, ExplorerContext } from './FileExplorer.svelte';
 export { default as StoragePersistenceStatus } from './StoragePersistenceStatus.svelte';
+export { default as DualPaneExplorer } from './DualPaneExplorer.svelte';
+export type { DualPaneTids, PaneId as DualPanePaneId } from './dualPaneTypes.js';
+export {
+	canShowCopyAcross,
+	assertCopyAcrossAllowed,
+	copyAcross,
+	CopyAcrossError,
+	type CopyAcrossArgs,
+	type CopyAcrossErrorCode
+} from './copyAcross.js';
 export {
 	EXPLORER_DOWNLOAD_MAX_BYTES,
 	EXPLORER_LIST_MAX_ENTRIES,
@@ -18,6 +28,11 @@ export {
 	type ExplorerOpenTarget
 } from './explorerDriver.js';
 export { createLocalExplorerDriver, type LocalExplorerDriverOptions } from './localExplorerDriver.js';
+export {
+	createMemoryExplorerDriver,
+	MEMORY_CAPS,
+	type MemoryExplorerDriverOptions
+} from './memoryExplorerDriver.js';
 export {
 	calculateMidOrder,
 	createTreeDndSession,

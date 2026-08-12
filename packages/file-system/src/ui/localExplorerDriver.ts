@@ -1,8 +1,8 @@
 /**
- * Local SharedVFS (or MemoryVfsService) adapter for FileExplorer.
+ * Local durable SharedVFS adapter for FileExplorer.
+ * For the flat in-memory VFS use `createMemoryExplorerDriver` instead.
  */
 import type { VfsNode } from '../types.js';
-import type { MemoryVfsService } from '../memoryVfs.js';
 import type { VfsService } from '../vfs.js';
 import {
 	applyListCap,
@@ -31,7 +31,9 @@ function mapNodes(nodes: VfsNode[]): ExplorerEntry[] {
 	return nodes.map((n) => nodeToEntry(n));
 }
 
-/** Shared surface used by durable VfsService and MemoryVfsService. */
+/** Shared surface used by the durable VfsService. The flat MemoryVfsService is
+ * not shape-compatible (no folders/trash/reorder) — use `createMemoryExplorerDriver`.
+ */
 export type LocalVfsLike = Pick<
 	VfsService,
 	| 'ready'
@@ -47,7 +49,7 @@ export type LocalVfsLike = Pick<
 	| 'permanentDelete'
 	| 'emptyTrash'
 	| 'readBlob'
-> | MemoryVfsService;
+>;
 
 export type LocalExplorerDriverOptions = {
 	/** Driver id: `local` (default) or `memory`. */
