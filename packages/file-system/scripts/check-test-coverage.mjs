@@ -33,22 +33,28 @@ function collect(dir, acc = []) {
 	return acc;
 }
 
-/** Minimal glob → RegExp supporting `**` and `*`. */
+/**
+ * Minimal glob → RegExp supporting `**` and `*`.
+ *
+ * `a/**\/b` must also match `a/b` (zero intervening directories) — that is how
+ * globs behave everywhere and how configs are written: `src/**\/*.test.ts` is
+ * expected to cover `src/utils.test.ts`. Translating `**` to `.*` naively
+ * REQUIRES a directory there and reports such files as orphans, so collapse the
+ * separator into the optional group instead.
+ */
 function toRegExp(glob) {
-	return new RegExp(
-		'^' +
-			glob
-				.split('**')
-				.map((part) =>
-					part
-						.split('*')
-						.map((s) => s.replace(/[.+^${}()|[\]\\]/g, '\\$&'))
-						.join('[^/]*')
-				)
-				.join('.*')
-				.replace(/\/\.\*\//g, '/(?:.*/)?') +
-			'$'
-	);
+	const body = glob
+		.split('/')
+		.reduce((acc, seg) => {
+			if (seg === '**') return acc + '(?:[^/]+/)*'; // zero or more dirs
+			const lit = seg
+				.split('*')
+				.map((s) => s.replace(/[.+^${}()|[\]\\]/g, '\\$&'))
+				.join('[^/]*');
+			return acc + lit + '/';
+		}, '')
+		.replace(/\/$/, '');
+	return new RegExp('^' + body + '$');
 }
 
 const patterns = [];
