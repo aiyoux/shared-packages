@@ -59,6 +59,19 @@ export type MonitorTransport = {
 	watchAddRoot(path: string, recursive?: boolean): Promise<MonitorWatchedRoot>;
 	watchListRoots(): Promise<{ roots: MonitorWatchedRoot[] }>;
 	/**
+	 * DELETE /v1/watch/roots/{id} — release a root created by `watchAddRoot`.
+	 *
+	 * Roots are process-global on the daemon: no per-client ownership, and no
+	 * reaping. It drops one ONLY on this call — never when a client disconnects
+	 * or its SSE stream closes. A client that adds roots and never removes them
+	 * therefore leaks them until the daemon restarts, and once `max_roots`
+	 * (default 16) is reached every new subscription fails.
+	 *
+	 * `force` skips the 409 the daemon returns when other subscribers remain;
+	 * pass it only when tearing down roots this client owns.
+	 */
+	watchRemoveRoot(rootId: string, force?: boolean): Promise<void>;
+	/**
 	 * POST /v1/watch/subs — change what an open stream watches without
 	 * reconnecting it, so navigating does not resync the folders you kept.
 	 */
@@ -180,6 +193,30 @@ export function createMonitorClient(opts: {
 		},
 		async watchListRoots() {
 			return (await getJson('/v1/watch/roots')) as { roots: MonitorWatchedRoot[] };
+		},
+		async watchRemoveRoot(rootId: string, force = true) {
+			// Teardown path: a failure here must never surface to the user (the
+			// stream is already closing), but leaving it silent entirely would hide
+			// a growing leak, so warn.
+			const ac = new AbortController();
+			const t = setTimeout(() => ac.abort(), 5_000);
+			const url = joinUrl(
+				base,
+				`/v1/watch/roots/${encodeURIComponent(rootId)}${force ? '?force=true' : ''}`
+			);
+			try {
+				const res = await fetchFn(
+					url,
+					withLocalAddressSpace(url, { method: 'DELETE', signal: ac.signal })
+				);
+				if (!res.ok && res.status !== 404) {
+					console.warn(`[monitor] releasing watch root ${rootId} failed (${res.status})`);
+				}
+			} catch {
+				console.warn(`[monitor] releasing watch root ${rootId} failed (network)`);
+			} finally {
+				clearTimeout(t);
+			}
 		},
 		async watchUpdateSubs(req) {
 			return (await postJson('/v1/watch/subs', {

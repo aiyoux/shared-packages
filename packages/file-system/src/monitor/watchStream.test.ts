@@ -69,10 +69,13 @@ function createHarness() {
 		return { subscribed, unsubscribed };
 	});
 
+	const watchRemoveRoot = vi.fn(async (_rootId: string, _force?: boolean) => {});
+
 	const transport = {
 		baseUrl: 'http://127.0.0.1:8300',
 		watchAddRoot,
 		watchUpdateSubs,
+		watchRemoveRoot,
 		list: vi.fn(),
 		stat: vi.fn(),
 		download: vi.fn(),
@@ -85,6 +88,7 @@ function createHarness() {
 		fetchImpl: fetchMock as unknown as typeof fetch,
 		watchAddRoot,
 		watchUpdateSubs,
+		watchRemoveRoot,
 		emit,
 		subIdFor: (path: string) => subs.get(`root:${path}`),
 		closeStream: () => {
@@ -121,6 +125,29 @@ describe('createMonitorWatchStream', () => {
 		// nothing was watching it.
 		await vi.waitFor(() => expect(onChange).toHaveBeenCalled());
 		stream.stop();
+	});
+
+	it('stop() releases every root it created, so the daemon does not leak them', async () => {
+		// The daemon drops a root ONLY on an explicit DELETE — never on client
+		// disconnect or stream close (roots are process-global, unowned, unreaped).
+		// Before this was wired up, each browsed folder leaked a root for the
+		// daemon's lifetime; at `max_roots` (16) every new subscription failed and
+		// live updates silently stopped working. Regression-guard that teardown.
+		const h = createHarness();
+		const stream = createMonitorWatchStream({
+			transport: h.transport,
+			fetchImpl: h.fetchImpl,
+			debounceMs: 10
+		});
+		stream.watchFolder('/home/me/a', vi.fn());
+		stream.watchFolder('/home/me/b', vi.fn());
+		await vi.waitFor(() => expect(h.watchAddRoot).toHaveBeenCalledTimes(2));
+
+		stream.stop();
+
+		await vi.waitFor(() => expect(h.watchRemoveRoot).toHaveBeenCalledTimes(2));
+		const released = h.watchRemoveRoot.mock.calls.map((c) => c[0]).sort();
+		expect(released).toEqual(['root:/home/me/a', 'root:/home/me/b']);
 	});
 
 	it('multiplexes several folders over one connection, routed by sub_id', async () => {

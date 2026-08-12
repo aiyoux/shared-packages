@@ -496,6 +496,19 @@ export function createMonitorWatchStream(
 
 		stop() {
 			stopped = true;
+			// Release the roots this stream created BEFORE clearing the folder map,
+			// which is the only place their ids are held.
+			//
+			// The daemon drops a root solely on an explicit DELETE — never when a
+			// client disconnects or its SSE stream closes (roots are process-global
+			// with no per-client ownership and no reaping). Without this, every
+			// folder ever browsed leaks a root for the daemon's lifetime, and once
+			// `max_roots` (default 16) is reached every new subscription fails with
+			// a status of `error`, which presents as "live updates just stopped
+			// working" long after the navigation that caused it.
+			const rootIds = [...folders.values()]
+				.map((f) => f.rootId)
+				.filter((id): id is string => !!id);
 			for (const folder of folders.values()) folder.coalescer.cancel();
 			folders.clear();
 			if (watchdogTimer) clearTimeout(watchdogTimer);
@@ -508,6 +521,9 @@ export function createMonitorWatchStream(
 			abortController = null;
 			clientId = null;
 			setStatus('closed');
+			// Fire-and-forget: teardown must not block, and the transport already
+			// swallows/warns per-root failures.
+			for (const rootId of rootIds) void transport.watchRemoveRoot(rootId);
 		}
 	};
 }

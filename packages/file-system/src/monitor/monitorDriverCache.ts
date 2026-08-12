@@ -19,6 +19,31 @@ type CacheEntry = {
 
 const cache = new Map<string, CacheEntry>();
 
+/**
+ * Dispose every cached driver when the page goes away.
+ *
+ * Without this, closing the tab (or navigating off the origin) leaves the
+ * daemon's watch roots registered forever: it drops a root only on an explicit
+ * DELETE, never on client disconnect, and the 5-minute idle-dispose timer dies
+ * with the page before it can fire. Each browsed folder then costs a permanent
+ * root until the daemon restarts, and at `max_roots` (16) every new
+ * subscription fails — which surfaces later as "live updates stopped working"
+ * with no obvious cause.
+ *
+ * `pagehide` (not `unload`) so this still runs when the browser puts the page
+ * into the back/forward cache. The DELETEs are fire-and-forget; the transport
+ * swallows failures, and a missed release is no worse than today's behaviour.
+ */
+if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+	window.addEventListener('pagehide', () => {
+		for (const e of cache.values()) {
+			if (e.disposeTimer) clearTimeout(e.disposeTimer);
+			disposeEntry(e);
+		}
+		cache.clear();
+	});
+}
+
 export function monitorDriverCacheSize(): number {
 	return cache.size;
 }
