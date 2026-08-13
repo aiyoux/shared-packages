@@ -78,7 +78,7 @@ async function bodyToArrayBuffer(body: BodyInit | null | undefined): Promise<Arr
 	if (body instanceof ArrayBuffer) return body;
 	if (ArrayBuffer.isView(body)) {
 		const view = body as ArrayBufferView;
-		return view.buffer.slice(view.byteOffset, view.byteOffset + view.byteLength);
+		return view.buffer.slice(view.byteOffset, view.byteOffset + view.byteLength) as ArrayBuffer;
 	}
 	if (typeof Blob !== 'undefined' && body instanceof Blob) {
 		return body.arrayBuffer();

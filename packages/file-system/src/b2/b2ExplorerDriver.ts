@@ -8,6 +8,7 @@ import {
 	BucketType,
 	FileAction,
 	type Bucket,
+	type DeleteTarget,
 	type FileVersion,
 	type HttpTransport
 } from '@backblaze-labs/b2-sdk';
@@ -135,7 +136,7 @@ export async function createB2ExplorerDriver(
 	}
 
 	async function deleteFileAllVersions(fileName: string): Promise<void> {
-		const targets: { fileName: string; fileId: string }[] = [];
+		const targets: DeleteTarget[] = [];
 		for await (const v of bucket!.paginateFileVersions({ prefix: fileName })) {
 			if (v.fileName !== fileName) continue;
 			targets.push({ fileName: v.fileName, fileId: v.fileId });
@@ -235,7 +236,7 @@ export async function createB2ExplorerDriver(
 					);
 
 					for (const f of listing.files) {
-						if (f.action === FileAction.Folder || f.action === 'folder') {
+						if (f.action === FileAction.Folder) {
 							const folderPrefix = f.fileName;
 							if (isFolderMarkerKey(folderPrefix)) continue;
 							if (rootPrefix && !folderPrefix.startsWith(rootPrefix)) continue;

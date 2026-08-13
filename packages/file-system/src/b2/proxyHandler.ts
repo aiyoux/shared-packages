@@ -109,7 +109,7 @@ export async function handleB2ControlPlaneProxy(
 				error: 'Request body too large for control-plane proxy'
 			};
 		}
-		body = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+		body = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
 	}
 
 	let upstream: Response;

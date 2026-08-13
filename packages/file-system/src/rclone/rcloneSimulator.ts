@@ -136,7 +136,7 @@ export class RcloneSimulator {
 					err.status = 404;
 					throw err;
 				}
-				return new Blob([node.body], { type: node.mimeType || 'application/octet-stream' });
+				return new Blob([node.body as BlobPart], { type: node.mimeType || 'application/octet-stream' });
 			}
 		};
 	}

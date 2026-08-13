@@ -99,7 +99,7 @@ export function createRcClient(opts: CreateRcClientOptions): RcloneTransport {
 								uploadOpts.body instanceof ArrayBuffer
 									? new Uint8Array(uploadOpts.body)
 									: uploadOpts.body
-							]);
+							] as BlobPart[]);
 				form.set('file', blob, 'upload.bin');
 				const res = await fetchFn(rcEndpoint(base, 'operations/uploadfile'), {
 					method: 'POST',

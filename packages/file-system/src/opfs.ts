@@ -18,7 +18,7 @@ export interface OpfsBlobStore {
 	clearAll?(): Promise<void>;
 }
 
-async function toUint8Array(data: BufferSource | Blob): Promise<Uint8Array> {
+async function toUint8Array(data: BufferSource | Blob | Uint8Array): Promise<Uint8Array> {
 	if (data instanceof Blob) {
 		const ab = await data.arrayBuffer();
 		return new Uint8Array(ab);
@@ -113,7 +113,7 @@ async function writeFileHandle(handle: FileSystemFileHandle, bytes: Uint8Array):
 	};
 	if (typeof anyHandle.createWritable === 'function') {
 		const writable = await anyHandle.createWritable();
-		await writable.write(bytes);
+		await writable.write(bytes as BufferSource);
 		await writable.close();
 		return;
 	}

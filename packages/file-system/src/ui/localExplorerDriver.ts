@@ -138,7 +138,7 @@ export function createLocalExplorerDriver(
 
 		async writeFile(parentId, file) {
 			const body = new Uint8Array(await file.arrayBuffer());
-			const n = await (vfs as { writeFile: (i: {
+			const n = await (vfs as unknown as { writeFile: (i: {
 				parentId: string | null;
 				name: string;
 				body: Uint8Array;
