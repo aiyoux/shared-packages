@@ -35,6 +35,7 @@ export { default as Tabs } from './Tabs.svelte';
 export { default as SegmentedControl } from './SegmentedControl.svelte';
 export { default as Pagination } from './Pagination.svelte';
 export { default as Popover } from './Popover.svelte';
+export { default as InfoTooltip } from './InfoTooltip.svelte';
 export { default as RouteFrameOverlay } from './RouteFrameOverlay.svelte';
 export { default as TimePicker } from './TimePicker.svelte';
 export { default as TimeRangePicker } from './TimeRangePicker.svelte';
