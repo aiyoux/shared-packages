@@ -21,6 +21,8 @@ export type CopyAcrossErrorCode =
 	| 'COPY_ACROSS_DEST_NO_FOLDERS'
 	| 'COPY_ACROSS_NO_SELECTION'
 	| 'COPY_ACROSS_NO_SOURCE'
+	| 'COPY_ACROSS_NO_DEST'
+	| 'COPY_ACROSS_DEST_READONLY'
 	| 'COPY_ACROSS_TRUNCATED'
 	| 'EXPLORER_TOO_LARGE'
 	| string;
@@ -230,6 +232,15 @@ async function copyFile(
 			type: entry.contentType || blob.type || 'application/octet-stream'
 		});
 
+		if (dest.id === 'monitor' || (!dest.writeFile && !dest.upload)) {
+			throw new CopyAcrossError(
+				dest.id === 'monitor' ? 'COPY_ACROSS_DEST_READONLY' : 'COPY_ACROSS_NO_DEST',
+				dest.id === 'monitor'
+					? 'Monitor is read-only. Copy from monitor into This computer, In memory, or the browser library.'
+					: 'Destination cannot accept file writes'
+			);
+		}
+
 		if (dest.writeFile) {
 			await dest.writeFile(destParentId, file);
 		} else if (dest.upload) {
@@ -242,11 +253,6 @@ async function copyFile(
 					});
 				}
 			});
-		} else {
-			throw new CopyAcrossError(
-				'COPY_ACROSS_NO_DEST',
-				'Destination cannot accept file writes'
-			);
 		}
 		reportCopy(opId, entry, { transferred: blob.size, size: blob.size, done: true, status: 'done' });
 	} catch (e) {

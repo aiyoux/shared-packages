@@ -2,6 +2,8 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { isLocalClass, isRemoteClass } from '../src/ui/explorerDriver.ts';
 import {
+	assertCopyAcrossAllowed,
+	canShowCopyAcross,
 	copyAcross,
 	CopyAcrossError,
 	destParentFromDropEvent,
@@ -14,26 +16,48 @@ import type { ExplorerDriver, ExplorerEntry } from '../src/ui/explorerDriver.ts'
 import { listTransfers, resetTransferRegistryForTests } from '../src/transferRegistry.ts';
 
 describe('isLocalClass / isRemoteClass', () => {
-	it('local-class = local | memory', () => {
+	it('local-class = local | memory | disk', () => {
 		assert.equal(isLocalClass('local'), true);
 		assert.equal(isLocalClass('memory'), true);
 		assert.equal(isLocalClass('disk'), true);
 		assert.equal(isLocalClass('b2'), false);
 		assert.equal(isLocalClass('rclone'), false);
+		assert.equal(isLocalClass('monitor'), false);
 		assert.equal(isLocalClass('other'), false);
 	});
 
-	it('remote-class = b2 | rclone', () => {
+	it('remote-class = b2 | rclone | monitor', () => {
 		assert.equal(isRemoteClass('b2'), true);
 		assert.equal(isRemoteClass('rclone'), true);
+		assert.equal(isRemoteClass('monitor'), true);
 		assert.equal(isRemoteClass('local'), false);
 		assert.equal(isRemoteClass('memory'), false);
+		assert.equal(isRemoteClass('disk'), false);
 	});
 
 	it('matrix: remote↔remote both remote-class', () => {
 		assert.equal(isRemoteClass('b2') && isRemoteClass('rclone'), true);
+		assert.equal(isRemoteClass('b2') && isRemoteClass('monitor'), true);
 		assert.equal(isLocalClass('local') || isLocalClass('b2'), true);
 		assert.equal(isLocalClass('b2') || isLocalClass('rclone'), false);
+	});
+
+	it('copy-across chrome: at least one local-class pane', () => {
+		assert.equal(canShowCopyAcross('b2', 'monitor'), false);
+		assert.equal(canShowCopyAcross('b2', 'b2'), false);
+		assert.equal(canShowCopyAcross('disk', 'b2'), true);
+		assert.equal(canShowCopyAcross('memory', 'monitor'), true);
+		assert.equal(canShowCopyAcross('local', 'monitor'), true);
+		assert.equal(canShowCopyAcross('disk', 'memory'), true);
+	});
+
+	it('assertCopyAcrossAllowed blocks only remote↔remote', () => {
+		assert.throws(() => assertCopyAcrossAllowed('b2', 'monitor'), /remote/i);
+		assert.throws(() => assertCopyAcrossAllowed('monitor', 'rclone'), /remote/i);
+		assertCopyAcrossAllowed('disk', 'b2');
+		assertCopyAcrossAllowed('b2', 'local');
+		assertCopyAcrossAllowed('monitor', 'memory');
+		assertCopyAcrossAllowed('local', 'disk');
 	});
 });
 
@@ -189,5 +213,58 @@ describe('copyAcross truncated folder', () => {
 		assert.equal(copies[0]!.done, true);
 		assert.equal(copies[0]!.status, 'done');
 		assert.equal(copies[0]!.transferred, 4);
+	});
+
+	it('allows disk → b2 file copy and rejects copy into monitor', async () => {
+		resetTransferRegistryForTests();
+		const file: ExplorerEntry = {
+			id: 'note.txt',
+			parentId: null,
+			name: 'note.txt',
+			kind: 'file',
+			size: 2
+		};
+		const disk = {
+			id: 'disk',
+			capabilities: { supportsMkdir: true },
+			async readBlob() {
+				return new Blob(['hi']);
+			},
+			async download() {
+				return new Blob(['hi']);
+			}
+		} as unknown as ExplorerDriver;
+		const b2 = {
+			id: 'b2',
+			capabilities: { supportsUpload: true },
+			async upload(_parent: string | null, f: File) {
+				return { id: f.name, parentId: null, name: f.name, kind: 'file' };
+			}
+		} as unknown as ExplorerDriver;
+		const mon = {
+			id: 'monitor',
+			capabilities: { supportsUpload: false }
+		} as unknown as ExplorerDriver;
+		assert.equal(
+			await copyAcross({
+				sourceDriver: disk,
+				destDriver: b2,
+				selectedIds: [file.id],
+				sourceEntries: [file],
+				destParentId: null
+			}),
+			1
+		);
+		await assert.rejects(
+			() =>
+				copyAcross({
+					sourceDriver: disk,
+					destDriver: mon,
+					selectedIds: [file.id],
+					sourceEntries: [file],
+					destParentId: null
+				}),
+			(e: unknown) => e instanceof CopyAcrossError && e.code === 'COPY_ACROSS_DEST_READONLY'
+		);
 	});
 });
