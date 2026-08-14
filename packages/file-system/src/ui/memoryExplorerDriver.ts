@@ -99,6 +99,10 @@ export function createMemoryExplorerDriver(
 				contentType: file.type || undefined
 			});
 			return toEntry(n);
+		},
+
+		subscribeChanges(listener) {
+			return vfs.subscribe(listener);
 		}
 	};
 }

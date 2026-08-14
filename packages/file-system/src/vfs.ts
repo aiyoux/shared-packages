@@ -1,4 +1,5 @@
 import { liveQuery, type Observable } from 'dexie';
+import { createChangeBus } from './changeBus.js';
 import { SharedVfsDatabase } from './db.js';
 import { generateId } from './id.js';
 import { sanitizeName, withNumericSuffix } from './names.js';
@@ -43,6 +44,7 @@ export class VfsService {
 	private readyPromise: Promise<void> | null = null;
 	private requestPersist: boolean;
 	private lastPersistence: PersistenceResult | null = null;
+	private readonly changeBus = createChangeBus();
 
 	constructor(opts: VfsServiceOptions = {}) {
 		this.db = new SharedVfsDatabase(opts.dbName ?? 'SharedVFS');
@@ -60,6 +62,15 @@ export class VfsService {
 		} else {
 			this.opfs = createOpfsBlobStore(opts.opfsRoot ?? 'shared-vfs');
 		}
+	}
+
+	/** Live list refresh for FileExplorer (same contract as monitor subscribeChanges). */
+	subscribe(listener: () => void): () => void {
+		return this.changeBus.subscribe(listener);
+	}
+
+	private emitChange(): void {
+		this.changeBus.notify();
 	}
 
 	async ready(): Promise<void> {
@@ -313,6 +324,9 @@ export class VfsService {
 			node.generation += 1;
 			await this.db.nodes.put(node);
 			return node;
+		}).then((node) => {
+			this.emitChange();
+			return node;
 		});
 	}
 
@@ -368,6 +382,9 @@ export class VfsService {
 				sortOrder
 			};
 			await this.db.nodes.put(node);
+			return node;
+		}).then((node) => {
+			this.emitChange();
 			return node;
 		});
 	}
@@ -488,6 +505,7 @@ export class VfsService {
 
 		const final = await this.db.nodes.get(nodeId);
 		if (!final) throw new VfsError('NOT_FOUND');
+		this.emitChange();
 		return final;
 	}
 
@@ -599,6 +617,7 @@ export class VfsService {
 
 		const final = await this.db.nodes.get(id);
 		if (!final) throw new VfsError('NOT_FOUND');
+		this.emitChange();
 		return final;
 	}
 
@@ -650,6 +669,9 @@ export class VfsService {
 			node.generation += 1;
 			await this.db.nodes.put(node);
 			return node;
+		}).then((node) => {
+			this.emitChange();
+			return node;
 		});
 	}
 
@@ -697,6 +719,7 @@ export class VfsService {
 			if (opts?.beforeId != null || opts?.afterId != null) {
 				return this.reorder(id, { beforeId: opts.beforeId, afterId: opts.afterId });
 			}
+			this.emitChange();
 			return moved;
 		});
 	}
@@ -761,6 +784,7 @@ export class VfsService {
 				await this.db.nodes.put(n);
 			}
 		});
+		this.emitChange();
 	}
 
 	async restore(id: string): Promise<VfsNode> {
@@ -813,6 +837,9 @@ export class VfsService {
 				await this.db.nodes.put(n);
 			}
 			return (await this.db.nodes.get(id))!;
+		}).then((node) => {
+			this.emitChange();
+			return node;
 		});
 	}
 
@@ -867,6 +894,7 @@ export class VfsService {
 				/* GC later */
 			}
 		}
+		this.emitChange();
 	}
 
 	async emptyTrash(): Promise<void> {
@@ -1037,6 +1065,7 @@ export class VfsService {
 			}
 		);
 		if (this.opfs.clearAll) await this.opfs.clearAll();
+		this.emitChange();
 	}
 }
 

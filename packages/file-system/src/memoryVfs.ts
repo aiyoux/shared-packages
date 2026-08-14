@@ -9,6 +9,7 @@
  *
  * @see docs/design/dnd-inmem-copy.md
  */
+import { createChangeBus } from './changeBus.js';
 import { generateId } from './id.js';
 import { sanitizeName, withNumericSuffix } from './names.js';
 import { createMemoryOpfs, type OpfsBlobStore } from './opfs.js';
@@ -53,6 +54,7 @@ type MemState = {
 	/** blobId → bytes */
 	blobs: Map<string, { bytes: Uint8Array; contentType?: string }>;
 	opfs: OpfsBlobStore;
+	bus: ReturnType<typeof createChangeBus>;
 };
 
 /** Single global store — one flat list for the whole app. */
@@ -63,7 +65,8 @@ function getState(): MemState {
 		globalState = {
 			nodes: new Map(),
 			blobs: new Map(),
-			opfs: createMemoryOpfs()
+			opfs: createMemoryOpfs(),
+			bus: createChangeBus()
 		};
 	}
 	return globalState;
@@ -85,9 +88,17 @@ function ensureUnique(name: string, excludeId?: string): string {
  * received files, and `/tools/files` "In memory" pane. Intentionally not a
  * `SharedVfsDatabase` subclass and intentionally not folder-capable.
  */
+function emitMemoryChange(): void {
+	getState().bus.notify();
+}
+
 export class MemoryVfsService {
 	async ready(): Promise<void> {
 		/* no-op — never opens IDB */
+	}
+
+	subscribe(listener: () => void): () => void {
+		return getState().bus.subscribe(listener);
 	}
 
 	get persistence() {
@@ -149,6 +160,7 @@ export class MemoryVfsService {
 			meta: input.meta
 		};
 		getState().nodes.set(node.id, node);
+		emitMemoryChange();
 		return node;
 	}
 
@@ -167,6 +179,7 @@ export class MemoryVfsService {
 		node.updatedAt = Date.now();
 		node.generation += 1;
 		getState().nodes.set(id, node);
+		emitMemoryChange();
 		return node;
 	}
 
@@ -203,6 +216,7 @@ export class MemoryVfsService {
 		node.updatedAt = Date.now();
 		node.generation += 1;
 		getState().nodes.set(id, node);
+		emitMemoryChange();
 		return node;
 	}
 
@@ -212,12 +226,14 @@ export class MemoryVfsService {
 		if (!node) return;
 		getState().blobs.delete(node.blobId);
 		getState().nodes.delete(id);
+		emitMemoryChange();
 	}
 
 	async dangerClearAll(): Promise<void> {
 		getState().nodes.clear();
 		getState().blobs.clear();
 		await getState().opfs.clearAll?.();
+		emitMemoryChange();
 	}
 }
 

@@ -49,6 +49,7 @@ export type LocalVfsLike = Pick<
 	| 'permanentDelete'
 	| 'emptyTrash'
 	| 'readBlob'
+	| 'subscribe'
 >;
 
 export type LocalExplorerDriverOptions = {
@@ -150,6 +151,11 @@ export function createLocalExplorerDriver(
 				contentType: file.type || undefined
 			});
 			return nodeToEntry(n);
+		},
+
+		subscribeChanges(listener) {
+			if (!vfs.subscribe) return () => {};
+			return vfs.subscribe(listener);
 		}
 	};
 }

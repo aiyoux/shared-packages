@@ -134,6 +134,21 @@ describe('FileExplorer component', () => {
 		expect(document.querySelector('[data-testid="fe-folder-row"]')).toBeNull();
 	});
 
+	it('second explorer lists a file written through the shared VFS', async () => {
+		render(FileExplorer, { props: { mode: 'manage', vfs, variant: 'panel' } });
+		render(FileExplorer, { props: { mode: 'manage', vfs, variant: 'panel' } });
+		await screen.findAllByTestId('file-explorer');
+		await vfs.writeFile({
+			parentId: null,
+			name: 'live-peer.txt',
+			fileType: 'unknown',
+			body: 'x'
+		});
+		await viWaitFor(() => document.querySelectorAll('[data-testid="fe-file-row"]').length >= 2);
+		const rows = [...document.querySelectorAll('[data-testid="fe-file-row"]')];
+		expect(rows.filter((r) => /live-peer/.test(r.textContent || '')).length).toBeGreaterThanOrEqual(2);
+	});
+
 	it('creates a folder via New folder form', async () => {
 		render(FileExplorer, { props: { mode: 'manage', vfs, variant: 'panel' } });
 		await screen.findByTestId('file-explorer');
