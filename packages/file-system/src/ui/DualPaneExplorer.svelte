@@ -92,6 +92,25 @@
 		rightDefault?: ConnectionKind;
 		/** Hide the dual-pane / feature toggles row (e.g. CM is always dual). */
 		hideToggles?: boolean;
+		/** Hide the pane labels (e.g. "Left"/"Right") in each pane chrome. */
+		hidePaneLabels?: boolean;
+		/** Hide the connection/backend switcher in each pane (locks its backend). */
+		hideConnectionSwitcher?: boolean;
+		/** In-progress transfer rows for each pane's explorer listing. */
+		pendingLeft?: Array<{
+			id: string;
+			name: string;
+			transferred: number;
+			size: number;
+			direction?: string;
+		}>;
+		pendingRight?: Array<{
+			id: string;
+			name: string;
+			transferred: number;
+			size: number;
+			direction?: string;
+		}>;
 		/** Notified when dual-pane toggles (so a page can widen its shell). */
 		onDualChange?: (dual: boolean) => void;
 		tids?: Partial<DualPaneTids>;
@@ -107,6 +126,10 @@
 		leftDefault = 'local',
 		rightDefault = 'local',
 		hideToggles = false,
+		hidePaneLabels = false,
+		hideConnectionSwitcher = false,
+		pendingLeft = [],
+		pendingRight = [],
 		onDualChange,
 		tids: tidsOverride = {}
 	}: Props = $props();
@@ -602,10 +625,13 @@
 	{@const subTid = tids.paneSub(id)}
 	<div class="files-pane" data-testid={tids.pane(id)} data-pane={id}>
 		<div class="pane-chrome" data-testid={tids.paneChrome(id)}>
-			<span class="pane-label" data-testid={tids.paneLabel(id)}>
-				{id === 'left' ? (dualPane ? 'Left' : 'Browser') : 'Right'}
-			</span>
-			<ConnectionSwitcher
+			{#if !hidePaneLabels}
+				<span class="pane-label" data-testid={tids.paneLabel(id)}>
+					{id === 'left' ? (dualPane ? 'Left' : 'Browser') : 'Right'}
+				</span>
+			{/if}
+			{#if !hideConnectionSwitcher}
+				<ConnectionSwitcher
 				activeId={p.activeId}
 				activeKind={p.activeKind}
 				profiles={b2Chips}
@@ -626,6 +652,7 @@
 					setPane(id, { showMonitorForm: true, showB2Form: false, showRcloneForm: false, error: '' });
 				}}
 			/>
+			{/if}
 			{#if showCopyAcross}
 				<button
 					type="button"
@@ -771,6 +798,7 @@
 						driver={localDriver}
 						showPersistence={false}
 						onOpen={onOpen}
+						pending={id === 'left' ? pendingLeft : pendingRight}
 						onContextChange={(ctx) => {
 							// Avoid full-pane rewrite storms — only patch ctx fields
 							if (id === 'left') left = { ...left, ctx };
@@ -784,6 +812,7 @@
 						driver={drv}
 						showPersistence={false}
 						onOpen={p.activeKind === 'memory' ? onOpen : undefined}
+						pending={id === 'left' ? pendingLeft : pendingRight}
 						onContextChange={(ctx) => {
 							if (id === 'left') left = { ...left, ctx };
 							else right = { ...right, ctx };

@@ -48,6 +48,17 @@
 		class?: string;
 		compatLibraryTestId?: boolean;
 		compatSaveTestId?: boolean;
+		/**
+		 * In-progress transfers to render as semi-transparent rows at the top of
+		 * the listing, each with a progress bar. Rows are non-interactive.
+		 */
+		pending?: Array<{
+			id: string;
+			name: string;
+			transferred: number;
+			size: number;
+			direction?: string;
+		}>;
 	}
 
 	let {
@@ -63,6 +74,7 @@
 		onOpen,
 		onSave,
 		onClose,
+		pending = [],
 		onContextChange,
 		variant = 'panel',
 		class: className = '',
@@ -952,9 +964,35 @@
 		aria-busy={listBusy ? 'true' : undefined}
 		ondragover={onListDragOver}
 	>
+		{#if pending.length > 0}
+			<div class="fe-pending-list" data-testid="fe-pending-list">
+				{#each pending as p (p.id)}
+					{@const pct = Math.min(100, Math.round(p.size ? (p.transferred / p.size) * 100 : 0))}
+					<div
+						class="fe-row fe-pending"
+						data-testid="fe-pending-row"
+						data-pending-name={p.name}
+						aria-disabled="true"
+					>
+						<span class="fe-icon">{p.direction === 'sending' ? '📤' : '📥'}</span>
+						<span class="fe-name" title={p.name}>{p.name}</span>
+						<div
+							class="fe-pending-bar"
+							role="progressbar"
+							aria-valuenow={pct}
+							aria-valuemin="0"
+							aria-valuemax="100"
+						>
+							<div class="fe-pending-fill" style="width: {pct}%"></div>
+						</div>
+						<span class="fe-pending-pct">{pct}%</span>
+					</div>
+				{/each}
+			</div>
+		{/if}
 		{#if initialLoad && nodes.length === 0}
 			<div class="fe-empty" data-testid="fe-loading">Loading…</div>
-		{:else if nodes.length === 0}
+		{:else if nodes.length === 0 && pending.length === 0}
 			<div class="fe-empty" data-testid="fe-empty">
 				{showTrash ? 'Trash is empty' : 'No files here'}
 			</div>
@@ -1258,6 +1296,37 @@
 	}
 	.fe-row:hover {
 		background: #2a2b30;
+	}
+	.fe-pending-list {
+		display: flex;
+		flex-direction: column;
+	}
+	.fe-row.fe-pending {
+		opacity: 0.65;
+		cursor: default;
+	}
+	.fe-row.fe-pending:hover {
+		background: transparent;
+	}
+	.fe-pending-bar {
+		flex: 0 1 120px;
+		height: 6px;
+		background: rgba(255, 255, 255, 0.08);
+		border-radius: 999px;
+		overflow: hidden;
+	}
+	.fe-pending-fill {
+		height: 100%;
+		background: #38bdf8;
+		border-radius: 999px;
+		transition: width 150ms ease;
+	}
+	.fe-pending-pct {
+		font-size: 0.72rem;
+		color: #94a3b8;
+		min-width: 34px;
+		text-align: right;
+		font-variant-numeric: tabular-nums;
 	}
 	.fe-row.incompatible {
 		opacity: 0.45;
