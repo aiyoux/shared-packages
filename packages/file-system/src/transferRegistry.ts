@@ -16,7 +16,7 @@
 import type { MemoryVfsService } from './memoryVfs.js';
 
 export type TransferIntegrity = 'pending' | 'ok' | 'mismatch' | 'skipped';
-export type TransferDirection = 'sending' | 'receiving';
+export type TransferDirection = 'sending' | 'receiving' | 'copying';
 export type TransferStatus = 'hashing' | 'active' | 'done' | 'failed' | 'incomplete';
 
 export interface TransferProgress {

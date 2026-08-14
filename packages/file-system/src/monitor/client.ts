@@ -6,6 +6,7 @@
  * Monitor must allow CORS from the Scratch Pad origin. Requests to loopback are
  * additionally annotated for Local Network Access — see `./localNetwork`.
  */
+import { blobFromResponse } from '../readProgress.js';
 import { withLocalAddressSpace } from './localNetwork';
 
 export type MonitorListEntry = {
@@ -53,7 +54,10 @@ export type MonitorSubsResult = {
 export type MonitorTransport = {
 	list(path: string): Promise<MonitorListResult>;
 	stat(path: string): Promise<MonitorStatResult>;
-	download(path: string): Promise<Blob>;
+	download(
+		path: string,
+		opts?: { onProgress?: (transferred: number, total?: number) => void }
+	): Promise<Blob>;
 	health(): Promise<unknown>;
 	/** Idempotent POST /v1/watch/roots */
 	watchAddRoot(path: string, recursive?: boolean): Promise<MonitorWatchedRoot>;
@@ -228,7 +232,7 @@ export function createMonitorClient(opts: {
 				unsubscribe: req.unsubscribe ?? []
 			})) as MonitorSubsResult;
 		},
-		async download(path: string) {
+		async download(path: string, opts) {
 			const ac = new AbortController();
 			const t = setTimeout(() => ac.abort(), 60_000);
 			const url = joinUrl(base, `/v1/fs/read?path=${encodeURIComponent(path)}`);
@@ -241,7 +245,7 @@ export function createMonitorClient(opts: {
 					const text = await res.text().catch(() => '');
 					throw new Error(text || `Download failed (${res.status})`);
 				}
-				return res.blob();
+				return blobFromResponse(res, { onProgress: opts?.onProgress });
 			} catch (e) {
 				if (e instanceof Error && e.name === 'AbortError') {
 					throw new Error('Monitor download timed out');

@@ -123,8 +123,12 @@ export interface ExplorerDriver {
 	/**
 	 * v1: fully buffered Blob.
 	 * Must reject if size > EXPLORER_DOWNLOAD_MAX_BYTES.
+	 * `onProgress` is optional; remotes should stream and emit byte counts.
 	 */
-	download?(id: ExplorerEntryId): Promise<Blob>;
+	download?(
+		id: ExplorerEntryId,
+		opts?: { onProgress?: (transferred: number, total?: number) => void }
+	): Promise<Blob>;
 	/** Optional: bytes for copy-across bridge (local/memory). */
 	readBlob?(id: ExplorerEntryId): Promise<Blob>;
 	/**

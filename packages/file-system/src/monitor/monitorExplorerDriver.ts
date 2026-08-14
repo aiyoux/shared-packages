@@ -168,13 +168,13 @@ export async function createMonitorExplorerDriver(
 			);
 		},
 
-		async download(id: ExplorerEntryId) {
+		async download(id: ExplorerEntryId, dlOpts) {
 			if (isFolderId(id)) {
 				throw new ExplorerMonitorError('MONITOR_ERROR', 'Cannot download a folder');
 			}
 			try {
 				const abs = toAbsolutePath(rootPath, id);
-				const blob = await transport.download(abs);
+				const blob = await transport.download(abs, { onProgress: dlOpts?.onProgress });
 				if (blob.size > EXPLORER_DOWNLOAD_MAX_BYTES) {
 					throw new ExplorerMonitorError(
 						'MONITOR_TOO_LARGE',

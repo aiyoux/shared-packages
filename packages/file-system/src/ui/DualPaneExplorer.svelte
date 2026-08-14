@@ -24,6 +24,8 @@
 	import { onMount, onDestroy } from 'svelte';
 	import { default as FileExplorer, type ExplorerContext } from './FileExplorer.svelte';
 	import { default as StoragePersistenceStatus } from './StoragePersistenceStatus.svelte';
+	import OpProgressPopup from './OpProgressPopup.svelte';
+	import { listTransfers, subscribeTransfers, type TransferItem } from '../transferRegistry.js';
 	import { type ExplorerDriver, type ExplorerEntry, type ExplorerOpenTarget } from './explorerDriver.js';
 	import { createMemoryExplorerDriver } from './memoryExplorerDriver.js';
 	// PaneId + DualPaneTids live in a .ts module so the ui barrel can re-export
@@ -244,6 +246,11 @@
 	let crossOver = $state<PaneId | null>(null);
 	let sendBusy = $state(false);
 	let sendError = $state<{ pane: PaneId; message: string } | null>(null);
+	/** Dest pane of the in-flight copy-across (pending rows land here). */
+	let copyDestPane = $state<PaneId | null>(null);
+	let copyItems = $state<TransferItem[]>([]);
+	let dismissedCopyIds = $state<Set<string>>(new Set());
+	let copyProgressUnsub: (() => void) | null = null;
 	let memoryVfs: MemoryVfsService | null = null;
 
 	/** True when at least one visible pane is durable local browser storage. */
@@ -322,6 +329,37 @@
 	const showCopyAcross = $derived(
 		dualPane && canShowCopyAcross(left.ctx.backend || left.activeKind, right.ctx.backend || right.activeKind)
 	);
+
+	const visibleCopyItems = $derived(copyItems.filter((t) => !dismissedCopyIds.has(t.id)));
+	const destCopyPending = $derived(
+		visibleCopyItems
+			.filter((t) => !t.done)
+			.map((t) => ({
+				id: t.id,
+				name: t.name,
+				transferred: t.transferred,
+				size: t.size || Math.max(t.transferred, 1),
+				direction: 'receiving' as const
+			}))
+	);
+
+	function panePending(id: PaneId) {
+		const extra = id === copyDestPane ? destCopyPending : [];
+		const base = id === 'left' ? pendingLeft : pendingRight;
+		return extra.length ? [...base, ...extra] : base;
+	}
+
+	function dismissCopy(id: string) {
+		dismissedCopyIds = new Set([...dismissedCopyIds, id]);
+	}
+
+	function dismissAllSettledCopy() {
+		const next = new Set(dismissedCopyIds);
+		for (const t of copyItems) {
+			if (t.done || t.status === 'failed') next.add(t.id);
+		}
+		dismissedCopyIds = next;
+	}
 
 	function readRcloneFeature(): boolean {
 		try {
@@ -417,9 +455,16 @@
 		const mem = getMemoryVfs();
 		memoryVfs = mem;
 		void mem.ready().then(() => installMemoryFilesHook(mem));
+		const pullCopy = () => {
+			copyItems = listTransfers().filter((t) => t.direction === 'copying');
+		};
+		pullCopy();
+		copyProgressUnsub = subscribeTransfers(pullCopy);
 	});
 
 	onDestroy(() => {
+		copyProgressUnsub?.();
+		copyProgressUnsub = null;
 		if (watchPollTimer) {
 			clearInterval(watchPollTimer);
 			watchPollTimer = null;
@@ -769,6 +814,7 @@
 		const dst = paneState(destId);
 		copyError = '';
 		copyBusy = true;
+		copyDestPane = destId;
 		try {
 			const destDriver = activeDriver(dst);
 			const n = await copyAcross({
@@ -1050,7 +1096,7 @@
 								? (entry) => runSend(id, { selectedIds: [entry.id], entries: [entry] })
 								: undefined
 						}
-						pending={id === 'left' ? pendingLeft : pendingRight}
+						pending={panePending(id)}
 						onContextChange={(ctx) => {
 							// Avoid full-pane rewrite storms — only patch ctx fields
 							if (id === 'left') left = { ...left, ctx };
@@ -1070,7 +1116,7 @@
 								? (entry) => runSend(id, { selectedIds: [entry.id], entries: [entry] })
 								: undefined
 						}
-						pending={id === 'left' ? pendingLeft : pendingRight}
+						pending={panePending(id)}
 						onContextChange={(ctx) => {
 							if (id === 'left') left = { ...left, ctx };
 							else right = { ...right, ctx };
@@ -1138,6 +1184,11 @@
 			{@render explorerPane('right')}
 		{/if}
 	</div>
+	<OpProgressPopup
+		items={visibleCopyItems}
+		onDismiss={dismissCopy}
+		onDismissAll={dismissAllSettledCopy}
+	/>
 </div>
 
 <style>

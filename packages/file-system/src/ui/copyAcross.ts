@@ -5,6 +5,8 @@
  * Connections `FileTransferPanel` (via {@link DualPaneExplorer}) single-source it.
  * @see docs/design/dnd-inmem-copy.md
  */
+import { generateId } from '../id.js';
+import { upsertProgress } from '../transferRegistry.js';
 import {
 	EXPLORER_DOWNLOAD_MAX_BYTES,
 	isLocalClass,
@@ -172,6 +174,24 @@ export async function copyAcross(args: CopyAcrossArgs): Promise<number> {
 	return count;
 }
 
+function reportCopy(
+	id: string,
+	entry: ExplorerEntry,
+	patch: { transferred: number; size?: number; done?: boolean; status?: 'active' | 'done' | 'failed'; error?: string }
+): void {
+	const size = patch.size ?? entry.size ?? patch.transferred;
+	upsertProgress({
+		id,
+		name: entry.name,
+		size,
+		transferred: patch.transferred,
+		direction: 'copying',
+		done: patch.done === true,
+		status: patch.status ?? (patch.done ? 'done' : 'active'),
+		error: patch.error
+	});
+}
+
 async function copyFile(
 	source: ExplorerDriver,
 	dest: ExplorerDriver,
@@ -182,33 +202,63 @@ async function copyFile(
 	if (entry.size != null && entry.size > EXPLORER_DOWNLOAD_MAX_BYTES) {
 		throw new CopyAcrossError('EXPLORER_TOO_LARGE', 'File exceeds download size cap');
 	}
-	let blob: Blob;
-	if (source.readBlob) {
-		blob = await source.readBlob(entry.id);
-	} else if (source.download) {
-		blob = await source.download(entry.id);
-	} else {
-		throw new CopyAcrossError('COPY_ACROSS_NO_SOURCE', 'Source cannot read file bytes');
-	}
-	if (blob.size > EXPLORER_DOWNLOAD_MAX_BYTES) {
-		throw new CopyAcrossError('EXPLORER_TOO_LARGE', 'File exceeds download size cap');
-	}
-	const file = new File([blob], entry.name, {
-		type: entry.contentType || blob.type || 'application/octet-stream'
-	});
+	const opId = generateId('copy');
+	const known = entry.size ?? 0;
+	reportCopy(opId, entry, { transferred: 0, size: known, status: 'active' });
+	try {
+		let blob: Blob;
+		if (source.download) {
+			blob = await source.download(entry.id, {
+				onProgress: (transferred, total) => {
+					reportCopy(opId, entry, {
+						transferred,
+						size: total ?? known ?? transferred,
+						status: 'active'
+					});
+				}
+			});
+		} else if (source.readBlob) {
+			blob = await source.readBlob(entry.id);
+		} else {
+			throw new CopyAcrossError('COPY_ACROSS_NO_SOURCE', 'Source cannot read file bytes');
+		}
+		if (blob.size > EXPLORER_DOWNLOAD_MAX_BYTES) {
+			throw new CopyAcrossError('EXPLORER_TOO_LARGE', 'File exceeds download size cap');
+		}
+		reportCopy(opId, entry, { transferred: blob.size, size: blob.size, status: 'active' });
+		const file = new File([blob], entry.name, {
+			type: entry.contentType || blob.type || 'application/octet-stream'
+		});
 
-	if (dest.writeFile) {
-		await dest.writeFile(destParentId, file);
-		return;
+		if (dest.writeFile) {
+			await dest.writeFile(destParentId, file);
+		} else if (dest.upload) {
+			await dest.upload(destParentId, file, {
+				onProgress: (pct) => {
+					reportCopy(opId, entry, {
+						transferred: Math.round(blob.size * Math.min(1, Math.max(0, pct))),
+						size: blob.size,
+						status: 'active'
+					});
+				}
+			});
+		} else {
+			throw new CopyAcrossError(
+				'COPY_ACROSS_NO_DEST',
+				'Destination cannot accept file writes'
+			);
+		}
+		reportCopy(opId, entry, { transferred: blob.size, size: blob.size, done: true, status: 'done' });
+	} catch (e) {
+		reportCopy(opId, entry, {
+			transferred: 0,
+			size: known,
+			done: true,
+			status: 'failed',
+			error: e instanceof Error ? e.message : String(e)
+		});
+		throw e;
 	}
-	if (dest.upload) {
-		await dest.upload(destParentId, file);
-		return;
-	}
-	throw new CopyAcrossError(
-		'COPY_ACROSS_NO_DEST',
-		'Destination cannot accept file writes'
-	);
 }
 
 async function copyFolderTree(

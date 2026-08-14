@@ -11,6 +11,7 @@ import {
 	parseExplorerDragIds
 } from '../src/ui/copyAcross.ts';
 import type { ExplorerDriver, ExplorerEntry } from '../src/ui/explorerDriver.ts';
+import { listTransfers, resetTransferRegistryForTests } from '../src/transferRegistry.ts';
 
 describe('isLocalClass / isRemoteClass', () => {
 	it('local-class = local | memory', () => {
@@ -141,5 +142,52 @@ describe('copyAcross truncated folder', () => {
 				}),
 			(e: unknown) => e instanceof CopyAcrossError && e.code === 'COPY_ACROSS_TRUNCATED'
 		);
+	});
+
+	it('reports copy progress through the transfer registry', async () => {
+		resetTransferRegistryForTests();
+		const file: ExplorerEntry = {
+			id: 'remote.bin',
+			parentId: null,
+			name: 'remote.bin',
+			kind: 'file',
+			size: 4
+		};
+		const ticks: number[] = [];
+		const source = {
+			id: 'b2',
+			capabilities: {},
+			async download(_id: string, opts?: { onProgress?: (n: number, t?: number) => void }) {
+				opts?.onProgress?.(2, 4);
+				ticks.push(2);
+				opts?.onProgress?.(4, 4);
+				ticks.push(4);
+				return new Blob([new Uint8Array([1, 2, 3, 4])]);
+			}
+		} as unknown as ExplorerDriver;
+		const written: string[] = [];
+		const dest = {
+			id: 'memory',
+			capabilities: { supportsMkdir: false },
+			async writeFile(_parent: string | null, f: File) {
+				written.push(f.name);
+				return { id: 'mem-1', parentId: null, name: f.name, kind: 'file' };
+			}
+		} as unknown as ExplorerDriver;
+		const n = await copyAcross({
+			sourceDriver: source,
+			destDriver: dest,
+			selectedIds: [file.id],
+			sourceEntries: [file],
+			destParentId: null
+		});
+		assert.equal(n, 1);
+		assert.deepEqual(written, ['remote.bin']);
+		assert.ok(ticks.includes(4));
+		const copies = listTransfers().filter((t) => t.direction === 'copying');
+		assert.equal(copies.length, 1);
+		assert.equal(copies[0]!.done, true);
+		assert.equal(copies[0]!.status, 'done');
+		assert.equal(copies[0]!.transferred, 4);
 	});
 });

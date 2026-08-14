@@ -25,6 +25,7 @@ import {
 	type ExplorerListResult
 } from '../ui/explorerDriver.js';
 import { inferFileTypeFromName } from '../index.js';
+import { blobFromResponse } from '../readProgress.js';
 import { ExplorerB2Error, mapB2Error } from './errors.js';
 import {
 	baseNameFromKey,
@@ -451,7 +452,7 @@ export async function createB2ExplorerDriver(
 			}
 		},
 
-		async download(id) {
+		async download(id, dlOpts) {
 			try {
 				// Size check via control plane (proxied) — avoid download-host HEAD
 				// with account auth token (private-bucket CORS denies that).
@@ -486,15 +487,21 @@ export async function createB2ExplorerDriver(
 							`Download failed (${res.status})`
 						);
 					}
-					const buf = await res.arrayBuffer();
-					if (buf.byteLength > EXPLORER_DOWNLOAD_MAX_BYTES) {
-						throw new ExplorerB2Error('B2_TOO_LARGE', 'Download exceeded size cap');
+					try {
+						return await blobFromResponse(res, {
+							onProgress: dlOpts?.onProgress,
+							maxBytes: EXPLORER_DOWNLOAD_MAX_BYTES,
+							contentType:
+								res.headers.get('content-type') ||
+								info.contentType ||
+								'application/octet-stream'
+						});
+					} catch (e) {
+						if (e instanceof Error && e.message === 'EXPLORER_TOO_LARGE') {
+							throw new ExplorerB2Error('B2_TOO_LARGE', 'Download exceeded size cap');
+						}
+						throw e;
 					}
-					const type =
-						res.headers.get('content-type') ||
-						info.contentType ||
-						'application/octet-stream';
-					return new Blob([buf], { type });
 				}
 
 				// Simulator / injected transport: SDK stream download
@@ -502,6 +509,7 @@ export async function createB2ExplorerDriver(
 				const reader = result.body.getReader();
 				const chunks: Uint8Array[] = [];
 				let total = 0;
+				let lastEmit = 0;
 				for (;;) {
 					const { done, value } = await reader.read();
 					if (done) break;
@@ -512,8 +520,14 @@ export async function createB2ExplorerDriver(
 							throw new ExplorerB2Error('B2_TOO_LARGE', 'Download exceeded size cap');
 						}
 						chunks.push(value);
+						const now = Date.now();
+						if (!lastEmit || now - lastEmit >= 80) {
+							lastEmit = now;
+							dlOpts?.onProgress?.(total, len || undefined);
+						}
 					}
 				}
+				dlOpts?.onProgress?.(total, len || total);
 				const type = result.headers.contentType || 'application/octet-stream';
 				return new Blob(chunks as BlobPart[], { type });
 			} catch (e) {

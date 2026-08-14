@@ -32,6 +32,24 @@ describe('transferRegistry', () => {
 		clearAllMemoryVfsForTests();
 	});
 
+	it('tracks copying direction for pane-to-pane copies', () => {
+		upsertProgress(progress({ id: 'c1', name: 'from-b2.bin', direction: 'copying', transferred: 3, size: 10 }));
+		expect(listTransfers()[0]?.direction).toBe('copying');
+		expect(listTransfers()[0]?.done).toBe(false);
+		upsertProgress(
+			progress({
+				id: 'c1',
+				name: 'from-b2.bin',
+				direction: 'copying',
+				transferred: 10,
+				size: 10,
+				done: true,
+				status: 'done'
+			})
+		);
+		expect(listTransfers()[0]?.done).toBe(true);
+	});
+
 	it('upsertProgress tracks active then done', async () => {
 		upsertProgress(progress({ id: 'a', transferred: 5 }));
 		expect(listTransfers()).toHaveLength(1);
