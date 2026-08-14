@@ -32,12 +32,17 @@ export function pencilGradeParams(grade: PencilGrade): BrushParams {
 	return PENCIL_GRADE_PARAMS[grade];
 }
 
-export function brushParams(brushType: BrushType, pencilGrade: PencilGrade = 'HB'): BrushParams {
+/**
+ * `highlighterOpacity` overrides the highlighter's nominal opacity (default
+ * 0.5 — bumped up from the original 0.35, which read as too faint) with a
+ * user-configured strength. Ignored for every other brush type.
+ */
+export function brushParams(brushType: BrushType, pencilGrade: PencilGrade = 'HB', highlighterOpacity?: number): BrushParams {
 	switch (brushType) {
 		case 'pencil':
 			return pencilGradeParams(normalizePencilGrade(pencilGrade));
 		case 'highlighter':
-			return { opacity: 0.35, blendMode: 'multiply', widthMult: 4, thinning: 0, smoothing: 0.6, streamline: 0.5 };
+			return { opacity: highlighterOpacity ?? 0.5, blendMode: 'multiply', widthMult: 4, thinning: 0, smoothing: 0.6, streamline: 0.5 };
 		default:
 			return { opacity: 1, blendMode: 'normal', widthMult: 1, thinning: 0.6, smoothing: 0.5, streamline: 0.5 };
 	}
@@ -47,8 +52,8 @@ export function effectiveStrokeWidth(baseStrokeWidth: number, brushType: BrushTy
 	return baseStrokeWidth * brushParams(brushType, pencilGrade).widthMult;
 }
 
-export function brushMaterialProps(brushType: BrushType, pencilGrade: PencilGrade = 'HB'): Partial<PathData> {
-	const { opacity, blendMode } = brushParams(brushType, pencilGrade);
+export function brushMaterialProps(brushType: BrushType, pencilGrade: PencilGrade = 'HB', highlighterOpacity?: number): Partial<PathData> {
+	const { opacity, blendMode } = brushParams(brushType, pencilGrade, highlighterOpacity);
 	const props: Partial<PathData> = {};
 	if (opacity !== 1) props.opacity = opacity;
 	if (blendMode !== 'normal') props.blendMode = blendMode;
@@ -66,8 +71,8 @@ export function brushMaterialProps(brushType: BrushType, pencilGrade: PencilGrad
  * `p` is clamped to 0..1. The baseline floor keeps very-light pressure from going
  * fully transparent (a faint ghost of the stroke should still read).
  */
-export function pressureStrokeOpacity(p: number, brushType: BrushType, pencilGrade: PencilGrade = 'HB'): number {
-	const nominal = brushParams(brushType, pencilGrade).opacity;
+export function pressureStrokeOpacity(p: number, brushType: BrushType, pencilGrade: PencilGrade = 'HB', highlighterOpacity?: number): number {
+	const nominal = brushParams(brushType, pencilGrade, highlighterOpacity).opacity;
 	// Pen (and any fully-opaque brush) stays opaque regardless of pressure — only
 	// the multiply-blend brushes (pencil/marker) get the reduced-baseline ramp.
 	if (nominal >= 1) return 1;
@@ -81,7 +86,8 @@ export function buildBasicStrokePath(
 	baseStrokeWidth: number,
 	layerId: string,
 	brushType: BrushType,
-	pencilGrade: PencilGrade = 'HB'
+	pencilGrade: PencilGrade = 'HB',
+	highlighterOpacity?: number
 ): PathData {
 	return {
 		id: generateId(),
@@ -90,7 +96,7 @@ export function buildBasicStrokePath(
 		fill: 'none',
 		strokeWidth: effectiveStrokeWidth(baseStrokeWidth, brushType, pencilGrade),
 		layerId,
-		...brushMaterialProps(brushType, pencilGrade)
+		...brushMaterialProps(brushType, pencilGrade, highlighterOpacity)
 	};
 }
 
@@ -103,7 +109,8 @@ export function buildStrokeSegmentPath(
 	stroke: string,
 	layerId: string,
 	brushType: BrushType,
-	pencilGrade: PencilGrade = 'HB'
+	pencilGrade: PencilGrade = 'HB',
+	highlighterOpacity?: number
 ): PathData {
 	return {
 		id: generateId(),
@@ -112,7 +119,7 @@ export function buildStrokeSegmentPath(
 		fill: 'none',
 		strokeWidth: width,
 		layerId,
-		...brushMaterialProps(brushType, pencilGrade)
+		...brushMaterialProps(brushType, pencilGrade, highlighterOpacity)
 	};
 }
 
@@ -123,7 +130,8 @@ export function buildFreehandStrokePath(
 	brushType: BrushType,
 	source?: PathData['freehandSource'],
 	pencilGrade: PencilGrade = 'HB',
-	opacity?: number
+	opacity?: number,
+	highlighterOpacity?: number
 ): PathData {
 	return {
 		id: generateId(),
@@ -133,7 +141,7 @@ export function buildFreehandStrokePath(
 		strokeWidth: 0,
 		layerId,
 		...(source ? { freehandSource: source } : {}),
-		...brushMaterialProps(brushType, pencilGrade),
+		...brushMaterialProps(brushType, pencilGrade, highlighterOpacity),
 		...(opacity !== undefined ? { opacity } : {})
 	};
 }

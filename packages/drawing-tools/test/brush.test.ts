@@ -31,9 +31,16 @@ describe('pressure-driven opacity (pencil & marker)', () => {
 	});
 
 	it('ramps marker (highlighter) from a reduced baseline up to its nominal', () => {
-		assert.ok(pressureStrokeOpacity(0, 'highlighter') < 0.35);
-		assert.equal(pressureStrokeOpacity(1, 'highlighter'), 0.35);
+		assert.ok(pressureStrokeOpacity(0, 'highlighter') < 0.5);
+		assert.equal(pressureStrokeOpacity(1, 'highlighter'), 0.5);
 		assert.ok(pressureStrokeOpacity(0.7, 'highlighter') > pressureStrokeOpacity(0.2, 'highlighter'));
+	});
+
+	it('honors a highlighterOpacity override for the nominal (and its pressure ramp)', () => {
+		assert.equal(pressureStrokeOpacity(1, 'highlighter', 'HB', 0.8), 0.8);
+		assert.ok(pressureStrokeOpacity(0, 'highlighter', 'HB', 0.8) < 0.8);
+		// Other brush types ignore the override entirely.
+		assert.equal(pressureStrokeOpacity(1, 'pen', 'HB', 0.8), 1);
 	});
 
 	it('keeps a faint floor at zero pressure so light strokes still read', () => {
@@ -99,7 +106,7 @@ describe('brush SVG path contracts', () => {
 
 	it('makes highlighter paths wide, translucent, and multiply blended', () => {
 		assert.deepEqual(brushMaterialProps('highlighter'), {
-			opacity: 0.35,
+			opacity: 0.5,
 			blendMode: 'multiply'
 		});
 		assert.equal(effectiveStrokeWidth(5, 'highlighter'), 20);
@@ -110,7 +117,22 @@ describe('brush SVG path contracts', () => {
 			fill: 'none',
 			strokeWidth: 18,
 			layerId: 'notes',
-			opacity: 0.35,
+			opacity: 0.5,
+			blendMode: 'multiply'
+		});
+
+		// A caller-supplied strength overrides the nominal default.
+		assert.deepEqual(brushMaterialProps('highlighter', 'HB', 0.8), {
+			opacity: 0.8,
+			blendMode: 'multiply'
+		});
+		assert.deepEqual(withoutId(buildStrokeSegmentPath(1, 2, 3, 4, 18, '#ffff00', 'notes', 'highlighter', 'HB', 0.8)), {
+			d: 'M 1 2 L 3 4',
+			stroke: '#ffff00',
+			fill: 'none',
+			strokeWidth: 18,
+			layerId: 'notes',
+			opacity: 0.8,
 			blendMode: 'multiply'
 		});
 	});
@@ -136,7 +158,19 @@ describe('brush SVG path contracts', () => {
 			fill: '#ffff00',
 			strokeWidth: 0,
 			layerId: 'default',
-			opacity: 0.35,
+			opacity: 0.5,
+			blendMode: 'multiply'
+		});
+
+		// highlighterOpacity sets the nominal; an explicit trailing `opacity`
+		// (pressure-derived per-point value) still wins over both.
+		assert.deepEqual(withoutId(buildFreehandStrokePath('M 0 0 L 10 0 Z', '#ffff00', 'default', 'highlighter', undefined, 'HB', undefined, 0.8)), {
+			d: 'M 0 0 L 10 0 Z',
+			stroke: 'none',
+			fill: '#ffff00',
+			strokeWidth: 0,
+			layerId: 'default',
+			opacity: 0.8,
 			blendMode: 'multiply'
 		});
 	});
