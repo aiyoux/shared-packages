@@ -99,6 +99,7 @@ describe('FileExplorer component', () => {
 		const row = document.querySelector('[data-testid="fe-file-row"]') as HTMLElement;
 		await fireEvent.click(row);
 		expect(row.classList.contains('selected')).toBe(true);
+		expect(opened).toEqual([]);
 		const openBtn = await screen.findByTestId('fe-open-selected');
 		await fireEvent.click(openBtn);
 		expect(opened).toEqual(['Sketch.skch']);

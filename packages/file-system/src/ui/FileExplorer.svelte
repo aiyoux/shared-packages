@@ -1132,13 +1132,6 @@
 						if (listBusy) return;
 						void activate(n);
 					}}
-					ondblclick={(e) => {
-						if (listBusy) return;
-						const t = e.target as HTMLElement | null;
-						if (t?.closest?.('input, button, a, [contenteditable="true"]')) return;
-						e.preventDefault();
-						void activate(n);
-					}}
 				>
 					<span class="fe-icon">{n.kind === 'folder' ? '📁' : '📄'}</span>
 					{#if renamingId === n.id}
