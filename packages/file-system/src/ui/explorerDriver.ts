@@ -57,6 +57,12 @@ export interface ExplorerCapabilities {
 	 * Local durable + memory: true. B2 + rclone: false.
 	 */
 	supportsSiblingOrder: boolean;
+	/**
+	 * Rows are draggable (native HTML5 DnD, ids in `text/plain`) for external
+	 * drop targets outside this FileExplorer, even when supportsMove is false.
+	 * Does not enable internal move/reorder. Optional; false when omitted.
+	 */
+	supportsDragOut?: boolean;
 }
 
 /**

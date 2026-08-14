@@ -22,7 +22,8 @@ export const MEMORY_CAPS: ExplorerCapabilities = {
 	supportsMkdir: false,
 	supportsUpload: false,
 	supportsDownload: true,
-	supportsSiblingOrder: false
+	supportsSiblingOrder: false,
+	supportsDragOut: true
 };
 
 function toEntry(n: {

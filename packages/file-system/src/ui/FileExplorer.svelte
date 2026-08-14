@@ -155,6 +155,13 @@
 		mode === 'manage' && !showTrash && caps.supportsMove
 	);
 
+	// Broader than dndEnabled: also true when the driver only wants rows
+	// draggable for external drop targets (supportsDragOut), without opting
+	// into internal move/reorder (e.g. the flat memory list).
+	const dragOutEnabled = $derived(
+		mode === 'manage' && !showTrash && Boolean(caps.supportsMove || caps.supportsDragOut)
+	);
+
 	// Notify parent of selection/folder without tracking unstable callback identity
 	let lastCtxKey = '';
 	$effect(() => {
@@ -179,7 +186,7 @@
 	}
 
 	function onRowDragStart(e: DragEvent, n: ExplorerEntry) {
-		if (!dndEnabled) {
+		if (!dragOutEnabled) {
 			e.preventDefault();
 			return;
 		}
@@ -191,13 +198,17 @@
 		}
 		const ids =
 			selected.has(n.id) && selected.size > 0 ? [...selected] : [n.id];
-		dnd.startDrag(ids, parentId);
+		// Only start the internal move/reorder session when the driver actually
+		// supports move — for supportsDragOut-only drivers (e.g. memory), leave
+		// the session inactive so no in-list drop-target chrome/logic engages;
+		// the native dataTransfer payload below is still set for external drops.
+		if (caps.supportsMove) dnd.startDrag(ids, parentId);
 		try {
 			e.dataTransfer?.setData('text/plain', ids.join(','));
 		} catch {
 			/* jsdom may lack full DataTransfer */
 		}
-		if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move';
+		if (e.dataTransfer) e.dataTransfer.effectAllowed = caps.supportsMove ? 'move' : 'copy';
 	}
 
 	function onRowDragOver(e: DragEvent, n: ExplorerEntry) {
@@ -1024,7 +1035,7 @@
 					data-file-type={n.fileType ?? ''}
 					data-id={n.id}
 					data-name={n.name}
-					draggable={dndEnabled}
+					draggable={dragOutEnabled}
 					aria-disabled={!actionable && n.kind === 'file' ? 'true' : undefined}
 					aria-selected={selected.has(n.id) || i === focusIndex}
 					role="option"
