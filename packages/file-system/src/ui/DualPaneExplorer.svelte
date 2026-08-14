@@ -29,7 +29,13 @@
 	// PaneId + DualPaneTids live in a .ts module so the ui barrel can re-export
 	// them without the *.svelte named-export limitation.
 	import { type PaneId, type DualPaneTids } from './dualPaneTypes.js';
-	import { canShowCopyAcross, copyAcross, CopyAcrossError } from './copyAcross.js';
+	import {
+		canShowCopyAcross,
+		copyAcross,
+		CopyAcrossError,
+		destParentFromDropEvent,
+		idsFromExplorerDataTransfer
+	} from './copyAcross.js';
 	import { getMemoryVfs, type MemoryVfsService, type VfsService } from '../index.js';
 	import {
 		B2ConnectionForm,
@@ -202,6 +208,9 @@
 	let watchPollTimer: ReturnType<typeof setInterval> | null = null;
 	let copyBusy = $state(false);
 	let copyError = $state('');
+	/** Pane a FileExplorer row drag started in (cross-pane copy). */
+	let crossDragFrom = $state<PaneId | null>(null);
+	let crossOver = $state<PaneId | null>(null);
 	let sendBusy = $state(false);
 	let sendError = $state<{ pane: PaneId; message: string } | null>(null);
 	let memoryVfs: MemoryVfsService | null = null;
@@ -596,22 +605,68 @@
 		});
 	}
 
-	async function runCopyAcross(from: PaneId) {
+	function onPaneDragStart(id: PaneId) {
+		if (!dualPane || !showCopyAcross) return;
+		crossDragFrom = id;
+		crossOver = null;
+	}
+
+	function onPaneDragOver(id: PaneId, e: DragEvent) {
+		if (!dualPane || !showCopyAcross || !crossDragFrom || crossDragFrom === id) return;
+		e.preventDefault();
+		e.stopPropagation();
+		if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+		crossOver = id;
+	}
+
+	function onPaneDragLeave(id: PaneId, e: DragEvent) {
+		const next = e.relatedTarget;
+		if (next instanceof Node && (e.currentTarget as Node).contains(next)) return;
+		if (crossOver === id) crossOver = null;
+	}
+
+	function onPaneDragEnd() {
+		crossDragFrom = null;
+		crossOver = null;
+	}
+
+	async function onPaneDrop(id: PaneId, e: DragEvent) {
+		if (!dualPane || !showCopyAcross || !crossDragFrom || crossDragFrom === id) {
+			onPaneDragEnd();
+			return;
+		}
+		e.preventDefault();
+		e.stopPropagation();
+		const from = crossDragFrom;
+		const src = paneState(from);
+		const dst = paneState(id);
+		const dragged = idsFromExplorerDataTransfer(e.dataTransfer);
+		const selectedIds = dragged.length ? dragged : src.ctx.selectedIds;
+		const destParentId = destParentFromDropEvent(e, dst.ctx.parentId);
+		onPaneDragEnd();
+		await runCopyAcross(from, { selectedIds, destParentId });
+	}
+
+	async function runCopyAcross(
+		from: PaneId,
+		opts?: { selectedIds?: string[]; destParentId?: string | null }
+	) {
 		if (!dualPane) return;
 		const src = paneState(from);
-		const dst = paneState(from === 'left' ? 'right' : 'left');
+		const destId: PaneId = from === 'left' ? 'right' : 'left';
+		const dst = paneState(destId);
 		copyError = '';
 		copyBusy = true;
 		try {
 			const n = await copyAcross({
 				sourceDriver: activeDriver(src),
 				destDriver: activeDriver(dst),
-				selectedIds: src.ctx.selectedIds,
+				selectedIds: opts?.selectedIds ?? src.ctx.selectedIds,
 				sourceEntries: src.ctx.entries,
-				destParentId: dst.ctx.parentId
+				destParentId: opts?.destParentId !== undefined ? opts.destParentId : dst.ctx.parentId
 			});
 			// Remount dest explorer to refresh list
-			setPane(from === 'left' ? 'right' : 'left', {
+			setPane(destId, {
 				explorerKey: dst.explorerKey + 1
 			});
 			if (n === 0) copyError = 'Nothing copied';
@@ -662,7 +717,18 @@
 	{@const drv = activeDriver(p)}
 	{@const hostTid = tids.explorerHost(id)}
 	{@const subTid = tids.paneSub(id)}
-	<div class="files-pane" data-testid={tids.pane(id)} data-pane={id}>
+	<!-- svelte-ignore a11y_no_static_element_interactions -->
+	<div
+		class="files-pane"
+		class:drop-target={crossOver === id}
+		data-testid={tids.pane(id)}
+		data-pane={id}
+		ondragstart={() => onPaneDragStart(id)}
+		ondragover={(e) => onPaneDragOver(id, e)}
+		ondragleave={(e) => onPaneDragLeave(id, e)}
+		ondrop={(e) => void onPaneDrop(id, e)}
+		ondragend={onPaneDragEnd}
+	>
 		<div class="pane-chrome" data-testid={tids.paneChrome(id)}>
 			{#if !hidePaneLabels}
 				<span class="pane-label" data-testid={tids.paneLabel(id)}>
@@ -1038,6 +1104,11 @@
 		min-height: 420px;
 		display: flex;
 		flex-direction: column;
+	}
+	.files-pane.drop-target {
+		outline: 2px solid #38bdf8;
+		outline-offset: -2px;
+		background: color-mix(in srgb, #38bdf8 10%, transparent);
 	}
 	.files-body.dual .files-pane + .files-pane {
 		border-left: 1px solid var(--border, #334155);

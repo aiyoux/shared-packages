@@ -31,6 +31,41 @@ export class CopyAcrossError extends Error {
 	}
 }
 
+/** Native DnD type FileExplorer writes; DualPaneExplorer reads it on pane drop. */
+export const FE_EXPLORER_IDS_MIME = 'application/x-fe-explorer-ids';
+
+export function parseExplorerDragIds(raw: string): string[] {
+	return raw
+		.split(',')
+		.map((id) => id.trim())
+		.filter(Boolean);
+}
+
+export function idsFromExplorerDataTransfer(dt: DataTransfer | null | undefined): string[] {
+	if (!dt) return [];
+	let raw = '';
+	try {
+		raw = dt.getData(FE_EXPLORER_IDS_MIME) || dt.getData('text/plain') || '';
+	} catch {
+		raw = '';
+	}
+	return parseExplorerDragIds(raw);
+}
+
+/** Drop on a folder row copies into that folder; otherwise dest's open folder. */
+export function destParentFromDropEvent(
+	e: { target: EventTarget | null },
+	fallback: string | null
+): string | null {
+	const el = e.target as { closest?: (sel: string) => { getAttribute(name: string): string | null } | null } | null;
+	if (!el || typeof el.closest !== 'function') return fallback;
+	const row = el.closest('[data-fe-row-id]');
+	if (row?.getAttribute('data-fe-kind') === 'folder') {
+		return row.getAttribute('data-fe-row-id');
+	}
+	return fallback;
+}
+
 export type CopyAcrossArgs = {
 	sourceDriver: ExplorerDriver;
 	destDriver: ExplorerDriver;

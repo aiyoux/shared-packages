@@ -9,6 +9,7 @@
 	import { createLocalExplorerDriver } from './localExplorerDriver.js';
 	import StoragePersistenceStatus from './StoragePersistenceStatus.svelte';
 	import { createTreeDndSession, resolveDrop, zoneFromY, type DropZone } from './treeDnd/index.js';
+	import { FE_EXPLORER_IDS_MIME } from './copyAcross.js';
 
 	export type ExplorerMode = 'manage' | 'open' | 'save' | 'browse';
 
@@ -213,11 +214,14 @@
 		// the native dataTransfer payload below is still set for external drops.
 		if (caps.supportsMove) dnd.startDrag(ids, parentId);
 		try {
-			e.dataTransfer?.setData('text/plain', ids.join(','));
+			const payload = ids.join(',');
+			e.dataTransfer?.setData('text/plain', payload);
+			e.dataTransfer?.setData(FE_EXPLORER_IDS_MIME, payload);
 		} catch {
 			/* jsdom may lack full DataTransfer */
 		}
-		if (e.dataTransfer) e.dataTransfer.effectAllowed = caps.supportsMove ? 'move' : 'copy';
+		// copyMove so DualPaneExplorer can accept a copy drop (move-only is rejected).
+		if (e.dataTransfer) e.dataTransfer.effectAllowed = caps.supportsMove ? 'copyMove' : 'copy';
 	}
 
 	function onRowDragOver(e: DragEvent, n: ExplorerEntry) {
@@ -303,6 +307,9 @@
 	}
 
 	function onRowDrop(e: DragEvent, n: ExplorerEntry) {
+		// Inactive session = a drag from the *other* dual pane. Let it bubble
+		// so DualPaneExplorer can copy-across; do not steal the drop.
+		if (!dnd.getState().active) return;
 		e.preventDefault();
 		e.stopPropagation();
 		void commitDndDrop(n);
