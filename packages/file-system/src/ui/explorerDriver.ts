@@ -201,5 +201,10 @@ export function isLocalClass(driverId: string): boolean {
 }
 
 export function isRemoteClass(driverId: string): boolean {
-	return driverId === 'b2' || driverId === 'rclone' || driverId === 'monitor';
+	return (
+		driverId === 'b2' ||
+		driverId === 'rclone' ||
+		driverId === 'monitor' ||
+		driverId === 'peer-fs'
+	);
 }

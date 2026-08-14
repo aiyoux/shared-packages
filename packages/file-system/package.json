@@ -27,6 +27,11 @@
       "import": "./src/ui/localExplorerDriver.ts",
       "default": "./src/ui/localExplorerDriver.ts"
     },
+    "./ui/memoryExplorerDriver": {
+      "types": "./src/ui/memoryExplorerDriver.ts",
+      "import": "./src/ui/memoryExplorerDriver.ts",
+      "default": "./src/ui/memoryExplorerDriver.ts"
+    },
     "./ui/copyAcross": {
       "types": "./src/ui/copyAcross.ts",
       "import": "./src/ui/copyAcross.ts",

@@ -232,12 +232,16 @@ async function copyFile(
 			type: entry.contentType || blob.type || 'application/octet-stream'
 		});
 
-		if (dest.id === 'monitor' || (!dest.writeFile && !dest.upload)) {
+		const noWrite = !dest.writeFile && !dest.upload;
+		const readonlyDest = dest.id === 'monitor' || (dest.id === 'peer-fs' && noWrite);
+		if (readonlyDest || noWrite) {
 			throw new CopyAcrossError(
-				dest.id === 'monitor' ? 'COPY_ACROSS_DEST_READONLY' : 'COPY_ACROSS_NO_DEST',
+				readonlyDest ? 'COPY_ACROSS_DEST_READONLY' : 'COPY_ACROSS_NO_DEST',
 				dest.id === 'monitor'
 					? 'Monitor is read-only. Copy from monitor into This computer, In memory, or the browser library.'
-					: 'Destination cannot accept file writes'
+					: readonlyDest
+						? 'That shared location is read-only'
+						: 'Destination cannot accept file writes'
 			);
 		}
 

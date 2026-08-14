@@ -26,10 +26,11 @@ describe('isLocalClass / isRemoteClass', () => {
 		assert.equal(isLocalClass('other'), false);
 	});
 
-	it('remote-class = b2 | rclone | monitor', () => {
+	it('remote-class = b2 | rclone | monitor | peer-fs', () => {
 		assert.equal(isRemoteClass('b2'), true);
 		assert.equal(isRemoteClass('rclone'), true);
 		assert.equal(isRemoteClass('monitor'), true);
+		assert.equal(isRemoteClass('peer-fs'), true);
 		assert.equal(isRemoteClass('local'), false);
 		assert.equal(isRemoteClass('memory'), false);
 		assert.equal(isRemoteClass('disk'), false);
@@ -49,15 +50,20 @@ describe('isLocalClass / isRemoteClass', () => {
 		assert.equal(canShowCopyAcross('memory', 'monitor'), true);
 		assert.equal(canShowCopyAcross('local', 'monitor'), true);
 		assert.equal(canShowCopyAcross('disk', 'memory'), true);
+		assert.equal(canShowCopyAcross('local', 'peer-fs'), true);
+		assert.equal(canShowCopyAcross('b2', 'peer-fs'), false);
 	});
 
 	it('assertCopyAcrossAllowed blocks only remote↔remote', () => {
 		assert.throws(() => assertCopyAcrossAllowed('b2', 'monitor'), /remote/i);
 		assert.throws(() => assertCopyAcrossAllowed('monitor', 'rclone'), /remote/i);
+		assert.throws(() => assertCopyAcrossAllowed('b2', 'peer-fs'), /remote/i);
 		assertCopyAcrossAllowed('disk', 'b2');
 		assertCopyAcrossAllowed('b2', 'local');
 		assertCopyAcrossAllowed('monitor', 'memory');
 		assertCopyAcrossAllowed('local', 'disk');
+		assertCopyAcrossAllowed('local', 'peer-fs');
+		assertCopyAcrossAllowed('disk', 'peer-fs');
 	});
 });
 

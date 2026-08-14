@@ -129,6 +129,8 @@
 			selectedIds: string[];
 			entries: ExplorerEntry[];
 		}) => void;
+		/** Guest peer-filesystem on the right pane (Connections share tab). */
+		overrideRight?: { driver: ExplorerDriver; label: string } | null;
 		/** In-progress transfer rows for each pane's explorer listing. */
 		pendingLeft?: Array<{
 			id: string;
@@ -178,6 +180,7 @@
 		rcloneEnabled = false,
 		switcherShowMemory = true,
 		onExplorerDrag,
+		overrideRight = null,
 		pendingLeft = [],
 		pendingRight = [],
 		onDualChange,
@@ -288,7 +291,8 @@
 		if (id === 'left') left = { ...left, ...patch };
 		else right = { ...right, ...patch };
 	}
-	function activeDriver(p: PaneState): ExplorerDriver {
+	function activeDriver(p: PaneState, id?: PaneId): ExplorerDriver {
+		if (id === 'right' && overrideRight) return overrideRight.driver;
 		if (p.activeKind === 'memory') return p.memoryDriver ?? getMemoryDriver();
 		if (p.activeKind !== 'local' && p.remoteDriver) return p.remoteDriver;
 		return localDriver;
@@ -326,8 +330,11 @@
 		monitorProfiles.map((p) => ({ id: p.id, name: p.name, detail: p.rootPath }))
 	);
 
+	const rightCopyKind = $derived(
+		overrideRight ? overrideRight.driver.id : right.ctx.backend || right.activeKind
+	);
 	const showCopyAcross = $derived(
-		dualPane && canShowCopyAcross(left.ctx.backend || left.activeKind, right.ctx.backend || right.activeKind)
+		dualPane && canShowCopyAcross(left.ctx.backend || left.activeKind, rightCopyKind)
 	);
 
 	const visibleCopyItems = $derived(copyItems.filter((t) => !dismissedCopyIds.has(t.id)));
@@ -758,7 +765,7 @@
 		if (selectedIds.length) {
 			onExplorerDrag?.({
 				paneId: id,
-				driver: activeDriver(p),
+				driver: activeDriver(p, id),
 				selectedIds,
 				entries: p.ctx.entries
 			});
@@ -816,9 +823,9 @@
 		copyBusy = true;
 		copyDestPane = destId;
 		try {
-			const destDriver = activeDriver(dst);
+			const destDriver = activeDriver(dst, destId);
 			const n = await copyAcross({
-				sourceDriver: activeDriver(src),
+				sourceDriver: activeDriver(src, from),
 				destDriver,
 				selectedIds: opts?.selectedIds ?? src.ctx.selectedIds,
 				sourceEntries: src.ctx.entries,
@@ -851,7 +858,7 @@
 		try {
 			await onSend({
 				paneId: id,
-				driver: activeDriver(p),
+				driver: activeDriver(p, id),
 				selectedIds,
 				entries
 			});
@@ -878,7 +885,7 @@
 {#snippet explorerPane(id: PaneId)}
 	<!-- Read $state panes directly so UI reacts (avoid stale {@const}). -->
 	{@const p = id === 'left' ? left : right}
-	{@const drv = activeDriver(p)}
+	{@const drv = activeDriver(p, id)}
 	{@const hostTid = tids.explorerHost(id)}
 	{@const subTid = tids.paneSub(id)}
 	<!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -899,7 +906,7 @@
 					{id === 'left' ? (dualPane ? 'Left' : 'Browser') : 'Right'}
 				</span>
 			{/if}
-			{#if paneShowsSwitcher(id)}
+			{#if paneShowsSwitcher(id) && !(id === 'right' && overrideRight)}
 				<ConnectionSwitcher
 				activeId={p.activeId}
 				activeKind={p.activeKind}
@@ -987,6 +994,9 @@
 				<span class="remote-badge" data-testid="disk-badge-{id}"
 					>This computer{p.diskName ? ` · ${p.diskName}` : ''}</span
 				>
+			{/if}
+			{#if id === 'right' && overrideRight}
+				<span class="remote-badge" data-testid="peer-fs-badge">Their · {overrideRight.label}</span>
 			{/if}
 			{#if subTid}
 				<span class="pane-sub" data-testid={subTid.testid}>{subTid.text}</span>
@@ -1081,8 +1091,20 @@
 			</div>
 		{/if}
 		<div class="pane-explorer" data-testid={hostTid}>
-			{#key `${id}-${p.explorerKey}-${p.activeKind}-${p.activeId}`}
-				{#if p.activeKind === 'local'}
+			{#key `${id}-${p.explorerKey}-${p.activeKind}-${p.activeId}-${id === 'right' && overrideRight ? `peer:${overrideRight.label}` : ''}`}
+				{#if id === 'right' && overrideRight}
+					<FileExplorer
+						mode="manage"
+						variant="panel"
+						driver={overrideRight.driver}
+						showPersistence={false}
+						initialParentId={p.ctx.parentId}
+						pending={panePending(id)}
+						onContextChange={(ctx) => {
+							right = { ...right, ctx };
+						}}
+					/>
+				{:else if p.activeKind === 'local'}
 					<!-- Page header owns the persistence chip; keep FE toolbar uncluttered. -->
 					<FileExplorer
 						mode="manage"
