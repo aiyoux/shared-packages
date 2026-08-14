@@ -34,7 +34,8 @@
 		copyAcross,
 		CopyAcrossError,
 		destParentFromDropEvent,
-		idsFromExplorerDataTransfer
+		idsFromExplorerDataTransfer,
+		idsFromExplorerDragTarget
 	} from './copyAcross.js';
 	import { getMemoryVfs, type MemoryVfsService, type VfsService } from '../index.js';
 	import { canPickDirectory, createDiskExplorerDriver, pickDirectory } from '../disk/index.js';
@@ -105,6 +106,27 @@
 		hidePaneLabels?: boolean;
 		/** Hide the connection/backend switcher in each pane (locks its backend). */
 		hideConnectionSwitcher?: boolean;
+		/** When set, only these panes show the backend switcher. */
+		switcherPanes?: PaneId[];
+		/**
+		 * Force-enable monitor chips even when the feature-toggle row is hidden
+		 * (CM always-dual layout). Does not persist the files-page localStorage flag.
+		 */
+		monitorEnabled?: boolean;
+		/** Same as monitorEnabled for rclone (off unless asked). */
+		rcloneEnabled?: boolean;
+		/** Show the In memory chip in the switcher. Default true. */
+		switcherShowMemory?: boolean;
+		/**
+		 * Fired when a FileExplorer row drag starts in a pane. CM uses this to
+		 * download-then-send from B2/monitor as well as local/memory VFS.
+		 */
+		onExplorerDrag?: (args: {
+			paneId: PaneId;
+			driver: ExplorerDriver;
+			selectedIds: string[];
+			entries: ExplorerEntry[];
+		}) => void;
 		/** In-progress transfer rows for each pane's explorer listing. */
 		pendingLeft?: Array<{
 			id: string;
@@ -149,6 +171,11 @@
 		hideToggles = false,
 		hidePaneLabels = false,
 		hideConnectionSwitcher = false,
+		switcherPanes,
+		monitorEnabled = false,
+		rcloneEnabled = false,
+		switcherShowMemory = true,
+		onExplorerDrag,
 		pendingLeft = [],
 		pendingRight = [],
 		onDualChange,
@@ -382,8 +409,8 @@
 			dualPane = dualPaneDefault;
 		}
 		onDualChange?.(dualPane);
-		showRclone = readRcloneFeature();
-		showMonitor = readMonitorFeature();
+		showRclone = rcloneEnabled || readRcloneFeature();
+		showMonitor = monitorEnabled || readMonitorFeature();
 		void reloadProfiles();
 		// Hub files memory singleton hook (separate from durable page-owned __VFS_TEST__).
 		// Memory is global/shared: NOT disposed on pagehide.
@@ -668,7 +695,29 @@
 		});
 	}
 
-	function onPaneDragStart(id: PaneId) {
+	function paneShowsSwitcher(id: PaneId): boolean {
+		if (hideConnectionSwitcher) return false;
+		if (!switcherPanes || switcherPanes.length === 0) return true;
+		return switcherPanes.includes(id);
+	}
+
+	function onPaneDragStart(id: PaneId, e: DragEvent) {
+		const p = paneState(id);
+		const fromDt = idsFromExplorerDataTransfer(e.dataTransfer);
+		const fromRow = idsFromExplorerDragTarget(e.target);
+		const selectedIds = fromDt.length
+			? fromDt
+			: fromRow.length
+				? fromRow
+				: p.ctx.selectedIds;
+		if (selectedIds.length) {
+			onExplorerDrag?.({
+				paneId: id,
+				driver: activeDriver(p),
+				selectedIds,
+				entries: p.ctx.entries
+			});
+		}
 		if (!dualPane || !showCopyAcross) return;
 		crossDragFrom = id;
 		crossOver = null;
@@ -792,7 +841,7 @@
 		class:drop-target={crossOver === id}
 		data-testid={tids.pane(id)}
 		data-pane={id}
-		ondragstart={() => onPaneDragStart(id)}
+		ondragstart={(e) => onPaneDragStart(id, e)}
 		ondragover={(e) => onPaneDragOver(id, e)}
 		ondragleave={(e) => onPaneDragLeave(id, e)}
 		ondrop={(e) => void onPaneDrop(id, e)}
@@ -804,7 +853,7 @@
 					{id === 'left' ? (dualPane ? 'Left' : 'Browser') : 'Right'}
 				</span>
 			{/if}
-			{#if !hideConnectionSwitcher}
+			{#if paneShowsSwitcher(id)}
 				<ConnectionSwitcher
 				activeId={p.activeId}
 				activeKind={p.activeKind}
@@ -813,7 +862,7 @@
 				monitorProfiles={monitorChips}
 				showRclone={showRclone}
 				showMonitor={showMonitor}
-				showMemory={true}
+				showMemory={switcherShowMemory}
 				busy={p.busy}
 				onSelect={(sel) => onSelectConnection(id, sel)}
 				onConfigureB2={() => {

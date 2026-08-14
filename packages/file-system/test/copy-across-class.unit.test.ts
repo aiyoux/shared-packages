@@ -7,6 +7,7 @@ import {
 	destParentFromDropEvent,
 	FE_EXPLORER_IDS_MIME,
 	idsFromExplorerDataTransfer,
+	idsFromExplorerDragTarget,
 	parseExplorerDragIds
 } from '../src/ui/copyAcross.ts';
 import type { ExplorerDriver, ExplorerEntry } from '../src/ui/explorerDriver.ts';
@@ -78,6 +79,32 @@ describe('cross-pane drag payload', () => {
 		};
 		assert.equal(destParentFromDropEvent({ target: file as unknown as EventTarget }, 'open'), 'open');
 		assert.equal(destParentFromDropEvent({ target: null }, 'open'), 'open');
+	});
+
+	it('idsFromExplorerDragTarget reads the row, or the selected set', () => {
+		const selected = {
+			getAttribute(name: string) {
+				return name === 'data-fe-row-id' ? 'a' : null;
+			}
+		};
+		const list = {
+			querySelectorAll(sel: string) {
+				return sel === '.fe-row.selected[data-fe-row-id]' ? [selected] : [];
+			}
+		};
+		const row = {
+			getAttribute(name: string) {
+				if (name === 'data-fe-row-id') return 'a';
+				return null;
+			},
+			closest(sel: string) {
+				if (sel === '[data-fe-row-id]') return row;
+				if (sel === '[data-testid="fe-list"]') return list;
+				return null;
+			}
+		};
+		assert.deepEqual(idsFromExplorerDragTarget(row as unknown as EventTarget), ['a']);
+		assert.deepEqual(idsFromExplorerDragTarget(null), []);
 	});
 });
 

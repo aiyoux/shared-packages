@@ -40,7 +40,9 @@ const MONITOR_CAPS: ExplorerCapabilities = {
 	supportsMkdir: false,
 	supportsUpload: false,
 	supportsDownload: true,
-	supportsSiblingOrder: false
+	supportsSiblingOrder: false,
+	/** Native drag so DualPane / CM send-zone can copy or download-then-send. */
+	supportsDragOut: true
 };
 
 function sortFoldersFirst(entries: ExplorerEntry[]): ExplorerEntry[] {

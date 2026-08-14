@@ -54,6 +54,36 @@ export function idsFromExplorerDataTransfer(dt: DataTransfer | null | undefined)
 }
 
 /** Drop on a folder row copies into that folder; otherwise dest's open folder. */
+/**
+ * Row ids for a dragstart that bubbled from a FileExplorer row. Chrome often
+ * leaves getData() empty until drop, so DualPane / CM send-zone use this.
+ */
+export function idsFromExplorerDragTarget(target: EventTarget | null): string[] {
+	const el = target as {
+		closest?: (sel: string) => {
+			getAttribute(name: string): string | null;
+			closest(sel: string): {
+				querySelectorAll(sel: string): Iterable<{ getAttribute(name: string): string | null }>;
+			} | null;
+		} | null;
+	} | null;
+	if (!el || typeof el.closest !== 'function') return [];
+	const row = el.closest('[data-fe-row-id]');
+	if (!row) return [];
+	const draggedId = row.getAttribute('data-fe-row-id');
+	if (!draggedId) return [];
+	const list = row.closest('[data-testid="fe-list"]');
+	if (list) {
+		const selected: string[] = [];
+		for (const n of list.querySelectorAll('.fe-row.selected[data-fe-row-id]')) {
+			const id = n.getAttribute('data-fe-row-id');
+			if (id) selected.push(id);
+		}
+		if (selected.length > 0 && selected.includes(draggedId)) return selected;
+	}
+	return [draggedId];
+}
+
 export function destParentFromDropEvent(
 	e: { target: EventTarget | null },
 	fallback: string | null

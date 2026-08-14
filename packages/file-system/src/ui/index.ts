@@ -8,6 +8,7 @@ export {
 	assertCopyAcrossAllowed,
 	copyAcross,
 	CopyAcrossError,
+	idsFromExplorerDragTarget,
 	type CopyAcrossArgs,
 	type CopyAcrossErrorCode
 } from './copyAcross.js';
