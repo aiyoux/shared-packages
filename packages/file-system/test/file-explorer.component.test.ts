@@ -76,6 +76,46 @@ describe('FileExplorer component', () => {
 		expect(incompatible?.getAttribute('data-file-type')).toBe('vrec');
 	});
 
+	it('single-click selects; Open appears and calls onOpen', async () => {
+		await vfs.writeFile({
+			parentId: null,
+			name: 'Sketch',
+			fileType: 'skch',
+			body: { format: 'skch', schemaVersion: 1, name: 'Sketch', data: {} }
+		});
+		const opened: string[] = [];
+		render(FileExplorer, {
+			props: {
+				mode: 'manage',
+				vfs,
+				variant: 'panel',
+				onOpen: (entry: { name: string }) => {
+					opened.push(entry.name);
+				}
+			}
+		});
+		await viWaitForRows(1);
+		expect(screen.queryByTestId('fe-open-selected')).toBeNull();
+		const row = document.querySelector('[data-testid="fe-file-row"]') as HTMLElement;
+		await fireEvent.click(row);
+		expect(row.classList.contains('selected')).toBe(true);
+		const openBtn = await screen.findByTestId('fe-open-selected');
+		await fireEvent.click(openBtn);
+		expect(opened).toEqual(['Sketch.skch']);
+	});
+
+	it('single-click on a folder selects it; Open enters the folder', async () => {
+		await vfs.mkdir(null, 'Docs');
+		render(FileExplorer, { props: { mode: 'manage', vfs, variant: 'panel' } });
+		await viWaitFor(() => !!document.querySelector('[data-testid="fe-folder-row"]'));
+		const row = document.querySelector('[data-testid="fe-folder-row"]') as HTMLElement;
+		await fireEvent.click(row);
+		expect(row.classList.contains('selected')).toBe(true);
+		await fireEvent.click(await screen.findByTestId('fe-open-selected'));
+		await viWaitFor(() => !!document.querySelector('[data-testid="fe-empty"]'));
+		expect(document.querySelector('[data-testid="fe-folder-row"]')).toBeNull();
+	});
+
 	it('creates a folder via New folder form', async () => {
 		render(FileExplorer, { props: { mode: 'manage', vfs, variant: 'panel' } });
 		await screen.findByTestId('file-explorer');

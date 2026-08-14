@@ -165,14 +165,8 @@ describe('FileExplorer hard-delete rclone backend', () => {
 		});
 		const rows = await screen.findAllByTestId('fe-file-row');
 		expect(rows.length).toBe(2);
-		// Selection is press-and-hold — long-press each row to select it.
-		async function longPressSelect(row: HTMLElement) {
-			await fireEvent.pointerDown(row, { button: 0 });
-			await new Promise((r) => setTimeout(r, 600));
-			await fireEvent.pointerUp(row);
-		}
-		await longPressSelect(rows[0]!);
-		await longPressSelect(rows[1]!);
+		await fireEvent.click(rows[0]!.querySelector('.fe-name')!);
+		await fireEvent.click(rows[1]!.querySelector('.fe-name')!);
 		const batch = await screen.findByTestId('fe-trash-selected');
 		await fireEvent.click(batch);
 		expect(confirmSpy).toHaveBeenCalledTimes(1);

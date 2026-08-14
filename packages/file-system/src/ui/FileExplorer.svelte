@@ -106,6 +106,8 @@
 	let listTruncated = $state(false);
 	let breadcrumbs = $state<ExplorerEntry[]>([]);
 	let selected = $state<Set<string>>(new Set());
+	/** Most recently toggled-on row — Open uses this when several items are selected. */
+	let lastSelectedId = $state<string | null>(null);
 	let saveName = $state(defaultName);
 	let error = $state('');
 	let showTrash = $state(false);
@@ -186,9 +188,6 @@
 	}
 
 	function onRowDragStart(e: DragEvent, n: ExplorerEntry) {
-		// A drag beat the long-press threshold — don't also toggle selection.
-		clearLongPressTimer();
-		longPressFired = false;
 		if (!dragOutEnabled) {
 			e.preventDefault();
 			return;
@@ -499,6 +498,7 @@
 		showTrash = false;
 		parentId = n.id;
 		selected = new Set();
+		lastSelectedId = null;
 		focusIndex = -1;
 	}
 
@@ -506,6 +506,7 @@
 		showTrash = false;
 		parentId = id;
 		selected = new Set();
+		lastSelectedId = null;
 		focusIndex = -1;
 	}
 
@@ -669,49 +670,62 @@
 		renameValue = n.name;
 	}
 
+	function canToggleSelect(): boolean {
+		return multiSelect || mode === 'manage' || mode === 'open';
+	}
+
 	function toggleSelect(id: string, e?: MouseEvent) {
-		if (!multiSelect && mode !== 'manage') return;
+		if (!canToggleSelect()) return;
 		e?.stopPropagation();
 		const next = new Set(selected);
 		if (next.has(id)) next.delete(id);
 		else next.add(id);
 		selected = next;
+		lastSelectedId = next.has(id) ? id : next.size ? [...next][next.size - 1]! : null;
 	}
 
-	/**
-	 * Selection is press-and-hold (no checkbox column): long-pressing a row
-	 * toggles it and enters "selection mode" — while any row is selected,
-	 * a plain click on a row toggles selection instead of opening it. Escape
-	 * or deselecting the last row exits selection mode.
-	 */
-	const LONG_PRESS_MS = 500;
-	let longPressTimer: ReturnType<typeof setTimeout> | null = null;
-	let longPressFired = false;
+	const selectedEntries = $derived(
+		[...selected]
+			.map((id) => nodes.find((n) => n.id === id))
+			.filter((n): n is ExplorerEntry => !!n)
+	);
 
-	function clearLongPressTimer() {
-		if (longPressTimer) {
-			clearTimeout(longPressTimer);
-			longPressTimer = null;
+	/** Open appears once something is selected that we can enter or hand off. */
+	const canOpenSelection = $derived.by(() => {
+		if (selectedEntries.length === 0) return false;
+		if (selectedEntries.some((e) => e.kind === 'folder')) return true;
+		if (
+			onOpen &&
+			(mode === 'open' || mode === 'manage') &&
+			selectedEntries.some((e) => e.kind === 'file' && rowActionable(e))
+		) {
+			return true;
 		}
-	}
+		if (mode === 'save' && selectedEntries.some((e) => e.kind === 'file')) return true;
+		return false;
+	});
 
-	function onRowPointerDown(e: PointerEvent, n: ExplorerEntry) {
-		// jsdom's synthetic PointerEvent lacks `button` (undefined) — real
-		// browsers always set 0 for touch/pen/left-mouse, so only reject a
-		// definite non-primary button (e.g. right-click).
-		if (e.button != null && e.button !== 0) return;
-		const t = e.target as HTMLElement | null;
-		if (t?.closest?.('input, button, a, [contenteditable="true"]')) return;
-		longPressFired = false;
-		clearLongPressTimer();
-		longPressTimer = setTimeout(() => {
-			// Check listBusy at fire time, not press time — a brief busy blip
-			// under the initial touch shouldn't kill an otherwise-valid hold.
-			if (listBusy) return;
-			longPressFired = true;
-			toggleSelect(n.id);
-			if (typeof navigator !== 'undefined' && navigator.vibrate) navigator.vibrate(50);
-		}, LONG_PRESS_MS);
+	async function openSelected() {
+		if (!selectedEntries.length) return;
+		const last = lastSelectedId
+			? selectedEntries.find((e) => e.id === lastSelectedId)
+			: undefined;
+		const files = selectedEntries.filter((e) => e.kind === 'file' && rowActionable(e));
+		const folders = selectedEntries.filter((e) => e.kind === 'folder');
+		const primaryFile =
+			last?.kind === 'file' && rowActionable(last) ? last : (files[0] ?? null);
+		const primaryFolder = last?.kind === 'folder' ? last : (folders[0] ?? null);
+		if (primaryFile && onOpen && (mode === 'open' || mode === 'manage')) {
+			await onOpen(primaryFile);
+			return;
+		}
+		if (primaryFolder) {
+			await enterFolder(primaryFolder);
+			return;
+		}
+		if (mode === 'save' && primaryFile) {
+			saveName = primaryFile.name;
+		}
 	}
 
 	function idsForClipboard(): string[] {
@@ -808,6 +822,7 @@
 			if (selected.size > 0) {
 				e.preventDefault();
 				selected = new Set();
+				lastSelectedId = null;
 			}
 			return;
 		}
@@ -828,6 +843,17 @@
 			if (n) {
 				e.preventDefault();
 				void activate(n);
+			} else if (canOpenSelection) {
+				e.preventDefault();
+				void openSelected();
+			}
+			return;
+		}
+		if (e.key === ' ' || e.key === 'Spacebar') {
+			const n = focusedNode();
+			if (n && canToggleSelect()) {
+				e.preventDefault();
+				toggleSelect(n.id);
 			}
 			return;
 		}
@@ -928,6 +954,11 @@
 				>
 					Drag to reorder
 				</span>
+			{/if}
+			{#if canOpenSelection}
+				<button type="button" data-testid="fe-open-selected" onclick={() => void openSelected()}>
+					Open
+				</button>
 			{/if}
 			{#if mode === 'manage'}
 				{#if caps.supportsMkdir}
@@ -1090,21 +1121,22 @@
 					ondragover={(e) => onRowDragOver(e, n)}
 					ondrop={(e) => onRowDrop(e, n)}
 					ondragend={onRowDragEnd}
-					onpointerdown={(multiSelect || mode === 'manage') ? (e) => onRowPointerDown(e, n) : undefined}
-					onpointerup={clearLongPressTimer}
-					onpointermove={clearLongPressTimer}
-					onpointercancel={clearLongPressTimer}
 					onclick={(e) => {
-						if (listBusy) return;
-						if (longPressFired) {
-							longPressFired = false;
-							return;
-						}
-						if ((multiSelect || mode === 'manage') && selected.size > 0) {
+						const t = e.target as HTMLElement | null;
+						if (t?.closest?.('input, button, a, [contenteditable="true"]')) return;
+						focusIndex = i;
+						if (canToggleSelect()) {
 							toggleSelect(n.id, e);
 							return;
 						}
-						focusIndex = i;
+						if (listBusy) return;
+						void activate(n);
+					}}
+					ondblclick={(e) => {
+						if (listBusy) return;
+						const t = e.target as HTMLElement | null;
+						if (t?.closest?.('input, button, a, [contenteditable="true"]')) return;
+						e.preventDefault();
 						void activate(n);
 					}}
 				>
@@ -1213,7 +1245,7 @@
 
 	{#if mode === 'open'}
 		<footer class="fe-open-bar" data-testid="fe-open-bar">
-			<span class="fe-hint">Double-click or select a compatible file to open</span>
+			<span class="fe-hint">Select a compatible file, then Open</span>
 		</footer>
 	{/if}
 </div>
