@@ -193,7 +193,7 @@ export function applyListCap(entries: ExplorerEntry[]): ExplorerListResult {
 }
 
 export function isLocalClass(driverId: string): boolean {
-	return driverId === 'local' || driverId === 'memory';
+	return driverId === 'local' || driverId === 'memory' || driverId === 'disk';
 }
 
 export function isRemoteClass(driverId: string): boolean {

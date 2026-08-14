@@ -25,6 +25,7 @@ describe('FileExplorer component', () => {
 		expect(await screen.findByTestId('file-explorer')).toBeTruthy();
 		expect(screen.getByTestId('file-explorer').getAttribute('data-fe-mode')).toBe('manage');
 		expect(screen.getByTestId('fe-new-folder')).toBeTruthy();
+		expect(screen.getByTestId('fe-upload')).toBeTruthy();
 		expect(screen.getByTestId('fe-trash-view')).toBeTruthy();
 		expect(screen.getByTestId('fe-breadcrumbs')).toBeTruthy();
 	});

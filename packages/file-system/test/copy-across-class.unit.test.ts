@@ -12,6 +12,7 @@ describe('isLocalClass / isRemoteClass', () => {
 	it('local-class = local | memory', () => {
 		assert.equal(isLocalClass('local'), true);
 		assert.equal(isLocalClass('memory'), true);
+		assert.equal(isLocalClass('disk'), true);
 		assert.equal(isLocalClass('b2'), false);
 		assert.equal(isLocalClass('rclone'), false);
 		assert.equal(isLocalClass('other'), false);

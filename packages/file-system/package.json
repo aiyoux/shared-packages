@@ -49,6 +49,11 @@
       "svelte": "./src/monitor/index.ts",
       "import": "./src/monitor/index.ts",
       "default": "./src/monitor/index.ts"
+    },
+    "./disk": {
+      "types": "./src/disk/index.ts",
+      "import": "./src/disk/index.ts",
+      "default": "./src/disk/index.ts"
     }
   },
   "svelte": "./src/index.ts",

@@ -867,13 +867,16 @@
 		}
 	}
 
+	const canImportFromDevice = $derived(Boolean(driver.upload || driver.writeFile));
+
 	async function onUploadFiles(files: FileList | null) {
-		if (!files?.length || !driver.upload || !caps.supportsUpload) return;
+		const put = driver.upload ?? driver.writeFile;
+		if (!files?.length || !put) return;
 		uploadBusy = true;
 		error = '';
 		try {
 			for (const file of Array.from(files)) {
-				await driver.upload(parentId, file);
+				await put(parentId, file);
 			}
 			await refresh();
 		} catch (e) {
@@ -1032,14 +1035,15 @@
 						New folder
 					</button>
 				{/if}
-				{#if caps.supportsUpload}
+				{#if canImportFromDevice}
 					<button
 						type="button"
 						data-testid="fe-upload"
 						disabled={uploadBusy}
+						title="Open the system file picker and add the file to this folder"
 						onclick={() => fileInputEl?.click()}
 					>
-						{uploadBusy ? 'Uploading…' : 'Upload'}
+						{uploadBusy ? 'Uploading…' : 'Upload from device'}
 					</button>
 					<input
 						bind:this={fileInputEl}

@@ -34,6 +34,12 @@ export {
 	type MemoryExplorerDriverOptions
 } from './memoryExplorerDriver.js';
 export {
+	createDiskExplorerDriver,
+	DISK_CAPS,
+	canPickDirectory,
+	pickDirectory
+} from '../disk/index.js';
+export {
 	calculateMidOrder,
 	createTreeDndSession,
 	resolveDrop,

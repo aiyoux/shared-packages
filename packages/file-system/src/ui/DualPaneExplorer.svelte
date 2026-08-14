@@ -37,6 +37,7 @@
 		idsFromExplorerDataTransfer
 	} from './copyAcross.js';
 	import { getMemoryVfs, type MemoryVfsService, type VfsService } from '../index.js';
+	import { canPickDirectory, createDiskExplorerDriver, pickDirectory } from '../disk/index.js';
 	import {
 		B2ConnectionForm,
 		ConnectionSwitcher,
@@ -171,6 +172,8 @@
 		showRcloneForm: boolean;
 		showMonitorForm: boolean;
 		explorerKey: number;
+		/** Picked folder name when activeKind is disk. */
+		diskName: string;
 		/** Open folder + selection for copy-across */
 		ctx: ExplorerContext;
 	};
@@ -191,6 +194,7 @@
 			showRcloneForm: false,
 			showMonitorForm: false,
 			explorerKey: 0,
+			diskName: '',
 			ctx: emptyCtx(kind)
 		};
 	}
@@ -256,7 +260,7 @@
 		return localDriver;
 	}
 	function releaseRemote(kind: ConnectionKind, profileId: string | null | undefined) {
-		if (!profileId || profileId === 'local' || profileId === 'memory') return;
+		if (!profileId || profileId === 'local' || profileId === 'memory' || profileId === 'disk') return;
 		if (kind === 'b2') releaseB2Driver(profileId);
 		else if (kind === 'rclone') releaseRcloneDriver(profileId);
 		else if (kind === 'monitor') releaseMonitorDriver(profileId);
@@ -396,7 +400,10 @@
 		// Release any held remote drivers on teardown (memory VFS is global: NOT disposed).
 		for (const id of ['left', 'right'] as PaneId[]) {
 			const p = paneState(id);
-			if (p.activeId !== 'local' && p.activeId !== 'memory') releaseRemote(p.activeKind, p.activeId);
+			dropDiskDriver(p);
+			if (p.activeId !== 'local' && p.activeId !== 'memory' && p.activeId !== 'disk') {
+				releaseRemote(p.activeKind, p.activeId);
+			}
 		}
 	});
 
@@ -410,7 +417,8 @@
 		}
 		if (!on) {
 			const r = right;
-			if (r.activeId !== 'local' && r.activeId !== 'memory') {
+			dropDiskDriver(r);
+			if (r.activeId !== 'local' && r.activeId !== 'memory' && r.activeId !== 'disk') {
 				releaseRemote(r.activeKind, r.activeId);
 			}
 			right = emptyPane(rightDefault);
@@ -422,6 +430,7 @@
 		const p = paneState(id);
 		const prevId = p.activeId !== 'local' && p.activeId !== 'memory' ? p.activeId : null;
 		const prevKind = p.activeKind;
+		dropDiskDriver(p);
 		setPane(id, { busy: true, error: '', showRcloneForm: false, showMonitorForm: false });
 		try {
 			const driver = await acquireB2Driver(profile);
@@ -450,7 +459,8 @@
 
 	async function connectRclone(id: PaneId, profile: RcloneConnectionProfileV1) {
 		const p = paneState(id);
-		const prevId = p.activeId !== 'local' && p.activeId !== 'memory' ? p.activeId : null;
+		dropDiskDriver(p);
+		const prevId = p.activeId !== 'local' && p.activeId !== 'memory' && p.activeId !== 'disk' ? p.activeId : null;
 		const prevKind = p.activeKind;
 		setPane(id, { busy: true, error: '', showB2Form: false, showMonitorForm: false });
 		try {
@@ -497,7 +507,8 @@
 
 	async function connectMonitor(id: PaneId, profile: MonitorConnectionProfileV1) {
 		const p = paneState(id);
-		const prevId = p.activeId !== 'local' && p.activeId !== 'memory' ? p.activeId : null;
+		dropDiskDriver(p);
+		const prevId = p.activeId !== 'local' && p.activeId !== 'memory' && p.activeId !== 'disk' ? p.activeId : null;
 		const prevKind = p.activeKind;
 		setPane(id, {
 			busy: true,
@@ -536,9 +547,53 @@
 		}
 	}
 
+	function dropDiskDriver(p: PaneState) {
+		if (p.activeKind === 'disk') p.remoteDriver?.dispose?.();
+	}
+
+	async function connectDisk(id: PaneId, opts?: { replace?: boolean }) {
+		const p = paneState(id);
+		if (p.activeKind === 'disk' && p.remoteDriver && !opts?.replace) return;
+		if (!canPickDirectory()) {
+			setPane(id, {
+				error: 'This browser cannot open a computer folder. Use Chrome or Edge, or upload individual files with Upload from device.'
+			});
+			return;
+		}
+		try {
+			const handle = await pickDirectory();
+			if (p.activeKind === 'disk') p.remoteDriver?.dispose?.();
+			else if (p.activeId !== 'local' && p.activeId !== 'memory') {
+				releaseRemote(p.activeKind, p.activeId);
+			}
+			const driver = createDiskExplorerDriver(handle);
+			await driver.ready();
+			setPane(id, {
+				activeId: 'disk',
+				activeKind: 'disk',
+				remoteDriver: driver,
+				memoryDriver: null,
+				diskName: handle.name || 'This computer',
+				showB2Form: false,
+				showRcloneForm: false,
+				showMonitorForm: false,
+				explorerKey: p.explorerKey + 1,
+				error: '',
+				ctx: emptyCtx('disk')
+			});
+		} catch (e) {
+			const name = e && typeof e === 'object' && 'name' in e ? String((e as { name: unknown }).name) : '';
+			if (name === 'AbortError') return;
+			setPane(id, {
+				error: e instanceof Error ? e.message : 'Could not open that folder'
+			});
+		}
+	}
+
 	function connectMemory(id: PaneId) {
 		const p = paneState(id);
-		if (p.activeId !== 'local' && p.activeId !== 'memory') {
+		dropDiskDriver(p);
+		if (p.activeId !== 'local' && p.activeId !== 'memory' && p.activeId !== 'disk') {
 			releaseRemote(p.activeKind, p.activeId);
 		}
 		const mem = getMemoryDriver();
@@ -553,14 +608,16 @@
 			showMonitorForm: false,
 			explorerKey: p.explorerKey + 1,
 			error: '',
+			diskName: '',
 			ctx: emptyCtx('memory')
 		});
 	}
 
-	async function onSelectConnection(id: PaneId, selection: 'local' | 'memory' | string) {
+	async function onSelectConnection(id: PaneId, selection: 'local' | 'memory' | 'disk' | string) {
 		const p = paneState(id);
 		if (selection === 'local') {
-			if (p.activeId !== 'local' && p.activeId !== 'memory') {
+			dropDiskDriver(p);
+			if (p.activeId !== 'local' && p.activeId !== 'memory' && p.activeId !== 'disk') {
 				releaseRemote(p.activeKind, p.activeId);
 			}
 			setPane(id, {
@@ -573,12 +630,17 @@
 				showRcloneForm: false,
 				showMonitorForm: false,
 				explorerKey: p.explorerKey + 1,
+				diskName: '',
 				ctx: emptyCtx('local')
 			});
 			return;
 		}
 		if (selection === 'memory') {
 			connectMemory(id);
+			return;
+		}
+		if (selection === 'disk') {
+			await connectDisk(id);
 			return;
 		}
 		if (p.activeId === selection && p.remoteDriver) return;
@@ -756,6 +818,7 @@
 				onConfigureMonitor={() => {
 					setPane(id, { showMonitorForm: true, showB2Form: false, showRcloneForm: false, error: '' });
 				}}
+				onConfigureDisk={() => void connectDisk(id, { replace: true })}
 			/>
 			{/if}
 			{#if showCopyAcross}
@@ -815,6 +878,10 @@
 				</span>
 			{:else if p.activeKind === 'memory'}
 				<span class="remote-badge mem" data-testid="memory-badge-{id}">In memory · tab only</span>
+			{:else if p.activeKind === 'disk'}
+				<span class="remote-badge" data-testid="disk-badge-{id}"
+					>This computer{p.diskName ? ` · ${p.diskName}` : ''}</span
+				>
 			{/if}
 			{#if subTid}
 				<span class="pane-sub" data-testid={subTid.testid}>{subTid.text}</span>

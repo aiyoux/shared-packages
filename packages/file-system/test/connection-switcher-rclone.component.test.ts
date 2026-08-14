@@ -17,6 +17,8 @@ describe('ConnectionSwitcher multi-backend', () => {
 		});
 		expect(screen.getByTestId('connection-switcher')).toBeTruthy();
 		expect(screen.getByTestId('conn-local')).toBeTruthy();
+		expect(screen.getByTestId('conn-disk')).toBeTruthy();
+		expect(screen.getByTestId('conn-disk-config')).toBeTruthy();
 		expect(screen.getByTestId('conn-rclone')).toBeTruthy();
 		expect(screen.getByTestId('conn-rclone-config')).toBeTruthy();
 	});

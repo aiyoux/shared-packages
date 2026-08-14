@@ -1,6 +1,6 @@
 <script lang="ts">
 	/** Storage backend kind for the hub connection switcher. */
-	export type ConnectionKind = 'local' | 'memory' | 'b2' | 'rclone' | 'monitor';
+	export type ConnectionKind = 'local' | 'memory' | 'disk' | 'b2' | 'rclone' | 'monitor';
 
 	export type B2ProfileChip = {
 		id: string;
@@ -15,11 +15,12 @@
 	export type MonitorProfileChip = B2ProfileChip;
 
 	interface Props {
-		/** Active selection: local | memory | profile id */
-		activeId?: string | 'local' | 'memory';
+		/** Active selection: local | memory | disk | profile id */
+		activeId?: string | 'local' | 'memory' | 'disk';
 		/**
 		 * Which backend is active when `activeId` is a profile id.
-		 * Defaults: `local` when activeId is `local`, `memory` when memory, else `b2`.
+		 * Defaults: `local` when activeId is `local`, `memory` when memory,
+		 * `disk` when disk, else `b2`.
 		 */
 		activeKind?: ConnectionKind;
 		/** Saved B2 profiles — each becomes a join button */
@@ -39,11 +40,13 @@
 		showMonitor?: boolean;
 		/** Show In memory chip (tab-ephemeral VFS). Default true. */
 		showMemory?: boolean;
-		/** Select local, memory, or a profile id (B2 / rclone / monitor) */
-		onSelect?: (id: 'local' | 'memory' | string) => void;
+		/** Select local, memory, disk, or a profile id (B2 / rclone / monitor) */
+		onSelect?: (id: 'local' | 'memory' | 'disk' | string) => void;
 		onConfigureB2?: () => void;
 		onConfigureRclone?: () => void;
 		onConfigureMonitor?: () => void;
+		/** Re-pick the native folder when already on disk. */
+		onConfigureDisk?: () => void;
 	}
 
 	let {
@@ -59,16 +62,23 @@
 		onSelect,
 		onConfigureB2,
 		onConfigureRclone,
-		onConfigureMonitor
+		onConfigureMonitor,
+		onConfigureDisk
 	}: Props = $props();
 
 	/** Resolved kind for active chip highlighting (back-compat when activeKind omitted). */
 	const kind = $derived<ConnectionKind>(
 		activeKind ??
-			(activeId === 'local' ? 'local' : activeId === 'memory' ? 'memory' : 'b2')
+			(activeId === 'local'
+				? 'local'
+				: activeId === 'memory'
+					? 'memory'
+					: activeId === 'disk'
+						? 'disk'
+						: 'b2')
 	);
 
-	function select(id: 'local' | 'memory' | string) {
+	function select(id: 'local' | 'memory' | 'disk' | string) {
 		if (busy) return;
 		onSelect?.(id);
 	}
@@ -97,6 +107,31 @@
 			In memory
 		</button>
 	{/if}
+
+	<button
+		type="button"
+		class:active={kind === 'disk'}
+		data-testid="conn-disk"
+		disabled={busy}
+		title="Browse a folder on this computer. The browser will ask permission (Chrome / Edge)."
+		onclick={() => select('disk')}
+	>
+		This computer
+	</button>
+	<button
+		type="button"
+		class="ghost"
+		data-testid="conn-disk-config"
+		disabled={busy}
+		onclick={(e) => {
+			e.preventDefault();
+			e.stopPropagation();
+			if (busy) return;
+			onConfigureDisk?.();
+		}}
+	>
+		{kind === 'disk' ? 'Change folder' : 'Choose folder'}
+	</button>
 
 	{#each profiles as p (p.id)}
 		<button
