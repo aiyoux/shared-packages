@@ -24,7 +24,7 @@
 	import { onMount, onDestroy } from 'svelte';
 	import { default as FileExplorer, type ExplorerContext } from './FileExplorer.svelte';
 	import { default as StoragePersistenceStatus } from './StoragePersistenceStatus.svelte';
-	import { type ExplorerDriver, type ExplorerOpenTarget } from './explorerDriver.js';
+	import { type ExplorerDriver, type ExplorerEntry, type ExplorerOpenTarget } from './explorerDriver.js';
 	import { createMemoryExplorerDriver } from './memoryExplorerDriver.js';
 	// PaneId + DualPaneTids live in a .ts module so the ui barrel can re-export
 	// them without the *.svelte named-export limitation.
@@ -74,6 +74,8 @@
 		paneSub: () => undefined,
 		copyAcross: (id) => `fe-copy-across-${id}`,
 		copyAcrossError: 'fe-copy-across-error',
+		send: (id) => `fe-send-${id}`,
+		sendError: 'fe-send-error',
 		dualToggle: 'fe-dual-pane-toggle',
 		rcloneToggle: 'fe-rclone-feature-toggle',
 		monitorToggle: 'fe-monitor-feature-toggle',
@@ -113,6 +115,18 @@
 		}>;
 		/** Notified when dual-pane toggles (so a page can widen its shell). */
 		onDualChange?: (dual: boolean) => void;
+		/**
+		 * When provided, renders a "Send" button next to Copy across on each
+		 * pane, enabled once that pane has a selection — e.g. CM sending
+		 * selected files to the connected peer. Omit to hide the button
+		 * entirely (the default; unrelated to copy-across compatibility).
+		 */
+		onSend?: (args: {
+			paneId: PaneId;
+			driver: ExplorerDriver;
+			selectedIds: string[];
+			entries: ExplorerEntry[];
+		}) => void | Promise<void>;
 		tids?: Partial<DualPaneTids>;
 	};
 
@@ -131,6 +145,7 @@
 		pendingLeft = [],
 		pendingRight = [],
 		onDualChange,
+		onSend,
 		tids: tidsOverride = {}
 	}: Props = $props();
 
@@ -187,6 +202,8 @@
 	let watchPollTimer: ReturnType<typeof setInterval> | null = null;
 	let copyBusy = $state(false);
 	let copyError = $state('');
+	let sendBusy = $state(false);
+	let sendError = $state<{ pane: PaneId; message: string } | null>(null);
 	let memoryVfs: MemoryVfsService | null = null;
 
 	/** True when at least one visible pane is durable local browser storage. */
@@ -606,6 +623,28 @@
 		}
 	}
 
+	async function runSend(id: PaneId) {
+		if (!onSend) return;
+		const p = paneState(id);
+		if (p.ctx.selectedIds.length === 0) return;
+		sendError = null;
+		sendBusy = true;
+		try {
+			await onSend({
+				paneId: id,
+				driver: activeDriver(p),
+				selectedIds: p.ctx.selectedIds,
+				entries: p.ctx.entries
+			});
+			// Remount so selection clears and the pane re-lists.
+			setPane(id, { explorerKey: p.explorerKey + 1 });
+		} catch (e) {
+			sendError = { pane: id, message: e instanceof Error ? e.message : String(e) };
+		} finally {
+			sendBusy = false;
+		}
+	}
+
 	/**
 	 * Imperative refresh: remount a pane's `FileExplorer` so it re-lists. Used by
 	 * host pages that mutate a backend VFS outside copy-across (e.g. CM
@@ -664,6 +703,21 @@
 				>
 					{copyBusy ? 'Copying…' : 'Copy across'}
 				</button>
+			{/if}
+			{#if onSend}
+				<button
+					type="button"
+					class="send-selected"
+					data-testid={tids.send(id)}
+					disabled={sendBusy || p.ctx.selectedIds.length === 0 || !drv.download}
+					title="Send selected items to the other user"
+					onclick={() => runSend(id)}
+				>
+					{sendBusy ? 'Sending…' : 'Send'}
+				</button>
+				{#if sendError?.pane === id}
+					<span class="send-err" data-testid={tids.sendError} role="alert">{sendError.message}</span>
+				{/if}
 			{/if}
 			{#if p.busy}
 				<span
@@ -905,6 +959,7 @@
 	}
 	.dual-toggle,
 	.copy-across,
+	.send-selected,
 	.rclone-toggle {
 		padding: 0.35rem 0.7rem;
 		border-radius: 8px;
@@ -928,11 +983,13 @@
 		outline: 2px solid #38bdf8;
 		outline-offset: 1px;
 	}
-	.copy-across:disabled {
+	.copy-across:disabled,
+	.send-selected:disabled {
 		opacity: 0.5;
 		cursor: not-allowed;
 	}
-	.copy-err {
+	.copy-err,
+	.send-err {
 		color: #ffb4b4;
 		font-size: 0.85rem;
 	}

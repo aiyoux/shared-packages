@@ -186,11 +186,14 @@
 	}
 
 	function onRowDragStart(e: DragEvent, n: ExplorerEntry) {
+		// A drag beat the long-press threshold — don't also toggle selection.
+		clearLongPressTimer();
+		longPressFired = false;
 		if (!dragOutEnabled) {
 			e.preventDefault();
 			return;
 		}
-		// Interactive controls (checkbox / rename / buttons) must not start a row drag
+		// Interactive controls (rename / buttons) must not start a row drag
 		const t = e.target as HTMLElement | null;
 		if (t?.closest?.('input, button, a, [contenteditable="true"]')) {
 			e.preventDefault();
@@ -666,13 +669,49 @@
 		renameValue = n.name;
 	}
 
-	function toggleSelect(id: string, e: MouseEvent) {
+	function toggleSelect(id: string, e?: MouseEvent) {
 		if (!multiSelect && mode !== 'manage') return;
-		e.stopPropagation();
+		e?.stopPropagation();
 		const next = new Set(selected);
 		if (next.has(id)) next.delete(id);
 		else next.add(id);
 		selected = next;
+	}
+
+	/**
+	 * Selection is press-and-hold (no checkbox column): long-pressing a row
+	 * toggles it and enters "selection mode" — while any row is selected,
+	 * a plain click on a row toggles selection instead of opening it. Escape
+	 * or deselecting the last row exits selection mode.
+	 */
+	const LONG_PRESS_MS = 500;
+	let longPressTimer: ReturnType<typeof setTimeout> | null = null;
+	let longPressFired = false;
+
+	function clearLongPressTimer() {
+		if (longPressTimer) {
+			clearTimeout(longPressTimer);
+			longPressTimer = null;
+		}
+	}
+
+	function onRowPointerDown(e: PointerEvent, n: ExplorerEntry) {
+		// jsdom's synthetic PointerEvent lacks `button` (undefined) — real
+		// browsers always set 0 for touch/pen/left-mouse, so only reject a
+		// definite non-primary button (e.g. right-click).
+		if (e.button != null && e.button !== 0) return;
+		const t = e.target as HTMLElement | null;
+		if (t?.closest?.('input, button, a, [contenteditable="true"]')) return;
+		longPressFired = false;
+		clearLongPressTimer();
+		longPressTimer = setTimeout(() => {
+			// Check listBusy at fire time, not press time — a brief busy blip
+			// under the initial touch shouldn't kill an otherwise-valid hold.
+			if (listBusy) return;
+			longPressFired = true;
+			toggleSelect(n.id);
+			if (typeof navigator !== 'undefined' && navigator.vibrate) navigator.vibrate(50);
+		}, LONG_PRESS_MS);
 	}
 
 	function idsForClipboard(): string[] {
@@ -765,6 +804,13 @@
 		const t = e.target as HTMLElement | null;
 		if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) return;
 
+		if (e.key === 'Escape') {
+			if (selected.size > 0) {
+				e.preventDefault();
+				selected = new Set();
+			}
+			return;
+		}
 		if (e.key === 'ArrowDown') {
 			e.preventDefault();
 			if (!nodes.length) return;
@@ -1044,21 +1090,24 @@
 					ondragover={(e) => onRowDragOver(e, n)}
 					ondrop={(e) => onRowDrop(e, n)}
 					ondragend={onRowDragEnd}
-					onclick={() => {
+					onpointerdown={(multiSelect || mode === 'manage') ? (e) => onRowPointerDown(e, n) : undefined}
+					onpointerup={clearLongPressTimer}
+					onpointermove={clearLongPressTimer}
+					onpointercancel={clearLongPressTimer}
+					onclick={(e) => {
 						if (listBusy) return;
+						if (longPressFired) {
+							longPressFired = false;
+							return;
+						}
+						if ((multiSelect || mode === 'manage') && selected.size > 0) {
+							toggleSelect(n.id, e);
+							return;
+						}
 						focusIndex = i;
 						void activate(n);
 					}}
 				>
-					{#if multiSelect || mode === 'manage'}
-						<input
-							type="checkbox"
-							data-testid="fe-select"
-							checked={selected.has(n.id)}
-							disabled={listBusy}
-							onclick={(e) => toggleSelect(n.id, e)}
-						/>
-					{/if}
 					<span class="fe-icon">{n.kind === 'folder' ? '📁' : '📄'}</span>
 					{#if renamingId === n.id}
 						<input
@@ -1300,6 +1349,11 @@
 		padding: 8px 10px;
 		border-radius: 6px;
 		cursor: pointer;
+		/* Long-press selects — don't let touch scrolling or the native text/callout
+		   menu preempt the hold gesture. */
+		touch-action: manipulation;
+		-webkit-touch-callout: none;
+		user-select: none;
 	}
 	.fe-row button:disabled {
 		opacity: 0.45;

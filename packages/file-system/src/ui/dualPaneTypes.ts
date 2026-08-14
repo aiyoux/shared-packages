@@ -19,6 +19,9 @@ export type DualPaneTids = {
 	paneSub: (id: PaneId) => { testid: string; text: string } | undefined;
 	copyAcross: (id: PaneId) => string;
 	copyAcrossError: string;
+	/** "Send" button testid per pane (shown only when `onSend` is passed). */
+	send: (id: PaneId) => string;
+	sendError: string;
 	dualToggle: string;
 	rcloneToggle: string;
 	monitorToggle: string;
