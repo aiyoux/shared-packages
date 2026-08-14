@@ -76,6 +76,22 @@ describe('FileExplorer component', () => {
 		expect(incompatible?.getAttribute('data-file-type')).toBe('vrec');
 	});
 
+	it('pointerup selects when click is swallowed (draggable rows)', async () => {
+		await vfs.writeFile({
+			parentId: null,
+			name: 'Sketch',
+			fileType: 'skch',
+			body: { format: 'skch', schemaVersion: 1, name: 'Sketch', data: {} }
+		});
+		render(FileExplorer, { props: { mode: 'manage', vfs, variant: 'panel' } });
+		await viWaitForRows(1);
+		const row = document.querySelector('[data-testid="fe-file-row"]') as HTMLElement;
+		await fireEvent.pointerDown(row, { button: 0, clientX: 10, clientY: 10 });
+		await fireEvent.pointerUp(row, { button: 0, clientX: 11, clientY: 10 });
+		expect(row.classList.contains('selected')).toBe(true);
+		expect(screen.getByTestId('fe-trash-selected')).toBeTruthy();
+	});
+
 	it('single-click selects; Open appears and calls onOpen', async () => {
 		await vfs.writeFile({
 			parentId: null,

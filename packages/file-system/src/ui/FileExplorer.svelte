@@ -188,15 +188,22 @@
 	}
 
 	function onRowDragStart(e: DragEvent, n: ExplorerEntry) {
+		dragStarted = true;
 		if (!dragOutEnabled) {
 			e.preventDefault();
 			return;
 		}
 		// Interactive controls (rename / buttons) must not start a row drag
-		const t = e.target as HTMLElement | null;
-		if (t?.closest?.('input, button, a, [contenteditable="true"]')) {
+		if (isRowControl(e.target)) {
 			e.preventDefault();
 			return;
+		}
+		// A drag is a send/move of this row — keep it selected, don't toggle off.
+		if (canToggleSelect() && !selected.has(n.id)) {
+			const next = new Set(selected);
+			next.add(n.id);
+			selected = next;
+			lastSelectedId = n.id;
 		}
 		const ids =
 			selected.has(n.id) && selected.size > 0 ? [...selected] : [n.id];
@@ -302,6 +309,8 @@
 	}
 
 	function onRowDragEnd() {
+		dragStarted = false;
+		press = null;
 		dnd.stopDrag();
 		dndTargetId = null;
 		dndZone = null;
@@ -674,7 +683,11 @@
 		return multiSelect || mode === 'manage' || mode === 'open';
 	}
 
-	function toggleSelect(id: string, e?: MouseEvent) {
+	function isRowControl(t: EventTarget | null): boolean {
+		return t instanceof Element && !!t.closest('input, button, a, [contenteditable="true"]');
+	}
+
+	function toggleSelect(id: string, e?: Event) {
 		if (!canToggleSelect()) return;
 		e?.stopPropagation();
 		const next = new Set(selected);
@@ -682,6 +695,56 @@
 		else next.add(id);
 		selected = next;
 		lastSelectedId = next.has(id) ? id : next.size ? [...next][next.size - 1]! : null;
+	}
+
+	/**
+	 * Rows are native-draggable. Chrome often swallows the following `click`
+	 * after mousedown on a draggable node, so selection is committed on
+	 * pointerup when the pointer didn't travel (and on click as a fallback
+	 * for tests / non-draggable rows).
+	 */
+	const SELECT_SLOP_PX = 6;
+	let press:
+		| { id: string; x: number; y: number; index: number }
+		| null = null;
+	let dragStarted = false;
+	let selectedOnPointerUp = false;
+
+	function onRowPointerDown(e: PointerEvent, n: ExplorerEntry, i: number) {
+		if (e.button != null && e.button !== 0) return;
+		if (isRowControl(e.target)) return;
+		press = { id: n.id, x: e.clientX, y: e.clientY, index: i };
+		dragStarted = false;
+		selectedOnPointerUp = false;
+	}
+
+	function onRowPointerUp(e: PointerEvent, n: ExplorerEntry) {
+		if (!press || press.id !== n.id) return;
+		const start = press;
+		press = null;
+		if (dragStarted || isRowControl(e.target)) return;
+		const dx = e.clientX - start.x;
+		const dy = e.clientY - start.y;
+		if (dx * dx + dy * dy > SELECT_SLOP_PX * SELECT_SLOP_PX) return;
+		if (!canToggleSelect()) return;
+		focusIndex = start.index;
+		toggleSelect(n.id, e);
+		selectedOnPointerUp = true;
+	}
+
+	function onRowClick(e: MouseEvent, n: ExplorerEntry, i: number) {
+		if (isRowControl(e.target)) return;
+		if (selectedOnPointerUp) {
+			selectedOnPointerUp = false;
+			return;
+		}
+		focusIndex = i;
+		if (canToggleSelect()) {
+			toggleSelect(n.id, e);
+			return;
+		}
+		if (listBusy) return;
+		void activate(n);
 	}
 
 	const selectedEntries = $derived(
@@ -1121,97 +1184,96 @@
 					ondragover={(e) => onRowDragOver(e, n)}
 					ondrop={(e) => onRowDrop(e, n)}
 					ondragend={onRowDragEnd}
-					onclick={(e) => {
-						const t = e.target as HTMLElement | null;
-						if (t?.closest?.('input, button, a, [contenteditable="true"]')) return;
-						focusIndex = i;
-						if (canToggleSelect()) {
-							toggleSelect(n.id, e);
-							return;
-						}
-						if (listBusy) return;
-						void activate(n);
+					onpointerdown={(e) => onRowPointerDown(e, n, i)}
+					onpointerup={(e) => onRowPointerUp(e, n)}
+					onpointercancel={() => {
+						press = null;
 					}}
+					onclick={(e) => onRowClick(e, n, i)}
 				>
-					<span class="fe-icon">{n.kind === 'folder' ? '📁' : '📄'}</span>
-					{#if renamingId === n.id}
-						<input
-							data-testid="fe-rename-input"
-							bind:value={renameValue}
-							onclick={(e) => e.stopPropagation()}
-							onkeydown={(e) => {
-								if (e.key === 'Enter') commitRename(n);
-								if (e.key === 'Escape') renamingId = null;
-							}}
-						/>
-					{:else}
-						<span class="fe-name" title={!actionable && n.kind === 'file' ? 'Wrong type for this app' : n.name}
-							>{n.name}</span
-						>
-					{/if}
-					{#if showTrash && caps.supportsTrash}
-						<button
-							type="button"
-							data-testid="fe-restore"
-							disabled={listBusy}
-							onclick={(e) => {
-								e.stopPropagation();
-								restoreNode(n);
-							}}>Restore</button
-						>
-						<button
-							type="button"
-							data-testid="fe-permanent-delete"
-							disabled={listBusy}
-							onclick={(e) => {
-								e.stopPropagation();
-								permanentNode(n);
-							}}>Delete forever</button
-						>
-					{:else if mode === 'manage' && actionable}
-						{#if caps.supportsRename}
+					<span class="fe-row-main">
+						<span class="fe-icon">{n.kind === 'folder' ? '📁' : '📄'}</span>
+						{#if renamingId === n.id}
+							<input
+								data-testid="fe-rename-input"
+								bind:value={renameValue}
+								onclick={(e) => e.stopPropagation()}
+								onkeydown={(e) => {
+									if (e.key === 'Enter') commitRename(n);
+									if (e.key === 'Escape') renamingId = null;
+								}}
+							/>
+						{:else}
+							<span class="fe-name" title={!actionable && n.kind === 'file' ? 'Wrong type for this app' : n.name}
+								>{n.name}</span
+							>
+						{/if}
+					</span>
+					<span class="fe-row-actions">
+						{#if showTrash && caps.supportsTrash}
 							<button
 								type="button"
-								data-testid="fe-rename-btn"
+								data-testid="fe-restore"
 								disabled={listBusy}
 								onclick={(e) => {
 									e.stopPropagation();
-									startRename(n);
-								}}>Rename</button
+									restoreNode(n);
+								}}>Restore</button
 							>
-						{/if}
-						{#if caps.supportsCopy && n.kind === 'file'}
 							<button
 								type="button"
-								data-testid="fe-row-copy"
+								data-testid="fe-permanent-delete"
 								disabled={listBusy}
 								onclick={(e) => {
 									e.stopPropagation();
-									void copyNode(n);
-								}}>Copy</button
+									permanentNode(n);
+								}}>Delete forever</button
 							>
-						{/if}
-						{#if caps.supportsDownload && n.kind === 'file'}
+						{:else if mode === 'manage' && actionable}
+							{#if caps.supportsRename}
+								<button
+									type="button"
+									data-testid="fe-rename-btn"
+									disabled={listBusy}
+									onclick={(e) => {
+										e.stopPropagation();
+										startRename(n);
+									}}>Rename</button
+								>
+							{/if}
+							{#if caps.supportsCopy && n.kind === 'file'}
+								<button
+									type="button"
+									data-testid="fe-row-copy"
+									disabled={listBusy}
+									onclick={(e) => {
+										e.stopPropagation();
+										void copyNode(n);
+									}}>Copy</button
+								>
+							{/if}
+							{#if caps.supportsDownload && n.kind === 'file'}
+								<button
+									type="button"
+									data-testid="fe-row-download"
+									disabled={listBusy}
+									onclick={(e) => {
+										e.stopPropagation();
+										void downloadNode(n);
+									}}>Download</button
+								>
+							{/if}
 							<button
 								type="button"
-								data-testid="fe-row-download"
+								data-testid="fe-row-trash"
 								disabled={listBusy}
 								onclick={(e) => {
 									e.stopPropagation();
-									void downloadNode(n);
-								}}>Download</button
+									void deleteIds([n.id]);
+								}}>Delete</button
 							>
 						{/if}
-						<button
-							type="button"
-							data-testid="fe-row-trash"
-							disabled={listBusy}
-							onclick={(e) => {
-								e.stopPropagation();
-								void deleteIds([n.id]);
-							}}>Delete</button
-						>
-					{/if}
+					</span>
 				</div>
 				{#if showAfter}
 					<div class="fe-dnd-line" data-testid="fe-dnd-line-after" aria-hidden="true"></div>
@@ -1374,11 +1436,24 @@
 		padding: 8px 10px;
 		border-radius: 6px;
 		cursor: pointer;
-		/* Long-press selects — don't let touch scrolling or the native text/callout
-		   menu preempt the hold gesture. */
 		touch-action: manipulation;
 		-webkit-touch-callout: none;
 		user-select: none;
+	}
+	.fe-row-main {
+		flex: 1 1 0;
+		min-width: 3.5rem;
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		min-height: 1.75rem;
+		overflow: hidden;
+	}
+	.fe-row-actions {
+		display: inline-flex;
+		flex: 0 0 auto;
+		align-items: center;
+		gap: 4px;
 	}
 	.fe-row button:disabled {
 		opacity: 0.45;
@@ -1424,6 +1499,8 @@
 	}
 	.fe-row.selected {
 		background: #2c3a4f;
+		outline: 1px solid #5b8def;
+		outline-offset: -1px;
 	}
 	.fe-dnd-line {
 		height: 2px;
