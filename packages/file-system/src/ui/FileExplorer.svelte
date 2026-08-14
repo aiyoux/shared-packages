@@ -902,11 +902,7 @@
 			return;
 		}
 		if (e.key === 'Enter') {
-			const n = focusedNode();
-			if (n) {
-				e.preventDefault();
-				void activate(n);
-			} else if (canOpenSelection) {
+			if (canOpenSelection) {
 				e.preventDefault();
 				void openSelected();
 			}
@@ -1190,6 +1186,10 @@
 						press = null;
 					}}
 					onclick={(e) => onRowClick(e, n, i)}
+					ondblclick={(e) => {
+						e.preventDefault();
+						e.stopPropagation();
+					}}
 				>
 					<span class="fe-row-main">
 						<span class="fe-icon">{n.kind === 'folder' ? '📁' : '📄'}</span>
