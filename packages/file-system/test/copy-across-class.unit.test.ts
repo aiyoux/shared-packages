@@ -2,11 +2,14 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { isLocalClass, isRemoteClass } from '../src/ui/explorerDriver.ts';
 import {
+	copyAcross,
+	CopyAcrossError,
 	destParentFromDropEvent,
 	FE_EXPLORER_IDS_MIME,
 	idsFromExplorerDataTransfer,
 	parseExplorerDragIds
 } from '../src/ui/copyAcross.ts';
+import type { ExplorerDriver, ExplorerEntry } from '../src/ui/explorerDriver.ts';
 
 describe('isLocalClass / isRemoteClass', () => {
 	it('local-class = local | memory', () => {
@@ -75,5 +78,41 @@ describe('cross-pane drag payload', () => {
 		};
 		assert.equal(destParentFromDropEvent({ target: file as unknown as EventTarget }, 'open'), 'open');
 		assert.equal(destParentFromDropEvent({ target: null }, 'open'), 'open');
+	});
+});
+
+describe('copyAcross truncated folder', () => {
+	it('aborts instead of silently dropping children past the list cap', async () => {
+		const folder: ExplorerEntry = {
+			id: 'big/',
+			parentId: null,
+			name: 'big',
+			kind: 'folder'
+		};
+		const source = {
+			id: 'disk',
+			capabilities: { supportsMkdir: true },
+			async list() {
+				return { entries: [], truncated: true };
+			}
+		} as unknown as ExplorerDriver;
+		const dest = {
+			id: 'local',
+			capabilities: { supportsMkdir: true },
+			async mkdir() {
+				return { id: 'copied/', parentId: null, name: 'big', kind: 'folder' };
+			}
+		} as unknown as ExplorerDriver;
+		await assert.rejects(
+			() =>
+				copyAcross({
+					sourceDriver: source,
+					destDriver: dest,
+					selectedIds: [folder.id],
+					sourceEntries: [folder],
+					destParentId: null
+				}),
+			(e: unknown) => e instanceof CopyAcrossError && e.code === 'COPY_ACROSS_TRUNCATED'
+		);
 	});
 });

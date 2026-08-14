@@ -62,4 +62,32 @@ describe('diskExplorerDriver', () => {
 			true
 		);
 	});
+
+	it('identity rename is a no-op (file and folder)', async () => {
+		const drv = createDiskExplorerDriver(createMemoryDiskRoot());
+		const file = await drv.writeFile!(null, new File(['keep'], 'keep.txt'));
+		const folder = await drv.mkdir!(null, 'Docs');
+		await drv.writeFile!(folder.id, new File(['c'], 'child.txt'));
+		const sameFile = await drv.rename!(file.id, 'keep.txt');
+		assert.equal(sameFile.id, file.id);
+		assert.equal(await (await drv.readBlob!(file.id)).text(), 'keep');
+		const sameFolder = await drv.rename!(folder.id, 'Docs');
+		assert.equal(sameFolder.id, folder.id);
+		const kids = await drv.list({ parentId: folder.id });
+		assert.equal(kids.entries.length, 1);
+		assert.equal(kids.entries[0]!.name, 'child.txt');
+	});
+
+	it('rejects copy/move of a folder into itself or a descendant', async () => {
+		const drv = createDiskExplorerDriver(createMemoryDiskRoot());
+		const docs = await drv.mkdir!(null, 'Docs');
+		const nested = await drv.mkdir!(docs.id, 'Nested');
+		await assert.rejects(() => drv.copy!(docs.id, docs.id), /CYCLE/);
+		await assert.rejects(() => drv.move!(docs.id, nested.id), /CYCLE/);
+		const still = await drv.list({ parentId: null });
+		assert.equal(
+			still.entries.some((e) => e.id === docs.id),
+			true
+		);
+	});
 });

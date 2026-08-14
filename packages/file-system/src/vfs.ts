@@ -356,16 +356,15 @@ export class VfsService {
 	): Promise<VfsNode> {
 		await this.ready();
 		const clean = sanitizeName(name);
-		if (parentId) {
-			const parent = await this.db.nodes.get(parentId);
-			if (!parent || parent.kind !== 'folder') throw new VfsError('NOT_A_FOLDER', 'Parent not a folder');
-			if (parent.deletedAt != null) throw new VfsError('TRASH_STATE', 'Parent is in trash');
-		}
-
 		const id = opts?.id ?? generateId('fld');
 		const now = Date.now();
 
 		return this.db.transaction('rw', this.db.nodes, async () => {
+			if (parentId) {
+				const parent = await this.db.nodes.get(parentId);
+				if (!parent || parent.kind !== 'folder') throw new VfsError('NOT_A_FOLDER', 'Parent not a folder');
+				if (parent.deletedAt != null) throw new VfsError('TRASH_STATE', 'Parent is in trash');
+			}
 			const unique = await this.ensureUniqueName(parentId, clean, undefined, opts?.onConflict ?? 'rename');
 			const existing = await this.db.nodes.get(id);
 			if (existing) return existing;
@@ -398,23 +397,26 @@ export class VfsService {
 		if (fileType !== 'unknown' && getFileType(fileType)) {
 			name = forceExtension(name, fileType);
 		}
-		if (input.parentId) {
-			const parent = await this.db.nodes.get(input.parentId);
-			if (!parent || parent.kind !== 'folder') throw new VfsError('NOT_A_FOLDER');
-			if (parent.deletedAt != null) throw new VfsError('TRASH_STATE');
-		}
 
 		const nodeId = input.id ?? generateId('file');
 		const blobId = generateId('blob');
 		const writeId = generateId('w');
+		const tmpPath = `tmp/${writeId}.partial`;
 		const finalPath = `blobs/${blobId}.bin`;
 		const { bytes, contentType } = await serializeBody(input.body, input.contentType);
 		const leaseKey = `write:${blobId}`;
 		const owner = generateId('lease');
 		const now = Date.now();
+		let overwritten: VfsNode | undefined;
 
-		// Reserve name + pending blobRef + lease
+		// Reserve name + pending blobRef + lease. Parent is re-checked inside
+		// the txn so a concurrent trash cannot park a live child under it.
 		await this.db.transaction('rw', this.db.nodes, this.db.blobRefs, this.db.leases, async () => {
+			if (input.parentId) {
+				const parent = await this.db.nodes.get(input.parentId);
+				if (!parent || parent.kind !== 'folder') throw new VfsError('NOT_A_FOLDER');
+				if (parent.deletedAt != null) throw new VfsError('TRASH_STATE');
+			}
 			const unique = await this.ensureUniqueName(
 				input.parentId,
 				name,
@@ -426,9 +428,10 @@ export class VfsService {
 			if (existing && existing.deletedAt == null) {
 				throw new VfsError('NAME_CONFLICT', `Node id already exists: ${nodeId}`);
 			}
+			if (existing) overwritten = { ...existing };
 			await this.db.blobRefs.put({
 				id: blobId,
-				opfsPath: `tmp/${writeId}.partial`,
+				opfsPath: tmpPath,
 				byteLength: 0,
 				createdAt: now,
 				contentType,
@@ -460,25 +463,31 @@ export class VfsService {
 			await this.db.nodes.put(node);
 		});
 
-
 		try {
-			const { tmpPath, byteLength } = await this.opfs.writePartial(writeId, bytes);
-			await this.db.transaction('rw', this.db.nodes, this.db.blobRefs, this.db.leases, async () => {
+			const partial = await this.opfs.writePartial(writeId, bytes);
+			await this.db.transaction('rw', this.db.nodes, this.db.blobRefs, async () => {
+				if (input.parentId) {
+					const parent = await this.db.nodes.get(input.parentId);
+					if (!parent || parent.kind !== 'folder' || parent.deletedAt != null) {
+						throw new VfsError('TRASH_STATE');
+					}
+				}
 				await this.db.blobRefs.put({
 					id: blobId,
-					opfsPath: tmpPath,
-					byteLength,
+					opfsPath: partial.tmpPath,
+					byteLength: partial.byteLength,
 					createdAt: now,
 					contentType,
+					pending: true,
 					pendingPromote: true
 				});
 				const node = await this.db.nodes.get(nodeId);
 				if (!node) throw new VfsError('NOT_FOUND');
-				node.size = byteLength;
+				node.size = partial.byteLength;
 				node.updatedAt = Date.now();
 				await this.db.nodes.put(node);
 			});
-			await this.opfs.promote(tmpPath, finalPath);
+			await this.opfs.promote(partial.tmpPath, finalPath);
 			await this.db.transaction('rw', this.db.blobRefs, this.db.leases, async () => {
 				const ref = await this.db.blobRefs.get(blobId);
 				if (ref) {
@@ -490,14 +499,16 @@ export class VfsService {
 				await this.db.leases.delete(leaseKey);
 			});
 		} catch (e) {
-			// rollback
-			await this.db.nodes.delete(nodeId);
+			if (overwritten) await this.db.nodes.put(overwritten);
+			else await this.db.nodes.delete(nodeId);
 			await this.db.blobRefs.delete(blobId);
 			await this.db.leases.delete(leaseKey);
-			try {
-				await this.opfs.remove(`tmp/${writeId}.partial`);
-			} catch {
-				/* ignore */
+			for (const p of [tmpPath, finalPath]) {
+				try {
+					await this.opfs.remove(p);
+				} catch {
+					/* ignore */
+				}
 			}
 			if (e instanceof VfsError) throw e;
 			throw new VfsError('OPFS_IO', String(e));
@@ -531,8 +542,7 @@ export class VfsService {
 		const owner = generateId('lease');
 		const now = Date.now();
 
-		let tmpPath: string;
-		let byteLength: number;
+		let tmpPath: string | undefined;
 
 		try {
 			// First, validate the generation inside a read transaction
@@ -551,9 +561,24 @@ export class VfsService {
 			// Write to OPFS only after generation check passes
 			const partial = await this.opfs.writePartial(writeId, bytes);
 			tmpPath = partial.tmpPath;
-			byteLength = partial.byteLength;
 
-			// Now commit the metadata update (re-check generation inside rw txn)
+			// Stage the new blob. Keep node.blobId on the previous ref until
+			// promote + path swap succeed so a crash/failed promote cannot
+			// unreference the last-good bytes.
+			await this.db.transaction('rw', this.db.blobRefs, this.db.leases, async () => {
+				await this.db.blobRefs.put({
+					id: blobId,
+					opfsPath: tmpPath!,
+					byteLength: partial.byteLength,
+					createdAt: now,
+					contentType,
+					pendingPromote: true
+				});
+				await this.db.leases.put({ key: leaseKey, owner, expiresAt: now + this.graceMs });
+			});
+
+			await this.opfs.promote(tmpPath, finalPath);
+
 			await this.db.transaction('rw', this.db.nodes, this.db.blobRefs, this.db.leases, async () => {
 				const cur = await this.db.nodes.get(id);
 				if (!cur) throw new VfsError('NOT_FOUND');
@@ -564,26 +589,27 @@ export class VfsService {
 						actual: cur.generation
 					});
 				}
-				await this.db.blobRefs.put({
-					id: blobId,
-					opfsPath: tmpPath,
-					byteLength,
-					createdAt: now,
-					contentType,
-					pendingPromote: true
-				});
-				await this.db.leases.put({ key: leaseKey, owner, expiresAt: now + this.graceMs });
+				const ref = await this.db.blobRefs.get(blobId);
+				if (ref) {
+					ref.opfsPath = finalPath;
+					ref.pendingPromote = false;
+					await this.db.blobRefs.put(ref);
+				}
 				cur.blobId = blobId;
-				cur.size = byteLength;
+				cur.size = partial.byteLength;
 				cur.updatedAt = Date.now();
 				cur.generation = cur.generation + 1;
 				cur.contentType = contentType;
 				await this.db.nodes.put(cur);
+				await this.db.leases.delete(leaseKey);
 			});
 		} catch (e) {
-			if (tmpPath!) {
+			await this.db.blobRefs.delete(blobId);
+			await this.db.leases.delete(leaseKey);
+			for (const p of [tmpPath, finalPath]) {
+				if (!p) continue;
 				try {
-					await this.opfs.remove(tmpPath);
+					await this.opfs.remove(p);
 				} catch {
 					/* ignore */
 				}
@@ -591,18 +617,7 @@ export class VfsService {
 			throw e;
 		}
 
-		await this.opfs.promote(tmpPath, finalPath);
-		await this.db.transaction('rw', this.db.blobRefs, this.db.leases, async () => {
-			const ref = await this.db.blobRefs.get(blobId);
-			if (ref) {
-				ref.opfsPath = finalPath;
-				ref.pendingPromote = false;
-				await this.db.blobRefs.put(ref);
-			}
-			await this.db.leases.delete(leaseKey);
-		});
-
-		// best-effort previous blob cleanup
+		// best-effort previous blob cleanup (node now points at the new blob)
 		if (prevBlobId && prevBlobId !== blobId) {
 			const oldRef = await this.db.blobRefs.get(prevBlobId);
 			if (oldRef) {
@@ -988,10 +1003,19 @@ export class VfsService {
 		);
 
 		const refs = await this.db.blobRefs.toArray();
+		const namedPaths = new Set<string>();
+		for (const ref of refs) {
+			namedPaths.add(ref.opfsPath);
+			// Promote may have already moved bytes to blobs/<id>.bin while
+			// the live row still names tmp/… — treat both as live.
+			if (ref.pendingPromote) namedPaths.add(`blobs/${ref.id}.bin`);
+		}
+
 		for (const ref of refs) {
 			if (referenced.has(ref.id)) continue;
 			if (activeLeases.has(ref.id)) continue;
-			if (ref.pending && now - ref.createdAt < this.graceMs) continue;
+			const inFlight = !!(ref.pending || ref.pendingPromote);
+			if (inFlight && now - ref.createdAt < this.graceMs) continue;
 			try {
 				await this.opfs.remove(ref.opfsPath);
 			} catch {
@@ -1002,9 +1026,10 @@ export class VfsService {
 			report.unreferencedBlobsRemoved++;
 		}
 
-		// tmp GC
+		// tmp GC — never unlink a path a blobRef still names
 		const tmps = await this.opfs.listTmp();
 		for (const t of tmps) {
+			if (namedPaths.has(t.path)) continue;
 			const age = t.mtimeMs != null ? now - t.mtimeMs : this.graceMs + 1;
 			if (age > this.graceMs) {
 				try {
@@ -1027,9 +1052,8 @@ export class VfsService {
 		// OPFS orphans under blobs/
 		try {
 			const opfsBlobs = await this.opfs.listOrphans('blobs');
-			const livePaths = new Set((await this.db.blobRefs.toArray()).map((r) => r.opfsPath));
 			for (const p of opfsBlobs) {
-				if (livePaths.has(p)) continue;
+				if (namedPaths.has(p)) continue;
 				const blobId = p.replace(/^blobs\//, '').replace(/\.bin$/, '');
 				if (activeLeases.has(blobId)) continue;
 				try {

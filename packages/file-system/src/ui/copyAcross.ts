@@ -19,6 +19,7 @@ export type CopyAcrossErrorCode =
 	| 'COPY_ACROSS_DEST_NO_FOLDERS'
 	| 'COPY_ACROSS_NO_SELECTION'
 	| 'COPY_ACROSS_NO_SOURCE'
+	| 'COPY_ACROSS_TRUNCATED'
 	| 'EXPLORER_TOO_LARGE'
 	| string;
 
@@ -191,7 +192,14 @@ async function copyFolderTree(
 	}
 	const created = await dest.mkdir(destParentId, folder.name);
 	let count = 1;
-	const { entries } = await source.list({ parentId: folder.id });
+	const listed = await source.list({ parentId: folder.id });
+	if (listed.truncated) {
+		throw new CopyAcrossError(
+			'COPY_ACROSS_TRUNCATED',
+			'Folder has more than 2000 items; copy aborted so nothing is silently dropped'
+		);
+	}
+	const { entries } = listed;
 	for (const child of entries) {
 		if (child.kind === 'folder') {
 			count += await copyFolderTree(source, dest, child, created.id);

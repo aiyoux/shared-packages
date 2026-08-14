@@ -131,12 +131,19 @@ export class MemoryVfsService {
 		if (fileType !== 'unknown' && getFileType(fileType)) {
 			name = forceExtension(name, fileType);
 		}
+		const taken = [...getState().nodes.values()].some((n) => n.name === name);
+		if (taken && input.onConflict === 'error') {
+			throw new VfsError('NAME_CONFLICT', `Name already exists: ${name}`);
+		}
 		name = ensureUnique(name, undefined);
 		const { bytes, contentType } = await serializeBody(input.body, input.contentType);
 		const nodeId = input.id ?? generateId('file');
+		if (input.id && getState().nodes.has(input.id)) {
+			throw new VfsError('NAME_CONFLICT', `Node id already exists: ${input.id}`);
+		}
 		const blobId = generateId('blob');
 		const now = Date.now();
-		getState().blobs.set(blobId, { bytes, contentType });
+		getState().blobs.set(blobId, { bytes: new Uint8Array(bytes), contentType });
 		// mirror to memory OPFS for parity with the durable path (best-effort)
 		try {
 			const writeId = generateId('w');
@@ -171,8 +178,24 @@ export class MemoryVfsService {
 			throw new VfsError('GENERATION_CONFLICT');
 		}
 		const { bytes, contentType } = await serializeBody(body, node.contentType);
-		const blobId = node.blobId ?? generateId('blob');
-		getState().blobs.set(blobId, { bytes, contentType });
+		const prevBlobId = node.blobId;
+		const blobId = generateId('blob');
+		getState().blobs.set(blobId, { bytes: new Uint8Array(bytes), contentType });
+		try {
+			const writeId = generateId('w');
+			const { tmpPath } = await getState().opfs.writePartial(writeId, bytes);
+			await getState().opfs.promote(tmpPath, `blobs/${blobId}.bin`);
+		} catch {
+			/* map store is source of truth */
+		}
+		if (prevBlobId && prevBlobId !== blobId) {
+			getState().blobs.delete(prevBlobId);
+			try {
+				await getState().opfs.remove(`blobs/${prevBlobId}.bin`);
+			} catch {
+				/* ignore */
+			}
+		}
 		node.blobId = blobId;
 		node.size = bytes.byteLength;
 		node.contentType = contentType;
@@ -188,7 +211,7 @@ export class MemoryVfsService {
 		if (!node) throw new VfsError('NOT_FOUND');
 		const b = getState().blobs.get(node.blobId);
 		if (!b) throw new VfsError('OPFS_IO', 'missing blob');
-		return b.bytes;
+		return new Uint8Array(b.bytes);
 	}
 
 	async readBlob(id: string): Promise<Blob> {
@@ -225,6 +248,11 @@ export class MemoryVfsService {
 		const node = getState().nodes.get(id);
 		if (!node) return;
 		getState().blobs.delete(node.blobId);
+		try {
+			await getState().opfs.remove(`blobs/${node.blobId}.bin`);
+		} catch {
+			/* ignore */
+		}
 		getState().nodes.delete(id);
 		emitMemoryChange();
 	}
@@ -250,6 +278,8 @@ export function createMemoryVfs(_scope?: string): MemoryVfsService {
 /** Clear the global memory store. The `scope` arg is ignored. */
 export function disposeMemoryVfs(_scope?: string): void {
 	if (!globalState) return;
+	globalState.bus.notify();
+	globalState.bus.clear();
 	globalState.nodes.clear();
 	globalState.blobs.clear();
 	void globalState.opfs.clearAll?.();

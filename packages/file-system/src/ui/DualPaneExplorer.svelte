@@ -562,12 +562,13 @@
 		}
 		try {
 			const handle = await pickDirectory();
+			const driver = createDiskExplorerDriver(handle);
+			await driver.ready();
+			// Only drop the previous remote after the new grant is usable.
 			if (p.activeKind === 'disk') p.remoteDriver?.dispose?.();
 			else if (p.activeId !== 'local' && p.activeId !== 'memory') {
 				releaseRemote(p.activeKind, p.activeId);
 			}
-			const driver = createDiskExplorerDriver(handle);
-			await driver.ready();
 			setPane(id, {
 				activeId: 'disk',
 				activeKind: 'disk',
@@ -720,17 +721,21 @@
 		copyError = '';
 		copyBusy = true;
 		try {
+			const destDriver = activeDriver(dst);
 			const n = await copyAcross({
 				sourceDriver: activeDriver(src),
-				destDriver: activeDriver(dst),
+				destDriver,
 				selectedIds: opts?.selectedIds ?? src.ctx.selectedIds,
 				sourceEntries: src.ctx.entries,
 				destParentId: opts?.destParentId !== undefined ? opts.destParentId : dst.ctx.parentId
 			});
-			// Remount dest explorer to refresh list
-			setPane(destId, {
-				explorerKey: dst.explorerKey + 1
-			});
+			// Live drivers refresh in place. Remotes without subscribeChanges
+			// remount but keep the dest open folder via initialParentId.
+			if (!destDriver.subscribeChanges) {
+				setPane(destId, {
+					explorerKey: dst.explorerKey + 1
+				});
+			}
 			if (n === 0) copyError = 'Nothing copied';
 		} catch (e) {
 			if (e instanceof CopyAcrossError) copyError = e.message;
@@ -740,18 +745,20 @@
 		}
 	}
 
-	async function runSend(id: PaneId) {
+	async function runSend(id: PaneId, opts?: { selectedIds?: string[]; entries?: ExplorerEntry[] }) {
 		if (!onSend) return;
 		const p = paneState(id);
-		if (p.ctx.selectedIds.length === 0) return;
+		const selectedIds = opts?.selectedIds ?? p.ctx.selectedIds;
+		const entries = opts?.entries ?? p.ctx.entries;
+		if (selectedIds.length === 0) return;
 		sendError = null;
 		sendBusy = true;
 		try {
 			await onSend({
 				paneId: id,
 				driver: activeDriver(p),
-				selectedIds: p.ctx.selectedIds,
-				entries: p.ctx.entries
+				selectedIds,
+				entries
 			});
 			// Remount so selection clears and the pane re-lists.
 			setPane(id, { explorerKey: p.explorerKey + 1 });
@@ -832,6 +839,9 @@
 				>
 					{copyBusy ? 'Copying…' : 'Copy across'}
 				</button>
+				{#if copyError}
+					<span class="copy-err" data-testid={tids.copyAcrossError} role="alert">{copyError}</span>
+				{/if}
 			{/if}
 			{#if onSend}
 				<button
@@ -984,7 +994,13 @@
 						variant="panel"
 						driver={localDriver}
 						showPersistence={false}
+						initialParentId={p.ctx.parentId}
 						onOpen={onOpen}
+						onSendFile={
+							onSend
+								? (entry) => runSend(id, { selectedIds: [entry.id], entries: [entry] })
+								: undefined
+						}
 						pending={id === 'left' ? pendingLeft : pendingRight}
 						onContextChange={(ctx) => {
 							// Avoid full-pane rewrite storms — only patch ctx fields
@@ -998,7 +1014,13 @@
 						variant="panel"
 						driver={drv}
 						showPersistence={false}
+						initialParentId={p.ctx.parentId}
 						onOpen={p.activeKind === 'memory' ? onOpen : undefined}
+						onSendFile={
+							onSend
+								? (entry) => runSend(id, { selectedIds: [entry.id], entries: [entry] })
+								: undefined
+						}
 						pending={id === 'left' ? pendingLeft : pendingRight}
 						onContextChange={(ctx) => {
 							if (id === 'left') left = { ...left, ctx };
@@ -1058,9 +1080,6 @@
 			>
 				{dualPane ? 'Single pane' : 'Dual pane'}
 			</button>
-			{#if copyError}
-				<span class="copy-err" data-testid={tids.copyAcrossError} role="alert">{copyError}</span>
-			{/if}
 		</div>
 	{/if}
 

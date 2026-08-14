@@ -164,4 +164,100 @@ describe('VfsService', () => {
 		assert.equal(bare.name, 'shot.png');
 		assert.equal(bare.fileType, 'image');
 	});
+
+	it('updateFile keeps the old blob if promote fails', async () => {
+		const f = await vfs.writeFile({
+			parentId: null,
+			name: 'keep.skch',
+			fileType: 'skch',
+			body: { v: 1 }
+		});
+		const before = await vfs.get(f.id);
+		const origPromote = vfs.opfs.promote.bind(vfs.opfs);
+		vfs.opfs.promote = async () => {
+			throw new Error('promote-boom');
+		};
+		await assert.rejects(
+			() => vfs.updateFile(f.id, { v: 2 }, { expectedGeneration: f.generation }),
+			(e: unknown) => e instanceof Error && String(e).includes('promote-boom')
+		);
+		vfs.opfs.promote = origPromote;
+		const after = await vfs.get(f.id);
+		assert.equal(after!.blobId, before!.blobId);
+		assert.equal(after!.generation, before!.generation);
+		assert.deepEqual(await vfs.readJson(f.id), { v: 1 });
+	});
+
+	it('gc does not delete a pendingPromote blobRef or its blobs/ path', async () => {
+		const f = await vfs.writeFile({
+			parentId: null,
+			name: 'staged.skch',
+			fileType: 'skch',
+			body: { v: 1 }
+		});
+		const stagedId = 'blob-pending-test';
+		await vfs.db.blobRefs.put({
+			id: stagedId,
+			opfsPath: 'tmp/staged.partial',
+			byteLength: 4,
+			createdAt: Date.now(),
+			pendingPromote: true
+		});
+		await vfs.opfs.writePartial('staged', new Uint8Array([1, 2, 3, 4]));
+		await vfs.opfs.promote('tmp/staged.partial', `blobs/${stagedId}.bin`);
+		const report = await vfs.gc();
+		void report;
+		const still = await vfs.db.blobRefs.get(stagedId);
+		assert.ok(still, 'pendingPromote ref must survive gc');
+		const bytes = await vfs.opfs.read(`blobs/${stagedId}.bin`);
+		assert.equal(bytes.byteLength, 4);
+		assert.ok(await vfs.get(f.id));
+	});
+
+	it('writeFile / mkdir refuse a parent that is trashed inside the txn', async () => {
+		const folder = await vfs.mkdir(null, 'SoonGone');
+		await vfs.trash(folder.id);
+		await assert.rejects(
+			() => vfs.mkdir(folder.id, 'child'),
+			(e: unknown) => e instanceof VfsError && e.code === 'TRASH_STATE'
+		);
+		await assert.rejects(
+			() =>
+				vfs.writeFile({
+					parentId: folder.id,
+					name: 'x.skch',
+					fileType: 'skch',
+					body: {}
+				}),
+			(e: unknown) => e instanceof VfsError && e.code === 'TRASH_STATE'
+		);
+	});
+
+	it('writeFile rollback restores a overwritten trash row', async () => {
+		const f = await vfs.writeFile({
+			parentId: null,
+			name: 'gone.skch',
+			fileType: 'skch',
+			body: { keep: true }
+		});
+		await vfs.trash(f.id);
+		const origPromote = vfs.opfs.promote.bind(vfs.opfs);
+		vfs.opfs.promote = async () => {
+			throw new Error('promote-fail');
+		};
+		await assert.rejects(() =>
+			vfs.writeFile({
+				id: f.id,
+				parentId: null,
+				name: 'reuse.skch',
+				fileType: 'skch',
+				body: { keep: false }
+			})
+		);
+		vfs.opfs.promote = origPromote;
+		const restored = await vfs.get(f.id);
+		assert.ok(restored);
+		assert.ok(restored!.deletedAt != null);
+		assert.deepEqual(await vfs.readJson(f.id), { keep: true });
+	});
 });

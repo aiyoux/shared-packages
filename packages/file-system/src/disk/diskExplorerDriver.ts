@@ -51,6 +51,46 @@ function toEntry(
 	};
 }
 
+/** True when dest is the source, or a folder dest that lives under source. */
+export function isDiskCycle(srcId: string, destId: string): boolean {
+	if (srcId === destId) return true;
+	if (isFolderId(srcId) && destId.startsWith(srcId)) return true;
+	return false;
+}
+
+function assertDiskCopySafe(srcId: string, destId: string): void {
+	if (isDiskCycle(srcId, destId)) {
+		throw new Error('CYCLE');
+	}
+}
+
+async function listAll(root: DiskDirHandle, parentId: string | null): Promise<ExplorerEntry[]> {
+	const dir = await walkDir(root, parentId);
+	const entries: ExplorerEntry[] = [];
+	for await (const [name, handle] of dir.entries()) {
+		const kind = handle.kind === 'directory' ? 'folder' : 'file';
+		const id = joinId(parentId, name, kind === 'folder');
+		const extra: Partial<ExplorerEntry> = {};
+		if (kind === 'file') {
+			try {
+				const file = await (handle as DiskFileHandle).getFile();
+				extra.size = file.size;
+				extra.updatedAt = file.lastModified;
+				extra.contentType = file.type || undefined;
+				extra.fileType = inferFileTypeFromName(name);
+			} catch {
+				extra.fileType = inferFileTypeFromName(name);
+			}
+		}
+		entries.push(toEntry(id, kind, extra));
+	}
+	entries.sort((a, b) => {
+		if (a.kind !== b.kind) return a.kind === 'folder' ? -1 : 1;
+		return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+	});
+	return entries;
+}
+
 export function createDiskExplorerDriver(root: DiskDirHandle): ExplorerDriver {
 	return {
 		id: 'disk',
@@ -80,30 +120,7 @@ export function createDiskExplorerDriver(root: DiskDirHandle): ExplorerDriver {
 		},
 
 		async list(opts: ExplorerListOptions): Promise<ExplorerListResult> {
-			const dir = await walkDir(root, opts.parentId);
-			const entries: ExplorerEntry[] = [];
-			for await (const [name, handle] of dir.entries()) {
-				const kind = handle.kind === 'directory' ? 'folder' : 'file';
-				const id = joinId(opts.parentId, name, kind === 'folder');
-				const extra: Partial<ExplorerEntry> = {};
-				if (kind === 'file') {
-					try {
-						const file = await (handle as DiskFileHandle).getFile();
-						extra.size = file.size;
-						extra.updatedAt = file.lastModified;
-						extra.contentType = file.type || undefined;
-						extra.fileType = inferFileTypeFromName(name);
-					} catch {
-						extra.fileType = inferFileTypeFromName(name);
-					}
-				}
-				entries.push(toEntry(id, kind, extra));
-			}
-			entries.sort((a, b) => {
-				if (a.kind !== b.kind) return a.kind === 'folder' ? -1 : 1;
-				return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
-			});
-			return applyListCap(entries);
+			return applyListCap(await listAll(root, opts.parentId));
 		},
 
 		async mkdir(parentId, name) {
@@ -113,11 +130,16 @@ export function createDiskExplorerDriver(root: DiskDirHandle): ExplorerDriver {
 		},
 
 		async rename(id, name) {
+			if (baseName(id) === name) {
+				return toEntry(id, isFolderId(id) ? 'folder' : 'file');
+			}
 			const parent = parentIdOf(id);
+			const destId = joinId(parent, name, isFolderId(id));
+			assertDiskCopySafe(id, destId);
 			if (isFolderId(id)) {
 				const created = await this.mkdir!(parent, name);
-				const { entries } = await this.list({ parentId: id });
-				for (const child of entries) await this.copy!(child.id, created.id);
+				const children = await listAll(root, id);
+				for (const child of children) await this.copy!(child.id, created.id);
 				await this.delete(id);
 				return created;
 			}
@@ -126,21 +148,26 @@ export function createDiskExplorerDriver(root: DiskDirHandle): ExplorerDriver {
 				parent,
 				new File([blob], name, { type: blob.type })
 			);
-			await this.delete(id);
+			if (written.id !== id) await this.delete(id);
 			return written;
 		},
 
 		async move(id, newParentId) {
+			const destId = joinId(newParentId, baseName(id), isFolderId(id));
+			if (destId === id) return;
+			assertDiskCopySafe(id, destId);
 			await this.copy!(id, newParentId);
 			await this.delete(id);
 		},
 
 		async copy(id, newParentId) {
 			const name = baseName(id);
+			const destId = joinId(newParentId, name, isFolderId(id));
+			assertDiskCopySafe(id, destId);
 			if (isFolderId(id)) {
 				const created = await this.mkdir!(newParentId, name);
-				const { entries } = await this.list({ parentId: id });
-				for (const child of entries) {
+				const children = await listAll(root, id);
+				for (const child of children) {
 					await this.copy!(child.id, created.id);
 				}
 				return;

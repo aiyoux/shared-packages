@@ -116,6 +116,30 @@ describe('MemoryVfs fail-closed flat list', () => {
 		await expect(vfs.readBytes(f.id)).rejects.toThrow();
 	});
 
+	it('readBytes returns a copy of the store buffer', async () => {
+		const vfs = createMemoryVfs();
+		const f = await vfs.writeFile({
+			parentId: null,
+			name: 'buf.bin',
+			body: new Uint8Array([1, 2, 3])
+		});
+		const a = await vfs.readBytes(f.id);
+		a[0] = 9;
+		const b = await vfs.readBytes(f.id);
+		expect([...b]).toEqual([1, 2, 3]);
+	});
+
+	it('writeFile honors onConflict error and rejects an existing id', async () => {
+		const vfs = createMemoryVfs();
+		const first = await vfs.writeFile({ parentId: null, name: 'a.txt', body: 'a' });
+		await expect(
+			vfs.writeFile({ parentId: null, name: 'a.txt', body: 'b', onConflict: 'error' })
+		).rejects.toMatchObject({ code: 'NAME_CONFLICT' });
+		await expect(
+			vfs.writeFile({ id: first.id, parentId: null, name: 'other.txt', body: 'c' })
+		).rejects.toMatchObject({ code: 'NAME_CONFLICT' });
+	});
+
 	it('memory driver id and caps (flat, no folders)', async () => {
 		const vfs = createMemoryVfs();
 		const driver = createMemoryExplorerDriver(vfs);

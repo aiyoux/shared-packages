@@ -165,6 +165,7 @@ describe('FileExplorer hard-delete rclone backend', () => {
 		});
 		const rows = await screen.findAllByTestId('fe-file-row');
 		expect(rows.length).toBe(2);
+		await fireEvent.click(screen.getByTestId('fe-select-multi'));
 		await fireEvent.click(rows[0]!.querySelector('.fe-name')!);
 		await fireEvent.click(rows[1]!.querySelector('.fe-name')!);
 		const batch = await screen.findByTestId('fe-trash-selected');

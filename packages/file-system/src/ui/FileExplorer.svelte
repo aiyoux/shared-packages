@@ -37,6 +37,11 @@
 		 */
 		showPersistence?: boolean;
 		onOpen?: (entry: ExplorerOpenTarget) => void | Promise<void>;
+		/** Preview "Send this file" — Connections dual-pane send path. */
+		onSendFile?: (entry: ExplorerOpenTarget) => void | Promise<void>;
+		sendLabel?: string;
+		/** Override the preview Open label (string or per-entry). */
+		openLabel?: string | ((entry: ExplorerOpenTarget) => string);
 		onSave?: (args: {
 			parentId: string | null;
 			name: string;
@@ -73,6 +78,9 @@
 		vfs: vfsProp,
 		showPersistence = true,
 		onOpen,
+		onSendFile,
+		sendLabel = 'Send this file',
+		openLabel,
 		onSave,
 		onClose,
 		pending = [],
@@ -109,6 +117,10 @@
 	let selected = $state<Set<string>>(new Set());
 	/** Most recently toggled-on row — Open uses this when several items are selected. */
 	let lastSelectedId = $state<string | null>(null);
+	/** Off: click opens a folder or a file preview. On: click selects (legacy multi). */
+	let selectMulti = $state(false);
+	let previewEntry = $state<ExplorerEntry | null>(null);
+	let previewBusy = $state(false);
 	let saveName = $state(defaultName);
 	let error = $state('');
 	let showTrash = $state(false);
@@ -537,20 +549,6 @@
 		await goCrumb(parent?.id ?? null);
 	}
 
-	async function activate(n: ExplorerEntry) {
-		if (n.kind === 'folder') {
-			await enterFolder(n);
-			return;
-		}
-		if (!rowActionable(n)) return;
-		if (mode === 'open' || mode === 'manage') {
-			await onOpen?.(n);
-		}
-		if (mode === 'save') {
-			saveName = n.name;
-		}
-	}
-
 	async function confirmSave() {
 		if (!onSave) return;
 		let name = saveName.trim();
@@ -687,7 +685,86 @@
 	}
 
 	function canToggleSelect(): boolean {
-		return multiSelect || mode === 'manage' || mode === 'open';
+		return selectMulti && (multiSelect || mode === 'manage' || mode === 'open');
+	}
+
+	function setSelectMulti(on: boolean) {
+		selectMulti = on;
+		if (on) {
+			previewEntry = null;
+		} else {
+			selected = new Set();
+			lastSelectedId = null;
+		}
+	}
+
+	function formatBytes(n: number | undefined): string {
+		if (n == null) return 'Unknown size';
+		if (n < 1024) return `${n} B`;
+		if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+		if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+		return `${(n / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+	}
+
+	function formatWhen(ts: number | undefined): string {
+		if (!ts) return '';
+		try {
+			return new Date(ts).toLocaleString();
+		} catch {
+			return '';
+		}
+	}
+
+	function defaultOpenLabel(entry: ExplorerOpenTarget): string {
+		if (typeof openLabel === 'function') return openLabel(entry);
+		if (typeof openLabel === 'string' && openLabel) return openLabel;
+		if (entry.fileType === 'skch') return 'Open in sketcher';
+		if (entry.fileType === 'ob3d') return 'Open in 3D';
+		if (entry.fileType === 'vrec') return 'Open in voice';
+		return 'Open';
+	}
+
+	async function activatePreview(n: ExplorerEntry) {
+		if (n.kind === 'folder') {
+			previewEntry = null;
+			await enterFolder(n);
+			return;
+		}
+		if (mode === 'save') {
+			saveName = n.name;
+		}
+		// One current file so Copy across / Send can target it without Select multi.
+		selected = new Set([n.id]);
+		lastSelectedId = n.id;
+		previewEntry = n;
+	}
+
+	async function confirmPreviewOpen() {
+		const n = previewEntry;
+		if (!n || !onOpen) return;
+		previewBusy = true;
+		try {
+			await onOpen(n);
+			previewEntry = null;
+		} catch (e) {
+			error = errMsg(e);
+		} finally {
+			previewBusy = false;
+		}
+	}
+
+	async function confirmPreviewSend() {
+		const n = previewEntry;
+		if (!n || !onSendFile) return;
+		previewBusy = true;
+		try {
+			await onSendFile(n);
+			previewEntry = null;
+		} catch (e) {
+			error = errMsg(e);
+		} finally {
+			previewBusy = false;
+		}
 	}
 
 	function isRowControl(t: EventTarget | null): boolean {
@@ -733,10 +810,13 @@
 		const dx = e.clientX - start.x;
 		const dy = e.clientY - start.y;
 		if (dx * dx + dy * dy > SELECT_SLOP_PX * SELECT_SLOP_PX) return;
-		if (!canToggleSelect()) return;
 		focusIndex = start.index;
-		toggleSelect(n.id, e);
 		selectedOnPointerUp = true;
+		if (canToggleSelect()) {
+			toggleSelect(n.id, e);
+			return;
+		}
+		void activatePreview(n);
 	}
 
 	function onRowClick(e: MouseEvent, n: ExplorerEntry, i: number) {
@@ -750,8 +830,7 @@
 			toggleSelect(n.id, e);
 			return;
 		}
-		if (listBusy) return;
-		void activate(n);
+		void activatePreview(n);
 	}
 
 	const selectedEntries = $derived(
@@ -892,6 +971,11 @@
 		if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) return;
 
 		if (e.key === 'Escape') {
+			if (previewEntry) {
+				e.preventDefault();
+				previewEntry = null;
+				return;
+			}
 			if (selected.size > 0) {
 				e.preventDefault();
 				selected = new Set();
@@ -912,9 +996,20 @@
 			return;
 		}
 		if (e.key === 'Enter') {
+			if (previewEntry) {
+				e.preventDefault();
+				if (onOpen) void confirmPreviewOpen();
+				return;
+			}
 			if (canOpenSelection) {
 				e.preventDefault();
 				void openSelected();
+				return;
+			}
+			const focused = focusedNode();
+			if (focused && !selectMulti) {
+				e.preventDefault();
+				void activatePreview(focused);
 			}
 			return;
 		}
@@ -984,6 +1079,7 @@
 	data-testid={rootTestId}
 	data-fe-backend={driver.id}
 	data-fe-mode={mode}
+	data-fe-select-multi={selectMulti ? 'on' : 'off'}
 	role={variant === 'dialog' ? 'dialog' : 'group'}
 	aria-label="File explorer"
 	tabindex="0"
@@ -1015,6 +1111,18 @@
 			{#if showPersistChip && localVfs}
 				<StoragePersistenceStatus vfs={localVfs} compact class="fe-persist-slot" />
 			{/if}
+			{#if mode === 'manage' || mode === 'open'}
+				<button
+					type="button"
+					data-testid="fe-select-multi"
+					class:active={selectMulti}
+					aria-pressed={selectMulti}
+					title="Click rows to select or deselect more than one item"
+					onclick={() => setSelectMulti(!selectMulti)}
+				>
+					Select multi
+				</button>
+			{/if}
 			{#if mode === 'manage' && caps.supportsSiblingOrder && !showTrash}
 				<span
 					class="fe-dnd-hint"
@@ -1024,7 +1132,7 @@
 					Drag to reorder
 				</span>
 			{/if}
-			{#if canOpenSelection}
+			{#if selectMulti && canOpenSelection}
 				<button type="button" data-testid="fe-open-selected" onclick={() => void openSelected()}>
 					Open
 				</button>
@@ -1172,6 +1280,7 @@
 					class:file={n.kind === 'file'}
 					class:incompatible={!actionable && n.kind === 'file'}
 					class:selected={selected.has(n.id)}
+					class:previewed={previewEntry?.id === n.id}
 					class:focused={i === focusIndex}
 					class:fe-dnd-into={showInto}
 					data-testid={n.kind === 'folder' ? 'fe-folder-row' : 'fe-file-row'}
@@ -1311,13 +1420,89 @@
 
 	{#if mode === 'open'}
 		<footer class="fe-open-bar" data-testid="fe-open-bar">
-			<span class="fe-hint">Select a compatible file, then Open</span>
+			<span class="fe-hint">
+				{selectMulti ? 'Select a compatible file, then Open' : 'Click a file for details, or a folder to open it'}
+			</span>
 		</footer>
+	{/if}
+
+	{#if previewEntry}
+		<div
+			class="fe-preview-backdrop"
+			data-testid="fe-file-preview"
+			role="dialog"
+			aria-modal="true"
+			aria-label={previewEntry.name}
+		>
+			<button
+				type="button"
+				class="fe-preview-scrim"
+				aria-label="Close preview"
+				onclick={() => (previewEntry = null)}
+			></button>
+			<div class="fe-preview-card">
+				<h2 class="fe-preview-name" data-testid="fe-file-preview-name">{previewEntry.name}</h2>
+				<dl class="fe-preview-meta">
+					<div>
+						<dt>Size</dt>
+						<dd data-testid="fe-file-preview-size">{formatBytes(previewEntry.size)}</dd>
+					</div>
+					{#if previewEntry.fileType}
+						<div>
+							<dt>Type</dt>
+							<dd data-testid="fe-file-preview-type">{previewEntry.fileType}</dd>
+						</div>
+					{/if}
+					{#if previewEntry.contentType}
+						<div>
+							<dt>MIME</dt>
+							<dd>{previewEntry.contentType}</dd>
+						</div>
+					{/if}
+					{#if previewEntry.updatedAt}
+						<div>
+							<dt>Updated</dt>
+							<dd>{formatWhen(previewEntry.updatedAt)}</dd>
+						</div>
+					{/if}
+				</dl>
+				<div class="fe-preview-actions">
+					{#if onOpen && rowActionable(previewEntry) && (mode === 'open' || mode === 'manage')}
+						<button
+							type="button"
+							data-testid="fe-file-preview-open"
+							disabled={previewBusy}
+							onclick={() => void confirmPreviewOpen()}
+						>
+							{defaultOpenLabel(previewEntry)}
+						</button>
+					{/if}
+					{#if onSendFile && previewEntry.kind === 'file'}
+						<button
+							type="button"
+							data-testid="fe-file-preview-send"
+							disabled={previewBusy}
+							onclick={() => void confirmPreviewSend()}
+						>
+							{sendLabel}
+						</button>
+					{/if}
+					<button
+						type="button"
+						data-testid="fe-file-preview-close"
+						onclick={() => (previewEntry = null)}
+					>
+						Close
+					</button>
+				</div>
+			</div>
+		</div>
 	{/if}
 </div>
 
 <style>
 	.fe-root {
+		position: relative;
 		display: flex;
 		flex-direction: column;
 		min-height: 280px;
@@ -1512,6 +1697,83 @@
 		background: #2c3a4f;
 		outline: 1px solid #5b8def;
 		outline-offset: -1px;
+	}
+	.fe-row.previewed {
+		background: #2a3340;
+		outline: 1px dashed #7cb7ff;
+		outline-offset: -1px;
+	}
+	.fe-preview-backdrop {
+		position: absolute;
+		inset: 0;
+		z-index: 8;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+	}
+	.fe-preview-scrim {
+		position: absolute;
+		inset: 0;
+		border: 0;
+		background: color-mix(in srgb, #000 45%, transparent);
+		cursor: pointer;
+	}
+	.fe-preview-card {
+		position: relative;
+		z-index: 1;
+		min-width: min(280px, 90%);
+		max-width: 360px;
+		padding: 16px 18px;
+		background: #22232a;
+		border: 1px solid #444;
+		border-radius: 10px;
+		box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
+	}
+	.fe-preview-name {
+		margin: 0 0 12px;
+		font-size: 1rem;
+		font-weight: 650;
+		word-break: break-word;
+	}
+	.fe-preview-meta {
+		margin: 0 0 14px;
+		display: grid;
+		gap: 6px;
+	}
+	.fe-preview-meta div {
+		display: grid;
+		grid-template-columns: 72px 1fr;
+		gap: 8px;
+		font-size: 0.85rem;
+	}
+	.fe-preview-meta dt {
+		margin: 0;
+		opacity: 0.65;
+	}
+	.fe-preview-meta dd {
+		margin: 0;
+	}
+	.fe-preview-actions {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 6px;
+	}
+	.fe-preview-actions button {
+		background: #2a2b30;
+		border: 1px solid #444;
+		color: inherit;
+		border-radius: 6px;
+		padding: 6px 10px;
+		cursor: pointer;
+	}
+	.fe-preview-actions button:disabled {
+		opacity: 0.5;
+		cursor: not-allowed;
+	}
+	.fe-preview-actions [data-testid='fe-file-preview-open'],
+	.fe-preview-actions [data-testid='fe-file-preview-send'] {
+		background: #2c3a4f;
+		border-color: #5b8def;
 	}
 	.fe-dnd-line {
 		height: 2px;

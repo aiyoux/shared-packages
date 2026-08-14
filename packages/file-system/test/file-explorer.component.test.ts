@@ -77,7 +77,7 @@ describe('FileExplorer component', () => {
 		expect(incompatible?.getAttribute('data-file-type')).toBe('vrec');
 	});
 
-	it('pointerup selects when click is swallowed (draggable rows)', async () => {
+	it('pointerup opens a file preview (draggable rows swallow click)', async () => {
 		await vfs.writeFile({
 			parentId: null,
 			name: 'Sketch',
@@ -87,13 +87,15 @@ describe('FileExplorer component', () => {
 		render(FileExplorer, { props: { mode: 'manage', vfs, variant: 'panel' } });
 		await viWaitForRows(1);
 		const row = document.querySelector('[data-testid="fe-file-row"]') as HTMLElement;
-		await fireEvent.pointerDown(row, { button: 0, clientX: 10, clientY: 10 });
-		await fireEvent.pointerUp(row, { button: 0, clientX: 11, clientY: 10 });
-		expect(row.classList.contains('selected')).toBe(true);
-		expect(screen.getByTestId('fe-trash-selected')).toBeTruthy();
+		const nameEl = row.querySelector('.fe-name') as HTMLElement;
+		await fireEvent.pointerDown(nameEl, { button: 0, clientX: 10, clientY: 10 });
+		await fireEvent.pointerUp(nameEl, { button: 0, clientX: 11, clientY: 10 });
+		expect(await screen.findByTestId('fe-file-preview')).toBeTruthy();
+		expect(screen.getByTestId('fe-file-preview-name').textContent).toMatch(/Sketch/);
+		expect(screen.queryByTestId('fe-open-selected')).toBeNull();
 	});
 
-	it('single-click selects; Open appears and calls onOpen', async () => {
+	it('file preview Open calls onOpen with a sketcher label', async () => {
 		await vfs.writeFile({
 			parentId: null,
 			name: 'Sketch',
@@ -115,23 +117,76 @@ describe('FileExplorer component', () => {
 		expect(screen.queryByTestId('fe-open-selected')).toBeNull();
 		const row = document.querySelector('[data-testid="fe-file-row"]') as HTMLElement;
 		await fireEvent.click(row);
-		expect(row.classList.contains('selected')).toBe(true);
 		expect(opened).toEqual([]);
-		const openBtn = await screen.findByTestId('fe-open-selected');
+		const openBtn = await screen.findByTestId('fe-file-preview-open');
+		expect(openBtn.textContent).toMatch(/sketcher/i);
 		await fireEvent.click(openBtn);
 		expect(opened).toEqual(['Sketch.skch']);
 	});
 
-	it('single-click on a folder selects it; Open enters the folder', async () => {
+	it('single-click on a folder enters it', async () => {
 		await vfs.mkdir(null, 'Docs');
 		render(FileExplorer, { props: { mode: 'manage', vfs, variant: 'panel' } });
 		await viWaitFor(() => !!document.querySelector('[data-testid="fe-folder-row"]'));
 		const row = document.querySelector('[data-testid="fe-folder-row"]') as HTMLElement;
 		await fireEvent.click(row);
-		expect(row.classList.contains('selected')).toBe(true);
-		await fireEvent.click(await screen.findByTestId('fe-open-selected'));
 		await viWaitFor(() => !!document.querySelector('[data-testid="fe-empty"]'));
 		expect(document.querySelector('[data-testid="fe-folder-row"]')).toBeNull();
+	});
+
+	it('Select multi restores click-to-toggle; toolbar Open calls onOpen', async () => {
+		await vfs.writeFile({
+			parentId: null,
+			name: 'Sketch',
+			fileType: 'skch',
+			body: { format: 'skch', schemaVersion: 1, name: 'Sketch', data: {} }
+		});
+		const opened: string[] = [];
+		render(FileExplorer, {
+			props: {
+				mode: 'manage',
+				vfs,
+				variant: 'panel',
+				onOpen: (entry: { name: string }) => {
+					opened.push(entry.name);
+				}
+			}
+		});
+		await viWaitForRows(1);
+		await fireEvent.click(screen.getByTestId('fe-select-multi'));
+		expect(screen.getByTestId('fe-select-multi').getAttribute('aria-pressed')).toBe('true');
+		const row = document.querySelector('[data-testid="fe-file-row"]') as HTMLElement;
+		await fireEvent.click(row);
+		expect(row.classList.contains('selected')).toBe(true);
+		expect(screen.queryByTestId('fe-file-preview')).toBeNull();
+		const openBtn = await screen.findByTestId('fe-open-selected');
+		await fireEvent.click(openBtn);
+		expect(opened).toEqual(['Sketch.skch']);
+	});
+
+	it('preview Send this file calls onSendFile', async () => {
+		await vfs.writeFile({
+			parentId: null,
+			name: 'note.txt',
+			fileType: 'unknown',
+			body: 'hi'
+		});
+		const sent: string[] = [];
+		render(FileExplorer, {
+			props: {
+				mode: 'manage',
+				vfs,
+				variant: 'panel',
+				onSendFile: (entry: { name: string }) => {
+					sent.push(entry.name);
+				}
+			}
+		});
+		await viWaitForRows(1);
+		const row = document.querySelector('[data-testid="fe-file-row"]') as HTMLElement;
+		await fireEvent.click(row.querySelector('.fe-name')!);
+		await fireEvent.click(await screen.findByTestId('fe-file-preview-send'));
+		expect(sent).toEqual(['note.txt']);
 	});
 
 	it('second explorer lists a file written through the shared VFS', async () => {
