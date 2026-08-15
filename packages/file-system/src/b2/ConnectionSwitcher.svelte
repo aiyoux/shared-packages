@@ -430,7 +430,6 @@
 	}
 	.conn-settings-wrap {
 		position: relative;
-		margin-left: auto;
 		order: 99;
 		flex-shrink: 0;
 	}
