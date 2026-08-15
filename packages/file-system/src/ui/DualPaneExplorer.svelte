@@ -208,6 +208,7 @@
 		diskName: string;
 		/** Open folder + selection for copy-across */
 		ctx: ExplorerContext;
+		showTrash: boolean;
 	};
 
 	function emptyCtx(backend: string = 'local'): ExplorerContext {
@@ -227,7 +228,8 @@
 			showMonitorForm: false,
 			explorerKey: 0,
 			diskName: '',
-			ctx: emptyCtx(kind)
+			ctx: emptyCtx(kind),
+			showTrash: false
 		};
 	}
 
@@ -901,15 +903,16 @@
 		ondragend={onPaneDragEnd}
 	>
 		<div class="pane-chrome" data-testid={tids.paneChrome(id)}>
-			{#if !hidePaneLabels}
+			{#if !hidePaneLabels && dualPane}
 				<span class="pane-label" data-testid={tids.paneLabel(id)}>
-					{id === 'left' ? (dualPane ? 'Left' : 'Browser') : 'Right'}
+					{id === 'left' ? 'Left' : 'Right'}
 				</span>
 			{/if}
 			{#if paneShowsSwitcher(id) && !(id === 'right' && overrideRight)}
 				<ConnectionSwitcher
 				activeId={p.activeId}
 				activeKind={p.activeKind}
+				capabilities={drv.capabilities}
 				profiles={b2Chips}
 				rcloneProfiles={rcloneChips}
 				monitorProfiles={monitorChips}
@@ -929,6 +932,25 @@
 				}}
 				onConfigureDisk={() => void connectDisk(id, { replace: true })}
 			/>
+			{/if}
+			{#if drv.capabilities.supportsTrash}
+				<button
+					type="button"
+					class="pane-trash"
+					class:active={p.showTrash}
+					data-testid="fe-trash-view"
+					title={p.showTrash ? 'Leave trash' : 'Open trash'}
+					aria-pressed={p.showTrash}
+					onclick={() => {
+						const next = !p.showTrash;
+						setPane(id, {
+							showTrash: next,
+							ctx: { ...p.ctx, parentId: null, selectedIds: [] }
+						});
+					}}
+				>
+					Trash
+				</button>
 			{/if}
 			{#if showCopyAcross}
 				<button
@@ -1098,6 +1120,9 @@
 						variant="panel"
 						driver={overrideRight.driver}
 						showPersistence={false}
+						hideToolbarTrash={true}
+						trashView={p.showTrash}
+						onTrashViewChange={(open) => setPane(id, { showTrash: open })}
 						initialParentId={p.ctx.parentId}
 						pending={panePending(id)}
 						onContextChange={(ctx) => {
@@ -1111,6 +1136,9 @@
 						variant="panel"
 						driver={localDriver}
 						showPersistence={false}
+						hideToolbarTrash={true}
+						trashView={p.showTrash}
+						onTrashViewChange={(open) => setPane(id, { showTrash: open })}
 						initialParentId={p.ctx.parentId}
 						onOpen={onOpen}
 						onSendFile={
@@ -1131,6 +1159,9 @@
 						variant="panel"
 						driver={drv}
 						showPersistence={false}
+						hideToolbarTrash={true}
+						trashView={p.showTrash}
+						onTrashViewChange={(open) => setPane(id, { showTrash: open })}
 						initialParentId={p.ctx.parentId}
 						onOpen={p.activeKind === 'memory' ? onOpen : undefined}
 						onSendFile={
@@ -1335,6 +1366,23 @@
 		text-transform: uppercase;
 		letter-spacing: 0.04em;
 		opacity: 0.7;
+	}
+	.pane-trash {
+		order: 98;
+		margin-left: auto;
+		padding: 0.35rem 0.7rem;
+		border-radius: 8px;
+		border: 1px solid var(--border, #334155);
+		background: var(--surface, #1e293b);
+		color: inherit;
+		cursor: pointer;
+		font: inherit;
+		font-size: 0.85rem;
+		font-weight: 600;
+	}
+	.pane-trash.active {
+		outline: 2px solid #38bdf8;
+		outline-offset: 1px;
 	}
 	.pane-form {
 		padding: 0 0.65rem;

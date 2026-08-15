@@ -65,6 +65,11 @@
 			size: number;
 			direction?: string;
 		}>;
+		/** Dual-pane header owns the Trash toggle — hide the toolbar copy. */
+		hideToolbarTrash?: boolean;
+		/** Controlled trash view (DualPane header). Uncontrolled when omitted. */
+		trashView?: boolean;
+		onTrashViewChange?: (open: boolean) => void;
 	}
 
 	let {
@@ -88,7 +93,10 @@
 		variant = 'panel',
 		class: className = '',
 		compatLibraryTestId = false,
-		compatSaveTestId = false
+		compatSaveTestId = false,
+		hideToolbarTrash = false,
+		trashView = undefined,
+		onTrashViewChange
 	}: Props = $props();
 
 	// Resolve driver once from props (local default). Re-create if prop identity changes via effect below.
@@ -123,7 +131,12 @@
 	let previewBusy = $state(false);
 	let saveName = $state(defaultName);
 	let error = $state('');
-	let showTrash = $state(false);
+	let internalTrash = $state(false);
+	const showTrash = $derived(trashView !== undefined ? trashView : internalTrash);
+	function setTrash(open: boolean) {
+		if (trashView === undefined) internalTrash = open;
+		onTrashViewChange?.(open);
+	}
 	/** True until the first list() completes (empty shell only). */
 	let initialLoad = $state(true);
 	/** True while a list/mutation refresh is in flight. */
@@ -475,6 +488,10 @@
 	}
 
 	$effect(() => {
+		if (trashView === true) parentId = null;
+	});
+
+	$effect(() => {
 		void parentId;
 		void showTrash;
 		void mode;
@@ -523,7 +540,7 @@
 
 	async function enterFolder(n: ExplorerEntry) {
 		if (n.kind !== 'folder') return;
-		showTrash = false;
+		setTrash(false);
 		parentId = n.id;
 		selected = new Set();
 		lastSelectedId = null;
@@ -531,7 +548,7 @@
 	}
 
 	async function goCrumb(id: string | null) {
-		showTrash = false;
+		setTrash(false);
 		parentId = id;
 		selected = new Set();
 		lastSelectedId = null;
@@ -540,7 +557,7 @@
 
 	async function goUp() {
 		if (showTrash) {
-			showTrash = false;
+			setTrash(false);
 			return;
 		}
 		if (!parentId) return;
@@ -1123,15 +1140,6 @@
 					Select multi
 				</button>
 			{/if}
-			{#if mode === 'manage' && caps.supportsSiblingOrder && !showTrash}
-				<span
-					class="fe-dnd-hint"
-					data-testid="fe-dnd-hint"
-					title="Drag a row before/after a sibling to reorder. Drop onto a folder to move into it."
-				>
-					Drag to reorder
-				</span>
-			{/if}
 			{#if selectMulti && canOpenSelection}
 				<button type="button" data-testid="fe-open-selected" onclick={() => void openSelected()}>
 					Open
@@ -1162,13 +1170,13 @@
 						onchange={(e) => onUploadFiles((e.currentTarget as HTMLInputElement).files)}
 					/>
 				{/if}
-				{#if caps.supportsTrash}
+				{#if caps.supportsTrash && !hideToolbarTrash}
 					<button
 						type="button"
 						data-testid="fe-trash-view"
 						class:active={showTrash}
 						onclick={() => {
-							showTrash = !showTrash;
+							setTrash(!showTrash);
 							parentId = null;
 						}}
 					>
@@ -1560,14 +1568,6 @@
 	}
 	.fe-toolbar button.active {
 		outline: 1px solid var(--fe-accent, #7cb7ff);
-	}
-	.fe-dnd-hint {
-		font-size: 0.72rem;
-		color: #94a3b8;
-		padding: 2px 6px;
-		border-radius: 6px;
-		border: 1px dashed #475569;
-		white-space: nowrap;
 	}
 	.fe-close {
 		font-size: 18px;

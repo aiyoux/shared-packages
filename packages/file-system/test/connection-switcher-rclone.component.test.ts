@@ -6,7 +6,7 @@ import { render, screen, fireEvent } from '@testing-library/svelte';
 import ConnectionSwitcher from '../src/b2/ConnectionSwitcher.svelte';
 
 describe('ConnectionSwitcher multi-backend', () => {
-	it('switcher.chips: conn-rclone* when showRclone and zero profiles', () => {
+	it('switcher.menu: local/disk options and rclone settings when showRclone and zero profiles', () => {
 		render(ConnectionSwitcher, {
 			props: {
 				activeId: 'local',
@@ -16,6 +16,8 @@ describe('ConnectionSwitcher multi-backend', () => {
 			}
 		});
 		expect(screen.getByTestId('connection-switcher')).toBeTruthy();
+		expect(screen.getByTestId('conn-trigger')).toBeTruthy();
+		expect(screen.getByTestId('conn-settings')).toBeTruthy();
 		expect(screen.getByTestId('conn-local')).toBeTruthy();
 		expect(screen.getByTestId('conn-disk')).toBeTruthy();
 		expect(screen.getByTestId('conn-disk-config')).toBeTruthy();
@@ -128,6 +130,38 @@ describe('ConnectionSwitcher multi-backend', () => {
 		expect(screen.queryByTestId('conn-rclone')).toBeNull();
 		expect(screen.queryByTestId('conn-rclone-profile')).toBeNull();
 		expect(screen.queryByTestId('conn-rclone-config')).toBeNull();
+	});
+
+	it('info control lists enabled and disabled caps for the active connection', () => {
+		render(ConnectionSwitcher, {
+			props: {
+				activeId: 'local',
+				activeKind: 'local',
+				capabilities: {
+					supportsTrash: true,
+					supportsSoftDelete: true,
+					supportsRename: true,
+					supportsMove: true,
+					supportsCopy: true,
+					supportsMkdir: true,
+					supportsUpload: false,
+					supportsDownload: true,
+					supportsSiblingOrder: true,
+					supportsDragOut: true
+				}
+			}
+		});
+		expect(screen.getByTestId('conn-caps-info')).toBeTruthy();
+		const tip = screen.getByTestId('conn-caps-tooltip');
+		expect(tip.textContent).toMatch(/Trash/);
+		expect(tip.textContent).toMatch(/Upload from device/);
+		expect(tip.textContent).toMatch(/Drag to reorder/);
+		const trash = [...tip.querySelectorAll('li')].find((el) => el.textContent?.includes('Trash'));
+		const upload = [...tip.querySelectorAll('li')].find((el) =>
+			el.textContent?.includes('Upload from device')
+		);
+		expect(trash?.getAttribute('data-on')).toBe('1');
+		expect(upload?.getAttribute('data-on')).toBe('0');
 	});
 
 	it('onSelect / onConfigureRclone fire when not busy', async () => {
