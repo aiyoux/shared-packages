@@ -1367,6 +1367,9 @@
 		letter-spacing: 0.04em;
 		opacity: 0.7;
 	}
+	.pane-chrome:has(.pane-trash) :global(.conn-settings-wrap) {
+		margin-left: 0;
+	}
 	.pane-trash {
 		order: 98;
 		margin-left: auto;

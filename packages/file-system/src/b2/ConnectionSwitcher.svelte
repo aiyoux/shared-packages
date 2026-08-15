@@ -564,9 +564,10 @@
 		width: 15.5rem;
 		padding: 0.55rem 0.65rem 0.5rem;
 		border-radius: 10px;
-		border: 1px solid var(--border, #334155);
-		background: var(--bg-card, #0f172a);
-		box-shadow: 0 10px 28px rgba(0, 0, 0, 0.4);
+		border: 1px solid #334155;
+		background: #0f172a;
+		color: #e2e8f0;
+		box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
 		font-size: 0.78rem;
 		line-height: 1.35;
 	}
@@ -654,6 +655,7 @@
 		position: relative;
 		order: 99;
 		flex-shrink: 0;
+		margin-left: auto;
 	}
 	.conn-gear {
 		display: inline-flex;
@@ -674,14 +676,16 @@
 	.conn-settings-panel {
 		display: none;
 		position: absolute;
-		z-index: 30;
+		z-index: 40;
 		min-width: 14rem;
 		max-width: min(22rem, 90vw);
 		padding: 0.35rem;
 		border-radius: 10px;
-		border: 1px solid var(--border, #334155);
-		background: var(--bg-card, #1e293b);
-		box-shadow: 0 10px 28px rgba(0, 0, 0, 0.35);
+		border: 1px solid #334155;
+		/* Hub --bg-card is ~2% white and reads as transparent. */
+		background: #1e293b;
+		color: #e2e8f0;
+		box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
 	}
 	.conn-menu.open,
 	.conn-settings-panel.open {
