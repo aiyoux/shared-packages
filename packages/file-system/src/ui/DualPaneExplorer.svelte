@@ -110,12 +110,9 @@
 		hideConnectionSwitcher?: boolean;
 		/** When set, only these panes show the backend switcher. */
 		switcherPanes?: PaneId[];
-		/**
-		 * Force-enable monitor chips even when the feature-toggle row is hidden
-		 * (CM always-dual layout). Does not persist the files-page localStorage flag.
-		 */
+		/** @deprecated monitor is always enabled. Kept so existing callers compile. */
 		monitorEnabled?: boolean;
-		/** Same as monitorEnabled for rclone (off unless asked). */
+		/** @deprecated rclone is always enabled. Kept so existing callers compile. */
 		rcloneEnabled?: boolean;
 		/** Show the In memory chip in the switcher. Default true. */
 		switcherShowMemory?: boolean;
@@ -176,8 +173,8 @@
 		hidePaneLabels = false,
 		hideConnectionSwitcher = false,
 		switcherPanes,
-		monitorEnabled = false,
-		rcloneEnabled = false,
+		monitorEnabled: _monitorEnabled = true,
+		rcloneEnabled: _rcloneEnabled = true,
 		switcherShowMemory = true,
 		onExplorerDrag,
 		overrideRight = null,
@@ -189,9 +186,6 @@
 	}: Props = $props();
 
 	const tids: DualPaneTids = { ...defaultTids, ...tidsOverride };
-
-	const RCLONE_FEATURE_LS = 'feature:rcloneFiles';
-	const MONITOR_FEATURE_LS = 'feature:monitorFiles';
 
 	type PaneState = {
 		activeId: 'local' | 'memory' | string;
@@ -239,8 +233,8 @@
 	let b2Profiles = $state<B2ConnectionProfileV1[]>([]);
 	let rcloneProfiles = $state<RcloneConnectionProfileV1[]>([]);
 	let monitorProfiles = $state<MonitorConnectionProfileV1[]>([]);
-	let showRclone = $state(false);
-	let showMonitor = $state(false);
+	const showRclone = true;
+	const showMonitor = true;
 	/** Live watch status per pane (from monitor driver). */
 	let monitorWatchStatus = $state<Record<string, string>>({});
 	let watchPollTimer: ReturnType<typeof setInterval> | null = null;
@@ -370,84 +364,6 @@
 		dismissedCopyIds = next;
 	}
 
-	function readRcloneFeature(): boolean {
-		try {
-			const v = localStorage.getItem(RCLONE_FEATURE_LS);
-			if (import.meta.env.DEV) return v !== '0';
-			return v === '1';
-		} catch {
-			return Boolean(import.meta.env.DEV);
-		}
-	}
-	function setRcloneFeature(on: boolean) {
-		showRclone = on;
-		try {
-			localStorage.setItem(RCLONE_FEATURE_LS, on ? '1' : '0');
-		} catch {
-			/* ignore */
-		}
-		// Drop rclone panes when disabling the feature
-		if (!on) {
-			for (const id of ['left', 'right'] as PaneId[]) {
-				const p = paneState(id);
-				if (p.activeKind === 'rclone' || p.showRcloneForm) {
-					if (p.activeKind === 'rclone' && p.activeId !== 'local' && p.activeId !== 'memory') {
-						releaseRcloneDriver(p.activeId);
-					}
-					setPane(id, {
-						activeId: 'local',
-						activeKind: 'local',
-						remoteDriver: null,
-						showRcloneForm: false,
-						explorerKey: p.explorerKey + 1,
-						ctx: emptyCtx('local')
-					});
-				}
-			}
-			rcloneProfiles = [];
-		} else {
-			void reloadProfiles();
-		}
-	}
-	function readMonitorFeature(): boolean {
-		try {
-			const v = localStorage.getItem(MONITOR_FEATURE_LS);
-			if (import.meta.env.DEV) return v !== '0';
-			return v === '1';
-		} catch {
-			return Boolean(import.meta.env.DEV);
-		}
-	}
-	function setMonitorFeature(on: boolean) {
-		showMonitor = on;
-		try {
-			localStorage.setItem(MONITOR_FEATURE_LS, on ? '1' : '0');
-		} catch {
-			/* ignore */
-		}
-		if (!on) {
-			for (const id of ['left', 'right'] as PaneId[]) {
-				const p = paneState(id);
-				if (p.activeKind === 'monitor' || p.showMonitorForm) {
-					if (p.activeKind === 'monitor' && p.activeId !== 'local' && p.activeId !== 'memory') {
-						releaseMonitorDriver(p.activeId);
-					}
-					setPane(id, {
-						activeId: 'local',
-						activeKind: 'local',
-						remoteDriver: null,
-						showMonitorForm: false,
-						explorerKey: p.explorerKey + 1,
-						ctx: emptyCtx('local')
-					});
-				}
-			}
-			monitorProfiles = [];
-		} else {
-			void reloadProfiles();
-		}
-	}
-
 	onMount(() => {
 		try {
 			const stored = localStorage.getItem(dualPaneKey);
@@ -456,8 +372,6 @@
 			dualPane = dualPaneDefault;
 		}
 		onDualChange?.(dualPane);
-		showRclone = rcloneEnabled || readRcloneFeature();
-		showMonitor = monitorEnabled || readMonitorFeature();
 		void reloadProfiles();
 		// Hub files memory singleton hook (separate from durable page-owned __VFS_TEST__).
 		// Memory is global/shared: NOT disposed on pagehide.
@@ -1189,32 +1103,6 @@
 					<StoragePersistenceStatus vfs={persistenceVfs} compact={false} pollMs={10_000} />
 				</div>
 			{/if}
-			<label
-				class="rclone-toggle"
-				class:active={showRclone}
-				title="Browse remotes via rclone rcd. Browser connects to the Base URL in settings (local or tunnel). Off by default in production. rcd must allow CORS."
-				data-testid={tids.rcloneToggle}
-			>
-				<input
-					type="checkbox"
-					checked={showRclone}
-					onchange={(e) => setRcloneFeature((e.currentTarget as HTMLInputElement).checked)}
-				/>
-				<span>rclone</span>
-			</label>
-			<label
-				class="rclone-toggle"
-				class:active={showMonitor}
-				title="Browse a directory via monitor (browser → Base URL in settings; default https://127.0.0.1:8300). Read-only. Off by default in production. Monitor must allow CORS."
-				data-testid={tids.monitorToggle}
-			>
-				<input
-					type="checkbox"
-					checked={showMonitor}
-					onchange={(e) => setMonitorFeature((e.currentTarget as HTMLInputElement).checked)}
-				/>
-				<span>monitor</span>
-			</label>
 			<button
 				type="button"
 				class="dual-toggle"
@@ -1264,8 +1152,7 @@
 	}
 	.dual-toggle,
 	.copy-across,
-	.send-selected,
-	.rclone-toggle {
+	.send-selected {
 		padding: 0.35rem 0.7rem;
 		border-radius: 8px;
 		border: 1px solid var(--border, #334155);
@@ -1274,17 +1161,7 @@
 		cursor: pointer;
 		font-size: 0.9rem;
 	}
-	.rclone-toggle {
-		display: inline-flex;
-		align-items: center;
-		gap: 0.4rem;
-		user-select: none;
-	}
-	.rclone-toggle input {
-		margin: 0;
-	}
-	.dual-toggle.active,
-	.rclone-toggle.active {
+	.dual-toggle.active {
 		outline: 2px solid #38bdf8;
 		outline-offset: 1px;
 	}
