@@ -6,7 +6,13 @@
  */
 import readerWasmUrl from './wasm/zxing_reader.wasm?url';
 import { bytesToBase64url } from './encoding.js';
-import { mapDetectedFormat, type BarcodeFormatType, type NonJabScannerMode, type ScannerMode } from './types.js';
+import {
+  isLinearBarcodeFormat,
+  mapDetectedFormat,
+  type BarcodeFormatType,
+  type NonJabScannerMode,
+  type ScannerMode
+} from './types.js';
 
 export const ZXING_READER_WASM_URL = readerWasmUrl;
 
@@ -22,7 +28,12 @@ const NATIVE_FORMATS: Record<NonJabScannerMode, string[]> = {
   qrmini: [],
   datamatrix: ['data_matrix'],
   aztec: ['aztec'],
-  smart: ['qr_code', 'data_matrix', 'aztec']
+  eanupc: ['ean_13', 'ean_8', 'upc_a', 'upc_e'],
+  ean13: ['ean_13'],
+  ean8: ['ean_8'],
+  upca: ['upc_a'],
+  upce: ['upc_e'],
+  smart: ['qr_code', 'data_matrix', 'aztec', 'ean_13', 'ean_8', 'upc_a', 'upc_e']
 };
 
 const WASM_FORMATS: Record<NonJabScannerMode, string[]> = {
@@ -30,7 +41,12 @@ const WASM_FORMATS: Record<NonJabScannerMode, string[]> = {
   qrmini: ['MicroQRCode'],
   datamatrix: ['DataMatrix'],
   aztec: ['Aztec'],
-  smart: ['QRCode', 'MicroQRCode', 'DataMatrix', 'Aztec']
+  eanupc: ['EANUPC'],
+  ean13: ['EAN13'],
+  ean8: ['EAN8'],
+  upca: ['UPCA'],
+  upce: ['UPCE'],
+  smart: ['QRCode', 'MicroQRCode', 'DataMatrix', 'Aztec', 'EAN13', 'EAN8', 'UPCA', 'UPCE']
 };
 
 export type StartScanOptions = {
@@ -187,9 +203,12 @@ export async function startZxingScan(
   if (!ctx) return;
 
   const useJab = mode === 'jabcode';
-  const nonJabMode: NonJabScannerMode =
-    mode === 'qr' || mode === 'qrmini' || mode === 'datamatrix' || mode === 'aztec' ? mode : 'smart';
-  const useContrast = nonJabMode === 'qr' || nonJabMode === 'smart';
+  const nonJabMode: NonJabScannerMode = mode === 'jabcode' ? 'smart' : mode;
+  const useContrast =
+    nonJabMode === 'qr' ||
+    nonJabMode === 'smart' ||
+    nonJabMode === 'eanupc' ||
+    isLinearBarcodeFormat(nonJabMode);
 
   let detector: { detect: (source: CanvasImageSource) => Promise<DetectedBarcode[]> } | null = null;
   let wasmOpts: ReturnType<typeof getWasmReaderOptions> | null = null;

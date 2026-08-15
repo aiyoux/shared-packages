@@ -20,6 +20,8 @@ import { moduleSideFromSvg, svgToDataUrl } from './svg.js';
 import {
   DEFAULT_JABCODE_COLORS,
   DEFAULT_QR_EC_LEVEL,
+  isLinearBarcodeFormat,
+  normalizeLinearDigits,
   type BarcodeFormatType,
   type BarcodeWriteDetails,
   type GenerateBarcodeOptions,
@@ -35,7 +37,11 @@ const WRITE_FORMAT: Record<Exclude<BarcodeFormatType, 'jabcode'>, string> = {
   qr: 'QRCode',
   qrmini: 'MicroQRCode',
   datamatrix: 'DataMatrix',
-  aztec: 'Aztec'
+  aztec: 'Aztec',
+  ean13: 'EAN13',
+  ean8: 'EAN8',
+  upca: 'UPCA',
+  upce: 'UPCE'
 };
 
 export function resolveGenOptions(
@@ -66,9 +72,9 @@ function ecLevelForFormat(
 }
 
 /**
- * Generate QR / Data Matrix / Aztec / Micro QR via zxing-wasm (lazy-loaded).
- * Accepts string or raw bytes (binary is denser for DM/Aztec).
- * Prefers SVG; PNG only if SVG missing.
+ * Generate QR / Data Matrix / Aztec / Micro QR / EAN / UPC via zxing-wasm
+ * (lazy-loaded). Accepts string or raw bytes (binary is denser for DM/Aztec;
+ * EAN/UPC are digits-only). Prefers SVG; PNG only if SVG missing.
  */
 export async function writeBarcode(
   input: string | Uint8Array,
@@ -84,7 +90,15 @@ export async function writeBarcode(
     mod.setZXingModuleOverrides({ locateFile: locateWriterWasm });
     const { writeBarcode: zxingWrite } = mod;
     const writeOpts = {
-      format: WRITE_FORMAT[format] as 'QRCode' | 'MicroQRCode' | 'DataMatrix' | 'Aztec',
+      format: WRITE_FORMAT[format] as
+        | 'QRCode'
+        | 'MicroQRCode'
+        | 'DataMatrix'
+        | 'Aztec'
+        | 'EAN13'
+        | 'EAN8'
+        | 'UPCA'
+        | 'UPCE',
       scale: 1,
       addQuietZones: true,
       ecLevel,
@@ -138,6 +152,9 @@ export async function generateBarcodeFromBytes(
   jabcodeColors?: number,
   base64urlString?: string
 ): Promise<string | null> {
+  if (isLinearBarcodeFormat(format)) {
+    return generateBarcode(new TextDecoder().decode(bytes), format, { jabcodeColors, scale: 4 });
+  }
   if (format === 'datamatrix' || format === 'aztec') {
     return generateBarcode(bytes, format, { jabcodeColors, scale: 4 });
   }
@@ -151,6 +168,9 @@ export async function generateBarcodeFromBytesFallback(
   jabcodeColors?: number,
   base64urlString?: string
 ): Promise<string | null> {
+  if (isLinearBarcodeFormat(format)) {
+    return generateBarcode(new TextDecoder().decode(bytes), format, { jabcodeColors, scale: 6 });
+  }
   if (format === 'datamatrix' || format === 'aztec') {
     return generateBarcode(bytes, format, { jabcodeColors, scale: 6 });
   }
@@ -171,7 +191,12 @@ export async function generateBarcode(
     }
     return await generateJabCode(data, opts.jabcodeColors);
   }
-  const written = await writeBarcode(data, format, {
+  const payload =
+    isLinearBarcodeFormat(format)
+      ? normalizeLinearDigits(typeof data === 'string' ? data : new TextDecoder().decode(data))
+      : data;
+  if (isLinearBarcodeFormat(format) && !payload) return null;
+  const written = await writeBarcode(payload, format, {
     scale: opts.scale,
     qrEcLevel: opts.qrEcLevel
   });

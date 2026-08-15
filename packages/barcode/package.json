@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": false,
   "type": "module",
-  "description": "Browser barcode generate and scan API (QR, Micro QR, Data Matrix, Aztec, JAB). Vendored zxing-wasm — no CDN fetch.",
+  "description": "Browser barcode generate and scan API (QR, Micro QR, Data Matrix, Aztec, EAN/UPC, JAB). Vendored zxing-wasm — no CDN fetch.",
   "exports": {
     ".": {
       "types": "./src/index.ts",
