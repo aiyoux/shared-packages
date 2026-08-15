@@ -765,6 +765,7 @@
 		if (entry.fileType === 'skch') return 'Open in sketcher';
 		if (entry.fileType === 'ob3d') return 'Open in 3D';
 		if (entry.fileType === 'vrec') return 'Open in voice';
+		if (entry.fileType === 'image') return 'Open in Images';
 		return 'Open';
 	}
 

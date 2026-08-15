@@ -9,6 +9,7 @@ Canonical source for the published shared packages:
 | `@shared-packages/barcode` | `packages/barcode` | `~/Code/scratch-pad` (generate + scan API) |
 | `@shared-packages/compress` | `packages/compress` | `~/Code/scratch-pad` (lazy fflate / ZipKit / AddMaple pack+expand) |
 | `@shared-packages/crypto` | `packages/crypto` | `~/Code/scratch-pad` (Web Crypto / libsodium hash + .spvault) |
+| `@shared-packages/image` | `packages/image` | `~/Code/scratch-pad` (native Canvas / jSquash convert+resize) |
 | `@shared-packages/video` | `packages/video` | `~/Code/scratch-pad` Language Hub (trim/encode + players) |
 
 Plus `packages/component-library`, the dev/demo app for `ui` (not published).
