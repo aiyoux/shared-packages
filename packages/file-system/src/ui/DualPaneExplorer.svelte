@@ -901,9 +901,9 @@
 		ondragend={onPaneDragEnd}
 	>
 		<div class="pane-chrome" data-testid={tids.paneChrome(id)}>
-			{#if !hidePaneLabels}
+			{#if !hidePaneLabels && dualPane}
 				<span class="pane-label" data-testid={tids.paneLabel(id)}>
-					{id === 'left' ? (dualPane ? 'Left' : 'Browser') : 'Right'}
+					{id === 'left' ? 'Left' : 'Right'}
 				</span>
 			{/if}
 			{#if paneShowsSwitcher(id) && !(id === 'right' && overrideRight)}

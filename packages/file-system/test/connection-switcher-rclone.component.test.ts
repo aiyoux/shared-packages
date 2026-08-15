@@ -6,7 +6,7 @@ import { render, screen, fireEvent } from '@testing-library/svelte';
 import ConnectionSwitcher from '../src/b2/ConnectionSwitcher.svelte';
 
 describe('ConnectionSwitcher multi-backend', () => {
-	it('switcher.chips: conn-rclone* when showRclone and zero profiles', () => {
+	it('switcher.menu: local/disk options and rclone settings when showRclone and zero profiles', () => {
 		render(ConnectionSwitcher, {
 			props: {
 				activeId: 'local',
@@ -16,6 +16,8 @@ describe('ConnectionSwitcher multi-backend', () => {
 			}
 		});
 		expect(screen.getByTestId('connection-switcher')).toBeTruthy();
+		expect(screen.getByTestId('conn-trigger')).toBeTruthy();
+		expect(screen.getByTestId('conn-settings')).toBeTruthy();
 		expect(screen.getByTestId('conn-local')).toBeTruthy();
 		expect(screen.getByTestId('conn-disk')).toBeTruthy();
 		expect(screen.getByTestId('conn-disk-config')).toBeTruthy();
