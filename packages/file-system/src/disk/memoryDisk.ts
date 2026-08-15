@@ -7,6 +7,13 @@ type MemFile = { kind: 'file'; name: string; bytes: Uint8Array; type: string };
 type MemDir = { kind: 'directory'; name: string; children: Map<string, MemNode> };
 type MemNode = MemFile | MemDir;
 
+/** The real API rejects with a DOMException; callers branch on `.name`. */
+function fsError(name: 'NotFoundError' | 'TypeMismatchError', message: string): Error {
+	const e = new Error(message);
+	e.name = name;
+	return e;
+}
+
 function nowFile(name: string, bytes: Uint8Array, type: string): File {
 	return new File([bytes], name, { type });
 }
@@ -60,8 +67,8 @@ function wrapDir(node: MemDir): DiskDirHandle {
 		async getDirectoryHandle(name, opts) {
 			const existing = node.children.get(name);
 			if (existing?.kind === 'directory') return wrapDir(existing);
-			if (existing) throw new Error('TYPE_MISMATCH');
-			if (!opts?.create) throw new Error('NOT_FOUND');
+			if (existing) throw fsError('TypeMismatchError', 'TYPE_MISMATCH');
+			if (!opts?.create) throw fsError('NotFoundError', 'NOT_FOUND');
 			const created: MemDir = { kind: 'directory', name, children: new Map() };
 			node.children.set(name, created);
 			return wrapDir(created);
@@ -69,14 +76,14 @@ function wrapDir(node: MemDir): DiskDirHandle {
 		async getFileHandle(name, opts) {
 			const existing = node.children.get(name);
 			if (existing?.kind === 'file') return wrapFile(existing);
-			if (existing) throw new Error('TYPE_MISMATCH');
-			if (!opts?.create) throw new Error('NOT_FOUND');
+			if (existing) throw fsError('TypeMismatchError', 'TYPE_MISMATCH');
+			if (!opts?.create) throw fsError('NotFoundError', 'NOT_FOUND');
 			const created: MemFile = { kind: 'file', name, bytes: new Uint8Array(), type: '' };
 			node.children.set(name, created);
 			return wrapFile(created);
 		},
 		async removeEntry(name) {
-			if (!node.children.delete(name)) throw new Error('NOT_FOUND');
+			if (!node.children.delete(name)) throw fsError('NotFoundError', 'NOT_FOUND');
 		}
 	};
 }

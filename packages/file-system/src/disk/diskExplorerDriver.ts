@@ -3,6 +3,7 @@
  * `showDirectoryPicker` (File System Access API).
  */
 import { inferFileTypeFromName } from '../index.js';
+import { withNumericSuffix } from '../names.js';
 import { emitBlobChunks } from '../readProgress.js';
 import {
 	applyListCap,
@@ -63,6 +64,33 @@ function assertDiskCopySafe(srcId: string, destId: string): void {
 	if (isDiskCycle(srcId, destId)) {
 		throw new Error('CYCLE');
 	}
+}
+
+async function nameTaken(dir: DiskDirHandle, name: string): Promise<boolean> {
+	try {
+		await dir.getFileHandle(name);
+		return true;
+	} catch (e) {
+		// Only a genuine miss frees the name. Anything else (TypeMismatchError when
+		// a folder holds it, a permission failure) counts as taken — guessing wrong
+		// in that direction costs a suffix, guessing wrong the other way overwrites
+		// the user's file.
+		return (e as DOMException | undefined)?.name !== 'NotFoundError';
+	}
+}
+
+/**
+ * Free name for a new file in `dir`, renaming on conflict the way
+ * `VfsService.ensureUniqueName` does. There is no sibling index on disk, so
+ * each candidate is probed individually.
+ */
+export async function uniqueDiskName(dir: DiskDirHandle, name: string): Promise<string> {
+	if (!(await nameTaken(dir, name))) return name;
+	for (let i = 1; i <= 1000; i++) {
+		const candidate = withNumericSuffix(name, i);
+		if (!(await nameTaken(dir, candidate))) return candidate;
+	}
+	throw new Error('NAME_CONFLICT');
 }
 
 async function listAll(root: DiskDirHandle, parentId: string | null): Promise<ExplorerEntry[]> {
@@ -190,14 +218,20 @@ export function createDiskExplorerDriver(root: DiskDirHandle): ExplorerDriver {
 
 		async writeFile(parentId, file) {
 			const dir = await walkDir(root, parentId);
-			const fh = await dir.getFileHandle(file.name, { create: true });
+			// `getFileHandle(name, { create: true })` opens an existing entry rather
+			// than failing, and `createWritable()` truncates it — so without this
+			// probe a same-name file on the user's real disk is silently destroyed,
+			// with no trash to recover it from. Rename instead, as every other
+			// driver here does.
+			const name = await uniqueDiskName(dir, file.name);
+			const fh = await dir.getFileHandle(name, { create: true });
 			const w = await fh.createWritable();
 			await w.write(file);
 			await w.close();
-			return toEntry(joinId(parentId, file.name, false), 'file', {
+			return toEntry(joinId(parentId, name, false), 'file', {
 				size: file.size,
 				contentType: file.type || undefined,
-				fileType: inferFileTypeFromName(file.name)
+				fileType: inferFileTypeFromName(name)
 			});
 		},
 
