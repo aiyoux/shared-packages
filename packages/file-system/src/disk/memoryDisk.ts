@@ -3,7 +3,9 @@
  */
 import type { DiskDirHandle, DiskFileHandle } from './handles.js';
 
-type MemFile = { kind: 'file'; name: string; bytes: Uint8Array; type: string };
+// `Uint8Array<ArrayBuffer>`, not the default `Uint8Array<ArrayBufferLike>`:
+// only the former is a `BlobPart`, and these bytes go straight into `new File`.
+type MemFile = { kind: 'file'; name: string; bytes: Uint8Array<ArrayBuffer>; type: string };
 type MemDir = { kind: 'directory'; name: string; children: Map<string, MemNode> };
 type MemNode = MemFile | MemDir;
 
@@ -14,7 +16,7 @@ function fsError(name: 'NotFoundError' | 'TypeMismatchError', message: string): 
 	return e;
 }
 
-function nowFile(name: string, bytes: Uint8Array, type: string): File {
+function nowFile(name: string, bytes: Uint8Array<ArrayBuffer>, type: string): File {
 	return new File([bytes], name, { type });
 }
 

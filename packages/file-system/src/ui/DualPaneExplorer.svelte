@@ -289,6 +289,15 @@
 	function paneState(id: PaneId): PaneState {
 		return id === 'left' ? left : right;
 	}
+	/**
+	 * `onSendFile` hands back an open-target, which is thinner than the list row
+	 * — no `parentId`, no `contentType`. Recover the full row from the pane so
+	 * `onSend` consumers get the mime type they read off it.
+	 */
+	function sendTargetEntries(id: PaneId, target: ExplorerOpenTarget): ExplorerEntry[] {
+		const row = paneState(id).ctx.entries.find((e) => e.id === target.id);
+		return [row ?? { ...target, parentId: null }];
+	}
 	function setPane(id: PaneId, patch: Partial<PaneState>) {
 		if (id === 'left') left = { ...left, ...patch };
 		else right = { ...right, ...patch };
@@ -1143,7 +1152,11 @@
 						onOpen={onOpen}
 						onSendFile={
 							onSend
-								? (entry) => runSend(id, { selectedIds: [entry.id], entries: [entry] })
+								? (entry) =>
+										runSend(id, {
+											selectedIds: [entry.id],
+											entries: sendTargetEntries(id, entry)
+										})
 								: undefined
 						}
 						pending={panePending(id)}
@@ -1166,7 +1179,11 @@
 						onOpen={p.activeKind === 'memory' ? onOpen : undefined}
 						onSendFile={
 							onSend
-								? (entry) => runSend(id, { selectedIds: [entry.id], entries: [entry] })
+								? (entry) =>
+										runSend(id, {
+											selectedIds: [entry.id],
+											entries: sendTargetEntries(id, entry)
+										})
 								: undefined
 						}
 						pending={panePending(id)}
