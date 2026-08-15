@@ -912,6 +912,7 @@
 				<ConnectionSwitcher
 				activeId={p.activeId}
 				activeKind={p.activeKind}
+				capabilities={drv.capabilities}
 				profiles={b2Chips}
 				rcloneProfiles={rcloneChips}
 				monitorProfiles={monitorChips}

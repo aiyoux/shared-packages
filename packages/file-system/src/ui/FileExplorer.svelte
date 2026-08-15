@@ -1140,15 +1140,6 @@
 					Select multi
 				</button>
 			{/if}
-			{#if mode === 'manage' && caps.supportsSiblingOrder && !showTrash}
-				<span
-					class="fe-dnd-hint"
-					data-testid="fe-dnd-hint"
-					title="Drag a row before/after a sibling to reorder. Drop onto a folder to move into it."
-				>
-					Drag to reorder
-				</span>
-			{/if}
 			{#if selectMulti && canOpenSelection}
 				<button type="button" data-testid="fe-open-selected" onclick={() => void openSelected()}>
 					Open
@@ -1577,14 +1568,6 @@
 	}
 	.fe-toolbar button.active {
 		outline: 1px solid var(--fe-accent, #7cb7ff);
-	}
-	.fe-dnd-hint {
-		font-size: 0.72rem;
-		color: #94a3b8;
-		padding: 2px 6px;
-		border-radius: 6px;
-		border: 1px dashed #475569;
-		white-space: nowrap;
 	}
 	.fe-close {
 		font-size: 18px;

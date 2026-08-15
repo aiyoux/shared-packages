@@ -1,4 +1,6 @@
 <script lang="ts">
+	import type { ExplorerCapabilities } from '../ui/explorerDriver.js';
+
 	/** Storage backend kind for the hub connection switcher. */
 	export type ConnectionKind = 'local' | 'memory' | 'disk' | 'b2' | 'rclone' | 'monitor';
 
@@ -40,6 +42,8 @@
 		showMonitor?: boolean;
 		/** Show In memory option (tab-ephemeral VFS). Default true. */
 		showMemory?: boolean;
+		/** Active driver caps — tooltip lists these for the current connection. */
+		capabilities?: ExplorerCapabilities;
 		/** Select local, memory, disk, or a profile id (B2 / rclone / monitor) */
 		onSelect?: (id: 'local' | 'memory' | 'disk' | string) => void;
 		onConfigureB2?: () => void;
@@ -59,6 +63,7 @@
 		showRclone = true,
 		showMonitor = true,
 		showMemory = true,
+		capabilities,
 		onSelect,
 		onConfigureB2,
 		onConfigureRclone,
@@ -99,6 +104,112 @@
 			return p ? `Monitor · ${p.name}` : 'Monitor';
 		}
 		return 'Browser files';
+	});
+
+	const kindNote = $derived(
+		kind === 'memory'
+			? 'This tab only — cleared when the tab closes.'
+			: kind === 'disk'
+				? 'Folder on this computer (browser permission).'
+				: kind === 'b2'
+					? 'Remote Backblaze B2. Keys stay in this browser.'
+					: kind === 'monitor'
+						? 'Read-only live folder via monitor.'
+						: kind === 'rclone'
+							? 'Remote folder via rclone.'
+							: 'Saved in this browser (Dexie + OPFS).'
+	);
+
+	const fallbackCaps: Record<ConnectionKind, ExplorerCapabilities> = {
+		local: {
+			supportsTrash: true,
+			supportsSoftDelete: true,
+			supportsRename: true,
+			supportsMove: true,
+			supportsCopy: true,
+			supportsMkdir: true,
+			supportsUpload: false,
+			supportsDownload: false,
+			supportsSiblingOrder: true
+		},
+		memory: {
+			supportsTrash: false,
+			supportsSoftDelete: false,
+			supportsRename: true,
+			supportsMove: false,
+			supportsCopy: false,
+			supportsMkdir: false,
+			supportsUpload: false,
+			supportsDownload: true,
+			supportsSiblingOrder: false,
+			supportsDragOut: true
+		},
+		disk: {
+			supportsTrash: false,
+			supportsSoftDelete: false,
+			supportsRename: true,
+			supportsMove: true,
+			supportsCopy: true,
+			supportsMkdir: true,
+			supportsUpload: true,
+			supportsDownload: true,
+			supportsSiblingOrder: false,
+			supportsDragOut: true
+		},
+		b2: {
+			supportsTrash: false,
+			supportsSoftDelete: false,
+			supportsRename: true,
+			supportsMove: true,
+			supportsCopy: true,
+			supportsMkdir: true,
+			supportsUpload: true,
+			supportsDownload: true,
+			supportsSiblingOrder: false
+		},
+		rclone: {
+			supportsTrash: false,
+			supportsSoftDelete: false,
+			supportsRename: true,
+			supportsMove: true,
+			supportsCopy: true,
+			supportsMkdir: true,
+			supportsUpload: true,
+			supportsDownload: true,
+			supportsSiblingOrder: false
+		},
+		monitor: {
+			supportsTrash: false,
+			supportsSoftDelete: false,
+			supportsRename: false,
+			supportsMove: false,
+			supportsCopy: false,
+			supportsMkdir: false,
+			supportsUpload: false,
+			supportsDownload: true,
+			supportsSiblingOrder: false,
+			supportsDragOut: true
+		}
+	};
+
+	const capRows = $derived.by(() => {
+		const c = capabilities ?? fallbackCaps[kind];
+		const rows: { label: string; on: boolean }[] = [
+			{ label: 'Trash', on: !!c?.supportsTrash },
+			{ label: 'Soft delete', on: !!c?.supportsSoftDelete },
+			{ label: 'Rename', on: !!c?.supportsRename },
+			{ label: 'Move', on: !!c?.supportsMove },
+			{ label: 'Copy', on: !!c?.supportsCopy },
+			{ label: 'New folders', on: !!c?.supportsMkdir },
+			{ label: 'Upload from device', on: !!c?.supportsUpload },
+			{ label: 'Download', on: !!c?.supportsDownload },
+			{ label: 'Drag to reorder', on: !!c?.supportsSiblingOrder },
+			{ label: 'Drag files out', on: !!c?.supportsDragOut }
+		];
+		if (!c) {
+			/* No driver yet — still show the list as unavailable rather than empty. */
+		}
+		return rows;
 	});
 
 	function select(id: 'local' | 'memory' | 'disk' | string) {
@@ -157,6 +268,7 @@
 
 <div class="conn-switch" bind:this={rootEl} data-testid="connection-switcher">
 	<div class="conn-select">
+		<div class="conn-select-row">
 		<button
 			type="button"
 			class="conn-trigger"
@@ -170,6 +282,31 @@
 			<span class="conn-trigger-label">{activeLabel}</span>
 			<span class="conn-caret" aria-hidden="true">▾</span>
 		</button>
+		<div class="conn-info-wrap">
+			<button
+				type="button"
+				class="conn-info"
+				data-testid="conn-caps-info"
+				aria-label={`Features for ${activeLabel}`}
+				aria-describedby="conn-caps-tip"
+			>
+				i
+			</button>
+			<div class="conn-caps-tip" id="conn-caps-tip" data-testid="conn-caps-tooltip" role="tooltip">
+				<p class="caps-title">{activeLabel}</p>
+				<p class="caps-note">{kindNote}</p>
+				<ul class="caps-list">
+					{#each capRows as row (row.label)}
+						<li class:on={row.on} data-on={row.on ? '1' : '0'}>
+							<span class="caps-mark" aria-hidden="true">{row.on ? '✓' : '–'}</span>
+							{row.label}
+							<span class="visually-hidden">{row.on ? 'enabled' : 'disabled'}</span>
+						</li>
+					{/each}
+				</ul>
+			</div>
+		</div>
+		</div>
 
 		<div class="conn-menu" class:open={menuOpen} data-testid="conn-menu" role="listbox">
 			<button
@@ -392,7 +529,92 @@
 	.conn-select {
 		position: relative;
 		min-width: 10rem;
-		max-width: 16rem;
+		max-width: 18rem;
+	}
+	.conn-select-row {
+		display: flex;
+		align-items: center;
+		gap: 0.3rem;
+	}
+	.conn-info-wrap {
+		position: relative;
+		flex-shrink: 0;
+	}
+	.conn-info {
+		width: 1.45rem;
+		height: 1.45rem;
+		padding: 0;
+		border-radius: 999px;
+		border: 1px solid var(--border, #334155);
+		background: var(--surface, #1e293b);
+		color: inherit;
+		font: inherit;
+		font-size: 0.72rem;
+		font-weight: 750;
+		font-style: italic;
+		line-height: 1;
+		cursor: help;
+	}
+	.conn-caps-tip {
+		display: none;
+		position: absolute;
+		z-index: 40;
+		top: calc(100% + 6px);
+		left: 0;
+		width: 15.5rem;
+		padding: 0.55rem 0.65rem 0.5rem;
+		border-radius: 10px;
+		border: 1px solid var(--border, #334155);
+		background: var(--bg-card, #0f172a);
+		box-shadow: 0 10px 28px rgba(0, 0, 0, 0.4);
+		font-size: 0.78rem;
+		line-height: 1.35;
+	}
+	.conn-info-wrap:hover .conn-caps-tip,
+	.conn-info-wrap:focus-within .conn-caps-tip {
+		display: block;
+	}
+	.caps-title {
+		margin: 0 0 0.15rem;
+		font-weight: 700;
+		font-size: 0.82rem;
+	}
+	.caps-note {
+		margin: 0 0 0.45rem;
+		opacity: 0.75;
+		font-size: 0.72rem;
+	}
+	.caps-list {
+		margin: 0;
+		padding: 0;
+		list-style: none;
+		display: grid;
+		gap: 0.12rem;
+	}
+	.caps-list li {
+		display: flex;
+		align-items: center;
+		gap: 0.4rem;
+		opacity: 0.45;
+	}
+	.caps-list li.on {
+		opacity: 1;
+	}
+	.caps-mark {
+		width: 0.85rem;
+		text-align: center;
+		color: #38bdf8;
+		font-weight: 700;
+	}
+	.caps-list li:not(.on) .caps-mark {
+		color: #64748b;
+	}
+	.visually-hidden {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		overflow: hidden;
+		clip: rect(0 0 0 0);
 	}
 	.conn-trigger,
 	.conn-gear,
