@@ -1,0 +1,43 @@
+{
+  "name": "@shared-packages/barcode",
+  "version": "0.1.0",
+  "private": false,
+  "type": "module",
+  "description": "Browser barcode generate and scan API (QR, Micro QR, Data Matrix, Aztec, JAB). Vendored zxing-wasm — no CDN fetch.",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./jabcode": {
+      "types": "./src/jabcode.ts",
+      "import": "./src/jabcode.ts",
+      "default": "./src/jabcode.ts"
+    }
+  },
+  "types": "./src/index.ts",
+  "files": [
+    "src"
+  ],
+  "scripts": {
+    "test": "vitest run",
+    "check": "tsc --noEmit -p tsconfig.json",
+    "yalc:publish": "yalc publish"
+  },
+  "dependencies": {
+    "zxing-wasm": "3.1.2"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "typescript": "^5.7.3",
+    "vite": "^8.1.5",
+    "vitest": "^4.1.2"
+  },
+  "engines": {
+    "node": ">=22.7.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

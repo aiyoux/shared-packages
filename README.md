@@ -5,6 +5,7 @@ This repository contains packages that are genuinely shared across app and modul
 - `packages/ui`: Shared UI component library (Svelte components) plus its `date/` subpath — canonical date types/helpers used by the components.
 - `packages/drawing-tools`: Headless 2D drawing primitives shared by Creative/sketcher apps.
 - `packages/file-system`: Browser VFS (Dexie + OPFS), FileExplorer UI, and optional Backblaze B2 remote browser (`@shared-packages/file-system/b2`). Host apps keep thin control-plane proxy routes.
+- `packages/barcode`: Browser barcode generate + scan API (QR / Micro QR / Data Matrix / Aztec / JAB). Vendored `zxing-wasm` — no CDN. Product UI and signaling stay in the consumer.
 - `packages/component-library`: A demo/dev app for developing and previewing `ui`'s components. Not published.
 
 `module-sdk`, `item-tree`, and `shell-core` used to live here but were modular-app-specific (a SurrealDB sync engine, offline cache, domain schedulers, the record model, domain UI editors) — they've moved into `modular-app` as first-party workspace packages (`repos/module-sdk`, `repos/item-tree`, `repos/shell-core`). Prefer generic reusable primitives and storage/UI infrastructure here; keep product-specific routes and session glue in consumer apps.
