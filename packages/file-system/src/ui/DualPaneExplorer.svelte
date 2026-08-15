@@ -25,6 +25,8 @@
 	import { default as FileExplorer, type ExplorerContext } from './FileExplorer.svelte';
 	import { default as StoragePersistenceStatus } from './StoragePersistenceStatus.svelte';
 	import OpProgressPopup from './OpProgressPopup.svelte';
+	import DualPhaseConfirm from './DualPhaseConfirm.svelte';
+	import { stackTransferItems } from './stackProgress.js';
 	import { listTransfers, subscribeTransfers, type TransferItem } from '../transferRegistry.js';
 	import { type ExplorerDriver, type ExplorerEntry, type ExplorerOpenTarget } from './explorerDriver.js';
 	import { createMemoryExplorerDriver } from './memoryExplorerDriver.js';
@@ -33,6 +35,8 @@
 	import { type PaneId, type DualPaneTids } from './dualPaneTypes.js';
 	import {
 		canShowCopyAcross,
+		isDualPhaseCopy,
+		describeCopyAcrossPath,
 		copyAcross,
 		CopyAcrossError,
 		destParentFromDropEvent,
@@ -110,12 +114,9 @@
 		hideConnectionSwitcher?: boolean;
 		/** When set, only these panes show the backend switcher. */
 		switcherPanes?: PaneId[];
-		/**
-		 * Force-enable monitor chips even when the feature-toggle row is hidden
-		 * (CM always-dual layout). Does not persist the files-page localStorage flag.
-		 */
+		/** @deprecated monitor is always enabled. Kept so existing callers compile. */
 		monitorEnabled?: boolean;
-		/** Same as monitorEnabled for rclone (off unless asked). */
+		/** @deprecated rclone is always enabled. Kept so existing callers compile. */
 		rcloneEnabled?: boolean;
 		/** Show the In memory chip in the switcher. Default true. */
 		switcherShowMemory?: boolean;
@@ -138,6 +139,7 @@
 			transferred: number;
 			size: number;
 			direction?: string;
+			ready?: number;
 		}>;
 		pendingRight?: Array<{
 			id: string;
@@ -145,6 +147,7 @@
 			transferred: number;
 			size: number;
 			direction?: string;
+			ready?: number;
 		}>;
 		/** Notified when dual-pane toggles (so a page can widen its shell). */
 		onDualChange?: (dual: boolean) => void;
@@ -176,8 +179,8 @@
 		hidePaneLabels = false,
 		hideConnectionSwitcher = false,
 		switcherPanes,
-		monitorEnabled = false,
-		rcloneEnabled = false,
+		monitorEnabled: _monitorEnabled = true,
+		rcloneEnabled: _rcloneEnabled = true,
 		switcherShowMemory = true,
 		onExplorerDrag,
 		overrideRight = null,
@@ -189,9 +192,6 @@
 	}: Props = $props();
 
 	const tids: DualPaneTids = { ...defaultTids, ...tidsOverride };
-
-	const RCLONE_FEATURE_LS = 'feature:rcloneFiles';
-	const MONITOR_FEATURE_LS = 'feature:monitorFiles';
 
 	type PaneState = {
 		activeId: 'local' | 'memory' | string;
@@ -239,8 +239,8 @@
 	let b2Profiles = $state<B2ConnectionProfileV1[]>([]);
 	let rcloneProfiles = $state<RcloneConnectionProfileV1[]>([]);
 	let monitorProfiles = $state<MonitorConnectionProfileV1[]>([]);
-	let showRclone = $state(false);
-	let showMonitor = $state(false);
+	const showRclone = true;
+	const showMonitor = true;
 	/** Live watch status per pane (from monitor driver). */
 	let monitorWatchStatus = $state<Record<string, string>>({});
 	let watchPollTimer: ReturnType<typeof setInterval> | null = null;
@@ -257,6 +257,11 @@
 	let dismissedCopyIds = $state<Set<string>>(new Set());
 	let copyProgressUnsub: (() => void) | null = null;
 	let memoryVfs: MemoryVfsService | null = null;
+	let dualPhasePrompt = $state<{
+		sourceLabel: string;
+		destLabel: string;
+		resolve: (ok: boolean) => void;
+	} | null>(null);
 
 	/** True when at least one visible pane is durable local browser storage. */
 	const showLocalPersist = $derived(
@@ -350,13 +355,14 @@
 
 	const visibleCopyItems = $derived(copyItems.filter((t) => !dismissedCopyIds.has(t.id)));
 	const destCopyPending = $derived(
-		visibleCopyItems
+		stackTransferItems(visibleCopyItems)
 			.filter((t) => !t.done)
 			.map((t) => ({
 				id: t.id,
 				name: t.name,
-				transferred: t.transferred,
-				size: t.size || Math.max(t.transferred, 1),
+				transferred: t.behind,
+				size: t.size || Math.max(t.ahead, 1),
+				ready: t.ahead,
 				direction: 'receiving' as const
 			}))
 	);
@@ -379,84 +385,6 @@
 		dismissedCopyIds = next;
 	}
 
-	function readRcloneFeature(): boolean {
-		try {
-			const v = localStorage.getItem(RCLONE_FEATURE_LS);
-			if (import.meta.env.DEV) return v !== '0';
-			return v === '1';
-		} catch {
-			return Boolean(import.meta.env.DEV);
-		}
-	}
-	function setRcloneFeature(on: boolean) {
-		showRclone = on;
-		try {
-			localStorage.setItem(RCLONE_FEATURE_LS, on ? '1' : '0');
-		} catch {
-			/* ignore */
-		}
-		// Drop rclone panes when disabling the feature
-		if (!on) {
-			for (const id of ['left', 'right'] as PaneId[]) {
-				const p = paneState(id);
-				if (p.activeKind === 'rclone' || p.showRcloneForm) {
-					if (p.activeKind === 'rclone' && p.activeId !== 'local' && p.activeId !== 'memory') {
-						releaseRcloneDriver(p.activeId);
-					}
-					setPane(id, {
-						activeId: 'local',
-						activeKind: 'local',
-						remoteDriver: null,
-						showRcloneForm: false,
-						explorerKey: p.explorerKey + 1,
-						ctx: emptyCtx('local')
-					});
-				}
-			}
-			rcloneProfiles = [];
-		} else {
-			void reloadProfiles();
-		}
-	}
-	function readMonitorFeature(): boolean {
-		try {
-			const v = localStorage.getItem(MONITOR_FEATURE_LS);
-			if (import.meta.env.DEV) return v !== '0';
-			return v === '1';
-		} catch {
-			return Boolean(import.meta.env.DEV);
-		}
-	}
-	function setMonitorFeature(on: boolean) {
-		showMonitor = on;
-		try {
-			localStorage.setItem(MONITOR_FEATURE_LS, on ? '1' : '0');
-		} catch {
-			/* ignore */
-		}
-		if (!on) {
-			for (const id of ['left', 'right'] as PaneId[]) {
-				const p = paneState(id);
-				if (p.activeKind === 'monitor' || p.showMonitorForm) {
-					if (p.activeKind === 'monitor' && p.activeId !== 'local' && p.activeId !== 'memory') {
-						releaseMonitorDriver(p.activeId);
-					}
-					setPane(id, {
-						activeId: 'local',
-						activeKind: 'local',
-						remoteDriver: null,
-						showMonitorForm: false,
-						explorerKey: p.explorerKey + 1,
-						ctx: emptyCtx('local')
-					});
-				}
-			}
-			monitorProfiles = [];
-		} else {
-			void reloadProfiles();
-		}
-	}
-
 	onMount(() => {
 		try {
 			const stored = localStorage.getItem(dualPaneKey);
@@ -465,8 +393,6 @@
 			dualPane = dualPaneDefault;
 		}
 		onDualChange?.(dualPane);
-		showRclone = rcloneEnabled || readRcloneFeature();
-		showMonitor = monitorEnabled || readMonitorFeature();
 		void reloadProfiles();
 		// Hub files memory singleton hook (separate from durable page-owned __VFS_TEST__).
 		// Memory is global/shared: NOT disposed on pagehide.
@@ -822,6 +748,60 @@
 		await runCopyAcross(from, { selectedIds, destParentId });
 	}
 
+	function copyHints(id: PaneId): {
+		copyOut: ReturnType<typeof describeCopyAcrossPath> | null;
+		copyIn: ReturnType<typeof describeCopyAcrossPath> | null;
+		copyOtherLabel: string;
+		copyIdleNote: string | null;
+	} {
+		if (!dualPane) {
+			return {
+				copyOut: null,
+				copyIn: null,
+				copyOtherLabel: '',
+				copyIdleNote: 'Turn on dual pane to copy between locations.'
+			};
+		}
+		const otherId: PaneId = id === 'left' ? 'right' : 'left';
+		const mine = activeDriver(paneState(id), id);
+		const other = activeDriver(paneState(otherId), otherId);
+		const myLabel = paneConnectionLabel(id);
+		const otherLabel = paneConnectionLabel(otherId);
+		return {
+			copyOut: describeCopyAcrossPath(mine, other, { source: myLabel, dest: otherLabel }),
+			copyIn: describeCopyAcrossPath(other, mine, { source: otherLabel, dest: myLabel }),
+			copyOtherLabel: otherLabel,
+			copyIdleNote: null
+		};
+	}
+
+	function paneConnectionLabel(id: PaneId): string {
+		const p = paneState(id);
+		if (id === 'right' && overrideRight) return overrideRight.label;
+		if (p.activeKind === 'memory') return 'In memory';
+		if (p.activeKind === 'disk') return p.diskName ? `This computer · ${p.diskName}` : 'This computer';
+		if (p.activeKind === 'local') return 'Browser files';
+		if (p.activeKind === 'b2') {
+			const chip = b2Chips.find((c) => c.id === p.activeId);
+			return chip ? `B2 · ${chip.name}` : 'B2';
+		}
+		if (p.activeKind === 'rclone') {
+			const chip = rcloneChips.find((c) => c.id === p.activeId);
+			return chip ? `rclone · ${chip.name}` : 'rclone';
+		}
+		if (p.activeKind === 'monitor') {
+			const chip = monitorChips.find((c) => c.id === p.activeId);
+			return chip ? `Monitor · ${chip.name}` : 'Monitor';
+		}
+		return p.activeKind;
+	}
+
+	function askDualPhase(sourceLabel: string, destLabel: string): Promise<boolean> {
+		return new Promise((resolve) => {
+			dualPhasePrompt = { sourceLabel, destLabel, resolve };
+		});
+	}
+
 	async function runCopyAcross(
 		from: PaneId,
 		opts?: { selectedIds?: string[]; destParentId?: string | null }
@@ -831,10 +811,15 @@
 		const destId: PaneId = from === 'left' ? 'right' : 'left';
 		const dst = paneState(destId);
 		copyError = '';
+		const sourceDriver = activeDriver(src, from);
+		const destDriver = activeDriver(dst, destId);
+		if (isDualPhaseCopy(sourceDriver, destDriver)) {
+			const ok = await askDualPhase(paneConnectionLabel(from), paneConnectionLabel(destId));
+			if (!ok) return;
+		}
 		copyBusy = true;
 		copyDestPane = destId;
 		try {
-			const destDriver = activeDriver(dst, destId);
 			const n = await copyAcross({
 				sourceDriver: activeDriver(src, from),
 				destDriver,
@@ -918,10 +903,15 @@
 				</span>
 			{/if}
 			{#if paneShowsSwitcher(id) && !(id === 'right' && overrideRight)}
+				{@const hints = copyHints(id)}
 				<ConnectionSwitcher
 				activeId={p.activeId}
 				activeKind={p.activeKind}
 				capabilities={drv.capabilities}
+				copyOut={hints.copyOut}
+				copyIn={hints.copyIn}
+				copyOtherLabel={hints.copyOtherLabel}
+				copyIdleNote={hints.copyIdleNote}
 				profiles={b2Chips}
 				rcloneProfiles={rcloneChips}
 				monitorProfiles={monitorChips}
@@ -1009,7 +999,7 @@
 				<span class="remote-badge" data-testid="rclone-remote-badge-{id}">rclone · open-with off</span>
 			{:else if p.activeKind === 'monitor'}
 				<span class="remote-badge" data-testid="monitor-remote-badge-{id}"
-					>monitor · read-only · open-with off</span
+					>monitor · open-with off</span
 				>
 				<span
 					class="remote-badge mon-watch"
@@ -1206,32 +1196,6 @@
 					<StoragePersistenceStatus vfs={persistenceVfs} compact={false} pollMs={10_000} />
 				</div>
 			{/if}
-			<label
-				class="rclone-toggle"
-				class:active={showRclone}
-				title="Browse remotes via rclone rcd. Browser connects to the Base URL in settings (local or tunnel). Off by default in production. rcd must allow CORS."
-				data-testid={tids.rcloneToggle}
-			>
-				<input
-					type="checkbox"
-					checked={showRclone}
-					onchange={(e) => setRcloneFeature((e.currentTarget as HTMLInputElement).checked)}
-				/>
-				<span>rclone</span>
-			</label>
-			<label
-				class="rclone-toggle"
-				class:active={showMonitor}
-				title="Browse a directory via monitor (browser → Base URL in settings; default https://127.0.0.1:8300). Read-only. Off by default in production. Monitor must allow CORS."
-				data-testid={tids.monitorToggle}
-			>
-				<input
-					type="checkbox"
-					checked={showMonitor}
-					onchange={(e) => setMonitorFeature((e.currentTarget as HTMLInputElement).checked)}
-				/>
-				<span>monitor</span>
-			</label>
 			<button
 				type="button"
 				class="dual-toggle"
@@ -1259,6 +1223,22 @@
 		onDismiss={dismissCopy}
 		onDismissAll={dismissAllSettledCopy}
 	/>
+	{#if dualPhasePrompt}
+		<DualPhaseConfirm
+			sourceLabel={dualPhasePrompt.sourceLabel}
+			destLabel={dualPhasePrompt.destLabel}
+			onConfirm={() => {
+				const r = dualPhasePrompt?.resolve;
+				dualPhasePrompt = null;
+				r?.(true);
+			}}
+			onCancel={() => {
+				const r = dualPhasePrompt?.resolve;
+				dualPhasePrompt = null;
+				r?.(false);
+			}}
+		/>
+	{/if}
 </div>
 
 <style>
@@ -1281,8 +1261,7 @@
 	}
 	.dual-toggle,
 	.copy-across,
-	.send-selected,
-	.rclone-toggle {
+	.send-selected {
 		padding: 0.35rem 0.7rem;
 		border-radius: 8px;
 		border: 1px solid var(--border, #334155);
@@ -1291,17 +1270,7 @@
 		cursor: pointer;
 		font-size: 0.9rem;
 	}
-	.rclone-toggle {
-		display: inline-flex;
-		align-items: center;
-		gap: 0.4rem;
-		user-select: none;
-	}
-	.rclone-toggle input {
-		margin: 0;
-	}
-	.dual-toggle.active,
-	.rclone-toggle.active {
+	.dual-toggle.active {
 		outline: 2px solid #38bdf8;
 		outline-offset: 1px;
 	}
@@ -1383,6 +1352,9 @@
 		text-transform: uppercase;
 		letter-spacing: 0.04em;
 		opacity: 0.7;
+	}
+	.pane-chrome:has(.pane-trash) :global(.conn-settings-wrap) {
+		margin-left: 0;
 	}
 	.pane-trash {
 		order: 98;

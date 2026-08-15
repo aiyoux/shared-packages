@@ -1,5 +1,6 @@
 <script lang="ts">
 	import type { TransferItem } from '../transferRegistry.js';
+	import { stackTransferItems, type StackedProgress } from './stackProgress.js';
 
 	interface Props {
 		items: TransferItem[];
@@ -9,16 +10,28 @@
 
 	let { items, onDismiss, onDismissAll }: Props = $props();
 
-	function pct(t: TransferItem): number {
-		if (!t.size) return t.done ? 100 : 0;
-		return Math.min(100, Math.round((t.transferred / t.size) * 100));
+	const stacked = $derived(stackTransferItems(items));
+
+	function pct(n: number, size: number, done: boolean): number {
+		if (!size) return done ? 100 : 0;
+		return Math.min(100, Math.round((n / size) * 100));
 	}
 
-	function label(t: TransferItem): string {
+	function label(t: StackedProgress): string {
 		if (t.status === 'failed') return 'Failed';
 		if (t.done) return 'Done';
-		if (t.size && t.transferred >= t.size) return 'Writing…';
+		if (t.ahead !== t.behind) {
+			const dl = pct(t.ahead, t.size, false);
+			const tx = pct(t.behind, t.size, false);
+			return `${tx}% sent · ${dl}% ready`;
+		}
+		if (t.size && t.behind >= t.size) return 'Writing…';
 		return 'Copying…';
+	}
+
+	function dismissRow(t: StackedProgress) {
+		if (!onDismiss) return;
+		for (const id of t.ids) onDismiss(id);
 	}
 </script>
 
@@ -33,7 +46,9 @@
 			{/if}
 		</header>
 		<ul class="op-list">
-			{#each items as t (t.id)}
+			{#each stacked as t (t.id)}
+				{@const aheadPct = pct(t.ahead, t.size, t.done)}
+				{@const behindPct = pct(t.behind, t.size, t.done)}
 				<li
 					class="op-row"
 					class:failed={t.status === 'failed'}
@@ -45,13 +60,21 @@
 						<span class="op-name" title={t.name}>{t.name}</span>
 						<span class="op-status">{label(t)}</span>
 						{#if onDismiss && (t.done || t.status === 'failed')}
-							<button type="button" class="op-x" onclick={() => onDismiss(t.id)} aria-label="Dismiss">
+							<button type="button" class="op-x" onclick={() => dismissRow(t)} aria-label="Dismiss">
 								×
 							</button>
 						{/if}
 					</div>
-					<div class="op-bar" role="progressbar" aria-valuenow={pct(t)} aria-valuemin={0} aria-valuemax={100}>
-						<div class="op-fill" style="width: {pct(t)}%"></div>
+					<div
+						class="op-bar"
+						role="progressbar"
+						aria-valuenow={behindPct}
+						aria-valuemin={0}
+						aria-valuemax={100}
+						aria-label={`${t.name}: ${behindPct}% transferred, ${aheadPct}% downloaded`}
+					>
+						<div class="op-fill ahead" style="width: {aheadPct}%"></div>
+						<div class="op-fill behind" style="width: {behindPct}%"></div>
 					</div>
 					{#if t.error}
 						<p class="op-err">{t.error}</p>
@@ -122,6 +145,7 @@
 		white-space: nowrap;
 	}
 	.op-bar {
+		position: relative;
 		height: 6px;
 		border-radius: 999px;
 		background: rgba(255, 255, 255, 0.1);
@@ -129,15 +153,26 @@
 		margin-top: 0.25rem;
 	}
 	.op-fill {
+		position: absolute;
+		inset: 0 auto 0 0;
 		height: 100%;
-		background: #38bdf8;
 		border-radius: 999px;
 		transition: width 120ms ease;
 	}
-	.op-row.failed .op-fill {
+	.op-fill.ahead {
+		background: rgba(56, 189, 248, 0.35);
+	}
+	.op-fill.behind {
+		background: #38bdf8;
+	}
+	.op-row.failed .op-fill.ahead {
+		background: rgba(248, 113, 113, 0.35);
+	}
+	.op-row.failed .op-fill.behind {
 		background: #f87171;
 	}
-	.op-row.done .op-fill {
+	.op-row.done .op-fill.ahead,
+	.op-row.done .op-fill.behind {
 		background: #4ade80;
 	}
 	.op-err {

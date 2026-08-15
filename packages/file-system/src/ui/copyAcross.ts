@@ -117,19 +117,89 @@ function entryById(entries: ExplorerEntry[], id: string): ExplorerEntry | undefi
 }
 
 /**
- * Visibility: dual-pane active AND at least one local-class pane.
+ * Dual-pane copy-across is available for any pair of panes.
+ * Same-connection remotes short-circuit server-side; distinct remotes
+ * go through a dual-phase download→upload on this device.
  */
-export function canShowCopyAcross(leftId: string, rightId: string): boolean {
-	return isLocalClass(leftId) || isLocalClass(rightId);
+export function canShowCopyAcross(_leftId?: string, _rightId?: string): boolean {
+	return true;
 }
 
-export function assertCopyAcrossAllowed(sourceId: string, destId: string): void {
-	if (isRemoteClass(sourceId) && isRemoteClass(destId)) {
-		throw new CopyAcrossError(
-			'COPY_ACROSS_REMOTE_REMOTE',
-			'Cannot copy between two remote connections'
-		);
+export function assertCopyAcrossAllowed(_sourceId: string, _destId: string): void {
+	/* Remote↔remote is allowed; dest writability is checked per driver. */
+}
+
+/** Same saved connection (shared profile). Roots stay aligned so dest.copy can use source ids. */
+export function canServerCopy(source: ExplorerDriver, dest: ExplorerDriver): boolean {
+	if (!dest.copy) return false;
+	if (source.connectionId && dest.connectionId && source.connectionId === dest.connectionId) {
+		return true;
 	}
+	return source === dest;
+}
+
+/** Browser-mediated two-leg copy (download, then dest write). */
+export function isDualPhaseCopy(source: ExplorerDriver, dest: ExplorerDriver): boolean {
+	if (canServerCopy(source, dest)) return false;
+	return isRemoteClass(source.id) && isRemoteClass(dest.id);
+}
+
+export type CopyAcrossPathKind = 'server' | 'dual-phase' | 'direct' | 'blocked' | 'idle';
+
+export type CopyAcrossPath = {
+	kind: CopyAcrossPathKind;
+	summary: string;
+	detail: string;
+};
+
+function backendName(id: string): string {
+	if (id === 'b2') return 'Backblaze B2';
+	if (id === 'monitor') return 'monitor';
+	if (id === 'rclone') return 'rclone';
+	if (id === 'peer-fs') return 'the other device';
+	if (id === 'disk') return 'This computer';
+	if (id === 'memory') return 'In memory';
+	if (id === 'local') return 'Browser files';
+	return id;
+}
+
+/**
+ * Human description of the copy route for the current source → dest pair.
+ * Used by the connection (i) tooltip so the live pane config is visible.
+ */
+export function describeCopyAcrossPath(
+	source: ExplorerDriver,
+	dest: ExplorerDriver,
+	labels: { source: string; dest: string }
+): CopyAcrossPath {
+	if (canServerCopy(source, dest)) {
+		const where = backendName(source.id);
+		return {
+			kind: 'server',
+			summary: `Server copy on ${where}`,
+			detail: `Both panes are the same ${where} connection. The API copies in place — nothing downloads through this browser.`
+		};
+	}
+	const blocked = destCannotWrite(dest);
+	if (blocked) {
+		return {
+			kind: 'blocked',
+			summary: `Cannot copy into ${labels.dest}`,
+			detail: blocked.message
+		};
+	}
+	if (isDualPhaseCopy(source, dest)) {
+		return {
+			kind: 'dual-phase',
+			summary: `Dual-phase: ${labels.source} → this device → ${labels.dest}`,
+			detail: 'Download first, then upload. Transfer can start as pieces arrive. A confirm popup appears before it starts.'
+		};
+	}
+	return {
+		kind: 'direct',
+		summary: `Copy through this device`,
+		detail: `Read from ${labels.source} and write to ${labels.dest} with one progress bar.`
+	};
 }
 
 /**
@@ -194,29 +264,99 @@ function reportCopy(
 	});
 }
 
+function destCannotWrite(dest: ExplorerDriver): CopyAcrossError | null {
+	const noWrite = !dest.writeFile && !dest.upload;
+	if (dest.id === 'peer-fs' && noWrite) {
+		return new CopyAcrossError('COPY_ACROSS_DEST_READONLY', 'That shared location is read-only');
+	}
+	if (noWrite && !dest.copy) {
+		return new CopyAcrossError('COPY_ACROSS_NO_DEST', 'Destination cannot accept file writes');
+	}
+	return null;
+}
+
 async function copyFile(
 	source: ExplorerDriver,
 	dest: ExplorerDriver,
 	entry: ExplorerEntry,
 	destParentId: string | null
 ): Promise<void> {
-	// Pre-check size before loading into memory to avoid OOM
 	if (entry.size != null && entry.size > EXPLORER_DOWNLOAD_MAX_BYTES) {
 		throw new CopyAcrossError('EXPLORER_TOO_LARGE', 'File exceeds download size cap');
 	}
 	const opId = generateId('copy');
 	const known = entry.size ?? 0;
-	reportCopy(opId, entry, { transferred: 0, size: known, status: 'active' });
-	try {
-		let blob: Blob;
-		if (source.download) {
-			blob = await source.download(entry.id, {
+	const dual = isDualPhaseCopy(source, dest);
+	const server = canServerCopy(source, dest);
+	const remoteId = `${opId}:remote`;
+	const wireId = `${opId}:wire`;
+	const reportLeg = (
+		id: string,
+		name: string,
+		patch: { transferred: number; size?: number; done?: boolean; status?: 'active' | 'done' | 'failed'; error?: string }
+	) => {
+		upsertProgress({
+			id,
+			name,
+			size: patch.size ?? known,
+			transferred: patch.transferred,
+			direction: 'copying',
+			done: patch.done === true,
+			status: patch.status ?? (patch.done ? 'done' : 'active'),
+			error: patch.error
+		});
+	};
+	const failAll = (err: unknown) => {
+		const msg = err instanceof Error ? err.message : String(err);
+		if (dual) {
+			reportLeg(remoteId, entry.name, { transferred: 0, size: known, done: true, status: 'failed', error: msg });
+			reportLeg(wireId, entry.name, { transferred: 0, size: known, done: true, status: 'failed', error: msg });
+		} else {
+			reportCopy(opId, entry, { transferred: 0, size: known, done: true, status: 'failed', error: msg });
+		}
+	};
+
+	if (server && dest.copy) {
+		reportCopy(opId, entry, { transferred: 0, size: known, status: 'active' });
+		try {
+			await dest.copy(entry.id, destParentId, {
 				onProgress: (transferred, total) => {
 					reportCopy(opId, entry, {
 						transferred,
 						size: total ?? known ?? transferred,
 						status: 'active'
 					});
+				}
+			});
+			reportCopy(opId, entry, { transferred: known || 1, size: known || 1, done: true, status: 'done' });
+			return;
+		} catch (e) {
+			failAll(e);
+			throw e;
+		}
+	}
+
+	const blocked = destCannotWrite(dest);
+	if (blocked) {
+		failAll(blocked);
+		throw blocked;
+	}
+
+	if (dual) {
+		reportLeg(remoteId, `Download · ${source.id}`, { transferred: 0, size: known, status: 'active' });
+		reportLeg(wireId, entry.name, { transferred: 0, size: known, status: 'active' });
+	} else {
+		reportCopy(opId, entry, { transferred: 0, size: known, status: 'active' });
+	}
+
+	try {
+		let blob: Blob;
+		if (source.download) {
+			blob = await source.download(entry.id, {
+				onProgress: (transferred, total) => {
+					const size = total ?? known ?? transferred;
+					if (dual) reportLeg(remoteId, `Download · ${source.id}`, { transferred, size, status: 'active' });
+					else reportCopy(opId, entry, { transferred, size, status: 'active' });
 				}
 			});
 		} else if (source.readBlob) {
@@ -227,46 +367,42 @@ async function copyFile(
 		if (blob.size > EXPLORER_DOWNLOAD_MAX_BYTES) {
 			throw new CopyAcrossError('EXPLORER_TOO_LARGE', 'File exceeds download size cap');
 		}
-		reportCopy(opId, entry, { transferred: blob.size, size: blob.size, status: 'active' });
+		if (dual) {
+			reportLeg(remoteId, `Download · ${source.id}`, {
+				transferred: blob.size,
+				size: blob.size,
+				done: true,
+				status: 'done'
+			});
+		} else {
+			reportCopy(opId, entry, { transferred: blob.size, size: blob.size, status: 'active' });
+		}
 		const file = new File([blob], entry.name, {
 			type: entry.contentType || blob.type || 'application/octet-stream'
 		});
 
-		const noWrite = !dest.writeFile && !dest.upload;
-		const readonlyDest = dest.id === 'monitor' || (dest.id === 'peer-fs' && noWrite);
-		if (readonlyDest || noWrite) {
-			throw new CopyAcrossError(
-				readonlyDest ? 'COPY_ACROSS_DEST_READONLY' : 'COPY_ACROSS_NO_DEST',
-				dest.id === 'monitor'
-					? 'Monitor is read-only. Copy from monitor into This computer, In memory, or the browser library.'
-					: readonlyDest
-						? 'That shared location is read-only'
-						: 'Destination cannot accept file writes'
-			);
-		}
-
 		if (dest.writeFile) {
 			await dest.writeFile(destParentId, file);
+			if (dual) reportLeg(wireId, entry.name, { transferred: blob.size, size: blob.size, done: true, status: 'done' });
 		} else if (dest.upload) {
 			await dest.upload(destParentId, file, {
 				onProgress: (pct) => {
-					reportCopy(opId, entry, {
-						transferred: Math.round(blob.size * Math.min(1, Math.max(0, pct))),
-						size: blob.size,
-						status: 'active'
-					});
+					const transferred = Math.round(blob.size * Math.min(1, Math.max(0, pct)));
+					if (dual) reportLeg(wireId, entry.name, { transferred, size: blob.size, status: 'active' });
+					else reportCopy(opId, entry, { transferred, size: blob.size, status: 'active' });
 				}
 			});
+			if (dual) {
+				reportLeg(wireId, entry.name, { transferred: blob.size, size: blob.size, done: true, status: 'done' });
+			}
+		} else {
+			throw new CopyAcrossError('COPY_ACROSS_NO_DEST', 'Destination cannot accept file writes');
 		}
-		reportCopy(opId, entry, { transferred: blob.size, size: blob.size, done: true, status: 'done' });
+		if (!dual) {
+			reportCopy(opId, entry, { transferred: blob.size, size: blob.size, done: true, status: 'done' });
+		}
 	} catch (e) {
-		reportCopy(opId, entry, {
-			transferred: 0,
-			size: known,
-			done: true,
-			status: 'failed',
-			error: e instanceof Error ? e.message : String(e)
-		});
+		failAll(e);
 		throw e;
 	}
 }

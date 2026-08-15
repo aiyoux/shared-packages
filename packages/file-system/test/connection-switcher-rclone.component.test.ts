@@ -164,6 +164,32 @@ describe('ConnectionSwitcher multi-backend', () => {
 		expect(upload?.getAttribute('data-on')).toBe('0');
 	});
 
+	it('tooltip documents the live copy path for the current pane pair', () => {
+		render(ConnectionSwitcher, {
+			props: {
+				activeId: 'p1',
+				activeKind: 'b2',
+				profiles: [{ id: 'p1', name: 'photos' }],
+				copyOtherLabel: 'Monitor · home',
+				copyOut: {
+					kind: 'dual-phase',
+					summary: 'Dual-phase: B2 · photos → this device → Monitor · home',
+					detail: 'Download first, then upload. A confirm popup appears before it starts.'
+				},
+				copyIn: {
+					kind: 'dual-phase',
+					summary: 'Dual-phase: Monitor · home → this device → B2 · photos',
+					detail: 'Download first, then upload.'
+				}
+			}
+		});
+		const path = screen.getByTestId('conn-copy-path');
+		expect(path.textContent).toMatch(/Copy path/);
+		expect(path.textContent).toMatch(/To Monitor · home/);
+		expect(path.textContent).toMatch(/Dual-phase/);
+		expect(path.querySelector('[data-copy-kind="dual-phase"]')).toBeTruthy();
+	});
+
 	it('onSelect / onConfigureRclone fire when not busy', async () => {
 		const onSelect = vi.fn();
 		const onConfigureRclone = vi.fn();
