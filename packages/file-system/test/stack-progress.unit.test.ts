@@ -80,4 +80,87 @@ describe('stackTransferItems', () => {
 		assert.equal(single?.ahead, 10);
 		assert.equal(single?.behind, 10);
 	});
+
+	it('normalises compress + wire legs with different totals onto the original size', () => {
+		const rows = stackTransferItems([
+			item({
+				id: 'op6:compress',
+				name: 'notes.txt',
+				transferred: 1000,
+				size: 1000,
+				done: true,
+				status: 'done',
+				direction: 'sending'
+			}),
+			item({
+				id: 'op6:wire',
+				name: 'notes.txt',
+				transferred: 200,
+				size: 400,
+				direction: 'sending'
+			})
+		]);
+		assert.equal(rows.length, 1);
+		assert.equal(rows[0]!.size, 1000);
+		assert.equal(rows[0]!.ahead, 1000);
+		assert.equal(rows[0]!.behind, 500);
+		assert.equal(rows[0]!.phase, 'transfer');
+	});
+
+	it('marks the stack as compressing / decompressing from the active leg', () => {
+		const compressing = stackTransferItems([
+			item({
+				id: 'op7:compress',
+				name: 'a.txt',
+				transferred: 0,
+				size: 800,
+				direction: 'sending'
+			})
+		]);
+		assert.equal(compressing[0]!.phase, 'compress');
+
+		const decompressing = stackTransferItems([
+			item({
+				id: 'op8:wire',
+				name: 'a.txt',
+				transferred: 400,
+				size: 400,
+				done: true,
+				status: 'done',
+				direction: 'receiving'
+			}),
+			item({
+				id: 'op8:decompress',
+				name: 'a.txt',
+				transferred: 0,
+				size: 400,
+				direction: 'receiving'
+			})
+		]);
+		assert.equal(decompressing[0]!.phase, 'decompress');
+		assert.equal(decompressing[0]!.ahead, 400);
+		assert.equal(decompressing[0]!.behind, 0);
+	});
+
+	it('exposes streamed bytes when the wire size is still unknown', () => {
+		const rows = stackTransferItems([
+			item({
+				id: 'op9:compress',
+				name: 'dump.sql',
+				transferred: 16_000_000,
+				size: 40_000_000,
+				direction: 'sending'
+			}),
+			item({
+				id: 'op9:wire',
+				name: 'dump.sql',
+				transferred: 1_200_000,
+				size: 0,
+				direction: 'sending'
+			})
+		]);
+		assert.equal(rows[0]!.phase, 'compress');
+		assert.equal(rows[0]!.streamedBytes, 1_200_000);
+		assert.equal(rows[0]!.size, 40_000_000);
+	});
 });

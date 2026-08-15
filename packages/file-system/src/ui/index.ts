@@ -48,7 +48,11 @@ export {
 	canPickDirectory,
 	pickDirectory
 } from '../disk/index.js';
-export { stackTransferItems, type StackedProgress } from './stackProgress.js';
+export {
+	stackTransferItems,
+	type StackedProgress,
+	type StackProgressPhase
+} from './stackProgress.js';
 export {
 	calculateMidOrder,
 	createTreeDndSession,
