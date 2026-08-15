@@ -89,6 +89,16 @@ export interface ExplorerListResult {
 
 export interface ExplorerDriver {
 	readonly id: 'local' | 'memory' | 'b2' | 'rclone' | string;
+	/**
+	 * Profile id for this pane connection (`b2:<id>`, `monitor:<id>`, …).
+	 * Two panes on the same saved connection share this value.
+	 */
+	readonly connectionId?: string;
+	/**
+	 * Daemon / account identity. Same monitor host or same B2 bucket can
+	 * server-copy even when the saved profiles differ.
+	 */
+	readonly endpointKey?: string;
 	readonly capabilities: ExplorerCapabilities;
 	ready(): Promise<void>;
 	list(opts: ExplorerListOptions): Promise<ExplorerListResult>;
@@ -101,7 +111,14 @@ export interface ExplorerDriver {
 	/** File-only on B2 v1; folders throw B2_FOLDER_OP_UNSUPPORTED. */
 	rename?(id: ExplorerEntryId, name: string): Promise<ExplorerEntry>;
 	move?(id: ExplorerEntryId, newParentId: ExplorerEntryId | null): Promise<void>;
-	copy?(id: ExplorerEntryId, newParentId: ExplorerEntryId | null): Promise<void>;
+	copy?(
+		id: ExplorerEntryId,
+		newParentId: ExplorerEntryId | null,
+		opts?: {
+			onProgress?: (transferred: number, total?: number) => void;
+			signal?: AbortSignal;
+		}
+	): Promise<void | ExplorerEntry>;
 	/**
 	 * MANDATORY when supportsSiblingOrder === true.
 	 * Same-parent rank write from full sibling set.

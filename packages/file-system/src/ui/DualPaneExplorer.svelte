@@ -25,6 +25,8 @@
 	import { default as FileExplorer, type ExplorerContext } from './FileExplorer.svelte';
 	import { default as StoragePersistenceStatus } from './StoragePersistenceStatus.svelte';
 	import OpProgressPopup from './OpProgressPopup.svelte';
+	import DualPhaseConfirm from './DualPhaseConfirm.svelte';
+	import { stackTransferItems } from './stackProgress.js';
 	import { listTransfers, subscribeTransfers, type TransferItem } from '../transferRegistry.js';
 	import { type ExplorerDriver, type ExplorerEntry, type ExplorerOpenTarget } from './explorerDriver.js';
 	import { createMemoryExplorerDriver } from './memoryExplorerDriver.js';
@@ -33,6 +35,8 @@
 	import { type PaneId, type DualPaneTids } from './dualPaneTypes.js';
 	import {
 		canShowCopyAcross,
+		isDualPhaseCopy,
+		describeCopyAcrossPath,
 		copyAcross,
 		CopyAcrossError,
 		destParentFromDropEvent,
@@ -135,6 +139,7 @@
 			transferred: number;
 			size: number;
 			direction?: string;
+			ready?: number;
 		}>;
 		pendingRight?: Array<{
 			id: string;
@@ -142,6 +147,7 @@
 			transferred: number;
 			size: number;
 			direction?: string;
+			ready?: number;
 		}>;
 		/** Notified when dual-pane toggles (so a page can widen its shell). */
 		onDualChange?: (dual: boolean) => void;
@@ -251,6 +257,11 @@
 	let dismissedCopyIds = $state<Set<string>>(new Set());
 	let copyProgressUnsub: (() => void) | null = null;
 	let memoryVfs: MemoryVfsService | null = null;
+	let dualPhasePrompt = $state<{
+		sourceLabel: string;
+		destLabel: string;
+		resolve: (ok: boolean) => void;
+	} | null>(null);
 
 	/** True when at least one visible pane is durable local browser storage. */
 	const showLocalPersist = $derived(
@@ -335,13 +346,14 @@
 
 	const visibleCopyItems = $derived(copyItems.filter((t) => !dismissedCopyIds.has(t.id)));
 	const destCopyPending = $derived(
-		visibleCopyItems
+		stackTransferItems(visibleCopyItems)
 			.filter((t) => !t.done)
 			.map((t) => ({
 				id: t.id,
 				name: t.name,
-				transferred: t.transferred,
-				size: t.size || Math.max(t.transferred, 1),
+				transferred: t.behind,
+				size: t.size || Math.max(t.ahead, 1),
+				ready: t.ahead,
 				direction: 'receiving' as const
 			}))
 	);
@@ -727,6 +739,60 @@
 		await runCopyAcross(from, { selectedIds, destParentId });
 	}
 
+	function copyHints(id: PaneId): {
+		copyOut: ReturnType<typeof describeCopyAcrossPath> | null;
+		copyIn: ReturnType<typeof describeCopyAcrossPath> | null;
+		copyOtherLabel: string;
+		copyIdleNote: string | null;
+	} {
+		if (!dualPane) {
+			return {
+				copyOut: null,
+				copyIn: null,
+				copyOtherLabel: '',
+				copyIdleNote: 'Turn on dual pane to copy between locations.'
+			};
+		}
+		const otherId: PaneId = id === 'left' ? 'right' : 'left';
+		const mine = activeDriver(paneState(id), id);
+		const other = activeDriver(paneState(otherId), otherId);
+		const myLabel = paneConnectionLabel(id);
+		const otherLabel = paneConnectionLabel(otherId);
+		return {
+			copyOut: describeCopyAcrossPath(mine, other, { source: myLabel, dest: otherLabel }),
+			copyIn: describeCopyAcrossPath(other, mine, { source: otherLabel, dest: myLabel }),
+			copyOtherLabel: otherLabel,
+			copyIdleNote: null
+		};
+	}
+
+	function paneConnectionLabel(id: PaneId): string {
+		const p = paneState(id);
+		if (id === 'right' && overrideRight) return overrideRight.label;
+		if (p.activeKind === 'memory') return 'In memory';
+		if (p.activeKind === 'disk') return p.diskName ? `This computer · ${p.diskName}` : 'This computer';
+		if (p.activeKind === 'local') return 'Browser files';
+		if (p.activeKind === 'b2') {
+			const chip = b2Chips.find((c) => c.id === p.activeId);
+			return chip ? `B2 · ${chip.name}` : 'B2';
+		}
+		if (p.activeKind === 'rclone') {
+			const chip = rcloneChips.find((c) => c.id === p.activeId);
+			return chip ? `rclone · ${chip.name}` : 'rclone';
+		}
+		if (p.activeKind === 'monitor') {
+			const chip = monitorChips.find((c) => c.id === p.activeId);
+			return chip ? `Monitor · ${chip.name}` : 'Monitor';
+		}
+		return p.activeKind;
+	}
+
+	function askDualPhase(sourceLabel: string, destLabel: string): Promise<boolean> {
+		return new Promise((resolve) => {
+			dualPhasePrompt = { sourceLabel, destLabel, resolve };
+		});
+	}
+
 	async function runCopyAcross(
 		from: PaneId,
 		opts?: { selectedIds?: string[]; destParentId?: string | null }
@@ -736,10 +802,15 @@
 		const destId: PaneId = from === 'left' ? 'right' : 'left';
 		const dst = paneState(destId);
 		copyError = '';
+		const sourceDriver = activeDriver(src, from);
+		const destDriver = activeDriver(dst, destId);
+		if (isDualPhaseCopy(sourceDriver, destDriver)) {
+			const ok = await askDualPhase(paneConnectionLabel(from), paneConnectionLabel(destId));
+			if (!ok) return;
+		}
 		copyBusy = true;
 		copyDestPane = destId;
 		try {
-			const destDriver = activeDriver(dst, destId);
 			const n = await copyAcross({
 				sourceDriver: activeDriver(src, from),
 				destDriver,
@@ -823,10 +894,15 @@
 				</span>
 			{/if}
 			{#if paneShowsSwitcher(id) && !(id === 'right' && overrideRight)}
+				{@const hints = copyHints(id)}
 				<ConnectionSwitcher
 				activeId={p.activeId}
 				activeKind={p.activeKind}
 				capabilities={drv.capabilities}
+				copyOut={hints.copyOut}
+				copyIn={hints.copyIn}
+				copyOtherLabel={hints.copyOtherLabel}
+				copyIdleNote={hints.copyIdleNote}
 				profiles={b2Chips}
 				rcloneProfiles={rcloneChips}
 				monitorProfiles={monitorChips}
@@ -914,7 +990,7 @@
 				<span class="remote-badge" data-testid="rclone-remote-badge-{id}">rclone · open-with off</span>
 			{:else if p.activeKind === 'monitor'}
 				<span class="remote-badge" data-testid="monitor-remote-badge-{id}"
-					>monitor · read-only · open-with off</span
+					>monitor · open-with off</span
 				>
 				<span
 					class="remote-badge mon-watch"
@@ -1130,6 +1206,22 @@
 		onDismiss={dismissCopy}
 		onDismissAll={dismissAllSettledCopy}
 	/>
+	{#if dualPhasePrompt}
+		<DualPhaseConfirm
+			sourceLabel={dualPhasePrompt.sourceLabel}
+			destLabel={dualPhasePrompt.destLabel}
+			onConfirm={() => {
+				const r = dualPhasePrompt?.resolve;
+				dualPhasePrompt = null;
+				r?.(true);
+			}}
+			onCancel={() => {
+				const r = dualPhasePrompt?.resolve;
+				dualPhasePrompt = null;
+				r?.(false);
+			}}
+		/>
+	{/if}
 </div>
 
 <style>

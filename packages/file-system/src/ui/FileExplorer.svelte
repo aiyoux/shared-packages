@@ -61,9 +61,12 @@
 		pending?: Array<{
 			id: string;
 			name: string;
+			/** Trailing leg — sent / dest write (solid fill). */
 			transferred: number;
 			size: number;
 			direction?: string;
+			/** Leading leg — downloaded / ready (translucent fill). Defaults to transferred. */
+			ready?: number;
 		}>;
 		/** Dual-pane header owns the Trash toggle — hide the toolbar copy. */
 		hideToolbarTrash?: boolean;
@@ -1241,7 +1244,10 @@
 		{#if pending.length > 0}
 			<div class="fe-pending-list" data-testid="fe-pending-list">
 				{#each pending as p (p.id)}
-					{@const pct = Math.min(100, Math.round(p.size ? (p.transferred / p.size) * 100 : 0))}
+					{@const behindPct = Math.min(100, Math.round(p.size ? (p.transferred / p.size) * 100 : 0))}
+					{@const aheadN = p.ready ?? p.transferred}
+					{@const aheadPct = Math.min(100, Math.round(p.size ? (aheadN / p.size) * 100 : 0))}
+					{@const stacked = aheadPct !== behindPct}
 					<div
 						class="fe-row fe-pending"
 						data-testid="fe-pending-row"
@@ -1253,13 +1259,19 @@
 						<div
 							class="fe-pending-bar"
 							role="progressbar"
-							aria-valuenow={pct}
+							aria-valuenow={behindPct}
 							aria-valuemin="0"
 							aria-valuemax="100"
+							aria-label={stacked
+								? `${p.name}: ${behindPct}% transferred, ${aheadPct}% ready`
+								: undefined}
 						>
-							<div class="fe-pending-fill" style="width: {pct}%"></div>
+							{#if stacked}
+								<div class="fe-pending-fill ahead" style="width: {aheadPct}%"></div>
+							{/if}
+							<div class="fe-pending-fill" class:behind={stacked} style="width: {behindPct}%"></div>
 						</div>
-						<span class="fe-pending-pct">{pct}%</span>
+						<span class="fe-pending-pct">{behindPct}%</span>
 					</div>
 				{/each}
 			</div>
@@ -1670,6 +1682,7 @@
 		background: transparent;
 	}
 	.fe-pending-bar {
+		position: relative;
 		flex: 0 1 120px;
 		height: 6px;
 		background: rgba(255, 255, 255, 0.08);
@@ -1681,6 +1694,17 @@
 		background: #38bdf8;
 		border-radius: 999px;
 		transition: width 150ms ease;
+	}
+	.fe-pending-fill.ahead,
+	.fe-pending-fill.behind {
+		position: absolute;
+		inset: 0 auto 0 0;
+	}
+	.fe-pending-fill.ahead {
+		background: rgba(56, 189, 248, 0.35);
+	}
+	.fe-pending-fill.behind {
+		background: #38bdf8;
 	}
 	.fe-pending-pct {
 		font-size: 0.72rem;

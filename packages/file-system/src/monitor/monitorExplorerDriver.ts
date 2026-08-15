@@ -1,6 +1,6 @@
 /**
  * Monitor local-fs browser driver (browser → profile baseUrl /v1/fs).
- * Read-only: list + download. Live list refresh via fetch-based SSE.
+ * List + download + upload + same-host copy. Live list refresh via SSE.
  * Open-with off (remote-class).
  */
 import {
@@ -18,6 +18,7 @@ import { ExplorerMonitorError, mapMonitorError } from './errors.js';
 import {
 	baseName,
 	breadcrumbChain,
+	childId,
 	isFolderId,
 	parentIdOf,
 	relativeIdFromAbsolute,
@@ -38,7 +39,8 @@ const MONITOR_CAPS: ExplorerCapabilities = {
 	supportsMove: false,
 	supportsCopy: false,
 	supportsMkdir: false,
-	supportsUpload: false,
+	supportsCopy: true,
+	supportsUpload: true,
 	supportsDownload: true,
 	supportsSiblingOrder: false,
 	/** Native drag so DualPane / CM send-zone can copy or download-then-send. */
@@ -98,8 +100,43 @@ export async function createMonitorExplorerDriver(
 		return watch;
 	}
 
+	function withSuffix(name: string, n: number): string {
+		const i = name.lastIndexOf('.');
+		if (i <= 0) return `${name} (${n})`;
+		return `${name.slice(0, i)} (${n})${name.slice(i)}`;
+	}
+
+	async function uniqueName(parentId: ExplorerEntryId | null, base: string): Promise<string> {
+		let used = new Set<string>();
+		try {
+			const result = await transport.list(toAbsolutePath(rootPath, parentId));
+			used = new Set(result.entries.map((e) => e.name));
+		} catch {
+			return base;
+		}
+		if (!used.has(base)) return base;
+		for (let i = 1; i < 200; i++) {
+			const next = withSuffix(base, i);
+			if (!used.has(next)) return next;
+		}
+		return `${Date.now()}-${base}`;
+	}
+
+	function endpointKeyFromUrl(baseUrl: string): string {
+		try {
+			const u = new URL(baseUrl);
+			u.hash = '';
+			u.search = '';
+			return `monitor:${u.href.replace(/\/+$/, '').toLowerCase()}`;
+		} catch {
+			return `monitor:${baseUrl.replace(/\/+$/, '').toLowerCase()}`;
+		}
+	}
+
 	const driver: MonitorExplorerDriver = {
 		id: 'monitor',
+		connectionId: `monitor:${profile.id}`,
+		endpointKey: endpointKeyFromUrl(transport.baseUrl || profile.baseUrl),
 		capabilities: MONITOR_CAPS,
 
 		getWatchStatus() {
@@ -166,6 +203,51 @@ export async function createMonitorExplorerDriver(
 				'MONITOR_READONLY',
 				'Monitor connection is read-only'
 			);
+		},
+
+		async upload(parentId, file, opts) {
+			try {
+				const destName = await uniqueName(parentId, file.name);
+				const destRel = childId(parentId, destName, false);
+				const abs = toAbsolutePath(rootPath, destRel);
+				const st = await transport.write(abs, file, {
+					signal: opts?.signal,
+					onProgress: (n, total) => {
+						const t = total ?? file.size ?? 1;
+						opts?.onProgress?.(n / Math.max(t, 1));
+					}
+				});
+				return {
+					id: destRel,
+					parentId,
+					name: destName,
+					kind: 'file' as const,
+					size: st.size ?? file.size,
+					updatedAt: st.mtime_ms,
+					contentType: file.type || undefined,
+					fileType: inferFileTypeFromName(destName)
+				};
+			} catch (e) {
+				throw mapMonitorError(e);
+			}
+		},
+
+		async copy(id, newParentId, opts) {
+			if (isFolderId(id)) {
+				throw new ExplorerMonitorError('MONITOR_ERROR', 'Folder copy is not supported');
+			}
+			try {
+				const destName = await uniqueName(newParentId, baseName(id));
+				const destRel = childId(newParentId, destName, false);
+				const from = toAbsolutePath(rootPath, id);
+				const to = toAbsolutePath(rootPath, destRel);
+				await transport.copy(from, to, {
+					signal: opts?.signal,
+					onProgress: opts?.onProgress
+				});
+			} catch (e) {
+				throw mapMonitorError(e);
+			}
 		},
 
 		async download(id: ExplorerEntryId, dlOpts) {

@@ -2,15 +2,21 @@ export { default as FileExplorer } from './FileExplorer.svelte';
 export type { ExplorerMode, ExplorerContext } from './FileExplorer.svelte';
 export { default as StoragePersistenceStatus } from './StoragePersistenceStatus.svelte';
 export { default as DualPaneExplorer } from './DualPaneExplorer.svelte';
+export { default as DualPhaseConfirm } from './DualPhaseConfirm.svelte';
 export type { DualPaneTids, PaneId as DualPanePaneId } from './dualPaneTypes.js';
 export {
 	canShowCopyAcross,
 	assertCopyAcrossAllowed,
+	canServerCopy,
+	isDualPhaseCopy,
+	describeCopyAcrossPath,
 	copyAcross,
 	CopyAcrossError,
 	idsFromExplorerDragTarget,
 	type CopyAcrossArgs,
-	type CopyAcrossErrorCode
+	type CopyAcrossErrorCode,
+	type CopyAcrossPath,
+	type CopyAcrossPathKind
 } from './copyAcross.js';
 export {
 	EXPLORER_DOWNLOAD_MAX_BYTES,
@@ -40,6 +46,7 @@ export {
 	canPickDirectory,
 	pickDirectory
 } from '../disk/index.js';
+export { stackTransferItems, type StackedProgress } from './stackProgress.js';
 export {
 	calculateMidOrder,
 	createTreeDndSession,

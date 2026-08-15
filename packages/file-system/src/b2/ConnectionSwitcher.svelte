@@ -1,5 +1,6 @@
 <script lang="ts">
 	import type { ExplorerCapabilities } from '../ui/explorerDriver.js';
+	import type { CopyAcrossPath } from '../ui/copyAcross.js';
 
 	/** Storage backend kind for the hub connection switcher. */
 	export type ConnectionKind = 'local' | 'memory' | 'disk' | 'b2' | 'rclone' | 'monitor';
@@ -44,6 +45,15 @@
 		showMemory?: boolean;
 		/** Active driver caps — tooltip lists these for the current connection. */
 		capabilities?: ExplorerCapabilities;
+		/**
+		 * Live copy-across route for the current dual-pane pair.
+		 * Shown in the (i) tooltip so the in-app config is explicit.
+		 */
+		copyOut?: CopyAcrossPath | null;
+		copyIn?: CopyAcrossPath | null;
+		copyOtherLabel?: string;
+		/** Dual pane is off — copy-across is idle. */
+		copyIdleNote?: string | null;
 		/** Select local, memory, disk, or a profile id (B2 / rclone / monitor) */
 		onSelect?: (id: 'local' | 'memory' | 'disk' | string) => void;
 		onConfigureB2?: () => void;
@@ -64,6 +74,10 @@
 		showMonitor = true,
 		showMemory = true,
 		capabilities,
+		copyOut = null,
+		copyIn = null,
+		copyOtherLabel = '',
+		copyIdleNote = null,
 		onSelect,
 		onConfigureB2,
 		onConfigureRclone,
@@ -114,7 +128,7 @@
 				: kind === 'b2'
 					? 'Remote Backblaze B2. Keys stay in this browser.'
 					: kind === 'monitor'
-						? 'Read-only live folder via monitor.'
+						? 'Live folder via monitor (same connection can server-copy).'
 						: kind === 'rclone'
 							? 'Remote folder via rclone.'
 							: 'Saved in this browser (Dexie + OPFS).'
@@ -183,9 +197,9 @@
 			supportsSoftDelete: false,
 			supportsRename: false,
 			supportsMove: false,
-			supportsCopy: false,
+			supportsCopy: true,
 			supportsMkdir: false,
-			supportsUpload: false,
+			supportsUpload: true,
 			supportsDownload: true,
 			supportsSiblingOrder: false,
 			supportsDragOut: true
@@ -304,6 +318,24 @@
 						</li>
 					{/each}
 				</ul>
+				<div class="copy-path" data-testid="conn-copy-path">
+					<p class="caps-title copy-path-title">Copy path</p>
+					{#if copyIdleNote}
+						<p class="copy-path-summary">{copyIdleNote}</p>
+					{:else}
+						{#if copyOut}
+							<p class="copy-path-dir">To {copyOtherLabel || 'the other pane'}</p>
+							<p class="copy-path-summary" data-copy-kind={copyOut.kind}>{copyOut.summary}</p>
+							<p class="copy-path-detail">{copyOut.detail}</p>
+						{/if}
+						{#if copyIn}
+							<p class="copy-path-dir">From {copyOtherLabel || 'the other pane'}</p>
+							<p class="copy-path-summary" data-copy-kind={copyIn.kind}>{copyIn.summary}</p>
+							<p class="copy-path-detail">{copyIn.detail}</p>
+						{/if}
+					{/if}
+					<p class="copy-path-detail">Folder copy only works between local panes.</p>
+				</div>
 			</div>
 		</div>
 		</div>
@@ -561,7 +593,7 @@
 		z-index: 40;
 		top: calc(100% + 6px);
 		left: 0;
-		width: 15.5rem;
+		width: 18.5rem;
 		padding: 0.55rem 0.65rem 0.5rem;
 		border-radius: 10px;
 		border: 1px solid #334155;
@@ -600,6 +632,31 @@
 	}
 	.caps-list li.on {
 		opacity: 1;
+	}
+	.copy-path {
+		margin-top: 0.55rem;
+		padding-top: 0.45rem;
+		border-top: 1px solid #334155;
+	}
+	.copy-path-title {
+		margin-bottom: 0.3rem;
+	}
+	.copy-path-dir {
+		margin: 0.35rem 0 0.1rem;
+		font-weight: 650;
+		font-size: 0.72rem;
+		text-transform: uppercase;
+		letter-spacing: 0.03em;
+		opacity: 0.7;
+	}
+	.copy-path-summary {
+		margin: 0;
+		font-weight: 600;
+	}
+	.copy-path-detail {
+		margin: 0.15rem 0 0;
+		opacity: 0.75;
+		font-size: 0.72rem;
 	}
 	.caps-mark {
 		width: 0.85rem;

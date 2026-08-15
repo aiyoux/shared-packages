@@ -182,6 +182,8 @@ export async function createB2ExplorerDriver(
 
 	const driver: ExplorerDriver = {
 		id: 'b2',
+		connectionId: `b2:${opts.profile.id}`,
+		endpointKey: `b2:${opts.profile.applicationKeyId}::${opts.profile.bucketName}`,
 		capabilities: B2_CAPS,
 
 		async ready() {

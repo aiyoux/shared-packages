@@ -117,6 +117,8 @@ export async function createRcloneExplorerDriver(
 
 	const driver: ExplorerDriver = {
 		id: 'rclone',
+		connectionId: `rclone:${profile.id}`,
+		endpointKey: `rclone:${profile.fs}::${rootPath}`,
 		capabilities: RCLONE_CAPS,
 
 		async ready() {
