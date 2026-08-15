@@ -56,7 +56,11 @@ export type MonitorTransport = {
 	stat(path: string): Promise<MonitorStatResult>;
 	download(
 		path: string,
-		opts?: { onProgress?: (transferred: number, total?: number) => void }
+		opts?: {
+			onProgress?: (transferred: number, total?: number) => void;
+			onChunk?: (chunk: Uint8Array) => void | Promise<void>;
+			assemble?: boolean;
+		}
 	): Promise<Blob>;
 	health(): Promise<unknown>;
 	/** Idempotent POST /v1/watch/roots */
@@ -245,7 +249,11 @@ export function createMonitorClient(opts: {
 					const text = await res.text().catch(() => '');
 					throw new Error(text || `Download failed (${res.status})`);
 				}
-				return blobFromResponse(res, { onProgress: opts?.onProgress });
+				return blobFromResponse(res, {
+					onProgress: opts?.onProgress,
+					onChunk: opts?.onChunk,
+					assemble: opts?.assemble
+				});
 			} catch (e) {
 				if (e instanceof Error && e.name === 'AbortError') {
 					throw new Error('Monitor download timed out');

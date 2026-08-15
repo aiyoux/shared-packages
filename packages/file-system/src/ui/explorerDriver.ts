@@ -127,7 +127,16 @@ export interface ExplorerDriver {
 	 */
 	download?(
 		id: ExplorerEntryId,
-		opts?: { onProgress?: (transferred: number, total?: number) => void }
+		opts?: {
+			onProgress?: (transferred: number, total?: number) => void;
+			/** Awaited per body chunk so a consumer can start the next hop early. */
+			onChunk?: (chunk: Uint8Array) => void | Promise<void>;
+			/**
+			 * When false, skip retaining a full Blob (empty Blob returned).
+			 * Pair with `onChunk` for pipelined transfers.
+			 */
+			assemble?: boolean;
+		}
 	): Promise<Blob>;
 	/** Optional: bytes for copy-across bridge (local/memory). */
 	readBlob?(id: ExplorerEntryId): Promise<Blob>;

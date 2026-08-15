@@ -4,6 +4,7 @@
  */
 import type { VfsNode } from '../types.js';
 import type { VfsService } from '../vfs.js';
+import { emitBlobChunks } from '../readProgress.js';
 import {
 	applyListCap,
 	nodeToEntry,
@@ -133,8 +134,12 @@ export function createLocalExplorerDriver(
 			return vfs.readBlob(entryId);
 		},
 
-		async download(entryId) {
-			return vfs.readBlob(entryId);
+		async download(entryId, opts) {
+			const blob = await vfs.readBlob(entryId);
+			if (opts?.onChunk) {
+				await emitBlobChunks(blob, { onChunk: opts.onChunk, onProgress: opts.onProgress });
+			}
+			return opts?.assemble === false ? new Blob([], { type: blob.type }) : blob;
 		},
 
 		async writeFile(parentId, file) {

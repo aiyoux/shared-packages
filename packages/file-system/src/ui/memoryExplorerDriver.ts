@@ -5,6 +5,7 @@
  * durable `VfsService`).
  */
 import { MemoryVfsService } from '../memoryVfs.js';
+import { emitBlobChunks } from '../readProgress.js';
 import {
 	applyListCap,
 	type ExplorerCapabilities,
@@ -86,8 +87,12 @@ export function createMemoryExplorerDriver(
 			return vfs.readBlob(id);
 		},
 
-		async download(id) {
-			return vfs.readBlob(id);
+		async download(id, opts) {
+			const blob = await vfs.readBlob(id);
+			if (opts?.onChunk) {
+				await emitBlobChunks(blob, { onChunk: opts.onChunk, onProgress: opts.onProgress });
+			}
+			return opts?.assemble === false ? new Blob([], { type: blob.type }) : blob;
 		},
 
 		async writeFile(_parentId, file) {

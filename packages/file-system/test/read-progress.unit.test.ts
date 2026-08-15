@@ -33,4 +33,23 @@ describe('blobFromResponse', () => {
 			/EXPLORER_TOO_LARGE/
 		);
 	});
+
+	it('onChunk sees every body byte and assemble:false returns an empty Blob', async () => {
+		const stream = new ReadableStream<Uint8Array>({
+			start(ctrl) {
+				ctrl.enqueue(new Uint8Array([1, 2, 3]));
+				ctrl.enqueue(new Uint8Array([4, 5]));
+				ctrl.close();
+			}
+		});
+		const got: number[] = [];
+		const blob = await blobFromResponse(new Response(stream), {
+			assemble: false,
+			onChunk: (c) => {
+				got.push(...c);
+			}
+		});
+		assert.equal(blob.size, 0);
+		assert.deepEqual(got, [1, 2, 3, 4, 5]);
+	});
 });

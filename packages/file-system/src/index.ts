@@ -8,6 +8,11 @@ export * from './persist.js';
 export * from './vfs.js';
 export * from './memoryVfs.js';
 export * from './transferRegistry.js';
-export { blobFromResponse, type ByteProgress, type ReadProgressOpts } from './readProgress.js';
+export {
+	blobFromResponse,
+	emitBlobChunks,
+	type ByteProgress,
+	type ReadProgressOpts
+} from './readProgress.js';
 export * from './migrate/runAll.js';
 export { serializeBody, parseJsonBytes } from './serialize.js';

@@ -174,7 +174,11 @@ export async function createMonitorExplorerDriver(
 			}
 			try {
 				const abs = toAbsolutePath(rootPath, id);
-				const blob = await transport.download(abs, { onProgress: dlOpts?.onProgress });
+				const blob = await transport.download(abs, {
+					onProgress: dlOpts?.onProgress,
+					onChunk: dlOpts?.onChunk,
+					assemble: dlOpts?.assemble
+				});
 				if (blob.size > EXPLORER_DOWNLOAD_MAX_BYTES) {
 					throw new ExplorerMonitorError(
 						'MONITOR_TOO_LARGE',

@@ -490,6 +490,8 @@ export async function createB2ExplorerDriver(
 					try {
 						return await blobFromResponse(res, {
 							onProgress: dlOpts?.onProgress,
+							onChunk: dlOpts?.onChunk,
+							assemble: dlOpts?.assemble,
 							maxBytes: EXPLORER_DOWNLOAD_MAX_BYTES,
 							contentType:
 								res.headers.get('content-type') ||
@@ -507,6 +509,7 @@ export async function createB2ExplorerDriver(
 				// Simulator / injected transport: SDK stream download
 				const result = await bucket!.download(id);
 				const reader = result.body.getReader();
+				const assemble = dlOpts?.assemble !== false;
 				const chunks: Uint8Array[] = [];
 				let total = 0;
 				let lastEmit = 0;
@@ -519,7 +522,8 @@ export async function createB2ExplorerDriver(
 							await reader.cancel();
 							throw new ExplorerB2Error('B2_TOO_LARGE', 'Download exceeded size cap');
 						}
-						chunks.push(value);
+						if (assemble) chunks.push(value);
+						await dlOpts?.onChunk?.(value);
 						const now = Date.now();
 						if (!lastEmit || now - lastEmit >= 80) {
 							lastEmit = now;
@@ -529,7 +533,7 @@ export async function createB2ExplorerDriver(
 				}
 				dlOpts?.onProgress?.(total, len || total);
 				const type = result.headers.contentType || 'application/octet-stream';
-				return new Blob(chunks as BlobPart[], { type });
+				return assemble ? new Blob(chunks as BlobPart[], { type }) : new Blob([], { type });
 			} catch (e) {
 				if (e instanceof ExplorerB2Error) throw e;
 				throw mapB2Error(e);

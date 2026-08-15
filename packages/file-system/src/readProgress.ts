@@ -5,6 +5,13 @@ export type ReadProgressOpts = {
 	onProgress?: ByteProgress;
 	maxBytes?: number;
 	contentType?: string;
+	/** Called for each body chunk (awaited, so the reader can apply backpressure). */
+	onChunk?: (chunk: Uint8Array) => void | Promise<void>;
+	/**
+	 * When false, do not retain chunks for the returned Blob (empty Blob).
+	 * Use with `onChunk` when the caller consumes bytes as they arrive.
+	 */
+	assemble?: boolean;
 };
 
 /**
@@ -16,10 +23,15 @@ export async function blobFromResponse(res: Response, opts?: ReadProgressOpts): 
 	const type =
 		opts?.contentType || res.headers.get('content-type') || 'application/octet-stream';
 	const onProgress = opts?.onProgress;
+	const assemble = opts?.assemble !== false;
 	if (!res.body || typeof res.body.getReader !== 'function') {
 		const blob = await res.blob();
-		onProgress?.(blob.size, blob.size);
-		return blob;
+		if (opts?.onChunk && blob.size) {
+			await emitBlobChunks(blob, { onChunk: opts.onChunk, onProgress });
+		} else {
+			onProgress?.(blob.size, blob.size);
+		}
+		return assemble ? blob : new Blob([], { type });
 	}
 	const reader = res.body.getReader();
 	const chunks: Uint8Array[] = [];
@@ -41,7 +53,8 @@ export async function blobFromResponse(res: Response, opts?: ReadProgressOpts): 
 				await reader.cancel();
 				throw new Error('EXPLORER_TOO_LARGE');
 			}
-			chunks.push(value);
+			if (assemble) chunks.push(value);
+			await opts?.onChunk?.(value);
 			emit();
 		}
 	} finally {
@@ -52,5 +65,24 @@ export async function blobFromResponse(res: Response, opts?: ReadProgressOpts): 
 		}
 	}
 	onProgress?.(transferred, totalHeader ?? transferred);
-	return new Blob(chunks as BlobPart[], { type });
+	return assemble ? new Blob(chunks as BlobPart[], { type }) : new Blob([], { type });
+}
+
+/** Slice a Blob into chunks, awaiting `onChunk` so callers can apply backpressure. */
+export async function emitBlobChunks(
+	blob: Blob,
+	opts: {
+		onChunk: (chunk: Uint8Array) => void | Promise<void>;
+		onProgress?: ByteProgress;
+		chunkSize?: number;
+	}
+): Promise<void> {
+	const step = Math.max(16 * 1024, opts.chunkSize ?? 64 * 1024);
+	const total = blob.size;
+	for (let offset = 0; offset < total; offset += step) {
+		const end = Math.min(offset + step, total);
+		const chunk = new Uint8Array(await blob.slice(offset, end).arrayBuffer());
+		await opts.onChunk(chunk);
+		opts.onProgress?.(end, total);
+	}
 }

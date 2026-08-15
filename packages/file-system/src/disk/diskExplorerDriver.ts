@@ -3,6 +3,7 @@
  * `showDirectoryPicker` (File System Access API).
  */
 import { inferFileTypeFromName } from '../index.js';
+import { emitBlobChunks } from '../readProgress.js';
 import {
 	applyListCap,
 	EXPLORER_DOWNLOAD_MAX_BYTES,
@@ -210,8 +211,12 @@ export function createDiskExplorerDriver(root: DiskDirHandle): ExplorerDriver {
 			return file;
 		},
 
-		async download(id) {
-			return this.readBlob!(id);
+		async download(id, opts) {
+			const blob = await this.readBlob!(id);
+			if (opts?.onChunk) {
+				await emitBlobChunks(blob, { onChunk: opts.onChunk, onProgress: opts.onProgress });
+			}
+			return opts?.assemble === false ? new Blob([], { type: blob.type }) : blob;
 		}
 	};
 }
