@@ -37,9 +37,8 @@ const MONITOR_CAPS: ExplorerCapabilities = {
 	supportsSoftDelete: false,
 	supportsRename: false,
 	supportsMove: false,
-	supportsCopy: false,
-	supportsMkdir: false,
 	supportsCopy: true,
+	supportsMkdir: false,
 	supportsUpload: true,
 	supportsDownload: true,
 	supportsSiblingOrder: false,
@@ -198,11 +197,16 @@ export async function createMonitorExplorerDriver(
 			}
 		},
 
-		async delete() {
-			throw new ExplorerMonitorError(
-				'MONITOR_READONLY',
-				'Monitor connection is read-only'
-			);
+		async delete(id: ExplorerEntryId) {
+			try {
+				const abs = toAbsolutePath(rootPath, id);
+				if (abs === rootPath) {
+					throw new ExplorerMonitorError('MONITOR_FORBIDDEN', 'Cannot delete the connection root');
+				}
+				await transport.unlink(abs);
+			} catch (e) {
+				throw mapMonitorError(e);
+			}
 		},
 
 		async upload(parentId, file, opts) {

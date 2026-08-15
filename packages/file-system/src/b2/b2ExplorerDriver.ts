@@ -36,6 +36,7 @@ import {
 	sanitizeSegment
 } from './folderMarkers.js';
 import { createHybridB2Transport } from './hybridTransport.js';
+import { ensureExplorerCors } from './b2Cors.js';
 import { normalizeNamePrefix, type B2ConnectionProfileV1 } from './types.js';
 
 /** Download-auth token lifetime for direct browser GETs (seconds). */
@@ -118,6 +119,13 @@ export async function createB2ExplorerDriver(
 	}
 	if (!bucket) {
 		throw new ExplorerB2Error('B2_NOT_FOUND', `Bucket not found: ${opts.profile.bucketName}`);
+	}
+
+	// Best-effort: add this page origin to bucket CORS so direct uploads work.
+	// Limited keys without writeBuckets skip silently; the data-plane relay
+	// still carries the bytes through the hub.
+	if (typeof window !== 'undefined' && !usingCustomTransport) {
+		await ensureExplorerCors(bucket, window.location.origin);
 	}
 
 	function absPrefix(parentId: ExplorerEntryId | null): string {

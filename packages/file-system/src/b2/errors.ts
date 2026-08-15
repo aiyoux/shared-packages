@@ -61,7 +61,7 @@ export function mapB2Error(e: unknown): ExplorerB2Error {
 			'B2_CORS',
 			msg.includes('api.backblazeb2.com') || msg.includes('api0')
 				? 'B2 control-plane blocked in browser. Hub must proxy via /api/b2/proxy (redeploy).'
-				: `${msg} — check bucket CORS for upload/download (see docs/deploy.md).`
+				: `${msg} — upload is relayed via /api/b2/data-plane when bucket CORS is missing. If this persists, check the hub proxy and bucket CORS (docs/deploy.md). Origin: ${typeof window !== 'undefined' ? window.location.origin : 'unknown'}.`
 		);
 	}
 

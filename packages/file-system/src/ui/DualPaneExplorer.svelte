@@ -108,7 +108,7 @@
 		rightDefault?: ConnectionKind;
 		/** Hide the dual-pane / feature toggles row (e.g. CM is always dual). */
 		hideToggles?: boolean;
-		/** Hide the pane labels (e.g. "Left"/"Right") in each pane chrome. */
+		/** @deprecated pane Left/Right labels are gone. Kept so existing callers compile. */
 		hidePaneLabels?: boolean;
 		/** Hide the connection/backend switcher in each pane (locks its backend). */
 		hideConnectionSwitcher?: boolean;
@@ -176,7 +176,7 @@
 		leftDefault = 'local',
 		rightDefault = 'local',
 		hideToggles = false,
-		hidePaneLabels = false,
+		hidePaneLabels: _hidePaneLabels = false,
 		hideConnectionSwitcher = false,
 		switcherPanes,
 		monitorEnabled: _monitorEnabled = true,
@@ -897,11 +897,6 @@
 		ondragend={onPaneDragEnd}
 	>
 		<div class="pane-chrome" data-testid={tids.paneChrome(id)}>
-			{#if !hidePaneLabels && dualPane}
-				<span class="pane-label" data-testid={tids.paneLabel(id)}>
-					{id === 'left' ? 'Left' : 'Right'}
-				</span>
-			{/if}
 			{#if paneShowsSwitcher(id) && !(id === 'right' && overrideRight)}
 				{@const hints = copyHints(id)}
 				<ConnectionSwitcher
@@ -1345,13 +1340,6 @@
 		gap: 0.5rem;
 		padding: 0.5rem 0.65rem;
 		border-bottom: 1px solid var(--border, #334155);
-	}
-	.pane-label {
-		font-size: 0.75rem;
-		font-weight: 650;
-		text-transform: uppercase;
-		letter-spacing: 0.04em;
-		opacity: 0.7;
 	}
 	.pane-chrome:has(.pane-trash) :global(.conn-settings-wrap) {
 		margin-left: 0;

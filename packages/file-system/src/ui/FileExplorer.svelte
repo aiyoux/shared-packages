@@ -601,14 +601,25 @@
 
 	function confirmHardDelete(ids: string[], names: string[]): boolean {
 		if (caps.supportsSoftDelete) return true;
+		const folders = ids.filter((id) => nodes.find((n) => n.id === id)?.kind === 'folder');
 		if (ids.length === 1) {
 			const name = names[0] ?? 'item';
+			if (folders.length) {
+				return window.confirm(
+					`Delete folder “${name}” and everything inside it? This cannot be undone.`
+				);
+			}
 			return window.confirm(
-				`Delete “${name}” permanently from remote storage? This removes all versions.`
+				`Delete “${name}” permanently from remote storage? This cannot be undone.`
+			);
+		}
+		if (folders.length) {
+			return window.confirm(
+				`Delete ${ids.length} items, including ${folders.length} folder${folders.length === 1 ? '' : 's'} and everything inside them? This cannot be undone.`
 			);
 		}
 		return window.confirm(
-			`Delete ${ids.length} items permanently from remote storage? All versions will be removed.`
+			`Delete ${ids.length} items permanently from remote storage? This cannot be undone.`
 		);
 	}
 

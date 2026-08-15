@@ -82,6 +82,8 @@ export type MonitorTransport = {
 			onProgress?: (transferred: number, total?: number) => void;
 		}
 	): Promise<void>;
+	/** Delete a file (or empty directory) at `path`. */
+	unlink(path: string, opts?: { signal?: AbortSignal }): Promise<void>;
 	health(): Promise<unknown>;
 	/** Idempotent POST /v1/watch/roots */
 	watchAddRoot(path: string, recursive?: boolean): Promise<MonitorWatchedRoot>;
@@ -402,6 +404,45 @@ export function createMonitorClient(opts: {
 				if (e instanceof Error && e.name === 'AbortError') {
 					throw new Error(
 						opts?.signal?.aborted ? 'Monitor copy cancelled' : 'Monitor copy timed out'
+					);
+				}
+				if (e instanceof TypeError) {
+					throw new Error(
+						`Cannot reach monitor at ${base} (network/CORS). Is it running and allowing this origin?`
+					);
+				}
+				throw e;
+			} finally {
+				opts?.signal?.removeEventListener('abort', onAbort);
+				clearTimeout(t);
+			}
+		},
+		async unlink(path, opts) {
+			const ac = new AbortController();
+			const t = setTimeout(() => ac.abort(), 15_000);
+			const onAbort = () => ac.abort();
+			opts?.signal?.addEventListener('abort', onAbort);
+			const url = joinUrl(base, `/v1/fs/unlink?path=${encodeURIComponent(path)}`);
+			try {
+				const res = await fetchFn(
+					url,
+					withLocalAddressSpace(url, { method: 'DELETE', signal: ac.signal })
+				);
+				if (!res.ok) {
+					const parsed = await res.json().catch(() => ({}));
+					const err = (parsed as { error?: { message?: string } | string }).error;
+					const msg =
+						typeof err === 'string'
+							? err
+							: err && typeof err === 'object' && 'message' in err
+								? String(err.message)
+								: res.statusText;
+					throw new Error(msg || `Delete failed (${res.status})`);
+				}
+			} catch (e) {
+				if (e instanceof Error && e.name === 'AbortError') {
+					throw new Error(
+						opts?.signal?.aborted ? 'Monitor delete cancelled' : 'Monitor delete timed out'
 					);
 				}
 				if (e instanceof TypeError) {

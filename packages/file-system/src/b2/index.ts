@@ -26,6 +26,19 @@ export {
 	isB2DataPlaneUrl
 } from './controlPlane.js';
 export {
+	handleB2DataPlaneRelay,
+	assertB2DataPlaneRelayUrl,
+	B2_DATA_PLANE_RELAY_PATH,
+	B2_RELAY_URL_HEADER,
+	B2_RELAY_METHOD_HEADER
+} from './dataPlaneRelay.js';
+export {
+	ensureExplorerCors,
+	mergeExplorerCorsRules,
+	corsAllowsBrowserFileIo,
+	B2_EXPLORER_CORS_RULE
+} from './b2Cors.js';
+export {
 	handleB2ControlPlaneProxy,
 	B2_PROXY_MAX_BODY_BYTES,
 	B2_PROXY_ALLOWED_METHODS,

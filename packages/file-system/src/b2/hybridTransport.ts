@@ -7,6 +7,11 @@
  */
 import type { HttpRequest, HttpResponse, HttpTransport } from '@backblaze-labs/b2-sdk';
 import { isB2ControlPlaneUrl, isB2DataPlaneUrl } from './controlPlane.js';
+import {
+	B2_DATA_PLANE_RELAY_PATH,
+	B2_RELAY_METHOD_HEADER,
+	B2_RELAY_URL_HEADER
+} from './dataPlaneRelay.js';
 
 /** Default same-origin control-plane relay path used by host apps. */
 export const DEFAULT_B2_PROXY_PATH = '/api/b2/proxy';
@@ -17,6 +22,12 @@ export type HybridB2TransportOptions = {
 	 * Defaults to {@link DEFAULT_B2_PROXY_PATH}.
 	 */
 	proxyPath?: string;
+	/**
+	 * Same-origin relay for upload/download hosts when bucket CORS blocks
+	 * the browser. Defaults to {@link B2_DATA_PLANE_RELAY_PATH}. Pass `''`
+	 * to disable.
+	 */
+	dataPlaneRelayPath?: string;
 };
 
 /** Headers that must not be re-sent from browser to our proxy as hop-by-hop noise. */
@@ -90,7 +101,38 @@ async function bodyToArrayBuffer(body: BodyInit | null | undefined): Promise<Arr
 	throw new Error('Unsupported request body type for B2 transport');
 }
 
-async function directSend(request: HttpRequest): Promise<HttpResponse> {
+function isBrowserCorsFailure(e: unknown): boolean {
+	if (e instanceof TypeError) return true;
+	const msg = e instanceof Error ? e.message : String(e ?? '');
+	return /failed to fetch|networkerror|load failed|cors/i.test(msg);
+}
+
+function absoluteAppPath(path: string): string {
+	if (path.startsWith('http://') || path.startsWith('https://')) return path;
+	if (typeof window !== 'undefined') return `${window.location.origin}${path}`;
+	return path;
+}
+
+async function responseToHttp(res: Response): Promise<HttpResponse> {
+	const buf = await res.arrayBuffer();
+	return createHttpResponse(res.status, res.headers, buf);
+}
+
+async function relayDataPlane(request: HttpRequest, relayPath: string): Promise<HttpResponse> {
+	const headers = new Headers(request.headers);
+	headers.set(B2_RELAY_URL_HEADER, request.url);
+	headers.set(B2_RELAY_METHOD_HEADER, request.method);
+	const res = await fetch(absoluteAppPath(relayPath), {
+		method: 'POST',
+		headers,
+		body: request.body ?? null,
+		redirect: 'manual',
+		signal: request.signal
+	});
+	return responseToHttp(res);
+}
+
+async function directSend(request: HttpRequest, relayPath: string): Promise<HttpResponse> {
 	if (!isB2DataPlaneUrl(request.url) && !isB2ControlPlaneUrl(request.url)) {
 		// Should not happen with a healthy B2 realm; fail closed.
 		throw new Error(`Refusing non-B2 URL: ${safeUrlForError(request.url)}`);
@@ -103,9 +145,22 @@ async function directSend(request: HttpRequest): Promise<HttpResponse> {
 		redirect: 'manual',
 		signal: request.signal
 	};
-	const res = await fetch(request.url, init);
-	const buf = await res.arrayBuffer();
-	return createHttpResponse(res.status, res.headers, buf);
+	// Uploads need a CORS rule on the bucket. Relay POST/PUT through the hub
+	// so copy-into-B2 works before/without that rule. GET still tries direct
+	// (download-auth query) and falls back if the browser blocks it.
+	const method = (request.method || 'GET').toUpperCase();
+	if (relayPath && isB2DataPlaneUrl(request.url) && (method === 'POST' || method === 'PUT')) {
+		return relayDataPlane(request, relayPath);
+	}
+	try {
+		const res = await fetch(request.url, init);
+		return await responseToHttp(res);
+	} catch (e) {
+		if (relayPath && isB2DataPlaneUrl(request.url) && isBrowserCorsFailure(e)) {
+			return relayDataPlane(request, relayPath);
+		}
+		throw e;
+	}
 }
 
 async function proxySend(request: HttpRequest, proxyPath: string): Promise<HttpResponse> {
@@ -217,12 +272,14 @@ function safeUrlForError(url: string): string {
  */
 export function createHybridB2Transport(opts: HybridB2TransportOptions = {}): HttpTransport {
 	const proxyPath = opts.proxyPath ?? DEFAULT_B2_PROXY_PATH;
+	const relayPath =
+		opts.dataPlaneRelayPath === undefined ? B2_DATA_PLANE_RELAY_PATH : opts.dataPlaneRelayPath;
 	return {
 		async send(request: HttpRequest): Promise<HttpResponse> {
 			if (isB2ControlPlaneUrl(request.url)) {
 				return proxySend(request, proxyPath);
 			}
-			return directSend(request);
+			return directSend(request, relayPath);
 		}
 	};
 }
