@@ -766,6 +766,7 @@
 		if (entry.fileType === 'ob3d') return 'Open in 3D';
 		if (entry.fileType === 'vrec') return 'Open in voice';
 		if (entry.fileType === 'image') return 'Open in Images';
+		if (entry.fileType === 'video') return 'Open in Video';
 		return 'Open';
 	}
 

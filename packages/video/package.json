@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": false,
   "type": "module",
-  "description": "Browser video trim/re-encode (WebCodecs + mediabunny) and reusable editor/player UI.",
+  "description": "Browser video trim/export with lazy engines (WebCodecs + mediabunny, or FFmpeg WASM) and reusable editor/player UI.",
   "svelte": "./src/index.ts",
   "exports": {
     ".": {
@@ -26,6 +26,8 @@
     "yalc:publish": "yalc publish"
   },
   "dependencies": {
+    "@ffmpeg/ffmpeg": "^0.12.15",
+    "@ffmpeg/util": "^0.12.2",
     "mediabunny": "^1.50.9"
   },
   "peerDependencies": {

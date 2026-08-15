@@ -1,15 +1,9 @@
 import { Output, Mp4OutputFormat, BufferTarget, EncodedVideoPacketSource, EncodedPacket } from 'mediabunny';
+import type { ProcessOptions } from './types.js';
+
+export type { ProcessOptions };
 
 type RVFCMetadata = VideoFrameCallbackMetadata;
-
-export interface ProcessOptions {
-	start: number;
-	end: number;
-	width?: number;
-	height?: number;
-	bitrate: string;
-	onProgress?: (progress: number) => void;
-}
 
 export function parseBitrate(bitrate: string): number {
 	const match = bitrate.match(/^(\d+(?:\.\d+)?)\s*(k|M|G)?$/i);

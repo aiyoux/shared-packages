@@ -30,6 +30,13 @@ const DEFAULT_TYPES: FileTypeDef[] = [
 		schemaVersion: 1
 	},
 	{
+		id: 'video',
+		extension: '.mp4',
+		mime: 'video/mp4',
+		label: 'Video',
+		schemaVersion: 1
+	},
+	{
 		id: 'json',
 		extension: '.json',
 		mime: 'application/json',
@@ -44,7 +51,8 @@ const DEFAULT_TYPES: FileTypeDef[] = [
  * when none matches). Prevents `photo.jpg` → `photo.jpg.png` for image.
  */
 const MULTI_EXT: Partial<Record<FileTypeId, readonly string[]>> = {
-	image: ['.png', '.jpg', '.jpeg', '.webp', '.gif', '.svg']
+	image: ['.png', '.jpg', '.jpeg', '.webp', '.gif', '.svg'],
+	video: ['.mp4', '.webm', '.mov', '.m4v', '.mkv', '.ogv']
 };
 
 /** Product extensions stripped before re-applying a forced primary extension. */

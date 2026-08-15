@@ -1,5 +1,5 @@
 /** File type registry ids. */
-export type FileTypeId = 'skch' | 'ob3d' | 'vrec' | 'image' | 'json' | 'unknown';
+export type FileTypeId = 'skch' | 'ob3d' | 'vrec' | 'image' | 'video' | 'json' | 'unknown';
 
 export type VfsNodeKind = 'folder' | 'file';
 
