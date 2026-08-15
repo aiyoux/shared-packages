@@ -1,0 +1,46 @@
+{
+  "name": "@shared-packages/video",
+  "version": "0.1.0",
+  "private": false,
+  "type": "module",
+  "description": "Browser video trim/re-encode (WebCodecs + mediabunny) and reusable editor/player UI.",
+  "svelte": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "svelte": "./src/index.ts",
+      "import": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./VideoTimeline.svelte": "./src/VideoTimeline.svelte",
+    "./VideoTransport.svelte": "./src/VideoTransport.svelte",
+    "./VideoProcessPanel.svelte": "./src/VideoProcessPanel.svelte",
+    "./VideoPlayer.svelte": "./src/VideoPlayer.svelte",
+    "./VideoLightbox.svelte": "./src/VideoLightbox.svelte"
+  },
+  "types": "./src/index.ts",
+  "files": ["src"],
+  "scripts": {
+    "test": "vitest run",
+    "check": "tsc --noEmit -p tsconfig.json",
+    "yalc:publish": "yalc publish"
+  },
+  "dependencies": {
+    "mediabunny": "^1.50.9"
+  },
+  "peerDependencies": {
+    "@lucide/svelte": "^0.554.0",
+    "svelte": "^5.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "typescript": "^5.7.3",
+    "vitest": "^4.1.2"
+  },
+  "engines": {
+    "node": ">=22.7.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
