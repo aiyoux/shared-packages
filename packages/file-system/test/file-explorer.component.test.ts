@@ -20,6 +20,30 @@ describe('FileExplorer component', () => {
 		await vfs.ready();
 	});
 
+	it('drops an OS file into the open folder via writeFile', async () => {
+		render(FileExplorer, { props: { mode: 'manage', vfs, variant: 'panel' } });
+		await screen.findByTestId('fe-list');
+		const list = screen.getByTestId('fe-list');
+		const file = new File(['hello-os'], 'from-pc.txt', { type: 'text/plain' });
+		const dt = {
+			types: ['Files'],
+			files: {
+				length: 1,
+				0: file,
+				item: (i: number) => (i === 0 ? file : null),
+				[Symbol.iterator]: function* () {
+					yield file;
+				}
+			},
+			dropEffect: 'none'
+		};
+		await fireEvent.drop(list, { dataTransfer: dt });
+		await viWaitFor(async () => {
+			const rows = await vfs.list({ parentId: null });
+			return rows.some((n) => n.name === 'from-pc.txt');
+		});
+	});
+
 	it('renders manage chrome with new folder and trash controls', async () => {
 		render(FileExplorer, { props: { mode: 'manage', vfs, variant: 'panel' } });
 		expect(await screen.findByTestId('file-explorer')).toBeTruthy();

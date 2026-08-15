@@ -13,6 +13,8 @@ export {
 	copyAcross,
 	CopyAcrossError,
 	idsFromExplorerDragTarget,
+	dataTransferHasOsFiles,
+	filesFromDataTransfer,
 	type CopyAcrossArgs,
 	type CopyAcrossErrorCode,
 	type CopyAcrossPath,

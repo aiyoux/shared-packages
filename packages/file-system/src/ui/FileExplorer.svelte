@@ -9,7 +9,11 @@
 	import { createLocalExplorerDriver } from './localExplorerDriver.js';
 	import StoragePersistenceStatus from './StoragePersistenceStatus.svelte';
 	import { createTreeDndSession, resolveDrop, zoneFromY, type DropZone } from './treeDnd/index.js';
-	import { FE_EXPLORER_IDS_MIME } from './copyAcross.js';
+	import {
+		FE_EXPLORER_IDS_MIME,
+		dataTransferHasOsFiles,
+		filesFromDataTransfer
+	} from './copyAcross.js';
 
 	export type ExplorerMode = 'manage' | 'open' | 'save' | 'browse';
 
@@ -70,6 +74,8 @@
 		}>;
 		/** Dual-pane header owns the Trash toggle — hide the toolbar copy. */
 		hideToolbarTrash?: boolean;
+		/** Dual-pane header owns Select file — hide the toolbar copy. */
+		hideToolbarUpload?: boolean;
 		/** Controlled trash view (DualPane header). Uncontrolled when omitted. */
 		trashView?: boolean;
 		onTrashViewChange?: (open: boolean) => void;
@@ -98,6 +104,7 @@
 		compatLibraryTestId = false,
 		compatSaveTestId = false,
 		hideToolbarTrash = false,
+		hideToolbarUpload = false,
 		trashView = undefined,
 		onTrashViewChange
 	}: Props = $props();
@@ -174,6 +181,7 @@
 	let clipboard = $state<{ mode: 'copy' | 'cut'; ids: string[] } | null>(null);
 	let uploadBusy = $state(false);
 	let fileInputEl: HTMLInputElement | undefined = $state();
+	let osDropOver = $state(false);
 
 	/** Per-instance DnD session (dual-pane safe). */
 	const dnd = createTreeDndSession();
@@ -253,6 +261,13 @@
 	}
 
 	function onRowDragOver(e: DragEvent, n: ExplorerEntry) {
+		if (allowOsFileDrag(e)) {
+			e.preventDefault();
+			e.stopPropagation();
+			if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+			osDropOver = true;
+			return;
+		}
 		if (!dnd.getState().active) return;
 		e.preventDefault();
 		const el = e.currentTarget as HTMLElement;
@@ -272,16 +287,6 @@
 		dndTargetId = n.id;
 		dndZone = zone;
 		if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
-	}
-
-	function onListDragOver(e: DragEvent) {
-		if (!dnd.getState().active) return;
-		// empty list / padding → drop into current parent
-		if ((e.target as HTMLElement).closest?.('.fe-row')) return;
-		e.preventDefault();
-		dnd.setDropTarget(null, 'into');
-		dndTargetId = null;
-		dndZone = 'into';
 	}
 
 	async function commitDndDrop(target: ExplorerEntry | null) {
@@ -335,6 +340,14 @@
 	}
 
 	function onRowDrop(e: DragEvent, n: ExplorerEntry) {
+		if (allowOsFileDrag(e)) {
+			e.preventDefault();
+			e.stopPropagation();
+			osDropOver = false;
+			const dest = n.kind === 'folder' ? n.id : parentId;
+			void importDeviceFiles(filesFromDataTransfer(e.dataTransfer), dest);
+			return;
+		}
 		// Inactive session = a drag from the *other* dual pane. Let it bubble
 		// so DualPaneExplorer can copy-across; do not steal the drop.
 		if (!dnd.getState().active) return;
@@ -979,14 +992,14 @@
 
 	const canImportFromDevice = $derived(Boolean(driver.upload || driver.writeFile));
 
-	async function onUploadFiles(files: FileList | null) {
+	async function importDeviceFiles(files: File[], destParentId: string | null = parentId) {
 		const put = driver.upload ?? driver.writeFile;
-		if (!files?.length || !put) return;
+		if (!files.length || !put) return;
 		uploadBusy = true;
 		error = '';
 		try {
-			for (const file of Array.from(files)) {
-				await put(parentId, file);
+			for (const file of files) {
+				await put(destParentId, file);
 			}
 			await refresh();
 		} catch (e) {
@@ -995,6 +1008,48 @@
 			uploadBusy = false;
 			if (fileInputEl) fileInputEl.value = '';
 		}
+	}
+
+	async function onUploadFiles(files: FileList | null) {
+		if (!files?.length) return;
+		await importDeviceFiles(Array.from(files), parentId);
+	}
+
+	function allowOsFileDrag(e: DragEvent): boolean {
+		if (mode !== 'manage' || showTrash || !canImportFromDevice) return false;
+		if (dnd.getState().active) return false;
+		return dataTransferHasOsFiles(e.dataTransfer);
+	}
+
+	function onListDragOver(e: DragEvent) {
+		if (allowOsFileDrag(e)) {
+			e.preventDefault();
+			e.stopPropagation();
+			if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+			osDropOver = true;
+			return;
+		}
+		if (!dnd.getState().active) return;
+		// empty list / padding → drop into current parent
+		if ((e.target as HTMLElement).closest?.('.fe-row')) return;
+		e.preventDefault();
+		dnd.setDropTarget(null, 'into');
+		dndTargetId = null;
+		dndZone = 'into';
+	}
+
+	function onListDragLeave(e: DragEvent) {
+		const next = e.relatedTarget;
+		if (next instanceof Node && (e.currentTarget as Node).contains(next)) return;
+		osDropOver = false;
+	}
+
+	function onListDrop(e: DragEvent) {
+		if (!allowOsFileDrag(e)) return;
+		e.preventDefault();
+		e.stopPropagation();
+		osDropOver = false;
+		void importDeviceFiles(filesFromDataTransfer(e.dataTransfer), parentId);
 	}
 
 	function onListKeydown(e: KeyboardEvent) {
@@ -1166,15 +1221,17 @@
 					</button>
 				{/if}
 				{#if canImportFromDevice}
-					<button
-						type="button"
-						data-testid="fe-upload"
-						disabled={uploadBusy}
-						title="Open the system file picker and add the file to this folder"
-						onclick={() => fileInputEl?.click()}
-					>
-						{uploadBusy ? 'Uploading…' : 'Upload from device'}
-					</button>
+					{#if !hideToolbarUpload}
+						<button
+							type="button"
+							data-testid="fe-upload"
+							disabled={uploadBusy}
+							title="Open the system file picker and add the file to this folder"
+							onclick={() => fileInputEl?.click()}
+						>
+							{uploadBusy ? 'Uploading…' : 'Select file'}
+						</button>
+					{/if}
 					<input
 						bind:this={fileInputEl}
 						type="file"
@@ -1250,7 +1307,10 @@
 		data-testid="fe-list"
 		role="listbox"
 		aria-busy={listBusy ? 'true' : undefined}
+		class:os-drop={osDropOver}
 		ondragover={onListDragOver}
+		ondragleave={onListDragLeave}
+		ondrop={onListDrop}
 	>
 		{#if pending.length > 0}
 			<div class="fe-pending-list" data-testid="fe-pending-list">
@@ -1602,6 +1662,11 @@
 		overflow: auto;
 		padding: 6px;
 		min-height: 120px;
+	}
+	.fe-list.os-drop {
+		outline: 2px dashed #38bdf8;
+		outline-offset: -4px;
+		background: rgba(56, 189, 248, 0.06);
 	}
 	.fe-list-busy {
 		/* Soft cue even before delayed overlay appears */

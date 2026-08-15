@@ -215,7 +215,7 @@
 			{ label: 'Move', on: !!c?.supportsMove },
 			{ label: 'Copy', on: !!c?.supportsCopy },
 			{ label: 'New folders', on: !!c?.supportsMkdir },
-			{ label: 'Upload from device', on: !!c?.supportsUpload },
+			{ label: 'Select file / drop from PC', on: !!c?.supportsUpload },
 			{ label: 'Download', on: !!c?.supportsDownload },
 			{ label: 'Drag to reorder', on: !!c?.supportsSiblingOrder },
 			{ label: 'Drag files out', on: !!c?.supportsDragOut }

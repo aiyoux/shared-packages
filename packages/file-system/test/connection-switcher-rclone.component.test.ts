@@ -154,11 +154,11 @@ describe('ConnectionSwitcher multi-backend', () => {
 		expect(screen.getByTestId('conn-caps-info')).toBeTruthy();
 		const tip = screen.getByTestId('conn-caps-tooltip');
 		expect(tip.textContent).toMatch(/Trash/);
-		expect(tip.textContent).toMatch(/Upload from device/);
+		expect(tip.textContent).toMatch(/Select file \/ drop from PC/);
 		expect(tip.textContent).toMatch(/Drag to reorder/);
 		const trash = [...tip.querySelectorAll('li')].find((el) => el.textContent?.includes('Trash'));
 		const upload = [...tip.querySelectorAll('li')].find((el) =>
-			el.textContent?.includes('Upload from device')
+			el.textContent?.includes('Select file')
 		);
 		expect(trash?.getAttribute('data-on')).toBe('1');
 		expect(upload?.getAttribute('data-on')).toBe('0');

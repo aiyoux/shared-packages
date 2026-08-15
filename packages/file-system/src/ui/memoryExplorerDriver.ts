@@ -21,7 +21,7 @@ export const MEMORY_CAPS: ExplorerCapabilities = {
 	supportsMove: false,
 	supportsCopy: false,
 	supportsMkdir: false,
-	supportsUpload: false,
+	supportsUpload: true,
 	supportsDownload: true,
 	supportsSiblingOrder: false,
 	supportsDragOut: true

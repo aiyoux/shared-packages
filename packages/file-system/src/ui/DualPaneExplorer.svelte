@@ -41,7 +41,9 @@
 		CopyAcrossError,
 		destParentFromDropEvent,
 		idsFromExplorerDataTransfer,
-		idsFromExplorerDragTarget
+		idsFromExplorerDragTarget,
+		dataTransferHasOsFiles,
+		filesFromDataTransfer
 	} from './copyAcross.js';
 	import { getMemoryVfs, type MemoryVfsService, type VfsService } from '../index.js';
 	import { canPickDirectory, createDiskExplorerDriver, pickDirectory } from '../disk/index.js';
@@ -262,6 +264,8 @@
 		destLabel: string;
 		resolve: (ok: boolean) => void;
 	} | null>(null);
+	let selectFileInput = $state<Partial<Record<PaneId, HTMLInputElement>>>({});
+	let osDropPane = $state<PaneId | null>(null);
 
 	/** True when at least one visible pane is durable local browser storage. */
 	const showLocalPersist = $derived(
@@ -274,7 +278,7 @@
 		return createMemoryExplorerDriver(memoryVfs, {
 			capabilitiesPatch: {
 				supportsDownload: true,
-				supportsUpload: false
+				supportsUpload: true
 			}
 		});
 	}
@@ -712,7 +716,59 @@
 		crossOver = null;
 	}
 
+	function paneCanImport(id: PaneId): boolean {
+		const drv = activeDriver(paneState(id), id);
+		return Boolean(drv.upload || drv.writeFile);
+	}
+
+	function bindSelectFileInput(node: HTMLInputElement, id: PaneId) {
+		selectFileInput = { ...selectFileInput, [id]: node };
+		return {
+			destroy() {
+				const next = { ...selectFileInput };
+				delete next[id];
+				selectFileInput = next;
+			}
+		};
+	}
+
+	async function importOsFilesToPane(
+		id: PaneId,
+		files: File[],
+		destParentId?: string | null
+	): Promise<void> {
+		const p = paneState(id);
+		const drv = activeDriver(p, id);
+		const put = drv.upload ?? drv.writeFile;
+		if (!put || files.length === 0) return;
+		copyError = '';
+		copyBusy = true;
+		copyDestPane = id;
+		const parent = destParentId !== undefined ? destParentId : p.ctx.parentId;
+		try {
+			for (const file of files) {
+				await put(parent, file);
+			}
+			if (!drv.subscribeChanges) {
+				setPane(id, { explorerKey: p.explorerKey + 1 });
+			}
+		} catch (e) {
+			copyError = e instanceof Error ? e.message : String(e);
+		} finally {
+			copyBusy = false;
+			const input = selectFileInput[id];
+			if (input) input.value = '';
+		}
+	}
+
 	function onPaneDragOver(id: PaneId, e: DragEvent) {
+		if (dataTransferHasOsFiles(e.dataTransfer) && paneCanImport(id) && !crossDragFrom) {
+			e.preventDefault();
+			e.stopPropagation();
+			if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+			osDropPane = id;
+			return;
+		}
 		if (!dualPane || !showCopyAcross || !crossDragFrom || crossDragFrom === id) return;
 		e.preventDefault();
 		e.stopPropagation();
@@ -724,14 +780,25 @@
 		const next = e.relatedTarget;
 		if (next instanceof Node && (e.currentTarget as Node).contains(next)) return;
 		if (crossOver === id) crossOver = null;
+		if (osDropPane === id) osDropPane = null;
 	}
 
 	function onPaneDragEnd() {
 		crossDragFrom = null;
 		crossOver = null;
+		osDropPane = null;
 	}
 
 	async function onPaneDrop(id: PaneId, e: DragEvent) {
+		const osFiles = filesFromDataTransfer(e.dataTransfer);
+		if (osFiles.length && paneCanImport(id) && !crossDragFrom) {
+			e.preventDefault();
+			e.stopPropagation();
+			const destParentId = destParentFromDropEvent(e, paneState(id).ctx.parentId);
+			onPaneDragEnd();
+			await importOsFilesToPane(id, osFiles, destParentId);
+			return;
+		}
 		if (!dualPane || !showCopyAcross || !crossDragFrom || crossDragFrom === id) {
 			onPaneDragEnd();
 			return;
@@ -887,7 +954,7 @@
 	<!-- svelte-ignore a11y_no_static_element_interactions -->
 	<div
 		class="files-pane"
-		class:drop-target={crossOver === id}
+		class:drop-target={crossOver === id || osDropPane === id}
 		data-testid={tids.pane(id)}
 		data-pane={id}
 		ondragstart={(e) => onPaneDragStart(id, e)}
@@ -926,6 +993,29 @@
 				}}
 				onConfigureDisk={() => void connectDisk(id, { replace: true })}
 			/>
+			{/if}
+			{#if paneCanImport(id)}
+				<button
+					type="button"
+					class="select-file"
+					data-testid="fe-upload"
+					disabled={copyBusy || p.showTrash}
+					title="Open the system file picker and copy a file into this folder"
+					onclick={() => selectFileInput[id]?.click()}
+				>
+					{copyBusy && copyDestPane === id ? 'Adding…' : 'Select file'}
+				</button>
+				<input
+					type="file"
+					multiple
+					hidden
+					data-testid="fe-upload-input"
+					use:bindSelectFileInput={id}
+					onchange={(e) => {
+						const list = (e.currentTarget as HTMLInputElement).files;
+						if (list?.length) void importOsFilesToPane(id, Array.from(list));
+					}}
+				/>
 			{/if}
 			{#if drv.capabilities.supportsTrash}
 				<button
@@ -1115,6 +1205,7 @@
 						driver={overrideRight.driver}
 						showPersistence={false}
 						hideToolbarTrash={true}
+						hideToolbarUpload={true}
 						trashView={p.showTrash}
 						onTrashViewChange={(open) => setPane(id, { showTrash: open })}
 						initialParentId={p.ctx.parentId}
@@ -1131,6 +1222,7 @@
 						driver={localDriver}
 						showPersistence={false}
 						hideToolbarTrash={true}
+						hideToolbarUpload={true}
 						trashView={p.showTrash}
 						onTrashViewChange={(open) => setPane(id, { showTrash: open })}
 						initialParentId={p.ctx.parentId}
@@ -1158,6 +1250,7 @@
 						driver={drv}
 						showPersistence={false}
 						hideToolbarTrash={true}
+						hideToolbarUpload={true}
 						trashView={p.showTrash}
 						onTrashViewChange={(open) => setPane(id, { showTrash: open })}
 						initialParentId={p.ctx.parentId}
@@ -1256,7 +1349,8 @@
 	}
 	.dual-toggle,
 	.copy-across,
-	.send-selected {
+	.send-selected,
+	.select-file {
 		padding: 0.35rem 0.7rem;
 		border-radius: 8px;
 		border: 1px solid var(--border, #334155);
@@ -1270,7 +1364,8 @@
 		outline-offset: 1px;
 	}
 	.copy-across:disabled,
-	.send-selected:disabled {
+	.send-selected:disabled,
+	.select-file:disabled {
 		opacity: 0.5;
 		cursor: not-allowed;
 	}

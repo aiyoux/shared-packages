@@ -23,7 +23,7 @@ const LOCAL_CAPS: ExplorerCapabilities = {
 	supportsMove: true,
 	supportsCopy: true,
 	supportsMkdir: true,
-	supportsUpload: false,
+	supportsUpload: true,
 	supportsDownload: false,
 	supportsSiblingOrder: true
 };

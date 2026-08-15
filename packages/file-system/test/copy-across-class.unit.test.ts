@@ -9,8 +9,10 @@ import {
 	CopyAcrossError,
 	describeCopyAcrossPath,
 	isDualPhaseCopy,
+	dataTransferHasOsFiles,
 	destParentFromDropEvent,
 	FE_EXPLORER_IDS_MIME,
+	filesFromDataTransfer,
 	idsFromExplorerDataTransfer,
 	idsFromExplorerDragTarget,
 	parseExplorerDragIds
@@ -69,6 +71,24 @@ describe('isLocalClass / isRemoteClass', () => {
 });
 
 describe('cross-pane drag payload', () => {
+	it('detects OS file drags vs explorer row ids', () => {
+		const os = { types: ['Files'], files: { length: 0 } } as unknown as DataTransfer;
+		const explorer = {
+			types: [FE_EXPLORER_IDS_MIME],
+			files: { length: 0 }
+		} as unknown as DataTransfer;
+		assert.equal(dataTransferHasOsFiles(os), true);
+		assert.equal(dataTransferHasOsFiles(explorer), false);
+		const listed = {
+			types: ['Files'],
+			files: [{ name: 'a.txt' } as File]
+		} as unknown as DataTransfer;
+		assert.deepEqual(
+			filesFromDataTransfer(listed).map((f) => f.name),
+			['a.txt']
+		);
+	});
+
 	it('parseExplorerDragIds splits and trims', () => {
 		assert.deepEqual(parseExplorerDragIds(' a, b , ,c '), ['a', 'b', 'c']);
 		assert.deepEqual(parseExplorerDragIds(''), []);

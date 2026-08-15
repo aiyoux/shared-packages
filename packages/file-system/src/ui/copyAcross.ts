@@ -38,6 +38,30 @@ export class CopyAcrossError extends Error {
 
 /** Native DnD type FileExplorer writes; DualPaneExplorer reads it on pane drop. */
 export const FE_EXPLORER_IDS_MIME = 'application/x-fe-explorer-ids';
+export const FE_CM_EXPLORER_IDS_MIME = 'application/x-cm-explorer-ids';
+
+/** True while the OS/browser is dragging real files (not an explorer row). */
+export function dataTransferHasOsFiles(dt: DataTransfer | null | undefined): boolean {
+	if (!dt) return false;
+	if (dt.files && dt.files.length > 0) return true;
+	const types = Array.from(dt.types ?? []);
+	return types.includes('Files');
+}
+
+export function dataTransferHasExplorerIds(dt: DataTransfer | null | undefined): boolean {
+	if (!dt) return false;
+	const types = Array.from(dt.types ?? []);
+	return (
+		types.includes(FE_EXPLORER_IDS_MIME) ||
+		types.includes(FE_CM_EXPLORER_IDS_MIME) ||
+		types.includes('application/x-fe-explorer-ids')
+	);
+}
+
+export function filesFromDataTransfer(dt: DataTransfer | null | undefined): File[] {
+	if (!dt?.files?.length) return [];
+	return Array.from(dt.files);
+}
 
 export function parseExplorerDragIds(raw: string): string[] {
 	return raw
