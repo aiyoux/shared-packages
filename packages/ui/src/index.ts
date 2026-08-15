@@ -30,6 +30,8 @@ export { default as DatePicker } from './DatePicker.svelte';
 export { default as Label } from './Label.svelte';
 export { default as Badge } from './Badge.svelte';
 export { default as Card } from './Card.svelte';
+export { default as FileDropZone } from './FileDropZone.svelte';
+export { formatBytes, bytesToArrayBuffer, downloadBytes, fileFromBytes } from './files.ts';
 export { default as Separator } from './Separator.svelte';
 export { default as Tabs } from './Tabs.svelte';
 export { default as SegmentedControl } from './SegmentedControl.svelte';

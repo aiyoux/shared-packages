@@ -16,7 +16,12 @@
       "svelte": "./src/date/index.ts",
       "default": "./src/date/index.ts"
     },
-    "./ShellFrame.svelte": "./src/ShellFrame.svelte"
+    "./ShellFrame.svelte": "./src/ShellFrame.svelte",
+    "./FileDropZone.svelte": "./src/FileDropZone.svelte",
+    "./files": {
+      "types": "./src/files.ts",
+      "default": "./src/files.ts"
+    }
   },
   "scripts": {
     "yalc:publish": "yalc publish"
