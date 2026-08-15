@@ -6,6 +6,7 @@ Canonical source for the published shared packages:
 |---------|------|-----------|
 | `@shared-packages/ui` | `packages/ui` | `~/Code/modular-app`, `~/Code/sign-dictionary` |
 | `@shared-packages/file-system` | `packages/file-system` | `~/Code/scratch-pad` (all worktrees) |
+| `@shared-packages/barcode` | `packages/barcode` | `~/Code/scratch-pad` (generate + scan API) |
 
 Plus `packages/component-library`, the dev/demo app for `ui` (not published).
 
