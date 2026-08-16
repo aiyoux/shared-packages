@@ -66,6 +66,7 @@ export {
 	markWithBoundValues,
 	peekBake,
 	peekLastBake,
+	scene3dBoundValues,
 	setBakeAdapter,
 	type BakedPath,
 	type BakeAdapter,

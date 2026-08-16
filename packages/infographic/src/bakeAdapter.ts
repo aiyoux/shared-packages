@@ -1,3 +1,4 @@
+import { bindMark } from './bindings.js';
 import { DEFAULT_EXPORT_FPS, SCENE3D_EXPORT_FPS } from './types.js';
 import type { AnyMark, IgfxDocument, Scene3dMark, Scene3dObject } from './types.js';
 
@@ -7,7 +8,7 @@ export type { Scene3dCamera, Scene3dMark, Scene3dObject } from './types.js';
 
 export interface Live3dContext {
 	canvas: HTMLCanvasElement;
-	setSceneFromMark(mark: Scene3dMark, tMs: number): void;
+	setSceneFromMark(mark: Scene3dMark, tMs: number, boundValues?: number[] | null): void;
 	waitSettled(): Promise<void>;
 	renderTo(target: OffscreenCanvas | HTMLCanvasElement): void;
 	dispose(): void;
@@ -35,9 +36,9 @@ export function documentHasScene3d(doc: Pick<IgfxDocument, 'marks'>): boolean {
 	return doc.marks.some(isScene3dMark);
 }
 
-/** Export fps: 12 when any scene3d is present, else lastExport.fps || 30. */
-export function bakeFpsFor(doc: Pick<IgfxDocument, 'marks' | 'lastExport'>, forExport = false): number {
-	if (forExport && documentHasScene3d(doc)) return SCENE3D_EXPORT_FPS;
+/** 12 whenever any scene3d is present (preview + export share cache keys). Else lastExport.fps || 30. */
+export function bakeFpsFor(doc: Pick<IgfxDocument, 'marks' | 'lastExport'>, _forExport = false): number {
+	if (documentHasScene3d(doc)) return SCENE3D_EXPORT_FPS;
 	return doc.lastExport?.fps ?? DEFAULT_EXPORT_FPS;
 }
 
@@ -80,8 +81,11 @@ export function peekBake(markId: string, signature: string): BakedPath[] | undef
 	return cache.get(cacheKey(markId, signature));
 }
 
-export function peekLastBake(markId: string): BakedPath[] | undefined {
-	return lastByMark.get(markId)?.paths;
+/** Last bake only if its stored signature still matches — never a stale poster frame. */
+export function peekLastBake(markId: string, signature: string): BakedPath[] | undefined {
+	const last = lastByMark.get(markId);
+	if (!last || last.signature !== signature) return undefined;
+	return last.paths;
 }
 
 export function applyBar3dHeights(objects: Scene3dObject[], values?: number[] | null): Scene3dObject[] {
@@ -151,23 +155,14 @@ export async function ensureBaked(
 }
 
 export async function ensureDocumentBaked(doc: IgfxDocument, tMs: number, fps?: number): Promise<void> {
-	const useFps = fps ?? bakeFpsFor(doc, true);
+	const useFps = fps ?? bakeFpsFor(doc);
 	for (const mark of doc.marks) {
 		if (!isScene3dMark(mark)) continue;
-		const values = scene3dBoundValues(doc, mark);
-		await ensureBaked(mark, tMs, useFps, values);
+		await ensureBaked(mark, tMs, useFps, scene3dBoundValues(doc, mark));
 	}
 }
 
-function scene3dBoundValues(doc: IgfxDocument, mark: Scene3dMark): number[] | null {
-	const ref = mark.bindings.values?.ref;
-	if (!ref) return null;
-	const parsed = /^dataset:([^.]+)\.(.+)$/.exec(ref);
-	if (!parsed) return null;
-	const ds = doc.datasets.find((d) => d.id === parsed[1]);
-	if (!ds) return null;
-	return ds.rows.map((row) => {
-		const raw = row[parsed[2]];
-		return typeof raw === 'number' && Number.isFinite(raw) ? raw : 0;
-	});
+/** Same bound-value array `resolve` / `ensureBaked` use (`bindMark` + `coerceNumber`). */
+export function scene3dBoundValues(doc: IgfxDocument, mark: Scene3dMark): number[] | null {
+	return bindMark(doc, mark, []).series?.values ?? null;
 }

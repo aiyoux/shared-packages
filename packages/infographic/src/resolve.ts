@@ -1,4 +1,11 @@
-import { bakeSignature, isScene3dMark, peekBake, peekLastBake, type BakedPath } from './bakeAdapter.js';
+import {
+	bakeFpsFor,
+	bakeSignature,
+	isScene3dMark,
+	peekBake,
+	peekLastBake,
+	type BakedPath
+} from './bakeAdapter.js';
 import { bindMark, type BoundMark } from './bindings.js';
 import { renderAxis } from './marks/axis.js';
 import { renderBar } from './marks/bar.js';
@@ -8,7 +15,6 @@ import { renderLine } from './marks/line.js';
 import { renderStat } from './marks/stat.js';
 import { renderText } from './marks/text.js';
 import { defaultMarkMotion, sampleMotion, type MarkMotion } from './motion.js';
-import { DEFAULT_EXPORT_FPS } from './types.js';
 import type {
 	IgfxDocument,
 	Mark,
@@ -32,7 +38,7 @@ function renderScene3d(
 	const w = mark.layout.w;
 	const h = mark.layout.h;
 	const signature = bakeSignature(mark, tMs, fps, bound.series?.values ?? null);
-	const baked: BakedPath[] | undefined = peekBake(mark.id, signature) ?? peekLastBake(mark.id);
+	const baked: BakedPath[] | undefined = peekBake(mark.id, signature) ?? peekLastBake(mark.id, signature);
 	if (!baked || baked.length === 0) {
 		warnings.push(`bake pending:${mark.id}`);
 		return {
@@ -102,7 +108,7 @@ export function resolve(doc: IgfxDocument, tMs: number): ResolvedFrame {
 
 	const boundById = new Map<string, BoundMark>();
 	const markById = new Map<string, Mark>();
-	const fps = doc.lastExport?.fps ?? DEFAULT_EXPORT_FPS;
+	const fps = bakeFpsFor(doc);
 	for (const mark of doc.marks) {
 		if (!isScene3dMark(mark)) markById.set(mark.id, mark);
 		boundById.set(mark.id, bindMark(doc, mark, warnings));
