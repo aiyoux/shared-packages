@@ -24,30 +24,45 @@ function asWriteView(bytes: Uint8Array): Uint8Array<ArrayBuffer> {
 	return copy;
 }
 
-export async function compressBytes(
-	bytes: Uint8Array,
-	format: NativeStreamCodec
-): Promise<Uint8Array> {
-	const cs = new CompressionStream(format);
-	// Read concurrently. Chromium deadlocks if we write+close first: the
-	// transform's internal buffer fills and close() never settles.
-	const readerP = readStreamToBytes(cs.readable);
-	const writer = cs.writable.getWriter();
-	await writer.write(asWriteView(bytes));
-	await writer.close();
-	return readerP;
+type ByteTransform = {
+	readable: ReadableStream<Uint8Array>;
+	writable: WritableStream<BufferSource>;
+};
+
+/**
+ * Push `bytes` through a native transform and collect the result.
+ *
+ * Read concurrently. Chromium deadlocks if we write+close first: the
+ * transform's internal buffer fills and close() never settles.
+ *
+ * When the transform errors — corrupt input to a DecompressionStream is the
+ * common case — the readable side and the writer BOTH reject. Awaiting only
+ * one leaves the other an unhandled rejection: in Node that fails the run
+ * outright, and in the browser it fires `unhandledrejection` for every bad
+ * frame the /cm camera scanner gates through `isAcceptableScanText`. So
+ * settle both sides, then surface the readable's error, which carries the
+ * underlying zlib cause (`Z_DATA_ERROR`).
+ */
+async function pumpBytes(transform: ByteTransform, bytes: Uint8Array): Promise<Uint8Array> {
+	const readerP = readStreamToBytes(transform.readable);
+	const writerP = (async () => {
+		const writer = transform.writable.getWriter();
+		await writer.write(asWriteView(bytes));
+		await writer.close();
+	})();
+
+	const [read, written] = await Promise.allSettled([readerP, writerP]);
+	if (read.status === 'rejected') throw read.reason;
+	if (written.status === 'rejected') throw written.reason;
+	return read.value;
 }
 
-export async function decompressBytes(
-	bytes: Uint8Array,
-	format: NativeStreamCodec
-): Promise<Uint8Array> {
-	const ds = new DecompressionStream(format);
-	const readerP = readStreamToBytes(ds.readable);
-	const writer = ds.writable.getWriter();
-	await writer.write(asWriteView(bytes));
-	await writer.close();
-	return readerP;
+export function compressBytes(bytes: Uint8Array, format: NativeStreamCodec): Promise<Uint8Array> {
+	return pumpBytes(new CompressionStream(format), bytes);
+}
+
+export function decompressBytes(bytes: Uint8Array, format: NativeStreamCodec): Promise<Uint8Array> {
+	return pumpBytes(new DecompressionStream(format), bytes);
 }
 
 export const deflateRaw = (bytes: Uint8Array) => compressBytes(bytes, 'deflate-raw');
