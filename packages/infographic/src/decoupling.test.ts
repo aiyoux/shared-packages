@@ -12,7 +12,7 @@ const pkg = JSON.parse(
 };
 
 describe('package decoupling', () => {
-	it('does not depend on composition or video', () => {
+	it('does not depend on composition, video, scene-bake, or three', () => {
 		const deps = {
 			...pkg.dependencies,
 			...pkg.devDependencies,
@@ -20,5 +20,7 @@ describe('package decoupling', () => {
 		};
 		expect(deps['@shared-packages/composition']).toBeUndefined();
 		expect(deps['@shared-packages/video']).toBeUndefined();
+		expect(deps['@shared-packages/scene-bake']).toBeUndefined();
+		expect(deps.three).toBeUndefined();
 	});
 });

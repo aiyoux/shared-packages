@@ -1,0 +1,41 @@
+{
+  "name": "@shared-packages/scene-bake",
+  "version": "0.1.0",
+  "private": false,
+  "type": "module",
+  "description": "Software hidden-line 3D scene → SVG path encode (SVGRenderer + computeSpans worker). Shared by svg-sketcher and infographic.",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "types": "./src/index.ts",
+  "files": [
+    "src"
+  ],
+  "scripts": {
+    "test": "vitest run",
+    "check": "tsc --noEmit -p tsconfig.json",
+    "yalc:publish": "yalc publish"
+  },
+  "dependencies": {
+    "@shared-packages/drawing-tools": "*",
+    "three": "^0.185.1",
+    "three-mesh-bvh": "^0.9.13"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "@types/three": "^0.185.1",
+    "jsdom": "^29.1.1",
+    "typescript": "^5.7.3",
+    "vitest": "^4.1.2"
+  },
+  "engines": {
+    "node": ">=22.7.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

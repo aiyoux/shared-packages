@@ -1,5 +1,6 @@
 import { resolveColorToken } from './theme.js';
 import type {
+	AnyMark,
 	BindingRef,
 	Dataset,
 	IgfxDocument,
@@ -208,8 +209,29 @@ function seriesColor(
 	return resolveColorToken(theme, 0);
 }
 
-export function bindMark(doc: IgfxDocument, mark: Mark, warnings: string[]): BoundMark {
+export function bindMark(doc: IgfxDocument, mark: AnyMark, warnings: string[]): BoundMark {
 	const theme = doc.theme;
+	if (mark.kind === 'scene3d') {
+		const raw = mark.bindings.values;
+		if (!raw) return emptyBound();
+		if (!isBindingRef(raw)) {
+			warnings.push(`Mark "${mark.id}" values is not a dataset column ref`);
+			return emptyBound({ missing: true });
+		}
+		const col = resolveColumn(doc, raw, warnings, mark.id, 'values');
+		if (!col) return emptyBound({ missing: true });
+		return emptyBound({
+			series: {
+				categories: [],
+				values: col.values.map((v) => coerceNumber(v) ?? 0),
+				xs: [],
+				ys: [],
+				color: seriesColor(theme, mark as unknown as Mark, doc, warnings),
+				datasetLabel: col.dataset.label,
+				datasetId: col.dataset.id
+			}
+		});
+	}
 	switch (mark.kind) {
 		case 'bar': {
 			const catRaw = mark.bindings.category;

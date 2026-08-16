@@ -13,6 +13,7 @@ Canonical source for the published shared packages:
 | `@shared-packages/video` | `packages/video` | `~/Code/scratch-pad` hub Video tool + Language Hub (lazy WebCodecs / FFmpeg trim+export) |
 | `@shared-packages/composition` | `packages/composition` | `~/Code/scratch-pad` (clock, clip protocol, composite; no infographic/video import) |
 | `@shared-packages/scan` | `packages/scan` | `~/Code/scratch-pad` hub Scan tool (lazy OpenCV.js detect/warp + optional OCR) |
+| `@shared-packages/scene-bake` | `packages/scene-bake` | `~/Code/scratch-pad` sketcher temp-bake + infographic `scene3d` (software SVG encode + hidden-line worker) |
 
 Plus `packages/component-library`, the dev/demo app for `ui` (not published).
 
