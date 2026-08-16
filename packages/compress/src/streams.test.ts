@@ -16,4 +16,17 @@ describe('native CompressionStream codecs', () => {
 		expect(packed[1]).toBe(0x8b);
 		expect(new TextDecoder().decode(await gunzipBytes(packed))).toBe(new TextDecoder().decode(SAMPLE));
 	});
+
+	it('deflate-raw settles on a large buffer (no write-then-read deadlock)', async () => {
+		const large = new TextEncoder().encode(('a=' + 'x'.repeat(80) + '\n').repeat(400));
+		const packed = await Promise.race([
+			deflateRaw(large),
+			new Promise<never>((_, reject) => {
+				setTimeout(() => reject(new Error('deflate-raw hung')), 2_000);
+			})
+		]);
+		expect(packed.byteLength).toBeGreaterThan(0);
+		expect(packed.byteLength).toBeLessThan(large.byteLength);
+		expect(new TextDecoder().decode(await inflateRaw(packed))).toBe(new TextDecoder().decode(large));
+	});
 });

@@ -29,10 +29,13 @@ export async function compressBytes(
 	format: NativeStreamCodec
 ): Promise<Uint8Array> {
 	const cs = new CompressionStream(format);
+	// Read concurrently. Chromium deadlocks if we write+close first: the
+	// transform's internal buffer fills and close() never settles.
+	const readerP = readStreamToBytes(cs.readable);
 	const writer = cs.writable.getWriter();
 	await writer.write(asWriteView(bytes));
 	await writer.close();
-	return readStreamToBytes(cs.readable);
+	return readerP;
 }
 
 export async function decompressBytes(
@@ -40,10 +43,11 @@ export async function decompressBytes(
 	format: NativeStreamCodec
 ): Promise<Uint8Array> {
 	const ds = new DecompressionStream(format);
+	const readerP = readStreamToBytes(ds.readable);
 	const writer = ds.writable.getWriter();
 	await writer.write(asWriteView(bytes));
 	await writer.close();
-	return readStreamToBytes(ds.readable);
+	return readerP;
 }
 
 export const deflateRaw = (bytes: Uint8Array) => compressBytes(bytes, 'deflate-raw');
