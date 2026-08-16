@@ -1,4 +1,4 @@
-import type { ScanEngine } from './types.js';
+import type { ScanEngine, ScanLoadProgress } from './types.js';
 
 let cached: ScanEngine | null = null;
 let opencvUrl: string | undefined;
@@ -6,6 +6,8 @@ let opencvUrl: string | undefined;
 export type LoadScanOptions = {
 	/** Classic-script URL for opencv.js (required in Vite/ESM). */
 	opencvUrl?: string;
+	/** Download / worker-init progress. Safe to call from the UI. */
+	onProgress?: (info: ScanLoadProgress) => void;
 };
 
 export function setOpenCvUrl(url: string) {
@@ -20,8 +22,13 @@ export function getOpenCvUrl(): string | undefined {
 export async function loadScanEngine(opts: LoadScanOptions = {}): Promise<ScanEngine> {
 	if (opts.opencvUrl) opencvUrl = opts.opencvUrl;
 	if (cached) return cached;
-	const { opencvEngine } = await import('./engines/opencv.js');
-	await opencvEngine.load();
+	const { opencvEngine, setOpenCvProgress } = await import('./engines/opencv.js');
+	setOpenCvProgress(opts.onProgress);
+	try {
+		await opencvEngine.load();
+	} finally {
+		setOpenCvProgress(undefined);
+	}
 	cached = opencvEngine;
 	return cached;
 }

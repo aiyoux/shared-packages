@@ -16,8 +16,8 @@ export async function commitScan(
 	opts: CommitOptions = {}
 ): Promise<ScanPage> {
 	const engine = await loadScanEngine();
-	let warped = engine.warp(image, quad, { maxEdge: opts.maxEdge });
-	if (opts.enhance) warped = engine.enhance(warped);
+	let warped = await engine.warp(image, quad, { maxEdge: opts.maxEdge });
+	if (opts.enhance) warped = await engine.enhance(warped);
 	const blob = await imageDataToBlob(warped, 'image/jpeg', 0.92);
 	let text: string | undefined;
 	if (opts.ocr) {

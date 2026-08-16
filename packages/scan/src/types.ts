@@ -25,12 +25,18 @@ export type EnhanceOptions = {
 	C?: number;
 };
 
+export type ScanLoadProgress = {
+	phase: 'download' | 'init';
+	loaded?: number;
+	total?: number;
+};
+
 export type ScanEngine = {
 	readonly id: 'opencv';
 	load(): Promise<void>;
-	detectQuad(image: ImageData, opts?: DetectOptions): Quad | null;
-	warp(image: ImageData, quad: Quad, opts?: WarpOptions): ImageData;
-	enhance(image: ImageData, opts?: EnhanceOptions): ImageData;
+	detectQuad(image: ImageData, opts?: DetectOptions): Promise<Quad | null>;
+	warp(image: ImageData, quad: Quad, opts?: WarpOptions): Promise<ImageData>;
+	enhance(image: ImageData, opts?: EnhanceOptions): Promise<ImageData>;
 };
 
 export type QuadLockStatus = {

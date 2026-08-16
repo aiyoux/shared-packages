@@ -6,6 +6,7 @@ export type {
 	Quad,
 	QuadLockStatus,
 	ScanEngine,
+	ScanLoadProgress,
 	ScanPage,
 	WarpOptions
 } from './types.js';
