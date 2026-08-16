@@ -11,6 +11,7 @@ Canonical source for the published shared packages:
 | `@shared-packages/crypto` | `packages/crypto` | `~/Code/scratch-pad` (Web Crypto / libsodium hash + .spvault) |
 | `@shared-packages/image` | `packages/image` | `~/Code/scratch-pad` (native Canvas / jSquash convert+resize) |
 | `@shared-packages/video` | `packages/video` | `~/Code/scratch-pad` hub Video tool + Language Hub (lazy WebCodecs / FFmpeg trim+export) |
+| `@shared-packages/composition` | `packages/composition` | `~/Code/scratch-pad` (clock, clip protocol, composite; no infographic/video import) |
 | `@shared-packages/scan` | `packages/scan` | `~/Code/scratch-pad` hub Scan tool (lazy OpenCV.js detect/warp + optional OCR) |
 
 Plus `packages/component-library`, the dev/demo app for `ui` (not published).
