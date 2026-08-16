@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { formatTimecode } from './time.js';
-import { parseBitrate } from './process.js';
+import { parseBitrate } from './encodeSession.js';
 
 describe('formatTimecode', () => {
 	it('formats minutes and seconds', () => {

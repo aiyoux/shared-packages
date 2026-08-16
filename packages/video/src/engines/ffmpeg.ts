@@ -1,4 +1,4 @@
-import { parseBitrate } from '../process.js';
+import { parseBitrate } from '../encodeSession.js';
 import { engineInfo, type ProcessOptions, type VideoEngine } from '../types.js';
 
 /** Official single-thread core — loaded from a CDN so the hub worker is not 30MB. */
