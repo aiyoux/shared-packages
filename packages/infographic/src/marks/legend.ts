@@ -7,6 +7,7 @@ export function renderLegend(ctx: MarkRenderCtx): ResolvedNode {
 	}
 	const sibling = ctx.sibling(ctx.bound.forMark);
 	if (!sibling?.bound.series) {
+		ctx.warnings.push(`Mark "${ctx.mark.id}" forMark "${ctx.bound.forMark}" has no series`);
 		return rootGroup(ctx, [], { 'data-hidden': 'true' });
 	}
 

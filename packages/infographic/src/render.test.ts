@@ -43,6 +43,47 @@ describe('renderSvg', () => {
 		expect(svg).not.toContain('<hello');
 		expect(svg).toContain('&lt;hello &amp; &quot;world&quot;&gt;');
 	});
+
+	it('emits a user-space clipPath rect for line progress, not CSS inset', () => {
+		const doc = createDocument();
+		doc.datasets = [
+			{
+				id: 'd',
+				label: 'D',
+				columns: [
+					{ id: 't', label: 'T', type: 'number' },
+					{ id: 'n', label: 'N', type: 'number' }
+				],
+				rows: [
+					{ t: 0, n: 1 },
+					{ t: 1, n: 2 }
+				]
+			}
+		];
+		doc.marks = [
+			{
+				id: 'trend',
+				kind: 'line',
+				layout: { x: 160, y: 200, w: 1600, h: 720 },
+				bindings: { x: { ref: 'dataset:d.t' }, y: { ref: 'dataset:d.n' } }
+			}
+		];
+		doc.timeline.tracks = [
+			{
+				id: 'grow',
+				target: 'mark:trend.progress',
+				keyframes: [
+					{ tMs: 0, value: 0, easing: 'linear' },
+					{ tMs: 1000, value: 1 }
+				]
+			}
+		];
+		const svg = renderSvg(resolve(doc, 500));
+		expect(svg).toContain('<clipPath');
+		expect(svg).toContain('clip-path="url(#trend-clip)"');
+		expect(svg).not.toMatch(/clip-path="inset/);
+		expect(svg).toMatch(/<rect[^>]*x="160"[^>]*width="800"/);
+	});
 });
 
 describe('rasterize', () => {
@@ -83,10 +124,45 @@ describe('rasterize', () => {
 		expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:igfx-test');
 	});
 
-	// Browser-only: rasterize of a 2×2 rect must produce non-empty pixels.
-	// Skip in node — Image.decode() of an SVG Blob is a Chromium/DOM path, and
-	// createImageBitmap cannot decode SVG (WHATWG html#923).
-	it.skip('rasterize of a 2×2 rect produces non-empty pixels', () => {
-		// Implemented in a browser runner: new Image() + object URL + decode + getImageData.
+	it('rasterize of a 2×2 rect produces non-empty pixels (node canvas mock)', async () => {
+		// Node cannot decode an SVG Blob (`Image` / createImageBitmap). The mock
+		// paints when drawImage runs so getImageData can assert non-empty pixels.
+		const pixels = new Uint8ClampedArray(2 * 2 * 4);
+		const ctx = {
+			clearRect: () => {
+				pixels.fill(0);
+			},
+			drawImage: () => {
+				for (let i = 0; i < pixels.length; i += 4) {
+					pixels[i] = 255;
+					pixels[i + 1] = 255;
+					pixels[i + 2] = 255;
+					pixels[i + 3] = 255;
+				}
+			},
+			getImageData: () => ({ data: pixels, width: 2, height: 2 })
+		};
+		const canvas = {
+			width: 0,
+			height: 0,
+			getContext: () => ctx
+		};
+		vi.stubGlobal(
+			'Image',
+			class {
+				src = '';
+				decode() {
+					return Promise.resolve();
+				}
+			}
+		);
+		vi.stubGlobal('URL', {
+			createObjectURL: () => 'blob:igfx-pixels',
+			revokeObjectURL: vi.fn()
+		});
+
+		await rasterize(tinyFrame(), canvas as unknown as HTMLCanvasElement);
+		const data = ctx.getImageData().data;
+		expect(data.some((n) => n > 0)).toBe(true);
 	});
 });

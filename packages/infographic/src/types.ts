@@ -120,7 +120,7 @@ export interface IgfxDocument {
 
 export interface ResolvedNode {
 	id: string;
-	tag: 'g' | 'rect' | 'path' | 'text' | 'line' | 'circle';
+	tag: 'g' | 'rect' | 'path' | 'text' | 'line' | 'circle' | 'clipPath';
 	attrs: Record<string, string>;
 	text?: string;
 	children?: ResolvedNode[];

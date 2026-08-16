@@ -56,6 +56,7 @@ export function resolve(doc: IgfxDocument, tMs: number): ResolvedFrame {
 				theme: doc.theme,
 				motion: motion.byMark.get(mark.id) ?? defaultMarkMotion(),
 				bound,
+				warnings,
 				sibling
 			})
 		);

@@ -103,12 +103,17 @@ describe('resolve progress', () => {
 
 	it('changes line clip-rect width at 0 / 0.5 / 1', () => {
 		const doc = linearProgressDoc('line');
-		const g0 = findById(resolve(doc, 0).nodes, 'm');
-		const gHalf = findById(resolve(doc, 500).nodes, 'm');
-		const g1 = findById(resolve(doc, 1000).nodes, 'm');
-		expect(Number(g0?.attrs['data-clip-width'])).toBe(0);
-		expect(Number(gHalf?.attrs['data-clip-width'])).toBeCloseTo(100, 5);
-		expect(Number(g1?.attrs['data-clip-width'])).toBe(200);
+		const r0 = findById(resolve(doc, 0).nodes, 'm:clip-rect');
+		const rHalf = findById(resolve(doc, 500).nodes, 'm:clip-rect');
+		const r1 = findById(resolve(doc, 1000).nodes, 'm:clip-rect');
+		expect(r0?.attrs.x).toBe('10');
+		expect(rHalf?.attrs.x).toBe('10');
+		expect(r1?.attrs.x).toBe('10');
+		expect(Number(r0?.attrs.width)).toBe(0);
+		expect(Number(rHalf?.attrs.width)).toBeCloseTo(100, 5);
+		expect(Number(r1?.attrs.width)).toBe(200);
+		expect(r0?.attrs.height).toBe('100');
+		expect(r1?.attrs.y).toBe('10');
 	});
 
 	it('changes stat count-up at 0 / 0.5 / 1', () => {
@@ -166,6 +171,29 @@ describe('missing bindings', () => {
 		expect(findById(frame.nodes, 'trend:path')?.attrs.d).toBe('');
 		expect(findById(frame.nodes, 'kpi:value')?.text).toBe('—');
 		expect(findById(frame.nodes, 'caption:text')?.text).toBe('');
+		expect(findById(frame.nodes, 'leg')?.attrs['data-hidden']).toBe('true');
+		expect(findById(frame.nodes, 'ax')?.attrs['data-hidden']).toBe('true');
+	});
+
+	it('warns when forMark is dangling or has no series', () => {
+		const doc = createDocument();
+		doc.marks = [
+			{
+				id: 'leg',
+				kind: 'legend',
+				layout: { x: 0, y: 0, w: 100, h: 20 },
+				bindings: { forMark: 'bars' }
+			},
+			{
+				id: 'ax',
+				kind: 'axis',
+				layout: { x: 0, y: 0, w: 100, h: 100 },
+				bindings: { forMark: 'gone' }
+			}
+		];
+		const frame = resolve(doc, 0);
+		expect(frame.warnings.some((w) => /Mark "leg" forMark "bars" has no series/.test(w))).toBe(true);
+		expect(frame.warnings.some((w) => /Mark "ax" forMark "gone" has no series/.test(w))).toBe(true);
 		expect(findById(frame.nodes, 'leg')?.attrs['data-hidden']).toBe('true');
 		expect(findById(frame.nodes, 'ax')?.attrs['data-hidden']).toBe('true');
 	});

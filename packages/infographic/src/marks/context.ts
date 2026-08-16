@@ -8,6 +8,7 @@ export interface MarkRenderCtx {
 	theme: Theme;
 	motion: MarkMotion;
 	bound: BoundMark;
+	warnings: string[];
 	sibling: (id: string) => { mark: Mark; bound: BoundMark } | undefined;
 }
 

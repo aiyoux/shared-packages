@@ -51,26 +51,37 @@ export function renderLine(ctx: MarkRenderCtx): ResolvedNode {
 	}
 
 	const clipW = w * ctx.motion.progress;
-	const unrevealed = Math.max(0, w - clipW);
-	return rootGroup(
-		ctx,
-		[
-			{
-				id: `${ctx.mark.id}:path`,
-				tag: 'path',
-				attrs: {
-					d: pts.join(' '),
-					fill: 'none',
-					stroke: series.color,
-					'stroke-width': '3',
-					'stroke-linejoin': 'round',
-					'stroke-linecap': 'round'
-				}
-			}
-		],
+	const clipId = `${ctx.mark.id}-clip`;
+	return rootGroup(ctx, [
 		{
-			'clip-path': `inset(0 ${unrevealed}px 0 0)`,
-			'data-clip-width': String(clipW)
+			id: clipId,
+			tag: 'clipPath',
+			attrs: {},
+			children: [
+				{
+					id: `${ctx.mark.id}:clip-rect`,
+					tag: 'rect',
+					attrs: {
+						x: String(x),
+						y: String(y),
+						width: String(clipW),
+						height: String(h)
+					}
+				}
+			]
+		},
+		{
+			id: `${ctx.mark.id}:path`,
+			tag: 'path',
+			attrs: {
+				d: pts.join(' '),
+				fill: 'none',
+				stroke: series.color,
+				'stroke-width': '3',
+				'stroke-linejoin': 'round',
+				'stroke-linecap': 'round',
+				'clip-path': `url(#${clipId})`
+			}
 		}
-	);
+	]);
 }
