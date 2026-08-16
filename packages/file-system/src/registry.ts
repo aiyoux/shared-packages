@@ -16,6 +16,13 @@ const DEFAULT_TYPES: FileTypeDef[] = [
 		schemaVersion: 1
 	},
 	{
+		id: 'cari',
+		extension: '.cari',
+		mime: 'application/x-scratch-cari+json',
+		label: 'Caricature',
+		schemaVersion: 1
+	},
+	{
 		id: 'vrec',
 		extension: '.vrec',
 		mime: 'application/x-scratch-vrec+json',
@@ -56,7 +63,7 @@ const MULTI_EXT: Partial<Record<FileTypeId, readonly string[]>> = {
 };
 
 /** Product extensions stripped before re-applying a forced primary extension. */
-const STRIPPABLE_PRODUCT_EXT = /\.(skch|ob3d|vrec|json)$/i;
+const STRIPPABLE_PRODUCT_EXT = /\.(skch|ob3d|cari|vrec|json)$/i;
 
 const registry = new Map<FileTypeId, FileTypeDef>(DEFAULT_TYPES.map((t) => [t.id, t]));
 

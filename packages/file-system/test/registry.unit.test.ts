@@ -62,6 +62,8 @@ describe('registry multi-ext image + forceExtension', () => {
 		assert.equal(inferFileTypeFromName('clip.mp4'), 'video');
 		assert.equal(inferFileTypeFromName('clip.webm'), 'video');
 		assert.equal(inferFileTypeFromName('draft.skch'), 'skch');
+		assert.equal(inferFileTypeFromName('mesh.ob3d'), 'ob3d');
+		assert.equal(inferFileTypeFromName('face.cari'), 'cari');
 		assert.equal(inferFileTypeFromName('report.pdf'), 'unknown');
 		assert.equal(inferFileTypeFromName('noext'), 'unknown');
 	});
