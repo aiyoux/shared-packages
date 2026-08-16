@@ -12,7 +12,7 @@ export type ScanPage = {
 };
 
 export type DetectOptions = {
-	/** Reject quads smaller than this fraction of the frame. */
+	/** Reject quads smaller than this fraction of the frame. Default 0.05. */
 	minAreaRatio?: number;
 };
 

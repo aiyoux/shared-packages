@@ -79,7 +79,7 @@ describe('QuadLock', () => {
 	});
 
 	it('resets when the quad jumps or disappears', () => {
-		const lock = new QuadLock({ needed: 3, maxMoveRatio: 0.02 });
+		const lock = new QuadLock({ needed: 3, maxMoveRatio: 0.02, maxMisses: 0 });
 		const q = orderCorners([
 			{ x: 10, y: 10 },
 			{ x: 90, y: 10 },
@@ -96,6 +96,23 @@ describe('QuadLock', () => {
 			{ x: 0, y: 40 }
 		]);
 		expect(lock.observe(jumped, 100, 100).progress).toBeCloseTo(1 / 3);
+	});
+
+	it('keeps the lock through a brief miss', () => {
+		const lock = new QuadLock({ needed: 3, maxMisses: 2 });
+		const q = orderCorners([
+			{ x: 10, y: 10 },
+			{ x: 90, y: 10 },
+			{ x: 90, y: 90 },
+			{ x: 10, y: 90 }
+		]);
+		lock.observe(q, 100, 100);
+		lock.observe(q, 100, 100);
+		const miss = lock.observe(null, 100, 100);
+		expect(miss.progress).toBeCloseTo(2 / 3);
+		expect(miss.quad).toEqual(q);
+		expect(lock.observe(null, 100, 100).progress).toBeCloseTo(2 / 3);
+		expect(lock.observe(null, 100, 100).progress).toBe(0);
 	});
 });
 
