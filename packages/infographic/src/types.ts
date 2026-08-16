@@ -6,6 +6,8 @@ export const DEFAULT_ARTBOARD_HEIGHT = 1080;
 export const DEFAULT_DURATION_MS = 8000;
 export const DEFAULT_EXPORT_FPS = 30;
 export const DEFAULT_EXPORT_BITRATE = '1M';
+/** Hidden-line encode is too slow for 30 fps; video with any scene3d drops to this. */
+export const SCENE3D_EXPORT_FPS = 12;
 
 /** v1 hard cap; UI refuses paste above this. */
 export const MAX_DATASET_ROWS = 500;
@@ -69,6 +71,38 @@ export interface Mark {
 	style?: Record<string, string | number | boolean>;
 }
 
+export interface Scene3dObject {
+	id: string;
+	primitive: 'box' | 'sphere' | 'cylinder' | 'bar3d';
+	position: [number, number, number];
+	rotation: [number, number, number];
+	scale: [number, number, number];
+	color?: string;
+}
+
+export interface Scene3dCamera {
+	position: [number, number, number];
+	target: [number, number, number];
+	fov: number;
+}
+
+export interface Scene3dMark {
+	id: string;
+	kind: 'scene3d';
+	layout: { x: number; y: number; w: number; h: number };
+	scene: {
+		objects: Scene3dObject[];
+		camera: Scene3dCamera;
+	};
+	bindings: {
+		/** number column → `bar3d` heights, in object order */
+		values?: BindingRef;
+	};
+	style?: Record<string, string | number | boolean>;
+}
+
+export type AnyMark = Mark | Scene3dMark;
+
 export interface MotionKeyframe {
 	tMs: number;
 	value: number;
@@ -112,7 +146,7 @@ export interface IgfxDocument {
 	theme: Theme;
 	datasets: Dataset[];
 	scalars: Scalar[];
-	marks: Mark[];
+	marks: AnyMark[];
 	timeline: IgfxTimeline;
 	mediaBed?: MediaBed;
 	lastExport?: LastExport;

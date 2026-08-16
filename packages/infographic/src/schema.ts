@@ -10,6 +10,7 @@ import {
 	MARK_KINDS,
 	MAX_DATASET_COLUMNS,
 	MAX_DATASET_ROWS,
+	type AnyMark,
 	type BindingRef,
 	type Dataset,
 	type DatasetColumn,
@@ -23,6 +24,9 @@ import {
 	type MotionKeyframe,
 	type MotionTrack,
 	type Scalar,
+	type Scene3dCamera,
+	type Scene3dMark,
+	type Scene3dObject,
 	type ValidationResult
 } from './types.js';
 
@@ -153,8 +157,72 @@ function parseBindingValue(raw: unknown): BindingRef | string | number | undefin
 	return undefined;
 }
 
-function parseMark(raw: unknown): Mark | null {
+const SCENE3D_PRIMITIVES = new Set(['box', 'sphere', 'cylinder', 'bar3d']);
+
+function parseVec3(raw: unknown, fallback: [number, number, number]): [number, number, number] {
+	if (!Array.isArray(raw) || raw.length < 3) return fallback;
+	return [asFinite(raw[0], fallback[0]), asFinite(raw[1], fallback[1]), asFinite(raw[2], fallback[2])];
+}
+
+function parseScene3dObject(raw: unknown): Scene3dObject | null {
 	if (!isRecord(raw) || typeof raw.id !== 'string' || !raw.id) return null;
+	if (!SCENE3D_PRIMITIVES.has(raw.primitive as string)) return null;
+	const obj: Scene3dObject = {
+		id: raw.id,
+		primitive: raw.primitive as Scene3dObject['primitive'],
+		position: parseVec3(raw.position, [0, 0, 0]),
+		rotation: parseVec3(raw.rotation, [0, 0, 0]),
+		scale: parseVec3(raw.scale, [1, 1, 1])
+	};
+	if (typeof raw.color === 'string') obj.color = raw.color;
+	return obj;
+}
+
+function parseScene3dMark(raw: Record<string, unknown>): Scene3dMark | null {
+	if (typeof raw.id !== 'string' || !raw.id) return null;
+	const sceneRaw = isRecord(raw.scene) ? raw.scene : {};
+	const camRaw = isRecord(sceneRaw.camera) ? sceneRaw.camera : {};
+	const camera: Scene3dCamera = {
+		position: parseVec3(camRaw.position, [2, 2, 2]),
+		target: parseVec3(camRaw.target, [0, 0, 0]),
+		fov: asFinite(camRaw.fov, 50)
+	};
+	const objects = (Array.isArray(sceneRaw.objects) ? sceneRaw.objects : [])
+		.map(parseScene3dObject)
+		.filter((o): o is Scene3dObject => !!o);
+	const bindings: Scene3dMark['bindings'] = {};
+	const bindingsRaw = isRecord(raw.bindings) ? raw.bindings : {};
+	if (isRecord(bindingsRaw.values) && typeof bindingsRaw.values.ref === 'string') {
+		bindings.values = { ref: bindingsRaw.values.ref };
+	}
+	let style: Record<string, string | number | boolean> | undefined;
+	if (isRecord(raw.style)) {
+		style = {};
+		for (const [key, value] of Object.entries(raw.style)) {
+			if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+				style[key] = value;
+			}
+		}
+	}
+	const layoutRaw = isRecord(raw.layout) ? raw.layout : {};
+	return {
+		id: raw.id,
+		kind: 'scene3d',
+		layout: {
+			x: asFinite(layoutRaw.x, 0),
+			y: asFinite(layoutRaw.y, 0),
+			w: asFinite(layoutRaw.w, 100),
+			h: asFinite(layoutRaw.h, 100)
+		},
+		scene: { objects, camera },
+		bindings,
+		...(style ? { style } : {})
+	};
+}
+
+function parseMark(raw: unknown): AnyMark | null {
+	if (!isRecord(raw) || typeof raw.id !== 'string' || !raw.id) return null;
+	if (raw.kind === 'scene3d') return parseScene3dMark(raw);
 	if (!MARK_KIND_SET.has(raw.kind as string)) return null;
 	const layoutRaw = isRecord(raw.layout) ? raw.layout : {};
 	const bindingsRaw = isRecord(raw.bindings) ? raw.bindings : {};
@@ -262,7 +330,7 @@ export function parseIgfx(raw: unknown): IgfxDocument {
 		.filter((s): s is Scalar => !!s);
 	const marks = (Array.isArray(migrated.marks) ? migrated.marks : [])
 		.map(parseMark)
-		.filter((m): m is Mark => !!m);
+		.filter((m): m is AnyMark => !!m);
 
 	const doc: IgfxDocument = {
 		format: IGFX_FORMAT,
@@ -340,7 +408,7 @@ export function validate(doc: IgfxDocument): ValidationResult {
 	const scalarIds = new Set(doc.scalars.map((s) => s.id));
 	const markIds = new Set(doc.marks.map((m) => m.id));
 	for (const mark of doc.marks) {
-		if (!MARK_KIND_SET.has(mark.kind)) {
+		if (mark.kind !== 'scene3d' && !MARK_KIND_SET.has(mark.kind)) {
 			warnings.push(`Unknown mark kind "${mark.kind}" on "${mark.id}"`);
 		}
 		for (const [key, value] of Object.entries(mark.bindings)) {
@@ -363,12 +431,14 @@ export function validate(doc: IgfxDocument): ValidationResult {
 				warnings.push(`Mark "${mark.id}" binding ${key} has unrecognized ref "${value.ref}"`);
 			}
 		}
-		const forMark =
-			(typeof mark.bindings.forMark === 'string' && mark.bindings.forMark) ||
-			(typeof mark.style?.forMark === 'string' && mark.style.forMark) ||
-			undefined;
-		if ((mark.kind === 'legend' || mark.kind === 'axis') && forMark && !markIds.has(forMark)) {
-			warnings.push(`Mark "${mark.id}" forMark "${forMark}" does not exist`);
+		if (mark.kind === 'legend' || mark.kind === 'axis') {
+			const forMark =
+				(typeof mark.bindings.forMark === 'string' && mark.bindings.forMark) ||
+				(typeof mark.style?.forMark === 'string' && mark.style.forMark) ||
+				undefined;
+			if (forMark && !markIds.has(forMark)) {
+				warnings.push(`Mark "${mark.id}" forMark "${forMark}" does not exist`);
+			}
 		}
 	}
 	return { ok: errors.length === 0, errors, warnings };

@@ -1,4 +1,4 @@
-import type { IgfxDocument, MarkKind, MotionTrack } from './types.js';
+import type { IgfxDocument, MotionTrack } from './types.js';
 
 export type EasingName = 'linear' | 'easeIn' | 'easeOut' | 'easeInOut';
 
@@ -10,7 +10,7 @@ export interface MarkMotion {
 }
 
 const ANIMATABLE = new Set(['progress', 'opacity', 'x', 'y']);
-const PROGRESS_KINDS = new Set<MarkKind>(['bar', 'line', 'stat']);
+const PROGRESS_KINDS = new Set(['bar', 'line', 'stat']);
 
 export function defaultMarkMotion(): MarkMotion {
 	return { progress: 1, opacity: 1, x: 0, y: 0 };
@@ -58,7 +58,7 @@ export function sampleMotion(
 	tMs: number
 ): { byMark: Map<string, MarkMotion>; warnings: string[] } {
 	const byMark = new Map<string, MarkMotion>();
-	const kinds = new Map<string, MarkKind>();
+	const kinds = new Map<string, string>();
 	for (const mark of doc.marks) {
 		byMark.set(mark.id, defaultMarkMotion());
 		kinds.set(mark.id, mark.kind);

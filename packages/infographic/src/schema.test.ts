@@ -34,11 +34,50 @@ describe('parseIgfx', () => {
 		const doc = parseIgfx({
 			format: 'igfx',
 			marks: [
-				{ id: 'cube', kind: 'scene3d', layout: { x: 0, y: 0, w: 10, h: 10 }, bindings: {} },
+				{ id: 'blob', kind: 'blob', layout: { x: 0, y: 0, w: 10, h: 10 }, bindings: {} },
 				{ id: 't', kind: 'text', layout: { x: 0, y: 0, w: 10, h: 10 }, bindings: { text: 'hi' } }
 			]
 		});
 		expect(doc.marks.map((m) => m.kind)).toEqual(['text']);
+	});
+
+	it('keeps scene3d persist shape and drops previewPaths', () => {
+		const doc = parseIgfx({
+			format: 'igfx',
+			marks: [
+				{
+					id: 'cube',
+					kind: 'scene3d',
+					layout: { x: 10, y: 20, w: 200, h: 150 },
+					scene: {
+						objects: [
+							{
+								id: 'box',
+								primitive: 'box',
+								position: [0, 0, 0],
+								rotation: [0, 0.2, 0],
+								scale: [1, 1, 1],
+								color: '#f00'
+							}
+						],
+						camera: { position: [2, 2, 2], target: [0, 0, 0], fov: 40 }
+					},
+					bindings: { values: { ref: 'dataset:d.n' } },
+					previewPaths: [{ d: 'M0 0', stroke: '#000', fill: 'none', strokeWidth: 1 }]
+				}
+			]
+		});
+		expect(doc.marks).toHaveLength(1);
+		const mark = doc.marks[0];
+		expect(mark.kind).toBe('scene3d');
+		if (mark.kind !== 'scene3d') return;
+		expect(mark.scene.objects[0]?.primitive).toBe('box');
+		expect(mark.scene.camera.fov).toBe(40);
+		expect(mark.bindings.values?.ref).toBe('dataset:d.n');
+		expect('previewPaths' in mark).toBe(false);
+		const again = parseIgfx(JSON.parse(serializeIgfx(doc)));
+		expect(again.marks[0]?.kind).toBe('scene3d');
+		expect(JSON.stringify(again)).not.toContain('previewPaths');
 	});
 
 	it('caps datasets at 500 rows and 20 columns', () => {

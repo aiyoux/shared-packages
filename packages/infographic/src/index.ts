@@ -10,6 +10,8 @@ export {
 	MARK_KINDS,
 	MAX_DATASET_COLUMNS,
 	MAX_DATASET_ROWS,
+	SCENE3D_EXPORT_FPS,
+	type AnyMark,
 	type BindingRef,
 	type Dataset,
 	type DatasetColumn,
@@ -25,6 +27,9 @@ export {
 	type ResolvedFrame,
 	type ResolvedNode,
 	type Scalar,
+	type Scene3dCamera,
+	type Scene3dMark,
+	type Scene3dObject,
 	type Theme,
 	type ValidationResult
 } from './types.js';
@@ -48,13 +53,21 @@ export { resolve } from './resolve.js';
 export { escapeXml, rasterize, renderSvg } from './render.js';
 
 export {
+	applyBar3dHeights,
+	bakeFpsFor,
 	bakeSignature,
+	clearBakeCache,
+	defaultScene3dMark,
+	documentHasScene3d,
 	ensureBaked,
+	ensureDocumentBaked,
+	getBakeAdapter,
+	isScene3dMark,
+	markWithBoundValues,
 	peekBake,
+	peekLastBake,
+	setBakeAdapter,
 	type BakedPath,
 	type BakeAdapter,
-	type Live3dContext,
-	type Scene3dCamera,
-	type Scene3dMark,
-	type Scene3dObject
+	type Live3dContext
 } from './bakeAdapter.js';
