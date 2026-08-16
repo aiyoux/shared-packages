@@ -61,6 +61,13 @@
 		onConfigureMonitor?: () => void;
 		/** Re-pick the native folder when already on disk. */
 		onConfigureDisk?: () => void;
+		/**
+		 * `full` (default): backend dropdown + settings gear.
+		 * `settings`: gear + panel only — used for a single module-level host.
+		 */
+		variant?: 'full' | 'settings';
+		/** Hide the gear in `full` variant (host already owns settings). Default true. */
+		showSettings?: boolean;
 	}
 
 	let {
@@ -82,8 +89,13 @@
 		onConfigureB2,
 		onConfigureRclone,
 		onConfigureMonitor,
-		onConfigureDisk
+		onConfigureDisk,
+		variant = 'full',
+		showSettings = true
 	}: Props = $props();
+
+	const settingsOnly = $derived(variant === 'settings');
+	const renderSettings = $derived(settingsOnly || showSettings);
 
 	let menuOpen = $state(false);
 	let settingsOpen = $state(false);
@@ -280,7 +292,13 @@
 	});
 </script>
 
-<div class="conn-switch" bind:this={rootEl} data-testid="connection-switcher">
+<div
+	class="conn-switch"
+	class:settings-only={settingsOnly}
+	bind:this={rootEl}
+	data-testid={settingsOnly ? 'connection-settings' : 'connection-switcher'}
+>
+	{#if !settingsOnly}
 	<div class="conn-select">
 		<div class="conn-select-row">
 		<button
@@ -445,7 +463,9 @@
 			{/if}
 		</div>
 	</div>
+	{/if}
 
+	{#if renderSettings}
 	<div class="conn-settings-wrap">
 	<button
 		type="button"
@@ -552,11 +572,15 @@
 		{/if}
 	</div>
 	</div>
+	{/if}
 </div>
 
 <style>
 	.conn-switch {
 		display: contents;
+	}
+	.conn-switch.settings-only {
+		display: block;
 	}
 	.conn-select {
 		position: relative;

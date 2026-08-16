@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { tick } from 'svelte';
+	import { tick, type Snippet } from 'svelte';
 	import { getSharedVfs, isActionable, type FileTypeId, type VfsService, VfsError } from '../index.js';
 	import {
 		type ExplorerDriver,
@@ -76,6 +76,8 @@
 		hideToolbarTrash?: boolean;
 		/** Dual-pane header owns Select file — hide the toolbar copy. */
 		hideToolbarUpload?: boolean;
+		/** Extra manage-toolbar actions (e.g. Copy across when chrome is in the hub). */
+		toolbarExtra?: Snippet;
 		/** Controlled trash view (DualPane header). Uncontrolled when omitted. */
 		trashView?: boolean;
 		onTrashViewChange?: (open: boolean) => void;
@@ -105,6 +107,7 @@
 		compatSaveTestId = false,
 		hideToolbarTrash = false,
 		hideToolbarUpload = false,
+		toolbarExtra,
 		trashView = undefined,
 		onTrashViewChange
 	}: Props = $props();
@@ -771,7 +774,7 @@
 	}
 
 	async function activatePreview(n: ExplorerEntry) {
-		if (n.kind === 'folder') {
+		if (n.kind === 'folder' && (mode === 'save' || showTrash)) {
 			previewEntry = null;
 			await enterFolder(n);
 			return;
@@ -779,7 +782,7 @@
 		if (mode === 'save') {
 			saveName = n.name;
 		}
-		// One current file so Copy across / Send can target it without Select multi.
+		// One current item so Copy across / Send can target it without Select multi.
 		selected = new Set([n.id]);
 		lastSelectedId = n.id;
 		previewEntry = n;
@@ -787,7 +790,13 @@
 
 	async function confirmPreviewOpen() {
 		const n = previewEntry;
-		if (!n || !onOpen) return;
+		if (!n) return;
+		if (n.kind === 'folder') {
+			previewEntry = null;
+			await enterFolder(n);
+			return;
+		}
+		if (!onOpen) return;
 		previewBusy = true;
 		try {
 			await onOpen(n);
@@ -797,6 +806,32 @@
 		} finally {
 			previewBusy = false;
 		}
+	}
+
+	function renamePreviewItem() {
+		const n = previewEntry;
+		if (!n) return;
+		previewEntry = null;
+		startRename(n);
+	}
+
+	async function copyPreviewItem() {
+		const n = previewEntry;
+		if (!n) return;
+		await copyNode(n);
+		previewEntry = null;
+	}
+
+	async function deletePreviewItem() {
+		const n = previewEntry;
+		if (!n) return;
+		previewEntry = null;
+		await deleteIds([n.id]);
+	}
+
+	function renameSelectedItem() {
+		if (selectedEntries.length !== 1) return;
+		startRename(selectedEntries[0]!);
 	}
 
 	async function confirmPreviewSend() {
@@ -1086,7 +1121,7 @@
 		if (e.key === 'Enter') {
 			if (previewEntry) {
 				e.preventDefault();
-				if (onOpen) void confirmPreviewOpen();
+				if (previewEntry.kind === 'folder' || onOpen) void confirmPreviewOpen();
 				return;
 			}
 			if (canOpenSelection) {
@@ -1243,6 +1278,9 @@
 						onchange={(e) => onUploadFiles((e.currentTarget as HTMLInputElement).files)}
 					/>
 				{/if}
+				{#if toolbarExtra}
+					{@render toolbarExtra()}
+				{/if}
 				{#if caps.supportsTrash && !hideToolbarTrash}
 					<button
 						type="button"
@@ -1256,15 +1294,101 @@
 						Trash
 					</button>
 				{/if}
-				{#if selected.size}
-					<button type="button" data-testid="fe-trash-selected" onclick={trashSelected}>
-						Delete
+				{#if selectMulti && selected.size}
+					{#if selected.size === 1 && caps.supportsRename && !showTrash}
+						<button
+							type="button"
+							class="fe-icon-btn"
+							data-testid="fe-rename-btn"
+							title="Rename"
+							aria-label="Rename"
+							disabled={listBusy}
+							onclick={renameSelectedItem}
+						>
+							<svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"
+								><path
+									fill="none"
+									stroke="currentColor"
+									stroke-width="2"
+									stroke-linecap="round"
+									stroke-linejoin="round"
+									d="M12 20h9M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"
+								/></svg
+							>
+						</button>
+					{/if}
+					<button
+						type="button"
+						class="fe-icon-btn"
+						data-testid="fe-trash-selected"
+						title="Delete"
+						aria-label="Delete"
+						onclick={trashSelected}
+					>
+						<svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"
+							><path
+								fill="none"
+								stroke="currentColor"
+								stroke-width="2"
+								stroke-linecap="round"
+								stroke-linejoin="round"
+								d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"
+							/></svg
+						>
 					</button>
 					{#if caps.supportsMove}
-						<button type="button" data-testid="fe-cut" onclick={cutSelection}>Cut</button>
+						<button
+							type="button"
+							class="fe-icon-btn"
+							data-testid="fe-cut"
+							title="Cut"
+							aria-label="Cut"
+							onclick={cutSelection}
+						>
+							<svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"
+								><circle cx="6" cy="6" r="3" fill="none" stroke="currentColor" stroke-width="2" /><circle
+									cx="6"
+									cy="18"
+									r="3"
+									fill="none"
+									stroke="currentColor"
+									stroke-width="2"
+								/><path
+									fill="none"
+									stroke="currentColor"
+									stroke-width="2"
+									d="M20 4 8.12 15.88M14.47 14.48 20 20"
+								/></svg
+							>
+						</button>
 					{/if}
 					{#if caps.supportsCopy}
-						<button type="button" data-testid="fe-copy" onclick={copySelection}>Copy</button>
+						<button
+							type="button"
+							class="fe-icon-btn"
+							data-testid="fe-copy"
+							title="Copy"
+							aria-label="Copy"
+							onclick={copySelection}
+						>
+							<svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"
+								><rect
+									x="9"
+									y="9"
+									width="13"
+									height="13"
+									rx="2"
+									fill="none"
+									stroke="currentColor"
+									stroke-width="2"
+								/><path
+									fill="none"
+									stroke="currentColor"
+									stroke-width="2"
+									d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"
+								/></svg
+							>
+						</button>
 					{/if}
 				{/if}
 				{#if clipboard?.ids.length && !showTrash && (caps.supportsMove || caps.supportsCopy)}
@@ -1422,8 +1546,8 @@
 							>
 						{/if}
 					</span>
-					<span class="fe-row-actions">
-						{#if showTrash && caps.supportsTrash}
+					{#if showTrash && caps.supportsTrash}
+						<span class="fe-row-actions">
 							<button
 								type="button"
 								data-testid="fe-restore"
@@ -1442,51 +1566,8 @@
 									permanentNode(n);
 								}}>Delete forever</button
 							>
-						{:else if mode === 'manage' && actionable}
-							{#if caps.supportsRename}
-								<button
-									type="button"
-									data-testid="fe-rename-btn"
-									disabled={listBusy}
-									onclick={(e) => {
-										e.stopPropagation();
-										startRename(n);
-									}}>Rename</button
-								>
-							{/if}
-							{#if caps.supportsCopy && n.kind === 'file'}
-								<button
-									type="button"
-									data-testid="fe-row-copy"
-									disabled={listBusy}
-									onclick={(e) => {
-										e.stopPropagation();
-										void copyNode(n);
-									}}>Copy</button
-								>
-							{/if}
-							{#if caps.supportsDownload && n.kind === 'file'}
-								<button
-									type="button"
-									data-testid="fe-row-download"
-									disabled={listBusy}
-									onclick={(e) => {
-										e.stopPropagation();
-										void downloadNode(n);
-									}}>Download</button
-								>
-							{/if}
-							<button
-								type="button"
-								data-testid="fe-row-trash"
-								disabled={listBusy}
-								onclick={(e) => {
-									e.stopPropagation();
-									void deleteIds([n.id]);
-								}}>Delete</button
-							>
-						{/if}
-					</span>
+						</span>
+					{/if}
 				</div>
 				{#if showAfter}
 					<div class="fe-dnd-line" data-testid="fe-dnd-line-after" aria-hidden="true"></div>
@@ -1560,7 +1641,16 @@
 					{/if}
 				</dl>
 				<div class="fe-preview-actions">
-					{#if onOpen && rowActionable(previewEntry) && (mode === 'open' || mode === 'manage')}
+					{#if previewEntry.kind === 'folder' && mode !== 'browse'}
+						<button
+							type="button"
+							data-testid="fe-file-preview-open"
+							disabled={previewBusy}
+							onclick={() => void confirmPreviewOpen()}
+						>
+							Open
+						</button>
+					{:else if onOpen && rowActionable(previewEntry) && (mode === 'open' || mode === 'manage')}
 						<button
 							type="button"
 							data-testid="fe-file-preview-open"
@@ -1578,6 +1668,46 @@
 							onclick={() => void confirmPreviewSend()}
 						>
 							{sendLabel}
+						</button>
+					{/if}
+					{#if mode === 'manage' && !showTrash}
+						{#if caps.supportsRename}
+							<button
+								type="button"
+								data-testid="fe-rename-btn"
+								disabled={listBusy}
+								onclick={renamePreviewItem}
+							>
+								Rename
+							</button>
+						{/if}
+						{#if caps.supportsCopy && previewEntry.kind === 'file'}
+							<button
+								type="button"
+								data-testid="fe-row-copy"
+								disabled={listBusy}
+								onclick={() => void copyPreviewItem()}
+							>
+								Copy
+							</button>
+						{/if}
+						{#if caps.supportsDownload && previewEntry.kind === 'file'}
+							<button
+								type="button"
+								data-testid="fe-row-download"
+								disabled={listBusy}
+								onclick={() => void downloadNode(previewEntry)}
+							>
+								Download
+							</button>
+						{/if}
+						<button
+							type="button"
+							data-testid="fe-row-trash"
+							disabled={listBusy}
+							onclick={() => void deletePreviewItem()}
+						>
+							Delete
 						</button>
 					{/if}
 					<button
@@ -1653,6 +1783,14 @@
 	}
 	.fe-toolbar button.active {
 		outline: 1px solid var(--fe-accent, #7cb7ff);
+	}
+	.fe-toolbar .fe-icon-btn {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 2rem;
+		height: 2rem;
+		padding: 0;
 	}
 	.fe-close {
 		font-size: 18px;

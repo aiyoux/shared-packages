@@ -207,4 +207,33 @@ describe('ConnectionSwitcher multi-backend', () => {
 		await fireEvent.click(screen.getByTestId('conn-rclone-config'));
 		expect(onConfigureRclone).toHaveBeenCalled();
 	});
+
+	it('showSettings=false hides the gear; dropdown remains', () => {
+		render(ConnectionSwitcher, {
+			props: {
+				activeId: 'local',
+				showSettings: false
+			}
+		});
+		expect(screen.getByTestId('connection-switcher')).toBeTruthy();
+		expect(screen.getByTestId('conn-trigger')).toBeTruthy();
+		expect(screen.queryByTestId('conn-settings')).toBeNull();
+		expect(screen.queryByTestId('conn-settings-panel')).toBeNull();
+	});
+
+	it('variant=settings is gear-only (no dropdown)', () => {
+		render(ConnectionSwitcher, {
+			props: {
+				variant: 'settings',
+				profiles: [],
+				showRclone: true,
+				showMonitor: true
+			}
+		});
+		expect(screen.getByTestId('connection-settings')).toBeTruthy();
+		expect(screen.queryByTestId('connection-switcher')).toBeNull();
+		expect(screen.queryByTestId('conn-trigger')).toBeNull();
+		expect(screen.getByTestId('conn-settings')).toBeTruthy();
+		expect(screen.getByTestId('conn-b2-config')).toBeTruthy();
+	});
 });

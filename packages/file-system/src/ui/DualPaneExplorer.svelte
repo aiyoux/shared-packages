@@ -33,6 +33,7 @@
 	// PaneId + DualPaneTids live in a .ts module so the ui barrel can re-export
 	// them without the *.svelte named-export limitation.
 	import { type PaneId, type DualPaneTids } from './dualPaneTypes.js';
+	import { portal } from './portal.js';
 	import {
 		canShowCopyAcross,
 		isDualPhaseCopy,
@@ -166,6 +167,12 @@
 			entries: ExplorerEntry[];
 		}) => void | Promise<void>;
 		tids?: Partial<DualPaneTids>;
+		/**
+		 * CSS selector (or later-appearing host) for a single module settings
+		 * gear. When set, pane switchers hide their gears and one settings
+		 * control is portaled into the host — Files uses the hub topbar.
+		 */
+		settingsPortal?: string;
 	};
 
 	let {
@@ -190,8 +197,22 @@
 		pendingRight = [],
 		onDualChange,
 		onSend,
-		tids: tidsOverride = {}
+		tids: tidsOverride = {},
+		settingsPortal = ''
 	}: Props = $props();
+
+	const hostSettings = $derived(Boolean(settingsPortal));
+
+	function openHostForm(which: 'b2' | 'rclone' | 'monitor') {
+		// Module-level settings apply to the explorer as a whole; the form
+		// mounts on the left pane (the only pane when dual is off).
+		setPane('left', {
+			showB2Form: which === 'b2',
+			showRcloneForm: which === 'rclone',
+			showMonitorForm: which === 'monitor',
+			error: ''
+		});
+	}
 
 	const tids: DualPaneTids = { ...defaultTids, ...tidsOverride };
 
@@ -943,7 +964,125 @@
 		const p = paneState(id);
 		setPane(id, { explorerKey: p.explorerKey + 1 });
 	}
+
+	function toggleTrash(id: PaneId) {
+		const p = paneState(id);
+		const next = !p.showTrash;
+		setPane(id, {
+			showTrash: next,
+			ctx: { ...p.ctx, parentId: null, selectedIds: [] }
+		});
+	}
 </script>
+
+{#snippet paneSwitcher(id: PaneId)}
+	{@const p = id === 'left' ? left : right}
+	{@const drv = activeDriver(p, id)}
+	{@const hints = copyHints(id)}
+	<ConnectionSwitcher
+		activeId={p.activeId}
+		activeKind={p.activeKind}
+		capabilities={drv.capabilities}
+		copyOut={hints.copyOut}
+		copyIn={hints.copyIn}
+		copyOtherLabel={hints.copyOtherLabel}
+		copyIdleNote={hints.copyIdleNote}
+		profiles={b2Chips}
+		rcloneProfiles={rcloneChips}
+		monitorProfiles={monitorChips}
+		showRclone={showRclone}
+		showMonitor={showMonitor}
+		showMemory={switcherShowMemory}
+		showSettings={!hostSettings}
+		busy={p.busy}
+		onSelect={(sel) => onSelectConnection(id, sel)}
+		onConfigureB2={() => {
+			setPane(id, { showB2Form: true, showRcloneForm: false, showMonitorForm: false, error: '' });
+		}}
+		onConfigureRclone={() => {
+			setPane(id, { showRcloneForm: true, showB2Form: false, showMonitorForm: false, error: '' });
+		}}
+		onConfigureMonitor={() => {
+			setPane(id, { showMonitorForm: true, showB2Form: false, showRcloneForm: false, error: '' });
+		}}
+		onConfigureDisk={() => void connectDisk(id, { replace: true })}
+	/>
+{/snippet}
+
+{#snippet paneTrash(id: PaneId)}
+	{@const p = id === 'left' ? left : right}
+	{@const drv = activeDriver(p, id)}
+	{#if drv.capabilities.supportsTrash}
+		<button
+			type="button"
+			class="pane-trash"
+			class:host-trash={hostSettings}
+			class:active={p.showTrash}
+			data-testid="fe-trash-view"
+			title={p.showTrash ? 'Leave trash' : 'Open trash'}
+			aria-pressed={p.showTrash}
+			onclick={() => toggleTrash(id)}
+		>
+			Trash
+		</button>
+	{/if}
+{/snippet}
+
+{#snippet paneBadges(id: PaneId)}
+	{@const p = id === 'left' ? left : right}
+	{#if p.busy}
+		<span
+			class="busy"
+			data-testid={p.activeKind === 'monitor' || p.showMonitorForm
+				? `monitor-connecting-${id}`
+				: p.activeKind === 'rclone' || p.showRcloneForm
+					? `rclone-connecting-${id}`
+					: `b2-connecting-${id}`}
+		>
+			Connecting…
+		</span>
+	{/if}
+	{#if p.activeKind === 'b2'}
+		<span class="remote-badge" data-testid="b2-remote-badge-{id}">Remote · open-with off</span>
+	{:else if p.activeKind === 'rclone'}
+		<span class="remote-badge" data-testid="rclone-remote-badge-{id}">rclone · open-with off</span>
+	{:else if p.activeKind === 'monitor'}
+		<span class="remote-badge" data-testid="monitor-remote-badge-{id}">monitor · open-with off</span>
+		<span
+			class="remote-badge mon-watch"
+			data-testid="monitor-watch-status-{id}"
+			data-status={monitorWatchStatus[id] ?? 'off'}
+			title="Live filesystem watch (monitor SSE)"
+		>
+			watch · {monitorWatchStatus[id] ?? 'off'}
+		</span>
+	{:else if p.activeKind === 'memory'}
+		<span class="remote-badge mem" data-testid="memory-badge-{id}">In memory · tab only</span>
+	{:else if p.activeKind === 'disk'}
+		<span class="remote-badge" data-testid="disk-badge-{id}"
+			>This computer{p.diskName ? ` · ${p.diskName}` : ''}</span
+		>
+	{/if}
+	{#if id === 'right' && overrideRight}
+		<span class="remote-badge" data-testid="peer-fs-badge">Their · {overrideRight.label}</span>
+	{/if}
+{/snippet}
+
+{#snippet copyAcrossAction(id: PaneId)}
+	{@const p = id === 'left' ? left : right}
+	{#if hostSettings && showCopyAcross}
+		<button
+			type="button"
+			class="copy-across"
+			data-testid={tids.copyAcross(id)}
+			disabled={copyBusy || p.ctx.selectedIds.length === 0}
+			title="Copy selected items into the other pane's open folder"
+			onclick={() => runCopyAcross(id)}
+		>
+			{copyBusy ? 'Copying…' : 'Copy across'}
+		</button>
+	{/if}
+{/snippet}
 
 {#snippet explorerPane(id: PaneId)}
 	<!-- Read $state panes directly so UI reacts (avoid stale {@const}). -->
@@ -963,36 +1102,10 @@
 		ondrop={(e) => void onPaneDrop(id, e)}
 		ondragend={onPaneDragEnd}
 	>
+		{#if !hostSettings}
 		<div class="pane-chrome" data-testid={tids.paneChrome(id)}>
 			{#if paneShowsSwitcher(id) && !(id === 'right' && overrideRight)}
-				{@const hints = copyHints(id)}
-				<ConnectionSwitcher
-				activeId={p.activeId}
-				activeKind={p.activeKind}
-				capabilities={drv.capabilities}
-				copyOut={hints.copyOut}
-				copyIn={hints.copyIn}
-				copyOtherLabel={hints.copyOtherLabel}
-				copyIdleNote={hints.copyIdleNote}
-				profiles={b2Chips}
-				rcloneProfiles={rcloneChips}
-				monitorProfiles={monitorChips}
-				showRclone={showRclone}
-				showMonitor={showMonitor}
-				showMemory={switcherShowMemory}
-				busy={p.busy}
-				onSelect={(sel) => onSelectConnection(id, sel)}
-				onConfigureB2={() => {
-					setPane(id, { showB2Form: true, showRcloneForm: false, showMonitorForm: false, error: '' });
-				}}
-				onConfigureRclone={() => {
-					setPane(id, { showRcloneForm: true, showB2Form: false, showMonitorForm: false, error: '' });
-				}}
-				onConfigureMonitor={() => {
-					setPane(id, { showMonitorForm: true, showB2Form: false, showRcloneForm: false, error: '' });
-				}}
-				onConfigureDisk={() => void connectDisk(id, { replace: true })}
-			/>
+				{@render paneSwitcher(id)}
 			{/if}
 			{#if paneCanImport(id)}
 				<button
@@ -1017,25 +1130,7 @@
 					}}
 				/>
 			{/if}
-			{#if drv.capabilities.supportsTrash}
-				<button
-					type="button"
-					class="pane-trash"
-					class:active={p.showTrash}
-					data-testid="fe-trash-view"
-					title={p.showTrash ? 'Leave trash' : 'Open trash'}
-					aria-pressed={p.showTrash}
-					onclick={() => {
-						const next = !p.showTrash;
-						setPane(id, {
-							showTrash: next,
-							ctx: { ...p.ctx, parentId: null, selectedIds: [] }
-						});
-					}}
-				>
-					Trash
-				</button>
-			{/if}
+			{@render paneTrash(id)}
 			{#if showCopyAcross}
 				<button
 					type="button"
@@ -1066,48 +1161,25 @@
 					<span class="send-err" data-testid={tids.sendError} role="alert">{sendError.message}</span>
 				{/if}
 			{/if}
-			{#if p.busy}
-				<span
-					class="busy"
-					data-testid={p.activeKind === 'monitor' || p.showMonitorForm
-						? `monitor-connecting-${id}`
-						: p.activeKind === 'rclone' || p.showRcloneForm
-							? `rclone-connecting-${id}`
-							: `b2-connecting-${id}`}
-				>
-					Connecting…
-				</span>
+			{@render paneBadges(id)}
+			{#if subTid}
+				<span class="pane-sub" data-testid={subTid.testid}>{subTid.text}</span>
 			{/if}
-			{#if p.activeKind === 'b2'}
-				<span class="remote-badge" data-testid="b2-remote-badge-{id}">Remote · open-with off</span>
-			{:else if p.activeKind === 'rclone'}
-				<span class="remote-badge" data-testid="rclone-remote-badge-{id}">rclone · open-with off</span>
-			{:else if p.activeKind === 'monitor'}
-				<span class="remote-badge" data-testid="monitor-remote-badge-{id}"
-					>monitor · open-with off</span
-				>
-				<span
-					class="remote-badge mon-watch"
-					data-testid="monitor-watch-status-{id}"
-					data-status={monitorWatchStatus[id] ?? 'off'}
-					title="Live filesystem watch (monitor SSE)"
-				>
-					watch · {monitorWatchStatus[id] ?? 'off'}
-				</span>
-			{:else if p.activeKind === 'memory'}
-				<span class="remote-badge mem" data-testid="memory-badge-{id}">In memory · tab only</span>
-			{:else if p.activeKind === 'disk'}
-				<span class="remote-badge" data-testid="disk-badge-{id}"
-					>This computer{p.diskName ? ` · ${p.diskName}` : ''}</span
-				>
+		</div>
+		{:else if p.busy || p.activeKind !== 'local' || (id === 'right' && overrideRight) || (copyError && showCopyAcross) || sendError?.pane === id || subTid}
+		<div class="pane-status" data-testid={tids.paneChrome(id)}>
+			{@render paneBadges(id)}
+			{#if copyError && showCopyAcross}
+				<span class="copy-err" data-testid={tids.copyAcrossError} role="alert">{copyError}</span>
 			{/if}
-			{#if id === 'right' && overrideRight}
-				<span class="remote-badge" data-testid="peer-fs-badge">Their · {overrideRight.label}</span>
+			{#if sendError?.pane === id}
+				<span class="send-err" data-testid={tids.sendError} role="alert">{sendError.message}</span>
 			{/if}
 			{#if subTid}
 				<span class="pane-sub" data-testid={subTid.testid}>{subTid.text}</span>
 			{/if}
 		</div>
+		{/if}
 		{#if p.error}
 			<div
 				class="b2-error"
@@ -1205,7 +1277,7 @@
 						driver={overrideRight.driver}
 						showPersistence={false}
 						hideToolbarTrash={true}
-						hideToolbarUpload={true}
+						hideToolbarUpload={!hostSettings}
 						trashView={p.showTrash}
 						onTrashViewChange={(open) => setPane(id, { showTrash: open })}
 						initialParentId={p.ctx.parentId}
@@ -1213,7 +1285,11 @@
 						onContextChange={(ctx) => {
 							right = { ...right, ctx };
 						}}
-					/>
+					>
+						{#snippet toolbarExtra()}
+							{@render copyAcrossAction(id)}
+						{/snippet}
+					</FileExplorer>
 				{:else if p.activeKind === 'local'}
 					<!-- Page header owns the persistence chip; keep FE toolbar uncluttered. -->
 					<FileExplorer
@@ -1222,7 +1298,7 @@
 						driver={localDriver}
 						showPersistence={false}
 						hideToolbarTrash={true}
-						hideToolbarUpload={true}
+						hideToolbarUpload={!hostSettings}
 						trashView={p.showTrash}
 						onTrashViewChange={(open) => setPane(id, { showTrash: open })}
 						initialParentId={p.ctx.parentId}
@@ -1242,7 +1318,11 @@
 							if (id === 'left') left = { ...left, ctx };
 							else right = { ...right, ctx };
 						}}
-					/>
+					>
+						{#snippet toolbarExtra()}
+							{@render copyAcrossAction(id)}
+						{/snippet}
+					</FileExplorer>
 				{:else}
 					<FileExplorer
 						mode="manage"
@@ -1250,7 +1330,7 @@
 						driver={drv}
 						showPersistence={false}
 						hideToolbarTrash={true}
-						hideToolbarUpload={true}
+						hideToolbarUpload={!hostSettings}
 						trashView={p.showTrash}
 						onTrashViewChange={(open) => setPane(id, { showTrash: open })}
 						initialParentId={p.ctx.parentId}
@@ -1269,12 +1349,57 @@
 							if (id === 'left') left = { ...left, ctx };
 							else right = { ...right, ctx };
 						}}
-					/>
+					>
+						{#snippet toolbarExtra()}
+							{@render copyAcrossAction(id)}
+						{/snippet}
+					</FileExplorer>
 				{/if}
 			{/key}
 		</div>
 	</div>
 {/snippet}
+
+{#if hostSettings}
+	<div class="dpe-host-chrome" use:portal={settingsPortal}>
+		{#if paneShowsSwitcher('left')}
+			<div
+				class="dpe-host-conn"
+				data-testid="conn-switcher-left"
+				data-pane="left"
+				aria-label="Left pane connection"
+			>
+				{@render paneSwitcher('left')}
+				{@render paneTrash('left')}
+			</div>
+		{/if}
+		{#if dualPane && paneShowsSwitcher('right') && !overrideRight}
+			<div
+				class="dpe-host-conn"
+				data-testid="conn-switcher-right"
+				data-pane="right"
+				aria-label="Right pane connection"
+			>
+				{@render paneSwitcher('right')}
+				{@render paneTrash('right')}
+			</div>
+		{/if}
+		<div class="dpe-host-settings">
+			<ConnectionSwitcher
+				variant="settings"
+				profiles={b2Chips}
+				rcloneProfiles={rcloneChips}
+				monitorProfiles={monitorChips}
+				showRclone={showRclone}
+				showMonitor={showMonitor}
+				onConfigureB2={() => openHostForm('b2')}
+				onConfigureRclone={() => openHostForm('rclone')}
+				onConfigureMonitor={() => openHostForm('monitor')}
+				onConfigureDisk={() => void connectDisk('left', { replace: true })}
+			/>
+		</div>
+	</div>
+{/if}
 
 <div class="dpe-shell" class:dual={dualPane}>
 	{#if !hideToggles}
@@ -1330,6 +1455,37 @@
 </div>
 
 <style>
+	.dpe-host-chrome {
+		display: flex;
+		align-items: center;
+		gap: 0.65rem;
+	}
+	.dpe-host-conn {
+		display: flex;
+		align-items: center;
+		gap: 0.35rem;
+		min-width: 0;
+	}
+	.dpe-host-conn + .dpe-host-conn {
+		padding-left: 0.65rem;
+		border-left: 1px solid rgba(255, 255, 255, 0.12);
+	}
+	.dpe-host-settings {
+		display: flex;
+		align-items: center;
+	}
+	.pane-trash.host-trash {
+		order: 0;
+		margin-left: 0;
+	}
+	.pane-status {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 0.45rem;
+		padding: 0.35rem 0.65rem;
+		border-bottom: 1px solid var(--border, #334155);
+	}
 	.dpe-shell {
 		display: flex;
 		flex-direction: column;

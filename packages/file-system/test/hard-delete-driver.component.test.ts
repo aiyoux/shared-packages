@@ -86,7 +86,8 @@ describe('FileExplorer hard-delete backend', () => {
 		confirmSpy.mockReturnValue(false);
 		render(FileExplorer, { props: { mode: 'manage', driver, variant: 'panel' } });
 		await screen.findByTestId('fe-file-row');
-		await fireEvent.click(screen.getByTestId('fe-row-trash'));
+		await fireEvent.click(screen.getByTestId('fe-file-row'));
+		await fireEvent.click(await screen.findByTestId('fe-row-trash'));
 		expect(confirmSpy).toHaveBeenCalled();
 		expect(deleted).toHaveLength(0);
 		expect(screen.getByTestId('fe-file-row')).toBeTruthy();
@@ -103,7 +104,8 @@ describe('FileExplorer hard-delete backend', () => {
 		confirmSpy.mockReturnValue(true);
 		render(FileExplorer, { props: { mode: 'manage', driver, variant: 'panel' } });
 		await screen.findByTestId('fe-file-row');
-		await fireEvent.click(screen.getByTestId('fe-row-trash'));
+		await fireEvent.click(screen.getByTestId('fe-file-row'));
+		await fireEvent.click(await screen.findByTestId('fe-row-trash'));
 		expect(confirmSpy).toHaveBeenCalled();
 		expect(deleted).toEqual(['gone.bin']);
 		// After refresh list is empty

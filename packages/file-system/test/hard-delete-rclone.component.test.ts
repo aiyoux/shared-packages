@@ -110,7 +110,8 @@ describe('FileExplorer hard-delete rclone backend', () => {
 		confirmSpy.mockReturnValue(false);
 		render(FileExplorer, { props: { mode: 'manage', driver, variant: 'panel' } });
 		await screen.findByTestId('fe-file-row');
-		await fireEvent.click(screen.getByTestId('fe-row-trash'));
+		await fireEvent.click(screen.getByTestId('fe-file-row'));
+		await fireEvent.click(await screen.findByTestId('fe-row-trash'));
 		expect(confirmSpy).toHaveBeenCalled();
 		expect(deleted).toHaveLength(0);
 		expect(screen.getByTestId('fe-file-row')).toBeTruthy();
@@ -127,7 +128,8 @@ describe('FileExplorer hard-delete rclone backend', () => {
 		confirmSpy.mockReturnValue(true);
 		render(FileExplorer, { props: { mode: 'manage', driver, variant: 'panel' } });
 		await screen.findByTestId('fe-file-row');
-		await fireEvent.click(screen.getByTestId('fe-row-trash'));
+		await fireEvent.click(screen.getByTestId('fe-file-row'));
+		await fireEvent.click(await screen.findByTestId('fe-row-trash'));
 		expect(confirmSpy).toHaveBeenCalled();
 		expect(deleted).toEqual(['gone.bin']);
 		await vi.waitFor(() => {
@@ -146,7 +148,8 @@ describe('FileExplorer hard-delete rclone backend', () => {
 		confirmSpy.mockReturnValue(false);
 		render(FileExplorer, { props: { mode: 'manage', driver, variant: 'panel' } });
 		await screen.findByTestId('fe-file-row');
-		await fireEvent.click(screen.getByTestId('fe-row-trash'));
+		await fireEvent.click(screen.getByTestId('fe-file-row'));
+		await fireEvent.click(await screen.findByTestId('fe-row-trash'));
 		expect(confirmSpy).toHaveBeenCalled();
 		const msg = String(confirmSpy.mock.calls[0]?.[0] ?? '');
 		expect(msg.toLowerCase()).toMatch(/permanent/);
