@@ -125,7 +125,16 @@ export async function createB2ExplorerDriver(
 	// Limited keys without writeBuckets skip silently; the data-plane relay
 	// still carries the bytes through the hub.
 	if (typeof window !== 'undefined' && !usingCustomTransport) {
-		await ensureExplorerCors(bucket, window.location.origin);
+		// b2Cors keeps a portable rule shape (allowedOperations: string[]) so it
+		// stays free of SDK types, while the SDK narrows that same field to a
+		// CorsOperation literal union. The two are mutually unassignable — the
+		// read side needs ours wider, the update side needs it narrower — so the
+		// mismatch is absorbed here, at the single boundary, rather than by
+		// leaking SDK types back into b2Cors.
+		await ensureExplorerCors(
+			bucket as unknown as Parameters<typeof ensureExplorerCors>[0],
+			window.location.origin
+		);
 	}
 
 	function absPrefix(parentId: ExplorerEntryId | null): string {

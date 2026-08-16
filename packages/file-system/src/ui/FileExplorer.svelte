@@ -1694,11 +1694,14 @@
 							</button>
 						{/if}
 						{#if caps.supportsDownload && previewEntry.kind === 'file'}
+							<!-- previewEntry is $state, so the onclick closure widens it back
+							     to ExplorerEntry | null; bind the narrowed value here. -->
+							{@const downloadEntry = previewEntry}
 							<button
 								type="button"
 								data-testid="fe-row-download"
 								disabled={listBusy}
-								onclick={() => void downloadNode(previewEntry)}
+								onclick={() => void downloadNode(downloadEntry)}
 							>
 								Download
 							</button>
