@@ -6,6 +6,17 @@ function roleOrder(role: ActiveSample['track']['role']): number {
 	return role === 'media' ? 0 : 1;
 }
 
+/** Encode's pull path never sees these; we must close them or decoder frames leak. */
+function closePulledFrame(frame: CanvasImageSource | VideoFrame): void {
+	if (typeof VideoFrame !== 'undefined' && frame instanceof VideoFrame) {
+		frame.close();
+		return;
+	}
+	if (typeof ImageBitmap !== 'undefined' && frame instanceof ImageBitmap) {
+		frame.close();
+	}
+}
+
 /**
  * Stateless: a new OffscreenCanvas every call. Media first, then graphics.
  * Do not cache last-frame bitmaps — `pull(t)` must not depend on call order.
@@ -27,7 +38,11 @@ export async function composite(
 			throw new Error(`No ClipRenderer registered for kind "${active.clip.kind}"`);
 		}
 		const frame = await renderer.pullFrame(active.clip, active.localMs, size);
-		ctx.drawImage(frame as CanvasImageSource, 0, 0);
+		try {
+			ctx.drawImage(frame as CanvasImageSource, 0, 0, size.w, size.h);
+		} finally {
+			closePulledFrame(frame);
+		}
 	}
 
 	return canvas;

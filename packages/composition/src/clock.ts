@@ -41,6 +41,11 @@ export function createCompositionClock(durationMs: number): CompositionClock {
 		rafId = null;
 	}
 
+	function scheduleTick(): void {
+		cancelTick();
+		rafId = requestAnimationFrame(tick);
+	}
+
 	function rebaseOrigin(now = performance.now()): void {
 		origin = now - timeMs / rate;
 	}
@@ -56,7 +61,8 @@ export function createCompositionClock(durationMs: number): CompositionClock {
 			return;
 		}
 		emit();
-		rafId = requestAnimationFrame(tick);
+		// Subscriber may pause/play during emit; only keep one rAF loop.
+		if (playing) scheduleTick();
 	}
 
 	function play(): void {
@@ -65,7 +71,7 @@ export function createCompositionClock(durationMs: number): CompositionClock {
 		playing = true;
 		rebaseOrigin();
 		emit();
-		rafId = requestAnimationFrame(tick);
+		if (playing) scheduleTick();
 	}
 
 	function pause(): void {
