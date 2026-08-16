@@ -1,0 +1,32 @@
+{
+  "name": "@shared-packages/sticker-library",
+  "version": "0.1.0",
+  "private": false,
+  "type": "module",
+  "description": "Emoji sticker catalog and picker UI — hub Stickers tool and sketcher insert modal.",
+  "svelte": "./src/index.ts",
+  "publishConfig": {
+    "access": "public"
+  },
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "svelte": "./src/index.ts",
+      "import": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./catalog": {
+      "types": "./src/catalog.ts",
+      "import": "./src/catalog.ts",
+      "default": "./src/catalog.ts"
+    }
+  },
+  "types": "./src/index.ts",
+  "files": ["src"],
+  "scripts": {
+    "yalc:publish": "yalc publish"
+  },
+  "peerDependencies": {
+    "svelte": "^5.0.0"
+  }
+}
