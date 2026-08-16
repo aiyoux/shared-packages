@@ -214,29 +214,48 @@ self.onmessage = function (event) {
 	try {
 		if (msg.type === 'init') {
 			if (!msg.url) throw new Error('OpenCV.js worker URL missing.');
-			self.cv = {
+			// opencv.js getBinaryPromise() fetch()es the embedded data: WASM URI.
+			// Chromium workers hang on that fetch, so force the sync data-URI decoder.
+			var nativeFetch = self.fetch;
+			self.fetch = function (input, init) {
+				var href = typeof input === 'string' ? input : input && input.url;
+				if (typeof href === 'string' && href.indexOf('data:') === 0) {
+					return Promise.reject(new Error('skip-data-uri-fetch'));
+				}
+				return nativeFetch.apply(self, arguments);
+			};
+			var settled = false;
+			function succeed(cv) {
+				if (settled) return;
+				if (!cv || typeof cv.Mat !== 'function') return;
+				settled = true;
+				cvRef = cv;
+				reply(id, { ok: true });
+			}
+			function fail(err) {
+				if (settled) return;
+				settled = true;
+				reply(id, { ok: false, error: err && err.message ? err.message : String(err) });
+			}
+			self.Module = {
 				onRuntimeInitialized: function () {
-					if (self.cv && typeof self.cv.Mat === 'function') {
-						cvRef = self.cv;
-					}
+					succeed(self.cv);
 				}
 			};
 			try {
 				importScripts(msg.url);
 			} catch (err) {
-				reply(id, { ok: false, error: err && err.message ? err.message : String(err) });
+				fail(err);
 				return;
 			}
-			waitForCv(120000).then(function (cv) {
-				cvRef = cv;
-				reply(id, { ok: true });
-			}).catch(function (err) {
-				var hint = self.cv ? (' typeof Mat=' + typeof self.cv.Mat) : ' cv is missing';
-				reply(id, {
-					ok: false,
-					error: (err && err.message ? err.message : String(err)) + hint
-				});
-			});
+			if (self.cv && typeof self.cv.then === 'function') {
+				try {
+					self.cv.then(function (mod) { succeed(mod || self.cv); });
+				} catch (err) {
+					/* Module.then is not a real Promise */
+				}
+			}
+			waitForCv(120000).then(succeed).catch(fail);
 			return;
 		}
 		if (!cvRef) throw new Error('OpenCV.js is not loaded.');
