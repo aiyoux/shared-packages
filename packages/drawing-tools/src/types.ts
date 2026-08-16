@@ -42,6 +42,8 @@ export interface ImportedImage {
     height: number;
     opacity: number;
     layerId?: string;
+    /** Radians. Optional so older saves still load. */
+    rotation?: number;
 }
 
 export interface PathData {

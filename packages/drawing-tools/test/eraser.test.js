@@ -197,6 +197,14 @@ test('split eraser does not delete a whole run of line that a drag merely passes
     assert.deepEqual(result, [line], 'the drag never touched the ink, so the line must be untouched');
 });
 
+test('split eraser cuts a multi-segment basic line when the drag runs along its centerline', () => {
+    const d = Array.from({ length: 21 }, (_, i) => `${(169.6 + i * 33).toFixed(1)} 400.0`).join(' L ');
+    const line = { ...linePath(`M ${d}`), strokeWidth: 12 };
+    const trail = Array.from({ length: 16 }, (_, i) => ({ x: 400 + i * 12, y: 400 }));
+    const result = splitPathsByEraser([line], trail, 40);
+    assert.equal(result.length, 2, `along-line cut should split the stroke, got ${result.length}`);
+});
+
 test('split eraser cuts a line the drag actually runs over', () => {
     // The counterpart to the graze tests: the same parallel drag, but ON the
     // line, must still remove it. (A "keep everything" regression would pass the
