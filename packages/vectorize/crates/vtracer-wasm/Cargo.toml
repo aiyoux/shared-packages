@@ -1,0 +1,16 @@
+[package]
+name = "vtracer-wasm"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Browser WASM bindings for VTracer 1.0 (convertPixels)."
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde-wasm-bindgen = "0.6"
+vtracer = "1.0.0-alpha.3"
+wasm-bindgen = "0.2"

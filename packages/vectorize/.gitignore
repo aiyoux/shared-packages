@@ -1,0 +1,5 @@
+crates/**/target
+src/wasm/.gitignore
+src/wasm/package.json
+src/wasm/README.md
+src/wasm/.npmignore
