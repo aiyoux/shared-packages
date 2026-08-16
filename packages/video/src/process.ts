@@ -1,47 +1,10 @@
-import { Output, Mp4OutputFormat, BufferTarget, EncodedVideoPacketSource, EncodedPacket } from 'mediabunny';
+import { createEncodeSession, parseBitrate } from './encodeSession.js';
 import type { ProcessOptions } from './types.js';
 
 export type { ProcessOptions };
+export { parseBitrate };
 
 type RVFCMetadata = VideoFrameCallbackMetadata;
-
-export function parseBitrate(bitrate: string): number {
-	const match = bitrate.match(/^(\d+(?:\.\d+)?)\s*(k|M|G)?$/i);
-	if (!match) return 1_000_000;
-	const value = parseFloat(match[1]);
-	const unit = match[2]?.toLowerCase();
-	if (unit === 'k') return value * 1_000;
-	if (unit === 'm') return value * 1_000_000;
-	if (unit === 'g') return value * 1_000_000_000;
-	return value;
-}
-
-/**
- * Pick the lowest H.264 level whose max frame size (in macroblocks) fits the
- * given coded dimensions, and return the level's hex byte for the codec string.
- *
- * Level 3.1 (the long-standing default here) caps the coded area at 3600
- * macroblocks (≈921,600 px), so anything larger than 720p must declare a
- * higher level or the encoder rejects the configuration outright.
- * Values from the H.264 spec, Table A-1 (MaxFS column).
- */
-function avcLevelByte(width: number, height: number): string {
-	const macroblocks = Math.ceil(width / 16) * Math.ceil(height / 16);
-	// [maxFrameSizeInMacroblocks, levelByteHex] ordered ascending.
-	const levels: Array<[number, string]> = [
-		[1620, '1F'], // 3.1
-		[3600, '1F'], // 3.1
-		[5120, '20'], // 3.2
-		[8192, '28'], // 4.0
-		[8704, '2A'], // 4.2
-		[22080, '32'], // 5.0
-		[36864, '33'] // 5.1
-	];
-	for (const [maxFs, byte] of levels) {
-		if (macroblocks <= maxFs) return byte;
-	}
-	return '34'; // 5.2 — anything larger still
-}
 
 /**
  * Trim and optionally resize a video using WebCodecs.
@@ -55,6 +18,8 @@ function avcLevelByte(width: number, height: number): string {
  * everywhere the blob is consumed.
  *
  * Requires modern Chromium (Chrome / Edge / Brave). No Safari fallback.
+ *
+ * Capture is play + RVFC + metadata.mediaTime. Do not seek currentTime per frame.
  */
 export async function processVideo(inputBlob: Blob, options: ProcessOptions): Promise<Blob> {
 	if (typeof VideoEncoder === 'undefined' || typeof VideoFrame === 'undefined') {
@@ -96,6 +61,8 @@ export async function processVideo(inputBlob: Blob, options: ProcessOptions): Pr
 		URL.revokeObjectURL(video.src);
 	};
 
+	let session: ReturnType<typeof createEncodeSession> | null = null;
+
 	try {
 		await new Promise<void>((resolve, reject) => {
 			video.onloadedmetadata = () => resolve();
@@ -128,49 +95,12 @@ export async function processVideo(inputBlob: Blob, options: ProcessOptions): Pr
 			throw new Error('Could not acquire a 2D context on OffscreenCanvas for resize.');
 		}
 
-		const output = new Output({
-			format: new Mp4OutputFormat({ fastStart: 'in-memory' }),
-			target: new BufferTarget()
-		});
-		const videoSource = new EncodedVideoPacketSource('avc');
-		output.addVideoTrack(videoSource);
-		await output.start();
-
-		const bitsPerSecond = parseBitrate(options.bitrate);
-		let encoderError: Error | null = null;
-		let muxError: Error | null = null;
-		// EncodedVideoPacketSource.add() is async (for writer/encoder
-		// backpressure). Chain the calls so packets are muxed in the order the
-		// encoder emits them, and so we can await completion before finalizing.
-		// Errors are captured rather than left to reject the chain unhandled.
-		let muxChain: Promise<void> = Promise.resolve();
-		const encoder = new VideoEncoder({
-			output: (chunk, meta) => {
-				const packet = EncodedPacket.fromEncodedChunk(chunk);
-				muxChain = muxChain
-					.then(() => videoSource.add(packet, meta))
-					.catch((e) => {
-						muxError = muxError ?? (e instanceof Error ? e : new Error(String(e)));
-					});
-			},
-			error: (e) => {
-				encoderError = e instanceof Error ? e : new Error(String(e));
-			}
-		});
-
-		// H.264 Baseline (42E0…), with the level chosen to fit the output size.
-		const codec = `avc1.42E0${avcLevelByte(outWidth, outHeight)}`;
-		encoder.configure({
-			codec,
+		session = createEncodeSession({
 			width: outWidth,
 			height: outHeight,
-			bitrate: bitsPerSecond,
-			framerate: 30,
-			avc: { format: 'avc' }
+			bitrate: options.bitrate,
+			fpsHint: 30
 		});
-
-		const KEYFRAME_INTERVAL_US = 2_000_000;
-		let lastKeyframeUs = -Infinity;
 
 		let lastReportedProgress = -1;
 		const reportProgress = (mediaTimeSec: number) => {
@@ -189,14 +119,7 @@ export async function processVideo(inputBlob: Blob, options: ProcessOptions): Pr
 		// encoder so output timing exactly mirrors source timing at whatever
 		// frame rate the source actually runs at.
 		const captureDone = new Promise<void>((resolve, reject) => {
-			let kept = false;
-
 			const onFrame = (_now: number, metadata: RVFCMetadata) => {
-				if (encoderError) {
-					reject(encoderError);
-					return;
-				}
-
 				const mediaTime = metadata.mediaTime;
 
 				if (mediaTime < options.start - 1e-3) {
@@ -221,13 +144,9 @@ export async function processVideo(inputBlob: Blob, options: ProcessOptions): Pr
 						frame = new VideoFrame(video, { timestamp: tsUs });
 					}
 
-					const wantKeyframe = !kept || tsUs - lastKeyframeUs >= KEYFRAME_INTERVAL_US;
-					if (wantKeyframe) lastKeyframeUs = tsUs;
-
-					encoder.encode(frame, { keyFrame: wantKeyframe });
+					session!.encode(frame);
 					frame.close();
 
-					kept = true;
 					reportProgress(mediaTime);
 				} catch (err) {
 					reject(err instanceof Error ? err : new Error(String(err)));
@@ -258,20 +177,11 @@ export async function processVideo(inputBlob: Blob, options: ProcessOptions): Pr
 
 		if (!video.paused) video.pause();
 
-		await encoder.flush();
-		if (encoderError) throw encoderError;
-		encoder.close();
-		await muxChain;
-		if (muxError) throw muxError;
-		await output.finalize();
-
+		const blob = await session.flush();
 		reportProgress(options.end);
-
-		const buffer = (output.target as BufferTarget).buffer;
-		if (!buffer) throw new Error('Muxing produced no output buffer.');
-		return new Blob([buffer], { type: 'video/mp4' });
+		return blob;
 	} finally {
+		session?.close();
 		cleanupDom();
 	}
 }
-

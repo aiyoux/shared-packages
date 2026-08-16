@@ -1,4 +1,6 @@
-export { processVideo, parseBitrate } from './process.js';
+export { processVideo } from './process.js';
+export { parseBitrate, createEncodeSession, type EncodeSession } from './encodeSession.js';
+export { encodeFrames, type FrameSource } from './encodeFrames.js';
 export { createVideoUrl, getVideoDuration, getVideoFrameRate, revokeVideoUrl } from './meta.js';
 export { formatTimecode } from './time.js';
 export {
