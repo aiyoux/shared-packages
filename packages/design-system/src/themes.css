@@ -1,0 +1,164 @@
+/*
+ * Per-app themes — [data-theme] scoped overrides of the canonical tokens.
+ *
+ * Scoped, order-independent, composable: a theme applies to the subtree that
+ * carries the attribute (in the hub SPA, `data-theme` is set on <html> while
+ * the app is mounted), so a hub-mounted app keeps its identity without touching
+ * the document root's canonical values.
+ *
+ * The hub, connections, and terminal converge to the §2 canonical tokens and
+ * need no theme (terminal gets one small identity override). The indigo apps
+ * (voice, dictionary, prompter, sketcher) preserve their distinctive look here.
+ *
+ * Wrapped in `@layer tokens` (host declares the layer order).
+ */
+@layer tokens {
+	/* ---- terminal: slate ground, panels match the ground ---- */
+	[data-theme='terminal'] {
+		--surface-1: #020617;
+		--bg-panel: #020617;
+		--bg-secondary: #020617;
+	}
+
+	/* ---- voice: indigo accent, glassmorphism near-black ---- */
+	[data-theme='voice'] {
+		--accent: #6366f1;
+		--accent-rgb: 99, 102, 241;
+		--accent-light: #818cf8;
+		--accent-glow: rgba(99, 102, 241, 0.4);
+		--bg-primary: #0a0a0f;
+		--bg-main: #0a0a0f;
+		--bg-secondary: #12121a;
+		--bg-card: rgba(255, 255, 255, 0.05);
+		--bg-card-hover: rgba(255, 255, 255, 0.08);
+		--text-primary: #ffffff;
+		--text-secondary: #a0a0b0;
+		--text-muted: #606070;
+		--text-dim: #707080;
+		--border: rgba(255, 255, 255, 0.1);
+		--radius-sm: 8px;
+		--radius-md: 12px;
+		--radius-lg: 20px;
+		--radius-full: 9999px;
+		--transition-fast: 150ms ease;
+		--transition-normal: 250ms ease;
+		--transition-slow: 400ms ease;
+	}
+
+	/* ---- prompter: identical palette to voice ---- */
+	[data-theme='prompter'] {
+		--accent: #6366f1;
+		--accent-rgb: 99, 102, 241;
+		--accent-light: #818cf8;
+		--accent-glow: rgba(99, 102, 241, 0.4);
+		--bg-primary: #0a0a0f;
+		--bg-secondary: #12121a;
+		--bg-card: rgba(255, 255, 255, 0.05);
+		--bg-card-hover: rgba(255, 255, 255, 0.08);
+		--text-primary: #ffffff;
+		--text-secondary: #a0a0b0;
+		--text-muted: #606070;
+		--border: rgba(255, 255, 255, 0.1);
+		--radius-sm: 8px;
+		--radius-md: 12px;
+		--radius-lg: 20px;
+		--radius-full: 9999px;
+		--transition-fast: 150ms ease;
+		--transition-normal: 250ms ease;
+		--transition-slow: 400ms ease;
+	}
+
+	/* ---- dictionary: indigo accent, tight radii, "Clean Geometric" ---- */
+	[data-theme='dictionary'] {
+		--accent: #6366f1;
+		--accent-rgb: 99, 102, 241;
+		--accent-light: #818cf8;
+		--accent-glow: rgba(99, 102, 241, 0.2);
+		--bg-primary: #09090d;
+		--bg-secondary: #121218;
+		--bg-card: #16161e;
+		--bg-card-hover: #1c1c26;
+		--text-primary: #ffffff;
+		--text-secondary: #9a9ab0;
+		--text-muted: #7a7a90;
+		--border: rgba(255, 255, 255, 0.08);
+		--border-hover: rgba(255, 255, 255, 0.16);
+		--radius-sm: 6px;
+		--radius-md: 6px;
+		--radius-lg: 8px;
+		--radius-xl: 10px;
+		--radius-2xl: 12px;
+		--radius-3xl: 16px;
+		--radius-full: 9999px;
+		--transition-fast: 150ms;
+		--transition-normal: 220ms;
+		--transition-slow: 350ms;
+		--ease-default: cubic-bezier(0.16, 1, 0.3, 1);
+		--ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+		--ease-bounce: cubic-bezier(0.16, 1, 0.3, 1);
+		--ease-spring: cubic-bezier(0.16, 1, 0.3, 1);
+
+		/* shared-UI aliases resolve to the dictionary's indigo accent */
+		--color-primary: var(--accent);
+		--color-primary-foreground: #ffffff;
+		--color-border: var(--border);
+		--color-foreground: var(--text-primary);
+		--color-background: var(--bg-primary);
+		--color-input: var(--bg-secondary);
+		--color-muted-foreground: var(--text-secondary);
+
+		/* dictionary stacking */
+		--z-map-default: 10;
+		--z-map-hover: 20;
+		--z-map-controls: 100;
+		--z-dropdown: 1000;
+		--z-header: 1000;
+		--z-sidebar-backdrop: 1000;
+		--z-sidebar: 1001;
+		--z-modal-backdrop: 2000;
+		--z-modal-content: 2010;
+	}
+
+	/* ---- sketcher: indigo accent, near-black, canvas overlay chrome ---- */
+	[data-theme='sketcher'] {
+		--accent: #6366f1;
+		--accent-rgb: 99, 102, 241;
+		--accent-light: #818cf8;
+		--accent-glow: rgba(99, 102, 241, 0.4);
+		--accent-subtle: rgba(99, 102, 241, 0.12);
+		--bg-primary: #0a0a0f;
+		--bg-secondary: #12121a;
+		--bg-card: rgba(255, 255, 255, 0.05);
+		--bg-card-hover: rgba(255, 255, 255, 0.08);
+		--bg-chrome: rgba(18, 18, 24, 0.94);
+		--bg-chrome-hover: rgba(28, 28, 36, 0.97);
+		--text-primary: #ffffff;
+		--text-secondary: #a0a0b0;
+		--text-muted: #606070;
+		--border: rgba(255, 255, 255, 0.1);
+		--border-hover: rgba(255, 255, 255, 0.2);
+		--radius-sm: 8px;
+		--radius-md: 12px;
+		--radius-lg: 20px;
+		--radius-full: 9999px;
+		--overlay-light: rgba(255, 255, 255, 0.02);
+		--overlay-medium: rgba(255, 255, 255, 0.05);
+		--overlay-dark: rgba(255, 255, 255, 0.1);
+		--overlay-darker: rgba(255, 255, 255, 0.15);
+		--overlay-darkest: rgba(255, 255, 255, 0.2);
+		--overlay-backdrop: rgba(0, 0, 0, 0.7);
+		--shadow-soft: rgba(0, 0, 0, 0.2);
+		--shadow-medium: rgba(0, 0, 0, 0.3);
+		--shadow-hard: rgba(0, 0, 0, 0.5);
+		--shadow-light: rgba(0, 0, 0, 0.12);
+		--shadow-heavy: rgba(0, 0, 0, 0.55);
+		--success: #22c55e;
+		--success-rgb: 34, 197, 94;
+		--warning: #e0a800;
+		--warning-rgb: 224, 168, 0;
+		--warning-bg: rgba(224, 168, 0, 0.15);
+		--transition-fast: 150ms ease;
+		--transition-normal: 250ms ease;
+		--transition-slow: 400ms ease;
+	}
+}

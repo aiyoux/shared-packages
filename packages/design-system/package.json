@@ -1,0 +1,36 @@
+{
+  "name": "@shared-packages/design-system",
+  "version": "0.1.0",
+  "private": false,
+  "type": "module",
+  "description": "Design tokens, reset, themes, and primitives shared across the hub + mounted apps and modular-app.",
+  "svelte": "./src/index.ts",
+  "publishConfig": {
+    "access": "public"
+  },
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "svelte": "./src/index.ts",
+      "import": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./tokens.css": "./src/tokens.css",
+    "./reset.css": "./src/reset.css",
+    "./themes.css": "./src/themes.css",
+    "./Button.svelte": "./src/components/Button.svelte",
+    "./Card.svelte": "./src/components/Card.svelte",
+    "./Input.svelte": "./src/components/Input.svelte",
+    "./FormGroup.svelte": "./src/components/FormGroup.svelte",
+    "./Tooltip.svelte": "./src/components/Tooltip.svelte",
+    "./LevelMeter.svelte": "./src/components/LevelMeter.svelte"
+  },
+  "types": "./src/index.ts",
+  "files": ["src"],
+  "scripts": {
+    "yalc:publish": "yalc publish"
+  },
+  "peerDependencies": {
+    "svelte": "^5.0.0"
+  }
+}

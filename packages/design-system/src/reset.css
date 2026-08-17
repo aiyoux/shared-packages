@@ -1,0 +1,67 @@
+/*
+ * Design system reset — loaded once by the host. The one owner of page-level
+ * base rules. Do not zero margin/padding on bare `*`: unlayered resets beat
+ * Tailwind v4 `@layer utilities` and wiped spacing from hub-mounted tools.
+ * Tailwind preflight + utilities own spacing.
+ *
+ * Wrapped in `@layer reset` (host declares the layer order).
+ */
+@layer reset {
+	*,
+	*::before,
+	*::after {
+		box-sizing: border-box;
+	}
+
+	html,
+	body {
+		height: 100%;
+		margin: 0;
+		padding: 0;
+		/* Default: allow document scroll. Immersive tools toggle class-gated
+		   locks (*-scroll-lock) on <html> only while mounted. */
+		overflow-x: hidden;
+		overflow-y: auto;
+		background-color: var(--surface-ground);
+		color: var(--text-primary);
+		font-family: var(--font-sans);
+		-webkit-font-smoothing: antialiased;
+	}
+
+	::selection {
+		background: rgb(56 189 248 / 0.3);
+	}
+
+	:focus-visible {
+		outline: 2px solid var(--accent);
+		outline-offset: 2px;
+	}
+
+	::-webkit-scrollbar {
+		width: 8px;
+	}
+
+	::-webkit-scrollbar-track {
+		background: transparent;
+	}
+
+	::-webkit-scrollbar-thumb {
+		background: rgb(255 255 255 / 0.1);
+		border-radius: 4px;
+	}
+
+	::-webkit-scrollbar-thumb:hover {
+		background: rgb(255 255 255 / 0.2);
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		*,
+		*::before,
+		*::after {
+			animation-duration: 0.01ms !important;
+			animation-iteration-count: 1 !important;
+			transition-duration: 0.01ms !important;
+			scroll-behavior: auto !important;
+		}
+	}
+}
