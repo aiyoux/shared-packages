@@ -24,7 +24,8 @@
     "./Input.svelte": "./src/components/Input.svelte",
     "./FormGroup.svelte": "./src/components/FormGroup.svelte",
     "./Tooltip.svelte": "./src/components/Tooltip.svelte",
-    "./LevelMeter.svelte": "./src/components/LevelMeter.svelte"
+    "./LevelMeter.svelte": "./src/components/LevelMeter.svelte",
+    "./Sidebar.svelte": "./src/components/Sidebar.svelte"
   },
   "types": "./src/index.ts",
   "files": ["src"],

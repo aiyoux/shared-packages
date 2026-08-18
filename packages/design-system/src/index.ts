@@ -18,3 +18,4 @@ export { default as Input } from './components/Input.svelte';
 export { default as FormGroup } from './components/FormGroup.svelte';
 export { default as Tooltip } from './components/Tooltip.svelte';
 export { default as LevelMeter } from './components/LevelMeter.svelte';
+export { default as Sidebar, type SidebarNavItem } from './components/Sidebar.svelte';
