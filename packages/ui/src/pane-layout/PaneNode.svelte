@@ -146,7 +146,7 @@
 		flex-direction: column;
 		background: var(--surface, #0f172a);
 		border: 1px solid color-mix(in srgb, var(--border, #334155) 80%, transparent);
-		border-radius: 8px;
+		border-radius: 0;
 		overflow: hidden;
 	}
 	.pl-leaf.focused {
