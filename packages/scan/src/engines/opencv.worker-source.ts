@@ -36,13 +36,42 @@ function nearestOdd(n) {
 	return v % 2 === 0 ? v + 1 : v;
 }
 
+function matByteLength(mat) {
+	var rows = mat.rows || 0;
+	var cols = mat.cols || 0;
+	var elem = 1;
+	try {
+		if (typeof mat.elemSize === 'function') elem = mat.elemSize();
+		else if (typeof mat.channels === 'function') elem = mat.channels();
+	} catch (e) {
+		elem = 4;
+	}
+	return rows * cols * elem;
+}
+
 function matBytes(mat) {
-	var copy = new Uint8ClampedArray(mat.data.length);
-	copy.set(mat.data);
+	var n = matByteLength(mat);
+	var src = mat.data;
+	var copy = new Uint8ClampedArray(n);
+	if (src && src.length >= n) {
+		if (src.subarray) copy.set(src.subarray(0, n));
+		else copy.set(src);
+	} else if (src) {
+		copy.set(src);
+	}
 	return copy;
 }
 
 function toRgbaImageData(cv, mat) {
+	var channels = 0;
+	try {
+		channels = typeof mat.channels === 'function' ? mat.channels() : 0;
+	} catch (e) {
+		channels = 0;
+	}
+	if (channels === 4) {
+		return { buffer: matBytes(mat).buffer, width: mat.cols, height: mat.rows };
+	}
 	var rgba = new cv.Mat();
 	try {
 		cv.cvtColor(mat, rgba, cv.COLOR_GRAY2RGBA);
@@ -173,68 +202,95 @@ function contourToQuad(cv, cnt) {
 	}
 }
 
+function scoreQuad(pts, width, height) {
+	var area = quadArea(pts);
+	var fill = area / (width * height || 1);
+	// Prefer a page that fills a useful chunk of the frame, not a tiny card
+	// or the entire sensor.
+	var fillScore = 1;
+	if (fill < 0.12) fillScore = fill / 0.12;
+	else if (fill > 0.94) fillScore = Math.max(0.2, (1 - fill) / 0.06);
+	var w = Math.max(dist(pts[0], pts[1]), dist(pts[3], pts[2]));
+	var h = Math.max(dist(pts[0], pts[3]), dist(pts[1], pts[2]));
+	var ar = w / (h || 1);
+	var arScore = ar > 0.32 && ar < 3.2 ? 1 : 0.35;
+	return area * fillScore * arScore;
+}
+
 function detectFromEdges(cv, edges, minArea, width, height) {
 	var modes = [cv.RETR_EXTERNAL, cv.RETR_LIST];
 	var best = null;
+	var maxContours = 80;
 	for (var m = 0; m < modes.length; m++) {
 		var src = edges.clone();
 		var contours = new cv.MatVector();
 		var hierarchy = new cv.Mat();
 		try {
 			cv.findContours(src, contours, hierarchy, modes[m], cv.CHAIN_APPROX_SIMPLE);
-			for (var i = 0; i < contours.size(); i++) {
+			var n = Math.min(contours.size(), maxContours);
+			for (var i = 0; i < n; i++) {
 				var cnt = contours.get(i);
 				var area = cv.contourArea(cnt);
 				if (area < minArea) continue;
 				var quad = contourToQuad(cv, cnt);
 				if (!quad || !usableQuad(quad, width, height, minArea)) continue;
-				if (!best || area > best.area) best = { area: area, quad: quad };
+				var score = scoreQuad(quad, width, height);
+				if (!best || score > best.score) best = { score: score, quad: quad };
 			}
 		} finally {
 			src.delete();
 			contours.delete();
 			hierarchy.delete();
 		}
+		if (best) return best.quad;
 	}
 	return best ? best.quad : null;
 }
 
 function matFromRgba(cv, buffer, width, height) {
-	var bytes = buffer instanceof Uint8ClampedArray ? buffer : new Uint8ClampedArray(buffer);
+	var bytes = buffer instanceof Uint8Array ? buffer : new Uint8ClampedArray(buffer);
 	if (typeof cv.CV_8UC4 !== 'number') {
 		throw new Error('OpenCV CV_8UC4 missing');
 	}
+	var expected = width * height * 4;
+	if (bytes.length < expected) {
+		throw new Error('Image buffer is shorter than width*height*4');
+	}
 	var src = new cv.Mat(height, width, cv.CV_8UC4);
-	src.data.set(bytes);
+	src.data.set(bytes.subarray ? bytes.subarray(0, expected) : bytes);
 	return src;
 }
 
-function detectQuad(cv, buffer, width, height, opts) {
-	opts = opts || {};
-	var minArea = (opts.minAreaRatio != null ? opts.minAreaRatio : 0.05) * width * height;
-	var src = matFromRgba(cv, buffer, width, height);
-	var gray = new cv.Mat();
+function scaleFoundQuad(quad, scale) {
+	if (!quad || scale === 1) return quad;
+	var inv = 1 / scale;
+	return [
+		{ x: quad[0].x * inv, y: quad[0].y * inv },
+		{ x: quad[1].x * inv, y: quad[1].y * inv },
+		{ x: quad[2].x * inv, y: quad[2].y * inv },
+		{ x: quad[3].x * inv, y: quad[3].y * inv }
+	];
+}
+
+function detectOnGray(cv, gray, minArea, width, height) {
 	var work = new cv.Mat();
 	var edges = new cv.Mat();
-	var kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5));
+	var closeK = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(7, 7));
+	var dilateK = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(3, 3));
 	try {
-		cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
-		try {
-			if (typeof cv.CLAHE === 'function') {
-				var clahe = new cv.CLAHE(2, new cv.Size(8, 8));
-				clahe.apply(gray, gray);
-				clahe.delete();
-			}
-		} catch (e) {
-			/* CLAHE optional */
+		function fromBinary() {
+			return detectFromEdges(cv, edges, minArea, width, height);
 		}
+		// Text at native resolution drowns the page outline. Blur first so
+		// Canny sees the sheet, then dilate/close so the border reconnects.
 		cv.GaussianBlur(gray, work, new cv.Size(5, 5), 0);
-		var cannyPairs = [[30, 90], [50, 150], [80, 200]];
+		var cannyPairs = [[20, 70], [40, 120], [75, 200]];
 		for (var c = 0; c < cannyPairs.length; c++) {
 			try {
 				cv.Canny(work, edges, cannyPairs[c][0], cannyPairs[c][1]);
-				cv.morphologyEx(edges, edges, cv.MORPH_CLOSE, kernel);
-				var fromCanny = detectFromEdges(cv, edges, minArea, width, height);
+				cv.dilate(edges, edges, dilateK);
+				cv.morphologyEx(edges, edges, cv.MORPH_CLOSE, closeK);
+				var fromCanny = fromBinary();
 				if (fromCanny) return fromCanny;
 			} catch (e) {
 				/* next Canny pair */
@@ -242,7 +298,8 @@ function detectQuad(cv, buffer, width, height, opts) {
 		}
 		var threshModes = [
 			[cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY, 21, 5],
-			[cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 21, 5]
+			[cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 21, 5],
+			[cv.ADAPTIVE_THRESH_MEAN_C, cv.THRESH_BINARY, 15, 4]
 		];
 		for (var t = 0; t < threshModes.length; t++) {
 			try {
@@ -255,30 +312,81 @@ function detectQuad(cv, buffer, width, height, opts) {
 					threshModes[t][2],
 					threshModes[t][3]
 				);
-				cv.morphologyEx(edges, edges, cv.MORPH_CLOSE, kernel);
-				var fromBin = detectFromEdges(cv, edges, minArea, width, height);
+				cv.morphologyEx(edges, edges, cv.MORPH_CLOSE, closeK);
+				var fromBin = fromBinary();
 				if (fromBin) return fromBin;
 			} catch (e) {
 				/* next threshold */
 			}
 		}
 		try {
+			cv.GaussianBlur(gray, work, new cv.Size(11, 11), 0);
 			cv.threshold(work, edges, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU);
-			cv.morphologyEx(edges, edges, cv.MORPH_CLOSE, kernel);
-			var fromOtsu = detectFromEdges(cv, edges, minArea, width, height);
+			cv.morphologyEx(edges, edges, cv.MORPH_CLOSE, closeK);
+			var fromOtsu = fromBinary();
 			if (fromOtsu) return fromOtsu;
 			cv.threshold(work, edges, 0, 255, cv.THRESH_BINARY_INV + cv.THRESH_OTSU);
-			cv.morphologyEx(edges, edges, cv.MORPH_CLOSE, kernel);
-			return detectFromEdges(cv, edges, minArea, width, height);
+			cv.morphologyEx(edges, edges, cv.MORPH_CLOSE, closeK);
+			return fromBinary();
 		} catch (e) {
 			return null;
 		}
 	} finally {
-		src.delete();
-		gray.delete();
 		work.delete();
 		edges.delete();
-		kernel.delete();
+		closeK.delete();
+		dilateK.delete();
+	}
+}
+
+function detectQuad(cv, buffer, width, height, opts) {
+	opts = opts || {};
+	var maxEdge = opts.maxDetectEdge != null ? opts.maxDetectEdge : 480;
+	var src = matFromRgba(cv, buffer, width, height);
+	var resized = null;
+	var scale = 1;
+	try {
+		var longest = Math.max(width, height);
+		var work = src;
+		var dw = width;
+		var dh = height;
+		// Tiny frames hit pathological OpenCV.js paths (detect never returns).
+		// Always run around 360–480px on the long edge.
+		var minEdge = 360;
+		if (longest > maxEdge || longest < minEdge) {
+			scale = (longest > maxEdge ? maxEdge : minEdge) / longest;
+			dw = Math.max(2, Math.round(width * scale));
+			dh = Math.max(2, Math.round(height * scale));
+			resized = new cv.Mat();
+			cv.resize(src, resized, new cv.Size(dw, dh), 0, 0, cv.INTER_AREA);
+			work = resized;
+		}
+		var minArea = (opts.minAreaRatio != null ? opts.minAreaRatio : 0.04) * dw * dh;
+		var gray = new cv.Mat();
+		var boosted = new cv.Mat();
+		try {
+			cv.cvtColor(work, gray, cv.COLOR_RGBA2GRAY);
+			var found = detectOnGray(cv, gray, minArea, dw, dh);
+			if (found) return scaleFoundQuad(found, scale);
+			try {
+				if (typeof cv.CLAHE === 'function') {
+					var clahe = new cv.CLAHE(2, new cv.Size(8, 8));
+					clahe.apply(gray, boosted);
+					clahe.delete();
+					found = detectOnGray(cv, boosted, minArea, dw, dh);
+					if (found) return scaleFoundQuad(found, scale);
+				}
+			} catch (e) {
+				/* CLAHE optional */
+			}
+			return null;
+		} finally {
+			gray.delete();
+			boosted.delete();
+		}
+	} finally {
+		src.delete();
+		if (resized) resized.delete();
 	}
 }
 
@@ -286,11 +394,12 @@ function warp(cv, buffer, width, height, quad, opts) {
 	opts = opts || {};
 	var size = outputSize(quad, opts.maxEdge || 1600);
 	var src = matFromRgba(cv, buffer, width, height);
-	var srcTri = cv.matFromArray(4, 1, cv.CV_32FC2, [
-		quad[0].x, quad[0].y, quad[1].x, quad[1].y, quad[2].x, quad[2].y, quad[3].x, quad[3].y
-	]);
+	var pts = [
+		+quad[0].x, +quad[0].y, +quad[1].x, +quad[1].y, +quad[2].x, +quad[2].y, +quad[3].x, +quad[3].y
+	];
+	var srcTri = cv.matFromArray(4, 1, cv.CV_32FC2, pts);
 	var dstTri = cv.matFromArray(4, 1, cv.CV_32FC2, [0, 0, size.width, 0, size.width, size.height, 0, size.height]);
-	var dest = new cv.Mat();
+	var dest = new cv.Mat(size.height, size.width, src.type ? src.type() : cv.CV_8UC4);
 	var M = null;
 	try {
 		M = cv.getPerspectiveTransform(srcTri, dstTri);

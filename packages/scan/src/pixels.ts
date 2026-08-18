@@ -1,3 +1,45 @@
+/** Copy pixels into a standalone buffer so the worker can transfer it. */
+export function copyPixelBuffer(data: ArrayLike<number>): ArrayBuffer {
+	if (ArrayBuffer.isView(data)) {
+		return new Uint8ClampedArray(data as Uint8Array).buffer;
+	}
+	try {
+		const maybe = data as Uint8ClampedArray;
+		if (typeof maybe.slice === 'function') {
+			const sliced = maybe.slice();
+			if (sliced.buffer instanceof ArrayBuffer) return sliced.buffer;
+		}
+	} catch {
+		/* reactive proxies of typed arrays fail brand checks — fall through */
+	}
+	const copy = new Uint8ClampedArray(data.length);
+	for (let i = 0; i < data.length; i++) copy[i] = Number(data[i]);
+	return copy.buffer;
+}
+
+export function snapshotImageData(image: ImageData): ImageData {
+	const width = Number(image.width);
+	const height = Number(image.height);
+	try {
+		const bytes = new Uint8ClampedArray(copyPixelBuffer(image.data));
+		if (bytes.byteLength === width * height * 4) {
+			return new ImageData(bytes, width, height);
+		}
+	} catch {
+		/* Svelte $state may proxy ImageData; redraw through a canvas. */
+	}
+	if (typeof document === 'undefined') {
+		throw new Error('Could not snapshot ImageData outside a document.');
+	}
+	const canvas = document.createElement('canvas');
+	canvas.width = width;
+	canvas.height = height;
+	const ctx = canvas.getContext('2d');
+	if (!ctx) throw new Error('Could not snapshot image data.');
+	ctx.putImageData(image, 0, 0);
+	return ctx.getImageData(0, 0, width, height);
+}
+
 export async function imageDataToBlob(
 	data: ImageData,
 	type = 'image/jpeg',

@@ -1,7 +1,9 @@
+import { plainQuad } from './cloneable.js';
 import { loadScanEngine } from './engines.js';
 import { newScanId } from './geometry.js';
-import { imageDataToBlob } from './pixels.js';
+import { imageDataToBlob, snapshotImageData } from './pixels.js';
 import type { Quad, ScanPage } from './types.js';
+import { warpImageData } from './warp.js';
 
 export type CommitOptions = {
 	enhance?: boolean;
@@ -15,9 +17,16 @@ export async function commitScan(
 	quad: Quad,
 	opts: CommitOptions = {}
 ): Promise<ScanPage> {
-	const engine = await loadScanEngine();
-	let warped = await engine.warp(image, quad, { maxEdge: opts.maxEdge });
-	if (opts.enhance) warped = await engine.enhance(warped);
+	const pixels =
+		ArrayBuffer.isView(image.data) && image instanceof ImageData
+			? image
+			: snapshotImageData(image);
+	const corners = plainQuad(quad);
+	let warped = warpImageData(pixels, corners, opts.maxEdge);
+	if (opts.enhance) {
+		const engine = await loadScanEngine();
+		warped = await engine.enhance(warped);
+	}
 	const blob = await imageDataToBlob(warped, 'image/jpeg', 0.92);
 	let text: string | undefined;
 	if (opts.ocr) {

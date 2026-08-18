@@ -1,7 +1,20 @@
 import type { ScanEngine, ScanLoadProgress } from './types.js';
 
-let cached: ScanEngine | null = null;
-let opencvUrl: string | undefined;
+const CACHE_KEY = '__spScanEngine';
+const URL_KEY = '__spScanOpenCvUrl';
+
+function getCached(): ScanEngine | null {
+	return ((globalThis as Record<string, unknown>)[CACHE_KEY] as ScanEngine | undefined) ?? null;
+}
+
+function setCached(engine: ScanEngine | null) {
+	(globalThis as Record<string, unknown>)[CACHE_KEY] = engine;
+}
+
+let cached: ScanEngine | null = getCached();
+let opencvUrl: string | undefined = (globalThis as Record<string, unknown>)[URL_KEY] as
+	| string
+	| undefined;
 
 export type LoadScanOptions = {
 	/** Classic-script URL for opencv.js (required in Vite/ESM). */
@@ -12,15 +25,17 @@ export type LoadScanOptions = {
 
 export function setOpenCvUrl(url: string) {
 	opencvUrl = url;
+	(globalThis as Record<string, unknown>)[URL_KEY] = url;
 }
 
 export function getOpenCvUrl(): string | undefined {
-	return opencvUrl;
+	return opencvUrl ?? ((globalThis as Record<string, unknown>)[URL_KEY] as string | undefined);
 }
 
 /** Load OpenCV.js once. Safe to call from the UI on “Start camera”. */
 export async function loadScanEngine(opts: LoadScanOptions = {}): Promise<ScanEngine> {
-	if (opts.opencvUrl) opencvUrl = opts.opencvUrl;
+	if (opts.opencvUrl) setOpenCvUrl(opts.opencvUrl);
+	cached = getCached();
 	if (cached) return cached;
 	const { opencvEngine, setOpenCvProgress } = await import('./engines/opencv.js');
 	setOpenCvProgress(opts.onProgress);
@@ -30,6 +45,7 @@ export async function loadScanEngine(opts: LoadScanOptions = {}): Promise<ScanEn
 		setOpenCvProgress(undefined);
 	}
 	cached = opencvEngine;
+	setCached(cached);
 	return cached;
 }
 

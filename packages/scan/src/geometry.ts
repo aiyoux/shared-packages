@@ -1,3 +1,4 @@
+import { plainQuad } from './cloneable.js';
 import type { ContainRect, Point, Quad } from './types.js';
 
 export function newScanId(): string {
@@ -91,10 +92,5 @@ export function fullFrameQuad(width: number, height: number, insetRatio = 0.08):
 }
 
 export function cloneQuad(q: Quad): Quad {
-	return [
-		{ x: q[0].x, y: q[0].y },
-		{ x: q[1].x, y: q[1].y },
-		{ x: q[2].x, y: q[2].y },
-		{ x: q[3].x, y: q[3].y }
-	];
+	return plainQuad(q);
 }
