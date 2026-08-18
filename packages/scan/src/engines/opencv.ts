@@ -1,4 +1,6 @@
+import { workerPayload } from '../cloneable.js';
 import { OPENCV_WORKER_SOURCE } from './opencv.worker-source.js';
+import { copyPixelBuffer } from '../pixels.js';
 import type { DetectOptions, EnhanceOptions, Quad, ScanEngine, WarpOptions } from '../types.js';
 
 type ProgressFn = (info: {
@@ -32,12 +34,28 @@ function report(info: { phase: 'download' | 'init'; loaded?: number; total?: num
 }
 
 function copyImageBuffer(image: ImageData): ArrayBuffer {
-	const copy = new Uint8ClampedArray(image.data);
-	return copy.buffer;
+	return copyPixelBuffer(image.data);
 }
 
 function fromWorkerImage(msg: { buffer: ArrayBuffer; width: number; height: number }): ImageData {
 	return new ImageData(new Uint8ClampedArray(msg.buffer), msg.width, msg.height);
+}
+
+function resetWorker() {
+	if (worker) {
+		try {
+			worker.terminate();
+		} catch {
+			/* already dead */
+		}
+	}
+	worker = null;
+	ready = false;
+	loadPromise = null;
+	for (const wait of pending.values()) {
+		wait.reject(new Error('OpenCV worker was reset'));
+	}
+	pending.clear();
 }
 
 function spawnWorker(): Worker {
@@ -65,16 +83,51 @@ function spawnWorker(): Worker {
 	return next;
 }
 
-function call<T>(payload: Record<string, unknown>, transfer: Transferable[] = []): Promise<T> {
+const RPC_TIMEOUT_MS = 8_000;
+let rpcChain: Promise<unknown> = Promise.resolve();
+
+function postRaw<T>(payload: Record<string, unknown>, transfer: Transferable[], timeoutMs: number): Promise<T> {
 	if (!worker) throw new Error('OpenCV.js is not loaded. Call load() first.');
 	const id = ++rpcId;
 	return new Promise<T>((resolve, reject) => {
+		const timer = setTimeout(() => {
+			if (!pending.has(id)) return;
+			pending.delete(id);
+			resetWorker();
+			reject(new Error('OpenCV worker timed out'));
+		}, timeoutMs);
 		pending.set(id, {
-			resolve: (value) => resolve(value as T),
-			reject
+			resolve: (value) => {
+				clearTimeout(timer);
+				resolve(value as T);
+			},
+			reject: (err) => {
+				clearTimeout(timer);
+				reject(err);
+			}
 		});
-		worker!.postMessage({ ...payload, id }, transfer);
+		try {
+			worker!.postMessage(workerPayload({ ...payload, id }), transfer);
+		} catch (err) {
+			pending.delete(id);
+			clearTimeout(timer);
+			reject(err instanceof Error ? err : new Error(String(err)));
+		}
 	});
+}
+
+function call<T>(
+	payload: Record<string, unknown>,
+	transfer: Transferable[] = [],
+	timeoutMs = RPC_TIMEOUT_MS
+): Promise<T> {
+	const run = async () => {
+		await loadInWorker();
+		return postRaw<T>(payload, transfer, timeoutMs);
+	};
+	const next = rpcChain.then(run, run);
+	rpcChain = next.catch(() => undefined);
+	return next;
 }
 
 async function downloadOpenCv(url: string): Promise<ArrayBuffer> {
@@ -128,7 +181,7 @@ async function loadInWorker(): Promise<void> {
 			report({ phase: 'init' });
 			worker = spawnWorker();
 			const abs = new URL(url, globalThis.location.href).href;
-			await call({ type: 'init', url: abs });
+			await postRaw({ type: 'init', url: abs }, [], 120_000);
 			ready = true;
 		})().catch((err) => {
 			loadPromise = null;

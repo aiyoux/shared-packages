@@ -14,6 +14,8 @@ export type ScanPage = {
 export type DetectOptions = {
 	/** Reject quads smaller than this fraction of the frame. Default 0.05. */
 	minAreaRatio?: number;
+	/** Longest edge (px) to run detection at. Larger frames are downscaled first. Default 480. */
+	maxDetectEdge?: number;
 };
 
 export type WarpOptions = {
