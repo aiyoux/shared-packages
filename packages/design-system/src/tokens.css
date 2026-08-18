@@ -57,6 +57,16 @@
 		--danger: #ef4444;
 		--danger-rgb: 239, 68, 68;
 
+		/* Neutral overlay triples. Translucent white/black is how every app draws
+		   hairlines, hover washes and scrims — ~390 hand-written rgba(255,255,255,a)
+		   / rgba(0,0,0,a) values across the codebase. Composing them through a token
+		   (`rgba(var(--overlay-rgb), 0.06)`) keeps the rendered value identical on
+		   the dark themes while making the direction themeable: a light theme swaps
+		   the two, which is what §3 means by light mode being "currently
+		   impossible". Comma triples, to match --accent-rgb / --danger-rgb. */
+		--overlay-rgb: 255, 255, 255;
+		--scrim-rgb: 0, 0, 0;
+
 		/* ---- type ---- */
 		--font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
 		--font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
