@@ -11,9 +11,17 @@
  * components keep resolving without a rename. `-rgb` tokens stay comma-separated
  * triplets: the codebase composes with `rgba(var(--accent-rgb), a)`.
  *
- * This file carries no cascade-layer wrapper here (the host declares
- * `@layer reset, tokens, primitives, app, utilities` and imports it); the
- * wrapper is added by the consuming host so layers are declared exactly once.
+ * This file carries no cascade-layer wrapper here (each consuming app
+ * declares `@layer reset, tokens, theme, base, primitives, components, app,
+ * utilities;` in its own entry sheet, imported before this file). Phase 4
+ * (docs/design/design-system.md) investigated consolidating that statement
+ * to a single copy here, but Vite's per-route CSS code-splitting can emit a
+ * component's own `@layer primitives { … }` (e.g. Button/Card) in a chunk
+ * that loads *before* this file — under the CSS layer-ordering algorithm, a
+ * layer's position is fixed by whichever stylesheet mentions it first, so a
+ * lone copy here isn't sufficient to guarantee order; each entry point needs
+ * its own copy so the full order is pinned regardless of chunk arrival order.
+ * Left duplicated across the 7 consuming sheets deliberately.
  */
 @layer tokens {
 	:root {

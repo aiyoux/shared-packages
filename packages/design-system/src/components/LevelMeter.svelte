@@ -8,11 +8,14 @@
     value = 0,
     max = 5,
     label,
+    /** Override the active-bar color, e.g. by severity: (i) => value <= 2 ? 'var(--text-muted)' : 'var(--accent)' */
+    barColor,
     class: className = ''
   }: {
     value?: number;
     max?: number;
     label?: string;
+    barColor?: (index: number) => string;
     class?: string;
   } = $props();
 </script>
@@ -28,7 +31,10 @@
   {#if label}<span class="ds-level-meter__label">{label}</span>{/if}
   <div class="ds-level-meter__bars">
     {#each Array(max) as _, i}
-      <span class="ds-level-meter__bar {i < value ? 'is-active' : ''}"></span>
+      <span
+        class="ds-level-meter__bar {i < value ? 'is-active' : ''}"
+        style={i < value && barColor ? `background: ${barColor(i)}; border-color: ${barColor(i)};` : ''}
+      ></span>
     {/each}
   </div>
 </div>
