@@ -100,3 +100,25 @@ export function findNode(node: LayoutNode, id: string): LayoutNode | null {
 	if (node.kind === 'leaf') return null;
 	return findNode(node.first, id) ?? findNode(node.second, id);
 }
+
+/**
+ * After restoring a tree from storage, bump the id counter so later splits
+ * cannot reuse a `leaf-N` / `split-N` that already exists in the snapshot.
+ */
+export function syncLayoutIdSeq(node: LayoutNode): void {
+	let max = seq;
+	walk(node);
+	seq = max;
+
+	function walk(n: LayoutNode): void {
+		const match = /^(?:leaf|split|pane)-(\d+)$/.exec(n.id);
+		if (match) {
+			const value = Number(match[1]);
+			if (Number.isFinite(value) && value > max) max = value;
+		}
+		if (n.kind === 'split') {
+			walk(n.first);
+			walk(n.second);
+		}
+	}
+}

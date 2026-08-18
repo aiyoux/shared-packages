@@ -58,6 +58,8 @@ export {
 	clampRatio,
 	newLayoutId,
 	resetLayoutIdsForTests,
+	syncLayoutIdSeq,
+	findNode,
 	MIN_SPLIT_RATIO,
 	MAX_SPLIT_RATIO
 } from './pane-layout/tree.ts';
@@ -68,6 +70,23 @@ export type {
 	SplitDirection,
 	SplitPlacement
 } from './pane-layout/types.ts';
+export {
+	PANE_SESSION_QUERY,
+	PANE_SESSION_VERSION,
+	PANE_SESSION_STORAGE_PREFIX,
+	createSessionId,
+	readSessionId,
+	applySessionId,
+	isWorkspacePath,
+	parseLayoutNode,
+	parsePaneSessionSnapshot,
+	createPaneSessionStore
+} from './pane-layout/session.ts';
+export type {
+	PaneSessionSnapshot,
+	PaneSessionStore,
+	StorageLike
+} from './pane-layout/session.ts';
 export { default as MobileBottomTray } from './MobileBottomTray.svelte';
 export { default as TimeStackBuilder } from './TimeStackBuilder.svelte';
 export { default as TimeReferenceRangeEditor } from './TimeReferenceRangeEditor.svelte';
