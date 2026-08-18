@@ -251,6 +251,39 @@ describe('FileExplorer component', () => {
 		const listed = await vfs.list({ parentId: null });
 		expect(listed.some((n) => n.kind === 'folder' && n.name === 'Comp Folder')).toBe(true);
 	});
+
+	it('opens trash as a popup listing without replacing the live folder', async () => {
+		await vfs.writeFile({
+			parentId: null,
+			name: 'KeepMe',
+			fileType: 'unknown',
+			body: 'keep'
+		});
+		const doomed = await vfs.writeFile({
+			parentId: null,
+			name: 'Trashed',
+			fileType: 'unknown',
+			body: 'gone'
+		});
+		await vfs.trash(doomed.id);
+
+		render(FileExplorer, { props: { mode: 'manage', vfs, variant: 'panel' } });
+		await viWaitForRows(1);
+		expect(screen.queryByTestId('fe-trash-popup')).toBeNull();
+		const live = document.querySelectorAll('[data-testid="fe-list"] [data-testid="fe-file-row"]');
+		expect([...live].some((r) => /KeepMe/.test(r.textContent || ''))).toBe(true);
+		expect([...live].some((r) => /Trashed/.test(r.textContent || ''))).toBe(false);
+
+		await fireEvent.click(screen.getByTestId('fe-trash-view'));
+		await viWaitFor(() => {
+			const popup = document.querySelector('[data-testid="fe-trash-popup"]');
+			return !!popup && /Trashed/.test(popup.textContent || '');
+		});
+		expect(screen.getByTestId('fe-restore')).toBeTruthy();
+		expect(screen.getByTestId('fe-permanent-delete')).toBeTruthy();
+		const stillLive = document.querySelectorAll('[data-testid="fe-list"] [data-testid="fe-file-row"]');
+		expect([...stillLive].some((r) => /KeepMe/.test(r.textContent || ''))).toBe(true);
+	});
 });
 
 async function viWaitForRows(min: number, ms = 4000) {

@@ -231,7 +231,6 @@
 		diskName: string;
 		/** Open folder + selection for copy-across */
 		ctx: ExplorerContext;
-		showTrash: boolean;
 	};
 
 	function emptyCtx(backend: string = 'local'): ExplorerContext {
@@ -251,8 +250,7 @@
 			showMonitorForm: false,
 			explorerKey: 0,
 			diskName: '',
-			ctx: emptyCtx(kind),
-			showTrash: false
+			ctx: emptyCtx(kind)
 		};
 	}
 
@@ -965,14 +963,6 @@
 		setPane(id, { explorerKey: p.explorerKey + 1 });
 	}
 
-	function toggleTrash(id: PaneId) {
-		const p = paneState(id);
-		const next = !p.showTrash;
-		setPane(id, {
-			showTrash: next,
-			ctx: { ...p.ctx, parentId: null, selectedIds: [] }
-		});
-	}
 </script>
 
 {#snippet paneSwitcher(id: PaneId)}
@@ -1007,25 +997,6 @@
 		}}
 		onConfigureDisk={() => void connectDisk(id, { replace: true })}
 	/>
-{/snippet}
-
-{#snippet paneTrash(id: PaneId)}
-	{@const p = id === 'left' ? left : right}
-	{@const drv = activeDriver(p, id)}
-	{#if drv.capabilities.supportsTrash}
-		<button
-			type="button"
-			class="pane-trash"
-			class:host-trash={hostSettings}
-			class:active={p.showTrash}
-			data-testid="fe-trash-view"
-			title={p.showTrash ? 'Leave trash' : 'Open trash'}
-			aria-pressed={p.showTrash}
-			onclick={() => toggleTrash(id)}
-		>
-			Trash
-		</button>
-	{/if}
 {/snippet}
 
 {#snippet paneBadges(id: PaneId)}
@@ -1112,7 +1083,7 @@
 					type="button"
 					class="select-file"
 					data-testid="fe-upload"
-					disabled={copyBusy || p.showTrash}
+					disabled={copyBusy}
 					title="Open the system file picker and copy a file into this folder"
 					onclick={() => selectFileInput[id]?.click()}
 				>
@@ -1130,7 +1101,6 @@
 					}}
 				/>
 			{/if}
-			{@render paneTrash(id)}
 			{#if showCopyAcross}
 				<button
 					type="button"
@@ -1276,10 +1246,7 @@
 						variant="panel"
 						driver={overrideRight.driver}
 						showPersistence={false}
-						hideToolbarTrash={true}
 						hideToolbarUpload={!hostSettings}
-						trashView={p.showTrash}
-						onTrashViewChange={(open) => setPane(id, { showTrash: open })}
 						initialParentId={p.ctx.parentId}
 						pending={panePending(id)}
 						onContextChange={(ctx) => {
@@ -1297,10 +1264,7 @@
 						variant="panel"
 						driver={localDriver}
 						showPersistence={false}
-						hideToolbarTrash={true}
 						hideToolbarUpload={!hostSettings}
-						trashView={p.showTrash}
-						onTrashViewChange={(open) => setPane(id, { showTrash: open })}
 						initialParentId={p.ctx.parentId}
 						onOpen={onOpen}
 						onSendFile={
@@ -1329,10 +1293,7 @@
 						variant="panel"
 						driver={drv}
 						showPersistence={false}
-						hideToolbarTrash={true}
 						hideToolbarUpload={!hostSettings}
-						trashView={p.showTrash}
-						onTrashViewChange={(open) => setPane(id, { showTrash: open })}
 						initialParentId={p.ctx.parentId}
 						onOpen={p.activeKind === 'memory' ? onOpen : undefined}
 						onSendFile={
@@ -1370,7 +1331,6 @@
 				aria-label="Left pane connection"
 			>
 				{@render paneSwitcher('left')}
-				{@render paneTrash('left')}
 			</div>
 		{/if}
 		{#if dualPane && paneShowsSwitcher('right') && !overrideRight}
@@ -1381,7 +1341,6 @@
 				aria-label="Right pane connection"
 			>
 				{@render paneSwitcher('right')}
-				{@render paneTrash('right')}
 			</div>
 		{/if}
 		<div class="dpe-host-settings">
@@ -1473,10 +1432,6 @@
 	.dpe-host-settings {
 		display: flex;
 		align-items: center;
-	}
-	.pane-trash.host-trash {
-		order: 0;
-		margin-left: 0;
 	}
 	.pane-status {
 		display: flex;
@@ -1591,26 +1546,6 @@
 		gap: 0.5rem;
 		padding: 0.5rem 0.65rem;
 		border-bottom: 1px solid var(--border, #334155);
-	}
-	.pane-chrome:has(.pane-trash) :global(.conn-settings-wrap) {
-		margin-left: 0;
-	}
-	.pane-trash {
-		order: 98;
-		margin-left: auto;
-		padding: 0.35rem 0.7rem;
-		border-radius: 8px;
-		border: 1px solid var(--border, #334155);
-		background: var(--surface, #1e293b);
-		color: inherit;
-		cursor: pointer;
-		font: inherit;
-		font-size: 0.85rem;
-		font-weight: 600;
-	}
-	.pane-trash.active {
-		outline: 2px solid #38bdf8;
-		outline-offset: 1px;
 	}
 	.pane-form {
 		padding: 0 0.65rem;

@@ -72,15 +72,12 @@
 			/** Leading leg — downloaded / ready (translucent fill). Defaults to transferred. */
 			ready?: number;
 		}>;
-		/** Dual-pane header owns the Trash toggle — hide the toolbar copy. */
+		/** Hide the toolbar Trash button (popup listing). Default shows it when supportsTrash. */
 		hideToolbarTrash?: boolean;
 		/** Dual-pane header owns Select file — hide the toolbar copy. */
 		hideToolbarUpload?: boolean;
 		/** Extra manage-toolbar actions (e.g. Copy across when chrome is in the hub). */
 		toolbarExtra?: Snippet;
-		/** Controlled trash view (DualPane header). Uncontrolled when omitted. */
-		trashView?: boolean;
-		onTrashViewChange?: (open: boolean) => void;
 	}
 
 	let {
@@ -107,9 +104,7 @@
 		compatSaveTestId = false,
 		hideToolbarTrash = false,
 		hideToolbarUpload = false,
-		toolbarExtra,
-		trashView = undefined,
-		onTrashViewChange
+		toolbarExtra
 	}: Props = $props();
 
 	// Resolve driver once from props (local default). Re-create if prop identity changes via effect below.
@@ -144,12 +139,10 @@
 	let previewBusy = $state(false);
 	let saveName = $state(defaultName);
 	let error = $state('');
-	let internalTrash = $state(false);
-	const showTrash = $derived(trashView !== undefined ? trashView : internalTrash);
-	function setTrash(open: boolean) {
-		if (trashView === undefined) internalTrash = open;
-		onTrashViewChange?.(open);
-	}
+	/** Trash is a popup listing — never a replacement of the live folder. */
+	let trashOpen = $state(false);
+	let trashNodes = $state<ExplorerEntry[]>([]);
+	let trashBusy = $state(false);
 	/** True until the first list() completes (empty shell only). */
 	let initialLoad = $state(true);
 	/** True while a list/mutation refresh is in flight. */
@@ -193,15 +186,13 @@
 
 	// Cap-gated only — do not fold listBusy into the attribute or rows flicker
 	// non-draggable during refresh paint (and component tests race listBusy).
-	const dndEnabled = $derived(
-		mode === 'manage' && !showTrash && caps.supportsMove
-	);
+	const dndEnabled = $derived(mode === 'manage' && caps.supportsMove);
 
 	// Broader than dndEnabled: also true when the driver only wants rows
 	// draggable for external drop targets (supportsDragOut), without opting
 	// into internal move/reorder (e.g. the flat memory list).
 	const dragOutEnabled = $derived(
-		mode === 'manage' && !showTrash && Boolean(caps.supportsMove || caps.supportsDragOut)
+		mode === 'manage' && Boolean(caps.supportsMove || caps.supportsDragOut)
 	);
 
 	// Notify parent of selection/folder without tracking unstable callback identity
@@ -450,20 +441,11 @@
 			if (!silent) await driver.ready();
 			if (gen !== refreshGen) return;
 
-			let nextNodes: ExplorerEntry[];
-			let nextTruncated: boolean;
-			let nextCrumbs: ExplorerEntry[];
-			if (showTrash && mode === 'manage' && caps.supportsTrash) {
-				const result = await driver.list({ parentId: null, trashOnly: true });
-				nextNodes = result.entries;
-				nextTruncated = result.truncated;
-				nextCrumbs = [];
-			} else {
-				const result = await driver.list({ parentId });
-				nextNodes = result.entries;
-				nextTruncated = result.truncated;
-				nextCrumbs = parentId ? await driver.getPath(parentId) : [];
-			}
+			const result = await driver.list({ parentId });
+			const nextNodesRaw = result.entries;
+			const nextTruncated = result.truncated;
+			const nextCrumbs = parentId ? await driver.getPath(parentId) : [];
+			let nextNodes = nextNodesRaw;
 			if (gen !== refreshGen) return;
 
 			if (hideIncompatible && accept?.length) {
@@ -507,12 +489,7 @@
 	}
 
 	$effect(() => {
-		if (trashView === true) parentId = null;
-	});
-
-	$effect(() => {
 		void parentId;
-		void showTrash;
 		void mode;
 		void driver;
 		// A new folder does not inherit the last one's failure streak.
@@ -548,8 +525,29 @@
 	});
 
 	function rowActionable(n: ExplorerEntry): boolean {
-		if (showTrash) return true;
 		return isActionable(n as never, accept);
+	}
+
+	async function refreshTrash() {
+		if (!caps.supportsTrash) {
+			trashNodes = [];
+			return;
+		}
+		trashBusy = true;
+		try {
+			const result = await driver.list({ parentId: null, trashOnly: true });
+			trashNodes = result.entries;
+		} catch (e) {
+			error = errMsg(e);
+		} finally {
+			trashBusy = false;
+		}
+	}
+
+	async function toggleTrashPopup() {
+		const next = !trashOpen;
+		trashOpen = next;
+		if (next) await refreshTrash();
 	}
 
 	function focusedNode(): ExplorerEntry | null {
@@ -559,7 +557,7 @@
 
 	async function enterFolder(n: ExplorerEntry) {
 		if (n.kind !== 'folder') return;
-		setTrash(false);
+		trashOpen = false;
 		parentId = n.id;
 		selected = new Set();
 		lastSelectedId = null;
@@ -567,7 +565,7 @@
 	}
 
 	async function goCrumb(id: string | null) {
-		setTrash(false);
+		trashOpen = false;
 		parentId = id;
 		selected = new Set();
 		lastSelectedId = null;
@@ -575,8 +573,8 @@
 	}
 
 	async function goUp() {
-		if (showTrash) {
-			setTrash(false);
+		if (trashOpen) {
+			trashOpen = false;
 			return;
 		}
 		if (!parentId) return;
@@ -683,7 +681,7 @@
 	}
 
 	async function trashFocusedOrSelected() {
-		if (showTrash || mode === 'browse') return;
+		if (trashOpen || mode === 'browse') return;
 		const ids =
 			selected.size > 0
 				? [...selected]
@@ -696,21 +694,21 @@
 	async function restoreNode(n: ExplorerEntry) {
 		if (!driver.restore) return;
 		await driver.restore(n.id);
-		await refresh();
+		await Promise.all([refreshTrash(), refresh()]);
 	}
 
 	async function permanentNode(n: ExplorerEntry) {
 		if (!driver.permanentDelete) return;
 		if (!window.confirm(`Permanently delete “${n.name}”? This cannot be undone.`)) return;
 		await driver.permanentDelete(n.id);
-		await refresh();
+		await refreshTrash();
 	}
 
 	async function emptyTrash() {
 		if (!driver.emptyTrash) return;
 		if (!window.confirm('Empty trash? All items will be permanently deleted.')) return;
 		await driver.emptyTrash();
-		await refresh();
+		await refreshTrash();
 	}
 
 	async function commitRename(n: ExplorerEntry) {
@@ -726,7 +724,7 @@
 	}
 
 	function startRename(n: ExplorerEntry) {
-		if (mode !== 'manage' || showTrash || !caps.supportsRename) return;
+		if (mode !== 'manage' || !caps.supportsRename) return;
 		renamingId = n.id;
 		renameValue = n.name;
 	}
@@ -776,7 +774,7 @@
 	}
 
 	async function activatePreview(n: ExplorerEntry) {
-		if (n.kind === 'folder' && (mode === 'save' || showTrash)) {
+		if (n.kind === 'folder' && mode === 'save') {
 			previewEntry = null;
 			await enterFolder(n);
 			return;
@@ -967,21 +965,21 @@
 	}
 
 	function cutSelection() {
-		if (mode !== 'manage' || showTrash || !caps.supportsMove) return;
+		if (mode !== 'manage' || !caps.supportsMove) return;
 		const ids = idsForClipboard();
 		if (!ids.length) return;
 		clipboard = { mode: 'cut', ids };
 	}
 
 	function copySelection() {
-		if (mode !== 'manage' || showTrash || !caps.supportsCopy) return;
+		if (mode !== 'manage' || !caps.supportsCopy) return;
 		const ids = idsForClipboard();
 		if (!ids.length) return;
 		clipboard = { mode: 'copy', ids };
 	}
 
 	async function pasteClipboard() {
-		if (mode !== 'manage' || showTrash || !clipboard?.ids.length) return;
+		if (mode !== 'manage' || !clipboard?.ids.length) return;
 		error = '';
 		try {
 			for (const id of clipboard.ids) {
@@ -1002,7 +1000,7 @@
 	}
 
 	async function copyNode(n: ExplorerEntry) {
-		if (mode !== 'manage' || showTrash || !driver.copy || !caps.supportsCopy) return;
+		if (mode !== 'manage' || !driver.copy || !caps.supportsCopy) return;
 		try {
 			await driver.copy(n.id, parentId);
 			await refresh();
@@ -1055,7 +1053,7 @@
 	}
 
 	function allowOsFileDrag(e: DragEvent): boolean {
-		if (mode !== 'manage' || showTrash || !canImportFromDevice) return false;
+		if (mode !== 'manage' || !canImportFromDevice) return false;
 		if (dnd.getState().active) return false;
 		return dataTransferHasOsFiles(e.dataTransfer);
 	}
@@ -1148,14 +1146,19 @@
 		}
 		if (e.key === 'F2') {
 			const n = focusedNode();
-			if (n && mode === 'manage' && !showTrash && caps.supportsRename) {
+			if (n && mode === 'manage' && !trashOpen && caps.supportsRename) {
 				e.preventDefault();
 				startRename(n);
 			}
 			return;
 		}
+		if (e.key === 'Escape' && trashOpen) {
+			e.preventDefault();
+			trashOpen = false;
+			return;
+		}
 		if (e.key === 'Delete') {
-			if (mode === 'manage' && !showTrash) {
+			if (mode === 'manage' && !trashOpen) {
 				e.preventDefault();
 				void trashFocusedOrSelected();
 			}
@@ -1163,7 +1166,7 @@
 		}
 		if (e.key === 'Backspace') {
 			e.preventDefault();
-			if ((e.metaKey || e.ctrlKey) && mode === 'manage' && !showTrash) {
+			if ((e.metaKey || e.ctrlKey) && mode === 'manage' && !trashOpen) {
 				void trashFocusedOrSelected();
 			} else {
 				void goUp();
@@ -1227,10 +1230,6 @@
 					{crumb.name}
 				</button>
 			{/each}
-			{#if showTrash && caps.supportsTrash}
-				<span class="fe-sep">/</span>
-				<span class="fe-crumb active">Trash</span>
-			{/if}
 		</div>
 		<div class="fe-toolbar" data-testid="fe-toolbar">
 			{#if showPersistChip && localVfs}
@@ -1287,17 +1286,17 @@
 					<button
 						type="button"
 						data-testid="fe-trash-view"
-						class:active={showTrash}
-						onclick={() => {
-							setTrash(!showTrash);
-							parentId = null;
-						}}
+						class:active={trashOpen}
+						aria-pressed={trashOpen}
+						aria-haspopup="dialog"
+						title="Open trash"
+						onclick={() => void toggleTrashPopup()}
 					>
 						Trash
 					</button>
 				{/if}
 				{#if selectMulti && selected.size}
-					{#if selected.size === 1 && caps.supportsRename && !showTrash}
+					{#if selected.size === 1 && caps.supportsRename}
 						<button
 							type="button"
 							class="fe-icon-btn"
@@ -1393,13 +1392,10 @@
 						</button>
 					{/if}
 				{/if}
-				{#if clipboard?.ids.length && !showTrash && (caps.supportsMove || caps.supportsCopy)}
+				{#if clipboard?.ids.length && (caps.supportsMove || caps.supportsCopy)}
 					<button type="button" data-testid="fe-paste" onclick={() => pasteClipboard()}>
 						Paste {clipboard.mode === 'cut' ? '(move)' : '(copy)'}
 					</button>
-				{/if}
-				{#if showTrash && caps.supportsTrash}
-					<button type="button" data-testid="fe-empty-trash" onclick={emptyTrash}>Empty trash</button>
 				{/if}
 			{/if}
 			{#if onClose}
@@ -1479,7 +1475,7 @@
 			<div class="fe-empty" data-testid="fe-loading">Loading…</div>
 		{:else if nodes.length === 0 && pending.length === 0}
 			<div class="fe-empty" data-testid="fe-empty">
-				{showTrash ? 'Trash is empty' : 'No files here'}
+				No files here
 			</div>
 		{:else}
 			{#each nodes as n, i (n.id)}
@@ -1548,28 +1544,6 @@
 							>
 						{/if}
 					</span>
-					{#if showTrash && caps.supportsTrash}
-						<span class="fe-row-actions">
-							<button
-								type="button"
-								data-testid="fe-restore"
-								disabled={listBusy}
-								onclick={(e) => {
-									e.stopPropagation();
-									restoreNode(n);
-								}}>Restore</button
-							>
-							<button
-								type="button"
-								data-testid="fe-permanent-delete"
-								disabled={listBusy}
-								onclick={(e) => {
-									e.stopPropagation();
-									permanentNode(n);
-								}}>Delete forever</button
-							>
-						</span>
-					{/if}
 				</div>
 				{#if showAfter}
 					<div class="fe-dnd-line" data-testid="fe-dnd-line-after" aria-hidden="true"></div>
@@ -1672,7 +1646,7 @@
 							{sendLabel}
 						</button>
 					{/if}
-					{#if mode === 'manage' && !showTrash}
+					{#if mode === 'manage'}
 						{#if caps.supportsRename}
 							<button
 								type="button"
@@ -1726,6 +1700,75 @@
 			</div>
 		</div>
 	{/if}
+
+	{#if trashOpen && caps.supportsTrash}
+		<div
+			class="fe-preview-backdrop"
+			data-testid="fe-trash-popup"
+			role="dialog"
+			aria-modal="true"
+			aria-label="Trash"
+		>
+			<button
+				type="button"
+				class="fe-preview-scrim"
+				aria-label="Close trash"
+				onclick={() => (trashOpen = false)}
+			></button>
+			<div class="fe-trash-card">
+				<div class="fe-trash-head">
+					<h2 class="fe-preview-name">Trash</h2>
+					{#if trashNodes.length}
+						<button type="button" data-testid="fe-empty-trash" onclick={() => void emptyTrash()}>
+							Empty trash
+						</button>
+					{/if}
+				</div>
+				{#if trashBusy && trashNodes.length === 0}
+					<div class="fe-empty">Loading…</div>
+				{:else if trashNodes.length === 0}
+					<div class="fe-empty" data-testid="fe-trash-empty">Trash is empty</div>
+				{:else}
+					<div class="fe-trash-list">
+						{#each trashNodes as n (n.id)}
+							<div
+								class="fe-row"
+								class:folder={n.kind === 'folder'}
+								class:file={n.kind === 'file'}
+								data-testid={n.kind === 'folder' ? 'fe-folder-row' : 'fe-file-row'}
+								data-id={n.id}
+								data-name={n.name}
+							>
+								<span class="fe-row-main">
+									<span class="fe-icon">{n.kind === 'folder' ? '📁' : '📄'}</span>
+									<span class="fe-name" title={n.name}>{n.name}</span>
+								</span>
+								<span class="fe-row-actions">
+									<button
+										type="button"
+										data-testid="fe-restore"
+										disabled={trashBusy}
+										onclick={() => void restoreNode(n)}>Restore</button
+									>
+									<button
+										type="button"
+										data-testid="fe-permanent-delete"
+										disabled={trashBusy}
+										onclick={() => void permanentNode(n)}>Delete forever</button
+									>
+								</span>
+							</div>
+						{/each}
+					</div>
+				{/if}
+				<div class="fe-trash-foot">
+					<button type="button" data-testid="fe-trash-close" onclick={() => (trashOpen = false)}>
+						Close
+					</button>
+				</div>
+			</div>
+		</div>
+	{/if}
 </div>
 
 <style>
@@ -1744,6 +1787,8 @@
 		font-size: 14px;
 	}
 	.fe-header {
+		position: relative;
+		z-index: 9;
 		display: flex;
 		justify-content: space-between;
 		gap: 8px;
@@ -2019,6 +2064,54 @@
 	.fe-preview-actions [data-testid='fe-file-preview-send'] {
 		background: #2c3a4f;
 		border-color: #5b8def;
+	}
+	.fe-trash-card {
+		position: relative;
+		z-index: 1;
+		display: flex;
+		flex-direction: column;
+		width: min(440px, 94%);
+		max-height: min(420px, 80%);
+		padding: 14px 16px 12px;
+		background: #22232a;
+		border: 1px solid #444;
+		border-radius: 10px;
+		box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
+	}
+	.fe-trash-head,
+	.fe-trash-foot {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 8px;
+	}
+	.fe-trash-head .fe-preview-name {
+		margin: 0;
+	}
+	.fe-trash-head button,
+	.fe-trash-foot button,
+	.fe-trash-list button {
+		background: #2a2b30;
+		border: 1px solid #444;
+		color: inherit;
+		border-radius: 6px;
+		padding: 4px 8px;
+		cursor: pointer;
+	}
+	.fe-trash-head button:disabled,
+	.fe-trash-list button:disabled {
+		opacity: 0.5;
+		cursor: not-allowed;
+	}
+	.fe-trash-list {
+		flex: 1;
+		min-height: 0;
+		overflow: auto;
+		margin: 10px 0;
+	}
+	.fe-trash-foot {
+		justify-content: flex-end;
+		padding-top: 4px;
 	}
 	.fe-dnd-line {
 		height: 2px;
