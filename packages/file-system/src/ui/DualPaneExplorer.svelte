@@ -214,6 +214,8 @@
 		});
 	}
 
+	// svelte-ignore state_referenced_locally -- test-id overrides are fixed for
+	// the lifetime of the component; they are not meant to react.
 	const tids: DualPaneTids = { ...defaultTids, ...tidsOverride };
 
 	type PaneState = {
@@ -254,7 +256,10 @@
 		};
 	}
 
+	// svelte-ignore state_referenced_locally -- `default` props, by contract:
+	// they seed the panes once and are not meant to track later changes.
 	let left = $state<PaneState>(emptyPane(leftDefault));
+	// svelte-ignore state_referenced_locally
 	let right = $state<PaneState>(emptyPane(rightDefault));
 	let dualPane = $state(false);
 	let b2Profiles = $state<B2ConnectionProfileV1[]>([]);

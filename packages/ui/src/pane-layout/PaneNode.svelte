@@ -28,7 +28,10 @@
 </script>
 
 {#if node.kind === 'leaf'}
+	<!-- Focus-on-click only; every pane is also reachable by the layout's own
+	     keyboard commands, so no separate key handler belongs here. -->
 	<!-- svelte-ignore a11y_no_static_element_interactions -->
+	<!-- svelte-ignore a11y_click_events_have_key_events -->
 	<div
 		class="pl-leaf"
 		class:focused={focusedId === node.id}

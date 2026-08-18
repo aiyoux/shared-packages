@@ -1199,7 +1199,9 @@
       const container = years_scroll_ref;
       let selectedEl = container?.querySelector('[data-selected="true"]') ?? null;
       if (!selectedEl && container) {
-        const yearButtons = container.querySelectorAll('button');
+        // Array.from: NodeListOf is not iterable without downlevelIteration,
+        // which this package does not enable.
+        const yearButtons = Array.from(container.querySelectorAll('button'));
         const visibleYearStr = String(header_visible_date.year);
         for (const btn of yearButtons) {
           if (btn.textContent?.trim() === visibleYearStr) {

@@ -72,6 +72,11 @@
 	}
 </script>
 
+<!-- A split-pane divider. `separator` is the correct role and it is genuinely
+     focusable/operable by keyboard, so the generic non-interactive warnings
+     do not apply. -->
+<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 <div
 	bind:this={host}
 	class="pl-handle"

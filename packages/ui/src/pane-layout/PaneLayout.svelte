@@ -5,7 +5,17 @@
 	import PaneNode from './PaneNode.svelte';
 
 	let {
-		root = $bindable(),
+		// Default here rather than a `if (!root) root = createLeaf()` guard below:
+		// the guard narrowed only at that statement, not inside $derived or the
+		// exported functions that run later, which saw `LayoutNode | undefined`
+		// (7 type errors).
+		//
+		// Nuance vs the old guard: $bindable's fallback is local, so a caller who
+		// binds an *undefined* root no longer has the initial tree written back to
+		// them. It self-heals on the first split (which assigns `root`), and every
+		// consumer here passes a root already — but bind an initialised value if
+		// you depend on reading the tree before interacting with it.
+		root = $bindable(createLeaf()),
 		focusedId = $bindable(null),
 		showChrome = true,
 		pane
@@ -16,7 +26,6 @@
 		pane: Snippet<[{ id: string; focused: boolean }]>;
 	} = $props();
 
-	if (!root) root = createLeaf();
 	if (!focusedId) focusedId = root.kind === 'leaf' ? root.id : null;
 
 	const canClose = $derived(leafCount(root) > 1);

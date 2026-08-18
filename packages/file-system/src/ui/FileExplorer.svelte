@@ -108,6 +108,8 @@
 	}: Props = $props();
 
 	// Resolve driver once from props (local default). Re-create if prop identity changes via effect below.
+	// svelte-ignore state_referenced_locally -- deliberate: resolve once, then
+	// re-create via the effect below when the prop identity changes.
 	let driver = $state<ExplorerDriver>(
 		driverProp ?? createLocalExplorerDriver(vfsProp ?? getSharedVfs())
 	);
@@ -126,6 +128,7 @@
 		}
 	});
 
+	// svelte-ignore state_referenced_locally -- `initial` prop, by contract.
 	let parentId = $state<string | null>(initialParentId);
 	let nodes = $state<ExplorerEntry[]>([]);
 	let listTruncated = $state(false);
@@ -137,6 +140,7 @@
 	let selectMulti = $state(false);
 	let previewEntry = $state<ExplorerEntry | null>(null);
 	let previewBusy = $state(false);
+	// svelte-ignore state_referenced_locally -- `default` prop, by contract.
 	let saveName = $state(defaultName);
 	let error = $state('');
 	/** Trash is a popup listing — never a replacement of the live folder. */
@@ -1209,13 +1213,14 @@
 		}
 	}
 
-	const rootTestId = compatLibraryTestId
-		? 'library-modal'
-		: compatSaveTestId
-			? 'save-modal'
-			: 'file-explorer';
+	// $derived, not const: these are props, so a plain const froze the testid at
+	// the initial value if a caller ever toggled variant.
+	const rootTestId = $derived(
+		compatLibraryTestId ? 'library-modal' : compatSaveTestId ? 'save-modal' : 'file-explorer'
+	);
 </script>
 
+<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
 <div
 	class="fe-root {variant} {className}"
 	data-testid={rootTestId}
@@ -1449,6 +1454,7 @@
 
 	<div
 		class="fe-list"
+		tabindex="0"
 		class:fe-list-busy={listBusy}
 		class:fe-list-covered={showBusyOverlay}
 		data-testid="fe-list"
@@ -1512,6 +1518,8 @@
 				{#if showBefore}
 					<div class="fe-dnd-line" data-testid="fe-dnd-line-before" aria-hidden="true"></div>
 				{/if}
+				<!-- svelte-ignore a11y_click_events_have_key_events -->
+				<!-- svelte-ignore a11y_no_static_element_interactions -->
 				<div
 					class="fe-row"
 					class:folder={n.kind === 'folder'}
