@@ -18,6 +18,7 @@
     "./tokens.css": "./src/tokens.css",
     "./reset.css": "./src/reset.css",
     "./themes.css": "./src/themes.css",
+    "./tooltip.css": "./src/tooltip.css",
     "./Button.svelte": "./src/components/Button.svelte",
     "./Card.svelte": "./src/components/Card.svelte",
     "./Input.svelte": "./src/components/Input.svelte",
