@@ -133,7 +133,7 @@
 	let selected = $state<Set<string>>(new Set());
 	/** Most recently toggled-on row — Open uses this when several items are selected. */
 	let lastSelectedId = $state<string | null>(null);
-	/** Off: click opens a folder or a file preview. On: click selects (legacy multi). */
+	/** Off: click selects one row. On: click toggles multi-select. */
 	let selectMulti = $state(false);
 	let previewEntry = $state<ExplorerEntry | null>(null);
 	let previewBusy = $state(false);
@@ -230,11 +230,15 @@
 			return;
 		}
 		// A drag is a send/move of this row — keep it selected, don't toggle off.
-		if (canToggleSelect() && !selected.has(n.id)) {
-			const next = new Set(selected);
-			next.add(n.id);
-			selected = next;
-			lastSelectedId = n.id;
+		if (!selected.has(n.id)) {
+			if (canToggleSelect()) {
+				const next = new Set(selected);
+				next.add(n.id);
+				selected = next;
+				lastSelectedId = n.id;
+			} else {
+				selectExclusive(n);
+			}
 		}
 		const ids =
 			selected.has(n.id) && selected.size > 0 ? [...selected] : [n.id];
@@ -737,10 +741,27 @@
 		selectMulti = on;
 		if (on) {
 			previewEntry = null;
-		} else {
-			selected = new Set();
-			lastSelectedId = null;
 		}
+	}
+
+	function selectExclusive(n: ExplorerEntry) {
+		selected = new Set([n.id]);
+		lastSelectedId = n.id;
+		if (previewEntry && previewEntry.id !== n.id) previewEntry = null;
+	}
+
+	function selectedPrimary(): ExplorerEntry | null {
+		if (lastSelectedId) {
+			const last = nodes.find((n) => n.id === lastSelectedId && selected.has(n.id));
+			if (last) return last;
+		}
+		return selectedEntries[0] ?? null;
+	}
+
+	function openSelectedDetails() {
+		const n = selectedPrimary();
+		if (!n) return;
+		previewEntry = n;
 	}
 
 	function formatBytes(n: number | undefined): string {
@@ -771,21 +792,6 @@
 		if (entry.fileType === 'image') return 'Open in Images';
 		if (entry.fileType === 'video') return 'Open in Video';
 		return 'Open';
-	}
-
-	async function activatePreview(n: ExplorerEntry) {
-		if (n.kind === 'folder' && mode === 'save') {
-			previewEntry = null;
-			await enterFolder(n);
-			return;
-		}
-		if (mode === 'save') {
-			saveName = n.name;
-		}
-		// One current item so Copy across / Send can target it without Select multi.
-		selected = new Set([n.id]);
-		lastSelectedId = n.id;
-		previewEntry = n;
 	}
 
 	async function confirmPreviewOpen() {
@@ -893,11 +899,7 @@
 		if (dx * dx + dy * dy > SELECT_SLOP_PX * SELECT_SLOP_PX) return;
 		focusIndex = start.index;
 		selectedOnPointerUp = true;
-		if (canToggleSelect()) {
-			toggleSelect(n.id, e);
-			return;
-		}
-		void activatePreview(n);
+		void applyRowActivate(n, e);
 	}
 
 	function onRowClick(e: MouseEvent, n: ExplorerEntry, i: number) {
@@ -907,11 +909,22 @@
 			return;
 		}
 		focusIndex = i;
+		void applyRowActivate(n, e);
+	}
+
+	async function applyRowActivate(n: ExplorerEntry, e?: Event) {
 		if (canToggleSelect()) {
 			toggleSelect(n.id, e);
 			return;
 		}
-		void activatePreview(n);
+		if (n.kind === 'folder' && mode === 'save') {
+			await enterFolder(n);
+			return;
+		}
+		if (mode === 'save' && n.kind === 'file') {
+			saveName = n.name;
+		}
+		selectExclusive(n);
 	}
 
 	const selectedEntries = $derived(
@@ -1130,17 +1143,18 @@
 				return;
 			}
 			const focused = focusedNode();
-			if (focused && !selectMulti) {
+			if (focused) {
 				e.preventDefault();
-				void activatePreview(focused);
+				selectExclusive(focused);
 			}
 			return;
 		}
 		if (e.key === ' ' || e.key === 'Spacebar') {
 			const n = focusedNode();
-			if (n && canToggleSelect()) {
+			if (n) {
 				e.preventDefault();
-				toggleSelect(n.id);
+				if (canToggleSelect()) toggleSelect(n.id);
+				else selectExclusive(n);
 			}
 			return;
 		}
@@ -1246,8 +1260,17 @@
 				>
 					Select multi
 				</button>
+				<button
+					type="button"
+					data-testid="fe-item-details"
+					disabled={selected.size === 0}
+					title="Open details for the selected item"
+					onclick={() => openSelectedDetails()}
+				>
+					Details
+				</button>
 			{/if}
-			{#if selectMulti && canOpenSelection}
+			{#if canOpenSelection}
 				<button type="button" data-testid="fe-open-selected" onclick={() => void openSelected()}>
 					Open
 				</button>
@@ -1295,7 +1318,7 @@
 						Trash
 					</button>
 				{/if}
-				{#if selectMulti && selected.size}
+				{#if selected.size}
 					{#if selected.size === 1 && caps.supportsRename}
 						<button
 							type="button"
@@ -1571,7 +1594,7 @@
 	{#if mode === 'open'}
 		<footer class="fe-open-bar" data-testid="fe-open-bar">
 			<span class="fe-hint">
-				{selectMulti ? 'Select a compatible file, then Open' : 'Click a file for details, or a folder to open it'}
+				{selectMulti ? 'Select a compatible file, then Open' : 'Click a row to select it'}
 			</span>
 		</footer>
 	{/if}

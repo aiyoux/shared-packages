@@ -50,6 +50,7 @@ describe('FileExplorer component', () => {
 		expect(screen.getByTestId('file-explorer').getAttribute('data-fe-mode')).toBe('manage');
 		expect(screen.getByTestId('fe-new-folder')).toBeTruthy();
 		expect(screen.getByTestId('fe-upload')).toBeTruthy();
+		expect(screen.getByTestId('fe-item-details')).toBeTruthy();
 		expect(screen.getByTestId('fe-trash-view')).toBeTruthy();
 		expect(screen.getByTestId('fe-breadcrumbs')).toBeTruthy();
 	});
@@ -101,7 +102,7 @@ describe('FileExplorer component', () => {
 		expect(incompatible?.getAttribute('data-file-type')).toBe('vrec');
 	});
 
-	it('pointerup opens a file preview (draggable rows swallow click)', async () => {
+	it('pointerup selects the row; Details opens the item popup', async () => {
 		await vfs.writeFile({
 			parentId: null,
 			name: 'Sketch',
@@ -114,11 +115,15 @@ describe('FileExplorer component', () => {
 		const nameEl = row.querySelector('.fe-name') as HTMLElement;
 		await fireEvent.pointerDown(nameEl, { button: 0, clientX: 10, clientY: 10 });
 		await fireEvent.pointerUp(nameEl, { button: 0, clientX: 11, clientY: 10 });
-		expect(await screen.findByTestId('fe-file-preview')).toBeTruthy();
+		expect(row.classList.contains('selected')).toBe(true);
+		expect(screen.queryByTestId('fe-file-preview')).toBeNull();
+		await fireEvent.click(screen.getByTestId('fe-item-details'));
+		const preview = await screen.findByTestId('fe-file-preview');
+		expect(preview).toBeTruthy();
 		expect(screen.getByTestId('fe-file-preview-name').textContent).toMatch(/Sketch/);
-		expect(screen.getByTestId('fe-rename-btn')).toBeTruthy();
-		expect(screen.getByTestId('fe-row-copy')).toBeTruthy();
-		expect(screen.getByTestId('fe-row-trash')).toBeTruthy();
+		expect(preview.querySelector('[data-testid="fe-rename-btn"]')).toBeTruthy();
+		expect(preview.querySelector('[data-testid="fe-row-copy"]')).toBeTruthy();
+		expect(preview.querySelector('[data-testid="fe-row-trash"]')).toBeTruthy();
 		expect(screen.queryByTestId('fe-open-selected')).toBeNull();
 		expect(document.querySelector('[data-testid="fe-file-row"] [data-testid="fe-rename-btn"]')).toBeNull();
 	});
@@ -146,22 +151,28 @@ describe('FileExplorer component', () => {
 		const row = document.querySelector('[data-testid="fe-file-row"]') as HTMLElement;
 		await fireEvent.click(row);
 		expect(opened).toEqual([]);
+		expect(row.classList.contains('selected')).toBe(true);
+		await fireEvent.click(screen.getByTestId('fe-item-details'));
 		const openBtn = await screen.findByTestId('fe-file-preview-open');
 		expect(openBtn.textContent).toMatch(/sketcher/i);
 		await fireEvent.click(openBtn);
 		expect(opened).toEqual(['Sketch.skch']);
 	});
 
-	it('single-click on a folder opens the item popup; Open enters it', async () => {
+	it('single-click on a folder selects it; Details opens the popup; Open enters it', async () => {
 		await vfs.mkdir(null, 'Docs');
 		render(FileExplorer, { props: { mode: 'manage', vfs, variant: 'panel' } });
 		await viWaitFor(() => !!document.querySelector('[data-testid="fe-folder-row"]'));
 		const row = document.querySelector('[data-testid="fe-folder-row"]') as HTMLElement;
 		await fireEvent.click(row);
-		const openBtn = await screen.findByTestId('fe-file-preview-open');
+		expect(row.classList.contains('selected')).toBe(true);
+		expect(screen.queryByTestId('fe-file-preview')).toBeNull();
+		await fireEvent.click(screen.getByTestId('fe-item-details'));
+		const preview = await screen.findByTestId('fe-file-preview');
+		const openBtn = screen.getByTestId('fe-file-preview-open');
 		expect(openBtn.textContent).toMatch(/^Open$/);
-		expect(screen.getByTestId('fe-rename-btn')).toBeTruthy();
-		expect(screen.getByTestId('fe-row-trash')).toBeTruthy();
+		expect(preview.querySelector('[data-testid="fe-rename-btn"]')).toBeTruthy();
+		expect(preview.querySelector('[data-testid="fe-row-trash"]')).toBeTruthy();
 		await fireEvent.click(openBtn);
 		await viWaitFor(() => !!document.querySelector('[data-testid="fe-empty"]'));
 		expect(document.querySelector('[data-testid="fe-folder-row"]')).toBeNull();
@@ -218,6 +229,7 @@ describe('FileExplorer component', () => {
 		await viWaitForRows(1);
 		const row = document.querySelector('[data-testid="fe-file-row"]') as HTMLElement;
 		await fireEvent.click(row.querySelector('.fe-name')!);
+		await fireEvent.click(screen.getByTestId('fe-item-details'));
 		await fireEvent.click(await screen.findByTestId('fe-file-preview-send'));
 		expect(sent).toEqual(['note.txt']);
 	});
