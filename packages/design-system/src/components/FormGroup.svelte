@@ -33,6 +33,14 @@
     font-weight: 500;
     color: var(--text-secondary);
   }
+  /* A raw <label for="..."> child (proper label/control association) gets the
+     same treatment as the `label` prop's rendered span. Excludes app-defined
+     label variants (e.g. .checkbox-label), which style their own layout. */
+  .ds-form-group > :global(label:not([class])) {
+    font-size: 0.9rem;
+    font-weight: 500;
+    color: var(--text-secondary);
+  }
   .ds-form-group__hint {
     margin: 0;
     font-size: 0.8rem;
