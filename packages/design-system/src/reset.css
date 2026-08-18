@@ -64,4 +64,18 @@
 			scroll-behavior: auto !important;
 		}
 	}
+
+  /* Visually hidden but exposed to assistive tech. Was defined per-app; it is
+     an accessibility primitive, so it has one definition here. */
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
 }

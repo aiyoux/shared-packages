@@ -25,10 +25,14 @@
     "./FormGroup.svelte": "./src/components/FormGroup.svelte",
     "./Tooltip.svelte": "./src/components/Tooltip.svelte",
     "./LevelMeter.svelte": "./src/components/LevelMeter.svelte",
-    "./Sidebar.svelte": "./src/components/Sidebar.svelte"
+    "./Sidebar.svelte": "./src/components/Sidebar.svelte",
+    "./button.css": "./src/button.css",
+    "./motion.css": "./src/motion.css"
   },
   "types": "./src/index.ts",
-  "files": ["src"],
+  "files": [
+    "src"
+  ],
   "scripts": {
     "yalc:publish": "yalc publish"
   },

@@ -1,0 +1,51 @@
+/*
+ * Design system entrance animations.
+ *
+ * `.animate-fade-in` was defined independently in four app stylesheets
+ * (dictionary, voice, prompter, sketcher) with three of the four byte-identical
+ * — the textbook duplicated-knowledge case this package exists to remove. The
+ * shared definition takes the majority form (10px rise, ease-out).
+ *
+ * The `prefers-reduced-motion` override travelled with only one of the four
+ * copies, so three apps animated regardless of the user's setting. Defining it
+ * here fixes that everywhere at once, and satisfies the design-system rule that
+ * all motion collapses under reduced-motion.
+ */
+@layer primitives {
+  @keyframes ds-fade-in {
+    from {
+      opacity: 0;
+      transform: translateY(10px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  @keyframes ds-slide-up {
+    from {
+      opacity: 0;
+      transform: translateY(20px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  .animate-fade-in {
+    animation: ds-fade-in var(--dur) var(--ease);
+  }
+
+  .animate-slide-up {
+    animation: ds-slide-up var(--dur) var(--ease);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .animate-fade-in,
+    .animate-slide-up {
+      animation: none;
+    }
+  }
+}
