@@ -12,29 +12,47 @@
  * silently restyling the hub is exactly the cross-app leak this package exists
  * to remove.
  *
- * `font-display: optional` is deliberate and is what makes the shift
- * impossible rather than merely unlikely: the browser uses the fallback if the
- * face is not ready within its short block period, and then does NOT swap for
- * that page load. `swap` — what the Google imports used — guarantees the
- * opposite. Self-hosting keeps the file same-origin and small enough that it
- * normally wins the race anyway, and it drops a third-party runtime dependency
- * from every app.
+ * Served from each app's own static/fonts/ at a stable path so app.html can
+ * <link rel="preload"> it. src/fonts/ here stays the canonical copy; the check
+ * in scripts/check-design-invariants.sh fails if any app's copy drifts from it.
+ *
+ * `font-display: block`, with the preload above, is what makes the typeface
+ * deterministic. The two alternatives were both tried and both produced visible
+ * bugs:
+ *
+ *   swap      what the old Google imports used. Renders the fallback, then
+ *             re-renders in Inter whenever it arrives — the original complaint,
+ *             text growing a beat after load.
+ *   optional  never swaps, but the browser keeps the fallback for the whole page
+ *             load if the face misses its ~100ms block window. Without a preload
+ *             the fetch did not start until after CSS parse and layout (measured
+ *             at 341ms), so a cold load rendered the system font and a cached one
+ *             rendered Inter — two tabs, two typefaces, same CSS. It also proved
+ *             unstable *within* one load: loading further CSS chunks could drop
+ *             an already-applied Inter back to the fallback.
+ *
+ * `block` renders nothing until the face is ready, then Inter — so there is no
+ * fallback frame to be inconsistent with and nothing to swap. The preload makes
+ * that period negligible: same-origin, 48KB, fetched at HTML parse rather than
+ * after layout. Its bad case is invisible text for up to 3s if the file goes
+ * missing, which is why check-design-invariants.sh verifies every app's copy
+ * exists and matches this package byte for byte.
  */
 @layer reset {
 	@font-face {
 		font-family: 'Inter';
 		font-style: normal;
 		font-weight: 100 900;
-		font-display: optional;
-		src: url('./fonts/inter-latin-ext-var.woff2') format('woff2');
+		font-display: block;
+		src: url('/fonts/inter-latin-ext-var.woff2') format('woff2');
 		unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
 	}
 	@font-face {
 		font-family: 'Inter';
 		font-style: normal;
 		font-weight: 100 900;
-		font-display: optional;
-		src: url('./fonts/inter-latin-var.woff2') format('woff2');
+		font-display: block;
+		src: url('/fonts/inter-latin-var.woff2') format('woff2');
 		unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
 	}
 }
