@@ -77,6 +77,13 @@
 		--text-xl: 20px;
 		--text-display: clamp(2rem, 5vw, 3rem);
 
+		/* Body leading. Previously unowned: four app sheets each declared
+		   `body { line-height: 1.6 }` on a bare element in @layer app, which
+		   outranks @layer reset — so whichever app's CSS chunk reached the page
+		   first re-spaced every line box on the hub. 1.6 is the value all four
+		   independently chose. */
+		--leading: 1.6;
+
 		/* ---- space (8px base grid) ---- */
 		--space-1: 4px;
 		--space-2: 8px;

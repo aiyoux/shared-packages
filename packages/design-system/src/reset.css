@@ -25,11 +25,19 @@
 		background-color: var(--surface-ground);
 		color: var(--text-primary);
 		font-family: var(--font-sans);
+		line-height: var(--leading);
 		-webkit-font-smoothing: antialiased;
 	}
 
 	::selection {
 		background: rgb(56 189 248 / 0.3);
+	}
+
+	/* Pointer users get no ring; keyboard users keep the :focus-visible one
+	   below. Was a bare `button:focus:not(:focus-visible)` in voice-rec's sheet,
+	   which applied to every button in whatever document loaded that chunk. */
+	button:focus:not(:focus-visible) {
+		outline: none;
 	}
 
 	:focus-visible {

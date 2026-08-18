@@ -27,6 +27,8 @@
 		--accent-light: #818cf8;
 		--accent-glow: rgba(99, 102, 241, 0.4);
 		--bg-primary: #0a0a0f;
+		/* reset.css paints from --surface-ground; keep it with --bg-primary. */
+		--surface-ground: #0a0a0f;
 		--bg-main: #0a0a0f;
 		--bg-secondary: #12121a;
 		--bg-card: rgba(255, 255, 255, 0.05);
@@ -52,6 +54,8 @@
 		--accent-light: #818cf8;
 		--accent-glow: rgba(99, 102, 241, 0.4);
 		--bg-primary: #0a0a0f;
+		/* reset.css paints from --surface-ground; keep it with --bg-primary. */
+		--surface-ground: #0a0a0f;
 		--bg-secondary: #12121a;
 		--bg-card: rgba(255, 255, 255, 0.05);
 		--bg-card-hover: rgba(255, 255, 255, 0.08);
@@ -75,6 +79,8 @@
 		--accent-light: #818cf8;
 		--accent-glow: rgba(99, 102, 241, 0.2);
 		--bg-primary: #09090d;
+		/* reset.css paints from --surface-ground; keep it with --bg-primary. */
+		--surface-ground: #09090d;
 		--bg-secondary: #121218;
 		--bg-card: #16161e;
 		--bg-card-hover: #1c1c26;
@@ -127,6 +133,8 @@
 		--accent-glow: rgba(99, 102, 241, 0.4);
 		--accent-subtle: rgba(99, 102, 241, 0.12);
 		--bg-primary: #0a0a0f;
+		/* reset.css paints from --surface-ground; keep it with --bg-primary. */
+		--surface-ground: #0a0a0f;
 		--bg-secondary: #12121a;
 		--bg-card: rgba(255, 255, 255, 0.05);
 		--bg-card-hover: rgba(255, 255, 255, 0.08);
