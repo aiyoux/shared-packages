@@ -2,24 +2,35 @@
   /**
    * Design-system text input — the single owner of the bare
    * `input[type=...]` / `textarea` / `select` form-control styles.
+   *
+   * `value` is declared explicitly (rather than left to `...rest`) and
+   * marked `$bindable()` — Svelte 5 does not forward `bind:value` through a
+   * rest-spread onto an inner element, so callers using `bind:value` would
+   * silently lose two-way binding without this.
    */
   let {
     class: className = '',
     type = 'text',
+    value = $bindable(),
+    children,
     ...rest
   }: {
     class?: string;
     type?: string;
+    value?: any;
+    children?: import('svelte').Snippet;
     [key: string]: any;
   } = $props();
 </script>
 
 {#if type === 'textarea'}
-  <textarea class="ds-input {className}" {...rest}></textarea>
+  <textarea class="ds-input {className}" bind:value {...rest}></textarea>
 {:else if type === 'select'}
-  <select class="ds-input ds-input--select {className}" {...rest}></select>
+  <select class="ds-input ds-input--select {className}" bind:value {...rest}>
+    {@render children?.()}
+  </select>
 {:else}
-  <input {type} class="ds-input {className}" {...rest} />
+  <input {type} class="ds-input {className}" bind:value {...rest} />
 {/if}
 
 <style>
