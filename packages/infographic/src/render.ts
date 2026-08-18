@@ -50,7 +50,13 @@ export async function rasterize(
 		await img.decode();
 		canvas.width = frame.width;
 		canvas.height = frame.height;
-		const ctx = canvas.getContext('2d');
+		// getContext('2d') widens to the union of every context type when `canvas`
+		// may be an OffscreenCanvas, and ImageBitmapRenderingContext has neither
+		// clearRect nor drawImage. Narrow to the 2d context we actually asked for.
+		const ctx = canvas.getContext('2d') as
+			| CanvasRenderingContext2D
+			| OffscreenCanvasRenderingContext2D
+			| null;
 		if (!ctx) throw new Error('2d context unavailable');
 		ctx.clearRect(0, 0, canvas.width, canvas.height);
 		ctx.drawImage(img, 0, 0);
