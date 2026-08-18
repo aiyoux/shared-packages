@@ -55,6 +55,75 @@
 		--accent-emerald: #34d399;
 		--accent-violet: #a78bfa;
 		--danger: #ef4444;
+
+		/* Categorical palette.
+		 *
+		 * §2: "Accents are categorical only: they classify, they don't decorate."
+		 * Apps were doing exactly that with 95 distinct hard-coded values — tag
+		 * colours, status dots, per-category chips — of which the top 24 covered
+		 * only 69%, so there was no small set to snap them to and no way for a
+		 * theme to move them.
+		 *
+		 * Derived from usage rather than invented (§7 resolution 2): each pair is
+		 * the exact value the apps already used, so adopting these is a rename, not
+		 * a restyle. `-soft` is the lighter step, used for text and icons on dark
+		 * surfaces; the base is used for fills and dots.
+		 */
+		--cat-amber: #f59e0b;
+		--cat-amber-soft: #fbbf24;
+		--cat-yellow: #eab308;
+		--cat-yellow-soft: #facc15;
+		--cat-emerald: #10b981;
+		--cat-emerald-soft: #34d399;
+		--cat-green: #22c55e;
+		--cat-green-soft: #4ade80;
+		--cat-sky: #0ea5e9;
+		--cat-sky-soft: #38bdf8;
+		--cat-blue: #3b82f6;
+		--cat-blue-soft: #60a5fa;
+		--cat-violet: #8b5cf6;
+		--cat-violet-soft: #a78bfa;
+		--cat-purple: #a855f7;
+		--cat-purple-soft: #c084fc;
+		--cat-rose: #f43f5e;
+		--cat-rose-soft: #fb7185;
+		--cat-red: #ef4444;
+		--cat-red-soft: #f87171;
+		--cat-pink: #ec4899;
+		--cat-pink-soft: #f472b6;
+		--cat-orange: #f97316;
+		--cat-orange-soft: #fb923c;
+
+		/* Comma triples for alpha composition — `rgba(var(--cat-sky-rgb), 0.15)`,
+		   the same idiom as --accent-rgb / --danger-rgb / --overlay-rgb. Apps used
+		   149 hand-written rgba() values on these hues for washes, glows and
+		   selected-row tints; without a triple there was no way to express those
+		   through a token. Relative colour syntax would avoid the duplication but
+		   its failure mode is a dropped declaration, i.e. no colour at all. */
+		--cat-amber-rgb: 245, 158, 11;
+		--cat-amber-soft-rgb: 251, 191, 36;
+		--cat-yellow-rgb: 234, 179, 8;
+		--cat-yellow-soft-rgb: 250, 204, 21;
+		--cat-emerald-rgb: 16, 185, 129;
+		--cat-emerald-soft-rgb: 52, 211, 153;
+		--cat-green-rgb: 34, 197, 94;
+		--cat-green-soft-rgb: 74, 222, 128;
+		--cat-sky-rgb: 14, 165, 233;
+		--cat-sky-soft-rgb: 56, 189, 248;
+		--cat-blue-rgb: 59, 130, 246;
+		--cat-blue-soft-rgb: 96, 165, 250;
+		--cat-violet-rgb: 139, 92, 246;
+		--cat-violet-soft-rgb: 167, 139, 250;
+		--cat-purple-rgb: 168, 85, 247;
+		--cat-purple-soft-rgb: 192, 132, 252;
+		--cat-rose-rgb: 244, 63, 94;
+		--cat-rose-soft-rgb: 251, 113, 133;
+		--cat-red-rgb: 239, 68, 68;
+		--cat-red-soft-rgb: 248, 113, 113;
+		--cat-pink-rgb: 236, 72, 153;
+		--cat-pink-soft-rgb: 244, 114, 182;
+		--cat-orange-rgb: 249, 115, 22;
+		--cat-orange-soft-rgb: 251, 146, 60;
 		--danger-rgb: 239, 68, 68;
 
 		/* Neutral overlay triples. Translucent white/black is how every app draws
