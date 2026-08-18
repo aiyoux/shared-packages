@@ -27,7 +27,8 @@
     "./LevelMeter.svelte": "./src/components/LevelMeter.svelte",
     "./Sidebar.svelte": "./src/components/Sidebar.svelte",
     "./button.css": "./src/button.css",
-    "./motion.css": "./src/motion.css"
+    "./motion.css": "./src/motion.css",
+    "./fonts.css": "./src/fonts.css"
   },
   "types": "./src/index.ts",
   "files": [

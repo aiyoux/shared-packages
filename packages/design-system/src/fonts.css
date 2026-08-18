@@ -1,0 +1,40 @@
+/*
+ * Inter — self-hosted, and the single owner of this font in the monorepo.
+ *
+ * Previously four app stylesheets each carried
+ * `@import url('https://fonts.googleapis.com/css2?family=Inter…&display=swap')`
+ * while the hub declared Inter in --font-sans and loaded no font at all. So the
+ * hub rendered in the fallback until some *other* app's CSS chunk happened to
+ * reach the page — via preload-on-hover or a prior navigation — at which point
+ * Inter arrived and every glyph on the hub re-rendered ~1s after load. Measured:
+ * the brand text grew 92.66px -> 93.91px, and two tabs settled at different
+ * widths depending on whether a sub-app chunk had loaded. A sub-app stylesheet
+ * silently restyling the hub is exactly the cross-app leak this package exists
+ * to remove.
+ *
+ * `font-display: optional` is deliberate and is what makes the shift
+ * impossible rather than merely unlikely: the browser uses the fallback if the
+ * face is not ready within its short block period, and then does NOT swap for
+ * that page load. `swap` — what the Google imports used — guarantees the
+ * opposite. Self-hosting keeps the file same-origin and small enough that it
+ * normally wins the race anyway, and it drops a third-party runtime dependency
+ * from every app.
+ */
+@layer reset {
+	@font-face {
+		font-family: 'Inter';
+		font-style: normal;
+		font-weight: 100 900;
+		font-display: optional;
+		src: url('./fonts/inter-latin-ext-var.woff2') format('woff2');
+		unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+	}
+	@font-face {
+		font-family: 'Inter';
+		font-style: normal;
+		font-weight: 100 900;
+		font-display: optional;
+		src: url('./fonts/inter-latin-var.woff2') format('woff2');
+		unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+	}
+}
