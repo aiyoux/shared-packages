@@ -47,6 +47,27 @@ export { DateAnchorEditorState, type AnchorType } from './DateAnchorEditorState.
 export { default as OverlayHost } from './OverlayHost.svelte';
 export { default as VelocityScroller } from './VelocityScroller.svelte';
 export { default as ResizableSidePanel } from './ResizableSidePanel.svelte';
+export { default as PaneLayout } from './pane-layout/PaneLayout.svelte';
+export {
+	createLeaf,
+	splitLeaf,
+	closeLeaf,
+	setSplitRatio,
+	listLeaves,
+	leafCount,
+	clampRatio,
+	newLayoutId,
+	resetLayoutIdsForTests,
+	MIN_SPLIT_RATIO,
+	MAX_SPLIT_RATIO
+} from './pane-layout/tree.ts';
+export type {
+	LayoutNode,
+	LayoutLeaf,
+	LayoutSplit,
+	SplitDirection,
+	SplitPlacement
+} from './pane-layout/types.ts';
 export { default as MobileBottomTray } from './MobileBottomTray.svelte';
 export { default as TimeStackBuilder } from './TimeStackBuilder.svelte';
 export { default as TimeReferenceRangeEditor } from './TimeReferenceRangeEditor.svelte';
