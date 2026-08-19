@@ -13,6 +13,7 @@
 		onFocus,
 		onSplit,
 		onClose,
+		onApps,
 		onResize
 	}: {
 		node: LayoutNode;
@@ -23,6 +24,7 @@
 		onFocus: (id: string) => void;
 		onSplit: (leafId: string, direction: SplitDirection) => void;
 		onClose: (leafId: string) => void;
+		onApps?: (leafId: string) => void;
 		onResize: (splitId: string, deltaRatio: number) => void;
 	} = $props();
 </script>
@@ -44,6 +46,17 @@
 			<header class="pl-chrome" data-testid="pl-chrome">
 				<span class="pl-chrome-id">{node.id}</span>
 				<div class="pl-chrome-actions">
+					{#if onApps}
+						<button
+							type="button"
+							data-testid="pl-apps"
+							title="Choose an app for this pane"
+							onclick={(e) => {
+								e.stopPropagation();
+								onApps(node.id);
+							}}>Apps</button
+						>
+					{/if}
 					<button
 						type="button"
 						data-testid="pl-split-row"
@@ -98,6 +111,7 @@
 				{onFocus}
 				{onSplit}
 				{onClose}
+				{onApps}
 				{onResize}
 			/>
 		</div>
@@ -115,6 +129,7 @@
 				{onFocus}
 				{onSplit}
 				{onClose}
+				{onApps}
 				{onResize}
 			/>
 		</div>

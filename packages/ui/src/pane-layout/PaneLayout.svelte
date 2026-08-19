@@ -18,11 +18,14 @@
 		root = $bindable(createLeaf()),
 		focusedId = $bindable(null),
 		showChrome = true,
+		onApps,
 		pane
 	}: {
 		root?: LayoutNode;
 		focusedId?: string | null;
 		showChrome?: boolean;
+		/** Chrome "Apps" button — host opens a picker without unmounting the leaf. */
+		onApps?: (leafId: string) => void;
 		pane: Snippet<[{ id: string; focused: boolean }]>;
 	} = $props();
 
@@ -83,6 +86,7 @@
 		onFocus={(id) => (focusedId = id)}
 		onSplit={(id, dir) => splitAt(id, dir)}
 		onClose={(id) => closeAt(id)}
+		{onApps}
 		{onResize}
 	/>
 </div>
