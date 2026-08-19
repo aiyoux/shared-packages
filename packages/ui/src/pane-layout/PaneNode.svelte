@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
 	import type { LayoutNode, SplitDirection } from './types.js';
+	import { paneChromeSlotId } from './chrome.js';
 	import SplitHandle from './SplitHandle.svelte';
 	import PaneNode from './PaneNode.svelte';
 
@@ -44,47 +45,64 @@
 	>
 		{#if showChrome}
 			<header class="pl-chrome" data-testid="pl-chrome">
-				<span class="pl-chrome-id">{node.id}</span>
-				<div class="pl-chrome-actions">
+				<div
+					class="pl-chrome-app"
+					id={paneChromeSlotId(node.id)}
+					data-testid="pl-chrome-app"
+					data-pl-leaf={node.id}
+				></div>
+				<div class="pl-chrome-window" data-testid="pl-chrome-window">
 					{#if onApps}
 						<button
 							type="button"
 							data-testid="pl-apps"
 							title="Choose an app for this pane"
+							aria-label="Choose an app for this pane"
 							onclick={(e) => {
 								e.stopPropagation();
 								onApps(node.id);
-							}}>Apps</button
+							}}
 						>
+							<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/></svg>
+						</button>
 					{/if}
 					<button
 						type="button"
 						data-testid="pl-split-row"
 						title="Split right"
+						aria-label="Split right"
 						onclick={(e) => {
 							e.stopPropagation();
 							onSplit(node.id, 'row');
-						}}>Split →</button
+						}}
 					>
+						<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M12 3v18"/></svg>
+					</button>
 					<button
 						type="button"
 						data-testid="pl-split-col"
 						title="Split down"
+						aria-label="Split down"
 						onclick={(e) => {
 							e.stopPropagation();
 							onSplit(node.id, 'col');
-						}}>Split ↓</button
+						}}
 					>
+						<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 12h18"/></svg>
+					</button>
 					<button
 						type="button"
 						data-testid="pl-close"
 						title="Close pane"
+						aria-label="Close pane"
 						disabled={!canClose}
 						onclick={(e) => {
 							e.stopPropagation();
 							onClose(node.id);
-						}}>Close</button
+						}}
 					>
+						<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+					</button>
 				</div>
 			</header>
 		{/if}
@@ -170,38 +188,55 @@
 	.pl-chrome {
 		display: flex;
 		align-items: center;
-		justify-content: space-between;
+		justify-content: flex-end;
 		gap: 8px;
 		flex-shrink: 0;
-		padding: 4px 6px 4px 10px;
+		min-height: 32px;
+		padding: 4px 6px;
 		border-bottom: 1px solid color-mix(in srgb, var(--border, #334155) 70%, transparent);
 		background: color-mix(in srgb, var(--surface, #1e293b) 88%, transparent);
 		font-size: 11px;
 	}
-	.pl-chrome-id {
-		opacity: 0.45;
-		font-variant-numeric: tabular-nums;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-	.pl-chrome-actions {
+	.pl-chrome-app {
+		flex: 1 1 0;
+		min-width: 0;
+		min-height: 0;
 		display: flex;
-		gap: 4px;
+		align-items: center;
 	}
-	.pl-chrome-actions button {
-		border: 1px solid color-mix(in srgb, var(--border, #475569) 80%, transparent);
+	.pl-chrome-window {
+		display: flex;
+		align-items: center;
+		gap: 2px;
+		flex-shrink: 0;
+		padding: 2px;
+		border: 1px solid color-mix(in srgb, var(--border, #475569) 70%, transparent);
+		border-radius: 6px;
+		background: color-mix(in srgb, var(--surface, #1e293b) 70%, #000);
+	}
+	.pl-chrome-window button {
+		box-sizing: border-box;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 26px;
+		height: 26px;
+		padding: 0;
+		border: 1px solid transparent;
+		border-radius: 5px;
 		background: transparent;
 		color: inherit;
-		border-radius: 5px;
-		padding: 2px 7px;
-		font: inherit;
 		cursor: pointer;
 	}
-	.pl-chrome-actions button:hover:not(:disabled) {
-		border-color: var(--accent, #38bdf8);
+	.pl-chrome-window button:hover:not(:disabled),
+	.pl-chrome-window button:focus-visible:not(:disabled) {
+		border-color: color-mix(in srgb, var(--border, #475569) 80%, transparent);
+		background: color-mix(in srgb, var(--surface, #334155) 55%, transparent);
 	}
-	.pl-chrome-actions button:disabled {
+	.pl-chrome-window button:focus-visible {
+		outline: none;
+	}
+	.pl-chrome-window button:disabled {
 		opacity: 0.35;
 		cursor: not-allowed;
 	}

@@ -42,6 +42,7 @@ export { default as OverlayHost } from './OverlayHost.svelte';
 export { default as VelocityScroller } from './VelocityScroller.svelte';
 export { default as ResizableSidePanel } from './ResizableSidePanel.svelte';
 export { default as PaneLayout } from './pane-layout/PaneLayout.svelte';
+export { paneChromeSlotId } from './pane-layout/chrome.ts';
 export {
 	createLeaf,
 	splitLeaf,
