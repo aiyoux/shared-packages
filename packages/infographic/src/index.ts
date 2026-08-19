@@ -109,8 +109,11 @@ export {
 export {
 	ancestorsOf,
 	childrenOf,
+	hasParentCycle,
 	objectToMark,
+	reparent,
 	subtreeIds,
+	wouldCreateCycle,
 	worldTransforms,
 	type WorldXform
 } from './objects.js';

@@ -305,6 +305,31 @@ describe('validate', () => {
 		expect(validate(overPoints).errors).toContain(`point cap ${MAX_POINTS_PER_SERIES}`);
 	});
 
+	it('rejects parentId cycles', () => {
+		const stubObject = (id: string, extra: Partial<IgfxObject> = {}): IgfxObject => ({
+			id,
+			name: id,
+			parentId: null,
+			kind: 'text',
+			visible: true,
+			transform: { x: 0, y: 0, w: 10, h: 10, rotation: 0, opacity: 1 },
+			...extra
+		});
+		const loop = createDocument();
+		getActiveScene(loop).objects = [
+			stubObject('a', { parentId: 'b' }),
+			stubObject('b', { parentId: 'a' })
+		];
+		const looped = validate(loop);
+		expect(looped.ok).toBe(false);
+		expect(looped.errors).toContain('Object "a" parentId cycle');
+		expect(looped.errors).toContain('Object "b" parentId cycle');
+
+		const self = createDocument();
+		getActiveScene(self).objects = [stubObject('a', { parentId: 'a' })];
+		expect(validate(self).errors).toContain('Object "a" parentId cycle');
+	});
+
 	it('does not fail validate on a freshly parsed over-cap file (already sliced)', () => {
 		const objects = Array.from({ length: MAX_OBJECTS_PER_SCENE + 10 }, (_, i) => ({
 			id: `o${i}`,

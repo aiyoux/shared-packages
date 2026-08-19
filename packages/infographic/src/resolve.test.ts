@@ -16,7 +16,7 @@ import {
 	resolveScene,
 	TEMPLATE_IDS
 } from './index.js';
-import type { IgfxDocument, ResolvedFrame, ResolvedNode } from './types.js';
+import type { IgfxDocument, IgfxObject, ResolvedFrame, ResolvedNode } from './types.js';
 
 const goldensDir = join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'goldens');
 
@@ -560,6 +560,106 @@ describe('caps fixtures', () => {
 		expect(frame.nodes).toHaveLength(MAX_OBJECTS_PER_SCENE);
 		expect(findById(frame.nodes, 'o0:text')?.text).toBe('0');
 		expect(findById(frame.nodes, 'o255:text')?.text).toBe('255');
+	});
+
+	it('resolves a 256-object / 200-point fixture under 16 ms', () => {
+		const doc = createDocument();
+		const scene = getActiveScene(doc);
+		const objects: IgfxObject[] = [
+			{
+				id: 'g',
+				name: 'g',
+				parentId: null,
+				kind: 'group',
+				visible: true,
+				transform: { x: 200, y: 50, w: 10, h: 10, rotation: 90, opacity: 1 }
+			},
+			{
+				id: 'series',
+				name: 'series',
+				parentId: 'g',
+				kind: 'series',
+				visible: true,
+				transform: { x: 0, y: 0, w: 10, h: 10, rotation: 0, opacity: 1 },
+				series: { mode: 'bars' }
+			}
+		];
+		for (let i = 0; i < 200; i += 1) {
+			objects.push({
+				id: `p${i}`,
+				name: `p${i}`,
+				parentId: 'series',
+				kind: 'point',
+				visible: true,
+				transform: { x: 0, y: 0, w: 16, h: 16, rotation: 0, opacity: 1 },
+				point: { x: i, y: 1 }
+			});
+		}
+		for (let i = 0; i < MAX_OBJECTS_PER_SCENE - 202; i += 1) {
+			objects.push({
+				id: `t${i}`,
+				name: `t${i}`,
+				parentId: 'g',
+				kind: 'text',
+				visible: true,
+				transform: { x: 100, y: 0, w: 20, h: 30, rotation: 0, opacity: 1 },
+				bindings: { text: String(i) }
+			});
+		}
+		scene.objects = objects;
+		expect(scene.objects).toHaveLength(MAX_OBJECTS_PER_SCENE);
+		const frame = resolve(doc, 0);
+		expect(findById(frame.nodes, 'g')).toBeUndefined();
+		expect(findById(frame.nodes, 'series')).toBeUndefined();
+		expect(findById(frame.nodes, 'p0')).toBeUndefined();
+		expect(frame.nodes).toHaveLength(MAX_OBJECTS_PER_SCENE - 202);
+		let best = Number.POSITIVE_INFINITY;
+		for (let i = 0; i < 8; i += 1) {
+			const t0 = performance.now();
+			resolve(doc, 0);
+			best = Math.min(best, performance.now() - t0);
+		}
+		expect(best).toBeLessThan(16);
+	});
+});
+
+describe('group world compose', () => {
+	it('skips the group node and lands a child at the §4.3 SVG coords', () => {
+		const doc = createDocument();
+		const scene = getActiveScene(doc);
+		scene.objects = [
+			{
+				id: 'g',
+				name: 'g',
+				parentId: null,
+				kind: 'group',
+				visible: true,
+				transform: { x: 200, y: 50, w: 10, h: 10, rotation: 90, opacity: 0.5 }
+			},
+			{
+				id: 'child',
+				name: 'child',
+				parentId: 'g',
+				kind: 'text',
+				visible: true,
+				transform: { x: 100, y: 0, w: 20, h: 30, rotation: 0, opacity: 0.5 },
+				bindings: { text: 'hi' }
+			}
+		];
+		const frame = resolve(doc, 0);
+		expect(findById(frame.nodes, 'g')).toBeUndefined();
+		const wrapper = findById(frame.nodes, 'child');
+		expect(wrapper).toBeTruthy();
+		const rot = /^rotate\(([-\d.eE]+)\s+([-\d.eE]+)\s+([-\d.eE]+)\)$/.exec(
+			wrapper?.attrs.transform ?? ''
+		);
+		expect(rot).toBeTruthy();
+		expect(Number(rot?.[1])).toBeCloseTo(90);
+		expect(Number(rot?.[2])).toBeCloseTo(200);
+		expect(Number(rot?.[3])).toBeCloseTo(150);
+		expect(Number(wrapper?.attrs.opacity)).toBeCloseTo(0.25);
+		expect(findById(frame.nodes, 'child:text')?.attrs.x).toBeDefined();
+		expect(Number(findById(frame.nodes, 'child:text')?.attrs.x)).toBeCloseTo(200);
 	});
 });
 

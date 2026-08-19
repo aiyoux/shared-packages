@@ -49,6 +49,7 @@ import {
 	type Theme,
 	type ValidationResult
 } from './types.js';
+import { hasParentCycle } from './objects.js';
 
 export class IgfxParseError extends Error {
 	constructor(message: string) {
@@ -613,17 +614,6 @@ function uniqueIds(ids: string[], label: string, errors: string[]): void {
 	}
 }
 
-function parentCycle(objects: IgfxObject[], obj: IgfxObject, byId: Map<string, IgfxObject>): boolean {
-	const seen = new Set<string>();
-	let cur: IgfxObject | undefined = obj;
-	while (cur) {
-		if (seen.has(cur.id)) return true;
-		seen.add(cur.id);
-		cur = cur.parentId ? byId.get(cur.parentId) : undefined;
-	}
-	return false;
-}
-
 function checkBindings(
 	ownerId: string,
 	bindings: Record<string, BindingRef | string | number> | undefined,
@@ -724,7 +714,7 @@ export function validate(doc: IgfxDocument): ValidationResult {
 			if (obj.parentId) {
 				if (!objectIds.has(obj.parentId)) {
 					errors.push(`Object "${obj.id}" parentId "${obj.parentId}" is not in the scene`);
-				} else if (parentCycle(scene.objects, obj, byId)) {
+				} else if (hasParentCycle(scene, obj.id)) {
 					errors.push(`Object "${obj.id}" parentId cycle`);
 				}
 			}

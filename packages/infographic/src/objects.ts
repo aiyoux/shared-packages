@@ -57,9 +57,25 @@ function localPose(obj: IgfxObject, sampled: Map<string, Partial<ObjectTransform
 	};
 }
 
+/** Root parent is origin (0, 0), θp = 0 — equivalent to returning `local` unchanged. */
+function compose(parent: WorldXform | undefined, local: WorldXform): WorldXform {
+	if (!parent) return local;
+	const theta = (parent.rotation * Math.PI) / 180;
+	const cos = Math.cos(theta);
+	const sin = Math.sin(theta);
+	return {
+		x: parent.x + local.x * cos - local.y * sin,
+		y: parent.y + local.x * sin + local.y * cos,
+		w: local.w,
+		h: local.h,
+		rotation: parent.rotation + local.rotation,
+		opacity: parent.opacity * local.opacity
+	};
+}
+
 /**
- * One pre-order memoized pass over `scene.objects`.
- * S2 keeps identity parents (rotation compose lands in S3).
+ * One memoized pre-order pass over `scene.objects` (§4.3).
+ * Do not call this per-object as a fresh ancestor walk — that is O(n²) at the 256 cap.
  */
 export function worldTransforms(
 	scene: IgfxScene,
@@ -75,8 +91,9 @@ export function worldTransforms(
 
 	const visit = (obj: IgfxObject): void => {
 		if (worlds.has(obj.id)) return;
-		// Identity parent: world = sampled local pose. S3 composes rotation.
-		worlds.set(obj.id, localPose(obj, sampled));
+		const local = localPose(obj, sampled);
+		const parentWorld = obj.parentId ? worlds.get(obj.parentId) : undefined;
+		worlds.set(obj.id, compose(parentWorld, local));
 		for (const child of kids.get(obj.id) ?? []) visit(child);
 	};
 
@@ -85,6 +102,57 @@ export function worldTransforms(
 		if (!worlds.has(obj.id)) worlds.set(obj.id, localPose(obj, sampled));
 	}
 	return worlds;
+}
+
+export function wouldCreateCycle(
+	scene: IgfxScene,
+	objectId: string,
+	newParentId: string | null
+): boolean {
+	if (newParentId === null) return false;
+	const byId = new Map(scene.objects.map((o) => [o.id, o]));
+	const seen = new Set<string>();
+	let cur = byId.get(newParentId);
+	while (cur) {
+		if (cur.id === objectId) return true;
+		if (seen.has(cur.id)) break;
+		seen.add(cur.id);
+		cur = cur.parentId ? byId.get(cur.parentId) : undefined;
+	}
+	return false;
+}
+
+export function hasParentCycle(scene: IgfxScene, objectId: string): boolean {
+	const byId = new Map(scene.objects.map((o) => [o.id, o]));
+	const seen = new Set<string>();
+	let cur = byId.get(objectId);
+	while (cur) {
+		if (seen.has(cur.id)) return true;
+		seen.add(cur.id);
+		cur = cur.parentId ? byId.get(cur.parentId) : undefined;
+	}
+	return false;
+}
+
+/** Field-write `parentId`. Rejects missing ids, cycles, and `point` → non-`series`. */
+export function reparent(
+	scene: IgfxScene,
+	objectId: string,
+	newParentId: string | null
+): boolean {
+	const byId = new Map(scene.objects.map((o) => [o.id, o]));
+	const obj = byId.get(objectId);
+	if (!obj) return false;
+	if (newParentId !== null) {
+		const parent = byId.get(newParentId);
+		if (!parent) return false;
+		if (obj.kind === 'point' && parent.kind !== 'series') return false;
+	} else if (obj.kind === 'point') {
+		return false;
+	}
+	if (wouldCreateCycle(scene, objectId, newParentId)) return false;
+	obj.parentId = newParentId;
+	return true;
 }
 
 export function objectToMark(
