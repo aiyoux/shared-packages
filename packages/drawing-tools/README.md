@@ -41,12 +41,5 @@ Phase-2 consumer swap must keep green.
 
 ## Local sharing
 
-Published to the local yalc store from this repo's root:
-
-```
-cd ~/Code/shared-packages
-npm run yalc:publish
-```
-
-Consumers pull on their own schedule (`npm run shared:pull`). Always publish
-here before expecting a consumer to pull.
+Consumers depend on this package via `file:`. Edit here and they HMR. Run
+`npm install` in a consumer only when `exports` change.

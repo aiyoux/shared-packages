@@ -20,6 +20,6 @@ same rule that applies to `@shared-packages/file-system/ui`.
 
 ## Changing it
 
-Edit here, then `npm run yalc:publish`, then `npm run shared:pull` in the
-consumer. Never edit a consumer's `.yalc/@shared-packages/sticker-library/`
-checkout — it is a read-only published snapshot and the drift check will fail.
+Edit here. Consumers depend on this package via `file:` and HMR the change.
+Run `npm install` in a consumer only when `exports` change. Never edit a
+consumer's `node_modules/@shared-packages/sticker-library/` copy.

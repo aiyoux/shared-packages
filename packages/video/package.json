@@ -22,8 +22,7 @@
   "files": ["src"],
   "scripts": {
     "test": "vitest run",
-    "check": "tsc --noEmit -p tsconfig.json",
-    "yalc:publish": "yalc publish"
+    "check": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
     "@ffmpeg/ffmpeg": "^0.12.15",

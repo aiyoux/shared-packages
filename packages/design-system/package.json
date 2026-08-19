@@ -37,9 +37,6 @@
   "files": [
     "src"
   ],
-  "scripts": {
-    "yalc:publish": "yalc publish"
-  },
   "peerDependencies": {
     "svelte": "^5.0.0"
   }

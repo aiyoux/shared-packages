@@ -36,8 +36,6 @@ import VideoLightbox from '@shared-packages/video/VideoLightbox.svelte';
 
 `VideoProcessPanel` accepts an optional `interpolator` for a local RIFE-style post-step.
 
-## Publish
+## Local development
 
-```bash
-npm run yalc:publish -w @shared-packages/video
-```
+Consumers depend on this package via `file:`. Edit here and they HMR. Run `npm install` in a consumer only when `exports` change.

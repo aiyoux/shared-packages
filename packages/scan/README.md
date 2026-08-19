@@ -19,8 +19,6 @@ const pdf = await pagesToPdf([page]);
 
 `loadScanEngine()` / `commitScan()` / `recognizeText()` / `pagesToPdf()` dynamically import their libraries on first use.
 
-## Publish
+## Local development
 
-```bash
-npm run yalc:publish -w @shared-packages/scan
-```
+Consumers depend on this package via `file:`. Edit here and they HMR. Run `npm install` in a consumer only when `exports` change.
