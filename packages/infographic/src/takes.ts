@@ -40,8 +40,19 @@ function laterFullSpanTrack(take: SceneTimeline, objectId: string): SceneTrack |
 	return found;
 }
 
+function laterTrackFor(take: SceneTimeline, objectId: string): SceneTrack | undefined {
+	let found: SceneTrack | undefined;
+	for (const track of take.tracks) {
+		if (track.objectId === objectId) found = track;
+	}
+	return found;
+}
+
+/** Never return a detached track — refuse returns an already-inserted row. */
 function pushTrack(take: SceneTimeline, track: SceneTrack): SceneTrack {
-	if (take.tracks.length >= MAX_TRACKS_PER_TAKE) return track;
+	if (take.tracks.length >= MAX_TRACKS_PER_TAKE) {
+		return laterTrackFor(take, track.objectId) ?? take.tracks[take.tracks.length - 1]!;
+	}
 	take.tracks.push(track);
 	return track;
 }
@@ -53,7 +64,7 @@ export function placeObjectAtPlayhead(
 	playheadMs: number,
 	durationMs?: number
 ): SceneTrack {
-	const startMs = Math.max(0, roundMs(playheadMs));
+	const startMs = Math.min(take.durationMs, Math.max(0, roundMs(playheadMs)));
 	const remaining = take.durationMs - startMs;
 	const requested = durationMs === undefined ? Math.min(2000, remaining) : roundMs(durationMs);
 	const track: SceneTrack = {
@@ -93,7 +104,9 @@ export function addKeyframe(
 	const covering = Number.isFinite(tMs) ? laterCoveringTrack(take, objectId, tMs) : undefined;
 	const track = covering ?? ensureFullSpanTrack(take, objectId);
 	if (!Number.isFinite(tMs) || !Number.isFinite(key.value)) return track;
-	if (!take.tracks.includes(track)) return track;
+	// Cap refuse may hand back another object's row — do not write onto it.
+	if (track.objectId !== objectId || !take.tracks.includes(track)) return track;
+	if (!covering && !isFullSpan(track, take.durationMs)) return track;
 
 	let curve: PropertyCurve | undefined;
 	for (const c of track.curves) {

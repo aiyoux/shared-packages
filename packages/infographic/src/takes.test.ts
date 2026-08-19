@@ -2,11 +2,15 @@ import { describe, expect, it } from 'vitest';
 import {
 	addKeyframe,
 	createDocument,
+	createTake,
 	duplicateTake,
 	ensureFullSpanTrack,
 	getActiveScene,
 	getActiveTake,
 	instantiateTemplate,
+	MAX_KEYS_PER_CURVE,
+	MAX_TAKES_PER_SCENE,
+	MAX_TRACKS_PER_TAKE,
 	moveTrack,
 	placeObjectAtPlayhead,
 	resolve,
@@ -74,8 +78,11 @@ describe('placeObjectAtPlayhead', () => {
 		const doc = createDocument();
 		const take = getActiveTake(getActiveScene(doc));
 		expect(placeObjectAtPlayhead(take, 'a', 7000).durationMs).toBe(1000);
-		expect(placeObjectAtPlayhead(take, 'b', 8000).durationMs).toBe(1);
-		expect(placeObjectAtPlayhead(take, 'c', 0, 500).durationMs).toBe(500);
+		const atEnd = placeObjectAtPlayhead(take, 'b', 8000);
+		expect(atEnd).toMatchObject({ startMs: 8000, durationMs: 1 });
+		const pastEnd = placeObjectAtPlayhead(take, 'c', 10000);
+		expect(pastEnd).toMatchObject({ startMs: 8000, durationMs: 1 });
+		expect(placeObjectAtPlayhead(take, 'd', 0, 500).durationMs).toBe(500);
 	});
 
 	it('overlapping place clips are visible by OR of ranges', () => {
@@ -249,5 +256,66 @@ describe('duplicateTake', () => {
 		expect(take.tracks[0].curves[0].keyframes[0].value).toBe(0.2);
 		expect(sampleTake(scene, copy, 0).byObject.get('t')?.motion.opacity).toBe(0.9);
 		expect(sampleTake(scene, take, 0).byObject.get('t')?.motion.opacity).toBe(0.2);
+	});
+});
+
+describe('mutate caps', () => {
+	it('256th+ place/ensure is a no-op and returns an already-inserted track', () => {
+		const doc = createDocument();
+		const take = getActiveTake(getActiveScene(doc));
+		take.tracks = Array.from({ length: MAX_TRACKS_PER_TAKE }, (_, i) => ({
+			id: `track-${i}`,
+			objectId: `o${i}`,
+			startMs: 0,
+			durationMs: 100,
+			curves: []
+		}));
+		const last = take.tracks[MAX_TRACKS_PER_TAKE - 1];
+		const placed = placeObjectAtPlayhead(take, 'fresh', 0);
+		expect(take.tracks).toHaveLength(MAX_TRACKS_PER_TAKE);
+		expect(take.tracks.includes(placed)).toBe(true);
+		expect(placed).toBe(last);
+
+		const ensured = ensureFullSpanTrack(take, 'fresh');
+		expect(take.tracks).toHaveLength(MAX_TRACKS_PER_TAKE);
+		expect(take.tracks.includes(ensured)).toBe(true);
+		expect(ensured).toBe(last);
+	});
+
+	it('drops a 257th key but still upserts an existing tMs', () => {
+		const doc = createDocument();
+		const scene = getActiveScene(doc);
+		const take = getActiveTake(scene);
+		scene.objects = [obj('t')];
+		addKeyframe(take, 't', 'opacity', { tMs: 0, value: 0 });
+		const curve = take.tracks[0].curves[0];
+		curve.keyframes = Array.from({ length: MAX_KEYS_PER_CURVE }, (_, i) => ({
+			tMs: i,
+			value: i / MAX_KEYS_PER_CURVE
+		}));
+
+		addKeyframe(take, 't', 'opacity', { tMs: MAX_KEYS_PER_CURVE + 10, value: 1 });
+		expect(curve.keyframes).toHaveLength(MAX_KEYS_PER_CURVE);
+		expect(curve.keyframes.some((k) => k.tMs === MAX_KEYS_PER_CURVE + 10)).toBe(false);
+
+		addKeyframe(take, 't', 'opacity', { tMs: 0, value: 0.77 });
+		expect(curve.keyframes).toHaveLength(MAX_KEYS_PER_CURVE);
+		expect(curve.keyframes[0]).toMatchObject({ tMs: 0, value: 0.77 });
+	});
+
+	it('does not push a 17th take and leaves activeTimelineId unchanged', () => {
+		const doc = createDocument();
+		const scene = getActiveScene(doc);
+		const first = getActiveTake(scene);
+		while (scene.timelines.length < MAX_TAKES_PER_SCENE) {
+			scene.timelines.push(createTake(`Take ${scene.timelines.length + 1}`));
+		}
+		const active = scene.activeTimelineId;
+		expect(scene.timelines).toHaveLength(MAX_TAKES_PER_SCENE);
+
+		const refused = duplicateTake(scene, first.id);
+		expect(refused).toBe(first);
+		expect(scene.timelines).toHaveLength(MAX_TAKES_PER_SCENE);
+		expect(scene.activeTimelineId).toBe(active);
 	});
 });
