@@ -19,9 +19,7 @@ import {
 	MAX_TAKES_PER_SCENE,
 	MAX_TRACKS_PER_TAKE,
 	OBJECT_KINDS,
-	PRESET_KINDS,
 	type AnimatableProp,
-	type AnyMark,
 	type BindingRef,
 	type Dataset,
 	type DatasetColumn,
@@ -31,14 +29,11 @@ import {
 	type IgfxScene,
 	type IgfxTimeline,
 	type LastExport,
-	type Mark,
 	type MediaBed,
 	type MotionKeyframe,
-	type MotionTrack,
 	type MarkKind,
 	type ObjectKind,
 	type ObjectTransform,
-	type PresetKind,
 	type PathSpec,
 	type PointSpec,
 	type PropertyCurve,
@@ -146,85 +141,6 @@ export function compositionSpanMs(doc: IgfxDocument): number {
 	const scene = getActiveScene(doc);
 	const take = getActiveTake(scene);
 	return Math.max(take.durationMs, scene.mediaBed?.durationMs ?? 0);
-}
-
-const PRESET_KIND_SET = new Set<string>(PRESET_KINDS);
-
-function isPresetKind(kind: ObjectKind): kind is PresetKind {
-	return PRESET_KIND_SET.has(kind);
-}
-
-function objectToMark(obj: IgfxObject): AnyMark | null {
-	if (!isPresetKind(obj.kind)) return null;
-	const layout = {
-		x: obj.transform.x,
-		y: obj.transform.y,
-		w: obj.transform.w,
-		h: obj.transform.h
-	};
-	if (obj.kind === 'scene3d') {
-		const mark: Scene3dMark = {
-			id: obj.id,
-			kind: 'scene3d',
-			layout,
-			scene: obj.scene ?? {
-				objects: [],
-				camera: { position: [2, 2, 2], target: [0, 0, 0], fov: 50 }
-			},
-			bindings: {}
-		};
-		if (obj.bindings && isRecord(obj.bindings.values) && typeof obj.bindings.values.ref === 'string') {
-			mark.bindings.values = { ref: obj.bindings.values.ref };
-		}
-		if (obj.style) mark.style = obj.style;
-		return mark;
-	}
-	const mark: Mark = {
-		id: obj.id,
-		kind: obj.kind as MarkKind,
-		layout,
-		bindings: obj.bindings ?? {}
-	};
-	if (obj.style) mark.style = obj.style;
-	return mark;
-}
-
-/**
- * Temporary read adapter until resolve walks the object tree.
- * Active scene + take only. Not a write API — `layout` is a detached copy of `transform`.
- */
-export function v1View(doc: IgfxDocument): {
-	marks: AnyMark[];
-	timeline: IgfxTimeline;
-	mediaBed?: MediaBed;
-} {
-	const scene = getActiveScene(doc);
-	const take = getActiveTake(scene);
-	const marks: AnyMark[] = [];
-	for (const obj of scene.objects) {
-		const mark = objectToMark(obj);
-		if (mark) marks.push(mark);
-	}
-	const tracks: MotionTrack[] = [];
-	for (const track of take.tracks) {
-		for (const curve of track.curves) {
-			tracks.push({
-				id: curve.id,
-				target: `mark:${track.objectId}.${curve.prop}`,
-				keyframes: curve.keyframes
-			});
-		}
-	}
-	const out: { marks: AnyMark[]; timeline: IgfxTimeline; mediaBed?: MediaBed } = {
-		marks,
-		timeline: {
-			durationMs: take.durationMs,
-			posterMs: take.posterMs,
-			tracks
-		}
-	};
-	if (scene.mediaBed) out.mediaBed = scene.mediaBed;
-	return out;
 }
 
 export function serializeIgfx(doc: IgfxDocument): string {

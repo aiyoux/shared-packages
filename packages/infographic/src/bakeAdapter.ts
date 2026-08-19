@@ -1,7 +1,8 @@
 import { bindMark } from './bindings.js';
-import { v1View } from './schema.js';
+import { objectToMark } from './objects.js';
+import { getActiveScene } from './schema.js';
 import { DEFAULT_EXPORT_FPS, SCENE3D_EXPORT_FPS } from './types.js';
-import type { AnyMark, IgfxDocument, Scene3dMark, Scene3dObject } from './types.js';
+import type { AnyMark, IgfxDocument, IgfxObject, ObjectTransform, Scene3dMark, Scene3dObject } from './types.js';
 
 export type BakedPath = { d: string; stroke: string; fill: string; strokeWidth: number };
 
@@ -34,7 +35,7 @@ export function isScene3dMark(mark: AnyMark): mark is Scene3dMark {
 }
 
 export function documentHasScene3d(doc: IgfxDocument): boolean {
-	return v1View(doc).marks.some(isScene3dMark);
+	return getActiveScene(doc).objects.some((o) => o.kind === 'scene3d');
 }
 
 /** 12 whenever any scene3d is present (preview + export share cache keys). Else lastExport.fps || 30. */
@@ -108,29 +109,71 @@ export function markWithBoundValues(mark: Scene3dMark, boundValues?: number[] | 
 	};
 }
 
+const DEFAULT_SCENE3D_SCENE: Scene3dMark['scene'] = {
+	objects: [
+		{
+			id: 'box',
+			primitive: 'box',
+			position: [0, 0, 0],
+			rotation: [0.35, 0.6, 0],
+			scale: [1, 1, 1],
+			color: '#2563eb'
+		}
+	],
+	camera: { position: [2.4, 1.8, 2.4], target: [0, 0, 0], fov: 45 }
+};
+
+export function defaultScene3dObject(
+	id: string,
+	transform: Partial<ObjectTransform> = {}
+): IgfxObject {
+	return {
+		id,
+		name: id,
+		parentId: null,
+		kind: 'scene3d',
+		visible: true,
+		transform: {
+			x: transform.x ?? 80,
+			y: transform.y ?? 80,
+			w: transform.w ?? 480,
+			h: transform.h ?? 360,
+			rotation: transform.rotation ?? 0,
+			opacity: transform.opacity ?? 1
+		},
+		scene: {
+			objects: DEFAULT_SCENE3D_SCENE.objects.map((o) => ({
+				...o,
+				id: o.id === 'box' ? `${id}-box` : o.id,
+				position: [...o.position] as [number, number, number],
+				rotation: [...o.rotation] as [number, number, number],
+				scale: [...o.scale] as [number, number, number]
+			})),
+			camera: {
+				position: [...DEFAULT_SCENE3D_SCENE.camera.position] as [number, number, number],
+				target: [...DEFAULT_SCENE3D_SCENE.camera.target] as [number, number, number],
+				fov: DEFAULT_SCENE3D_SCENE.camera.fov
+			}
+		}
+	};
+}
+
 export function defaultScene3dMark(
 	id: string,
 	layout: { x: number; y: number; w: number; h: number } = { x: 80, y: 80, w: 480, h: 360 }
 ): Scene3dMark {
-	return {
-		id,
-		kind: 'scene3d',
-		layout,
-		scene: {
-			objects: [
-				{
-					id: `${id}-box`,
-					primitive: 'box',
-					position: [0, 0, 0],
-					rotation: [0.35, 0.6, 0],
-					scale: [1, 1, 1],
-					color: '#2563eb'
-				}
-			],
-			camera: { position: [2.4, 1.8, 2.4], target: [0, 0, 0], fov: 45 }
-		},
-		bindings: {}
-	};
+	const obj = defaultScene3dObject(id, layout);
+	const mark = objectToMark(obj, layout);
+	if (!mark || mark.kind !== 'scene3d') {
+		return {
+			id,
+			kind: 'scene3d',
+			layout,
+			scene: obj.scene ?? { objects: [], camera: { position: [2, 2, 2], target: [0, 0, 0], fov: 50 } },
+			bindings: {}
+		};
+	}
+	return mark;
 }
 
 export async function ensureBaked(
@@ -157,8 +200,10 @@ export async function ensureBaked(
 
 export async function ensureDocumentBaked(doc: IgfxDocument, tMs: number, fps?: number): Promise<void> {
 	const useFps = fps ?? bakeFpsFor(doc);
-	for (const mark of v1View(doc).marks) {
-		if (!isScene3dMark(mark)) continue;
+	for (const obj of getActiveScene(doc).objects) {
+		if (obj.kind !== 'scene3d') continue;
+		const mark = objectToMark(obj);
+		if (!mark || !isScene3dMark(mark)) continue;
 		await ensureBaked(mark, tMs, useFps, scene3dBoundValues(doc, mark));
 	}
 }

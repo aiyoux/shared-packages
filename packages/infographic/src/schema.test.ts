@@ -15,7 +15,6 @@ import {
 	MAX_TRACKS_PER_TAKE,
 	parseIgfx,
 	serializeIgfx,
-	v1View,
 	validate,
 	type IgfxObject,
 	type SceneTimeline,
@@ -49,9 +48,7 @@ describe('parseIgfx', () => {
 		expect(('mediaBed' in doc) as boolean).toBe(false);
 		expect(typeof doc.theme.fontFamily).toBe('string');
 		expect(typeof doc.theme.fontMono).toBe('string');
-		const view = v1View(doc);
-		expect(view.marks).toEqual([]);
-		expect(view.timeline.durationMs).toBe(8000);
+		expect(getActiveScene(doc).objects).toEqual([]);
 	});
 
 	it('strips unknown mark kinds rather than failing', () => {

@@ -42,3 +42,20 @@ export function fontSizeOf(ctx: MarkRenderCtx, fallback: number): number {
 	if (typeof raw === 'number' && Number.isFinite(raw) && raw > 0) return raw;
 	return fallback;
 }
+
+/** Shim wrapper: rotate + world opacity. Renderers see motion.x/y = 0, motion.opacity = 1. */
+export function wrapWorld(
+	id: string,
+	world: { x: number; y: number; rotation: number; opacity: number },
+	inner: ResolvedNode
+): ResolvedNode {
+	return {
+		id,
+		tag: 'g',
+		attrs: {
+			transform: `rotate(${world.rotation} ${world.x} ${world.y})`,
+			opacity: String(world.opacity)
+		},
+		children: [inner]
+	};
+}

@@ -77,7 +77,6 @@ export {
 	newId,
 	parseIgfx,
 	serializeIgfx,
-	v1View,
 	validate
 } from './schema.js';
 
@@ -94,7 +93,29 @@ export {
 	type TemplateInfo
 } from './templates.js';
 
-export { resolve } from './resolve.js';
+export { resolve, resolveScene } from './resolve.js';
+
+export {
+	applyEasing,
+	objectVisible,
+	sampleKeyframes,
+	sampleTake,
+	sampleTrack,
+	trackCovers,
+	type MarkMotion,
+	type ObjectSample
+} from './motion.js';
+
+export {
+	ancestorsOf,
+	childrenOf,
+	objectToMark,
+	subtreeIds,
+	worldTransforms,
+	type WorldXform
+} from './objects.js';
+
+export { bindMark, bindObject, type BoundMark, type BoundSeries } from './bindings.js';
 
 export { escapeXml, rasterize, renderSvg } from './render.js';
 
@@ -104,6 +125,7 @@ export {
 	bakeSignature,
 	clearBakeCache,
 	defaultScene3dMark,
+	defaultScene3dObject,
 	documentHasScene3d,
 	ensureBaked,
 	ensureDocumentBaked,

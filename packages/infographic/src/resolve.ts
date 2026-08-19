@@ -6,24 +6,39 @@ import {
 	peekLastBake,
 	type BakedPath
 } from './bakeAdapter.js';
-import { bindMark, type BoundMark } from './bindings.js';
+import { bindObject, type BoundMark } from './bindings.js';
 import { renderAxis } from './marks/axis.js';
 import { renderBar } from './marks/bar.js';
-import type { MarkRenderCtx } from './marks/context.js';
+import { wrapWorld, type MarkRenderCtx } from './marks/context.js';
 import { renderLegend } from './marks/legend.js';
 import { renderLine } from './marks/line.js';
 import { renderStat } from './marks/stat.js';
 import { renderText } from './marks/text.js';
-import { defaultMarkMotion, sampleMotion, type MarkMotion } from './motion.js';
-import { effectiveArtboard, effectiveTheme, getActiveScene, v1View } from './schema.js';
+import { sampleTake, sampledLocal, type MarkMotion, type ObjectSample } from './motion.js';
+import { objectToMark, worldTransforms, type WorldXform } from './objects.js';
+import { createTake, effectiveArtboard, effectiveTheme } from './schema.js';
+import { DEFAULT_DURATION_MS } from './types.js';
 import type {
 	IgfxDocument,
+	IgfxObject,
+	IgfxScene,
 	Mark,
+	ObjectTransform,
 	ResolvedFrame,
 	ResolvedNode,
 	Scene3dMark,
+	SceneTimeline,
 	Theme
 } from './types.js';
+
+function emptyFrame(
+	width: number,
+	height: number,
+	background: string,
+	warnings: string[]
+): ResolvedFrame {
+	return { width, height, background, nodes: [], warnings };
+}
 
 function renderScene3d(
 	mark: Scene3dMark,
@@ -102,21 +117,86 @@ function renderMark(ctx: MarkRenderCtx): ResolvedNode {
 	}
 }
 
-export function resolve(doc: IgfxDocument, tMs: number): ResolvedFrame {
-	const warnings: string[] = [];
-	const motion = sampleMotion(doc, tMs);
-	warnings.push(...motion.warnings);
+function shimMotion(sample: ObjectSample): MarkMotion {
+	return {
+		progress: sample.motion.progress,
+		opacity: 1,
+		x: 0,
+		y: 0
+	};
+}
 
-	const scene = getActiveScene(doc);
-	const artboard = effectiveArtboard(doc, scene);
+function renderObject(
+	obj: IgfxObject,
+	world: WorldXform,
+	sample: ObjectSample,
+	ctx: Omit<MarkRenderCtx, 'mark' | 'motion'> & { tMs: number; fps: number }
+): ResolvedNode | null {
+	const mark = objectToMark(obj, { x: world.x, y: world.y, w: world.w, h: world.h });
+	if (!mark) return null;
+	const motion = shimMotion(sample);
+	let inner: ResolvedNode;
+	if (isScene3dMark(mark)) {
+		inner = renderScene3d(mark, motion, ctx.theme, ctx.tMs, ctx.fps, ctx.bound, ctx.warnings);
+	} else {
+		inner = renderMark({
+			doc: ctx.doc,
+			mark,
+			theme: ctx.theme,
+			motion,
+			bound: ctx.bound,
+			warnings: ctx.warnings,
+			sibling: ctx.sibling
+		});
+	}
+	return wrapWorld(obj.id, world, inner);
+}
+
+export function resolveScene(
+	doc: IgfxDocument,
+	sceneId: string,
+	tMs: number,
+	timelineId?: string
+): ResolvedFrame {
+	const scene: IgfxScene | undefined = doc.scenes.find((s) => s.id === sceneId);
+	if (!scene) {
+		return emptyFrame(doc.artboard.width, doc.artboard.height, doc.theme.background, [
+			`missing scene:${sceneId}`
+		]);
+	}
+
+	const warnings: string[] = [];
+	const takeId = timelineId ?? scene.activeTimelineId;
+	let take: SceneTimeline | undefined = scene.timelines.find((t) => t.id === takeId);
+	if (!take) {
+		warnings.push(`missing take:${takeId}`);
+		take = { ...createTake('Take'), durationMs: DEFAULT_DURATION_MS, posterMs: DEFAULT_DURATION_MS };
+	}
+
 	const theme = effectiveTheme(doc, scene);
-	const view = v1View(doc);
+	const artboard = effectiveArtboard(doc, scene);
+	const sampled = sampleTake(scene, take, tMs);
+	warnings.push(...sampled.warnings);
+
 	const boundById = new Map<string, BoundMark>();
 	const markById = new Map<string, Mark>();
+	const locals = new Map<string, Partial<ObjectTransform>>();
+	for (const obj of scene.objects) {
+		const sample = sampled.byObject.get(obj.id);
+		if (sample) locals.set(obj.id, sampledLocal(obj, sample));
+		const bound = bindObject(doc, obj, warnings, theme);
+		if (sample?.motion.value !== undefined) bound.value = sample.motion.value;
+		boundById.set(obj.id, bound);
+	}
+
+	const worlds = worldTransforms(scene, locals);
 	const fps = bakeFpsFor(doc);
-	for (const mark of view.marks) {
-		if (!isScene3dMark(mark)) markById.set(mark.id, mark);
-		boundById.set(mark.id, bindMark(doc, mark, warnings));
+
+	for (const obj of scene.objects) {
+		const world = worlds.get(obj.id);
+		if (!world) continue;
+		const mark = objectToMark(obj, { x: world.x, y: world.y, w: world.w, h: world.h });
+		if (mark && !isScene3dMark(mark)) markById.set(mark.id, mark);
 	}
 
 	const sibling = (id: string) => {
@@ -127,25 +207,23 @@ export function resolve(doc: IgfxDocument, tMs: number): ResolvedFrame {
 	};
 
 	const nodes: ResolvedNode[] = [];
-	for (const mark of view.marks) {
-		const bound = boundById.get(mark.id);
-		if (!bound) continue;
-		const markMotion = motion.byMark.get(mark.id) ?? defaultMarkMotion();
-		if (isScene3dMark(mark)) {
-			nodes.push(renderScene3d(mark, markMotion, theme, tMs, fps, bound, warnings));
-			continue;
-		}
-		nodes.push(
-			renderMark({
-				doc,
-				mark,
-				theme,
-				motion: markMotion,
-				bound,
-				warnings,
-				sibling
-			})
-		);
+	for (const obj of scene.objects) {
+		if (obj.kind === 'group' || obj.kind === 'point') continue;
+		const sample = sampled.byObject.get(obj.id);
+		if (!sample?.visible) continue;
+		const world = worlds.get(obj.id);
+		const bound = boundById.get(obj.id);
+		if (!world || !bound) continue;
+		const node = renderObject(obj, world, sample, {
+			doc,
+			theme,
+			bound,
+			warnings,
+			sibling,
+			tMs,
+			fps
+		});
+		if (node) nodes.push(node);
 	}
 
 	return {
@@ -155,4 +233,14 @@ export function resolve(doc: IgfxDocument, tMs: number): ResolvedFrame {
 		nodes,
 		warnings
 	};
+}
+
+export function resolve(doc: IgfxDocument, tMs: number): ResolvedFrame {
+	const scene = doc.scenes.find((s) => s.id === doc.activeSceneId) ?? doc.scenes[0];
+	if (!scene) {
+		return emptyFrame(doc.artboard.width, doc.artboard.height, doc.theme.background, [
+			`missing scene:${doc.activeSceneId}`
+		]);
+	}
+	return resolveScene(doc, scene.id, tMs, scene.activeTimelineId);
 }

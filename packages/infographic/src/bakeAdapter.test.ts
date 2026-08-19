@@ -4,6 +4,7 @@ import {
 	bakeSignature,
 	clearBakeCache,
 	defaultScene3dMark,
+	defaultScene3dObject,
 	documentHasScene3d,
 	ensureBaked,
 	ensureDocumentBaked,
@@ -14,7 +15,7 @@ import {
 	type BakeAdapter,
 	type BakedPath
 } from './bakeAdapter.js';
-import { createDocument, parseIgfx, resolve, v1View } from './index.js';
+import { createDocument, getActiveScene, objectToMark, parseIgfx, resolve } from './index.js';
 import { SCENE3D_EXPORT_FPS, type Scene3dMark } from './types.js';
 
 const samplePath: BakedPath = { d: 'M0 0 L10 0', stroke: '#000', fill: 'none', strokeWidth: 2 };
@@ -43,7 +44,11 @@ describe('bake cache', () => {
 		const doc = parseIgfx({ format: 'igfx', marks: [defaultScene3dMark('cube')] });
 		const frame = resolve(doc, 0);
 		expect(frame.warnings.some((w) => w === 'bake pending:cube')).toBe(true);
-		expect(frame.nodes[0]?.children?.[0]?.attrs['data-bake']).toBe('pending');
+		const pending = frame.nodes
+			.flatMap((n) => n.children ?? [])
+			.flatMap((n) => (n.attrs['data-bake'] ? [n] : n.children ?? []))
+			.find((n) => n.attrs['data-bake'] === 'pending');
+		expect(pending?.attrs['data-bake']).toBe('pending');
 	});
 
 	it('ensureBaked fills the cache and resolve consumes it', async () => {
@@ -63,8 +68,11 @@ describe('bake cache', () => {
 
 		const frame = resolve(doc, 0);
 		expect(frame.warnings.some((w) => w.startsWith('bake pending:'))).toBe(false);
-		expect(frame.nodes[0]?.attrs['data-bake']).toBe('ready');
-		expect(frame.nodes[0]?.children?.[0]?.attrs.d).toBe(samplePath.d);
+		const ready = frame.nodes
+			.flatMap((n) => [n, ...(n.children ?? [])])
+			.find((n) => n.attrs['data-bake'] === 'ready');
+		expect(ready?.attrs['data-bake']).toBe('ready');
+		expect(ready?.children?.[0]?.attrs.d).toBe(samplePath.d);
 	});
 
 	it('does not use lastExport.fps 30 when any scene3d is present', () => {
@@ -127,6 +135,50 @@ describe('bake cache', () => {
 		});
 		await ensureDocumentBaked(doc, 0, 12);
 		expect(adapter.encodes).toBe(2);
-		expect(peekBake('a', bakeSignature(v1View(doc).marks[0] as Scene3dMark, 0, 12))?.length).toBe(1);
+		const mark = objectToMark(getActiveScene(doc).objects[0]!) as Scene3dMark;
+		expect(peekBake('a', bakeSignature(mark, 0, 12))?.length).toBe(1);
+	});
+
+	it('defaultScene3dObject returns an IgfxObject consumed by ensureDocumentBaked', async () => {
+		const adapter = mockAdapter();
+		setBakeAdapter(adapter);
+		const doc = createDocument();
+		getActiveScene(doc).objects = [defaultScene3dObject('cube', { x: 10, y: 20, w: 100, h: 80 })];
+		expect(documentHasScene3d(doc)).toBe(true);
+		await ensureDocumentBaked(doc, 0, 12);
+		expect(adapter.encodes).toBe(1);
+		const mark = objectToMark(getActiveScene(doc).objects[0]!) as Scene3dMark;
+		expect(mark.layout).toEqual({ x: 10, y: 20, w: 100, h: 80 });
+		expect(peekBake('cube', bakeSignature(mark, 0, 12))?.length).toBe(1);
+	});
+
+	it('ensureDocumentBaked walks only the active scene', async () => {
+		const adapter = mockAdapter();
+		setBakeAdapter(adapter);
+		const doc = parseIgfx({
+			format: 'igfx',
+			schemaVersion: 2,
+			scenes: [
+				{
+					id: 'active',
+					name: 'Active',
+					objects: [defaultScene3dObject('a')],
+					timelines: [{ id: 't', name: 'Take 1', durationMs: 8000, posterMs: 8000, tracks: [] }],
+					activeTimelineId: 't'
+				},
+				{
+					id: 'other',
+					name: 'Other',
+					objects: [defaultScene3dObject('b')],
+					timelines: [{ id: 't', name: 'Take 1', durationMs: 8000, posterMs: 8000, tracks: [] }],
+					activeTimelineId: 't'
+				}
+			],
+			activeSceneId: 'active'
+		});
+		await ensureDocumentBaked(doc, 0, 12);
+		expect(adapter.encodes).toBe(1);
+		expect(peekBake('a', bakeSignature(objectToMark(getActiveScene(doc).objects[0]!) as Scene3dMark, 0, 12))).toBeTruthy();
+		expect(peekBake('b', bakeSignature(defaultScene3dMark('b'), 0, 12))).toBeUndefined();
 	});
 });

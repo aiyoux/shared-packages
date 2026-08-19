@@ -15,7 +15,6 @@ import {
 	parseIgfx,
 	serializeIgfx,
 	TEMPLATE_IDS,
-	v1View,
 	type PropertyCurve,
 	type SceneTimeline,
 	type SceneTrack
@@ -148,9 +147,9 @@ describe('parseIgfx migration goldens', () => {
 				expect(curve.id).toBe(`${track.objectId}-${curve.prop}`);
 			}
 		}
-		const view = v1View(doc);
-		expect(view.timeline.tracks.some((t) => t.target.endsWith('.progress'))).toBe(true);
-		expect(view.timeline.tracks.some((t) => t.target === 'mark:title.opacity')).toBe(true);
+		const curves = take.tracks.flatMap((t) => t.curves.map((c) => ({ objectId: t.objectId, ...c })));
+		expect(curves.some((c) => c.prop === 'progress')).toBe(true);
+		expect(curves.some((c) => c.objectId === 'title' && c.prop === 'opacity')).toBe(true);
 	});
 
 	it('slices over-cap v2 input instead of validate-erroring', () => {

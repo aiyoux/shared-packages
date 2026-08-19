@@ -1,9 +1,11 @@
+import { objectToMark } from './objects.js';
 import { resolveColorToken } from './theme.js';
 import type {
 	AnyMark,
 	BindingRef,
 	Dataset,
 	IgfxDocument,
+	IgfxObject,
 	Mark,
 	Scalar,
 	Theme
@@ -209,8 +211,12 @@ function seriesColor(
 	return resolveColorToken(theme, 0);
 }
 
-export function bindMark(doc: IgfxDocument, mark: AnyMark, warnings: string[]): BoundMark {
-	const theme = doc.theme;
+export function bindMark(
+	doc: IgfxDocument,
+	mark: AnyMark,
+	warnings: string[],
+	theme: Theme = doc.theme
+): BoundMark {
 	if (mark.kind === 'scene3d') {
 		const raw = mark.bindings.values;
 		if (!raw) return emptyBound();
@@ -321,4 +327,15 @@ export function bindMark(doc: IgfxDocument, mark: AnyMark, warnings: string[]): 
 		default:
 			return emptyBound({ missing: true });
 	}
+}
+
+export function bindObject(
+	doc: IgfxDocument,
+	obj: IgfxObject,
+	warnings: string[],
+	theme: Theme = doc.theme
+): BoundMark {
+	const mark = objectToMark(obj);
+	if (!mark) return emptyBound();
+	return bindMark(doc, mark, warnings, theme);
 }
