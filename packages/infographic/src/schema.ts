@@ -109,15 +109,22 @@ export function defaultDocument(): IgfxDocument {
 }
 
 export function getActiveScene(doc: IgfxDocument): IgfxScene {
-	return doc.scenes.find((s) => s.id === doc.activeSceneId) ?? doc.scenes[0] ?? createScene('Scene');
+	const found = doc.scenes.find((s) => s.id === doc.activeSceneId) ?? doc.scenes[0];
+	if (found) return found;
+	const scene = createScene('Scene');
+	doc.scenes = [scene];
+	doc.activeSceneId = scene.id;
+	return scene;
 }
 
 export function getActiveTake(scene: IgfxScene): SceneTimeline {
-	return (
-		scene.timelines.find((t) => t.id === scene.activeTimelineId) ??
-		scene.timelines[0] ??
-		createTake()
-	);
+	const found =
+		scene.timelines.find((t) => t.id === scene.activeTimelineId) ?? scene.timelines[0];
+	if (found) return found;
+	const take = createTake();
+	scene.timelines = [take];
+	scene.activeTimelineId = take.id;
+	return take;
 }
 
 export function effectiveArtboard(
