@@ -44,4 +44,11 @@ describe('decoupling', () => {
 			expect(readFileSync(file, 'utf8'), file).not.toMatch(banned);
 		}
 	});
+
+	it('source does not mention IgfxScene, IgfxObject, or SceneTrack', () => {
+		const banned = /\b(IgfxScene|IgfxObject|SceneTrack)\b/;
+		for (const file of collectTs(srcDir)) {
+			expect(readFileSync(file, 'utf8'), file).not.toMatch(banned);
+		}
+	});
 });

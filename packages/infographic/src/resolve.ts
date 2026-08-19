@@ -15,6 +15,7 @@ import { renderLine } from './marks/line.js';
 import { renderStat } from './marks/stat.js';
 import { renderText } from './marks/text.js';
 import { defaultMarkMotion, sampleMotion, type MarkMotion } from './motion.js';
+import { v1View } from './schema.js';
 import type {
 	IgfxDocument,
 	Mark,
@@ -106,10 +107,11 @@ export function resolve(doc: IgfxDocument, tMs: number): ResolvedFrame {
 	const motion = sampleMotion(doc, tMs);
 	warnings.push(...motion.warnings);
 
+	const view = v1View(doc);
 	const boundById = new Map<string, BoundMark>();
 	const markById = new Map<string, Mark>();
 	const fps = bakeFpsFor(doc);
-	for (const mark of doc.marks) {
+	for (const mark of view.marks) {
 		if (!isScene3dMark(mark)) markById.set(mark.id, mark);
 		boundById.set(mark.id, bindMark(doc, mark, warnings));
 	}
@@ -122,7 +124,7 @@ export function resolve(doc: IgfxDocument, tMs: number): ResolvedFrame {
 	};
 
 	const nodes: ResolvedNode[] = [];
-	for (const mark of doc.marks) {
+	for (const mark of view.marks) {
 		const bound = boundById.get(mark.id);
 		if (!bound) continue;
 		const markMotion = motion.byMark.get(mark.id) ?? defaultMarkMotion();

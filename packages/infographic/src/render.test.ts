@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createDocument, rasterize, renderSvg, resolve } from './index.js';
+import { createDocument, parseIgfx, rasterize, renderSvg, resolve } from './index.js';
 import type { ResolvedFrame } from './types.js';
 
 function tinyFrame(): ResolvedFrame {
@@ -30,54 +30,64 @@ describe('renderSvg', () => {
 	});
 
 	it('escapes text and attribute values', () => {
-		const doc = createDocument();
-		doc.marks = [
-			{
-				id: 't',
-				kind: 'text',
-				layout: { x: 10, y: 20, w: 200, h: 40 },
-				bindings: { text: '<hello & "world">' }
-			}
-		];
+		const doc = parseIgfx({
+			format: 'igfx',
+			schemaVersion: 1,
+			marks: [
+				{
+					id: 't',
+					kind: 'text',
+					layout: { x: 10, y: 20, w: 200, h: 40 },
+					bindings: { text: '<hello & "world">' }
+				}
+			]
+		});
 		const svg = renderSvg(resolve(doc, 0));
 		expect(svg).not.toContain('<hello');
 		expect(svg).toContain('&lt;hello &amp; &quot;world&quot;&gt;');
 	});
 
 	it('emits a user-space clipPath rect for line progress, not CSS inset', () => {
-		const doc = createDocument();
-		doc.datasets = [
-			{
-				id: 'd',
-				label: 'D',
-				columns: [
-					{ id: 't', label: 'T', type: 'number' },
-					{ id: 'n', label: 'N', type: 'number' }
-				],
-				rows: [
-					{ t: 0, n: 1 },
-					{ t: 1, n: 2 }
+		const doc = parseIgfx({
+			format: 'igfx',
+			schemaVersion: 1,
+			datasets: [
+				{
+					id: 'd',
+					label: 'D',
+					columns: [
+						{ id: 't', label: 'T', type: 'number' },
+						{ id: 'n', label: 'N', type: 'number' }
+					],
+					rows: [
+						{ t: 0, n: 1 },
+						{ t: 1, n: 2 }
+					]
+				}
+			],
+			marks: [
+				{
+					id: 'trend',
+					kind: 'line',
+					layout: { x: 160, y: 200, w: 1600, h: 720 },
+					bindings: { x: { ref: 'dataset:d.t' }, y: { ref: 'dataset:d.n' } }
+				}
+			],
+			timeline: {
+				durationMs: 8000,
+				posterMs: 8000,
+				tracks: [
+					{
+						id: 'grow',
+						target: 'mark:trend.progress',
+						keyframes: [
+							{ tMs: 0, value: 0, easing: 'linear' },
+							{ tMs: 1000, value: 1 }
+						]
+					}
 				]
 			}
-		];
-		doc.marks = [
-			{
-				id: 'trend',
-				kind: 'line',
-				layout: { x: 160, y: 200, w: 1600, h: 720 },
-				bindings: { x: { ref: 'dataset:d.t' }, y: { ref: 'dataset:d.n' } }
-			}
-		];
-		doc.timeline.tracks = [
-			{
-				id: 'grow',
-				target: 'mark:trend.progress',
-				keyframes: [
-					{ tMs: 0, value: 0, easing: 'linear' },
-					{ tMs: 1000, value: 1 }
-				]
-			}
-		];
+		});
 		const svg = renderSvg(resolve(doc, 500));
 		expect(svg).toContain('<clipPath');
 		expect(svg).toContain('clip-path="url(#trend-clip)"');

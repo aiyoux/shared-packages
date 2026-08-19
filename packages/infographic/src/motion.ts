@@ -1,3 +1,4 @@
+import { v1View } from './schema.js';
 import type { IgfxDocument, MotionTrack } from './types.js';
 
 export type EasingName = 'linear' | 'easeIn' | 'easeOut' | 'easeInOut';
@@ -57,14 +58,15 @@ export function sampleMotion(
 	doc: IgfxDocument,
 	tMs: number
 ): { byMark: Map<string, MarkMotion>; warnings: string[] } {
+	const view = v1View(doc);
 	const byMark = new Map<string, MarkMotion>();
 	const kinds = new Map<string, string>();
-	for (const mark of doc.marks) {
+	for (const mark of view.marks) {
 		byMark.set(mark.id, defaultMarkMotion());
 		kinds.set(mark.id, mark.kind);
 	}
 	const warnings: string[] = [];
-	for (const track of doc.timeline.tracks) {
+	for (const track of view.timeline.tracks) {
 		const parsed = parseTrackTarget(track.target);
 		if (!parsed) {
 			warnings.push(`Track "${track.id}" has unrecognized target "${track.target}"`);

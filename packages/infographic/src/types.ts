@@ -1,5 +1,6 @@
 export const IGFX_FORMAT = 'igfx' as const;
-export const IGFX_SCHEMA_VERSION = 1;
+export const IGFX_SCHEMA_VERSION = 2;
+export const IGFX_SCHEMA_VERSION_V1 = 1;
 
 export const DEFAULT_ARTBOARD_WIDTH = 1920;
 export const DEFAULT_ARTBOARD_HEIGHT = 1080;
@@ -12,6 +13,13 @@ export const SCENE3D_EXPORT_FPS = 12;
 /** v1 hard cap; UI refuses paste above this. */
 export const MAX_DATASET_ROWS = 500;
 export const MAX_DATASET_COLUMNS = 20;
+
+export const MAX_SCENES = 32;
+export const MAX_OBJECTS_PER_SCENE = 256;
+export const MAX_TAKES_PER_SCENE = 16;
+export const MAX_TRACKS_PER_TAKE = 256;
+export const MAX_KEYS_PER_CURVE = 256;
+export const MAX_POINTS_PER_SERIES = 200;
 
 export const ARTBOARD_PRESETS = [
 	{ id: 'hd', width: 1920, height: 1080, label: 'Full HD' },
@@ -138,6 +146,151 @@ export interface LastExport {
 	height?: number;
 }
 
+export type PresetKind = 'bar' | 'line' | 'stat' | 'text' | 'legend' | 'axis' | 'scene3d';
+export type BuiltKind = 'group' | 'shape' | 'path' | 'series' | 'point';
+export type ObjectKind = PresetKind | BuiltKind;
+
+export const PRESET_KINDS: readonly PresetKind[] = [
+	'bar',
+	'line',
+	'stat',
+	'text',
+	'legend',
+	'axis',
+	'scene3d'
+];
+export const BUILT_KINDS: readonly BuiltKind[] = ['group', 'shape', 'path', 'series', 'point'];
+export const OBJECT_KINDS: readonly ObjectKind[] = [...PRESET_KINDS, ...BUILT_KINDS];
+
+export interface ObjectTransform {
+	x: number;
+	y: number;
+	w: number;
+	h: number;
+	rotation: number;
+	opacity: number;
+}
+
+export type ShapePrimitive = 'rect' | 'ellipse' | 'line';
+
+export interface ShapeSpec {
+	primitive: ShapePrimitive;
+}
+
+export interface PathSpec {
+	/** SVG path `d` in object-local coordinates. Not sketcher PathData. */
+	d: string;
+	closed?: boolean;
+}
+
+export type SeriesMode = 'bars' | 'line' | 'scatter';
+
+export interface SeriesSpec {
+	mode: SeriesMode;
+}
+
+export interface PointSpec {
+	/** Data-domain X (not artboard px). Mapped through the series box. */
+	x: number;
+	/** Data-domain Y. Used by `line` / `scatter`. Fallback magnitude for `bars` if `value` is omitted. */
+	y: number;
+	/** Data magnitude for `bars`. Ignored by `line` / `scatter`. */
+	value?: number;
+	label?: string;
+}
+
+export interface IgfxObject {
+	id: string;
+	name: string;
+	parentId: string | null;
+	kind: ObjectKind;
+	visible: boolean;
+	locked?: boolean;
+	transform: ObjectTransform;
+	bindings?: Record<string, BindingRef | string | number>;
+	style?: Record<string, string | number | boolean>;
+	/** kind === 'scene3d' — same persist shape as today's Scene3dMark.scene */
+	scene?: Scene3dMark['scene'];
+	/** kind === 'shape' */
+	shape?: ShapeSpec;
+	/** kind === 'path' */
+	path?: PathSpec;
+	/** kind === 'series' */
+	series?: SeriesSpec;
+	/** kind === 'point' */
+	point?: PointSpec;
+}
+
+export interface SceneCamera2d {
+	x: number;
+	y: number;
+	zoom: number;
+}
+
+export type AnimatableProp =
+	| 'progress'
+	| 'opacity'
+	| 'x'
+	| 'y'
+	| 'w'
+	| 'h'
+	| 'rotation'
+	| 'value'
+	| 'pointX'
+	| 'pointY';
+
+export const ANIMATABLE_PROPS: readonly AnimatableProp[] = [
+	'progress',
+	'opacity',
+	'x',
+	'y',
+	'w',
+	'h',
+	'rotation',
+	'value',
+	'pointX',
+	'pointY'
+];
+
+export interface PropertyCurve {
+	id: string;
+	/** Animatable prop name. Not a target string. */
+	prop: AnimatableProp;
+	keyframes: MotionKeyframe[];
+}
+
+export interface SceneTrack {
+	id: string;
+	objectId: string;
+	startMs: number;
+	durationMs: number;
+	curves: PropertyCurve[];
+}
+
+export interface SceneTimeline {
+	id: string;
+	name: string;
+	durationMs: number;
+	posterMs: number;
+	tracks: SceneTrack[];
+}
+
+export interface IgfxScene {
+	id: string;
+	name: string;
+	objects: IgfxObject[];
+	timelines: SceneTimeline[];
+	activeTimelineId: string;
+	/** Falls back to doc.artboard when omitted. */
+	artboard?: { width: number; height: number };
+	/** Viewport framing only. Export ignores this. */
+	camera?: SceneCamera2d;
+	/** Partial overlay on doc.theme. */
+	themeOverride?: Partial<Theme>;
+	/** Optional footage under this scene. Migrated from v1 doc.mediaBed. */
+	mediaBed?: MediaBed;
+}
+
 export interface IgfxDocument {
 	format: typeof IGFX_FORMAT;
 	schemaVersion: number;
@@ -146,9 +299,8 @@ export interface IgfxDocument {
 	theme: Theme;
 	datasets: Dataset[];
 	scalars: Scalar[];
-	marks: AnyMark[];
-	timeline: IgfxTimeline;
-	mediaBed?: MediaBed;
+	scenes: IgfxScene[];
+	activeSceneId: string;
 	lastExport?: LastExport;
 }
 

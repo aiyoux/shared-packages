@@ -1,0 +1,67 @@
+{
+	"format": "igfx",
+	"schemaVersion": 1,
+	"name": "Hand rolled",
+	"marks": [
+		{
+			"id": "title",
+			"kind": "text",
+			"layout": { "x": 10, "y": 20, "w": 200, "h": 40 },
+			"bindings": { "text": "Hello" }
+		},
+		{
+			"id": "blob",
+			"kind": "blob",
+			"layout": { "x": 0, "y": 0, "w": 10, "h": 10 },
+			"bindings": {}
+		},
+		{
+			"id": "bars",
+			"kind": "bar",
+			"layout": { "x": 40, "y": 80, "w": 400, "h": 200 },
+			"bindings": {}
+		}
+	],
+	"timeline": {
+		"durationMs": 8000,
+		"posterMs": 8000,
+		"tracks": [
+			{
+				"id": "grow",
+				"target": "mark:bars.progress",
+				"keyframes": [
+					{ "tMs": 0, "value": 0, "easing": "easeOut" },
+					{ "tMs": 800, "value": 1 }
+				]
+			},
+			{
+				"id": "fade",
+				"target": "mark:title.opacity",
+				"keyframes": [
+					{ "tMs": 0, "value": 0 },
+					{ "tMs": 400, "value": 1 }
+				]
+			},
+			{
+				"id": "move",
+				"target": "mark:title.x",
+				"keyframes": [{ "tMs": 0, "value": 10 }]
+			},
+			{
+				"id": "grow-later",
+				"target": "mark:bars.progress",
+				"keyframes": [{ "tMs": 0, "value": 0.5 }]
+			},
+			{
+				"id": "bad",
+				"target": "not-a-target",
+				"keyframes": [{ "tMs": 0, "value": 1 }]
+			}
+		]
+	},
+	"mediaBed": {
+		"nodeId": "vid-1",
+		"offsetMs": 120,
+		"durationMs": 5400
+	}
+}

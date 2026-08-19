@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { instantiateTemplate, listTemplates, resolve, TEMPLATE_IDS } from './index.js';
+import { instantiateTemplate, listTemplates, resolve, TEMPLATE_IDS, v1View } from './index.js';
 
 describe('templates', () => {
 	it('ships three first-party documents', () => {
@@ -9,12 +9,14 @@ describe('templates', () => {
 	it.each(TEMPLATE_IDS)('%s has progress 0→1 and title opacity tracks, posterMs = durationMs', (id) => {
 		const doc = instantiateTemplate(id);
 		expect(doc.artboard).toEqual({ width: 1920, height: 1080 });
-		expect(doc.timeline.durationMs).toBe(8000);
-		expect(doc.timeline.posterMs).toBe(8000);
-		expect(doc.timeline.posterMs).toBe(doc.timeline.durationMs);
+		expect(doc.scenes).toHaveLength(1);
+		const view = v1View(doc);
+		expect(view.timeline.durationMs).toBe(8000);
+		expect(view.timeline.posterMs).toBe(8000);
+		expect(view.timeline.posterMs).toBe(view.timeline.durationMs);
 
-		const progress = doc.timeline.tracks.filter((t) => t.target.endsWith('.progress'));
-		const title = doc.timeline.tracks.find((t) => t.target === 'mark:title.opacity');
+		const progress = view.timeline.tracks.filter((t) => t.target.endsWith('.progress'));
+		const title = view.timeline.tracks.find((t) => t.target === 'mark:title.opacity');
 		expect(progress.length).toBeGreaterThan(0);
 		for (const track of progress) {
 			expect(track.keyframes[0]).toMatchObject({ tMs: 0, value: 0 });
@@ -28,6 +30,6 @@ describe('templates', () => {
 	it.each(TEMPLATE_IDS)('%s is deterministic at posterMs', (id) => {
 		const a = instantiateTemplate(id);
 		const b = instantiateTemplate(id);
-		expect(resolve(a, a.timeline.posterMs)).toEqual(resolve(b, b.timeline.posterMs));
+		expect(resolve(a, v1View(a).timeline.posterMs)).toEqual(resolve(b, v1View(b).timeline.posterMs));
 	});
 });

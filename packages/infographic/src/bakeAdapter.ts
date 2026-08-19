@@ -1,4 +1,5 @@
 import { bindMark } from './bindings.js';
+import { v1View } from './schema.js';
 import { DEFAULT_EXPORT_FPS, SCENE3D_EXPORT_FPS } from './types.js';
 import type { AnyMark, IgfxDocument, Scene3dMark, Scene3dObject } from './types.js';
 
@@ -32,12 +33,12 @@ export function isScene3dMark(mark: AnyMark): mark is Scene3dMark {
 	return mark.kind === 'scene3d';
 }
 
-export function documentHasScene3d(doc: Pick<IgfxDocument, 'marks'>): boolean {
-	return doc.marks.some(isScene3dMark);
+export function documentHasScene3d(doc: IgfxDocument): boolean {
+	return v1View(doc).marks.some(isScene3dMark);
 }
 
 /** 12 whenever any scene3d is present (preview + export share cache keys). Else lastExport.fps || 30. */
-export function bakeFpsFor(doc: Pick<IgfxDocument, 'marks' | 'lastExport'>, _forExport = false): number {
+export function bakeFpsFor(doc: IgfxDocument, _forExport = false): number {
 	if (documentHasScene3d(doc)) return SCENE3D_EXPORT_FPS;
 	return doc.lastExport?.fps ?? DEFAULT_EXPORT_FPS;
 }
@@ -156,7 +157,7 @@ export async function ensureBaked(
 
 export async function ensureDocumentBaked(doc: IgfxDocument, tMs: number, fps?: number): Promise<void> {
 	const useFps = fps ?? bakeFpsFor(doc);
-	for (const mark of doc.marks) {
+	for (const mark of v1View(doc).marks) {
 		if (!isScene3dMark(mark)) continue;
 		await ensureBaked(mark, tMs, useFps, scene3dBoundValues(doc, mark));
 	}

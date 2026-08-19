@@ -1,5 +1,5 @@
-import { createDocument } from './schema.js';
-import type { IgfxDocument, MotionTrack } from './types.js';
+import { parseIgfx } from './schema.js';
+import type { IgfxDocument, IgfxScene, MotionTrack } from './types.js';
 
 export const TEMPLATE_IDS = ['stat-trio', 'bar-compare', 'line-trend'] as const;
 export type TemplateId = (typeof TEMPLATE_IDS)[number];
@@ -38,164 +38,185 @@ function titleOpacityTrack(): MotionTrack {
 	};
 }
 
-function statTrio(): IgfxDocument {
-	const doc = createDocument('Quarterly snapshot');
-	doc.scalars = [
-		{ id: 's-title', label: 'Title', type: 'string', value: 'Quarterly snapshot' },
-		{ id: 's-a', label: 'Revenue', type: 'number', value: 128 },
-		{ id: 's-b', label: 'NPS', type: 'number', value: 42 },
-		{ id: 's-c', label: 'Retention', type: 'number', value: 96 }
-	];
-	doc.marks = [
-		{
-			id: 'title',
-			kind: 'text',
-			layout: { x: 80, y: 72, w: 1760, h: 80 },
-			bindings: { text: { ref: 'scalar:s-title' } },
-			style: { fontSize: 56 }
-		},
-		{
-			id: 'kpi-a',
-			kind: 'stat',
-			layout: { x: 80, y: 280, w: 540, h: 400 },
-			bindings: {
-				value: { ref: 'scalar:s-a' },
-				label: 'Revenue',
-				prefix: '$',
-				suffix: 'k'
+function statTrioV1(): Record<string, unknown> {
+	return {
+		format: 'igfx',
+		schemaVersion: 1,
+		name: 'Quarterly snapshot',
+		scalars: [
+			{ id: 's-title', label: 'Title', type: 'string', value: 'Quarterly snapshot' },
+			{ id: 's-a', label: 'Revenue', type: 'number', value: 128 },
+			{ id: 's-b', label: 'NPS', type: 'number', value: 42 },
+			{ id: 's-c', label: 'Retention', type: 'number', value: 96 }
+		],
+		marks: [
+			{
+				id: 'title',
+				kind: 'text',
+				layout: { x: 80, y: 72, w: 1760, h: 80 },
+				bindings: { text: { ref: 'scalar:s-title' } },
+				style: { fontSize: 56 }
+			},
+			{
+				id: 'kpi-a',
+				kind: 'stat',
+				layout: { x: 80, y: 280, w: 540, h: 400 },
+				bindings: {
+					value: { ref: 'scalar:s-a' },
+					label: 'Revenue',
+					prefix: '$',
+					suffix: 'k'
+				}
+			},
+			{
+				id: 'kpi-b',
+				kind: 'stat',
+				layout: { x: 690, y: 280, w: 540, h: 400 },
+				bindings: {
+					value: { ref: 'scalar:s-b' },
+					label: 'NPS'
+				}
+			},
+			{
+				id: 'kpi-c',
+				kind: 'stat',
+				layout: { x: 1300, y: 280, w: 540, h: 400 },
+				bindings: {
+					value: { ref: 'scalar:s-c' },
+					label: 'Retention',
+					suffix: '%'
+				}
 			}
-		},
-		{
-			id: 'kpi-b',
-			kind: 'stat',
-			layout: { x: 690, y: 280, w: 540, h: 400 },
-			bindings: {
-				value: { ref: 'scalar:s-b' },
-				label: 'NPS'
-			}
-		},
-		{
-			id: 'kpi-c',
-			kind: 'stat',
-			layout: { x: 1300, y: 280, w: 540, h: 400 },
-			bindings: {
-				value: { ref: 'scalar:s-c' },
-				label: 'Retention',
-				suffix: '%'
-			}
-		}
-	];
-	doc.timeline.tracks = [
-		progressTrack('grow-a', 'kpi-a'),
-		progressTrack('grow-b', 'kpi-b'),
-		progressTrack('grow-c', 'kpi-c'),
-		titleOpacityTrack()
-	];
-	return doc;
-}
-
-function barCompare(): IgfxDocument {
-	const doc = createDocument('Regional sales');
-	doc.scalars = [{ id: 's-title', label: 'Title', type: 'string', value: 'Regional sales' }];
-	doc.datasets = [
-		{
-			id: 'sales',
-			label: 'Sales',
-			columns: [
-				{ id: 'cat', label: 'Region', type: 'string' },
-				{ id: 'n', label: 'Amount', type: 'number' }
-			],
-			rows: [
-				{ cat: 'North', n: 42 },
-				{ cat: 'South', n: 31 },
-				{ cat: 'East', n: 55 },
-				{ cat: 'West', n: 28 },
-				{ cat: 'Central', n: 37 },
-				{ cat: 'APAC', n: 49 }
+		],
+		timeline: {
+			durationMs: 8000,
+			posterMs: 8000,
+			tracks: [
+				progressTrack('grow-a', 'kpi-a'),
+				progressTrack('grow-b', 'kpi-b'),
+				progressTrack('grow-c', 'kpi-c'),
+				titleOpacityTrack()
 			]
 		}
-	];
-	doc.marks = [
-		{
-			id: 'title',
-			kind: 'text',
-			layout: { x: 80, y: 48, w: 1760, h: 72 },
-			bindings: { text: { ref: 'scalar:s-title' } },
-			style: { fontSize: 48 }
-		},
-		{
-			id: 'axis',
-			kind: 'axis',
-			layout: { x: 160, y: 200, w: 1600, h: 720 },
-			bindings: { forMark: 'bars' }
-		},
-		{
-			id: 'bars',
-			kind: 'bar',
-			layout: { x: 160, y: 200, w: 1600, h: 720 },
-			bindings: {
-				category: { ref: 'dataset:sales.cat' },
-				value: { ref: 'dataset:sales.n' }
-			}
-		},
-		{
-			id: 'legend',
-			kind: 'legend',
-			layout: { x: 80, y: 140, w: 400, h: 40 },
-			bindings: { forMark: 'bars' }
-		}
-	];
-	doc.timeline.tracks = [progressTrack('grow', 'bars'), titleOpacityTrack()];
-	return doc;
+	};
 }
 
-function lineTrend(): IgfxDocument {
-	const doc = createDocument('Monthly trend');
-	doc.scalars = [{ id: 's-title', label: 'Title', type: 'string', value: 'Monthly trend' }];
+function barCompareV1(): Record<string, unknown> {
+	return {
+		format: 'igfx',
+		schemaVersion: 1,
+		name: 'Regional sales',
+		scalars: [{ id: 's-title', label: 'Title', type: 'string', value: 'Regional sales' }],
+		datasets: [
+			{
+				id: 'sales',
+				label: 'Sales',
+				columns: [
+					{ id: 'cat', label: 'Region', type: 'string' },
+					{ id: 'n', label: 'Amount', type: 'number' }
+				],
+				rows: [
+					{ cat: 'North', n: 42 },
+					{ cat: 'South', n: 31 },
+					{ cat: 'East', n: 55 },
+					{ cat: 'West', n: 28 },
+					{ cat: 'Central', n: 37 },
+					{ cat: 'APAC', n: 49 }
+				]
+			}
+		],
+		marks: [
+			{
+				id: 'title',
+				kind: 'text',
+				layout: { x: 80, y: 48, w: 1760, h: 72 },
+				bindings: { text: { ref: 'scalar:s-title' } },
+				style: { fontSize: 48 }
+			},
+			{
+				id: 'axis',
+				kind: 'axis',
+				layout: { x: 160, y: 200, w: 1600, h: 720 },
+				bindings: { forMark: 'bars' }
+			},
+			{
+				id: 'bars',
+				kind: 'bar',
+				layout: { x: 160, y: 200, w: 1600, h: 720 },
+				bindings: {
+					category: { ref: 'dataset:sales.cat' },
+					value: { ref: 'dataset:sales.n' }
+				}
+			},
+			{
+				id: 'legend',
+				kind: 'legend',
+				layout: { x: 80, y: 140, w: 400, h: 40 },
+				bindings: { forMark: 'bars' }
+			}
+		],
+		timeline: {
+			durationMs: 8000,
+			posterMs: 8000,
+			tracks: [progressTrack('grow', 'bars'), titleOpacityTrack()]
+		}
+	};
+}
+
+function lineTrendV1(): Record<string, unknown> {
 	const values = [12, 18, 15, 22, 28, 25, 31, 36, 34, 40, 44, 48];
-	doc.datasets = [
-		{
-			id: 'series',
-			label: 'Series',
-			columns: [
-				{ id: 't', label: 'Month', type: 'number' },
-				{ id: 'n', label: 'Value', type: 'number' }
-			],
-			rows: values.map((n, i) => ({ t: i + 1, n }))
-		}
-	];
-	doc.marks = [
-		{
-			id: 'title',
-			kind: 'text',
-			layout: { x: 80, y: 48, w: 1760, h: 72 },
-			bindings: { text: { ref: 'scalar:s-title' } },
-			style: { fontSize: 48 }
-		},
-		{
-			id: 'axis',
-			kind: 'axis',
-			layout: { x: 160, y: 200, w: 1600, h: 720 },
-			bindings: { forMark: 'trend' }
-		},
-		{
-			id: 'trend',
-			kind: 'line',
-			layout: { x: 160, y: 200, w: 1600, h: 720 },
-			bindings: {
-				x: { ref: 'dataset:series.t' },
-				y: { ref: 'dataset:series.n' }
+	return {
+		format: 'igfx',
+		schemaVersion: 1,
+		name: 'Monthly trend',
+		scalars: [{ id: 's-title', label: 'Title', type: 'string', value: 'Monthly trend' }],
+		datasets: [
+			{
+				id: 'series',
+				label: 'Series',
+				columns: [
+					{ id: 't', label: 'Month', type: 'number' },
+					{ id: 'n', label: 'Value', type: 'number' }
+				],
+				rows: values.map((n, i) => ({ t: i + 1, n }))
 			}
+		],
+		marks: [
+			{
+				id: 'title',
+				kind: 'text',
+				layout: { x: 80, y: 48, w: 1760, h: 72 },
+				bindings: { text: { ref: 'scalar:s-title' } },
+				style: { fontSize: 48 }
+			},
+			{
+				id: 'axis',
+				kind: 'axis',
+				layout: { x: 160, y: 200, w: 1600, h: 720 },
+				bindings: { forMark: 'trend' }
+			},
+			{
+				id: 'trend',
+				kind: 'line',
+				layout: { x: 160, y: 200, w: 1600, h: 720 },
+				bindings: {
+					x: { ref: 'dataset:series.t' },
+					y: { ref: 'dataset:series.n' }
+				}
+			}
+		],
+		timeline: {
+			durationMs: 8000,
+			posterMs: 8000,
+			tracks: [progressTrack('grow', 'trend'), titleOpacityTrack()]
 		}
-	];
-	doc.timeline.tracks = [progressTrack('grow', 'trend'), titleOpacityTrack()];
-	return doc;
+	};
 }
 
-const BUILDERS: Record<TemplateId, () => IgfxDocument> = {
-	'stat-trio': statTrio,
-	'bar-compare': barCompare,
-	'line-trend': lineTrend
+const V1_FIXTURES: Record<TemplateId, () => Record<string, unknown>> = {
+	'stat-trio': statTrioV1,
+	'bar-compare': barCompareV1,
+	'line-trend': lineTrendV1
 };
 
 export function listTemplates(): TemplateInfo[] {
@@ -203,7 +224,11 @@ export function listTemplates(): TemplateInfo[] {
 }
 
 export function instantiateTemplate(id: TemplateId): IgfxDocument {
-	const build = BUILDERS[id];
+	const build = V1_FIXTURES[id];
 	if (!build) throw new Error(`Unknown template "${id}"`);
-	return structuredClone(build());
+	return parseIgfx(build());
+}
+
+export function instantiateSceneTemplate(id: TemplateId): IgfxScene {
+	return structuredClone(instantiateTemplate(id).scenes[0]);
 }

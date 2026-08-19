@@ -14,8 +14,8 @@ import {
 	type BakeAdapter,
 	type BakedPath
 } from './bakeAdapter.js';
-import { createDocument, parseIgfx, resolve } from './index.js';
-import { SCENE3D_EXPORT_FPS } from './types.js';
+import { createDocument, parseIgfx, resolve, v1View } from './index.js';
+import { SCENE3D_EXPORT_FPS, type Scene3dMark } from './types.js';
 
 const samplePath: BakedPath = { d: 'M0 0 L10 0', stroke: '#000', fill: 'none', strokeWidth: 2 };
 
@@ -40,8 +40,7 @@ afterEach(() => {
 
 describe('bake cache', () => {
 	it('resolve stays sync and warns when the cache is cold', () => {
-		const doc = createDocument();
-		doc.marks = [defaultScene3dMark('cube')];
+		const doc = parseIgfx({ format: 'igfx', marks: [defaultScene3dMark('cube')] });
 		const frame = resolve(doc, 0);
 		expect(frame.warnings.some((w) => w === 'bake pending:cube')).toBe(true);
 		expect(frame.nodes[0]?.children?.[0]?.attrs['data-bake']).toBe('pending');
@@ -51,8 +50,7 @@ describe('bake cache', () => {
 		const adapter = mockAdapter();
 		setBakeAdapter(adapter);
 		const mark = defaultScene3dMark('cube');
-		const doc = createDocument();
-		doc.marks = [mark];
+		const doc = parseIgfx({ format: 'igfx', marks: [mark] });
 		const fps = bakeFpsFor(doc);
 		expect(fps).toBe(SCENE3D_EXPORT_FPS);
 		const paths = await ensureBaked(mark, 0, fps);
@@ -70,9 +68,9 @@ describe('bake cache', () => {
 	});
 
 	it('does not use lastExport.fps 30 when any scene3d is present', () => {
-		const doc = createDocument();
-		expect(bakeFpsFor(doc)).toBe(30);
-		doc.marks = [defaultScene3dMark('a')];
+		const empty = createDocument();
+		expect(bakeFpsFor(empty)).toBe(30);
+		const doc = parseIgfx({ format: 'igfx', marks: [defaultScene3dMark('a')] });
 		doc.lastExport = { fps: 30, bitrate: '1M' };
 		expect(documentHasScene3d(doc)).toBe(true);
 		expect(bakeFpsFor(doc)).toBe(SCENE3D_EXPORT_FPS);
@@ -129,6 +127,6 @@ describe('bake cache', () => {
 		});
 		await ensureDocumentBaked(doc, 0, 12);
 		expect(adapter.encodes).toBe(2);
-		expect(peekBake('a', bakeSignature(doc.marks[0] as never, 0, 12))?.length).toBe(1);
+		expect(peekBake('a', bakeSignature(v1View(doc).marks[0] as Scene3dMark, 0, 12))?.length).toBe(1);
 	});
 });
