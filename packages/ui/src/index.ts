@@ -4,8 +4,6 @@
 export * from './date/index.ts';
 
 export { default as ShellFrame } from './ShellFrame.svelte';
-export { default as Button } from './Button.svelte';
-export { default as Input } from './Input.svelte';
 export { default as Spinner } from './Spinner.svelte';
 export { default as TopProgressBar } from './TopProgressBar.svelte';
 export { default as Checkbox } from './Checkbox.svelte';
@@ -21,15 +19,11 @@ export {
   type CheckboxState
 } from './checkbox.ts';
 export { default as RadioGroup } from './RadioGroup.svelte';
-export { default as Select } from './Select.svelte';
 export { default as ConnectionScopeSelect } from './ConnectionScopeSelect.svelte';
 export { default as NumberInput } from './NumberInput.svelte';
 export { default as DateRangeCalendar } from './DateRangeCalendar.svelte';
 export { default as DateRangePicker } from './DateRangePicker.svelte';
 export { default as DatePicker } from './DatePicker.svelte';
-export { default as Label } from './Label.svelte';
-export { default as Badge } from './Badge.svelte';
-export { default as Card } from './Card.svelte';
 export { default as FileDropZone } from './FileDropZone.svelte';
 export { formatBytes, bytesToArrayBuffer, downloadBytes, fileFromBytes } from './files.ts';
 export { default as Separator } from './Separator.svelte';
