@@ -107,6 +107,18 @@ export {
 } from './motion.js';
 
 export {
+	addKeyframe,
+	duplicateTake,
+	ensureFullSpanTrack,
+	moveTrack,
+	placeObjectAtPlayhead,
+	setTakeDuration,
+	setTakePoster,
+	trimTrack,
+	unlinkTrack
+} from './takes.js';
+
+export {
 	ancestorsOf,
 	childrenOf,
 	objectToMark,
