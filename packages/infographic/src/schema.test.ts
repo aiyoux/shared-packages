@@ -1,15 +1,25 @@
 import { describe, expect, it } from 'vitest';
 import {
 	createDocument,
+	createScene,
 	getActiveScene,
 	getActiveTake,
 	IGFX_FORMAT,
 	MAX_DATASET_COLUMNS,
 	MAX_DATASET_ROWS,
+	MAX_KEYS_PER_CURVE,
+	MAX_OBJECTS_PER_SCENE,
+	MAX_POINTS_PER_SERIES,
+	MAX_SCENES,
+	MAX_TAKES_PER_SCENE,
+	MAX_TRACKS_PER_TAKE,
 	parseIgfx,
 	serializeIgfx,
 	v1View,
-	validate
+	validate,
+	type IgfxObject,
+	type SceneTimeline,
+	type SceneTrack
 } from './index.js';
 
 describe('parseIgfx', () => {
@@ -131,6 +141,58 @@ describe('parseIgfx', () => {
 		expect(doc.scenes[0].timelines).toHaveLength(1);
 		expect(doc.activeSceneId).toBe(doc.scenes[0].id);
 	});
+
+	it('fills a partial scene artboard from the collection default', () => {
+		const doc = parseIgfx({
+			format: 'igfx',
+			schemaVersion: 2,
+			artboard: { width: 1920, height: 1080 },
+			scenes: [
+				{
+					id: 's',
+					name: 'Scene',
+					artboard: { width: 1080 },
+					objects: [],
+					timelines: [{ id: 't', name: 'Take 1', durationMs: 8000, posterMs: 8000, tracks: [] }],
+					activeTimelineId: 't'
+				}
+			],
+			activeSceneId: 's'
+		});
+		expect(doc.scenes[0].artboard).toEqual({ width: 1080, height: 1080 });
+	});
+
+	it('strips orphan points before applying the 256-object cap', () => {
+		const orphans = Array.from({ length: MAX_OBJECTS_PER_SCENE }, (_, i) => ({
+			id: `p${i}`,
+			kind: 'point',
+			parentId: null,
+			point: { x: 0, y: 0 }
+		}));
+		const doc = parseIgfx({
+			format: 'igfx',
+			schemaVersion: 2,
+			scenes: [
+				{
+					id: 's',
+					name: 'Scene',
+					objects: [
+						...orphans,
+						{
+							id: 'keep',
+							kind: 'text',
+							transform: { x: 0, y: 0, w: 10, h: 10, rotation: 0, opacity: 1 },
+							bindings: { text: 'kept' }
+						}
+					],
+					timelines: [{ id: 't', name: 'Take 1', durationMs: 8000, posterMs: 8000, tracks: [] }],
+					activeTimelineId: 't'
+				}
+			],
+			activeSceneId: 's'
+		});
+		expect(doc.scenes[0].objects.map((o) => o.id)).toEqual(['keep']);
+	});
 });
 
 describe('validate', () => {
@@ -167,5 +229,123 @@ describe('validate', () => {
 		const result = validate(doc);
 		expect(result.ok).toBe(true);
 		expect(result.warnings.some((w) => /objectId "gone"/.test(w))).toBe(true);
+	});
+
+	it('refuses in-memory adds that exceed scene/object/take/track/key/point caps', () => {
+		const stubObject = (id: string, extra: Partial<IgfxObject> = {}): IgfxObject => ({
+			id,
+			name: id,
+			parentId: null,
+			kind: 'text',
+			visible: true,
+			transform: { x: 0, y: 0, w: 10, h: 10, rotation: 0, opacity: 1 },
+			...extra
+		});
+
+		const overScenes = createDocument();
+		overScenes.scenes = Array.from({ length: MAX_SCENES + 1 }, (_, i) => {
+			const scene = createScene(`S${i}`);
+			scene.id = `s${i}`;
+			return scene;
+		});
+		overScenes.activeSceneId = overScenes.scenes[0].id;
+		expect(validate(overScenes).ok).toBe(false);
+		expect(validate(overScenes).errors).toContain(`scene cap ${MAX_SCENES}`);
+
+		const overObjects = createDocument();
+		getActiveScene(overObjects).objects = Array.from({ length: MAX_OBJECTS_PER_SCENE + 1 }, (_, i) =>
+			stubObject(`o${i}`)
+		);
+		expect(validate(overObjects).errors).toContain(`object cap ${MAX_OBJECTS_PER_SCENE}`);
+
+		const overTakes = createDocument();
+		const takeScene = getActiveScene(overTakes);
+		takeScene.timelines = Array.from({ length: MAX_TAKES_PER_SCENE + 1 }, (_, i) => ({
+			id: `take-${i}`,
+			name: `Take ${i}`,
+			durationMs: 8000,
+			posterMs: 8000,
+			tracks: []
+		}));
+		takeScene.activeTimelineId = takeScene.timelines[0].id;
+		expect(validate(overTakes).errors).toContain(`take cap ${MAX_TAKES_PER_SCENE}`);
+
+		const overTracks = createDocument();
+		const trackTake = getActiveTake(getActiveScene(overTracks));
+		trackTake.tracks = Array.from({ length: MAX_TRACKS_PER_TAKE + 1 }, (_, i) => ({
+			id: `tr${i}`,
+			objectId: 'missing',
+			startMs: 0,
+			durationMs: 100,
+			curves: []
+		})) as SceneTrack[];
+		expect(validate(overTracks).errors).toContain(`track cap ${MAX_TRACKS_PER_TAKE}`);
+
+		const overKeys = createDocument();
+		getActiveTake(getActiveScene(overKeys)).tracks.push({
+			id: 'track-k',
+			objectId: 'missing',
+			startMs: 0,
+			durationMs: 100,
+			curves: [
+				{
+					id: 'c',
+					prop: 'opacity',
+					keyframes: Array.from({ length: MAX_KEYS_PER_CURVE + 1 }, (_, i) => ({ tMs: i, value: 1 }))
+				}
+			]
+		});
+		expect(validate(overKeys).errors).toContain(`key cap ${MAX_KEYS_PER_CURVE}`);
+
+		const overPoints = createDocument();
+		const pointScene = getActiveScene(overPoints);
+		pointScene.objects = [
+			stubObject('series', { kind: 'series', series: { mode: 'bars' } }),
+			...Array.from({ length: MAX_POINTS_PER_SERIES + 1 }, (_, i) =>
+				stubObject(`p${i}`, { kind: 'point', parentId: 'series', point: { x: i, y: 1 } })
+			)
+		];
+		expect(validate(overPoints).errors).toContain(`point cap ${MAX_POINTS_PER_SERIES}`);
+	});
+
+	it('does not fail validate on a freshly parsed over-cap file (already sliced)', () => {
+		const objects = Array.from({ length: MAX_OBJECTS_PER_SCENE + 10 }, (_, i) => ({
+			id: `o${i}`,
+			kind: 'text',
+			transform: { x: 0, y: 0, w: 10, h: 10, rotation: 0, opacity: 1 }
+		}));
+		const tracks = Array.from({ length: MAX_TRACKS_PER_TAKE + 5 }, (_, i) => ({
+			id: `tr${i}`,
+			objectId: 'o0',
+			startMs: 0,
+			durationMs: 100,
+			curves: [
+				{
+					id: `c${i}`,
+					prop: 'opacity',
+					keyframes: Array.from({ length: MAX_KEYS_PER_CURVE + 3 }, (_, k) => ({
+						tMs: k,
+						value: 1
+					}))
+				}
+			]
+		}));
+		const timelines = Array.from({ length: MAX_TAKES_PER_SCENE + 2 }, (_, i) => ({
+			id: `take-${i}`,
+			name: `Take ${i}`,
+			durationMs: 8000,
+			posterMs: 8000,
+			tracks: i === 0 ? tracks : []
+		})) as SceneTimeline[];
+		const scenes = Array.from({ length: MAX_SCENES + 4 }, (_, i) => ({
+			id: `scene-${i}`,
+			name: `Scene ${i}`,
+			objects: i === 0 ? objects : [],
+			timelines,
+			activeTimelineId: 'take-0'
+		}));
+		const parsed = parseIgfx({ format: 'igfx', schemaVersion: 2, scenes });
+		expect(parsed.scenes).toHaveLength(MAX_SCENES);
+		expect(validate(parsed).ok).toBe(true);
 	});
 });

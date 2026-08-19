@@ -15,7 +15,7 @@ import { renderLine } from './marks/line.js';
 import { renderStat } from './marks/stat.js';
 import { renderText } from './marks/text.js';
 import { defaultMarkMotion, sampleMotion, type MarkMotion } from './motion.js';
-import { v1View } from './schema.js';
+import { effectiveArtboard, effectiveTheme, getActiveScene, v1View } from './schema.js';
 import type {
 	IgfxDocument,
 	Mark,
@@ -107,6 +107,9 @@ export function resolve(doc: IgfxDocument, tMs: number): ResolvedFrame {
 	const motion = sampleMotion(doc, tMs);
 	warnings.push(...motion.warnings);
 
+	const scene = getActiveScene(doc);
+	const artboard = effectiveArtboard(doc, scene);
+	const theme = effectiveTheme(doc, scene);
 	const view = v1View(doc);
 	const boundById = new Map<string, BoundMark>();
 	const markById = new Map<string, Mark>();
@@ -129,14 +132,14 @@ export function resolve(doc: IgfxDocument, tMs: number): ResolvedFrame {
 		if (!bound) continue;
 		const markMotion = motion.byMark.get(mark.id) ?? defaultMarkMotion();
 		if (isScene3dMark(mark)) {
-			nodes.push(renderScene3d(mark, markMotion, doc.theme, tMs, fps, bound, warnings));
+			nodes.push(renderScene3d(mark, markMotion, theme, tMs, fps, bound, warnings));
 			continue;
 		}
 		nodes.push(
 			renderMark({
 				doc,
 				mark,
-				theme: doc.theme,
+				theme,
 				motion: markMotion,
 				bound,
 				warnings,
@@ -146,9 +149,9 @@ export function resolve(doc: IgfxDocument, tMs: number): ResolvedFrame {
 	}
 
 	return {
-		width: doc.artboard.width,
-		height: doc.artboard.height,
-		background: doc.theme.background,
+		width: artboard.width,
+		height: artboard.height,
+		background: theme.background,
 		nodes,
 		warnings
 	};

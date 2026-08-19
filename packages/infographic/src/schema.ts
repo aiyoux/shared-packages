@@ -189,7 +189,10 @@ function objectToMark(obj: IgfxObject): AnyMark | null {
 	return mark;
 }
 
-/** S1 adapter. Emits v1-shaped views of the *active* scene + take. */
+/**
+ * Temporary read adapter until resolve walks the object tree.
+ * Active scene + take only. Not a write API — `layout` is a detached copy of `transform`.
+ */
 export function v1View(doc: IgfxDocument): {
 	marks: AnyMark[];
 	timeline: IgfxTimeline;
@@ -604,14 +607,16 @@ function stripOrphanPoints(objects: IgfxObject[]): IgfxObject[] {
 	return kept;
 }
 
-function parseScene(raw: unknown): IgfxScene | null {
+function parseScene(
+	raw: unknown,
+	collectionArtboard: { width: number; height: number }
+): IgfxScene | null {
 	if (!isRecord(raw) || typeof raw.id !== 'string' || !raw.id) return null;
 	const objects = stripOrphanPoints(
 		(Array.isArray(raw.objects) ? raw.objects : [])
 			.map(parseObject)
 			.filter((o): o is IgfxObject => !!o)
-			.slice(0, MAX_OBJECTS_PER_SCENE)
-	);
+	).slice(0, MAX_OBJECTS_PER_SCENE);
 	let timelines = (Array.isArray(raw.timelines) ? raw.timelines : [])
 		.map(parseTake)
 		.filter((t): t is SceneTimeline => !!t)
@@ -627,12 +632,10 @@ function parseScene(raw: unknown): IgfxScene | null {
 		activeTimelineId
 	};
 	if (isRecord(raw.artboard)) {
-		const width = Math.max(1, asFinite(raw.artboard.width, 0));
-		const height = Math.max(1, asFinite(raw.artboard.height, 0));
 		if (raw.artboard.width !== undefined || raw.artboard.height !== undefined) {
 			scene.artboard = {
-				width: width || DEFAULT_ARTBOARD_WIDTH,
-				height: height || DEFAULT_ARTBOARD_HEIGHT
+				width: Math.max(1, asFinite(raw.artboard.width, collectionArtboard.width)),
+				height: Math.max(1, asFinite(raw.artboard.height, collectionArtboard.height))
 			};
 		}
 	}
@@ -663,7 +666,7 @@ export function parseIgfx(raw: unknown): IgfxDocument {
 		.filter((s): s is Scalar => !!s);
 
 	let scenes = (Array.isArray(migrated.scenes) ? migrated.scenes : [])
-		.map(parseScene)
+		.map((s) => parseScene(s, { width, height }))
 		.filter((s): s is IgfxScene => !!s)
 		.slice(0, MAX_SCENES);
 	if (scenes.length === 0) scenes = [createScene('Scene')];

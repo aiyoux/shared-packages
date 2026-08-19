@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { instantiateTemplate, parseIgfx, resolve, v1View } from './index.js';
+import {
+	getActiveScene,
+	getActiveTake,
+	instantiateTemplate,
+	parseIgfx,
+	resolve,
+	v1View
+} from './index.js';
 import type { IgfxDocument, ResolvedNode } from './types.js';
 
 function findById(nodes: ResolvedNode[], id: string): ResolvedNode | undefined {
@@ -257,5 +264,44 @@ describe('template motion vs poster', () => {
 		const end = findById(resolve(doc, v1View(doc).timeline.posterMs).nodes, 'title');
 		expect(Number(start?.attrs.opacity)).toBe(0);
 		expect(Number(end?.attrs.opacity)).toBe(1);
+	});
+
+	it('bar-compare still has #bars geometry at posterMs and durationMs', () => {
+		const doc = instantiateTemplate('bar-compare');
+		const take = getActiveTake(getActiveScene(doc));
+		expect(take.durationMs).toBe(8000);
+		for (const tMs of [8000, take.durationMs, take.posterMs]) {
+			const frame = resolve(doc, tMs);
+			const bars = findById(frame.nodes, 'bars');
+			expect(bars?.children?.length).toBeGreaterThan(0);
+			expect(Number(findById(frame.nodes, 'bars:0')?.attrs['data-length'])).toBeGreaterThan(0);
+		}
+	});
+});
+
+describe('scene overrides', () => {
+	it('uses the active scene artboard and theme for the frame', () => {
+		const doc = parseIgfx({
+			format: 'igfx',
+			schemaVersion: 2,
+			artboard: { width: 1920, height: 1080 },
+			theme: { background: '#ffffff' },
+			scenes: [
+				{
+					id: 'scene-square',
+					name: 'Square',
+					artboard: { width: 1080, height: 1080 },
+					themeOverride: { background: '#111111' },
+					objects: [],
+					timelines: [{ id: 'take-1', name: 'Take 1', durationMs: 8000, posterMs: 8000, tracks: [] }],
+					activeTimelineId: 'take-1'
+				}
+			],
+			activeSceneId: 'scene-square'
+		});
+		const frame = resolve(doc, 0);
+		expect(frame.width).toBe(1080);
+		expect(frame.height).toBe(1080);
+		expect(frame.background).toBe('#111111');
 	});
 });
