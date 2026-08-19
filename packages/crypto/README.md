@@ -37,11 +37,7 @@ Fixed 64-byte header starting with magic `SPVLT01\n`, then ciphertext of an
 inner single-file (`SPVLTsf1`) or tree (`SPVLTfs1`) payload. Not zip, age, or
 7z — `isVaultBytes` rejects those.
 
-## Publish
+## Local development
 
-```bash
-npm run yalc:publish -w @shared-packages/crypto
-```
-
-Then in each consumer: `npx yalc add @shared-packages/crypto` the first time,
-or `npm run shared:pull`.
+Consumers depend on this package via `file:`. Edit here and they HMR. Run
+`npm install` in a consumer only when `exports` change.

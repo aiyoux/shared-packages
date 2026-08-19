@@ -22,8 +22,7 @@
   ],
   "scripts": {
     "test": "vitest run",
-    "check": "tsc --noEmit -p tsconfig.json",
-    "yalc:publish": "yalc publish"
+    "check": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
     "zxing-wasm": "3.1.2"

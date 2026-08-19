@@ -75,8 +75,7 @@
     "test:component": "vitest run --config vitest.config.ts",
     "check:test-coverage": "node scripts/check-test-coverage.mjs",
     "test:all": "npm run check:test-coverage && npm run test && npm run test:b2 && npm run test:rclone && npm run test:component",
-    "check": "tsc --noEmit -p tsconfig.json && npm run check:test-coverage",
-    "yalc:publish": "yalc publish"
+    "check": "tsc --noEmit -p tsconfig.json && npm run check:test-coverage"
   },
 
   "dependencies": {

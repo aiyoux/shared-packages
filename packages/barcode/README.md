@@ -43,12 +43,6 @@ pass `validate` to `startZxingScan` — that check is not built into this packag
 `src/wasm/zxing_{writer,reader}.wasm` are copies of `node_modules/zxing-wasm/dist/**`.
 Refresh them when upgrading `zxing-wasm`; `src/zxing.wasm.test.ts` fails if they drift.
 
-## Publish
+## Local development
 
-From this repo root (`~/Code/shared-packages/<worktree>`):
-
-```bash
-npm run yalc:publish -w @shared-packages/barcode
-```
-
-Then in each consumer: `npm run shared:pull`.
+Consumers depend on this package via `file:`. Edit here and they HMR. Run `npm install` in a consumer only when `exports` change.

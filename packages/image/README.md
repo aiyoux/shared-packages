@@ -23,12 +23,6 @@ const out = await convertImage('native', bytes, {
 `listEngines()` is sync and does not load WASM. `loadEngine(id)` / `convertImage`
 dynamically import the chosen library on first use.
 
-## Publish
+## Local development
 
-From this repo root (`~/Code/shared-packages/<worktree>`):
-
-```bash
-npm run yalc:publish -w @shared-packages/image
-```
-
-Then in each consumer: `npx yalc add @shared-packages/image` the first time, then `npm run shared:pull`.
+Consumers depend on this package via `file:`. Edit here and they HMR. Run `npm install` in a consumer only when `exports` change.

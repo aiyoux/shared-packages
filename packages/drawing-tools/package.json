@@ -20,8 +20,7 @@
   "files": ["dist", "src"],
   "scripts": {
     "build": "esbuild src/index.ts --bundle --format=esm --outfile=dist/index.js --external:perfect-freehand --external:polygon-clipping --external:clipper2-wasm --sourcemap",
-    "test": "node --experimental-test-module-mocks --test test/*.test.js test/*.test.ts",
-    "yalc:publish": "npm run build && yalc publish"
+    "test": "node --experimental-test-module-mocks --test test/*.test.js test/*.test.ts"
   },
   "dependencies": {
     "clipper2-wasm": "^0.4.0",

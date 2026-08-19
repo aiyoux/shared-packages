@@ -7,12 +7,10 @@
   "scripts": {
     "dev": "npm run dev --workspace @shared-packages/component-library-app",
     "build": "npm run build --workspace @shared-packages/component-library-app",
-    "preview": "npm run preview --workspace @shared-packages/component-library-app",
-    "yalc:publish": "npm run yalc:publish --workspaces --if-present"
+    "preview": "npm run preview --workspace @shared-packages/component-library-app"
   },
   "devDependencies": {
-    "wrangler": "^4.120.0",
-    "yalc": "^1.0.0-pre.53"
+    "wrangler": "^4.120.0"
   },
   "dependencies": {
     "@lucide/svelte": "^0.554.0",

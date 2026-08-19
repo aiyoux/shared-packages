@@ -16,8 +16,7 @@
   "scripts": {
     "build:wasm": "wasm-pack build crates/vtracer-wasm --target bundler --out-dir src/wasm --release",
     "test": "vitest run",
-    "check": "tsc --noEmit -p tsconfig.json",
-    "yalc:publish": "yalc publish"
+    "check": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
     "esm-potrace-wasm": "^0.4.1"

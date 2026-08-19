@@ -17,8 +17,7 @@
   ],
   "scripts": {
     "test": "vitest run",
-    "check": "tsc --noEmit -p tsconfig.json",
-    "yalc:publish": "yalc publish"
+    "check": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
     "@jsquash/jpeg": "^1.6.0",

@@ -27,12 +27,6 @@ const files = await expandBytes('fflate', out.data, 'gzip', out.name);
 `listEngines()` is sync and does not load WASM. `loadEngine(id)` / `packFiles` /
 `expandBytes` dynamically import the chosen library on first use.
 
-## Publish
+## Local development
 
-From this repo root (`~/Code/shared-packages/<worktree>`):
-
-```bash
-npm run yalc:publish -w @shared-packages/compress
-```
-
-Then in each consumer: `npm run shared:pull` (or `npx yalc add @shared-packages/compress` the first time).
+Consumers depend on this package via `file:`. Edit here and they HMR. Run `npm install` in a consumer only when `exports` change.

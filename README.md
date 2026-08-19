@@ -12,62 +12,28 @@ This repository contains packages that are genuinely shared across app and modul
 
 ---
 
-## Local Development Workflow (yalc)
+## Local Development Workflow (`file:`)
 
-For local development and cross-app sharing across projects under `~/Code` (e.g., `modular-app`, `sign-dictionary`), we use **`yalc`** to publish and link `ui` locally without registry overhead.
+Consumers under `~/Code` (e.g. `modular-app`, `sign-dictionary`, `scratch-pad`) depend on these packages via `file:` paths that resolve to this repo. This tree is the source of truth. There is no snapshot publish step.
 
-### 1. Register/Publish the Package Locally
-To publish `ui` to your local yalc registry:
-```bash
-# From the root of shared-packages
-npm install
-npm run yalc:publish
-```
-This registers `@modular@shared-packages/ui` into the local `~/.yalc` store.
+1. Edit a package here. A running consumer Vite/SvelteKit dev server HMR-picks up the change.
+2. Run `npm install` in a consumer only when a package's `exports` map (or other `package.json` fields npm resolves) changes. Ordinary source edits do not need a consumer install.
 
-### 2. Consume the Package in Consumer Applications
-In your consumer application (e.g., `~/Code/modular-app` or `~/Code/sign-dictionary`), link the package:
-
-#### Option A: Link the package with `package.json` updates (Default)
-Adds a reference to `.yalc/` directly into your `package.json` dependencies:
-```bash
-yalc add @modular@shared-packages/ui
-npm install
-```
-*To undo this and revert to your original pre-yalc dependencies:*
-```bash
-yalc retreat --all
-npm install
-```
-
-#### Option B: Clean/Pure local injection (No `package.json` modifications)
-If you want to keep your `package.json` pointing to an NPM registry or Git version (e.g., `"^0.1.0"`) for remote deployments/CI, but override it locally:
-```bash
-yalc add @modular@shared-packages/ui --pure
-```
-*   `--pure` places the files inside `node_modules` without modifying your `package.json`.
-*   Running `npm install` on any server or local repo will fetch from the registry normally, completely ignoring the yalc local override.
+Do not edit a consumer's `node_modules/@shared-packages/...` copy. Fixes belong here.
 
 ---
 
 ## Future Transition to a Remote NPM Registry
 
-If you decide to publish these packages to a private or public NPM registry in the future (e.g., `@modular@shared-packages/ui` on npmjs.org or GitHub Packages):
+If you decide to publish these packages to a private or public NPM registry in the future (e.g. `@shared-packages/ui` on npmjs.org or GitHub Packages):
 
 1. **Publish to the Registry**:
    Set up authentication and publish all packages:
    ```bash
    npm publish --workspaces --access public
    ```
-2. **Revert Yalc Locally**:
-   Run the retreat command in your consumer applications to clean up the yalc configurations:
+2. **Point consumers at the registry**:
+   Replace the `file:` dependency with a published version:
    ```bash
-   yalc retreat --all
+   npm install @shared-packages/ui@latest
    ```
-3. **Point to Registry**:
-   Install standard semantic versions normally:
-   ```bash
-   npm install @modular@shared-packages/ui@latest
-   ```
-   If using pure injection (`yalc add --pure`), simply running `npm install` will fetch from the registry.
-

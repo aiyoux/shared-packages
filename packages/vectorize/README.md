@@ -9,5 +9,6 @@ Rebuild WASM after crate changes:
 
 ```bash
 npm run build:wasm -w @shared-packages/vectorize
-npm run yalc:publish -w @shared-packages/vectorize
 ```
+
+Consumers depend on this package via `file:`. Edit here and they HMR. Run `npm install` in a consumer only when `exports` change.
