@@ -104,8 +104,9 @@ export function addKeyframe(
 	const covering = Number.isFinite(tMs) ? laterCoveringTrack(take, objectId, tMs) : undefined;
 	const track = covering ?? ensureFullSpanTrack(take, objectId);
 	if (!Number.isFinite(tMs) || !Number.isFinite(key.value)) return track;
-	// Cap refuse may hand back another object's row — do not write onto it.
-	if (track.objectId !== objectId || !take.tracks.includes(track)) return track;
+	// Compare by id — Svelte $state proxies make `includes(original)` false
+	// after push(), which used to create a lane and then skip the key write.
+	if (track.objectId !== objectId || !take.tracks.some((t) => t.id === track.id)) return track;
 	if (!covering && !isFullSpan(track, take.durationMs)) return track;
 
 	let curve: PropertyCurve | undefined;

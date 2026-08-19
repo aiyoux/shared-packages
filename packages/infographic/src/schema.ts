@@ -152,6 +152,13 @@ export function compositionSpanMs(doc: IgfxDocument): number {
 }
 
 export function serializeIgfx(doc: IgfxDocument): string {
+	const scenes = doc.scenes.map((scene) => {
+		const copy: Record<string, unknown> = { ...scene };
+		// Read mediaBed explicitly — Svelte $state proxies can drop newly
+		// assigned fields from object rest/JSON.stringify.
+		if (scene.mediaBed) copy.mediaBed = scene.mediaBed;
+		return copy;
+	});
 	const body: Record<string, unknown> = {
 		format: IGFX_FORMAT,
 		schemaVersion: IGFX_SCHEMA_VERSION,
@@ -160,7 +167,7 @@ export function serializeIgfx(doc: IgfxDocument): string {
 		theme: doc.theme,
 		datasets: doc.datasets,
 		scalars: doc.scalars,
-		scenes: doc.scenes,
+		scenes,
 		activeSceneId: doc.activeSceneId
 	};
 	if (doc.lastExport) body.lastExport = doc.lastExport;

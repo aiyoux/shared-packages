@@ -51,6 +51,18 @@ describe('parseIgfx', () => {
 		expect(getActiveScene(doc).objects).toEqual([]);
 	});
 
+	it('round-trips scene.mediaBed through serializeIgfx', () => {
+		const doc = createDocument();
+		getActiveScene(doc).mediaBed = { nodeId: 'vid-1', offsetMs: 0, durationMs: 1500 };
+		const raw = JSON.parse(serializeIgfx(doc));
+		expect(raw.scenes[0].mediaBed).toEqual({ nodeId: 'vid-1', offsetMs: 0, durationMs: 1500 });
+		expect(getActiveScene(parseIgfx(raw)).mediaBed).toEqual({
+			nodeId: 'vid-1',
+			offsetMs: 0,
+			durationMs: 1500
+		});
+	});
+
 	it('strips unknown mark kinds rather than failing', () => {
 		const doc = parseIgfx({
 			format: 'igfx',
