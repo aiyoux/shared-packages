@@ -3,8 +3,10 @@
  *
  * §2 palette (docs/design/design-system.md): tech neo-brutalism, softened.
  * Ground and surfaces are a single cool near-black ramp; sky is the primary
- * accent; radii stay small. Apps keep their identity via [data-theme] overrides
- * in themes.css — nothing here is redefined by an app sheet.
+ * accent; radii stay small. This `:root` is studio — no `data-theme` on
+ * `<html>` is this look. Named overlays (`paper` / `dark` / `midnight` /
+ * `forest` / `neon`) and product identity live in themes.css; they remap
+ * `--surface-*` / `--accent` / type / radius and never write `:root`.
  *
  * Legacy aliases below map the token names the hub + apps already reference
  * (--bg-primary, --accent, --radius-md, …) onto this canonical set, so existing
