@@ -1,18 +1,158 @@
 /*
- * Per-app themes — [data-theme] scoped overrides of the canonical tokens.
+ * Theme overlays — [data-theme] scoped overrides of the canonical tokens.
  *
- * Scoped, order-independent, composable: a theme applies to the subtree that
- * carries the attribute (in the hub SPA, `data-theme` is set on <html> while
- * the app is mounted), so a hub-mounted app keeps its identity without touching
- * the document root's canonical values.
+ * Contract
+ * --------
+ * Studio is the default. `tokens.css` is the only writer of `:root`. Absence
+ * of `data-theme` on `<html>` (or any ancestor) is the current studio look:
+ * sky `#38bdf8`, `--radius-md` 6px, slate surfaces, Inter, hairline borders.
  *
- * The hub, connections, and terminal converge to the §2 canonical tokens and
- * need no theme (terminal gets one small identity override). The indigo apps
- * (voice, dictionary, prompter, sketcher) preserve their distinctive look here.
+ * Hosts set `data-theme` on an element (typically `<html>`). Consumers read
+ * the design-system token names below — never `--app-*`. A theme applies to
+ * the subtree that carries the attribute, so a hub-mounted app can keep an
+ * identity without rewriting the document root.
+ *
+ * First-class named overlays (this sheet; modular-app picker names):
+ *   paper | dark | midnight | forest | neon
+ *
+ * Product-identity overlays (kept until C3 retires indigo):
+ *   voice | prompter | dictionary | sketcher | terminal
+ *
+ * A named theme may override:
+ *   color-scheme
+ *   --surface-ground, --surface-1, --surface-2, --surface-3
+ *   --line-hairline, --line-strong, --line-rail
+ *   --text-primary, --text-secondary, --text-muted, --text-faint
+ *   --accent, --accent-rgb, --accent-glow, --accent-light
+ *   --overlay-rgb, --scrim-rgb          (light themes swap the pair)
+ *   --color-primary-foreground          (literal alias on :root)
+ *
+ * A named theme must not override type scale, radius (stay 6px), space,
+ * density, motion, or the categorical `--cat-*` palette, and must not write
+ * `:root`. Legacy `--bg-*` / `--border` / `--color-*` aliases are `var()`
+ * of the tokens above and follow automatically.
+ *
+ * These five overlays remake paper / dark / midnight / forest / neon as
+ * tints of the studio system — not a second indigo palette.
  *
  * Wrapped in `@layer tokens` (host declares the layer order).
  */
 @layer tokens {
+	/* ---- paper: light slate sheet, studio sky ---- */
+	[data-theme='paper'] {
+		color-scheme: light;
+		--surface-ground: #f8fafc;
+		--surface-1: #ffffff;
+		--surface-2: #f1f5f9;
+		--surface-3: #e2e8f0;
+		--line-hairline: rgb(2 6 23 / 0.08);
+		--line-strong: rgb(2 6 23 / 0.16);
+		--line-rail: #94a3b8;
+		--text-primary: #0f172a;
+		--text-secondary: #475569;
+		--text-muted: #64748b;
+		--text-faint: #94a3b8;
+		--accent: #38bdf8;
+		--accent-rgb: 56, 189, 248;
+		--accent-glow: rgb(56 189 248 / 0.18);
+		--accent-light: #0ea5e9;
+		--overlay-rgb: 2, 6, 23;
+		--scrim-rgb: 255, 255, 255;
+		--color-primary-foreground: #020617;
+	}
+
+	/* ---- dark: lifted slate-navy, same sky ---- */
+	[data-theme='dark'] {
+		color-scheme: dark;
+		--surface-ground: #0b101c;
+		--surface-1: #12182a;
+		--surface-2: #181f33;
+		--surface-3: #1e2740;
+		--line-hairline: rgb(255 255 255 / 0.07);
+		--line-strong: rgb(255 255 255 / 0.14);
+		--line-rail: #475569;
+		--text-primary: #f1f5f9;
+		--text-secondary: #94a3b8;
+		--text-muted: #64748b;
+		--text-faint: #475569;
+		--accent: #38bdf8;
+		--accent-rgb: 56, 189, 248;
+		--accent-glow: rgb(56 189 248 / 0.16);
+		--accent-light: #7dd3fc;
+		--overlay-rgb: 255, 255, 255;
+		--scrim-rgb: 0, 0, 0;
+		--color-primary-foreground: #020617;
+	}
+
+	/* ---- midnight: blue-tinted slate ---- */
+	[data-theme='midnight'] {
+		color-scheme: dark;
+		--surface-ground: #0c121a;
+		--surface-1: #121a28;
+		--surface-2: #17202b;
+		--surface-3: #1e2a3a;
+		--line-hairline: rgb(56 189 248 / 0.10);
+		--line-strong: rgb(56 189 248 / 0.20);
+		--line-rail: #3d4f66;
+		--text-primary: #e6ecf3;
+		--text-secondary: #a8b2be;
+		--text-muted: #7b8796;
+		--text-faint: #5b6776;
+		--accent: #38bdf8;
+		--accent-rgb: 56, 189, 248;
+		--accent-glow: rgb(56 189 248 / 0.22);
+		--accent-light: #7dd3fc;
+		--overlay-rgb: 255, 255, 255;
+		--scrim-rgb: 0, 0, 0;
+		--color-primary-foreground: #0c121a;
+	}
+
+	/* ---- forest: green-tinted paper ---- */
+	[data-theme='forest'] {
+		color-scheme: light;
+		--surface-ground: #f0f8f0;
+		--surface-1: #fbfffb;
+		--surface-2: #e3eae3;
+		--surface-3: #d4ddd4;
+		--line-hairline: rgb(25 34 27 / 0.10);
+		--line-strong: rgb(25 34 27 / 0.18);
+		--line-rail: #8aa08a;
+		--text-primary: #19221b;
+		--text-secondary: #4e5d4e;
+		--text-muted: #6b7a6b;
+		--text-faint: #8a988a;
+		--accent: #38bdf8;
+		--accent-rgb: 56, 189, 248;
+		--accent-glow: rgb(56 189 248 / 0.18);
+		--accent-light: #0ea5e9;
+		--overlay-rgb: 25, 34, 27;
+		--scrim-rgb: 255, 255, 255;
+		--color-primary-foreground: #020617;
+	}
+
+	/* ---- neon: high-chroma purple-navy, electric sky ---- */
+	[data-theme='neon'] {
+		color-scheme: dark;
+		--surface-ground: #03001e;
+		--surface-1: #0e0035;
+		--surface-2: #150a3c;
+		--surface-3: #1e234f;
+		--line-hairline: rgb(56 189 248 / 0.18);
+		--line-strong: rgb(56 189 248 / 0.32);
+		--line-rail: #38bdf8;
+		--text-primary: #eef0ff;
+		--text-secondary: #a8b4e0;
+		--text-muted: #7a9fdd;
+		--text-faint: #5a6aa0;
+		--accent: #38bdf8;
+		--accent-rgb: 56, 189, 248;
+		--accent-glow: rgb(56 189 248 / 0.35);
+		--accent-light: #7dd3fc;
+		--overlay-rgb: 255, 255, 255;
+		--scrim-rgb: 0, 0, 0;
+		--color-primary-foreground: #020617;
+	}
+
 	/* ---- terminal: slate ground, panels match the ground ---- */
 	[data-theme='terminal'] {
 		--surface-1: #020617;
