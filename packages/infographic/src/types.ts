@@ -306,7 +306,7 @@ export interface IgfxDocument {
 
 export interface ResolvedNode {
 	id: string;
-	tag: 'g' | 'rect' | 'path' | 'text' | 'line' | 'circle' | 'clipPath';
+	tag: 'g' | 'rect' | 'path' | 'text' | 'line' | 'circle' | 'ellipse' | 'clipPath';
 	attrs: Record<string, string>;
 	text?: string;
 	children?: ResolvedNode[];

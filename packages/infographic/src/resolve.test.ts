@@ -610,9 +610,9 @@ describe('caps fixtures', () => {
 		expect(scene.objects).toHaveLength(MAX_OBJECTS_PER_SCENE);
 		const frame = resolve(doc, 0);
 		expect(findById(frame.nodes, 'g')).toBeUndefined();
-		expect(findById(frame.nodes, 'series')).toBeUndefined();
+		expect(findById(frame.nodes, 'series')).toBeTruthy();
 		expect(findById(frame.nodes, 'p0')).toBeUndefined();
-		expect(frame.nodes).toHaveLength(MAX_OBJECTS_PER_SCENE - 202);
+		expect(frame.nodes).toHaveLength(MAX_OBJECTS_PER_SCENE - 201);
 		let best = Number.POSITIVE_INFINITY;
 		for (let i = 0; i < 8; i += 1) {
 			const t0 = performance.now();

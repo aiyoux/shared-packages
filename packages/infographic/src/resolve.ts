@@ -7,6 +7,7 @@ import {
 	type BakedPath
 } from './bakeAdapter.js';
 import { bindObject, type BoundMark } from './bindings.js';
+import { renderGeometry } from './geometry.js';
 import { renderAxis } from './marks/axis.js';
 import { renderBar } from './marks/bar.js';
 import { wrapWorld, type MarkRenderCtx } from './marks/context.js';
@@ -15,7 +16,8 @@ import { renderLine } from './marks/line.js';
 import { renderStat } from './marks/stat.js';
 import { renderText } from './marks/text.js';
 import { sampleTake, sampledLocal, type MarkMotion, type ObjectSample } from './motion.js';
-import { objectToMark, worldTransforms, type WorldXform } from './objects.js';
+import { childrenOf, objectToMark, worldTransforms, type WorldXform } from './objects.js';
+import { renderSeries, visiblePointChildren } from './series.js';
 import { createTake, effectiveArtboard, effectiveTheme } from './schema.js';
 import { DEFAULT_DURATION_MS } from './types.js';
 import type {
@@ -126,28 +128,61 @@ function shimMotion(sample: ObjectSample): MarkMotion {
 	};
 }
 
+function syntheticSeriesMark(obj: IgfxObject, world: WorldXform): Mark {
+	const mark: Mark = {
+		id: obj.id,
+		kind: obj.series?.mode === 'bars' ? 'bar' : 'line',
+		layout: { x: world.x, y: world.y, w: world.w, h: world.h },
+		bindings: {}
+	};
+	if (obj.style) mark.style = obj.style;
+	return mark;
+}
+
 function renderObject(
 	obj: IgfxObject,
 	world: WorldXform,
 	sample: ObjectSample,
-	ctx: Omit<MarkRenderCtx, 'mark' | 'motion'> & { tMs: number; fps: number }
+	ctx: Omit<MarkRenderCtx, 'mark' | 'motion'> & {
+		tMs: number;
+		fps: number;
+		scene: IgfxScene;
+		sampled: Map<string, ObjectSample>;
+	}
 ): ResolvedNode | null {
-	const mark = objectToMark(obj, { x: world.x, y: world.y, w: world.w, h: world.h });
-	if (!mark) return null;
+	const layout = { x: world.x, y: world.y, w: world.w, h: world.h };
 	const motion = shimMotion(sample);
 	let inner: ResolvedNode;
-	if (isScene3dMark(mark)) {
-		inner = renderScene3d(mark, motion, ctx.theme, ctx.tMs, ctx.fps, ctx.bound, ctx.warnings);
-	} else {
-		inner = renderMark({
-			doc: ctx.doc,
-			mark,
+	if (obj.kind === 'shape' || obj.kind === 'path') {
+		inner = renderGeometry(obj, layout, ctx.theme);
+	} else if (obj.kind === 'series') {
+		const points = visiblePointChildren(childrenOf(ctx.scene, obj.id), ctx.sampled).map((point) => ({
+			obj: point,
+			sample: ctx.sampled.get(point.id)
+		}));
+		inner = renderSeries({
+			obj,
+			layout,
+			progress: sample.motion.progress,
 			theme: ctx.theme,
-			motion,
-			bound: ctx.bound,
-			warnings: ctx.warnings,
-			sibling: ctx.sibling
+			points
 		});
+	} else {
+		const mark = objectToMark(obj, layout);
+		if (!mark) return null;
+		if (isScene3dMark(mark)) {
+			inner = renderScene3d(mark, motion, ctx.theme, ctx.tMs, ctx.fps, ctx.bound, ctx.warnings);
+		} else {
+			inner = renderMark({
+				doc: ctx.doc,
+				mark,
+				theme: ctx.theme,
+				motion,
+				bound: ctx.bound,
+				warnings: ctx.warnings,
+				sibling: ctx.sibling
+			});
+		}
 	}
 	return wrapWorld(obj.id, world, inner);
 }
@@ -181,10 +216,11 @@ export function resolveScene(
 	const boundById = new Map<string, BoundMark>();
 	const markById = new Map<string, Mark>();
 	const locals = new Map<string, Partial<ObjectTransform>>();
+	const byId = new Map(scene.objects.map((o) => [o.id, o]));
 	for (const obj of scene.objects) {
 		const sample = sampled.byObject.get(obj.id);
 		if (sample) locals.set(obj.id, sampledLocal(obj, sample));
-		const bound = bindObject(doc, obj, warnings, theme);
+		const bound = bindObject(doc, obj, warnings, theme, { scene, sampled: sampled.byObject });
 		if (sample?.motion.value !== undefined) bound.value = sample.motion.value;
 		boundById.set(obj.id, bound);
 	}
@@ -200,10 +236,16 @@ export function resolveScene(
 	}
 
 	const sibling = (id: string) => {
-		const mark = markById.get(id);
 		const bound = boundById.get(id);
-		if (!mark || !bound) return undefined;
-		return { mark, bound };
+		if (!bound) return undefined;
+		const existing = markById.get(id);
+		if (existing) return { mark: existing, bound };
+		const obj = byId.get(id);
+		const world = worlds.get(id);
+		if (obj?.kind === 'series' && world) {
+			return { mark: syntheticSeriesMark(obj, world), bound };
+		}
+		return undefined;
 	};
 
 	const nodes: ResolvedNode[] = [];
@@ -221,7 +263,9 @@ export function resolveScene(
 			warnings,
 			sibling,
 			tMs,
-			fps
+			fps,
+			scene,
+			sampled: sampled.byObject
 		});
 		if (node) nodes.push(node);
 	}

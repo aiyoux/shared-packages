@@ -186,5 +186,47 @@ describe('sampleTake', () => {
 		expect(sampleTake(scene, take, 1500).byObject.get('unlinked')?.visible).toBe(true);
 		expect(sampleTake(scene, take, 1501).byObject.get('covering')?.visible).toBe(false);
 	});
+
+	it('samples w/h/rotation/value/pointX/pointY overlays', () => {
+		const doc = createDocument();
+		const scene = getActiveScene(doc);
+		scene.objects = [
+			{
+				id: 'pt',
+				name: 'pt',
+				parentId: null,
+				kind: 'point',
+				visible: true,
+				transform: { x: 0, y: 0, w: 16, h: 16, rotation: 5, opacity: 1 },
+				point: { x: 0, y: 10, value: 10 }
+			}
+		];
+		const take = getActiveTake(scene);
+		take.tracks = [
+			{
+				id: 'track-pt',
+				objectId: 'pt',
+				startMs: 0,
+				durationMs: 8000,
+				curves: [
+					{ id: 'w', prop: 'w', keyframes: [{ tMs: 0, value: 50 }] },
+					{ id: 'h', prop: 'h', keyframes: [{ tMs: 0, value: 60 }] },
+					{ id: 'rot', prop: 'rotation', keyframes: [{ tMs: 0, value: 45 }] },
+					{ id: 'val', prop: 'value', keyframes: [{ tMs: 0, value: 12 }] },
+					{ id: 'px', prop: 'pointX', keyframes: [{ tMs: 0, value: 3 }] },
+					{ id: 'py', prop: 'pointY', keyframes: [{ tMs: 0, value: 4 }] }
+				]
+			}
+		];
+		const motion = sampleTake(scene, take, 0).byObject.get('pt')?.motion;
+		expect(motion).toMatchObject({
+			w: 50,
+			h: 60,
+			rotation: 45,
+			value: 12,
+			pointX: 3,
+			pointY: 4
+		});
+	});
 });
 

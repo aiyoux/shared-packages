@@ -1,4 +1,14 @@
-import type { AnyMark, IgfxObject, IgfxScene, Mark, ObjectTransform, Scene3dMark } from './types.js';
+import type { ObjectSample } from './motion.js';
+import { mapSeriesGlyph, seriesPointPose } from './series.js';
+import type {
+	AnyMark,
+	IgfxObject,
+	IgfxScene,
+	Mark,
+	ObjectTransform,
+	Scene3dMark,
+	SeriesMode
+} from './types.js';
 
 export interface WorldXform {
 	x: number;
@@ -7,6 +17,13 @@ export interface WorldXform {
 	h: number;
 	rotation: number;
 	opacity: number;
+}
+
+export interface LayoutBox {
+	x: number;
+	y: number;
+	w: number;
+	h: number;
 }
 
 const PRESET_KIND_SET = new Set([
@@ -191,4 +208,30 @@ export function objectToMark(
 	};
 	if (obj.style) mark.style = obj.style;
 	return mark;
+}
+
+/**
+ * Derived glyph center in artboard px. Ignores persist `point.transform`.
+ * `siblings` is visible-in-order (same list as series.ts, before the line/scatter k slice).
+ */
+export function mappedGlyph(
+	seriesWorld: WorldXform,
+	mode: SeriesMode,
+	point: IgfxObject,
+	sample: ObjectSample,
+	siblings: { point: IgfxObject; sample: ObjectSample }[],
+	opts?: { progress?: number; horizontal?: boolean }
+): { x: number; y: number } {
+	const poses = siblings.map((s) => seriesPointPose(s.point, s.sample));
+	let index = siblings.findIndex((s) => s.point.id === point.id);
+	if (index < 0) {
+		poses.push(seriesPointPose(point, sample));
+		index = poses.length - 1;
+	}
+	return mapSeriesGlyph(seriesWorld, mode, index, poses, opts);
+}
+
+export function pointHandleBox(...args: Parameters<typeof mappedGlyph>): LayoutBox {
+	const { x, y } = mappedGlyph(...args);
+	return { x: x - 8, y: y - 8, w: 16, h: 16 };
 }

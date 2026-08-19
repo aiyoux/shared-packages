@@ -1,4 +1,6 @@
-import { objectToMark } from './objects.js';
+import type { ObjectSample } from './motion.js';
+import { childrenOf, objectToMark } from './objects.js';
+import { seriesColor as userSeriesColor, seriesPointPose, visiblePointChildren } from './series.js';
 import { resolveColorToken } from './theme.js';
 import type {
 	AnyMark,
@@ -6,6 +8,7 @@ import type {
 	Dataset,
 	IgfxDocument,
 	IgfxObject,
+	IgfxScene,
 	Mark,
 	Scalar,
 	Theme
@@ -329,12 +332,49 @@ export function bindMark(
 	}
 }
 
+export interface BindObjectCtx {
+	scene: IgfxScene;
+	sampled?: Map<string, ObjectSample>;
+}
+
+function bindUserSeries(obj: IgfxObject, theme: Theme, ctx?: BindObjectCtx): BoundMark {
+	const color = userSeriesColor(obj, theme);
+	const children = ctx ? childrenOf(ctx.scene, obj.id) : [];
+	const visible = visiblePointChildren(children, ctx?.sampled);
+	const poses = visible.map((point) => seriesPointPose(point, ctx?.sampled?.get(point.id)));
+	const mode = obj.series?.mode ?? 'bars';
+	if (mode === 'bars') {
+		return emptyBound({
+			series: {
+				categories: visible.map((point) => point.point?.label ?? point.name),
+				values: poses.map((p) => p.pv),
+				xs: [],
+				ys: [],
+				color,
+				datasetLabel: obj.name
+			}
+		});
+	}
+	return emptyBound({
+		series: {
+			categories: [],
+			values: [],
+			xs: poses.map((p) => p.px),
+			ys: poses.map((p) => p.py),
+			color,
+			datasetLabel: obj.name
+		}
+	});
+}
+
 export function bindObject(
 	doc: IgfxDocument,
 	obj: IgfxObject,
 	warnings: string[],
-	theme: Theme = doc.theme
+	theme: Theme = doc.theme,
+	ctx?: BindObjectCtx
 ): BoundMark {
+	if (obj.kind === 'series') return bindUserSeries(obj, theme, ctx);
 	const mark = objectToMark(obj);
 	if (!mark) return emptyBound();
 	return bindMark(doc, mark, warnings, theme);

@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { createDocument, getActiveScene } from './index.js';
+import type { ObjectSample } from './motion.js';
 import {
 	ancestorsOf,
 	childrenOf,
 	hasParentCycle,
+	mappedGlyph,
 	objectToMark,
+	pointHandleBox,
 	reparent,
 	subtreeIds,
 	wouldCreateCycle,
@@ -127,5 +130,50 @@ describe('object tree helpers', () => {
 			{ x: 10, y: 20, w: 30, h: 40 }
 		);
 		expect(mark).toMatchObject({ id: 'bars', kind: 'bar', layout: { x: 10, y: 20, w: 30, h: 40 } });
+	});
+});
+
+describe('mappedGlyph / pointHandleBox', () => {
+	const seriesWorld = { x: 160, y: 200, w: 800, h: 400, rotation: 0, opacity: 1 };
+	const rest = (): ObjectSample => ({
+		visible: true,
+		motion: { progress: 1, opacity: 1, x: 0, y: 0, w: 16, h: 16, rotation: 0 }
+	});
+	const points: IgfxObject[] = [
+		obj('p1', {
+			kind: 'point',
+			name: 'P1',
+			parentId: 'series',
+			point: { x: 0, y: 10, value: 10 },
+			transform: { x: 999, y: 999, w: 1, h: 1, rotation: 0, opacity: 1 }
+		}),
+		obj('p2', { kind: 'point', name: 'P2', parentId: 'series', point: { x: 1, y: 24, value: 24 } }),
+		obj('p3', { kind: 'point', name: 'P3', parentId: 'series', point: { x: 2, y: 18, value: 18 } }),
+		obj('p4', { kind: 'point', name: 'P4', parentId: 'series', point: { x: 3, y: 32, value: 32 } })
+	];
+	const siblings = points.map((point) => ({ point, sample: rest() }));
+
+	it('maps bar-mode points to the glyph center and ignores persist transform', () => {
+		const p1 = mappedGlyph(seriesWorld, 'bars', points[0], rest(), siblings);
+		expect(p1).toEqual({ x: 263, y: 537.5 });
+		expect(pointHandleBox(seriesWorld, 'bars', points[0], rest(), siblings)).toEqual({
+			x: 255,
+			y: 529.5,
+			w: 16,
+			h: 16
+		});
+		expect(mappedGlyph(seriesWorld, 'bars', points[1], rest(), siblings)).toEqual({ x: 461, y: 450 });
+		expect(mappedGlyph(seriesWorld, 'bars', points[2], rest(), siblings)).toEqual({ x: 659, y: 487.5 });
+		expect(mappedGlyph(seriesWorld, 'bars', points[3], rest(), siblings)).toEqual({ x: 857, y: 400 });
+	});
+
+	it('maps line-mode points through lineDomain', () => {
+		const p1 = mappedGlyph(seriesWorld, 'line', points[0], rest(), siblings);
+		expect(p1).toEqual({ x: 160, y: 600 });
+		const p2 = mappedGlyph(seriesWorld, 'line', points[1], rest(), siblings);
+		expect(p2.x).toBeCloseTo(426.67, 1);
+		expect(p2.y).toBeCloseTo(345.45, 1);
+		const p4 = mappedGlyph(seriesWorld, 'scatter', points[3], rest(), siblings);
+		expect(p4).toEqual({ x: 960, y: 200 });
 	});
 });

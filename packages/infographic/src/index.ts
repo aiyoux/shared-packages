@@ -110,15 +110,24 @@ export {
 	ancestorsOf,
 	childrenOf,
 	hasParentCycle,
+	mappedGlyph,
 	objectToMark,
+	pointHandleBox,
 	reparent,
 	subtreeIds,
 	wouldCreateCycle,
 	worldTransforms,
+	type LayoutBox,
 	type WorldXform
 } from './objects.js';
 
-export { bindMark, bindObject, type BoundMark, type BoundSeries } from './bindings.js';
+export {
+	bindMark,
+	bindObject,
+	type BindObjectCtx,
+	type BoundMark,
+	type BoundSeries
+} from './bindings.js';
 
 export { escapeXml, rasterize, renderSvg } from './render.js';
 
