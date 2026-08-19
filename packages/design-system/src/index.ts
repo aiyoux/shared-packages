@@ -14,8 +14,8 @@
  *
  * Theme contract: studio is the un-themed default (`tokens.css` `:root`).
  * Set `data-theme` to a `NamedTheme` to apply a first-class overlay from
- * `themes.css`. Product values (`voice` | `prompter` | `dictionary` |
- * `sketcher` | `terminal`) remain until C3.
+ * `themes.css`. Product value `terminal` remains as a small surface override;
+ * `voice` / `prompter` / `dictionary` / `sketcher` inherit studio.
  */
 export const NAMED_THEMES = ['paper', 'dark', 'midnight', 'forest', 'neon'] as const;
 export type NamedTheme = (typeof NAMED_THEMES)[number];
