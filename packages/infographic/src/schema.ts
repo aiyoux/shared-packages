@@ -151,12 +151,26 @@ export function compositionSpanMs(doc: IgfxDocument): number {
 	return Math.max(take.durationMs, scene.mediaBed?.durationMs ?? 0);
 }
 
+function copyMediaBed(scene: IgfxScene): MediaBed | undefined {
+	const raw = scene.mediaBed;
+	if (!raw || typeof raw !== 'object') return undefined;
+	if (typeof raw.nodeId !== 'string' || !raw.nodeId) return undefined;
+	return {
+		nodeId: raw.nodeId,
+		offsetMs: typeof raw.offsetMs === 'number' && Number.isFinite(raw.offsetMs) ? raw.offsetMs : 0,
+		durationMs:
+			typeof raw.durationMs === 'number' && Number.isFinite(raw.durationMs) ? raw.durationMs : 0
+	};
+}
+
 export function serializeIgfx(doc: IgfxDocument): string {
 	const scenes = doc.scenes.map((scene) => {
 		const copy: Record<string, unknown> = { ...scene };
-		// Read mediaBed explicitly — Svelte $state proxies can drop newly
+		// Copy mediaBed as primitives — Svelte $state proxies can drop newly
 		// assigned fields from object rest/JSON.stringify.
-		if (scene.mediaBed) copy.mediaBed = scene.mediaBed;
+		const bed = copyMediaBed(scene);
+		if (bed) copy.mediaBed = bed;
+		else delete copy.mediaBed;
 		return copy;
 	});
 	const body: Record<string, unknown> = {
