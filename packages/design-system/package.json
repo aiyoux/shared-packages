@@ -19,6 +19,7 @@
     "./tokens.css": "./src/tokens.css",
     "./reset.css": "./src/reset.css",
     "./themes.css": "./src/themes.css",
+    "./tailwind-theme.css": "./src/tailwind-theme.css",
     "./tooltip.css": "./src/tooltip.css",
     "./Button.svelte": "./src/components/Button.svelte",
     "./Card.svelte": "./src/components/Card.svelte",

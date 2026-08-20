@@ -15,8 +15,9 @@
  * Theme contract: studio dark (cyber wireframe) is the un-themed default
  * (`tokens.css` `:root`). Hosts set `data-color-scheme` to `dark` | `light`
  * (default `dark`). Set `data-theme` to a `NamedTheme` for a named overlay
- * from `themes.css`. Product value `terminal` remains as a small surface
- * override; `voice` / `prompter` / `dictionary` / `sketcher` inherit studio.
+ * from `themes.css`. Mounted products inherit studio; they do not ship a
+ * second identity overlay. Tailwind apps import `./tailwind-theme.css` so
+ * utility colors follow the same tokens.
  */
 export const NAMED_THEMES = ['light', 'paper', 'dark', 'midnight', 'forest', 'neon'] as const;
 export type NamedTheme = (typeof NAMED_THEMES)[number];
