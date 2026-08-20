@@ -4,6 +4,8 @@
  */
 import { describe, it, expect, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/svelte';
+import { packFiles } from '@shared-packages/compress';
+import { sealVault } from '@shared-packages/crypto';
 import FileExplorer from '../src/ui/FileExplorer.svelte';
 import { createVfs, resetSharedVfsForTests, type VfsService } from '../src/index.ts';
 
@@ -464,6 +466,104 @@ describe('FileExplorer component', () => {
 		await fireEvent.click(toggle);
 		expect(root.getAttribute('data-fe-preview-dock')).toBe('off');
 		expect(screen.queryByTestId('fe-preview-dock')).toBeNull();
+	});
+
+	it('shows Decompress and Open archive for a zip, and opens an inner filesystem popup', async () => {
+		const packed = await packFiles(
+			'fflate',
+			[
+				{ name: 'hello.txt', data: new TextEncoder().encode('hello') },
+				{ name: 'nested/inner.txt', data: new TextEncoder().encode('inner') }
+			],
+			'zip'
+		);
+		const zip = packed[0]!;
+		await vfs.writeFile({
+			parentId: null,
+			name: zip.name,
+			body: zip.data,
+			contentType: 'application/zip'
+		});
+		render(FileExplorer, { props: { mode: 'manage', vfs, variant: 'panel' } });
+		await viWaitForRows(1);
+		const row = document.querySelector('[data-testid="fe-file-row"]') as HTMLElement;
+		await fireEvent.click(row);
+		await fireEvent.click(screen.getByTestId('fe-item-details'));
+		await screen.findByTestId('fe-file-preview');
+		expect(screen.getByTestId('fe-file-preview-decompress')).toBeTruthy();
+		expect(screen.getByTestId('fe-file-preview-open-archive').textContent).toMatch(/Open archive/);
+		expect(screen.getByTestId('fe-file-preview-open').textContent).toMatch(/Open archive/);
+		expect((screen.getByTestId('fe-decompress-selected') as HTMLButtonElement).disabled).toBe(false);
+		await fireEvent.click(screen.getByTestId('fe-file-preview-decompress'));
+		const dlg = await screen.findByTestId('fe-archive-dialog');
+		expect(dlg.getAttribute('data-kind')).toBe('decompress');
+		expect(screen.getByTestId('fe-archive-dest-popup')).toBeTruthy();
+		await fireEvent.click(screen.getByTestId('fe-archive-cancel'));
+
+		await fireEvent.click(screen.getByTestId('fe-file-preview-open-archive'));
+		const inner = await screen.findByTestId('fe-inner-fs-dialog', { timeout: 8000 });
+		expect(inner.textContent).toMatch(/archive\.zip|hello/);
+		await viWaitFor(() => {
+			const rows = inner.querySelectorAll('[data-testid="fe-file-row"], [data-testid="fe-folder-row"]');
+			return rows.length >= 2;
+		});
+		expect(inner.querySelector('[data-name="hello.txt"]')).toBeTruthy();
+		expect(inner.querySelector('[data-name="nested"]')).toBeTruthy();
+	});
+
+	it('shows Decrypt for a vault and packs multi-select as a ZIP inner filesystem', async () => {
+		const sealed = await sealVault(
+			'webcrypto',
+			[{ path: 'secret.txt', data: new TextEncoder().encode('hidden') }],
+			'pw',
+			{ kind: 'single' }
+		);
+		await vfs.writeFile({
+			parentId: null,
+			name: sealed.name,
+			body: sealed.data
+		});
+		await vfs.writeFile({
+			parentId: null,
+			name: 'a.txt',
+			body: 'alpha'
+		});
+		await vfs.writeFile({
+			parentId: null,
+			name: 'b.txt',
+			body: 'beta'
+		});
+		render(FileExplorer, { props: { mode: 'manage', vfs, variant: 'panel' } });
+		await viWaitFor(() => document.querySelectorAll('[data-testid="fe-file-row"]').length >= 3);
+
+		const vaultRow = document.querySelector(`[data-testid="fe-file-row"][data-name="${sealed.name}"]`) as HTMLElement;
+		await fireEvent.click(vaultRow);
+		await fireEvent.click(screen.getByTestId('fe-item-details'));
+		await screen.findByTestId('fe-file-preview');
+		expect(screen.getByTestId('fe-file-preview-decrypt')).toBeTruthy();
+		expect(screen.getByTestId('fe-file-preview-open-archive').textContent).toMatch(/Open vault/);
+		expect((screen.getByTestId('fe-decrypt-selected') as HTMLButtonElement).disabled).toBe(false);
+		await fireEvent.click(screen.getByTestId('fe-file-preview-decrypt'));
+		const decryptDlg = await screen.findByTestId('fe-archive-dialog');
+		expect(decryptDlg.getAttribute('data-kind')).toBe('decrypt');
+		expect(screen.getByTestId('fe-archive-password')).toBeTruthy();
+		expect(screen.queryByTestId('fe-archive-password-confirm')).toBeNull();
+		expect(screen.getByTestId('fe-archive-dest-popup')).toBeTruthy();
+		await fireEvent.click(screen.getByTestId('fe-archive-cancel'));
+		await fireEvent.click(screen.getByTestId('fe-file-preview-close'));
+
+		const aRow = document.querySelector('[data-testid="fe-file-row"][data-name="a.txt"]') as HTMLElement;
+		const bRow = document.querySelector('[data-testid="fe-file-row"][data-name="b.txt"]') as HTMLElement;
+		await fireEvent.click(aRow);
+		await fireEvent.click(screen.getByTestId('fe-select-multi'));
+		await fireEvent.click(bRow);
+		await fireEvent.click(screen.getByTestId('fe-compress-selected'));
+		const compressDlg = await screen.findByTestId('fe-archive-dialog');
+		expect(compressDlg.getAttribute('data-kind')).toBe('compress');
+		expect(compressDlg.textContent).toMatch(/2 items/);
+		expect(compressDlg.textContent).toMatch(/ZIP inner filesystem/);
+		expect((screen.getByTestId('fe-archive-codec') as HTMLSelectElement).disabled).toBe(true);
+		expect((screen.getByTestId('fe-archive-codec') as HTMLSelectElement).value).toBe('zip');
 	});
 });
 

@@ -1,5 +1,6 @@
 <script lang="ts">
-	import { tick, type Snippet } from 'svelte';
+	import { onDestroy, tick, type Snippet } from 'svelte';
+	import FileExplorer from './FileExplorer.svelte';
 	import { getSharedVfs, isActionable, type FileTypeId, type VfsService, VfsError } from '../index.js';
 	import {
 		type ExplorerDriver,
@@ -11,6 +12,17 @@
 	import FeIcon from './FeIcon.svelte';
 	import FeTipIconBtn from './FeTipIconBtn.svelte';
 	import FeArchiveDialog from './FeArchiveDialog.svelte';
+	import {
+		createInnerFsSession,
+		expandPackedBytes,
+		looksCompressedName,
+		looksPackedName,
+		looksVaultName,
+		readEntryBytes,
+		type ArchiveDest,
+		type ArchiveKind,
+		type InnerFsSession
+	} from './archiveOps.js';
 	import { createTreeDndSession, resolveDrop, zoneFromY, type DropZone } from './treeDnd/index.js';
 	import {
 		FE_EXPLORER_IDS_MIME,
@@ -147,7 +159,13 @@
 	let selectMulti = $state(false);
 	let previewEntry = $state<ExplorerEntry | null>(null);
 	let previewBusy = $state(false);
-	let archiveKind = $state<'compress' | 'encrypt' | null>(null);
+	let archiveKind = $state<ArchiveKind | null>(null);
+	let archiveEntries = $state<ExplorerEntry[]>([]);
+	let archiveDestLocked = $state<ArchiveDest | null>(null);
+	let innerFs = $state<InnerFsSession | null>(null);
+	onDestroy(() => {
+		void innerFs?.dispose();
+	});
 	/** off → below (horizontal split) → beside (vertical split) → off. */
 	type PreviewDock = 'off' | 'bottom' | 'right';
 	const PREVIEW_DOCK_KEY = 'fe:previewDock';
@@ -793,6 +811,49 @@
 		previewEntry = n;
 	}
 
+	function startArchive(kind: ArchiveKind, targets: ExplorerEntry[], destLocked: ArchiveDest | null = null) {
+		if (!targets.length) return;
+		archiveKind = kind;
+		archiveEntries = targets;
+		archiveDestLocked = destLocked;
+	}
+
+	function closeArchive() {
+		archiveKind = null;
+		archiveEntries = [];
+		archiveDestLocked = null;
+	}
+
+	async function closeInnerFs() {
+		const session = innerFs;
+		innerFs = null;
+		await tick();
+		await session?.dispose();
+	}
+
+	async function openPackedEntry(entry: ExplorerEntry): Promise<boolean> {
+		if (entry.kind !== 'file' || !looksPackedName(entry.name)) return false;
+		if (looksVaultName(entry.name)) {
+			startArchive('decrypt', [entry], 'popup');
+			return true;
+		}
+		previewBusy = true;
+		error = '';
+		try {
+			const bytes = await readEntryBytes(driver, entry);
+			const files = await expandPackedBytes(bytes, entry.name);
+			innerFs = await createInnerFsSession(entry.name, files);
+			previewEntry = null;
+			return true;
+		} catch (e) {
+			error = errMsg(e);
+			startArchive('decompress', [entry]);
+			return true;
+		} finally {
+			previewBusy = false;
+		}
+	}
+
 	function persistPreviewDock(next: PreviewDock) {
 		try {
 			if (next === 'off') localStorage.removeItem(PREVIEW_DOCK_KEY);
@@ -835,6 +896,8 @@
 	function defaultOpenLabel(entry: ExplorerOpenTarget): string {
 		if (typeof openLabel === 'function') return openLabel(entry);
 		if (typeof openLabel === 'string' && openLabel) return openLabel;
+		if (looksVaultName(entry.name)) return 'Open vault';
+		if (looksCompressedName(entry.name)) return 'Open archive';
 		if (entry.fileType === 'skch') return 'Open in sketcher';
 		if (entry.fileType === 'ob3d') return 'Open in 3D';
 		if (entry.fileType === 'cari') return 'Open in Caricature';
@@ -845,6 +908,13 @@
 		return 'Open';
 	}
 
+	function previewShowsOpen(entry: ExplorerEntry): boolean {
+		if (entry.kind === 'folder') return mode !== 'browse';
+		if (mode !== 'open' && mode !== 'manage') return false;
+		if (mode === 'manage' && looksPackedName(entry.name)) return true;
+		return Boolean(onOpen && rowActionable(entry));
+	}
+
 	async function confirmPreviewOpen() {
 		const n = previewEntry;
 		if (!n) return;
@@ -853,6 +923,7 @@
 			await enterFolder(n);
 			return;
 		}
+		if (await openPackedEntry(n)) return;
 		if (!onOpen) return;
 		previewBusy = true;
 		try {
@@ -987,6 +1058,7 @@
 			await enterFolder(n);
 			return;
 		}
+		if (await openPackedEntry(n)) return;
 		if (!rowActionable(n)) return;
 		if (onOpen && (mode === 'open' || mode === 'manage')) {
 			await onOpen(n);
@@ -1020,6 +1092,9 @@
 	const canOpenSelection = $derived.by(() => {
 		if (selectedEntries.length === 0) return false;
 		if (selectedEntries.some((e) => e.kind === 'folder')) return true;
+		if (mode === 'manage' && selectedEntries.some((e) => e.kind === 'file' && looksPackedName(e.name))) {
+			return true;
+		}
 		if (
 			onOpen &&
 			(mode === 'open' || mode === 'manage') &&
@@ -1031,6 +1106,13 @@
 		return false;
 	});
 
+	const canDecompressSelection = $derived(
+		selectedEntries.length > 0 && selectedEntries.every((e) => e.kind === 'file' && looksCompressedName(e.name))
+	);
+	const canDecryptSelection = $derived(
+		selectedEntries.length > 0 && selectedEntries.every((e) => e.kind === 'file' && looksVaultName(e.name))
+	);
+
 	async function openSelected() {
 		if (!selectedEntries.length) return;
 		const last = lastSelectedId
@@ -1038,6 +1120,14 @@
 			: undefined;
 		const files = selectedEntries.filter((e) => e.kind === 'file' && rowActionable(e));
 		const folders = selectedEntries.filter((e) => e.kind === 'folder');
+		const packedFile =
+			last?.kind === 'file' && looksPackedName(last.name)
+				? last
+				: (selectedEntries.find((e) => e.kind === 'file' && looksPackedName(e.name)) ?? null);
+		if (packedFile && mode === 'manage') {
+			await openPackedEntry(packedFile);
+			return;
+		}
 		const primaryFile =
 			last?.kind === 'file' && rowActionable(last) ? last : (files[0] ?? null);
 		const primaryFolder = last?.kind === 'folder' ? last : (folders[0] ?? null);
@@ -1233,21 +1323,30 @@
 		if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) return;
 
 		if (e.key === 'Escape') {
+			e.preventDefault();
+			e.stopPropagation();
+			if (innerFs && variant !== 'dialog') {
+				void closeInnerFs();
+				return;
+			}
 			if (archiveKind) {
-				e.preventDefault();
-				archiveKind = null;
+				closeArchive();
+				return;
+			}
+			if (trashOpen) {
+				trashOpen = false;
 				return;
 			}
 			if (previewEntry) {
-				e.preventDefault();
 				previewEntry = null;
 				return;
 			}
 			if (selected.size > 0) {
-				e.preventDefault();
 				selected = new Set();
 				lastSelectedId = null;
+				return;
 			}
+			if (variant === 'dialog' && onClose) onClose();
 			return;
 		}
 		if (e.key === 'ArrowDown') {
@@ -1547,6 +1646,34 @@
 						disabled={selected.size === 0 || !caps.supportsCopy}
 						onclick={copySelection}
 					/>
+					<FeTipIconBtn
+						testid="fe-compress-selected"
+						tip="Compress"
+						icon="file-archive"
+						disabled={selected.size === 0}
+						onclick={() => startArchive('compress', selectedEntries)}
+					/>
+					<FeTipIconBtn
+						testid="fe-encrypt-selected"
+						tip="Encrypt"
+						icon="lock"
+						disabled={selected.size === 0}
+						onclick={() => startArchive('encrypt', selectedEntries)}
+					/>
+					<FeTipIconBtn
+						testid="fe-decompress-selected"
+						tip="Decompress"
+						icon="package-open"
+						disabled={!canDecompressSelection}
+						onclick={() => startArchive('decompress', selectedEntries)}
+					/>
+					<FeTipIconBtn
+						testid="fe-decrypt-selected"
+						tip="Decrypt"
+						icon="unlock"
+						disabled={!canDecryptSelection}
+						onclick={() => startArchive('decrypt', selectedEntries)}
+					/>
 				</div>
 			{/if}
 		</div>
@@ -1751,7 +1878,7 @@
 					{/if}
 				</dl>
 				<div class="fe-preview-actions">
-					{#if previewEntry.kind === 'folder' && mode !== 'browse'}
+					{#if previewShowsOpen(previewEntry)}
 						<button
 							type="button"
 							class="ds-btn ds-btn--sm ds-btn--primary"
@@ -1759,17 +1886,7 @@
 							disabled={previewBusy}
 							onclick={() => void confirmPreviewOpen()}
 						>
-							Open
-						</button>
-					{:else if onOpen && rowActionable(previewEntry) && (mode === 'open' || mode === 'manage')}
-						<button
-							type="button"
-							class="ds-btn ds-btn--sm ds-btn--primary"
-							data-testid="fe-file-preview-open"
-							disabled={previewBusy}
-							onclick={() => void confirmPreviewOpen()}
-						>
-							{defaultOpenLabel(previewEntry)}
+							{previewEntry.kind === 'folder' ? 'Open' : defaultOpenLabel(previewEntry)}
 						</button>
 					{/if}
 					{#if onSendFile && previewEntry.kind === 'file'}
@@ -1827,24 +1944,7 @@
 						>
 							Delete
 						</button>
-						{#if previewEntry.kind === 'file'}
-							<button
-								type="button"
-								class="ds-btn ds-btn--sm ds-btn--secondary"
-								data-testid="fe-file-preview-compress"
-								onclick={() => (archiveKind = 'compress')}
-							>
-								Compress
-							</button>
-							<button
-								type="button"
-								class="ds-btn ds-btn--sm ds-btn--secondary"
-								data-testid="fe-file-preview-encrypt"
-								onclick={() => (archiveKind = 'encrypt')}
-							>
-								Encrypt
-							</button>
-						{/if}
+						{@render archiveButtons(previewEntry)}
 					{/if}
 				</div>
 			{:else}
@@ -1918,7 +2018,7 @@
 					{/if}
 				</dl>
 				<div class="fe-preview-actions">
-					{#if previewEntry.kind === 'folder' && mode !== 'browse'}
+					{#if previewShowsOpen(previewEntry)}
 						<button
 							type="button"
 							class="ds-btn ds-btn--sm ds-btn--primary"
@@ -1926,17 +2026,7 @@
 							disabled={previewBusy}
 							onclick={() => void confirmPreviewOpen()}
 						>
-							Open
-						</button>
-					{:else if onOpen && rowActionable(previewEntry) && (mode === 'open' || mode === 'manage')}
-						<button
-							type="button"
-							class="ds-btn ds-btn--sm ds-btn--primary"
-							data-testid="fe-file-preview-open"
-							disabled={previewBusy}
-							onclick={() => void confirmPreviewOpen()}
-						>
-							{defaultOpenLabel(previewEntry)}
+							{previewEntry.kind === 'folder' ? 'Open' : defaultOpenLabel(previewEntry)}
 						</button>
 					{/if}
 					{#if onSendFile && previewEntry.kind === 'file'}
@@ -1996,24 +2086,7 @@
 						>
 							Delete
 						</button>
-						{#if previewEntry.kind === 'file'}
-							<button
-								type="button"
-								class="ds-btn ds-btn--sm ds-btn--secondary"
-								data-testid="fe-file-preview-compress"
-								onclick={() => (archiveKind = 'compress')}
-							>
-								Compress
-							</button>
-							<button
-								type="button"
-								class="ds-btn ds-btn--sm ds-btn--secondary"
-								data-testid="fe-file-preview-encrypt"
-								onclick={() => (archiveKind = 'encrypt')}
-							>
-								Encrypt
-							</button>
-						{/if}
+						{@render archiveButtons(previewEntry)}
 					{/if}
 					<button
 						type="button"
@@ -2111,19 +2184,119 @@
 		</div>
 	{/if}
 
-	{#if archiveKind && previewEntry?.kind === 'file'}
+	{#if archiveKind && archiveEntries.length}
 		<FeArchiveDialog
 			kind={archiveKind}
-			entry={previewEntry}
+			entries={archiveEntries}
 			{driver}
-			onDone={() => {
-				archiveKind = null;
+			destLocked={archiveDestLocked}
+			onDone={(result) => {
+				closeArchive();
+				if (result?.inner?.length) {
+					void createInnerFsSession(result.title, result.inner)
+						.then((session) => {
+							innerFs = session;
+						})
+						.catch((e) => {
+							error = errMsg(e);
+						});
+					return;
+				}
 				void refresh();
 			}}
-			onCancel={() => (archiveKind = null)}
+			onCancel={closeArchive}
 		/>
 	{/if}
+
+	{#if innerFs}
+		<div
+			class="fe-inner-fs"
+			data-testid="fe-inner-fs-dialog"
+			role="dialog"
+			aria-modal="true"
+			aria-label={innerFs.title}
+		>
+			<button
+				type="button"
+				class="fe-inner-fs-scrim"
+				aria-label="Close inner filesystem"
+				onclick={() => void closeInnerFs()}
+			></button>
+			<div class="fe-inner-fs-card">
+				<div class="fe-inner-fs-head">
+					<h2 class="fe-preview-name">{innerFs.title}</h2>
+					<button
+						type="button"
+						class="ds-btn ds-btn--sm ds-btn--ghost"
+						data-testid="fe-inner-fs-close"
+						onclick={() => void closeInnerFs()}
+					>
+						Close
+					</button>
+				</div>
+				<div class="fe-inner-fs-body">
+					<FileExplorer
+						driver={innerFs.driver}
+						mode="manage"
+						variant="dialog"
+						showPersistence={false}
+						hideToolbarTrash
+						onClose={() => void closeInnerFs()}
+					/>
+				</div>
+			</div>
+		</div>
+	{/if}
 </div>
+
+{#snippet archiveButtons(entry: ExplorerEntry)}
+	<button
+		type="button"
+		class="ds-btn ds-btn--sm ds-btn--secondary"
+		data-testid="fe-file-preview-compress"
+		onclick={() => startArchive('compress', [entry])}
+	>
+		Compress
+	</button>
+	<button
+		type="button"
+		class="ds-btn ds-btn--sm ds-btn--secondary"
+		data-testid="fe-file-preview-encrypt"
+		onclick={() => startArchive('encrypt', [entry])}
+	>
+		Encrypt
+	</button>
+	{#if entry.kind === 'file' && looksCompressedName(entry.name)}
+		<button
+			type="button"
+			class="ds-btn ds-btn--sm ds-btn--secondary"
+			data-testid="fe-file-preview-decompress"
+			onclick={() => startArchive('decompress', [entry])}
+		>
+			Decompress
+		</button>
+	{/if}
+	{#if entry.kind === 'file' && looksVaultName(entry.name)}
+		<button
+			type="button"
+			class="ds-btn ds-btn--sm ds-btn--secondary"
+			data-testid="fe-file-preview-decrypt"
+			onclick={() => startArchive('decrypt', [entry])}
+		>
+			Decrypt
+		</button>
+	{/if}
+	{#if entry.kind === 'file' && looksPackedName(entry.name)}
+		<button
+			type="button"
+			class="ds-btn ds-btn--sm ds-btn--secondary"
+			data-testid="fe-file-preview-open-archive"
+			onclick={() => void openPackedEntry(entry)}
+		>
+			{looksVaultName(entry.name) ? 'Open vault' : 'Open archive'}
+		</button>
+	{/if}
+{/snippet}
 
 <style>
 	.fe-root {
@@ -2454,6 +2627,50 @@
 		border: 1px solid var(--line-hairline);
 		border-radius: 0;
 		box-shadow: 0 12px 32px rgb(var(--scrim-rgb) / 0.4);
+	}
+	.fe-inner-fs {
+		position: fixed;
+		inset: 0;
+		z-index: 70;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+	}
+	.fe-inner-fs-scrim {
+		position: absolute;
+		inset: 0;
+		border: 0;
+		background: rgb(var(--scrim-rgb) / 0.55);
+		cursor: pointer;
+	}
+	.fe-inner-fs-card {
+		position: relative;
+		z-index: 1;
+		display: flex;
+		flex-direction: column;
+		width: min(720px, calc(100vw - 2rem));
+		height: min(80vh, 640px);
+		padding: 12px 14px 10px;
+		background: var(--surface-2);
+		border: 1px solid var(--line-hairline);
+		box-shadow: 0 12px 32px rgb(var(--scrim-rgb) / 0.4);
+	}
+	.fe-inner-fs-head {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 8px;
+		margin-bottom: 8px;
+	}
+	.fe-inner-fs-head .fe-preview-name {
+		margin: 0;
+	}
+	.fe-inner-fs-body {
+		flex: 1 1 0;
+		min-height: 0;
+	}
+	.fe-inner-fs-body :global(.fe-root) {
+		height: 100%;
 	}
 	.fe-trash-head,
 	.fe-trash-foot {

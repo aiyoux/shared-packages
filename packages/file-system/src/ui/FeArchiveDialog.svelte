@@ -1,13 +1,13 @@
 <script lang="ts">
 	/**
-	 * Compress or encrypt a FileExplorer row using the same engines as the
-	 * hub Compress / Hash & Vault tools (`@shared-packages/compress`, `crypto`).
+	 * Compress / decompress / encrypt / decrypt FileExplorer rows using the
+	 * same engines as the hub Compress / Hash & Vault tools.
 	 */
 	import '@shared-packages/design-system/button.css';
 	import {
 		CODEC_LABEL,
-		DEFAULT_ENGINE as DEFAULT_COMPRESS_ENGINE,
 		defaultCodecFor,
+		engineSupports,
 		listEngines as listCompressEngines,
 		loadEngine as loadCompressEngine,
 		packFiles,
@@ -15,7 +15,6 @@
 		type EngineId as CompressEngineId
 	} from '@shared-packages/compress';
 	import {
-		DEFAULT_ENGINE as DEFAULT_CRYPTO_ENGINE,
 		listEngines as listCryptoEngines,
 		loadEngine as loadCryptoEngine,
 		sealVault,
@@ -24,34 +23,69 @@
 	import { getMemoryVfs } from '../memoryVfs.js';
 	import { createMemoryExplorerDriver } from './memoryExplorerDriver.js';
 	import type { ExplorerDriver, ExplorerEntry } from './explorerDriver.js';
+	import {
+		COMPRESS_STORAGE_KEY,
+		CRYPTO_STORAGE_KEY,
+		collectPackEntries,
+		expandPackedBytes,
+		packingAsTree,
+		readStoredCompressEngine,
+		readStoredCryptoEngine,
+		subjectLabel,
+		toArchiveEntries,
+		writeEntriesToDriver,
+		type ArchiveDest,
+		type ArchiveKind,
+		type PackedPath
+	} from './archiveOps.js';
 
-	type Kind = 'compress' | 'encrypt';
-	type Dest = 'same' | 'folder' | 'memory';
+	export type { ArchiveDest, ArchiveKind };
 
-	const COMPRESS_STORAGE = 'scratchpad-compress-engine';
-	const CRYPTO_STORAGE = 'scratchpad-crypto-engine';
+	export type ArchiveDone = {
+		inner?: PackedPath[];
+		title: string;
+	};
+
+	const KIND_TITLE: Record<ArchiveKind, string> = {
+		compress: 'Compress',
+		encrypt: 'Encrypt',
+		decompress: 'Decompress',
+		decrypt: 'Decrypt'
+	};
+	const KIND_BUSY: Record<ArchiveKind, string> = {
+		compress: 'Compressing…',
+		encrypt: 'Encrypting…',
+		decompress: 'Decompressing…',
+		decrypt: 'Decrypting…'
+	};
 
 	let {
 		kind,
-		entry,
+		entries,
 		driver,
+		destLocked = null,
 		onDone,
 		onCancel
 	}: {
-		kind: Kind;
-		entry: ExplorerEntry;
+		kind: ArchiveKind;
+		entries: ExplorerEntry[];
 		driver: ExplorerDriver;
-		onDone: () => void;
+		destLocked?: ArchiveDest | null;
+		onDone: (result?: ArchiveDone) => void;
 		onCancel: () => void;
 	} = $props();
 
 	const compressEngines = listCompressEngines();
 	const cryptoEngines = listCryptoEngines();
+	const isExtract = $derived(kind === 'decompress' || kind === 'decrypt');
+	const isCrypto = $derived(kind === 'encrypt' || kind === 'decrypt');
+	const treePack = $derived(packingAsTree(entries));
+	const titleName = $derived(subjectLabel(entries));
 
-	let dest = $state<Dest>('same');
-	let compressEngineId = $state<CompressEngineId>(readStored(COMPRESS_STORAGE, DEFAULT_COMPRESS_ENGINE));
-	let codec = $state<Codec>(defaultCodecFor(readStored(COMPRESS_STORAGE, DEFAULT_COMPRESS_ENGINE)));
-	let cryptoEngineId = $state<CryptoEngineId>(readStoredCrypto());
+	let dest = $state<ArchiveDest>('same');
+	let compressEngineId = $state<CompressEngineId>(readStoredCompressEngine());
+	let codec = $state<Codec>(defaultCodecFor(readStoredCompressEngine()));
+	let cryptoEngineId = $state<CryptoEngineId>(readStoredCryptoEngine());
 	let password = $state('');
 	let password2 = $state('');
 	let engineStatus = $state<'idle' | 'loading' | 'ready' | 'error'>('idle');
@@ -67,25 +101,48 @@
 		compressEngines.find((e) => e.id === compressEngineId) ?? compressEngines[0]!
 	);
 	const cryptoEngine = $derived(cryptoEngines.find((e) => e.id === cryptoEngineId) ?? cryptoEngines[0]!);
-	const availableCodecs = $derived(compressEngine.codecs);
+	const availableCodecs = $derived(
+		treePack && kind === 'compress'
+			? compressEngine.codecs.filter((c) => c === 'zip')
+			: compressEngine.codecs
+	);
 	const canPickFolder = $derived(driver.capabilities.supportsMkdir);
 	const alreadyMemory = $derived(driver.id === 'memory');
 	const canWriteHere = $derived(Boolean(driver.writeFile || driver.upload));
 
 	$effect(() => {
-		if (dest === 'same' && !canWriteHere && !alreadyMemory) dest = 'memory';
+		if (destLocked) dest = destLocked;
 	});
 
 	$effect(() => {
-		if (!availableCodecs.includes(codec)) codec = defaultCodecFor(compressEngineId);
+		if (destLocked) return;
+		if (dest === 'same' && !canWriteHere && !alreadyMemory) dest = isExtract ? 'popup' : 'memory';
 	});
 
 	$effect(() => {
-		const id = kind === 'compress' ? compressEngineId : cryptoEngineId;
+		if (kind === 'compress' && treePack) {
+			if (!engineSupports(compressEngineId, 'zip')) compressEngineId = 'fflate';
+			if (codec !== 'zip') codec = 'zip';
+		}
+	});
+
+	$effect(() => {
+		if (!availableCodecs.includes(codec) && availableCodecs.length) codec = availableCodecs[0]!;
+	});
+
+	$effect(() => {
+		if (kind === 'decrypt') {
+			engineStatus = 'ready';
+			engineError = '';
+			return;
+		}
+		const id = isCrypto ? cryptoEngineId : compressEngineId;
 		let cancelled = false;
 		engineStatus = 'loading';
 		engineError = '';
-		const load = kind === 'compress' ? loadCompressEngine(id as CompressEngineId) : loadCryptoEngine(id as CryptoEngineId);
+		const load = isCrypto
+			? loadCryptoEngine(id as CryptoEngineId)
+			: loadCompressEngine(id as CompressEngineId);
 		void load
 			.then(() => {
 				if (!cancelled) engineStatus = 'ready';
@@ -96,7 +153,7 @@
 				engineError = err instanceof Error ? err.message : 'Failed to load engine';
 			});
 		try {
-			localStorage.setItem(kind === 'compress' ? COMPRESS_STORAGE : CRYPTO_STORAGE, id);
+			localStorage.setItem(isCrypto ? CRYPTO_STORAGE_KEY : COMPRESS_STORAGE_KEY, id);
 		} catch {
 			/* ignore */
 		}
@@ -106,33 +163,13 @@
 	});
 
 	$effect(() => {
-		if (pickParent === null) pickParent = entry.parentId;
+		if (pickParent === null) pickParent = entries[0]?.parentId ?? null;
 	});
 
 	$effect(() => {
 		if (dest !== 'folder') return;
 		void loadPick(pickParent);
 	});
-
-	function readStored(key: string, fallback: CompressEngineId): CompressEngineId {
-		try {
-			const v = localStorage.getItem(key);
-			if (v === 'fflate' || v === 'zipkit' || v === 'addmaple') return v;
-		} catch {
-			/* ignore */
-		}
-		return fallback;
-	}
-
-	function readStoredCrypto(): CryptoEngineId {
-		try {
-			const v = localStorage.getItem(CRYPTO_STORAGE);
-			if (v === 'webcrypto' || v === 'libsodium') return v;
-		} catch {
-			/* ignore */
-		}
-		return DEFAULT_CRYPTO_ENGINE;
-	}
 
 	async function loadPick(parentId: string | null) {
 		pickBusy = true;
@@ -147,34 +184,13 @@
 		}
 	}
 
-	async function readSource(): Promise<Uint8Array> {
-		const blob = driver.readBlob
-			? await driver.readBlob(entry.id)
-			: await driver.download?.(entry.id);
-		if (!blob) throw new Error('This connection cannot read the file');
-		return new Uint8Array(await blob.arrayBuffer());
-	}
-
-	async function writeDest(name: string, data: Uint8Array, type: string) {
-		const file = new File([data], name, { type });
-		if (dest === 'memory') {
-			const mem = createMemoryExplorerDriver(getMemoryVfs());
-			await mem.ready();
-			await mem.writeFile!(null, file);
-			return;
-		}
-		const parent = dest === 'same' ? entry.parentId : pickParent;
-		const put = driver.writeFile ?? driver.upload;
-		if (!put) throw new Error('This location cannot receive files');
-		await put(parent, file);
-	}
-
 	const canRun = $derived(
 		engineStatus === 'ready' &&
 			!busy &&
 			(dest !== 'same' || canWriteHere) &&
 			(dest !== 'folder' || canPickFolder) &&
-			(kind === 'compress' || (password.length > 0 && password === password2))
+			(kind !== 'encrypt' || (password.length > 0 && password === password2)) &&
+			(kind !== 'decrypt' || password.length > 0)
 	);
 
 	async function run() {
@@ -182,21 +198,59 @@
 		busy = true;
 		actionError = '';
 		try {
-			const bytes = await readSource();
-			if (kind === 'compress') {
-				const packed = await packFiles(compressEngineId, [{ name: entry.name, data: bytes }], codec);
-				const out = packed[0]!;
-				await writeDest(out.name, out.data, 'application/octet-stream');
-			} else {
-				const sealed = await sealVault(cryptoEngineId, [{ path: entry.name, data: bytes }], password);
-				await writeDest(sealed.name, sealed.data, 'application/octet-stream');
+			if (kind === 'compress' || kind === 'encrypt') {
+				const packed = await collectPackEntries(driver, entries);
+				if (kind === 'compress') {
+					const out = await packFiles(compressEngineId, toArchiveEntries(packed), codec);
+					await writeOutputs(out.map((f) => ({ path: f.name, data: f.data })));
+				} else {
+					const sealed = await sealVault(
+						cryptoEngineId,
+						packed,
+						password,
+						treePack ? { kind: 'tree' } : undefined
+					);
+					await writeOutputs([{ path: sealed.name, data: sealed.data }]);
+				}
+				onDone({ title: titleName });
+				return;
 			}
-			onDone();
+
+			const inner: PackedPath[] = [];
+			for (const entry of entries) {
+				if (entry.kind !== 'file') continue;
+				const bytes = await (async () => {
+					const blob = driver.readBlob
+						? await driver.readBlob(entry.id)
+						: await driver.download?.(entry.id);
+					if (!blob) throw new Error('This connection cannot read the file');
+					return new Uint8Array(await blob.arrayBuffer());
+				})();
+				inner.push(...(await expandPackedBytes(bytes, entry.name, password)));
+			}
+			if (!inner.length) throw new Error('Nothing to extract');
+			if (dest === 'popup') {
+				onDone({ inner, title: titleName });
+				return;
+			}
+			await writeOutputs(inner);
+			onDone({ title: titleName });
 		} catch (e) {
 			actionError = e instanceof Error ? e.message : String(e);
 		} finally {
 			busy = false;
 		}
+	}
+
+	async function writeOutputs(files: PackedPath[]) {
+		if (dest === 'memory') {
+			const mem = createMemoryExplorerDriver(getMemoryVfs());
+			await mem.ready();
+			await writeEntriesToDriver(mem, null, files);
+			return;
+		}
+		const parent = dest === 'same' ? (entries[0]?.parentId ?? null) : pickParent;
+		await writeEntriesToDriver(driver, parent, files);
 	}
 </script>
 
@@ -210,7 +264,7 @@
 >
 	<div class="scrim" onclick={onCancel} role="presentation"></div>
 	<div class="card">
-		<h2 id="fe-archive-title">{kind === 'compress' ? 'Compress' : 'Encrypt'} {entry.name}</h2>
+		<h2 id="fe-archive-title">{KIND_TITLE[kind]} {titleName}</h2>
 
 		{#if kind === 'compress'}
 			<div class="fields">
@@ -224,15 +278,19 @@
 				</label>
 				<label>
 					<span>Format</span>
-					<select bind:value={codec} data-testid="fe-archive-codec">
+					<select bind:value={codec} data-testid="fe-archive-codec" disabled={treePack}>
 						{#each availableCodecs as c (c)}
 							<option value={c}>{CODEC_LABEL[c]}</option>
 						{/each}
 					</select>
 				</label>
 			</div>
-			<p class="hint">{compressEngine.description}</p>
-		{:else}
+			<p class="hint">
+				{compressEngine.description}{treePack
+					? ' · Multiple items pack as a ZIP inner filesystem.'
+					: ''}
+			</p>
+		{:else if kind === 'encrypt'}
 			<div class="fields">
 				<label>
 					<span>Library</span>
@@ -256,7 +314,36 @@
 					/>
 				</label>
 			</div>
-			<p class="hint">{cryptoEngine.description} · {cryptoEngine.aead} · {cryptoEngine.kdf}</p>
+			<p class="hint">
+				{cryptoEngine.description} · {cryptoEngine.aead} · {cryptoEngine.kdf}{treePack
+					? ' · Multiple items seal as a vault tree.'
+					: ''}
+			</p>
+		{:else if kind === 'decompress'}
+			<div class="fields">
+				<label>
+					<span>Library</span>
+					<select bind:value={compressEngineId} data-testid="fe-archive-engine">
+						{#each compressEngines as engine (engine.id)}
+							<option value={engine.id}>{engine.label}</option>
+						{/each}
+					</select>
+				</label>
+			</div>
+			<p class="hint">{compressEngine.description} · Format is detected from the file.</p>
+		{:else}
+			<div class="fields">
+				<label>
+					<span>Password</span>
+					<input
+						type="password"
+						autocomplete="current-password"
+						bind:value={password}
+						data-testid="fe-archive-password"
+					/>
+				</label>
+			</div>
+			<p class="hint">Unlocks a Scratch Pad vault (.spvault).</p>
 		{/if}
 
 		{#if engineStatus === 'loading'}
@@ -265,32 +352,54 @@
 			<p class="err" role="alert">{engineError}</p>
 		{/if}
 
-		<fieldset class="dest">
-			<legend>Save to</legend>
-			<label>
-				<input
-					type="radio"
-					name="fe-archive-dest"
-					value="same"
-					bind:group={dest}
-					disabled={!canWriteHere}
-					data-testid="fe-archive-dest-same"
-				/>
-				Same folder
-			</label>
-			{#if canPickFolder}
+		{#if !destLocked}
+			<fieldset class="dest">
+				<legend>{isExtract ? 'Extract to' : 'Save to'}</legend>
 				<label>
-					<input type="radio" name="fe-archive-dest" value="folder" bind:group={dest} />
-					Choose folder…
+					<input
+						type="radio"
+						name="fe-archive-dest"
+						value="same"
+						bind:group={dest}
+						disabled={!canWriteHere}
+						data-testid="fe-archive-dest-same"
+					/>
+					Same folder
 				</label>
-			{/if}
-			{#if !alreadyMemory}
-				<label>
-					<input type="radio" name="fe-archive-dest" value="memory" bind:group={dest} data-testid="fe-archive-dest-memory" />
-					In-memory storage
-				</label>
-			{/if}
-		</fieldset>
+				{#if canPickFolder}
+					<label>
+						<input type="radio" name="fe-archive-dest" value="folder" bind:group={dest} />
+						Choose folder…
+					</label>
+				{/if}
+				{#if !alreadyMemory}
+					<label>
+						<input
+							type="radio"
+							name="fe-archive-dest"
+							value="memory"
+							bind:group={dest}
+							data-testid="fe-archive-dest-memory"
+						/>
+						In-memory storage
+					</label>
+				{/if}
+				{#if isExtract}
+					<label>
+						<input
+							type="radio"
+							name="fe-archive-dest"
+							value="popup"
+							bind:group={dest}
+							data-testid="fe-archive-dest-popup"
+						/>
+						Open in popup
+					</label>
+				{/if}
+			</fieldset>
+		{:else if destLocked === 'popup'}
+			<p class="hint">Contents open as an inner filesystem in a popup.</p>
+		{/if}
 
 		{#if dest === 'folder'}
 			<div class="picker" data-testid="fe-archive-folder-pick">
@@ -338,7 +447,7 @@
 				disabled={!canRun}
 				onclick={() => void run()}
 			>
-				{busy ? (kind === 'compress' ? 'Compressing…' : 'Encrypting…') : kind === 'compress' ? 'Compress' : 'Encrypt'}
+				{busy ? KIND_BUSY[kind] : dest === 'popup' ? 'Open' : KIND_TITLE[kind]}
 			</button>
 		</div>
 	</div>
