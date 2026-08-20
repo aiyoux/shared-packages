@@ -1,12 +1,14 @@
 /*
  * Design system tokens — the ONLY writer of `:root`.
  *
- * §2 palette (docs/design/design-system.md): tech neo-brutalism, softened.
- * Ground and surfaces are a single cool near-black ramp; sky is the primary
- * accent; radii stay small. This `:root` is studio — no `data-theme` on
- * `<html>` is this look. Named overlays (`paper` / `dark` / `midnight` /
- * `forest` / `neon`) and product identity live in themes.css; they remap
- * `--surface-*` / `--accent` / type / radius and never write `:root`.
+ * §2 palette: cyber brutalist / vector wireframe. Carbon void ground, flat
+ * planes, cool hairlines that draw structure, sky as punctuation, tight
+ * radii. This `:root` is the default dark studio — no `data-theme` and
+ * `data-color-scheme="dark"` (or omitted) is this look. Light lives in
+ * themes.css as `[data-color-scheme=light]` / `[data-theme=light|paper]`.
+ * Named overlays (`paper` / `dark` / `midnight` / `forest` / `neon`) and
+ * product identity remap `--surface-*` / `--accent` / type and never write
+ * `:root`. Dark named overlay matches this `:root`.
  *
  * Legacy aliases below map the token names the hub + apps already reference
  * (--bg-primary, --accent, --radius-md, …) onto this canonical set, so existing
@@ -31,27 +33,28 @@
 	:root {
 		color-scheme: dark;
 
-		/* ---- ground & surfaces ---- */
+		/* ---- ground & surfaces (carbon void, flat planes) ---- */
 		--surface-ground: #020617;
-		--surface-1: #080c18;
-		--surface-2: #0d1322;
-		--surface-3: #141b2d;
+		--surface-1: #070b14;
+		--surface-2: #0c111c;
+		--surface-3: #131a28;
+		--theme-color: #020617;
 
-		/* ---- hairlines ---- */
-		--line-hairline: rgb(255 255 255 / 0.06);
-		--line-strong: rgb(255 255 255 / 0.12);
-		--line-rail: #384252;
+		/* ---- hairlines (vector wire — cool, structural, 1px) ---- */
+		--line-hairline: rgb(148 197 232 / 0.16);
+		--line-strong: rgb(148 197 232 / 0.32);
+		--line-rail: #3d4f63;
 
 		/* ---- text ---- */
-		--text-primary: #f1f5f9;
-		--text-secondary: #94a3b8;
-		--text-muted: #64748b;
-		--text-faint: #475569;
+		--text-primary: #e8eef4;
+		--text-secondary: #9aa8b6;
+		--text-muted: #6b7785;
+		--text-faint: #4d5663;
 
 		/* ---- accents (sky is primary; the rest are categorical) ---- */
 		--accent: #38bdf8;
 		--accent-rgb: 56, 189, 248;
-		--accent-glow: rgb(56 189 248 / 0.14);
+		--accent-glow: rgb(56 189 248 / 0.12);
 		--accent-light: #7dd3fc;
 		--accent-amber: #f59e0b;
 		--accent-emerald: #34d399;
@@ -165,11 +168,11 @@
 		--space-7: 40px;
 		--space-8: 48px;
 
-		/* ---- radius ---- */
-		--radius-xs: 2px;
-		--radius-sm: 4px;
-		--radius-md: 6px;
-		--radius-lg: 10px;
+		/* ---- radius (tight — wireframe, not pill) ---- */
+		--radius-xs: 1px;
+		--radius-sm: 2px;
+		--radius-md: 4px;
+		--radius-lg: 6px;
 		--radius-full: 9999px;
 
 		/* ---- density ---- */
@@ -213,10 +216,10 @@
 		--warning-bg: rgb(245 158 11 / 0.15);
 
 		/* legacy radius names (some apps use finer scales) */
-		--radius-2xs: 2px;
-		--radius-xl: 14px;
-		--radius-2xl: 18px;
-		--radius-3xl: 24px;
+		--radius-2xs: 1px;
+		--radius-xl: 8px;
+		--radius-2xl: 10px;
+		--radius-3xl: 12px;
 		--radius-round: 50%;
 
 		/* motion (legacy names → §2 motion) */

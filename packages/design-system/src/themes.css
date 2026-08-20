@@ -1,87 +1,100 @@
 /*
- * Theme overlays — [data-theme] scoped overrides of the canonical tokens.
+ * Theme overlays — [data-theme] / [data-color-scheme] overrides of canonical tokens.
  *
  * Contract
  * --------
- * Studio is the default. `tokens.css` is the only writer of `:root`. Absence
- * of `data-theme` on `<html>` (or any ancestor) is the current studio look:
- * sky `#38bdf8`, `--radius-md` 6px, slate surfaces, Inter, hairline borders.
+ * Studio dark (cyber wireframe) is the default. `tokens.css` is the only
+ * writer of `:root`. Absence of `data-theme` / `data-color-scheme`, or
+ * `data-color-scheme="dark"`, is that look: carbon void, cool hairlines,
+ * sky `#38bdf8` as punctuation, `--radius-md` 4px.
  *
- * Hosts set `data-theme` on an element (typically `<html>`). Consumers read
- * the design-system token names below — never `--app-*`. A theme applies to
- * the subtree that carries the attribute, so a hub-mounted app can keep an
- * identity without rewriting the document root.
+ * Hosts set `data-color-scheme` on `<html>` for light/dark (`dark` default).
+ * Named overlays still use `data-theme` on an element (typically `<html>`).
+ * Consumers read the design-system token names below — never `--app-*`.
+ * A theme applies to the subtree that carries the attribute, so a hub-mounted
+ * app can keep an identity without rewriting the document root.
+ *
+ * Color scheme (hub toggle; persist as `scratchpad-color-scheme`):
+ *   dark | light
  *
  * First-class named overlays (this sheet; modular-app picker names):
- *   paper | dark | midnight | forest | neon
+ *   light | paper | dark | midnight | forest | neon
  *
  * Product-identity overlays:
  *   terminal
  *
+ * `light` is the first-class light scheme. `paper` is the same overlay
+ * (legacy picker name). `dark` restates studio so a nested `[data-theme=dark]`
+ * can recover from a light ancestor (custom properties inherit).
+ *
  * A named theme may override:
  *   color-scheme
- *   --surface-ground, --surface-1, --surface-2, --surface-3
+ *   --surface-ground, --surface-1, --surface-2, --surface-3, --theme-color
  *   --line-hairline, --line-strong, --line-rail
  *   --text-primary, --text-secondary, --text-muted, --text-faint
  *   --accent, --accent-rgb, --accent-glow, --accent-light
  *   --overlay-rgb, --scrim-rgb          (light themes swap the pair)
  *   --color-primary-foreground          (literal alias on :root)
  *
- * A named theme must not override type scale, radius (stay 6px), space,
- * density, motion, or the categorical `--cat-*` palette, and must not write
- * `:root`. Legacy `--bg-*` / `--border` / `--color-*` aliases are `var()`
- * of the tokens above and follow automatically.
- *
- * These five overlays remake paper / dark / midnight / forest / neon as
- * tints of the studio system — not a second indigo palette.
+ * A named theme must not override type scale, radius, space, density,
+ * motion, or the categorical `--cat-*` palette, and must not write `:root`.
+ * Legacy `--bg-*` / `--border` / `--color-*` aliases are `var()` of the
+ * tokens above and follow automatically.
  *
  * Wrapped in `@layer tokens` (host declares the layer order).
  */
 @layer tokens {
-	/* ---- paper: light slate sheet, studio sky ---- */
+	/* ---- light: cool paper, same sky punctuation ---- */
+	:root[data-color-scheme='light'],
+	html.light,
+	[data-theme='light'],
 	[data-theme='paper'] {
 		color-scheme: light;
-		--surface-ground: #f8fafc;
+		--surface-ground: #f4f6f8;
 		--surface-1: #ffffff;
-		--surface-2: #f1f5f9;
-		--surface-3: #e2e8f0;
-		--line-hairline: rgb(2 6 23 / 0.08);
-		--line-strong: rgb(2 6 23 / 0.16);
-		--line-rail: #94a3b8;
-		--text-primary: #0f172a;
-		--text-secondary: #475569;
-		--text-muted: #64748b;
-		--text-faint: #94a3b8;
+		--surface-2: #eaeef2;
+		--surface-3: #dde3ea;
+		--theme-color: #f4f6f8;
+		--line-hairline: rgb(10 16 28 / 0.12);
+		--line-strong: rgb(10 16 28 / 0.22);
+		--line-rail: #8b98a8;
+		--text-primary: #0c1218;
+		--text-secondary: #3d4a58;
+		--text-muted: #5c6b7a;
+		--text-faint: #8a96a3;
 		--accent: #38bdf8;
 		--accent-rgb: 56, 189, 248;
-		--accent-glow: rgb(56 189 248 / 0.18);
-		--accent-light: #0ea5e9;
-		--overlay-rgb: 2, 6, 23;
+		--accent-glow: rgb(56 189 248 / 0.16);
+		--accent-light: #0284c7;
+		--overlay-rgb: 10, 16, 28;
 		--scrim-rgb: 255, 255, 255;
 		--color-primary-foreground: #020617;
 	}
 
-	/* ---- dark: lifted slate-navy, same sky ---- */
+	/* ---- dark: restates studio so nested overlays can recover from light ---- */
+	:root[data-color-scheme='dark'],
+	html.dark,
 	[data-theme='dark'] {
 		color-scheme: dark;
-		--surface-ground: #0b101c;
-		--surface-1: #12182a;
-		--surface-2: #181f33;
-		--surface-3: #1e2740;
-		--line-hairline: rgb(255 255 255 / 0.07);
-		--line-strong: rgb(255 255 255 / 0.14);
-		--line-rail: #475569;
-		--text-primary: #f1f5f9;
-		--text-secondary: #94a3b8;
-		--text-muted: #64748b;
-		--text-faint: #475569;
+		--surface-ground: #020617;
+		--surface-1: #070b14;
+		--surface-2: #0c111c;
+		--surface-3: #131a28;
+		--theme-color: #020617;
+		--line-hairline: rgb(148 197 232 / 0.16);
+		--line-strong: rgb(148 197 232 / 0.32);
+		--line-rail: #3d4f63;
+		--text-primary: #e8eef4;
+		--text-secondary: #9aa8b6;
+		--text-muted: #6b7785;
+		--text-faint: #4d5663;
 		--accent: #38bdf8;
 		--accent-rgb: 56, 189, 248;
-		--accent-glow: rgb(56 189 248 / 0.16);
+		--accent-glow: rgb(56 189 248 / 0.12);
 		--accent-light: #7dd3fc;
 		--overlay-rgb: 255, 255, 255;
 		--scrim-rgb: 0, 0, 0;
-		--color-primary-foreground: #020617;
+		--color-primary-foreground: #ffffff;
 	}
 
 	/* ---- midnight: blue-tinted slate ---- */
@@ -91,6 +104,7 @@
 		--surface-1: #121a28;
 		--surface-2: #17202b;
 		--surface-3: #1e2a3a;
+		--theme-color: #0c121a;
 		--line-hairline: rgb(56 189 248 / 0.10);
 		--line-strong: rgb(56 189 248 / 0.20);
 		--line-rail: #3d4f66;
@@ -114,6 +128,7 @@
 		--surface-1: #fbfffb;
 		--surface-2: #e3eae3;
 		--surface-3: #d4ddd4;
+		--theme-color: #f0f8f0;
 		--line-hairline: rgb(25 34 27 / 0.10);
 		--line-strong: rgb(25 34 27 / 0.18);
 		--line-rail: #8aa08a;
@@ -137,6 +152,7 @@
 		--surface-1: #0e0035;
 		--surface-2: #150a3c;
 		--surface-3: #1e234f;
+		--theme-color: #03001e;
 		--line-hairline: rgb(56 189 248 / 0.18);
 		--line-strong: rgb(56 189 248 / 0.32);
 		--line-rail: #38bdf8;

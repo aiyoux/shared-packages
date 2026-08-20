@@ -12,13 +12,26 @@
  * dependency) so they work in every consumer. See scratch-pad
  * docs/design/design-system.md for the architecture.
  *
- * Theme contract: studio is the un-themed default (`tokens.css` `:root`).
- * Set `data-theme` to a `NamedTheme` to apply a first-class overlay from
- * `themes.css`. Product value `terminal` remains as a small surface override;
- * `voice` / `prompter` / `dictionary` / `sketcher` inherit studio.
+ * Theme contract: studio dark (cyber wireframe) is the un-themed default
+ * (`tokens.css` `:root`). Hosts set `data-color-scheme` to `dark` | `light`
+ * (default `dark`). Set `data-theme` to a `NamedTheme` for a named overlay
+ * from `themes.css`. Product value `terminal` remains as a small surface
+ * override; `voice` / `prompter` / `dictionary` / `sketcher` inherit studio.
  */
-export const NAMED_THEMES = ['paper', 'dark', 'midnight', 'forest', 'neon'] as const;
+export const NAMED_THEMES = ['light', 'paper', 'dark', 'midnight', 'forest', 'neon'] as const;
 export type NamedTheme = (typeof NAMED_THEMES)[number];
+
+export {
+	COLOR_SCHEMES,
+	COLOR_SCHEME_STORAGE_KEY,
+	DEFAULT_COLOR_SCHEME,
+	THEME_COLOR,
+	applyColorScheme,
+	isColorScheme,
+	persistColorScheme,
+	readStoredColorScheme,
+	type ColorScheme
+} from './color-scheme.ts';
 
 export { default as Button } from './components/Button.svelte';
 export { default as Card } from './components/Card.svelte';

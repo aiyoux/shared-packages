@@ -30,7 +30,7 @@
 	}
 
 	::selection {
-		background: rgb(56 189 248 / 0.3);
+		background: var(--accent-glow);
 	}
 
 	/* Pointer users get no ring; keyboard users keep the :focus-visible one
@@ -54,12 +54,12 @@
 	}
 
 	::-webkit-scrollbar-thumb {
-		background: rgb(255 255 255 / 0.1);
-		border-radius: 4px;
+		background: rgb(var(--overlay-rgb) / 0.12);
+		border-radius: var(--radius-sm);
 	}
 
 	::-webkit-scrollbar-thumb:hover {
-		background: rgb(255 255 255 / 0.2);
+		background: rgb(var(--overlay-rgb) / 0.22);
 	}
 
 	@media (prefers-reduced-motion: reduce) {
