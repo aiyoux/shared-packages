@@ -204,6 +204,19 @@
 		--bg-card: var(--surface-2);
 		--bg-card-hover: var(--surface-3);
 		--bg-main: var(--surface-ground);
+		--bg-chrome: var(--surface-2);
+		--bg-chrome-hover: var(--surface-3);
+
+		/* Translucent washes. Apps already write `var(--overlay-medium)` on
+		   menu-row / button hover; without these aliases the declaration is
+		   invalid and the hover paints nothing. Composed from --overlay-rgb
+		   so light themes (which swap that triple) keep a visible wash. */
+		--overlay-light: rgb(var(--overlay-rgb) / 0.04);
+		--overlay-medium: rgb(var(--overlay-rgb) / 0.10);
+		--overlay-dark: rgb(var(--overlay-rgb) / 0.16);
+		--overlay-darker: rgb(var(--overlay-rgb) / 0.22);
+		--overlay-darkest: rgb(var(--overlay-rgb) / 0.32);
+		--overlay-backdrop: rgb(var(--scrim-rgb) / 0.55);
 
 		/* text */
 		--text-main: var(--text-primary);

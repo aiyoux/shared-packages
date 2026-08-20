@@ -161,7 +161,7 @@
 		border-radius: 6px;
 		background: color-mix(in srgb, var(--surface, #1e293b) 70%, #000);
 	}
-	.pl-chrome-window button {
+	.pl-chrome-window > button {
 		box-sizing: border-box;
 		display: inline-flex;
 		align-items: center;
@@ -176,15 +176,15 @@
 		cursor: pointer;
 		overflow: visible;
 	}
-	.pl-chrome-window button:hover:not(:disabled),
-	.pl-chrome-window button:focus-visible:not(:disabled) {
+	.pl-chrome-window > button:hover:not(:disabled),
+	.pl-chrome-window > button:focus-visible:not(:disabled) {
 		border-color: color-mix(in srgb, var(--border, #475569) 80%, transparent);
 		background: color-mix(in srgb, var(--surface, #334155) 55%, transparent);
 	}
-	.pl-chrome-window button:focus-visible {
+	.pl-chrome-window > button:focus-visible {
 		outline: none;
 	}
-	.pl-chrome-window button:disabled {
+	.pl-chrome-window > button:disabled {
 		opacity: 0.35;
 		cursor: not-allowed;
 	}

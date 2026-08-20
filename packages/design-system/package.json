@@ -21,6 +21,7 @@
     "./themes.css": "./src/themes.css",
     "./tailwind-theme.css": "./src/tailwind-theme.css",
     "./tooltip.css": "./src/tooltip.css",
+    "./menu.css": "./src/menu.css",
     "./Button.svelte": "./src/components/Button.svelte",
     "./Card.svelte": "./src/components/Card.svelte",
     "./HudFrame.svelte": "./src/components/HudFrame.svelte",
