@@ -85,7 +85,9 @@
   "peerDependencies": {
     "svelte": "^5.0.0",
     "@shared-packages/design-system": "*",
-    "@shared-packages/ui": "*"
+    "@shared-packages/ui": "*",
+    "@shared-packages/compress": "*",
+    "@shared-packages/crypto": "*"
   },
   "peerDependenciesMeta": {
     "svelte": {

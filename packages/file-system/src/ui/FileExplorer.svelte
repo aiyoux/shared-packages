@@ -10,12 +10,18 @@
 	import StoragePersistenceStatus from './StoragePersistenceStatus.svelte';
 	import FeIcon from './FeIcon.svelte';
 	import FeTipIconBtn from './FeTipIconBtn.svelte';
+	import FeArchiveDialog from './FeArchiveDialog.svelte';
 	import { createTreeDndSession, resolveDrop, zoneFromY, type DropZone } from './treeDnd/index.js';
 	import {
 		FE_EXPLORER_IDS_MIME,
 		dataTransferHasOsFiles,
 		filesFromDataTransfer
 	} from './copyAcross.js';
+	import {
+		payloadFromClipboardItems,
+		payloadFromDataTransfer,
+		type SystemClip
+	} from './systemClipboard.js';
 	import '@shared-packages/design-system/button.css';
 	import '@shared-packages/design-system/tooltip.css';
 
@@ -141,6 +147,7 @@
 	let selectMulti = $state(false);
 	let previewEntry = $state<ExplorerEntry | null>(null);
 	let previewBusy = $state(false);
+	let archiveKind = $state<'compress' | 'encrypt' | null>(null);
 	/** off → below (horizontal split) → beside (vertical split) → off. */
 	type PreviewDock = 'off' | 'bottom' | 'right';
 	const PREVIEW_DOCK_KEY = 'fe:previewDock';
@@ -196,6 +203,7 @@
 	let renameValue = $state('');
 	let focusIndex = $state(-1);
 	let clipboard = $state<{ mode: 'copy' | 'cut'; ids: string[] } | null>(null);
+	let systemClip = $state<SystemClip | null>(null);
 	let uploadBusy = $state(false);
 	let osDropOver = $state(false);
 	let fileInputEl = $state<HTMLInputElement | null>(null);
@@ -1117,6 +1125,55 @@
 
 	const canImportFromDevice = $derived(Boolean(driver.upload || driver.writeFile));
 
+	async function refreshSystemClipboard() {
+		if (typeof navigator === 'undefined' || !navigator.clipboard?.read) return;
+		try {
+			const items = await navigator.clipboard.read();
+			const next = await payloadFromClipboardItems(items);
+			if (next) systemClip = next;
+		} catch {
+			/* permission / unsupported — keep last snapshot from paste */
+		}
+	}
+
+	async function pasteSystemClipboard() {
+		if (mode !== 'manage' || !canImportFromDevice) return;
+		let payload = systemClip;
+		if (!payload?.files.length) {
+			await refreshSystemClipboard();
+			payload = systemClip;
+		}
+		if (!payload?.files.length) {
+			error = 'Clipboard is empty or not readable';
+			return;
+		}
+		await importDeviceFiles(payload.files, parentId);
+	}
+
+	$effect(() => {
+		if (typeof document === 'undefined') return;
+		if (mode !== 'manage') return;
+		const onPaste = (e: ClipboardEvent) => {
+			const next = payloadFromDataTransfer(e.clipboardData);
+			if (next) systemClip = next;
+		};
+		const onFocus = () => void refreshSystemClipboard();
+		const onVis = () => {
+			if (document.visibilityState === 'visible') void refreshSystemClipboard();
+		};
+		document.addEventListener('paste', onPaste, true);
+		window.addEventListener('focus', onFocus);
+		document.addEventListener('visibilitychange', onVis);
+		document.addEventListener('clipboardchange', onFocus);
+		void refreshSystemClipboard();
+		return () => {
+			document.removeEventListener('paste', onPaste, true);
+			window.removeEventListener('focus', onFocus);
+			document.removeEventListener('visibilitychange', onVis);
+			document.removeEventListener('clipboardchange', onFocus);
+		};
+	});
+
 	async function importDeviceFiles(files: File[], destParentId: string | null = parentId) {
 		const put = driver.upload ?? driver.writeFile;
 		if (!files.length || !put) return;
@@ -1176,6 +1233,11 @@
 		if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) return;
 
 		if (e.key === 'Escape') {
+			if (archiveKind) {
+				e.preventDefault();
+				archiveKind = null;
+				return;
+			}
 			if (previewEntry) {
 				e.preventDefault();
 				previewEntry = null;
@@ -1271,9 +1333,15 @@
 			return;
 		}
 		if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v') {
-			if (mode === 'manage' && (caps.supportsMove || caps.supportsCopy)) {
+			if (mode !== 'manage') return;
+			if (clipboard?.ids.length && (caps.supportsMove || caps.supportsCopy)) {
 				e.preventDefault();
 				void pasteClipboard();
+				return;
+			}
+			if (canImportFromDevice) {
+				e.preventDefault();
+				void pasteSystemClipboard();
 			}
 		}
 	}
@@ -1298,6 +1366,9 @@
 	);
 	const pasteTip = $derived(
 		clipboard?.mode === 'cut' ? 'Paste (move)' : clipboard ? 'Paste (copy)' : 'Paste'
+	);
+	const systemPasteTip = $derived(
+		systemClip?.label ?? 'Paste from clipboard (file, image, or text)'
 	);
 </script>
 
@@ -1338,6 +1409,16 @@
 			<div class="fe-toolbar-row">
 				{#if showPersistChip && localVfs}
 					<StoragePersistenceStatus vfs={localVfs} compact class="fe-persist-slot" />
+				{/if}
+				{#if mode === 'manage' && canImportFromDevice}
+					<FeTipIconBtn
+						testid="fe-system-paste"
+						tip={systemPasteTip}
+						icon="clipboard-paste"
+						disabled={!systemClip?.files.length || uploadBusy}
+						active={Boolean(systemClip?.files.length)}
+						onclick={() => void pasteSystemClipboard()}
+					/>
 				{/if}
 				{#if mode === 'manage' || mode === 'open'}
 					<FeTipIconBtn
@@ -1746,6 +1827,24 @@
 						>
 							Delete
 						</button>
+						{#if previewEntry.kind === 'file'}
+							<button
+								type="button"
+								class="ds-btn ds-btn--sm ds-btn--secondary"
+								data-testid="fe-file-preview-compress"
+								onclick={() => (archiveKind = 'compress')}
+							>
+								Compress
+							</button>
+							<button
+								type="button"
+								class="ds-btn ds-btn--sm ds-btn--secondary"
+								data-testid="fe-file-preview-encrypt"
+								onclick={() => (archiveKind = 'encrypt')}
+							>
+								Encrypt
+							</button>
+						{/if}
 					{/if}
 				</div>
 			{:else}
@@ -1897,6 +1996,24 @@
 						>
 							Delete
 						</button>
+						{#if previewEntry.kind === 'file'}
+							<button
+								type="button"
+								class="ds-btn ds-btn--sm ds-btn--secondary"
+								data-testid="fe-file-preview-compress"
+								onclick={() => (archiveKind = 'compress')}
+							>
+								Compress
+							</button>
+							<button
+								type="button"
+								class="ds-btn ds-btn--sm ds-btn--secondary"
+								data-testid="fe-file-preview-encrypt"
+								onclick={() => (archiveKind = 'encrypt')}
+							>
+								Encrypt
+							</button>
+						{/if}
 					{/if}
 					<button
 						type="button"
@@ -1992,6 +2109,19 @@
 				</div>
 			</div>
 		</div>
+	{/if}
+
+	{#if archiveKind && previewEntry?.kind === 'file'}
+		<FeArchiveDialog
+			kind={archiveKind}
+			entry={previewEntry}
+			{driver}
+			onDone={() => {
+				archiveKind = null;
+				void refresh();
+			}}
+			onCancel={() => (archiveKind = null)}
+		/>
 	{/if}
 </div>
 

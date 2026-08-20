@@ -53,6 +53,8 @@ describe('FileExplorer component', () => {
 		expect(screen.getByTestId('fe-item-details')).toBeTruthy();
 		expect(screen.getByTestId('fe-trash-view')).toBeTruthy();
 		expect(screen.getByTestId('fe-breadcrumbs')).toBeTruthy();
+		expect(screen.getByTestId('fe-system-paste')).toBeTruthy();
+		expect((screen.getByTestId('fe-system-paste') as HTMLButtonElement).disabled).toBe(true);
 		expect(screen.getByTestId('fe-select-multi').parentElement?.getAttribute('data-tooltip')).toBe(
 			'Select multiple items'
 		);
@@ -216,6 +218,37 @@ describe('FileExplorer component', () => {
 		expect(openBtn.textContent).toMatch(/sketcher/i);
 		await fireEvent.click(openBtn);
 		expect(opened).toEqual(['Sketch.skch']);
+	});
+
+	it('details Compress and Encrypt open destination dialogs', async () => {
+		await vfs.writeFile({
+			parentId: null,
+			name: 'note.txt',
+			fileType: 'txt',
+			body: new Blob(['hello'], { type: 'text/plain' }),
+			contentType: 'text/plain'
+		});
+		render(FileExplorer, { props: { mode: 'manage', vfs, variant: 'panel' } });
+		await viWaitForRows(1);
+		const row = document.querySelector('[data-testid="fe-file-row"]') as HTMLElement;
+		await fireEvent.click(row);
+		await fireEvent.click(screen.getByTestId('fe-item-details'));
+		await screen.findByTestId('fe-file-preview');
+		await fireEvent.click(screen.getByTestId('fe-file-preview-compress'));
+		const compressDlg = await screen.findByTestId('fe-archive-dialog');
+		expect(compressDlg.getAttribute('data-kind')).toBe('compress');
+		expect(screen.getByTestId('fe-archive-engine')).toBeTruthy();
+		expect(screen.getByTestId('fe-archive-codec')).toBeTruthy();
+		expect(screen.getByTestId('fe-archive-dest-same')).toBeTruthy();
+		expect(screen.getByTestId('fe-archive-dest-memory')).toBeTruthy();
+		await fireEvent.click(screen.getByTestId('fe-archive-cancel'));
+		expect(screen.queryByTestId('fe-archive-dialog')).toBeNull();
+
+		await fireEvent.click(screen.getByTestId('fe-file-preview-encrypt'));
+		const encryptDlg = await screen.findByTestId('fe-archive-dialog');
+		expect(encryptDlg.getAttribute('data-kind')).toBe('encrypt');
+		expect(screen.getByTestId('fe-archive-password')).toBeTruthy();
+		expect(screen.getByTestId('fe-archive-password-confirm')).toBeTruthy();
 	});
 
 	it('single-click on a folder selects it; Details opens the popup; Open enters it', async () => {

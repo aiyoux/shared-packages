@@ -36,7 +36,9 @@ export default defineConfig({
 				'../design-system/src/segmented.css'
 			),
 			'@shared-packages/design-system': path.resolve(root, '../design-system/src'),
-			'@shared-packages/ui': path.resolve(root, '../ui/src/index.ts')
+			'@shared-packages/ui': path.resolve(root, '../ui/src/index.ts'),
+			'@shared-packages/compress': path.resolve(root, '../compress/src/index.ts'),
+			'@shared-packages/crypto': path.resolve(root, '../crypto/src/index.ts')
 		}
 	}
 });
