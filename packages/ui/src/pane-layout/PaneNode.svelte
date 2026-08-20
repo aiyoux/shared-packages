@@ -99,11 +99,10 @@
 					<button
 						type="button"
 						data-testid="pl-close"
-						title="Close pane"
-						aria-label="Close pane"
-						data-tooltip="Close pane"
+						title={canClose ? 'Close pane' : 'Close app'}
+						aria-label={canClose ? 'Close pane' : 'Close app'}
+						data-tooltip={canClose ? 'Close pane' : 'Close app'}
 						data-tooltip-pos="bottom-left"
-						disabled={!canClose}
 						onclick={(e) => {
 							e.stopPropagation();
 							onClose(node.id);
