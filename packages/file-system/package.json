@@ -83,7 +83,8 @@
     "dexie": "^4.4.4"
   },
   "peerDependencies": {
-    "svelte": "^5.0.0"
+    "svelte": "^5.0.0",
+    "@shared-packages/design-system": "*"
   },
   "peerDependenciesMeta": {
     "svelte": {

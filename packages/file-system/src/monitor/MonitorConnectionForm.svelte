@@ -184,14 +184,14 @@
 		flex-direction: column;
 		gap: 12px;
 		padding: 12px;
-		border: 1px solid var(--border, #334155);
-		border-radius: 10px;
-		background: var(--surface, #1e293b);
+		border: 1px solid var(--line-hairline);
+		border-radius: 0;
+		background: var(--surface-2);
 	}
 	.lead {
 		margin: 0;
 		font-size: 0.85rem;
-		color: var(--text-secondary, #94a3b8);
+		color: var(--text-secondary);
 		line-height: 1.45;
 	}
 	.fields {
@@ -204,15 +204,16 @@
 		flex-direction: column;
 		gap: 4px;
 		font-size: 0.8rem;
-		color: var(--text-muted, #94a3b8);
+		color: var(--text-muted);
 	}
 	input {
 		padding: 8px 10px;
-		border-radius: 8px;
-		border: 1px solid var(--border, #475569);
-		background: #0f172a;
+		border-radius: var(--radius-md);
+		border: 1px solid var(--line-hairline);
+		background: var(--surface-1);
 		color: inherit;
 		font-size: 0.9rem;
+		font: inherit;
 	}
 	.profile-list {
 		list-style: none;
@@ -234,8 +235,8 @@
 		flex-direction: column;
 		gap: 2px;
 		padding: 8px 10px;
-		border-radius: 8px;
-		border: 1px solid var(--border, #475569);
+		border-radius: var(--radius-md);
+		border: 1px solid var(--line-hairline);
 		background: transparent;
 		color: inherit;
 		cursor: pointer;
@@ -256,16 +257,17 @@
 	}
 	button {
 		padding: 8px 12px;
-		border-radius: 8px;
-		border: 1px solid var(--border, #475569);
+		border-radius: var(--radius-md);
+		border: 1px solid var(--line-strong);
 		background: transparent;
 		color: inherit;
 		cursor: pointer;
 		font-size: 0.85rem;
 	}
 	button.primary {
-		background: rgba(14, 165, 233, 0.15);
-		border-color: rgba(14, 165, 233, 0.4);
+		background: rgb(var(--accent-rgb) / 0.15);
+		border-color: rgb(var(--accent-rgb) / 0.4);
+		color: var(--text-primary);
 	}
 	button.ghost {
 		opacity: 0.9;
@@ -276,7 +278,7 @@
 	}
 	.err {
 		margin: 0;
-		color: #fca5a5;
+		color: var(--cat-red-soft);
 		font-size: 0.85rem;
 	}
 	code {

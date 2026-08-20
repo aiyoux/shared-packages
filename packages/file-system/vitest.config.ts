@@ -24,5 +24,14 @@ export default defineConfig({
 		include: ['test/**/*.component.test.ts'],
 		setupFiles: ['./test/setup.mjs', '@testing-library/svelte/vitest']
 	},
-	root
+	root,
+	resolve: {
+		alias: {
+			'@shared-packages/design-system/button.css': path.resolve(
+				root,
+				'../design-system/src/button.css'
+			),
+			'@shared-packages/design-system': path.resolve(root, '../design-system/src')
+		}
+	}
 });

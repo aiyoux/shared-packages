@@ -95,10 +95,10 @@
 		max-height: min(40vh, 320px);
 		overflow: auto;
 		padding: 0.65rem 0.75rem 0.75rem;
-		border-radius: 10px;
-		border: 1px solid var(--border, #334155);
-		background: color-mix(in srgb, var(--surface, #1e293b) 94%, #000);
-		box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+		border-radius: 0;
+		border: 1px solid var(--line-hairline);
+		background: var(--surface-2);
+		box-shadow: 0 12px 32px rgb(var(--scrim-rgb) / 0.35);
 		color: inherit;
 		font-size: 0.85rem;
 	}
@@ -148,7 +148,7 @@
 		position: relative;
 		height: 6px;
 		border-radius: 999px;
-		background: rgba(255, 255, 255, 0.1);
+		background: rgb(var(--overlay-rgb) / 0.1);
 		overflow: hidden;
 		margin-top: 0.25rem;
 	}
@@ -160,24 +160,24 @@
 		transition: width 120ms ease;
 	}
 	.op-fill.ahead {
-		background: rgba(56, 189, 248, 0.35);
+		background: rgb(var(--accent-rgb) / 0.35);
 	}
 	.op-fill.behind {
-		background: #38bdf8;
+		background: var(--accent);
 	}
 	.op-row.failed .op-fill.ahead {
-		background: rgba(248, 113, 113, 0.35);
+		background: rgb(var(--danger-rgb) / 0.35);
 	}
 	.op-row.failed .op-fill.behind {
-		background: #f87171;
+		background: var(--danger);
 	}
 	.op-row.done .op-fill.ahead,
 	.op-row.done .op-fill.behind {
-		background: #4ade80;
+		background: var(--accent-emerald);
 	}
 	.op-err {
 		margin: 0.25rem 0 0;
-		color: #ffb4b4;
+		color: var(--cat-red-soft);
 		font-size: 0.75rem;
 	}
 </style>

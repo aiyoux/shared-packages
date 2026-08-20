@@ -601,8 +601,8 @@
 		height: 1.45rem;
 		padding: 0;
 		border-radius: 999px;
-		border: 1px solid var(--border, #334155);
-		background: var(--surface, #1e293b);
+		border: 1px solid var(--line-hairline);
+		background: var(--surface-2);
 		color: inherit;
 		font: inherit;
 		font-size: 0.72rem;
@@ -619,11 +619,11 @@
 		left: 0;
 		width: 18.5rem;
 		padding: 0.55rem 0.65rem 0.5rem;
-		border-radius: 10px;
-		border: 1px solid #334155;
-		background: #0f172a;
-		color: #e2e8f0;
-		box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
+		border-radius: 0;
+		border: 1px solid var(--line-hairline);
+		background: var(--surface-2);
+		color: var(--text-primary);
+		box-shadow: 0 10px 28px rgb(var(--scrim-rgb) / 0.45);
 		font-size: 0.78rem;
 		line-height: 1.35;
 	}
@@ -660,7 +660,7 @@
 	.copy-path {
 		margin-top: 0.55rem;
 		padding-top: 0.45rem;
-		border-top: 1px solid #334155;
+		border-top: 1px solid var(--line-hairline);
 	}
 	.copy-path-title {
 		margin-bottom: 0.3rem;
@@ -685,11 +685,11 @@
 	.caps-mark {
 		width: 0.85rem;
 		text-align: center;
-		color: #38bdf8;
+		color: var(--accent);
 		font-weight: 700;
 	}
 	.caps-list li:not(.on) .caps-mark {
-		color: #64748b;
+		color: var(--text-muted);
 	}
 	.visually-hidden {
 		position: absolute;
@@ -703,9 +703,9 @@
 	.conn-menu button,
 	.conn-settings-panel button {
 		padding: 0.35rem 0.7rem;
-		border-radius: 8px;
-		border: 1px solid var(--border, #334155);
-		background: var(--surface, #1e293b);
+		border-radius: var(--radius-md);
+		border: 1px solid var(--line-hairline);
+		background: var(--surface-2);
 		color: inherit;
 		cursor: pointer;
 		font-size: 0.9rem;
@@ -761,12 +761,11 @@
 		min-width: 14rem;
 		max-width: min(22rem, 90vw);
 		padding: 0.35rem;
-		border-radius: 10px;
-		border: 1px solid #334155;
-		/* Hub --bg-card is ~2% white and reads as transparent. */
-		background: #1e293b;
-		color: #e2e8f0;
-		box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
+		border-radius: 0;
+		border: 1px solid var(--line-hairline);
+		background: var(--surface-2);
+		color: var(--text-primary);
+		box-shadow: 0 10px 28px rgb(var(--scrim-rgb) / 0.45);
 	}
 	.conn-menu.open,
 	.conn-settings-panel.open {
@@ -790,16 +789,17 @@
 	}
 	.conn-menu button:hover,
 	.conn-settings-panel button:hover {
-		background: rgba(255, 255, 255, 0.06);
+		background: rgb(var(--overlay-rgb) / 0.06);
 	}
 	.conn-menu button.active {
-		outline: 2px solid #38bdf8;
+		outline: 2px solid var(--accent);
 		outline-offset: 0;
+		background: rgb(var(--accent-rgb) / 0.08);
 	}
 	.conn-sep {
 		height: 1px;
 		margin: 0.25rem 0.35rem;
-		background: var(--border, #334155);
+		background: var(--line-hairline);
 	}
 	.settings-title {
 		margin: 0.15rem 0.45rem 0.25rem;

@@ -14,6 +14,7 @@
 		dataTransferHasOsFiles,
 		filesFromDataTransfer
 	} from './copyAcross.js';
+	import '@shared-packages/design-system/button.css';
 
 	export type ExplorerMode = 'manage' | 'open' | 'save' | 'browse';
 
@@ -1257,6 +1258,7 @@
 			{#if mode === 'manage' || mode === 'open'}
 				<button
 					type="button"
+					class="ds-btn ds-btn--sm ds-btn--secondary"
 					data-testid="fe-select-multi"
 					class:active={selectMulti}
 					aria-pressed={selectMulti}
@@ -1267,6 +1269,7 @@
 				</button>
 				<button
 					type="button"
+					class="ds-btn ds-btn--sm ds-btn--secondary"
 					data-testid="fe-item-details"
 					disabled={selected.size === 0}
 					title="Open details for the selected item"
@@ -1276,13 +1279,23 @@
 				</button>
 			{/if}
 			{#if canOpenSelection}
-				<button type="button" data-testid="fe-open-selected" onclick={() => void openSelected()}>
+				<button
+					type="button"
+					class="ds-btn ds-btn--sm ds-btn--primary"
+					data-testid="fe-open-selected"
+					onclick={() => void openSelected()}
+				>
 					Open
 				</button>
 			{/if}
 			{#if mode === 'manage'}
 				{#if caps.supportsMkdir}
-					<button type="button" data-testid="fe-new-folder" onclick={() => (newFolderOpen = true)}>
+					<button
+						type="button"
+						class="ds-btn ds-btn--sm ds-btn--secondary"
+						data-testid="fe-new-folder"
+						onclick={() => (newFolderOpen = true)}
+					>
 						New folder
 					</button>
 				{/if}
@@ -1290,6 +1303,7 @@
 					{#if !hideToolbarUpload}
 						<button
 							type="button"
+							class="ds-btn ds-btn--sm ds-btn--secondary"
 							data-testid="fe-upload"
 							disabled={uploadBusy}
 							title="Open the system file picker and add the file to this folder"
@@ -1313,6 +1327,7 @@
 				{#if caps.supportsTrash && !hideToolbarTrash}
 					<button
 						type="button"
+						class="ds-btn ds-btn--sm ds-btn--secondary"
 						data-testid="fe-trash-view"
 						class:active={trashOpen}
 						aria-pressed={trashOpen}
@@ -1327,7 +1342,7 @@
 					{#if selected.size === 1 && caps.supportsRename}
 						<button
 							type="button"
-							class="fe-icon-btn"
+							class="ds-btn ds-btn--icon ds-btn--ghost"
 							data-testid="fe-rename-btn"
 							title="Rename"
 							aria-label="Rename"
@@ -1348,7 +1363,7 @@
 					{/if}
 					<button
 						type="button"
-						class="fe-icon-btn"
+						class="ds-btn ds-btn--icon ds-btn--ghost"
 						data-testid="fe-trash-selected"
 						title="Delete"
 						aria-label="Delete"
@@ -1368,7 +1383,7 @@
 					{#if caps.supportsMove}
 						<button
 							type="button"
-							class="fe-icon-btn"
+							class="ds-btn ds-btn--icon ds-btn--ghost"
 							data-testid="fe-cut"
 							title="Cut"
 							aria-label="Cut"
@@ -1394,7 +1409,7 @@
 					{#if caps.supportsCopy}
 						<button
 							type="button"
-							class="fe-icon-btn"
+							class="ds-btn ds-btn--icon ds-btn--ghost"
 							data-testid="fe-copy"
 							title="Copy"
 							aria-label="Copy"
@@ -1421,13 +1436,24 @@
 					{/if}
 				{/if}
 				{#if clipboard?.ids.length && (caps.supportsMove || caps.supportsCopy)}
-					<button type="button" data-testid="fe-paste" onclick={() => pasteClipboard()}>
+					<button
+						type="button"
+						class="ds-btn ds-btn--sm ds-btn--secondary"
+						data-testid="fe-paste"
+						onclick={() => pasteClipboard()}
+					>
 						Paste {clipboard.mode === 'cut' ? '(move)' : '(copy)'}
 					</button>
 				{/if}
 			{/if}
 			{#if onClose}
-				<button type="button" class="fe-close" data-testid="fe-close" aria-label="Close" onclick={onClose}>
+				<button
+					type="button"
+					class="ds-btn ds-btn--icon ds-btn--ghost fe-close"
+					data-testid="fe-close"
+					aria-label="Close"
+					onclick={onClose}
+				>
 					×
 				</button>
 			{/if}
@@ -1447,8 +1473,17 @@
 	{#if newFolderOpen && caps.supportsMkdir}
 		<div class="fe-inline-form" data-testid="fe-new-folder-form">
 			<input data-testid="fe-new-folder-input" bind:value={newFolderName} />
-			<button type="button" data-testid="fe-new-folder-confirm" onclick={createFolder}>Create</button>
-			<button type="button" onclick={() => (newFolderOpen = false)}>Cancel</button>
+			<button
+				type="button"
+				class="ds-btn ds-btn--sm ds-btn--primary"
+				data-testid="fe-new-folder-confirm"
+				onclick={createFolder}>Create</button
+			>
+			<button
+				type="button"
+				class="ds-btn ds-btn--sm ds-btn--ghost"
+				onclick={() => (newFolderOpen = false)}>Cancel</button
+			>
 		</div>
 	{/if}
 
@@ -1595,7 +1630,12 @@
 				Name
 				<input id="save-name" data-testid="fe-name-input" bind:value={saveName} />
 			</label>
-			<button type="button" data-testid="fe-save-confirm" onclick={confirmSave}>Save</button>
+			<button
+				type="button"
+				class="ds-btn ds-btn--sm ds-btn--primary"
+				data-testid="fe-save-confirm"
+				onclick={confirmSave}>Save</button
+			>
 		</footer>
 	{/if}
 
@@ -1651,6 +1691,7 @@
 					{#if previewEntry.kind === 'folder' && mode !== 'browse'}
 						<button
 							type="button"
+							class="ds-btn ds-btn--sm ds-btn--primary"
 							data-testid="fe-file-preview-open"
 							disabled={previewBusy}
 							onclick={() => void confirmPreviewOpen()}
@@ -1660,6 +1701,7 @@
 					{:else if onOpen && rowActionable(previewEntry) && (mode === 'open' || mode === 'manage')}
 						<button
 							type="button"
+							class="ds-btn ds-btn--sm ds-btn--primary"
 							data-testid="fe-file-preview-open"
 							disabled={previewBusy}
 							onclick={() => void confirmPreviewOpen()}
@@ -1670,6 +1712,7 @@
 					{#if onSendFile && previewEntry.kind === 'file'}
 						<button
 							type="button"
+							class="ds-btn ds-btn--sm ds-btn--primary"
 							data-testid="fe-file-preview-send"
 							disabled={previewBusy}
 							onclick={() => void confirmPreviewSend()}
@@ -1681,6 +1724,7 @@
 						{#if caps.supportsRename}
 							<button
 								type="button"
+								class="ds-btn ds-btn--sm ds-btn--secondary"
 								data-testid="fe-rename-btn"
 								disabled={listBusy}
 								onclick={renamePreviewItem}
@@ -1691,6 +1735,7 @@
 						{#if caps.supportsCopy && previewEntry.kind === 'file'}
 							<button
 								type="button"
+								class="ds-btn ds-btn--sm ds-btn--secondary"
 								data-testid="fe-row-copy"
 								disabled={listBusy}
 								onclick={() => void copyPreviewItem()}
@@ -1704,6 +1749,7 @@
 							{@const downloadEntry = previewEntry}
 							<button
 								type="button"
+								class="ds-btn ds-btn--sm ds-btn--secondary"
 								data-testid="fe-row-download"
 								disabled={listBusy}
 								onclick={() => void downloadNode(downloadEntry)}
@@ -1713,6 +1759,7 @@
 						{/if}
 						<button
 							type="button"
+							class="ds-btn ds-btn--sm ds-btn--danger"
 							data-testid="fe-row-trash"
 							disabled={listBusy}
 							onclick={() => void deletePreviewItem()}
@@ -1722,6 +1769,7 @@
 					{/if}
 					<button
 						type="button"
+						class="ds-btn ds-btn--sm ds-btn--ghost"
 						data-testid="fe-file-preview-close"
 						onclick={() => (previewEntry = null)}
 					>
@@ -1750,7 +1798,12 @@
 				<div class="fe-trash-head">
 					<h2 class="fe-preview-name">Trash</h2>
 					{#if trashNodes.length}
-						<button type="button" data-testid="fe-empty-trash" onclick={() => void emptyTrash()}>
+						<button
+							type="button"
+							class="ds-btn ds-btn--sm ds-btn--danger"
+							data-testid="fe-empty-trash"
+							onclick={() => void emptyTrash()}
+						>
 							Empty trash
 						</button>
 					{/if}
@@ -1777,12 +1830,14 @@
 								<span class="fe-row-actions">
 									<button
 										type="button"
+										class="ds-btn ds-btn--sm ds-btn--secondary"
 										data-testid="fe-restore"
 										disabled={trashBusy}
 										onclick={() => void restoreNode(n)}>Restore</button
 									>
 									<button
 										type="button"
+										class="ds-btn ds-btn--sm ds-btn--danger"
 										data-testid="fe-permanent-delete"
 										disabled={trashBusy}
 										onclick={() => void permanentNode(n)}>Delete forever</button
@@ -1793,7 +1848,12 @@
 					</div>
 				{/if}
 				<div class="fe-trash-foot">
-					<button type="button" data-testid="fe-trash-close" onclick={() => (trashOpen = false)}>
+					<button
+						type="button"
+						class="ds-btn ds-btn--sm ds-btn--ghost"
+						data-testid="fe-trash-close"
+						onclick={() => (trashOpen = false)}
+					>
 						Close
 					</button>
 				</div>
@@ -1807,24 +1867,30 @@
 		position: relative;
 		display: flex;
 		flex-direction: column;
+		min-height: 0;
+		height: 100%;
+		max-height: none;
+		background: var(--surface-1);
+		color: var(--text-primary);
+		border: 1px solid var(--line-hairline);
+		border-radius: 0;
+		overflow: hidden;
+		font-family: var(--font-sans);
+		font-size: var(--text-md);
+	}
+	.fe-root.dialog {
 		min-height: 280px;
 		max-height: 70vh;
-		background: var(--fe-bg, #1a1b1e);
-		color: var(--fe-fg, #e8e8ea);
-		border: 1px solid var(--fe-border, #333);
-		border-radius: 10px;
-		overflow: hidden;
-		font-family: system-ui, sans-serif;
-		font-size: 14px;
+		height: auto;
 	}
 	.fe-header {
 		position: relative;
 		z-index: 9;
 		display: flex;
 		justify-content: space-between;
-		gap: 8px;
-		padding: 10px 12px;
-		border-bottom: 1px solid var(--fe-border, #333);
+		gap: var(--space-2);
+		padding: var(--space-2) var(--space-3);
+		border-bottom: 1px solid var(--line-hairline);
 		flex-wrap: wrap;
 	}
 	.fe-breadcrumbs {
@@ -1836,12 +1902,13 @@
 	.fe-crumb {
 		background: none;
 		border: none;
-		color: var(--fe-accent, #7cb7ff);
+		color: var(--accent-light);
 		cursor: pointer;
-		padding: 2px 4px;
+		padding: 2px var(--space-1);
+		font: inherit;
 	}
 	.fe-crumb.active {
-		color: inherit;
+		color: var(--text-primary);
 		cursor: default;
 	}
 	.fe-toolbar {
@@ -1850,28 +1917,11 @@
 		align-items: center;
 		flex-wrap: wrap;
 	}
-	.fe-toolbar button {
-		background: #2a2b30;
-		border: 1px solid #444;
-		color: inherit;
-		border-radius: 6px;
-		padding: 4px 8px;
-		cursor: pointer;
-	}
-	.fe-toolbar button:disabled {
-		opacity: 0.5;
-		cursor: not-allowed;
-	}
-	.fe-toolbar button.active {
-		outline: 1px solid var(--fe-accent, #7cb7ff);
-	}
-	.fe-toolbar .fe-icon-btn {
-		display: inline-flex;
-		align-items: center;
-		justify-content: center;
-		width: 2rem;
-		height: 2rem;
-		padding: 0;
+	.fe-toolbar :global(.ds-btn.active),
+	.fe-toolbar :global(.ds-btn[aria-pressed='true']) {
+		background: rgb(var(--accent-rgb) / 0.08);
+		border-color: var(--accent);
+		color: var(--text-primary);
 	}
 	.fe-close {
 		font-size: 18px;
@@ -1882,12 +1932,12 @@
 		flex: 1;
 		overflow: auto;
 		padding: 6px;
-		min-height: 120px;
+		min-height: 0;
 	}
 	.fe-list.os-drop {
-		outline: 2px dashed #38bdf8;
+		outline: 2px dashed var(--accent);
 		outline-offset: -4px;
-		background: rgba(56, 189, 248, 0.06);
+		background: var(--accent-glow);
 	}
 	.fe-list-busy {
 		/* Soft cue even before delayed overlay appears */
@@ -1901,9 +1951,9 @@
 		align-items: center;
 		justify-content: center;
 		/* Opaque enough that the previous list is not readable underneath */
-		background: color-mix(in srgb, var(--fe-bg, #1a1b1e) 92%, transparent);
+		background: color-mix(in srgb, var(--surface-1) 92%, transparent);
 		backdrop-filter: blur(2px);
-		animation: fe-busy-fade 0.12s ease-out;
+		animation: fe-busy-fade var(--dur-fast) var(--ease);
 		pointer-events: all;
 	}
 	/* Hide previous list under the spinner so only the post-load list is seen */
@@ -1917,8 +1967,8 @@
 		width: 36px;
 		height: 36px;
 		border-radius: 50%;
-		border: 3px solid color-mix(in srgb, var(--fe-fg, #e8e8ea) 18%, transparent);
-		border-top-color: var(--fe-accent, #7cb7ff);
+		border: 3px solid rgb(var(--overlay-rgb) / 0.18);
+		border-top-color: var(--accent);
 		animation: fe-spin 0.7s linear infinite;
 	}
 	@keyframes fe-busy-fade {
@@ -1939,7 +1989,7 @@
 		align-items: center;
 		gap: 8px;
 		padding: 8px 10px;
-		border-radius: 6px;
+		border-radius: 0;
 		cursor: pointer;
 		touch-action: manipulation;
 		-webkit-touch-callout: none;
@@ -1965,7 +2015,7 @@
 		cursor: not-allowed;
 	}
 	.fe-row:hover {
-		background: #2a2b30;
+		background: var(--surface-3);
 	}
 	.fe-pending-list {
 		display: flex;
@@ -1982,13 +2032,13 @@
 		position: relative;
 		flex: 0 1 120px;
 		height: 6px;
-		background: rgba(255, 255, 255, 0.08);
+		background: rgb(var(--overlay-rgb) / 0.08);
 		border-radius: 999px;
 		overflow: hidden;
 	}
 	.fe-pending-fill {
 		height: 100%;
-		background: #38bdf8;
+		background: var(--accent);
 		border-radius: 999px;
 		transition: width 150ms ease;
 	}
@@ -1998,14 +2048,14 @@
 		inset: 0 auto 0 0;
 	}
 	.fe-pending-fill.ahead {
-		background: rgba(56, 189, 248, 0.35);
+		background: rgb(var(--accent-rgb) / 0.35);
 	}
 	.fe-pending-fill.behind {
-		background: #38bdf8;
+		background: var(--accent);
 	}
 	.fe-pending-pct {
 		font-size: 0.72rem;
-		color: #94a3b8;
+		color: var(--text-muted);
 		min-width: 34px;
 		text-align: right;
 		font-variant-numeric: tabular-nums;
@@ -2015,13 +2065,13 @@
 		cursor: not-allowed;
 	}
 	.fe-row.selected {
-		background: #2c3a4f;
-		outline: 1px solid #5b8def;
+		background: rgb(var(--accent-rgb) / 0.12);
+		outline: 1px solid var(--accent);
 		outline-offset: -1px;
 	}
 	.fe-row.previewed {
-		background: #2a3340;
-		outline: 1px dashed #7cb7ff;
+		background: rgb(var(--accent-rgb) / 0.08);
+		outline: 1px dashed var(--accent-light);
 		outline-offset: -1px;
 	}
 	.fe-preview-backdrop {
@@ -2036,7 +2086,7 @@
 		position: absolute;
 		inset: 0;
 		border: 0;
-		background: color-mix(in srgb, #000 45%, transparent);
+		background: rgb(var(--scrim-rgb) / 0.55);
 		cursor: pointer;
 	}
 	.fe-preview-card {
@@ -2045,10 +2095,10 @@
 		min-width: min(280px, 90%);
 		max-width: 360px;
 		padding: 16px 18px;
-		background: #22232a;
-		border: 1px solid #444;
-		border-radius: 10px;
-		box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
+		background: var(--surface-2);
+		border: 1px solid var(--line-hairline);
+		border-radius: 0;
+		box-shadow: 0 12px 32px rgb(var(--scrim-rgb) / 0.4);
 	}
 	.fe-preview-name {
 		margin: 0 0 12px;
@@ -2079,22 +2129,9 @@
 		flex-wrap: wrap;
 		gap: 6px;
 	}
-	.fe-preview-actions button {
-		background: #2a2b30;
-		border: 1px solid #444;
-		color: inherit;
-		border-radius: 6px;
-		padding: 6px 10px;
-		cursor: pointer;
-	}
 	.fe-preview-actions button:disabled {
 		opacity: 0.5;
 		cursor: not-allowed;
-	}
-	.fe-preview-actions [data-testid='fe-file-preview-open'],
-	.fe-preview-actions [data-testid='fe-file-preview-send'] {
-		background: #2c3a4f;
-		border-color: #5b8def;
 	}
 	.fe-trash-card {
 		position: relative;
@@ -2104,10 +2141,10 @@
 		width: min(440px, 94%);
 		max-height: min(420px, 80%);
 		padding: 14px 16px 12px;
-		background: #22232a;
-		border: 1px solid #444;
-		border-radius: 10px;
-		box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
+		background: var(--surface-2);
+		border: 1px solid var(--line-hairline);
+		border-radius: 0;
+		box-shadow: 0 12px 32px rgb(var(--scrim-rgb) / 0.4);
 	}
 	.fe-trash-head,
 	.fe-trash-foot {
@@ -2118,16 +2155,6 @@
 	}
 	.fe-trash-head .fe-preview-name {
 		margin: 0;
-	}
-	.fe-trash-head button,
-	.fe-trash-foot button,
-	.fe-trash-list button {
-		background: #2a2b30;
-		border: 1px solid #444;
-		color: inherit;
-		border-radius: 6px;
-		padding: 4px 8px;
-		cursor: pointer;
 	}
 	.fe-trash-head button:disabled,
 	.fe-trash-list button:disabled {
@@ -2147,15 +2174,15 @@
 	.fe-dnd-line {
 		height: 2px;
 		margin: 0 0.5rem;
-		background: #38bdf8;
+		background: var(--accent);
 		border-radius: 1px;
 	}
 	.fe-row.fe-dnd-into {
-		outline: 2px solid #38bdf8;
+		outline: 2px solid var(--accent);
 		outline-offset: -2px;
 	}
 	.fe-row.focused {
-		outline: 1px solid #6ea8fe;
+		outline: 1px solid var(--accent-light);
 		outline-offset: -1px;
 	}
 	.fe-name {
@@ -2171,14 +2198,14 @@
 	}
 	.fe-error {
 		padding: 8px 12px;
-		background: #4a2020;
-		color: #ffb4b4;
+		background: rgb(var(--danger-rgb) / 0.16);
+		color: var(--cat-red-soft);
 	}
 	.fe-truncated {
 		padding: 6px 12px;
-		background: #2a2a18;
-		color: #e8d48b;
-		font-size: 12px;
+		background: var(--warning-bg);
+		color: var(--accent-amber);
+		font-size: var(--text-sm);
 	}
 	.fe-save-bar,
 	.fe-open-bar,
@@ -2186,17 +2213,18 @@
 		display: flex;
 		gap: 8px;
 		padding: 10px 12px;
-		border-top: 1px solid var(--fe-border, #333);
+		border-top: 1px solid var(--line-hairline);
 		align-items: center;
 	}
 	.fe-save-bar input,
 	.fe-inline-form input,
 	input[data-testid='fe-rename-input'] {
-		background: #111;
-		border: 1px solid #444;
+		background: var(--surface-2);
+		border: 1px solid var(--line-hairline);
 		color: inherit;
-		border-radius: 4px;
+		border-radius: var(--radius-md);
 		padding: 4px 8px;
+		font: inherit;
 	}
 	.fe-hint {
 		opacity: 0.7;

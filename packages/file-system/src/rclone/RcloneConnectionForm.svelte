@@ -292,7 +292,7 @@
 	.hint {
 		margin: 0;
 		font-size: 0.9rem;
-		color: var(--text-muted, #94a3b8);
+		color: var(--text-muted);
 		line-height: 1.4;
 	}
 	.hint code {
@@ -300,9 +300,8 @@
 	}
 	.err {
 		padding: 0.5rem 0.75rem;
-		background: #4a2020;
-		color: #ffb4b4;
-		border-radius: 6px;
+		background: rgb(var(--danger-rgb) / 0.16);
+		color: var(--cat-red-soft);
 		font-size: 0.9rem;
 	}
 	.fields {
@@ -313,7 +312,7 @@
 	.editing-label {
 		margin: 0;
 		font-size: 0.8rem;
-		color: #7dd3fc;
+		color: var(--accent-light);
 	}
 	label {
 		display: flex;
@@ -323,10 +322,11 @@
 	}
 	input {
 		padding: 0.4rem 0.55rem;
-		border-radius: 6px;
-		border: 1px solid var(--border, #334155);
-		background: var(--surface, #0f172a);
+		border-radius: var(--radius-md);
+		border: 1px solid var(--line-hairline);
+		background: var(--surface-2);
 		color: inherit;
+		font: inherit;
 	}
 	.actions {
 		display: flex;
@@ -335,10 +335,10 @@
 	}
 	button {
 		padding: 0.4rem 0.75rem;
-		border-radius: 6px;
-		border: 1px solid #475569;
-		background: #1e293b;
-		color: inherit;
+		border-radius: var(--radius-md);
+		border: 1px solid var(--line-strong);
+		background: var(--surface-2);
+		color: var(--text-primary);
 		cursor: pointer;
 		font-size: 0.85rem;
 	}
@@ -346,8 +346,9 @@
 		opacity: 0.6;
 	}
 	button.danger {
-		border-color: #7f1d1d;
-		color: #fecaca;
+		border-color: var(--danger);
+		color: var(--cat-red-soft);
+		background: rgb(var(--danger-rgb) / 0.12);
 	}
 	button.ghost {
 		background: transparent;
@@ -367,10 +368,10 @@
 		gap: 0.35rem;
 		align-items: center;
 		padding: 0.35rem 0;
-		border-bottom: 1px solid var(--border, #334155);
+		border-bottom: 1px solid var(--line-hairline);
 	}
 	.saved li.editing {
-		outline: 1px dashed #38bdf8;
+		outline: 1px dashed var(--accent);
 		outline-offset: 2px;
 		border-radius: 4px;
 	}

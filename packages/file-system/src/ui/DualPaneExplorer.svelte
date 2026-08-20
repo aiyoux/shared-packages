@@ -11,7 +11,7 @@
 	 *     (`getMemoryVfs`), shared app-wide so received files are accessible
 	 *     everywhere.
 	 *   - `onOpen`: optional open-file handler (hub opens skch/ob3d/vrec).
-	 *   - `persistenceVfs`: optional VFS for the storage-persistence chip.
+	 *   - `persistenceVfs`: unused for UI (kept so existing callers compile).
 	 *   - `tids`: per-page testid config so each consumer keeps its existing
 	 *     e2e selectors (defaults match the hub `/tools/files` page).
 	 *
@@ -23,7 +23,6 @@
 	 */
 	import { onMount, onDestroy } from 'svelte';
 	import { default as FileExplorer, type ExplorerContext } from './FileExplorer.svelte';
-	import { default as StoragePersistenceStatus } from './StoragePersistenceStatus.svelte';
 	import OpProgressPopup from './OpProgressPopup.svelte';
 	import DualPhaseConfirm from './DualPhaseConfirm.svelte';
 	import { stackTransferItems } from './stackProgress.js';
@@ -34,6 +33,7 @@
 	// them without the *.svelte named-export limitation.
 	import { type PaneId, type DualPaneTids } from './dualPaneTypes.js';
 	import { portal } from './portal.js';
+	import '@shared-packages/design-system/button.css';
 	import {
 		canShowCopyAcross,
 		isDualPhaseCopy,
@@ -168,11 +168,21 @@
 		}) => void | Promise<void>;
 		tids?: Partial<DualPaneTids>;
 		/**
-		 * CSS selector (or later-appearing host) for a single module settings
-		 * gear. When set, pane switchers hide their gears and one settings
-		 * control is portaled into the host — Files uses the hub topbar.
+		 * CSS selector for a single module settings gear. When set, pane
+		 * switchers hide their gears and one settings control is portaled here.
 		 */
 		settingsPortal?: string;
+		/**
+		 * CSS selector for connection switchers. When empty, each files pane
+		 * keeps its own switcher (workspace). Files fullscreen uses the hub topbar.
+		 */
+		switcherPortal?: string;
+		/**
+		 * CSS selector for the single/dual layout switcher. Files injects into
+		 * the pane chrome (workspace) or hub topbar (fullscreen /tools/files).
+		 * When empty, the switcher stays in this component's own controls row.
+		 */
+		layoutPortal?: string;
 	};
 
 	let {
@@ -198,10 +208,13 @@
 		onDualChange,
 		onSend,
 		tids: tidsOverride = {},
-		settingsPortal = ''
+		settingsPortal = '',
+		switcherPortal = '',
+		layoutPortal = ''
 	}: Props = $props();
 
 	const hostSettings = $derived(Boolean(settingsPortal));
+	const hostSwitchers = $derived(Boolean(switcherPortal));
 
 	function openHostForm(which: 'b2' | 'rclone' | 'monitor') {
 		// Module-level settings apply to the explorer as a whole; the form
@@ -290,12 +303,6 @@
 	} | null>(null);
 	let selectFileInput = $state<Partial<Record<PaneId, HTMLInputElement>>>({});
 	let osDropPane = $state<PaneId | null>(null);
-
-	/** True when at least one visible pane is durable local browser storage. */
-	const showLocalPersist = $derived(
-		(left.activeKind === 'local' || (dualPane && right.activeKind === 'local')) &&
-			!!persistenceVfs
-	);
 
 	function getMemoryDriver(): ExplorerDriver {
 		if (!memoryVfs) memoryVfs = getMemoryVfs();
@@ -1049,7 +1056,7 @@
 	{#if hostSettings && showCopyAcross}
 		<button
 			type="button"
-			class="copy-across"
+			class="ds-btn ds-btn--sm ds-btn--secondary copy-across"
 			data-testid={tids.copyAcross(id)}
 			disabled={copyBusy || p.ctx.selectedIds.length === 0}
 			title="Copy selected items into the other pane's open folder"
@@ -1086,7 +1093,7 @@
 			{#if paneCanImport(id)}
 				<button
 					type="button"
-					class="select-file"
+					class="ds-btn ds-btn--sm ds-btn--secondary select-file"
 					data-testid="fe-upload"
 					disabled={copyBusy}
 					title="Open the system file picker and copy a file into this folder"
@@ -1109,7 +1116,7 @@
 			{#if showCopyAcross}
 				<button
 					type="button"
-					class="copy-across"
+					class="ds-btn ds-btn--sm ds-btn--secondary copy-across"
 					data-testid={tids.copyAcross(id)}
 					disabled={copyBusy || p.ctx.selectedIds.length === 0}
 					title="Copy selected items into the other pane's open folder"
@@ -1124,7 +1131,7 @@
 			{#if onSend}
 				<button
 					type="button"
-					class="send-selected"
+					class="ds-btn ds-btn--sm ds-btn--secondary send-selected"
 					data-testid={tids.send(id)}
 					disabled={sendBusy || p.ctx.selectedIds.length === 0 || !drv.download}
 					title="Send selected items to the other user"
@@ -1326,8 +1333,8 @@
 	</div>
 {/snippet}
 
-{#if hostSettings}
-	<div class="dpe-host-chrome" use:portal={settingsPortal}>
+{#if hostSwitchers}
+	<div class="dpe-host-chrome" use:portal={switcherPortal}>
 		{#if paneShowsSwitcher('left')}
 			<div
 				class="dpe-host-conn"
@@ -1348,7 +1355,12 @@
 				{@render paneSwitcher('right')}
 			</div>
 		{/if}
-		<div class="dpe-host-settings">
+	</div>
+{/if}
+
+{#if hostSettings}
+	<div class="dpe-host-settings-park" class:parked={Boolean(settingsPortal)}>
+		<div class="dpe-host-settings" use:portal={settingsPortal}>
 			<ConnectionSwitcher
 				variant="settings"
 				profiles={b2Chips}
@@ -1365,29 +1377,45 @@
 	</div>
 {/if}
 
-<div class="dpe-shell" class:dual={dualPane}>
-	{#if !hideToggles}
-		<div class="dpe-controls">
-			{#if showLocalPersist && persistenceVfs}
-				<div class="persist-wrap" data-testid={tids.persist}>
-					<StoragePersistenceStatus vfs={persistenceVfs} compact={false} pollMs={10_000} />
-				</div>
-			{/if}
+{#if !hideToggles}
+	<div class="dpe-layout-park" class:parked={Boolean(layoutPortal)}>
+		<div
+			class="dpe-layout"
+			class:portaled={Boolean(layoutPortal)}
+			role="radiogroup"
+			aria-label="File manager layout"
+			data-testid={tids.dualToggle}
+			use:portal={layoutPortal || undefined}
+		>
 			<button
 				type="button"
-				class="dual-toggle"
-				class:active={dualPane}
-				data-testid={tids.dualToggle}
-				aria-pressed={dualPane}
-				title={dualPane
-					? 'Show a single file tree'
-					: 'Two independent trees side by side. Copy across appears when at least one pane is local/memory.'}
-				onclick={() => setDualPane(!dualPane)}
+				role="radio"
+				class="dpe-layout-opt"
+				class:active={!dualPane}
+				aria-checked={!dualPane}
+				data-testid="{tids.dualToggle}-single"
+				title="One file tree"
+				onclick={() => setDualPane(false)}
 			>
-				{dualPane ? 'Single pane' : 'Dual pane'}
+				Single
+			</button>
+			<button
+				type="button"
+				role="radio"
+				class="dpe-layout-opt"
+				class:active={dualPane}
+				aria-checked={dualPane}
+				data-testid="{tids.dualToggle}-dual"
+				title="Two independent trees side by side"
+				onclick={() => setDualPane(true)}
+			>
+				Dual
 			</button>
 		</div>
-	{/if}
+	</div>
+{/if}
+
+<div class="dpe-shell" class:dual={dualPane}>
 
 	<div class="files-body" class:dual={dualPane} data-testid={tids.body}>
 		{@render explorerPane('left')}
@@ -1432,11 +1460,21 @@
 	}
 	.dpe-host-conn + .dpe-host-conn {
 		padding-left: 0.65rem;
-		border-left: 1px solid rgba(255, 255, 255, 0.12);
+		border-left: 1px solid var(--line-hairline);
+	}
+	.dpe-host-settings-park.parked {
+		position: absolute;
+		width: 0;
+		height: 0;
+		margin: 0;
+		padding: 0;
+		overflow: hidden;
+		pointer-events: none;
 	}
 	.dpe-host-settings {
 		display: flex;
 		align-items: center;
+		margin-left: auto;
 	}
 	.pane-status {
 		display: flex;
@@ -1444,50 +1482,70 @@
 		align-items: center;
 		gap: 0.45rem;
 		padding: 0.35rem 0.65rem;
-		border-bottom: 1px solid var(--border, #334155);
+		border-bottom: 1px solid var(--line-hairline);
 	}
 	.dpe-shell {
 		display: flex;
 		flex-direction: column;
-		gap: 0.75rem;
+		flex: 1;
+		min-height: 0;
+		gap: 0;
 		width: 100%;
+		height: 100%;
 	}
-	.dpe-controls {
-		display: flex;
-		align-items: center;
-		gap: 0.75rem;
-		flex-wrap: wrap;
+	.dpe-layout-park.parked {
+		position: absolute;
+		width: 0;
+		height: 0;
+		margin: 0;
+		padding: 0;
+		overflow: hidden;
+		pointer-events: none;
 	}
-	.persist-wrap {
+	.dpe-layout {
 		display: inline-flex;
-		align-items: center;
-		margin-right: auto;
+		align-items: stretch;
+		flex-shrink: 0;
+		border: 1px solid var(--line-hairline);
+		border-radius: var(--hud-radius);
+		background: rgb(var(--overlay-rgb) / 0.02);
 	}
-	.dual-toggle,
-	.copy-across,
-	.send-selected,
-	.select-file {
-		padding: 0.35rem 0.7rem;
-		border-radius: 8px;
-		border: 1px solid var(--border, #334155);
-		background: var(--surface, #1e293b);
-		color: inherit;
+	.dpe-layout.portaled {
+		height: var(--control-h-sm);
+	}
+	.dpe-layout-opt {
+		box-sizing: border-box;
+		margin: 0;
+		padding: 0 0.65rem;
+		border: 0;
+		border-right: 1px solid var(--line-hairline);
+		background: transparent;
+		color: var(--text-muted);
+		font: inherit;
+		font-size: 0.72rem;
+		font-weight: 600;
+		letter-spacing: 0.04em;
+		text-transform: uppercase;
 		cursor: pointer;
-		font-size: 0.9rem;
 	}
-	.dual-toggle.active {
-		outline: 2px solid #38bdf8;
-		outline-offset: 1px;
+	.dpe-layout-opt:last-child {
+		border-right: 0;
 	}
-	.copy-across:disabled,
-	.send-selected:disabled,
-	.select-file:disabled {
-		opacity: 0.5;
-		cursor: not-allowed;
+	.dpe-layout-opt.active {
+		background: rgb(var(--accent-rgb) / 0.08);
+		color: var(--text-primary);
+	}
+	.dpe-layout-opt:hover:not(.active) {
+		background: rgb(var(--overlay-rgb) / 0.04);
+		color: var(--text-primary);
+	}
+	.dpe-layout-opt:focus-visible {
+		outline: 1px solid var(--accent);
+		outline-offset: -1px;
 	}
 	.copy-err,
 	.send-err {
-		color: #ffb4b4;
+		color: var(--cat-red-soft);
 		font-size: 0.85rem;
 	}
 	.busy {
@@ -1497,33 +1555,33 @@
 	.b2-error {
 		margin: 0;
 		padding: 0.4rem 0.65rem;
-		background: #4a2020;
-		color: #ffb4b4;
-		border-radius: 6px;
+		background: rgb(var(--danger-rgb) / 0.16);
+		color: var(--cat-red-soft);
 		font-size: 0.85rem;
 	}
 	.remote-badge {
 		font-size: 0.75rem;
-		color: #7dd3fc;
+		color: var(--accent-light);
 		white-space: nowrap;
 	}
 	.remote-badge.mem {
-		color: #c4b5fd;
+		color: var(--accent-violet);
 	}
 	.remote-badge.mon-watch {
-		color: #86efac;
+		color: var(--accent-emerald);
 		text-transform: lowercase;
 	}
 	.pane-sub {
 		font-size: 0.72rem;
-		color: var(--text-muted, #94a3b8);
+		color: var(--text-muted);
 	}
 	.files-body {
-		min-height: 420px;
-		border: 1px solid var(--border, #e2e8f0);
-		border-radius: 12px;
+		flex: 1;
+		min-height: 0;
+		border: 0;
+		border-radius: 0;
 		overflow: hidden;
-		background: var(--surface, #0f172a);
+		background: var(--surface-1);
 		display: grid;
 		grid-template-columns: 1fr;
 	}
@@ -1532,17 +1590,17 @@
 	}
 	.files-pane {
 		min-width: 0;
-		min-height: 420px;
+		min-height: 0;
 		display: flex;
 		flex-direction: column;
 	}
 	.files-pane.drop-target {
-		outline: 2px solid #38bdf8;
+		outline: 2px solid var(--accent);
 		outline-offset: -2px;
-		background: color-mix(in srgb, #38bdf8 10%, transparent);
+		background: var(--accent-glow);
 	}
 	.files-body.dual .files-pane + .files-pane {
-		border-left: 1px solid var(--border, #334155);
+		border-left: 1px solid var(--line-hairline);
 	}
 	.pane-chrome {
 		display: flex;
@@ -1550,11 +1608,11 @@
 		align-items: center;
 		gap: 0.5rem;
 		padding: 0.5rem 0.65rem;
-		border-bottom: 1px solid var(--border, #334155);
+		border-bottom: 1px solid var(--line-hairline);
 	}
 	.pane-form {
 		padding: 0 0.65rem;
-		border-bottom: 1px solid var(--border, #334155);
+		border-bottom: 1px solid var(--line-hairline);
 		max-height: 50vh;
 		overflow: auto;
 	}
@@ -1567,7 +1625,8 @@
 	.pane-explorer :global(.fe-root) {
 		flex: 1;
 		height: 100%;
-		min-height: 360px;
+		min-height: 0;
+		max-height: none;
 		border: none;
 		border-radius: 0;
 	}

@@ -1,4 +1,6 @@
 <script lang="ts">
+	import '@shared-packages/design-system/button.css';
+
 	interface Props {
 		sourceLabel: string;
 		destLabel: string;
@@ -28,10 +30,10 @@
 		</p>
 		<p class="hint">A disconnect or failed upload leaves the destination unchanged when possible.</p>
 		<div class="actions">
-			<button type="button" class="cancel" data-testid="fe-dual-phase-cancel" onclick={onCancel}>
+			<button type="button" class="ds-btn ds-btn--sm ds-btn--ghost" data-testid="fe-dual-phase-cancel" onclick={onCancel}>
 				Cancel
 			</button>
-			<button type="button" class="go" data-testid="fe-dual-phase-confirm-go" onclick={onConfirm}>
+			<button type="button" class="ds-btn ds-btn--sm ds-btn--primary" data-testid="fe-dual-phase-confirm-go" onclick={onConfirm}>
 				Continue
 			</button>
 		</div>
@@ -50,17 +52,17 @@
 	.scrim {
 		position: absolute;
 		inset: 0;
-		background: rgba(0, 0, 0, 0.55);
+		background: rgb(var(--scrim-rgb) / 0.55);
 	}
 	.card {
 		position: relative;
 		z-index: 1;
 		width: min(440px, calc(100vw - 2rem));
 		padding: 1.15rem 1.25rem;
-		border-radius: 12px;
-		background: #1e293b;
-		border: 1px solid #334155;
-		color: inherit;
+		border-radius: 0;
+		background: var(--surface-2);
+		border: 1px solid var(--line-hairline);
+		color: var(--text-primary);
 	}
 	h2 {
 		margin: 0 0 0.6rem;
@@ -79,22 +81,5 @@
 		display: flex;
 		justify-content: flex-end;
 		gap: 0.5rem;
-	}
-	button {
-		border-radius: 8px;
-		padding: 0.4rem 0.85rem;
-		font: inherit;
-		cursor: pointer;
-	}
-	.cancel {
-		background: transparent;
-		border: 1px solid #475569;
-		color: inherit;
-	}
-	.go {
-		background: #38bdf8;
-		border: 0;
-		color: #0f172a;
-		font-weight: 600;
 	}
 </style>
