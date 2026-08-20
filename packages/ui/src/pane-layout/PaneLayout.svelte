@@ -1,8 +1,10 @@
 <script lang="ts">
-	import type { Snippet } from 'svelte';
+	import { tick, untrack, type Snippet } from 'svelte';
 	import type { LayoutNode, SplitDirection } from './types.js';
-	import { closeLeaf, createLeaf, leafCount, setSplitRatio, splitLeaf } from './tree.js';
+	import { closeLeaf, createLeaf, leafCount, listLeaves, setSplitRatio, splitLeaf } from './tree.js';
+	import { layoutSlotKey, parkLeaves, rehomeLeaves } from './leafHome.js';
 	import PaneNode from './PaneNode.svelte';
+	import PaneLeaf from './PaneLeaf.svelte';
 
 	let {
 		// Default here rather than a `if (!root) root = createLeaf()` guard below:
@@ -35,6 +37,29 @@
 	if (!focusedId) focusedId = root.kind === 'leaf' ? root.id : null;
 
 	const canClose = $derived(leafCount(root) > 1);
+	const leaves = $derived(listLeaves(root));
+	const slotKey = $derived(layoutSlotKey(root));
+
+	let parkEl: HTMLElement | null = $state(null);
+
+	// Park keyed leaves before the split tree is torn down, then rehome into
+	// the new slots. Resize changes ratio only (slotKey ignores it) so a drag
+	// does not blink the panes.
+	$effect.pre(() => {
+		void slotKey;
+		untrack(() => parkLeaves(parkEl));
+	});
+	$effect(() => {
+		void slotKey;
+		const ids = untrack(() => listLeaves(root).map((leaf) => leaf.id));
+		let cancelled = false;
+		void tick().then(() => {
+			if (!cancelled) rehomeLeaves(ids);
+		});
+		return () => {
+			cancelled = true;
+		};
+	});
 
 	export function splitFocused(direction: SplitDirection = 'row'): string | null {
 		const target = focusedId ?? (root.kind === 'leaf' ? root.id : null);
@@ -83,22 +108,31 @@
 	}
 </script>
 
-<div class="pl-root" data-testid="pane-layout">
-	<PaneNode
-		node={root}
-		{focusedId}
-		{canClose}
-		{showChrome}
-		{pane}
-		onFocus={(id) => (focusedId = id)}
-		onSplit={(id, dir) => splitAt(id, dir)}
-		onClose={(id) => closeAt(id)}
-		{onApps}
-		{onResize}
-	/>
+<div class="pl-host" data-testid="pane-layout">
+	<div class="pl-root">
+		<PaneNode node={root} {onResize} />
+	</div>
+	<!-- Keyed leaves live here in the Svelte tree; homeLeaf moves them into
+	     the matching slot so split/close can reshape without remounting. -->
+	<div class="pl-park" bind:this={parkEl} hidden aria-hidden="true">
+		{#each leaves as leaf (leaf.id)}
+			<PaneLeaf
+				id={leaf.id}
+				focused={focusedId === leaf.id}
+				{canClose}
+				{showChrome}
+				{pane}
+				onFocus={(id) => (focusedId = id)}
+				onSplit={(id, dir) => splitAt(id, dir)}
+				onClose={(id) => closeAt(id)}
+				{onApps}
+			/>
+		{/each}
+	</div>
 </div>
 
 <style>
+	.pl-host,
 	.pl-root {
 		display: flex;
 		flex: 1 1 0;
@@ -106,5 +140,8 @@
 		min-height: 0;
 		width: 100%;
 		height: 100%;
+	}
+	.pl-host {
+		position: relative;
 	}
 </style>

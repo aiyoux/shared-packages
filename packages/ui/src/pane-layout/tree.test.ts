@@ -8,6 +8,7 @@ import {
 	setSplitRatio,
 	splitLeaf
 } from './tree.ts';
+import { layoutSlotKey } from './leafHome.ts';
 
 describe('pane layout tree', () => {
 	beforeEach(() => {
@@ -73,5 +74,15 @@ describe('pane layout tree', () => {
 		const thin = setSplitRatio(split.root, split.root.id, 0.01);
 		expect(wide.kind === 'split' && wide.ratio).toBe(0.85);
 		expect(thin.kind === 'split' && thin.ratio).toBe(0.15);
+	});
+
+	it('slot key ignores ratio so resize does not rehome leaves', () => {
+		const split = splitLeaf(createLeaf('a'), 'a', 'row')!;
+		if (split.root.kind !== 'split') return;
+		const before = layoutSlotKey(split.root);
+		const resized = setSplitRatio(split.root, split.root.id, 0.7);
+		expect(layoutSlotKey(resized)).toBe(before);
+		const closed = closeLeaf(split.root, split.newLeaf.id);
+		expect(layoutSlotKey(closed)).not.toBe(before);
 	});
 });
