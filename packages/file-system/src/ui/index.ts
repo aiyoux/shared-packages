@@ -13,8 +13,11 @@ export {
 	copyAcross,
 	CopyAcrossError,
 	idsFromExplorerDragTarget,
+	idsFromExplorerDataTransfer,
 	dataTransferHasOsFiles,
+	dataTransferHasExplorerIds,
 	filesFromDataTransfer,
+	FE_EXPLORER_IDS_MIME,
 	type CopyAcrossArgs,
 	type CopyAcrossErrorCode,
 	type CopyAcrossPath,
@@ -37,6 +40,7 @@ export {
 	type ExplorerOpenTarget
 } from './explorerDriver.js';
 export { createLocalExplorerDriver, type LocalExplorerDriverOptions } from './localExplorerDriver.js';
+export { portal } from './portal.js';
 export {
 	createMemoryExplorerDriver,
 	MEMORY_CAPS,
