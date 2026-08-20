@@ -798,6 +798,50 @@ export function isClosedFilledPath(path: PathData) {
     return !!(path.d.toUpperCase().includes('Z') && path.fill && path.fill !== 'none');
 }
 
+/**
+ * Open centerline strokes thicker than this are erased as the region they
+ * paint (boolean subtract), not by trimming the polyline. A centerline cut on
+ * a fat round-capped stroke — highlighter is the usual case — leaves a
+ * semicircle of radius `strokeWidth/2` at each new end: the "giant sausages".
+ * Thin pens stay on the cheaper centerline path.
+ */
+const WIDE_OPEN_STROKE_WIDTH = 8;
+
+export function isWideOpenStroke(path: PathData) {
+    if (isClosedFilledPath(path)) return false;
+    if (!path.stroke || path.stroke === 'none') return false;
+    if (path.fill && path.fill !== 'none') return false;
+    return (path.strokeWidth || 0) >= WIDE_OPEN_STROKE_WIDTH;
+}
+
+/** Rewrite a wide centerline stroke as filled ink so clip-erase can punch the
+ *  painted region. Un-erased highlighters stay stroked; only pieces that were
+ *  actually cut are emitted this way. */
+function asFilledInkPath(path: PathData, hasTranslate: boolean, tx: number, ty: number): PathData {
+    const ink = path.stroke && path.stroke !== 'none' ? path.stroke : path.fill;
+    return {
+        ...path,
+        fill: ink || '#000',
+        stroke: 'none',
+        strokeWidth: 0,
+        clipDerived: true,
+        transform: hasTranslate ? undefined : path.transform,
+        ...(hasTranslate && path.clipRect ? { clipRect: rebaseClipRect(path, tx, ty) } : {}),
+    };
+}
+
+function expandBounds(
+    b: { minX: number; minY: number; maxX: number; maxY: number },
+    pad: number,
+) {
+    return {
+        minX: b.minX - pad,
+        minY: b.minY - pad,
+        maxX: b.maxX + pad,
+        maxY: b.maxY + pad,
+    };
+}
+
 const closeRing = (points: Point[]): Ring => {
     const ring: Ring = points.map(p => [p.x, p.y]);
     const first = ring[0];
@@ -894,6 +938,64 @@ const cachedSubject = (path: PathData, flatCmds: FlatCommand[]): MultiPolygon | 
         subjectCache.set(path, entry);
     }
     return entry;
+};
+
+/** The region a wide open stroke actually paints (round-cap capsule along the
+ *  centerline). Cached per path identity like {@link cachedSubject}. */
+const cachedStrokeInkRegion = (path: PathData, flatCmds: FlatCommand[]): MultiPolygon | null => {
+    let entry = subjectCache.get(path);
+    if (entry === undefined) {
+        const t0 = performance.now();
+        entry = strokeInkRegionFromFlat(flatCmds, path.strokeWidth || 1);
+        eraseStats.subjectBuilds++;
+        eraseStats.subjectMs += performance.now() - t0;
+        subjectCache.set(path, entry);
+    }
+    return entry;
+};
+
+const strokeInkRegionFromFlat = (flatCmds: FlatCommand[], strokeWidth: number): MultiPolygon | null => {
+    const half = Math.max(0.05, strokeWidth / 2);
+    const subpaths: Point[][] = [];
+    let cur: Point[] = [];
+    const flush = () => {
+        if (cur.length) subpaths.push(cur);
+        cur = [];
+    };
+    for (const cmd of flatCmds) {
+        if (cmd.type === 'M') {
+            flush();
+            cur = [{ x: cmd.x, y: cmd.y }];
+        } else if (cmd.type === 'L') {
+            cur.push({ x: cmd.x, y: cmd.y });
+        }
+    }
+    flush();
+    const parts: Geometry[] = [];
+    for (const pts of subpaths) {
+        if (pts.length === 0) continue;
+        if (pts.length === 1) {
+            parts.push(circlePolygon(pts[0], half));
+            continue;
+        }
+        try {
+            const resolved = union(roundPolygon([strokeOutlineRing(pts, half)]));
+            if (resolved && resolved.length > 0) {
+                parts.push(...normalizeMultiPolygon(resolved));
+                continue;
+            }
+        } catch {
+            /* fall through to capsules */
+        }
+        let prev = pts[0];
+        for (let i = 1; i < pts.length; i++) {
+            parts.push(capsulePolygon(prev, pts[i], half));
+            prev = pts[i];
+        }
+    }
+    if (parts.length === 0) return null;
+    const merged = unionGeometryParts(parts);
+    return merged ? (merged as MultiPolygon) : (parts as unknown as MultiPolygon);
 };
 
 // Per-subject-polygon outer bboxes, keyed on the SUBJECT array (stable object
@@ -2275,6 +2377,36 @@ const closedPathMayIntersectEraser = (flatCmds: FlatCommand[], subject: MultiPol
     return false;
 };
 
+/** Whether a fat open stroke's *painted* region (centerline ± strokeRadius,
+ *  round caps) actually meets the eraser. Centerline-only hit tests miss a
+ *  flank graze on a highlighter, which is exactly the preview's shave. */
+const openStrokeMayIntersectEraser = (
+    flatCmds: FlatCommand[],
+    eraserPoints: Point[],
+    eraserSegments: { a: Point; b: Point }[],
+    radius: number,
+    strokeRadius: number,
+) => {
+    const reach = radius + strokeRadius;
+    const reachSq = reach * reach;
+    let prev: Point | null = null;
+    for (const cmd of flatCmds) {
+        if (cmd.type === 'M') {
+            for (const p of eraserPoints) {
+                if ((cmd.x - p.x) ** 2 + (cmd.y - p.y) ** 2 <= reachSq) return true;
+            }
+            prev = { x: cmd.x, y: cmd.y };
+        } else if (cmd.type === 'L' && prev) {
+            const b = { x: cmd.x, y: cmd.y };
+            if (erasedIntervalsForSegment(prev, b, eraserPoints, eraserSegments, reach).length > 0) {
+                return true;
+            }
+            prev = b;
+        }
+    }
+    return false;
+};
+
 type PointP = Point & { p?: number };
 type FlatCommandP = FlatCommand & { p?: number };
 
@@ -2644,21 +2776,36 @@ export const splitOnePathByEraser = (
     }
 
     // Genuine filled shapes (rectangles, baked mesh faces, …) — polygon
-    // clipping is the right tool here.
-    if (isClosedFilledPath(path)) {
+    // clipping is the right tool here. Fat open strokes (highlighter) take
+    // the same path: subtracting the eraser from the painted capsule, so cut
+    // ends follow the eraser instead of sprouting round-cap sausages.
+    const wideOpenStroke = isWideOpenStroke(path);
+    if (isClosedFilledPath(path) || wideOpenStroke) {
         eraseStats.closedFilledChecked++;
-        const splitPathMetadata = hasTranslate
-            ? { ...path, transform: undefined, ...(path.clipRect ? { clipRect: rebaseClipRect(path, tx, ty) } : {}) }
-            : path;
+        const splitPathMetadata = wideOpenStroke
+            ? asFilledInkPath(path, hasTranslate, tx, ty)
+            : hasTranslate
+                ? { ...path, transform: undefined, ...(path.clipRect ? { clipRect: rebaseClipRect(path, tx, ty) } : {}) }
+                : path;
         // Diagnostics cover clip-derived pieces too — piece re-erases were the
         // unrecorded blind spot where corrupted differences went unnoticed.
-        const isClipFreehand = isFreehandPath || !!path.clipDerived;
+        // Wide open strokes are marked clipDerived so later erases keep the
+        // filled-region guards instead of falling back to centerline trim.
+        const isClipFreehand = isFreehandPath || !!path.clipDerived || wideOpenStroke;
         // Subject geometry is eraser-independent AND path-immutable, so it's
         // cached per path identity (see subjectCache) — one build per path
         // lifetime, reused across every move of every drag. subjectBuilds in
         // the perf counters now counts cache MISSES only.
-        const subject = cachedSubject(path, flatCmds);
-        if (!closedPathMayIntersectEraser(flatCmds, subject, sampledEraserPoints, radius)) {
+        const subject = wideOpenStroke
+            ? cachedStrokeInkRegion(path, flatCmds)
+            : cachedSubject(path, flatCmds);
+        if (wideOpenStroke && !subject) return [path];
+        if (wideOpenStroke) {
+            if (!openStrokeMayIntersectEraser(flatCmds, sampledEraserPoints, eraserSegments, radius, strokeRadius)) {
+                eraseStats.mayIntersectRejected++;
+                return [path];
+            }
+        } else if (!closedPathMayIntersectEraser(flatCmds, subject, sampledEraserPoints, radius)) {
             eraseStats.mayIntersectRejected++;
             return [path];
         }
@@ -2666,7 +2813,12 @@ export const splitOnePathByEraser = (
         // (identical result to the full-trail union — see localEraserRegion).
         // The whole-drag trail's full union made each Martinez difference ~50ms
         // on a dense scene; the local region keeps each one small.
-        const eraserRegion = localEraserRegion(ctx, pathBounds);
+        // Wide strokes paint a band around the centerline — expand so a flank
+        // graze still selects the local eraser capsules.
+        const eraserRegion = localEraserRegion(
+            ctx,
+            wideOpenStroke ? expandBounds(pathBounds, strokeRadius) : pathBounds,
+        );
         if (!eraserRegion) return [path];
         // Fade mode on a filled shape: the part outside the eraser keeps its
         // opacity, the overlap comes back dimmer. Same two halves as the clean
@@ -2773,12 +2925,15 @@ export const splitOnePathByEraser = (
                 // eslint-disable-next-line no-console
                 console.log('[CLIP] a stroke was left un-erased this pass (safe, no reshape).');
             }
-            out = [splitPathMetadata];
+            // Wide open strokes must stay as the original centerline if clip
+            // bailed — converting them to filled ink without a cut would change
+            // un-erased highlighter into a shape.
+            out = wideOpenStroke ? [path] : [splitPathMetadata];
             // On a bail with a translate, splitPathMetadata is a NEW object
             // (transform stripped) sharing the path's id — its bounds differ, so
             // re-key the grid entry. Without translate splitPathMetadata === path,
             // so nothing changed and no sync is needed.
-            if (sync && hasTranslate) {
+            if (sync && hasTranslate && !wideOpenStroke) {
                 sync.removed.push(path);
                 sync.added.push(splitPathMetadata);
             }

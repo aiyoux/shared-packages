@@ -42,12 +42,61 @@ function applyIncrementally(paths: PathData[], trail: { x: number; y: number }[]
 	return current;
 }
 
-/** Width of the hole cut through a single horizontal stroke. */
+const nums = (d: string) => (d.match(/-?\d+\.?\d*/g) || []).map(Number);
+
+const pathContains = (d: string, px: number, py: number) => {
+	const rings: [number, number][][] = [];
+	let cur: [number, number][] = [];
+	const tokens = d.trim().split(/\s+/);
+	for (let i = 0; i < tokens.length; i++) {
+		const t = tokens[i];
+		if (t === 'M' || t === 'L') {
+			const x = Number(tokens[++i]), y = Number(tokens[++i]);
+			if (t === 'M') {
+				if (cur.length > 2) rings.push(cur);
+				cur = [[x, y]];
+			} else cur.push([x, y]);
+		} else if (t === 'Z') {
+			if (cur.length > 2) rings.push(cur);
+			cur = [];
+		}
+	}
+	if (cur.length > 2) rings.push(cur);
+	let inside = false;
+	for (const ring of rings) {
+		for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+			const [xi, yi] = ring[i], [xj, yj] = ring[j];
+			if (((yi > py) !== (yj > py)) && (px < (xj - xi) * (py - yi) / (yj - yi || 1e-9) + xi)) inside = !inside;
+		}
+	}
+	return inside;
+};
+
+const inkAt = (paths: PathData[], px: number, py: number) => paths.some(p => {
+	if (p.fill && p.fill !== 'none') return pathContains(p.d, px, py);
+	const half = (p.strokeWidth || 0) / 2;
+	const n = nums(p.d);
+	for (let i = 0; i + 3 < n.length; i += 2) {
+		const x1 = n[i], y1 = n[i + 1], x2 = n[i + 2], y2 = n[i + 3];
+		const dx = x2 - x1, dy = y2 - y1, l2 = dx * dx + dy * dy;
+		let t = l2 ? ((px - x1) * dx + (py - y1) * dy) / l2 : 0;
+		t = t < 0 ? 0 : t > 1 ? 1 : t;
+		if (Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy)) <= half + 0.25) return true;
+	}
+	return false;
+});
+
+/** Width of the hole cut through a single horizontal stroke, measured on y=0. */
 const gapWidth = (paths: PathData[]) => {
-	const spans = paths
-		.map(p => { const n = (p.d.match(/-?\d+\.?\d*/g) || []).map(Number); return [n[0], n[2]] as [number, number]; })
-		.sort((a, b) => a[0] - b[0]);
-	return spans.length < 2 ? 0 : spans[1][0] - spans[0][1];
+	let first: number | null = null;
+	let last = 0;
+	for (let x = 0; x <= 400; x += 0.5) {
+		if (!inkAt(paths, x, 0)) {
+			if (first === null) first = x;
+			last = x;
+		}
+	}
+	return first === null ? 0 : last - first;
 };
 
 const RADIUS = 20;
@@ -56,12 +105,40 @@ const horizontal = (strokeWidth: number) => [line('M 0 0 L 400 0', { strokeWidth
 
 describe('incremental erase vs one batch pass', () => {
 	it('cuts at radius + capPadding in one pass', () => {
-		for (const strokeWidth of [2, 8, 24]) {
-			const gap = gapWidth(splitPathsByEraser(horizontal(strokeWidth), crossing, RADIUS));
+		// Thin centerline strokes pad the cut by the round-cap radius so the
+		// surviving cap does not bulge into the hole. Measured on the polyline
+		// endpoints (the caps themselves occupy the padding visually).
+		const centerlineGap = (paths: PathData[]) => {
+			const spans = paths
+				.map(p => {
+					const n = nums(p.d);
+					return [n[0], n[2]] as [number, number];
+				})
+				.sort((a, b) => a[0] - b[0]);
+			return spans.length < 2 ? 0 : spans[1][0] - spans[0][1];
+		};
+		for (const strokeWidth of [2, 4]) {
+			const gap = centerlineGap(splitPathsByEraser(horizontal(strokeWidth), crossing, RADIUS));
 			assert.ok(
 				Math.abs(gap - 2 * (RADIUS + strokeWidth / 2)) < 0.5,
 				`batch gap for strokeWidth ${strokeWidth} was ${gap}, expected ~${2 * (RADIUS + strokeWidth / 2)}`
 			);
+		}
+	});
+
+	it('punches a wide stroke at the eraser diameter (no round-cap sausages)', () => {
+		// Fat open strokes (highlighter) are subtracted as painted regions, so
+		// the hole is the eraser's own width, not a pair of  strokeWidth/2 caps.
+		for (const strokeWidth of [8, 24]) {
+			const result = splitPathsByEraser(horizontal(strokeWidth), crossing, RADIUS);
+			const gap = gapWidth(result);
+			assert.ok(
+				Math.abs(gap - 2 * RADIUS) < strokeWidth * 0.35 + 2,
+				`wide strokeWidth ${strokeWidth} gap was ${gap}, expected ~${2 * RADIUS}`
+			);
+			assert.equal(inkAt(result, 200, 0), false, 'crossing still has ink');
+			assert.equal(inkAt(result, 40, 0), true, 'left remainder vanished');
+			assert.equal(inkAt(result, 360, 0), true, 'right remainder vanished');
 		}
 	});
 

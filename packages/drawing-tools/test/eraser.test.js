@@ -595,7 +595,55 @@ test('split eraser preserves pencil material props when splitting centerline pat
     assert.equal(result.every(path => path.layerId === 'sketch'), true);
 });
 
-test('split eraser preserves highlighter material props when splitting centerline paths', () => {
+/** Evenodd point-in-path over M/L/Z rings (holes flip). */
+const pathContains = (d, px, py) => {
+    const rings = [];
+    let cur = [];
+    // Walk commands: this helper is only used on clip-emitted M/L/Z fills.
+    const tokens = d.trim().split(/\s+/);
+    cur = [];
+    for (let i = 0; i < tokens.length; i++) {
+        const t = tokens[i];
+        if (t === 'M' || t === 'L') {
+            const x = Number(tokens[++i]), y = Number(tokens[++i]);
+            if (t === 'M') {
+                if (cur.length > 2) rings.push(cur);
+                cur = [[x, y]];
+            } else {
+                cur.push([x, y]);
+            }
+        } else if (t === 'Z') {
+            if (cur.length > 2) rings.push(cur);
+            cur = [];
+        }
+    }
+    if (cur.length > 2) rings.push(cur);
+    let inside = false;
+    for (const ring of rings) {
+        for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+            const [xi, yi] = ring[i], [xj, yj] = ring[j];
+            if (((yi > py) !== (yj > py)) && (px < (xj - xi) * (py - yi) / (yj - yi || 1e-9) + xi)) inside = !inside;
+        }
+    }
+    return inside;
+};
+
+const inkCovers = (paths, px, py) => paths.some(p => {
+    if (p.fill && p.fill !== 'none') return pathContains(p.d, px, py);
+    const half = (p.strokeWidth || 0) / 2;
+    const nums = pathNumbers(p.d);
+    for (let i = 0; i + 3 < nums.length; i += 2) {
+        const x1 = nums[i], y1 = nums[i + 1], x2 = nums[i + 2], y2 = nums[i + 3];
+        const dx = x2 - x1, dy = y2 - y1, l2 = dx * dx + dy * dy;
+        let t = l2 ? ((px - x1) * dx + (py - y1) * dy) / l2 : 0;
+        t = t < 0 ? 0 : t > 1 ? 1 : t;
+        const ex = px - (x1 + t * dx), ey = py - (y1 + t * dy);
+        if (Math.hypot(ex, ey) <= half + 0.2) return true;
+    }
+    return false;
+});
+
+test('split eraser punches highlighter as a painted region, not round-cap sausages', () => {
     const paths = [{
         ...linePath('M 0 0 L 100 0'),
         stroke: '#ffff00',
@@ -604,16 +652,25 @@ test('split eraser preserves highlighter material props when splitting centerlin
         blendMode: 'multiply'
     }];
 
+    // Vertical sweep through the middle, wide enough to cut the 20-wide band.
     const result = splitPathsByEraser(paths, [
         { x: 50, y: -24 },
         { x: 50, y: 24 }
     ], 5);
 
-    assert.equal(result.length, 2);
-    assert.equal(result.every(path => path.stroke === '#ffff00'), true);
-    assert.equal(result.every(path => path.strokeWidth === 20), true);
+    assert.ok(result.length >= 1, 'some ink should survive on either side');
+    assert.equal(result.every(path => path.fill === '#ffff00'), true);
+    assert.equal(result.every(path => path.stroke === 'none'), true);
+    assert.equal(result.every(path => path.strokeWidth === 0), true);
     assert.equal(result.every(path => path.opacity === 0.35), true);
     assert.equal(result.every(path => path.blendMode === 'multiply'), true);
+    assert.equal(result.every(path => path.clipDerived === true), true);
+
+    // The eraser circle along x=50 must be empty — a centerline trim would
+    // have left 20-wide round caps filling that gap (the sausages).
+    assert.equal(inkCovers(result, 50, 0), false, 'eraser crossing still has ink (sausage cap)');
+    assert.equal(inkCovers(result, 10, 0), true, 'left remainder disappeared');
+    assert.equal(inkCovers(result, 90, 0), true, 'right remainder disappeared');
 });
 
 test('split eraser accounts for brush stroke width when hit testing highlighter strokes', () => {
@@ -628,21 +685,32 @@ test('split eraser accounts for brush stroke width when hit testing highlighter 
         blendMode: 'multiply'
     }];
 
-    // Far from both centerlines: nothing is cut, whatever the brush width. A
-    // small eraser skimming the flank of a fat highlighter must not sever the
-    // whole 20-wide band — it only shaves an edge the preview keeps showing.
+    // Far from both centerlines: nothing is cut, whatever the brush width.
+    const farAway = [{ x: 50, y: 40 }];
+    assert.deepEqual(splitPathsByEraser(thinPen, farAway, 3), thinPen);
+    assert.deepEqual(splitPathsByEraser(wideHighlighter, farAway, 3), wideHighlighter);
+
+    // A small eraser skimming the flank of a fat highlighter must shave that
+    // edge (matching the live preview) without severing the whole 20-wide band.
     const alongTheFlank = [{ x: 50, y: 10 }];
     assert.deepEqual(splitPathsByEraser(thinPen, alongTheFlank, 3), thinPen);
-    assert.deepEqual(splitPathsByEraser(wideHighlighter, alongTheFlank, 3), wideHighlighter);
+    const shaved = splitPathsByEraser(wideHighlighter, alongTheFlank, 3);
+    assert.ok(shaved.length >= 1);
+    assert.equal(inkCovers(shaved, 50, 0), true, 'flank graze deleted the whole highlighter');
+    assert.equal(inkCovers(shaved, 50, 10), false, 'flank under the eraser was not shaved');
+    assert.equal(shaved.every(path => path.blendMode === 'multiply'), true);
+    assert.equal(shaved.every(path => path.opacity === 0.35), true);
 
-    // Over the centerline: both are cut, and the highlighter's material props
-    // ride along onto every piece.
+    // Over the centerline: thin pen still splits as a centerline; highlighter
+    // is a filled-region punch so the crossing is empty, not a pair of sausages.
     const overTheLine = [{ x: 50, y: 0 }];
     assert.equal(splitPathsByEraser(thinPen, overTheLine, 3).length, 2);
     const highlighterResult = splitPathsByEraser(wideHighlighter, overTheLine, 3);
-    assert.equal(highlighterResult.length, 2);
+    assert.ok(highlighterResult.length >= 1);
     assert.equal(highlighterResult.every(path => path.blendMode === 'multiply'), true);
     assert.equal(highlighterResult.every(path => path.opacity === 0.35), true);
+    assert.equal(inkCovers(highlighterResult, 50, 0), false, 'center punch still has ink');
+    assert.equal(inkCovers(highlighterResult, 10, 0), true, 'highlighter remainder vanished');
 });
 
 test('split eraser preserves highlighter material props when clipping filled freehand outlines', () => {
