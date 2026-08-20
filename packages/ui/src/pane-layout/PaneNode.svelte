@@ -58,6 +58,8 @@
 							data-testid="pl-apps"
 							title="Choose an app for this pane"
 							aria-label="Choose an app for this pane"
+							data-tooltip="Apps"
+							data-tooltip-pos="bottom-left"
 							onclick={(e) => {
 								e.stopPropagation();
 								onApps(node.id);
@@ -71,6 +73,8 @@
 						data-testid="pl-split-row"
 						title="Split right"
 						aria-label="Split right"
+						data-tooltip="Split right"
+						data-tooltip-pos="bottom-left"
 						onclick={(e) => {
 							e.stopPropagation();
 							onSplit(node.id, 'row');
@@ -83,6 +87,8 @@
 						data-testid="pl-split-col"
 						title="Split down"
 						aria-label="Split down"
+						data-tooltip="Split down"
+						data-tooltip-pos="bottom-left"
 						onclick={(e) => {
 							e.stopPropagation();
 							onSplit(node.id, 'col');
@@ -93,9 +99,10 @@
 					<button
 						type="button"
 						data-testid="pl-close"
-						title="Close pane"
-						aria-label="Close pane"
-						disabled={!canClose}
+						title={canClose ? 'Close pane' : 'Close app'}
+						aria-label={canClose ? 'Close pane' : 'Close app'}
+						data-tooltip={canClose ? 'Close pane' : 'Close app'}
+						data-tooltip-pos="bottom-left"
 						onclick={(e) => {
 							e.stopPropagation();
 							onClose(node.id);
@@ -227,6 +234,7 @@
 		background: transparent;
 		color: inherit;
 		cursor: pointer;
+		overflow: visible;
 	}
 	.pl-chrome-window button:hover:not(:disabled),
 	.pl-chrome-window button:focus-visible:not(:disabled) {

@@ -19,6 +19,7 @@
 		focusedId = $bindable(null),
 		showChrome = true,
 		onApps,
+		onCloseLast,
 		pane
 	}: {
 		root?: LayoutNode;
@@ -26,6 +27,8 @@
 		showChrome?: boolean;
 		/** Chrome "Apps" button — host opens a picker without unmounting the leaf. */
 		onApps?: (leafId: string) => void;
+		/** Last remaining leaf: host unloads the app instead of removing the pane. */
+		onCloseLast?: (leafId: string) => void;
 		pane: Snippet<[{ id: string; focused: boolean }]>;
 	} = $props();
 
@@ -52,6 +55,10 @@
 	}
 
 	export function closeAt(leafId: string): void {
+		if (leafCount(root) <= 1) {
+			onCloseLast?.(leafId);
+			return;
+		}
 		const next = closeLeaf(root, leafId);
 		root = next;
 		if (focusedId === leafId) {
