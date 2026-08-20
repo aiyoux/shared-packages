@@ -15,6 +15,7 @@
       "import": "./src/index.ts",
       "default": "./src/index.ts"
     },
+    "./color-scheme": "./src/color-scheme.ts",
     "./tokens.css": "./src/tokens.css",
     "./reset.css": "./src/reset.css",
     "./themes.css": "./src/themes.css",
