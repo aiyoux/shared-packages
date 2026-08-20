@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { TransferItem } from '../transferRegistry.js';
 	import { stackTransferItems, type StackedProgress } from './stackProgress.js';
+	import FeIcon from './FeIcon.svelte';
 
 	interface Props {
 		items: TransferItem[];
@@ -61,7 +62,7 @@
 						<span class="op-status">{label(t)}</span>
 						{#if onDismiss && (t.done || t.status === 'failed')}
 							<button type="button" class="op-x" onclick={() => dismissRow(t)} aria-label="Dismiss">
-								×
+								<FeIcon name="x" size={12} />
 							</button>
 						{/if}
 					</div>
@@ -111,6 +112,9 @@
 	}
 	.op-dismiss,
 	.op-x {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
 		background: none;
 		border: 0;
 		color: inherit;

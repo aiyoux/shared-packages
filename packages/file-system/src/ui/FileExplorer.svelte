@@ -8,6 +8,7 @@
 	} from './explorerDriver.js';
 	import { createLocalExplorerDriver } from './localExplorerDriver.js';
 	import StoragePersistenceStatus from './StoragePersistenceStatus.svelte';
+	import FeIcon from './FeIcon.svelte';
 	import { createTreeDndSession, resolveDrop, zoneFromY, type DropZone } from './treeDnd/index.js';
 	import {
 		FE_EXPLORER_IDS_MIME,
@@ -1349,16 +1350,7 @@
 							disabled={listBusy}
 							onclick={renameSelectedItem}
 						>
-							<svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"
-								><path
-									fill="none"
-									stroke="currentColor"
-									stroke-width="2"
-									stroke-linecap="round"
-									stroke-linejoin="round"
-									d="M12 20h9M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"
-								/></svg
-							>
+							<FeIcon name="pencil" size={15} />
 						</button>
 					{/if}
 					<button
@@ -1369,16 +1361,7 @@
 						aria-label="Delete"
 						onclick={trashSelected}
 					>
-						<svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"
-							><path
-								fill="none"
-								stroke="currentColor"
-								stroke-width="2"
-								stroke-linecap="round"
-								stroke-linejoin="round"
-								d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"
-							/></svg
-						>
+						<FeIcon name="trash" size={15} />
 					</button>
 					{#if caps.supportsMove}
 						<button
@@ -1389,21 +1372,7 @@
 							aria-label="Cut"
 							onclick={cutSelection}
 						>
-							<svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"
-								><circle cx="6" cy="6" r="3" fill="none" stroke="currentColor" stroke-width="2" /><circle
-									cx="6"
-									cy="18"
-									r="3"
-									fill="none"
-									stroke="currentColor"
-									stroke-width="2"
-								/><path
-									fill="none"
-									stroke="currentColor"
-									stroke-width="2"
-									d="M20 4 8.12 15.88M14.47 14.48 20 20"
-								/></svg
-							>
+							<FeIcon name="scissors" size={15} />
 						</button>
 					{/if}
 					{#if caps.supportsCopy}
@@ -1415,23 +1384,7 @@
 							aria-label="Copy"
 							onclick={copySelection}
 						>
-							<svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"
-								><rect
-									x="9"
-									y="9"
-									width="13"
-									height="13"
-									rx="2"
-									fill="none"
-									stroke="currentColor"
-									stroke-width="2"
-								/><path
-									fill="none"
-									stroke="currentColor"
-									stroke-width="2"
-									d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"
-								/></svg
-							>
+							<FeIcon name="copy" size={15} />
 						</button>
 					{/if}
 				{/if}
@@ -1454,7 +1407,7 @@
 					aria-label="Close"
 					onclick={onClose}
 				>
-					×
+					<FeIcon name="x" size={15} />
 				</button>
 			{/if}
 		</div>
@@ -1513,7 +1466,9 @@
 						data-pending-name={p.name}
 						aria-disabled="true"
 					>
-						<span class="fe-icon">{p.direction === 'sending' ? '📤' : '📥'}</span>
+						<span class="fe-icon">
+							<FeIcon name={p.direction === 'sending' ? 'upload' : 'download'} size={16} />
+						</span>
 						<span class="fe-name" title={p.name}>{p.name}</span>
 						<div
 							class="fe-pending-bar"
@@ -1593,7 +1548,9 @@
 					}}
 				>
 					<span class="fe-row-main">
-						<span class="fe-icon">{n.kind === 'folder' ? '📁' : '📄'}</span>
+						<span class="fe-icon">
+							<FeIcon name={n.kind === 'folder' ? 'folder' : 'file'} size={16} />
+						</span>
 						{#if renamingId === n.id}
 							<input
 								data-testid="fe-rename-input"
@@ -1824,7 +1781,9 @@
 								data-name={n.name}
 							>
 								<span class="fe-row-main">
-									<span class="fe-icon">{n.kind === 'folder' ? '📁' : '📄'}</span>
+									<span class="fe-icon">
+										<FeIcon name={n.kind === 'folder' ? 'folder' : 'file'} size={16} />
+									</span>
 									<span class="fe-name" title={n.name}>{n.name}</span>
 								</span>
 								<span class="fe-row-actions">
@@ -2184,6 +2143,14 @@
 	.fe-row.focused {
 		outline: 1px solid var(--accent-light);
 		outline-offset: -1px;
+	}
+	.fe-icon {
+		display: inline-flex;
+		color: var(--text-secondary);
+		flex-shrink: 0;
+	}
+	.fe-row.folder .fe-icon {
+		color: var(--accent-light);
 	}
 	.fe-name {
 		flex: 1;

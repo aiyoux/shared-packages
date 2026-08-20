@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { ExplorerCapabilities } from '../ui/explorerDriver.js';
 	import type { CopyAcrossPath } from '../ui/copyAcross.js';
+	import FeIcon from '../ui/FeIcon.svelte';
 
 	/** Storage backend kind for the hub connection switcher. */
 	export type ConnectionKind = 'local' | 'memory' | 'disk' | 'b2' | 'rclone' | 'monitor';
@@ -312,7 +313,7 @@
 			onclick={toggleMenu}
 		>
 			<span class="conn-trigger-label">{activeLabel}</span>
-			<span class="conn-caret" aria-hidden="true">▾</span>
+			<span class="conn-caret"><FeIcon name="chevron-down" size={14} /></span>
 		</button>
 		<div class="conn-info-wrap">
 			<button
@@ -322,7 +323,7 @@
 				aria-label={`Features for ${activeLabel}`}
 				aria-describedby="conn-caps-tip"
 			>
-				i
+				<FeIcon name="info" size={12} />
 			</button>
 			<div class="conn-caps-tip" id="conn-caps-tip" data-testid="conn-caps-tooltip" role="tooltip">
 				<p class="caps-title">{activeLabel}</p>
@@ -478,12 +479,7 @@
 		aria-label="Configure connections"
 		onclick={toggleSettings}
 	>
-		<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
-			<path
-				fill="currentColor"
-				d="M19.14 12.94c.04-.31.06-.63.06-.94s-.02-.63-.06-.94l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.39.96a7.03 7.03 0 0 0-1.63-.94l-.36-2.54A.5.5 0 0 0 13.9 2h-3.8a.5.5 0 0 0-.49.42l-.36 2.54c-.59.22-1.14.54-1.63.94l-2.39-.96a.5.5 0 0 0-.6.22L2.71 8.48a.5.5 0 0 0 .12.64l2.03 1.58c-.04.31-.06.63-.06.94s.02.63.06.94L2.83 14.16a.5.5 0 0 0-.12.64l1.92 3.32c.13.22.4.31.64.22l2.39-.96c.49.4 1.04.72 1.63.94l.36 2.54c.05.24.25.42.49.42h3.8c.24 0 .44-.18.49-.42l.36-2.54c.59-.22 1.14-.54 1.63-.94l2.39.96c.24.09.51 0 .64-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58ZM12 15.5A3.5 3.5 0 1 1 12 8.5a3.5 3.5 0 0 1 0 7Z"
-			/>
-		</svg>
+		<FeIcon name="settings" size={15} />
 	</button>
 
 	<div
@@ -597,18 +593,16 @@
 		flex-shrink: 0;
 	}
 	.conn-info {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
 		width: 1.45rem;
 		height: 1.45rem;
 		padding: 0;
-		border-radius: 999px;
+		border-radius: var(--hud-radius);
 		border: 1px solid var(--line-hairline);
 		background: var(--surface-2);
-		color: inherit;
-		font: inherit;
-		font-size: 0.72rem;
-		font-weight: 750;
-		font-style: italic;
-		line-height: 1;
+		color: var(--text-secondary);
 		cursor: help;
 	}
 	.conn-caps-tip {
@@ -729,8 +723,9 @@
 		font-weight: 600;
 	}
 	.conn-caret {
+		display: inline-flex;
 		opacity: 0.7;
-		font-size: 0.75rem;
+		color: var(--text-muted);
 	}
 	.conn-settings-wrap {
 		position: relative;

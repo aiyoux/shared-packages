@@ -173,8 +173,8 @@
 		 */
 		settingsPortal?: string;
 		/**
-		 * CSS selector for connection switchers. When empty, each files pane
-		 * keeps its own switcher (workspace). Files fullscreen uses the hub topbar.
+		 * CSS selector for connection switchers (left of the pane/window header).
+		 * When empty, each files pane keeps its own switcher in pane chrome.
 		 */
 		switcherPortal?: string;
 		/**
@@ -1334,45 +1334,32 @@
 {/snippet}
 
 {#if hostSwitchers}
-	<div class="dpe-host-chrome" use:portal={switcherPortal}>
-		{#if paneShowsSwitcher('left')}
-			<div
-				class="dpe-host-conn"
-				data-testid="conn-switcher-left"
-				data-pane="left"
-				aria-label="Left pane connection"
-			>
-				{@render paneSwitcher('left')}
-			</div>
-		{/if}
-		{#if dualPane && paneShowsSwitcher('right') && !overrideRight}
-			<div
-				class="dpe-host-conn"
-				data-testid="conn-switcher-right"
-				data-pane="right"
-				aria-label="Right pane connection"
-			>
-				{@render paneSwitcher('right')}
-			</div>
-		{/if}
-	</div>
-{/if}
-
-{#if hostSettings}
-	<div class="dpe-host-settings-park" class:parked={Boolean(settingsPortal)}>
-		<div class="dpe-host-settings" use:portal={settingsPortal}>
-			<ConnectionSwitcher
-				variant="settings"
-				profiles={b2Chips}
-				rcloneProfiles={rcloneChips}
-				monitorProfiles={monitorChips}
-				showRclone={showRclone}
-				showMonitor={showMonitor}
-				onConfigureB2={() => openHostForm('b2')}
-				onConfigureRclone={() => openHostForm('rclone')}
-				onConfigureMonitor={() => openHostForm('monitor')}
-				onConfigureDisk={() => void connectDisk('left', { replace: true })}
-			/>
+	<div class="dpe-host-chrome-park" class:parked={Boolean(switcherPortal)}>
+		<div
+			class="dpe-host-chrome"
+			class:portaled={Boolean(switcherPortal)}
+			use:portal={switcherPortal || undefined}
+		>
+			{#if paneShowsSwitcher('left')}
+				<div
+					class="dpe-host-conn"
+					data-testid="conn-switcher-left"
+					data-pane="left"
+					aria-label="Left pane connection"
+				>
+					{@render paneSwitcher('left')}
+				</div>
+			{/if}
+			{#if dualPane && paneShowsSwitcher('right') && !overrideRight}
+				<div
+					class="dpe-host-conn"
+					data-testid="conn-switcher-right"
+					data-pane="right"
+					aria-label="Right pane connection"
+				>
+					{@render paneSwitcher('right')}
+				</div>
+			{/if}
 		</div>
 	</div>
 {/if}
@@ -1415,6 +1402,25 @@
 	</div>
 {/if}
 
+{#if hostSettings}
+	<div class="dpe-host-settings-park" class:parked={Boolean(settingsPortal)}>
+		<div class="dpe-host-settings" use:portal={settingsPortal}>
+			<ConnectionSwitcher
+				variant="settings"
+				profiles={b2Chips}
+				rcloneProfiles={rcloneChips}
+				monitorProfiles={monitorChips}
+				showRclone={showRclone}
+				showMonitor={showMonitor}
+				onConfigureB2={() => openHostForm('b2')}
+				onConfigureRclone={() => openHostForm('rclone')}
+				onConfigureMonitor={() => openHostForm('monitor')}
+				onConfigureDisk={() => void connectDisk('left', { replace: true })}
+			/>
+		</div>
+	</div>
+{/if}
+
 <div class="dpe-shell" class:dual={dualPane}>
 
 	<div class="files-body" class:dual={dualPane} data-testid={tids.body}>
@@ -1447,10 +1453,35 @@
 </div>
 
 <style>
+	.dpe-host-chrome-park.parked {
+		position: absolute;
+		width: 0;
+		height: 0;
+		margin: 0;
+		padding: 0;
+		overflow: hidden;
+		pointer-events: none;
+	}
 	.dpe-host-chrome {
 		display: flex;
 		align-items: center;
 		gap: 0.65rem;
+		min-width: 0;
+	}
+	.dpe-host-chrome.portaled :global(.conn-trigger) {
+		box-sizing: border-box;
+		min-height: var(--control-h-sm);
+		height: var(--control-h-sm);
+		padding: 0 0.55rem;
+		font-size: 0.75rem;
+	}
+	.dpe-host-chrome.portaled :global(.conn-select) {
+		min-width: 8rem;
+		max-width: 14rem;
+	}
+	.dpe-host-chrome.portaled :global(.conn-info) {
+		width: var(--control-h-sm);
+		height: var(--control-h-sm);
 	}
 	.dpe-host-conn {
 		display: flex;
