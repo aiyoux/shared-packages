@@ -76,8 +76,6 @@
 		}>;
 		/** Hide the toolbar Trash button (popup listing). Default shows it when supportsTrash. */
 		hideToolbarTrash?: boolean;
-		/** Dual-pane header owns Select file — hide the toolbar copy. */
-		hideToolbarUpload?: boolean;
 		/** Extra manage-toolbar actions (e.g. Copy across when chrome is in the hub). */
 		toolbarExtra?: Snippet;
 	}
@@ -105,7 +103,6 @@
 		compatLibraryTestId = false,
 		compatSaveTestId = false,
 		hideToolbarTrash = false,
-		hideToolbarUpload = false,
 		toolbarExtra
 	}: Props = $props();
 
@@ -142,6 +139,22 @@
 	let selectMulti = $state(false);
 	let previewEntry = $state<ExplorerEntry | null>(null);
 	let previewBusy = $state(false);
+	/** off → below (horizontal split) → beside (vertical split) → off. */
+	type PreviewDock = 'off' | 'bottom' | 'right';
+	const PREVIEW_DOCK_KEY = 'fe:previewDock';
+	let previewDock = $state<PreviewDock>(
+		typeof localStorage === 'undefined'
+			? 'off'
+			: (() => {
+					try {
+						const v = localStorage.getItem(PREVIEW_DOCK_KEY);
+						if (v === 'bottom' || v === 'right') return v;
+					} catch {
+						/* ignore */
+					}
+					return 'off';
+				})()
+	);
 	// svelte-ignore state_referenced_locally -- `default` prop, by contract.
 	let saveName = $state(defaultName);
 	let error = $state('');
@@ -182,7 +195,6 @@
 	let focusIndex = $state(-1);
 	let clipboard = $state<{ mode: 'copy' | 'cut'; ids: string[] } | null>(null);
 	let uploadBusy = $state(false);
-	let fileInputEl: HTMLInputElement | undefined = $state();
 	let osDropOver = $state(false);
 
 	/** Per-instance DnD session (dual-pane safe). */
@@ -770,6 +782,28 @@
 		previewEntry = n;
 	}
 
+	function persistPreviewDock(next: PreviewDock) {
+		try {
+			if (next === 'off') localStorage.removeItem(PREVIEW_DOCK_KEY);
+			else localStorage.setItem(PREVIEW_DOCK_KEY, next);
+		} catch {
+			/* ignore */
+		}
+	}
+
+	function cyclePreviewDock() {
+		const next: PreviewDock =
+			previewDock === 'off' ? 'bottom' : previewDock === 'bottom' ? 'right' : 'off';
+		previewDock = next;
+		persistPreviewDock(next);
+		if (next === 'off') previewEntry = null;
+	}
+
+	$effect(() => {
+		if (previewDock === 'off') return;
+		previewEntry = selectedPrimary();
+	});
+
 	function formatBytes(n: number | undefined): string {
 		if (n == null) return 'Unknown size';
 		if (n < 1024) return `${n} B`;
@@ -886,6 +920,9 @@
 		| null = null;
 	let dragStarted = false;
 	let selectedOnPointerUp = false;
+	/** Skip the second pointerup of a double-click so multi-select doesn't toggle off. */
+	let lastRowActivate: { id: string; at: number } | null = null;
+	const DBLCLICK_MS = 500;
 
 	function onRowPointerDown(e: PointerEvent, n: ExplorerEntry, i: number) {
 		if (e.button != null && e.button !== 0) return;
@@ -905,17 +942,46 @@
 		if (dx * dx + dy * dy > SELECT_SLOP_PX * SELECT_SLOP_PX) return;
 		focusIndex = start.index;
 		selectedOnPointerUp = true;
+		const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+		if (lastRowActivate && lastRowActivate.id === n.id && now - lastRowActivate.at < DBLCLICK_MS) {
+			return;
+		}
+		lastRowActivate = { id: n.id, at: now };
 		void applyRowActivate(n, e);
 	}
 
 	function onRowClick(e: MouseEvent, n: ExplorerEntry, i: number) {
 		if (isRowControl(e.target)) return;
+		if (e.detail > 1) return;
 		if (selectedOnPointerUp) {
 			selectedOnPointerUp = false;
 			return;
 		}
 		focusIndex = i;
 		void applyRowActivate(n, e);
+	}
+
+	function onRowDblClick(e: MouseEvent, n: ExplorerEntry, i: number) {
+		if (isRowControl(e.target)) return;
+		if (renamingId === n.id) return;
+		e.preventDefault();
+		e.stopPropagation();
+		focusIndex = i;
+		selectExclusive(n);
+		void openRow(n);
+	}
+
+	async function openRow(n: ExplorerEntry) {
+		if (n.kind === 'folder') {
+			await enterFolder(n);
+			return;
+		}
+		if (!rowActionable(n)) return;
+		if (onOpen && (mode === 'open' || mode === 'manage')) {
+			await onOpen(n);
+			return;
+		}
+		if (mode === 'save') saveName = n.name;
 	}
 
 	async function applyRowActivate(n: ExplorerEntry, e?: Event) {
@@ -1062,13 +1128,7 @@
 			error = errMsg(e);
 		} finally {
 			uploadBusy = false;
-			if (fileInputEl) fileInputEl.value = '';
 		}
-	}
-
-	async function onUploadFiles(files: FileList | null) {
-		if (!files?.length) return;
-		await importDeviceFiles(Array.from(files), parentId);
 	}
 
 	function allowOsFileDrag(e: DragEvent): boolean {
@@ -1225,10 +1285,13 @@
 <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
 <div
 	class="fe-root {variant} {className}"
+	class:preview-bottom={previewDock === 'bottom'}
+	class:preview-right={previewDock === 'right'}
 	data-testid={rootTestId}
 	data-fe-backend={driver.id}
 	data-fe-mode={mode}
 	data-fe-select-multi={selectMulti ? 'on' : 'off'}
+	data-fe-preview-dock={previewDock}
 	role={variant === 'dialog' ? 'dialog' : 'group'}
 	aria-label="File explorer"
 	tabindex="0"
@@ -1278,6 +1341,21 @@
 				>
 					Details
 				</button>
+				<button
+					type="button"
+					class="ds-btn ds-btn--sm ds-btn--secondary"
+					data-testid="fe-preview-layout"
+					class:active={previewDock !== 'off'}
+					aria-pressed={previewDock !== 'off'}
+					title={previewDock === 'off'
+						? 'Show preview below the list'
+						: previewDock === 'bottom'
+							? 'Move preview beside the list'
+							: 'Hide preview'}
+					onclick={cyclePreviewDock}
+				>
+					Preview
+				</button>
 			{/if}
 			{#if canOpenSelection}
 				<button
@@ -1301,25 +1379,19 @@
 					</button>
 				{/if}
 				{#if canImportFromDevice}
-					{#if !hideToolbarUpload}
-						<button
-							type="button"
-							class="ds-btn ds-btn--sm ds-btn--secondary"
-							data-testid="fe-upload"
-							disabled={uploadBusy}
-							title="Open the system file picker and add the file to this folder"
-							onclick={() => fileInputEl?.click()}
-						>
-							{uploadBusy ? 'Uploading…' : 'Select file'}
-						</button>
-					{/if}
 					<input
-						bind:this={fileInputEl}
 						type="file"
 						multiple
 						hidden
 						data-testid="fe-upload-input"
-						onchange={(e) => onUploadFiles((e.currentTarget as HTMLInputElement).files)}
+						onchange={(e) => {
+							const list = (e.currentTarget as HTMLInputElement).files;
+							if (!list?.length) return;
+							const el = e.currentTarget;
+							void importDeviceFiles(Array.from(list), parentId).finally(() => {
+								el.value = '';
+							});
+						}}
 					/>
 				{/if}
 				{#if toolbarExtra}
@@ -1440,6 +1512,7 @@
 		</div>
 	{/if}
 
+	<div class="fe-split">
 	<div
 		class="fe-list"
 		tabindex="0"
@@ -1542,10 +1615,7 @@
 						press = null;
 					}}
 					onclick={(e) => onRowClick(e, n, i)}
-					ondblclick={(e) => {
-						e.preventDefault();
-						e.stopPropagation();
-					}}
+					ondblclick={(e) => onRowDblClick(e, n, i)}
 				>
 					<span class="fe-row-main">
 						<span class="fe-icon">
@@ -1580,6 +1650,124 @@
 			</div>
 		{/if}
 	</div>
+	{#if previewDock !== 'off'}
+		<aside
+			class="fe-preview-dock"
+			data-testid="fe-preview-dock"
+			data-placement={previewDock}
+			aria-label="File preview"
+		>
+			{#if previewEntry}
+				<h2 class="fe-preview-name" data-testid="fe-file-preview-name">{previewEntry.name}</h2>
+				<dl class="fe-preview-meta">
+					<div>
+						<dt>Size</dt>
+						<dd data-testid="fe-file-preview-size">{formatBytes(previewEntry.size)}</dd>
+					</div>
+					{#if previewEntry.fileType}
+						<div>
+							<dt>Type</dt>
+							<dd data-testid="fe-file-preview-type">{previewEntry.fileType}</dd>
+						</div>
+					{/if}
+					{#if previewEntry.contentType}
+						<div>
+							<dt>MIME</dt>
+							<dd>{previewEntry.contentType}</dd>
+						</div>
+					{/if}
+					{#if previewEntry.updatedAt}
+						<div>
+							<dt>Updated</dt>
+							<dd>{formatWhen(previewEntry.updatedAt)}</dd>
+						</div>
+					{/if}
+				</dl>
+				<div class="fe-preview-actions">
+					{#if previewEntry.kind === 'folder' && mode !== 'browse'}
+						<button
+							type="button"
+							class="ds-btn ds-btn--sm ds-btn--primary"
+							data-testid="fe-file-preview-open"
+							disabled={previewBusy}
+							onclick={() => void confirmPreviewOpen()}
+						>
+							Open
+						</button>
+					{:else if onOpen && rowActionable(previewEntry) && (mode === 'open' || mode === 'manage')}
+						<button
+							type="button"
+							class="ds-btn ds-btn--sm ds-btn--primary"
+							data-testid="fe-file-preview-open"
+							disabled={previewBusy}
+							onclick={() => void confirmPreviewOpen()}
+						>
+							{defaultOpenLabel(previewEntry)}
+						</button>
+					{/if}
+					{#if onSendFile && previewEntry.kind === 'file'}
+						<button
+							type="button"
+							class="ds-btn ds-btn--sm ds-btn--primary"
+							data-testid="fe-file-preview-send"
+							disabled={previewBusy}
+							onclick={() => void confirmPreviewSend()}
+						>
+							{sendLabel}
+						</button>
+					{/if}
+					{#if mode === 'manage'}
+						{#if caps.supportsRename}
+							<button
+								type="button"
+								class="ds-btn ds-btn--sm ds-btn--secondary"
+								data-testid="fe-rename-btn"
+								disabled={listBusy}
+								onclick={renamePreviewItem}
+							>
+								Rename
+							</button>
+						{/if}
+						{#if caps.supportsCopy && previewEntry.kind === 'file'}
+							<button
+								type="button"
+								class="ds-btn ds-btn--sm ds-btn--secondary"
+								data-testid="fe-row-copy"
+								disabled={listBusy}
+								onclick={() => void copyPreviewItem()}
+							>
+								Copy
+							</button>
+						{/if}
+						{#if caps.supportsDownload && previewEntry.kind === 'file'}
+							{@const downloadEntry = previewEntry}
+							<button
+								type="button"
+								class="ds-btn ds-btn--sm ds-btn--secondary"
+								data-testid="fe-row-download"
+								disabled={listBusy}
+								onclick={() => void downloadNode(downloadEntry)}
+							>
+								Download
+							</button>
+						{/if}
+						<button
+							type="button"
+							class="ds-btn ds-btn--sm ds-btn--danger"
+							data-testid="fe-row-trash"
+							disabled={listBusy}
+							onclick={() => void deletePreviewItem()}
+						>
+							Delete
+						</button>
+					{/if}
+				</div>
+			{:else}
+				<p class="fe-preview-empty">Select a file or folder</p>
+			{/if}
+		</aside>
+	{/if}
+	</div>
 
 	{#if mode === 'save'}
 		<footer class="fe-save-bar" data-testid="fe-save-bar">
@@ -1604,7 +1792,7 @@
 		</footer>
 	{/if}
 
-	{#if previewEntry}
+	{#if previewEntry && previewDock === 'off'}
 		<div
 			class="fe-preview-backdrop"
 			data-testid="fe-file-preview"
@@ -1885,6 +2073,41 @@
 	.fe-close {
 		font-size: 18px;
 		line-height: 1;
+	}
+	.fe-split {
+		flex: 1;
+		min-height: 0;
+		min-width: 0;
+		display: grid;
+		grid-template-columns: 1fr;
+		grid-template-rows: 1fr;
+	}
+	.fe-root.preview-bottom .fe-split {
+		grid-template-rows: 1fr minmax(9rem, 36%);
+	}
+	.fe-root.preview-right .fe-split {
+		grid-template-columns: 1fr minmax(14rem, 36%);
+	}
+	.fe-split > .fe-list {
+		min-height: 0;
+		min-width: 0;
+	}
+	.fe-preview-dock {
+		min-width: 0;
+		min-height: 0;
+		overflow: auto;
+		padding: 12px 14px;
+		background: var(--surface-2);
+		border-left: 1px solid var(--line-hairline);
+	}
+	.fe-root.preview-bottom .fe-preview-dock {
+		border-left: 0;
+		border-top: 1px solid var(--line-hairline);
+	}
+	.fe-preview-empty {
+		margin: 0;
+		color: var(--text-muted);
+		font-size: var(--text-sm);
 	}
 	.fe-list {
 		position: relative;

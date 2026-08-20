@@ -302,7 +302,6 @@
 		destLabel: string;
 		resolve: (ok: boolean) => void;
 	} | null>(null);
-	let selectFileInput = $state<Partial<Record<PaneId, HTMLInputElement>>>({});
 	let osDropPane = $state<PaneId | null>(null);
 
 	function getMemoryDriver(): ExplorerDriver {
@@ -753,17 +752,6 @@
 		return Boolean(drv.upload || drv.writeFile);
 	}
 
-	function bindSelectFileInput(node: HTMLInputElement, id: PaneId) {
-		selectFileInput = { ...selectFileInput, [id]: node };
-		return {
-			destroy() {
-				const next = { ...selectFileInput };
-				delete next[id];
-				selectFileInput = next;
-			}
-		};
-	}
-
 	async function importOsFilesToPane(
 		id: PaneId,
 		files: File[],
@@ -788,8 +776,6 @@
 			copyError = e instanceof Error ? e.message : String(e);
 		} finally {
 			copyBusy = false;
-			const input = selectFileInput[id];
-			if (input) input.value = '';
 		}
 	}
 
@@ -1091,29 +1077,6 @@
 			{#if paneShowsSwitcher(id) && !(id === 'right' && overrideRight)}
 				{@render paneSwitcher(id)}
 			{/if}
-			{#if paneCanImport(id)}
-				<button
-					type="button"
-					class="ds-btn ds-btn--sm ds-btn--secondary select-file"
-					data-testid="fe-upload"
-					disabled={copyBusy}
-					title="Open the system file picker and copy a file into this folder"
-					onclick={() => selectFileInput[id]?.click()}
-				>
-					{copyBusy && copyDestPane === id ? 'Adding…' : 'Select file'}
-				</button>
-				<input
-					type="file"
-					multiple
-					hidden
-					data-testid="fe-upload-input"
-					use:bindSelectFileInput={id}
-					onchange={(e) => {
-						const list = (e.currentTarget as HTMLInputElement).files;
-						if (list?.length) void importOsFilesToPane(id, Array.from(list));
-					}}
-				/>
-			{/if}
 			{#if showCopyAcross}
 				<button
 					type="button"
@@ -1259,7 +1222,6 @@
 						variant="panel"
 						driver={overrideRight.driver}
 						showPersistence={false}
-						hideToolbarUpload={!hostSettings}
 						initialParentId={p.ctx.parentId}
 						pending={panePending(id)}
 						onContextChange={(ctx) => {
@@ -1277,7 +1239,6 @@
 						variant="panel"
 						driver={localDriver}
 						showPersistence={false}
-						hideToolbarUpload={!hostSettings}
 						initialParentId={p.ctx.parentId}
 						onOpen={onOpen}
 						onSendFile={
@@ -1306,7 +1267,6 @@
 						variant="panel"
 						driver={drv}
 						showPersistence={false}
-						hideToolbarUpload={!hostSettings}
 						initialParentId={p.ctx.parentId}
 						onOpen={p.activeKind === 'memory' ? onOpen : undefined}
 						onSendFile={

@@ -12,6 +12,7 @@ describe('FileExplorer component', () => {
 
 	beforeEach(async () => {
 		resetSharedVfsForTests();
+		localStorage.removeItem('fe:previewDock');
 		vfs = createVfs({
 			dbName: `fe-comp-${Date.now()}-${Math.random()}`,
 			memoryOpfs: true,
@@ -49,7 +50,6 @@ describe('FileExplorer component', () => {
 		expect(await screen.findByTestId('file-explorer')).toBeTruthy();
 		expect(screen.getByTestId('file-explorer').getAttribute('data-fe-mode')).toBe('manage');
 		expect(screen.getByTestId('fe-new-folder')).toBeTruthy();
-		expect(screen.getByTestId('fe-upload')).toBeTruthy();
 		expect(screen.getByTestId('fe-item-details')).toBeTruthy();
 		expect(screen.getByTestId('fe-trash-view')).toBeTruthy();
 		expect(screen.getByTestId('fe-breadcrumbs')).toBeTruthy();
@@ -295,6 +295,83 @@ describe('FileExplorer component', () => {
 		expect(screen.getByTestId('fe-permanent-delete')).toBeTruthy();
 		const stillLive = document.querySelectorAll('[data-testid="fe-list"] [data-testid="fe-file-row"]');
 		expect([...stillLive].some((r) => /KeepMe/.test(r.textContent || ''))).toBe(true);
+	});
+
+	it('double-click enters a folder', async () => {
+		const folder = await vfs.mkdir(null, 'Docs');
+		await vfs.writeFile({
+			parentId: folder.id,
+			name: 'inside.txt',
+			fileType: 'txt',
+			body: new Blob(['hi'], { type: 'text/plain' }),
+			contentType: 'text/plain'
+		});
+		render(FileExplorer, { props: { mode: 'manage', vfs, variant: 'panel' } });
+		await viWaitFor(() => !!document.querySelector('[data-testid="fe-folder-row"]'));
+		const folderRow = document.querySelector('[data-testid="fe-folder-row"]') as HTMLElement;
+		await fireEvent.dblClick(folderRow);
+		await viWaitForRows(1);
+		const file = document.querySelector('[data-testid="fe-file-row"]') as HTMLElement;
+		expect(file?.getAttribute('data-name')).toBe('inside.txt');
+	});
+
+	it('double-click opens a file via onOpen', async () => {
+		await vfs.writeFile({
+			parentId: null,
+			name: 'Sketch',
+			fileType: 'skch',
+			body: { format: 'skch', schemaVersion: 1, name: 'Sketch', data: {} }
+		});
+		const opened: string[] = [];
+		render(FileExplorer, {
+			props: {
+				mode: 'manage',
+				vfs,
+				variant: 'panel',
+				onOpen: (entry: { name: string }) => {
+					opened.push(entry.name);
+				}
+			}
+		});
+		await viWaitForRows(1);
+		const row = document.querySelector('[data-testid="fe-file-row"]') as HTMLElement;
+		await fireEvent.dblClick(row);
+		expect(opened).toHaveLength(1);
+		expect(opened[0]).toMatch(/Sketch/);
+	});
+
+	it('Preview cycles below, beside, then off and shows the selected file', async () => {
+		await vfs.writeFile({
+			parentId: null,
+			name: 'Sketch',
+			fileType: 'skch',
+			body: { format: 'skch', schemaVersion: 1, name: 'Sketch', data: {} }
+		});
+		render(FileExplorer, { props: { mode: 'manage', vfs, variant: 'panel' } });
+		await viWaitForRows(1);
+		const root = screen.getByTestId('file-explorer');
+		const toggle = screen.getByTestId('fe-preview-layout');
+		expect(root.getAttribute('data-fe-preview-dock')).toBe('off');
+		expect(screen.queryByTestId('fe-preview-dock')).toBeNull();
+
+		await fireEvent.click(toggle);
+		expect(root.getAttribute('data-fe-preview-dock')).toBe('bottom');
+		const dock = await screen.findByTestId('fe-preview-dock');
+		expect(dock.getAttribute('data-placement')).toBe('bottom');
+		expect(dock.textContent).toMatch(/Select a file or folder/);
+
+		const row = document.querySelector('[data-testid="fe-file-row"]') as HTMLElement;
+		await fireEvent.click(row);
+		await viWaitFor(() => /Sketch/.test(dock.textContent || ''));
+		expect(screen.queryByTestId('fe-file-preview')).toBeNull();
+
+		await fireEvent.click(toggle);
+		expect(root.getAttribute('data-fe-preview-dock')).toBe('right');
+		expect(screen.getByTestId('fe-preview-dock').getAttribute('data-placement')).toBe('right');
+
+		await fireEvent.click(toggle);
+		expect(root.getAttribute('data-fe-preview-dock')).toBe('off');
+		expect(screen.queryByTestId('fe-preview-dock')).toBeNull();
 	});
 });
 

@@ -71,7 +71,7 @@ describe('FileExplorer hard-delete backend', () => {
 		await screen.findByTestId('file-explorer');
 		expect(screen.getByTestId('file-explorer').getAttribute('data-fe-backend')).toBe('mock-b2');
 		expect(screen.queryByTestId('fe-trash-view')).toBeNull();
-		expect(screen.getByTestId('fe-upload')).toBeTruthy();
+		expect(screen.queryByTestId('fe-upload')).toBeNull();
 		expect(screen.getByTestId('fe-new-folder')).toBeTruthy();
 	});
 

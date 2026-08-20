@@ -77,7 +77,7 @@ describe('FileExplorer hard-delete rclone backend', () => {
 		expect(screen.queryByTestId('fe-trash-view')).toBeNull();
 		expect(screen.queryByTestId('fe-empty-trash')).toBeNull();
 		expect(screen.queryByTestId('fe-restore')).toBeNull();
-		expect(screen.getByTestId('fe-upload')).toBeTruthy();
+		expect(screen.queryByTestId('fe-upload')).toBeNull();
 		expect(screen.getByTestId('fe-new-folder')).toBeTruthy();
 	});
 
