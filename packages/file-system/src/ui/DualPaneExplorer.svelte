@@ -34,6 +34,7 @@
 	import { type PaneId, type DualPaneTids } from './dualPaneTypes.js';
 	import { portal } from './portal.js';
 	import '@shared-packages/design-system/button.css';
+	import '@shared-packages/design-system/segmented.css';
 	import {
 		canShowCopyAcross,
 		isDualPhaseCopy,
@@ -1367,7 +1368,7 @@
 {#if !hideToggles}
 	<div class="dpe-layout-park" class:parked={Boolean(layoutPortal)}>
 		<div
-			class="dpe-layout"
+			class="ds-seg dpe-layout"
 			class:portaled={Boolean(layoutPortal)}
 			role="radiogroup"
 			aria-label="File manager layout"
@@ -1534,45 +1535,20 @@
 		pointer-events: none;
 	}
 	.dpe-layout {
-		display: inline-flex;
-		align-items: stretch;
+		flex-wrap: nowrap;
+		width: max-content;
 		flex-shrink: 0;
-		border: 1px solid var(--line-hairline);
-		border-radius: var(--hud-radius);
-		background: rgb(var(--overlay-rgb) / 0.02);
 	}
 	.dpe-layout.portaled {
 		height: var(--control-h-sm);
+		padding: 2px;
+		gap: 2px;
 	}
 	.dpe-layout-opt {
-		box-sizing: border-box;
-		margin: 0;
 		padding: 0 0.65rem;
-		border: 0;
-		border-right: 1px solid var(--line-hairline);
-		background: transparent;
-		color: var(--text-muted);
-		font: inherit;
 		font-size: 0.72rem;
-		font-weight: 600;
 		letter-spacing: 0.04em;
 		text-transform: uppercase;
-		cursor: pointer;
-	}
-	.dpe-layout-opt:last-child {
-		border-right: 0;
-	}
-	.dpe-layout-opt.active {
-		background: rgb(var(--accent-rgb) / 0.08);
-		color: var(--text-primary);
-	}
-	.dpe-layout-opt:hover:not(.active) {
-		background: rgb(var(--overlay-rgb) / 0.04);
-		color: var(--text-primary);
-	}
-	.dpe-layout-opt:focus-visible {
-		outline: 1px solid var(--accent);
-		outline-offset: -1px;
 	}
 	.copy-err,
 	.send-err {

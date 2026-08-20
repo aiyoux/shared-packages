@@ -33,7 +33,8 @@
     "tailwind-merge": "^3.4.0"
   },
   "peerDependencies": {
-    "svelte": "^5.0.0"
+    "svelte": "^5.0.0",
+    "@shared-packages/design-system": "*"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^7.0.0",

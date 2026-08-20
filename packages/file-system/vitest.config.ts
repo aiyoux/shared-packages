@@ -31,6 +31,10 @@ export default defineConfig({
 				root,
 				'../design-system/src/button.css'
 			),
+			'@shared-packages/design-system/segmented.css': path.resolve(
+				root,
+				'../design-system/src/segmented.css'
+			),
 			'@shared-packages/design-system': path.resolve(root, '../design-system/src')
 		}
 	}

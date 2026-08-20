@@ -35,6 +35,7 @@
     "./LevelMeter.svelte": "./src/components/LevelMeter.svelte",
     "./Sidebar.svelte": "./src/components/Sidebar.svelte",
     "./button.css": "./src/button.css",
+    "./segmented.css": "./src/segmented.css",
     "./motion.css": "./src/motion.css",
     "./fonts.css": "./src/fonts.css"
   },

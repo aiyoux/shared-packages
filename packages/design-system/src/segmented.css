@@ -1,0 +1,61 @@
+/*
+ * Segmented control appearance — the `.ds-seg` track.
+ *
+ * Lives in a standalone sheet (same reason as button.css): DualPaneExplorer
+ * and other non-wrapper call sites must share the look without forking it.
+ * Segmented.svelte imports this file.
+ *
+ * Selected state: class `selected` / `active` / `on`, or
+ * `aria-selected="true"` / `aria-checked="true"`.
+ */
+@layer primitives {
+	.ds-seg {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: stretch;
+		gap: 3px;
+		padding: 3px;
+		background: var(--surface-2);
+		border: 1px solid var(--line-hairline);
+		border-radius: var(--hud-radius);
+	}
+
+	.ds-seg > :is(button, a) {
+		flex: 1;
+		min-width: 0;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		gap: var(--space-2);
+		padding: 8px 12px;
+		border: 0;
+		border-radius: var(--hud-radius);
+		background: transparent;
+		color: var(--text-secondary);
+		font-family: inherit;
+		font-size: 0.9rem;
+		font-weight: 600;
+		text-align: center;
+		white-space: nowrap;
+		text-decoration: none;
+		cursor: pointer;
+	}
+
+	.ds-seg > :is(button, a):hover:not(:disabled) {
+		color: var(--text-primary);
+	}
+
+	.ds-seg > :is(button, a):disabled {
+		opacity: 0.45;
+		cursor: not-allowed;
+	}
+
+	.ds-seg > :is(button, a).selected,
+	.ds-seg > :is(button, a).active,
+	.ds-seg > :is(button, a).on,
+	.ds-seg > :is(button, a)[aria-selected='true'],
+	.ds-seg > :is(button, a)[aria-checked='true'] {
+		background: var(--accent);
+		color: var(--color-primary-foreground);
+	}
+}
