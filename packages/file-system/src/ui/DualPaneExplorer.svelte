@@ -1106,29 +1106,6 @@
 			{#if paneShowsSwitcher(id) && !(id === 'right' && overrideRight)}
 				{@render paneSwitcher(id)}
 			{/if}
-<<<<<<< Updated upstream
-=======
-			{#if paneCanImport(id)}
-				<FeTipIconBtn
-					testid="fe-upload"
-					tip={copyBusy && copyDestPane === id ? 'Adding…' : 'Select file'}
-					icon="upload"
-					disabled={copyBusy}
-					onclick={() => selectFileInput[id]?.click()}
-				/>
-				<input
-					type="file"
-					multiple
-					hidden
-					data-testid="fe-upload-input"
-					use:bindSelectFileInput={id}
-					onchange={(e) => {
-						const list = (e.currentTarget as HTMLInputElement).files;
-						if (list?.length) void importOsFilesToPane(id, Array.from(list));
-					}}
-				/>
-			{/if}
->>>>>>> Stashed changes
 			{#if showCopyAcross}
 				<FeTipIconBtn
 					testid={tids.copyAcross(id)}

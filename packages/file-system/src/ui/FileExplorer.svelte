@@ -198,6 +198,7 @@
 	let clipboard = $state<{ mode: 'copy' | 'cut'; ids: string[] } | null>(null);
 	let uploadBusy = $state(false);
 	let osDropOver = $state(false);
+	let fileInputEl = $state<HTMLInputElement | null>(null);
 
 	/** Per-instance DnD session (dual-pane safe). */
 	const dnd = createTreeDndSession();
@@ -1288,6 +1289,13 @@
 	const copyTip = $derived(selected.size && caps.supportsCopy ? 'Copy' : 'Select an item to copy');
 	const detailsTip = $derived(selected.size ? 'Details' : 'Select an item for details');
 	const uploadTip = $derived(uploadBusy ? 'Uploading…' : 'Select file');
+	const previewTip = $derived(
+		previewDock === 'off'
+			? 'Show preview below the list'
+			: previewDock === 'bottom'
+				? 'Move preview beside the list'
+				: 'Hide preview'
+	);
 	const pasteTip = $derived(
 		clipboard?.mode === 'cut' ? 'Paste (move)' : clipboard ? 'Paste (copy)' : 'Paste'
 	);
@@ -1327,84 +1335,6 @@
 			{/each}
 		</div>
 		<div class="fe-toolbar" data-testid="fe-toolbar">
-<<<<<<< Updated upstream
-			{#if showPersistChip && localVfs}
-				<StoragePersistenceStatus vfs={localVfs} compact class="fe-persist-slot" />
-			{/if}
-			{#if mode === 'manage' || mode === 'open'}
-				<button
-					type="button"
-					class="ds-btn ds-btn--sm ds-btn--secondary"
-					data-testid="fe-select-multi"
-					class:active={selectMulti}
-					aria-pressed={selectMulti}
-					title="Click rows to select or deselect more than one item"
-					onclick={() => setSelectMulti(!selectMulti)}
-				>
-					Select multi
-				</button>
-				<button
-					type="button"
-					class="ds-btn ds-btn--sm ds-btn--secondary"
-					data-testid="fe-item-details"
-					disabled={selected.size === 0}
-					title="Open details for the selected item"
-					onclick={() => openSelectedDetails()}
-				>
-					Details
-				</button>
-				<button
-					type="button"
-					class="ds-btn ds-btn--sm ds-btn--secondary"
-					data-testid="fe-preview-layout"
-					class:active={previewDock !== 'off'}
-					aria-pressed={previewDock !== 'off'}
-					title={previewDock === 'off'
-						? 'Show preview below the list'
-						: previewDock === 'bottom'
-							? 'Move preview beside the list'
-							: 'Hide preview'}
-					onclick={cyclePreviewDock}
-				>
-					Preview
-				</button>
-			{/if}
-			{#if canOpenSelection}
-				<button
-					type="button"
-					class="ds-btn ds-btn--sm ds-btn--primary"
-					data-testid="fe-open-selected"
-					onclick={() => void openSelected()}
-				>
-					Open
-				</button>
-			{/if}
-			{#if mode === 'manage'}
-				{#if caps.supportsMkdir}
-					<button
-						type="button"
-						class="ds-btn ds-btn--sm ds-btn--secondary"
-						data-testid="fe-new-folder"
-						onclick={() => (newFolderOpen = true)}
-					>
-						New folder
-					</button>
-				{/if}
-				{#if canImportFromDevice}
-					<input
-						type="file"
-						multiple
-						hidden
-						data-testid="fe-upload-input"
-						onchange={(e) => {
-							const list = (e.currentTarget as HTMLInputElement).files;
-							if (!list?.length) return;
-							const el = e.currentTarget;
-							void importDeviceFiles(Array.from(list), parentId).finally(() => {
-								el.value = '';
-							});
-						}}
-=======
 			<div class="fe-toolbar-row">
 				{#if showPersistChip && localVfs}
 					<StoragePersistenceStatus vfs={localVfs} compact class="fe-persist-slot" />
@@ -1424,7 +1354,14 @@
 						icon="info"
 						disabled={selected.size === 0}
 						onclick={() => openSelectedDetails()}
->>>>>>> Stashed changes
+					/>
+					<FeTipIconBtn
+						testid="fe-preview-layout"
+						tip={previewTip}
+						icon="layout"
+						active={previewDock !== 'off'}
+						pressed={previewDock !== 'off'}
+						onclick={cyclePreviewDock}
 					/>
 				{/if}
 				{#if canOpenSelection}
@@ -1445,22 +1382,27 @@
 						/>
 					{/if}
 					{#if canImportFromDevice}
-						{#if !hideToolbarUpload}
-							<FeTipIconBtn
-								testid="fe-upload"
-								tip={uploadTip}
-								icon="upload"
-								disabled={uploadBusy}
-								onclick={() => fileInputEl?.click()}
-							/>
-						{/if}
+						<FeTipIconBtn
+							testid="fe-upload"
+							tip={uploadTip}
+							icon="upload"
+							disabled={uploadBusy}
+							onclick={() => fileInputEl?.click()}
+						/>
 						<input
 							bind:this={fileInputEl}
 							type="file"
 							multiple
 							hidden
 							data-testid="fe-upload-input"
-							onchange={(e) => onUploadFiles((e.currentTarget as HTMLInputElement).files)}
+							onchange={(e) => {
+								const list = (e.currentTarget as HTMLInputElement).files;
+								if (!list?.length) return;
+								const el = e.currentTarget;
+								void importDeviceFiles(Array.from(list), parentId).finally(() => {
+									el.value = '';
+								});
+							}}
 						/>
 					{/if}
 					{#if toolbarExtra}
@@ -2129,11 +2071,6 @@
 		border-color: var(--accent);
 		color: var(--text-primary);
 	}
-<<<<<<< Updated upstream
-	.fe-close {
-		font-size: 18px;
-		line-height: 1;
-	}
 	.fe-split {
 		flex: 1;
 		min-height: 0;
@@ -2169,8 +2106,6 @@
 		color: var(--text-muted);
 		font-size: var(--text-sm);
 	}
-=======
->>>>>>> Stashed changes
 	.fe-list {
 		position: relative;
 		flex: 1;
