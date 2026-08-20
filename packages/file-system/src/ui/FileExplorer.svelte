@@ -9,6 +9,7 @@
 	import { createLocalExplorerDriver } from './localExplorerDriver.js';
 	import StoragePersistenceStatus from './StoragePersistenceStatus.svelte';
 	import FeIcon from './FeIcon.svelte';
+	import FeTipIconBtn from './FeTipIconBtn.svelte';
 	import { createTreeDndSession, resolveDrop, zoneFromY, type DropZone } from './treeDnd/index.js';
 	import {
 		FE_EXPLORER_IDS_MIME,
@@ -16,6 +17,7 @@
 		filesFromDataTransfer
 	} from './copyAcross.js';
 	import '@shared-packages/design-system/button.css';
+	import '@shared-packages/design-system/tooltip.css';
 
 	export type ExplorerMode = 'manage' | 'open' | 'save' | 'browse';
 
@@ -1280,6 +1282,15 @@
 	const rootTestId = $derived(
 		compatLibraryTestId ? 'library-modal' : compatSaveTestId ? 'save-modal' : 'file-explorer'
 	);
+	const renameTip = $derived(selected.size === 1 ? 'Rename' : 'Select one item to rename');
+	const deleteTip = $derived(selected.size ? 'Delete' : 'Select an item to delete');
+	const cutTip = $derived(selected.size && caps.supportsMove ? 'Cut' : 'Select an item to cut');
+	const copyTip = $derived(selected.size && caps.supportsCopy ? 'Copy' : 'Select an item to copy');
+	const detailsTip = $derived(selected.size ? 'Details' : 'Select an item for details');
+	const uploadTip = $derived(uploadBusy ? 'Uploading…' : 'Select file');
+	const pasteTip = $derived(
+		clipboard?.mode === 'cut' ? 'Paste (move)' : clipboard ? 'Paste (copy)' : 'Paste'
+	);
 </script>
 
 <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
@@ -1316,6 +1327,7 @@
 			{/each}
 		</div>
 		<div class="fe-toolbar" data-testid="fe-toolbar">
+<<<<<<< Updated upstream
 			{#if showPersistChip && localVfs}
 				<StoragePersistenceStatus vfs={localVfs} compact class="fe-persist-slot" />
 			{/if}
@@ -1392,95 +1404,127 @@
 								el.value = '';
 							});
 						}}
+=======
+			<div class="fe-toolbar-row">
+				{#if showPersistChip && localVfs}
+					<StoragePersistenceStatus vfs={localVfs} compact class="fe-persist-slot" />
+				{/if}
+				{#if mode === 'manage' || mode === 'open'}
+					<FeTipIconBtn
+						testid="fe-select-multi"
+						tip="Select multiple items"
+						icon="check-square"
+						active={selectMulti}
+						pressed={selectMulti}
+						onclick={() => setSelectMulti(!selectMulti)}
+					/>
+					<FeTipIconBtn
+						testid="fe-item-details"
+						tip={detailsTip}
+						icon="info"
+						disabled={selected.size === 0}
+						onclick={() => openSelectedDetails()}
+>>>>>>> Stashed changes
 					/>
 				{/if}
-				{#if toolbarExtra}
-					{@render toolbarExtra()}
+				{#if canOpenSelection}
+					<FeTipIconBtn
+						testid="fe-open-selected"
+						tip="Open"
+						icon="folder-open"
+						onclick={() => void openSelected()}
+					/>
 				{/if}
-				{#if caps.supportsTrash && !hideToolbarTrash}
-					<button
-						type="button"
-						class="ds-btn ds-btn--sm ds-btn--secondary"
-						data-testid="fe-trash-view"
-						class:active={trashOpen}
-						aria-pressed={trashOpen}
-						aria-haspopup="dialog"
-						title="Open trash"
-						onclick={() => void toggleTrashPopup()}
-					>
-						Trash
-					</button>
-				{/if}
-				{#if selected.size}
-					{#if selected.size === 1 && caps.supportsRename}
-						<button
-							type="button"
-							class="ds-btn ds-btn--icon ds-btn--ghost"
-							data-testid="fe-rename-btn"
-							title="Rename"
-							aria-label="Rename"
-							disabled={listBusy}
-							onclick={renameSelectedItem}
-						>
-							<FeIcon name="pencil" size={15} />
-						</button>
+				{#if mode === 'manage'}
+					{#if caps.supportsMkdir}
+						<FeTipIconBtn
+							testid="fe-new-folder"
+							tip="New folder"
+							icon="folder-plus"
+							onclick={() => (newFolderOpen = true)}
+						/>
 					{/if}
-					<button
-						type="button"
-						class="ds-btn ds-btn--icon ds-btn--ghost"
-						data-testid="fe-trash-selected"
-						title="Delete"
-						aria-label="Delete"
-						onclick={trashSelected}
-					>
-						<FeIcon name="trash" size={15} />
-					</button>
-					{#if caps.supportsMove}
-						<button
-							type="button"
-							class="ds-btn ds-btn--icon ds-btn--ghost"
-							data-testid="fe-cut"
-							title="Cut"
-							aria-label="Cut"
-							onclick={cutSelection}
-						>
-							<FeIcon name="scissors" size={15} />
-						</button>
+					{#if canImportFromDevice}
+						{#if !hideToolbarUpload}
+							<FeTipIconBtn
+								testid="fe-upload"
+								tip={uploadTip}
+								icon="upload"
+								disabled={uploadBusy}
+								onclick={() => fileInputEl?.click()}
+							/>
+						{/if}
+						<input
+							bind:this={fileInputEl}
+							type="file"
+							multiple
+							hidden
+							data-testid="fe-upload-input"
+							onchange={(e) => onUploadFiles((e.currentTarget as HTMLInputElement).files)}
+						/>
 					{/if}
-					{#if caps.supportsCopy}
-						<button
-							type="button"
-							class="ds-btn ds-btn--icon ds-btn--ghost"
-							data-testid="fe-copy"
-							title="Copy"
-							aria-label="Copy"
-							onclick={copySelection}
-						>
-							<FeIcon name="copy" size={15} />
-						</button>
+					{#if toolbarExtra}
+						{@render toolbarExtra()}
+					{/if}
+					{#if caps.supportsTrash && !hideToolbarTrash}
+						<FeTipIconBtn
+							testid="fe-trash-view"
+							tip="Open trash"
+							icon="archive"
+							active={trashOpen}
+							pressed={trashOpen}
+							haspopup
+							onclick={() => void toggleTrashPopup()}
+						/>
+					{/if}
+					{#if clipboard?.ids.length && (caps.supportsMove || caps.supportsCopy)}
+						<FeTipIconBtn
+							testid="fe-paste"
+							tip={pasteTip}
+							icon="clipboard"
+							onclick={() => pasteClipboard()}
+						/>
 					{/if}
 				{/if}
-				{#if clipboard?.ids.length && (caps.supportsMove || caps.supportsCopy)}
-					<button
-						type="button"
-						class="ds-btn ds-btn--sm ds-btn--secondary"
-						data-testid="fe-paste"
-						onclick={() => pasteClipboard()}
-					>
-						Paste {clipboard.mode === 'cut' ? '(move)' : '(copy)'}
-					</button>
+				{#if onClose}
+					<FeTipIconBtn testid="fe-close" tip="Close" icon="x" onclick={onClose} />
 				{/if}
-			{/if}
-			{#if onClose}
-				<button
-					type="button"
-					class="ds-btn ds-btn--icon ds-btn--ghost fe-close"
-					data-testid="fe-close"
-					aria-label="Close"
-					onclick={onClose}
+			</div>
+			{#if mode === 'manage'}
+				<div
+					class="fe-toolbar-row fe-selection-actions"
+					data-testid="fe-selection-actions"
+					aria-label="Selection actions"
 				>
-					<FeIcon name="x" size={15} />
-				</button>
+					<FeTipIconBtn
+						testid="fe-rename-btn"
+						tip={renameTip}
+						icon="pencil"
+						disabled={listBusy || selected.size !== 1 || !caps.supportsRename}
+						onclick={renameSelectedItem}
+					/>
+					<FeTipIconBtn
+						testid="fe-trash-selected"
+						tip={deleteTip}
+						icon="trash"
+						disabled={selected.size === 0}
+						onclick={trashSelected}
+					/>
+					<FeTipIconBtn
+						testid="fe-cut"
+						tip={cutTip}
+						icon="scissors"
+						disabled={selected.size === 0 || !caps.supportsMove}
+						onclick={cutSelection}
+					/>
+					<FeTipIconBtn
+						testid="fe-copy"
+						tip={copyTip}
+						icon="copy"
+						disabled={selected.size === 0 || !caps.supportsCopy}
+						onclick={copySelection}
+					/>
+				</div>
 			{/if}
 		</div>
 	</header>
@@ -2060,9 +2104,24 @@
 	}
 	.fe-toolbar {
 		display: flex;
+		flex-direction: column;
+		align-items: flex-end;
+		gap: 4px;
+		min-width: 0;
+	}
+	.fe-toolbar-row {
+		display: flex;
 		gap: 6px;
 		align-items: center;
 		flex-wrap: wrap;
+		justify-content: flex-end;
+	}
+	.fe-toolbar :global(.ds-btn--icon) {
+		width: var(--control-h-sm);
+		height: var(--control-h-sm);
+	}
+	.fe-toolbar :global(.ds-btn:disabled) {
+		opacity: 0.35;
 	}
 	.fe-toolbar :global(.ds-btn.active),
 	.fe-toolbar :global(.ds-btn[aria-pressed='true']) {
@@ -2070,6 +2129,7 @@
 		border-color: var(--accent);
 		color: var(--text-primary);
 	}
+<<<<<<< Updated upstream
 	.fe-close {
 		font-size: 18px;
 		line-height: 1;
@@ -2109,6 +2169,8 @@
 		color: var(--text-muted);
 		font-size: var(--text-sm);
 	}
+=======
+>>>>>>> Stashed changes
 	.fe-list {
 		position: relative;
 		flex: 1;

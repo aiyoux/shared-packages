@@ -33,7 +33,10 @@
 	// them without the *.svelte named-export limitation.
 	import { type PaneId, type DualPaneTids } from './dualPaneTypes.js';
 	import { portal } from './portal.js';
+	import FeTipIconBtn from './FeTipIconBtn.svelte';
+	import { SplitHandle } from '@shared-packages/ui';
 	import '@shared-packages/design-system/button.css';
+	import '@shared-packages/design-system/tooltip.css';
 	import '@shared-packages/design-system/segmented.css';
 	import {
 		canShowCopyAcross,
@@ -276,6 +279,29 @@
 	// svelte-ignore state_referenced_locally
 	let right = $state<PaneState>(emptyPane(rightDefault));
 	let dualPane = $state(false);
+	/** Left pane share of dual-mode width (same clamp as window-manager splits). */
+	let dualRatio = $state(0.5);
+	const dualRatioKey = $derived(`${dualPaneKey}:ratio`);
+	const MIN_DUAL_RATIO = 0.15;
+	const MAX_DUAL_RATIO = 0.85;
+
+	function clampDualRatio(n: number): number {
+		if (!Number.isFinite(n)) return 0.5;
+		return Math.min(MAX_DUAL_RATIO, Math.max(MIN_DUAL_RATIO, n));
+	}
+
+	function persistDualRatio(n: number) {
+		try {
+			localStorage.setItem(dualRatioKey, String(n));
+		} catch {
+			/* ignore */
+		}
+	}
+
+	function onDualRatioDelta(delta: number) {
+		dualRatio = clampDualRatio(dualRatio + delta);
+		persistDualRatio(dualRatio);
+	}
 	let b2Profiles = $state<B2ConnectionProfileV1[]>([]);
 	let rcloneProfiles = $state<RcloneConnectionProfileV1[]>([]);
 	let monitorProfiles = $state<MonitorConnectionProfileV1[]>([]);
@@ -426,6 +452,12 @@
 			dualPane = stored === null ? dualPaneDefault : stored === '1';
 		} catch {
 			dualPane = dualPaneDefault;
+		}
+		try {
+			const storedRatio = localStorage.getItem(dualRatioKey);
+			if (storedRatio != null) dualRatio = clampDualRatio(Number(storedRatio));
+		} catch {
+			/* keep default */
 		}
 		onDualChange?.(dualPane);
 		void reloadProfiles();
@@ -1041,16 +1073,13 @@
 {#snippet copyAcrossAction(id: PaneId)}
 	{@const p = id === 'left' ? left : right}
 	{#if hostSettings && showCopyAcross}
-		<button
-			type="button"
-			class="ds-btn ds-btn--sm ds-btn--secondary copy-across"
-			data-testid={tids.copyAcross(id)}
+		<FeTipIconBtn
+			testid={tids.copyAcross(id)}
+			tip={copyBusy ? 'Copying…' : 'Copy across'}
+			icon="arrow-left-right"
 			disabled={copyBusy || p.ctx.selectedIds.length === 0}
-			title="Copy selected items into the other pane's open folder"
 			onclick={() => runCopyAcross(id)}
-		>
-			{copyBusy ? 'Copying…' : 'Copy across'}
-		</button>
+		/>
 	{/if}
 {/snippet}
 
@@ -1077,32 +1106,49 @@
 			{#if paneShowsSwitcher(id) && !(id === 'right' && overrideRight)}
 				{@render paneSwitcher(id)}
 			{/if}
+<<<<<<< Updated upstream
+=======
+			{#if paneCanImport(id)}
+				<FeTipIconBtn
+					testid="fe-upload"
+					tip={copyBusy && copyDestPane === id ? 'Adding…' : 'Select file'}
+					icon="upload"
+					disabled={copyBusy}
+					onclick={() => selectFileInput[id]?.click()}
+				/>
+				<input
+					type="file"
+					multiple
+					hidden
+					data-testid="fe-upload-input"
+					use:bindSelectFileInput={id}
+					onchange={(e) => {
+						const list = (e.currentTarget as HTMLInputElement).files;
+						if (list?.length) void importOsFilesToPane(id, Array.from(list));
+					}}
+				/>
+			{/if}
+>>>>>>> Stashed changes
 			{#if showCopyAcross}
-				<button
-					type="button"
-					class="ds-btn ds-btn--sm ds-btn--secondary copy-across"
-					data-testid={tids.copyAcross(id)}
+				<FeTipIconBtn
+					testid={tids.copyAcross(id)}
+					tip={copyBusy ? 'Copying…' : 'Copy across'}
+					icon="arrow-left-right"
 					disabled={copyBusy || p.ctx.selectedIds.length === 0}
-					title="Copy selected items into the other pane's open folder"
 					onclick={() => runCopyAcross(id)}
-				>
-					{copyBusy ? 'Copying…' : 'Copy across'}
-				</button>
+				/>
 				{#if copyError}
 					<span class="copy-err" data-testid={tids.copyAcrossError} role="alert">{copyError}</span>
 				{/if}
 			{/if}
 			{#if onSend}
-				<button
-					type="button"
-					class="ds-btn ds-btn--sm ds-btn--secondary send-selected"
-					data-testid={tids.send(id)}
+				<FeTipIconBtn
+					testid={tids.send(id)}
+					tip={sendBusy ? 'Sending…' : 'Send'}
+					icon="send"
 					disabled={sendBusy || p.ctx.selectedIds.length === 0 || !drv.download}
-					title="Send selected items to the other user"
 					onclick={() => runSend(id)}
-				>
-					{sendBusy ? 'Sending…' : 'Send'}
-				</button>
+				/>
 				{#if sendError?.pane === id}
 					<span class="send-err" data-testid={tids.sendError} role="alert">{sendError.message}</span>
 				{/if}
@@ -1384,10 +1430,27 @@
 
 <div class="dpe-shell" class:dual={dualPane}>
 
-	<div class="files-body" class:dual={dualPane} data-testid={tids.body}>
-		{@render explorerPane('left')}
+	<div
+		class="files-body"
+		class:dual={dualPane}
+		data-testid={tids.body}
+		style={dualPane
+			? `grid-template-columns: minmax(0, ${dualRatio}fr) auto minmax(0, ${1 - dualRatio}fr)`
+			: undefined}
+	>
+		<div class="files-pane-slot">
+			{@render explorerPane('left')}
+		</div>
 		{#if dualPane}
-			{@render explorerPane('right')}
+			<SplitHandle
+				axis="x"
+				testid="fe-dual-split"
+				ariaLabel="Resize file panes"
+				onRatioDelta={onDualRatioDelta}
+			/>
+			<div class="files-pane-slot">
+				{@render explorerPane('right')}
+			</div>
 		{/if}
 	</div>
 	<OpProgressPopup
@@ -1550,14 +1613,21 @@
 		overflow: hidden;
 		background: var(--surface-1);
 		display: grid;
-		grid-template-columns: 1fr;
+		grid-template-columns: minmax(0, 1fr);
+		grid-template-rows: minmax(0, 1fr);
 	}
-	.files-body.dual {
-		grid-template-columns: 1fr 1fr;
+	.files-pane-slot {
+		min-width: 0;
+		min-height: 0;
+		height: 100%;
+		display: flex;
+		flex-direction: column;
 	}
 	.files-pane {
 		min-width: 0;
 		min-height: 0;
+		flex: 1 1 0;
+		height: 100%;
 		display: flex;
 		flex-direction: column;
 	}
@@ -1565,9 +1635,6 @@
 		outline: 2px solid var(--accent);
 		outline-offset: -2px;
 		background: var(--accent-glow);
-	}
-	.files-body.dual .files-pane + .files-pane {
-		border-left: 1px solid var(--line-hairline);
 	}
 	.pane-chrome {
 		display: flex;
@@ -1599,7 +1666,11 @@
 	}
 	@media (max-width: 800px) {
 		.files-body.dual {
-			grid-template-columns: 1fr;
+			grid-template-columns: minmax(0, 1fr) !important;
+			grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+		}
+		.files-body.dual :global([data-testid='fe-dual-split']) {
+			display: none;
 		}
 	}
 </style>

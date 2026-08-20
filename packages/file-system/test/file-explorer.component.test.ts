@@ -53,6 +53,65 @@ describe('FileExplorer component', () => {
 		expect(screen.getByTestId('fe-item-details')).toBeTruthy();
 		expect(screen.getByTestId('fe-trash-view')).toBeTruthy();
 		expect(screen.getByTestId('fe-breadcrumbs')).toBeTruthy();
+		expect(screen.getByTestId('fe-select-multi').parentElement?.getAttribute('data-tooltip')).toBe(
+			'Select multiple items'
+		);
+		expect(screen.getByTestId('fe-item-details').parentElement?.getAttribute('data-tooltip')).toBe(
+			'Select an item for details'
+		);
+		expect(screen.getByTestId('fe-new-folder').parentElement?.getAttribute('data-tooltip')).toBe(
+			'New folder'
+		);
+		expect(screen.getByTestId('fe-upload').parentElement?.getAttribute('data-tooltip')).toBe(
+			'Select file'
+		);
+		expect(screen.getByTestId('fe-trash-view').parentElement?.getAttribute('data-tooltip')).toBe(
+			'Open trash'
+		);
+		expect(screen.getByTestId('fe-selection-actions')).toBeTruthy();
+		expect((screen.getByTestId('fe-rename-btn') as HTMLButtonElement).disabled).toBe(true);
+		expect((screen.getByTestId('fe-trash-selected') as HTMLButtonElement).disabled).toBe(true);
+		expect((screen.getByTestId('fe-cut') as HTMLButtonElement).disabled).toBe(true);
+		expect((screen.getByTestId('fe-copy') as HTMLButtonElement).disabled).toBe(true);
+		expect(screen.getByTestId('fe-rename-btn').parentElement?.getAttribute('data-tooltip')).toBe(
+			'Select one item to rename'
+		);
+		expect(screen.getByTestId('fe-trash-selected').parentElement?.getAttribute('data-tooltip')).toBe(
+			'Select an item to delete'
+		);
+		expect(screen.getByTestId('fe-cut').parentElement?.getAttribute('data-tooltip')).toBe(
+			'Select an item to cut'
+		);
+		expect(screen.getByTestId('fe-copy').parentElement?.getAttribute('data-tooltip')).toBe(
+			'Select an item to copy'
+		);
+	});
+
+	it('enables selection-action icons after a row is selected', async () => {
+		await vfs.writeFile({
+			parentId: null,
+			name: 'Sketch',
+			fileType: 'skch',
+			body: { format: 'skch', schemaVersion: 1, name: 'Sketch', data: {} }
+		});
+		render(FileExplorer, { props: { mode: 'manage', vfs, variant: 'panel' } });
+		await viWaitForRows(1);
+		expect((screen.getByTestId('fe-trash-selected') as HTMLButtonElement).disabled).toBe(true);
+		const row = document.querySelector('[data-testid="fe-file-row"]') as HTMLElement;
+		await fireEvent.click(row);
+		expect(row.classList.contains('selected')).toBe(true);
+		expect((screen.getByTestId('fe-rename-btn') as HTMLButtonElement).disabled).toBe(false);
+		expect((screen.getByTestId('fe-trash-selected') as HTMLButtonElement).disabled).toBe(false);
+		expect((screen.getByTestId('fe-cut') as HTMLButtonElement).disabled).toBe(false);
+		expect((screen.getByTestId('fe-copy') as HTMLButtonElement).disabled).toBe(false);
+		expect(screen.getByTestId('fe-rename-btn').parentElement?.getAttribute('data-tooltip')).toBe(
+			'Rename'
+		);
+		expect(screen.getByTestId('fe-trash-selected').parentElement?.getAttribute('data-tooltip')).toBe(
+			'Delete'
+		);
+		expect(screen.getByTestId('fe-cut').parentElement?.getAttribute('data-tooltip')).toBe('Cut');
+		expect(screen.getByTestId('fe-copy').parentElement?.getAttribute('data-tooltip')).toBe('Copy');
 	});
 
 	it('shows storage persistence chip for local VFS and can hide it', async () => {

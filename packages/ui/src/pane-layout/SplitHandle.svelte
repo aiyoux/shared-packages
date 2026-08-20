@@ -7,12 +7,14 @@
 		axis,
 		ariaLabel = 'Resize panes',
 		disabled = false,
+		testid = 'pl-handle',
 		onRatioDelta
 	}: {
 		/** `x` = side-by-side split (col-resize). `y` = stacked split (row-resize). */
 		axis: 'x' | 'y';
 		ariaLabel?: string;
 		disabled?: boolean;
+		testid?: string;
 		/** Called with pointer delta as a fraction of the split container size. */
 		onRatioDelta: (deltaRatio: number) => void;
 	} = $props();
@@ -88,7 +90,7 @@
 	aria-label={ariaLabel}
 	aria-disabled={disabled}
 	tabindex="0"
-	data-testid="pl-handle"
+	data-testid={testid}
 	onpointerdown={onPointerDown}
 	onpointermove={onPointerMove}
 	onpointerup={onPointerUp}
