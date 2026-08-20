@@ -82,6 +82,17 @@ export type {
 	PaneSessionStore,
 	StorageLike
 } from './pane-layout/session.ts';
+export {
+	PANE_HISTORY_STATE_KEY,
+	readPaneHistoryMarker,
+	createPaneHistory
+} from './pane-layout/history.ts';
+export type {
+	PaneHistory,
+	PaneHistoryMarker,
+	HistoryLike,
+	EventTargetLike
+} from './pane-layout/history.ts';
 export { default as MobileBottomTray } from './MobileBottomTray.svelte';
 export { default as TimeStackBuilder } from './TimeStackBuilder.svelte';
 export { default as TimeReferenceRangeEditor } from './TimeReferenceRangeEditor.svelte';
