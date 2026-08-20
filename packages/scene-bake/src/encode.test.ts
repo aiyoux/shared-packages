@@ -24,6 +24,28 @@ describe('encodeSceneToSvg', () => {
 		expect(paths.some((p) => p.d.length > 0)).toBe(true);
 	});
 
+	it('accepts a duck-typed camera from another three copy', () => {
+		const { scene, camera } = cubeScene();
+		camera.updateMatrixWorld(true);
+		const foreign = {
+			isCamera: true,
+			isPerspectiveCamera: true,
+			fov: camera.fov,
+			aspect: camera.aspect,
+			near: camera.near,
+			far: camera.far,
+			zoom: camera.zoom,
+			position: camera.position,
+			quaternion: camera.quaternion,
+			up: camera.up,
+			matrixWorld: camera.matrixWorld,
+			matrixWorldInverse: camera.matrixWorldInverse
+		};
+		expect(foreign instanceof THREE.Camera).toBe(false);
+		const paths = encodeSceneToSvg(scene, foreign as unknown as THREE.Camera, 200, 200);
+		expect(paths.length).toBeGreaterThan(0);
+	});
+
 	it('async encode matches sync when computeSpans is inline', async () => {
 		const { scene, camera } = cubeScene();
 		const sync = encodeSceneToSvg(scene, camera, 200, 200);

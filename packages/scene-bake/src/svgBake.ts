@@ -1234,6 +1234,65 @@ function projectClipTriangles(
 // pressure. setSize + overdraw are reset each call.
 let sharedSvgRenderer: SVGRenderer | null = null;
 
+/**
+ * SVGRenderer does `camera instanceof Camera` against *this* module's `three`.
+ * Threlte cameras often come from a second `three` copy (Vite resolving
+ * scene-bake vs the app), so instanceof fails even though `isCamera` is true.
+ * Rebuild with local classes; copy world + projection so the bake matches.
+ */
+function cloneCameraForBake(src: THREE.Camera, width: number, height: number): THREE.Camera {
+	const raw = src as THREE.Camera & { current?: THREE.Camera; isCamera?: boolean };
+	const live = raw?.isCamera ? raw : raw?.current;
+	if (!live || !(live as { isCamera?: boolean }).isCamera) {
+		throw new Error('encodeSceneToSvg: camera is not a THREE.Camera');
+	}
+
+	const aspect = Math.max(1e-6, width / height);
+	const ortho = live as THREE.OrthographicCamera;
+	if (ortho.isOrthographicCamera) {
+		const cam = new THREE.OrthographicCamera(
+			ortho.left,
+			ortho.right,
+			ortho.top,
+			ortho.bottom,
+			ortho.near,
+			ortho.far
+		);
+		cam.zoom = ortho.zoom;
+		cam.position.copy(ortho.position);
+		cam.quaternion.copy(ortho.quaternion);
+		cam.up.copy(ortho.up);
+		cam.matrixWorld.copy(ortho.matrixWorld);
+		cam.matrixWorldInverse.copy(ortho.matrixWorldInverse);
+		cam.updateProjectionMatrix();
+		return cam;
+	}
+
+	const persp = live as THREE.PerspectiveCamera;
+	const cam = new THREE.PerspectiveCamera(
+		persp.fov ?? 45,
+		aspect,
+		persp.near ?? 0.1,
+		persp.far ?? 1000
+	);
+	cam.zoom = persp.zoom ?? 1;
+	cam.position.copy(persp.position);
+	cam.quaternion.copy(persp.quaternion);
+	cam.up.copy(persp.up);
+	cam.matrixWorld.copy(persp.matrixWorld);
+	cam.matrixWorldInverse.copy(persp.matrixWorldInverse);
+	cam.updateProjectionMatrix();
+	return cam;
+}
+
+function isMesh(obj: THREE.Object3D): obj is THREE.Mesh {
+	return !!(obj as THREE.Mesh).isMesh;
+}
+
+function isLineSegments(obj: THREE.Object3D): obj is THREE.LineSegments {
+	return !!(obj as THREE.LineSegments).isLineSegments;
+}
+
 function beginEncode(
     threeScene: THREE.Scene,
     threeCamera: THREE.Camera,
@@ -1244,13 +1303,7 @@ function beginEncode(
     renderer.setSize(width, height);
     renderer.overdraw = 0;
 
-    // Clone and prepare camera & scene with updated matrices for accurate 2D projection
-    const exportCamera = threeCamera.clone();
-    if ('aspect' in exportCamera) {
-        (exportCamera as THREE.PerspectiveCamera).aspect = width / height;
-        (exportCamera as THREE.PerspectiveCamera).updateProjectionMatrix();
-    }
-    exportCamera.updateMatrixWorld(true);
+    const exportCamera = cloneCameraForBake(threeCamera, width, height);
 
     const bakeScene = threeScene.clone();
     bakeScene.updateMatrixWorld(true);
@@ -1316,7 +1369,7 @@ function beginEncode(
             return;
         }
 
-        if (child instanceof THREE.Mesh) {
+        if (isMesh(child)) {
             // A cloud is drawn as flat vector puffs, but it is still a solid body
             // in the scene: geometry buried inside it has to be culled like any
             // other hidden line. So the placeholder meshes stay occluders while
@@ -1333,15 +1386,14 @@ function beginEncode(
                 originalSides.set(child, (child.material as THREE.Material).side);
                 (child.material as THREE.Material).side = THREE.DoubleSide;
             }
-        } else if (child instanceof THREE.LineSegments && child.geometry) {
+        } else if (isLineSegments(child) && child.geometry) {
             lineSegments.push(child);
         }
     });
 
-    // Pseudo effect sizing below projects from the live camera, not the
-    // aspect-corrected export clone.
+    // Project from the local-THREE export camera (same instance SVGRenderer uses).
     const camPos = new THREE.Vector3();
-    threeCamera.getWorldPosition(camPos);
+    exportCamera.getWorldPosition(camPos);
 
     const clipTriangles = pseudoEffects.some(effect => effect.type === 'cloud')
         ? collectWorldTriangles(meshes)
@@ -1357,7 +1409,7 @@ function beginEncode(
         // No edges means nothing for the pass to cull, and preparing it anyway
         // would ship geometry to the worker for no result.
         prepared: bakeMeshes.length > 0 && lineSegments.length > 0
-            ? prepareHiddenLine(threeCamera, bakeMeshes, lineSegments)
+            ? prepareHiddenLine(exportCamera, bakeMeshes, lineSegments)
             : null,
         restoreMaterialSides: () => {
             meshes.forEach(mesh => {
