@@ -1,3 +1,4 @@
+import { MAX_POTRACE_PIXELS, packImageData } from './pixels.js';
 import { parsePalette, suggestSvgName, type TracerId, type TracerInfo, type VectorizedImage } from './types.js';
 import { TRACER_CATALOG, type PotraceOptions, type VtracerOptions } from './types.js';
 
@@ -31,29 +32,37 @@ export async function vectorizeImage(
 ): Promise<VectorizedImage> {
 	await loadTracer(options.tracer);
 	let svg: string;
+	let outW = image.width;
+	let outH = image.height;
 	if (options.tracer === 'vtracer') {
+		const packed = packImageData(image);
+		outW = packed.width;
+		outH = packed.height;
 		const { vectorizeWithVtracer } = await import('./engines/vtracer.js');
 		const opts = { ...(options.vtracer ?? {}) };
 		if (opts.palette && !Array.isArray(opts.palette)) {
 			opts.palette = parsePalette(String(opts.palette));
 		}
 		svg = vectorizeWithVtracer(
-			new Uint8Array(image.data.buffer.slice(0)),
-			image.width,
-			image.height,
+			new Uint8Array(packed.data),
+			packed.width,
+			packed.height,
 			opts
 		);
 	} else {
+		const packed = packImageData(image, MAX_POTRACE_PIXELS);
+		outW = packed.width;
+		outH = packed.height;
 		const { vectorizeWithPotrace } = await import('./engines/potrace.js');
-		svg = await vectorizeWithPotrace(image, options.potrace ?? {});
+		svg = await vectorizeWithPotrace(packed, options.potrace ?? {});
 	}
 	const data = new TextEncoder().encode(svg);
 	return {
 		name: suggestSvgName(options.name ?? 'image'),
 		svg,
 		data,
-		width: image.width,
-		height: image.height,
+		width: outW,
+		height: outH,
 		sourceBytes: options.sourceBytes ?? data.byteLength,
 		sourceWidth: options.sourceWidth ?? image.width,
 		sourceHeight: options.sourceHeight ?? image.height,

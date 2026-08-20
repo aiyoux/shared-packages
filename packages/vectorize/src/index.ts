@@ -19,3 +19,4 @@ export {
 } from './types.js';
 
 export { listTracers, loadTracer, vectorizeImage, type VectorizeOptions } from './operations.js';
+export { MAX_POTRACE_PIXELS, packImageData } from './pixels.js';
