@@ -1,6 +1,8 @@
+import { digestChunks } from '../digest.js';
+import { hexToBytes } from '../hex.js';
 import { engineInfo, type CryptoEngine, type HashAlg, type KdfParams } from '../types.js';
 
-const WEB_HASH: Record<Exclude<HashAlg, 'blake2b'>, string> = {
+const WEB_HASH: Record<Exclude<HashAlg, 'blake2b' | 'blake3'>, string> = {
 	sha256: 'SHA-256',
 	sha384: 'SHA-384',
 	sha512: 'SHA-512'
@@ -37,6 +39,7 @@ export const webcryptoEngine: CryptoEngine = {
 
 	async hash(bytes, alg) {
 		if (alg === 'blake2b') throw new Error('Web Crypto cannot hash with BLAKE2b');
+		if (alg === 'blake3') return hexToBytes(await digestChunks([bytes], 'blake3'));
 		const digest = await subtle().digest(WEB_HASH[alg], asBuf(bytes));
 		return new Uint8Array(digest);
 	},

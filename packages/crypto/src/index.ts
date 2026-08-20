@@ -48,6 +48,17 @@ export {
 } from './sha256.js';
 
 export {
+	DEFAULT_FILE_DIGEST_ALG,
+	FILE_DIGEST_LABEL,
+	createFileDigest,
+	digestChunks,
+	digestFileStreaming,
+	isFileDigestAlg,
+	type FileDigestAlg,
+	type IncrementalDigest
+} from './digest.js';
+
+export {
 	INNER_SINGLE_MAGIC,
 	INNER_TREE_MAGIC,
 	VAULT_HEADER_SIZE,

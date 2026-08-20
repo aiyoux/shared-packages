@@ -11,7 +11,9 @@ describe('catalog', () => {
 		expect(listEngines().map((e) => e.id)).toEqual(['webcrypto', 'libsodium']);
 		expect(ENGINE_CATALOG).toHaveLength(2);
 		expect(engineSupportsHash('webcrypto', 'blake2b')).toBe(false);
+		expect(engineSupportsHash('webcrypto', 'blake3')).toBe(true);
 		expect(engineSupportsHash('libsodium', 'blake2b')).toBe(true);
+		expect(engineSupportsHash('libsodium', 'blake3')).toBe(true);
 		expect(DEFAULT_HASH).toBe('sha256');
 	});
 });
@@ -38,5 +40,13 @@ describe('hashBytes', () => {
 		const got = await hashBytes('libsodium', ABC, 'blake2b');
 		expect(got.bytes.byteLength).toBe(32);
 		await expect(hashBytes('webcrypto', ABC, 'blake2b')).rejects.toThrow(/does not support/);
+	});
+
+	it('hashes with BLAKE3 on both engines', async () => {
+		const expected = '6437b3ac38465133ffb63b75273a8db548c558465d79db03fd359c6cd5bd9d85';
+		const web = await hashBytes('webcrypto', ABC, 'blake3');
+		expect(web.hex).toBe(expected);
+		const sodium = await hashBytes('libsodium', ABC, 'blake3');
+		expect(sodium.hex).toBe(expected);
 	});
 });

@@ -1,3 +1,5 @@
+import { digestChunks } from '../digest.js';
+import { hexToBytes } from '../hex.js';
 import { engineInfo, type CryptoEngine, type HashAlg, type KdfParams } from '../types.js';
 
 type Sodium = typeof import('libsodium-wrappers-sumo');
@@ -29,6 +31,7 @@ export const sodiumEngine: CryptoEngine = {
 	},
 
 	async hash(bytes, alg: HashAlg) {
+		if (alg === 'blake3') return hexToBytes(await digestChunks([bytes], 'blake3'));
 		const s = await get();
 		if (alg === 'sha256') return s.crypto_hash_sha256(bytes);
 		if (alg === 'sha512') return s.crypto_hash_sha512(bytes);

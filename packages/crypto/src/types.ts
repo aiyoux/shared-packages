@@ -1,6 +1,6 @@
 export type EngineId = 'webcrypto' | 'libsodium';
 
-export type HashAlg = 'sha256' | 'sha384' | 'sha512' | 'blake2b';
+export type HashAlg = 'sha256' | 'sha384' | 'sha512' | 'blake2b' | 'blake3';
 
 export type VaultKind = 'single' | 'tree';
 
@@ -52,16 +52,16 @@ export const ENGINE_CATALOG: readonly EngineInfo[] = [
 	{
 		id: 'webcrypto',
 		label: 'Web Crypto',
-		description: 'Browser-native SubtleCrypto — SHA-2 and AES-256-GCM. No extra download.',
-		hashes: ['sha256', 'sha384', 'sha512'],
+		description: 'Browser-native SubtleCrypto — SHA-2 and AES-256-GCM. BLAKE3 is bundled (~9 kB WASM).',
+		hashes: ['sha256', 'sha384', 'sha512', 'blake3'],
 		aead: 'AES-256-GCM',
 		kdf: 'PBKDF2-SHA-256'
 	},
 	{
 		id: 'libsodium',
 		label: 'libsodium',
-		description: 'libsodium WASM — BLAKE2b, Argon2id, and XChaCha20-Poly1305.',
-		hashes: ['sha256', 'sha512', 'blake2b'],
+		description: 'libsodium WASM — BLAKE2b, Argon2id, and XChaCha20-Poly1305. BLAKE3 is bundled separately.',
+		hashes: ['sha256', 'sha512', 'blake2b', 'blake3'],
 		aead: 'XChaCha20-Poly1305',
 		kdf: 'Argon2id'
 	}
@@ -74,7 +74,8 @@ export const HASH_LABEL: Record<HashAlg, string> = {
 	sha256: 'SHA-256',
 	sha384: 'SHA-384',
 	sha512: 'SHA-512',
-	blake2b: 'BLAKE2b'
+	blake2b: 'BLAKE2b',
+	blake3: 'BLAKE3'
 };
 
 export const VAULT_EXTENSION = '.spvault';
