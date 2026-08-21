@@ -1781,12 +1781,23 @@ const polygonIsTinyEraserRemnant = (polygon: Polygon, eraserPoints: Point[], rad
     //    "a chunk in the middle of the erase vanished".
     //  - subjectArea·0.25: never treat a meaningful fraction of the source shape
     //    as dust (a small shape reduced to ~50% is not a crumb).
-    //  - 12px²: an ABSOLUTE ceiling. Dust is dust regardless of eraser size —
-    //    a 12px² piece is visible ink, not a rounding crumb. This caps the
-    //    r²-scaled term so wide erasers stop eating small real survivors while
-    //    still cleaning genuine sub-pixel slivers. (For r≤12, r²·0.08 ≤ 12, so
-    //    small erasers are unaffected.)
-    const maxTinyArea = Math.max(0.5, Math.min(radius * radius * 0.08, subjectArea * 0.25, 12));
+    //  - 5px²: an ABSOLUTE ceiling, and the lowest this can go. It caps the
+    //    r²-scaled term so a wide eraser stops eating small real survivors.
+    //
+    //    It was 12px² — roughly a 3.5px square, which is a dot you can see, and
+    //    it is what made the tidy-up feel like the eraser taking ink it had
+    //    only grazed. Reproduced: a horizontal Ink line rubbed downwards near
+    //    its end leaves a stub that is on screen while rubbing and gone when
+    //    you let go. The stub sits in the band between `radius` (what the
+    //    eraser visibly clears) and the footprint margin, so no distance test
+    //    can tell it from a crumb — its SIZE is the only thing left to bound.
+    //
+    //    5 is the floor the crumb contract allows, not a preference: the fast
+    //    sparse pass test requires anything under subjectArea·0.08 (5.12px² for
+    //    its 8x8 squares) to be cleaned, and at 4 the near-fully-erased sliver
+    //    stops collapsing to a negligible result. So this is as small a dot as
+    //    the eraser can be asked to leave alone while still clearing dust.
+    const maxTinyArea = Math.max(0.5, Math.min(radius * radius * 0.08, subjectArea * 0.25, 5));
     if (area > maxTinyArea) return false;
 
     const points = normalizedRingPoints(outer);
