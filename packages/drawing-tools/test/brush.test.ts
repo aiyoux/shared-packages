@@ -104,10 +104,12 @@ describe('brush SVG path contracts', () => {
 		});
 	});
 
-	it('makes highlighter paths wide, translucent, and multiply blended', () => {
+	it('makes highlighter paths wide and translucent, source-over (not multiply)', () => {
+		// Multiply against committed opaque ink hid the marker under pen strokes
+		// on pointer-up. Source-over + opacity keeps it on top; blendMode is
+		// omitted when normal (same contract as pen).
 		assert.deepEqual(brushMaterialProps('highlighter'), {
-			opacity: 0.5,
-			blendMode: 'multiply'
+			opacity: 0.5
 		});
 		assert.equal(effectiveStrokeWidth(5, 'highlighter'), 20);
 
@@ -117,14 +119,12 @@ describe('brush SVG path contracts', () => {
 			fill: 'none',
 			strokeWidth: 18,
 			layerId: 'notes',
-			opacity: 0.5,
-			blendMode: 'multiply'
+			opacity: 0.5
 		});
 
 		// A caller-supplied strength overrides the nominal default.
 		assert.deepEqual(brushMaterialProps('highlighter', 'HB', 0.8), {
-			opacity: 0.8,
-			blendMode: 'multiply'
+			opacity: 0.8
 		});
 		assert.deepEqual(withoutId(buildStrokeSegmentPath(1, 2, 3, 4, 18, '#ffff00', 'notes', 'highlighter', 'HB', 0.8)), {
 			d: 'M 1 2 L 3 4',
@@ -132,8 +132,7 @@ describe('brush SVG path contracts', () => {
 			fill: 'none',
 			strokeWidth: 18,
 			layerId: 'notes',
-			opacity: 0.8,
-			blendMode: 'multiply'
+			opacity: 0.8
 		});
 	});
 
@@ -158,8 +157,7 @@ describe('brush SVG path contracts', () => {
 			fill: '#ffff00',
 			strokeWidth: 0,
 			layerId: 'default',
-			opacity: 0.5,
-			blendMode: 'multiply'
+			opacity: 0.5
 		});
 
 		// highlighterOpacity sets the nominal; an explicit trailing `opacity`
@@ -170,8 +168,7 @@ describe('brush SVG path contracts', () => {
 			fill: '#ffff00',
 			strokeWidth: 0,
 			layerId: 'default',
-			opacity: 0.8,
-			blendMode: 'multiply'
+			opacity: 0.8
 		});
 	});
 });

@@ -42,7 +42,16 @@ export function brushParams(brushType: BrushType, pencilGrade: PencilGrade = 'HB
 		case 'pencil':
 			return pencilGradeParams(normalizePencilGrade(pencilGrade));
 		case 'highlighter':
-			return { opacity: highlighterOpacity ?? 0.5, blendMode: 'multiply', widthMult: 4, thinning: 0, smoothing: 0.6, streamline: 0.5 };
+			// Source-over, not multiply. Multiply against already-committed opaque
+			// ink (Cs*Cd) turns the marker black wherever it crosses a pen, so the
+			// stroke looks like it dropped under the ink the moment the pointer
+			// lifts. The live preview is an SVG overlay composited on top of the
+			// raster canvases, so mix-blend-mode never sees those pixels and the
+			// marker stays on top while drawing. Source-over + opacity matches
+			// that lift: highlighter sits on top, ink still shows through.
+			// Overlapping marker strokes still darken via stacked alpha (and
+			// markerBuildUp splits scribbles into separate paths).
+			return { opacity: highlighterOpacity ?? 0.5, blendMode: 'normal', widthMult: 4, thinning: 0, smoothing: 0.6, streamline: 0.5 };
 		default:
 			return { opacity: 1, blendMode: 'normal', widthMult: 1, thinning: 0.6, smoothing: 0.5, streamline: 0.5 };
 	}
@@ -61,7 +70,7 @@ export function brushMaterialProps(brushType: BrushType, pencilGrade: PencilGrad
 }
 
 /**
- * Pressure-driven opacity for the multiply-blend brushes (pencil & marker) in
+ * Pressure-driven opacity for the translucent brushes (pencil & marker) in
  * pressure mode. Light press is intentionally lighter than the brush's nominal
  * opacity (a reduced baseline, so there's headroom to SEE the darkening as you
  * press harder); full press reaches the nominal opacity (the darkness you get
