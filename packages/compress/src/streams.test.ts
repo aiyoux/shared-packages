@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { deflateRaw, gunzipBytes, gzipBytes, inflateRaw } from './streams.js';
+import { deflateRaw, decompressBytesCapped, gunzipBytes, gzipBytes, inflateRaw } from './streams.js';
 
 const SAMPLE = new TextEncoder().encode('scratch-pad stream fixture\n'.repeat(20));
 
@@ -48,5 +48,13 @@ describe('native CompressionStream codecs', () => {
 		expect(packed.byteLength).toBeGreaterThan(0);
 		expect(packed.byteLength).toBeLessThan(large.byteLength);
 		expect(new TextDecoder().decode(await inflateRaw(packed))).toBe(new TextDecoder().decode(large));
+	});
+
+	it('aborts inflate when output exceeds maxOutputBytes', async () => {
+		const packed = await deflateRaw(SAMPLE);
+		await expect(inflateRaw(packed, { maxOutputBytes: 8 })).rejects.toThrow(/exceeded 8 bytes/);
+		await expect(decompressBytesCapped(packed, 'deflate-raw', 8)).rejects.toThrow(/exceeded 8 bytes/);
+		const ok = await inflateRaw(packed, { maxOutputBytes: SAMPLE.byteLength });
+		expect(ok.byteLength).toBe(SAMPLE.byteLength);
 	});
 });

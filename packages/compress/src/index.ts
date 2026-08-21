@@ -31,6 +31,7 @@ export { expandBytes, packFiles, resolveExpandCodec, type PackedFile } from './o
 export {
 	compressBytes,
 	decompressBytes,
+	decompressBytesCapped,
 	deflateRaw,
 	gunzipBytes,
 	gzipBytes,

@@ -65,7 +65,62 @@ export function decompressBytes(bytes: Uint8Array, format: NativeStreamCodec): P
 	return pumpBytes(new DecompressionStream(format), bytes);
 }
 
+/** Abort inflate as soon as output exceeds `maxOutputBytes` (zip-bomb guard). */
+export async function decompressBytesCapped(
+	bytes: Uint8Array,
+	format: NativeStreamCodec,
+	maxOutputBytes: number
+): Promise<Uint8Array> {
+	if (!Number.isFinite(maxOutputBytes) || maxOutputBytes < 0) {
+		throw new Error('maxOutputBytes must be a non-negative number');
+	}
+	const ds = new DecompressionStream(format);
+	const reader = ds.readable.getReader();
+	const writer = ds.writable.getWriter();
+	const chunks: Uint8Array[] = [];
+	let total = 0;
+
+	const writeP = (async () => {
+		await writer.write(asWriteView(bytes));
+		await writer.close();
+	})();
+
+	const readP = (async () => {
+		while (true) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			if (!value || value.byteLength === 0) continue;
+			total += value.byteLength;
+			if (total > maxOutputBytes) {
+				await reader.cancel().catch(() => {});
+				await writer.abort().catch(() => {});
+				throw new Error(`Decompressed size exceeded ${maxOutputBytes} bytes`);
+			}
+			chunks.push(value);
+		}
+	})();
+
+	const [read, written] = await Promise.allSettled([readP, writeP]);
+	if (read.status === 'rejected') throw read.reason;
+	if (written.status === 'rejected') throw written.reason;
+	const out = new Uint8Array(total);
+	let off = 0;
+	for (const c of chunks) {
+		out.set(c, off);
+		off += c.byteLength;
+	}
+	return out;
+}
+
 export const deflateRaw = (bytes: Uint8Array) => compressBytes(bytes, 'deflate-raw');
-export const inflateRaw = (bytes: Uint8Array) => decompressBytes(bytes, 'deflate-raw');
+export function inflateRaw(
+	bytes: Uint8Array,
+	opts?: { maxOutputBytes?: number }
+): Promise<Uint8Array> {
+	if (opts?.maxOutputBytes != null) {
+		return decompressBytesCapped(bytes, 'deflate-raw', opts.maxOutputBytes);
+	}
+	return decompressBytes(bytes, 'deflate-raw');
+}
 export const gzipBytes = (bytes: Uint8Array) => compressBytes(bytes, 'gzip');
 export const gunzipBytes = (bytes: Uint8Array) => decompressBytes(bytes, 'gzip');
