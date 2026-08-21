@@ -2851,6 +2851,7 @@ export const splitOnePathByEraser = (
                         d,
                         opacity: next,
                         clipDerived: true,
+                        faded: true,
                     });
                 }
             }
@@ -2965,7 +2966,7 @@ export const splitOnePathByEraser = (
         const step = fadeStep(path, fade);
         if (sync) sync.removed.push(path);
         if (step === null) return [];
-        const worn = { ...path, id: generateId(), opacity: step.opacity, transform: hasTranslate ? undefined : path.transform, d: hasTranslate ? flatCmdsToD(flatCmds) : path.d, ...(hasTranslate && path.clipRect ? { clipRect: rebaseClipRect(path, tx, ty) } : {}) };
+        const worn = { ...path, id: generateId(), opacity: step.opacity, faded: true, transform: hasTranslate ? undefined : path.transform, d: hasTranslate ? flatCmdsToD(flatCmds) : path.d, ...(hasTranslate && path.clipRect ? { clipRect: rebaseClipRect(path, tx, ty) } : {}) };
         if (sync) sync.added.push(worn);
         eraseStats.piecesEmitted += 1;
         return [worn];
@@ -2992,13 +2993,17 @@ export const splitOnePathByEraser = (
             ...path,
             id: generateId(),
             d,
+            // Cleared here and re-set below only for the covered run: a
+            // remainder is the part the eraser did NOT reach, so it must not
+            // carry a fade marker inherited from the path it was cut from.
+            faded: undefined,
             fill: path.fill || 'none',
             transform: hasTranslate ? undefined : path.transform,
             ...(hasTranslate && path.clipRect ? { clipRect: rebaseClipRect(path, tx, ty) } : {}),
             // `opacity` is only passed for the run the eraser actually covered,
             // so it doubles as "this piece took its fade step" for the sweep
             // stamp. Remainders are emitted without it and stay fadeable.
-            ...(opacity !== undefined ? { opacity } : {}),
+            ...(opacity !== undefined ? { opacity, faded: true } : {}),
         };
         pieces.push(piece);
         if (sync) sync.added.push(piece);
@@ -3152,7 +3157,11 @@ const flattenFadedInk = (
     const groups = new Map<string, number[]>();
     for (let i = 0; i < result.length; i++) {
         const p = result[i];
-        if ((p.opacity ?? 1) >= 1) continue;
+        // Ink a fade actually dimmed — NOT ink that merely happens to be
+        // translucent. A highlighter is born below 1, so testing opacity swept
+        // untouched highlighter in here and collapsed whole bands the eraser
+        // never reached. See `PathData.faded`.
+        if (!p.faded) continue;
         const bbox = cachedFlatten(p).bbox;
         if (!bbox) continue;
         if (bbox.maxX < reach.minX || bbox.minX > reach.maxX) continue;

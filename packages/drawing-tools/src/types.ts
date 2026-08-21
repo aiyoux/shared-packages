@@ -74,6 +74,16 @@ export interface PathData {
      * unguarded, letting corrupted difference results (dropped holes →
      * spurious solid fills) into the drawing. */
     clipDerived?: boolean;
+    /**
+     * This piece is ink a fade eraser dimmed — not merely ink that happens to
+     * be translucent.
+     *
+     * The stack flattener needs to tell those apart and cannot do it from
+     * opacity: a highlighter is BORN below 1, so "opacity < 1" swept untouched
+     * highlighter into the flatten and collapsed it together with ink that had
+     * actually been rubbed, changing bands the eraser never went near.
+     */
+    faded?: boolean;
     transform?: string;
     bakeGroupId?: string;
     layerId?: string;
