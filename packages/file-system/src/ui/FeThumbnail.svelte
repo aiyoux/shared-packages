@@ -47,7 +47,12 @@
 		const en = enabled;
 		kind = getPreviewKind(e);
 
-		if (!en || !kind || !d.readBlob) {
+		// Captured, not re-read: the async block below runs after this effect
+		// returns, and a narrowing on `d.readBlob` does not survive into it —
+		// the driver is a mutable reference and TS cannot know it still has the
+		// method by then.
+		const readBlob = d.readBlob;
+		if (!en || !kind || !readBlob) {
 			revoke();
 			loading = false;
 			failed = false;
@@ -65,7 +70,7 @@
 
 		(async () => {
 			try {
-				const blob = await d.readBlob(e.id);
+				const blob = await readBlob.call(d, e.id);
 				if (cancelled || !blob) return;
 				const thumbUrl = await generateThumbnail(blob, kind!, maxDim);
 				if (cancelled) return;

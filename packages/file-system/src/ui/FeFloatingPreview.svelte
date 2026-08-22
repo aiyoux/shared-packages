@@ -40,7 +40,10 @@
 		const e = entry;
 		const d = driver;
 		const k = kind;
-		if (!k || !d.readBlob) {
+		// Captured, not re-read: see FeThumbnail — the narrowing would not
+		// survive into the async block below.
+		const readBlob = d.readBlob;
+		if (!k || !readBlob) {
 			loading = false;
 			error = 'Preview not available for this file type';
 			return;
@@ -56,7 +59,7 @@
 
 		(async () => {
 			try {
-				const blob = await d.readBlob(e.id);
+				const blob = await readBlob.call(d, e.id);
 				if (cancelled || !blob) return;
 
 				if (k === 'pdf') {
