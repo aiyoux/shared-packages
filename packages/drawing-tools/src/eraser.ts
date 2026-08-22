@@ -555,6 +555,12 @@ export type FadeOptions = {
      * is what a real eraser does.
      */
     normalizeStack?: boolean;
+    /**
+     * The sweep this pass belongs to. Ink already stamped with it is skipped,
+     * so overlapping chunk caps within one sweep cannot dim it twice. Omit for
+     * a one-shot pass, which has no seams to protect.
+     */
+    sweepId?: number;
 };
 
 /** Overlap area, in square units, below which flattening leaves well alone. */
@@ -2736,6 +2742,10 @@ export const splitOnePathByEraser = (
     // pre-filtered by id already).
     if (candidates && path.id && !candidates.has(path.id)) return [path];
 
+    // Already dimmed by this same sweep. Consecutive chunks overlap by a radius
+    // at every seam, and fading twice is visible, so this ink is done until the
+    // pointer reverses and a new sweep begins. See `PathData.fadeSweepId`.
+    if (ctx.fade?.sweepId != null && path.fadeSweepId === ctx.fade.sweepId) return [path];
 
     eraseStats.pathsChecked++;
 
@@ -2863,6 +2873,7 @@ export const splitOnePathByEraser = (
                         opacity: next,
                         clipDerived: true,
                         faded: true,
+                        ...(ctx.fade?.sweepId != null ? { fadeSweepId: ctx.fade.sweepId } : {}),
                     });
                 }
             }
@@ -2977,7 +2988,7 @@ export const splitOnePathByEraser = (
         const step = fadeStep(path, fade);
         if (sync) sync.removed.push(path);
         if (step === null) return [];
-        const worn = { ...path, id: generateId(), opacity: step.opacity, faded: true, transform: hasTranslate ? undefined : path.transform, d: hasTranslate ? flatCmdsToD(flatCmds) : path.d, ...(hasTranslate && path.clipRect ? { clipRect: rebaseClipRect(path, tx, ty) } : {}) };
+        const worn = { ...path, id: generateId(), opacity: step.opacity, faded: true, ...(fade.sweepId != null ? { fadeSweepId: fade.sweepId } : {}), transform: hasTranslate ? undefined : path.transform, d: hasTranslate ? flatCmdsToD(flatCmds) : path.d, ...(hasTranslate && path.clipRect ? { clipRect: rebaseClipRect(path, tx, ty) } : {}) };
         if (sync) sync.added.push(worn);
         eraseStats.piecesEmitted += 1;
         return [worn];
@@ -3014,7 +3025,7 @@ export const splitOnePathByEraser = (
             // `opacity` is only passed for the run the eraser actually covered,
             // so it doubles as "this piece took its fade step" for the sweep
             // stamp. Remainders are emitted without it and stay fadeable.
-            ...(opacity !== undefined ? { opacity, faded: true } : {}),
+            ...(opacity !== undefined ? { opacity, faded: true, ...(fade?.sweepId != null ? { fadeSweepId: fade.sweepId } : {}) } : {}),
         };
         pieces.push(piece);
         if (sync) sync.added.push(piece);

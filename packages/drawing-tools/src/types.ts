@@ -84,6 +84,20 @@ export interface PathData {
      * actually been rubbed, changing bands the eraser never went near.
      */
     faded?: boolean;
+    /**
+     * Which fade sweep last dimmed this ink.
+     *
+     * Fading is not idempotent, and consecutive chunks of one rub overlap —
+     * each sweeps a radius past its own ends — so a chunked straight rub would
+     * otherwise dim the same ink two or three times at every seam. Ink stamped
+     * with the sweep in progress is left alone, which is what lets fade commit
+     * on the same responsive travel cadence as cutting instead of waiting for
+     * the pointer to reverse.
+     *
+     * A reversal starts a new sweep and a new stamp, so scrubbing back over ink
+     * still compounds — see `FadeOptions.accumulate`.
+     */
+    fadeSweepId?: number;
     transform?: string;
     bakeGroupId?: string;
     layerId?: string;
