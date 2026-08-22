@@ -19,7 +19,7 @@ describe('LocalExplorerDriver', () => {
 		await drv.ready();
 		assert.equal(drv.id, 'local');
 		assert.equal(drv.capabilities.supportsTrash, true);
-		assert.equal(drv.capabilities.supportsUpload, false);
+		assert.equal(drv.capabilities.supportsUpload, true);
 		assert.equal(drv.capabilities.supportsDownload, false);
 
 		await drv.mkdir!(null, 'Docs');
@@ -78,7 +78,7 @@ describe('LocalExplorerDriver', () => {
 		);
 	});
 
-	it('stock local caps stay download/upload false (bridge must not flip)', async () => {
+	it('stock local caps: download false, upload true (OS file drop)', async () => {
 		const vfs = createVfs({
 			dbName: `local-caps-${Date.now()}`,
 			memoryOpfs: true,
@@ -86,7 +86,7 @@ describe('LocalExplorerDriver', () => {
 		});
 		const drv = createLocalExplorerDriver(vfs);
 		assert.equal(drv.capabilities.supportsDownload, false);
-		assert.equal(drv.capabilities.supportsUpload, false);
+		assert.equal(drv.capabilities.supportsUpload, true);
 	});
 
 	it('apply list cap via EXPLORER_LIST_MAX_ENTRIES constant', () => {
