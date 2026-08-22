@@ -42,6 +42,9 @@
 	} from './systemClipboard.js';
 	import '@shared-packages/design-system/button.css';
 	import '@shared-packages/design-system/tooltip.css';
+	import FeThumbnail from './FeThumbnail.svelte';
+	import FeFloatingPreview from './FeFloatingPreview.svelte';
+	import { getPreviewKind } from './feThumbnails.js';
 
 	export type ExplorerMode = 'manage' | 'open' | 'save' | 'browse';
 
@@ -198,6 +201,72 @@
 	let trashBusy = $state(false);
 	/** True until the first list() completes (empty shell only). */
 	let initialLoad = $state(true);
+
+	// ── View modes ────────────────────────────────────────────────
+	type ViewMode = 'list' | 'icons' | 'detailed';
+	const VIEW_MODE_KEY = 'fe:viewMode';
+	const SHOW_PREVIEW_KEY = 'fe:showPreview';
+	let viewMode = $state<ViewMode>(
+		typeof localStorage === 'undefined'
+			? 'list'
+			: (() => {
+					try {
+						const v = localStorage.getItem(VIEW_MODE_KEY);
+						if (v === 'icons' || v === 'detailed') return v;
+					} catch {
+						/* ignore */
+					}
+					return 'list';
+				})()
+	);
+	let showPreview = $state(
+		typeof localStorage === 'undefined'
+			? false
+			: (() => {
+					try {
+						return localStorage.getItem(SHOW_PREVIEW_KEY) === 'true';
+					} catch {
+						return false;
+					}
+				})()
+	);
+	let viewSwitcherOpen = $state(false);
+	let floatingPreviewEntry = $state<ExplorerEntry | null>(null);
+
+	function persistViewMode(v: ViewMode) {
+		try {
+			localStorage.setItem(VIEW_MODE_KEY, v);
+		} catch {
+			/* ignore */
+		}
+	}
+	function persistShowPreview(v: boolean) {
+		try {
+			localStorage.setItem(SHOW_PREVIEW_KEY, v ? 'true' : 'false');
+		} catch {
+			/* ignore */
+		}
+	}
+	function setViewMode(v: ViewMode) {
+		viewMode = v;
+		persistViewMode(v);
+	}
+	function toggleShowPreview() {
+		showPreview = !showPreview;
+		persistShowPreview(showPreview);
+	}
+	function toggleViewSwitcher() {
+		viewSwitcherOpen = !viewSwitcherOpen;
+	}
+	function closeViewSwitcher() {
+		viewSwitcherOpen = false;
+	}
+
+	function openFloatingPreview() {
+		if (previewEntry && previewEntry.kind === 'file' && getPreviewKind(previewEntry)) {
+			floatingPreviewEntry = previewEntry;
+		}
+	}
 	/** True while a list/mutation refresh is in flight. */
 	let listBusy = $state(false);
 	/**
@@ -1539,10 +1608,13 @@
 	data-fe-mode={mode}
 	data-fe-select-multi={selectMulti ? 'on' : 'off'}
 	data-fe-preview-dock={previewDock}
+	data-fe-view-mode={viewMode}
+	data-fe-show-preview={showPreview ? 'on' : 'off'}
 	role={variant === 'dialog' ? 'dialog' : 'group'}
 	aria-label="File explorer"
 	tabindex="0"
 	onkeydown={onListKeydown}
+	onclick={() => { if (viewSwitcherOpen) closeViewSwitcher(); }}
 >
 	<header class="fe-header" data-testid="fe-header">
 		<div class="fe-breadcrumbs" data-testid="fe-breadcrumbs">
@@ -1564,6 +1636,43 @@
 		</div>
 		<div class="fe-toolbar" data-testid="fe-toolbar">
 			<div class="fe-toolbar-row">
+				{#if mode === 'manage' || mode === 'open'}
+					<span class="fe-view-switcher-wrap" data-testid="fe-view-switcher">
+						<FeTipIconBtn
+							testid="fe-view-switcher-btn"
+							tip="View options"
+							icon={viewMode === 'icons' ? 'layout-grid' : viewMode === 'detailed' ? 'table' : 'list'}
+							active={viewSwitcherOpen}
+							pressed={viewSwitcherOpen}
+							haspopup
+							onclick={toggleViewSwitcher}
+						/>
+						{#if viewSwitcherOpen}
+							<!-- svelte-ignore a11y_click_events_have_key_events -->
+							<!-- svelte-ignore a11y_no_static_element_interactions -->
+							<div class="fe-view-popup" data-testid="fe-view-popup" onclick={(e) => e.stopPropagation()}>
+								<button type="button" class="fe-view-option" class:active={viewMode === 'list'} data-testid="fe-view-list" onclick={() => setViewMode('list')}>
+									<FeIcon name="list" size={16} />
+									<span>List</span>
+								</button>
+								<button type="button" class="fe-view-option" class:active={viewMode === 'icons'} data-testid="fe-view-icons" onclick={() => setViewMode('icons')}>
+									<FeIcon name="layout-grid" size={16} />
+									<span>Icons</span>
+								</button>
+								<button type="button" class="fe-view-option" class:active={viewMode === 'detailed'} data-testid="fe-view-detailed" onclick={() => setViewMode('detailed')}>
+									<FeIcon name="table" size={16} />
+									<span>Detailed</span>
+								</button>
+								<div class="fe-view-divider"></div>
+								<button type="button" class="fe-view-option fe-view-checkbox" class:active={showPreview} data-testid="fe-view-show-preview" onclick={toggleShowPreview}>
+									<FeIcon name="eye" size={16} />
+									<span>Show preview</span>
+									<span class="fe-view-check">{showPreview ? '✓' : ''}</span>
+								</button>
+							</div>
+						{/if}
+					</span>
+				{/if}
 				{#if showPersistChip && localVfs}
 					<StoragePersistenceStatus vfs={localVfs} compact class="fe-persist-slot" />
 				{/if}
@@ -1767,6 +1876,8 @@
 	<div class="fe-split">
 	<div
 		class="fe-list"
+		class:fe-list-icons={viewMode === 'icons'}
+		class:fe-list-detailed={viewMode === 'detailed'}
 		tabindex="0"
 		class:fe-list-busy={listBusy}
 		class:fe-list-covered={showBusyOverlay}
@@ -1830,6 +1941,7 @@
 					dndEnabled && caps.supportsSiblingOrder && dndTargetId === n.id && dndZone === 'after'}
 				{@const showInto =
 					dndEnabled && dndTargetId === n.id && dndZone === 'into' && n.kind === 'folder'}
+				{@const previewKind = showPreview ? getPreviewKind(n) : null}
 				{#if showBefore}
 					<div class="fe-dnd-line" data-testid="fe-dnd-line-before" aria-hidden="true"></div>
 				{/if}
@@ -1844,6 +1956,8 @@
 					class:previewed={previewEntry?.id === n.id}
 					class:focused={i === focusIndex}
 					class:fe-dnd-into={showInto}
+					class:fe-row-icon={viewMode === 'icons'}
+					class:fe-row-detailed={viewMode === 'detailed'}
 					data-testid={n.kind === 'folder' ? 'fe-folder-row' : 'fe-file-row'}
 					data-fe-row-id={n.id}
 					data-fe-parent-id={n.parentId ?? ''}
@@ -1869,26 +1983,71 @@
 					onclick={(e) => onRowClick(e, n, i)}
 					ondblclick={(e) => onRowDblClick(e, n, i)}
 				>
-					<span class="fe-row-main">
-						<span class="fe-icon">
-							<FeIcon name={n.kind === 'folder' ? 'folder' : 'file'} size={16} />
+					{#if viewMode === 'icons'}
+						<span class="fe-row-icon-thumb">
+							{#if previewKind}
+								<FeThumbnail entry={n} {driver} maxDim={120} enabled={showPreview} />
+							{:else}
+								<span class="fe-row-icon-fallback">
+									<FeIcon name={n.kind === 'folder' ? 'folder' : 'file'} size={48} />
+								</span>
+							{/if}
 						</span>
-						{#if renamingId === n.id}
-							<input
-								data-testid="fe-rename-input"
-								bind:value={renameValue}
-								onclick={(e) => e.stopPropagation()}
-								onkeydown={(e) => {
-									if (e.key === 'Enter') commitRename(n);
-									if (e.key === 'Escape') renamingId = null;
-								}}
-							/>
-						{:else}
-							<span class="fe-name" title={!actionable && n.kind === 'file' ? 'Wrong type for this app' : n.name}
-								>{n.name}</span
-							>
-						{/if}
-					</span>
+						<span class="fe-row-icon-name" title={n.name}>{#if renamingId === n.id}<input data-testid="fe-rename-input" bind:value={renameValue} onclick={(e) => e.stopPropagation()} onkeydown={(e) => { if (e.key === 'Enter') commitRename(n); if (e.key === 'Escape') renamingId = null; }} />{:else}{n.name}{/if}</span>
+					{:else if viewMode === 'detailed'}
+						<span class="fe-row-main">
+							<span class="fe-icon">
+								{#if previewKind}
+									<FeThumbnail entry={n} {driver} maxDim={32} enabled={showPreview} />
+								{:else}
+									<FeIcon name={n.kind === 'folder' ? 'folder' : 'file'} size={16} />
+								{/if}
+							</span>
+							{#if renamingId === n.id}
+								<input
+									data-testid="fe-rename-input"
+									bind:value={renameValue}
+									onclick={(e) => e.stopPropagation()}
+									onkeydown={(e) => {
+										if (e.key === 'Enter') commitRename(n);
+										if (e.key === 'Escape') renamingId = null;
+									}}
+								/>
+							{:else}
+								<span class="fe-name" title={!actionable && n.kind === 'file' ? 'Wrong type for this app' : n.name}
+									>{n.name}</span
+								>
+							{/if}
+						</span>
+						<span class="fe-row-col fe-row-size">{n.size != null ? formatBytes(n.size) : '—'}</span>
+						<span class="fe-row-col fe-row-type">{n.fileType ?? (n.kind === 'folder' ? 'Folder' : 'File')}</span>
+						<span class="fe-row-col fe-row-modified">{n.updatedAt ? formatWhen(n.updatedAt) : '—'}</span>
+					{:else}
+						<span class="fe-row-main">
+							<span class="fe-icon">
+								{#if previewKind}
+									<FeThumbnail entry={n} {driver} maxDim={32} enabled={showPreview} />
+								{:else}
+									<FeIcon name={n.kind === 'folder' ? 'folder' : 'file'} size={16} />
+								{/if}
+							</span>
+							{#if renamingId === n.id}
+								<input
+									data-testid="fe-rename-input"
+									bind:value={renameValue}
+									onclick={(e) => e.stopPropagation()}
+									onkeydown={(e) => {
+										if (e.key === 'Enter') commitRename(n);
+										if (e.key === 'Escape') renamingId = null;
+									}}
+								/>
+							{:else}
+								<span class="fe-name" title={!actionable && n.kind === 'file' ? 'Wrong type for this app' : n.name}
+									>{n.name}</span
+								>
+							{/if}
+						</span>
+					{/if}
 				</div>
 				{#if showAfter}
 					<div class="fe-dnd-line" data-testid="fe-dnd-line-after" aria-hidden="true"></div>
@@ -1911,6 +2070,11 @@
 		>
 			{#if previewEntry}
 				<h2 class="fe-preview-name" data-testid="fe-file-preview-name">{previewEntry.name}</h2>
+				{#if showPreview && previewEntry.kind === 'file' && getPreviewKind(previewEntry)}
+					<div class="fe-preview-thumb" data-testid="fe-preview-thumb">
+						<FeThumbnail entry={previewEntry} {driver} maxDim={previewDock === 'right' ? 240 : 160} enabled={true} />
+					</div>
+				{/if}
 				<dl class="fe-preview-meta">
 					<div>
 						<dt>Size</dt>
@@ -1936,6 +2100,17 @@
 					{/if}
 				</dl>
 				<div class="fe-preview-actions">
+					{#if previewEntry.kind === 'file' && getPreviewKind(previewEntry)}
+						<button
+							type="button"
+							class="ds-btn ds-btn--sm ds-btn--secondary"
+							data-testid="fe-file-preview-float"
+							onclick={openFloatingPreview}
+						>
+							<FeIcon name="maximize-2" size={14} />
+							Preview
+						</button>
+					{/if}
 					{#if previewShowsOpen(previewEntry)}
 						<button
 							type="button"
@@ -2051,6 +2226,11 @@
 			></button>
 			<div class="fe-preview-card">
 				<h2 class="fe-preview-name" data-testid="fe-file-preview-name">{previewEntry.name}</h2>
+				{#if showPreview && previewEntry.kind === 'file' && getPreviewKind(previewEntry)}
+					<div class="fe-preview-thumb" data-testid="fe-preview-thumb">
+						<FeThumbnail entry={previewEntry} {driver} maxDim={200} enabled={true} />
+					</div>
+				{/if}
 				<dl class="fe-preview-meta">
 					<div>
 						<dt>Size</dt>
@@ -2076,6 +2256,17 @@
 					{/if}
 				</dl>
 				<div class="fe-preview-actions">
+					{#if previewEntry.kind === 'file' && getPreviewKind(previewEntry)}
+						<button
+							type="button"
+							class="ds-btn ds-btn--sm ds-btn--secondary"
+							data-testid="fe-file-preview-float"
+							onclick={openFloatingPreview}
+						>
+							<FeIcon name="maximize-2" size={14} />
+							Preview
+						</button>
+					{/if}
 					{#if previewShowsOpen(previewEntry)}
 						<button
 							type="button"
@@ -2304,6 +2495,14 @@
 				</div>
 			</div>
 		</div>
+	{/if}
+
+	{#if floatingPreviewEntry}
+		<FeFloatingPreview
+			entry={floatingPreviewEntry}
+			{driver}
+			onClose={() => (floatingPreviewEntry = null)}
+		/>
 	{/if}
 </div>
 
@@ -2821,5 +3020,160 @@
 	.fe-hint {
 		opacity: 0.7;
 		font-size: 12px;
+	}
+
+	/* ── View switcher popup ──────────────────────────────────── */
+	.fe-view-switcher-wrap {
+		position: relative;
+		display: inline-flex;
+	}
+	.fe-view-popup {
+		position: absolute;
+		top: calc(100% + 4px);
+		left: 0;
+		z-index: 20;
+		min-width: 160px;
+		padding: 4px;
+		background: var(--surface-2);
+		border: 1px solid var(--line-hairline);
+		border-radius: var(--radius-md, 4px);
+		box-shadow: 0 8px 24px rgb(var(--scrim-rgb, 0 0 0) / 0.3);
+	}
+	.fe-view-option {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		width: 100%;
+		padding: 6px 8px;
+		background: none;
+		border: none;
+		color: var(--text-primary);
+		font: inherit;
+		font-size: 0.85rem;
+		cursor: pointer;
+		border-radius: 3px;
+		text-align: left;
+	}
+	.fe-view-option:hover {
+		background: var(--surface-3);
+	}
+	.fe-view-option.active {
+		background: rgb(var(--accent-rgb) / 0.12);
+		color: var(--accent);
+	}
+	.fe-view-option span {
+		flex: 1;
+	}
+	.fe-view-checkbox .fe-view-check {
+		flex: 0;
+		min-width: 16px;
+		text-align: right;
+		font-weight: 700;
+	}
+	.fe-view-divider {
+		height: 1px;
+		margin: 4px 0;
+		background: var(--line-hairline);
+	}
+
+	/* ── Icon view ────────────────────────────────────────────── */
+	.fe-list-icons {
+		display: grid;
+		grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+		gap: 4px;
+		align-content: start;
+		padding: 8px;
+	}
+	.fe-row.fe-row-icon {
+		flex-direction: column;
+		padding: 6px;
+		gap: 4px;
+		align-items: center;
+		text-align: center;
+		border: 1px solid transparent;
+	}
+	.fe-row.fe-row-icon:hover {
+		border-color: var(--line-hairline);
+	}
+	.fe-row.fe-row-icon.selected {
+		border-color: var(--accent);
+	}
+	.fe-row-icon-thumb {
+		width: 96px;
+		height: 96px;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		overflow: hidden;
+		border-radius: 4px;
+		background: var(--surface-3);
+	}
+	.fe-row-icon-fallback {
+		color: var(--text-muted);
+	}
+	.fe-row-icon-name {
+		width: 100%;
+		font-size: 0.78rem;
+		line-height: 1.2;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		word-break: break-word;
+		white-space: normal;
+		display: -webkit-box;
+		-webkit-line-clamp: 2;
+		-webkit-box-orient: vertical;
+	}
+
+	/* ── Detailed view ────────────────────────────────────────── */
+	.fe-list-detailed .fe-row.fe-row-detailed {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+	}
+	.fe-row-detailed .fe-row-main {
+		flex: 1 1 0;
+		min-width: 0;
+	}
+	.fe-row-col {
+		flex: 0 0 auto;
+		font-size: 0.8rem;
+		color: var(--text-muted);
+		white-space: nowrap;
+		font-variant-numeric: tabular-nums;
+	}
+	.fe-row-size {
+		min-width: 5rem;
+		text-align: right;
+	}
+	.fe-row-type {
+		min-width: 4.5rem;
+		text-transform: capitalize;
+	}
+	.fe-row-modified {
+		min-width: 8rem;
+	}
+	.fe-list-detailed .fe-icon {
+		width: 20px;
+		height: 20px;
+		overflow: hidden;
+	}
+
+	/* ── Preview thumbnail in dock/popup ──────────────────────── */
+	.fe-preview-thumb {
+		width: 100%;
+		min-height: 80px;
+		max-height: 240px;
+		margin-bottom: 12px;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		background: var(--surface-3);
+		border: 1px solid var(--line-hairline);
+		border-radius: 4px;
+		overflow: hidden;
+	}
+	.fe-preview-thumb :global(.fe-thumb-img) {
+		max-height: 240px;
 	}
 </style>
