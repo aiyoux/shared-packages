@@ -26,6 +26,8 @@ export type StackedProgress = {
 	streamedBytes?: number;
 	error?: string;
 	sha256?: string;
+	/** Digest algorithm for `sha256` (e.g. 'blake3', 'sha256'). */
+	hashAlg?: string;
 	integrity?: TransferIntegrity;
 	resumed?: boolean;
 	parallelStreams?: number;
@@ -126,6 +128,7 @@ export function stackTransferItems(items: TransferItem[]): StackedProgress[] {
 			streamedBytes: streamedBytes || undefined,
 			error: parts.find((p) => p.error)?.error,
 			sha256: primary.sha256,
+			hashAlg: primary.hashAlg,
 			integrity: primary.integrity,
 			resumed: primary.resumed,
 			parallelStreams: primary.parallelStreams
@@ -145,6 +148,7 @@ export function stackTransferItems(items: TransferItem[]): StackedProgress[] {
 			direction: t.direction,
 			error: t.error,
 			sha256: t.sha256,
+			hashAlg: t.hashAlg,
 			integrity: t.integrity,
 			resumed: t.resumed,
 			parallelStreams: t.parallelStreams

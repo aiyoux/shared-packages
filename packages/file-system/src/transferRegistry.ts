@@ -27,6 +27,8 @@ export interface TransferProgress {
 	direction: TransferDirection;
 	done: boolean;
 	sha256?: string;
+	/** Digest algorithm for `sha256` (e.g. 'blake3', 'sha256'). */
+	hashAlg?: string;
 	integrity?: TransferIntegrity;
 	status?: TransferStatus;
 	error?: string;
@@ -57,6 +59,8 @@ export interface TransferItem {
 	done: boolean;
 	integrity?: TransferIntegrity;
 	sha256?: string;
+	/** Digest algorithm for `sha256` (e.g. 'blake3', 'sha256'). */
+	hashAlg?: string;
 	blob?: Blob;
 	url?: string;
 	contentType?: string;
@@ -189,6 +193,7 @@ export function upsertProgress(progress: TransferProgress): TransferItem {
 		done: progress.done,
 		integrity: progress.integrity ?? prev?.integrity,
 		sha256: progress.sha256 ?? prev?.sha256,
+		hashAlg: progress.hashAlg ?? prev?.hashAlg,
 		blob: prev?.blob,
 		url: prev?.url,
 		contentType: prev?.contentType,
