@@ -9,15 +9,32 @@ import { buildEraseDelta, type EraseDelta } from './eraseDelta.ts';
  *  The drag-end precise pass is pure computation — no DOM, no Svelte — so it can
  *  run here and leave the UI thread free. That is the whole point: on a long
  *  stroke the pass is hundreds of ms, and running it inline froze the page.
- *  Structured-clone overhead is negligible next to it (measured 1.3ms of
- *  serialization against ~825ms of compute, 0.2%).
+ *  Structured-clone overhead is negligible next to a drag-END pass (measured
+ *  1.3ms of serialization against ~825ms of compute, 0.2%). It is NOT negligible
+ *  for "apply while erasing", where the compute per increment is a couple of ms
+ *  and the document is sent — and sent back — every time. Profiled on 800
+ *  paths: ~1020ms of a single drag inside clone/structuredClone, which was
+ *  essentially the whole cost of the drag.
+ *
+ *  So a rub can open a SESSION. The document is handed over once, the worker
+ *  keeps the working copy for the length of the rub, and each pass carries only
+ *  the trail and comes back as a positional diff. The last pass returns the
+ *  full array so the main thread ends the rub holding exactly what the worker
+ *  computed, rather than a copy it has been patching.
  *
  *  `isLayerLocked` is a closure and cannot be cloned, so the caller sends the
  *  data it closes over (locked ids + active layer + the multi-layer toggle) and
  *  the predicate is rebuilt here to mirror the store's own logic exactly. */
 export type EraseRequest = {
     jobId: number;
-    paths: PathData[];
+    /** The rub this pass belongs to. Passes that share one carry the document
+     *  only on the first message; later ones use the worker's copy. Absent for
+     *  a one-shot pass, which behaves exactly as before. */
+    sessionId?: number;
+    /** Hand back the full array and close the session — the last pass of a rub. */
+    endSession?: boolean;
+    /** Omitted on a continuing session pass: the worker already has it. */
+    paths?: PathData[];
     eraserPoints: { x: number; y: number }[];
     radius: number;
     lockedLayerIds: string[];
@@ -36,7 +53,11 @@ export type EraseRequest = {
 
 export type EraseResponse =
     | {
-        jobId: number; ok: true; paths: PathData[]; stats: EraseStats; changed: boolean;
+        jobId: number; ok: true;
+        /** Present for a one-shot pass, and for the pass that closes a session.
+         *  Omitted mid-session — apply `delta` instead. */
+        paths?: PathData[];
+        stats: EraseStats; changed: boolean;
         engine: 'clipper2' | 'martinez';
         /** Positional diff for the scoped undo entry, or null when it could not
          *  be derived (caller then stores the whole-array entry). Computed HERE
@@ -73,6 +94,10 @@ const clipperReady: Promise<void> = (async () => {
     }
 })();
 
+/** Working copy per open rub. One entry at a time in practice; keyed so a
+ *  stale pass from an abandoned rub cannot write into a live one. */
+const sessions = new Map<number, PathData[]>();
+
 self.onmessage = async (event: MessageEvent<EraseRequest>) => {
     const req = event.data;
     try {
@@ -93,8 +118,15 @@ self.onmessage = async (event: MessageEvent<EraseRequest>) => {
         // main thread can tell whether anything changed (→ whether to push an undo
         // entry) without diffing the result array.
         const sync = { removed: [] as PathData[], added: [] as PathData[] };
+        // A continuing session pass brings no paths; use the copy this worker
+        // has been keeping. A session whose copy is missing (a stray pass after
+        // it closed) is not recoverable here — fail loudly rather than erase
+        // against the wrong document.
+        const before = req.paths ?? (req.sessionId != null ? sessions.get(req.sessionId) : undefined);
+        if (!before) throw new Error('erase pass has no paths and no open session');
+        if (req.sessionId != null && req.paths) sessions.set(req.sessionId, req.paths);
         const paths = splitPathsByEraser(
-            req.paths,
+            before,
             req.eraserPoints,
             req.radius,
             isLayerLocked,
@@ -103,11 +135,23 @@ self.onmessage = async (event: MessageEvent<EraseRequest>) => {
                 : { sync, fade: req.fade }
         );
         const changed = sync.removed.length > 0;
+        const delta = changed ? buildEraseDelta(before, paths, sync) : null;
+        const inSession = req.sessionId != null;
+        if (inSession) {
+            if (req.endSession) sessions.delete(req.sessionId!);
+            else sessions.set(req.sessionId!, paths);
+        }
+        // Mid-session the diff is enough, and it is the whole point — shipping
+        // the array back every increment costs as much as sending it out. When
+        // there is no diff to send, or the rub is closing, hand over the array.
+        const sendPaths = !inSession || req.endSession || !delta;
         const res: EraseResponse = {
-            jobId: req.jobId, ok: true, paths, stats: getEraseStats(),
+            jobId: req.jobId, ok: true,
+            ...(sendPaths ? { paths } : {}),
+            stats: getEraseStats(),
             changed,
             engine: isClipper2Active() ? 'clipper2' : 'martinez',
-            delta: changed ? buildEraseDelta(req.paths, paths, sync) : null
+            delta
         };
         (self as unknown as Worker).postMessage(res);
     } catch (err) {

@@ -148,3 +148,4 @@ export {
   __resetDialogStackForTests,
   type DialogStackEntry
 } from './dialogStack.ts';
+export { default as PathNodeEditor } from './PathNodeEditor.svelte';
