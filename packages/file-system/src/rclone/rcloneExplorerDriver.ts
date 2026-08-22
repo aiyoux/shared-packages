@@ -35,7 +35,8 @@ const RCLONE_CAPS: ExplorerCapabilities = {
 	supportsMkdir: true,
 	supportsUpload: true,
 	supportsDownload: true,
-	supportsSiblingOrder: false
+	supportsSiblingOrder: false,
+	supportsDragOut: true
 };
 
 function sortFoldersFirst(entries: ExplorerEntry[]): ExplorerEntry[] {

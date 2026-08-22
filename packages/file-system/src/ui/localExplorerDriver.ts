@@ -25,7 +25,8 @@ const LOCAL_CAPS: ExplorerCapabilities = {
 	supportsMkdir: true,
 	supportsUpload: true,
 	supportsDownload: false,
-	supportsSiblingOrder: true
+	supportsSiblingOrder: true,
+	supportsDragOut: true
 };
 
 function mapNodes(nodes: VfsNode[]): ExplorerEntry[] {

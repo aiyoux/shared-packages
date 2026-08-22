@@ -30,6 +30,12 @@
 		filesFromDataTransfer
 	} from './copyAcross.js';
 	import {
+		prefetchForDragOut,
+		getDragOutFile,
+		clearDragOutCache,
+		evictDragOutFile
+	} from './dragOutCache.js';
+	import {
 		payloadFromClipboardItems,
 		payloadFromDataTransfer,
 		type SystemClip
@@ -165,6 +171,7 @@
 	let innerFs = $state<InnerFsSession | null>(null);
 	onDestroy(() => {
 		void innerFs?.dispose();
+		clearDragOutCache();
 	});
 	/** off → below (horizontal split) → beside (vertical split) → off. */
 	type PreviewDock = 'off' | 'bottom' | 'right';
@@ -257,6 +264,21 @@
 		});
 	});
 
+	// Pre-fetch selected file blobs so they're ready for OS drag-out at
+	// dragstart (which is synchronous — can't await there). Only for
+	// supportsDragOut drivers; folders and oversized files are skipped.
+	$effect(() => {
+		if (!caps.supportsDragOut) return;
+		// Read selected so the effect re-runs on selection change.
+		const ids = [...selected];
+		for (const id of ids) {
+			const entry = nodes.find((n) => n.id === id);
+			if (entry && entry.kind === 'file') {
+				void prefetchForDragOut(driver, entry);
+			}
+		}
+	});
+
 	function errMsg(e: unknown): string {
 		if (e instanceof VfsError) return e.code;
 		if (e && typeof e === 'object' && 'code' in e && typeof (e as { code: unknown }).code === 'string') {
@@ -301,6 +323,42 @@
 		} catch {
 			/* jsdom may lack full DataTransfer */
 		}
+
+		// OS drag-out: add pre-fetched File(s) to dataTransfer so the OS
+		// receives real file content when dropped on desktop / file manager.
+		// Works in Chrome, Edge, Firefox. The File was pre-fetched on
+		// selection (see the $effect above) — dragstart is synchronous so
+		// we can only use what's already in the cache.
+		if (caps.supportsDragOut && e.dataTransfer) {
+			const files: File[] = [];
+			for (const id of ids) {
+				const entry = nodes.find((nn) => nn.id === id);
+				if (entry && entry.kind === 'file') {
+					const file = getDragOutFile(id);
+					if (file) files.push(file);
+				}
+			}
+			if (files.length > 0) {
+				try {
+					for (const file of files) {
+						e.dataTransfer.items.add(file);
+					}
+					// DownloadURL fallback (Chrome/Edge): lets the OS download
+					// the file by URL when the File payload isn't enough.
+					if (files.length === 1) {
+						const url = URL.createObjectURL(files[0]!);
+						const ct = files[0]!.type || 'application/octet-stream';
+						e.dataTransfer.setData(
+							'DownloadURL',
+							`${files[0]!.name}:${ct}:${url}`
+						);
+					}
+				} catch {
+					/* some browsers / jsdom reject items.add in tests */
+				}
+			}
+		}
+
 		// copyMove so DualPaneExplorer can accept a copy drop (move-only is rejected).
 		if (e.dataTransfer) e.dataTransfer.effectAllowed = caps.supportsMove ? 'copyMove' : 'copy';
 	}

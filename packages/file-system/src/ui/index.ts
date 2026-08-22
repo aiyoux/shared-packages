@@ -30,6 +30,14 @@ export {
 	type CrossWindowDragSession
 } from './crossWindowDnd.js';
 export {
+	prefetchForDragOut,
+	getDragOutFile,
+	hasDragOutFile,
+	evictDragOutFile,
+	clearDragOutCache,
+	evictDriver
+} from './dragOutCache.js';
+export {
 	EXPLORER_DOWNLOAD_MAX_BYTES,
 	EXPLORER_LIST_MAX_ENTRIES,
 	applyListCap,
