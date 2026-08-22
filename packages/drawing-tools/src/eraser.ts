@@ -2131,9 +2131,6 @@ const splitClosedFilledPath = (
             ...path,
             id: generateId(),
             d,
-            // The stroke this piece descends from, so a later sweep of the same
-            // rub can tell one stroke cut in two from two layers of ink.
-            fadeOrigin: path.fadeOrigin ?? path.id,
             fill: path.fill || 'none',
             fillRule: path.fillRule === 'evenodd' ? path.fillRule : undefined,
             freehandSource: undefined,
@@ -2876,7 +2873,6 @@ export const splitOnePathByEraser = (
                         opacity: next,
                         clipDerived: true,
                         faded: true,
-                        fadeOrigin: path.fadeOrigin ?? path.id,
                         ...(ctx.fade?.sweepId != null ? { fadeSweepId: ctx.fade.sweepId } : {}),
                     });
                 }
@@ -2992,7 +2988,7 @@ export const splitOnePathByEraser = (
         const step = fadeStep(path, fade);
         if (sync) sync.removed.push(path);
         if (step === null) return [];
-        const worn = { ...path, id: generateId(), opacity: step.opacity, faded: true, fadeOrigin: path.fadeOrigin ?? path.id, ...(fade.sweepId != null ? { fadeSweepId: fade.sweepId } : {}), transform: hasTranslate ? undefined : path.transform, d: hasTranslate ? flatCmdsToD(flatCmds) : path.d, ...(hasTranslate && path.clipRect ? { clipRect: rebaseClipRect(path, tx, ty) } : {}) };
+        const worn = { ...path, id: generateId(), opacity: step.opacity, faded: true, ...(fade.sweepId != null ? { fadeSweepId: fade.sweepId } : {}), transform: hasTranslate ? undefined : path.transform, d: hasTranslate ? flatCmdsToD(flatCmds) : path.d, ...(hasTranslate && path.clipRect ? { clipRect: rebaseClipRect(path, tx, ty) } : {}) };
         if (sync) sync.added.push(worn);
         eraseStats.piecesEmitted += 1;
         return [worn];
@@ -3023,11 +3019,6 @@ export const splitOnePathByEraser = (
             // remainder is the part the eraser did NOT reach, so it must not
             // carry a fade marker inherited from the path it was cut from.
             faded: undefined,
-            // Lineage, unlike the fade marker, rides on EVERY piece. A
-            // remainder that loses it starts a fresh one, and the next sweep of
-            // the same rub then reads two pieces of one stroke as two layers of
-            // ink — see PathData.fadeOrigin.
-            fadeOrigin: path.fadeOrigin ?? path.id,
             fill: path.fill || 'none',
             transform: hasTranslate ? undefined : path.transform,
             ...(hasTranslate && path.clipRect ? { clipRect: rebaseClipRect(path, tx, ty) } : {}),
@@ -3136,30 +3127,25 @@ const fadedInkKey = (p: PathData): string | null => {
 };
 
 /**
- * The opacity one flattened piece must carry to stand in for the pile it replaces.
+ * Is this piece translucent ink — ink that COMPOSITES rather than covering?
  *
- * De-overlapping is only invisible when the ink is OPAQUE: one black layer at
- * 0.55 looks exactly like four of them. Translucent ink composites instead, so
- * a pile is darker than any of its layers — four highlighter passes at 0.34 read
- * as 1-0.66^4 = 0.81 — and covering the patch once at the single-layer opacity
- * throws that depth away. Measured on the four-pass pile this was found with:
- * the rub showed 0.446 and settled to 0.19, which is the "much heavier erase on
- * release" the flatten was blamed for.
+ * Flattening de-overlaps same-ink pieces so a rubbed patch is covered exactly
+ * once, which is invisible for opaque ink and destructive for translucent ink.
+ * Not merely wrong by an opacity value, either: a real drawing is not a pile of
+ * even depth. Rubbing 18 overlapping highlighter strokes committed FOUR pieces,
+ * at 0.546, 0.48 and 0.186 twice — the band went from a smoothly varying wash
+ * to four flat slabs, two of them pale enough to read as holes punched through
+ * the ink. No single opacity per piece can carry a depth that varies across the
+ * piece, so translucent ink is left as the separate pieces it is.
  *
- * What the strength dial promises is that a rub leaves `factor` of what was
- * there, so the pile is the thing to scale: `pile * factor`. Fading is a plain
- * multiply (see `fadedOpacity`), so the pre-rub layer opacity is recoverable
- * exactly, and for opaque ink this returns `factor` — the value flattening
- * already produced, unchanged.
+ * Fading is a plain multiply (see `fadedOpacity`), so the pre-rub opacity is
+ * recoverable exactly: ink that was already below 1 before this rub touched it
+ * composites, and ink at 1 covers.
  */
-const flattenedPileOpacity = (faded: number, depth: number, fade: FadeOptions): number => {
-    if (depth < 2 || !(fade.factor > 0)) return faded;
-    const layer = faded / fade.factor;
-    // Opaque ink: one layer already IS the pile, which is the case flattening
-    // was built for. Nothing to fold in.
-    if (!(layer < 1)) return faded;
-    const pile = 1 - Math.pow(1 - layer, depth);
-    return Math.min(1, pile * fade.factor);
+const compositesRatherThanCovers = (piece: PathData, fade: FadeOptions): boolean => {
+    if (piece.opacity === undefined) return false;
+    if (!(fade.factor > 0)) return false;
+    return piece.opacity / fade.factor < 1;
 };
 
 /**
@@ -3226,6 +3212,9 @@ const flattenFadedInk = (
         // untouched highlighter in here and collapsed whole bands the eraser
         // never reached. See `PathData.faded`.
         if (!p.faded) continue;
+        // Ink that composites keeps its own geometry — see
+        // `compositesRatherThanCovers`.
+        if (compositesRatherThanCovers(p, fade)) continue;
         const bbox = cachedFlatten(p).bbox;
         if (!bbox) continue;
         if (bbox.maxX < reach.minX || bbox.minX > reach.maxX) continue;
@@ -3332,19 +3321,7 @@ const flattenFadedInk = (
             const changed = remainder !== whole || run.length > 1;
             if (changed) {
                 const top = run[run.length - 1];
-                // How many thicknesses of ink this one piece is about to stand
-                // in for. A piece that already stands in for a pile counts as
-                // the pile it is, not as one layer — otherwise a chunked rub
-                // folds the same depth in once per chunk.
-                const alreadyStandsForPile = run.some((i) => result[i].fadeFlattened);
-                // How many thicknesses of ink, NOT how many pieces: consecutive
-                // chunks of one rub overlap at their seam, and folding that in
-                // would darken a single layer as if it were two.
-                const depth = new Set(run.map((i) => result[i].fadeOrigin ?? result[i].id ?? String(i))).size;
-                const template0 = result[top];
-                const pileOpacity = alreadyStandsForPile || template0.opacity === undefined
-                    ? template0.opacity
-                    : flattenedPileOpacity(template0.opacity, depth, fade);
+
                 // Emitted at FULL precision, unrounded. This shape was cut
                 // against the outline of the piece above it, so it already
                 // shares that outline exactly — and snapping it onto the 0.1
@@ -3361,7 +3338,6 @@ const flattenFadedInk = (
                     ? {
                         ...template,
                         d,
-                        ...(pileOpacity !== undefined ? { opacity: pileOpacity, fadeFlattened: true } : {}),
                         // Merged or trimmed, this is no longer a centreline —
                         // the area it paints is the only faithful description.
                         fill: (template.fill && template.fill !== 'none') ? template.fill : template.stroke,

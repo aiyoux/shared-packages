@@ -98,29 +98,6 @@ export interface PathData {
      * still compounds — see `FadeOptions.accumulate`.
      */
     fadeSweepId?: number;
-    /**
-     * This piece already stands in for a whole pile of ink, not one layer of it.
-     *
-     * Flattening de-overlaps same-ink faded pieces so a rubbed patch is covered
-     * exactly once. That is invisible for OPAQUE ink — one black layer looks
-     * like four — but translucent ink composites, so four highlighter passes at
-     * 0.34 read as 0.81, and covering the patch once at 0.34 throws the depth
-     * away. The survivor therefore carries the pile's opacity rather than its
-     * own, and this marks it as having done so: a later rub must not fold the
-     * same depth in a second time.
-     */
-    fadeFlattened?: boolean;
-    /**
-     * The id of the stroke this piece descends from, carried through every
-     * fade and split.
-     *
-     * Flattening needs to know how DEEP the ink under the rub is, and the
-     * count of overlapping pieces does not say: two chunks of one rub overlap
-     * at their seam without the ink being two layers deep. Pieces that trace
-     * back to the same stroke are one thickness however many they are, so
-     * counting distinct origins is what separates a genuine pile from a seam.
-     */
-    fadeOrigin?: string;
     transform?: string;
     bakeGroupId?: string;
     layerId?: string;
