@@ -26,13 +26,14 @@ const SCALE_RE = /scale\(\s*(-?[\d.]+)(?:[ ,]+(-?[\d.]+))?\s*\)/;
 // of a full layer redraw (erase/undo/load), and the same PathData objects are
 // repainted repeatedly. WeakMap keyed on the PathData object, invalidated when d
 // or transform changes (node edits mutate d in place). Falls away with the path.
-const path2DCache = new WeakMap<PathData, { key: string; path2d: Path2D }>();
+const path2DCache = new WeakMap<PathData, { d: string; transform?: string; path2d: Path2D }>();
 function getPath2D(p: PathData): Path2D {
-	const key = `${p.d}|${p.transform ?? ''}`;
+	// Same as cachedPathBounds: compare the fields, don't build a key out of
+	// them — the key was a fresh copy of `d` on every single lookup.
 	const cached = path2DCache.get(p);
-	if (cached && cached.key === key) return cached.path2d;
+	if (cached && cached.d === p.d && cached.transform === p.transform) return cached.path2d;
 	const path2d = new Path2D(p.d);
-	path2DCache.set(p, { key, path2d });
+	path2DCache.set(p, { d: p.d, transform: p.transform, path2d });
 	return path2d;
 }
 
@@ -275,14 +276,61 @@ export function rectsIntersect(a: Rect, b: Rect): boolean {
 // the erase spatial grid, so a path's bbox is parsed once and reused everywhere
 // — including warming bboxes during the incremental pathsByLayer pass so the
 // erase grid build at erase-pointerdown is all cache hits (no upfront hitch).
-const pathBoundsCache = new WeakMap<PathData, { key: string; bounds: Rect | null }>();
+//
+// The validity check compares `d` and `transform` as they are, rather than
+// concatenating them into a key. Building that key allocated a copy of every
+// path's `d` on every lookup — and a lookup is not rare: the incremental
+// pathsByLayer pass walks every path, and an erase increment triggers a full
+// walk. Measured on 800 paths with ~600-char `d`, a 40-move as-you-go rub spent
+// 424ms of a 1050ms drag inside that pass, nearly all of it building keys for
+// entries that were about to hit. Comparing the strings directly starts with a
+// pointer check for the common case, where the path has not been touched and
+// `d` is literally the same string.
+const pathBoundsCache = new WeakMap<PathData, BoundsEntry>();
+
+type BoundsEntry = { d: string; transform?: string; bounds: Rect | null };
+
+/**
+ * Second-level lookup keyed on the path's ID.
+ *
+ * The WeakMap above is keyed on the object, and under Svelte 5 deep reactivity
+ * that is not stable: reassigning `paths` hands back fresh proxies for the same
+ * underlying paths, so an object-keyed cache misses and re-parses `d`. The
+ * erase spatial grid already learned this and keys on id for the same reason —
+ * there it broke correctness, so it got noticed; here it only ever cost time,
+ * so it did not.
+ *
+ * Measured on 800 paths over a 40-move as-you-go rub: 17,122 misses against a
+ * document that only ever changed 9 pieces, each miss re-parsing a ~600-char
+ * `d`. That was the bulk of the drag's main-thread time.
+ *
+ * Bounded rather than weak, since a string key cannot hold its path alive: an
+ * erase mints a new id per piece, so this grows with editing. It is a cache —
+ * dropping it wholesale at the cap costs one round of re-parsing and nothing
+ * else.
+ */
+const pathBoundsById = new Map<string, BoundsEntry>();
+const MAX_BOUNDS_BY_ID = 50_000;
+
 export function cachedPathBounds(p: PathData): Rect | null {
-	const key = `${p.d}|${p.transform ?? ''}`;
 	const cached = pathBoundsCache.get(p);
-	if (cached && cached.key === key) return cached.bounds;
-	const bounds = pathBounds(p);
-	pathBoundsCache.set(p, { key, bounds });
-	return bounds;
+	if (cached && cached.d === p.d && cached.transform === p.transform) return cached.bounds;
+	const id = p.id;
+	if (id) {
+		const byId = pathBoundsById.get(id);
+		if (byId && byId.d === p.d && byId.transform === p.transform) {
+			// Same path, new proxy — adopt the entry so this wrapper hits too.
+			pathBoundsCache.set(p, byId);
+			return byId.bounds;
+		}
+	}
+	const entry: BoundsEntry = { d: p.d, transform: p.transform, bounds: pathBounds(p) };
+	pathBoundsCache.set(p, entry);
+	if (id) {
+		if (pathBoundsById.size >= MAX_BOUNDS_BY_ID) pathBoundsById.clear();
+		pathBoundsById.set(id, entry);
+	}
+	return entry.bounds;
 }
 
 /** Smallest rect covering both inputs (for accumulating a dirty region). */
