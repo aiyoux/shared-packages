@@ -155,6 +155,7 @@
 		{/if}
 	</div>
 
+	<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
 	<div class="controls-bar" onclick={(e) => e.stopPropagation()}>
 		<button class="control-btn play-btn" onclick={togglePlay} aria-label={isPaused ? 'Play' : 'Pause'}>
 			{#if isPaused}

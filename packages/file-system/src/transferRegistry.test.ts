@@ -129,4 +129,47 @@ describe('transferRegistry', () => {
 		setReceived({ id: 'c1', name: 'c', blob, url: URL.createObjectURL(blob), size: 1, integrity: 'ok' });
 		expect(transferBlobBytes()).toBe(1);
 	});
+
+	it('clears stale error when transfer becomes active or done', () => {
+		// Simulate a held incoming offer: active with an error message
+		upsertProgress(progress({ id: 'h1', error: 'Waiting for you to accept' }));
+		expect(listTransfers()[0]?.error).toBe('Waiting for you to accept');
+		// Subsequent active progress without error should clear it
+		upsertProgress(progress({ id: 'h1', transferred: 5 }));
+		expect(listTransfers()[0]?.error).toBeUndefined();
+	});
+
+	it('preserves error on failed status updates', () => {
+		upsertProgress(progress({ id: 'f1', error: 'Connection lost' }));
+		upsertProgress(progress({ id: 'f1', status: 'failed', done: true }));
+		expect(listTransfers()[0]?.error).toBe('Connection lost');
+	});
+
+	it('setReceived clears stale error on successful receive', () => {
+		upsertProgress(progress({ id: 'r-err', error: 'Waiting for you to accept' }));
+		const blob = new Blob(['data']);
+		setReceived({
+			id: 'r-err',
+			name: 'file.bin',
+			blob,
+			url: URL.createObjectURL(blob),
+			size: 4,
+			integrity: 'ok'
+		});
+		expect(listTransfers()[0]?.error).toBeUndefined();
+	});
+
+	it('setReceived preserves error on integrity mismatch', () => {
+		upsertProgress(progress({ id: 'r-mis', error: 'Bad hash' }));
+		const blob = new Blob(['data']);
+		setReceived({
+			id: 'r-mis',
+			name: 'file.bin',
+			blob,
+			url: URL.createObjectURL(blob),
+			size: 4,
+			integrity: 'mismatch'
+		});
+		expect(listTransfers()[0]?.error).toBe('Bad hash');
+	});
 });
