@@ -48,8 +48,14 @@
 		idsFromExplorerDataTransfer,
 		idsFromExplorerDragTarget,
 		dataTransferHasOsFiles,
+		dataTransferHasExplorerIds,
 		filesFromDataTransfer
 	} from './copyAcross.js';
+	import {
+		setCrossWindowDrag,
+		getCrossWindowDrag,
+		clearCrossWindowDrag
+	} from './crossWindowDnd.js';
 	import { getMemoryVfs, type MemoryVfsService, type VfsService } from '../index.js';
 	import { canPickDirectory, createDiskExplorerDriver, pickDirectory } from '../disk/index.js';
 	import {
@@ -773,6 +779,16 @@
 				selectedIds,
 				entries: p.ctx.entries
 			});
+			// Register a cross-instance drag session so another
+			// DualPaneExplorer in a different workspace pane (same document)
+			// can accept this as a copy-across drop even in single-pane mode.
+			setCrossWindowDrag({
+				sourceDriver: activeDriver(p, id),
+				sourceEntries: p.ctx.entries,
+				selectedIds
+			});
+		} else {
+			clearCrossWindowDrag();
 		}
 		if (!dualPane || !showCopyAcross) return;
 		crossDragFrom = id;
@@ -819,11 +835,27 @@
 			osDropPane = id;
 			return;
 		}
-		if (!dualPane || !showCopyAcross || !crossDragFrom || crossDragFrom === id) return;
-		e.preventDefault();
-		e.stopPropagation();
-		if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
-		crossOver = id;
+		// Same-instance cross-pane drag (dual-pane mode).
+		if (crossDragFrom && crossDragFrom !== id) {
+			e.preventDefault();
+			e.stopPropagation();
+			if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+			crossOver = id;
+			return;
+		}
+		// Cross-instance drag: another DualPaneExplorer in a different
+		// workspace pane started this drag. Accept even in single-pane mode.
+		if (
+			!crossDragFrom &&
+			dataTransferHasExplorerIds(e.dataTransfer) &&
+			getCrossWindowDrag()
+		) {
+			e.preventDefault();
+			e.stopPropagation();
+			if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+			crossOver = id;
+			return;
+		}
 	}
 
 	function onPaneDragLeave(id: PaneId, e: DragEvent) {
@@ -837,6 +869,7 @@
 		crossDragFrom = null;
 		crossOver = null;
 		osDropPane = null;
+		clearCrossWindowDrag();
 	}
 
 	async function onPaneDrop(id: PaneId, e: DragEvent) {
@@ -849,20 +882,41 @@
 			await importOsFilesToPane(id, osFiles, destParentId);
 			return;
 		}
-		if (!dualPane || !showCopyAcross || !crossDragFrom || crossDragFrom === id) {
+		// Same-instance cross-pane copy (dual-pane mode).
+		if (crossDragFrom && crossDragFrom !== id) {
+			e.preventDefault();
+			e.stopPropagation();
+			const from = crossDragFrom;
+			const src = paneState(from);
+			const dst = paneState(id);
+			const dragged = idsFromExplorerDataTransfer(e.dataTransfer);
+			const selectedIds = dragged.length ? dragged : src.ctx.selectedIds;
+			const destParentId = destParentFromDropEvent(e, dst.ctx.parentId);
 			onPaneDragEnd();
+			await runCopyAcross(from, { selectedIds, destParentId });
 			return;
 		}
-		e.preventDefault();
-		e.stopPropagation();
-		const from = crossDragFrom;
-		const src = paneState(from);
-		const dst = paneState(id);
-		const dragged = idsFromExplorerDataTransfer(e.dataTransfer);
-		const selectedIds = dragged.length ? dragged : src.ctx.selectedIds;
-		const destParentId = destParentFromDropEvent(e, dst.ctx.parentId);
+		// Cross-instance copy: drag from another DualPaneExplorer in a
+		// different workspace pane. Works in single-pane mode too.
+		const crossDrag = !crossDragFrom ? getCrossWindowDrag() : null;
+		if (crossDrag && dataTransferHasExplorerIds(e.dataTransfer)) {
+			e.preventDefault();
+			e.stopPropagation();
+			const dst = paneState(id);
+			const dragged = idsFromExplorerDataTransfer(e.dataTransfer);
+			const selectedIds = dragged.length ? dragged : crossDrag.selectedIds;
+			const destParentId = destParentFromDropEvent(e, dst.ctx.parentId);
+			onPaneDragEnd();
+			await runCrossInstanceCopy(
+				crossDrag.sourceDriver,
+				crossDrag.sourceEntries,
+				selectedIds,
+				id,
+				destParentId
+			);
+			return;
+		}
 		onPaneDragEnd();
-		await runCopyAcross(from, { selectedIds, destParentId });
 	}
 
 	function copyHints(id: PaneId): {
@@ -946,6 +1000,50 @@
 			});
 			// Live drivers refresh in place. Remotes without subscribeChanges
 			// remount but keep the dest open folder via initialParentId.
+			if (!destDriver.subscribeChanges) {
+				setPane(destId, {
+					explorerKey: dst.explorerKey + 1
+				});
+			}
+			if (n === 0) copyError = 'Nothing copied';
+		} catch (e) {
+			if (e instanceof CopyAcrossError) copyError = e.message;
+			else copyError = e instanceof Error ? e.message : String(e);
+		} finally {
+			copyBusy = false;
+		}
+	}
+
+	/**
+	 * Copy files from a different `<DualPaneExplorer>` instance (another workspace
+	 * pane). The source driver / entries / selectedIds come from the shared
+	 * cross-window drag session; the destination is a pane in this instance.
+	 * Works in single-pane mode — `dualPane` need not be on.
+	 */
+	async function runCrossInstanceCopy(
+		sourceDriver: ExplorerDriver,
+		sourceEntries: ExplorerEntry[],
+		selectedIds: string[],
+		destId: PaneId,
+		destParentId: string | null
+	) {
+		const dst = paneState(destId);
+		const destDriver = activeDriver(dst, destId);
+		copyError = '';
+		if (isDualPhaseCopy(sourceDriver, destDriver)) {
+			const ok = await askDualPhase(sourceDriver.id, paneConnectionLabel(destId));
+			if (!ok) return;
+		}
+		copyBusy = true;
+		copyDestPane = destId;
+		try {
+			const n = await copyAcross({
+				sourceDriver,
+				destDriver,
+				selectedIds,
+				sourceEntries,
+				destParentId
+			});
 			if (!destDriver.subscribeChanges) {
 				setPane(destId, {
 					explorerKey: dst.explorerKey + 1

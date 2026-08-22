@@ -24,6 +24,12 @@ export {
 	type CopyAcrossPathKind
 } from './copyAcross.js';
 export {
+	setCrossWindowDrag,
+	getCrossWindowDrag,
+	clearCrossWindowDrag,
+	type CrossWindowDragSession
+} from './crossWindowDnd.js';
+export {
 	EXPLORER_DOWNLOAD_MAX_BYTES,
 	EXPLORER_LIST_MAX_ENTRIES,
 	applyListCap,
