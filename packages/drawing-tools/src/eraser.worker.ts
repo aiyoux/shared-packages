@@ -18,9 +18,9 @@ import { buildEraseDelta, type EraseDelta } from './eraseDelta.ts';
  *
  *  So a rub can open a SESSION. The document is handed over once, the worker
  *  keeps the working copy for the length of the rub, and each pass carries only
- *  the trail and comes back as a positional diff. The last pass returns the
- *  full array so the main thread ends the rub holding exactly what the worker
- *  computed, rather than a copy it has been patching.
+ *  the trail and comes back as a positional diff. A pass whose diff could not be
+ *  derived falls back to the full array, so the caller is never left without a
+ *  way to apply the result.
  *
  *  `isLayerLocked` is a closure and cannot be cloned, so the caller sends the
  *  data it closes over (locked ids + active layer + the multi-layer toggle) and
@@ -31,8 +31,9 @@ export type EraseRequest = {
      *  only on the first message; later ones use the worker's copy. Absent for
      *  a one-shot pass, which behaves exactly as before. */
     sessionId?: number;
-    /** Hand back the full array and close the session — the last pass of a rub. */
-    endSession?: boolean;
+    /** Drop the session's working copy. Carries no work and gets no reply —
+     *  sent once the rub's passes have all drained. */
+    closeSession?: boolean;
     /** Omitted on a continuing session pass: the worker already has it. */
     paths?: PathData[];
     eraserPoints: { x: number; y: number }[];
@@ -100,6 +101,11 @@ const sessions = new Map<number, PathData[]>();
 
 self.onmessage = async (event: MessageEvent<EraseRequest>) => {
     const req = event.data;
+    // A close carries no work and expects no reply.
+    if (req.closeSession) {
+        if (req.sessionId != null) sessions.delete(req.sessionId);
+        return;
+    }
     try {
         await clipperReady;
         setClipper2Enabled(req.useClipper2 !== false);
@@ -137,14 +143,11 @@ self.onmessage = async (event: MessageEvent<EraseRequest>) => {
         const changed = sync.removed.length > 0;
         const delta = changed ? buildEraseDelta(before, paths, sync) : null;
         const inSession = req.sessionId != null;
-        if (inSession) {
-            if (req.endSession) sessions.delete(req.sessionId!);
-            else sessions.set(req.sessionId!, paths);
-        }
+        if (inSession) sessions.set(req.sessionId!, paths);
         // Mid-session the diff is enough, and it is the whole point — shipping
-        // the array back every increment costs as much as sending it out. When
-        // there is no diff to send, or the rub is closing, hand over the array.
-        const sendPaths = !inSession || req.endSession || !delta;
+        // the array back every increment costs as much as sending it out. With
+        // no diff to send there is nothing to apply, so hand over the array.
+        const sendPaths = !inSession || !delta;
         const res: EraseResponse = {
             jobId: req.jobId, ok: true,
             ...(sendPaths ? { paths } : {}),
