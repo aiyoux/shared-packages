@@ -1263,6 +1263,43 @@ export const eraserOutlinePolygon = (eraserPoints: Point[], radius: number): Mul
     return parts;
 };
 
+/** The eraser's swept region as an SVG path `d`, to be painted with a NONZERO
+ *  fill rather than stroked.
+ *
+ *  Same construction the commit cuts with — `strokeOutlineRing`, snapped to the
+ *  same 0.1 grid — minus the boolean `union` that resolves the ring's
+ *  self-crossings. A nonzero fill resolves them by rasterizing instead: the ring
+ *  is traced in one consistent direction, so every loop a curling trail folds
+ *  into it is wound the same way as the outer boundary and fills to exactly the
+ *  region the union would have produced. O(n), no clipper, cheap enough to
+ *  rebuild on every frame while the rub is still moving.
+ *
+ *  This exists so a live fade stand-in can be PAINTED as the same shape its
+ *  commit will CUT. Stroking the centerline at 2*radius with round caps was
+ *  close but not the same shape: the browser's caps and joins are true circles
+ *  where the cut's are 20-segment INSCRIBED arcs, ~0.14px shy of the circle at
+ *  r=44. The stand-in therefore covered a sliver the commit did not remove, and
+ *  that sliver reappeared as a hairline of ink along the seam the moment the
+ *  stand-in gave way — visible on a split erase through built-up highlighter,
+ *  where the ink underneath is dark enough to show it.
+ *
+ *  Only for erasing that cuts GEOMETRY — split and fade. Erasing that takes
+ *  whole strokes away has no cut edge for a stand-in to line up with, and a
+ *  document's stored `eraserPaths` are stroked polylines that must stay
+ *  stroked. */
+export const eraserSweptRegionPath = (points: Point[], radius: number): string => {
+    if (points.length === 0) return '';
+    const deduped: Point[] = [points[0]];
+    for (let i = 1; i < points.length; i++) {
+        const p = points[i], q = deduped[deduped.length - 1];
+        if (Math.abs(p.x - q.x) > 1e-9 || Math.abs(p.y - q.y) > 1e-9) deduped.push(p);
+    }
+    const polygon: Polygon = deduped.length === 1
+        ? circlePolygon(deduped[0], radius)
+        : [strokeOutlineRing(deduped, radius)];
+    return polygonToD(roundPolygon(polygon));
+};
+
 const unionGeometryParts = (parts: Geometry[]) => {
     if (parts.length === 0) return null;
     return union(parts[0], ...parts.slice(1));
