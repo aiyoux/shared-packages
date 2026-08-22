@@ -121,7 +121,7 @@ export async function getMupdf(): Promise<Record<string, (...args: never[]) => u
 	if (!mupdfPromise) {
 		mupdfPromise = (async () => {
 			if (typeof window !== 'undefined') {
-				const g = globalThis as Record<string, unknown>;
+				const g = globalThis as Record<string, any>;
 				if (!g.process) g.process = { env: {} };
 				if (!g.process.versions) g.process.versions = {};
 				try {
@@ -151,18 +151,20 @@ export async function getMupdf(): Promise<Record<string, (...args: never[]) => u
 export async function generatePdfThumbnail(blob: Blob, maxDim: number): Promise<string> {
 	const mupdf = await getMupdf();
 	const uint8 = new Uint8Array(await blob.arrayBuffer());
-	const Buffer = mupdf.Buffer as new (data?: unknown) => { write: (d: Uint8Array) => void };
+	const Buffer = mupdf.Buffer as unknown as new (data?: unknown) => { write: (d: Uint8Array) => void };
 	const buf = new Buffer();
 	buf.write(uint8);
 	const doc = (
-		mupdf.Document as new (buf: unknown, type: string) => {
-			countPages: () => number;
-			loadPage: (i: number) => {
-				getBounds: () => [number, number, number, number];
-				toPixmap: (mat: unknown, cs: unknown, alpha: boolean, show: boolean) => {
-					width: number;
-					height: number;
-					pixels: Uint8Array;
+		mupdf.Document as unknown as {
+			openDocument: (buf: unknown, type: string) => {
+				countPages: () => number;
+				loadPage: (i: number) => {
+					getBounds: () => [number, number, number, number];
+					toPixmap: (mat: unknown, cs: unknown, alpha: boolean, show: boolean) => {
+						width: number;
+						height: number;
+						pixels: Uint8Array;
+					};
 				};
 			};
 		}
@@ -193,18 +195,20 @@ export async function renderPdfPageToCanvas(
 ): Promise<number> {
 	const mupdf = await getMupdf();
 	const uint8 = new Uint8Array(await blob.arrayBuffer());
-	const Buffer = mupdf.Buffer as new (data?: unknown) => { write: (d: Uint8Array) => void };
+	const Buffer = mupdf.Buffer as unknown as new (data?: unknown) => { write: (d: Uint8Array) => void };
 	const buf = new Buffer();
 	buf.write(uint8);
 	const doc = (
-		mupdf.Document as new (buf: unknown, type: string) => {
-			countPages: () => number;
-			loadPage: (i: number) => {
-				getBounds: () => [number, number, number, number];
-				toPixmap: (mat: unknown, cs: unknown, alpha: boolean, show: boolean) => {
-					width: number;
-					height: number;
-					pixels: Uint8Array;
+		mupdf.Document as unknown as {
+			openDocument: (buf: unknown, type: string) => {
+				countPages: () => number;
+				loadPage: (i: number) => {
+					getBounds: () => [number, number, number, number];
+					toPixmap: (mat: unknown, cs: unknown, alpha: boolean, show: boolean) => {
+						width: number;
+						height: number;
+						pixels: Uint8Array;
+					};
 				};
 			};
 		}

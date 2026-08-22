@@ -369,7 +369,7 @@ export function svgToPaths(svgString: string, options: SvgToPathsOptions = {}): 
 	const paths: PathData[] = [];
 
 	const candidates = svgEl.querySelectorAll('path, rect, circle, ellipse, line, polygon, polyline');
-	for (const el of candidates) {
+	for (const el of Array.from(candidates)) {
 		if (isInSkipSubtree(el, svgEl)) continue;
 		const tag = el.tagName.toLowerCase().replace(/^.*:/, '');
 		if (!SHAPE_TAGS.has(tag)) continue;
@@ -383,7 +383,7 @@ export function svgToPaths(svgString: string, options: SvgToPathsOptions = {}): 
 	}
 
 	const uses = svgEl.querySelectorAll('use');
-	for (const useEl of uses) {
+	for (const useEl of Array.from(uses)) {
 		if (isInSkipSubtree(useEl, svgEl)) continue;
 		const href =
 			useEl.getAttribute('href') ||
