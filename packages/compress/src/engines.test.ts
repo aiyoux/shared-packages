@@ -6,9 +6,9 @@ import { expandBytes, packFiles } from './operations.js';
 const SAMPLE = new TextEncoder().encode('scratch-pad compress fixture\n'.repeat(40));
 
 describe('catalog', () => {
-	it('lists fflate, ZipKit, and AddMaple', () => {
-		expect(listEngines().map((e) => e.id)).toEqual(['fflate', 'zipkit', 'addmaple']);
-		expect(ENGINE_CATALOG).toHaveLength(3);
+	it('lists all engines', () => {
+		expect(listEngines().map((e) => e.id)).toEqual(['fflate', 'zipkit', 'addmaple', 'tarjs', 'nanotar']);
+		expect(ENGINE_CATALOG).toHaveLength(5);
 	});
 
 	it('keeps ZIP off AddMaple and on the other two', () => {
@@ -17,6 +17,14 @@ describe('catalog', () => {
 		expect(engineSupports('zipkit', 'zstd')).toBe(true);
 		expect(defaultCodecFor('addmaple')).toBe('gzip');
 		expect(defaultCodecFor('fflate')).toBe('zip');
+	});
+
+	it('tar engines support tar and default to it', () => {
+		expect(engineSupports('tarjs', 'tar')).toBe(true);
+		expect(engineSupports('nanotar', 'tar')).toBe(true);
+		expect(engineSupports('fflate', 'tar')).toBe(false);
+		expect(defaultCodecFor('tarjs')).toBe('tar');
+		expect(defaultCodecFor('nanotar')).toBe('tar');
 	});
 });
 
@@ -57,5 +65,63 @@ describe('fflate', () => {
 		await expect(packFiles('fflate', [{ name: 'x', data: SAMPLE }], 'brotli')).rejects.toThrow(
 			/does not support/
 		);
+	});
+});
+
+describe('tarjs', () => {
+	it('round-trips tar', async () => {
+		const engine = await loadEngine('tarjs');
+		const archive = await engine.tar!([
+			{ name: 'a.txt', data: SAMPLE },
+			{ name: 'nested/b.txt', data: new TextEncoder().encode('inner') }
+		]);
+		const files = await engine.untar!(archive);
+		expect(files.map((f) => f.name).sort()).toEqual(['a.txt', 'nested/b.txt']);
+		expect(new TextDecoder().decode(files.find((f) => f.name === 'nested/b.txt')!.data)).toBe(
+			'inner'
+		);
+	});
+
+	it('packFiles / expandBytes round-trip tar', async () => {
+		const packed = await packFiles(
+			'tarjs',
+			[{ name: 'note.txt', data: SAMPLE }],
+			'tar'
+		);
+		expect(packed).toHaveLength(1);
+		expect(packed[0]!.name).toBe('note.tar');
+		const expanded = await expandBytes('tarjs', packed[0]!.data, 'tar', packed[0]!.name);
+		expect(expanded).toHaveLength(1);
+		expect(expanded[0]!.name).toBe('note.txt');
+		expect(new TextDecoder().decode(expanded[0]!.data)).toBe(new TextDecoder().decode(SAMPLE));
+	});
+});
+
+describe('nanotar', () => {
+	it('round-trips tar', async () => {
+		const engine = await loadEngine('nanotar');
+		const archive = await engine.tar!([
+			{ name: 'a.txt', data: SAMPLE },
+			{ name: 'nested/b.txt', data: new TextEncoder().encode('inner') }
+		]);
+		const files = await engine.untar!(archive);
+		expect(files.map((f) => f.name).sort()).toEqual(['a.txt', 'nested/b.txt']);
+		expect(new TextDecoder().decode(files.find((f) => f.name === 'nested/b.txt')!.data)).toBe(
+			'inner'
+		);
+	});
+
+	it('packFiles / expandBytes round-trip tar', async () => {
+		const packed = await packFiles(
+			'nanotar',
+			[{ name: 'note.txt', data: SAMPLE }],
+			'tar'
+		);
+		expect(packed).toHaveLength(1);
+		expect(packed[0]!.name).toBe('note.tar');
+		const expanded = await expandBytes('nanotar', packed[0]!.data, 'tar', packed[0]!.name);
+		expect(expanded).toHaveLength(1);
+		expect(expanded[0]!.name).toBe('note.txt');
+		expect(new TextDecoder().decode(expanded[0]!.data)).toBe(new TextDecoder().decode(SAMPLE));
 	});
 });

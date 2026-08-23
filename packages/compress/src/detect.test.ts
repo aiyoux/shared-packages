@@ -8,6 +8,7 @@ import {
 	suggestArchiveName
 } from './detect.js';
 import { gzipSync, zipSync, strToU8 } from 'fflate';
+import { createTar } from 'nanotar';
 
 describe('detectFormatFromBytes', () => {
 	it('sniffs gzip', () => {
@@ -18,6 +19,11 @@ describe('detectFormatFromBytes', () => {
 	it('sniffs zip', () => {
 		const zipped = zipSync({ 'a.txt': strToU8('a') });
 		expect(detectFormatFromBytes(zipped)?.codec).toBe('zip');
+	});
+
+	it('sniffs tar from ustar magic at offset 257', () => {
+		const tar = createTar([{ name: 'a.txt', data: strToU8('a') }]);
+		expect(detectFormatFromBytes(tar)?.codec).toBe('tar');
 	});
 
 	it('sniffs zstd / xz / bzip2 / lz4 magic', () => {
@@ -41,6 +47,7 @@ describe('detectFormatFromName', () => {
 		expect(detectFormatFromName('photo.jpg.gz')?.codec).toBe('gzip');
 		expect(detectFormatFromName('bundle.tar.gz')?.codec).toBe('gzip');
 		expect(detectFormatFromName('pack.zip')?.codec).toBe('zip');
+		expect(detectFormatFromName('archive.tar')?.codec).toBe('tar');
 		expect(detectFormatFromName('x.zst')?.codec).toBe('zstd');
 		expect(detectFormatFromName('plain.txt')).toBeNull();
 	});
@@ -58,11 +65,18 @@ describe('names', () => {
 		expect(stripCompressionExt('note.txt.gz', 'gzip')).toBe('note.txt');
 		expect(stripCompressionExt('logs.tgz', 'gzip')).toBe('logs.tar');
 		expect(stripCompressionExt('pack.zip', 'zip')).toBe('pack');
+		expect(stripCompressionExt('archive.tar', 'tar')).toBe('archive');
 		expect(extensionForCodec('brotli')).toBe('.br');
+		expect(extensionForCodec('tar')).toBe('.tar');
 	});
 
 	it('names a zip from one file or a fallback', () => {
 		expect(suggestArchiveName([{ name: 'readme.md' }])).toBe('readme.zip');
 		expect(suggestArchiveName([{ name: 'a' }, { name: 'b' }])).toBe('archive.zip');
+	});
+
+	it('names a tar when codec is tar', () => {
+		expect(suggestArchiveName([{ name: 'readme.md' }], 'archive', 'tar')).toBe('readme.tar');
+		expect(suggestArchiveName([{ name: 'a' }, { name: 'b' }], 'archive', 'tar')).toBe('archive.tar');
 	});
 });

@@ -21,6 +21,12 @@ export async function loadEngine(id: EngineId): Promise<CompressionEngine> {
 	} else if (id === 'addmaple') {
 		const { addmapleEngine } = await import('./engines/addmaple.js');
 		engine = addmapleEngine;
+	} else if (id === 'tarjs') {
+		const { tarjsEngine } = await import('./engines/tarjs.js');
+		engine = tarjsEngine;
+	} else if (id === 'nanotar') {
+		const { nanotarEngine } = await import('./engines/nanotar.js');
+		engine = nanotarEngine;
 	} else {
 		throw new Error(`Unknown compression engine: ${id}`);
 	}

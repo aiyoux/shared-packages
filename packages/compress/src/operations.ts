@@ -29,7 +29,15 @@ export async function packFiles(
 	if (codec === 'zip') {
 		if (!engine.zip) throw new Error(`${engine.info.label} cannot create ZIP archives`);
 		const data = await engine.zip(files, options);
-		const name = suggestArchiveName(files);
+		const name = suggestArchiveName(files, 'archive', 'zip');
+		const sourceBytes = files.reduce((n, f) => n + f.data.byteLength, 0);
+		return [{ name, data, codec, sourceBytes }];
+	}
+
+	if (codec === 'tar') {
+		if (!engine.tar) throw new Error(`${engine.info.label} cannot create TAR archives`);
+		const data = await engine.tar(files, options);
+		const name = suggestArchiveName(files, 'archive', 'tar');
 		const sourceBytes = files.reduce((n, f) => n + f.data.byteLength, 0);
 		return [{ name, data, codec, sourceBytes }];
 	}
@@ -60,6 +68,10 @@ export async function expandBytes(
 	if (codec === 'zip') {
 		if (!engine.unzip) throw new Error(`${engine.info.label} cannot expand ZIP archives`);
 		return engine.unzip(bytes);
+	}
+	if (codec === 'tar') {
+		if (!engine.untar) throw new Error(`${engine.info.label} cannot expand TAR archives`);
+		return engine.untar(bytes);
 	}
 	const data = await engine.decompress(bytes, codec);
 	return [{ name: stripCompressionExt(name, codec), data }];

@@ -2,6 +2,7 @@ import { CODEC_EXTENSION, type Codec, type DetectedFormat } from './types.js';
 
 const EXT_TO_CODEC: Record<string, Codec> = {
 	'.zip': 'zip',
+	'.tar': 'tar',
 	'.gz': 'gzip',
 	'.gzip': 'gzip',
 	'.tgz': 'gzip',
@@ -33,6 +34,10 @@ function startsWith(bytes: Uint8Array, sig: number[]): boolean {
 export function detectFormatFromBytes(bytes: Uint8Array): DetectedFormat | null {
 	if (startsWith(bytes, [0x50, 0x4b, 0x03, 0x04]) || startsWith(bytes, [0x50, 0x4b, 0x05, 0x06]) || startsWith(bytes, [0x50, 0x4b, 0x07, 0x08])) {
 		return { codec: 'zip', confidence: 'high', label: 'ZIP archive', via: 'magic' };
+	}
+	// tar: "ustar" magic at offset 257 (POSIX/USTAR format)
+	if (bytes.length >= 263 && bytes[257] === 0x75 && bytes[258] === 0x73 && bytes[259] === 0x74 && bytes[260] === 0x61 && bytes[261] === 0x72) {
+		return { codec: 'tar', confidence: 'high', label: 'TAR archive', via: 'magic' };
 	}
 	if (startsWith(bytes, [0x1f, 0x8b])) {
 		return { codec: 'gzip', confidence: 'high', label: 'gzip', via: 'magic' };
@@ -90,11 +95,16 @@ export function stripCompressionExt(name: string, codec: Codec): string {
 	return name.replace(/\.[^.]+$/, '') || 'expanded';
 }
 
-export function suggestArchiveName(entries: { name: string }[], fallback = 'archive'): string {
+export function suggestArchiveName(
+	entries: { name: string }[],
+	fallback = 'archive',
+	codec: Codec = 'zip'
+): string {
+	const ext = CODEC_EXTENSION[codec];
 	if (entries.length === 1) {
 		const base = entries[0]!.name.replace(/[/\\]+/g, '_').replace(/^\.+/, '');
 		const stem = base.replace(/\.[^.]+$/, '') || fallback;
-		return `${stem}.zip`;
+		return `${stem}${ext}`;
 	}
-	return `${fallback}.zip`;
+	return `${fallback}${ext}`;
 }

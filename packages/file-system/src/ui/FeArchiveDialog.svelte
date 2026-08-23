@@ -103,7 +103,7 @@
 	const cryptoEngine = $derived(cryptoEngines.find((e) => e.id === cryptoEngineId) ?? cryptoEngines[0]!);
 	const availableCodecs = $derived(
 		treePack && kind === 'compress'
-			? compressEngine.codecs.filter((c) => c === 'zip')
+			? compressEngine.codecs.filter((c) => c === 'zip' || c === 'tar')
 			: compressEngine.codecs
 	);
 	const canPickFolder = $derived(driver.capabilities.supportsMkdir);
@@ -121,13 +121,31 @@
 
 	$effect(() => {
 		if (kind === 'compress' && treePack) {
-			if (!engineSupports(compressEngineId, 'zip')) compressEngineId = 'fflate';
-			if (codec !== 'zip') codec = 'zip';
+			// Multi-file packing needs a container codec (zip or tar).
+			// If the current engine can't do containers, switch to one that can.
+			if (!engineSupports(compressEngineId, 'zip') && !engineSupports(compressEngineId, 'tar')) {
+				const zipEngine = compressEngines.find((e) => e.codecs.includes('zip'));
+				if (zipEngine) compressEngineId = zipEngine.id;
+			}
+			if (codec !== 'zip' && codec !== 'tar') codec = 'zip';
 		}
 	});
 
 	$effect(() => {
 		if (!availableCodecs.includes(codec) && availableCodecs.length) codec = availableCodecs[0]!;
+	});
+
+	// Auto-switch engine when the selected codec isn't supported by the current engine.
+	$effect(() => {
+		if (kind !== 'compress') return;
+		if (codec === 'tar' && !engineSupports(compressEngineId, 'tar')) {
+			const tarEngine = compressEngines.find((e) => e.codecs.includes('tar'));
+			if (tarEngine) compressEngineId = tarEngine.id;
+		}
+		if (codec === 'zip' && !engineSupports(compressEngineId, 'zip')) {
+			const zipEngine = compressEngines.find((e) => e.codecs.includes('zip'));
+			if (zipEngine) compressEngineId = zipEngine.id;
+		}
 	});
 
 	$effect(() => {
@@ -287,7 +305,7 @@
 			</div>
 			<p class="hint">
 				{compressEngine.description}{treePack
-					? ' · Multiple items pack as a ZIP inner filesystem.'
+					? ' · Multiple items pack as a container archive.'
 					: ''}
 			</p>
 		{:else if kind === 'encrypt'}

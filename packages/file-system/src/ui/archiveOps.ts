@@ -230,6 +230,19 @@ export async function expandPackedBytes(
 	if (!fmt) throw new Error(`Not a recognized archive: ${name}`);
 	const engine = pickEngineForCodec(readStoredCompressEngine(), fmt.codec);
 	const files = await expandBytes(engine, bytes, fmt.codec, name);
+
+	// Two-step expand: if we just decompressed a gzip/deflate/etc. layer
+	// and the result is a single .tar file, automatically untar it.
+	if (files.length === 1 && files[0]!.name.toLowerCase().endsWith('.tar')) {
+		const tarBytes = files[0]!.data;
+		const tarFmt = detectFormat(tarBytes, files[0]!.name);
+		if (tarFmt?.codec === 'tar') {
+			const tarEngine = pickEngineForCodec(readStoredCompressEngine(), 'tar');
+			const tarFiles = await expandBytes(tarEngine, tarBytes, 'tar', files[0]!.name);
+			return tarFiles.map((f) => ({ path: f.name, data: f.data }));
+		}
+	}
+
 	return files.map((f) => ({ path: f.name, data: f.data }));
 }
 

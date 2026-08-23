@@ -1,7 +1,8 @@
-export type EngineId = 'fflate' | 'zipkit' | 'addmaple';
+export type EngineId = 'fflate' | 'zipkit' | 'addmaple' | 'tarjs' | 'nanotar';
 
 export type Codec =
 	| 'zip'
+	| 'tar'
 	| 'gzip'
 	| 'deflate'
 	| 'zlib'
@@ -24,6 +25,7 @@ export type EngineInfo = {
 	description: string;
 	codecs: readonly Codec[];
 	supportsZip: boolean;
+	supportsTar: boolean;
 };
 
 export type CompressOptions = {
@@ -41,10 +43,12 @@ export type DetectedFormat = {
 export interface CompressionEngine {
 	readonly info: EngineInfo;
 	load(): Promise<void>;
-	compress(bytes: Uint8Array, codec: Exclude<Codec, 'zip'>, options?: CompressOptions): Promise<Uint8Array>;
-	decompress(bytes: Uint8Array, codec: Exclude<Codec, 'zip'>): Promise<Uint8Array>;
+	compress(bytes: Uint8Array, codec: Exclude<Codec, 'zip' | 'tar'>, options?: CompressOptions): Promise<Uint8Array>;
+	decompress(bytes: Uint8Array, codec: Exclude<Codec, 'zip' | 'tar'>): Promise<Uint8Array>;
 	zip?(entries: ArchiveEntry[], options?: CompressOptions): Promise<Uint8Array>;
 	unzip?(bytes: Uint8Array): Promise<ArchiveEntry[]>;
+	tar?(entries: ArchiveEntry[], options?: CompressOptions): Promise<Uint8Array>;
+	untar?(bytes: Uint8Array): Promise<ArchiveEntry[]>;
 }
 
 export const ENGINE_CATALOG: readonly EngineInfo[] = [
@@ -53,21 +57,40 @@ export const ENGINE_CATALOG: readonly EngineInfo[] = [
 		label: 'fflate',
 		description: 'Pure JavaScript — gzip, deflate, zlib, and ZIP. Smallest download.',
 		codecs: ['zip', 'gzip', 'deflate', 'zlib'],
-		supportsZip: true
+		supportsZip: true,
+		supportsTar: false
 	},
 	{
 		id: 'zipkit',
 		label: 'ZipKit (WASM)',
 		description: 'One WASM engine — gzip through zstd, brotli, xz, and ZIP.',
 		codecs: ['zip', 'gzip', 'deflate', 'zlib', 'brotli', 'lz4', 'zstd', 'xz', 'lzma', 'bzip2', 'snappy'],
-		supportsZip: true
+		supportsZip: true,
+		supportsTar: false
 	},
 	{
 		id: 'addmaple',
 		label: 'AddMaple (3× WASM)',
 		description: 'SIMD WASM modules for gzip, brotli, and lz4. No ZIP container.',
 		codecs: ['gzip', 'brotli', 'lz4'],
-		supportsZip: false
+		supportsZip: false,
+		supportsTar: false
+	},
+	{
+		id: 'tarjs',
+		label: 'tarjs',
+		description: 'Pure JavaScript tar reader/writer. Read and write .tar archives.',
+		codecs: ['tar'],
+		supportsZip: false,
+		supportsTar: true
+	},
+	{
+		id: 'nanotar',
+		label: 'nanotar',
+		description: 'Tiny zero-dependency tar parser/writer for any JS runtime.',
+		codecs: ['tar'],
+		supportsZip: false,
+		supportsTar: true
 	}
 ] as const;
 
@@ -75,6 +98,7 @@ export const DEFAULT_ENGINE: EngineId = 'fflate';
 
 export const CODEC_LABEL: Record<Codec, string> = {
 	zip: 'ZIP archive',
+	tar: 'TAR archive',
 	gzip: 'gzip',
 	deflate: 'raw deflate',
 	zlib: 'zlib',
@@ -89,6 +113,7 @@ export const CODEC_LABEL: Record<Codec, string> = {
 
 export const CODEC_EXTENSION: Record<Codec, string> = {
 	zip: '.zip',
+	tar: '.tar',
 	gzip: '.gz',
 	deflate: '.deflate',
 	zlib: '.zz',
@@ -113,5 +138,7 @@ export function engineSupports(id: EngineId, codec: Codec): boolean {
 
 export function defaultCodecFor(id: EngineId): Codec {
 	const info = engineInfo(id);
-	return info.supportsZip ? 'zip' : info.codecs[0] ?? 'gzip';
+	if (info.supportsZip) return 'zip';
+	if (info.supportsTar) return 'tar';
+	return info.codecs[0] ?? 'gzip';
 }
