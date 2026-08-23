@@ -24,12 +24,22 @@
 		driver,
 		activeId,
 		treeVersion = 0,
-		onNavigate
+		onNavigate,
+		includeFiles = false,
+		rootLabel = 'Root',
+		showRoot = true,
+		onSelect
 	}: {
 		driver: ExplorerDriver;
 		activeId: ExplorerEntryId | null;
 		treeVersion?: number;
 		onNavigate: (id: ExplorerEntryId | null) => void;
+		/** When true, list files as well as folders. FileExplorer dock stays folders-only. */
+		includeFiles?: boolean;
+		rootLabel?: string;
+		showRoot?: boolean;
+		/** File row click when includeFiles. Folders still use onNavigate. */
+		onSelect?: (entry: ExplorerEntry) => void;
 	} = $props();
 
 	const ROOT_KEY = '__root__';
@@ -52,10 +62,13 @@
 		loading = new Set(loading).add(key);
 		try {
 			const { entries } = await d.list({ parentId });
-			const folders = entries
-				.filter((e) => e.kind === 'folder')
-				.sort((a, b) => a.name.localeCompare(b.name));
-			children = new Map(children).set(key, folders);
+			const rows = entries
+				.filter((e) => includeFiles || e.kind === 'folder')
+				.sort((a, b) => {
+					if (a.kind !== b.kind) return a.kind === 'folder' ? -1 : 1;
+					return a.name.localeCompare(b.name);
+				});
+			children = new Map(children).set(key, rows);
 		} catch {
 			// Best-effort nav aid — leave the node collapsed-looking (no cached
 			// children) rather than surfacing a separate error UI here.
@@ -136,15 +149,37 @@
 	// go stale.
 	$effect(() => {
 		const v = treeVersion;
+		const files = includeFiles;
 		const d = driver;
 		untrack(() => {
+			void v;
+			void files;
 			void refreshVisible(d);
 		});
+	});
+
+	// Standalone live refresh: subscribe root + expanded folders on the
+	// same driver watch stream FileExplorer already uses (no second client).
+	$effect(() => {
+		const d = driver;
+		const expandedIds = expanded;
+		const unsubs: Array<() => void> = [];
+		untrack(() => {
+			if (!d.subscribeChanges) return;
+			unsubs.push(d.subscribeChanges(() => void refreshVisible(d), { parentId: null }));
+			for (const id of expandedIds) {
+				unsubs.push(d.subscribeChanges(() => void refreshVisible(d), { parentId: id }));
+			}
+		});
+		return () => {
+			for (const u of unsubs) u();
+		};
 	});
 </script>
 
 {#snippet node(entry: ExplorerEntry, depth: number)}
-	{@const isOpen = expanded.has(entry.id)}
+	{@const isFolder = entry.kind === 'folder'}
+	{@const isOpen = isFolder && expanded.has(entry.id)}
 	{@const isActive = activeId === entry.id}
 	{@const kids = children.get(entry.id)}
 	{@const isLoading = loading.has(entry.id)}
@@ -157,33 +192,37 @@
 			style="padding-left: {depth * 14 + 4}px"
 			data-testid="fe-tree-row"
 			data-id={entry.id}
+			data-kind={entry.kind}
 			role="treeitem"
 			aria-selected={isActive}
-			aria-expanded={isOpen}
+			aria-expanded={isFolder ? isOpen : undefined}
 			tabindex="-1"
 			onclick={(e) => {
-				// Don't navigate when the toggle button was clicked —
-				// stopPropagation on the button should already prevent this,
-				// but belt-and-braces: if the click originated from the
-				// toggle, only expand/collapse, don't navigate.
 				if ((e.target as HTMLElement).closest('.fe-tree-toggle')) return;
-				onNavigate(entry.id);
+				if (isFolder) {
+					onNavigate(entry.id);
+				} else {
+					onSelect?.(entry);
+				}
 			}}
 		>
 			<button
 				type="button"
 				class="fe-tree-toggle"
-				class:invisible={kids?.length === 0}
+				class:invisible={!isFolder || kids?.length === 0}
 				data-testid="fe-tree-toggle"
 				aria-label={isOpen ? 'Collapse folder' : 'Expand folder'}
 				onclick={(e) => {
 					e.stopPropagation();
-					toggleExpand(entry.id);
+					if (isFolder) toggleExpand(entry.id);
 				}}
 			>
 				<FeIcon name={isOpen ? 'chevron-down' : 'chevron-right'} size={12} />
 			</button>
-			<FeIcon name={isOpen ? 'folder-open' : 'folder'} size={14} />
+			<FeIcon
+				name={isFolder ? (isOpen ? 'folder-open' : 'folder') : 'file'}
+				size={14}
+			/>
 			<span class="fe-tree-name" title={entry.name}>{entry.name}</span>
 		</div>
 		{#if isOpen}
@@ -208,6 +247,7 @@
 	<div
 		class="fe-tree-row fe-tree-root"
 		class:active={activeId === null}
+		class:hidden={!showRoot}
 		data-testid="fe-tree-row-root"
 		role="treeitem"
 		aria-selected={activeId === null}
@@ -216,7 +256,7 @@
 	>
 		<span class="fe-tree-toggle invisible" aria-hidden="true"></span>
 		<FeIcon name="folder" size={14} />
-		<span class="fe-tree-name">Root</span>
+		<span class="fe-tree-name">{rootLabel}</span>
 	</div>
 	<div class="fe-tree-children" role="group">
 		{#if loading.has(ROOT_KEY) && !children.has(ROOT_KEY)}
@@ -281,5 +321,8 @@
 		padding-bottom: 2px;
 		color: var(--text-muted, #888);
 		font-size: 0.78rem;
+	}
+	.fe-tree-root.hidden {
+		display: none;
 	}
 </style>

@@ -1,4 +1,5 @@
 export { default as FileExplorer } from './FileExplorer.svelte';
+export { default as FeTreeView } from './FeTreeView.svelte';
 export type { ExplorerMode, ExplorerContext } from './FileExplorer.svelte';
 export { default as StoragePersistenceStatus } from './StoragePersistenceStatus.svelte';
 export { default as DualPaneExplorer } from './DualPaneExplorer.svelte';
