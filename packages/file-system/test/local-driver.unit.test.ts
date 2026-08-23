@@ -20,7 +20,7 @@ describe('LocalExplorerDriver', () => {
 		assert.equal(drv.id, 'local');
 		assert.equal(drv.capabilities.supportsTrash, true);
 		assert.equal(drv.capabilities.supportsUpload, true);
-		assert.equal(drv.capabilities.supportsDownload, false);
+		assert.equal(drv.capabilities.supportsDownload, true);
 
 		await drv.mkdir!(null, 'Docs');
 		const listed = await drv.list({ parentId: null });
@@ -78,14 +78,14 @@ describe('LocalExplorerDriver', () => {
 		);
 	});
 
-	it('stock local caps: download false, upload true (OS file drop)', async () => {
+	it('stock local caps: download + upload true (OS file drop / save)', async () => {
 		const vfs = createVfs({
 			dbName: `local-caps-${Date.now()}`,
 			memoryOpfs: true,
 			requestPersist: false
 		});
 		const drv = createLocalExplorerDriver(vfs);
-		assert.equal(drv.capabilities.supportsDownload, false);
+		assert.equal(drv.capabilities.supportsDownload, true);
 		assert.equal(drv.capabilities.supportsUpload, true);
 	});
 

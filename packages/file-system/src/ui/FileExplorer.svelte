@@ -260,6 +260,8 @@
 	let trashOpen = $state(false);
 	let trashNodes = $state<ExplorerEntry[]>([]);
 	let trashBusy = $state(false);
+	/** Set while a "download selected" pass is triggering browser downloads. */
+	let downloadBusy = $state(false);
 	/** True until the first list() completes (empty shell only). */
 	let initialLoad = $state(true);
 
@@ -1294,6 +1296,11 @@
 			.filter((n): n is ExplorerEntry => !!n)
 	);
 
+	/** Toolbar download button: shown when this driver can hand out blobs. */
+	const supportsDownload = $derived(Boolean(driver.download) && caps.supportsDownload);
+	/** Enabled only when at least one selected row is a downloadable file. */
+	const canDownloadSelection = $derived(selectedEntries.some((e) => e.kind === 'file'));
+
 	/** Open appears once something is selected that we can enter or hand off. */
 	const canOpenSelection = $derived.by(() => {
 		if (selectedEntries.length === 0) return false;
@@ -1416,6 +1423,22 @@
 			URL.revokeObjectURL(url);
 		} catch (e) {
 			error = errMsg(e);
+		}
+	}
+
+	/** Download every selected file to the PC. Folders are left in place. */
+	async function downloadSelected() {
+		const files = selectedEntries.filter((e) => e.kind === 'file');
+		if (files.length === 0) return;
+		downloadBusy = true;
+		try {
+			// Sequential so each is its own browser download; a failed blob
+			// (downloadNode catches per-file) doesn't stop the rest.
+			for (const n of files) {
+				await downloadNode(n);
+			}
+		} finally {
+			downloadBusy = false;
 		}
 	}
 
@@ -1872,6 +1895,15 @@
 							pressed={trashOpen}
 							haspopup
 							onclick={() => void toggleTrashPopup()}
+						/>
+					{/if}
+					{#if supportsDownload}
+						<FeTipIconBtn
+							testid="fe-download-selected"
+							tip="Download selected to PC"
+							icon="download"
+							disabled={downloadBusy || !canDownloadSelection}
+							onclick={() => void downloadSelected()}
 						/>
 					{/if}
 					{#if clipboard?.ids.length && (caps.supportsMove || caps.supportsCopy)}

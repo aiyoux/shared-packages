@@ -24,7 +24,7 @@ const LOCAL_CAPS: ExplorerCapabilities = {
 	supportsCopy: true,
 	supportsMkdir: true,
 	supportsUpload: true,
-	supportsDownload: false,
+	supportsDownload: true,
 	supportsSiblingOrder: true,
 	supportsDragOut: true
 };
