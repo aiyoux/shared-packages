@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount, onDestroy } from 'svelte';
+	import { onMount, onDestroy, untrack } from 'svelte';
 	import FeIcon from './FeIcon.svelte';
 	import type { FeIconName } from './feIcons.js';
 	import {
@@ -53,7 +53,12 @@
 		// method by then.
 		const readBlob = d.readBlob;
 		if (!en || !kind || !readBlob) {
-			revoke();
+			// untrack: revoke() reads `url`. Reading it inside this effect (even
+			// transitively) would make the effect depend on it — and the async
+			// block below writes `url` once generation resolves, which would
+			// then re-trigger this very effect, revoke the URL it just created,
+			// and regenerate forever.
+			untrack(revoke);
 			loading = false;
 			failed = false;
 			return;
@@ -64,7 +69,8 @@
 		currentId = e.id;
 
 		let cancelled = false;
-		revoke();
+		// untrack: see comment above.
+		untrack(revoke);
 		loading = true;
 		failed = false;
 

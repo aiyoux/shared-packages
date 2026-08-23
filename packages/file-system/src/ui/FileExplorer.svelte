@@ -1637,7 +1637,13 @@
 		<div class="fe-toolbar" data-testid="fe-toolbar">
 			<div class="fe-toolbar-row">
 				{#if mode === 'manage' || mode === 'open'}
-					<span class="fe-view-switcher-wrap" data-testid="fe-view-switcher">
+					<!-- svelte-ignore a11y_click_events_have_key_events -->
+					<!-- svelte-ignore a11y_no_static_element_interactions -->
+					<span
+						class="fe-view-switcher-wrap"
+						data-testid="fe-view-switcher"
+						onclick={(e) => e.stopPropagation()}
+					>
 						<FeTipIconBtn
 							testid="fe-view-switcher-btn"
 							tip="View options"

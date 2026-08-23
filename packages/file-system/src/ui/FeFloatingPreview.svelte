@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onDestroy } from 'svelte';
+	import { onDestroy, untrack } from 'svelte';
 	import FeIcon from './FeIcon.svelte';
 	import { getPreviewKind, renderPdfPageToCanvas } from './feThumbnails.js';
 	import type { ExplorerDriver, ExplorerEntry } from './explorerDriver.js';
@@ -44,13 +44,21 @@
 		// survive into the async block below.
 		const readBlob = d.readBlob;
 		if (!k || !readBlob) {
+			// untrack: revokeUrl() reads `blobUrl`. Reading it inside this effect
+			// (even transitively) makes the effect depend on it — and the async
+			// block below writes `blobUrl` once the fetch resolves, which would
+			// then re-trigger this very effect, revoke the URL it just created,
+			// and refetch forever. See the same note below.
+			untrack(revokeUrl);
 			loading = false;
 			error = 'Preview not available for this file type';
 			return;
 		}
 
 		let cancelled = false;
-		revokeUrl();
+		// untrack: see comment above — must not make this effect depend on
+		// `blobUrl`, or assigning it after the fetch resolves would loop.
+		untrack(revokeUrl);
 		loading = true;
 		error = '';
 		pdfPageCount = 0;
