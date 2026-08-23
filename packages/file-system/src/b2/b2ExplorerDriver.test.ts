@@ -119,18 +119,85 @@ describe('B2ExplorerDriver (B2Simulator)', () => {
 		});
 	});
 
-	it('rejects folder rename/move/copy', async () => {
+	it('rejects folder move/copy', async () => {
 		const { driver } = await bootDriver();
 		const folder = await driver.mkdir!(null, 'f1');
-		await expect(driver.rename!(folder.id, 'f2')).rejects.toMatchObject({
-			code: 'B2_FOLDER_OP_UNSUPPORTED'
-		});
 		await expect(driver.move!(folder.id, null)).rejects.toMatchObject({
 			code: 'B2_FOLDER_OP_UNSUPPORTED'
 		});
 		await expect(driver.copy!(folder.id, null)).rejects.toMatchObject({
 			code: 'B2_FOLDER_OP_UNSUPPORTED'
 		});
+	});
+
+	it('renames an empty folder', async () => {
+		const { driver } = await bootDriver();
+		const folder = await driver.mkdir!(null, 'f1');
+		const renamed = await driver.rename!(folder.id, 'f2');
+		expect(renamed.name).toBe('f2');
+		expect(renamed.id).toBe('f2/');
+		expect(renamed.kind).toBe('folder');
+		const root = await driver.list({ parentId: null });
+		expect(root.entries.some((e) => e.name === 'f1')).toBe(false);
+		expect(root.entries.some((e) => e.kind === 'folder' && e.name === 'f2')).toBe(true);
+		const inside = await driver.list({ parentId: renamed.id });
+		expect(inside.entries).toHaveLength(0);
+	});
+
+	it('renames a folder and keeps nested children', async () => {
+		const { driver } = await bootDriver();
+		const folder = await driver.mkdir!(null, 'docs');
+		await driver.upload!(
+			folder.id,
+			new File([new Uint8Array([9])], 'note.txt', { type: 'text/plain' })
+		);
+		const nested = await driver.mkdir!(folder.id, 'images');
+		await driver.upload!(
+			nested.id,
+			new File([new Uint8Array([1])], 'a.png', { type: 'image/png' })
+		);
+
+		const renamed = await driver.rename!(folder.id, 'archive');
+		expect(renamed.id).toBe('archive/');
+		const root = await driver.list({ parentId: null });
+		expect(root.entries.some((e) => e.name === 'docs')).toBe(false);
+		expect(root.entries.some((e) => e.kind === 'folder' && e.name === 'archive')).toBe(true);
+
+		const kids = await driver.list({ parentId: renamed.id });
+		expect(kids.entries.some((e) => e.name === 'note.txt')).toBe(true);
+		expect(kids.entries.some((e) => e.kind === 'folder' && e.name === 'images')).toBe(true);
+		const nestedKids = await driver.list({ parentId: 'archive/images/' });
+		expect(nestedKids.entries.some((e) => e.name === 'a.png')).toBe(true);
+	});
+
+	it('identity folder rename is a no-op', async () => {
+		const { driver } = await bootDriver();
+		const folder = await driver.mkdir!(null, 'keep');
+		await driver.upload!(folder.id, new File([new Uint8Array([1])], 'a.txt'));
+		const same = await driver.rename!(folder.id, 'keep');
+		expect(same.id).toBe(folder.id);
+		const kids = await driver.list({ parentId: folder.id });
+		expect(kids.entries.some((e) => e.name === 'a.txt')).toBe(true);
+	});
+
+	it('folder rename suffixes when the dest name is taken', async () => {
+		const { driver } = await bootDriver();
+		await driver.mkdir!(null, 'a');
+		const b = await driver.mkdir!(null, 'b');
+		const renamed = await driver.rename!(b.id, 'a');
+		expect(renamed.name).toBe('a (1)');
+		expect(renamed.id).toBe('a (1)/');
+	});
+
+	it('renames a folder under namePrefix', async () => {
+		const { driver } = await bootDriver({ namePrefix: 'team/' });
+		const folder = await driver.mkdir!(null, 'docs');
+		expect(folder.id).toBe('team/docs/');
+		const renamed = await driver.rename!(folder.id, 'files');
+		expect(renamed.id).toBe('team/files/');
+		expect(renamed.parentId).toBeNull();
+		const root = await driver.list({ parentId: null });
+		expect(root.entries.map((e) => e.name).sort()).toEqual(['files']);
 	});
 
 	it('file rename and copy work', async () => {

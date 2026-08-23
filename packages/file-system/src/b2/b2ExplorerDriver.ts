@@ -142,16 +142,130 @@ export async function createB2ExplorerDriver(
 		return parentId ?? rootPrefix;
 	}
 
-	async function uniqueName(parentPrefix: string, baseName: string): Promise<string> {
+	function parentPrefixOf(abs: string): string {
+		const trimmed = abs.endsWith('/') ? abs.slice(0, -1) : abs;
+		const slash = trimmed.lastIndexOf('/');
+		return slash >= 0 ? trimmed.slice(0, slash + 1) : rootPrefix;
+	}
+
+	async function uniqueName(
+		parentPrefix: string,
+		baseName: string,
+		excludeKey?: string
+	): Promise<string> {
 		let candidate = baseName;
 		let i = 0;
 		for (;;) {
 			const key = `${parentPrefix}${candidate}`;
-			const existing = await bucket!.getFileInfoByName(key);
-			if (!existing) return candidate;
-			i += 1;
-			candidate = withSuffix(baseName, i);
+			if (key !== excludeKey) {
+				const existing = await bucket!.getFileInfoByName(key);
+				if (existing) {
+					i += 1;
+					candidate = withSuffix(baseName, i);
+					continue;
+				}
+			}
+			return candidate;
 		}
+	}
+
+	async function prefixHasFiles(prefix: string): Promise<boolean> {
+		for await (const _ of bucket!.paginateFileNames({ prefix })) {
+			return true;
+		}
+		return false;
+	}
+
+	async function uniqueFolderName(
+		parentPrefix: string,
+		baseName: string,
+		excludePrefix?: string
+	): Promise<string> {
+		let candidate = baseName;
+		let i = 0;
+		for (;;) {
+			const prefix = `${parentPrefix}${candidate}/`;
+			if (prefix !== excludePrefix && (await prefixHasFiles(prefix))) {
+				i += 1;
+				candidate = withSuffix(baseName, i);
+				continue;
+			}
+			return candidate;
+		}
+	}
+
+	async function listKeysUnderPrefix(prefix: string): Promise<string[]> {
+		const keys: string[] = [];
+		for await (const f of bucket!.paginateFileNames({ prefix })) {
+			keys.push(f.fileName);
+		}
+		return keys;
+	}
+
+	function toFolderEntry(folderPrefix: string): ExplorerEntry {
+		const parent = parentPrefixOf(folderPrefix);
+		return {
+			id: folderPrefix,
+			parentId: parent === rootPrefix ? null : parent,
+			name: baseNameFromPrefix(folderPrefix),
+			kind: 'folder'
+		};
+	}
+
+	async function copyKeysToPrefix(
+		srcPrefix: string,
+		destPrefix: string,
+		keys: string[]
+	): Promise<void> {
+		const copied: string[] = [];
+		try {
+			for (const srcKey of keys) {
+				const destKey = destPrefix + srcKey.slice(srcPrefix.length);
+				const src = await requireFileVersion(srcKey);
+				await bucket!.copyFile({ sourceFileId: src.fileId, fileName: destKey });
+				copied.push(destKey);
+			}
+		} catch (e) {
+			for (const destKey of copied) {
+				try {
+					await deleteFileAllVersions(destKey);
+				} catch {
+					/* rollback is best-effort */
+				}
+			}
+			throw e;
+		}
+	}
+
+	async function renameFolder(id: string, name: string): Promise<ExplorerEntry> {
+		const srcPrefix = id.endsWith('/') ? id : `${id}/`;
+		const parent = parentPrefixOf(srcPrefix);
+		const destName = await uniqueFolderName(parent, name, srcPrefix);
+		const destPrefix = `${parent}${destName}/`;
+		if (destPrefix === srcPrefix) return toFolderEntry(srcPrefix);
+
+		const keys = await listKeysUnderPrefix(srcPrefix);
+		if (keys.length === 0) {
+			await bucket!.upload({
+				fileName: markerKeyForFolderPrefix(destPrefix),
+				source: new BlobSource(new Blob([])),
+				contentType: 'application/x-bz-empty-folder'
+			});
+			return toFolderEntry(destPrefix);
+		}
+
+		await copyKeysToPrefix(srcPrefix, destPrefix, keys);
+		try {
+			for (const srcKey of keys) {
+				await deleteFileAllVersions(srcKey);
+			}
+		} catch {
+			throw new ExplorerB2Error(
+				'B2_RENAME_PARTIAL',
+				`Copied to ${destPrefix} but failed to remove ${srcPrefix}`
+			);
+		}
+		return toFolderEntry(destPrefix);
 	}
 
 	async function deleteFileAllVersions(fileName: string): Promise<void> {
@@ -365,16 +479,24 @@ export async function createB2ExplorerDriver(
 		},
 
 		async rename(id, name) {
-			if (id.endsWith('/')) {
-				throw new ExplorerB2Error('B2_FOLDER_OP_UNSUPPORTED', 'Folder rename not supported');
-			}
 			try {
-				const src = await requireFileVersion(id);
-				const parent = id.includes('/') ? id.slice(0, id.lastIndexOf('/') + 1) : rootPrefix;
 				const seg = sanitizeSegment(name);
-				// force extension retention is caller's job; keep as given
-				const destName = await uniqueName(parent, seg);
+				if (id.endsWith('/')) {
+					return await renameFolder(id, seg);
+				}
+				const src = await requireFileVersion(id);
+				const parent = parentPrefixOf(id);
+				const destName = await uniqueName(parent, seg, id);
 				const destKey = `${parent}${destName}`;
+				if (destKey === id) {
+					return {
+						id,
+						parentId: parent === rootPrefix ? null : parent,
+						name: destName,
+						kind: 'file' as const,
+						fileType: inferFileTypeFromName(id)
+					};
+				}
 				await bucket!.copyFile({ sourceFileId: src.fileId, fileName: destKey });
 				try {
 					await deleteFileAllVersions(id);
@@ -392,6 +514,9 @@ export async function createB2ExplorerDriver(
 					fileType: inferFileTypeFromName(destKey)
 				};
 			} catch (e) {
+				if (e instanceof Error && e.message === 'INVALID_NAME') {
+					throw new ExplorerB2Error('INVALID_NAME', 'Invalid name');
+				}
 				if (e instanceof ExplorerB2Error) throw e;
 				throw mapB2Error(e);
 			}
