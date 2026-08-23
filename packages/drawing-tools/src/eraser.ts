@@ -3218,6 +3218,86 @@ const compositesRatherThanCovers = (piece: PathData, fade: FadeOptions): boolean
  * Left alone: blended ink (multiply builds up ON PURPOSE) and ink that is both
  * filled and stroked.
  */
+/**
+ * Put the pieces of ONE faded stroke back into one path element.
+ *
+ * Every fade pass cuts each stroke it crosses into a dimmed part and a
+ * remainder, so a document fragments as it is erased: measured on a real
+ * layered-highlighter page, five rubs took it from 133 paths to 320, and the
+ * live preview's per-path cost rose with it — 0.6 scratch round trips per frame
+ * on the first rub, 2.9 on the fifth. Each round trip is a canvas read straight
+ * after a write, so on real hardware that is a pipeline flush. The rub that felt
+ * slow was paying for every rub before it.
+ *
+ * The pieces of one stroke at one strength are a PARTITION of that stroke:
+ * disjoint by construction, because that is what cutting produced. Disjoint
+ * regions do not interact under either fill rule and, being identically
+ * painted, cannot composite against each other — so drawing them as one path
+ * with many subpaths is the same picture, exactly, for translucent ink as much
+ * as opaque.
+ *
+ * Deliberately CONCATENATION, not a boolean union. `flattenFadedInk` records
+ * what happens when settled geometry is re-emitted: re-quantising a boundary
+ * shared with a neighbour that was not re-emitted opens hairline holes, and it
+ * measured worse than leaving it alone. Nothing here rewrites a boundary. The
+ * `d` strings are carried across byte-for-byte and only the element they sit in
+ * changes, so there is no new opportunity to miss. It is also O(n) string work
+ * rather than a clipper pass.
+ *
+ * Grouped by lineage AND sweep id, not just by appearance. Two pieces that look
+ * identical but came from different strokes may genuinely overlap — layered
+ * highlighter is nothing but that — and merging those WOULD change the picture,
+ * because two overlapping translucent regions composite darker than one. Sweep
+ * id is in the key so a pass that is still deciding what to dim cannot have its
+ * bookkeeping merged out from under it.
+ *
+ * Only FADED pieces, and only within the rub's reach, on the same reasoning as
+ * flattenFadedInk: ink the eraser never went near is not this pass's business.
+ */
+const mergeFadedSiblings = (
+    result: PathData[],
+    reach: { minX: number; minY: number; maxX: number; maxY: number }
+): PathData[] => {
+    // Index -> group key, for faded pieces inside the rub's reach.
+    const keyOf: (string | null)[] = new Array(result.length).fill(null);
+    let any = false;
+    for (let i = 0; i < result.length; i++) {
+        const p = result[i];
+        if (!p.faded || !p.fadeOrigin) continue;
+        const bbox = cachedFlatten(p).bbox;
+        if (!bbox) continue;
+        if (bbox.maxX < reach.minX || bbox.minX > reach.maxX) continue;
+        if (bbox.maxY < reach.minY || bbox.minY > reach.maxY) continue;
+        keyOf[i] = [
+            p.fadeOrigin, p.fill ?? '', p.stroke ?? '', p.strokeWidth ?? 0,
+            (p.opacity ?? 1).toFixed(4), p.layerId ?? '', p.fillRule ?? '',
+            p.blendMode ?? '', p.fadeSweepId ?? '', p.transform ?? '',
+            p.clipRect ? 'clip' : '', p.bakeGroupId ?? '',
+        ].join('|');
+        any = true;
+    }
+    if (!any) return result;
+
+    // CONSECUTIVE runs only. Merging pieces onto the position of the first
+    // moves the rest up the z-order, and anything of another colour that sits
+    // between them and overlaps would end up underneath — the hazard
+    // flattenFadedInk spells out below. Neighbours in z have nothing between
+    // them, so the question cannot arise.
+    const out: PathData[] = [];
+    for (let i = 0; i < result.length; ) {
+        const key = keyOf[i];
+        if (key === null) { out.push(result[i]); i++; continue; }
+        let j = i + 1;
+        while (j < result.length && keyOf[j] === key) j++;
+        if (j - i === 1) { out.push(result[i]); i = j; continue; }
+        let d = result[i].d;
+        for (let k = i + 1; k < j; k++) d += ' ' + result[k].d;
+        out.push({ ...result[i], d });
+        i = j;
+    }
+    return out.length === result.length ? result : out;
+};
+
 const flattenFadedInk = (
     result: PathData[],
     reach: { minX: number; minY: number; maxX: number; maxY: number },
@@ -3485,7 +3565,7 @@ export function splitPathsByEraser(
             }
             // Per-pass sync would record the intermediates, which the caller must
             // never see.
-            paths = flattenFadedInk(paths, eraserReach, fade);
+            paths = mergeFadedSiblings(flattenFadedInk(paths, eraserReach, fade), eraserReach);
             diffAgainstInput(paths);
             return paths;
         }
@@ -3494,7 +3574,7 @@ export function splitPathsByEraser(
     // Flattening rewrites pieces the pass had already recorded, so its own
     // running record no longer describes the outcome — diff the endpoints.
     if (fade?.normalizeStack) {
-        const out = flattenFadedInk(runPass(currentPaths, eraserPoints), eraserReach, fade);
+        const out = mergeFadedSiblings(flattenFadedInk(runPass(currentPaths, eraserPoints), eraserReach, fade), eraserReach);
         diffAgainstInput(out);
         return out;
     }
