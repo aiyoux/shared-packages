@@ -599,11 +599,15 @@
 		width: 1.45rem;
 		height: 1.45rem;
 		padding: 0;
-		border-radius: var(--hud-radius);
-		border: 1px solid var(--line-hairline);
-		background: var(--surface-2);
+		border: 0;
+		background: transparent;
 		color: var(--text-secondary);
 		cursor: help;
+		transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+	}
+	.conn-info:hover {
+		background: rgb(var(--overlay-rgb) / 0.06);
+		color: var(--text-primary);
 	}
 	.conn-caps-tip {
 		display: none;
@@ -693,7 +697,6 @@
 		clip: rect(0 0 0 0);
 	}
 	.conn-trigger,
-	.conn-gear,
 	.conn-menu button,
 	.conn-settings-panel button {
 		padding: 0.35rem 0.7rem;
@@ -740,6 +743,15 @@
 		padding: 0.35rem;
 		width: 2rem;
 		height: 2rem;
+		border: 0;
+		background: transparent;
+		color: var(--text-secondary);
+		cursor: pointer;
+		transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+	}
+	.conn-gear:hover:not(:disabled) {
+		background: rgb(var(--overlay-rgb) / 0.06);
+		color: var(--text-primary);
 	}
 	.conn-trigger:disabled,
 	.conn-gear:disabled,

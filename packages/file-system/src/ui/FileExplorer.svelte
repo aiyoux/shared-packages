@@ -43,6 +43,7 @@
 	import '@shared-packages/design-system/button.css';
 	import '@shared-packages/design-system/tooltip.css';
 	import FeThumbnail from './FeThumbnail.svelte';
+	import FeTreeView from './FeTreeView.svelte';
 	import FeFloatingPreview from './FeFloatingPreview.svelte';
 	import { getPreviewKind } from './feThumbnails.js';
 
@@ -192,6 +193,29 @@
 					return 'off';
 				})()
 	);
+	/** off → left sidebar → top strip → off, like a file manager's folder tree. */
+	type TreeDock = 'off' | 'left' | 'top';
+	const TREE_DOCK_KEY = 'fe:treeDock';
+	let treeDock = $state<TreeDock>(
+		typeof localStorage === 'undefined'
+			? 'off'
+			: (() => {
+					try {
+						const v = localStorage.getItem(TREE_DOCK_KEY);
+						if (v === 'left' || v === 'top') return v;
+					} catch {
+						/* ignore */
+					}
+					return 'off';
+				})()
+	);
+	/**
+	 * Bumped whenever a mutation could change folder structure (mkdir,
+	 * rename, move, copy, delete, restore, or a live remote change). The
+	 * tree dock re-fetches its currently-visible nodes when this changes —
+	 * see FeTreeView.
+	 */
+	let treeVersion = $state(0);
 	// svelte-ignore state_referenced_locally -- `default` prop, by contract.
 	let saveName = $state(defaultName);
 	let error = $state('');
@@ -637,6 +661,9 @@
 			breadcrumbs = nextCrumbs;
 			if (focusIndex >= nodes.length) focusIndex = nodes.length ? nodes.length - 1 : -1;
 			silentRetries = 0;
+			// Folder structure may have changed (mkdir/rename/move/delete/restore,
+			// or a live remote change) — let the tree dock know to re-fetch.
+			treeVersion += 1;
 		} catch (e) {
 			if (gen !== refreshGen) return;
 			if (!silent) {
@@ -996,6 +1023,21 @@
 		previewDock = next;
 		persistPreviewDock(next);
 		if (next === 'off') previewEntry = null;
+	}
+
+	function persistTreeDock(next: TreeDock) {
+		try {
+			if (next === 'off') localStorage.removeItem(TREE_DOCK_KEY);
+			else localStorage.setItem(TREE_DOCK_KEY, next);
+		} catch {
+			/* ignore */
+		}
+	}
+
+	function cycleTreeDock() {
+		const next: TreeDock = treeDock === 'off' ? 'left' : treeDock === 'left' ? 'top' : 'off';
+		treeDock = next;
+		persistTreeDock(next);
 	}
 
 	$effect(() => {
@@ -1590,6 +1632,13 @@
 				? 'Move preview beside the list'
 				: 'Hide preview'
 	);
+	const treeTip = $derived(
+		treeDock === 'off'
+			? 'Show folder tree on the left'
+			: treeDock === 'left'
+				? 'Move folder tree above the list'
+				: 'Hide folder tree'
+	);
 	const pasteTip = $derived(
 		clipboard?.mode === 'cut' ? 'Paste (move)' : clipboard ? 'Paste (copy)' : 'Paste'
 	);
@@ -1608,6 +1657,7 @@
 	data-fe-mode={mode}
 	data-fe-select-multi={selectMulti ? 'on' : 'off'}
 	data-fe-preview-dock={previewDock}
+	data-fe-tree-dock={treeDock}
 	data-fe-view-mode={viewMode}
 	data-fe-show-preview={showPreview ? 'on' : 'off'}
 	role={variant === 'dialog' ? 'dialog' : 'group'}
@@ -1707,6 +1757,14 @@
 						icon="info"
 						disabled={selected.size === 0}
 						onclick={() => openSelectedDetails()}
+					/>
+					<FeTipIconBtn
+						testid="fe-tree-dock"
+						tip={treeTip}
+						icon="panel-left"
+						active={treeDock !== 'off'}
+						pressed={treeDock !== 'off'}
+						onclick={cycleTreeDock}
 					/>
 					<FeTipIconBtn
 						testid="fe-preview-layout"
@@ -1879,6 +1937,17 @@
 		</div>
 	{/if}
 
+	<div class="fe-body" data-fe-tree-dock={treeDock}>
+	{#if treeDock !== 'off'}
+		<aside
+			class="fe-tree-dock"
+			data-testid="fe-tree-dock"
+			data-placement={treeDock}
+			aria-label="Folder tree"
+		>
+			<FeTreeView {driver} activeId={parentId} {treeVersion} onNavigate={goCrumb} />
+		</aside>
+	{/if}
 	<div class="fe-split">
 	<div
 		class="fe-list"
@@ -2191,6 +2260,7 @@
 			{/if}
 		</aside>
 	{/if}
+	</div>
 	</div>
 
 	{#if mode === 'save'}
@@ -2636,6 +2706,37 @@
 		background: rgb(var(--accent-rgb) / 0.08);
 		border-color: var(--accent);
 		color: var(--text-primary);
+	}
+	.fe-body {
+		flex: 1;
+		min-height: 0;
+		min-width: 0;
+		display: flex;
+		flex-direction: row;
+	}
+	.fe-body[data-fe-tree-dock='top'] {
+		flex-direction: column;
+	}
+	.fe-body > .fe-split {
+		flex: 1;
+		min-height: 0;
+		min-width: 0;
+	}
+	.fe-tree-dock {
+		flex: none;
+		min-width: 0;
+		min-height: 0;
+		overflow: auto;
+		padding: 6px 4px;
+		background: var(--surface-2);
+	}
+	.fe-body[data-fe-tree-dock='left'] .fe-tree-dock {
+		width: min(220px, 32%);
+		border-right: 1px solid var(--line-hairline);
+	}
+	.fe-body[data-fe-tree-dock='top'] .fe-tree-dock {
+		max-height: 38%;
+		border-bottom: 1px solid var(--line-hairline);
 	}
 	.fe-split {
 		flex: 1;
