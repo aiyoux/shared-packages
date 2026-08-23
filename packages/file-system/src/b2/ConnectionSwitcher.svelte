@@ -493,16 +493,6 @@
 			type="button"
 			role="menuitem"
 			class="ghost"
-			data-testid="conn-disk-config"
-			disabled={busy}
-			onclick={() => configure('disk')}
-		>
-			{kind === 'disk' ? 'Change computer folder' : 'Choose computer folder'}
-		</button>
-		<button
-			type="button"
-			role="menuitem"
-			class="ghost"
 			data-testid="conn-b2-config"
 			disabled={busy}
 			onclick={() => configure('b2')}
@@ -793,10 +783,13 @@
 		width: 100%;
 		background: transparent;
 		border-color: transparent;
+		border-radius: var(--radius-sm, 3px);
+		transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 	}
-	.conn-menu button:hover,
-	.conn-settings-panel button:hover {
-		background: rgb(var(--overlay-rgb) / 0.06);
+	.conn-menu button:hover:not(:disabled),
+	.conn-settings-panel button:hover:not(:disabled) {
+		background: rgb(var(--overlay-rgb) / 0.12);
+		color: var(--text-primary);
 	}
 	.conn-menu button.active {
 		outline: 2px solid var(--accent);
