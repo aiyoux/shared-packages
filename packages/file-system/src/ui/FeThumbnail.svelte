@@ -25,7 +25,7 @@
 	let url = $state<string | null>(null);
 	let loading = $state(false);
 	let failed = $state(false);
-	let kind = $state<PreviewKind | null>(null);
+	let kind = $derived(getPreviewKind(entry));
 	let currentId = '';
 
 	onDestroy(() => {
@@ -45,14 +45,21 @@
 		const e = entry;
 		const d = driver;
 		const en = enabled;
-		kind = getPreviewKind(e);
+		// `kind` is a $derived read here, not written — writing it from inside
+		// this effect and then reading it back in the same run used to make
+		// the effect depend on its own write, forcing exactly one redundant
+		// re-run right after mount. That re-run raced with (and cancelled) the
+		// in-flight blob fetch below, and since `currentId` was already set by
+		// the first run, the redundant run bailed out without restarting the
+		// fetch — leaving the thumbnail stuck on "loading" forever.
+		const k = kind;
 
 		// Captured, not re-read: the async block below runs after this effect
 		// returns, and a narrowing on `d.readBlob` does not survive into it —
 		// the driver is a mutable reference and TS cannot know it still has the
 		// method by then.
 		const readBlob = d.readBlob;
-		if (!en || !kind || !readBlob) {
+		if (!en || !k || !readBlob) {
 			// untrack: revoke() reads `url`. Reading it inside this effect (even
 			// transitively) would make the effect depend on it — and the async
 			// block below writes `url` once generation resolves, which would
@@ -78,7 +85,7 @@
 			try {
 				const blob = await readBlob.call(d, e.id);
 				if (cancelled || !blob) return;
-				const thumbUrl = await generateThumbnail(blob, kind!, maxDim);
+				const thumbUrl = await generateThumbnail(blob, k, maxDim);
 				if (cancelled) return;
 				url = thumbUrl;
 				loading = false;
