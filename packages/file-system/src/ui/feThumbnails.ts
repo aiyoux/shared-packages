@@ -50,6 +50,8 @@ export async function generateImageThumbnail(blob: Blob, maxDim: number): Promis
 	try {
 		const img = await loadImage(url);
 		const { canvas } = drawScaled(img.width, img.height, maxDim);
+		const ctx = canvas.getContext('2d')!;
+		ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
 		return canvas.toDataURL('image/webp', 0.82);
 	} finally {
 		URL.revokeObjectURL(url);
