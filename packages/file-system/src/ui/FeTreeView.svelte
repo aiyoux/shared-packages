@@ -70,17 +70,20 @@
 		if (!id) return;
 		try {
 			const chain = await d.getPath(id); // root..id, inclusive of id itself
-			let nextExpanded = expanded;
-			let changed = false;
+			// Only ADD to `expanded` — never remove. The user may have
+			// collapsed a node while getPath / loadChildren were in flight;
+			// overwriting `expanded` with a stale snapshot would undo that
+			// collapse. Re-read the live set right before assigning.
+			const toAdd: ExplorerEntryId[] = [];
 			for (const node of chain) {
-				if (!nextExpanded.has(node.id)) {
-					if (!changed) nextExpanded = new Set(nextExpanded);
-					nextExpanded.add(node.id);
-					changed = true;
-				}
+				if (!expanded.has(node.id)) toAdd.push(node.id);
 				await loadChildren(d, node.id);
 			}
-			if (changed) expanded = nextExpanded;
+			if (toAdd.length > 0) {
+				const next = new Set(expanded);
+				for (const nid of toAdd) next.add(nid);
+				expanded = next;
+			}
 		} catch {
 			/* best-effort nav aid; ignore */
 		}
@@ -158,7 +161,14 @@
 			aria-selected={isActive}
 			aria-expanded={isOpen}
 			tabindex="-1"
-			onclick={() => onNavigate(entry.id)}
+			onclick={(e) => {
+				// Don't navigate when the toggle button was clicked —
+				// stopPropagation on the button should already prevent this,
+				// but belt-and-braces: if the click originated from the
+				// toggle, only expand/collapse, don't navigate.
+				if ((e.target as HTMLElement).closest('.fe-tree-toggle')) return;
+				onNavigate(entry.id);
+			}}
 		>
 			<button
 				type="button"
@@ -245,14 +255,18 @@
 		display: inline-flex;
 		align-items: center;
 		justify-content: center;
-		width: 14px;
-		height: 14px;
+		width: 18px;
+		height: 18px;
 		flex: none;
 		border: 0;
 		background: none;
 		padding: 0;
 		color: inherit;
 		cursor: pointer;
+		border-radius: var(--radius-sm, 3px);
+	}
+	.fe-tree-toggle:hover {
+		background: rgb(var(--overlay-rgb) / 0.1);
 	}
 	.fe-tree-toggle.invisible {
 		visibility: hidden;
