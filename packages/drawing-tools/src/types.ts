@@ -98,6 +98,17 @@ export interface PathData {
      * still compounds — see `FadeOptions.accumulate`.
      */
     fadeSweepId?: number;
+    /**
+     * The id of the ORIGINAL stroke this piece was cut from, carried down
+     * every split so a stroke's pieces stay identifiable as one another's
+     * siblings however many passes have cut them.
+     *
+     * Seeded at the first split (`parent.fadeOrigin ?? parent.id`) and
+     * inherited thereafter. Siblings at one strength are a PARTITION of that
+     * original — disjoint by construction — which is what makes it safe to put
+     * them back in a single path element; see `mergeFadedSiblings`.
+     */
+    fadeOrigin?: string;
     transform?: string;
     bakeGroupId?: string;
     layerId?: string;

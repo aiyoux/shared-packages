@@ -2906,6 +2906,7 @@ export const splitOnePathByEraser = (
                     dimmed.push({
                         ...splitPathMetadata,
                         id: generateId(),
+                        fadeOrigin: path.fadeOrigin ?? path.id,
                         d,
                         opacity: next,
                         clipDerived: true,
@@ -3025,7 +3026,7 @@ export const splitOnePathByEraser = (
         const step = fadeStep(path, fade);
         if (sync) sync.removed.push(path);
         if (step === null) return [];
-        const worn = { ...path, id: generateId(), opacity: step.opacity, faded: true, ...(fade.sweepId != null ? { fadeSweepId: fade.sweepId } : {}), transform: hasTranslate ? undefined : path.transform, d: hasTranslate ? flatCmdsToD(flatCmds) : path.d, ...(hasTranslate && path.clipRect ? { clipRect: rebaseClipRect(path, tx, ty) } : {}) };
+        const worn = { ...path, id: generateId(), fadeOrigin: path.fadeOrigin ?? path.id, opacity: step.opacity, faded: true, ...(fade.sweepId != null ? { fadeSweepId: fade.sweepId } : {}), transform: hasTranslate ? undefined : path.transform, d: hasTranslate ? flatCmdsToD(flatCmds) : path.d, ...(hasTranslate && path.clipRect ? { clipRect: rebaseClipRect(path, tx, ty) } : {}) };
         if (sync) sync.added.push(worn);
         eraseStats.piecesEmitted += 1;
         return [worn];
@@ -3051,6 +3052,7 @@ export const splitOnePathByEraser = (
         const piece = {
             ...path,
             id: generateId(),
+            fadeOrigin: path.fadeOrigin ?? path.id,
             d,
             // Cleared here and re-set below only for the covered run: a
             // remainder is the part the eraser did NOT reach, so it must not
@@ -3178,8 +3180,16 @@ const fadedInkKey = (p: PathData): string | null => {
  * Fading is a plain multiply (see `fadedOpacity`), so the pre-rub opacity is
  * recoverable exactly: ink that was already below 1 before this rub touched it
  * composites, and ink at 1 covers.
+ *
+ * EXPORTED because the live preview has to ask the same question. The renderer
+ * decides between a per-path stand-in and one over the layer composite, and
+ * that choice only lands where the commit lands if it is made by this rule. A
+ * plain `opacity < 1` test is not the same rule and gets it wrong in both
+ * directions: it calls pen ink compositing the moment a first rub has faded it
+ * to 0.55 — so every later rub takes the expensive route AND previews it
+ * differently from how it will commit.
  */
-const compositesRatherThanCovers = (piece: PathData, fade: FadeOptions): boolean => {
+export const compositesRatherThanCovers = (piece: PathData, fade: FadeOptions): boolean => {
     if (piece.opacity === undefined) return false;
     if (!(fade.factor > 0)) return false;
     return piece.opacity / fade.factor < 1;
