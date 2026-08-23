@@ -1,0 +1,48 @@
+{
+  "name": "@shared-packages/git",
+  "version": "0.1.0",
+  "private": false,
+  "type": "module",
+  "description": "Git repo list, local/monitor backends, and history UI for Scratch Pad tools.",
+  "svelte": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "svelte": "./src/index.ts",
+      "import": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./GitHistory.svelte": "./src/GitHistory.svelte",
+    "./GitApp.svelte": "./src/GitApp.svelte",
+    "./ProjectApp.svelte": "./src/ProjectApp.svelte"
+  },
+  "types": "./src/index.ts",
+  "files": ["src"],
+  "scripts": {
+    "test": "vitest run",
+    "check": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@shared-packages/file-system": "file:../file-system",
+    "isomorphic-git": "^1.33.2"
+  },
+  "peerDependencies": {
+    "svelte": "^5.0.0"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^7.0.0",
+    "@testing-library/svelte": "^5.2.8",
+    "@types/node": "^26.1.1",
+    "fake-indexeddb": "^6.0.0",
+    "jsdom": "^26.1.0",
+    "svelte": "^5.56.6",
+    "typescript": "^5.7.3",
+    "vitest": "^4.1.2"
+  },
+  "engines": {
+    "node": ">=22.7.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
