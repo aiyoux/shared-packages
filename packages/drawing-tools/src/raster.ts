@@ -45,11 +45,19 @@ function applyTransform(ctx: CanvasRenderingContext2D, transform?: string) {
 	if (s) ctx.scale(parseFloat(s[1]), parseFloat(s[2] ?? s[1]));
 }
 
-/** Paint a single path onto the context, honoring fill/stroke/opacity/blend/transform. */
-export function drawPath(ctx: CanvasRenderingContext2D, p: PathData) {
+/**
+ * Paint a single path onto the context, honoring fill/stroke/opacity/blend/transform.
+ *
+ * `alphaScale` multiplies the path's own opacity. It exists so a caller can
+ * paint a whole pile of ink thinned by one fraction WITHOUT copying every path
+ * to change its opacity: the Path2D cache is keyed on the path object, so a
+ * fresh copy per frame would re-parse every `d`. The raster eraser's live fade
+ * preview is the caller — see RasterRenderer.paintLayerPaths.
+ */
+export function drawPath(ctx: CanvasRenderingContext2D, p: PathData, alphaScale = 1) {
 	const path = getPath2D(p);
 	ctx.save();
-	ctx.globalAlpha = p.opacity ?? 1;
+	ctx.globalAlpha = (p.opacity ?? 1) * alphaScale;
 	ctx.globalCompositeOperation =
 		p.blendMode && p.blendMode !== 'normal'
 			? (p.blendMode as GlobalCompositeOperation)
