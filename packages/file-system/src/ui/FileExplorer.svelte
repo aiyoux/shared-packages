@@ -1667,23 +1667,27 @@
 	onclick={() => { if (viewSwitcherOpen) closeViewSwitcher(); }}
 >
 	<header class="fe-header" data-testid="fe-header">
-		<div class="fe-breadcrumbs" data-testid="fe-breadcrumbs">
-			<button type="button" class="fe-crumb" data-testid="fe-crumb-root" onclick={() => goCrumb(null)}>
-				Root
-			</button>
-			{#each breadcrumbs as crumb (crumb.id)}
-				<span class="fe-sep">/</span>
-				<button
-					type="button"
-					class="fe-crumb"
-					data-testid="fe-crumb"
-					data-id={crumb.id}
-					onclick={() => goCrumb(crumb.id)}
-				>
-					{crumb.name}
+		{#if driver.id !== 'memory'}
+			<div class="fe-breadcrumbs" data-testid="fe-breadcrumbs">
+				<button type="button" class="fe-crumb" data-testid="fe-crumb-root" onclick={() => goCrumb(null)}>
+					Root
 				</button>
-			{/each}
-		</div>
+				{#each breadcrumbs as crumb (crumb.id)}
+					<span class="fe-sep">/</span>
+					<button
+						type="button"
+						class="fe-crumb"
+						data-testid="fe-crumb"
+						data-id={crumb.id}
+						onclick={() => goCrumb(crumb.id)}
+					>
+						{crumb.name}
+					</button>
+				{/each}
+			</div>
+		{:else}
+			<div class="fe-breadcrumbs-spacer" data-testid="fe-breadcrumbs-spacer"></div>
+		{/if}
 		<div class="fe-toolbar" data-testid="fe-toolbar">
 			<div class="fe-toolbar-row">
 				{#if mode === 'manage' || mode === 'open'}
@@ -1758,14 +1762,16 @@
 						disabled={selected.size === 0}
 						onclick={() => openSelectedDetails()}
 					/>
-					<FeTipIconBtn
-						testid="fe-tree-dock"
-						tip={treeTip}
-						icon="panel-left"
-						active={treeDock !== 'off'}
-						pressed={treeDock !== 'off'}
-						onclick={cycleTreeDock}
-					/>
+					{#if driver.id !== 'memory'}
+						<FeTipIconBtn
+							testid="fe-tree-dock"
+							tip={treeTip}
+							icon="panel-left"
+							active={treeDock !== 'off'}
+							pressed={treeDock !== 'off'}
+							onclick={cycleTreeDock}
+						/>
+					{/if}
 					<FeTipIconBtn
 						testid="fe-preview-layout"
 						tip={previewTip}
@@ -2667,6 +2673,9 @@
 		flex-wrap: wrap;
 		align-items: center;
 		gap: 4px;
+	}
+	.fe-breadcrumbs-spacer {
+		flex: 1;
 	}
 	.fe-crumb {
 		background: none;

@@ -1156,8 +1156,6 @@
 		>
 			watch · {monitorWatchStatus[id] ?? 'off'}
 		</span>
-	{:else if p.activeKind === 'memory'}
-		<span class="remote-badge mem" data-testid="memory-badge-{id}">In memory · tab only</span>
 	{:else if p.activeKind === 'disk'}
 		<span class="remote-badge" data-testid="disk-badge-{id}"
 			>This computer{p.diskName ? ` · ${p.diskName}` : ''}</span
