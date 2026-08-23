@@ -126,14 +126,12 @@
 		background: color-mix(in srgb, var(--border, #334155) 80%, transparent);
 	}
 	.pl-handle.x .pl-hairline {
-		inset: 0 auto 0 50%;
+		inset: 0 auto 0 5px;
 		width: 1px;
-		transform: translateX(-50%);
 	}
 	.pl-handle.y .pl-hairline {
-		inset: 50% 0 auto 0;
+		inset: 5px 0 auto 0;
 		height: 1px;
-		transform: translateY(-50%);
 	}
 	.pl-pill {
 		position: relative;

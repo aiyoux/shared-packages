@@ -42,6 +42,7 @@
 	} from './systemClipboard.js';
 	import '@shared-packages/design-system/button.css';
 	import '@shared-packages/design-system/tooltip.css';
+	import { SplitHandle } from '@shared-packages/ui';
 	import FeThumbnail from './FeThumbnail.svelte';
 	import FeTreeView from './FeTreeView.svelte';
 	import FeFloatingPreview from './FeFloatingPreview.svelte';
@@ -216,6 +217,42 @@
 	 * see FeTreeView.
 	 */
 	let treeVersion = $state(0);
+
+	/** Resizable ratios for tree dock and preview dock (fraction of the body). */
+	const TREE_RATIO_KEY = 'fe:treeRatio';
+	const PREVIEW_RATIO_KEY = 'fe:previewRatio';
+	const TREE_RATIO_DEFAULT = 0.22;
+	const PREVIEW_RATIO_DEFAULT = 0.34;
+	function loadRatio(key: string, fallback: number): number {
+		try {
+			const v = localStorage.getItem(key);
+			if (v) {
+				const n = Number(v);
+				if (Number.isFinite(n) && n > 0.05 && n < 0.8) return n;
+			}
+		} catch {
+			/* ignore */
+		}
+		return fallback;
+	}
+	let treeRatio = $state(loadRatio(TREE_RATIO_KEY, TREE_RATIO_DEFAULT));
+	let previewRatio = $state(loadRatio(PREVIEW_RATIO_KEY, PREVIEW_RATIO_DEFAULT));
+	function persistRatio(key: string, v: number) {
+		try {
+			localStorage.setItem(key, String(v));
+		} catch {
+			/* ignore */
+		}
+	}
+	function onTreeRatioDelta(delta: number) {
+		treeRatio = Math.min(0.6, Math.max(0.08, treeRatio + delta));
+		persistRatio(TREE_RATIO_KEY, treeRatio);
+	}
+	function onPreviewRatioDelta(delta: number) {
+		// Preview is on the right/bottom — dragging right/down shrinks it.
+		previewRatio = Math.min(0.7, Math.max(0.1, previewRatio - delta));
+		persistRatio(PREVIEW_RATIO_KEY, previewRatio);
+	}
 	// svelte-ignore state_referenced_locally -- `default` prop, by contract.
 	let saveName = $state(defaultName);
 	let error = $state('');
@@ -1660,6 +1697,7 @@
 	data-fe-tree-dock={treeDock}
 	data-fe-view-mode={viewMode}
 	data-fe-show-preview={showPreview ? 'on' : 'off'}
+	style="--preview-ratio: {previewRatio * 100}%"
 	role={variant === 'dialog' ? 'dialog' : 'group'}
 	aria-label="File explorer"
 	tabindex="0"
@@ -1950,9 +1988,16 @@
 			data-testid="fe-tree-dock"
 			data-placement={treeDock}
 			aria-label="Folder tree"
+			style="flex: 0 0 {treeRatio * 100}%"
 		>
 			<FeTreeView {driver} activeId={parentId} {treeVersion} onNavigate={goCrumb} />
 		</aside>
+		<SplitHandle
+			axis={treeDock === 'left' ? 'x' : 'y'}
+			testid="fe-tree-split"
+			ariaLabel="Resize folder tree"
+			onRatioDelta={onTreeRatioDelta}
+		/>
 	{/if}
 	<div class="fe-split">
 	<div
@@ -2143,6 +2188,12 @@
 		{/if}
 	</div>
 	{#if previewDock !== 'off'}
+		<SplitHandle
+			axis={previewDock === 'right' ? 'x' : 'y'}
+			testid="fe-preview-split"
+			ariaLabel="Resize preview pane"
+			onRatioDelta={onPreviewRatioDelta}
+		/>
 		<aside
 			class="fe-preview-dock"
 			data-testid="fe-preview-dock"
@@ -2739,14 +2790,6 @@
 		padding: 6px 4px;
 		background: var(--surface-2);
 	}
-	.fe-body[data-fe-tree-dock='left'] .fe-tree-dock {
-		width: min(220px, 32%);
-		border-right: 1px solid var(--line-hairline);
-	}
-	.fe-body[data-fe-tree-dock='top'] .fe-tree-dock {
-		max-height: 38%;
-		border-bottom: 1px solid var(--line-hairline);
-	}
 	.fe-split {
 		flex: 1;
 		min-height: 0;
@@ -2756,10 +2799,10 @@
 		grid-template-rows: 1fr;
 	}
 	.fe-root.preview-bottom .fe-split {
-		grid-template-rows: 1fr minmax(9rem, 36%);
+		grid-template-rows: 1fr auto minmax(8rem, var(--preview-ratio, 34%));
 	}
 	.fe-root.preview-right .fe-split {
-		grid-template-columns: 1fr minmax(14rem, 36%);
+		grid-template-columns: 1fr auto minmax(12rem, var(--preview-ratio, 34%));
 	}
 	.fe-split > .fe-list {
 		min-height: 0;
@@ -2771,11 +2814,6 @@
 		overflow: auto;
 		padding: 12px 14px;
 		background: var(--surface-2);
-		border-left: 1px solid var(--line-hairline);
-	}
-	.fe-root.preview-bottom .fe-preview-dock {
-		border-left: 0;
-		border-top: 1px solid var(--line-hairline);
 	}
 	.fe-preview-empty {
 		margin: 0;
