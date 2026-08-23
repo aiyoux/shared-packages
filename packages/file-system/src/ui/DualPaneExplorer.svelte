@@ -34,7 +34,7 @@
 	import { type PaneId, type DualPaneTids } from './dualPaneTypes.js';
 	import { portal } from './portal.js';
 	import FeTipIconBtn from './FeTipIconBtn.svelte';
-	import { SplitHandle } from '@shared-packages/ui';
+	import { SplitHandle, toast } from '@shared-packages/ui';
 	import '@shared-packages/design-system/button.css';
 	import '@shared-packages/design-system/tooltip.css';
 	import '@shared-packages/design-system/segmented.css';
@@ -317,12 +317,10 @@
 	let monitorWatchStatus = $state<Record<string, string>>({});
 	let watchPollTimer: ReturnType<typeof setInterval> | null = null;
 	let copyBusy = $state(false);
-	let copyError = $state('');
 	/** Pane a FileExplorer row drag started in (cross-pane copy). */
 	let crossDragFrom = $state<PaneId | null>(null);
 	let crossOver = $state<PaneId | null>(null);
 	let sendBusy = $state(false);
-	let sendError = $state<{ pane: PaneId; message: string } | null>(null);
 	/** Dest pane of the in-flight copy-across (pending rows land here). */
 	let copyDestPane = $state<PaneId | null>(null);
 	let copyItems = $state<TransferItem[]>([]);
@@ -511,7 +509,6 @@
 				releaseRemote(r.activeKind, r.activeId);
 			}
 			right = emptyPane(rightDefault);
-			copyError = '';
 		}
 	}
 
@@ -809,7 +806,6 @@
 		const drv = activeDriver(p, id);
 		const put = drv.upload ?? drv.writeFile;
 		if (!put || files.length === 0) return;
-		copyError = '';
 		copyBusy = true;
 		copyDestPane = id;
 		const parent = destParentId !== undefined ? destParentId : p.ctx.parentId;
@@ -821,7 +817,7 @@
 				setPane(id, { explorerKey: p.explorerKey + 1 });
 			}
 		} catch (e) {
-			copyError = e instanceof Error ? e.message : String(e);
+			toast.error(e instanceof Error ? e.message : String(e));
 		} finally {
 			copyBusy = false;
 		}
@@ -981,7 +977,6 @@
 		const src = paneState(from);
 		const destId: PaneId = from === 'left' ? 'right' : 'left';
 		const dst = paneState(destId);
-		copyError = '';
 		const sourceDriver = activeDriver(src, from);
 		const destDriver = activeDriver(dst, destId);
 		if (isDualPhaseCopy(sourceDriver, destDriver)) {
@@ -1005,10 +1000,10 @@
 					explorerKey: dst.explorerKey + 1
 				});
 			}
-			if (n === 0) copyError = 'Nothing copied';
+			if (n === 0) toast.info('Nothing copied');
 		} catch (e) {
-			if (e instanceof CopyAcrossError) copyError = e.message;
-			else copyError = e instanceof Error ? e.message : String(e);
+			if (e instanceof CopyAcrossError) toast.error(e.message);
+			else toast.error(e instanceof Error ? e.message : String(e));
 		} finally {
 			copyBusy = false;
 		}
@@ -1029,7 +1024,6 @@
 	) {
 		const dst = paneState(destId);
 		const destDriver = activeDriver(dst, destId);
-		copyError = '';
 		if (isDualPhaseCopy(sourceDriver, destDriver)) {
 			const ok = await askDualPhase(sourceDriver.id, paneConnectionLabel(destId));
 			if (!ok) return;
@@ -1049,10 +1043,10 @@
 					explorerKey: dst.explorerKey + 1
 				});
 			}
-			if (n === 0) copyError = 'Nothing copied';
+			if (n === 0) toast.info('Nothing copied');
 		} catch (e) {
-			if (e instanceof CopyAcrossError) copyError = e.message;
-			else copyError = e instanceof Error ? e.message : String(e);
+			if (e instanceof CopyAcrossError) toast.error(e.message);
+			else toast.error(e instanceof Error ? e.message : String(e));
 		} finally {
 			copyBusy = false;
 		}
@@ -1064,7 +1058,6 @@
 		const selectedIds = opts?.selectedIds ?? p.ctx.selectedIds;
 		const entries = opts?.entries ?? p.ctx.entries;
 		if (selectedIds.length === 0) return;
-		sendError = null;
 		sendBusy = true;
 		try {
 			await onSend({
@@ -1076,7 +1069,7 @@
 			// Remount so selection clears and the pane re-lists.
 			setPane(id, { explorerKey: p.explorerKey + 1 });
 		} catch (e) {
-			sendError = { pane: id, message: e instanceof Error ? e.message : String(e) };
+			toast.error(e instanceof Error ? e.message : String(e));
 		} finally {
 			sendBusy = false;
 		}
@@ -1210,39 +1203,27 @@
 					disabled={copyBusy || p.ctx.selectedIds.length === 0}
 					onclick={() => runCopyAcross(id)}
 				/>
-				{#if copyError}
-					<span class="copy-err" data-testid={tids.copyAcrossError} role="alert">{copyError}</span>
-				{/if}
 			{/if}
 			{#if onSend}
-				<FeTipIconBtn
-					testid={tids.send(id)}
-					tip={sendBusy ? 'Sending…' : 'Send'}
-					icon="send"
-					disabled={sendBusy || p.ctx.selectedIds.length === 0 || !drv.download}
-					onclick={() => runSend(id)}
-				/>
-				{#if sendError?.pane === id}
-					<span class="send-err" data-testid={tids.sendError} role="alert">{sendError.message}</span>
-				{/if}
-			{/if}
-			{@render paneBadges(id)}
-			{#if subTid}
-				<span class="pane-sub" data-testid={subTid.testid}>{subTid.text}</span>
-			{/if}
-		</div>
-		{:else if p.busy || (p.activeKind !== 'local' && p.activeKind !== 'memory') || (id === 'right' && overrideRight) || (copyError && showCopyAcross) || sendError?.pane === id || subTid}
-		<div class="pane-status" data-testid={tids.paneChrome(id)}>
-			{@render paneBadges(id)}
-			{#if copyError && showCopyAcross}
-				<span class="copy-err" data-testid={tids.copyAcrossError} role="alert">{copyError}</span>
-			{/if}
-			{#if sendError?.pane === id}
-				<span class="send-err" data-testid={tids.sendError} role="alert">{sendError.message}</span>
-			{/if}
-			{#if subTid}
-				<span class="pane-sub" data-testid={subTid.testid}>{subTid.text}</span>
-			{/if}
+			<FeTipIconBtn
+				testid={tids.send(id)}
+				tip={sendBusy ? 'Sending…' : 'Send'}
+				icon="send"
+				disabled={sendBusy || p.ctx.selectedIds.length === 0 || !drv.download}
+				onclick={() => runSend(id)}
+			/>
+		{/if}
+		{@render paneBadges(id)}
+		{#if subTid}
+			<span class="pane-sub" data-testid={subTid.testid}>{subTid.text}</span>
+		{/if}
+	</div>
+	{:else if p.busy || (p.activeKind !== 'local' && p.activeKind !== 'memory') || (id === 'right' && overrideRight) || subTid}
+	<div class="pane-status" data-testid={tids.paneChrome(id)}>
+		{@render paneBadges(id)}
+		{#if subTid}
+			<span class="pane-sub" data-testid={subTid.testid}>{subTid.text}</span>
+		{/if}
 		</div>
 		{/if}
 		{#if p.error}
@@ -1645,11 +1626,6 @@
 		font-size: 0.72rem;
 		letter-spacing: 0.04em;
 		text-transform: uppercase;
-	}
-	.copy-err,
-	.send-err {
-		color: var(--cat-red-soft);
-		font-size: 0.85rem;
 	}
 	.busy {
 		font-size: 0.8rem;

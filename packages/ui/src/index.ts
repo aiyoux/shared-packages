@@ -149,3 +149,13 @@ export {
   type DialogStackEntry
 } from './dialogStack.ts';
 export { default as PathNodeEditor } from './PathNodeEditor.svelte';
+
+// Unified toast system
+export { default as ToastHost } from './ToastHost.svelte';
+export {
+	toast,
+	getToasts,
+	__resetToastsForTests,
+	type Toast,
+	type ToastKind
+} from './toast-state.svelte.js';
