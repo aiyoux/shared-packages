@@ -6,6 +6,7 @@
 		saveProfile,
 		setActiveProfileId
 	} from './credentials.js';
+	import { HUB_MONITOR_PROFILES_CHANNEL, subscribeTabChannel } from '../crossTab.js';
 	import {
 		DEFAULT_MONITOR_BASE_URL,
 		validateMonitorProfileInput,
@@ -37,6 +38,9 @@
 
 	$effect(() => {
 		void reload();
+		return subscribeTabChannel(HUB_MONITOR_PROFILES_CHANNEL, () => {
+			void reload();
+		});
 	});
 
 	function clearFieldsForNew() {

@@ -1,6 +1,7 @@
 /**
  * IndexedDB store for hub monitor connection profiles.
  */
+import { HUB_MONITOR_PROFILES_CHANNEL, notifyTabChannel } from '../crossTab.js';
 import {
 	DEFAULT_MONITOR_BASE_URL,
 	HUB_MONITOR_DB_NAME,
@@ -106,6 +107,7 @@ export async function saveProfile(
 	const tx = db.transaction(HUB_MONITOR_STORE, 'readwrite');
 	tx.objectStore(HUB_MONITOR_STORE).put(row);
 	await txDone(tx);
+	notifyTabChannel(HUB_MONITOR_PROFILES_CHANNEL);
 	return row;
 }
 
@@ -128,6 +130,7 @@ export async function deleteProfile(id: string): Promise<void> {
 		metaReq.onerror = () => reject(metaReq.error);
 	});
 	await txDone(tx);
+	notifyTabChannel(HUB_MONITOR_PROFILES_CHANNEL);
 }
 
 export async function getActiveProfileId(): Promise<string | null> {
@@ -151,6 +154,7 @@ export async function setActiveProfileId(id: string | null): Promise<void> {
 		value: { activeProfileId: id } satisfies HubMonitorMeta
 	});
 	await txDone(tx);
+	notifyTabChannel(HUB_MONITOR_PROFILES_CHANNEL);
 }
 
 export function redactProfile(p: MonitorConnectionProfileV1): MonitorConnectionProfileV1 {

@@ -6,6 +6,7 @@
 		saveProfile,
 		setActiveProfileId
 	} from './credentials.js';
+	import { HUB_RCLONE_PROFILES_CHANNEL, subscribeTabChannel } from '../crossTab.js';
 	import {
 		DEFAULT_RCLONE_BASE_URL,
 		validateProfileInput,
@@ -45,6 +46,9 @@
 
 	$effect(() => {
 		void reload();
+		return subscribeTabChannel(HUB_RCLONE_PROFILES_CHANNEL, () => {
+			void reload();
+		});
 	});
 
 	function clearFieldsForNew() {

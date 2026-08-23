@@ -224,9 +224,10 @@ export class VfsService {
 		return rows;
 	}
 
-	/** Reactive list (Dexie liveQuery). */
+	/** Reactive list (Dexie liveQuery). Querier must be async so awaits inside
+	 * `list()` stay in Dexie's observation zone. */
 	liveList(opts: VfsListOptions): Observable<VfsNode[]> {
-		return liveQuery(() => this.list(opts));
+		return liveQuery(async () => this.list(opts));
 	}
 
 	async get(id: string): Promise<VfsNode | undefined> {

@@ -2,6 +2,7 @@
  * IndexedDB store for hub B2 connection profiles (plaintext v1).
  * Secrets never leave this origin; never log applicationKey.
  */
+import { HUB_B2_PROFILES_CHANNEL, notifyTabChannel } from '../crossTab.js';
 import {
 	HUB_B2_DB_NAME,
 	HUB_B2_META,
@@ -107,6 +108,7 @@ export async function saveProfile(
 	const tx = db.transaction(HUB_B2_STORE, 'readwrite');
 	tx.objectStore(HUB_B2_STORE).put(row);
 	await txDone(tx);
+	notifyTabChannel(HUB_B2_PROFILES_CHANNEL);
 	return row;
 }
 
@@ -131,6 +133,7 @@ export async function deleteProfile(id: string): Promise<void> {
 		tx.onerror = () => reject(tx.error);
 		tx.onabort = () => reject(tx.error ?? new Error('deleteProfile aborted'));
 	});
+	notifyTabChannel(HUB_B2_PROFILES_CHANNEL);
 }
 
 export async function getActiveProfileId(): Promise<string | null> {
@@ -154,6 +157,7 @@ export async function setActiveProfileId(id: string | null): Promise<void> {
 		value: { activeProfileId: id } satisfies HubB2Meta
 	});
 	await txDone(tx);
+	notifyTabChannel(HUB_B2_PROFILES_CHANNEL);
 }
 
 /** Redact secrets for any debug export. */

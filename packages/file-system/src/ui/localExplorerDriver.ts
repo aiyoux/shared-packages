@@ -52,7 +52,8 @@ export type LocalVfsLike = Pick<
 	| 'emptyTrash'
 	| 'readBlob'
 	| 'subscribe'
->;
+> &
+	Partial<Pick<VfsService, 'liveList'>>;
 
 export type LocalExplorerDriverOptions = {
 	/** Driver id: `local` (default) or `memory`. */
@@ -159,9 +160,34 @@ export function createLocalExplorerDriver(
 			return nodeToEntry(n);
 		},
 
-		subscribeChanges(listener) {
-			if (!vfs.subscribe) return () => {};
-			return vfs.subscribe(listener);
+		subscribeChanges(listener, scope) {
+			const unsubs: Array<() => void> = [];
+			if (vfs.subscribe) unsubs.push(vfs.subscribe(listener));
+			if (vfs.liveList) {
+				const sub = vfs
+					.liveList({
+						parentId: scope?.parentId ?? null,
+						trashOnly: false,
+						sort: caps.supportsSiblingOrder ? 'order' : 'name'
+					})
+					.subscribe(() => {
+						try {
+							listener();
+						} catch {
+							/* a stale explorer must not break writers */
+						}
+					});
+				unsubs.push(() => {
+					try {
+						sub.unsubscribe();
+					} catch {
+						/* ignore */
+					}
+				});
+			}
+			return () => {
+				for (const u of unsubs) u();
+			};
 		}
 	};
 }
