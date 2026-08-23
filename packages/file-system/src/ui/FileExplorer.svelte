@@ -1981,8 +1981,8 @@
 		</div>
 	{/if}
 
-	<div class="fe-body" data-fe-tree-dock={treeDock}>
-	{#if treeDock !== 'off'}
+	<div class="fe-body" data-fe-tree-dock={treeDock !== 'off' && driver.id !== 'memory' ? treeDock : 'off'}>
+	{#if treeDock !== 'off' && driver.id !== 'memory'}
 		<aside
 			class="fe-tree-dock"
 			data-testid="fe-tree-dock"
