@@ -1231,7 +1231,7 @@
 				<span class="pane-sub" data-testid={subTid.testid}>{subTid.text}</span>
 			{/if}
 		</div>
-		{:else if p.busy || p.activeKind !== 'local' || (id === 'right' && overrideRight) || (copyError && showCopyAcross) || sendError?.pane === id || subTid}
+		{:else if p.busy || (p.activeKind !== 'local' && p.activeKind !== 'memory') || (id === 'right' && overrideRight) || (copyError && showCopyAcross) || sendError?.pane === id || subTid}
 		<div class="pane-status" data-testid={tids.paneChrome(id)}>
 			{@render paneBadges(id)}
 			{#if copyError && showCopyAcross}
