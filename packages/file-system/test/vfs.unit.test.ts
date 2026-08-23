@@ -233,31 +233,75 @@ describe('VfsService', () => {
 		);
 	});
 
-	it('writeFile rollback restores a overwritten trash row', async () => {
+	it('writeFile refuses a live or trashed id', async () => {
 		const f = await vfs.writeFile({
 			parentId: null,
 			name: 'gone.skch',
 			fileType: 'skch',
 			body: { keep: true }
 		});
-		await vfs.trash(f.id);
-		const origPromote = vfs.opfs.promote.bind(vfs.opfs);
-		vfs.opfs.promote = async () => {
-			throw new Error('promote-fail');
-		};
-		await assert.rejects(() =>
-			vfs.writeFile({
-				id: f.id,
-				parentId: null,
-				name: 'reuse.skch',
-				fileType: 'skch',
-				body: { keep: false }
-			})
+		await assert.rejects(
+			() =>
+				vfs.writeFile({
+					id: f.id,
+					parentId: null,
+					name: 'reuse.skch',
+					fileType: 'skch',
+					body: { keep: false }
+				}),
+			(e: unknown) => e instanceof VfsError && e.code === 'NAME_CONFLICT'
 		);
-		vfs.opfs.promote = origPromote;
-		const restored = await vfs.get(f.id);
-		assert.ok(restored);
-		assert.ok(restored!.deletedAt != null);
+		await vfs.trash(f.id);
+		await assert.rejects(
+			() =>
+				vfs.writeFile({
+					id: f.id,
+					parentId: null,
+					name: 'reuse.skch',
+					fileType: 'skch',
+					body: { keep: false }
+				}),
+			(e: unknown) =>
+				e instanceof VfsError &&
+				e.code === 'NAME_CONFLICT' &&
+				(e as VfsError).details?.trashed === true
+		);
+		const still = await vfs.get(f.id);
+		assert.ok(still);
+		assert.ok(still!.deletedAt != null);
 		assert.deepEqual(await vfs.readJson(f.id), { keep: true });
+	});
+
+	it('metadata ops do not bump generation; updateFile with pre-move gen succeeds', async () => {
+		const folder = await vfs.mkdir(null, 'Docs');
+		const f = await vfs.writeFile({
+			parentId: null,
+			name: 'x.skch',
+			fileType: 'skch',
+			body: { v: 1 }
+		});
+		const gen = f.generation;
+		await vfs.rename(f.id, 'y');
+		assert.equal((await vfs.get(f.id))!.generation, gen);
+		await vfs.move(f.id, folder.id);
+		assert.equal((await vfs.get(f.id))!.generation, gen);
+		assert.equal((await vfs.get(f.id))!.parentId, folder.id);
+		const sibling = await vfs.writeFile({
+			parentId: folder.id,
+			name: 'z.skch',
+			fileType: 'skch',
+			body: { v: 0 }
+		});
+		await vfs.reorder(f.id, { afterId: sibling.id });
+		assert.equal((await vfs.get(f.id))!.generation, gen);
+		const updated = await vfs.updateFile(f.id, { v: 2 }, { expectedGeneration: gen });
+		assert.equal(updated.generation, gen + 1);
+		assert.deepEqual(await vfs.readJson(f.id), { v: 2 });
+		await vfs.trash(f.id);
+		assert.equal((await vfs.get(f.id))!.generation, gen + 1);
+		await vfs.restore(f.id);
+		assert.equal((await vfs.get(f.id))!.generation, gen + 1);
+		const afterRestore = await vfs.updateFile(f.id, { v: 3 }, { expectedGeneration: gen + 1 });
+		assert.equal(afterRestore.generation, gen + 2);
 	});
 });

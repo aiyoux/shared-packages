@@ -15,8 +15,11 @@ import { sanitizeName, withNumericSuffix } from './names.js';
 import { createMemoryOpfs, type OpfsBlobStore } from './opfs.js';
 import { forceExtension, getFileType, inferFileTypeFromName } from './registry.js';
 import { serializeBody } from './serialize.js';
+import { createOpenDocument, watchNode, type DocumentHost } from './documentSession.js';
 import {
+	type DocumentEvent,
 	type FileTypeId,
+	type OpenDocument,
 	type UpdateFileOpts,
 	type VfsListOptions,
 	type VfsNode,
@@ -99,6 +102,24 @@ export class MemoryVfsService {
 
 	subscribe(listener: () => void): () => void {
 		return getState().bus.subscribe(listener);
+	}
+
+	private asDocumentHost(): DocumentHost {
+		return {
+			get: (id) => this.get(id),
+			getPath: (id) => this.getPath(id),
+			subscribe: (listener) => this.subscribe(listener),
+			updateFile: (id, body, opts) => this.updateFile(id, body, opts),
+			writeFile: (input) => this.writeFile(input)
+		};
+	}
+
+	subscribeNode(id: string, listener: (event: DocumentEvent) => void): () => void {
+		return watchNode(this.asDocumentHost(), id, listener);
+	}
+
+	async openDocument(id: string, opts?: { generation?: number }): Promise<OpenDocument> {
+		return createOpenDocument(this.asDocumentHost(), id, opts);
 	}
 
 	get persistence() {
@@ -201,6 +222,7 @@ export class MemoryVfsService {
 		node.contentType = contentType;
 		node.updatedAt = Date.now();
 		node.generation += 1;
+		if (opts.meta !== undefined) node.meta = opts.meta;
 		getState().nodes.set(id, node);
 		emitMemoryChange();
 		return node;
@@ -237,7 +259,6 @@ export class MemoryVfsService {
 		finalName = ensureUnique(finalName, id);
 		node.name = finalName;
 		node.updatedAt = Date.now();
-		node.generation += 1;
 		getState().nodes.set(id, node);
 		emitMemoryChange();
 		return node;

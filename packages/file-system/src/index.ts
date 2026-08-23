@@ -6,6 +6,7 @@ export * from './opfs.js';
 export * from './db.js';
 export * from './persist.js';
 export * from './vfs.js';
+export * from './documentSession.js';
 export * from './memoryVfs.js';
 export * from './transferRegistry.js';
 export {

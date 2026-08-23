@@ -11,8 +11,16 @@ import {
 import { forceExtension, getFileType, inferFileTypeFromName } from './registry.js';
 import { parseJsonBytes, serializeBody } from './serialize.js';
 import {
+	createOpenDocument,
+	watchNode,
+	type DocumentHost
+} from './documentSession.js';
+import {
+	type DocumentEvent,
+	type DocumentSnapshot,
 	type FileTypeId,
 	type GcReport,
+	type OpenDocument,
 	type UpdateFileOpts,
 	type VfsListOptions,
 	type VfsNode,
@@ -67,6 +75,31 @@ export class VfsService {
 	/** Live list refresh for FileExplorer (same contract as monitor subscribeChanges). */
 	subscribe(listener: () => void): () => void {
 		return this.changeBus.subscribe(listener);
+	}
+
+	private asDocumentHost(): DocumentHost {
+		return {
+			get: (id) => this.get(id),
+			getPath: (id) => this.getPath(id),
+			subscribe: (listener) => this.subscribe(listener),
+			updateFile: (id, body, opts) => this.updateFile(id, body, opts),
+			writeFile: (input) => this.writeFile(input),
+			liveSnapshot: (id) =>
+				liveQuery(async (): Promise<DocumentSnapshot> => {
+					const node = await this.db.nodes.get(id);
+					const path = node ? await this.getPath(id) : [];
+					return { node, path };
+				})
+		};
+	}
+
+	subscribeNode(id: string, listener: (event: DocumentEvent) => void): () => void {
+		return watchNode(this.asDocumentHost(), id, listener);
+	}
+
+	async openDocument(id: string, opts?: { generation?: number }): Promise<OpenDocument> {
+		await this.ready();
+		return createOpenDocument(this.asDocumentHost(), id, opts);
 	}
 
 	private emitChange(): void {
@@ -313,7 +346,6 @@ export class VfsService {
 					const n = ordered[i]!;
 					n.sortOrder = ranks[i];
 					n.updatedAt = now;
-					if (n.id === id) n.generation += 1;
 					await this.db.nodes.put(n);
 				}
 				return (await this.db.nodes.get(id))!;
@@ -321,7 +353,6 @@ export class VfsService {
 
 			node.sortOrder = mid;
 			node.updatedAt = Date.now();
-			node.generation += 1;
 			await this.db.nodes.put(node);
 			return node;
 		}).then((node) => {
@@ -407,7 +438,16 @@ export class VfsService {
 		const leaseKey = `write:${blobId}`;
 		const owner = generateId('lease');
 		const now = Date.now();
-		let overwritten: VfsNode | undefined;
+
+		if (input.id) {
+			const existing = await this.db.nodes.get(input.id);
+			if (existing) {
+				throw new VfsError('NAME_CONFLICT', `Node id already exists: ${input.id}`, {
+					id: input.id,
+					trashed: existing.deletedAt != null
+				});
+			}
+		}
 
 		// Reserve name + pending blobRef + lease. Parent is re-checked inside
 		// the txn so a concurrent trash cannot park a live child under it.
@@ -425,10 +465,12 @@ export class VfsService {
 			);
 			name = unique;
 			const existing = await this.db.nodes.get(nodeId);
-			if (existing && existing.deletedAt == null) {
-				throw new VfsError('NAME_CONFLICT', `Node id already exists: ${nodeId}`);
+			if (existing) {
+				throw new VfsError('NAME_CONFLICT', `Node id already exists: ${nodeId}`, {
+					id: nodeId,
+					trashed: existing.deletedAt != null
+				});
 			}
-			if (existing) overwritten = { ...existing };
 			await this.db.blobRefs.put({
 				id: blobId,
 				opfsPath: tmpPath,
@@ -499,8 +541,7 @@ export class VfsService {
 				await this.db.leases.delete(leaseKey);
 			});
 		} catch (e) {
-			if (overwritten) await this.db.nodes.put(overwritten);
-			else await this.db.nodes.delete(nodeId);
+			await this.db.nodes.delete(nodeId);
 			await this.db.blobRefs.delete(blobId);
 			await this.db.leases.delete(leaseKey);
 			for (const p of [tmpPath, finalPath]) {
@@ -600,6 +641,7 @@ export class VfsService {
 				cur.updatedAt = Date.now();
 				cur.generation = cur.generation + 1;
 				cur.contentType = contentType;
+				if (opts.meta !== undefined) cur.meta = opts.meta;
 				await this.db.nodes.put(cur);
 				await this.db.leases.delete(leaseKey);
 			});
@@ -681,7 +723,6 @@ export class VfsService {
 			finalName = await this.ensureUniqueName(node.parentId, finalName, id, 'rename');
 			node.name = finalName;
 			node.updatedAt = Date.now();
-			node.generation += 1;
 			await this.db.nodes.put(node);
 			return node;
 		}).then((node) => {
@@ -718,7 +759,6 @@ export class VfsService {
 			node.parentId = newParentId;
 			node.name = unique;
 			node.updatedAt = Date.now();
-			node.generation += 1;
 			if (!sameParent || opts?.beforeId != null || opts?.afterId != null) {
 				// append rank in new parent; precise before/after via reorder after put
 				const siblings = this.sortSiblingsForOrder(await this.activeSiblings(newParentId, id));
@@ -848,7 +888,6 @@ export class VfsService {
 				n.deletedAt = null;
 				n.trashParentId = null;
 				n.updatedAt = Date.now();
-				n.generation += 1;
 				await this.db.nodes.put(n);
 			}
 			return (await this.db.nodes.get(id))!;
@@ -947,7 +986,10 @@ export class VfsService {
 
 	// ── Migration helpers ─────────────────────────────────────────
 
-	/** Upsert node by id (migration). */
+	/**
+	 * Upsert node by id. Migration/backfill only — bypasses CAS and
+	 * generation policy. Not a live save path.
+	 */
 	async migratePutNode(node: VfsNode): Promise<void> {
 		await this.ready();
 		await this.db.nodes.put(node);

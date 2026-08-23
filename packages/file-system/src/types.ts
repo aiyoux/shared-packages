@@ -21,7 +21,11 @@ export interface VfsNode {
 	size?: number;
 	createdAt: number;
 	updatedAt: number;
-	/** Monotonic CAS token; starts at 1. */
+	/**
+	 * CAS token for blob content only. Starts at 1. Bumps solely on
+	 * `updateFile` (including `force: true`). Rename/move/reorder/trash/restore
+	 * must not increment this.
+	 */
 	generation: number;
 	blobId?: string;
 	meta?: Record<string, unknown>;
@@ -65,14 +69,70 @@ export interface WriteFileInput {
 	fileType?: FileTypeId;
 	contentType?: string;
 	meta?: Record<string, unknown>;
-	/** Deterministic id for migrations */
+	/**
+	 * Deterministic id for migrations. Must not already exist, live or trashed
+	 * (no resurrection).
+	 */
 	id?: string;
 	onConflict?: 'rename' | 'error';
 }
 
-export type UpdateFileOpts =
+export type UpdateFileOpts = (
 	| { expectedGeneration: number; force?: false }
-	| { force: true; expectedGeneration?: never };
+	| { force: true; expectedGeneration?: never }
+) & { meta?: Record<string, unknown> };
+
+/** Latest `get(id)` + `getPath(id)` snapshot for a document watch. */
+export type DocumentSnapshot = {
+	node: VfsNode | undefined;
+	path: VfsNode[];
+};
+
+/**
+ * Independent diffs of parentId / name / path-chain / deletedAt / generation.
+ * A coalesced move+content snapshot produces both `path` and `content`.
+ * `deleted` is exclusive and ends the watch.
+ */
+export type DocumentEvent =
+	| {
+			type: 'path';
+			parentId: string | null;
+			name: string;
+			path: VfsNode[];
+	  }
+	| {
+			type: 'content';
+			generation: number;
+			/**
+			 * `subscribeNode`: always false.
+			 * `openDocument`: true when the session is dirty — disk generation
+			 * must not be copied onto the session CAS token.
+			 */
+			conflict: boolean;
+	  }
+	| {
+			type: 'deleted';
+			reason: 'trash' | 'permanent';
+	  };
+
+export interface OpenDocument {
+	readonly id: string;
+	readonly bound: boolean;
+	readonly dirty: boolean;
+	/** CAS token the next `save()` sends. */
+	readonly generation: number;
+	readonly node: VfsNode;
+	readonly path: VfsNode[];
+	markDirty(): void;
+	save(
+		body: unknown,
+		opts?: { meta?: Record<string, unknown>; force?: boolean }
+	): Promise<VfsNode>;
+	/** `writeFile` without `id`. Does not rebind. */
+	saveAs(input: Omit<WriteFileInput, 'id'>): Promise<VfsNode>;
+	subscribe(listener: (event: DocumentEvent) => void): () => void;
+	close(): void;
+}
 
 export interface VfsListOptions {
 	parentId: string | null;

@@ -96,6 +96,19 @@ describe('MemoryVfs fail-closed flat list', () => {
 		expect(renamed.name).toBe('b (1).txt');
 	});
 
+	it('rename does not bump generation; dirty save still CAS-matches', async () => {
+		const vfs = createMemoryVfs();
+		const a = await vfs.writeFile({ parentId: null, name: 'keep.txt', body: 'a' });
+		const gen = a.generation;
+		await vfs.rename(a.id, 'kept.txt');
+		expect((await vfs.get(a.id))!.generation).toBe(gen);
+		const doc = await vfs.openDocument(a.id);
+		doc.markDirty();
+		const saved = await doc.save('b');
+		expect(saved.generation).toBe(gen + 1);
+		doc.close();
+	});
+
 	it('updateFile honours generation CAS', async () => {
 		const vfs = createMemoryVfs();
 		const f = await vfs.writeFile({ parentId: null, name: 'f.txt', body: 'a' });
