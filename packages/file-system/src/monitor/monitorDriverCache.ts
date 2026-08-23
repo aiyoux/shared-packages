@@ -3,6 +3,8 @@
  */
 import type { ExplorerDriver } from '../ui/explorerDriver.js';
 import { createMonitorClient } from './client.js';
+import { abortAllGitStreams, abortGitStream } from './gitStream.js';
+import { abortAllHostStreams, abortHostStream } from './hostStream.js';
 import { createMonitorExplorerDriver } from './monitorExplorerDriver.js';
 import type { MonitorTransport } from './client.js';
 import type { MonitorConnectionProfileV1 } from './types.js';
@@ -41,6 +43,8 @@ if (typeof window !== 'undefined' && typeof window.addEventListener === 'functio
 			disposeEntry(e);
 		}
 		cache.clear();
+		abortAllHostStreams();
+		abortAllGitStreams();
 	});
 }
 
@@ -54,6 +58,8 @@ export function clearMonitorDriverCacheForTests(): void {
 		disposeEntry(e);
 	}
 	cache.clear();
+	abortAllHostStreams();
+	abortAllGitStreams();
 }
 
 function cancelDispose(e: CacheEntry) {
@@ -63,12 +69,18 @@ function cancelDispose(e: CacheEntry) {
 	}
 }
 
+function abortProfileStreams(profileId: string) {
+	abortHostStream(profileId);
+	abortGitStream(profileId);
+}
+
 function disposeEntry(e: CacheEntry) {
 	try {
 		e.driver?.dispose?.();
 	} catch {
 		/* ignore */
 	}
+	abortProfileStreams(e.profileId);
 }
 
 function scheduleDispose(profileId: string) {

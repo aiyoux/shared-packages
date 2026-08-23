@@ -47,6 +47,7 @@
 	import FeTreeView from './FeTreeView.svelte';
 	import FeFloatingPreview from './FeFloatingPreview.svelte';
 	import { getPreviewKind } from './feThumbnails.js';
+	import { detectProject } from './detectProject.js';
 
 	export type ExplorerMode = 'manage' | 'open' | 'save' | 'browse';
 
@@ -74,6 +75,8 @@
 		 */
 		showPersistence?: boolean;
 		onOpen?: (entry: ExplorerOpenTarget) => void | Promise<void>;
+		/** Preview "Open project" for folders that look like git working trees. */
+		onOpenProject?: (entry: ExplorerOpenTarget) => void | Promise<void>;
 		/** Preview "Send this file" — Connections dual-pane send path. */
 		onSendFile?: (entry: ExplorerOpenTarget) => void | Promise<void>;
 		sendLabel?: string;
@@ -122,6 +125,7 @@
 		vfs: vfsProp,
 		showPersistence = true,
 		onOpen,
+		onOpenProject,
 		onSendFile,
 		sendLabel = 'Send this file',
 		openLabel,
@@ -1137,6 +1141,25 @@
 		try {
 			await onOpen(n);
 			previewEntry = null;
+		} catch (e) {
+			error = errMsg(e);
+		} finally {
+			previewBusy = false;
+		}
+	}
+
+	async function confirmOpenProject() {
+		const n = previewEntry;
+		if (!n || n.kind !== 'folder' || !onOpenProject) return;
+		previewBusy = true;
+		try {
+			const ok = await detectProject(driver, n.id);
+			if (!ok) {
+				error = 'Not a git project';
+				return;
+			}
+			error = '';
+			await onOpenProject(n);
 		} catch (e) {
 			error = errMsg(e);
 		} finally {
@@ -2286,6 +2309,17 @@
 							{previewEntry.kind === 'folder' ? 'Open' : defaultOpenLabel(previewEntry)}
 						</button>
 					{/if}
+					{#if onOpenProject && previewEntry.kind === 'folder'}
+						<button
+							type="button"
+							class="ds-btn ds-btn--sm ds-btn--secondary"
+							data-testid="fe-open-project"
+							disabled={previewBusy}
+							onclick={() => void confirmOpenProject()}
+						>
+							Open project
+						</button>
+					{/if}
 					{#if onSendFile && previewEntry.kind === 'file'}
 						<button
 							type="button"
@@ -2441,6 +2475,17 @@
 							onclick={() => void confirmPreviewOpen()}
 						>
 							{previewEntry.kind === 'folder' ? 'Open' : defaultOpenLabel(previewEntry)}
+						</button>
+					{/if}
+					{#if onOpenProject && previewEntry.kind === 'folder'}
+						<button
+							type="button"
+							class="ds-btn ds-btn--sm ds-btn--secondary"
+							data-testid="fe-open-project"
+							disabled={previewBusy}
+							onclick={() => void confirmOpenProject()}
+						>
+							Open project
 						</button>
 					{/if}
 					{#if onSendFile && previewEntry.kind === 'file'}

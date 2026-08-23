@@ -8,6 +8,7 @@
  */
 import { blobFromResponse } from '../readProgress.js';
 import { withLocalAddressSpace } from './localNetwork';
+import { openJsonSse } from './sse.js';
 
 export type MonitorListEntry = {
 	name: string;
@@ -49,6 +50,28 @@ export type MonitorSubsRequest = {
 export type MonitorSubsResult = {
 	subscribed: Array<{ root_id: string; sub_id: string; path: string }>;
 	unsubscribed: Array<{ root_id: string; sub_id: string }>;
+};
+
+export type MonitorHostDisk = { name: string; used: number; total: number };
+
+export type MonitorHostSnapshot = {
+	cpu_pct: number;
+	mem_used: number;
+	mem_total: number;
+	disks: MonitorHostDisk[];
+};
+
+export type MonitorGitLogEntry = {
+	sha: string;
+	subject: string;
+	author?: string;
+	committed_at?: string;
+};
+
+export type MonitorGitSnapshot = {
+	branch: string | null;
+	dirty: boolean;
+	log: MonitorGitLogEntry[];
 };
 
 export type MonitorTransport = {
@@ -106,6 +129,19 @@ export type MonitorTransport = {
 	 * reconnecting it, so navigating does not resync the folders you kept.
 	 */
 	watchUpdateSubs(req: MonitorSubsRequest): Promise<MonitorSubsResult>;
+	hostSnapshot(): Promise<MonitorHostSnapshot>;
+	gitSnapshot(path: string): Promise<MonitorGitSnapshot>;
+	openHostEvents(opts: {
+		onSnapshot: (s: MonitorHostSnapshot) => void;
+		signal?: AbortSignal;
+	}): Promise<{ abort: () => void }>;
+	openGitEvents(
+		path: string,
+		opts: {
+			onSnapshot: (s: MonitorGitSnapshot) => void;
+			signal?: AbortSignal;
+		}
+	): Promise<{ abort: () => void }>;
 	/** HTTP base URL (also used for the SSE watch stream). */
 	baseUrl: string;
 };
@@ -114,6 +150,70 @@ function joinUrl(base: string, path: string): string {
 	const b = base.replace(/\/$/, '');
 	const p = path.startsWith('/') ? path : `/${path}`;
 	return `${b}${p}`;
+}
+
+function num(v: unknown): number | null {
+	if (typeof v === 'number' && Number.isFinite(v)) return v;
+	if (typeof v === 'string' && v.trim() && Number.isFinite(Number(v))) return Number(v);
+	return null;
+}
+
+function unwrapRecord(data: unknown): Record<string, unknown> | null {
+	if (!data || typeof data !== 'object') return null;
+	const o = data as Record<string, unknown>;
+	if (o.snapshot && typeof o.snapshot === 'object') {
+		return o.snapshot as Record<string, unknown>;
+	}
+	return o;
+}
+
+export function coerceHostSnapshot(data: unknown): MonitorHostSnapshot | null {
+	const o = unwrapRecord(data);
+	if (!o) return null;
+	const cpu = num(o.cpu_pct ?? o.cpuPct);
+	const memUsed = num(o.mem_used ?? o.memUsed);
+	const memTotal = num(o.mem_total ?? o.memTotal);
+	if (cpu == null || memUsed == null || memTotal == null) return null;
+	const rawDisks = Array.isArray(o.disks) ? o.disks : [];
+	const disks: MonitorHostDisk[] = [];
+	for (const d of rawDisks) {
+		if (!d || typeof d !== 'object') continue;
+		const disk = d as Record<string, unknown>;
+		const used = num(disk.used);
+		const total = num(disk.total);
+		const name = typeof disk.name === 'string' ? disk.name : '';
+		if (used == null || total == null) continue;
+		disks.push({ name, used, total });
+	}
+	return { cpu_pct: cpu, mem_used: memUsed, mem_total: memTotal, disks };
+}
+
+export function coerceGitSnapshot(data: unknown): MonitorGitSnapshot | null {
+	const o = unwrapRecord(data);
+	if (!o) return null;
+	if (!('branch' in o) && !('dirty' in o) && !('log' in o)) return null;
+	const branch = o.branch == null ? null : typeof o.branch === 'string' ? o.branch : null;
+	const dirty = Boolean(o.dirty);
+	const rawLog = Array.isArray(o.log) ? o.log : [];
+	const log: MonitorGitLogEntry[] = [];
+	for (const c of rawLog) {
+		if (!c || typeof c !== 'object') continue;
+		const row = c as Record<string, unknown>;
+		const sha = typeof row.sha === 'string' ? row.sha : '';
+		const subject = typeof row.subject === 'string' ? row.subject : '';
+		if (!sha && !subject) continue;
+		const entry: MonitorGitLogEntry = { sha, subject };
+		if (typeof row.author === 'string') entry.author = row.author;
+		const committed =
+			typeof row.committed_at === 'string'
+				? row.committed_at
+				: typeof row.committedAt === 'string'
+					? row.committedAt
+					: undefined;
+		if (committed) entry.committed_at = committed;
+		log.push(entry);
+	}
+	return { branch, dirty, log };
 }
 
 export function createMonitorClient(opts: {
@@ -455,6 +555,42 @@ export function createMonitorClient(opts: {
 				opts?.signal?.removeEventListener('abort', onAbort);
 				clearTimeout(t);
 			}
+		},
+		async hostSnapshot() {
+			const body = await getJson('/v1/host/snapshot');
+			const snap = coerceHostSnapshot(body);
+			if (!snap) throw new Error('Monitor host snapshot was malformed');
+			return snap;
+		},
+		async gitSnapshot(path: string) {
+			const body = await getJson(`/v1/git/snapshot?path=${encodeURIComponent(path)}`);
+			const snap = coerceGitSnapshot(body);
+			if (!snap) throw new Error('Monitor git snapshot was malformed');
+			return snap;
+		},
+		async openHostEvents(opts) {
+			const url = joinUrl(base, '/v1/host/events');
+			return openJsonSse({
+				url,
+				fetchImpl: fetchFn,
+				signal: opts.signal,
+				onEvent: (_event, data) => {
+					const snap = coerceHostSnapshot(data);
+					if (snap) opts.onSnapshot(snap);
+				}
+			});
+		},
+		async openGitEvents(path, opts) {
+			const url = joinUrl(base, `/v1/git/events?path=${encodeURIComponent(path)}`);
+			return openJsonSse({
+				url,
+				fetchImpl: fetchFn,
+				signal: opts.signal,
+				onEvent: (_event, data) => {
+					const snap = coerceGitSnapshot(data);
+					if (snap) opts.onSnapshot(snap);
+				}
+			});
 		}
 	};
 }

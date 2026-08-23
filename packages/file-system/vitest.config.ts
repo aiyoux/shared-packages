@@ -22,7 +22,12 @@ export default defineConfig({
 		// Component tests (jsdom). B2 unit tests: vitest.b2.config.ts (node).
 		environment: 'jsdom',
 		include: ['test/**/*.component.test.ts'],
-		setupFiles: ['./test/setup.mjs', '@testing-library/svelte/vitest']
+		setupFiles: ['./test/setup.mjs', '@testing-library/svelte/vitest'],
+		server: {
+			deps: {
+				inline: [/@lucide\/svelte/]
+			}
+		}
 	},
 	root,
 	resolve: {

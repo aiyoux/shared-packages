@@ -32,14 +32,22 @@ export {
 } from './monitorDriverCache.js';
 export {
 	createMonitorClient,
+	coerceGitSnapshot,
+	coerceHostSnapshot,
 	type MonitorTransport,
 	type MonitorListEntry,
 	type MonitorListResult,
 	type MonitorStatResult,
 	type MonitorSubsRequest,
 	type MonitorSubsResult,
-	type MonitorWatchedRoot
+	type MonitorWatchedRoot,
+	type MonitorHostDisk,
+	type MonitorHostSnapshot,
+	type MonitorGitLogEntry,
+	type MonitorGitSnapshot
 } from './client.js';
+export { getHostStream, abortHostStream, abortAllHostStreams, type HostStream } from './hostStream.js';
+export { getGitStream, abortGitStream, abortAllGitStreams, type GitStream } from './gitStream.js';
 export {
 	closeCredentialsDbForTests,
 	deleteProfile,

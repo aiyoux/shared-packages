@@ -73,4 +73,91 @@ describe('monitor client (direct transport)', () => {
 		expect(calls[5].url).toBe('http://192.168.1.50:8300/v1/fs/read?path=%2Ftmp%2Ffile.txt');
 		expect(calls[5].url).not.toContain('/api/monitor');
 	});
+
+	it('hostSnapshot and gitSnapshot hit /v1/host and /v1/git', async () => {
+		const mockFetch = vi.fn(async (input: RequestInfo | URL) => {
+			const url = String(input);
+			if (url.includes('/v1/host/snapshot')) {
+				return new Response(
+					JSON.stringify({
+						cpu_pct: 12.5,
+						mem_used: 100,
+						mem_total: 400,
+						disks: [{ name: '/', used: 10, total: 100 }]
+					}),
+					{ status: 200, headers: { 'content-type': 'application/json' } }
+				);
+			}
+			if (url.includes('/v1/git/snapshot')) {
+				return new Response(
+					JSON.stringify({
+						branch: 'main',
+						dirty: true,
+						log: [{ sha: 'abc1234deadbeef', subject: 'init', author: 'A', committed_at: '2024-01-01' }]
+					}),
+					{ status: 200, headers: { 'content-type': 'application/json' } }
+				);
+			}
+			return new Response('Not found', { status: 404 });
+		});
+		const client = createMonitorClient({
+			baseUrl: 'http://127.0.0.1:8300',
+			fetchImpl: mockFetch as unknown as typeof fetch
+		});
+		const host = await client.hostSnapshot();
+		expect(host.cpu_pct).toBe(12.5);
+		expect(host.disks[0]?.name).toBe('/');
+		expect(String(mockFetch.mock.calls[0]![0])).toBe('http://127.0.0.1:8300/v1/host/snapshot');
+
+		const git = await client.gitSnapshot('/home/me/proj');
+		expect(git.branch).toBe('main');
+		expect(git.dirty).toBe(true);
+		expect(git.log[0]?.subject).toBe('init');
+		expect(String(mockFetch.mock.calls[1]![0])).toBe(
+			'http://127.0.0.1:8300/v1/git/snapshot?path=%2Fhome%2Fme%2Fproj'
+		);
+	});
+
+	it('openHostEvents and openGitEvents parse SSE snapshots', async () => {
+		const encoder = new TextEncoder();
+		const openSse = (event: string, payload: unknown) => {
+			const stream = new ReadableStream<Uint8Array>({
+				start(c) {
+					c.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`));
+				}
+			});
+			return new Response(stream, {
+				status: 200,
+				headers: { 'content-type': 'text/event-stream' }
+			});
+		};
+		const mockFetch = vi.fn(async (input: RequestInfo | URL) => {
+			const url = String(input);
+			if (url.endsWith('/v1/host/events')) {
+				return openSse('host.snapshot', { cpu_pct: 3, mem_used: 1, mem_total: 2, disks: [] });
+			}
+			if (url.includes('/v1/git/events')) {
+				return openSse('git.snapshot', { branch: 'dev', dirty: false, log: [] });
+			}
+			return new Response('Not found', { status: 404 });
+		});
+		const client = createMonitorClient({
+			baseUrl: 'http://127.0.0.1:8300',
+			fetchImpl: mockFetch as unknown as typeof fetch
+		});
+		const hostSnaps: unknown[] = [];
+		const host = await client.openHostEvents({ onSnapshot: (s) => hostSnaps.push(s) });
+		await vi.waitFor(() => expect(hostSnaps).toHaveLength(1));
+		expect(hostSnaps[0]).toEqual({ cpu_pct: 3, mem_used: 1, mem_total: 2, disks: [] });
+		host.abort();
+
+		const gitSnaps: unknown[] = [];
+		const git = await client.openGitEvents('/tmp/repo', { onSnapshot: (s) => gitSnaps.push(s) });
+		await vi.waitFor(() => expect(gitSnaps).toHaveLength(1));
+		expect(gitSnaps[0]).toEqual({ branch: 'dev', dirty: false, log: [] });
+		expect(String(mockFetch.mock.calls[1]![0])).toBe(
+			'http://127.0.0.1:8300/v1/git/events?path=%2Ftmp%2Frepo'
+		);
+		git.abort();
+	});
 });

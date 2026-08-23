@@ -11,6 +11,9 @@
 	 *     (`getMemoryVfs`), shared app-wide so received files are accessible
 	 *     everywhere.
 	 *   - `onOpen`: optional open-file handler (hub opens skch/ob3d/vrec).
+	 *   - `onOpenProject`: optional "Open project" handler, forwarded to every
+	 *     backend (local, memory, b2, rclone, monitor, peer) — unlike `onOpen`,
+	 *     which is still memory-only on the remote branch.
 	 *   - `persistenceVfs`: unused for UI (kept so existing callers compile).
 	 *   - `tids`: per-page testid config so each consumer keeps its existing
 	 *     e2e selectors (defaults match the hub `/tools/files` page).
@@ -112,6 +115,7 @@
 	type Props = {
 		localDriver: ExplorerDriver;
 		onOpen?: (entry: ExplorerOpenTarget) => void | Promise<void>;
+		onOpenProject?: (entry: ExplorerOpenTarget) => void | Promise<void>;
 		persistenceVfs?: VfsService;
 		dualPaneKey?: string;
 		dualPaneDefault?: boolean;
@@ -198,6 +202,7 @@
 	let {
 		localDriver,
 		onOpen,
+		onOpenProject,
 		persistenceVfs,
 		dualPaneKey = 'fe:dualPane',
 		dualPaneDefault = false,
@@ -1323,6 +1328,7 @@
 						driver={overrideRight.driver}
 						showPersistence={false}
 						initialParentId={p.ctx.parentId}
+						onOpenProject={onOpenProject}
 						pending={panePending(id)}
 						onContextChange={(ctx) => {
 							right = { ...right, ctx };
@@ -1341,6 +1347,7 @@
 						showPersistence={false}
 						initialParentId={p.ctx.parentId}
 						onOpen={onOpen}
+						onOpenProject={onOpenProject}
 						onSendFile={
 							onSend
 								? (entry) =>
@@ -1369,6 +1376,7 @@
 						showPersistence={false}
 						initialParentId={p.ctx.parentId}
 						onOpen={p.activeKind === 'memory' ? onOpen : undefined}
+						onOpenProject={onOpenProject}
 						onSendFile={
 							onSend
 								? (entry) =>
