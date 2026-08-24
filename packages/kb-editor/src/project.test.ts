@@ -121,5 +121,8 @@ describe('allowlistedHref', () => {
 		expect(allowlistedHref('javascript:alert(1)')).toBeNull();
 		expect(allowlistedHref('data:text/html,x')).toBeNull();
 		expect(allowlistedHref('vbscript:msgbox(1)')).toBeNull();
+		expect(allowlistedHref('\0javascript:alert(1)')).toBeNull();
+		expect(allowlistedHref(' javascript:alert(1)')).toBeNull();
+		expect(allowlistedHref('java\nscript:alert(1)')).toBeNull();
 	});
 });

@@ -61,7 +61,7 @@ function selectionAfter(pre: KbPage, post: KbPage, op: Op, prev: Range): Range {
 			return collapsed(start);
 		}
 		case 'format-range':
-			return prev;
+			return op.range;
 		case 'split-block':
 			return collapsed({ blockId: op.newId, offset: 0 });
 		case 'merge-block': {
@@ -217,4 +217,9 @@ export function setJustCommittedComposition(state: EditorState, value: boolean):
 export function setSelection(state: EditorState, selection: Range): EditorState {
 	const next = clampRange(state.page, selection);
 	return { ...state, selection: next, blockFocus: blockFocusOf(state.page, next) };
+}
+
+/** Parent onDispatch handler: one undo group even when the editor emits Op[]. */
+export function applyEditorOps(state: EditorState, op: Op | Op[]): EditorState {
+	return Array.isArray(op) ? dispatchMany(state, op) : dispatch(state, op);
 }

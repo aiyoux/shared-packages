@@ -1,6 +1,6 @@
 import { plaintextOf } from '@shared-packages/kb-model';
 import { describe, expect, it } from 'vitest';
-import { copyPayload, KB_CLIPBOARD_MIME, parseSlice, pasteOps, stripHtml } from './clipboard.js';
+import { copyPayload, cutOps, KB_CLIPBOARD_MIME, parseSlice, pasteOps, stripHtml } from './clipboard.js';
 import { createEditorState, dispatchMany } from './state.js';
 import { page, para } from './testFixtures.js';
 
@@ -50,5 +50,49 @@ describe('clipboard', () => {
 		const live = { anchor: { blockId: 'p', offset: 1 }, head: { blockId: 'p', offset: 1 } };
 		const next = dispatchMany(state, pasteOps(state, live, { plain: 'X' }));
 		expect(plaintextOf(next.page.blocks[0])).toBe('aXb');
+	});
+
+	it('cut emits a single delete-range', () => {
+		const live = { anchor: { blockId: 'p', offset: 1 }, head: { blockId: 'p', offset: 3 } };
+		expect(cutOps(live)).toEqual([{ kind: 'delete-range', range: live }]);
+		expect(cutOps({ anchor: { blockId: 'p', offset: 1 }, head: { blockId: 'p', offset: 1 } })).toEqual([]);
+	});
+
+	it('drop of text/plain reuses pasteOps at the caret', () => {
+		const state = createEditorState(page([para('p', 'ab')]));
+		const live = { anchor: { blockId: 'p', offset: 1 }, head: { blockId: 'p', offset: 1 } };
+		const next = dispatchMany(state, pasteOps(state, live, { plain: 'Z' }));
+		expect(plaintextOf(next.page.blocks[0])).toBe('aZb');
+	});
+
+	it('JSON paste at a mid-block caret splits and preserves marks', () => {
+		const src = createEditorState(
+			page([
+				{
+					id: 'a',
+					type: 'paragraph',
+					content: [{ type: 'text', text: 'Hi', marks: [{ type: 'bold' }] }]
+				}
+			])
+		);
+		const payload = copyPayload(src, {
+			anchor: { blockId: 'a', offset: 0 },
+			head: { blockId: 'a', offset: 2 }
+		});
+		const sliced = parseSlice(payload!.json);
+		expect(sliced?.[0]).toMatchObject({
+			type: 'paragraph',
+			content: [{ text: 'Hi', marks: [{ type: 'bold' }] }]
+		});
+		const dest = createEditorState(page([para('z', 'hello')]));
+		const live = { anchor: { blockId: 'z', offset: 2 }, head: { blockId: 'z', offset: 2 } };
+		const ops = pasteOps(dest, live, { json: payload!.json });
+		expect(ops[0]?.kind).toBe('split-block');
+		const next = dispatchMany(dest, ops);
+		expect(next.page.blocks.map((b) => plaintextOf(b))).toEqual(['he', 'Hi', 'llo']);
+		const mid = next.page.blocks[1];
+		if (mid.type === 'paragraph') {
+			expect(mid.content[0].marks).toEqual([{ type: 'bold' }]);
+		}
 	});
 });

@@ -1,7 +1,8 @@
 <script lang="ts">
-	import type { Op } from '@shared-packages/kb-model';
+	import { onMount, untrack } from 'svelte';
+	import { plaintextOf, type Op } from '@shared-packages/kb-model';
 	import { mapBeforeInput } from './beforeinput.js';
-	import { copyPayload, KB_CLIPBOARD_MIME, pasteOps } from './clipboard.js';
+	import { copyPayload, cutOps, KB_CLIPBOARD_MIME, pasteOps } from './clipboard.js';
 	import {
 		beginComposition,
 		cancelComposition,
@@ -15,18 +16,18 @@
 	import { mapKeydown } from './keymap.js';
 	import { BLOCK_ID_ATTR, project } from './project.js';
 	import { rangeFromInputEvent, rangeFromSelection, restoreSelection } from './selection.js';
-	import { dispatchMany, redo, setSelection, undo, type EditorState } from './state.js';
-	import { plaintextOf } from '@shared-packages/kb-model';
+	import { redo, setSelection, undo, type EditorState } from './state.js';
 
 	let {
-		state,
+		state: editor,
 		editable = true,
 		onDispatch,
 		onState = undefined
 	}: {
 		state: EditorState;
 		editable?: boolean;
-		onDispatch: (op: Op) => void;
+		/** Single op or a group. Parent should use `applyEditorOps` so groups stay one undo entry. */
+		onDispatch: (op: Op | Op[]) => void;
 		onState?: (next: EditorState) => void;
 	} = $props();
 
@@ -37,7 +38,7 @@
 	let heights = $state<number[]>([]);
 	let draggingId = $state<string | null>(null);
 
-	const composing = $derived(localComposing || state.composing);
+	const composing = $derived(localComposing || editor.composing);
 
 	function emitState(next: EditorState) {
 		onState?.(next);
@@ -45,35 +46,23 @@
 
 	function emitOps(ops: Op[]) {
 		if (ops.length === 0) return;
-		if (ops.length === 1) {
-			onDispatch(ops[0]);
-			return;
-		}
-		if (onState) {
-			onState(dispatchMany(state, ops));
-			return;
-		}
-		for (const op of ops) onDispatch(op);
+		onDispatch(ops.length === 1 ? ops[0] : ops);
 	}
 
 	function liveRange(event?: InputEvent) {
-		if (!host) return state.selection;
-		if (event) return rangeFromInputEvent(host, event, state.selection);
-		return rangeFromSelection(host) ?? state.selection;
-	}
-
-	function sync(next: EditorState = state) {
-		if (!host || next.composing || localComposing) return;
-		project(host, next.page);
-		restoreSelection(host, next.selection, next.page);
-		heights = [...host.children].map((el) => (el as HTMLElement).offsetHeight);
+		if (!host) return editor.selection;
+		if (event) return rangeFromInputEvent(host, event, editor.selection);
+		return rangeFromSelection(host) ?? editor.selection;
 	}
 
 	$effect(() => {
-		state.page;
-		state.selection;
-		if (composing) return;
-		sync(state);
+		const page = editor.page;
+		if (!host || composing) return;
+		project(host, page);
+		untrack(() => {
+			restoreSelection(host, editor.selection, page);
+			heights = [...host.children].map((el) => (el as HTMLElement).offsetHeight);
+		});
 	});
 
 	function onBeforeInput(event: InputEvent) {
@@ -83,26 +72,21 @@
 		const live = liveRange(event);
 		const mapped = mapBeforeInput(
 			{
-				...state,
+				...editor,
 				composing: false,
-				justCommittedComposition: localJustCommitted || state.justCommittedComposition
+				justCommittedComposition: localJustCommitted || editor.justCommittedComposition
 			},
 			{ inputType: event.inputType, data: event.data, isComposing: event.isComposing },
 			live
 		);
 
-		if (event.inputType === 'insertFromPaste' || event.inputType === 'insertFromDrop') {
-			event.preventDefault();
-			return;
-		}
-
 		if (mapped.preventDefault) event.preventDefault();
 		if (mapped.history === 'undo') {
-			emitState(undo(state));
+			emitState(undo(editor));
 			return;
 		}
 		if (mapped.history === 'redo') {
-			emitState(redo(state));
+			emitState(redo(editor));
 			return;
 		}
 		emitOps(mapped.ops);
@@ -110,17 +94,17 @@
 
 	function onCompositionStart(_event: CompositionEvent) {
 		const live = liveRange();
-		snapshot = snapshotComposition(state, live);
+		snapshot = snapshotComposition(editor, live);
 		localComposing = true;
-		emitState(beginComposition(state));
+		emitState(beginComposition(editor));
 	}
 
 	function onCompositionEnd(event: CompositionEvent) {
 		localComposing = false;
 		const snap = snapshot;
 		snapshot = null;
-		const snapPage = snap?.page ?? state.page;
-		const snapSel = snap?.selection ?? state.selection;
+		const snapPage = snap?.page ?? editor.page;
+		const snapSel = snap?.selection ?? editor.selection;
 		const block = snapPage.blocks.find((item) => item.id === snapSel.anchor.blockId);
 		const original = block ? plaintextOf(block) : '';
 		let domText: string | null = null;
@@ -130,29 +114,24 @@
 		}
 		const data = confirmedCompositionText({ data: event.data }, domText, original);
 		if (!data) {
-			emitState(cancelComposition(state));
+			emitState(cancelComposition(editor));
 			if (host) {
 				project(host, snapPage);
 				restoreSelection(host, snapSel, snapPage);
 			}
 			return;
 		}
-		const { ops } = commitComposition(state, { page: snapPage, selection: snapSel }, data);
+		const { ops } = commitComposition(editor, { page: snapPage, selection: snapSel }, data);
 		localJustCommitted = true;
 		clearJustCommittedLater(() => {
 			localJustCommitted = false;
-			emitState({ ...state, justCommittedComposition: false, composing: false });
 		});
-		if (onState) {
-			onState(dispatchMany({ ...state, composing: false, justCommittedComposition: true }, ops));
-		} else {
-			emitOps(ops);
-		}
+		emitOps(ops);
 	}
 
 	function onKeyDown(event: KeyboardEvent) {
 		const result = mapKeydown(
-			{ ...state, composing },
+			{ ...editor, composing },
 			{
 				key: event.key,
 				metaKey: event.metaKey,
@@ -163,15 +142,15 @@
 			liveRange()
 		);
 		if (result.preventDefault) event.preventDefault();
-		if (result.history === 'undo') emitState(undo(state));
-		if (result.history === 'redo') emitState(redo(state));
+		if (result.history === 'undo') emitState(undo(editor));
+		if (result.history === 'redo') emitState(redo(editor));
 		emitOps(result.ops);
 	}
 
 	function onCopy(event: ClipboardEvent) {
 		if (composing) return;
 		const live = liveRange();
-		const payload = copyPayload(state, live);
+		const payload = copyPayload(editor, live);
 		if (!payload || !event.clipboardData) return;
 		event.preventDefault();
 		event.clipboardData.setData('text/plain', payload.plain);
@@ -181,12 +160,12 @@
 	function onCut(event: ClipboardEvent) {
 		if (composing) return;
 		const live = liveRange();
-		const payload = copyPayload(state, live);
+		const payload = copyPayload(editor, live);
 		if (!payload || !event.clipboardData) return;
 		event.preventDefault();
 		event.clipboardData.setData('text/plain', payload.plain);
 		event.clipboardData.setData(KB_CLIPBOARD_MIME, payload.json);
-		emitOps([{ kind: 'delete-range', range: live }]);
+		emitOps(cutOps(live));
 	}
 
 	function onPaste(event: ClipboardEvent) {
@@ -194,19 +173,50 @@
 		event.preventDefault();
 		const live = liveRange();
 		const data = event.clipboardData;
-		const ops = pasteOps(state, live, {
-			json: data?.getData(KB_CLIPBOARD_MIME) || null,
-			html: data?.getData('text/html') || null,
-			plain: data?.getData('text/plain') || null
-		});
-		emitOps(ops);
+		emitOps(
+			pasteOps(editor, live, {
+				json: data?.getData(KB_CLIPBOARD_MIME) || null,
+				html: data?.getData('text/html') || null,
+				plain: data?.getData('text/plain') || null
+			})
+		);
 	}
 
-	function onMouseUp() {
-		if (composing || !host) return;
-		const live = rangeFromSelection(host);
-		if (live) emitState(setSelection(state, live));
+	function onHostDragOver(event: DragEvent) {
+		if (composing) return;
+		if (draggingId) return;
+		event.preventDefault();
+		if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
 	}
+
+	function onHostDrop(event: DragEvent) {
+		if (composing) return;
+		if (draggingId) return;
+		event.preventDefault();
+		const live = liveRange();
+		const data = event.dataTransfer;
+		emitOps(
+			pasteOps(editor, live, {
+				json: data?.getData(KB_CLIPBOARD_MIME) || null,
+				html: data?.getData('text/html') || null,
+				plain: data?.getData('text/plain') || null
+			})
+		);
+	}
+
+	function onSelectionChange() {
+		if (composing || !host) return;
+		const sel = host.ownerDocument.getSelection();
+		if (!sel?.anchorNode || !host.contains(sel.anchorNode)) return;
+		const live = rangeFromSelection(host, sel);
+		if (live) emitState(setSelection(editor, live));
+	}
+
+	onMount(() => {
+		const doc = host?.ownerDocument ?? document;
+		doc.addEventListener('selectionchange', onSelectionChange);
+		return () => doc.removeEventListener('selectionchange', onSelectionChange);
+	});
 
 	function onHandleDragStart(event: DragEvent, id: string) {
 		draggingId = id;
@@ -227,7 +237,7 @@
 		if (!id) return;
 		const target = event.currentTarget as HTMLElement;
 		const where = dropWhere(event.clientY, target.getBoundingClientRect());
-		const afterId = dropAfterId(state.page, id, targetId, where);
+		const afterId = dropAfterId(editor.page, id, targetId, where);
 		if (afterId === 'noop') return;
 		onDispatch({ kind: 'move-block', id, afterId });
 	}
@@ -239,7 +249,7 @@
 
 <div class="kb-editor" data-testid="kb-editor">
 	<div class="kb-gutter" contenteditable="false" data-testid="kb-gutter">
-		{#each state.page.blocks as block, i (block.id)}
+		{#each editor.page.blocks as block, i (block.id)}
 			<button
 				type="button"
 				class="kb-handle"
@@ -259,6 +269,7 @@
 		bind:this={host}
 		contenteditable={editable ? 'true' : 'false'}
 		role="textbox"
+		tabindex="0"
 		aria-multiline="true"
 		aria-readonly={editable ? undefined : 'true'}
 		data-testid="kb-host"
@@ -270,7 +281,8 @@
 		oncopy={onCopy}
 		oncut={onCut}
 		onpaste={onPaste}
-		onmouseup={onMouseUp}
+		ondragover={onHostDragOver}
+		ondrop={onHostDrop}
 	></div>
 </div>
 

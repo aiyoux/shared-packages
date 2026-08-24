@@ -109,6 +109,28 @@ describe('composition state machine (IME freeze)', () => {
 		expect(br.ops).toEqual([]);
 	});
 
+	/**
+	 * Documented PR-3 compositionend → insertParagraph swallow.
+	 * This package has no Playwright runner (none in shared-packages). Hub e2e owns Chromium CJK
+	 * (preedit visible in the text node). This test is the in-package stand-in: commit once, then a
+	 * follow-up insertParagraph with isComposing=false must not split.
+	 */
+	it('compositionend then insertParagraph does not extra-split (Chromium CJK stand-in)', () => {
+		let state = beginComposition(createEditorState(page([para('p', '')])));
+		const snap = snapshotComposition(state, state.selection);
+		const { ops, state: ended } = commitComposition(state, snap, '漢字');
+		state = dispatchMany({ ...ended, composing: false }, ops);
+		expect(plaintextOf(state.page.blocks[0])).toBe('漢字');
+		expect(state.page.blocks).toHaveLength(1);
+		const follow = mapBeforeInput(
+			{ ...state, justCommittedComposition: true },
+			{ inputType: 'insertParagraph', data: null, isComposing: false },
+			state.selection
+		);
+		expect(follow.ops).toEqual([]);
+		expect(follow.preventDefault).toBe(true);
+	});
+
 	it('never preventDefaults insertCompositionText even when not composing', () => {
 		const state = createEditorState(createEmptyPage({ id: 'pg', title: '' }));
 		const result = mapBeforeInput(

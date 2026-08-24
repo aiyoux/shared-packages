@@ -2,6 +2,7 @@ import { plaintextOf } from '@shared-packages/kb-model';
 import { describe, expect, it } from 'vitest';
 import { code, heading, item, page, para } from './testFixtures.js';
 import {
+	applyEditorOps,
 	createEditorState,
 	dispatch,
 	dispatchMany,
@@ -96,14 +97,30 @@ describe('dispatch split/merge/format', () => {
 		expect(next.selection.anchor).toEqual({ blockId: 'a', offset: 2 });
 	});
 
-	it('format-range keeps the selection', () => {
+	it('format-range keeps the op range, not a stale prev caret', () => {
 		const range = { anchor: { blockId: 'p', offset: 0 }, head: { blockId: 'p', offset: 2 } };
-		const state = { ...ed([para('p', 'hi')]), selection: range };
+		const state = {
+			...ed([para('p', 'hi')]),
+			selection: { anchor: { blockId: 'p', offset: 2 }, head: { blockId: 'p', offset: 2 } }
+		};
 		const next = dispatch(state, { kind: 'format-range', range, mark: { type: 'bold' }, on: true });
 		expect(next.selection).toEqual(range);
 		const block = next.page.blocks[0];
 		expect(block.type).toBe('paragraph');
 		if (block.type === 'paragraph') expect(block.content[0].marks).toEqual([{ type: 'bold' }]);
+	});
+
+	it('applyEditorOps folds Op[] into one undo group', () => {
+		let state = ed([para('p', 'abcd')]);
+		state = applyEditorOps(state, [
+			{
+				kind: 'delete-range',
+				range: { anchor: { blockId: 'p', offset: 1 }, head: { blockId: 'p', offset: 3 } }
+			},
+			{ kind: 'insert-text', at: { blockId: 'p', offset: 1 }, text: 'X' }
+		]);
+		expect(plaintextOf(state.page.blocks[0])).toBe('aXd');
+		expect(state.undo).toHaveLength(1);
 	});
 
 	it('dispatchMany is one undo group', () => {

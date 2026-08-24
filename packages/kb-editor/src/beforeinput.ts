@@ -1,13 +1,15 @@
 import {
+	apply,
 	isAtomic,
 	isTextLike,
 	plaintextOf,
 	type Mark,
 	type Op,
+	type Point,
 	type Range
 } from '@shared-packages/kb-model';
 import { newBlockId } from './ids.js';
-import { isCollapsed } from './range.js';
+import { clampPoint, collapsed, isCollapsed, orderedRange } from './range.js';
 import { slashOps } from './slash.js';
 import type { EditorState } from './state.js';
 import { backspaceAtStartOps, deleteAtEndOps, expandCaretToUnit, isCodeEmptyLastLine } from './units.js';
@@ -28,37 +30,43 @@ export type BeforeInputResult = {
 const DELETE_TYPES = new Set([
 	'deleteContentBackward',
 	'deleteContentForward',
-	'deleteByCut',
 	'deleteContent',
 	'deleteByDrag'
 ]);
 
-function formatOps(state: EditorState, live: Range, mark: Mark): Op[] {
+function emptyParagraph(id: string) {
+	return { id, type: 'paragraph' as const, content: [{ type: 'text' as const, text: '', marks: [] }] };
+}
+
+/** Delete a non-collapsed range first, then compute follow-up ops on the post-delete page at document-order start. */
+function withDeletedSelection(
+	state: EditorState,
+	live: Range
+): { state: EditorState; at: Point; prefix: Op[] } {
+	if (isCollapsed(live)) {
+		return { state, at: live.anchor, prefix: [] };
+	}
+	const { start } = orderedRange(state.page, live);
+	const prefix: Op[] = [{ kind: 'delete-range', range: live }];
+	const page = apply(state.page, prefix[0]);
+	const at = clampPoint(page, start);
+	return {
+		state: { ...state, page, selection: collapsed(at), blockFocus: undefined },
+		at,
+		prefix
+	};
+}
+
+function formatOps(_state: EditorState, live: Range, mark: Mark): Op[] {
 	if (isCollapsed(live)) return [];
 	return [{ kind: 'format-range', range: live, mark, on: true }];
 }
 
-function enterOps(state: EditorState, live: Range): Op[] {
-	const point = live.anchor;
-	if (!isCollapsed(live)) {
-		return [
-			{ kind: 'delete-range', range: live },
-			...enterOps(
-				{ ...state, selection: { anchor: live.anchor, head: live.anchor } },
-				{ anchor: live.anchor, head: live.anchor }
-			)
-		];
-	}
+function enterAtCaret(state: EditorState, point: Point): Op[] {
 	const block = state.page.blocks.find((item) => item.id === point.blockId);
 	if (!block) return [];
 	if (isAtomic(block)) {
-		return [
-			{
-				kind: 'insert-block',
-				afterId: block.id,
-				block: { id: newBlockId(), type: 'paragraph', content: [{ type: 'text', text: '', marks: [] }] }
-			}
-		];
+		return [{ kind: 'insert-block', afterId: block.id, block: emptyParagraph(newBlockId()) }];
 	}
 	if (block.type === 'code') {
 		if (isCodeEmptyLastLine(block, point.offset)) {
@@ -76,15 +84,14 @@ function enterOps(state: EditorState, live: Range): Op[] {
 		return [{ kind: 'convert-block', id: block.id, to: 'paragraph' }];
 	}
 	if (block.type === 'heading' && point.offset === text.length) {
-		return [
-			{
-				kind: 'insert-block',
-				afterId: block.id,
-				block: { id: newBlockId(), type: 'paragraph', content: [{ type: 'text', text: '', marks: [] }] }
-			}
-		];
+		return [{ kind: 'insert-block', afterId: block.id, block: emptyParagraph(newBlockId()) }];
 	}
 	return [{ kind: 'split-block', at: point, newId: newBlockId() }];
+}
+
+function enterOps(state: EditorState, live: Range): Op[] {
+	const { state: next, at, prefix } = withDeletedSelection(state, live);
+	return [...prefix, ...enterAtCaret(next, at)];
 }
 
 function deleteOps(state: EditorState, live: Range, inputType: string): Op[] {
@@ -95,7 +102,6 @@ function deleteOps(state: EditorState, live: Range, inputType: string): Op[] {
 	const forward =
 		inputType === 'deleteContentForward' ||
 		inputType === 'deleteContent' ||
-		inputType === 'deleteByCut' ||
 		inputType === 'deleteByDrag';
 	if (!isCollapsed(live)) {
 		return [{ kind: 'delete-range', range: live }];
@@ -116,29 +122,28 @@ function deleteOps(state: EditorState, live: Range, inputType: string): Op[] {
 	return [];
 }
 
-function insertTextOps(state: EditorState, live: Range, text: string): Op[] {
+function insertAtCaret(state: EditorState, at: Point, text: string): Op[] {
 	if (!text) return [];
-	const ops: Op[] = [];
-	const at = live.anchor;
-	if (!isCollapsed(live)) ops.push({ kind: 'delete-range', range: live });
 	const block = state.page.blocks.find((item) => item.id === at.blockId);
 	if (block && isAtomic(block)) {
-		ops.push({
-			kind: 'insert-block',
-			afterId: block.id,
-			block: {
-				id: newBlockId(),
-				type: 'paragraph',
-				content: [{ type: 'text', text, marks: [] }]
+		return [
+			{
+				kind: 'insert-block',
+				afterId: block.id,
+				block: {
+					id: newBlockId(),
+					type: 'paragraph',
+					content: [{ type: 'text', text, marks: [] }]
+				}
 			}
-		});
-		return ops;
+		];
 	}
-	if (text === ' ' && block && isTextLike(block) && isCollapsed(live)) {
+	if (text === ' ' && block && isTextLike(block)) {
 		const slash = slashOps(block.id, plaintextOf(block));
 		if (slash) return slash;
 	}
 	if (block && isTextLike(block) && text.includes('\n')) {
+		const ops: Op[] = [];
 		const parts = text.split('\n');
 		let blockId = at.blockId;
 		let offset = at.offset;
@@ -157,8 +162,13 @@ function insertTextOps(state: EditorState, live: Range, text: string): Op[] {
 		}
 		return ops;
 	}
-	ops.push({ kind: 'insert-text', at, text });
-	return ops;
+	return [{ kind: 'insert-text', at, text }];
+}
+
+function insertTextOps(state: EditorState, live: Range, text: string): Op[] {
+	if (!text) return [];
+	const { state: next, at, prefix } = withDeletedSelection(state, live);
+	return [...prefix, ...insertAtCaret(next, at, text)];
 }
 
 /**
@@ -166,6 +176,7 @@ function insertTextOps(state: EditorState, live: Range, text: string): Op[] {
  *
  * While composing: never preventDefault, never dispatch, never re-project.
  * justCommittedComposition swallows follow-up insertText / insertParagraph / insertLineBreak.
+ * deleteByCut / insertFromPaste / insertFromDrop: preventDefault only; clipboard/drop handlers own the ops.
  */
 export function mapBeforeInput(
 	state: EditorState,
@@ -196,10 +207,13 @@ export function mapBeforeInput(
 	}
 
 	if (type === 'insertReplacementText') {
-		const ops: Op[] = [];
-		if (!isCollapsed(liveRange)) ops.push({ kind: 'delete-range', range: liveRange });
-		if (event.data) ops.push({ kind: 'insert-text', at: liveRange.anchor, text: event.data });
-		return { preventDefault: true, ops, freeze: false };
+		const { state: next, at, prefix } = withDeletedSelection(state, liveRange);
+		const insert = event.data ? insertAtCaret(next, at, event.data) : [];
+		return { preventDefault: true, ops: [...prefix, ...insert], freeze: false };
+	}
+
+	if (type === 'deleteByCut' || type === 'insertFromPaste' || type === 'insertFromDrop') {
+		return { preventDefault: true, ops: [], freeze: false };
 	}
 
 	if (DELETE_TYPES.has(type)) {
@@ -218,10 +232,6 @@ export function mapBeforeInput(
 	}
 	if (type === 'historyRedo') {
 		return { preventDefault: true, ops: [], freeze: false, history: 'redo' };
-	}
-
-	if (type === 'insertFromPaste' || type === 'insertFromDrop') {
-		return { preventDefault: true, ops: [], freeze: false };
 	}
 
 	return { preventDefault: true, ops: [], freeze: false };

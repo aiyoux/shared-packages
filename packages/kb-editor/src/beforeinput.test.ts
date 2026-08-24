@@ -167,4 +167,48 @@ describe('beforeinput mapping', () => {
 		expect(result.preventDefault).toBe(true);
 		expect(result.ops).toEqual([]);
 	});
+
+	it('deleteByCut preventDefaults and emits no ops (onCut owns the delete)', () => {
+		let state = createEditorState(page([para('p', 'abcd')]));
+		state = {
+			...state,
+			selection: { anchor: { blockId: 'p', offset: 1 }, head: { blockId: 'p', offset: 3 } }
+		};
+		const result = mapBeforeInput(state, { inputType: 'deleteByCut', data: null }, state.selection);
+		expect(result.preventDefault).toBe(true);
+		expect(result.ops).toEqual([]);
+		expect(plaintextOf(state.page.blocks[0])).toBe('abcd');
+	});
+
+	it('insertFromDrop preventDefaults and emits no ops (host drop owns paste)', () => {
+		const state = createEditorState(page([para('p', 'ab')]));
+		const result = mapBeforeInput(state, { inputType: 'insertFromDrop', data: 'x' }, state.selection);
+		expect(result.preventDefault).toBe(true);
+		expect(result.ops).toEqual([]);
+	});
+
+	it('backwards selection + insertText deletes then inserts at document-order start', () => {
+		let state = createEditorState(page([para('p', 'abcd')]));
+		const live = { anchor: { blockId: 'p', offset: 3 }, head: { blockId: 'p', offset: 1 } };
+		const result = mapBeforeInput(state, { inputType: 'insertText', data: 'X' }, live);
+		expect(result.ops[0]).toMatchObject({ kind: 'delete-range' });
+		expect(result.ops[1]).toMatchObject({
+			kind: 'insert-text',
+			at: { blockId: 'p', offset: 1 },
+			text: 'X'
+		});
+		state = dispatchMany(state, result.ops);
+		expect(plaintextOf(state.page.blocks[0])).toBe('aXd');
+	});
+
+	it('select-all /h1 + Enter deletes then splits; does not slash-convert leftover', () => {
+		let state = createEditorState(page([para('p', '/h1')]));
+		const live = { anchor: { blockId: 'p', offset: 0 }, head: { blockId: 'p', offset: 3 } };
+		const result = mapBeforeInput(state, { inputType: 'insertParagraph', data: null }, live);
+		expect(result.ops[0]?.kind).toBe('delete-range');
+		expect(result.ops.some((op) => op.kind === 'convert-block')).toBe(false);
+		state = dispatchMany(state, result.ops);
+		expect(state.page.blocks[0].type).toBe('paragraph');
+		expect(plaintextOf(state.page.blocks[0])).toBe('');
+	});
 });

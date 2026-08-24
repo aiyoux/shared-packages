@@ -1,6 +1,16 @@
-import { isTextLike, plaintextOf, type Block, type KbPage, type Op, type Range } from '@shared-packages/kb-model';
+import {
+	apply,
+	canonicalMarks,
+	isTextLike,
+	plaintextOf,
+	type Block,
+	type KbPage,
+	type Op,
+	type Range,
+	type TextSpan
+} from '@shared-packages/kb-model';
 import { newBlockId } from './ids.js';
-import { isCollapsed, orderedRange } from './range.js';
+import { clampPoint, isCollapsed, orderedRange } from './range.js';
 import type { EditorState } from './state.js';
 
 export const KB_CLIPBOARD_MIME = 'application/x-scratch-kb+json';
@@ -30,11 +40,28 @@ function remapBlock(block: Block): Block {
 	return { ...block, id };
 }
 
-function sliceTextLike(block: Extract<Block, { content: unknown }>, from: number, to: number): Block {
-	const text = plaintextOf(block).slice(from, to);
-	const content = text
-		? [{ type: 'text' as const, text, marks: [] }]
-		: [{ type: 'text' as const, text: '', marks: [] }];
+function sliceSpans(content: TextSpan[], from: number, to: number): TextSpan[] {
+	const out: TextSpan[] = [];
+	let pos = 0;
+	for (const span of content) {
+		const next = pos + span.text.length;
+		const a = Math.max(from, pos);
+		const b = Math.min(to, next);
+		if (b > a) {
+			out.push({
+				type: 'text',
+				text: span.text.slice(a - pos, b - pos),
+				marks: canonicalMarks(span.marks)
+			});
+		}
+		pos = next;
+	}
+	return out.filter((span) => span.text.length > 0);
+}
+
+function sliceTextLike(block: Extract<Block, { content: TextSpan[] }>, from: number, to: number): Block {
+	const sliced = sliceSpans(block.content, from, to);
+	const content = sliced.length > 0 ? sliced : [{ type: 'text' as const, text: '', marks: [] }];
 	if (block.type === 'heading') return { id: block.id, type: 'heading', level: block.level, content };
 	if (block.type === 'list_item') return { id: block.id, type: 'list_item', ordered: block.ordered, content };
 	return { id: block.id, type: 'paragraph', content };
@@ -83,28 +110,50 @@ export function parseSlice(raw: string): Block[] | null {
 	}
 }
 
-export function pasteOps(state: EditorState, live: Range, input: { json?: string | null; html?: string | null; plain?: string | null }): Op[] {
+function jsonInsertOps(state: EditorState, at: { blockId: string; offset: number }, jsonBlocks: Block[]): Op[] {
 	const ops: Op[] = [];
-	if (!isCollapsed(live)) ops.push({ kind: 'delete-range', range: live });
-	const at = isCollapsed(live) ? live.anchor : orderedRange(state.page, live).start;
+	const block = state.page.blocks.find((item) => item.id === at.blockId);
+	const len = block ? plaintextOf(block).length : 0;
+	let afterId: string | null;
+	if (block && at.offset > 0 && at.offset < len) {
+		ops.push({ kind: 'split-block', at, newId: newBlockId() });
+		afterId = at.blockId;
+	} else if (at.offset === 0) {
+		const index = state.page.blocks.findIndex((item) => item.id === at.blockId);
+		afterId = index > 0 ? state.page.blocks[index - 1].id : null;
+	} else {
+		afterId = at.blockId;
+	}
+	for (const item of jsonBlocks) {
+		const next = remapBlock(item);
+		ops.push({ kind: 'insert-block', afterId, block: next });
+		afterId = next.id;
+	}
+	return ops;
+}
+
+export function pasteOps(
+	state: EditorState,
+	live: Range,
+	input: { json?: string | null; html?: string | null; plain?: string | null }
+): Op[] {
+	const ops: Op[] = [];
+	let working = state;
+	if (!isCollapsed(live)) {
+		ops.push({ kind: 'delete-range', range: live });
+		working = { ...state, page: apply(state.page, ops[0]) };
+	}
+	const rawAt = isCollapsed(live) ? live.anchor : orderedRange(state.page, live).start;
+	const at = clampPoint(working.page, rawAt);
 	const jsonBlocks = input.json ? parseSlice(input.json) : null;
 	if (jsonBlocks && jsonBlocks.length > 0) {
-		let afterId: string | null = at.blockId;
-		if (at.offset === 0) {
-			const index = state.page.blocks.findIndex((b) => b.id === at.blockId);
-			afterId = index > 0 ? state.page.blocks[index - 1].id : null;
-		}
-		for (const block of jsonBlocks) {
-			const next = remapBlock(block);
-			ops.push({ kind: 'insert-block', afterId, block: next });
-			afterId = next.id;
-		}
+		ops.push(...jsonInsertOps(working, at, jsonBlocks));
 		return ops;
 	}
 	let text = input.plain ?? '';
 	if (!text && input.html) text = stripHtml(input.html);
 	if (!text) return ops;
-	const block = state.page.blocks.find((item) => item.id === at.blockId);
+	const block = working.page.blocks.find((item) => item.id === at.blockId);
 	if (block?.type === 'code') {
 		ops.push({ kind: 'insert-text', at, text });
 		return ops;
@@ -132,4 +181,9 @@ export function copyPayload(state: EditorState, live: Range): { plain: string; j
 	if (isCollapsed(live)) return null;
 	const blocks = sliceBlocks(state.page, live);
 	return { plain: slicePlaintext(state.page, live), json: serializeSlice(blocks) };
+}
+
+export function cutOps(live: Range): Op[] {
+	if (isCollapsed(live)) return [];
+	return [{ kind: 'delete-range', range: live }];
 }

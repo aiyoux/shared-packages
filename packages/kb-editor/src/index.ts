@@ -1,6 +1,7 @@
 export { mapBeforeInput, type BeforeInputEvent, type BeforeInputResult } from './beforeinput.js';
 export {
 	copyPayload,
+	cutOps,
 	KB_CLIPBOARD_MIME,
 	parseSlice,
 	pasteOps,
@@ -42,6 +43,7 @@ export {
 } from './selection.js';
 export { matchSlash, slashOps } from './slash.js';
 export {
+	applyEditorOps,
 	blockFocusOf,
 	createEditorState,
 	dispatch,
