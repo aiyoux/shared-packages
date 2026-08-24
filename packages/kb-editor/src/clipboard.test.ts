@@ -74,9 +74,9 @@ describe('clipboard', () => {
 			'n1',
 			'n2'
 		]);
-		expect(slicePlaintext(doc, live)).toBe('Call\none\ntwo');
+		expect(slicePlaintext(doc, live)).toBe('one\ntwo');
 		const payload = copyPayload({ ...createEditorState(doc), selection: live }, live);
-		expect(payload?.plain).toBe('Call\none\ntwo');
+		expect(payload?.plain).toBe('one\ntwo');
 		expect(parseSlice(payload!.json)?.map((b) => b.id)).toEqual(['c']);
 	});
 
@@ -87,11 +87,11 @@ describe('clipboard', () => {
 		).toEqual({ plain: '', json: serializeSlice([]) });
 		const nested = {
 			id: 'c',
-			type: 'paragraph' as const,
-			content: [{ type: 'text' as const, text: '', marks: [] }],
+			type: 'callout' as const,
+			variant: 'info' as const,
 			children: [{ id: 'n', type: 'paragraph' as const, content: [{ type: 'text' as const, text: 'in', marks: [] }] }]
 		};
-		const json = serializeSlice([nested as never]);
+		const json = serializeSlice([nested]);
 		const dest = createEditorState(page([para('z', 'keep')]));
 		const ops = pasteOps(dest, dest.selection, { json });
 		expect(ops.some((op) => op.kind === 'insert-block' && op.block.id === 'c')).toBe(false);
@@ -99,6 +99,7 @@ describe('clipboard', () => {
 		expect(inserted?.kind).toBe('insert-block');
 		if (inserted?.kind === 'insert-block') {
 			expect(inserted.block.id).not.toBe('c');
+			expect(inserted.block.type).toBe('callout');
 			const kids = (inserted.block as { children?: { id: string }[] }).children;
 			expect(kids?.[0].id).not.toBe('n');
 			expect(kids?.[0].id).toBeTruthy();
@@ -118,9 +119,8 @@ describe('clipboard', () => {
 		expect(cutOps(doc, live)).toEqual([{ kind: 'delete-range', range: live }]);
 		expect(cutOps(doc, { anchor: { blockId: 'p', offset: 1 }, head: { blockId: 'p', offset: 1 } })).toEqual([]);
 		const nested = page([nest('c', [para('n', 'in')]), para('z', 'zz')]);
-		expect(
-			cutOps(nested, { anchor: { blockId: 'n', offset: 0 }, head: { blockId: 'z', offset: 1 } })
-		).toEqual([]);
+		const crossed = { anchor: { blockId: 'n', offset: 0 }, head: { blockId: 'z', offset: 1 } };
+		expect(cutOps(nested, crossed)).toEqual([{ kind: 'delete-range', range: crossed }]);
 	});
 
 	it('drop of text/plain reuses pasteOps at the caret', () => {

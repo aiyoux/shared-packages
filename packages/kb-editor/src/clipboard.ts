@@ -15,7 +15,7 @@ import {
 	type TextSpan
 } from '@shared-packages/kb-model';
 import { newBlockId } from './ids.js';
-import { clampPoint, isCollapsed, orderedRange, rangeSharesParent } from './range.js';
+import { clampPoint, isCollapsed, orderedRange, parentIdFor } from './range.js';
 import type { EditorState } from './state.js';
 
 export const KB_CLIPBOARD_MIME = 'application/x-scratch-kb+json';
@@ -39,7 +39,8 @@ export function stripHtml(html: string): string {
 		.replace(/&#39;/gi, "'");
 }
 
-function remapBlock(block: Block): Block {
+/** Walk the subtree and mint a new id for every node. */
+export function remapBlock(block: Block): Block {
 	const id = newBlockId();
 	const next: Block = block.type === 'divider' ? { id, type: 'divider' } : { ...block, id };
 	const kids = blockChildren(block);
@@ -149,14 +150,16 @@ function jsonInsertOps(state: EditorState, at: { blockId: string; offset: number
 		const text = jsonBlocks.map((item) => plaintextOf(item)).join('\n');
 		if (text) return [{ kind: 'insert-text', at, text }];
 		let afterId: string | null = at.blockId;
+		const parentId = parentIdFor(state.page, at.blockId);
 		for (const item of jsonBlocks) {
 			const next = remapBlock(item);
-			ops.push({ kind: 'insert-block', afterId, block: next });
+			ops.push({ kind: 'insert-block', afterId, parentId, block: next });
 			afterId = next.id;
 		}
 		return ops;
 	}
 	const len = block ? plaintextOf(block).length : 0;
+	const parentId = parentIdFor(state.page, at.blockId);
 	let afterId: string | null;
 	if (block && isTextLike(block) && at.offset > 0 && at.offset < len) {
 		ops.push({ kind: 'split-block', at, newId: newBlockId() });
@@ -170,7 +173,7 @@ function jsonInsertOps(state: EditorState, at: { blockId: string; offset: number
 	}
 	for (const item of jsonBlocks) {
 		const next = remapBlock(item);
-		ops.push({ kind: 'insert-block', afterId, block: next });
+		ops.push({ kind: 'insert-block', afterId, parentId, block: next });
 		afterId = next.id;
 	}
 	return ops;
@@ -183,7 +186,7 @@ export function pasteOps(
 ): Op[] {
 	const ops: Op[] = [];
 	let working = state;
-	if (!isCollapsed(live) && rangeSharesParent(state.page, live)) {
+	if (!isCollapsed(live)) {
 		ops.push({ kind: 'delete-range', range: live });
 		working = { ...state, page: apply(state.page, ops[0]) };
 	}
@@ -227,7 +230,7 @@ export function copyPayload(state: EditorState, live: Range): { plain: string; j
 	return { plain: slicePlaintext(state.page, live), json: serializeSlice(blocks) };
 }
 
-export function cutOps(page: KbPage, live: Range): Op[] {
-	if (isCollapsed(live) || !rangeSharesParent(page, live)) return [];
+export function cutOps(_page: KbPage, live: Range): Op[] {
+	if (isCollapsed(live)) return [];
 	return [{ kind: 'delete-range', range: live }];
 }

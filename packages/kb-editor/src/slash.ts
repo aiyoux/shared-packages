@@ -1,4 +1,5 @@
-import type { Block, Op } from '@shared-packages/kb-model';
+import { parentOf, type Block, type KbPage, type Op } from '@shared-packages/kb-model';
+import { newBlockId } from './ids.js';
 
 export type SlashTarget = {
 	to: Block['type'];
@@ -15,14 +16,49 @@ const SLASH: Record<string, SlashTarget> = {
 	'/code': { to: 'code' }
 };
 
+const WRAP: Record<string, 'callout' | 'toggle'> = {
+	'/callout': 'callout',
+	'/toggle': 'toggle'
+};
+
 export function matchSlash(text: string): { cmd: string; target: SlashTarget } | null {
 	const target = SLASH[text];
 	if (!target) return null;
 	return { cmd: text, target };
 }
 
+function stripCmd(blockId: string, cmd: string): Op {
+	return {
+		kind: 'delete-range',
+		range: {
+			anchor: { blockId, offset: 0 },
+			head: { blockId, offset: cmd.length }
+		}
+	};
+}
+
+/** Insert an empty container, then move the current block into it. Not convert-block. */
+function wrapOps(blockId: string, cmd: string, type: 'callout' | 'toggle', page?: KbPage): Op[] | null {
+	if (page) {
+		const loc = parentOf(page, blockId);
+		if (!loc || loc.parent !== 'page') return null;
+	}
+	const containerId = newBlockId();
+	const block: Block =
+		type === 'toggle'
+			? { id: containerId, type: 'toggle', open: true, children: [] }
+			: { id: containerId, type: 'callout', variant: 'info', children: [] };
+	return [
+		{ kind: 'insert-block', afterId: blockId, block },
+		{ kind: 'move-block', id: blockId, afterId: null, parentId: containerId },
+		stripCmd(blockId, cmd)
+	];
+}
+
 /** Convert when the caret sits at the end of a slash command that is the whole block (or prefix + space). */
-export function slashOps(blockId: string, plaintext: string): Op[] | null {
+export function slashOps(blockId: string, plaintext: string, page?: KbPage): Op[] | null {
+	const wrap = WRAP[plaintext];
+	if (wrap) return wrapOps(blockId, plaintext, wrap, page);
 	const match = matchSlash(plaintext);
 	if (!match) return null;
 	const { cmd, target } = match;
@@ -33,12 +69,5 @@ export function slashOps(blockId: string, plaintext: string): Op[] | null {
 		...(target.level != null ? { level: target.level } : {}),
 		...(target.ordered != null ? { ordered: target.ordered } : {})
 	};
-	const strip: Op = {
-		kind: 'delete-range',
-		range: {
-			anchor: { blockId, offset: 0 },
-			head: { blockId, offset: cmd.length }
-		}
-	};
-	return [convert, strip];
+	return [convert, stripCmd(blockId, cmd)];
 }

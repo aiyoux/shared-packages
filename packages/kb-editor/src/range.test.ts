@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { clampPoint, collapsed, isCollapsed, orderedRange, payloadLength, requireBlock } from './range.js';
-import { nest, page, para } from './testFixtures.js';
+import { nest, page, para, toggle } from './testFixtures.js';
 
 describe('range helpers', () => {
 	it('orderedRange treats missing ids as last and does not throw', () => {
@@ -48,6 +48,12 @@ describe('range helpers', () => {
 			start: { blockId: 'n1', offset: 0 },
 			end: { blockId: 'z', offset: 2 }
 		});
+	});
+
+	it('clampPoint snaps a closed-toggle child to the toggle header', () => {
+		const doc = page([toggle('t', [para('h', 'hid')], false), para('z', 'zz')]);
+		expect(clampPoint(doc, { blockId: 'h', offset: 2 })).toEqual({ blockId: 't', offset: 0 });
+		expect(clampPoint(doc, { blockId: 't', offset: 9 })).toEqual({ blockId: 't', offset: 0 });
 	});
 
 	it('requireBlock throws on unknown ids; collapsed detects equality', () => {

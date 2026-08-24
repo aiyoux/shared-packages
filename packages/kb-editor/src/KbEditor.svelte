@@ -1,6 +1,13 @@
 <script lang="ts">
 	import { onMount, untrack } from 'svelte';
-	import { findBlock, plaintextOf, visibleOrder, type Op } from '@shared-packages/kb-model';
+	import {
+		findBlock,
+		parentIdOf,
+		parentOf,
+		plaintextOf,
+		visibleOrder,
+		type Op
+	} from '@shared-packages/kb-model';
 	import { mapBeforeInput } from './beforeinput.js';
 	import { copyPayload, cutOps, KB_CLIPBOARD_MIME, pasteOps } from './clipboard.js';
 	import {
@@ -12,7 +19,7 @@
 		snapshotComposition,
 		type CompositionSnapshot
 	} from './composition.js';
-	import { dropAfterId, dropWhere } from './gutter.js';
+	import { dropTarget, dropWhere, handleHeights, overlayBoxes, type OverlayBox } from './gutter.js';
 	import { mapKeydown } from './keymap.js';
 	import { BLOCK_ID_ATTR, project } from './project.js';
 	import { rangeFromInputEvent, rangeFromSelection, restoreSelection } from './selection.js';
@@ -35,7 +42,8 @@
 	let localComposing = $state(false);
 	let localJustCommitted = $state(false);
 	let snapshot = $state<CompositionSnapshot | null>(null);
-	let heights = $state<number[]>([]);
+	let heightById = $state<Record<string, number>>({});
+	let overlays = $state<OverlayBox[]>([]);
 	let draggingId = $state<string | null>(null);
 
 	const composing = $derived(localComposing || editor.composing);
@@ -61,7 +69,8 @@
 		project(host, page);
 		untrack(() => {
 			restoreSelection(host, editor.selection, page);
-			heights = [...host.children].map((el) => (el as HTMLElement).offsetHeight);
+			heightById = handleHeights(host);
+			overlays = overlayBoxes(host);
 		});
 	});
 
@@ -246,9 +255,27 @@
 		if (!id) return;
 		const target = event.currentTarget as HTMLElement;
 		const where = dropWhere(event.clientY, target.getBoundingClientRect());
-		const afterId = dropAfterId(editor.page, id, targetId, where);
-		if (afterId === 'noop') return;
-		onDispatch({ kind: 'move-block', id, afterId });
+		const drop = dropTarget(editor.page, id, targetId, where);
+		if (drop === 'noop') return;
+		onDispatch({ kind: 'move-block', id, afterId: drop.afterId, parentId: drop.parentId });
+	}
+
+	function onHostClick(event: MouseEvent) {
+		if (composing || !editable || !host) return;
+		const target = event.target as HTMLElement | null;
+		const el = target?.closest?.('[data-block-id]') as HTMLElement | null;
+		if (!el || !host.contains(el) || el.getAttribute('data-block-type') !== 'toggle') return;
+		const id = el.getAttribute('data-block-id');
+		if (!id) return;
+		const block = findBlock(editor.page, id);
+		if (block?.type !== 'toggle') return;
+		onDispatch({ kind: 'set-toggle', id, open: !block.open });
+	}
+
+	function handleParentId(blockId: string): string | undefined {
+		const loc = parentOf(editor.page, blockId);
+		if (!loc || loc.parent === 'page') return undefined;
+		return parentIdOf(loc.parent) ?? undefined;
 	}
 
 	function onHandleDragEnd() {
@@ -258,14 +285,25 @@
 
 <div class="kb-editor" data-testid="kb-editor">
 	<div class="kb-gutter" contenteditable="false" data-testid="kb-gutter">
-		{#each visibleOrder(editor.page) as block, i (block.id)}
+		{#each overlays as box (box.parentId)}
+			<div
+				class="kb-overlay"
+				data-testid="kb-gutter-overlay"
+				data-parent-id={box.parentId}
+				style:top="{box.top}px"
+				style:height="{Math.max(box.height, 0)}px"
+				style:pointer-events="none"
+			></div>
+		{/each}
+		{#each visibleOrder(editor.page) as block (block.id)}
 			<button
 				type="button"
 				class="kb-handle"
 				aria-label="Drag to reorder"
 				draggable={editable}
 				data-block-id={block.id}
-				style:height="{Math.max(heights[i] ?? 24, 24)}px"
+				data-parent-id={handleParentId(block.id)}
+				style:height="{Math.max(heightById[block.id] ?? 24, 24)}px"
 				ondragstart={(e) => onHandleDragStart(e, block.id)}
 				ondragover={onHandleDragOver}
 				ondrop={(e) => onHandleDrop(e, block.id)}
@@ -292,6 +330,7 @@
 		onpaste={onPaste}
 		ondragover={onHostDragOver}
 		ondrop={onHostDrop}
+		onclick={onHostClick}
 	></div>
 </div>
 
@@ -304,10 +343,22 @@
 		width: 100%;
 	}
 	.kb-gutter {
+		position: relative;
 		flex: 0 0 1.25rem;
+		width: 1.25rem;
 		display: flex;
 		flex-direction: column;
 		user-select: none;
+	}
+	.kb-overlay {
+		position: absolute;
+		left: 0;
+		width: 100%;
+		max-width: 100%;
+		pointer-events: none;
+		box-sizing: border-box;
+		border-left: 3px solid currentColor;
+		opacity: 0.4;
 	}
 	.kb-handle {
 		display: block;
@@ -318,6 +369,8 @@
 		background: transparent;
 		cursor: grab;
 		position: relative;
+		z-index: 1;
+		pointer-events: auto;
 		flex: 0 0 auto;
 	}
 	.kb-handle::before {
@@ -398,5 +451,14 @@
 	.kb-host :global(code) {
 		font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 		font-size: 0.9em;
+	}
+	.kb-host :global([data-block-type='callout']),
+	.kb-host :global([data-block-type='toggle']) {
+		margin: 0.15rem 0 0;
+		min-height: 0.35rem;
+		height: 0.35rem;
+	}
+	.kb-host :global([data-depth='1']) {
+		margin-left: 0.75rem;
 	}
 </style>

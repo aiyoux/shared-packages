@@ -1,11 +1,13 @@
 import {
 	documentOrder,
 	findBlock,
-	isAtomic,
+	isNonTextual,
 	locateBlock,
+	parentIdOf,
 	parentOf,
 	plaintextOf,
 	sameParent,
+	visibleOrder,
 	type KbPage,
 	type Point,
 	type Range
@@ -56,14 +58,41 @@ export function payloadLength(page: KbPage, blockId: string): number {
 	return block ? plaintextOf(block).length : 0;
 }
 
+export function parentIdFor(page: KbPage, blockId: string): string | null {
+	const loc = parentOf(page, blockId);
+	if (!loc) return null;
+	return parentIdOf(loc.parent);
+}
+
+function closedToggleAncestor(page: KbPage, id: string): string | null {
+	let current = id;
+	for (;;) {
+		const loc = parentOf(page, current);
+		if (!loc) return null;
+		if (loc.parent !== 'page' && loc.parent.type === 'toggle' && loc.parent.open === false) {
+			return loc.parent.id;
+		}
+		if (loc.parent === 'page') return null;
+		current = loc.parent.id;
+	}
+}
+
 export function clampPoint(page: KbPage, point: Point): Point {
+	const visible = visibleOrder(page);
 	const block = findBlock(page, point.blockId);
 	if (!block) {
-		const first = documentOrder(page)[0];
+		const first = visible[0] ?? documentOrder(page)[0];
 		if (!first) return { blockId: point.blockId, offset: 0 };
 		return { blockId: first.id, offset: 0 };
 	}
-	if (isAtomic(block)) return { blockId: block.id, offset: 0 };
+	if (!visible.some((item) => item.id === block.id)) {
+		const toggleId = closedToggleAncestor(page, block.id);
+		if (toggleId) return { blockId: toggleId, offset: 0 };
+		const first = visible[0];
+		if (!first) return { blockId: block.id, offset: 0 };
+		return { blockId: first.id, offset: 0 };
+	}
+	if (isNonTextual(block)) return { blockId: block.id, offset: 0 };
 	const len = plaintextOf(block).length;
 	return { blockId: block.id, offset: Math.max(0, Math.min(point.offset, len)) };
 }

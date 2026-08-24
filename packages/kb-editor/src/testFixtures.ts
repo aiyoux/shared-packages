@@ -1,4 +1,11 @@
-import { normalizePage, type Block, type KbPage, type Mark, type TextSpan } from '@shared-packages/kb-model';
+import {
+	normalizePage,
+	type Block,
+	type CalloutVariant,
+	type KbPage,
+	type Mark,
+	type TextSpan
+} from '@shared-packages/kb-model';
 
 const STAMP = '2026-01-01T00:00:00.000Z';
 
@@ -30,8 +37,17 @@ export function image(id: string, src = 'assets/diagram.png', alt = 'Diagram'): 
 	return { id, type: 'image', src, alt };
 }
 
-export function nest(id: string, kids: Block[], text = ''): Block {
-	return Object.assign(para(id, text), { children: kids });
+export function callout(id: string, kids: Block[], variant: CalloutVariant = 'info'): Block {
+	return { id, type: 'callout', variant, children: kids };
+}
+
+export function toggle(id: string, kids: Block[], open = true): Block {
+	return { id, type: 'toggle', open, children: kids };
+}
+
+/** Nested container fixture (callout). */
+export function nest(id: string, kids: Block[], _text = ''): Block {
+	return callout(id, kids);
 }
 
 export function page(blocks: Block[], extra: Partial<KbPage> = {}): KbPage {

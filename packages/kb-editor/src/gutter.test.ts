@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { dropAfterId, dropWhere } from './gutter.js';
+import { dropAfterId, dropTarget, dropWhere, overlayBoxes } from './gutter.js';
 import { project } from './project.js';
 import { createEditorState, dispatch } from './state.js';
-import { page, para } from './testFixtures.js';
+import { callout, page, para } from './testFixtures.js';
 
 describe('gutter drag', () => {
 	it('computes move-block afterId from drop half', () => {
@@ -41,5 +41,18 @@ describe('gutter drag', () => {
 		expect(host.querySelector('ul')).toBeNull();
 		expect(host.querySelector('ol')).toBeNull();
 		wrap.remove();
+	});
+
+	it('drop onto a nested child stamps parentId; overlay paint stays out of the host', () => {
+		const doc = page([callout('c', [para('n', 'in')]), para('z', 'Z')]);
+		expect(dropTarget(doc, 'z', 'n', 'after')).toEqual({ afterId: 'n', parentId: 'c' });
+		expect(dropAfterId(doc, 'z', 'n', 'after')).toBe('n');
+		const host = document.createElement('div');
+		document.body.append(host);
+		project(host, doc);
+		const boxes = overlayBoxes(host);
+		expect(boxes).toHaveLength(1);
+		expect(boxes[0].parentId).toBe('c');
+		host.remove();
 	});
 });

@@ -1,6 +1,9 @@
 import {
 	canonicalMarks,
+	isContainer,
 	isTextLike,
+	parentIdOf,
+	parentOf,
 	visibleOrder,
 	type Block,
 	type Inline,
@@ -12,6 +15,8 @@ import type { EditorState } from './state.js';
 
 export const BLOCK_ID_ATTR = 'data-block-id';
 export const BLOCK_TYPE_ATTR = 'data-block-type';
+export const PARENT_ID_ATTR = 'data-parent-id';
+export const DEPTH_ATTR = 'data-depth';
 
 function markElement(doc: Document, mark: Mark): HTMLElement {
 	switch (mark.type) {
@@ -58,7 +63,19 @@ function stripMagicBr(el: HTMLElement): void {
 	for (const br of walk) br.remove();
 }
 
-function renderTextLike(doc: Document, block: Extract<Block, { content: Inline[] }>): HTMLElement {
+function setTreeAttrs(el: HTMLElement, block: Block, parentId: string | null, depth: number): void {
+	el.setAttribute(BLOCK_ID_ATTR, block.id);
+	el.setAttribute(BLOCK_TYPE_ATTR, block.type);
+	el.setAttribute(DEPTH_ATTR, String(depth));
+	if (parentId) el.setAttribute(PARENT_ID_ATTR, parentId);
+}
+
+function renderTextLike(
+	doc: Document,
+	block: Extract<Block, { content: Inline[] }>,
+	parentId: string | null,
+	depth: number
+): HTMLElement {
 	let el: HTMLElement;
 	if (block.type === 'heading') {
 		el = doc.createElement(`h${block.level}`);
@@ -68,8 +85,7 @@ function renderTextLike(doc: Document, block: Extract<Block, { content: Inline[]
 	} else {
 		el = doc.createElement('p');
 	}
-	el.setAttribute(BLOCK_ID_ATTR, block.id);
-	el.setAttribute(BLOCK_TYPE_ATTR, block.type);
+	setTreeAttrs(el, block, parentId, depth);
 	appendSpans(doc, el, block.content);
 	stripMagicBr(el);
 	if (!hasTextNode(el)) el.appendChild(doc.createTextNode(''));
@@ -89,10 +105,14 @@ function docWalker(el: HTMLElement): TreeWalker {
 	return el.ownerDocument.createTreeWalker(el, NodeFilter.SHOW_TEXT);
 }
 
-function renderCode(doc: Document, block: Extract<Block, { type: 'code' }>): HTMLElement {
+function renderCode(
+	doc: Document,
+	block: Extract<Block, { type: 'code' }>,
+	parentId: string | null,
+	depth: number
+): HTMLElement {
 	const pre = doc.createElement('pre');
-	pre.setAttribute(BLOCK_ID_ATTR, block.id);
-	pre.setAttribute(BLOCK_TYPE_ATTR, 'code');
+	setTreeAttrs(pre, block, parentId, depth);
 	if (block.language) pre.setAttribute('data-language', block.language);
 	const code = doc.createElement('code');
 	code.appendChild(doc.createTextNode(block.text));
@@ -101,17 +121,25 @@ function renderCode(doc: Document, block: Extract<Block, { type: 'code' }>): HTM
 	return pre;
 }
 
-function renderDivider(doc: Document, block: Extract<Block, { type: 'divider' }>): HTMLElement {
+function renderDivider(
+	doc: Document,
+	block: Extract<Block, { type: 'divider' }>,
+	parentId: string | null,
+	depth: number
+): HTMLElement {
 	const hr = doc.createElement('hr');
-	hr.setAttribute(BLOCK_ID_ATTR, block.id);
-	hr.setAttribute(BLOCK_TYPE_ATTR, 'divider');
+	setTreeAttrs(hr, block, parentId, depth);
 	return hr;
 }
 
-function renderImage(doc: Document, block: Extract<Block, { type: 'image' }>): HTMLElement {
+function renderImage(
+	doc: Document,
+	block: Extract<Block, { type: 'image' }>,
+	parentId: string | null,
+	depth: number
+): HTMLElement {
 	const wrap = doc.createElement('div');
-	wrap.setAttribute(BLOCK_ID_ATTR, block.id);
-	wrap.setAttribute(BLOCK_TYPE_ATTR, 'image');
+	setTreeAttrs(wrap, block, parentId, depth);
 	const img = doc.createElement('img');
 	const src = allowlistedSrc(block.src);
 	if (src) img.setAttribute('src', src);
@@ -120,18 +148,50 @@ function renderImage(doc: Document, block: Extract<Block, { type: 'image' }>): H
 	return wrap;
 }
 
-export function renderBlock(doc: Document, block: Block): HTMLElement {
-	if (isTextLike(block)) return renderTextLike(doc, block);
-	if (block.type === 'code') return renderCode(doc, block);
-	if (block.type === 'divider') return renderDivider(doc, block);
-	return renderImage(doc, block);
+/** Chrome only: host-direct sibling of children, never a nested CE wrapper. */
+function renderContainer(
+	doc: Document,
+	block: Extract<Block, { type: 'callout' | 'toggle' }>,
+	parentId: string | null,
+	depth: number
+): HTMLElement {
+	const el = doc.createElement('div');
+	setTreeAttrs(el, block, parentId, depth);
+	if (block.type === 'callout') el.setAttribute('data-variant', block.variant);
+	else el.setAttribute('data-open', block.open ? 'true' : 'false');
+	return el;
+}
+
+function locAttrs(page: KbPage, id: string): { parentId: string | null; depth: number } {
+	const loc = parentOf(page, id);
+	const parentId = loc ? parentIdOf(loc.parent) : null;
+	return { parentId, depth: parentId ? 1 : 0 };
+}
+
+export function renderBlock(
+	doc: Document,
+	block: Block,
+	parentId: string | null = null,
+	depth = 0
+): HTMLElement {
+	if (isTextLike(block)) return renderTextLike(doc, block, parentId, depth);
+	if (block.type === 'code') return renderCode(doc, block, parentId, depth);
+	if (block.type === 'divider') return renderDivider(doc, block, parentId, depth);
+	if (block.type === 'image') return renderImage(doc, block, parentId, depth);
+	if (isContainer(block)) return renderContainer(doc, block, parentId, depth);
+	const el = doc.createElement('div');
+	setTreeAttrs(el, block, parentId, depth);
+	return el;
 }
 
 /** Imperative projection into the one contenteditable host. Never innerHTML. */
 export function project(host: HTMLElement, page: KbPage): void {
 	const doc = host.ownerDocument;
 	const nodes: HTMLElement[] = [];
-	for (const block of visibleOrder(page)) nodes.push(renderBlock(doc, block));
+	for (const block of visibleOrder(page)) {
+		const { parentId, depth } = locAttrs(page, block.id);
+		nodes.push(renderBlock(doc, block, parentId, depth));
+	}
 	host.replaceChildren(...nodes);
 	for (const child of host.children) stripMagicBr(child as HTMLElement);
 }

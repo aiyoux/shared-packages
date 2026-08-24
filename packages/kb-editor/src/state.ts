@@ -3,7 +3,7 @@ import {
 	documentOrder,
 	findBlock,
 	invert,
-	isAtomic,
+	isNonTextual,
 	normalizePage,
 	plaintextOf,
 	type KbPage,
@@ -35,7 +35,7 @@ export function createEditorState(page: KbPage): EditorState {
 		undo: [],
 		redo: [],
 		composing: false,
-		blockFocus: isAtomic(first) ? first.id : undefined,
+		blockFocus: isNonTextual(first) ? first.id : undefined,
 		justCommittedComposition: false
 	};
 }
@@ -43,7 +43,7 @@ export function createEditorState(page: KbPage): EditorState {
 export function blockFocusOf(page: KbPage, selection: Range): string | undefined {
 	if (!isCollapsed(selection)) return undefined;
 	const block = findBlock(page, selection.anchor.blockId);
-	if (block && isAtomic(block)) return block.id;
+	if (block && isNonTextual(block)) return block.id;
 	return undefined;
 }
 
@@ -77,12 +77,24 @@ function selectionAfter(pre: KbPage, post: KbPage, op: Op, prev: Range): Range {
 		case 'delete-block': {
 			const order = documentOrder(pre);
 			const index = blockIndex(pre, op.id);
-			const following = order[index + 1];
-			const previous = order[index - 1];
-			if (following && findBlock(post, following.id)) {
+			let following: (typeof order)[number] | undefined;
+			for (let i = index + 1; i < order.length; i++) {
+				if (findBlock(post, order[i].id)) {
+					following = order[i];
+					break;
+				}
+			}
+			if (following) {
 				return collapsed({ blockId: following.id, offset: 0 });
 			}
-			if (previous && findBlock(post, previous.id)) {
+			let previous: (typeof order)[number] | undefined;
+			for (let i = index - 1; i >= 0; i--) {
+				if (findBlock(post, order[i].id)) {
+					previous = order[i];
+					break;
+				}
+			}
+			if (previous) {
 				const keep = findBlock(post, previous.id)!;
 				return collapsed({ blockId: previous.id, offset: plaintextOf(keep).length });
 			}
@@ -102,6 +114,7 @@ function selectionAfter(pre: KbPage, post: KbPage, op: Op, prev: Range): Range {
 		case 'set-code':
 		case 'set-title':
 		case 'set-children':
+		case 'set-toggle':
 			return prev;
 		default: {
 			const _never: never = op;

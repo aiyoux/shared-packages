@@ -1,7 +1,7 @@
 import {
 	apply,
 	findBlock,
-	isAtomic,
+	isNonTextual,
 	isTextLike,
 	plaintextOf,
 	type Mark,
@@ -10,7 +10,7 @@ import {
 	type Range
 } from '@shared-packages/kb-model';
 import { newBlockId } from './ids.js';
-import { clampPoint, collapsed, isCollapsed, orderedRange, rangeSharesParent } from './range.js';
+import { clampPoint, collapsed, isCollapsed, orderedRange, parentIdFor } from './range.js';
 import { slashOps } from './slash.js';
 import type { EditorState } from './state.js';
 import { backspaceAtStartOps, deleteAtEndOps, expandCaretToUnit, isCodeEmptyLastLine } from './units.js';
@@ -44,7 +44,7 @@ function withDeletedSelection(
 	state: EditorState,
 	live: Range
 ): { state: EditorState; at: Point; prefix: Op[] } {
-	if (isCollapsed(live) || !rangeSharesParent(state.page, live)) {
+	if (isCollapsed(live)) {
 		return { state, at: live.anchor, prefix: [] };
 	}
 	const { start } = orderedRange(state.page, live);
@@ -63,11 +63,15 @@ function formatOps(_state: EditorState, live: Range, mark: Mark): Op[] {
 	return [{ kind: 'format-range', range: live, mark, on: true }];
 }
 
+function insertAfter(page: EditorState['page'], afterId: string, block: ReturnType<typeof emptyParagraph>): Op {
+	return { kind: 'insert-block', afterId, parentId: parentIdFor(page, afterId), block };
+}
+
 function enterAtCaret(state: EditorState, point: Point): Op[] {
 	const block = findBlock(state.page, point.blockId);
 	if (!block) return [];
-	if (isAtomic(block)) {
-		return [{ kind: 'insert-block', afterId: block.id, block: emptyParagraph(newBlockId()) }];
+	if (isNonTextual(block)) {
+		return [insertAfter(state.page, block.id, emptyParagraph(newBlockId()))];
 	}
 	if (block.type === 'code') {
 		if (isCodeEmptyLastLine(block, point.offset)) {
@@ -76,7 +80,7 @@ function enterAtCaret(state: EditorState, point: Point): Op[] {
 		return [{ kind: 'insert-text', at: point, text: '\n' }];
 	}
 	const text = plaintextOf(block);
-	const slash = slashOps(block.id, text);
+	const slash = slashOps(block.id, text, state.page);
 	if (slash) return slash;
 	if (block.type === 'list_item' && text === '') {
 		return [{ kind: 'convert-block', id: block.id, to: 'paragraph' }];
@@ -85,7 +89,7 @@ function enterAtCaret(state: EditorState, point: Point): Op[] {
 		return [{ kind: 'convert-block', id: block.id, to: 'paragraph' }];
 	}
 	if (block.type === 'heading' && point.offset === text.length) {
-		return [{ kind: 'insert-block', afterId: block.id, block: emptyParagraph(newBlockId()) }];
+		return [insertAfter(state.page, block.id, emptyParagraph(newBlockId()))];
 	}
 	return [{ kind: 'split-block', at: point, newId: newBlockId() }];
 }
@@ -96,7 +100,7 @@ function enterOps(state: EditorState, live: Range): Op[] {
 }
 
 function deleteOps(state: EditorState, live: Range, inputType: string): Op[] {
-	if (state.blockFocus) {
+	if (state.blockFocus && isCollapsed(live) && live.anchor.blockId === state.blockFocus) {
 		return [{ kind: 'delete-block', id: state.blockFocus }];
 	}
 	const backward = inputType === 'deleteContentBackward';
@@ -105,11 +109,11 @@ function deleteOps(state: EditorState, live: Range, inputType: string): Op[] {
 		inputType === 'deleteContent' ||
 		inputType === 'deleteByDrag';
 	if (!isCollapsed(live)) {
-		return rangeSharesParent(state.page, live) ? [{ kind: 'delete-range', range: live }] : [];
+		return [{ kind: 'delete-range', range: live }];
 	}
 	const block = findBlock(state.page, live.anchor.blockId);
 	if (!block) return [];
-	if (isAtomic(block)) return [{ kind: 'delete-block', id: block.id }];
+	if (isNonTextual(block)) return [{ kind: 'delete-block', id: block.id }];
 	if (backward) {
 		if (live.anchor.offset === 0) return backspaceAtStartOps(state.page, block.id);
 		const unit = expandCaretToUnit(state.page, live, 'backward');
@@ -127,21 +131,17 @@ function insertAtCaret(state: EditorState, at: Point, text: string): Op[] {
 	if (!text) return [];
 	const block = findBlock(state.page, at.blockId);
 	if (!block) return [];
-	if (isAtomic(block)) {
+	if (isNonTextual(block)) {
 		return [
-			{
-				kind: 'insert-block',
-				afterId: block.id,
-				block: {
-					id: newBlockId(),
-					type: 'paragraph',
-					content: [{ type: 'text', text, marks: [] }]
-				}
-			}
+			insertAfter(state.page, block.id, {
+				id: newBlockId(),
+				type: 'paragraph',
+				content: [{ type: 'text', text, marks: [] }]
+			})
 		];
 	}
 	if (text === ' ' && block && isTextLike(block)) {
-		const slash = slashOps(block.id, plaintextOf(block));
+		const slash = slashOps(block.id, plaintextOf(block), state.page);
 		if (slash) return slash;
 	}
 	if (block && isTextLike(block) && text.includes('\n')) {

@@ -2,13 +2,16 @@ import {
 	childrenOf,
 	findBlock,
 	isAtomic,
+	isContainer,
 	isHighSurrogate,
 	isLowSurrogate,
 	isTextLike,
+	parentIdOf,
 	parentOf,
 	plaintextOf,
 	type Block,
 	type KbPage,
+	type Op,
 	type Range
 } from '@shared-packages/kb-model';
 import { isCollapsed } from './range.js';
@@ -62,9 +65,57 @@ export function expandCaretToUnit(
 	return { anchor: point, head: { blockId: point.blockId, offset: to } };
 }
 
-export function backspaceAtStartOps(page: KbPage, blockId: string): import('@shared-packages/kb-model').Op[] {
+function isEmptyText(block: Block): boolean {
+	return (isTextLike(block) || block.type === 'code') && plaintextOf(block).length === 0;
+}
+
+function liftOutOfContainer(page: KbPage, childId: string, container: Block): Op[] {
+	const containerLoc = parentOf(page, container.id);
+	if (!containerLoc) return [];
+	const afterId =
+		containerLoc.index === 0 ? null : childrenOf(page, containerLoc.parent)[containerLoc.index - 1].id;
+	const parentId = parentIdOf(containerLoc.parent);
+	return [{ kind: 'move-block', id: childId, afterId, parentId }];
+}
+
+function unwrapFirstChild(page: KbPage, current: Block, container: Block): Op[] {
+	const kids = childrenOf(page, container);
+	const onlyChild = kids.length === 1;
+	if (isEmptyText(current)) {
+		const ops = liftOutOfContainer(page, current.id, container);
+		if (ops.length === 0) return [];
+		if (onlyChild) ops.push({ kind: 'delete-block', id: container.id });
+		return ops;
+	}
+	if (!onlyChild) return [];
+	const containerLoc = parentOf(page, container.id);
+	if (!containerLoc) return [];
+	const parentId = parentIdOf(containerLoc.parent);
+	if (containerLoc.index > 0) {
+		const prev = childrenOf(page, containerLoc.parent)[containerLoc.index - 1];
+		if (isTextLike(prev) || prev.type === 'code') {
+			return [
+				{ kind: 'move-block', id: current.id, afterId: prev.id, parentId },
+				{ kind: 'merge-block', keepId: prev.id, dropId: current.id },
+				{ kind: 'delete-block', id: container.id }
+			];
+		}
+	}
+	const ops = liftOutOfContainer(page, current.id, container);
+	if (ops.length === 0) return [];
+	ops.push({ kind: 'delete-block', id: container.id });
+	return ops;
+}
+
+export function backspaceAtStartOps(page: KbPage, blockId: string): Op[] {
 	const loc = parentOf(page, blockId);
-	if (!loc || loc.index <= 0) return [];
+	if (!loc) return [];
+	if (loc.index <= 0) {
+		if (loc.parent !== 'page' && isContainer(loc.parent)) {
+			return unwrapFirstChild(page, childrenOf(page, loc.parent)[loc.index], loc.parent);
+		}
+		return [];
+	}
 	const siblings = childrenOf(page, loc.parent);
 	const current = siblings[loc.index];
 	const prev = siblings[loc.index - 1];

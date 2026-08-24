@@ -39,4 +39,11 @@ describe('units', () => {
 		expect(backspaceAtStartOps(doc, 'b')).toEqual([{ kind: 'merge-block', keepId: 'a', dropId: 'b' }]);
 		expect(deleteAtEndOps(doc, 'a')).toEqual([{ kind: 'merge-block', keepId: 'a', dropId: 'b' }]);
 	});
+
+	it('unwraps an empty first child of a callout', () => {
+		const doc = page([para('z', 'z'), nest('c', [para('a', '')]), para('y', 'y')]);
+		const ops = backspaceAtStartOps(doc, 'a');
+		expect(ops[0]?.kind).toBe('move-block');
+		expect(ops.some((op) => op.kind === 'delete-block')).toBe(true);
+	});
 });

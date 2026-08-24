@@ -212,12 +212,12 @@ describe('beforeinput mapping', () => {
 		expect(plaintextOf(state.page.blocks[0])).toBe('');
 	});
 
-	it('does not emit delete-range when the live range crosses a parent boundary', () => {
+	it('emits delete-range when the live range crosses a parent boundary', () => {
 		const state = createEditorState(page([nest('c', [para('n', 'in')]), para('z', 'zz')]));
 		const live = { anchor: { blockId: 'n', offset: 0 }, head: { blockId: 'z', offset: 1 } };
-		expect(mapBeforeInput(state, { inputType: 'deleteContentBackward', data: null }, live).ops).toEqual(
-			[]
-		);
+		expect(mapBeforeInput(state, { inputType: 'deleteContentBackward', data: null }, live).ops).toEqual([
+			{ kind: 'delete-range', range: live }
+		]);
 	});
 
 	it('returns no ops when the caret names a missing block', () => {

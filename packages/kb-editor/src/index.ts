@@ -6,6 +6,7 @@ export {
 	parseSlice,
 	pasteOps,
 	serializeSlice,
+	remapBlock,
 	sliceBlocks,
 	slicePlaintext,
 	stripHtml,
@@ -21,11 +22,19 @@ export {
 	snapshotComposition,
 	type CompositionSnapshot
 } from './composition.js';
-export { dropAfterId, dropWhere } from './gutter.js';
+export { dropAfterId, dropTarget, dropWhere, overlayBoxes } from './gutter.js';
 export { allowlistedHref, allowlistedSrc } from './href.js';
 export { newBlockId } from './ids.js';
 export { mapKeydown, type KeyEvent, type KeymapResult } from './keymap.js';
-export { BLOCK_ID_ATTR, BLOCK_TYPE_ATTR, project, renderBlock, syncView } from './project.js';
+export {
+	BLOCK_ID_ATTR,
+	BLOCK_TYPE_ATTR,
+	DEPTH_ATTR,
+	PARENT_ID_ATTR,
+	project,
+	renderBlock,
+	syncView
+} from './project.js';
 export {
 	blockIndex,
 	clampRange,

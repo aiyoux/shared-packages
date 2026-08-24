@@ -1,5 +1,5 @@
 import type { KbPage, Op, Range } from '@shared-packages/kb-model';
-import { isCollapsed, orderedRange, rangeSharesParent } from './range.js';
+import { isCollapsed, orderedRange } from './range.js';
 import type { EditorState } from './state.js';
 
 export type CompositionSnapshot = {
@@ -32,7 +32,7 @@ export function commitComposition(
 		return { state: cancelComposition(state), ops: [] };
 	}
 	const ops: Op[] = [];
-	if (!isCollapsed(snapshot.selection) && rangeSharesParent(snapshot.page, snapshot.selection)) {
+	if (!isCollapsed(snapshot.selection)) {
 		ops.push({ kind: 'delete-range', range: snapshot.selection });
 	}
 	const { start } = orderedRange(snapshot.page, snapshot.selection);
