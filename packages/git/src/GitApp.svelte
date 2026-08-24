@@ -28,6 +28,18 @@
 		void reload();
 	});
 
+	async function maybeInitLocal(repoPath: string) {
+		if (typeof gitHost.initLocal !== 'function') return;
+		try {
+			await gitHost.initLocal(repoPath);
+		} catch (e) {
+			const msg = e instanceof Error ? e.message : String(e);
+			// Already a git repo / existing .git is success (idempotent).
+			if (/already a git repo|already exists|git directory already exists/i.test(msg)) return;
+			throw e;
+		}
+	}
+
 	async function add() {
 		error = '';
 		if (!label.trim() || !path.trim()) {
@@ -41,6 +53,7 @@
 				path: path.trim(),
 				baseUrl: backend === 'monitor' ? baseUrl.trim() || DEFAULT_MONITOR_BASE_URL : undefined
 			});
+			if (backend === 'local') await maybeInitLocal(repo.path);
 			label = '';
 			path = '';
 			await reload();
@@ -79,7 +92,12 @@
 		</label>
 		<label>
 			Path
-			<input type="text" bind:value={path} data-testid="git-repo-path" />
+			<input
+				type="text"
+				bind:value={path}
+				data-testid="git-repo-path"
+				placeholder={backend === 'local' ? 'VFS folder id' : ''}
+			/>
 		</label>
 		{#if backend === 'monitor'}
 			<label>

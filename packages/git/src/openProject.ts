@@ -5,6 +5,8 @@ export type OpenProjectPayload = {
 	backend: 'local' | 'monitor';
 	/** Git path: VFS id for local, absolute host path for monitor. */
 	path: string;
+	/** Display name; prefer this over a raw VFS id in `path`. */
+	label?: string;
 	/** Explorer id for the tree, when distinct from `path`. */
 	folderId?: string;
 	profileId?: string;

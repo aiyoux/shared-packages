@@ -41,7 +41,7 @@
 		const host = untrack(() => gitHost);
 		void (async () => {
 			const added = await host.addRepo({
-				label: payload.path.split('/').filter(Boolean).pop() || payload.path,
+				label: payload.label || payload.path.split('/').filter(Boolean).pop() || 'Project',
 				backend: payload.backend,
 				path: payload.path,
 				profileId: payload.profileId,
@@ -50,6 +50,23 @@
 			activeRepo = added;
 		})();
 	});
+
+	async function initLocalRepo() {
+		const repoPath =
+			activeRepo?.backend === 'local'
+				? activeRepo.path
+				: opened?.backend === 'local'
+					? opened.path
+					: null;
+		if (!repoPath || typeof gitHost.initLocal !== 'function') return;
+		try {
+			await gitHost.initLocal(repoPath);
+		} catch (e) {
+			const msg = e instanceof Error ? e.message : String(e);
+			if (/already a git repo|already exists|git directory already exists/i.test(msg)) return;
+			throw e;
+		}
+	}
 
 	$effect(() => {
 		const d = driver;
@@ -83,6 +100,11 @@
 		{/if}
 	</div>
 	<div class="hist">
+		{#if activeRepo?.backend === 'local' || opened?.backend === 'local'}
+			<button type="button" data-testid="projects-init-repo" onclick={() => void initLocalRepo()}>
+				Init
+			</button>
+		{/if}
 		{#if activeRepo}
 			<GitHistory {gitHost} repoId={activeRepo.id} />
 		{:else}

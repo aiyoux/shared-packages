@@ -188,4 +188,35 @@ describe('consumeOpenProject', () => {
 		});
 		expect(consumeOpenProject(storage, 5_000 + 1_000)).toBeNull();
 	});
+
+	it('round-trips optional label', () => {
+		const store = new Map<string, string>();
+		const storage = {
+			getItem: (k: string) => store.get(k) ?? null,
+			removeItem: (k: string) => {
+				store.delete(k);
+			},
+			setItem: (k: string, v: string) => {
+				store.set(k, v);
+			}
+		};
+		storage.setItem(
+			OPEN_PROJECT_KEY,
+			JSON.stringify({
+				backend: 'local',
+				path: 'fld_uuid',
+				label: 'My Project',
+				folderId: 'fld_uuid',
+				ts: 5_000
+			})
+		);
+		expect(consumeOpenProject(storage, 5_000 + 1_000)).toEqual({
+			backend: 'local',
+			path: 'fld_uuid',
+			label: 'My Project',
+			folderId: 'fld_uuid',
+			ts: 5_000
+		});
+		expect(store.has(OPEN_PROJECT_KEY)).toBe(false);
+	});
 });
