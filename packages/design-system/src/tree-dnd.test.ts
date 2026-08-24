@@ -134,4 +134,14 @@ describe('createPointerDrag', () => {
 		expect(typeof session.onPointerDown).toBe('function');
 		expect(session.didDrag()).toBe(false);
 	});
+
+	it('accepts onExternalDrop without changing the session shape', () => {
+		const session = createPointerDrag({
+			dropPolicy: () => [],
+			onCommit: () => {},
+			onExternalDrop: () => {},
+			nodeFromEl: () => null
+		});
+		expect(typeof session.onPointerDown).toBe('function');
+	});
 });

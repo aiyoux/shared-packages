@@ -22,6 +22,7 @@
 		expandedIds,
 		dropPolicy,
 		onDrop,
+		onExternalDrop,
 		onSelect,
 		onToggleExpand,
 		onActivate,
@@ -41,6 +42,7 @@
 			zone: Zone,
 			mods?: PointerDragMods
 		) => void;
+		onExternalDrop?: (drag: TreeDrag<K, M>, clientX: number, clientY: number) => void;
 		onSelect?: (node: TreeNodeModel<K, M>) => void;
 		onToggleExpand?: (node: TreeNodeModel<K, M>) => void;
 		onActivate?: (node: TreeNodeModel<K, M>) => void;
@@ -60,6 +62,7 @@
 	const drag = createPointerDrag<K, M>({
 		dropPolicy: (d, o) => dropPolicy?.(d, o) ?? [],
 		onCommit: (d, o, zone, mods) => onDrop?.(d, o, zone, mods),
+		onExternalDrop: (d, x, y) => onExternalDrop?.(d, x, y),
 		nodeFromEl: (el) => {
 			const id = el.dataset.treeId;
 			if (!id) return null;

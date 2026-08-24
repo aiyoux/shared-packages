@@ -110,6 +110,8 @@ export type PointerDragMods = { shiftKey: boolean };
 export type PointerDragOptions<K extends string = string, M = unknown> = {
 	dropPolicy: DropPolicy<K, M>;
 	onCommit: (drag: TreeDrag<K, M>, over: TreeDrag<K, M>, zone: Zone, mods: PointerDragMods) => void;
+	/** Fired on pointerup after a drag that did not land on a valid tree row. */
+	onExternalDrop?: (drag: TreeDrag<K, M>, clientX: number, clientY: number) => void;
 	nodeFromEl: (el: HTMLElement) => TreeDrag<K, M> | null;
 	isSelfDrop?: (drag: TreeDrag<K, M>, over: TreeDrag<K, M>) => boolean;
 	rowSelector?: string;
@@ -231,6 +233,8 @@ export function createPointerDrag<K extends string = string, M = unknown>(
 		const finish = (ev: PointerEvent) => {
 			if (activated && liveOver && liveZone) {
 				opts.onCommit(drag, liveOver, liveZone, { shiftKey: ev.shiftKey });
+			} else if (activated) {
+				opts.onExternalDrop?.(drag, ev.clientX, ev.clientY);
 			}
 			stop?.();
 			stop = null;

@@ -5,14 +5,24 @@ export type {
 	AnimFrame,
 	AnimKeyframe,
 	BindMode,
+	ClipMediaKind,
 	ClipSource,
-	FsBackend
+	FsBackend,
+	SketchFragment,
+	SketchFragmentKind,
+	SketchObjectKind
 } from './types.js';
-export { BIND_MODES } from './types.js';
+export {
+	BIND_MODES,
+	CLIP_MEDIA_KINDS,
+	SKETCH_FRAGMENT_KINDS,
+	SKETCH_OBJECT_KINDS
+} from './types.js';
 
 export {
 	AnimParseError,
 	assertClipMatchesDoc,
+	clipNeedsV2,
 	parseAnimDocument,
 	sameFsBackend,
 	serializeAnimDocument

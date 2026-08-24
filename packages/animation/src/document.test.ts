@@ -216,9 +216,207 @@ describe('parseAnimDocument / serializeAnimDocument', () => {
 	});
 
 	it('rejects unsupported schemaVersion', () => {
-		expect(() => parseAnimDocument({ schemaVersion: 2, durationMs: 0, clips: [] })).toThrow(
+		expect(() => parseAnimDocument({ schemaVersion: 3, durationMs: 0, clips: [] })).toThrow(
 			/schemaVersion/
 		);
+	});
+
+	it('accepts schemaVersion 2 with no clips', () => {
+		expect(parseAnimDocument({ schemaVersion: 2, durationMs: 0, clips: [] })).toEqual({
+			schemaVersion: 2,
+			durationMs: 0,
+			clips: []
+		});
+	});
+
+	it('rejects a sketch fragment on schemaVersion 1', () => {
+		expect(() =>
+			parseAnimDocument({
+				schemaVersion: 1,
+				durationMs: 1000,
+				clips: [
+					{
+						id: 'c',
+						startMs: 0,
+						durationMs: 10,
+						frame: { x: 0, y: 0, w: 1, h: 1 },
+						bind: 'live',
+						source: {
+							backend: 'shared-vfs',
+							nodeId: 'skch-1',
+							fragment: { kind: 'page', pageId: 'page-1' }
+						}
+					}
+				]
+			})
+		).toThrow(/schemaVersion 1 cannot carry a sketch fragment/);
+	});
+
+	it('rejects mediaKind sketch-fragment on schemaVersion 1', () => {
+		expect(() =>
+			parseAnimDocument({
+				schemaVersion: 1,
+				durationMs: 1000,
+				clips: [
+					{
+						id: 'c',
+						startMs: 0,
+						durationMs: 10,
+						frame: { x: 0, y: 0, w: 1, h: 1 },
+						bind: 'clone',
+						mediaKind: 'sketch-fragment',
+						snapshot: { bytesRef: 'data:image/png;base64,xx' }
+					}
+				]
+			})
+		).toThrow(/sketch-fragment/);
+	});
+
+	it('round-trips a v2 page fragment and writes schemaVersion 2', () => {
+		const doc: AnimDocument = {
+			schemaVersion: 2,
+			durationMs: 4000,
+			clips: [
+				{
+					id: 'frag',
+					startMs: 0,
+					durationMs: 2000,
+					frame: { x: 10, y: 20, w: 100, h: 80 },
+					bind: 'live',
+					mediaKind: 'sketch-fragment',
+					source: {
+						backend: 'shared-vfs',
+						nodeId: 'skch-1',
+						generation: 4,
+						fragment: { kind: 'layer', pageId: 'page-1', layerId: 'default' }
+					}
+				}
+			]
+		};
+		const json = serializeAnimDocument(doc);
+		expect(JSON.parse(json).schemaVersion).toBe(2);
+		expect(parseAnimDocument(json)).toEqual(doc);
+	});
+
+	it('serializes image-only docs as schemaVersion 1 even if the input said 2', () => {
+		const json = serializeAnimDocument({
+			schemaVersion: 2,
+			durationMs: 4000,
+			clips: cloneDoc.clips
+		});
+		expect(JSON.parse(json).schemaVersion).toBe(1);
+		expect(parseAnimDocument(json).schemaVersion).toBe(1);
+	});
+
+	it('bumps serialize to 2 when a v1-labelled doc carries a non-file fragment', () => {
+		const json = serializeAnimDocument({
+			schemaVersion: 1,
+			durationMs: 1000,
+			clips: [
+				{
+					id: 'obj',
+					startMs: 0,
+					durationMs: 500,
+					frame: { x: 0, y: 0, w: 8, h: 8 },
+					bind: 'snapshot',
+					mediaKind: 'sketch-fragment',
+					source: {
+						backend: 'shared-vfs',
+						nodeId: 'skch-1',
+						fragment: {
+							kind: 'object',
+							pageId: 'page-1',
+							layerId: 'default',
+							objectKind: 'image',
+							objectId: 'img-1'
+						}
+					},
+					snapshot: { bytesRef: 'data:image/png;base64,xx', atGeneration: 2 }
+				}
+			]
+		});
+		expect(JSON.parse(json).schemaVersion).toBe(2);
+		const parsed = parseAnimDocument(json);
+		expect(parsed.clips[0]).toMatchObject({
+			bind: 'snapshot',
+			mediaKind: 'sketch-fragment',
+			source: {
+				backend: 'shared-vfs',
+				nodeId: 'skch-1',
+				fragment: {
+					kind: 'object',
+					pageId: 'page-1',
+					layerId: 'default',
+					objectKind: 'image',
+					objectId: 'img-1'
+				}
+			}
+		});
+	});
+
+	it('keeps a file fragment on v1 and drops unknown fragment kinds on v2', () => {
+		const withFile = parseAnimDocument({
+			schemaVersion: 1,
+			durationMs: 100,
+			clips: [
+				{
+					id: 'f',
+					startMs: 0,
+					durationMs: 100,
+					frame: { x: 0, y: 0, w: 1, h: 1 },
+					bind: 'live',
+					source: {
+						backend: 'shared-vfs',
+						nodeId: 'img-1',
+						fragment: { kind: 'file' }
+					}
+				}
+			]
+		});
+		expect(withFile.schemaVersion).toBe(1);
+		expect(withFile.clips[0]).toMatchObject({
+			source: { backend: 'shared-vfs', nodeId: 'img-1', fragment: { kind: 'file' } }
+		});
+		expect(() =>
+			parseAnimDocument({
+				schemaVersion: 2,
+				durationMs: 100,
+				clips: [
+					{
+						id: 'f',
+						startMs: 0,
+						durationMs: 100,
+						frame: { x: 0, y: 0, w: 1, h: 1 },
+						bind: 'live',
+						source: {
+							backend: 'shared-vfs',
+							nodeId: 'skch-1',
+							fragment: { kind: 'stroke', pathId: 'p1' }
+						}
+					}
+				]
+			})
+		).toThrow(/unknown fragment.kind/);
+	});
+
+	it('clone still forbids source when mediaKind is sketch-fragment', () => {
+		expect(() =>
+			parseAnimDocument({
+				schemaVersion: 2,
+				durationMs: 100,
+				clips: [
+					{
+						id: 'c',
+						startMs: 0,
+						durationMs: 10,
+						frame: { x: 0, y: 0, w: 1, h: 1 },
+						bind: 'clone',
+						mediaKind: 'sketch-fragment',
+						source: { backend: 'shared-vfs', nodeId: 'skch-1' }
+					}
+				]
+			})
+		).toThrow(/omit source/);
 	});
 });
 
