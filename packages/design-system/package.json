@@ -22,6 +22,10 @@
     "./tailwind-theme.css": "./src/tailwind-theme.css",
     "./tooltip.css": "./src/tooltip.css",
     "./menu.css": "./src/menu.css",
+    "./tree.css": "./src/tree.css",
+    "./tree-dnd": "./src/tree-dnd.ts",
+    "./Tree.svelte": "./src/components/Tree.svelte",
+    "./TreeNode.svelte": "./src/components/TreeNode.svelte",
     "./Button.svelte": "./src/components/Button.svelte",
     "./Card.svelte": "./src/components/Card.svelte",
     "./HudFrame.svelte": "./src/components/HudFrame.svelte",
@@ -44,7 +48,14 @@
   "files": [
     "src"
   ],
+  "scripts": {
+    "test": "vitest run"
+  },
   "peerDependencies": {
     "svelte": "^5.0.0"
+  },
+  "devDependencies": {
+    "jsdom": "^26.1.0",
+    "vitest": "^4.1.2"
   }
 }

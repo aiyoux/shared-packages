@@ -48,3 +48,36 @@ export { default as FormGroup } from './components/FormGroup.svelte';
 export { default as Tooltip } from './components/Tooltip.svelte';
 export { default as LevelMeter } from './components/LevelMeter.svelte';
 export { default as Sidebar, type SidebarNavItem } from './components/Sidebar.svelte';
+export { default as Tree } from './components/Tree.svelte';
+export { default as TreeNode } from './components/TreeNode.svelte';
+export type {
+	DropPolicy,
+	FlatRow,
+	KeyboardResult,
+	TreeDrag,
+	TreeNode as TreeNodeModel,
+	Zone
+} from './tree-model.ts';
+export {
+	flattenVisible,
+	indexNodes,
+	isExpandable,
+	keyboardTarget,
+	toIdSet
+} from './tree-model.ts';
+export {
+	APPEND,
+	DEFAULT_BAR_SELECTOR,
+	DEFAULT_ROW_SELECTOR,
+	GUARD_SELECTOR,
+	ROW_DRAG_THRESHOLD,
+	ZONE_CLASSES,
+	barRect,
+	createPointerDrag,
+	insertIndex,
+	isInteractiveDragTarget,
+	parentRow,
+	pickZone,
+	rowFromPoint
+} from './tree-dnd.ts';
+export type { PointerDragMods, PointerDragOptions, PointerDragSession } from './tree-dnd.ts';

@@ -1,0 +1,190 @@
+/*
+ * Shared tree chrome. One place so Terminal, Sketcher, and later FileExplorer
+ * do not each invent row, rail, selection, and drop-zone treatments.
+ *
+ * Layout of app-specific extras (settings menus, unread dots) stays in the
+ * caller via Tree snippets. This sheet owns the row, indent rail, hover,
+ * selection, hover-reveal actions, and pointer-drag zone paints.
+ *
+ * Import from the host layout next to menu.css:
+ *   import '@shared-packages/design-system/tree.css';
+ */
+@layer components {
+	.tree {
+		display: flex;
+		flex-direction: column;
+		min-width: 0;
+		outline: none;
+	}
+
+	.tree-row {
+		position: relative;
+		display: flex;
+		align-items: center;
+		width: 100%;
+		min-width: 0;
+		min-height: var(--control-h-sm);
+		height: var(--control-h-sm);
+		padding: 0 var(--space-2);
+		padding-left: calc(var(--space-2) + (var(--tree-depth, 0) * var(--space-3)));
+		margin: 0;
+		border: 1px solid transparent;
+		border-radius: var(--radius-md);
+		background: transparent;
+		color: var(--text-secondary);
+		font-family: inherit;
+		font-size: var(--text-sm);
+		font-weight: 500;
+		line-height: 1.2;
+		text-align: left;
+		cursor: pointer;
+		appearance: none;
+	}
+
+	.tree-row:hover,
+	.tree-row:focus-visible {
+		background: var(--overlay-medium);
+		color: var(--text-primary);
+	}
+
+	.tree-row[aria-selected='true'],
+	.tree-row[data-state='active'] {
+		background: var(--accent-glow);
+		color: var(--accent);
+		border-color: var(--accent);
+	}
+
+	.tree-row[data-state='unread'] {
+		color: var(--cat-amber-soft);
+		background: rgb(var(--cat-amber-rgb) / 0.1);
+		border-color: rgb(var(--cat-amber-rgb) / 0.55);
+	}
+
+	.tree-row[data-state='hidden'] {
+		color: var(--text-faint);
+	}
+
+	.tree-row[data-state='hidden'] .tree-row-name {
+		text-decoration: line-through;
+		text-decoration-color: var(--text-faint);
+	}
+
+	.tree-group {
+		position: relative;
+		display: flex;
+		flex-direction: column;
+		min-width: 0;
+	}
+
+	.tree-group[data-tree-depth]:not([data-tree-depth='0']) {
+		box-shadow: inset 1px 0 var(--line-rail);
+		margin-left: var(--space-3);
+		padding-left: var(--space-1);
+	}
+
+	.tree-chevron {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		flex-shrink: 0;
+		width: 14px;
+		height: 14px;
+		margin-right: var(--space-1);
+		color: var(--text-muted);
+		transition: transform var(--dur-fast) var(--ease);
+	}
+
+	.tree-chevron.is-collapsed {
+		transform: rotate(-90deg);
+	}
+
+	.tree-chevron.is-leaf {
+		visibility: hidden;
+	}
+
+	.tree-row-label {
+		display: flex;
+		align-items: center;
+		justify-content: flex-start;
+		flex: 1 1 0%;
+		min-width: 0;
+		max-width: 100%;
+		overflow: hidden;
+		text-align: left;
+		gap: var(--space-2);
+	}
+
+	.tree-row-name {
+		flex: 1 1 0%;
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		text-align: left;
+	}
+
+	.tree-row-meta {
+		flex-shrink: 0;
+		font-size: var(--text-xs);
+		font-weight: 400;
+		color: var(--text-muted);
+	}
+
+	.tree-row-actions {
+		position: absolute;
+		right: var(--space-1);
+		top: 50%;
+		transform: translateY(-50%);
+		z-index: 10;
+		display: none;
+		align-items: center;
+		gap: 2px;
+		padding-left: var(--space-2);
+		border-radius: var(--radius-md);
+		background: linear-gradient(to left, var(--surface-ground) 60%, transparent);
+	}
+
+	.tree-row:hover > .tree-row-actions,
+	.tree-row:focus-within > .tree-row-actions,
+	.tree-row-actions.is-open {
+		display: flex;
+	}
+
+	.tree-row.dnd-dragging {
+		opacity: 0.45;
+	}
+
+	[data-tree-row].dnd-zone-before::before,
+	[data-tree-row].dnd-zone-after::after,
+	[data-dnd-row].dnd-zone-before::before,
+	[data-dnd-row].dnd-zone-after::after {
+		content: '';
+		position: absolute;
+		left: 0;
+		right: 0;
+		height: 1px;
+		z-index: 10;
+		pointer-events: none;
+		background: var(--accent);
+	}
+
+	[data-tree-row].dnd-zone-before::before,
+	[data-dnd-row].dnd-zone-before::before {
+		top: 0;
+	}
+
+	[data-tree-row].dnd-zone-after::after,
+	[data-dnd-row].dnd-zone-after::after {
+		bottom: 0;
+	}
+
+	[data-tree-row].dnd-zone-into,
+	[data-dnd-row].dnd-zone-into {
+		background: var(--accent-glow);
+		box-shadow: inset 0 0 0 1px var(--accent);
+	}
+
+	body.tree-dnd-active {
+		cursor: grabbing;
+	}
+}
