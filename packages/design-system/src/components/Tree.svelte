@@ -27,6 +27,8 @@
 		onActivate,
 		leading,
 		actions,
+		after,
+		extra,
 		class: className = ''
 	}: {
 		items: TreeNodeModel<K, M>[];
@@ -44,6 +46,10 @@
 		onActivate?: (node: TreeNodeModel<K, M>) => void;
 		leading?: Snippet<[TreeNodeModel<K, M>]>;
 		actions?: Snippet<[TreeNodeModel<K, M>]>;
+		/** Sibling of the row (settings menus). Always mounted. */
+		after?: Snippet<[TreeNodeModel<K, M>]>;
+		/** Rendered under an expanded row (e.g. connection WebSocket URL). */
+		extra?: Snippet<[TreeNodeModel<K, M>]>;
 		class?: string;
 	} = $props();
 
@@ -101,6 +107,8 @@
 			onPointerDown={drag.onPointerDown}
 			{leading}
 			{actions}
+			{after}
+			{extra}
 			didDrag={drag.didDrag}
 		/>
 	{/each}

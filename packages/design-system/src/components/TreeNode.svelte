@@ -15,6 +15,8 @@
 		onPointerDown,
 		leading,
 		actions,
+		after,
+		extra,
 		didDrag
 	}: {
 		node: TreeNodeModel<K, M>;
@@ -27,6 +29,8 @@
 		onPointerDown?: (e: PointerEvent, drag: TreeDrag<K, M>) => void;
 		leading?: Snippet<[TreeNodeModel<K, M>]>;
 		actions?: Snippet<[TreeNodeModel<K, M>]>;
+		after?: Snippet<[TreeNodeModel<K, M>]>;
+		extra?: Snippet<[TreeNodeModel<K, M>]>;
 		didDrag?: () => boolean;
 	} = $props();
 
@@ -108,6 +112,14 @@
 		{/if}
 	</button>
 
+	{#if after}
+		{@render after(node)}
+	{/if}
+
+	{#if extra && open}
+		{@render extra(node)}
+	{/if}
+
 	{#if expandable && open && node.children?.length}
 		<div role="group">
 			{#each node.children as child (child.id)}
@@ -122,6 +134,8 @@
 					{onPointerDown}
 					{leading}
 					{actions}
+					{after}
+					{extra}
 					{didDrag}
 				/>
 			{/each}
