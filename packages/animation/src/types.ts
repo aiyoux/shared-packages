@@ -2,7 +2,7 @@ export const BIND_MODES = ['clone', 'live', 'snapshot', 'gitPin'] as const;
 
 export type BindMode = (typeof BIND_MODES)[number];
 
-export const SKETCH_OBJECT_KINDS = ['image', 'bake', 'sticker', 'text'] as const;
+export const SKETCH_OBJECT_KINDS = ['image', 'bake', 'sticker', 'text', 'path'] as const;
 export type SketchObjectKind = (typeof SKETCH_OBJECT_KINDS)[number];
 
 export const SKETCH_FRAGMENT_KINDS = ['file', 'page', 'layer', 'object'] as const;

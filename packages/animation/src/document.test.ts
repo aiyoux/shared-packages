@@ -399,6 +399,38 @@ describe('parseAnimDocument / serializeAnimDocument', () => {
 		).toThrow(/unknown fragment.kind/);
 	});
 
+	it('round-trips a path object fragment', () => {
+		const json = serializeAnimDocument({
+			schemaVersion: 2,
+			durationMs: 1000,
+			clips: [
+				{
+					id: 'ink',
+					startMs: 0,
+					durationMs: 500,
+					frame: { x: 0, y: 0, w: 8, h: 8 },
+					bind: 'live',
+					mediaKind: 'sketch-fragment',
+					source: {
+						backend: 'shared-vfs',
+						nodeId: 'skch-1',
+						fragment: {
+							kind: 'object',
+							pageId: 'page-1',
+							layerId: 'default',
+							objectKind: 'path',
+							objectId: 'stroke-1'
+						}
+					}
+				}
+			]
+		});
+		expect(JSON.parse(json).schemaVersion).toBe(2);
+		expect(parseAnimDocument(json).clips[0]).toMatchObject({
+			source: { fragment: { objectKind: 'path', objectId: 'stroke-1' } }
+		});
+	});
+
 	it('clone still forbids source when mediaKind is sketch-fragment', () => {
 		expect(() =>
 			parseAnimDocument({
