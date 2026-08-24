@@ -1,7 +1,16 @@
 import { convertBlock, normalizeRange, resolvePoint } from './apply.js';
 import { sliceSpans } from './normalize.js';
-import { isAtomic, isTextLike, payloadLength, plaintextOf } from './plaintext.js';
-import { childrenOf, documentOrder, locateBlock, parentOf, sameParent, type ParentRef } from './tree.js';
+import { isAtomic, isContainer, isNonTextual, isTextLike, payloadLength, plaintextOf } from './plaintext.js';
+import {
+	childrenOf,
+	documentOrder,
+	lastDescendantId,
+	locateBlock,
+	parentOf,
+	parentIdOf,
+	sameParent,
+	type ParentRef
+} from './tree.js';
 import type { Block, KbPage, Mark, Op, Point, TextSpan } from './types.js';
 
 function cloneBlock(block: Block): Block {
@@ -22,6 +31,16 @@ function requireBlock(
 	const loc = locateBlock(page, id);
 	if (!loc) throw new Error(`${what}: unknown block ${id}`);
 	return loc;
+}
+
+function insertBlockOp(page: KbPage, block: Block): Extract<Op, { kind: 'insert-block' }> {
+	const loc = requireBlock(page, block.id, 'insert-block');
+	return {
+		kind: 'insert-block',
+		afterId: prevSiblingId(page, block.id),
+		parentId: parentIdOf(loc.parent),
+		block: cloneBlock(block)
+	};
 }
 
 const STRIP_MARKS: Mark[] = [
@@ -85,39 +104,68 @@ function convertedSuffixLength(start: Block, end: Block, endOffset: number): num
 	return 0;
 }
 
+function canConcat(start: Block, end: Block): boolean {
+	const startOk = isTextLike(start) || start.type === 'code';
+	const endOk = isTextLike(end) || end.type === 'code';
+	return startOk && endOk;
+}
+
+function trimStartPrefixExists(block: Block, offset: number): boolean {
+	if (isNonTextual(block)) return false;
+	return isTextLike(block) || block.type === 'code';
+}
+
+function fullyCoveredRoots(page: KbPage, startId: string, endId: string): Block[] {
+	const order = documentOrder(page);
+	const idx = new Map<string, number>();
+	for (let i = 0; i < order.length; i++) idx.set(order[i].id, i);
+	const startIdx = idx.get(startId) ?? -1;
+	const endIdx = idx.get(endId) ?? -1;
+	const roots: Block[] = [];
+	const covered = new Set<string>();
+
+	function ancestorCovered(block: Block): boolean {
+		let loc = parentOf(page, block.id);
+		while (loc && loc.parent !== 'page') {
+			if (covered.has(loc.parent.id)) return true;
+			loc = parentOf(page, loc.parent.id);
+		}
+		return false;
+	}
+
+	for (const block of order) {
+		if (block.id === startId || block.id === endId) continue;
+		const i = idx.get(block.id) ?? -1;
+		const j = idx.get(lastDescendantId(block)) ?? i;
+		if (!(i > startIdx && j < endIdx)) continue;
+		if (ancestorCovered(block)) continue;
+		roots.push(block);
+		covered.add(block.id);
+	}
+	return roots;
+}
+
 function invertDeleteRange(page: KbPage, op: Extract<Op, { kind: 'delete-range' }>): Op[] {
 	const { start, end } = normalizeRange(page, op.range);
 	if (start.block.id === end.block.id && start.offset === end.offset) return [];
 
 	if (start.block.id === end.block.id) {
-		if (isAtomic(start.block)) {
-			return [
-				{
-					kind: 'insert-block',
-					afterId: prevSiblingId(page, start.block.id),
-					block: cloneBlock(start.block)
-				}
-			];
+		if (isAtomic(start.block) || isContainer(start.block)) {
+			return [insertBlockOp(page, start.block)];
 		}
 		return insertSlice(start.block, start.offset, end.offset, start.offset);
 	}
 
-	if (!sameParent(start.parent, end.parent)) {
-		throw new Error('delete-range: start and end must share a parent');
-	}
-
 	const startBlock = start.block;
 	const endBlock = end.block;
-	const list = childrenOf(page, start.parent);
-	const middles = list.slice(start.indexInParent + 1, end.indexInParent);
-	const ops: Op[] = [];
-	const startSurvives = !isAtomic(startBlock);
-	const canConcat =
-		startSurvives &&
-		(isTextLike(startBlock) || startBlock.type === 'code') &&
-		(isTextLike(endBlock) || endBlock.type === 'code');
+	const roots = fullyCoveredRoots(page, startBlock.id, endBlock.id);
+	const same = sameParent(start.parent, end.parent);
+	const startSurvives = trimStartPrefixExists(startBlock, start.offset);
+	const willConcat = same && startSurvives && canConcat(startBlock, endBlock) && !isNonTextual(endBlock);
 
-	if (canConcat) {
+	const ops: Op[] = [];
+
+	if (willConcat) {
 		const suffixLen = convertedSuffixLength(startBlock, endBlock, end.offset);
 		if (suffixLen > 0) {
 			ops.push({
@@ -129,31 +177,21 @@ function invertDeleteRange(page: KbPage, op: Extract<Op, { kind: 'delete-range' 
 			});
 		}
 		ops.push(...insertSlice(startBlock, start.offset, payloadLength(startBlock), start.offset));
-		let afterId = startBlock.id;
-		for (const block of [...middles, endBlock]) {
-			ops.push({ kind: 'insert-block', afterId, block: cloneBlock(block) });
-			afterId = block.id;
+		for (const block of [...roots, endBlock]) {
+			ops.push(insertBlockOp(page, block));
 		}
 		return ops;
 	}
 
 	if (startSurvives) {
 		ops.push(...insertSlice(startBlock, start.offset, payloadLength(startBlock), start.offset));
-		let afterId = startBlock.id;
-		for (const block of middles) {
-			ops.push({ kind: 'insert-block', afterId, block: cloneBlock(block) });
-			afterId = block.id;
-		}
-		return ops;
 	}
-
-	if (!isAtomic(endBlock) && end.offset > 0) {
+	const toInsert = startSurvives ? roots : [startBlock, ...roots];
+	for (const block of toInsert) {
+		ops.push(insertBlockOp(page, block));
+	}
+	if (!isNonTextual(endBlock) && end.offset > 0) {
 		ops.push(...insertSlice(endBlock, 0, end.offset, 0));
-	}
-	let afterId = prevSiblingId(page, startBlock.id);
-	for (const block of [startBlock, ...middles]) {
-		ops.push({ kind: 'insert-block', afterId, block: cloneBlock(block) });
-		afterId = block.id;
 	}
 	return ops;
 }
@@ -245,17 +283,23 @@ function invertMergeBlock(page: KbPage, op: Extract<Op, { kind: 'merge-block' }>
 	if (!sameParent(keep.parent, drop.parent) || drop.index !== keep.index + 1) {
 		throw new Error('merge-block: dropId must be the immediate next sibling of keepId');
 	}
-	if (isAtomic(keep.block)) {
+	if (isAtomic(keep.block) || isContainer(keep.block)) {
 		throw new Error('cannot merge into atomic block');
 	}
 	const dropSnap = cloneBlock(drop.block);
-	if (isAtomic(drop.block)) {
-		return [{ kind: 'insert-block', afterId: op.keepId, block: dropSnap }];
+	if (isAtomic(drop.block) || isContainer(drop.block)) {
+		return [
+			{
+				kind: 'insert-block',
+				afterId: op.keepId,
+				parentId: parentIdOf(keep.parent),
+				block: dropSnap
+			}
+		];
 	}
 
 	const keepLen = payloadLength(keep.block);
 
-	// split-block on code is only legal at an empty last line, so restore via delete+insert.
 	if (keep.block.type === 'code') {
 		const added = drop.block.type === 'code' ? drop.block.text : plaintextOf(drop.block);
 		const ops: Op[] = [];
@@ -268,7 +312,12 @@ function invertMergeBlock(page: KbPage, op: Extract<Op, { kind: 'merge-block' }>
 				}
 			});
 		}
-		ops.push({ kind: 'insert-block', afterId: op.keepId, block: dropSnap });
+		ops.push({
+			kind: 'insert-block',
+			afterId: op.keepId,
+			parentId: parentIdOf(keep.parent),
+			block: dropSnap
+		});
 		return ops;
 	}
 
@@ -320,9 +369,9 @@ function restoreSolePayload(id: string, snap: Block, coercedLen: number): Op[] {
 }
 
 function invertConvertBlock(page: KbPage, op: Extract<Op, { kind: 'convert-block' }>): Op[] {
-	const { block } = requireBlock(page, op.id, 'convert-block');
-	if (op.to === 'image') {
-		throw new Error('cannot convert to image');
+	const { block, parent } = requireBlock(page, op.id, 'convert-block');
+	if (op.to === 'image' || op.to === 'callout' || op.to === 'toggle') {
+		throw new Error(`cannot convert to ${op.to}`);
 	}
 	if (isNoOpConvert(block, op)) return [];
 	if (isLosslessTextLikeConvert(block, op.to)) {
@@ -340,7 +389,12 @@ function invertConvertBlock(page: KbPage, op: Extract<Op, { kind: 'convert-block
 	if (others >= 1) {
 		return [
 			{ kind: 'delete-block', id: op.id },
-			{ kind: 'insert-block', afterId: prevSiblingId(page, op.id), block: cloneBlock(block) }
+			{
+				kind: 'insert-block',
+				afterId: prevSiblingId(page, op.id),
+				parentId: parentIdOf(parent),
+				block: cloneBlock(block)
+			}
 		];
 	}
 
@@ -359,7 +413,7 @@ function invertConvertBlock(page: KbPage, op: Extract<Op, { kind: 'convert-block
 function invertInsertText(page: KbPage, op: Extract<Op, { kind: 'insert-text' }>): Op[] {
 	const at = resolvePoint(page, op.at);
 	if (op.text === '') return [];
-	if (isAtomic(at.block)) {
+	if (isAtomic(at.block) || isContainer(at.block)) {
 		throw new Error('cannot insert text into atomic block');
 	}
 	if (isTextLike(at.block) && op.text.includes('\n')) {
@@ -391,14 +445,21 @@ export function invert(page: KbPage, op: Op): Op[] {
 		case 'insert-block':
 			return [{ kind: 'delete-block', id: op.block.id }];
 		case 'delete-block': {
-			if (documentOrder(page).length <= 1) return [];
-			const { block } = requireBlock(page, op.id, 'delete-block');
-			return [{ kind: 'insert-block', afterId: prevSiblingId(page, op.id), block: cloneBlock(block) }];
+			const { block, parent } = requireBlock(page, op.id, 'delete-block');
+			if (parent === 'page' && page.blocks.length <= 1) return [];
+			return [insertBlockOp(page, block)];
 		}
 		case 'move-block': {
-			requireBlock(page, op.id, 'move-block');
+			const loc = requireBlock(page, op.id, 'move-block');
 			if (op.afterId === op.id) throw new Error('cannot move block after itself');
-			return [{ kind: 'move-block', id: op.id, afterId: prevSiblingId(page, op.id) }];
+			return [
+				{
+					kind: 'move-block',
+					id: op.id,
+					afterId: prevSiblingId(page, op.id),
+					parentId: parentIdOf(loc.parent)
+				}
+			];
 		}
 		case 'convert-block':
 			return invertConvertBlock(page, op);
@@ -409,6 +470,11 @@ export function invert(page: KbPage, op: Op): Op[] {
 		}
 		case 'set-children':
 			return [{ kind: 'set-children', children: [...page.children] }];
+		case 'set-toggle': {
+			const { block } = requireBlock(page, op.id, 'set-toggle');
+			if (block.type !== 'toggle') throw new Error('set-toggle: block is not a toggle');
+			return [{ kind: 'set-toggle', id: op.id, open: block.open }];
+		}
 		default: {
 			const _never: never = op;
 			throw new Error(`unknown op: ${(_never as Op).kind}`);

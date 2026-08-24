@@ -31,8 +31,7 @@ export function sameParent(a: ParentRef, b: ParentRef): boolean {
 }
 
 function isClosedToggle(block: Block): boolean {
-	const rec = block as { type: string; open?: unknown };
-	return rec.type === 'toggle' && rec.open === false;
+	return block.type === 'toggle' && block.open === false;
 }
 
 function walk(blocks: Block[], out: Block[], visibleOnly: boolean): void {
@@ -87,4 +86,36 @@ export function parentOf(page: KbPage, id: string): BlockParent | undefined {
 	const found = locateBlock(page, id);
 	if (!found) return undefined;
 	return { parent: found.parent, index: found.index };
+}
+
+export function parentIdOf(parent: ParentRef): string | null {
+	return parent === 'page' ? null : parent.id;
+}
+
+export function isDescendant(page: KbPage, ancestorId: string, maybeChildId: string): boolean {
+	if (ancestorId === maybeChildId) return false;
+	const ancestor = findBlock(page, ancestorId);
+	if (!ancestor) return false;
+	const ids: string[] = [];
+	collectIds(ancestor, ids);
+	return ids.includes(maybeChildId);
+}
+
+function collectIds(block: Block, into: string[]): void {
+	into.push(block.id);
+	const kids = blockChildren(block);
+	if (kids) for (const child of kids) collectIds(child, into);
+}
+
+export function subtreeContains(block: Block, id: string): boolean {
+	if (block.id === id) return true;
+	const kids = blockChildren(block);
+	if (!kids) return false;
+	return kids.some((child) => subtreeContains(child, id));
+}
+
+export function lastDescendantId(block: Block): string {
+	const kids = blockChildren(block);
+	if (!kids || kids.length === 0) return block.id;
+	return lastDescendantId(kids[kids.length - 1]);
 }

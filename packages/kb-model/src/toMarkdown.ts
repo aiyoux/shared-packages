@@ -50,6 +50,10 @@ function renderBlock(block: Block, orderedIndex: number): string {
 			return '---';
 		case 'image':
 			return `![${block.alt}](${block.src})`;
+		case 'callout':
+		case 'toggle':
+			// Chrome is not textual; children render via documentOrder DFS.
+			return '';
 		default: {
 			return '';
 		}

@@ -1,5 +1,6 @@
 export const KB_FORMAT = 'kb' as const;
-export const KB_SCHEMA_VERSION = 1;
+/** Max schemaVersion this client understands. Not a parse/write stamp. */
+export const KB_SCHEMA_VERSION = 2;
 
 export type Mark =
 	| { type: 'bold' }
@@ -22,10 +23,35 @@ export type CodeBlock = { id: string; type: 'code'; language: string; text: stri
 export type DividerBlock = { id: string; type: 'divider' };
 export type ImageBlock = { id: string; type: 'image'; src: string; alt: string };
 
-export type Block = ParagraphBlock | HeadingBlock | ListItemBlock | CodeBlock | DividerBlock | ImageBlock;
+export type CalloutVariant = 'info' | 'warning' | 'note';
+
+export type CalloutBlock = {
+	id: string;
+	type: 'callout';
+	variant: CalloutVariant;
+	children: Block[];
+};
+
+export type ToggleBlock = {
+	id: string;
+	type: 'toggle';
+	open: boolean;
+	children: Block[];
+};
+
+export type Block =
+	| ParagraphBlock
+	| HeadingBlock
+	| ListItemBlock
+	| CodeBlock
+	| DividerBlock
+	| ImageBlock
+	| CalloutBlock
+	| ToggleBlock;
 
 export type TextLikeBlock = ParagraphBlock | HeadingBlock | ListItemBlock;
 export type AtomicBlock = DividerBlock | ImageBlock;
+export type ContainerBlock = CalloutBlock | ToggleBlock;
 
 export type KbPage = {
 	format: typeof KB_FORMAT;
@@ -49,9 +75,10 @@ export type Op =
 	| { kind: 'format-range'; range: Range; mark: Mark; on: boolean }
 	| { kind: 'split-block'; at: Point; newId: string }
 	| { kind: 'merge-block'; keepId: string; dropId: string }
-	| { kind: 'insert-block'; afterId: string | null; block: Block }
+	| { kind: 'insert-block'; afterId: string | null; parentId?: string | null; block: Block }
 	| { kind: 'delete-block'; id: string }
-	| { kind: 'move-block'; id: string; afterId: string | null }
+	| { kind: 'move-block'; id: string; afterId: string | null; parentId?: string | null }
 	| { kind: 'convert-block'; id: string; to: Block['type']; level?: 1 | 2 | 3; ordered?: boolean }
 	| { kind: 'set-code'; id: string; language: string }
-	| { kind: 'set-children'; children: string[] };
+	| { kind: 'set-children'; children: string[] }
+	| { kind: 'set-toggle'; id: string; open: boolean };

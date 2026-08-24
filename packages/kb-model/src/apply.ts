@@ -7,14 +7,17 @@ import {
 	orderedBlock,
 	splitSpans
 } from './normalize.js';
-import { isAtomic, isTextLike, plaintextOf } from './plaintext.js';
+import { isAtomic, isContainer, isNonTextual, isTextLike, plaintextOf } from './plaintext.js';
 import {
 	blockChildren,
 	childrenOf,
 	documentOrder,
+	isDescendant,
+	lastDescendantId,
 	locateBlock,
 	parentOf,
 	sameParent,
+	subtreeContains,
 	type ParentRef
 } from './tree.js';
 import type { Block, CodeBlock, KbPage, Mark, Op, Point, Range, TextSpan } from './types.js';
@@ -66,7 +69,7 @@ export function resolvePoint(page: KbPage, point: Point): Resolved {
 	if (!Number.isInteger(point.offset)) {
 		throw new UnresolvedPointError(`unresolved Point: offset ${point.offset} is not an integer`);
 	}
-	if (isAtomic(block)) {
+	if (isNonTextual(block)) {
 		if (point.offset !== 0) {
 			throw new UnresolvedPointError(`unresolved Point: illegal offset ${point.offset} on atomic block`);
 		}
@@ -177,7 +180,7 @@ function applySetTitle(page: KbPage, title: string): void {
 function applyInsertText(page: KbPage, op: Extract<Op, { kind: 'insert-text' }>): void {
 	const at = resolvePoint(page, op.at);
 	if (op.text === '') return;
-	if (isAtomic(at.block)) {
+	if (isAtomic(at.block) || isContainer(at.block)) {
 		throw new Error('cannot insert text into atomic block');
 	}
 	if (isTextLike(at.block)) {
@@ -219,7 +222,7 @@ function canConcat(start: Block, end: Block): boolean {
 }
 
 function trimStartPrefix(block: Block, offset: number): Block | null {
-	if (isAtomic(block)) return null;
+	if (isNonTextual(block)) return null;
 	if (block.type === 'code') {
 		return { ...block, text: block.text.slice(0, offset) };
 	}
@@ -231,7 +234,7 @@ function trimStartPrefix(block: Block, offset: number): Block | null {
 }
 
 function trimEndSuffix(block: Block, offset: number): Block | null {
-	if (isAtomic(block)) return offset > 0 ? null : block;
+	if (isNonTextual(block)) return offset > 0 ? null : block;
 	if (block.type === 'code') {
 		return { ...block, text: block.text.slice(offset) };
 	}
@@ -240,6 +243,50 @@ function trimEndSuffix(block: Block, offset: number): Block | null {
 		return { ...block, content: normalizeSpans(right) };
 	}
 	return null;
+}
+
+function dfsIndexMap(page: KbPage): Map<string, number> {
+	const map = new Map<string, number>();
+	const order = documentOrder(page);
+	for (let i = 0; i < order.length; i++) map.set(order[i].id, i);
+	return map;
+}
+
+function rewriteDeleteRange(
+	list: Block[],
+	start: Resolved,
+	end: Resolved,
+	idx: Map<string, number>
+): Block[] {
+	const startIdx = idx.get(start.block.id) ?? -1;
+	const endIdx = idx.get(end.block.id) ?? -1;
+	const next: Block[] = [];
+	for (const block of list) {
+		const i = idx.get(block.id) ?? -1;
+		const j = idx.get(lastDescendantId(block)) ?? i;
+		if (block.id === start.block.id) {
+			const prefix = trimStartPrefix(block, start.offset);
+			if (prefix) next.push(prefix);
+			continue;
+		}
+		if (block.id === end.block.id) {
+			const suffix = trimEndSuffix(block, end.offset);
+			if (suffix) next.push(suffix);
+			continue;
+		}
+		if (i > startIdx && j < endIdx) continue;
+		const containsStart = i < startIdx && j >= startIdx;
+		const containsEnd = i < endIdx && j >= endIdx;
+		const kids = blockChildren(block);
+		if ((containsStart || containsEnd) && kids) {
+			const rewritten = rewriteDeleteRange(kids, start, end, idx);
+			kids.splice(0, kids.length, ...rewritten);
+			next.push(block);
+			continue;
+		}
+		next.push(block);
+	}
+	return next;
 }
 
 function applyDeleteRange(page: KbPage, op: Extract<Op, { kind: 'delete-range' }>): void {
@@ -262,27 +309,24 @@ function applyDeleteRange(page: KbPage, op: Extract<Op, { kind: 'delete-range' }
 		return;
 	}
 
-	if (!sameParent(start.parent, end.parent)) {
-		throw new Error('delete-range: start and end must share a parent');
+	if (subtreeContains(start.block, end.block.id) && start.block.id !== end.block.id) {
+		throw new Error('delete-range: cannot start on a container that contains the end');
 	}
+
+	const idx = dfsIndexMap(page);
+	const rewritten = rewriteDeleteRange(page.blocks, start, end, idx);
+	page.blocks.splice(0, page.blocks.length, ...rewritten);
+
+	if (!sameParent(start.parent, end.parent)) return;
 
 	const list = childrenOf(page, start.parent);
-	const startBlock = list[start.indexInParent];
-	const endBlock = list[end.indexInParent];
-	const prefix = trimStartPrefix(startBlock, start.offset);
-	const suffix = trimEndSuffix(endBlock, end.offset);
-	const before = list.slice(0, start.indexInParent);
-	const after = list.slice(end.indexInParent + 1);
-	const next: Block[] = [...before];
-
-	if (prefix && suffix && canConcat(startBlock, endBlock)) {
-		next.push(concatEndOntoStart(prefix, suffix));
-	} else {
-		if (prefix) next.push(prefix);
-		if (suffix) next.push(suffix);
-	}
-	next.push(...after);
-	list.splice(0, list.length, ...next);
+	const startI = list.findIndex((block) => block.id === start.block.id);
+	const endI = list.findIndex((block) => block.id === end.block.id);
+	if (startI < 0 || endI < 0 || endI !== startI + 1) return;
+	const prefix = list[startI];
+	const suffix = list[endI];
+	if (!canConcat(start.block, end.block)) return;
+	list.splice(startI, 2, concatEndOntoStart(prefix, suffix));
 }
 
 function applyFormatRange(page: KbPage, op: Extract<Op, { kind: 'format-range' }>): void {
@@ -323,7 +367,7 @@ function applySplitBlock(page: KbPage, op: Extract<Op, { kind: 'split-block' }>)
 	}
 	const at = resolvePoint(page, op.at);
 	const block = at.block;
-	if (isAtomic(block)) {
+	if (isAtomic(block) || isContainer(block)) {
 		throw new Error('cannot split atomic block');
 	}
 	if (block.type === 'code') {
@@ -363,10 +407,10 @@ function applyMergeBlock(page: KbPage, op: Extract<Op, { kind: 'merge-block' }>)
 	}
 	const keep = keepLoc.block;
 	const drop = dropLoc.block;
-	if (isAtomic(keep)) {
+	if (isAtomic(keep) || isContainer(keep)) {
 		throw new Error('cannot merge into atomic block');
 	}
-	if (isAtomic(drop)) {
+	if (isAtomic(drop) || isContainer(drop)) {
 		deleteBlockAt(page, dropLoc.parent, dropLoc.index);
 		return;
 	}
@@ -374,9 +418,14 @@ function applyMergeBlock(page: KbPage, op: Extract<Op, { kind: 'merge-block' }>)
 	deleteBlockAt(page, dropLoc.parent, dropLoc.index);
 }
 
+const CONVERT_FORBIDDEN = new Set<Block['type']>(['image', 'callout', 'toggle']);
+
 export function convertBlock(block: Block, op: Extract<Op, { kind: 'convert-block' }>): Block {
-	if (op.to === 'image') {
-		throw new Error('cannot convert to image');
+	if (CONVERT_FORBIDDEN.has(op.to)) {
+		throw new Error(`cannot convert to ${op.to}`);
+	}
+	if (isContainer(block)) {
+		throw new Error(`cannot convert ${block.type}`);
 	}
 	if (block.type === op.to) {
 		if (block.type === 'heading') {
@@ -426,6 +475,50 @@ function applyConvertBlock(page: KbPage, op: Extract<Op, { kind: 'convert-block'
 	replaceBlock(page, loc.parent, loc.index, convertBlock(loc.block, op));
 }
 
+function requireContainerParent(page: KbPage, parentId: string, what: string): Block {
+	const loc = requireLocation(page, parentId, what);
+	if (!isContainer(loc.block)) {
+		throw new Error(`${what}: parentId must be a callout or toggle`);
+	}
+	if (loc.parent !== 'page') {
+		throw new Error(`${what}: containers cannot be nested`);
+	}
+	return loc.block;
+}
+
+/** parentId omitted/null = page root. afterId must be a direct child of that parent. */
+export function resolveInsertAnchor(
+	page: KbPage,
+	parentId: string | null | undefined,
+	afterId: string | null,
+	what: string
+): { parent: ParentRef; index: number } {
+	const parent: ParentRef = parentId == null ? 'page' : requireContainerParent(page, parentId, what);
+	if (afterId === null) return { parent, index: 0 };
+	const after = requireLocation(page, afterId, what);
+	if (!sameParent(after.parent, parent)) {
+		throw new Error(
+			parent === 'page'
+				? `${what}: afterId is not a child of the page`
+				: `${what}: afterId is not a direct child of parentId`
+		);
+	}
+	return { parent, index: after.index + 1 };
+}
+
+function assertInsertable(block: Block, depth: number): void {
+	if (isContainer(block)) {
+		if (depth >= 1) {
+			throw new Error('insert-block: nested containers are not allowed');
+		}
+		for (const child of block.children) {
+			if (isContainer(child)) {
+				throw new Error('insert-block: nested containers are not allowed');
+			}
+		}
+	}
+}
+
 function applyInsertBlock(page: KbPage, op: Extract<Op, { kind: 'insert-block' }>): void {
 	const incoming = subtreeIds(op.block);
 	const existing = new Set(documentOrder(page).map((block) => block.id));
@@ -436,12 +529,12 @@ function applyInsertBlock(page: KbPage, op: Extract<Op, { kind: 'insert-block' }
 		}
 		seen.add(id);
 	}
-	if (op.afterId === null) {
-		insertBlockAt(page, 'page', 0, op.block);
-		return;
+	const dest = resolveInsertAnchor(page, op.parentId, op.afterId, 'insert-block');
+	assertInsertable(op.block, dest.parent === 'page' ? 0 : 1);
+	if (isContainer(op.block) && op.afterId && subtreeContains(op.block, op.afterId)) {
+		throw new Error('insert-block: cannot insert a container that already contains afterId');
 	}
-	const after = requireLocation(page, op.afterId, 'insert-block');
-	insertBlockAt(page, after.parent, after.index + 1, op.block);
+	insertBlockAt(page, dest.parent, dest.index, op.block);
 }
 
 function applyDeleteBlock(page: KbPage, id: string): void {
@@ -454,19 +547,32 @@ function applyMoveBlock(page: KbPage, op: Extract<Op, { kind: 'move-block' }>): 
 		throw new Error('cannot move block after itself');
 	}
 	const fromLoc = requireLocation(page, op.id, 'move-block');
-	if (op.afterId !== null) requireLocation(page, op.afterId, 'move-block');
+	if (op.parentId === op.id) {
+		throw new Error('move-block: cannot move a block into itself');
+	}
+	if (op.parentId != null && isDescendant(page, op.id, op.parentId)) {
+		throw new Error('move-block: cannot move a block into its descendant');
+	}
+	if (op.afterId != null && isDescendant(page, op.id, op.afterId)) {
+		throw new Error('move-block: cannot move a block into its descendant');
+	}
+	const dest = resolveInsertAnchor(page, op.parentId, op.afterId, 'move-block');
+	if (dest.parent !== 'page' && isContainer(fromLoc.block)) {
+		throw new Error('move-block: nested containers are not allowed');
+	}
+
 	const fromList = childrenOf(page, fromLoc.parent);
 	const [block] = fromList.splice(fromLoc.index, 1);
+	const destList = childrenOf(page, dest.parent);
+	let index: number;
 	if (op.afterId === null) {
-		childrenOf(page, 'page').unshift(block);
-		return;
+		index = 0;
+	} else {
+		const at = destList.findIndex((item) => item.id === op.afterId);
+		if (at < 0) throw new Error(`move-block: unknown block ${op.afterId}`);
+		index = at + 1;
 	}
-	const toLoc = parentOf(page, op.afterId);
-	if (!toLoc) throw new Error(`move-block: unknown block ${op.afterId}`);
-	const toList = childrenOf(page, toLoc.parent);
-	const to = toList.findIndex((item) => item.id === op.afterId);
-	if (to < 0) throw new Error(`move-block: unknown block ${op.afterId}`);
-	toList.splice(to + 1, 0, block);
+	destList.splice(index, 0, block);
 }
 
 function applySetCode(page: KbPage, op: Extract<Op, { kind: 'set-code' }>): void {
@@ -476,6 +582,14 @@ function applySetCode(page: KbPage, op: Extract<Op, { kind: 'set-code' }>): void
 		throw new Error('set-code: block is not code');
 	}
 	replaceBlock(page, loc.parent, loc.index, { ...block, language: op.language });
+}
+
+function applySetToggle(page: KbPage, op: Extract<Op, { kind: 'set-toggle' }>): void {
+	const loc = requireLocation(page, op.id, 'set-toggle');
+	if (loc.block.type !== 'toggle') {
+		throw new Error('set-toggle: block is not a toggle');
+	}
+	replaceBlock(page, loc.parent, loc.index, { ...loc.block, open: op.open });
 }
 
 function applySetChildren(page: KbPage, children: string[]): void {
@@ -520,6 +634,9 @@ export function apply(page: KbPage, op: Op): KbPage {
 			break;
 		case 'set-children':
 			applySetChildren(next, op.children);
+			break;
+		case 'set-toggle':
+			applySetToggle(next, op);
 			break;
 		default: {
 			const _never: never = op;

@@ -56,7 +56,7 @@ describe('normalizePage', () => {
 		}
 	});
 
-	it('converts unknown block types to a plaintext paragraph', () => {
+	it('converts unknown leaf block types to a plaintext paragraph', () => {
 		const page = {
 			format: KB_FORMAT,
 			schemaVersion: 1,
@@ -65,7 +65,7 @@ describe('normalizePage', () => {
 			createdAt: '',
 			updatedAt: '',
 			children: [],
-			blocks: [{ id: 'x', type: 'toggle', text: 'Hidden' }]
+			blocks: [{ id: 'x', type: 'embed', text: 'Hidden' }]
 		} as unknown as KbPage;
 		const normalized = normalizePage(page);
 		expect(normalized.blocks[0]).toEqual({
@@ -75,7 +75,7 @@ describe('normalizePage', () => {
 		});
 	});
 
-	it('preserves nested children on a known block through orderedBlock', () => {
+	it('preserves callout children through orderedBlock', () => {
 		const page = {
 			format: KB_FORMAT,
 			schemaVersion: 1,
@@ -87,18 +87,65 @@ describe('normalizePage', () => {
 			blocks: [
 				{
 					id: 'c',
-					type: 'paragraph',
-					content: [span('')],
+					type: 'callout',
+					variant: 'info',
 					children: [{ id: 'n', type: 'paragraph', content: [span('in')] }]
 				}
 			]
 		} as unknown as KbPage;
 		const normalized = normalizePage(page);
-		expect(normalized.blocks[0].id).toBe('c');
-		expect((normalized.blocks[0] as { children?: { id: string }[] }).children?.[0]).toEqual({
-			id: 'n',
-			type: 'paragraph',
-			content: [span('in')]
+		expect(normalized.blocks[0]).toEqual({
+			id: 'c',
+			type: 'callout',
+			variant: 'info',
+			children: [
+				{
+					id: 'n',
+					type: 'paragraph',
+					content: [span('in')]
+				}
+			]
+		});
+		expect(normalized.schemaVersion).toBe(1);
+	});
+
+	it('does not stamp schemaVersion 2 onto a flat v1 page', () => {
+		const page = createEmptyPage({ id: 'p', title: 't' });
+		expect(page.schemaVersion).toBe(1);
+		expect(normalizePage(page).schemaVersion).toBe(1);
+	});
+
+	it('flattens nested callouts to depth 1', () => {
+		const page = {
+			format: KB_FORMAT,
+			schemaVersion: 2,
+			id: 'p',
+			title: 't',
+			createdAt: '',
+			updatedAt: '',
+			children: [],
+			blocks: [
+				{
+					id: 'c',
+					type: 'callout',
+					variant: 'note',
+					children: [
+						{
+							id: 'inner',
+							type: 'callout',
+							variant: 'info',
+							children: [{ id: 'n', type: 'paragraph', content: [span('in')] }]
+						}
+					]
+				}
+			]
+		} as unknown as KbPage;
+		const normalized = normalizePage(page);
+		expect(normalized.blocks[0]).toEqual({
+			id: 'c',
+			type: 'callout',
+			variant: 'note',
+			children: [{ id: 'n', type: 'paragraph', content: [span('in')] }]
 		});
 	});
 

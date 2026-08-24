@@ -296,50 +296,87 @@ describe('invert golden applyMany(apply(page, op), invert(page, op)) === normali
 		expect(plaintextOf(right.blocks[0])).toBe('ab');
 	});
 
-	it('round-trips nested same-parent split/merge/delete and throws on cross-parent', () => {
-		function nest(id: string, kids: Block[]): Block {
-			return Object.assign(para(id, ''), { children: kids });
+	it('round-trips nested same-parent split/merge/delete and DFS cross-parent delete-range', () => {
+		function callout(id: string, kids: Block[]): Block {
+			return { id, type: 'callout', variant: 'info', children: kids };
 		}
-		const src = page([nest('c', [para('a', 'ab'), para('b', 'cd')]), para('z', 'z')]);
+		const src = page([callout('c', [para('a', 'ab'), para('b', 'cd')]), para('z', 'z')]);
 		expectInvert(src, { kind: 'split-block', at: { blockId: 'a', offset: 1 }, newId: 'n' });
 		expectInvert(src, { kind: 'merge-block', keepId: 'a', dropId: 'b' });
 		expectInvert(src, {
 			kind: 'delete-range',
 			range: { anchor: { blockId: 'a', offset: 1 }, head: { blockId: 'b', offset: 1 } }
 		});
-		expectInvert(src, { kind: 'insert-block', afterId: 'a', block: para('n', 'n') });
+		expectInvert(src, {
+			kind: 'insert-block',
+			afterId: 'a',
+			parentId: 'c',
+			block: para('n', 'n')
+		});
 		expectInvert(src, { kind: 'delete-block', id: 'b' });
 		expectInvert(src, { kind: 'move-block', id: 'b', afterId: 'z' });
+		expectInvert(src, {
+			kind: 'delete-range',
+			range: { anchor: { blockId: 'a', offset: 0 }, head: { blockId: 'z', offset: 1 } }
+		});
 		expect(() => invert(src, { kind: 'merge-block', keepId: 'a', dropId: 'z' })).toThrow(
 			/immediate next/i
 		);
-		expect(() =>
-			invert(src, {
-				kind: 'delete-range',
-				range: { anchor: { blockId: 'a', offset: 0 }, head: { blockId: 'z', offset: 1 } }
-			})
-		).toThrow(/share a parent/i);
 		expect(() => invert(src, { kind: 'delete-block', id: 'missing' })).toThrow(/unknown/i);
 	});
 
-	it('afterId null is page root: nested first-child delete/move invert does not round-trip', () => {
-		function nest(id: string, kids: Block[]): Block {
-			return Object.assign(para(id, ''), { children: kids });
+	it('parentId on invert restores a nested first-child delete/move', () => {
+		function callout(id: string, kids: Block[]): Block {
+			return { id, type: 'callout', variant: 'info', children: kids };
 		}
-		const src = page([nest('c', [para('a', 'a'), para('b', 'b')]), para('z', 'z')]);
+		const src = page([callout('c', [para('a', 'a'), para('b', 'b')]), para('z', 'z')]);
 
 		const deleteOp: Op = { kind: 'delete-block', id: 'a' };
 		expect(invert(src, deleteOp)).toEqual([
-			{ kind: 'insert-block', afterId: null, block: para('a', 'a') }
+			{ kind: 'insert-block', afterId: null, parentId: 'c', block: para('a', 'a') }
 		]);
-		const afterDelete = applyMany(apply(src, deleteOp), invert(src, deleteOp));
-		expect(afterDelete.blocks.map((b) => b.id)).toEqual(['a', 'c', 'z']);
-		expect((afterDelete.blocks[1] as { children?: Block[] }).children?.map((b) => b.id)).toEqual(['b']);
+		expectInvert(src, deleteOp);
+		expectInvert(page([callout('c', [para('a', 'a'), para('b', 'b')])]), {
+			kind: 'delete-block',
+			id: 'a'
+		});
 
-		const moveOp: Op = { kind: 'move-block', id: 'a', afterId: 'b' };
-		expect(invert(src, moveOp)).toEqual([{ kind: 'move-block', id: 'a', afterId: null }]);
-		const afterMove = applyMany(apply(src, moveOp), invert(src, moveOp));
-		expect(afterMove.blocks.map((b) => b.id)).toEqual(['a', 'c', 'z']);
-		expect((afterMove.blocks[1] as { children?: Block[] }).children?.map((b) => b.id)).toEqual(['b']);
+		const moveOp: Op = { kind: 'move-block', id: 'a', afterId: 'b', parentId: 'c' };
+		expect(invert(src, moveOp)).toEqual([
+			{ kind: 'move-block', id: 'a', afterId: null, parentId: 'c' }
+		]);
+		expectInvert(src, moveOp);
+	});
+
+	it('round-trips move into/out of a callout and covering delete-range', () => {
+		function callout(id: string, kids: Block[]): Block {
+			return { id, type: 'callout', variant: 'info', children: kids };
+		}
+		const src = page([callout('c', [para('a', 'aa'), para('b', 'bb')]), para('z', 'zz')]);
+		expectInvert(src, { kind: 'move-block', id: 'z', afterId: 'a', parentId: 'c' });
+		expectInvert(src, { kind: 'move-block', id: 'b', afterId: 'c' });
+		expectInvert(src, {
+			kind: 'delete-range',
+			range: { anchor: { blockId: 'a', offset: 1 }, head: { blockId: 'z', offset: 1 } }
+		});
+		expectInvert(page([para('before', 'xx'), callout('c', [para('a', 'aa')]), para('z', 'zz')]), {
+			kind: 'delete-range',
+			range: { anchor: { blockId: 'before', offset: 1 }, head: { blockId: 'z', offset: 1 } }
+		});
+	});
+
+	it('round-trips set-toggle', () => {
+		const src = page([
+			{
+				id: 't',
+				type: 'toggle',
+				open: true,
+				children: [para('a', 'hid')]
+			},
+			para('z', 'z')
+		]);
+		expectInvert(src, { kind: 'set-toggle', id: 't', open: false });
+		expectInvert(src, { kind: 'set-toggle', id: 't', open: true });
+		expect(() => invert(src, { kind: 'set-toggle', id: 'a', open: false })).toThrow(/not a toggle/i);
 	});
 });

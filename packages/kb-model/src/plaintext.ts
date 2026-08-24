@@ -1,5 +1,5 @@
 import { blockChildren } from './tree.js';
-import type { Block, KbPage, TextLikeBlock } from './types.js';
+import type { Block, ContainerBlock, KbPage, TextLikeBlock } from './types.js';
 
 export function isTextLike(block: Block): block is TextLikeBlock {
 	return block.type === 'paragraph' || block.type === 'heading' || block.type === 'list_item';
@@ -7,6 +7,15 @@ export function isTextLike(block: Block): block is TextLikeBlock {
 
 export function isAtomic(block: Block): block is Extract<Block, { type: 'divider' | 'image' }> {
 	return block.type === 'divider' || block.type === 'image';
+}
+
+export function isContainer(block: Block): block is ContainerBlock {
+	return block.type === 'callout' || block.type === 'toggle';
+}
+
+/** Caret targets that only allow offset 0 (blockFocus). */
+export function isNonTextual(block: Block): boolean {
+	return isAtomic(block) || isContainer(block);
 }
 
 export function plaintextOf(block: Block): string {

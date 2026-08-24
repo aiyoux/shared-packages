@@ -165,4 +165,26 @@ describe('toMarkdown', () => {
 			'body\n'
 		);
 	});
+
+	it('renders callout and toggle children via DFS and skips container chrome', () => {
+		expect(
+			md([
+				{
+					id: 'c',
+					type: 'callout',
+					variant: 'info',
+					children: [
+						{ id: 'n1', type: 'paragraph', content: [span('note')] },
+						{ id: 'n2', type: 'paragraph', content: [span('body')] }
+					]
+				},
+				{
+					id: 't',
+					type: 'toggle',
+					open: false,
+					children: [{ id: 'h', type: 'paragraph', content: [span('hidden')] }]
+				}
+			])
+		).toBe('note\n\nbody\n\nhidden\n');
+	});
 });

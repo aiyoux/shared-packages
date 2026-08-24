@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { apply, applyMany } from './apply.js';
 import { normalizePage } from './normalize.js';
 import { plaintext, plaintextOf } from './plaintext.js';
+import { blockChildren, findBlock } from './tree.js';
 import {
 	KB_FORMAT,
 	type Block,
@@ -517,3 +518,161 @@ describe('apply other ops and errors', () => {
 		expect(plaintext(src)).toBe('hi\na\nb');
 	});
 });
+
+function callout(id: string, kids: Block[], variant: 'info' | 'warning' | 'note' = 'info'): Block {
+	return { id, type: 'callout', variant, children: kids };
+}
+
+function toggle(id: string, kids: Block[], open = true): Block {
+	return { id, type: 'toggle', open, children: kids };
+}
+
+describe('N1 callout/toggle apply', () => {
+	it('inserts inside a callout via parentId and stamps schema 2 only on serialize', () => {
+		const src = page([callout('c', [para('a', 'a')]), para('z', 'z')]);
+		expect(src.schemaVersion).toBe(1);
+		const inserted = apply(src, {
+			kind: 'insert-block',
+			afterId: 'a',
+			parentId: 'c',
+			block: para('n', 'n')
+		});
+		expect(inserted.blocks.map((b) => b.id)).toEqual(['c', 'z']);
+		expect(findKids(inserted, 'c').map((b) => b.id)).toEqual(['a', 'n']);
+		expect(inserted.schemaVersion).toBe(1);
+	});
+
+	it('honors the insert-block parentId / afterId truth table', () => {
+		const src = page([callout('c', [para('a', 'a'), para('b', 'b')]), para('z', 'z')]);
+
+		expect(apply(src, { kind: 'insert-block', afterId: null, block: para('n', 'n') }).blocks.map((b) => b.id)).toEqual([
+			'n',
+			'c',
+			'z'
+		]);
+		expect(
+			apply(src, { kind: 'insert-block', afterId: 'c', block: para('n', 'n') }).blocks.map((b) => b.id)
+		).toEqual(['c', 'n', 'z']);
+		expect(() => apply(src, { kind: 'insert-block', afterId: 'a', block: para('n', 'n') })).toThrow(
+			/not a child of the page/i
+		);
+
+		const prepended = apply(src, {
+			kind: 'insert-block',
+			afterId: null,
+			parentId: 'c',
+			block: para('n', 'n')
+		});
+		expect(findKids(prepended, 'c').map((b) => b.id)).toEqual(['n', 'a', 'b']);
+
+		const afterChild = apply(src, {
+			kind: 'insert-block',
+			afterId: 'a',
+			parentId: 'c',
+			block: para('n', 'n')
+		});
+		expect(findKids(afterChild, 'c').map((b) => b.id)).toEqual(['a', 'n', 'b']);
+
+		expect(() =>
+			apply(src, { kind: 'insert-block', afterId: 'z', parentId: 'c', block: para('n', 'n') })
+		).toThrow(/not a direct child of parentId/i);
+		expect(() =>
+			apply(src, { kind: 'insert-block', afterId: null, parentId: 'a', block: para('n', 'n') })
+		).toThrow(/callout or toggle/i);
+	});
+
+	it('split stays in the parent; merge only same-parent; unique ids are tree-wide', () => {
+		const src = page([callout('c', [para('a', 'ab'), para('b', 'cd')]), para('z', 'z')]);
+		const split = apply(src, { kind: 'split-block', at: { blockId: 'a', offset: 1 }, newId: 'n' });
+		expect(split.blocks.map((b) => b.id)).toEqual(['c', 'z']);
+		expect(findKids(split, 'c').map((b) => b.id)).toEqual(['a', 'n', 'b']);
+
+		const merged = apply(src, { kind: 'merge-block', keepId: 'a', dropId: 'b' });
+		expect(findKids(merged, 'c').map((b) => b.id)).toEqual(['a']);
+		expect(plaintextOf(findBlock(merged, 'a')!)).toBe('abcd');
+		expect(() => apply(src, { kind: 'merge-block', keepId: 'a', dropId: 'z' })).toThrow(/immediate next/i);
+		expect(() => apply(src, { kind: 'merge-block', keepId: 'c', dropId: 'z' })).toThrow(/atomic/i);
+
+		expect(() =>
+			apply(src, { kind: 'insert-block', afterId: 'z', block: para('a', 'dup') })
+		).toThrow(/duplicate/i);
+		expect(() =>
+			apply(src, { kind: 'split-block', at: { blockId: 'z', offset: 0 }, newId: 'a' })
+		).toThrow(/already exists/i);
+		expect(() =>
+			apply(src, { kind: 'insert-block', afterId: 'z', block: callout('n', [para('b', 'dup')]) })
+		).toThrow(/duplicate/i);
+	});
+
+	it('delete-range from inside a callout to after drops covered siblings and does not concat', () => {
+		const src = page([para('before', 'xx'), callout('c', [para('a', 'aa'), para('b', 'bb')]), para('z', 'zz')]);
+		const crossed = apply(src, {
+			kind: 'delete-range',
+			range: { anchor: { blockId: 'a', offset: 1 }, head: { blockId: 'z', offset: 1 } }
+		});
+		expect(crossed.blocks.map((b) => b.id)).toEqual(['before', 'c', 'z']);
+		expect(findKids(crossed, 'c').map((b) => b.id)).toEqual(['a']);
+		expect(plaintextOf(findBlock(crossed, 'a')!)).toBe('a');
+		expect(plaintextOf(findBlock(crossed, 'z')!)).toBe('z');
+		expect(plaintextOf(findBlock(crossed, 'before')!)).toBe('xx');
+
+		const covering = apply(src, {
+			kind: 'delete-range',
+			range: { anchor: { blockId: 'before', offset: 1 }, head: { blockId: 'z', offset: 1 } }
+		});
+		expect(covering.blocks.map((b) => b.id)).toEqual(['before']);
+		expect(plaintextOf(findBlock(covering, 'before')!)).toBe('xz');
+		expect(findBlock(covering, 'c')).toBeUndefined();
+	});
+
+	it('moves into and out of a callout and throws on move into a descendant', () => {
+		const src = page([callout('c', [para('a', 'a'), para('b', 'b')]), para('z', 'z')]);
+		const into = apply(src, { kind: 'move-block', id: 'z', afterId: 'a', parentId: 'c' });
+		expect(into.blocks.map((b) => b.id)).toEqual(['c']);
+		expect(findKids(into, 'c').map((b) => b.id)).toEqual(['a', 'z', 'b']);
+
+		const out = apply(src, { kind: 'move-block', id: 'b', afterId: 'c' });
+		expect(out.blocks.map((b) => b.id)).toEqual(['c', 'b', 'z']);
+		expect(findKids(out, 'c').map((b) => b.id)).toEqual(['a']);
+
+		expect(() => apply(src, { kind: 'move-block', id: 'c', afterId: 'a', parentId: 'c' })).toThrow(
+			/into itself/i
+		);
+		expect(() => apply(src, { kind: 'move-block', id: 'c', parentId: 'a', afterId: null })).toThrow(
+			/descendant|callout or toggle/i
+		);
+		expect(() => apply(src, { kind: 'move-block', id: 'c', afterId: 'a' })).toThrow(/descendant/i);
+	});
+
+	it('rejects nested callout insert, convert-to-container, and set-toggle on a non-toggle', () => {
+		const src = page([callout('c', [para('a', 'a')]), para('z', 'z')]);
+		expect(() =>
+			apply(src, { kind: 'insert-block', afterId: 'a', parentId: 'c', block: callout('n', [para('x', 'x')]) })
+		).toThrow(/nested containers/i);
+		expect(() =>
+			apply(src, {
+				kind: 'insert-block',
+				afterId: 'z',
+				block: callout('n', [callout('inner', [para('x', 'x')])])
+			})
+		).toThrow(/nested containers/i);
+		expect(() => apply(src, { kind: 'convert-block', id: 'z', to: 'callout' })).toThrow(/callout/i);
+		expect(() => apply(src, { kind: 'convert-block', id: 'z', to: 'toggle' })).toThrow(/toggle/i);
+		expect(() => apply(src, { kind: 'convert-block', id: 'c', to: 'paragraph' })).toThrow(/callout/i);
+		expect(() => apply(src, { kind: 'split-block', at: { blockId: 'c', offset: 0 }, newId: 'n' })).toThrow(
+			/atomic/i
+		);
+		expect(() =>
+			apply(src, { kind: 'insert-text', at: { blockId: 'c', offset: 0 }, text: 'x' })
+		).toThrow(/atomic/i);
+		expect(() => apply(src, { kind: 'set-toggle', id: 'c', open: false })).toThrow(/not a toggle/i);
+
+		const withToggle = page([toggle('t', [para('a', 'a')], true)]);
+		const closed = apply(withToggle, { kind: 'set-toggle', id: 't', open: false });
+		expect(closed.blocks[0]).toMatchObject({ type: 'toggle', open: false });
+	});
+});
+
+function findKids(doc: KbPage, id: string): Block[] {
+	return blockChildren(findBlock(doc, id)!) ?? [];
+}

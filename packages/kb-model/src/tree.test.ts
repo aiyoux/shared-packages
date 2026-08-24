@@ -23,8 +23,8 @@ function para(id: string, text: string): Block {
 	return { id, type: 'paragraph', content: [span(text)] };
 }
 
-function nest(id: string, kids: Block[], text = ''): Block {
-	return Object.assign(para(id, text), { children: kids });
+function callout(id: string, kids: Block[]): Block {
+	return { id, type: 'callout', variant: 'info', children: kids };
 }
 
 function page(blocks: Block[]): KbPage {
@@ -42,7 +42,7 @@ function page(blocks: Block[]): KbPage {
 
 describe('tree walk', () => {
 	it('findBlock / parentOf miss unknown ids and resolve page-root vs nested', () => {
-		const doc = page([para('a', 'A'), nest('c', [para('n1', 'in'), para('n2', 'two')]), para('z', 'Z')]);
+		const doc = page([para('a', 'A'), callout('c', [para('n1', 'in'), para('n2', 'two')]), para('z', 'Z')]);
 		expect(findBlock(doc, 'missing')).toBeUndefined();
 		expect(parentOf(doc, 'missing')).toBeUndefined();
 		expect(findBlock(doc, 'a')?.id).toBe('a');
@@ -58,7 +58,7 @@ describe('tree walk', () => {
 	});
 
 	it('documentOrder is DFS and visibleOrder omits closed-toggle children', () => {
-		const doc = page([para('a', 'A'), nest('c', [para('n1', 'in'), para('n2', 'two')]), para('z', 'Z')]);
+		const doc = page([para('a', 'A'), callout('c', [para('n1', 'in'), para('n2', 'two')]), para('z', 'Z')]);
 		expect(documentOrder(doc).map((b) => b.id)).toEqual(['a', 'c', 'n1', 'n2', 'z']);
 		expect(visibleOrder(doc).map((b) => b.id)).toEqual(['a', 'c', 'n1', 'n2', 'z']);
 
@@ -76,7 +76,7 @@ describe('tree walk', () => {
 	});
 
 	it('childrenOf throws on a leaf and returns the live root list', () => {
-		const doc = page([para('a', 'A'), nest('c', [para('n', 'in')])]);
+		const doc = page([para('a', 'A'), callout('c', [para('n', 'in')])]);
 		expect(childrenOf(doc, 'page')).toBe(doc.blocks);
 		const leaf = findBlock(doc, 'a')!;
 		expect(() => childrenOf(doc, leaf)).toThrow(/no children list/);
@@ -85,7 +85,7 @@ describe('tree walk', () => {
 	});
 
 	it('plaintext DFS uses children only for containers and tabs for table_row', () => {
-		const nested = page([nest('c', [para('n1', 'in'), para('n2', 'two')], ''), para('z', 'Z')]);
+		const nested = page([callout('c', [para('n1', 'in'), para('n2', 'two')]), para('z', 'Z')]);
 		expect(plaintext(nested)).toBe('in\ntwo\nZ');
 
 		const row = Object.assign(para('r', ''), {
@@ -96,15 +96,15 @@ describe('tree walk', () => {
 	});
 
 	it('toMarkdown walks DFS including nested children', () => {
-		const doc = page([nest('c', [para('n', 'inside')], 'Call'), para('z', 'Z')]);
-		expect(toMarkdown(doc)).toBe('Call\n\ninside\n\nZ\n');
-		expect(toMarkdown(page([nest('c', [para('n', 'inside')]), para('z', 'Z')]))).toBe('inside\n\nZ\n');
+		const doc = page([callout('c', [para('n', 'inside')]), para('z', 'Z')]);
+		expect(toMarkdown(doc)).toBe('inside\n\nZ\n');
+		expect(toMarkdown(page([callout('c', [para('n', 'inside')]), para('z', 'Z')]))).toBe('inside\n\nZ\n');
 	});
 });
 
 describe('apply uses parent lists', () => {
 	it('split-block inserts the new id as the next sibling in the parent, not the page root', () => {
-		const src = page([nest('c', [para('a', 'ab'), para('b', 'cd')]), para('z', 'z')]);
+		const src = page([callout('c', [para('a', 'ab'), para('b', 'cd')]), para('z', 'z')]);
 		const next = apply(src, { kind: 'split-block', at: { blockId: 'a', offset: 1 }, newId: 'n' });
 		expect(next.blocks.map((b) => b.id)).toEqual(['c', 'z']);
 		expect(blockChildren(findBlock(next, 'c')!)?.map((b) => b.id)).toEqual(['a', 'n', 'b']);
@@ -114,7 +114,7 @@ describe('apply uses parent lists', () => {
 
 	it('merge-block requires same-parent immediate siblings', () => {
 		const src = page([
-			nest('c', [para('a', 'he'), para('b', 'llo')]),
+			callout('c', [para('a', 'he'), para('b', 'llo')]),
 			para('z', '!')
 		]);
 		const merged = apply(src, { kind: 'merge-block', keepId: 'a', dropId: 'b' });
@@ -129,14 +129,16 @@ describe('apply uses parent lists', () => {
 		);
 	});
 
-	it('delete-range across different parents throws; same parent concatenates', () => {
-		const src = page([nest('c', [para('a', 'aa'), para('b', 'bb')]), para('z', 'zz')]);
-		expect(() =>
-			apply(src, {
-				kind: 'delete-range',
-				range: { anchor: { blockId: 'a', offset: 1 }, head: { blockId: 'z', offset: 1 } }
-			})
-		).toThrow(/share a parent/i);
+	it('delete-range from inside a callout to after does not concat across the boundary', () => {
+		const src = page([callout('c', [para('a', 'aa'), para('b', 'bb')]), para('z', 'zz')]);
+		const crossed = apply(src, {
+			kind: 'delete-range',
+			range: { anchor: { blockId: 'a', offset: 1 }, head: { blockId: 'z', offset: 1 } }
+		});
+		expect(crossed.blocks.map((b) => b.id)).toEqual(['c', 'z']);
+		expect(blockChildren(findBlock(crossed, 'c')!)?.map((b) => b.id)).toEqual(['a']);
+		expect((findBlock(crossed, 'a') as { content: TextSpan[] }).content[0].text).toBe('a');
+		expect((findBlock(crossed, 'z') as { content: TextSpan[] }).content[0].text).toBe('z');
 
 		const joined = apply(src, {
 			kind: 'delete-range',
@@ -146,8 +148,8 @@ describe('apply uses parent lists', () => {
 		expect((findBlock(joined, 'a') as { content: TextSpan[] }).content[0].text).toBe('ab');
 	});
 
-	it('insert-block duplicate id is tree-wide and afterId inserts in that parent', () => {
-		const src = page([nest('c', [para('a', 'x')]), para('z', 'z')]);
+	it('insert-block duplicate id is tree-wide and parentId is required for nested afterId', () => {
+		const src = page([callout('c', [para('a', 'x')]), para('z', 'z')]);
 		expect(() =>
 			apply(src, { kind: 'insert-block', afterId: 'z', block: para('a', 'dup') })
 		).toThrow(/duplicate/i);
@@ -161,25 +163,36 @@ describe('apply uses parent lists', () => {
 			apply(src, {
 				kind: 'insert-block',
 				afterId: 'z',
-				block: Object.assign(para('n', 'n'), { children: [para('z', 'dup')] })
+				block: callout('n', [para('z', 'dup')])
 			})
 		).toThrow(/duplicate/i);
 		expect(() =>
 			apply(src, {
 				kind: 'insert-block',
 				afterId: 'z',
-				block: Object.assign(para('n', 'n'), { children: [para('n', 'self')] })
+				block: callout('n', [para('n', 'self')])
 			})
 		).toThrow(/duplicate/i);
+		expect(() => apply(src, { kind: 'insert-block', afterId: 'a', block: para('n', 'n') })).toThrow(
+			/not a child of the page/i
+		);
 
-		const inserted = apply(src, { kind: 'insert-block', afterId: 'a', block: para('n', 'n') });
+		const inserted = apply(src, {
+			kind: 'insert-block',
+			afterId: 'a',
+			parentId: 'c',
+			block: para('n', 'n')
+		});
 		expect(inserted.blocks.map((b) => b.id)).toEqual(['c', 'z']);
 		expect(blockChildren(findBlock(inserted, 'c')!)?.map((b) => b.id)).toEqual(['a', 'n']);
 	});
 
-	it('move-block after a nested id stays in that parent; afterId null prepends at page root', () => {
-		const src = page([nest('c', [para('a', 'a'), para('b', 'b')]), para('z', 'z')]);
-		const nested = apply(src, { kind: 'move-block', id: 'a', afterId: 'b' });
+	it('move-block into a callout needs parentId; afterId null prepends at page root', () => {
+		const src = page([callout('c', [para('a', 'a'), para('b', 'b')]), para('z', 'z')]);
+		expect(() => apply(src, { kind: 'move-block', id: 'a', afterId: 'b' })).toThrow(
+			/not a child of the page/i
+		);
+		const nested = apply(src, { kind: 'move-block', id: 'a', afterId: 'b', parentId: 'c' });
 		expect(blockChildren(findBlock(nested, 'c')!)?.map((b) => b.id)).toEqual(['b', 'a']);
 		const lifted = apply(src, { kind: 'move-block', id: 'b', afterId: null });
 		expect(lifted.blocks.map((b) => b.id)).toEqual(['b', 'c', 'z']);

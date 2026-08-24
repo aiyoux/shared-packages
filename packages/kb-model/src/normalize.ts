@@ -1,8 +1,11 @@
+import { isSchemaUnderstood } from './migrate.js';
+import { isContainer } from './plaintext.js';
 import { blockChildren } from './tree.js';
 import {
 	KB_FORMAT,
-	KB_SCHEMA_VERSION,
 	type Block,
+	type CalloutBlock,
+	type CalloutVariant,
 	type CodeBlock,
 	type HeadingBlock,
 	type ImageBlock,
@@ -11,7 +14,8 @@ import {
 	type ListItemBlock,
 	type Mark,
 	type ParagraphBlock,
-	type TextSpan
+	type TextSpan,
+	type ToggleBlock
 } from './types.js';
 
 const MARK_RANK: Record<Mark['type'], number> = {
@@ -19,6 +23,18 @@ const MARK_RANK: Record<Mark['type'], number> = {
 	italic: 1,
 	code: 2,
 	link: 3
+};
+
+const CALLOUT_VARIANTS: ReadonlySet<string> = new Set(['info', 'warning', 'note']);
+
+export type NormalizeMeta = {
+	flattenedUnknown: boolean;
+	tooNew: boolean;
+};
+
+type NormalizeCtx = {
+	tooNew: boolean;
+	flattenedUnknown: boolean;
 };
 
 export function newBlockId(): string {
@@ -157,59 +173,78 @@ function orderedSpan(span: TextSpan): Inline {
 	};
 }
 
+function calloutVariant(value: unknown): CalloutVariant {
+	return typeof value === 'string' && CALLOUT_VARIANTS.has(value) ? (value as CalloutVariant) : 'info';
+}
+
+function passthroughBlock(raw: Record<string, unknown>): Block {
+	const id = typeof raw.id === 'string' && raw.id ? raw.id : newBlockId();
+	const type = typeof raw.type === 'string' && raw.type ? raw.type : 'unknown';
+	const block: Record<string, unknown> = { id, type };
+	for (const [key, value] of Object.entries(raw)) {
+		if (key === 'id' || key === 'type' || key === 'children') continue;
+		block[key] = value;
+	}
+	if (Array.isArray(raw.children)) {
+		block.children = raw.children.map((item) =>
+			item && typeof item === 'object' && !Array.isArray(item)
+				? passthroughBlock(item as Record<string, unknown>)
+				: item
+		);
+	}
+	return block as Block;
+}
+
 export function orderedBlock(block: Block): Block {
-	let ordered: Block;
 	switch (block.type) {
 		case 'paragraph':
-			ordered = { id: block.id, type: 'paragraph', content: block.content.map(orderedSpan) };
-			break;
+			return { id: block.id, type: 'paragraph', content: block.content.map(orderedSpan) };
 		case 'heading':
-			ordered = {
+			return {
 				id: block.id,
 				type: 'heading',
 				level: block.level,
 				content: block.content.map(orderedSpan)
 			};
-			break;
 		case 'list_item':
-			ordered = {
+			return {
 				id: block.id,
 				type: 'list_item',
 				ordered: block.ordered,
 				content: block.content.map(orderedSpan)
 			};
-			break;
 		case 'code':
-			ordered = { id: block.id, type: 'code', language: block.language, text: block.text };
-			break;
+			return { id: block.id, type: 'code', language: block.language, text: block.text };
 		case 'divider':
-			ordered = { id: block.id, type: 'divider' };
-			break;
+			return { id: block.id, type: 'divider' };
 		case 'image':
-			ordered = { id: block.id, type: 'image', src: block.src, alt: block.alt };
-			break;
+			return { id: block.id, type: 'image', src: block.src, alt: block.alt };
+		case 'callout':
+			return {
+				id: block.id,
+				type: 'callout',
+				variant: block.variant,
+				children: block.children.map(orderedBlock)
+			};
+		case 'toggle':
+			return {
+				id: block.id,
+				type: 'toggle',
+				open: block.open,
+				children: block.children.map(orderedBlock)
+			};
+		default: {
+			const rec = block as Block & Record<string, unknown>;
+			return passthroughBlock(rec);
+		}
 	}
-	const kids = blockChildren(block);
-	if (kids) (ordered as Block & { children: Block[] }).children = kids.map(orderedBlock);
-	return ordered;
 }
 
-function withChildren(block: Block, rec: Record<string, unknown>): Block {
-	const ordered = orderedBlock(block);
-	if (!Array.isArray(rec.children)) return ordered;
-	(ordered as Block & { children: Block[] }).children = rec.children.map((item) =>
-		normalizeBlock(item as Block)
-	);
-	return ordered;
-}
-
-export function normalizeBlock(block: Block | Record<string, unknown>): Block {
-	const rec = block as Record<string, unknown>;
-	const id = typeof rec.id === 'string' && rec.id ? rec.id : newBlockId();
+function normalizeLeaf(rec: Record<string, unknown>, id: string): Block {
 	switch (rec.type) {
 		case 'paragraph': {
 			const next: ParagraphBlock = { id, type: 'paragraph', content: coerceSpans(rec.content) };
-			return withChildren(next, rec);
+			return next;
 		}
 		case 'heading': {
 			const next: HeadingBlock = {
@@ -218,7 +253,7 @@ export function normalizeBlock(block: Block | Record<string, unknown>): Block {
 				level: headingLevel(rec.level),
 				content: coerceSpans(rec.content)
 			};
-			return withChildren(next, rec);
+			return next;
 		}
 		case 'list_item': {
 			const next: ListItemBlock = {
@@ -227,7 +262,7 @@ export function normalizeBlock(block: Block | Record<string, unknown>): Block {
 				ordered: rec.ordered === true,
 				content: coerceSpans(rec.content)
 			};
-			return withChildren(next, rec);
+			return next;
 		}
 		case 'code': {
 			const next: CodeBlock = {
@@ -236,10 +271,10 @@ export function normalizeBlock(block: Block | Record<string, unknown>): Block {
 				language: typeof rec.language === 'string' ? rec.language : '',
 				text: typeof rec.text === 'string' ? rec.text : ''
 			};
-			return withChildren(next, rec);
+			return next;
 		}
 		case 'divider':
-			return withChildren({ id, type: 'divider' }, rec);
+			return { id, type: 'divider' };
 		case 'image': {
 			const next: ImageBlock = {
 				id,
@@ -247,19 +282,111 @@ export function normalizeBlock(block: Block | Record<string, unknown>): Block {
 				src: typeof rec.src === 'string' ? rec.src : '',
 				alt: typeof rec.alt === 'string' ? rec.alt : ''
 			};
-			return withChildren(next, rec);
+			return next;
 		}
 		default:
-			return withChildren(unknownToParagraph(rec), rec);
+			return unknownToParagraph(rec);
 	}
 }
 
-export function normalizePage(page: KbPage): KbPage {
-	const blocks = (page.blocks ?? []).map((block) => normalizeBlock(block));
+function isKnownContainerType(type: unknown): type is 'callout' | 'toggle' {
+	return type === 'callout' || type === 'toggle';
+}
+
+function isKnownLeafType(type: unknown): boolean {
+	return (
+		type === 'paragraph' ||
+		type === 'heading' ||
+		type === 'list_item' ||
+		type === 'code' ||
+		type === 'divider' ||
+		type === 'image'
+	);
+}
+
+function normalizeBlockList(raws: unknown[], ctx: NormalizeCtx, depth: number): Block[] {
+	const out: Block[] = [];
+	for (const raw of raws) {
+		if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+		const rec = raw as Record<string, unknown>;
+		if (ctx.tooNew) {
+			out.push(passthroughBlock(rec));
+			continue;
+		}
+		if (isKnownContainerType(rec.type)) {
+			if (depth >= 1) {
+				const kids = Array.isArray(rec.children) ? rec.children : [];
+				out.push(...normalizeBlockList(kids, ctx, depth));
+				continue;
+			}
+			out.push(normalizeContainer(rec, ctx));
+			continue;
+		}
+		if (!isKnownLeafType(rec.type) && Array.isArray(rec.children) && rec.children.length > 0) {
+			ctx.flattenedUnknown = true;
+			out.push(...normalizeBlockList(rec.children, ctx, depth));
+			continue;
+		}
+		out.push(normalizeLeaf(rec, typeof rec.id === 'string' && rec.id ? rec.id : newBlockId()));
+	}
+	return out;
+}
+
+function normalizeContainer(rec: Record<string, unknown>, ctx: NormalizeCtx): CalloutBlock | ToggleBlock {
+	const id = typeof rec.id === 'string' && rec.id ? rec.id : newBlockId();
+	const kids = Array.isArray(rec.children) ? rec.children : [];
+	const children = normalizeBlockList(kids, ctx, 1);
+	if (rec.type === 'toggle') {
+		return { id, type: 'toggle', open: rec.open !== false, children };
+	}
+	return { id, type: 'callout', variant: calloutVariant(rec.variant), children };
+}
+
+export function normalizeBlock(block: Block | Record<string, unknown>): Block {
+	const rec = block as Record<string, unknown>;
+	const ctx: NormalizeCtx = { tooNew: false, flattenedUnknown: false };
+	const list = normalizeBlockList([rec], ctx, 0);
+	return list[0] ?? unknownToParagraph(rec);
+}
+
+function schemaVersionOf(page: KbPage): number {
+	return typeof page.schemaVersion === 'number' ? page.schemaVersion : 1;
+}
+
+export function hasNestedTypes(page: KbPage): boolean {
+	const walk = (blocks: Block[]): boolean => {
+		for (const block of blocks) {
+			if (isContainer(block)) return true;
+			const kids = blockChildren(block);
+			if (kids && walk(kids)) return true;
+		}
+		return false;
+	};
+	return walk(page.blocks ?? []);
+}
+
+/** Stamp schemaVersion 2 only when a nested type is present; otherwise keep the page's version. */
+export function writeSchemaVersion(page: KbPage): number {
+	const current = schemaVersionOf(page);
+	if (hasNestedTypes(page)) return Math.max(current, 2);
+	return current;
+}
+
+export function normalizePage(page: KbPage, meta?: NormalizeMeta): KbPage {
+	const schemaVersion = schemaVersionOf(page);
+	const ctx: NormalizeCtx = {
+		tooNew: !isSchemaUnderstood(schemaVersion),
+		flattenedUnknown: false
+	};
+	const blocks = normalizeBlockList(page.blocks ?? [], ctx, 0);
 	if (blocks.length === 0) blocks.push(emptyParagraph(newBlockId()));
+	if (meta) {
+		meta.flattenedUnknown = ctx.flattenedUnknown;
+		meta.tooNew = ctx.tooNew;
+	}
 	return {
 		format: KB_FORMAT,
-		schemaVersion: KB_SCHEMA_VERSION,
+		schemaVersion,
 		id: page.id,
 		title: typeof page.title === 'string' ? page.title : '',
 		createdAt: page.createdAt,
