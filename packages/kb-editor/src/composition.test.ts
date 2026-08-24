@@ -9,7 +9,7 @@ import {
 	snapshotComposition
 } from './composition.js';
 import { project, syncView } from './project.js';
-import { createEditorState, dispatchMany } from './state.js';
+import { applyEditorOps, createEditorState, dispatchMany } from './state.js';
 import { para, page } from './testFixtures.js';
 
 describe('composition state machine (IME freeze)', () => {
@@ -89,6 +89,34 @@ describe('composition state machine (IME freeze)', () => {
 		expect(ops).toEqual([{ kind: 'insert-text', at: { blockId: 'p', offset: 0 }, text: 'あ' }]);
 		const next = dispatchMany({ ...state, composing: false }, ops);
 		expect(plaintextOf(next.page.blocks[0])).toBe('あ');
+	});
+
+	it('applyEditorOps after compositionend lifts parent composing (onState freeze)', () => {
+		let state = beginComposition(createEditorState(page([para('p', '')])));
+		expect(state.composing).toBe(true);
+		const snap = snapshotComposition(state, state.selection);
+		const { ops } = commitComposition(state, snap, 'あ');
+		state = {
+			...applyEditorOps({ ...state, composing: false }, ops),
+			composing: false,
+			justCommittedComposition: true
+		};
+		expect(state.composing).toBe(false);
+		expect(plaintextOf(state.page.blocks[0])).toBe('あ');
+		expect(shouldProject(state)).toBe(true);
+		const follow = mapBeforeInput(state, { inputType: 'insertParagraph', data: null }, state.selection);
+		expect(follow.ops).toEqual([]);
+	});
+
+	it('dispatch of a body op lifts composing even if the parent still had composing=true', () => {
+		const frozen = beginComposition(createEditorState(page([para('p', '')])));
+		const next = applyEditorOps(frozen, {
+			kind: 'insert-text',
+			at: { blockId: 'p', offset: 0 },
+			text: 'x'
+		});
+		expect(next.composing).toBe(false);
+		expect(plaintextOf(next.page.blocks[0])).toBe('x');
 	});
 
 	it('justCommittedComposition swallows follow-up insertParagraph (CJK Enter confirm)', () => {

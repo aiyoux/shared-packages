@@ -113,9 +113,20 @@ export function parseSlice(raw: string): Block[] | null {
 function jsonInsertOps(state: EditorState, at: { blockId: string; offset: number }, jsonBlocks: Block[]): Op[] {
 	const ops: Op[] = [];
 	const block = state.page.blocks.find((item) => item.id === at.blockId);
+	if (block?.type === 'code') {
+		const text = jsonBlocks.map((item) => plaintextOf(item)).join('\n');
+		if (text) return [{ kind: 'insert-text', at, text }];
+		let afterId: string | null = at.blockId;
+		for (const item of jsonBlocks) {
+			const next = remapBlock(item);
+			ops.push({ kind: 'insert-block', afterId, block: next });
+			afterId = next.id;
+		}
+		return ops;
+	}
 	const len = block ? plaintextOf(block).length : 0;
 	let afterId: string | null;
-	if (block && at.offset > 0 && at.offset < len) {
+	if (block && isTextLike(block) && at.offset > 0 && at.offset < len) {
 		ops.push({ kind: 'split-block', at, newId: newBlockId() });
 		afterId = at.blockId;
 	} else if (at.offset === 0) {

@@ -125,6 +125,7 @@ export function dispatch(state: EditorState, op: Op): EditorState {
 		page,
 		selection,
 		...stack,
+		composing: false,
 		blockFocus: blockFocusOf(page, selection)
 	};
 }
@@ -154,6 +155,7 @@ export function dispatchMany(state: EditorState, ops: Op[]): EditorState {
 		page,
 		selection,
 		...stack,
+		composing: false,
 		blockFocus: blockFocusOf(page, selection)
 	};
 }

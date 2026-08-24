@@ -16,7 +16,7 @@
 	import { mapKeydown } from './keymap.js';
 	import { BLOCK_ID_ATTR, project } from './project.js';
 	import { rangeFromInputEvent, rangeFromSelection, restoreSelection } from './selection.js';
-	import { redo, setSelection, undo, type EditorState } from './state.js';
+	import { applyEditorOps, redo, setSelection, undo, type EditorState } from './state.js';
 
 	let {
 		state: editor,
@@ -126,7 +126,16 @@
 		clearJustCommittedLater(() => {
 			localJustCommitted = false;
 		});
-		emitOps(ops);
+		const committed = {
+			...applyEditorOps({ ...editor, composing: false }, ops.length === 1 ? ops[0] : ops),
+			composing: false,
+			justCommittedComposition: true
+		};
+		if (onState) {
+			emitState(committed);
+		} else {
+			emitOps(ops);
+		}
 	}
 
 	function onKeyDown(event: KeyboardEvent) {

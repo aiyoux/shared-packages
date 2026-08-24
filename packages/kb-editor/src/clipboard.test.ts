@@ -2,7 +2,7 @@ import { plaintextOf } from '@shared-packages/kb-model';
 import { describe, expect, it } from 'vitest';
 import { copyPayload, cutOps, KB_CLIPBOARD_MIME, parseSlice, pasteOps, stripHtml } from './clipboard.js';
 import { createEditorState, dispatchMany } from './state.js';
-import { page, para } from './testFixtures.js';
+import { code, page, para } from './testFixtures.js';
 
 describe('clipboard', () => {
 	it('copies text/plain and application/x-scratch-kb+json', () => {
@@ -94,5 +94,25 @@ describe('clipboard', () => {
 		if (mid.type === 'paragraph') {
 			expect(mid.content[0].marks).toEqual([{ type: 'bold' }]);
 		}
+	});
+
+	it('JSON paste into a code fence inserts text, never split-block', () => {
+		const src = createEditorState(page([para('a', 'Hi')]));
+		const payload = copyPayload(src, {
+			anchor: { blockId: 'a', offset: 0 },
+			head: { blockId: 'a', offset: 2 }
+		});
+		const dest = createEditorState(page([code('c', 'ab')]));
+		const live = { anchor: { blockId: 'c', offset: 1 }, head: { blockId: 'c', offset: 1 } };
+		const ops = pasteOps(dest, live, { json: payload!.json });
+		expect(ops.some((op) => op.kind === 'split-block')).toBe(false);
+		expect(ops[0]).toMatchObject({
+			kind: 'insert-text',
+			at: { blockId: 'c', offset: 1 },
+			text: 'Hi'
+		});
+		const next = dispatchMany(dest, ops);
+		expect(next.page.blocks).toHaveLength(1);
+		expect(next.page.blocks[0]).toMatchObject({ type: 'code', text: 'aHib' });
 	});
 });
