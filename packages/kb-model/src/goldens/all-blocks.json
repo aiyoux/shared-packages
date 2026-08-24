@@ -1,0 +1,86 @@
+{
+  "format": "kb",
+  "schemaVersion": 1,
+  "id": "page-gold",
+  "title": "Golden",
+  "createdAt": "2026-01-01T00:00:00.000Z",
+  "updatedAt": "2026-01-01T00:00:00.000Z",
+  "children": [
+    "child-a",
+    "child-b"
+  ],
+  "blocks": [
+    {
+      "id": "p1",
+      "type": "paragraph",
+      "content": [
+        {
+          "type": "text",
+          "text": "Hello",
+          "marks": [
+            {
+              "type": "bold"
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "text": " world",
+          "marks": [
+            {
+              "type": "italic"
+            },
+            {
+              "type": "link",
+              "href": "https://example.com"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "h1",
+      "type": "heading",
+      "level": 2,
+      "content": [
+        {
+          "type": "text",
+          "text": "Section",
+          "marks": []
+        }
+      ]
+    },
+    {
+      "id": "li1",
+      "type": "list_item",
+      "ordered": true,
+      "content": [
+        {
+          "type": "text",
+          "text": "Item",
+          "marks": [
+            {
+              "type": "code"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "c1",
+      "type": "code",
+      "language": "ts",
+      "text": "const n = 1;\n"
+    },
+    {
+      "id": "d1",
+      "type": "divider"
+    },
+    {
+      "id": "i1",
+      "type": "image",
+      "src": "assets/diagram.png",
+      "alt": "Diagram"
+    }
+  ]
+}
