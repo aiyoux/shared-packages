@@ -2,7 +2,7 @@
  * Monitor collab HTTP/SSE client. PNA requires `fetch` (`openJsonSse` /
  * `withLocalAddressSpace`).
  *
- * This is the transport only. `CollabSession` / `sendSnapshot` live in C0/C6.
+ * This is the transport only. `createMonitorCollabSession` is `./collabSession.ts`.
  */
 import { openJsonSse } from './sse.js';
 import { withLocalAddressSpace } from './localNetwork.js';

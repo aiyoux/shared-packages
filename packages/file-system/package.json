@@ -55,6 +55,11 @@
       "import": "./src/monitor/index.ts",
       "default": "./src/monitor/index.ts"
     },
+    "./monitor/collab": {
+      "types": "./src/monitor/collabSession.ts",
+      "import": "./src/monitor/collabSession.ts",
+      "default": "./src/monitor/collabSession.ts"
+    },
     "./disk": {
       "types": "./src/disk/index.ts",
       "import": "./src/disk/index.ts",
@@ -87,14 +92,19 @@
     "@shared-packages/design-system": "*",
     "@shared-packages/ui": "*",
     "@shared-packages/compress": "*",
-    "@shared-packages/crypto": "*"
+    "@shared-packages/crypto": "*",
+    "@shared-packages/kb-model": "*"
   },
   "peerDependenciesMeta": {
     "svelte": {
       "optional": true
+    },
+    "@shared-packages/kb-model": {
+      "optional": true
     }
   },
   "devDependencies": {
+    "@shared-packages/kb-model": "*",
     "@sveltejs/vite-plugin-svelte": "^7.0.0",
     "@testing-library/svelte": "^5.2.8",
     "@types/node": "^26.1.1",
