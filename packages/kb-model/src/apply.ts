@@ -2,7 +2,6 @@ import {
 	canonicalMarks,
 	emptyParagraph,
 	emptySpans,
-	newBlockId,
 	normalizePage,
 	normalizeSpans,
 	orderedBlock,
@@ -151,8 +150,8 @@ function applySetTitle(page: KbPage, title: string): void {
 }
 
 function applyInsertText(page: KbPage, op: Extract<Op, { kind: 'insert-text' }>): void {
-	if (op.text === '') return;
 	const at = resolvePoint(page, op.at);
+	if (op.text === '') return;
 	if (isAtomic(at.block)) {
 		throw new Error('cannot insert text into atomic block');
 	}
@@ -224,10 +223,6 @@ function applyDeleteRange(page: KbPage, op: Extract<Op, { kind: 'delete-range' }
 
 	if (start.index === end.index) {
 		const block = start.block;
-		if (isAtomic(block)) {
-			deleteBlockAt(page, start.index);
-			return;
-		}
 		if (block.type === 'code') {
 			const text = block.text.slice(0, start.offset) + block.text.slice(end.offset);
 			replaceBlock(page, start.index, { ...block, text });
@@ -478,11 +473,7 @@ export function apply(page: KbPage, op: Op): KbPage {
 			throw new Error(`unknown op: ${(_never as Op).kind}`);
 		}
 	}
-	const normalized = normalizePage(next);
-	if (normalized.blocks.length === 0) {
-		normalized.blocks.push(emptyParagraph(newBlockId()));
-	}
-	return normalized;
+	return normalizePage(next);
 }
 
 export function applyMany(page: KbPage, ops: Op[]): KbPage {

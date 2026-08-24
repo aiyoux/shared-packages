@@ -342,8 +342,8 @@ function invertConvertBlock(page: KbPage, op: Extract<Op, { kind: 'convert-block
 }
 
 function invertInsertText(page: KbPage, op: Extract<Op, { kind: 'insert-text' }>): Op[] {
-	if (op.text === '') return [];
 	const at = resolvePoint(page, op.at);
+	if (op.text === '') return [];
 	if (isAtomic(at.block)) {
 		throw new Error('cannot insert text into atomic block');
 	}

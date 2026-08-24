@@ -72,6 +72,24 @@ describe('invert golden applyMany(apply(page, op), invert(page, op)) === normali
 			at: { blockId: 'c', offset: 1 },
 			text: '\n'
 		});
+		expectInvert(page([para('p', 'x'), { id: 'd', type: 'divider' }]), {
+			kind: 'insert-text',
+			at: { blockId: 'd', offset: 0 },
+			text: ''
+		});
+	});
+
+	it('throws on empty insert-text at an unresolved Point', () => {
+		const src = page([para('p', 'ab'), { id: 'd', type: 'divider' }]);
+		expect(() =>
+			invert(src, { kind: 'insert-text', at: { blockId: 'missing', offset: 0 }, text: '' })
+		).toThrow(/unresolved Point/i);
+		expect(() =>
+			invert(src, { kind: 'insert-text', at: { blockId: 'p', offset: 3 }, text: '' })
+		).toThrow(/unresolved Point/i);
+		expect(() =>
+			invert(src, { kind: 'insert-text', at: { blockId: 'd', offset: 1 }, text: '' })
+		).toThrow(/unresolved Point/i);
 	});
 
 	it('round-trips same-block delete-range including emoji and marks', () => {

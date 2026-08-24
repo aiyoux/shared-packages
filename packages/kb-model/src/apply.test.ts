@@ -90,12 +90,26 @@ describe('apply insert-text', () => {
 	});
 
 	it('treats empty insert-text as a no-op and does not bump updatedAt', () => {
-		const src = page([para('p', 'ab')]);
+		const src = page([para('p', 'ab'), { id: 'd', type: 'divider' }]);
 		const frozen = structuredClone(src);
 		const next = apply(src, { kind: 'insert-text', at: { blockId: 'p', offset: 1 }, text: '' });
 		expect(next).toEqual(src);
 		expect(src).toEqual(frozen);
 		expect(next.updatedAt).toBe(STAMP);
+		expect(apply(src, { kind: 'insert-text', at: { blockId: 'd', offset: 0 }, text: '' })).toEqual(src);
+	});
+
+	it('throws on empty insert-text at an unresolved Point', () => {
+		const src = page([para('p', 'ab'), { id: 'd', type: 'divider' }]);
+		expect(() =>
+			apply(src, { kind: 'insert-text', at: { blockId: 'missing', offset: 0 }, text: '' })
+		).toThrow(/unresolved Point/i);
+		expect(() =>
+			apply(src, { kind: 'insert-text', at: { blockId: 'p', offset: 3 }, text: '' })
+		).toThrow(/unresolved Point/i);
+		expect(() =>
+			apply(src, { kind: 'insert-text', at: { blockId: 'd', offset: 1 }, text: '' })
+		).toThrow(/unresolved Point/i);
 	});
 
 	it('throws on atomic insert-text', () => {
