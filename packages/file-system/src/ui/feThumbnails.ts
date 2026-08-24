@@ -2,7 +2,7 @@
  * Thumbnail generation utilities for FileExplorer.
  *
  * Supports images (canvas resize), videos (frame capture via <video>),
- * and PDFs (first page render via dynamically-imported mupdf).
+ * and PDFs (first page render via dynamically-imported `@shared-packages/pdf`).
  *
  * All functions are browser-only and return blob: URLs that the caller
  * must revoke via `URL.revokeObjectURL`.
@@ -112,80 +112,66 @@ export async function generateVideoThumbnail(blob: Blob, maxDim: number): Promis
 	}
 }
 
-// ── PDF thumbnail (mupdf, dynamic import) ────────────────────────
+// ── PDF thumbnail (@shared-packages/pdf, dynamic import) ─────────
 
-let mupdfPromise: Promise<Record<string, (...args: never[]) => unknown>> | null = null;
+type PdfEngine = typeof import('@shared-packages/pdf');
 
-/** Module name as a variable so bundlers can't statically resolve it. */
-const MUPDF_MODULE = 'mupdf';
+let pdfPromise: Promise<PdfEngine> | null = null;
 
-export async function getMupdf(): Promise<Record<string, (...args: never[]) => unknown>> {
-	if (!mupdfPromise) {
-		mupdfPromise = (async () => {
-			if (typeof window !== 'undefined') {
-				const g = globalThis as Record<string, any>;
-				if (!g.process) g.process = { env: {} };
-				if (!g.process.versions) g.process.versions = {};
-				try {
-					Object.defineProperty(g.process.versions, 'node', {
-						get() {
-							return undefined;
-						},
-						configurable: true
-					});
-				} catch {
-					g.process.versions.node = undefined;
-				}
-			}
-			// @vite-ignore — variable import prevents static resolution
-			return (await import(/* @vite-ignore */ MUPDF_MODULE)) as Record<
-				string,
-				(...args: never[]) => unknown
-			>;
-		})();
-		mupdfPromise.catch(() => {
-			mupdfPromise = null;
+async function loadPdfEngine(): Promise<PdfEngine> {
+	if (!pdfPromise) {
+		pdfPromise = import('@shared-packages/pdf').catch((err) => {
+			pdfPromise = null;
+			throw err;
 		});
 	}
-	return mupdfPromise;
+	return pdfPromise;
+}
+
+export function resetPdfEngineForTests(): void {
+	const pending = pdfPromise;
+	pdfPromise = null;
+	if (pending) {
+		void pending.then((m) => m.resetPdfEngineForTests()).catch(() => {});
+	}
+}
+
+async function drawPngToCanvas(canvas: HTMLCanvasElement, png: Uint8Array): Promise<void> {
+	const copy = new Uint8Array(png.byteLength);
+	copy.set(png);
+	const blob = new Blob([copy], { type: 'image/png' });
+	const url = URL.createObjectURL(blob);
+	try {
+		const img = await loadImage(url);
+		canvas.width = img.width;
+		canvas.height = img.height;
+		const ctx = canvas.getContext('2d');
+		if (!ctx) throw new Error('2d context unavailable');
+		ctx.drawImage(img, 0, 0);
+	} finally {
+		URL.revokeObjectURL(url);
+	}
+}
+
+async function pngToWebpDataUrl(png: Uint8Array): Promise<string> {
+	const canvas = document.createElement('canvas');
+	await drawPngToCanvas(canvas, png);
+	return canvas.toDataURL('image/webp', 0.82);
 }
 
 export async function generatePdfThumbnail(blob: Blob, maxDim: number): Promise<string> {
-	const mupdf = await getMupdf();
+	const pdf = await loadPdfEngine();
 	const uint8 = new Uint8Array(await blob.arrayBuffer());
-	const Buffer = mupdf.Buffer as unknown as new (data?: unknown) => { write: (d: Uint8Array) => void };
-	const buf = new Buffer();
-	buf.write(uint8);
-	const doc = (
-		mupdf.Document as unknown as {
-			openDocument: (buf: unknown, type: string) => {
-				countPages: () => number;
-				loadPage: (i: number) => {
-					getBounds: () => [number, number, number, number];
-					toPixmap: (mat: unknown, cs: unknown, alpha: boolean, show: boolean) => {
-						width: number;
-						height: number;
-						pixels: Uint8Array;
-					};
-				};
-			};
-		}
-	).openDocument(buf, 'application/pdf');
-	if (doc.countPages() === 0) throw new Error('PDF has no pages');
-	const page = doc.loadPage(0);
-	const [pw, ph] = page.getBounds().slice(2) as [number, number];
-	const scale = Math.min(1, maxDim / Math.max(pw, ph));
-	const Matrix = mupdf.Matrix as unknown as { scale: (x: number, y: number) => unknown };
-	const ColorSpace = mupdf.ColorSpace as unknown as { DeviceRGB: unknown };
-	const pixmap = page.toPixmap(Matrix.scale(scale, scale), ColorSpace.DeviceRGB, false, true);
-	const canvas = document.createElement('canvas');
-	canvas.width = pixmap.width;
-	canvas.height = pixmap.height;
-	const ctx = canvas.getContext('2d')!;
-	const imageData = ctx.createImageData(pixmap.width, pixmap.height);
-	imageData.data.set(pixmap.pixels);
-	ctx.putImageData(imageData, 0, 0);
-	return canvas.toDataURL('image/webp', 0.82);
+	const handle = await pdf.openPdf(uint8);
+	try {
+		if (pdf.pageCount(handle) === 0) throw new Error('PDF has no pages');
+		const { width: pw, height: ph } = pdf.pageSizePt(handle, 0);
+		const scale = Math.min(1, maxDim / Math.max(pw, ph));
+		const { png } = await pdf.renderRaster(handle, 0, { scale });
+		return await pngToWebpDataUrl(png);
+	} finally {
+		pdf.destroy(handle);
+	}
 }
 
 /** Render a specific PDF page to a canvas at higher resolution. */
@@ -195,41 +181,18 @@ export async function renderPdfPageToCanvas(
 	pageIdx: number,
 	maxWidth: number
 ): Promise<number> {
-	const mupdf = await getMupdf();
+	const pdf = await loadPdfEngine();
 	const uint8 = new Uint8Array(await blob.arrayBuffer());
-	const Buffer = mupdf.Buffer as unknown as new (data?: unknown) => { write: (d: Uint8Array) => void };
-	const buf = new Buffer();
-	buf.write(uint8);
-	const doc = (
-		mupdf.Document as unknown as {
-			openDocument: (buf: unknown, type: string) => {
-				countPages: () => number;
-				loadPage: (i: number) => {
-					getBounds: () => [number, number, number, number];
-					toPixmap: (mat: unknown, cs: unknown, alpha: boolean, show: boolean) => {
-						width: number;
-						height: number;
-						pixels: Uint8Array;
-					};
-				};
-			};
-		}
-	).openDocument(buf, 'application/pdf');
-	const page = doc.loadPage(pageIdx);
-	const bounds = page.getBounds();
-	const pw = bounds[2] - bounds[0];
-	const ph = bounds[3] - bounds[1];
-	const scale = Math.min(2, maxWidth / pw);
-	const Matrix = mupdf.Matrix as unknown as { scale: (x: number, y: number) => unknown };
-	const ColorSpace = mupdf.ColorSpace as unknown as { DeviceRGB: unknown };
-	const pixmap = page.toPixmap(Matrix.scale(scale, scale), ColorSpace.DeviceRGB, false, true);
-	canvas.width = pixmap.width;
-	canvas.height = pixmap.height;
-	const ctx = canvas.getContext('2d')!;
-	const imageData = ctx.createImageData(pixmap.width, pixmap.height);
-	imageData.data.set(pixmap.pixels);
-	ctx.putImageData(imageData, 0, 0);
-	return doc.countPages();
+	const handle = await pdf.openPdf(uint8);
+	try {
+		const { width: pw } = pdf.pageSizePt(handle, pageIdx);
+		const scale = Math.min(2, maxWidth / pw);
+		const { png } = await pdf.renderRaster(handle, pageIdx, { scale });
+		await drawPngToCanvas(canvas, png);
+		return pdf.pageCount(handle);
+	} finally {
+		pdf.destroy(handle);
+	}
 }
 
 // ── Dispatcher ───────────────────────────────────────────────────

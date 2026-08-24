@@ -87,10 +87,14 @@
     "@shared-packages/design-system": "*",
     "@shared-packages/ui": "*",
     "@shared-packages/compress": "*",
-    "@shared-packages/crypto": "*"
+    "@shared-packages/crypto": "*",
+    "@shared-packages/pdf": "*"
   },
   "peerDependenciesMeta": {
     "svelte": {
+      "optional": true
+    },
+    "@shared-packages/pdf": {
       "optional": true
     }
   },
