@@ -24,7 +24,7 @@ export interface EraserPath {
     alpha?: number;
 }
 
-export type LayerKind = 'vector' | 'raster' | 'svg';
+export type LayerKind = 'vector' | 'raster' | 'svg' | 'pdf';
 
 /** Native SVG primitives stored on an `kind: 'svg'` layer. Not PathData ink. */
 export type SvgLineElement = {
@@ -52,6 +52,68 @@ export type SvgPathElement = {
 
 export type SvgElement = SvgLineElement | SvgPathElement;
 
+export type PdfTransform = { x: number; y: number; rotation?: number; sx?: number; sy?: number };
+
+export type PdfTextElement = {
+    type: 'text';
+    id: string;
+    str: string;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    fill: string;
+    fontSize: number;
+    d: string;
+    transform?: PdfTransform;
+    opacity?: number;
+};
+export type PdfImageElement = {
+    type: 'image';
+    id: string;
+    src: string;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    transform?: PdfTransform;
+    opacity?: number;
+};
+export type PdfPathElement = {
+    type: 'path';
+    id: string;
+    d: string;
+    fill: string;
+    stroke: string;
+    strokeWidth: number;
+    fillRule?: 'nonzero' | 'evenodd';
+    transform?: PdfTransform;
+    opacity?: number;
+};
+export type PdfGroupElement = {
+    type: 'group';
+    id: string;
+    children: PdfElement[];
+    transform?: PdfTransform;
+    opacity?: number;
+};
+export type PdfRasterChip = {
+    type: 'chip';
+    id: string;
+    src: string;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    transform?: PdfTransform;
+};
+export type PdfElement =
+    | PdfTextElement
+    | PdfImageElement
+    | PdfPathElement
+    | PdfGroupElement
+    | PdfRasterChip;
+
 export interface LayerData {
     id: string;
     name: string;
@@ -63,6 +125,7 @@ export interface LayerData {
      * Ink model for this layer. Missing on older saves — treat as `'vector'`.
      * Raster layers persist a page-aspect bitmap (`rasterSrc` + pixel size).
      * SVG layers persist native elements (`svgElements`).
+     * PDF layers persist interpreted page elements (`pdfElements`).
      * There is no convert-either-way.
      */
     kind?: LayerKind;
@@ -74,6 +137,8 @@ export interface LayerData {
     rasterSrc?: string;
     /** Native SVG elements. Ignored on vector/raster layers. */
     svgElements?: SvgElement[];
+    /** Interpreted PDF page elements. Ignored on vector/raster/svg layers. */
+    pdfElements?: PdfElement[];
 }
 
 export interface ImportedImage {
