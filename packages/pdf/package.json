@@ -1,0 +1,37 @@
+{
+  "name": "@shared-packages/pdf",
+  "version": "0.1.0",
+  "private": false,
+  "type": "module",
+  "description": "pdf.js interpreter: open, rasterize, and map a page to editable IR (text/path/image/group).",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "types": "./src/index.ts",
+  "files": [
+    "src"
+  ],
+  "scripts": {
+    "test": "vitest run",
+    "check": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "pdfjs-dist": "^5.4.149"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "pdf-lib": "^1.17.1",
+    "typescript": "^5.7.3",
+    "vitest": "^4.1.2"
+  },
+  "engines": {
+    "node": ">=22.7.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
