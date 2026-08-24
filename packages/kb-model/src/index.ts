@@ -6,6 +6,7 @@ export { canonicalMarks, normalizePage, normalizeSpans } from './normalize.js';
 export { parseKb } from './parse.js';
 export { isAtomic, isTextLike, plaintext, plaintextOf } from './plaintext.js';
 export { serializeKb } from './serialize.js';
+export { toMarkdown } from './toMarkdown.js';
 export {
 	KB_FORMAT,
 	KB_SCHEMA_VERSION,
