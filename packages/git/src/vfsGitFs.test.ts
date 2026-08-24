@@ -186,4 +186,19 @@ describe('createGitHost fsForLocal', () => {
 		unsub();
 		interval.mockRestore();
 	});
+
+	it('readBlobAt returns committed bytes after a dirty worktree edit', async () => {
+		const { vfs, folderId, fs } = await makeProject();
+		await commitReadme(fs, 'initial commit', 'hello\n');
+		const host = createGitHost({
+			fsForLocal: (id) => createVfsGitFs(vfs, { rootId: id })
+		});
+		const repo = await host.addRepo({ label: 'v', backend: 'local', path: folderId });
+		const sha = (await host.snapshot(repo.id)).log[0]?.sha;
+		expect(sha).toBeTruthy();
+		await fs.promises.writeFile('/README.md', 'changed\n');
+		const blob = await host.readBlobAt(repo, sha!, 'README.md');
+		expect(new TextDecoder().decode(blob)).toBe('hello\n');
+		expect(String(await fs.promises.readFile('/README.md', 'utf8'))).toBe('changed\n');
+	});
 });

@@ -34,6 +34,13 @@ export {
 	createMonitorClient,
 	coerceGitSnapshot,
 	coerceHostSnapshot,
+	coerceInoDev,
+	coerceListResult,
+	coerceMonitorCapabilities,
+	coerceMonitorMeta,
+	coerceStatResult,
+	type MonitorCapabilities,
+	type MonitorMeta,
 	type MonitorTransport,
 	type MonitorListEntry,
 	type MonitorListResult,
@@ -70,6 +77,7 @@ export {
 	isFolderId,
 	parentIdOf,
 	relativeIdFromAbsolute,
+	sanitizeSegment,
 	toAbsolutePath
 } from './pathIds.js';
 export {

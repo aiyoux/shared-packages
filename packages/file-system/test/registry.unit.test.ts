@@ -21,6 +21,7 @@ describe('registry multi-ext image + forceExtension', () => {
 		assert.deepEqual(acceptedExtensionsFor('igfx'), ['.igfx']);
 		assert.deepEqual(acceptedExtensionsFor('cari'), ['.cari']);
 		assert.deepEqual(acceptedExtensionsFor('kb'), ['.kb']);
+		assert.deepEqual(acceptedExtensionsFor('anim'), ['.anim']);
 		assert.deepEqual(acceptedExtensionsFor('json'), ['.json']);
 		assert.deepEqual(acceptedExtensionsFor('unknown'), []);
 	});
@@ -57,6 +58,8 @@ describe('registry multi-ext image + forceExtension', () => {
 		assert.equal(forceExtension('face.cari', 'cari'), 'face.cari');
 		assert.equal(forceExtension('demo', 'kb'), 'demo.kb');
 		assert.equal(forceExtension('index.kb', 'kb'), 'index.kb');
+		assert.equal(forceExtension('clip', 'anim'), 'clip.anim');
+		assert.equal(forceExtension('clip.anim', 'anim'), 'clip.anim');
 		assert.equal(forceExtension('note.json', 'json'), 'note.json');
 		assert.equal(forceExtension('note', 'json'), 'note.json');
 		// wrong product ext stripped then primary applied
@@ -64,6 +67,8 @@ describe('registry multi-ext image + forceExtension', () => {
 		assert.equal(forceExtension('x.igfx', 'skch'), 'x.skch');
 		assert.equal(forceExtension('x.igfx', 'cari'), 'x.cari');
 		assert.equal(forceExtension('x.cari', 'igfx'), 'x.igfx');
+		assert.equal(forceExtension('x.anim', 'skch'), 'x.skch');
+		assert.equal(forceExtension('x.skch', 'anim'), 'x.anim');
 	});
 
 	it('inferFileTypeFromName maps image multi-ext and product types', () => {
@@ -79,6 +84,7 @@ describe('registry multi-ext image + forceExtension', () => {
 		assert.equal(inferFileTypeFromName('x.igfx'), 'igfx');
 		assert.equal(inferFileTypeFromName('a.cari'), 'cari');
 		assert.equal(inferFileTypeFromName('index.kb'), 'kb');
+		assert.equal(inferFileTypeFromName('loop.anim'), 'anim');
 		assert.equal(inferFileTypeFromName('report.pdf'), 'unknown');
 		assert.equal(inferFileTypeFromName('noext'), 'unknown');
 	});
@@ -92,6 +98,8 @@ describe('registry multi-ext image + forceExtension', () => {
 		assert.equal(getFileTypeByExtension('.skch')?.id, 'skch');
 		assert.equal(getFileTypeByExtension('.igfx')?.id, 'igfx');
 		assert.equal(getFileTypeByExtension('.cari')?.id, 'cari');
+		assert.equal(getFileTypeByExtension('.kb')?.id, 'kb');
+		assert.equal(getFileTypeByExtension('.anim')?.id, 'anim');
 		assert.equal(getFileTypeByExtension('.pdf'), undefined);
 	});
 });

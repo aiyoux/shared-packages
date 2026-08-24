@@ -1,7 +1,7 @@
 import './ensureBuffer.js';
 import git from 'isomorphic-git';
 import { deleteRepo, getRepo, listRepos, putRepo } from './repos.js';
-import { localSnapshot, type GitFs } from './local.js';
+import { localReadBlobAt, localSnapshot, type GitFs } from './local.js';
 import { monitorSnapshot, monitorSubscribe } from './monitor.js';
 import type { GitHost, GitRepoRef, GitSnapshot } from './types.js';
 
@@ -111,6 +111,13 @@ export function createGitHost(opts: CreateGitHostOptions = {}): GitHost {
 		async initLocal(repoPath) {
 			const bound = bindLocal(repoPath);
 			await git.init({ fs: bound.fs, dir: bound.dir });
+		},
+		async readBlobAt(repo, rev, filepath) {
+			if (repo.backend === 'monitor') {
+				throw new Error('Monitor git blob is not wired on this host yet');
+			}
+			const bound = bindLocal(repo.path);
+			return localReadBlobAt(bound.fs, bound.dir, rev, filepath);
 		}
 	};
 }

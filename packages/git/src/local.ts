@@ -39,3 +39,24 @@ export async function localSnapshot(fs: GitFs, dir: string): Promise<GitSnapshot
 
 	return { status: { branch, dirty }, log };
 }
+
+export async function localReadBlobAt(
+	fs: GitFs,
+	dir: string,
+	rev: string,
+	filepath: string
+): Promise<Uint8Array> {
+	// readBlob wants an oid; peel refs (HEAD, branch) and abbreviated SHAs first.
+	let oid = rev;
+	try {
+		oid = await git.resolveRef({ fs, dir, ref: rev });
+	} catch {
+		try {
+			oid = await git.expandOid({ fs, dir, oid: rev });
+		} catch {
+			oid = rev;
+		}
+	}
+	const { blob } = await git.readBlob({ fs, dir, oid, filepath });
+	return blob;
+}

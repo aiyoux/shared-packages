@@ -1,6 +1,6 @@
 export { default as FileExplorer } from './FileExplorer.svelte';
 export { default as FeTreeView } from './FeTreeView.svelte';
-export { detectProject } from './detectProject.js';
+export { detectProject, findProjectRoot, type ProjectRootHit } from './detectProject.js';
 export type { ExplorerMode, ExplorerContext } from './FileExplorer.svelte';
 export { default as StoragePersistenceStatus } from './StoragePersistenceStatus.svelte';
 export { default as DualPaneExplorer } from './DualPaneExplorer.svelte';
@@ -16,6 +16,9 @@ export {
 	CopyAcrossError,
 	idsFromExplorerDragTarget,
 	idsFromExplorerDataTransfer,
+	parseExplorerDragIds,
+	parseExplorerDragPayload,
+	explorerDragFromDataTransfer,
 	dataTransferHasOsFiles,
 	dataTransferHasExplorerIds,
 	filesFromDataTransfer,
@@ -23,7 +26,8 @@ export {
 	type CopyAcrossArgs,
 	type CopyAcrossErrorCode,
 	type CopyAcrossPath,
-	type CopyAcrossPathKind
+	type CopyAcrossPathKind,
+	type ExplorerDragPayload
 } from './copyAcross.js';
 export {
 	collectOsDrop,
