@@ -747,8 +747,8 @@
 	});
 
 	/**
-	 * Live backends (monitor watch): re-list the open folder when the driver
-	 * signals a change.
+	 * Live backends (monitor watch, local Dexie liveQuery): re-list the open
+	 * folder when the driver signals a change.
 	 *
 	 * Re-subscribes on navigation so the backend can watch just this folder —
 	 * each mounted explorer holds its own subscription, which is what lets a
@@ -763,6 +763,7 @@
 				// Silent — keeps selection, and paints no busy chrome for a change the
 				// user did not initiate.
 				void refresh(true, 'delay', true);
+				if (trashOpen) void refreshTrash();
 			},
 			{ parentId: scopeId }
 		);

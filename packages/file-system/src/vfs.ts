@@ -1,5 +1,6 @@
 import { liveQuery, type Observable } from 'dexie';
 import { createChangeBus } from './changeBus.js';
+import { notifyTabChannel, subscribeTabChannel } from './crossTab.js';
 import { SharedVfsDatabase } from './db.js';
 import { generateId } from './id.js';
 import { sanitizeName, withNumericSuffix } from './names.js';
@@ -72,9 +73,20 @@ export class VfsService {
 		}
 	}
 
-	/** Live list refresh for FileExplorer (same contract as monitor subscribeChanges). */
+	private tabChannelName(): string {
+		return `shared-vfs:${this.db.name}`;
+	}
+
+	/** Live list refresh for FileExplorer (same contract as monitor subscribeChanges).
+	 * changeBus is same-tab; BroadcastChannel carries the signal to other tabs
+	 * because Dexie liveQuery on `.filter()` collections can miss storagemutated. */
 	subscribe(listener: () => void): () => void {
-		return this.changeBus.subscribe(listener);
+		const unsubBus = this.changeBus.subscribe(listener);
+		const unsubTab = subscribeTabChannel(this.tabChannelName(), listener);
+		return () => {
+			unsubBus();
+			unsubTab();
+		};
 	}
 
 	private asDocumentHost(): DocumentHost {
@@ -104,6 +116,7 @@ export class VfsService {
 
 	private emitChange(): void {
 		this.changeBus.notify();
+		notifyTabChannel(this.tabChannelName());
 	}
 
 	async ready(): Promise<void> {
@@ -224,9 +237,10 @@ export class VfsService {
 		return rows;
 	}
 
-	/** Reactive list (Dexie liveQuery). */
+	/** Reactive list (Dexie liveQuery). Querier must be async so awaits inside
+	 * `list()` stay in Dexie's observation zone. */
 	liveList(opts: VfsListOptions): Observable<VfsNode[]> {
-		return liveQuery(() => this.list(opts));
+		return liveQuery(async () => this.list(opts));
 	}
 
 	async get(id: string): Promise<VfsNode | undefined> {
@@ -972,6 +986,7 @@ export class VfsService {
 	async putDraft(draft: import('./types.js').AppDraft): Promise<void> {
 		await this.ready();
 		await this.db.drafts.put(draft);
+		this.emitChange();
 	}
 
 	async getDraft(id: string): Promise<import('./types.js').AppDraft | undefined> {
@@ -982,6 +997,7 @@ export class VfsService {
 	async deleteDraft(id: string): Promise<void> {
 		await this.ready();
 		await this.db.drafts.delete(id);
+		this.emitChange();
 	}
 
 	// ── Migration helpers ─────────────────────────────────────────

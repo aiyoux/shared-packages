@@ -66,7 +66,15 @@
 		getCrossWindowDrag,
 		clearCrossWindowDrag
 	} from './crossWindowDnd.js';
-	import { getMemoryVfs, type MemoryVfsService, type VfsService } from '../index.js';
+	import {
+		getMemoryVfs,
+		subscribeTabChannel,
+		HUB_B2_PROFILES_CHANNEL,
+		HUB_MONITOR_PROFILES_CHANNEL,
+		HUB_RCLONE_PROFILES_CHANNEL,
+		type MemoryVfsService,
+		type VfsService
+	} from '../index.js';
 	import { canPickDirectory, createDiskExplorerDriver, pickDirectory } from '../disk/index.js';
 	import {
 		B2ConnectionForm,
@@ -338,6 +346,7 @@
 	let copyItems = $state<TransferItem[]>([]);
 	let dismissedCopyIds = $state<Set<string>>(new Set());
 	let copyProgressUnsub: (() => void) | null = null;
+	let profileTabUnsub: (() => void) | null = null;
 	let memoryVfs: MemoryVfsService | null = null;
 	let dualPhasePrompt = $state<{
 		sourceLabel: string;
@@ -494,6 +503,17 @@
 		}
 		onDualChange?.(dualPane);
 		void reloadProfiles();
+		const reloadOnTab = () => {
+			void reloadProfiles();
+		};
+		const unsubs = [
+			subscribeTabChannel(HUB_B2_PROFILES_CHANNEL, reloadOnTab),
+			subscribeTabChannel(HUB_RCLONE_PROFILES_CHANNEL, reloadOnTab),
+			subscribeTabChannel(HUB_MONITOR_PROFILES_CHANNEL, reloadOnTab)
+		];
+		profileTabUnsub = () => {
+			for (const u of unsubs) u();
+		};
 		// Hub files memory singleton hook (separate from durable page-owned __VFS_TEST__).
 		// Memory is global/shared: NOT disposed on pagehide.
 		const mem = getMemoryVfs();
@@ -509,6 +529,8 @@
 	onDestroy(() => {
 		copyProgressUnsub?.();
 		copyProgressUnsub = null;
+		profileTabUnsub?.();
+		profileTabUnsub = null;
 		if (watchPollTimer) {
 			clearInterval(watchPollTimer);
 			watchPollTimer = null;

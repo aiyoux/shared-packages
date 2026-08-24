@@ -6,6 +6,7 @@
 		saveProfile,
 		setActiveProfileId
 	} from './credentials.js';
+	import { HUB_B2_PROFILES_CHANNEL, subscribeTabChannel } from '../crossTab.js';
 	import { validateProfileInput, type B2ConnectionProfileV1 } from './types.js';
 
 	interface Props {
@@ -40,6 +41,9 @@
 
 	$effect(() => {
 		void reload();
+		return subscribeTabChannel(HUB_B2_PROFILES_CHANNEL, () => {
+			void reload();
+		});
 	});
 
 	function clearFieldsForNew() {

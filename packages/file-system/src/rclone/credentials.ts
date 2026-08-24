@@ -2,6 +2,7 @@
  * IndexedDB store for hub rclone connection profiles (plaintext v1).
  * Secrets never leave this origin; never log rcPass.
  */
+import { HUB_RCLONE_PROFILES_CHANNEL, notifyTabChannel } from '../crossTab.js';
 import {
 	DEFAULT_RCLONE_BASE_URL,
 	HUB_RCLONE_DB_NAME,
@@ -124,6 +125,7 @@ export async function saveProfile(
 	const tx = db.transaction(HUB_RCLONE_STORE, 'readwrite');
 	tx.objectStore(HUB_RCLONE_STORE).put(row);
 	await txDone(tx);
+	notifyTabChannel(HUB_RCLONE_PROFILES_CHANNEL);
 	return row;
 }
 
@@ -148,6 +150,7 @@ export async function deleteProfile(id: string): Promise<void> {
 		tx.onerror = () => reject(tx.error);
 		tx.onabort = () => reject(tx.error ?? new Error('deleteProfile aborted'));
 	});
+	notifyTabChannel(HUB_RCLONE_PROFILES_CHANNEL);
 }
 
 export async function getActiveProfileId(): Promise<string | null> {
@@ -171,6 +174,7 @@ export async function setActiveProfileId(id: string | null): Promise<void> {
 		value: { activeProfileId: id } satisfies HubRcloneMeta
 	});
 	await txDone(tx);
+	notifyTabChannel(HUB_RCLONE_PROFILES_CHANNEL);
 }
 
 /** Redact secrets for any debug export. */
