@@ -5,7 +5,6 @@
 		acquireMonitorDriver,
 		releaseMonitorDriver,
 		getHostStream,
-		getGitStream,
 		toAbsolutePath,
 		baseName,
 		type MonitorConnectionProfileV1,
@@ -17,9 +16,11 @@
 		type ExplorerDriver,
 		type ExplorerEntryId
 	} from '@shared-packages/file-system/ui';
-	import { GitHistory, mapMonitorGitSnapshot, type GitRepoRef, type GitSnapshot } from '@shared-packages/git';
+	import { createGitHost, GitHistory, type GitRepoRef } from '@shared-packages/git';
 	import { diskPct, memPct, pct, type HostSnapshot } from './types.js';
 	import { SPARKLINE_N, samplesToPoints } from './sparkline.js';
+
+	const gitHost = createGitHost();
 
 	let profile = $state<MonitorConnectionProfileV1 | null>(null);
 	let driver = $state<ExplorerDriver | null>(null);
@@ -28,7 +29,6 @@
 	let hostSnap = $state<HostSnapshot | null>(null);
 	let samples = $state<Array<{ cpu: number; mem: number; disk: number }>>([]);
 	let gitRepo = $state<GitRepoRef | null>(null);
-	let gitSnap = $state<GitSnapshot | null>(null);
 
 	function asHost(s: MonitorHostSnapshot): HostSnapshot {
 		return {
@@ -59,7 +59,6 @@
 		hostSnap = null;
 		samples = [];
 		gitRepo = null;
-		gitSnap = null;
 	}
 
 	$effect(() => {
@@ -82,30 +81,32 @@
 		const d = driver;
 		const folder = selectedId;
 		gitRepo = null;
-		gitSnap = null;
 		if (!p || !d) return;
-		let unsub = () => {};
 		let cancelled = false;
 		void (async () => {
 			const ok = await detectProject(d, folder);
 			if (cancelled || !ok) return;
 			const abs = toAbsolutePath(p.rootPath, folder);
 			const label = folder ? baseName(folder) : p.rootPath;
-			gitRepo = {
-				id: `monitor:${p.id}:${abs}`,
+			const listed = await gitHost.listRepos();
+			if (cancelled) return;
+			const existing = listed.find((r) => r.backend === 'monitor' && r.path === abs);
+			if (existing) {
+				gitRepo = existing;
+				return;
+			}
+			const added = await gitHost.addRepo({
 				label,
 				backend: 'monitor',
 				path: abs,
 				profileId: p.id,
 				baseUrl: p.baseUrl
-			};
-			unsub = getGitStream(p, abs).subscribe((s) => {
-				gitSnap = mapMonitorGitSnapshot(s);
 			});
+			if (cancelled) return;
+			gitRepo = added;
 		})();
 		return () => {
 			cancelled = true;
-			unsub();
 		};
 	});
 </script>
@@ -153,7 +154,7 @@
 		</div>
 		<div class="git">
 			{#if gitRepo}
-				<GitHistory snapshot={gitSnap} />
+				<GitHistory {gitHost} repoId={gitRepo.id} />
 			{:else}
 				<GitHistory snapshot={null} />
 			{/if}
