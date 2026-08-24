@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onDestroy, tick, type Snippet } from 'svelte';
 	import FileExplorer from './FileExplorer.svelte';
-	import { getSharedVfs, isActionable, type FileTypeId, type VfsService, VfsError } from '../index.js';
+	import { getSharedVfs, isActionable, type FileTypeId, type VfsService } from '../index.js';
 	import {
 		type ExplorerDriver,
 		type ExplorerEntry,
@@ -26,9 +26,15 @@
 	import { createTreeDndSession, resolveDrop, zoneFromY, type DropZone } from './treeDnd/index.js';
 	import {
 		FE_EXPLORER_IDS_MIME,
-		dataTransferHasOsFiles,
-		filesFromDataTransfer
+		dataTransferHasOsFiles
 	} from './copyAcross.js';
+	import {
+		collectOsDrop,
+		importOsDropToDriver,
+		snapshotFiles,
+		type OsDropNode
+	} from './osDrop.js';
+	import { formatExplorerError } from './explorerError.js';
 	import {
 		prefetchForDragOut,
 		getDragOutFile,
@@ -42,7 +48,7 @@
 	} from './systemClipboard.js';
 	import '@shared-packages/design-system/button.css';
 	import '@shared-packages/design-system/tooltip.css';
-	import { SplitHandle } from '@shared-packages/ui';
+	import { SplitHandle, toast } from '@shared-packages/ui';
 	import FeThumbnail from './FeThumbnail.svelte';
 	import FeTreeView from './FeTreeView.svelte';
 	import FeFloatingPreview from './FeFloatingPreview.svelte';
@@ -416,11 +422,13 @@
 	});
 
 	function errMsg(e: unknown): string {
-		if (e instanceof VfsError) return e.code;
-		if (e && typeof e === 'object' && 'code' in e && typeof (e as { code: unknown }).code === 'string') {
-			return (e as { code: string }).code;
-		}
-		return e instanceof Error ? e.message : String(e);
+		return formatExplorerError(e);
+	}
+
+	function reportError(e: unknown): void {
+		const msg = errMsg(e);
+		error = msg;
+		toast.error(msg);
 	}
 
 	function onRowDragStart(e: DragEvent, n: ExplorerEntry) {
@@ -1517,21 +1525,28 @@
 		};
 	});
 
-	async function importDeviceFiles(files: File[], destParentId: string | null = parentId) {
-		const put = driver.upload ?? driver.writeFile;
-		if (!files.length || !put) return;
+	async function importOsNodes(
+		pending: Promise<OsDropNode[]>,
+		destParentId: string | null = parentId
+	) {
+		if (!(driver.upload || driver.writeFile)) return;
 		uploadBusy = true;
 		error = '';
 		try {
-			for (const file of files) {
-				await put(destParentId, file);
-			}
+			const nodes = await pending;
+			if (!nodes.length) return;
+			await importOsDropToDriver(driver, destParentId, nodes);
 			await refresh();
 		} catch (e) {
-			error = errMsg(e);
+			reportError(e);
 		} finally {
 			uploadBusy = false;
 		}
+	}
+
+	async function importDeviceFiles(files: File[], destParentId: string | null = parentId) {
+		if (!files.length) return;
+		await importOsNodes(snapshotFiles(files), destParentId);
 	}
 
 	function allowOsFileDrag(e: DragEvent): boolean {
@@ -1568,7 +1583,9 @@
 		e.preventDefault();
 		e.stopPropagation();
 		osDropOver = false;
-		void importDeviceFiles(filesFromDataTransfer(e.dataTransfer), parentId);
+		// Capture entries/files now — directory File objects die after this handler.
+		const pending = collectOsDrop(e.dataTransfer);
+		void importOsNodes(pending, parentId);
 	}
 
 	function onListKeydown(e: KeyboardEvent) {

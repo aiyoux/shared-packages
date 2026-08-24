@@ -47,6 +47,41 @@ describe('FileExplorer component', () => {
 		});
 	});
 
+	it('drops a desktop folder tree into nested VFS folders', async () => {
+		render(FileExplorer, { props: { mode: 'manage', vfs, variant: 'panel' } });
+		await screen.findByTestId('fe-list');
+		const list = screen.getByTestId('fe-list');
+		const nested = new File(['inside'], 'notes.txt', { type: 'text/plain' });
+		Object.defineProperty(nested, 'webkitRelativePath', { value: 'Trip/inner/notes.txt' });
+		const dt = {
+			types: ['Files'],
+			files: {
+				length: 1,
+				0: nested,
+				item: (i: number) => (i === 0 ? nested : null),
+				[Symbol.iterator]: function* () {
+					yield nested;
+				}
+			},
+			dropEffect: 'none'
+		};
+		await fireEvent.drop(list, { dataTransfer: dt });
+		await viWaitFor(async () => {
+			const root = await vfs.list({ parentId: null });
+			const trip = root.find((n) => n.name === 'Trip' && n.kind === 'folder');
+			if (!trip) return false;
+			const mid = await vfs.list({ parentId: trip.id });
+			const inner = mid.find((n) => n.name === 'inner' && n.kind === 'folder');
+			if (!inner) return false;
+			const files = await vfs.list({ parentId: inner.id });
+			return files.some((n) => n.name === 'notes.txt');
+		});
+		await viWaitFor(
+			() =>
+				Boolean(document.querySelector('[data-testid="fe-folder-row"][data-name="Trip"]'))
+		);
+	});
+
 	it('renders manage chrome with new folder and trash controls', async () => {
 		render(FileExplorer, { props: { mode: 'manage', vfs, variant: 'panel' } });
 		expect(await screen.findByTestId('file-explorer')).toBeTruthy();

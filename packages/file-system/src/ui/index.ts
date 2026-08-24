@@ -26,6 +26,15 @@ export {
 	type CopyAcrossPathKind
 } from './copyAcross.js';
 export {
+	collectOsDrop,
+	importOsDropToDriver,
+	snapshotFiles,
+	nodesFromFiles,
+	OsDropError,
+	type OsDropNode
+} from './osDrop.js';
+export { formatExplorerError } from './explorerError.js';
+export {
 	setCrossWindowDrag,
 	getCrossWindowDrag,
 	clearCrossWindowDrag,

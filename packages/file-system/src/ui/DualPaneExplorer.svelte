@@ -58,9 +58,10 @@
 		idsFromExplorerDataTransfer,
 		idsFromExplorerDragTarget,
 		dataTransferHasOsFiles,
-		dataTransferHasExplorerIds,
-		filesFromDataTransfer
+		dataTransferHasExplorerIds
 	} from './copyAcross.js';
+	import { collectOsDrop, importOsDropToDriver, type OsDropNode } from './osDrop.js';
+	import { formatExplorerError } from './explorerError.js';
 	import {
 		setCrossWindowDrag,
 		getCrossWindowDrag,
@@ -848,27 +849,26 @@
 		return Boolean(drv.upload || drv.writeFile);
 	}
 
-	async function importOsFilesToPane(
+	async function importOsDropToPane(
 		id: PaneId,
-		files: File[],
+		pending: Promise<OsDropNode[]>,
 		destParentId?: string | null
 	): Promise<void> {
 		const p = paneState(id);
 		const drv = activeDriver(p, id);
-		const put = drv.upload ?? drv.writeFile;
-		if (!put || files.length === 0) return;
+		if (!(drv.upload || drv.writeFile)) return;
 		copyBusy = true;
 		copyDestPane = id;
 		const parent = destParentId !== undefined ? destParentId : p.ctx.parentId;
 		try {
-			for (const file of files) {
-				await put(parent, file);
-			}
+			const nodes = await pending;
+			if (!nodes.length) return;
+			await importOsDropToDriver(drv, parent, nodes);
 			if (!drv.subscribeChanges) {
 				setPane(id, { explorerKey: p.explorerKey + 1 });
 			}
 		} catch (e) {
-			toast.error(e instanceof Error ? e.message : String(e));
+			toast.error(formatExplorerError(e));
 		} finally {
 			copyBusy = false;
 		}
@@ -920,13 +920,13 @@
 	}
 
 	async function onPaneDrop(id: PaneId, e: DragEvent) {
-		const osFiles = filesFromDataTransfer(e.dataTransfer);
-		if (osFiles.length && paneCanImport(id) && !crossDragFrom) {
+		if (dataTransferHasOsFiles(e.dataTransfer) && paneCanImport(id) && !crossDragFrom) {
 			e.preventDefault();
 			e.stopPropagation();
 			const destParentId = destParentFromDropEvent(e, paneState(id).ctx.parentId);
+			const pending = collectOsDrop(e.dataTransfer);
 			onPaneDragEnd();
-			await importOsFilesToPane(id, osFiles, destParentId);
+			await importOsDropToPane(id, pending, destParentId);
 			return;
 		}
 		// Same-instance cross-pane copy (dual-pane mode).
@@ -1054,7 +1054,7 @@
 			if (n === 0) toast.info('Nothing copied');
 		} catch (e) {
 			if (e instanceof CopyAcrossError) toast.error(e.message);
-			else toast.error(e instanceof Error ? e.message : String(e));
+			else toast.error(formatExplorerError(e));
 		} finally {
 			copyBusy = false;
 		}
@@ -1097,7 +1097,7 @@
 			if (n === 0) toast.info('Nothing copied');
 		} catch (e) {
 			if (e instanceof CopyAcrossError) toast.error(e.message);
-			else toast.error(e instanceof Error ? e.message : String(e));
+			else toast.error(formatExplorerError(e));
 		} finally {
 			copyBusy = false;
 		}
@@ -1120,7 +1120,7 @@
 			// Remount so selection clears and the pane re-lists.
 			setPane(id, { explorerKey: p.explorerKey + 1 });
 		} catch (e) {
-			toast.error(e instanceof Error ? e.message : String(e));
+			toast.error(formatExplorerError(e));
 		} finally {
 			sendBusy = false;
 		}
