@@ -70,7 +70,9 @@ export async function openPdf(bytes: Uint8Array): Promise<PdfHandle> {
 	const data = copyBytes(bytes);
 	const loadingTask = pdfjs.getDocument({
 		data,
-		disableWorker: workerUnavailable(),
+		// Main-thread parse is slower but avoids Vite failing to serve the
+		// pdf.worker.mjs URL from a file: linked package.
+		disableWorker: true,
 		isEvalSupported: false,
 		useSystemFonts: false,
 		disableFontFace: isNode(),
