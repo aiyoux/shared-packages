@@ -7,7 +7,7 @@ import {
 	type KbPage,
 	type Mark
 } from '@shared-packages/kb-model';
-import { paintCarets, type RemoteCaret } from './decorations.js';
+import { paintCarets, stripCollabWidgets, type RemoteCaret } from './decorations.js';
 import { allowlistedHref, allowlistedSrc } from './href.js';
 import type { EditorState } from './state.js';
 
@@ -141,16 +141,25 @@ export function project(host: HTMLElement, page: KbPage, opts?: ProjectOpts): vo
 	for (const block of visibleOrder(page)) nodes.push(renderBlock(doc, block));
 	host.replaceChildren(...nodes);
 	for (const child of host.children) stripMagicBr(child as HTMLElement);
-	if (opts?.composing) return;
+	if (opts?.composing) {
+		stripCollabWidgets(host);
+		return;
+	}
 	if (opts?.carets?.length) paintCarets(host, page, opts.carets);
 }
 
-/** Re-project unless composing (IME freeze). No widgets in the host while composing. */
+/**
+ * Re-project unless composing (IME freeze). While composing, strip already-painted
+ * widgets without replaceChildren so compositionend cannot read remote names.
+ */
 export function syncView(
 	host: HTMLElement,
 	state: EditorState,
 	opts?: { carets?: RemoteCaret[] }
 ): void {
-	if (state.composing) return;
+	if (state.composing) {
+		stripCollabWidgets(host);
+		return;
+	}
 	project(host, state.page, { carets: opts?.carets });
 }

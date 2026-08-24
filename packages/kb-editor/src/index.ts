@@ -25,6 +25,7 @@ export {
 	COLLAB_SEL_ATTR,
 	COLLAB_WIDGET_ATTR,
 	paintCarets,
+	stripCollabWidgets,
 	stripCollabWidgetsHtml,
 	type RemoteCaret
 } from './decorations.js';

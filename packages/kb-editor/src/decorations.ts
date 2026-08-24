@@ -1,5 +1,6 @@
 import { findBlock, plaintextOf, type KbPage, type Point } from '@shared-packages/kb-model';
 import { orderedRange } from './range.js';
+import { nodeAtOffset } from './selection.js';
 
 export const COLLAB_WIDGET_ATTR = 'data-collab-widget';
 export const COLLAB_SEL_ATTR = 'data-collab-sel';
@@ -20,39 +21,6 @@ function blockEl(host: HTMLElement, blockId: string): HTMLElement | null {
 	return host.querySelector(`[data-block-id="${cssEscape(blockId)}"]`);
 }
 
-function inWidget(node: Node): boolean {
-	const el = node.nodeType === Node.ELEMENT_NODE ? (node as Element) : node.parentElement;
-	return !!el?.closest(`[${COLLAB_WIDGET_ATTR}]`);
-}
-
-/** Document text nodes only; collab widgets are skipped. */
-function textNodes(block: HTMLElement): Text[] {
-	const out: Text[] = [];
-	const walk = block.ownerDocument.createTreeWalker(block, NodeFilter.SHOW_TEXT);
-	let node: Node | null;
-	while ((node = walk.nextNode())) {
-		if (inWidget(node)) continue;
-		out.push(node as Text);
-	}
-	return out;
-}
-
-function nodeAtOffset(block: HTMLElement, offset: number): { node: Text; offset: number } | null {
-	const texts = textNodes(block);
-	if (texts.length === 0) return null;
-	let remaining = Math.max(0, offset);
-	for (let i = 0; i < texts.length; i++) {
-		const text = texts[i];
-		const len = text.data.length;
-		if (remaining < len || (remaining === len && i === texts.length - 1)) {
-			return { node: text, offset: Math.min(remaining, len) };
-		}
-		remaining -= len;
-	}
-	const last = texts[texts.length - 1];
-	return { node: last, offset: last.data.length };
-}
-
 function unwrap(el: Element): void {
 	const parent = el.parentNode;
 	if (!parent) {
@@ -63,8 +31,13 @@ function unwrap(el: Element): void {
 	parent.removeChild(el);
 }
 
-function clearDecorations(host: HTMLElement): void {
+/** Remove caret widgets only. Does not unwrap selection highlights (that reshapes text). */
+export function stripCollabWidgets(host: HTMLElement): void {
 	for (const el of [...host.querySelectorAll(`[${COLLAB_WIDGET_ATTR}]`)]) el.remove();
+}
+
+function clearDecorations(host: HTMLElement): void {
+	stripCollabWidgets(host);
 	for (const el of [...host.querySelectorAll(`[${COLLAB_SEL_ATTR}]`)]) unwrap(el);
 }
 

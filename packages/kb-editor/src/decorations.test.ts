@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { copyPayload, stripHtml } from './clipboard.js';
+import { confirmedCompositionText } from './composition.js';
 import {
 	COLLAB_SEL_ATTR,
 	COLLAB_WIDGET_ATTR,
@@ -7,9 +8,24 @@ import {
 	type RemoteCaret
 } from './decorations.js';
 import { project, syncView } from './project.js';
-import { plaintextFromDom, pointFromDom, textNodes } from './selection.js';
+import { plaintextFromDom, pointFromDom, rangeFromSelection, textNodes } from './selection.js';
 import { createEditorState } from './state.js';
 import { page, para } from './testFixtures.js';
+
+function hasUnpairedSurrogate(text: string): boolean {
+	for (let i = 0; i < text.length; i++) {
+		const c = text.charCodeAt(i);
+		if (c >= 0xd800 && c <= 0xdbff) {
+			if (i + 1 >= text.length) return true;
+			const low = text.charCodeAt(i + 1);
+			if (low < 0xdc00 || low > 0xdfff) return true;
+			i++;
+		} else if (c >= 0xdc00 && c <= 0xdfff) {
+			return true;
+		}
+	}
+	return false;
+}
 
 function host(): HTMLDivElement {
 	const el = document.createElement('div');
@@ -67,6 +83,68 @@ describe('remote caret widgets', () => {
 		project(el, doc, { carets: [alice()], composing: true });
 		expect(el.querySelector(`[${COLLAB_WIDGET_ATTR}]`)).toBeNull();
 		expect(el.querySelector('[data-block-id="p"]')).toBeTruthy();
+		el.remove();
+	});
+
+	it('strips already-painted widgets on syncView while composing without replaceChildren', () => {
+		const el = host();
+		const doc = page([para('p', 'hello')]);
+		project(el, doc, { carets: [alice()] });
+		const block = el.querySelector('[data-block-id="p"]') as HTMLElement;
+		expect(el.querySelector(`[${COLLAB_WIDGET_ATTR}]`)).toBeTruthy();
+		expect(block.textContent).toContain('Alice');
+		const spy = vi.spyOn(el, 'replaceChildren');
+		syncView(el, { ...createEditorState(doc), composing: true }, { carets: [alice()] });
+		expect(spy).not.toHaveBeenCalled();
+		expect(el.querySelector(`[${COLLAB_WIDGET_ATTR}]`)).toBeNull();
+		expect(plaintextFromDom(block)).toBe('hello');
+		expect(block.textContent).toBe('hello');
+		expect(
+			confirmedCompositionText({ data: null }, plaintextFromDom(block), 'hello')
+		).toBe('');
+		spy.mockRestore();
+		el.remove();
+	});
+
+	it('maps a parent offset at the widget to the caret point, not end-of-block', () => {
+		const el = host();
+		const doc = page([para('p', 'hello')]);
+		project(el, doc, { carets: [alice()] });
+		const block = el.querySelector('[data-block-id="p"]') as HTMLElement;
+		const widget = block.querySelector(`[${COLLAB_WIDGET_ATTR}]`) as HTMLElement;
+		const index = [...block.childNodes].indexOf(widget);
+		expect(index).toBeGreaterThan(0);
+		expect(pointFromDom(el, block, index)).toEqual({ blockId: 'p', offset: 2 });
+		expect(pointFromDom(el, widget, 0)).toEqual({ blockId: 'p', offset: 2 });
+		expect(pointFromDom(el, widget, 1)).toEqual({ blockId: 'p', offset: 2 });
+		const sel = document.getSelection()!;
+		sel.removeAllRanges();
+		const range = document.createRange();
+		range.setStart(block, index);
+		range.collapse(true);
+		sel.addRange(range);
+		expect(rangeFromSelection(el, sel)).toEqual({
+			anchor: { blockId: 'p', offset: 2 },
+			head: { blockId: 'p', offset: 2 }
+		});
+		el.remove();
+	});
+
+	it('does not split a surrogate pair when painting a caret at a low-surrogate offset', () => {
+		const el = host();
+		const doc = page([para('p', 'a👍b')]);
+		project(el, doc, {
+			carets: [
+				alice({
+					anchor: { blockId: 'p', offset: 2 },
+					head: { blockId: 'p', offset: 2 }
+				})
+			]
+		});
+		const block = el.querySelector('[data-block-id="p"]') as HTMLElement;
+		const parts = textNodes(block).map((t) => t.data);
+		expect(parts.join('')).toBe('a👍b');
+		for (const part of parts) expect(hasUnpairedSurrogate(part)).toBe(false);
 		el.remove();
 	});
 
