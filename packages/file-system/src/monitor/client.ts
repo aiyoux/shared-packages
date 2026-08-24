@@ -10,12 +10,21 @@ import { blobFromResponse } from '../readProgress.js';
 import { withLocalAddressSpace } from './localNetwork';
 import { openJsonSse } from './sse.js';
 
+export type MonitorCapabilities = {
+	fs?: { ino?: boolean; rename?: boolean };
+	git?: { blob?: boolean };
+};
+
 export type MonitorListEntry = {
 	name: string;
 	path: string;
 	kind: 'folder' | 'file' | string;
 	size?: number;
 	mtime_ms?: number;
+	/** Decimal inode, never a number. */
+	ino?: string;
+	/** Decimal device id, never a number. */
+	dev?: string;
 };
 
 export type MonitorListResult = {
@@ -30,6 +39,10 @@ export type MonitorStatResult = {
 	kind: 'folder' | 'file' | string;
 	size?: number;
 	mtime_ms?: number;
+	/** Decimal inode, never a number. */
+	ino?: string;
+	/** Decimal device id, never a number. */
+	dev?: string;
 };
 
 export type MonitorWatchedRoot = {
@@ -74,9 +87,22 @@ export type MonitorGitSnapshot = {
 	log: MonitorGitLogEntry[];
 };
 
+export type MonitorMeta = {
+	name?: string;
+	version?: string;
+	features?: string[];
+	capabilities?: MonitorCapabilities;
+};
+
 export type MonitorTransport = {
 	list(path: string): Promise<MonitorListResult>;
 	stat(path: string): Promise<MonitorStatResult>;
+	/** GET /v1/meta — missing capabilities parse as all-false. */
+	meta(): Promise<MonitorMeta>;
+	/** POST /v1/fs/rename `{from,to}`. Callers gate on `capabilities.fs.rename`. */
+	rename?(from: string, to: string): Promise<void>;
+	/** GET /v1/git/blob?path=&rev=&file=. Callers gate on `capabilities.git.blob`. */
+	gitBlob?(repoPath: string, rev: string, file: string): Promise<Uint8Array>;
 	download(
 		path: string,
 		opts?: {
@@ -156,6 +182,92 @@ function num(v: unknown): number | null {
 	if (typeof v === 'number' && Number.isFinite(v)) return v;
 	if (typeof v === 'string' && v.trim() && Number.isFinite(Number(v))) return Number(v);
 	return null;
+}
+
+/** Inode/dev as decimal strings. Numbers are coerced defensively. */
+export function coerceInoDev(v: unknown): string | undefined {
+	if (typeof v === 'string' && v !== '') return v;
+	if (typeof v === 'number' && Number.isFinite(v)) {
+		return Number.isInteger(v) ? String(v) : String(Math.trunc(v));
+	}
+	if (typeof v === 'bigint') return v.toString();
+	return undefined;
+}
+
+const FALSE_CAPS: MonitorCapabilities = {
+	fs: { ino: false, rename: false },
+	git: { blob: false }
+};
+
+export function coerceMonitorCapabilities(raw: unknown): MonitorCapabilities {
+	if (!raw || typeof raw !== 'object') return { ...FALSE_CAPS, fs: { ...FALSE_CAPS.fs }, git: { ...FALSE_CAPS.git } };
+	const o = raw as Record<string, unknown>;
+	const fs = o.fs && typeof o.fs === 'object' ? (o.fs as Record<string, unknown>) : {};
+	const git = o.git && typeof o.git === 'object' ? (o.git as Record<string, unknown>) : {};
+	return {
+		fs: { ino: fs.ino === true, rename: fs.rename === true },
+		git: { blob: git.blob === true }
+	};
+}
+
+export function coerceMonitorMeta(data: unknown): MonitorMeta {
+	const o = data && typeof data === 'object' ? (data as Record<string, unknown>) : {};
+	const out: MonitorMeta = {
+		capabilities: coerceMonitorCapabilities(o.capabilities)
+	};
+	if (typeof o.name === 'string') out.name = o.name;
+	if (typeof o.version === 'string') out.version = o.version;
+	if (Array.isArray(o.features)) {
+		out.features = o.features.filter((f): f is string => typeof f === 'string');
+	}
+	return out;
+}
+
+function coerceFsEntry(raw: unknown): MonitorListEntry | null {
+	if (!raw || typeof raw !== 'object') return null;
+	const o = raw as Record<string, unknown>;
+	if (typeof o.name !== 'string' || typeof o.path !== 'string') return null;
+	const entry: MonitorListEntry = {
+		name: o.name,
+		path: o.path,
+		kind: typeof o.kind === 'string' ? o.kind : 'file'
+	};
+	const size = num(o.size);
+	if (size != null) entry.size = size;
+	const mtime = num(o.mtime_ms);
+	if (mtime != null) entry.mtime_ms = mtime;
+	const ino = coerceInoDev(o.ino);
+	if (ino !== undefined) entry.ino = ino;
+	const dev = coerceInoDev(o.dev);
+	if (dev !== undefined) entry.dev = dev;
+	return entry;
+}
+
+export function coerceListResult(data: unknown): MonitorListResult {
+	const o = data && typeof data === 'object' ? (data as Record<string, unknown>) : {};
+	const entries: MonitorListEntry[] = [];
+	if (Array.isArray(o.entries)) {
+		for (const item of o.entries) {
+			const e = coerceFsEntry(item);
+			if (e) entries.push(e);
+		}
+	}
+	return {
+		path: typeof o.path === 'string' ? o.path : '',
+		entries,
+		truncated: Boolean(o.truncated)
+	};
+}
+
+export function coerceStatResult(data: unknown): MonitorStatResult {
+	const entry = coerceFsEntry(data);
+	if (entry) return entry;
+	const o = data && typeof data === 'object' ? (data as Record<string, unknown>) : {};
+	return {
+		name: typeof o.name === 'string' ? o.name : '',
+		path: typeof o.path === 'string' ? o.path : '',
+		kind: typeof o.kind === 'string' ? o.kind : 'file'
+	};
 }
 
 function unwrapRecord(data: unknown): Record<string, unknown> | null {
@@ -303,14 +415,17 @@ export function createMonitorClient(opts: {
 	return {
 		baseUrl: base,
 		async list(path: string) {
-			return (await getJson(
-				`/v1/fs/list?path=${encodeURIComponent(path)}`
-			)) as MonitorListResult;
+			return coerceListResult(
+				await getJson(`/v1/fs/list?path=${encodeURIComponent(path)}`)
+			);
 		},
 		async stat(path: string) {
-			return (await getJson(
-				`/v1/fs/stat?path=${encodeURIComponent(path)}`
-			)) as MonitorStatResult;
+			return coerceStatResult(
+				await getJson(`/v1/fs/stat?path=${encodeURIComponent(path)}`)
+			);
+		},
+		async meta() {
+			return coerceMonitorMeta(await getJson('/v1/meta'));
 		},
 		async health() {
 			return getJson('/v1/health');
@@ -553,6 +668,40 @@ export function createMonitorClient(opts: {
 				throw e;
 			} finally {
 				opts?.signal?.removeEventListener('abort', onAbort);
+				clearTimeout(t);
+			}
+		},
+		async rename(from: string, to: string) {
+			await postJson('/v1/fs/rename', { from, to });
+		},
+		async gitBlob(repoPath: string, rev: string, file: string) {
+			const ac = new AbortController();
+			const t = setTimeout(() => ac.abort(), 60_000);
+			const url = joinUrl(
+				base,
+				`/v1/git/blob?path=${encodeURIComponent(repoPath)}&rev=${encodeURIComponent(rev)}&file=${encodeURIComponent(file)}`
+			);
+			try {
+				const res = await fetchFn(
+					url,
+					withLocalAddressSpace(url, { method: 'GET', signal: ac.signal })
+				);
+				if (!res.ok) {
+					const text = await res.text().catch(() => '');
+					throw new Error(text || `Git blob failed (${res.status})`);
+				}
+				return new Uint8Array(await res.arrayBuffer());
+			} catch (e) {
+				if (e instanceof Error && e.name === 'AbortError') {
+					throw new Error('Monitor git blob timed out');
+				}
+				if (e instanceof TypeError) {
+					throw new Error(
+						`Cannot reach monitor at ${base} (network/CORS). Is it running and allowing this origin?`
+					);
+				}
+				throw e;
+			} finally {
 				clearTimeout(t);
 			}
 		},

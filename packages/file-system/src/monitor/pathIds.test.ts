@@ -5,6 +5,7 @@ import {
 	childId,
 	parentIdOf,
 	relativeIdFromAbsolute,
+	sanitizeSegment,
 	toAbsolutePath
 } from './pathIds.js';
 
@@ -32,5 +33,13 @@ describe('monitor pathIds', () => {
 		const c = breadcrumbChain('a/b/');
 		expect(c.map((x) => x.id)).toEqual(['a/', 'a/b/']);
 		expect(c[0]!.parentId).toBeNull();
+	});
+
+	it('sanitizeSegment trims and rejects empty / . / .. / slash', () => {
+		expect(sanitizeSegment(' ok ')).toBe('ok');
+		expect(sanitizeSegment('a.png')).toBe('a.png');
+		expect(() => sanitizeSegment('')).toThrow(/INVALID_NAME/);
+		expect(() => sanitizeSegment('..')).toThrow(/INVALID_NAME/);
+		expect(() => sanitizeSegment('foo/bar.png')).toThrow(/INVALID_NAME/);
 	});
 });

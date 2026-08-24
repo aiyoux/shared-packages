@@ -8,6 +8,15 @@ function rejectUnsafe(seg: string): void {
 	if (seg.includes('\0')) throw new Error('INVALID_PATH');
 }
 
+/** Single path segment: no `/`, `.`, `..`, or empty. */
+export function sanitizeSegment(name: string): string {
+	const n = name.trim();
+	if (!n || n === '.' || n === '..' || n.includes('/') || n.includes('\0')) {
+		throw new Error('INVALID_NAME');
+	}
+	return n;
+}
+
 /** Absolute host path for list/stat/read given root + relative entry id. */
 export function toAbsolutePath(rootPath: string, entryId: string | null): string {
 	const root = rootPath === '/' ? '/' : rootPath.replace(/\/+$/, '');
