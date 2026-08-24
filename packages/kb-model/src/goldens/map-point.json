@@ -1,0 +1,49 @@
+{
+  "insertText": {
+    "text": "hello world",
+    "insert": { "at": 5, "text": "X" },
+    "cases": [
+      { "offset": 7, "after": 8 },
+      { "offset": 5, "assoc": -1, "after": 5 },
+      { "offset": 5, "assoc": 0, "after": 6 },
+      { "offset": 5, "assoc": 1, "after": 6 },
+      { "offset": 0, "after": 0 },
+      { "otherBlock": true, "offset": 2, "after": 2 }
+    ]
+  },
+  "deleteRange": {
+    "text": "abcdef",
+    "range": { "from": 2, "to": 5 },
+    "cases": [
+      { "offset": 1, "after": 1 },
+      { "offset": 2, "after": 2 },
+      { "offset": 4, "after": 2 },
+      { "offset": 5, "after": 2 },
+      { "offset": 6, "after": 3 }
+    ]
+  },
+  "splitBlock205": {
+    "comment": "y-prosemirror #205: after a remote split above B, B stays in the NEW block (stable newId)",
+    "blockId": "A",
+    "newId": "new",
+    "text": "0123456789ABCD",
+    "splitAt": 4,
+    "caretBefore": { "blockId": "A", "offset": 10 },
+    "caretAfter": { "blockId": "new", "offset": 6 }
+  },
+  "deleteBlock": {
+    "blocks": ["aa", "bb", "cc"],
+    "deleteId": "b",
+    "caretBlock": "b",
+    "snapTo": { "blockId": "c", "offset": 0 }
+  },
+  "applyRemoteBatch": {
+    "text": "hello world",
+    "point": { "blockId": "A", "offset": 11 },
+    "ops": [
+      { "kind": "insert-text", "at": { "blockId": "A", "offset": 5 }, "text": "X" },
+      { "kind": "split-block", "at": { "blockId": "A", "offset": 6 }, "newId": "N" }
+    ],
+    "after": { "blockId": "N", "offset": 6 }
+  }
+}
