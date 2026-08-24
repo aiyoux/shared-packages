@@ -1,4 +1,6 @@
+export { apply, applyMany, UnresolvedPointError } from './apply.js';
 export { createEmptyPage } from './createEmptyPage.js';
+export { invert } from './invert.js';
 export { migrateSchema, migrateV1 } from './migrate.js';
 export { canonicalMarks, normalizePage, normalizeSpans } from './normalize.js';
 export { parseKb } from './parse.js';
