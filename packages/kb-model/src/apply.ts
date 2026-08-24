@@ -7,7 +7,14 @@ import {
 	orderedBlock,
 	splitSpans
 } from './normalize.js';
-import { isAtomic, isContainer, isNonTextual, isTextLike, plaintextOf } from './plaintext.js';
+import {
+	isAtomic,
+	isContainer,
+	isNonTextual,
+	isTableStructure,
+	isTextLike,
+	plaintextOf
+} from './plaintext.js';
 import {
 	blockChildren,
 	childrenOf,
@@ -20,7 +27,19 @@ import {
 	subtreeContains,
 	type ParentRef
 } from './tree.js';
-import type { Block, CodeBlock, KbPage, Mark, Op, Point, Range, TextSpan } from './types.js';
+import type {
+	Block,
+	CodeBlock,
+	KbPage,
+	Mark,
+	Op,
+	Point,
+	Range,
+	TableBlock,
+	TableCellBlock,
+	TableRowBlock,
+	TextSpan
+} from './types.js';
 import { snapOffset } from './utf16.js';
 
 export class UnresolvedPointError extends Error {
@@ -180,7 +199,7 @@ function applySetTitle(page: KbPage, title: string): void {
 function applyInsertText(page: KbPage, op: Extract<Op, { kind: 'insert-text' }>): void {
 	const at = resolvePoint(page, op.at);
 	if (op.text === '') return;
-	if (isAtomic(at.block) || isContainer(at.block)) {
+	if (isNonTextual(at.block)) {
 		throw new Error('cannot insert text into atomic block');
 	}
 	if (isTextLike(at.block)) {
@@ -216,9 +235,24 @@ function concatEndOntoStart(start: Block, end: Block): Block {
 }
 
 function canConcat(start: Block, end: Block): boolean {
+	if (start.type === 'table_cell' || end.type === 'table_cell') return false;
 	const startOk = isTextLike(start) || start.type === 'code';
 	const endOk = isTextLike(end) || end.type === 'code';
 	return startOk && endOk;
+}
+
+function clearCell(block: TableCellBlock): TableCellBlock {
+	return block.header
+		? { id: block.id, type: 'table_cell', header: true, content: emptySpans() }
+		: { id: block.id, type: 'table_cell', content: emptySpans() };
+}
+
+function clearRow(block: TableRowBlock): TableRowBlock {
+	return {
+		id: block.id,
+		type: 'table_row',
+		children: block.children.map((cell) => clearCell(cell))
+	};
 }
 
 function trimStartPrefix(block: Block, offset: number): Block | null {
@@ -265,16 +299,44 @@ function rewriteDeleteRange(
 		const i = idx.get(block.id) ?? -1;
 		const j = idx.get(lastDescendantId(block)) ?? i;
 		if (block.id === start.block.id) {
+			if (block.type === 'table_cell') {
+				const prefix = trimStartPrefix(block, start.offset);
+				next.push(prefix ?? clearCell(block));
+				continue;
+			}
+			if (block.type === 'table_row') {
+				next.push(clearRow(block));
+				continue;
+			}
 			const prefix = trimStartPrefix(block, start.offset);
 			if (prefix) next.push(prefix);
 			continue;
 		}
 		if (block.id === end.block.id) {
+			if (block.type === 'table_cell') {
+				const suffix = trimEndSuffix(block, end.offset);
+				next.push(suffix ?? clearCell(block));
+				continue;
+			}
+			if (block.type === 'table_row') {
+				next.push(end.offset > 0 ? clearRow(block) : block);
+				continue;
+			}
 			const suffix = trimEndSuffix(block, end.offset);
 			if (suffix) next.push(suffix);
 			continue;
 		}
-		if (i > startIdx && j < endIdx) continue;
+		if (i > startIdx && j < endIdx) {
+			if (block.type === 'table_cell') {
+				next.push(clearCell(block));
+				continue;
+			}
+			if (block.type === 'table_row') {
+				next.push(clearRow(block));
+				continue;
+			}
+			continue;
+		}
 		const containsStart = i < startIdx && j >= startIdx;
 		const containsEnd = i < endIdx && j >= endIdx;
 		const kids = blockChildren(block);
@@ -367,7 +429,7 @@ function applySplitBlock(page: KbPage, op: Extract<Op, { kind: 'split-block' }>)
 	}
 	const at = resolvePoint(page, op.at);
 	const block = at.block;
-	if (isAtomic(block) || isContainer(block)) {
+	if (isNonTextual(block) || block.type === 'table_cell') {
 		throw new Error('cannot split atomic block');
 	}
 	if (block.type === 'code') {
@@ -407,10 +469,10 @@ function applyMergeBlock(page: KbPage, op: Extract<Op, { kind: 'merge-block' }>)
 	}
 	const keep = keepLoc.block;
 	const drop = dropLoc.block;
-	if (isAtomic(keep) || isContainer(keep)) {
+	if (isNonTextual(keep) || keep.type === 'table_cell') {
 		throw new Error('cannot merge into atomic block');
 	}
-	if (isAtomic(drop) || isContainer(drop)) {
+	if (isNonTextual(drop)) {
 		deleteBlockAt(page, dropLoc.parent, dropLoc.index);
 		return;
 	}
@@ -418,13 +480,20 @@ function applyMergeBlock(page: KbPage, op: Extract<Op, { kind: 'merge-block' }>)
 	deleteBlockAt(page, dropLoc.parent, dropLoc.index);
 }
 
-const CONVERT_FORBIDDEN = new Set<Block['type']>(['image', 'callout', 'toggle']);
+const CONVERT_FORBIDDEN = new Set<Block['type']>([
+	'image',
+	'callout',
+	'toggle',
+	'table',
+	'table_row',
+	'table_cell'
+]);
 
 export function convertBlock(block: Block, op: Extract<Op, { kind: 'convert-block' }>): Block {
 	if (CONVERT_FORBIDDEN.has(op.to)) {
 		throw new Error(`cannot convert to ${op.to}`);
 	}
-	if (isContainer(block)) {
+	if (isContainer(block) || isTableStructure(block) || block.type === 'table_cell') {
 		throw new Error(`cannot convert ${block.type}`);
 	}
 	if (block.type === op.to) {
@@ -507,12 +576,31 @@ export function resolveInsertAnchor(
 }
 
 function assertInsertable(block: Block, depth: number): void {
+	if (block.type === 'table_row' || block.type === 'table_cell') {
+		throw new Error('insert-block: use table structural ops for cells/rows');
+	}
+	if (block.type === 'table') {
+		if (depth >= 1) {
+			throw new Error('insert-block: nested containers are not allowed');
+		}
+		for (const row of block.children) {
+			if (row.type !== 'table_row') {
+				throw new Error('insert-block: table children must be table_row');
+			}
+			for (const cell of row.children) {
+				if (cell.type !== 'table_cell') {
+					throw new Error('insert-block: table_row children must be table_cell');
+				}
+			}
+		}
+		return;
+	}
 	if (isContainer(block)) {
 		if (depth >= 1) {
 			throw new Error('insert-block: nested containers are not allowed');
 		}
 		for (const child of block.children) {
-			if (isContainer(child)) {
+			if (isContainer(child) || child.type === 'table') {
 				throw new Error('insert-block: nested containers are not allowed');
 			}
 		}
@@ -539,6 +627,9 @@ function applyInsertBlock(page: KbPage, op: Extract<Op, { kind: 'insert-block' }
 
 function applyDeleteBlock(page: KbPage, id: string): void {
 	const loc = requireLocation(page, id, 'delete-block');
+	if (loc.block.type === 'table_row' || loc.block.type === 'table_cell') {
+		throw new Error('delete-block: use table structural ops for cells/rows');
+	}
 	deleteBlockAt(page, loc.parent, loc.index);
 }
 
@@ -557,7 +648,10 @@ function applyMoveBlock(page: KbPage, op: Extract<Op, { kind: 'move-block' }>): 
 		throw new Error('move-block: cannot move a block into its descendant');
 	}
 	const dest = resolveInsertAnchor(page, op.parentId, op.afterId, 'move-block');
-	if (dest.parent !== 'page' && isContainer(fromLoc.block)) {
+	if (fromLoc.block.type === 'table_row' || fromLoc.block.type === 'table_cell') {
+		throw new Error('move-block: use table structural ops for cells/rows');
+	}
+	if (dest.parent !== 'page' && (isContainer(fromLoc.block) || fromLoc.block.type === 'table')) {
 		throw new Error('move-block: nested containers are not allowed');
 	}
 
@@ -590,6 +684,102 @@ function applySetToggle(page: KbPage, op: Extract<Op, { kind: 'set-toggle' }>): 
 		throw new Error('set-toggle: block is not a toggle');
 	}
 	replaceBlock(page, loc.parent, loc.index, { ...loc.block, open: op.open });
+}
+
+function requireTable(page: KbPage, tableId: string, what: string): TableBlock {
+	const loc = requireLocation(page, tableId, what);
+	if (loc.block.type !== 'table') {
+		throw new Error(`${what}: ${tableId} is not a table`);
+	}
+	if (loc.parent !== 'page') {
+		throw new Error(`${what}: tables cannot be nested`);
+	}
+	return loc.block;
+}
+
+function tableWidth(table: TableBlock): number {
+	return table.children[0]?.children.length ?? 0;
+}
+
+function applyInsertTableRow(page: KbPage, op: Extract<Op, { kind: 'insert-table-row' }>): void {
+	const table = requireTable(page, op.tableId, 'insert-table-row');
+	if (op.row.type !== 'table_row') {
+		throw new Error('insert-table-row: row must be a table_row');
+	}
+	const width = tableWidth(table);
+	if (width > 0 && op.row.children.length !== width) {
+		throw new Error('insert-table-row: row must have one cell per column');
+	}
+	for (const cell of op.row.children) {
+		if (cell.type !== 'table_cell') {
+			throw new Error('insert-table-row: row children must be table_cell');
+		}
+	}
+	const incoming = subtreeIds(op.row);
+	const existing = new Set(documentOrder(page).map((block) => block.id));
+	const seen = new Set<string>();
+	for (const id of incoming) {
+		if (seen.has(id) || existing.has(id)) {
+			throw new Error(`insert-table-row: duplicate block id ${id}`);
+		}
+		seen.add(id);
+	}
+	let index = 0;
+	if (op.afterId !== null) {
+		const at = table.children.findIndex((row) => row.id === op.afterId);
+		if (at < 0) throw new Error(`insert-table-row: afterId is not a row of ${op.tableId}`);
+		index = at + 1;
+	}
+	table.children.splice(index, 0, orderedBlock(op.row) as TableRowBlock);
+}
+
+function applyInsertTableColumn(page: KbPage, op: Extract<Op, { kind: 'insert-table-column' }>): void {
+	const table = requireTable(page, op.tableId, 'insert-table-column');
+	const height = table.children.length;
+	if (op.cells.length !== height) {
+		throw new Error('insert-table-column: one cell per row');
+	}
+	if (!Number.isInteger(op.index) || op.index < 0 || op.index > tableWidth(table)) {
+		throw new Error('insert-table-column: index out of range');
+	}
+	const existing = new Set(documentOrder(page).map((block) => block.id));
+	const seen = new Set<string>();
+	for (const cell of op.cells) {
+		if (cell.type !== 'table_cell') {
+			throw new Error('insert-table-column: cells must be table_cell');
+		}
+		if (seen.has(cell.id) || existing.has(cell.id)) {
+			throw new Error(`insert-table-column: duplicate block id ${cell.id}`);
+		}
+		seen.add(cell.id);
+	}
+	for (let r = 0; r < height; r++) {
+		table.children[r].children.splice(op.index, 0, orderedBlock(op.cells[r]) as TableCellBlock);
+	}
+}
+
+function applyDeleteTableRow(page: KbPage, op: Extract<Op, { kind: 'delete-table-row' }>): void {
+	const table = requireTable(page, op.tableId, 'delete-table-row');
+	const index = table.children.findIndex((row) => row.id === op.rowId);
+	if (index < 0) throw new Error(`delete-table-row: unknown row ${op.rowId}`);
+	if (table.children.length <= 1) {
+		throw new Error('delete-table-row: keep at least one row');
+	}
+	table.children.splice(index, 1);
+}
+
+function applyDeleteTableColumn(page: KbPage, op: Extract<Op, { kind: 'delete-table-column' }>): void {
+	const table = requireTable(page, op.tableId, 'delete-table-column');
+	const width = tableWidth(table);
+	if (!Number.isInteger(op.index) || op.index < 0 || op.index >= width) {
+		throw new Error('delete-table-column: index out of range');
+	}
+	if (width <= 1) {
+		throw new Error('delete-table-column: keep at least one column');
+	}
+	for (const row of table.children) {
+		row.children.splice(op.index, 1);
+	}
 }
 
 function applySetChildren(page: KbPage, children: string[]): void {
@@ -637,6 +827,18 @@ export function apply(page: KbPage, op: Op): KbPage {
 			break;
 		case 'set-toggle':
 			applySetToggle(next, op);
+			break;
+		case 'insert-table-row':
+			applyInsertTableRow(next, op);
+			break;
+		case 'insert-table-column':
+			applyInsertTableColumn(next, op);
+			break;
+		case 'delete-table-row':
+			applyDeleteTableRow(next, op);
+			break;
+		case 'delete-table-column':
+			applyDeleteTableColumn(next, op);
 			break;
 		default: {
 			const _never: never = op;

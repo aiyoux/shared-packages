@@ -166,6 +166,41 @@ describe('toMarkdown', () => {
 		);
 	});
 
+	it('renders a GFM table and skips row/cell chrome', () => {
+		expect(
+			md([
+				{
+					id: 't',
+					type: 'table',
+					children: [
+						{
+							id: 'r1',
+							type: 'table_row',
+							children: [
+								{
+									id: 'c11',
+									type: 'table_cell',
+									header: true,
+									content: [span('A', [{ type: 'bold' }])]
+								},
+								{ id: 'c12', type: 'table_cell', header: true, content: [span('B')] }
+							]
+						},
+						{
+							id: 'r2',
+							type: 'table_row',
+							children: [
+								{ id: 'c21', type: 'table_cell', content: [span('a|b')] },
+								{ id: 'c22', type: 'table_cell', content: [span('d')] }
+							]
+						}
+					]
+				},
+				{ id: 'z', type: 'paragraph', content: [span('after')] }
+			])
+		).toBe('| **A** | B |\n| --- | --- |\n| a\\|b | d |\n\nafter\n');
+	});
+
 	it('renders callout and toggle children via DFS and skips container chrome', () => {
 		expect(
 			md([

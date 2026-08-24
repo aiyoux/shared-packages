@@ -1,6 +1,6 @@
 import { convertBlock, normalizeRange, resolvePoint } from './apply.js';
 import { sliceSpans } from './normalize.js';
-import { isAtomic, isContainer, isNonTextual, isTextLike, payloadLength, plaintextOf } from './plaintext.js';
+import { isNonTextual, isTextLike, payloadLength, plaintextOf } from './plaintext.js';
 import {
 	childrenOf,
 	documentOrder,
@@ -11,7 +11,7 @@ import {
 	sameParent,
 	type ParentRef
 } from './tree.js';
-import type { Block, KbPage, Mark, Op, Point, TextSpan } from './types.js';
+import type { Block, KbPage, Mark, Op, Point, TableCellBlock, TableRowBlock, TextSpan } from './types.js';
 
 function cloneBlock(block: Block): Block {
 	return structuredClone(block);
@@ -105,6 +105,7 @@ function convertedSuffixLength(start: Block, end: Block, endOffset: number): num
 }
 
 function canConcat(start: Block, end: Block): boolean {
+	if (start.type === 'table_cell' || end.type === 'table_cell') return false;
 	const startOk = isTextLike(start) || start.type === 'code';
 	const endOk = isTextLike(end) || end.type === 'code';
 	return startOk && endOk;
@@ -150,12 +151,26 @@ function fullyCoveredRoots(page: KbPage, startId: string, endId: string): Block[
 	return roots;
 }
 
+function restoreClearedTableContent(block: Block): Op[] {
+	if (block.type === 'table_cell') {
+		return restoreInsertedSpans(block.id, 0, block.content);
+	}
+	if (block.type === 'table_row') {
+		const ops: Op[] = [];
+		for (const cell of block.children) {
+			ops.push(...restoreInsertedSpans(cell.id, 0, cell.content));
+		}
+		return ops;
+	}
+	return [];
+}
+
 function invertDeleteRange(page: KbPage, op: Extract<Op, { kind: 'delete-range' }>): Op[] {
 	const { start, end } = normalizeRange(page, op.range);
 	if (start.block.id === end.block.id && start.offset === end.offset) return [];
 
 	if (start.block.id === end.block.id) {
-		if (isAtomic(start.block) || isContainer(start.block)) {
+		if (isNonTextual(start.block)) {
 			return [insertBlockOp(page, start.block)];
 		}
 		return insertSlice(start.block, start.offset, end.offset, start.offset);
@@ -165,10 +180,27 @@ function invertDeleteRange(page: KbPage, op: Extract<Op, { kind: 'delete-range' 
 	const endBlock = end.block;
 	const roots = fullyCoveredRoots(page, startBlock.id, endBlock.id);
 	const same = sameParent(start.parent, end.parent);
-	const startSurvives = trimStartPrefixExists(startBlock, start.offset);
+	const startRowKept = startBlock.type === 'table_row';
+	const startSurvives = trimStartPrefixExists(startBlock, start.offset) || startRowKept;
 	const willConcat = same && startSurvives && canConcat(startBlock, endBlock) && !isNonTextual(endBlock);
+	const cleared = roots.filter((block) => block.type === 'table_cell' || block.type === 'table_row');
+	const insertRoots = roots.filter((block) => block.type !== 'table_cell' && block.type !== 'table_row');
 
 	const ops: Op[] = [];
+
+	function restoreStart(): void {
+		if (startRowKept) {
+			ops.push(...restoreClearedTableContent(startBlock));
+			return;
+		}
+		if (startSurvives) {
+			ops.push(...insertSlice(startBlock, start.offset, payloadLength(startBlock), start.offset));
+		}
+	}
+
+	function insertable(block: Block): boolean {
+		return block.type !== 'table_cell' && block.type !== 'table_row';
+	}
 
 	if (willConcat) {
 		const suffixLen = convertedSuffixLength(startBlock, endBlock, end.offset);
@@ -181,17 +213,17 @@ function invertDeleteRange(page: KbPage, op: Extract<Op, { kind: 'delete-range' 
 				}
 			});
 		}
-		ops.push(...insertSlice(startBlock, start.offset, payloadLength(startBlock), start.offset));
-		for (const block of [...roots, endBlock]) {
+		restoreStart();
+		for (const block of cleared) ops.push(...restoreClearedTableContent(block));
+		for (const block of [...insertRoots, endBlock].filter(insertable)) {
 			ops.push(insertBlockOp(page, block));
 		}
 		return ops;
 	}
 
-	if (startSurvives) {
-		ops.push(...insertSlice(startBlock, start.offset, payloadLength(startBlock), start.offset));
-	}
-	const toInsert = startSurvives ? roots : [startBlock, ...roots];
+	restoreStart();
+	for (const block of cleared) ops.push(...restoreClearedTableContent(block));
+	const toInsert = (startSurvives ? insertRoots : [startBlock, ...insertRoots]).filter(insertable);
 	for (const block of toInsert) {
 		ops.push(insertBlockOp(page, block));
 	}
@@ -288,11 +320,11 @@ function invertMergeBlock(page: KbPage, op: Extract<Op, { kind: 'merge-block' }>
 	if (!sameParent(keep.parent, drop.parent) || drop.index !== keep.index + 1) {
 		throw new Error('merge-block: dropId must be the immediate next sibling of keepId');
 	}
-	if (isAtomic(keep.block) || isContainer(keep.block)) {
+	if (isNonTextual(keep.block) || keep.block.type === 'table_cell') {
 		throw new Error('cannot merge into atomic block');
 	}
 	const dropSnap = cloneBlock(drop.block);
-	if (isAtomic(drop.block) || isContainer(drop.block)) {
+	if (isNonTextual(drop.block)) {
 		return [
 			{
 				kind: 'insert-block',
@@ -375,7 +407,14 @@ function restoreSolePayload(id: string, snap: Block, coercedLen: number): Op[] {
 
 function invertConvertBlock(page: KbPage, op: Extract<Op, { kind: 'convert-block' }>): Op[] {
 	const { block, parent } = requireBlock(page, op.id, 'convert-block');
-	if (op.to === 'image' || op.to === 'callout' || op.to === 'toggle') {
+	if (
+		op.to === 'image' ||
+		op.to === 'callout' ||
+		op.to === 'toggle' ||
+		op.to === 'table' ||
+		op.to === 'table_row' ||
+		op.to === 'table_cell'
+	) {
 		throw new Error(`cannot convert to ${op.to}`);
 	}
 	if (isNoOpConvert(block, op)) return [];
@@ -418,7 +457,7 @@ function invertConvertBlock(page: KbPage, op: Extract<Op, { kind: 'convert-block
 function invertInsertText(page: KbPage, op: Extract<Op, { kind: 'insert-text' }>): Op[] {
 	const at = resolvePoint(page, op.at);
 	if (op.text === '') return [];
-	if (isAtomic(at.block) || isContainer(at.block)) {
+	if (isNonTextual(at.block)) {
 		throw new Error('cannot insert text into atomic block');
 	}
 	if (isTextLike(at.block) && op.text.includes('\n')) {
@@ -451,6 +490,9 @@ export function invert(page: KbPage, op: Op): Op[] {
 			return [{ kind: 'delete-block', id: op.block.id }];
 		case 'delete-block': {
 			const { block, parent } = requireBlock(page, op.id, 'delete-block');
+			if (block.type === 'table_row' || block.type === 'table_cell') {
+				throw new Error('delete-block: use table structural ops for cells/rows');
+			}
 			if (parent === 'page' && page.blocks.length <= 1) return [];
 			return [insertBlockOp(page, block)];
 		}
@@ -479,6 +521,37 @@ export function invert(page: KbPage, op: Op): Op[] {
 			const { block } = requireBlock(page, op.id, 'set-toggle');
 			if (block.type !== 'toggle') throw new Error('set-toggle: block is not a toggle');
 			return [{ kind: 'set-toggle', id: op.id, open: block.open }];
+		}
+		case 'insert-table-row':
+			return [{ kind: 'delete-table-row', tableId: op.tableId, rowId: op.row.id }];
+		case 'insert-table-column':
+			return [{ kind: 'delete-table-column', tableId: op.tableId, index: op.index }];
+		case 'delete-table-row': {
+			const loc = requireBlock(page, op.rowId, 'delete-table-row');
+			if (loc.block.type !== 'table_row') {
+				throw new Error(`delete-table-row: ${op.rowId} is not a table_row`);
+			}
+			return [
+				{
+					kind: 'insert-table-row',
+					tableId: op.tableId,
+					afterId: prevSiblingId(page, op.rowId),
+					row: cloneBlock(loc.block) as TableRowBlock
+				}
+			];
+		}
+		case 'delete-table-column': {
+			const tableLoc = requireBlock(page, op.tableId, 'delete-table-column');
+			if (tableLoc.block.type !== 'table') {
+				throw new Error(`delete-table-column: ${op.tableId} is not a table`);
+			}
+			const cells: TableCellBlock[] = [];
+			for (const row of tableLoc.block.children) {
+				const cell = row.children[op.index];
+				if (!cell) throw new Error('delete-table-column: index out of range');
+				cells.push(cloneBlock(cell) as TableCellBlock);
+			}
+			return [{ kind: 'insert-table-column', tableId: op.tableId, index: op.index, cells }];
 		}
 		default: {
 			const _never: never = op;

@@ -39,6 +39,25 @@ export type ToggleBlock = {
 	children: Block[];
 };
 
+export type TableCellBlock = {
+	id: string;
+	type: 'table_cell';
+	header?: boolean;
+	content: Inline[];
+};
+
+export type TableRowBlock = {
+	id: string;
+	type: 'table_row';
+	children: TableCellBlock[];
+};
+
+export type TableBlock = {
+	id: string;
+	type: 'table';
+	children: TableRowBlock[];
+};
+
 export type Block =
 	| ParagraphBlock
 	| HeadingBlock
@@ -47,11 +66,15 @@ export type Block =
 	| DividerBlock
 	| ImageBlock
 	| CalloutBlock
-	| ToggleBlock;
+	| ToggleBlock
+	| TableBlock
+	| TableRowBlock
+	| TableCellBlock;
 
-export type TextLikeBlock = ParagraphBlock | HeadingBlock | ListItemBlock;
+export type TextLikeBlock = ParagraphBlock | HeadingBlock | ListItemBlock | TableCellBlock;
 export type AtomicBlock = DividerBlock | ImageBlock;
 export type ContainerBlock = CalloutBlock | ToggleBlock;
+export type TableStructureBlock = TableBlock | TableRowBlock;
 
 export type KbPage = {
 	format: typeof KB_FORMAT;
@@ -81,4 +104,8 @@ export type Op =
 	| { kind: 'convert-block'; id: string; to: Block['type']; level?: 1 | 2 | 3; ordered?: boolean }
 	| { kind: 'set-code'; id: string; language: string }
 	| { kind: 'set-children'; children: string[] }
-	| { kind: 'set-toggle'; id: string; open: boolean };
+	| { kind: 'set-toggle'; id: string; open: boolean }
+	| { kind: 'insert-table-row'; tableId: string; afterId: string | null; row: TableRowBlock }
+	| { kind: 'insert-table-column'; tableId: string; index: number; cells: TableCellBlock[] }
+	| { kind: 'delete-table-row'; tableId: string; rowId: string }
+	| { kind: 'delete-table-column'; tableId: string; index: number };

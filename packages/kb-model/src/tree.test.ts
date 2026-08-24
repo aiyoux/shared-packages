@@ -88,11 +88,24 @@ describe('tree walk', () => {
 		const nested = page([callout('c', [para('n1', 'in'), para('n2', 'two')]), para('z', 'Z')]);
 		expect(plaintext(nested)).toBe('in\ntwo\nZ');
 
-		const row = Object.assign(para('r', ''), {
-			type: 'table_row',
-			children: [para('c1', 'a'), para('c2', 'b')]
-		}) as unknown as Block;
-		expect(plaintext({ ...page([para('x', 'x')]), blocks: [row] })).toBe('a\tb');
+		const doc = page([
+			{
+				id: 't',
+				type: 'table',
+				children: [
+					{
+						id: 'r',
+						type: 'table_row',
+						children: [
+							{ id: 'c1', type: 'table_cell', content: [span('a')] },
+							{ id: 'c2', type: 'table_cell', content: [span('b')] }
+						]
+					}
+				]
+			}
+		]);
+		expect(plaintext(doc)).toBe('a\tb');
+		expect(documentOrder(doc).map((b) => b.id)).toEqual(['t', 'r', 'c1', 'c2']);
 	});
 
 	it('toMarkdown walks DFS including nested children', () => {
