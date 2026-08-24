@@ -166,7 +166,7 @@ describe('toMarkdown', () => {
 		);
 	});
 
-	it('renders a GFM table and skips row/cell chrome', () => {
+	it('renders a GFM table with aligned columns and skips row/cell chrome', () => {
 		expect(
 			md([
 				{
@@ -198,10 +198,41 @@ describe('toMarkdown', () => {
 				},
 				{ id: 'z', type: 'paragraph', content: [span('after')] }
 			])
-		).toBe('| **A** | B |\n| --- | --- |\n| a\\|b | d |\n\nafter\n');
+		).toBe('| **A** | B   |\n| ----- | --- |\n| a\\|b  | d   |\n\nafter\n');
 	});
 
-	it('renders callout and toggle children via DFS and skips container chrome', () => {
+	it('keeps empty GFM cells so the grid stays rectangular', () => {
+		expect(
+			md([
+				{
+					id: 't',
+					type: 'table',
+					children: [
+						{
+							id: 'r1',
+							type: 'table_row',
+							children: [
+								{ id: 'c11', type: 'table_cell', header: true, content: [span('A')] },
+								{ id: 'c12', type: 'table_cell', header: true, content: [span('B')] },
+								{ id: 'c13', type: 'table_cell', header: true, content: [] }
+							]
+						},
+						{
+							id: 'r2',
+							type: 'table_row',
+							children: [
+								{ id: 'c21', type: 'table_cell', content: [] },
+								{ id: 'c22', type: 'table_cell', content: [span('d')] },
+								{ id: 'c23', type: 'table_cell', content: [] }
+							]
+						}
+					]
+				}
+			])
+		).toBe('| A   | B   |     |\n| --- | --- | --- |\n|     | d   |     |\n');
+	});
+
+	it('quotes callout children including nested lists', () => {
 		expect(
 			md([
 				{
@@ -210,9 +241,31 @@ describe('toMarkdown', () => {
 					variant: 'info',
 					children: [
 						{ id: 'n1', type: 'paragraph', content: [span('note')] },
-						{ id: 'n2', type: 'paragraph', content: [span('body')] }
+						{ id: 'n2', type: 'paragraph', content: [span('body')] },
+						{ id: 'u1', type: 'list_item', ordered: false, content: [span('alpha')] },
+						{ id: 'u2', type: 'list_item', ordered: false, content: [span('beta')] },
+						{ id: 'o1', type: 'list_item', ordered: true, content: [span('one')] },
+						{ id: 'o2', type: 'list_item', ordered: true, content: [span('two')] }
 					]
 				},
+				{ id: 'z', type: 'paragraph', content: [span('after')] }
+			])
+		).toBe('> note\n>\n> body\n>\n> - alpha\n> - beta\n>\n> 1. one\n> 2. two\n\nafter\n');
+	});
+
+	it('exports open toggle children and wraps closed toggle children in details', () => {
+		expect(
+			md([
+				{
+					id: 't',
+					type: 'toggle',
+					open: true,
+					children: [{ id: 's', type: 'paragraph', content: [span('shown')] }]
+				}
+			])
+		).toBe('shown\n');
+		expect(
+			md([
 				{
 					id: 't',
 					type: 'toggle',
@@ -220,6 +273,6 @@ describe('toMarkdown', () => {
 					children: [{ id: 'h', type: 'paragraph', content: [span('hidden')] }]
 				}
 			])
-		).toBe('note\n\nbody\n\nhidden\n');
+		).toBe('<details>\n\nhidden\n</details>\n');
 	});
 });

@@ -1,6 +1,15 @@
 import { normalizePage } from './normalize.js';
-import { blockChildren, documentOrder } from './tree.js';
-import type { Block, Inline, KbPage, ListItemBlock, Mark, TableBlock, TableRowBlock, TextSpan } from './types.js';
+import type {
+	Block,
+	Inline,
+	KbPage,
+	ListItemBlock,
+	Mark,
+	TableBlock,
+	TableRowBlock,
+	TextSpan,
+	ToggleBlock
+} from './types.js';
 
 function linkHref(marks: Mark[]): string | null {
 	let href: string | null = null;
@@ -40,15 +49,35 @@ function renderTable(table: TableBlock): string {
 	const rows = table.children;
 	if (rows.length === 0) return '';
 	const width = Math.max(1, ...rows.map((row) => row.children.length));
-	const line = (row: TableRowBlock) => {
+	const grid = rows.map((row) => {
 		const cols: string[] = [];
 		for (let i = 0; i < width; i++) cols.push(gfmCell(row, i));
-		return `| ${cols.join(' | ')} |`;
-	};
-	const sep = `| ${Array.from({ length: width }, () => '---').join(' | ')} |`;
-	const out = [line(rows[0]), sep];
-	for (const row of rows.slice(1)) out.push(line(row));
+		return cols;
+	});
+	const colWidths = Array.from({ length: width }, (_, i) =>
+		Math.max(3, ...grid.map((row) => row[i].length))
+	);
+	const formatRow = (cells: string[]) =>
+		`| ${cells.map((cell, i) => cell.padEnd(colWidths[i], ' ')).join(' | ')} |`;
+	const sep = `| ${colWidths.map((w) => '-'.repeat(w)).join(' | ')} |`;
+	const out = [formatRow(grid[0]), sep];
+	for (const row of grid.slice(1)) out.push(formatRow(row));
 	return out.join('\n');
+}
+
+function quoteMarkdown(md: string): string {
+	if (md === '') return '';
+	return md
+		.split('\n')
+		.map((line) => (line === '' ? '>' : `> ${line}`))
+		.join('\n');
+}
+
+function renderToggle(block: ToggleBlock): string {
+	const inner = renderSlice(block.children);
+	if (inner === '') return '';
+	if (block.open) return inner;
+	return `<details>\n\n${inner.endsWith('\n') ? inner : `${inner}\n`}</details>`;
 }
 
 function sameListRun(prev: Block | undefined, block: ListItemBlock): boolean {
@@ -72,9 +101,9 @@ function renderBlock(block: Block, orderedIndex: number): string {
 		case 'image':
 			return `![${block.alt}](${block.src})`;
 		case 'callout':
+			return quoteMarkdown(renderSlice(block.children));
 		case 'toggle':
-			// Chrome is not textual; children render via documentOrder DFS.
-			return '';
+			return renderToggle(block);
 		case 'table':
 			return renderTable(block);
 		case 'table_row':
@@ -93,9 +122,8 @@ function separator(prev: Block, next: Block): string {
 	return '\n\n';
 }
 
-/** Derived Markdown of the page body. Not a loader. */
-export function toMarkdown(page: KbPage): string {
-	const blocks = documentOrder(normalizePage(page));
+/** Recursively remap a sibling slice. Containers own their children. */
+function renderSlice(blocks: Block[]): string {
 	const chunks: string[] = [];
 	const emitted: Block[] = [];
 	let orderedIndex = 0;
@@ -108,12 +136,22 @@ export function toMarkdown(page: KbPage): string {
 			orderedIndex = 0;
 		}
 		const rendered = renderBlock(block, orderedIndex);
-		if (rendered === '' && (blockChildren(block)?.length ?? 0) > 0) continue;
+		if (
+			rendered === '' &&
+			(block.type === 'callout' || block.type === 'toggle' || block.type === 'table')
+		) {
+			continue;
+		}
 		if (prev) chunks.push(separator(prev, block));
 		chunks.push(rendered);
 		emitted.push(block);
 	}
-	const body = chunks.join('');
+	return chunks.join('');
+}
+
+/** Derived Markdown of the page body. Not a loader. */
+export function toMarkdown(page: KbPage): string {
+	const body = renderSlice(normalizePage(page).blocks);
 	if (body === '') return '';
 	return body.endsWith('\n') ? body : `${body}\n`;
 }
