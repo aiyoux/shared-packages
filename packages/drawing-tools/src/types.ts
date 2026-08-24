@@ -24,7 +24,33 @@ export interface EraserPath {
     alpha?: number;
 }
 
-export type LayerKind = 'vector' | 'raster';
+export type LayerKind = 'vector' | 'raster' | 'svg';
+
+/** Native SVG primitives stored on an `kind: 'svg'` layer. Not PathData ink. */
+export type SvgLineElement = {
+    type: 'line';
+    id: string;
+    x1: number;
+    y1: number;
+    x2: number;
+    y2: number;
+    stroke: string;
+    strokeWidth: number;
+    opacity?: number;
+};
+
+export type SvgPathElement = {
+    type: 'path';
+    id: string;
+    d: string;
+    stroke: string;
+    fill: string;
+    strokeWidth: number;
+    fillRule?: 'nonzero' | 'evenodd';
+    opacity?: number;
+};
+
+export type SvgElement = SvgLineElement | SvgPathElement;
 
 export interface LayerData {
     id: string;
@@ -36,6 +62,7 @@ export interface LayerData {
     /**
      * Ink model for this layer. Missing on older saves — treat as `'vector'`.
      * Raster layers persist a page-aspect bitmap (`rasterSrc` + pixel size).
+     * SVG layers persist native elements (`svgElements`).
      * There is no convert-either-way.
      */
     kind?: LayerKind;
@@ -45,6 +72,8 @@ export interface LayerData {
     rasterHeight?: number;
     /** PNG/WebP data URL of the raster plate. Ignored on vector layers. */
     rasterSrc?: string;
+    /** Native SVG elements. Ignored on vector/raster layers. */
+    svgElements?: SvgElement[];
 }
 
 export interface ImportedImage {
