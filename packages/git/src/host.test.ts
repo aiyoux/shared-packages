@@ -48,6 +48,18 @@ describe('createGitHost local backend', () => {
 		expect(dirty.status.dirty).toBe(true);
 	});
 
+	it('readBlobAt returns committed bytes, not dirty worktree', async () => {
+		const dir = await makeRepo();
+		const host = createGitHost({ fs });
+		const repo = await host.addRepo({ label: 'tiny', backend: 'local', path: dir });
+		const sha = (await host.snapshot(repo.id)).log[0]?.sha;
+		expect(sha).toBeTruthy();
+		await fs.promises.writeFile(path.join(dir, 'README.md'), 'hello world\n');
+		const blob = await host.readBlobAt(repo, sha!, 'README.md');
+		expect(new TextDecoder().decode(blob)).toBe('hello\n');
+		expect(await fs.promises.readFile(path.join(dir, 'README.md'), 'utf8')).toBe('hello world\n');
+	});
+
 	it('subscribeLocal re-snapshots after a working-tree change', async () => {
 		const dir = await makeRepo();
 		let notify: (() => void) | null = null;
@@ -124,6 +136,13 @@ describe('createGitHost monitor backend', () => {
 		path: '/tmp/p',
 		baseUrl: 'http://127.0.0.1:8300'
 	};
+
+	it('readBlobAt throws until monitor transport is wired', async () => {
+		const host = createGitHost({ fetchImpl: fakeMonitorFetch() });
+		await expect(host.readBlobAt(repo, 'abc123456789', 'README.md')).rejects.toThrow(
+			/Monitor git blob is not wired on this host yet/
+		);
+	});
 
 	it('snapshotRepo maps a fake /v1/git/snapshot without a live daemon', async () => {
 		const host = createGitHost({ fetchImpl: fakeMonitorFetch() });

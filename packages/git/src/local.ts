@@ -39,3 +39,13 @@ export async function localSnapshot(fs: GitFs, dir: string): Promise<GitSnapshot
 
 	return { status: { branch, dirty }, log };
 }
+
+export async function localReadBlobAt(
+	fs: GitFs,
+	dir: string,
+	rev: string,
+	filepath: string
+): Promise<Uint8Array> {
+	const { blob } = await git.readBlob({ fs, dir, oid: rev, filepath });
+	return blob;
+}

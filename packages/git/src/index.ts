@@ -6,7 +6,7 @@ export type {
 	GitStatus
 } from './types.js';
 export { createGitHost, type CreateGitHostOptions } from './host.js';
-export { localSnapshot, type GitFs } from './local.js';
+export { localReadBlobAt, localSnapshot, type GitFs } from './local.js';
 export { createVfsGitFs, type CreateVfsGitFsOptions } from './vfsGitFs.js';
 export { ensureBuffer } from './ensureBuffer.js';
 export {
