@@ -1,11 +1,17 @@
+import git from 'isomorphic-git';
 import { deleteRepo, getRepo, listRepos, putRepo } from './repos.js';
 import { localSnapshot, type GitFs } from './local.js';
 import { monitorSnapshot, monitorSubscribe } from './monitor.js';
 import type { GitHost, GitRepoRef, GitSnapshot } from './types.js';
 
 export type CreateGitHostOptions = {
-	/** Node `fs` (or LightningFS). Omit to no-op local snapshots in the browser. */
+	/** Node `fs` for tests. Browser local uses `fsForLocal` instead. */
 	fs?: GitFs;
+	/**
+	 * Per-repo GitFs rooted at a VFS folder id. When set, isomorphic-git `dir`
+	 * is `'/'` on that fs. `repo.path` remains the VFS id.
+	 */
+	fsForLocal?: (rootId: string) => GitFs;
 	fetchImpl?: typeof fetch;
 	/** Live local working-tree notifications. Omit for a one-shot local snapshot. */
 	subscribeLocal?: (dir: string, onChange: () => void) => () => void;
@@ -20,8 +26,15 @@ function newId(): string {
 
 export function createGitHost(opts: CreateGitHostOptions = {}): GitHost {
 	const fs = opts.fs;
+	const fsForLocal = opts.fsForLocal;
 	const fetchImpl = opts.fetchImpl;
 	const subscribeLocal = opts.subscribeLocal;
+
+	function bindLocal(repoPath: string): { fs: GitFs; dir: string } {
+		if (fsForLocal) return { fs: fsForLocal(repoPath), dir: '/' };
+		if (fs) return { fs, dir: repoPath };
+		throw new Error('Local git is not available in this environment');
+	}
 
 	async function requireRepo(id: string): Promise<GitRepoRef> {
 		const repo = await getRepo(id);
@@ -31,8 +44,8 @@ export function createGitHost(opts: CreateGitHostOptions = {}): GitHost {
 
 	async function snapshotRepo(repo: GitRepoRef): Promise<GitSnapshot> {
 		if (repo.backend === 'local') {
-			if (!fs) throw new Error('Local git is not available in this environment');
-			return localSnapshot(fs, repo.path);
+			const bound = bindLocal(repo.path);
+			return localSnapshot(bound.fs, bound.dir);
 		}
 		return monitorSnapshot(repo, { fetchImpl });
 	}
@@ -40,10 +53,11 @@ export function createGitHost(opts: CreateGitHostOptions = {}): GitHost {
 	function subscribeRepo(repo: GitRepoRef, onChange: (snap: GitSnapshot) => void): () => void {
 		if (repo.backend === 'local') {
 			let cancelled = false;
+			const bound = bindLocal(repo.path);
 			const emit = async () => {
-				if (!fs || cancelled) return;
+				if (cancelled) return;
 				try {
-					const snap = await localSnapshot(fs, repo.path);
+					const snap = await localSnapshot(bound.fs, bound.dir);
 					if (!cancelled) onChange(snap);
 				} catch {
 					/* local snapshot failed */
@@ -92,6 +106,10 @@ export function createGitHost(opts: CreateGitHostOptions = {}): GitHost {
 			};
 		},
 		snapshotRepo,
-		subscribeRepo
+		subscribeRepo,
+		async initLocal(repoPath) {
+			const bound = bindLocal(repoPath);
+			await git.init({ fs: bound.fs, dir: bound.dir });
+		}
 	};
 }

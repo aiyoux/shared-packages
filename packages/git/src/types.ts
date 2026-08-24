@@ -28,4 +28,6 @@ export interface GitHost {
 	subscribe(repoId: string, onChange: (snap: GitSnapshot) => void): () => void;
 	snapshotRepo(repo: GitRepoRef): Promise<GitSnapshot>;
 	subscribeRepo(repo: GitRepoRef, onChange: (snap: GitSnapshot) => void): () => void;
+	/** `git.init` for a local working tree (`repo.path` = VFS id or Node dir). */
+	initLocal(repoPath: string): Promise<void>;
 }
