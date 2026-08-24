@@ -2,6 +2,7 @@ import {
 	apply,
 	findBlock,
 	isNonTextual,
+	isTableStructure,
 	isTextLike,
 	plaintextOf,
 	type Mark,
@@ -13,6 +14,7 @@ import { newBlockId } from './ids.js';
 import { clampPoint, collapsed, deleteRangeOps, isCollapsed, orderedRange, parentIdFor } from './range.js';
 import { slashOps } from './slash.js';
 import type { EditorState } from './state.js';
+import { afterTableId, cellCoords, cellPlaintext, deleteRowOps, enterCellOps } from './table.js';
 import { backspaceAtStartOps, deleteAtEndOps, expandCaretToUnit, isCodeEmptyLastLine } from './units.js';
 
 export type BeforeInputEvent = {
@@ -26,6 +28,7 @@ export type BeforeInputResult = {
 	ops: Op[];
 	freeze: boolean;
 	history?: 'undo' | 'redo';
+	selection?: Range;
 };
 
 const DELETE_TYPES = new Set([
@@ -73,6 +76,14 @@ function insertAfter(page: EditorState['page'], afterId: string, block: ReturnTy
 function enterAtCaret(state: EditorState, point: Point): Op[] {
 	const block = findBlock(state.page, point.blockId);
 	if (!block) return [];
+	if (block.type === 'table_cell') {
+		return enterCellOps(state.page, collapsed(point))?.ops ?? [];
+	}
+	if (isTableStructure(block)) {
+		const afterId = afterTableId(state.page, block.id);
+		if (!afterId) return [];
+		return [{ kind: 'insert-block', afterId, parentId: null, block: emptyParagraph(newBlockId()) }];
+	}
 	if (isNonTextual(block)) {
 		return [insertAfter(state.page, block.id, emptyParagraph(newBlockId()))];
 	}
@@ -97,13 +108,23 @@ function enterAtCaret(state: EditorState, point: Point): Op[] {
 	return [{ kind: 'split-block', at: point, newId: newBlockId() }];
 }
 
-function enterOps(state: EditorState, live: Range): Op[] {
+function enterOps(state: EditorState, live: Range): { ops: Op[]; selection?: Range } {
+	if (cellCoords(state.page, orderedRange(state.page, live).start.blockId)) {
+		const nav = enterCellOps(state.page, live);
+		if (nav) return nav;
+	}
 	const { state: next, at, prefix } = withDeletedSelection(state, live);
-	return [...prefix, ...enterAtCaret(next, at)];
+	if (cellCoords(next.page, at.blockId)) {
+		const nav = enterCellOps(next.page, collapsed(at));
+		if (nav) return { ops: [...prefix, ...nav.ops], selection: nav.selection };
+	}
+	return { ops: [...prefix, ...enterAtCaret(next, at)] };
 }
 
 function deleteOps(state: EditorState, live: Range, inputType: string): Op[] {
 	if (state.blockFocus && isCollapsed(live) && live.anchor.blockId === state.blockFocus) {
+		const focused = findBlock(state.page, state.blockFocus);
+		if (focused?.type === 'table_row') return deleteRowOps(state.page, focused.id);
 		return [{ kind: 'delete-block', id: state.blockFocus }];
 	}
 	const backward = inputType === 'deleteContentBackward';
@@ -134,6 +155,22 @@ function insertAtCaret(state: EditorState, at: Point, text: string): Op[] {
 	if (!text) return [];
 	const block = findBlock(state.page, at.blockId);
 	if (!block) return [];
+	if (isTableStructure(block)) {
+		const afterId = afterTableId(state.page, block.id);
+		if (!afterId) return [];
+		return [
+			{
+				kind: 'insert-block',
+				afterId,
+				parentId: null,
+				block: {
+					id: newBlockId(),
+					type: 'paragraph',
+					content: [{ type: 'text', text: cellPlaintext(text), marks: [] }]
+				}
+			}
+		];
+	}
 	if (isNonTextual(block)) {
 		return [
 			insertAfter(state.page, block.id, {
@@ -142,6 +179,15 @@ function insertAtCaret(state: EditorState, at: Point, text: string): Op[] {
 				content: [{ type: 'text', text, marks: [] }]
 			})
 		];
+	}
+	if (block.type === 'table_cell') {
+		if (text === ' ') {
+			const slash = slashOps(block.id, plaintextOf(block), state.page);
+			if (slash) return slash;
+		}
+		const one = cellPlaintext(text);
+		if (!one) return [];
+		return [{ kind: 'insert-text', at, text: one }];
 	}
 	if (text === ' ' && block && isTextLike(block)) {
 		const slash = slashOps(block.id, plaintextOf(block), state.page);
@@ -208,7 +254,8 @@ export function mapBeforeInput(
 	}
 
 	if (type === 'insertParagraph' || type === 'insertLineBreak') {
-		return { preventDefault: true, ops: enterOps(state, liveRange), freeze: false };
+		const entered = enterOps(state, liveRange);
+		return { preventDefault: true, ops: entered.ops, freeze: false, selection: entered.selection };
 	}
 
 	if (type === 'insertReplacementText') {

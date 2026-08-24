@@ -22,13 +22,14 @@ export {
 	snapshotComposition,
 	type CompositionSnapshot
 } from './composition.js';
-export { dropAfterId, dropTarget, dropWhere, overlayBoxes } from './gutter.js';
+export { dropAfterId, dropTarget, dropWhere, gutterOrder, handleHeights, overlayBoxes } from './gutter.js';
 export { allowlistedHref, allowlistedSrc } from './href.js';
 export { newBlockId } from './ids.js';
 export { mapKeydown, type KeyEvent, type KeymapResult } from './keymap.js';
 export {
 	BLOCK_ID_ATTR,
 	BLOCK_TYPE_ATTR,
+	COL_ATTR,
 	DEPTH_ATTR,
 	PARENT_ID_ATTR,
 	project,
@@ -54,6 +55,15 @@ export {
 } from './selection.js';
 export { matchSlash, slashOps } from './slash.js';
 export {
+	cellCoords,
+	defaultTable,
+	enterCellOps,
+	tabOps,
+	tableRect,
+	type CellCoords,
+	type TableNav
+} from './table.js';
+export {
 	applyEditorOps,
 	blockFocusOf,
 	createEditorState,
@@ -76,6 +86,9 @@ export {
 	findBlock,
 	invert,
 	isAtomic,
+	isContainer,
+	isNonTextual,
+	isTableStructure,
 	isTextLike,
 	KB_FORMAT,
 	KB_SCHEMA_VERSION,

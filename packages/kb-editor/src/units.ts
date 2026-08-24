@@ -119,6 +119,7 @@ export function backspaceAtStartOps(page: KbPage, blockId: string): Op[] {
 	const siblings = childrenOf(page, loc.parent);
 	const current = siblings[loc.index];
 	const prev = siblings[loc.index - 1];
+	if (current.type === 'table_cell' || prev.type === 'table_cell') return [];
 	if (current.type === 'list_item' && plaintextOf(current) === '' && prev.type !== 'list_item') {
 		return [{ kind: 'convert-block', id: current.id, to: 'paragraph' }];
 	}
@@ -138,6 +139,7 @@ export function deleteAtEndOps(page: KbPage, blockId: string): import('@shared-p
 	if (loc.index >= siblings.length - 1) return [];
 	const current = siblings[loc.index];
 	const next = siblings[loc.index + 1];
+	if (current.type === 'table_cell' || next.type === 'table_cell') return [];
 	if (isAtomic(next)) return [{ kind: 'delete-block', id: next.id }];
 	if (isTextLike(next) || next.type === 'code') {
 		return [{ kind: 'merge-block', keepId: current.id, dropId: next.id }];

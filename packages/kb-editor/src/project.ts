@@ -17,6 +17,7 @@ export const BLOCK_ID_ATTR = 'data-block-id';
 export const BLOCK_TYPE_ATTR = 'data-block-type';
 export const PARENT_ID_ATTR = 'data-parent-id';
 export const DEPTH_ATTR = 'data-depth';
+export const COL_ATTR = 'data-col';
 
 function markElement(doc: Document, mark: Mark): HTMLElement {
 	switch (mark.type) {
@@ -74,7 +75,8 @@ function renderTextLike(
 	doc: Document,
 	block: Extract<Block, { content: Inline[] }>,
 	parentId: string | null,
-	depth: number
+	depth: number,
+	col?: number
 ): HTMLElement {
 	let el: HTMLElement;
 	if (block.type === 'heading') {
@@ -82,6 +84,10 @@ function renderTextLike(
 	} else if (block.type === 'list_item') {
 		el = doc.createElement('div');
 		el.setAttribute('data-ordered', block.ordered ? 'true' : 'false');
+	} else if (block.type === 'table_cell') {
+		el = doc.createElement('div');
+		if (block.header) el.setAttribute('data-header', 'true');
+		if (col != null) el.setAttribute(COL_ATTR, String(col));
 	} else {
 		el = doc.createElement('p');
 	}
@@ -151,14 +157,14 @@ function renderImage(
 /** Chrome only: host-direct sibling of children, never a nested CE wrapper. */
 function renderContainer(
 	doc: Document,
-	block: Extract<Block, { type: 'callout' | 'toggle' }>,
+	block: Extract<Block, { type: 'callout' | 'toggle' | 'table' }>,
 	parentId: string | null,
 	depth: number
 ): HTMLElement {
 	const el = doc.createElement('div');
 	setTreeAttrs(el, block, parentId, depth);
 	if (block.type === 'callout') el.setAttribute('data-variant', block.variant);
-	else el.setAttribute('data-open', block.open ? 'true' : 'false');
+	else if (block.type === 'toggle') el.setAttribute('data-open', block.open ? 'true' : 'false');
 	return el;
 }
 
@@ -168,29 +174,38 @@ function locAttrs(page: KbPage, id: string): { parentId: string | null; depth: n
 	return { parentId, depth: parentId ? 1 : 0 };
 }
 
+function cellCol(page: KbPage, id: string): number | undefined {
+	const loc = parentOf(page, id);
+	if (!loc || loc.parent === 'page' || loc.parent.type !== 'table_row') return undefined;
+	return loc.index;
+}
+
 export function renderBlock(
 	doc: Document,
 	block: Block,
 	parentId: string | null = null,
-	depth = 0
+	depth = 0,
+	col?: number
 ): HTMLElement {
-	if (isTextLike(block)) return renderTextLike(doc, block, parentId, depth);
+	if (isTextLike(block)) return renderTextLike(doc, block, parentId, depth, col);
 	if (block.type === 'code') return renderCode(doc, block, parentId, depth);
 	if (block.type === 'divider') return renderDivider(doc, block, parentId, depth);
 	if (block.type === 'image') return renderImage(doc, block, parentId, depth);
-	if (isContainer(block)) return renderContainer(doc, block, parentId, depth);
+	if (isContainer(block) || block.type === 'table') return renderContainer(doc, block, parentId, depth);
 	const el = doc.createElement('div');
 	setTreeAttrs(el, block, parentId, depth);
 	return el;
 }
 
-/** Imperative projection into the one contenteditable host. Never innerHTML. */
+/** Imperative projection into the one contenteditable host. Never innerHTML. Rows omitted. */
 export function project(host: HTMLElement, page: KbPage): void {
 	const doc = host.ownerDocument;
 	const nodes: HTMLElement[] = [];
 	for (const block of visibleOrder(page)) {
+		if (block.type === 'table_row') continue;
 		const { parentId, depth } = locAttrs(page, block.id);
-		nodes.push(renderBlock(doc, block, parentId, depth));
+		const col = block.type === 'table_cell' ? cellCol(page, block.id) : undefined;
+		nodes.push(renderBlock(doc, block, parentId, depth, col));
 	}
 	host.replaceChildren(...nodes);
 	for (const child of host.children) stripMagicBr(child as HTMLElement);

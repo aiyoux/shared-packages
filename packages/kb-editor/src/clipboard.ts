@@ -7,6 +7,7 @@ import {
 	findBlock,
 	isContainer,
 	isNonTextual,
+	isTableStructure,
 	isTextLike,
 	parentOf,
 	plaintextOf,
@@ -14,11 +15,21 @@ import {
 	type KbPage,
 	type Op,
 	type Range,
+	type TableBlock,
 	type TextSpan
 } from '@shared-packages/kb-model';
 import { newBlockId } from './ids.js';
 import { clampPoint, deleteRangeOps, isCollapsed, orderedRange, parentIdFor, textInsertPoint } from './range.js';
 import type { EditorState } from './state.js';
+import {
+	afterTableId,
+	cellPlaintext,
+	deleteRowOps,
+	parseTsv,
+	pasteCellsIntoTable,
+	pasteTableAtCell,
+	sliceTableRect
+} from './table.js';
 
 export const KB_CLIPBOARD_MIME = 'application/x-scratch-kb+json';
 
@@ -74,11 +85,18 @@ function sliceTextLike(block: Extract<Block, { content: TextSpan[] }>, from: num
 	const content = sliced.length > 0 ? sliced : [{ type: 'text' as const, text: '', marks: [] }];
 	if (block.type === 'heading') return { id: block.id, type: 'heading', level: block.level, content };
 	if (block.type === 'list_item') return { id: block.id, type: 'list_item', ordered: block.ordered, content };
+	if (block.type === 'table_cell') {
+		return block.header
+			? { id: block.id, type: 'table_cell', header: true, content }
+			: { id: block.id, type: 'table_cell', content };
+	}
 	return { id: block.id, type: 'paragraph', content };
 }
 
 export function sliceBlocks(page: KbPage, range: Range): Block[] {
 	if (isCollapsed(range)) return [];
+	const rect = sliceTableRect(page, range);
+	if (rect) return [rect];
 	const { start, end } = orderedRange(page, range);
 	const order = documentOrder(page);
 	const si = order.findIndex((b) => b.id === start.blockId);
@@ -155,7 +173,7 @@ function pushRemapped(
 	let destAfter = afterId;
 	for (const item of items) {
 		const next = remapBlock(item);
-		if (isContainer(next) && destParent != null) {
+		if ((isContainer(next) || next.type === 'table') && destParent != null) {
 			destAfter = destParent;
 			destParent = null;
 		}
@@ -171,6 +189,19 @@ function jsonInsertOps(state: EditorState, at: { blockId: string; offset: number
 		const text = jsonBlocks.map((item) => plaintextOf(item)).join('\n');
 		if (text) return [{ kind: 'insert-text', at, text }];
 		pushRemapped(ops, jsonBlocks, at.blockId, parentIdFor(state.page, at.blockId));
+		return ops;
+	}
+	if (block?.type === 'table_cell') {
+		if (jsonBlocks.length === 1 && jsonBlocks[0]!.type === 'table') {
+			return pasteTableAtCell(state.page, at, jsonBlocks[0] as TableBlock);
+		}
+		const text = cellPlaintext(jsonBlocks.map((item) => plaintextOf(item)).join(' '));
+		if (text) return [{ kind: 'insert-text', at, text }];
+		return [];
+	}
+	if (block && isTableStructure(block)) {
+		const afterId = afterTableId(state.page, block.id) ?? at.blockId;
+		pushRemapped(ops, jsonBlocks, afterId, null);
 		return ops;
 	}
 	const len = block ? plaintextOf(block).length : 0;
@@ -216,11 +247,24 @@ export function pasteOps(
 	if (!text && input.html) text = stripHtml(input.html);
 	if (!text) return ops;
 	const block = findBlock(working.page, at.blockId);
+	if (block?.type === 'table_cell') {
+		const tsv = parseTsv(text);
+		if (tsv && (tsv.length > 1 || (tsv[0]?.length ?? 0) > 1)) {
+			ops.push(...pasteCellsIntoTable(working.page, at, tsv));
+			return ops;
+		}
+		const one = cellPlaintext(text);
+		if (one) ops.push({ kind: 'insert-text', at, text: one });
+		return ops;
+	}
 	if (block && isNonTextual(block)) {
+		const afterId = isTableStructure(block)
+			? (afterTableId(working.page, block.id) ?? at.blockId)
+			: at.blockId;
 		ops.push({
 			kind: 'insert-block',
-			afterId: at.blockId,
-			parentId: parentIdFor(working.page, at.blockId),
+			afterId,
+			parentId: isTableStructure(block) ? null : parentIdFor(working.page, at.blockId),
 			block: {
 				id: newBlockId(),
 				type: 'paragraph',
@@ -253,11 +297,21 @@ export function pasteOps(
 }
 
 export function copyPayload(state: EditorState, live: Range): { plain: string; json: string } | null {
-	if (isCollapsed(live)) return null;
+	if (isCollapsed(live)) {
+		if (!state.blockFocus) return null;
+		const block = findBlock(state.page, state.blockFocus);
+		if (!block || !isNonTextual(block)) return null;
+		return { plain: plaintextOfSlice(block), json: serializeSlice([structuredClone(block)]) };
+	}
 	const blocks = sliceBlocks(state.page, live);
 	return { plain: slicePlaintext(state.page, live), json: serializeSlice(blocks) };
 }
 
-export function cutOps(page: KbPage, live: Range): Op[] {
+export function cutOps(page: KbPage, live: Range, blockFocus?: string): Op[] {
+	if (isCollapsed(live) && blockFocus) {
+		const block = findBlock(page, blockFocus);
+		if (block?.type === 'table_row') return deleteRowOps(page, block.id);
+		if (block && isNonTextual(block)) return [{ kind: 'delete-block', id: blockFocus }];
+	}
 	return deleteRangeOps(page, live);
 }

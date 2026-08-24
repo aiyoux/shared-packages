@@ -2,11 +2,12 @@
 	import { onMount, untrack } from 'svelte';
 	import {
 		findBlock,
+		isNonTextual,
 		parentIdOf,
 		parentOf,
 		plaintextOf,
-		visibleOrder,
-		type Op
+		type Op,
+		type Range
 	} from '@shared-packages/kb-model';
 	import { mapBeforeInput } from './beforeinput.js';
 	import { copyPayload, cutOps, KB_CLIPBOARD_MIME, pasteOps } from './clipboard.js';
@@ -19,7 +20,7 @@
 		snapshotComposition,
 		type CompositionSnapshot
 	} from './composition.js';
-	import { dropTarget, dropWhere, handleHeights, overlayBoxes, type OverlayBox } from './gutter.js';
+	import { dropTarget, dropWhere, gutterOrder, handleHeights, overlayBoxes, type OverlayBox } from './gutter.js';
 	import { mapKeydown } from './keymap.js';
 	import { BLOCK_ID_ATTR, project } from './project.js';
 	import { rangeFromInputEvent, rangeFromSelection, restoreSelection } from './selection.js';
@@ -58,6 +59,18 @@
 		onDispatch(ops.length === 1 ? ops[0] : ops);
 	}
 
+	function emitMapped(ops: Op[], selection?: Range) {
+		if (ops.length === 0) {
+			if (selection) emitState(setSelection(editor, selection));
+			return;
+		}
+		if (selection && onState) {
+			emitState(setSelection(applyEditorOps(editor, ops), selection));
+			return;
+		}
+		emitOps(ops);
+	}
+
 	function liveRange(event?: InputEvent) {
 		if (!host) return editor.selection;
 		if (event) return rangeFromInputEvent(host, event, editor.selection);
@@ -70,7 +83,7 @@
 		project(host, page);
 		untrack(() => {
 			restoreSelection(host, editor.selection, page);
-			heightById = handleHeights(host);
+			heightById = handleHeights(host, page);
 			overlays = overlayBoxes(host, gutterEl);
 		});
 	});
@@ -99,7 +112,7 @@
 			emitState(redo(editor));
 			return;
 		}
-		emitOps(mapped.ops);
+		emitMapped(mapped.ops, mapped.selection);
 	}
 
 	function onCompositionStart(_event: CompositionEvent) {
@@ -161,9 +174,15 @@
 			liveRange()
 		);
 		if (result.preventDefault) event.preventDefault();
-		if (result.history === 'undo') emitState(undo(editor));
-		if (result.history === 'redo') emitState(redo(editor));
-		emitOps(result.ops);
+		if (result.history === 'undo') {
+			emitState(undo(editor));
+			return;
+		}
+		if (result.history === 'redo') {
+			emitState(redo(editor));
+			return;
+		}
+		emitMapped(result.ops, result.selection);
 	}
 
 	function onCopy(event: ClipboardEvent) {
@@ -184,7 +203,7 @@
 		event.preventDefault();
 		event.clipboardData.setData('text/plain', payload.plain);
 		event.clipboardData.setData(KB_CLIPBOARD_MIME, payload.json);
-		emitOps(cutOps(editor.page, live));
+		emitOps(cutOps(editor.page, live, editor.blockFocus));
 	}
 
 	function onPaste(event: ClipboardEvent) {
@@ -236,6 +255,14 @@
 		doc.addEventListener('selectionchange', onSelectionChange);
 		return () => doc.removeEventListener('selectionchange', onSelectionChange);
 	});
+
+	function onHandlePointerDown(id: string) {
+		if (composing || !editable) return;
+		const block = findBlock(editor.page, id);
+		if (block && isNonTextual(block)) {
+			emitState(setSelection(editor, { anchor: { blockId: id, offset: 0 }, head: { blockId: id, offset: 0 } }));
+		}
+	}
 
 	function onHandleDragStart(event: DragEvent, id: string) {
 		draggingId = id;
@@ -296,7 +323,7 @@
 				style:pointer-events="none"
 			></div>
 		{/each}
-		{#each visibleOrder(editor.page) as block (block.id)}
+		{#each gutterOrder(editor.page) as block (block.id)}
 			<button
 				type="button"
 				class="kb-handle"
@@ -305,6 +332,7 @@
 				data-block-id={block.id}
 				data-parent-id={handleParentId(block.id)}
 				style:height="{heightById[block.id] ?? 24}px"
+				onpointerdown={() => onHandlePointerDown(block.id)}
 				ondragstart={(e) => onHandleDragStart(e, block.id)}
 				ondragover={onHandleDragOver}
 				ondrop={(e) => onHandleDrop(e, block.id)}
@@ -454,11 +482,22 @@
 		font-size: 0.9em;
 	}
 	.kb-host :global([data-block-type='callout']),
-	.kb-host :global([data-block-type='toggle']) {
+	.kb-host :global([data-block-type='toggle']),
+	.kb-host :global([data-block-type='table']) {
 		margin: 0;
 		min-height: 24px;
 		height: 24px;
 		box-sizing: border-box;
+	}
+	.kb-host :global([data-block-type='table_cell']) {
+		display: block;
+		margin: 0 0 0.15rem;
+		padding: 0.15rem 0.4rem;
+		border: 1px solid color-mix(in srgb, currentColor 28%, transparent);
+		box-sizing: border-box;
+	}
+	.kb-host :global([data-block-type='table_cell'][data-header='true']) {
+		font-weight: 650;
 	}
 	.kb-host :global([data-depth='1']) {
 		margin-left: 0.75rem;

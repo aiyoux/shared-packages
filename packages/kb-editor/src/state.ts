@@ -72,8 +72,46 @@ function selectionAfter(pre: KbPage, post: KbPage, op: Op, prev: Range): Range {
 			const keepLen = keep ? plaintextOf(keep).length : 0;
 			return collapsed({ blockId: op.keepId, offset: keepLen });
 		}
-		case 'insert-block':
+		case 'insert-block': {
+			if (op.block.type === 'table') {
+				const cell = op.block.children[0]?.children[0];
+				if (cell) return collapsed({ blockId: cell.id, offset: 0 });
+			}
 			return collapsed({ blockId: op.block.id, offset: 0 });
+		}
+		case 'insert-table-row': {
+			const cell = op.row.children[0];
+			if (cell) return collapsed({ blockId: cell.id, offset: 0 });
+			return collapsed({ blockId: op.row.id, offset: 0 });
+		}
+		case 'insert-table-column': {
+			const cell = op.cells[0];
+			if (cell) return collapsed({ blockId: cell.id, offset: 0 });
+			return prev;
+		}
+		case 'delete-table-row': {
+			const table = findBlock(post, op.tableId);
+			if (table?.type === 'table') {
+				const cell = table.children[0]?.children[0];
+				if (cell) return collapsed({ blockId: cell.id, offset: 0 });
+				return collapsed({ blockId: table.id, offset: 0 });
+			}
+			const remaining = documentOrder(post)[0];
+			return collapsed({ blockId: remaining.id, offset: plaintextOf(remaining).length });
+		}
+		case 'delete-table-column': {
+			if (findBlock(post, prev.anchor.blockId)) {
+				return clampRange(post, collapsed(prev.anchor));
+			}
+			const table = findBlock(post, op.tableId);
+			if (table?.type === 'table') {
+				const row = table.children[0];
+				const cell = row?.children[Math.min(op.index, Math.max(0, (row?.children.length ?? 1) - 1))];
+				if (cell) return collapsed({ blockId: cell.id, offset: 0 });
+				return collapsed({ blockId: table.id, offset: 0 });
+			}
+			return prev;
+		}
 		case 'delete-block': {
 			const order = documentOrder(pre);
 			const index = blockIndex(pre, op.id);

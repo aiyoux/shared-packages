@@ -4,6 +4,8 @@ import {
 	type CalloutVariant,
 	type KbPage,
 	type Mark,
+	type TableCellBlock,
+	type TableRowBlock,
 	type TextSpan
 } from '@shared-packages/kb-model';
 
@@ -43,6 +45,20 @@ export function callout(id: string, kids: Block[], variant: CalloutVariant = 'in
 
 export function toggle(id: string, kids: Block[], open = true): Block {
 	return { id, type: 'toggle', open, children: kids };
+}
+
+export function cell(id: string, text: string, header = false): TableCellBlock {
+	return header
+		? { id, type: 'table_cell', header: true, content: [span(text)] }
+		: { id, type: 'table_cell', content: [span(text)] };
+}
+
+export function row(id: string, cells: TableCellBlock[]): TableRowBlock {
+	return { id, type: 'table_row', children: cells };
+}
+
+export function table(id: string, rows: TableRowBlock[]): Block {
+	return { id, type: 'table', children: rows };
 }
 
 /** Nested container fixture (callout). */

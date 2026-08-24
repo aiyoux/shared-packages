@@ -3,8 +3,11 @@ import {
 	findBlock,
 	isContainer,
 	isDescendant,
+	isTableStructure,
 	parentIdOf,
 	parentOf,
+	visibleOrder,
+	type Block,
 	type KbPage
 } from '@shared-packages/kb-model';
 import { PARENT_ID_ATTR } from './project.js';
@@ -49,6 +52,9 @@ export function dropTarget(
 	const target = findBlock(page, targetId);
 	if (!dragged || !target) return 'noop';
 	if (isDescendant(page, draggedId, targetId)) return 'noop';
+	if (dragged.type === 'table_row' || dragged.type === 'table_cell') return 'noop';
+	if (target.type === 'table_row' || target.type === 'table_cell') return 'noop';
+	if (toLoc.parent !== 'page' && isTableStructure(toLoc.parent)) return 'noop';
 
 	if (isContainer(target) && where === 'after') {
 		if (isContainer(dragged)) return 'noop';
@@ -59,7 +65,7 @@ export function dropTarget(
 	}
 
 	const parentId = parentIdOf(toLoc.parent);
-	if (isContainer(dragged) && parentId != null) return 'noop';
+	if ((isContainer(dragged) || dragged.type === 'table') && parentId != null) return 'noop';
 
 	if (where === 'before') {
 		const afterId = prevSiblingId(page, toLoc);
@@ -114,12 +120,34 @@ export function overlayBoxes(host: HTMLElement, gutter?: HTMLElement | null): Ov
 	return boxes;
 }
 
-export function handleHeights(host: HTMLElement): Record<string, number> {
+function cssEscape(value: string): string {
+	if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') return CSS.escape(value);
+	return value.replace(/"/g, '\\"');
+}
+
+/** Gutter handles: visibleOrder minus cells (rows are synthetic; cells are not independently draggable). */
+export function gutterOrder(page: KbPage): Block[] {
+	return visibleOrder(page).filter((block) => block.type !== 'table_cell');
+}
+
+export function handleHeights(host: HTMLElement, page?: KbPage): Record<string, number> {
 	const next: Record<string, number> = {};
 	for (const child of host.children) {
 		const el = child as HTMLElement;
 		const id = el.getAttribute('data-block-id');
 		if (id) next[id] = el.offsetHeight;
+	}
+	if (!page) return next;
+	for (const block of visibleOrder(page)) {
+		if (block.type !== 'table_row') continue;
+		const cells = block.children;
+		if (cells.length === 0) continue;
+		const first = host.querySelector(`[data-block-id="${cssEscape(cells[0].id)}"]`) as HTMLElement | null;
+		const last = host.querySelector(
+			`[data-block-id="${cssEscape(cells[cells.length - 1].id)}"]`
+		) as HTMLElement | null;
+		if (!first || !last) continue;
+		next[block.id] = Math.max(0, last.getBoundingClientRect().bottom - first.getBoundingClientRect().top);
 	}
 	return next;
 }

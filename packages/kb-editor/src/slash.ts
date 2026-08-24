@@ -1,5 +1,6 @@
 import { parentOf, type Block, type KbPage, type Op } from '@shared-packages/kb-model';
 import { newBlockId } from './ids.js';
+import { defaultTable } from './table.js';
 
 export type SlashTarget = {
 	to: Block['type'];
@@ -16,9 +17,10 @@ const SLASH: Record<string, SlashTarget> = {
 	'/code': { to: 'code' }
 };
 
-const WRAP: Record<string, 'callout' | 'toggle'> = {
+const WRAP: Record<string, 'callout' | 'toggle' | 'table'> = {
 	'/callout': 'callout',
-	'/toggle': 'toggle'
+	'/toggle': 'toggle',
+	'/table': 'table'
 };
 
 export function matchSlash(text: string): { cmd: string; target: SlashTarget } | null {
@@ -38,10 +40,21 @@ function stripCmd(blockId: string, cmd: string): Op {
 }
 
 /** Insert an empty container, then move the current block into it. Not convert-block. */
-function wrapOps(blockId: string, cmd: string, type: 'callout' | 'toggle', page?: KbPage): Op[] | null {
+function wrapOps(
+	blockId: string,
+	cmd: string,
+	type: 'callout' | 'toggle' | 'table',
+	page?: KbPage
+): Op[] | null {
 	if (page) {
 		const loc = parentOf(page, blockId);
 		if (!loc || loc.parent !== 'page') return null;
+	}
+	if (type === 'table') {
+		return [
+			{ kind: 'insert-block', afterId: blockId, block: defaultTable() },
+			{ kind: 'delete-block', id: blockId }
+		];
 	}
 	const containerId = newBlockId();
 	const block: Block =
