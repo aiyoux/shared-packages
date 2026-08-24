@@ -24,6 +24,8 @@ export interface EraserPath {
     alpha?: number;
 }
 
+export type LayerKind = 'vector' | 'raster';
+
 export interface LayerData {
     id: string;
     name: string;
@@ -31,6 +33,18 @@ export interface LayerData {
     locked: boolean;
     opacity?: number;
     eraserPaths?: EraserPath[];
+    /**
+     * Ink model for this layer. Missing on older saves — treat as `'vector'`.
+     * Raster layers persist a page-aspect bitmap (`rasterSrc` + pixel size).
+     * There is no convert-either-way.
+     */
+    kind?: LayerKind;
+    /** Pixel columns of a raster plate. Ignored on vector layers. */
+    rasterWidth?: number;
+    /** Pixel rows of a raster plate. Aspect-locked to the page. */
+    rasterHeight?: number;
+    /** PNG/WebP data URL of the raster plate. Ignored on vector layers. */
+    rasterSrc?: string;
 }
 
 export interface ImportedImage {
