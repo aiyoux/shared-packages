@@ -3,19 +3,22 @@
 	import { FeTreeView, type ExplorerDriver, type ExplorerEntryId } from '@shared-packages/file-system/ui';
 	import { createGitHost } from './host.js';
 	import GitHistory from './GitHistory.svelte';
-	import { consumeOpenProject } from './openProject.js';
+	import { consumeOpenProject, type OpenProjectPayload } from './openProject.js';
 	import type { GitHost, GitRepoRef } from './types.js';
 
 	let {
 		driver = undefined,
 		folderId = null,
 		gitHost = createGitHost(),
-		repo = undefined
+		repo = undefined,
+		/** When passed (including `null`), skip sessionStorage consume — the parent already did. */
+		opened = undefined
 	}: {
 		driver?: ExplorerDriver;
 		folderId?: ExplorerEntryId | null;
 		gitHost?: GitHost;
 		repo?: GitRepoRef;
+		opened?: OpenProjectPayload | null;
 	} = $props();
 
 	let activeRepo = $state<GitRepoRef | null>(null);
@@ -32,16 +35,17 @@
 	});
 
 	$effect(() => {
-		const opened = consumeOpenProject();
-		if (!opened) return;
+		const fromProp = opened;
+		const payload = fromProp === undefined ? consumeOpenProject() : fromProp;
+		if (!payload) return;
 		const host = untrack(() => gitHost);
 		void (async () => {
 			const added = await host.addRepo({
-				label: opened.path.split('/').filter(Boolean).pop() || opened.path,
-				backend: opened.backend,
-				path: opened.path,
-				profileId: opened.profileId,
-				baseUrl: opened.baseUrl
+				label: payload.path.split('/').filter(Boolean).pop() || payload.path,
+				backend: payload.backend,
+				path: payload.path,
+				profileId: payload.profileId,
+				baseUrl: payload.baseUrl
 			});
 			activeRepo = added;
 		})();

@@ -9,6 +9,8 @@ export type OpenProjectPayload = {
 	folderId?: string;
 	profileId?: string;
 	baseUrl?: string;
+	/** Monitor profile root (driver clamp), when backend is monitor. */
+	rootPath?: string;
 	ts?: number;
 	openedAt?: number;
 };
