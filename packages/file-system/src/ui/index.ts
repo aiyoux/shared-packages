@@ -67,6 +67,7 @@ export {
 	type ExplorerListOptions,
 	type ExplorerListResult,
 	type ExplorerOpenTarget,
+	type ExplorerOpenContext,
 	type OpenProjectContext
 } from './explorerDriver.js';
 export { createLocalExplorerDriver, type LocalExplorerDriverOptions } from './localExplorerDriver.js';

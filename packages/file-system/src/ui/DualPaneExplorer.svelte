@@ -27,7 +27,8 @@
 	 * `__MEMORY_VFS_FILES__` (memory) and `__MONITOR_WATCH__` hooks.
 	 */
 	import { onMount, onDestroy } from 'svelte';
-	import { default as FileExplorer, type ExplorerContext } from './FileExplorer.svelte';
+	import { default as FileExplorer, type ExplorerContext, type ExplorerMode } from './FileExplorer.svelte';
+	import type { FileTypeId } from '../types.js';
 	import OpProgressPopup from './OpProgressPopup.svelte';
 	import DualPhaseConfirm from './DualPhaseConfirm.svelte';
 	import { stackTransferItems } from './stackProgress.js';
@@ -36,6 +37,7 @@
 		type ExplorerDriver,
 		type ExplorerEntry,
 		type ExplorerOpenTarget,
+		type ExplorerOpenContext,
 		type OpenProjectContext
 	} from './explorerDriver.js';
 	import { createMemoryExplorerDriver } from './memoryExplorerDriver.js';
@@ -130,7 +132,13 @@
 
 	type Props = {
 		localDriver: ExplorerDriver;
-		onOpen?: (entry: ExplorerOpenTarget) => void | Promise<void>;
+		onOpen?: (entry: ExplorerOpenTarget, ctx?: ExplorerOpenContext) => void | Promise<void>;
+		/** Forward `onOpen` to B2 / monitor / disk / rclone panes. Hub Files keeps this off. */
+		openRemotes?: boolean;
+		accept?: FileTypeId[];
+		hideIncompatible?: boolean;
+		openLabel?: string;
+		explorerMode?: ExplorerMode;
 		onOpenProject?: (entry: ExplorerOpenTarget, ctx: OpenProjectContext) => void | Promise<void>;
 		persistenceVfs?: VfsService;
 		dualPaneKey?: string;
@@ -218,6 +226,11 @@
 	let {
 		localDriver,
 		onOpen,
+		openRemotes = false,
+		accept,
+		hideIncompatible = false,
+		openLabel,
+		explorerMode = 'manage',
 		onOpenProject,
 		persistenceVfs,
 		dualPaneKey = 'fe:dualPane',
@@ -328,6 +341,12 @@
 	function onDualRatioDelta(delta: number) {
 		dualRatio = clampDualRatio(dualRatio + delta);
 		persistDualRatio(dualRatio);
+	}
+
+	function paneOnOpen(kind: string) {
+		if (!onOpen) return undefined;
+		if (kind === 'local' || kind === 'memory' || openRemotes) return onOpen;
+		return undefined;
 	}
 	let b2Profiles = $state<B2ConnectionProfileV1[]>([]);
 	let rcloneProfiles = $state<RcloneConnectionProfileV1[]>([]);
@@ -1373,11 +1392,15 @@
 			{#key `${id}-${p.explorerKey}-${p.activeKind}-${p.activeId}-${id === 'right' && overrideRight ? `peer:${overrideRight.label}` : ''}`}
 				{#if id === 'right' && overrideRight}
 					<FileExplorer
-						mode="manage"
+						mode={explorerMode}
+						{accept}
+						{hideIncompatible}
+						{openLabel}
 						variant="panel"
 						driver={overrideRight.driver}
 						showPersistence={false}
 						initialParentId={p.ctx.parentId}
+						onOpen={paneOnOpen('peer')}
 						onOpenProject={paneOpenProject(id)}
 						pending={panePending(id)}
 						onContextChange={(ctx) => {
@@ -1391,7 +1414,10 @@
 				{:else if p.activeKind === 'local'}
 					<!-- Page header owns the persistence chip; keep FE toolbar uncluttered. -->
 					<FileExplorer
-						mode="manage"
+						mode={explorerMode}
+						{accept}
+						{hideIncompatible}
+						{openLabel}
 						variant="panel"
 						driver={localDriver}
 						showPersistence={false}
@@ -1420,12 +1446,15 @@
 					</FileExplorer>
 				{:else}
 					<FileExplorer
-						mode="manage"
+						mode={explorerMode}
+						{accept}
+						{hideIncompatible}
+						{openLabel}
 						variant="panel"
 						driver={drv}
 						showPersistence={false}
 						initialParentId={p.ctx.parentId}
-						onOpen={p.activeKind === 'memory' ? onOpen : undefined}
+						onOpen={paneOnOpen(p.activeKind)}
 						onOpenProject={paneOpenProject(id)}
 						onSendFile={
 							onSend

@@ -85,7 +85,8 @@ describe('registry multi-ext image + forceExtension', () => {
 		assert.equal(inferFileTypeFromName('a.cari'), 'cari');
 		assert.equal(inferFileTypeFromName('index.kb'), 'kb');
 		assert.equal(inferFileTypeFromName('loop.anim'), 'anim');
-		assert.equal(inferFileTypeFromName('report.pdf'), 'unknown');
+		assert.equal(inferFileTypeFromName('report.pdf'), 'pdf');
+		assert.deepEqual(acceptedExtensionsFor('pdf'), ['.pdf']);
 		assert.equal(inferFileTypeFromName('noext'), 'unknown');
 	});
 

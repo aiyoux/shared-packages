@@ -65,6 +65,13 @@ const DEFAULT_TYPES: FileTypeDef[] = [
 		schemaVersion: 1
 	},
 	{
+		id: 'pdf',
+		extension: '.pdf',
+		mime: 'application/pdf',
+		label: 'PDF',
+		schemaVersion: 1
+	},
+	{
 		id: 'json',
 		extension: '.json',
 		mime: 'application/json',

@@ -5,7 +5,8 @@
 	import {
 		type ExplorerDriver,
 		type ExplorerEntry,
-		type ExplorerOpenTarget
+		type ExplorerOpenTarget,
+		type ExplorerOpenContext
 	} from './explorerDriver.js';
 	import { createLocalExplorerDriver } from './localExplorerDriver.js';
 	import StoragePersistenceStatus from './StoragePersistenceStatus.svelte';
@@ -80,7 +81,7 @@
 		 * Default true when backend is local; ignored for remote drivers.
 		 */
 		showPersistence?: boolean;
-		onOpen?: (entry: ExplorerOpenTarget) => void | Promise<void>;
+		onOpen?: (entry: ExplorerOpenTarget, ctx?: ExplorerOpenContext) => void | Promise<void>;
 		/** Preview "Open project" for folders that look like git working trees. */
 		onOpenProject?: (entry: ExplorerOpenTarget) => void | Promise<void>;
 		/** Preview "Send this file" — Connections dual-pane send path. */
@@ -795,6 +796,15 @@
 		return isActionable(n as never, accept);
 	}
 
+	function readOpenTarget(entry: ExplorerOpenTarget): Promise<Blob> {
+		if (driver.readBlob) return driver.readBlob(entry.id);
+		throw new Error('Cannot read this file from the current backend.');
+	}
+
+	function emitOpen(entry: ExplorerOpenTarget) {
+		return onOpen?.(entry, { read: () => readOpenTarget(entry) });
+	}
+
 	async function refreshTrash() {
 		if (!caps.supportsTrash) {
 			trashNodes = [];
@@ -1161,7 +1171,7 @@
 		if (!onOpen) return;
 		previewBusy = true;
 		try {
-			await onOpen(n);
+			await emitOpen(n);
 			previewEntry = null;
 		} catch (e) {
 			reportError(e);
@@ -1314,7 +1324,7 @@
 		if (await openPackedEntry(n)) return;
 		if (!rowActionable(n)) return;
 		if (onOpen && (mode === 'open' || mode === 'manage')) {
-			await onOpen(n);
+			await emitOpen(n);
 			return;
 		}
 		if (mode === 'save') saveName = n.name;
@@ -1390,7 +1400,7 @@
 			last?.kind === 'file' && rowActionable(last) ? last : (files[0] ?? null);
 		const primaryFolder = last?.kind === 'folder' ? last : (folders[0] ?? null);
 		if (primaryFile && onOpen && (mode === 'open' || mode === 'manage')) {
-			await onOpen(primaryFile);
+			await emitOpen(primaryFile);
 			return;
 		}
 		if (primaryFolder) {

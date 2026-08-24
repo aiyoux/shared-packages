@@ -22,6 +22,11 @@ export type ExplorerOpenTarget = {
 	fileType?: FileTypeId;
 };
 
+/** Extra context for `onOpen` so apps can read the file from the current backend. */
+export type ExplorerOpenContext = {
+	read: () => Promise<Blob>;
+};
+
 /**
  * DualPaneExplorer attaches this to `onOpenProject` so Files can tell Projects
  * whether the folder is local VFS, a monitor path, or another backend.

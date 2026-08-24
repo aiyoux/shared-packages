@@ -9,6 +9,7 @@ export type FileTypeId =
 	| 'anim'
 	| 'image'
 	| 'video'
+	| 'pdf'
 	| 'json'
 	| 'unknown';
 
