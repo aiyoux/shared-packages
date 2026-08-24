@@ -20,6 +20,7 @@ describe('registry multi-ext image + forceExtension', () => {
 		assert.deepEqual(acceptedExtensionsFor('vrec'), ['.vrec']);
 		assert.deepEqual(acceptedExtensionsFor('igfx'), ['.igfx']);
 		assert.deepEqual(acceptedExtensionsFor('cari'), ['.cari']);
+		assert.deepEqual(acceptedExtensionsFor('kb'), ['.kb']);
 		assert.deepEqual(acceptedExtensionsFor('json'), ['.json']);
 		assert.deepEqual(acceptedExtensionsFor('unknown'), []);
 	});
@@ -54,6 +55,8 @@ describe('registry multi-ext image + forceExtension', () => {
 		assert.equal(forceExtension('demo.igfx', 'igfx'), 'demo.igfx');
 		assert.equal(forceExtension('face', 'cari'), 'face.cari');
 		assert.equal(forceExtension('face.cari', 'cari'), 'face.cari');
+		assert.equal(forceExtension('demo', 'kb'), 'demo.kb');
+		assert.equal(forceExtension('index.kb', 'kb'), 'index.kb');
 		assert.equal(forceExtension('note.json', 'json'), 'note.json');
 		assert.equal(forceExtension('note', 'json'), 'note.json');
 		// wrong product ext stripped then primary applied
@@ -75,6 +78,7 @@ describe('registry multi-ext image + forceExtension', () => {
 		assert.equal(inferFileTypeFromName('face.cari'), 'cari');
 		assert.equal(inferFileTypeFromName('x.igfx'), 'igfx');
 		assert.equal(inferFileTypeFromName('a.cari'), 'cari');
+		assert.equal(inferFileTypeFromName('index.kb'), 'kb');
 		assert.equal(inferFileTypeFromName('report.pdf'), 'unknown');
 		assert.equal(inferFileTypeFromName('noext'), 'unknown');
 	});
