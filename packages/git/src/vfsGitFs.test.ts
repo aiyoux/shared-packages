@@ -163,6 +163,192 @@ describe('createVfsGitFs', () => {
 	});
 });
 
+describe('createVfsGitFs.promises.rename', () => {
+	function matrixRows(matrix: Awaited<ReturnType<typeof git.statusMatrix>>) {
+		return Object.fromEntries(matrix.map(([p, head, workdir, stage]) => [p, [head, workdir, stage]]));
+	}
+
+	async function namesAt(vfs: VfsService, parentId: string, includeDeleted = false) {
+		return (await vfs.list({ parentId, includeDeleted })).map((n) => n.name);
+	}
+
+	it('preserves file id and ino', async () => {
+		const { vfs, folderId, fs } = await makeProject();
+		await fs.promises.writeFile('/README.md', 'hello\n');
+		const beforeNode = (await vfs.list({ parentId: folderId })).find((n) => n.name === 'README.md')!;
+		const before = await fs.promises.stat('/README.md');
+		await fs.promises.rename('/README.md', '/MOVED.md');
+		await expect(fs.promises.stat('/README.md')).rejects.toMatchObject({ code: 'ENOENT' });
+		const after = await fs.promises.stat('/MOVED.md');
+		expect(after.ino).toBe(before.ino);
+		const afterNode = (await vfs.list({ parentId: folderId })).find((n) => n.name === 'MOVED.md')!;
+		expect(afterNode.id).toBe(beforeNode.id);
+		expect(String(await fs.promises.readFile('/MOVED.md', 'utf8'))).toBe('hello\n');
+	});
+
+	it('renames a directory and preserves folder id/ino and children', async () => {
+		const { vfs, folderId, fs } = await makeProject();
+		await fs.promises.mkdir('/page');
+		await fs.promises.writeFile('/page/index.kb', 'body\n');
+		const page = (await vfs.list({ parentId: folderId })).find((n) => n.name === 'page')!;
+		const before = await fs.promises.stat('/page');
+		await fs.promises.rename('/page', '/other');
+		await expect(fs.promises.stat('/page')).rejects.toMatchObject({ code: 'ENOENT' });
+		const after = await fs.promises.stat('/other');
+		expect(after.ino).toBe(before.ino);
+		expect(after.isDirectory()).toBe(true);
+		const moved = (await vfs.list({ parentId: folderId })).find((n) => n.name === 'other')!;
+		expect(moved.id).toBe(page.id);
+		expect(await fs.promises.readdir('/other')).toEqual(['index.kb']);
+		expect(String(await fs.promises.readFile('/other/index.kb', 'utf8'))).toBe('body\n');
+	});
+
+	it('overwrites a dest file without suffixing foo (1)', async () => {
+		const { vfs, folderId, fs } = await makeProject();
+		await fs.promises.writeFile('/foo.txt', 'src\n');
+		await fs.promises.writeFile('/bar.txt', 'dest\n');
+		const src = (await vfs.list({ parentId: folderId })).find((n) => n.name === 'foo.txt')!;
+		const dest = (await vfs.list({ parentId: folderId })).find((n) => n.name === 'bar.txt')!;
+		await fs.promises.rename('/foo.txt', '/bar.txt');
+		const active = await namesAt(vfs, folderId);
+		expect(active).toContain('bar.txt');
+		expect(active).not.toContain('foo.txt');
+		expect(active.some((n) => n.includes('(1)'))).toBe(false);
+		expect(active).not.toContain('bar (1).txt');
+		expect(String(await fs.promises.readFile('/bar.txt', 'utf8'))).toBe('src\n');
+		const kept = (await vfs.list({ parentId: folderId })).find((n) => n.name === 'bar.txt')!;
+		expect(kept.id).toBe(src.id);
+		expect(kept.id).not.toBe(dest.id);
+		const including = await vfs.list({ parentId: folderId, includeDeleted: true });
+		expect(including.some((n) => n.id === dest.id)).toBe(false);
+		expect(including.some((n) => n.name === 'bar (1).txt')).toBe(false);
+	});
+
+	it('overwrites a dest file in another directory without suffixing', async () => {
+		const { vfs, folderId, fs } = await makeProject();
+		await fs.promises.mkdir('/a');
+		await fs.promises.mkdir('/b');
+		await fs.promises.writeFile('/a/old.txt', 'src\n');
+		await fs.promises.writeFile('/b/new.txt', 'dest\n');
+		const a = (await vfs.list({ parentId: folderId })).find((n) => n.name === 'a')!;
+		const b = (await vfs.list({ parentId: folderId })).find((n) => n.name === 'b')!;
+		const src = (await vfs.list({ parentId: a.id })).find((n) => n.name === 'old.txt')!;
+		await fs.promises.rename('/a/old.txt', '/b/new.txt');
+		const bNames = await namesAt(vfs, b.id);
+		expect(bNames).toEqual(['new.txt']);
+		expect(bNames).not.toContain('new (1).txt');
+		expect(await namesAt(vfs, a.id)).toEqual([]);
+		expect(String(await fs.promises.readFile('/b/new.txt', 'utf8'))).toBe('src\n');
+		const kept = (await vfs.list({ parentId: b.id })).find((n) => n.name === 'new.txt')!;
+		expect(kept.id).toBe(src.id);
+	});
+
+	it('throws EEXIST when dest is a directory', async () => {
+		const { fs } = await makeProject();
+		await fs.promises.mkdir('/dir');
+		await fs.promises.writeFile('/file.txt', 'x\n');
+		await expect(fs.promises.rename('/file.txt', '/dir')).rejects.toMatchObject({ code: 'EEXIST' });
+		await fs.promises.mkdir('/other');
+		await expect(fs.promises.rename('/dir', '/other')).rejects.toMatchObject({ code: 'EEXIST' });
+		expect(await fs.promises.readdir('/')).toEqual(expect.arrayContaining(['dir', 'file.txt', 'other']));
+		expect(String(await fs.promises.readFile('/file.txt', 'utf8'))).toBe('x\n');
+	});
+
+	it('throws EEXIST when moving a directory onto a dest file', async () => {
+		const { fs } = await makeProject();
+		await fs.promises.mkdir('/dir');
+		await fs.promises.writeFile('/dir/child.txt', 'c\n');
+		await fs.promises.writeFile('/file.txt', 'x\n');
+		await expect(fs.promises.rename('/dir', '/file.txt')).rejects.toMatchObject({ code: 'EEXIST' });
+		expect(String(await fs.promises.readFile('/file.txt', 'utf8'))).toBe('x\n');
+		expect(await fs.promises.readdir('/dir')).toEqual(['child.txt']);
+	});
+
+	it('throws ENOENT when the old path is missing', async () => {
+		const { fs } = await makeProject();
+		await expect(fs.promises.rename('/nope', '/dest')).rejects.toMatchObject({ code: 'ENOENT' });
+	});
+
+	it('throws ENOENT when the dest parent is missing', async () => {
+		const { fs } = await makeProject();
+		await fs.promises.writeFile('/foo.txt', 'x\n');
+		await expect(fs.promises.rename('/foo.txt', '/missing/foo.txt')).rejects.toMatchObject({
+			code: 'ENOENT'
+		});
+		expect(String(await fs.promises.readFile('/foo.txt', 'utf8'))).toBe('x\n');
+	});
+
+	it('throws EPERM when renaming the git root or onto the git root', async () => {
+		const { fs } = await makeProject();
+		await fs.promises.writeFile('/foo.txt', 'x\n');
+		await expect(fs.promises.rename('/', '/other')).rejects.toMatchObject({ code: 'EPERM' });
+		await expect(fs.promises.rename('/foo.txt', '/')).rejects.toMatchObject({ code: 'EPERM' });
+	});
+
+	it('is a no-op when old and new resolve to the same node', async () => {
+		const { vfs, folderId, fs } = await makeProject();
+		await fs.promises.writeFile('/foo.txt', 'keep\n');
+		const node = (await vfs.list({ parentId: folderId })).find((n) => n.name === 'foo.txt')!;
+		await fs.promises.rename('/foo.txt', '/foo.txt');
+		await fs.promises.rename('/foo.txt', '/./foo.txt');
+		const again = (await vfs.list({ parentId: folderId })).find((n) => n.name === 'foo.txt')!;
+		expect(again.id).toBe(node.id);
+		expect(String(await fs.promises.readFile('/foo.txt', 'utf8'))).toBe('keep\n');
+		expect(await namesAt(vfs, folderId)).toEqual(['foo.txt']);
+	});
+
+	it('throws EINVAL when moving a directory into itself', async () => {
+		const { fs } = await makeProject();
+		await fs.promises.mkdir('/dir');
+		await expect(fs.promises.rename('/dir', '/dir/nested')).rejects.toMatchObject({ code: 'EINVAL' });
+		expect(await fs.promises.readdir('/')).toEqual(['dir']);
+		expect((await fs.promises.stat('/dir')).isDirectory()).toBe(true);
+	});
+
+	it('statusMatrix after a tracked file rename is delete+untracked and dirty', async () => {
+		const { fs } = await makeProject();
+		await commitReadme(fs, 'initial commit');
+		const clean = await git.statusMatrix({ fs, dir: '/' });
+		expect(matrixRows(clean)['README.md']).toEqual([1, 1, 1]);
+		await fs.promises.rename('/README.md', '/MOVED.md');
+		const rows = matrixRows(await git.statusMatrix({ fs, dir: '/' }));
+		expect(rows['README.md']).toEqual([1, 0, 1]);
+		expect(rows['MOVED.md']).toEqual([0, 2, 0]);
+		const snap = await localSnapshot(fs, '/');
+		expect(snap.status.dirty).toBe(true);
+	});
+
+	it('statusMatrix after a tracked folder rename is still delete+untracked', async () => {
+		const { fs } = await makeProject();
+		await git.init({ fs, dir: '/' });
+		await fs.promises.mkdir('/page');
+		await fs.promises.writeFile('/page/index.kb', 'wiki\n');
+		await git.add({ fs, dir: '/', filepath: 'page/index.kb' });
+		await git.commit({ fs, dir: '/', message: 'page', author: AUTHOR });
+		await fs.promises.rename('/page', '/other');
+		const rows = matrixRows(await git.statusMatrix({ fs, dir: '/' }));
+		expect(rows['page/index.kb']).toEqual([1, 0, 1]);
+		expect(rows['other/index.kb']).toEqual([0, 2, 0]);
+		expect((await localSnapshot(fs, '/')).status.dirty).toBe(true);
+	});
+
+	it('git.remove + git.add after rename stages delete+add; commit clears dirty', async () => {
+		const { fs } = await makeProject();
+		await commitReadme(fs, 'initial commit');
+		await fs.promises.rename('/README.md', '/MOVED.md');
+		await git.remove({ fs, dir: '/', filepath: 'README.md' });
+		await git.add({ fs, dir: '/', filepath: 'MOVED.md' });
+		const staged = matrixRows(await git.statusMatrix({ fs, dir: '/' }));
+		expect(staged['README.md']).toEqual([1, 0, 0]);
+		expect(staged['MOVED.md']).toEqual([0, 2, 2]);
+		await git.commit({ fs, dir: '/', message: 'rename', author: AUTHOR });
+		const after = matrixRows(await git.statusMatrix({ fs, dir: '/' }));
+		expect(after['README.md']).toBeUndefined();
+		expect(after['MOVED.md']).toEqual([1, 1, 1]);
+		expect((await localSnapshot(fs, '/')).status.dirty).toBe(false);
+	});
+});
+
 describe('createGitHost fsForLocal', () => {
 	it('snapshots and subscribeLocal via vfs.subscribe without polling', async () => {
 		const { vfs, folderId, fs } = await makeProject();

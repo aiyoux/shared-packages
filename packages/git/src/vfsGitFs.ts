@@ -6,6 +6,16 @@ import './ensureBuffer.js';
 import type { VfsNode, VfsService } from '@shared-packages/file-system';
 import type { GitFs } from './local.js';
 
+type PromiseFs = Extract<GitFs, { promises: object }>;
+
+type VfsGitFs = {
+	promises: PromiseFs['promises'] & {
+		rename(oldPath: string, newPath: string): Promise<void>;
+		symlink(target: string, path: string): Promise<never>;
+		readlink(path: string): Promise<never>;
+	};
+};
+
 export type CreateVfsGitFsOptions = {
 	/** VFS folder id of the working tree. */
 	rootId: string;
@@ -121,7 +131,15 @@ function encodingOf(opts?: unknown): string | undefined {
 	return undefined;
 }
 
-export function createVfsGitFs(vfs: VfsService, opts: CreateVfsGitFsOptions): GitFs {
+function mapVfsError(e: unknown, path: string): never {
+	const code = e && typeof e === 'object' && 'code' in e ? String((e as { code: string }).code) : '';
+	if (code === 'NOT_FOUND') throw nodeErr('ENOENT', path);
+	if (code === 'NAME_CONFLICT') throw nodeErr('EEXIST', path);
+	if (code === 'CYCLE' || code === 'INVALID_NAME') throw nodeErr('EINVAL', path);
+	throw e;
+}
+
+export function createVfsGitFs(vfs: VfsService, opts: CreateVfsGitFsOptions): VfsGitFs {
 	const rootId = opts.rootId;
 
 	const promises = {
@@ -212,8 +230,38 @@ export function createVfsGitFs(vfs: VfsService, opts: CreateVfsGitFsOptions): Gi
 			const w = await walk(vfs, rootId, path);
 			if (!w.node) throw nodeErr('ENOENT', path);
 			throw nodeErr('EINVAL', 'not a symlink');
+		},
+
+		async rename(oldPath: string, newPath: string) {
+			const src = await walk(vfs, rootId, oldPath);
+			if (!src.node) throw nodeErr('ENOENT', oldPath);
+			if ('root' in src && src.root) throw nodeErr('EPERM', oldPath);
+
+			const dest = await walk(vfs, rootId, newPath);
+			if ('root' in dest && dest.root) throw nodeErr('EPERM', newPath);
+			if (dest.node?.id === src.node.id) return;
+			if (dest.node?.kind === 'folder') throw nodeErr('EEXIST', newPath);
+			if (dest.node?.kind === 'file' && src.node.kind === 'folder') {
+				throw nodeErr('EEXIST', newPath);
+			}
+
+			const destName = dest.node ? dest.node.name : dest.name;
+			const destParentId = dest.parentId;
+			try {
+				// VFS rename/move suffixes on collision; POSIX overwrite must delete dest first.
+				if (dest.node?.kind === 'file') {
+					await vfs.permanentDelete(dest.node.id);
+				}
+				if (src.parentId === destParentId) {
+					await vfs.rename(src.node.id, destName);
+				} else {
+					await vfs.move(src.node.id, destParentId, { name: destName });
+				}
+			} catch (e) {
+				mapVfsError(e, newPath);
+			}
 		}
 	};
 
-	return { promises };
+	return { promises } as VfsGitFs;
 }
