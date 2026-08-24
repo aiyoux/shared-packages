@@ -26,6 +26,7 @@
   },
   "dependencies": {
     "@shared-packages/file-system": "file:../file-system",
+    "@shared-packages/ui": "file:../ui",
     "buffer": "^6.0.3",
     "isomorphic-git": "^1.33.2"
   },

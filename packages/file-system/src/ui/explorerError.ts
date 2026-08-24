@@ -28,7 +28,9 @@ const CODE_LABELS: Record<string, string> = {
 	MONITOR_UNAVAILABLE: 'Monitor is unavailable. Check the base URL and that the service is running.',
 	MONITOR_FORBIDDEN: 'That path is not allowed by the monitor.',
 	MONITOR_NOT_FOUND: 'That path was not found on the host.',
-	RCLONE_ERROR: 'rclone could not complete that request.'
+	RCLONE_ERROR: 'rclone could not complete that request.',
+	MOVE_UNSUPPORTED: 'This connection cannot move items here.',
+	COPY_UNSUPPORTED: 'This connection cannot copy items here.'
 };
 
 function codeOf(e: unknown): string {

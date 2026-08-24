@@ -13,12 +13,14 @@
 	import {
 		FeTreeView,
 		detectProject,
+		formatExplorerError,
 		type ExplorerDriver,
 		type ExplorerEntryId
 	} from '@shared-packages/file-system/ui';
 	import { createGitHost, GitHistory, type GitRepoRef } from '@shared-packages/git';
 	import { diskPct, memPct, pct, type HostSnapshot } from './types.js';
 	import { SPARKLINE_N, samplesToPoints } from './sparkline.js';
+	import { toast } from '@shared-packages/ui';
 
 	const gitHost = createGitHost();
 
@@ -47,7 +49,8 @@
 			driver = await acquireMonitorDriver(p);
 			selectedId = null;
 		} catch (e) {
-			error = e instanceof Error ? e.message : String(e);
+			error = formatExplorerError(e);
+			toast.error(error);
 			driver = null;
 		}
 	}

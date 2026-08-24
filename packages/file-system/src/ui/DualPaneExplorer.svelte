@@ -411,6 +411,10 @@
 		if (id === 'left') left = { ...left, ...patch };
 		else right = { ...right, ...patch };
 	}
+	function showPaneError(id: PaneId, message: string, extra: Partial<PaneState> = {}) {
+		setPane(id, { error: message, ...extra });
+		if (message) toast.error(message);
+	}
 	function activeDriver(p: PaneState, id?: PaneId): ExplorerDriver {
 		if (id === 'right' && overrideRight) return overrideRight.driver;
 		if (p.activeKind === 'memory') return p.memoryDriver ?? getMemoryDriver();
@@ -591,7 +595,7 @@
 			});
 		} catch (e) {
 			const mapped = mapB2Error(e);
-			setPane(id, { busy: false, error: mapped.message, showB2Form: true });
+			showPaneError(id, formatExplorerError(mapped), { busy: false, showB2Form: true });
 		}
 	}
 
@@ -622,7 +626,7 @@
 			});
 		} catch (e) {
 			const mapped = mapRcloneError(e);
-			setPane(id, { busy: false, error: mapped.message, showRcloneForm: true });
+			showPaneError(id, formatExplorerError(mapped), { busy: false, showRcloneForm: true });
 		}
 	}
 
@@ -677,9 +681,8 @@
 			startWatchStatusPoll();
 		} catch (e) {
 			const mapped = mapMonitorError(e);
-			setPane(id, {
+			showPaneError(id, formatMonitorErrorMessage(mapped), {
 				busy: false,
-				error: formatMonitorErrorMessage(mapped),
 				showMonitorForm: true
 			});
 		}
@@ -693,9 +696,10 @@
 		const p = paneState(id);
 		if (p.activeKind === 'disk' && p.remoteDriver && !opts?.replace) return;
 		if (!canPickDirectory()) {
-			setPane(id, {
-				error: 'This browser cannot open a computer folder. Use Chrome or Edge, or upload individual files with Upload from device.'
-			});
+			showPaneError(
+				id,
+				'This browser cannot open a computer folder. Use Chrome or Edge, or upload individual files with Upload from device.'
+			);
 			return;
 		}
 		try {
@@ -723,9 +727,10 @@
 		} catch (e) {
 			const name = e && typeof e === 'object' && 'name' in e ? String((e as { name: unknown }).name) : '';
 			if (name === 'AbortError') return;
-			setPane(id, {
-				error: e instanceof Error ? e.message : 'Could not open that folder'
-			});
+			showPaneError(
+				id,
+				e instanceof Error ? e.message : 'Could not open that folder'
+			);
 		}
 	}
 
@@ -800,8 +805,7 @@
 			return;
 		}
 		await reloadProfiles();
-		setPane(id, {
-			error: 'That connection was removed. Pick another or add one in settings.',
+		showPaneError(id, 'That connection was removed. Pick another or add one in settings.', {
 			showB2Form: true
 		});
 	}

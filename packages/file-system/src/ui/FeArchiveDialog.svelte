@@ -4,6 +4,8 @@
 	 * same engines as the hub Compress / Hash & Vault tools.
 	 */
 	import '@shared-packages/design-system/button.css';
+	import { toast } from '@shared-packages/ui';
+	import { formatExplorerError } from './explorerError.js';
 	import {
 		CODEC_LABEL,
 		defaultCodecFor,
@@ -196,7 +198,8 @@
 			pickFolders = listed.entries.filter((e) => e.kind === 'folder');
 			pickCrumbs = parentId ? await driver.getPath(parentId) : [];
 		} catch (e) {
-			actionError = e instanceof Error ? e.message : String(e);
+			actionError = formatExplorerError(e);
+			toast.error(actionError);
 		} finally {
 			pickBusy = false;
 		}
@@ -254,7 +257,8 @@
 			await writeOutputs(inner);
 			onDone({ title: titleName });
 		} catch (e) {
-			actionError = e instanceof Error ? e.message : String(e);
+			actionError = formatExplorerError(e);
+			toast.error(actionError);
 		} finally {
 			busy = false;
 		}

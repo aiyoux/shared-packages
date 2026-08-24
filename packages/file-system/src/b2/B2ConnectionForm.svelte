@@ -8,6 +8,8 @@
 	} from './credentials.js';
 	import { HUB_B2_PROFILES_CHANNEL, subscribeTabChannel } from '../crossTab.js';
 	import { validateProfileInput, type B2ConnectionProfileV1 } from './types.js';
+	import { toast } from '@shared-packages/ui';
+	import { formatExplorerError } from '../ui/explorerError.js';
 
 	interface Props {
 		/** Called after save when user wants to connect with this profile */
@@ -111,7 +113,8 @@
 				onConnected?.(profile);
 			}
 		} catch (e) {
-			error = e instanceof Error ? e.message : String(e);
+			error = formatExplorerError(e);
+			toast.error(error);
 		} finally {
 			busy = false;
 		}

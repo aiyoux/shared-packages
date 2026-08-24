@@ -22,7 +22,8 @@
   },
   "dependencies": {
     "@shared-packages/file-system": "file:../file-system",
-    "@shared-packages/git": "file:../git"
+    "@shared-packages/git": "file:../git",
+    "@shared-packages/ui": "file:../ui"
   },
   "peerDependencies": {
     "svelte": "^5.0.0"

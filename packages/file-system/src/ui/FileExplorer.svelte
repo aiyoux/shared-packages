@@ -426,9 +426,12 @@
 	}
 
 	function reportError(e: unknown): void {
-		const msg = errMsg(e);
+		reportMessage(errMsg(e));
+	}
+
+	function reportMessage(msg: string): void {
 		error = msg;
-		toast.error(msg);
+		if (msg) toast.error(msg);
 	}
 
 	function onRowDragStart(e: DragEvent, n: ExplorerEntry) {
@@ -578,7 +581,7 @@
 			}
 			await refresh();
 		} catch (err) {
-			error = errMsg(err);
+			reportError(err);
 		} finally {
 			dnd.stopDrag();
 			dndTargetId = null;
@@ -592,7 +595,8 @@
 			e.stopPropagation();
 			osDropOver = false;
 			const dest = n.kind === 'folder' ? n.id : parentId;
-			void importDeviceFiles(filesFromDataTransfer(e.dataTransfer), dest);
+			const pending = collectOsDrop(e.dataTransfer);
+			void importOsNodes(pending, dest);
 			return;
 		}
 		// Inactive session = a drag from the *other* dual pane. Let it bubble
@@ -718,7 +722,7 @@
 		} catch (e) {
 			if (gen !== refreshGen) return;
 			if (!silent) {
-				error = errMsg(e);
+				reportError(e);
 			} else if (silentRetries < SILENT_RETRY_LIMIT) {
 				// A failed background poll keeps the last good list rather than
 				// flashing red on every reconnect — but a silent failure is also how
@@ -730,7 +734,7 @@
 				// Persistently failing: staleness the user cannot see is worse than
 				// an error they can act on.
 				silentRetries = 0;
-				error = errMsg(e);
+				reportError(e);
 			}
 		} finally {
 			// Only the latest refresh may clear busy
@@ -795,7 +799,7 @@
 			const result = await driver.list({ parentId: null, trashOnly: true });
 			trashNodes = result.entries;
 		} catch (e) {
-			error = errMsg(e);
+			reportError(e);
 		} finally {
 			trashBusy = false;
 		}
@@ -854,7 +858,7 @@
 		try {
 			await onSave({ parentId, name });
 		} catch (e) {
-			error = errMsg(e);
+			reportError(e);
 		}
 	}
 
@@ -866,7 +870,7 @@
 			newFolderName = 'New Folder';
 			await refresh();
 		} catch (e) {
-			error = errMsg(e);
+			reportError(e);
 		}
 	}
 
@@ -926,10 +930,11 @@
 			const have = new Set(nodes.map((n) => n.id));
 			const restored = snapshot.filter((n) => idSet.has(n.id) && !have.has(n.id));
 			if (restored.length) nodes = [...nodes, ...restored];
-			error =
+			reportMessage(
 				failures.length === 1
 					? failures[0]!
-					: `${failures[0]} (and ${failures.length - 1} other errors)`;
+					: `${failures[0]} (and ${failures.length - 1} other errors)`
+			);
 		}
 	}
 
@@ -976,7 +981,7 @@
 			error = '';
 			await refresh();
 		} catch (e) {
-			error = errMsg(e);
+			reportError(e);
 		}
 	}
 
@@ -1052,7 +1057,7 @@
 			previewEntry = null;
 			return true;
 		} catch (e) {
-			error = errMsg(e);
+			reportError(e);
 			startArchive('decompress', [entry]);
 			return true;
 		} finally {
@@ -1151,7 +1156,7 @@
 			await onOpen(n);
 			previewEntry = null;
 		} catch (e) {
-			error = errMsg(e);
+			reportError(e);
 		} finally {
 			previewBusy = false;
 		}
@@ -1164,13 +1169,13 @@
 		try {
 			const ok = await detectProject(driver, n.id);
 			if (!ok) {
-				error = 'Not a git project';
+				reportMessage('Not a git project');
 				return;
 			}
 			error = '';
 			await onOpenProject(n);
 		} catch (e) {
-			error = errMsg(e);
+			reportError(e);
 		} finally {
 			previewBusy = false;
 		}
@@ -1210,7 +1215,7 @@
 			await onSendFile(n);
 			previewEntry = null;
 		} catch (e) {
-			error = errMsg(e);
+			reportError(e);
 		} finally {
 			previewBusy = false;
 		}
@@ -1426,7 +1431,7 @@
 			selected = new Set();
 			await refresh();
 		} catch (e) {
-			error = errMsg(e);
+			reportError(e);
 		}
 	}
 
@@ -1436,7 +1441,7 @@
 			await driver.copy(n.id, parentId);
 			await refresh();
 		} catch (e) {
-			error = errMsg(e);
+			reportError(e);
 		}
 	}
 
@@ -1454,7 +1459,7 @@
 			a.remove();
 			URL.revokeObjectURL(url);
 		} catch (e) {
-			error = errMsg(e);
+			reportError(e);
 		}
 	}
 
@@ -1495,7 +1500,7 @@
 			payload = systemClip;
 		}
 		if (!payload?.files.length) {
-			error = 'Clipboard is empty or not readable';
+			reportMessage('Clipboard is empty or not readable');
 			return;
 		}
 		await importDeviceFiles(payload.files, parentId);
@@ -2675,7 +2680,7 @@
 							innerFs = session;
 						})
 						.catch((e) => {
-							error = errMsg(e);
+							reportError(e);
 						});
 					return;
 				}

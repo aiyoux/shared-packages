@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { DEFAULT_MONITOR_BASE_URL } from '@shared-packages/file-system/monitor';
+	import { toast } from '@shared-packages/ui';
 	import GitHistory from './GitHistory.svelte';
 	import { createGitHost } from './host.js';
 	import type { GitHost, GitRepoRef } from './types.js';
@@ -60,6 +61,7 @@
 			selectedId = repo.id;
 		} catch (e) {
 			error = e instanceof Error ? e.message : String(e);
+			toast.error(error);
 		}
 	}
 

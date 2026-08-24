@@ -12,6 +12,8 @@
 		validateProfileInput,
 		type RcloneConnectionProfileV1
 	} from './types.js';
+	import { toast } from '@shared-packages/ui';
+	import { formatExplorerError } from '../ui/explorerError.js';
 
 	interface Props {
 		/** Called after save when user wants to connect with this profile */
@@ -123,7 +125,8 @@
 				onConnected?.(profile);
 			}
 		} catch (e) {
-			error = e instanceof Error ? e.message : String(e);
+			error = formatExplorerError(e);
+			toast.error(error);
 		} finally {
 			busy = false;
 		}

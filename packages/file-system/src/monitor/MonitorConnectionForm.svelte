@@ -12,6 +12,8 @@
 		validateMonitorProfileInput,
 		type MonitorConnectionProfileV1
 	} from './types.js';
+	import { toast } from '@shared-packages/ui';
+	import { formatExplorerError } from '../ui/explorerError.js';
 
 	interface Props {
 		onConnected?: (profile: MonitorConnectionProfileV1) => void;
@@ -86,7 +88,8 @@
 				onConnected?.(saved);
 			}
 		} catch (e) {
-			error = e instanceof Error ? e.message : String(e);
+			error = formatExplorerError(e);
+			toast.error(error);
 		} finally {
 			busy = false;
 		}
@@ -100,7 +103,8 @@
 			if (editingId === id) clearFieldsForNew();
 			await reload();
 		} catch (e) {
-			error = e instanceof Error ? e.message : String(e);
+			error = formatExplorerError(e);
+			toast.error(error);
 		} finally {
 			busy = false;
 		}
@@ -113,7 +117,8 @@
 			await setActiveProfileId(p.id);
 			onConnected?.(p);
 		} catch (e) {
-			error = e instanceof Error ? e.message : String(e);
+			error = formatExplorerError(e);
+			toast.error(error);
 		} finally {
 			busy = false;
 		}
