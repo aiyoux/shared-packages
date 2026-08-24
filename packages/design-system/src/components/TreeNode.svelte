@@ -69,6 +69,7 @@
 	data-tree-kind={node.kind}
 	data-tree-depth={depth}
 	data-testid={node.testId}
+	{...node.data ?? {}}
 >
 	<button
 		type="button"

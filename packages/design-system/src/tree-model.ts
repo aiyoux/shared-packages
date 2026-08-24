@@ -16,6 +16,8 @@ export type TreeNode<K extends string = string, M = unknown> = {
 	detail?: string;
 	/** Optional Playwright hook. */
 	testId?: string;
+	/** Extra attributes on the row wrapper (e.g. data-hidden-in-pinned). */
+	data?: Record<string, string>;
 };
 
 export type TreeDrag<K extends string = string, M = unknown> = {
