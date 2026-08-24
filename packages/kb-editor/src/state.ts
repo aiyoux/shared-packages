@@ -22,6 +22,8 @@ export type EditorState = {
 	composing: boolean;
 	blockFocus?: string;
 	justCommittedComposition?: boolean;
+	/** Remote ops held during IME freeze; drained after compositionend. */
+	pendingRemote?: Op[];
 };
 
 export function createEditorState(page: KbPage): EditorState {
@@ -36,7 +38,8 @@ export function createEditorState(page: KbPage): EditorState {
 		redo: [],
 		composing: false,
 		blockFocus: isAtomic(first) ? first.id : undefined,
-		justCommittedComposition: false
+		justCommittedComposition: false,
+		pendingRemote: []
 	};
 }
 

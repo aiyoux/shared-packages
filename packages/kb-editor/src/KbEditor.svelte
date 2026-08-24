@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount, untrack } from 'svelte';
-	import { findBlock, plaintextOf, visibleOrder, type Op } from '@shared-packages/kb-model';
+	import { findBlock, plaintextOf, visibleOrder, type Op, type Range } from '@shared-packages/kb-model';
 	import { mapBeforeInput } from './beforeinput.js';
 	import { copyPayload, cutOps, KB_CLIPBOARD_MIME, pasteOps } from './clipboard.js';
 	import {
@@ -12,6 +12,7 @@
 		snapshotComposition,
 		type CompositionSnapshot
 	} from './composition.js';
+	import { stripCollabWidgets, type RemoteCaret } from './decorations.js';
 	import { dropAfterId, dropWhere } from './gutter.js';
 	import { mapKeydown } from './keymap.js';
 	import { BLOCK_ID_ATTR, project } from './project.js';
@@ -26,14 +27,21 @@
 	let {
 		state: editor,
 		editable = true,
+		carets = [],
 		onDispatch,
-		onState = undefined
+		onState = undefined,
+		onComposing = undefined,
+		onSelection = undefined
 	}: {
 		state: EditorState;
 		editable?: boolean;
+		/** Remote caret widgets. Ignored while composing (IME freeze). */
+		carets?: RemoteCaret[];
 		/** Single op or a group. Parent should use `applyEditorOps` so groups stay one undo entry. */
 		onDispatch: (op: Op | Op[]) => void;
 		onState?: (next: EditorState) => void;
+		onComposing?: (composing: boolean) => void;
+		onSelection?: (range: Range) => void;
 	} = $props();
 
 	let host = $state<HTMLDivElement | undefined>(undefined);
@@ -62,8 +70,13 @@
 
 	$effect(() => {
 		const page = editor.page;
-		if (!host || composing) return;
-		project(host, page);
+		const remoteCarets = carets;
+		if (!host) return;
+		if (composing) {
+			stripCollabWidgets(host);
+			return;
+		}
+		project(host, page, { carets: remoteCarets });
 		untrack(() => {
 			restoreSelection(host, editor.selection, page);
 			heights = [...host.children].map((el) => (el as HTMLElement).offsetHeight);
@@ -101,11 +114,13 @@
 		const live = liveRange();
 		snapshot = snapshotComposition(editor, live);
 		localComposing = true;
+		onComposing?.(true);
 		emitState(beginComposition(editor));
 	}
 
 	function onCompositionEnd(event: CompositionEvent) {
 		localComposing = false;
+		onComposing?.(false);
 		const snap = snapshot;
 		snapshot = null;
 		const snapPage = snap?.page ?? editor.page;
@@ -223,7 +238,10 @@
 		const sel = host.ownerDocument.getSelection();
 		if (!sel?.anchorNode || !host.contains(sel.anchorNode)) return;
 		const live = rangeFromSelection(host, sel);
-		if (live) emitState(setSelection(editor, live));
+		if (live) {
+			emitState(setSelection(editor, live));
+			onSelection?.(live);
+		}
 	}
 
 	onMount(() => {

@@ -60,6 +60,12 @@ export {
 } from './selection.js';
 export { matchSlash, slashOps } from './slash.js';
 export {
+	applyRemoteOps,
+	flushPendingRemotes,
+	queueRemoteWhileComposing,
+	replaceFromSnapshot
+} from './remote.js';
+export {
 	applyEditorOps,
 	blockFocusOf,
 	createEditorState,
