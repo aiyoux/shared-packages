@@ -89,7 +89,9 @@ export function dropWhere(clientY: number, rect: { top: number; height: number }
 }
 
 /** Gutter-column overlay boxes for nested host-direct children that share data-parent-id. */
-export function overlayBoxes(host: HTMLElement): OverlayBox[] {
+export function overlayBoxes(host: HTMLElement, gutter?: HTMLElement | null): OverlayBox[] {
+	const origin = gutter ?? host;
+	const originTop = origin.getBoundingClientRect().top;
 	const groups = new Map<string, HTMLElement[]>();
 	for (const child of host.children) {
 		const el = child as HTMLElement;
@@ -101,12 +103,12 @@ export function overlayBoxes(host: HTMLElement): OverlayBox[] {
 	}
 	const boxes: OverlayBox[] = [];
 	for (const [parentId, els] of groups) {
-		const first = els[0];
-		const last = els[els.length - 1];
+		const first = els[0].getBoundingClientRect();
+		const last = els[els.length - 1].getBoundingClientRect();
 		boxes.push({
 			parentId,
-			top: first.offsetTop,
-			height: last.offsetTop + last.offsetHeight - first.offsetTop
+			top: first.top - originTop,
+			height: Math.max(0, last.bottom - first.top)
 		});
 	}
 	return boxes;

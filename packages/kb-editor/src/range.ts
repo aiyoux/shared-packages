@@ -1,7 +1,10 @@
 import {
+	blockChildren,
 	documentOrder,
 	findBlock,
+	isDescendant,
 	isNonTextual,
+	isTextLike,
 	locateBlock,
 	parentIdOf,
 	parentOf,
@@ -9,6 +12,7 @@ import {
 	sameParent,
 	visibleOrder,
 	type KbPage,
+	type Op,
 	type Point,
 	type Range
 } from '@shared-packages/kb-model';
@@ -99,4 +103,34 @@ export function clampPoint(page: KbPage, point: Point): Point {
 
 export function clampRange(page: KbPage, range: Range): Range {
 	return { anchor: clampPoint(page, range.anchor), head: clampPoint(page, range.head) };
+}
+
+/** True when the document-order start is a container that contains the end (illegal for apply). */
+export function rangeStartsOnAncestor(page: KbPage, range: Range): boolean {
+	if (isCollapsed(range)) return false;
+	const { start, end } = orderedRange(page, range);
+	return isDescendant(page, start.blockId, end.blockId);
+}
+
+/** Skip chrome→descendant ranges that apply would throw on. */
+export function deleteRangeOps(page: KbPage, range: Range): Op[] {
+	if (isCollapsed(range) || rangeStartsOnAncestor(page, range)) return [];
+	return [{ kind: 'delete-range', range }];
+}
+
+/**
+ * Caret for insert-text. Container/atomic chrome is not a text target:
+ * first text-like/code child, else null (caller no-ops).
+ */
+export function textInsertPoint(page: KbPage, point: Point): Point | null {
+	const block = findBlock(page, point.blockId);
+	if (!block) return null;
+	if (isTextLike(block) || block.type === 'code') {
+		return { blockId: block.id, offset: point.offset };
+	}
+	if (!isNonTextual(block)) return null;
+	const kids = blockChildren(block) ?? [];
+	const first = kids.find((kid) => isTextLike(kid) || kid.type === 'code');
+	if (!first) return null;
+	return { blockId: first.id, offset: 0 };
 }

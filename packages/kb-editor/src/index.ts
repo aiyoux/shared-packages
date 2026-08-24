@@ -39,8 +39,10 @@ export {
 	blockIndex,
 	clampRange,
 	collapsed,
+	deleteRangeOps,
 	isCollapsed,
-	orderedRange
+	orderedRange,
+	textInsertPoint
 } from './range.js';
 export {
 	caretIn,

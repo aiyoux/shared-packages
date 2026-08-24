@@ -10,10 +10,10 @@ import {
 	shouldProject,
 	snapshotComposition
 } from './composition.js';
-import { dropTarget, overlayBoxes } from './gutter.js';
+import { dropTarget, handleHeights, overlayBoxes } from './gutter.js';
 import KbEditor from './KbEditor.svelte';
 import { project, syncView } from './project.js';
-import { clampPoint } from './range.js';
+import { clampPoint, textInsertPoint } from './range.js';
 import { rangeFromEndpoints } from './selection.js';
 import { slashOps } from './slash.js';
 import { applyEditorOps, createEditorState, dispatch, dispatchMany } from './state.js';
@@ -289,5 +289,146 @@ describe('N2 callout/toggle editor', () => {
 		const next = dispatch(createEditorState(src), { kind: 'set-toggle', id: 't', open: false });
 		expect(next.page.blocks[0]).toMatchObject({ type: 'toggle', open: false });
 		expect(visibleOrder(next.page).map((b) => b.id)).toEqual(['t']);
+	});
+
+	it('compositionend on closed-toggle chrome does not insert-text on the container', () => {
+		const doc = page([toggle('t', [para('h', 'hid')], false)]);
+		const live = { anchor: { blockId: 't', offset: 0 }, head: { blockId: 't', offset: 0 } };
+		const state = { ...createEditorState(doc), selection: live };
+		expect(textInsertPoint(state.page, live.anchor)?.blockId).toBe('h');
+		const { ops } = commitComposition(state, snapshotComposition(state, live), 'あ');
+		expect(ops.some((op) => op.kind === 'insert-text' && op.at.blockId === 't')).toBe(false);
+		expect(ops).toEqual([{ kind: 'insert-text', at: { blockId: 'h', offset: 0 }, text: 'あ' }]);
+		expect(() => dispatchMany({ ...state, composing: false }, ops)).not.toThrow();
+		const next = dispatchMany({ ...state, composing: false }, ops);
+		expect(plaintextOf(findBlock(next.page, 'h')!)).toBe('あhid');
+	});
+
+	it('compositionend on empty container chrome is a no-op insert, not a throw', () => {
+		const doc = page([callout('c', [])]);
+		const live = { anchor: { blockId: 'c', offset: 0 }, head: { blockId: 'c', offset: 0 } };
+		const state = { ...createEditorState(doc), selection: live };
+		const { ops } = commitComposition(state, snapshotComposition(state, live), 'あ');
+		expect(ops).toEqual([]);
+		expect(() => dispatchMany({ ...state, composing: false }, ops)).not.toThrow();
+	});
+
+	it('chrome → child range: Backspace no-ops and insertText still preventDefaults without throwing', () => {
+		const doc = page([callout('c', [para('n', 'inside')]), para('z', 'Z')]);
+		const state = createEditorState(doc);
+		const live = { anchor: { blockId: 'c', offset: 0 }, head: { blockId: 'n', offset: 3 } };
+		const back = mapBeforeInput(state, { inputType: 'deleteContentBackward', data: null }, live);
+		expect(back.preventDefault).toBe(true);
+		expect(back.ops).toEqual([]);
+		expect(() => dispatchMany(state, back.ops)).not.toThrow();
+
+		const typed = mapBeforeInput(state, { inputType: 'insertText', data: 'x' }, live);
+		expect(typed.preventDefault).toBe(true);
+		expect(typed.ops.some((op) => op.kind === 'delete-range')).toBe(false);
+		expect(() => dispatchMany(state, typed.ops)).not.toThrow();
+		const next = dispatchMany(state, typed.ops);
+		expect(findBlock(next.page, 'c')?.type).toBe('callout');
+	});
+
+	it('commitComposition skips chrome→child delete-range', () => {
+		const state = createEditorState(page([callout('c', [para('n', 'in')])]));
+		const live = { anchor: { blockId: 'c', offset: 0 }, head: { blockId: 'n', offset: 2 } };
+		const { ops } = commitComposition(state, snapshotComposition(state, live), 'x');
+		expect(ops.some((op) => op.kind === 'delete-range')).toBe(false);
+		expect(ops).toEqual([{ kind: 'insert-text', at: { blockId: 'n', offset: 0 }, text: 'x' }]);
+		expect(() => dispatchMany(state, ops)).not.toThrow();
+	});
+
+	it('pasting a callout inside another callout child does not nest or throw', () => {
+		const src = createEditorState(page([callout('c1', [para('a', 'Hi')])]));
+		const json = serializeSlice(src.page.blocks);
+		const dest = createEditorState(page([callout('c2', [para('n', 'ab')]), para('z', 'Z')]));
+		const live = { anchor: { blockId: 'n', offset: 2 }, head: { blockId: 'n', offset: 2 } };
+		const ops = pasteOps(dest, live, { json });
+		const inserted = ops.find((op) => op.kind === 'insert-block');
+		expect(inserted?.kind).toBe('insert-block');
+		if (inserted?.kind === 'insert-block') {
+			expect(inserted.block.type).toBe('callout');
+			expect(inserted.parentId == null || inserted.parentId === null).toBe(true);
+			expect(inserted.afterId).toBe('c2');
+		}
+		expect(() => dispatchMany(dest, ops)).not.toThrow();
+		const next = dispatchMany(dest, ops);
+		expect(next.page.blocks.filter((b) => b.type === 'callout')).toHaveLength(2);
+		expect(next.page.blocks.every((b) => b.type !== 'callout' || b.children.every((k) => k.type !== 'callout'))).toBe(
+			true
+		);
+	});
+
+	it('overlay top is gutter-relative and chrome handle height matches chrome', async () => {
+		function rect(top: number, height: number, left = 0, width = 40): DOMRect {
+			return {
+				x: left,
+				y: top,
+				top,
+				left,
+				bottom: top + height,
+				right: left + width,
+				width,
+				height,
+				toJSON() {
+					return this;
+				}
+			};
+		}
+		const kbHost = host();
+		const gutter = document.createElement('div');
+		gutter.style.position = 'relative';
+		gutter.style.width = '1.25rem';
+		const wrap = document.createElement('div');
+		wrap.append(gutter, kbHost);
+		document.body.append(wrap);
+		project(kbHost, page([callout('c', [para('n', 'in'), para('m', 'mm')])]));
+		gutter.getBoundingClientRect = () => rect(400, 80);
+		kbHost.getBoundingClientRect = () => rect(400, 80, 20, 200);
+		const chrome = kbHost.querySelector('[data-block-id="c"]') as HTMLElement;
+		const childN = kbHost.querySelector('[data-block-id="n"]') as HTMLElement;
+		const childM = kbHost.querySelector('[data-block-id="m"]') as HTMLElement;
+		chrome.getBoundingClientRect = () => rect(400, 24, 20, 200);
+		childN.getBoundingClientRect = () => rect(424, 18, 20, 200);
+		childM.getBoundingClientRect = () => rect(442, 18, 20, 200);
+		Object.defineProperty(chrome, 'offsetHeight', { configurable: true, value: 24 });
+		Object.defineProperty(childN, 'offsetHeight', { configurable: true, value: 18 });
+		Object.defineProperty(childM, 'offsetHeight', { configurable: true, value: 18 });
+		const boxes = overlayBoxes(kbHost, gutter);
+		expect(boxes).toHaveLength(1);
+		expect(boxes[0].parentId).toBe('c');
+		expect(boxes[0].top).toBe(24);
+		expect(boxes[0].height).toBe(36);
+		const heights = handleHeights(kbHost);
+		expect(heights.c).toBe(24);
+		expect(heights.c).toBe(chrome.offsetHeight);
+		wrap.remove();
+	});
+
+	it('KbEditor chrome handle height equals chrome offsetHeight', async () => {
+		let state = createEditorState(page([callout('c', [para('n', 'inside')])]));
+		const { container, unmount } = render(KbEditor, {
+			props: {
+				state,
+				editable: true,
+				onDispatch: (op: Op | Op[]) => {
+					state = applyEditorOps(state, op);
+				}
+			}
+		});
+		await tick();
+		const kbHost = container.querySelector('[data-testid="kb-host"]') as HTMLElement;
+		const gutter = container.querySelector('[data-testid="kb-gutter"]') as HTMLElement;
+		const chrome = kbHost.querySelector('[data-block-id="c"]') as HTMLElement;
+		const chromeHandle = gutter.querySelector('button[data-block-id="c"]') as HTMLElement;
+		const overlay = container.querySelector('[data-testid="kb-gutter-overlay"]') as HTMLElement;
+		expect(chromeHandle.style.height).toBe(`${chrome.offsetHeight}px`);
+		if (overlay && chrome.offsetHeight) {
+			const child = kbHost.querySelector('[data-block-id="n"]') as HTMLElement;
+			const top = child.getBoundingClientRect().top - gutter.getBoundingClientRect().top;
+			expect(parseFloat(overlay.style.top)).toBeCloseTo(top, 5);
+		}
+		unmount();
 	});
 });

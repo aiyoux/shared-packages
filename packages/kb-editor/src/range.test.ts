@@ -1,6 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { clampPoint, collapsed, isCollapsed, orderedRange, payloadLength, requireBlock } from './range.js';
-import { nest, page, para, toggle } from './testFixtures.js';
+import {
+	clampPoint,
+	collapsed,
+	deleteRangeOps,
+	isCollapsed,
+	orderedRange,
+	payloadLength,
+	rangeStartsOnAncestor,
+	requireBlock,
+	textInsertPoint
+} from './range.js';
+import { callout, nest, page, para, toggle } from './testFixtures.js';
 
 describe('range helpers', () => {
 	it('orderedRange treats missing ids as last and does not throw', () => {
@@ -48,6 +58,18 @@ describe('range helpers', () => {
 			start: { blockId: 'n1', offset: 0 },
 			end: { blockId: 'z', offset: 2 }
 		});
+	});
+
+	it('rangeStartsOnAncestor is true for chrome→child and deleteRangeOps skips it', () => {
+		const doc = page([callout('c', [para('n', 'in')]), para('z', 'zz')]);
+		const chromeToChild = { anchor: { blockId: 'c', offset: 0 }, head: { blockId: 'n', offset: 2 } };
+		expect(rangeStartsOnAncestor(doc, chromeToChild)).toBe(true);
+		expect(deleteRangeOps(doc, chromeToChild)).toEqual([]);
+		expect(
+			rangeStartsOnAncestor(doc, { anchor: { blockId: 'n', offset: 0 }, head: { blockId: 'z', offset: 1 } })
+		).toBe(false);
+		expect(textInsertPoint(doc, { blockId: 'c', offset: 0 })).toEqual({ blockId: 'n', offset: 0 });
+		expect(textInsertPoint(page([callout('e', [])]), { blockId: 'e', offset: 0 })).toBeNull();
 	});
 
 	it('clampPoint snaps a closed-toggle child to the toggle header', () => {

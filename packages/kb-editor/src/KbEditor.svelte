@@ -39,6 +39,7 @@
 	} = $props();
 
 	let host = $state<HTMLDivElement | undefined>(undefined);
+	let gutterEl = $state<HTMLDivElement | undefined>(undefined);
 	let localComposing = $state(false);
 	let localJustCommitted = $state(false);
 	let snapshot = $state<CompositionSnapshot | null>(null);
@@ -70,7 +71,7 @@
 		untrack(() => {
 			restoreSelection(host, editor.selection, page);
 			heightById = handleHeights(host);
-			overlays = overlayBoxes(host);
+			overlays = overlayBoxes(host, gutterEl);
 		});
 	});
 
@@ -284,7 +285,7 @@
 </script>
 
 <div class="kb-editor" data-testid="kb-editor">
-	<div class="kb-gutter" contenteditable="false" data-testid="kb-gutter">
+	<div class="kb-gutter" bind:this={gutterEl} contenteditable="false" data-testid="kb-gutter">
 		{#each overlays as box (box.parentId)}
 			<div
 				class="kb-overlay"
@@ -303,7 +304,7 @@
 				draggable={editable}
 				data-block-id={block.id}
 				data-parent-id={handleParentId(block.id)}
-				style:height="{Math.max(heightById[block.id] ?? 24, 24)}px"
+				style:height="{heightById[block.id] ?? 24}px"
 				ondragstart={(e) => onHandleDragStart(e, block.id)}
 				ondragover={onHandleDragOver}
 				ondrop={(e) => onHandleDrop(e, block.id)}
@@ -454,9 +455,10 @@
 	}
 	.kb-host :global([data-block-type='callout']),
 	.kb-host :global([data-block-type='toggle']) {
-		margin: 0.15rem 0 0;
-		min-height: 0.35rem;
-		height: 0.35rem;
+		margin: 0;
+		min-height: 24px;
+		height: 24px;
+		box-sizing: border-box;
 	}
 	.kb-host :global([data-depth='1']) {
 		margin-left: 0.75rem;

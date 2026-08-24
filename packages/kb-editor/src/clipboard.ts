@@ -5,6 +5,8 @@ import {
 	childrenOf,
 	documentOrder,
 	findBlock,
+	isContainer,
+	isNonTextual,
 	isTextLike,
 	parentOf,
 	plaintextOf,
@@ -15,7 +17,7 @@ import {
 	type TextSpan
 } from '@shared-packages/kb-model';
 import { newBlockId } from './ids.js';
-import { clampPoint, isCollapsed, orderedRange, parentIdFor } from './range.js';
+import { clampPoint, deleteRangeOps, isCollapsed, orderedRange, parentIdFor, textInsertPoint } from './range.js';
 import type { EditorState } from './state.js';
 
 export const KB_CLIPBOARD_MIME = 'application/x-scratch-kb+json';
@@ -143,19 +145,32 @@ export function parseSlice(raw: string): Block[] | null {
 	}
 }
 
+function pushRemapped(
+	ops: Op[],
+	items: Block[],
+	afterId: string | null,
+	parentId: string | null
+): void {
+	let destParent = parentId;
+	let destAfter = afterId;
+	for (const item of items) {
+		const next = remapBlock(item);
+		if (isContainer(next) && destParent != null) {
+			destAfter = destParent;
+			destParent = null;
+		}
+		ops.push({ kind: 'insert-block', afterId: destAfter, parentId: destParent, block: next });
+		destAfter = next.id;
+	}
+}
+
 function jsonInsertOps(state: EditorState, at: { blockId: string; offset: number }, jsonBlocks: Block[]): Op[] {
 	const ops: Op[] = [];
 	const block = findBlock(state.page, at.blockId);
 	if (block?.type === 'code') {
 		const text = jsonBlocks.map((item) => plaintextOf(item)).join('\n');
 		if (text) return [{ kind: 'insert-text', at, text }];
-		let afterId: string | null = at.blockId;
-		const parentId = parentIdFor(state.page, at.blockId);
-		for (const item of jsonBlocks) {
-			const next = remapBlock(item);
-			ops.push({ kind: 'insert-block', afterId, parentId, block: next });
-			afterId = next.id;
-		}
+		pushRemapped(ops, jsonBlocks, at.blockId, parentIdFor(state.page, at.blockId));
 		return ops;
 	}
 	const len = block ? plaintextOf(block).length : 0;
@@ -171,11 +186,7 @@ function jsonInsertOps(state: EditorState, at: { blockId: string; offset: number
 	} else {
 		afterId = at.blockId;
 	}
-	for (const item of jsonBlocks) {
-		const next = remapBlock(item);
-		ops.push({ kind: 'insert-block', afterId, parentId, block: next });
-		afterId = next.id;
-	}
+	pushRemapped(ops, jsonBlocks, afterId, parentId);
 	return ops;
 }
 
@@ -187,11 +198,15 @@ export function pasteOps(
 	const ops: Op[] = [];
 	let working = state;
 	if (!isCollapsed(live)) {
-		ops.push({ kind: 'delete-range', range: live });
-		working = { ...state, page: apply(state.page, ops[0]) };
+		const del = deleteRangeOps(state.page, live);
+		if (del.length > 0) {
+			ops.push(...del);
+			working = { ...state, page: apply(state.page, del[0]) };
+		}
 	}
 	const rawAt = isCollapsed(live) ? live.anchor : orderedRange(state.page, live).start;
-	const at = clampPoint(working.page, rawAt);
+	const clamped = clampPoint(working.page, rawAt);
+	const at = textInsertPoint(working.page, clamped) ?? clamped;
 	const jsonBlocks = input.json ? parseSlice(input.json) : null;
 	if (jsonBlocks && jsonBlocks.length > 0) {
 		ops.push(...jsonInsertOps(working, at, jsonBlocks));
@@ -201,6 +216,19 @@ export function pasteOps(
 	if (!text && input.html) text = stripHtml(input.html);
 	if (!text) return ops;
 	const block = findBlock(working.page, at.blockId);
+	if (block && isNonTextual(block)) {
+		ops.push({
+			kind: 'insert-block',
+			afterId: at.blockId,
+			parentId: parentIdFor(working.page, at.blockId),
+			block: {
+				id: newBlockId(),
+				type: 'paragraph',
+				content: [{ type: 'text', text, marks: [] }]
+			}
+		});
+		return ops;
+	}
 	if (block?.type === 'code') {
 		ops.push({ kind: 'insert-text', at, text });
 		return ops;
@@ -230,7 +258,6 @@ export function copyPayload(state: EditorState, live: Range): { plain: string; j
 	return { plain: slicePlaintext(state.page, live), json: serializeSlice(blocks) };
 }
 
-export function cutOps(_page: KbPage, live: Range): Op[] {
-	if (isCollapsed(live)) return [];
-	return [{ kind: 'delete-range', range: live }];
+export function cutOps(page: KbPage, live: Range): Op[] {
+	return deleteRangeOps(page, live);
 }
