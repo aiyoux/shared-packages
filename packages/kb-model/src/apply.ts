@@ -627,6 +627,9 @@ function applyInsertBlock(page: KbPage, op: Extract<Op, { kind: 'insert-block' }
 
 function applyDeleteBlock(page: KbPage, id: string): void {
 	const loc = requireLocation(page, id, 'delete-block');
+	if (loc.block.type === 'table_row' || loc.block.type === 'table_cell') {
+		throw new Error('delete-block: use table structural ops for cells/rows');
+	}
 	deleteBlockAt(page, loc.parent, loc.index);
 }
 

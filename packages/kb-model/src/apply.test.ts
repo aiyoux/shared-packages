@@ -740,6 +740,45 @@ describe('N3 table types', () => {
 		expect(plaintext(next)).toBe('a\t\n\td\nzz');
 	});
 
+	it('same-row delete-range clears the end cell and does not concat leftovers', () => {
+		const src = grid();
+		const next = apply(src, {
+			kind: 'delete-range',
+			range: { anchor: { blockId: 'c11', offset: 1 }, head: { blockId: 'c12', offset: 1 } }
+		});
+		expect(findKids(next, 'r1').map((b) => b.id)).toEqual(['c11', 'c12']);
+		expect(findKids(next, 'r2').map((b) => b.id)).toEqual(['c21', 'c22']);
+		expect(plaintextOf(findBlock(next, 'c11')!)).toBe('a');
+		expect(plaintextOf(findBlock(next, 'c12')!)).toBe('b');
+		expect(plaintextOf(findBlock(next, 'c21')!)).toBe('cc');
+		expect(plaintextOf(findBlock(next, 'c22')!)).toBe('dd');
+	});
+
+	it('delete-range starting on a table_row keeps the row and clears cells', () => {
+		const src = grid();
+		const toPara = apply(src, {
+			kind: 'delete-range',
+			range: { anchor: { blockId: 'r1', offset: 0 }, head: { blockId: 'z', offset: 1 } }
+		});
+		expect(findKids(toPara, 't').map((b) => b.id)).toEqual(['r1', 'r2']);
+		expect(findKids(toPara, 'r1').map((b) => b.id)).toEqual(['c11', 'c12']);
+		expect(plaintextOf(findBlock(toPara, 'c11')!)).toBe('');
+		expect(plaintextOf(findBlock(toPara, 'c12')!)).toBe('');
+		expect(plaintextOf(findBlock(toPara, 'c21')!)).toBe('');
+		expect(plaintextOf(findBlock(toPara, 'c22')!)).toBe('');
+		expect(plaintextOf(findBlock(toPara, 'z')!)).toBe('z');
+
+		const toRow = apply(src, {
+			kind: 'delete-range',
+			range: { anchor: { blockId: 'r1', offset: 0 }, head: { blockId: 'r2', offset: 0 } }
+		});
+		expect(findKids(toRow, 't').map((b) => b.id)).toEqual(['r1', 'r2']);
+		expect(plaintextOf(findBlock(toRow, 'c11')!)).toBe('');
+		expect(plaintextOf(findBlock(toRow, 'c12')!)).toBe('');
+		expect(plaintextOf(findBlock(toRow, 'c21')!)).toBe('cc');
+		expect(plaintextOf(findBlock(toRow, 'c22')!)).toBe('dd');
+	});
+
 	it('does not merge a cell leftover into a following paragraph', () => {
 		const src = grid();
 		const next = apply(src, {
@@ -840,6 +879,8 @@ describe('N3 table types', () => {
 				block: row('rx', [cell('cx', 'x')])
 			})
 		).toThrow(/structural ops/i);
+		expect(() => apply(src, { kind: 'delete-block', id: 'r1' })).toThrow(/structural ops/i);
+		expect(() => apply(src, { kind: 'delete-block', id: 'c11' })).toThrow(/structural ops/i);
 		const oneRow = apply(src, { kind: 'delete-table-row', tableId: 't', rowId: 'r2' });
 		expect(() => apply(oneRow, { kind: 'delete-table-row', tableId: 't', rowId: 'r1' })).toThrow(
 			/at least one row/i

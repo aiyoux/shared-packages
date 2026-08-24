@@ -413,9 +413,23 @@ describe('invert golden applyMany(apply(page, op), invert(page, op)) === normali
 		});
 		expectInvert(src, {
 			kind: 'delete-range',
+			range: { anchor: { blockId: 'c11', offset: 1 }, head: { blockId: 'c12', offset: 1 } }
+		});
+		expectInvert(src, {
+			kind: 'delete-range',
 			range: { anchor: { blockId: 'c22', offset: 1 }, head: { blockId: 'z', offset: 1 } }
 		});
+		expectInvert(src, {
+			kind: 'delete-range',
+			range: { anchor: { blockId: 'r1', offset: 0 }, head: { blockId: 'z', offset: 1 } }
+		});
+		expectInvert(src, {
+			kind: 'delete-range',
+			range: { anchor: { blockId: 'r1', offset: 0 }, head: { blockId: 'r2', offset: 0 } }
+		});
 		expectInvert(src, { kind: 'delete-block', id: 't' });
+		expect(() => invert(src, { kind: 'delete-block', id: 'r1' })).toThrow(/structural ops/i);
+		expect(() => invert(src, { kind: 'delete-block', id: 'c11' })).toThrow(/structural ops/i);
 		expectInvert(src, {
 			kind: 'insert-table-row',
 			tableId: 't',

@@ -180,12 +180,27 @@ function invertDeleteRange(page: KbPage, op: Extract<Op, { kind: 'delete-range' 
 	const endBlock = end.block;
 	const roots = fullyCoveredRoots(page, startBlock.id, endBlock.id);
 	const same = sameParent(start.parent, end.parent);
-	const startSurvives = trimStartPrefixExists(startBlock, start.offset);
+	const startRowKept = startBlock.type === 'table_row';
+	const startSurvives = trimStartPrefixExists(startBlock, start.offset) || startRowKept;
 	const willConcat = same && startSurvives && canConcat(startBlock, endBlock) && !isNonTextual(endBlock);
 	const cleared = roots.filter((block) => block.type === 'table_cell' || block.type === 'table_row');
 	const insertRoots = roots.filter((block) => block.type !== 'table_cell' && block.type !== 'table_row');
 
 	const ops: Op[] = [];
+
+	function restoreStart(): void {
+		if (startRowKept) {
+			ops.push(...restoreClearedTableContent(startBlock));
+			return;
+		}
+		if (startSurvives) {
+			ops.push(...insertSlice(startBlock, start.offset, payloadLength(startBlock), start.offset));
+		}
+	}
+
+	function insertable(block: Block): boolean {
+		return block.type !== 'table_cell' && block.type !== 'table_row';
+	}
 
 	if (willConcat) {
 		const suffixLen = convertedSuffixLength(startBlock, endBlock, end.offset);
@@ -198,19 +213,17 @@ function invertDeleteRange(page: KbPage, op: Extract<Op, { kind: 'delete-range' 
 				}
 			});
 		}
-		ops.push(...insertSlice(startBlock, start.offset, payloadLength(startBlock), start.offset));
+		restoreStart();
 		for (const block of cleared) ops.push(...restoreClearedTableContent(block));
-		for (const block of [...insertRoots, endBlock]) {
+		for (const block of [...insertRoots, endBlock].filter(insertable)) {
 			ops.push(insertBlockOp(page, block));
 		}
 		return ops;
 	}
 
-	if (startSurvives) {
-		ops.push(...insertSlice(startBlock, start.offset, payloadLength(startBlock), start.offset));
-	}
+	restoreStart();
 	for (const block of cleared) ops.push(...restoreClearedTableContent(block));
-	const toInsert = startSurvives ? insertRoots : [startBlock, ...insertRoots];
+	const toInsert = (startSurvives ? insertRoots : [startBlock, ...insertRoots]).filter(insertable);
 	for (const block of toInsert) {
 		ops.push(insertBlockOp(page, block));
 	}
@@ -477,6 +490,9 @@ export function invert(page: KbPage, op: Op): Op[] {
 			return [{ kind: 'delete-block', id: op.block.id }];
 		case 'delete-block': {
 			const { block, parent } = requireBlock(page, op.id, 'delete-block');
+			if (block.type === 'table_row' || block.type === 'table_cell') {
+				throw new Error('delete-block: use table structural ops for cells/rows');
+			}
 			if (parent === 'page' && page.blocks.length <= 1) return [];
 			return [insertBlockOp(page, block)];
 		}
