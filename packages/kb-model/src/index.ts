@@ -4,7 +4,15 @@ export { invert } from './invert.js';
 export { isSchemaUnderstood, migrateSchema, migrateV1, schemaWriteAllowed } from './migrate.js';
 export { canonicalMarks, hasNestedTypes, normalizePage, normalizeSpans, writeSchemaVersion } from './normalize.js';
 export { parseKb, parseKbDocument, type ParsedKb } from './parse.js';
-export { isAtomic, isContainer, isNonTextual, isTextLike, plaintext, plaintextOf } from './plaintext.js';
+export {
+	isAtomic,
+	isContainer,
+	isNonTextual,
+	isTableStructure,
+	isTextLike,
+	plaintext,
+	plaintextOf
+} from './plaintext.js';
 export { serializeKb } from './serialize.js';
 export { toMarkdown } from './toMarkdown.js';
 export {
@@ -43,6 +51,10 @@ export {
 	type ParagraphBlock,
 	type Point,
 	type Range,
+	type TableBlock,
+	type TableCellBlock,
+	type TableRowBlock,
+	type TableStructureBlock,
 	type TextLikeBlock,
 	type TextSpan,
 	type ToggleBlock

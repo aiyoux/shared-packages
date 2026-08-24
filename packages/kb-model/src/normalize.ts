@@ -14,6 +14,9 @@ import {
 	type ListItemBlock,
 	type Mark,
 	type ParagraphBlock,
+	type TableBlock,
+	type TableCellBlock,
+	type TableRowBlock,
 	type TextSpan,
 	type ToggleBlock
 } from './types.js';
@@ -47,6 +50,18 @@ export function emptySpans(): TextSpan[] {
 
 export function emptyParagraph(id: string): ParagraphBlock {
 	return { id, type: 'paragraph', content: emptySpans() };
+}
+
+export function emptyCell(id: string, header?: boolean): TableCellBlock {
+	return header
+		? { id, type: 'table_cell', header: true, content: emptySpans() }
+		: { id, type: 'table_cell', content: emptySpans() };
+}
+
+export function emptyRow(id: string, width: number): TableRowBlock {
+	const cells: TableCellBlock[] = [];
+	for (let i = 0; i < Math.max(1, width); i++) cells.push(emptyCell(newBlockId()));
+	return { id, type: 'table_row', children: cells };
 }
 
 export function canonicalMarks(marks: Mark[]): Mark[] {
@@ -233,6 +248,31 @@ export function orderedBlock(block: Block): Block {
 				open: block.open,
 				children: block.children.map(orderedBlock)
 			};
+		case 'table':
+			return {
+				id: block.id,
+				type: 'table',
+				children: block.children.map((row) => orderedBlock(row) as TableRowBlock)
+			};
+		case 'table_row':
+			return {
+				id: block.id,
+				type: 'table_row',
+				children: block.children.map((cell) => orderedBlock(cell) as TableCellBlock)
+			};
+		case 'table_cell':
+			return block.header
+				? {
+						id: block.id,
+						type: 'table_cell',
+						header: true,
+						content: block.content.map(orderedSpan)
+					}
+				: {
+						id: block.id,
+						type: 'table_cell',
+						content: block.content.map(orderedSpan)
+					};
 		default: {
 			const rec = block as Block & Record<string, unknown>;
 			return passthroughBlock(rec);
@@ -289,6 +329,75 @@ function normalizeLeaf(rec: Record<string, unknown>, id: string): Block {
 	}
 }
 
+function normalizeCell(rec: Record<string, unknown>, id: string): TableCellBlock {
+	return rec.header === true
+		? { id, type: 'table_cell', header: true, content: coerceSpans(rec.content) }
+		: { id, type: 'table_cell', content: coerceSpans(rec.content) };
+}
+
+function cellFromUnknown(raw: Record<string, unknown>): TableCellBlock {
+	const id = typeof raw.id === 'string' && raw.id ? raw.id : newBlockId();
+	if (raw.type === 'table_cell') return normalizeCell(raw, id);
+	return { id, type: 'table_cell', content: coerceSpans(raw.content ?? raw.text) };
+}
+
+function normalizeRow(rec: Record<string, unknown>): TableRowBlock {
+	const id = typeof rec.id === 'string' && rec.id ? rec.id : newBlockId();
+	const kids = Array.isArray(rec.children) ? rec.children : [];
+	const cells: TableCellBlock[] = [];
+	for (const raw of kids) {
+		if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+		const item = raw as Record<string, unknown>;
+		if (item.type === 'table' || item.type === 'table_row' || item.type === 'callout' || item.type === 'toggle') {
+			continue;
+		}
+		cells.push(cellFromUnknown(item));
+	}
+	return { id, type: 'table_row', children: cells };
+}
+
+function padRow(row: TableRowBlock, width: number): TableRowBlock {
+	if (row.children.length >= width) return row;
+	const cells = [...row.children];
+	while (cells.length < width) cells.push(emptyCell(newBlockId()));
+	return { ...row, children: cells };
+}
+
+function normalizeTable(rec: Record<string, unknown>): TableBlock {
+	const id = typeof rec.id === 'string' && rec.id ? rec.id : newBlockId();
+	const kids = Array.isArray(rec.children) ? rec.children : [];
+	const rows: TableRowBlock[] = [];
+	for (const raw of kids) {
+		if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+		const item = raw as Record<string, unknown>;
+		if (item.type === 'table_row') {
+			rows.push(normalizeRow(item));
+			continue;
+		}
+		if (item.type === 'table_cell') {
+			rows.push({
+				id: newBlockId(),
+				type: 'table_row',
+				children: [normalizeCell(item, typeof item.id === 'string' && item.id ? item.id : newBlockId())]
+			});
+		}
+	}
+	if (rows.length === 0) rows.push(emptyRow(newBlockId(), 1));
+	const width = Math.max(1, ...rows.map((row) => row.children.length));
+	return { id, type: 'table', children: rows.map((row) => padRow(row, width)) };
+}
+
+function flattenTableToParagraphs(rec: Record<string, unknown>): ParagraphBlock[] {
+	const table = normalizeTable(rec);
+	const out: ParagraphBlock[] = [];
+	for (const row of table.children) {
+		for (const cell of row.children) {
+			out.push({ id: cell.id, type: 'paragraph', content: cell.content });
+		}
+	}
+	return out.length > 0 ? out : [emptyParagraph(typeof rec.id === 'string' && rec.id ? rec.id : newBlockId())];
+}
+
 function isKnownContainerType(type: unknown): type is 'callout' | 'toggle' {
 	return type === 'callout' || type === 'toggle';
 }
@@ -311,6 +420,29 @@ function normalizeBlockList(raws: unknown[], ctx: NormalizeCtx, depth: number): 
 		const rec = raw as Record<string, unknown>;
 		if (ctx.tooNew) {
 			out.push(passthroughBlock(rec));
+			continue;
+		}
+		if (rec.type === 'table') {
+			if (depth >= 1) {
+				out.push(...flattenTableToParagraphs(rec));
+				continue;
+			}
+			out.push(normalizeTable(rec));
+			continue;
+		}
+		if (rec.type === 'table_row') {
+			out.push(
+				...normalizeRow(rec).children.map((cell) => ({
+					id: cell.id,
+					type: 'paragraph' as const,
+					content: cell.content
+				}))
+			);
+			continue;
+		}
+		if (rec.type === 'table_cell') {
+			const cell = normalizeCell(rec, typeof rec.id === 'string' && rec.id ? rec.id : newBlockId());
+			out.push({ id: cell.id, type: 'paragraph', content: cell.content });
 			continue;
 		}
 		if (isKnownContainerType(rec.type)) {
@@ -356,7 +488,7 @@ function schemaVersionOf(page: KbPage): number {
 export function hasNestedTypes(page: KbPage): boolean {
 	const walk = (blocks: Block[]): boolean => {
 		for (const block of blocks) {
-			if (isContainer(block)) return true;
+			if (isContainer(block) || block.type === 'table') return true;
 			const kids = blockChildren(block);
 			if (kids && walk(kids)) return true;
 		}

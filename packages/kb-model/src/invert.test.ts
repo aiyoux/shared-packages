@@ -389,6 +389,55 @@ describe('invert golden applyMany(apply(page, op), invert(page, op)) === normali
 		);
 	});
 
+	it('round-trips table row/column insert and delete and cell delete-range', () => {
+		function cell(id: string, text: string): Block {
+			return { id, type: 'table_cell', content: [span(text)] };
+		}
+		function row(id: string, cells: Block[]): Block {
+			return { id, type: 'table_row', children: cells as Extract<Block, { type: 'table_cell' }>[] };
+		}
+		function table(id: string, rows: Block[]): Block {
+			return { id, type: 'table', children: rows as Extract<Block, { type: 'table_row' }>[] };
+		}
+		const src = page([
+			table('t', [
+				row('r1', [cell('c11', 'aa'), cell('c12', 'bb')]),
+				row('r2', [cell('c21', 'cc'), cell('c22', 'dd')])
+			]),
+			para('z', 'zz')
+		]);
+		expectInvert(src, { kind: 'insert-text', at: { blockId: 'c11', offset: 1 }, text: 'X' });
+		expectInvert(src, {
+			kind: 'delete-range',
+			range: { anchor: { blockId: 'c11', offset: 1 }, head: { blockId: 'c22', offset: 1 } }
+		});
+		expectInvert(src, {
+			kind: 'delete-range',
+			range: { anchor: { blockId: 'c22', offset: 1 }, head: { blockId: 'z', offset: 1 } }
+		});
+		expectInvert(src, { kind: 'delete-block', id: 't' });
+		expectInvert(src, {
+			kind: 'insert-table-row',
+			tableId: 't',
+			afterId: 'r1',
+			row: row('rN', [cell('n1', 'x'), cell('n2', 'y')]) as Extract<Block, { type: 'table_row' }>
+		});
+		expectInvert(src, {
+			kind: 'insert-table-column',
+			tableId: 't',
+			index: 1,
+			cells: [cell('n1', 'N'), cell('n2', 'M')] as Extract<Block, { type: 'table_cell' }>[]
+		});
+		expectInvert(src, { kind: 'delete-table-row', tableId: 't', rowId: 'r2' });
+		expectInvert(src, { kind: 'delete-table-column', tableId: 't', index: 1 });
+		expectInvert(src, {
+			kind: 'format-range',
+			range: { anchor: { blockId: 'c11', offset: 0 }, head: { blockId: 'c12', offset: 2 } },
+			mark: { type: 'bold' },
+			on: true
+		});
+	});
+
 	it('round-trips set-toggle', () => {
 		const src = page([
 			{

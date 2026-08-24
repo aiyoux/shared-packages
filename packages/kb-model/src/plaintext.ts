@@ -1,8 +1,19 @@
 import { blockChildren } from './tree.js';
-import type { Block, ContainerBlock, KbPage, TextLikeBlock } from './types.js';
+import type {
+	Block,
+	ContainerBlock,
+	KbPage,
+	TableStructureBlock,
+	TextLikeBlock
+} from './types.js';
 
 export function isTextLike(block: Block): block is TextLikeBlock {
-	return block.type === 'paragraph' || block.type === 'heading' || block.type === 'list_item';
+	return (
+		block.type === 'paragraph' ||
+		block.type === 'heading' ||
+		block.type === 'list_item' ||
+		block.type === 'table_cell'
+	);
 }
 
 export function isAtomic(block: Block): block is Extract<Block, { type: 'divider' | 'image' }> {
@@ -13,9 +24,13 @@ export function isContainer(block: Block): block is ContainerBlock {
 	return block.type === 'callout' || block.type === 'toggle';
 }
 
+export function isTableStructure(block: Block): block is TableStructureBlock {
+	return block.type === 'table' || block.type === 'table_row';
+}
+
 /** Caret targets that only allow offset 0 (blockFocus). */
 export function isNonTextual(block: Block): boolean {
-	return isAtomic(block) || isContainer(block);
+	return isAtomic(block) || isContainer(block) || isTableStructure(block);
 }
 
 export function plaintextOf(block: Block): string {
