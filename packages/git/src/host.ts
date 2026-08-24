@@ -1,3 +1,4 @@
+import './ensureBuffer.js';
 import git from 'isomorphic-git';
 import { deleteRepo, getRepo, listRepos, putRepo } from './repos.js';
 import { localSnapshot, type GitFs } from './local.js';

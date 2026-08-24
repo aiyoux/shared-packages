@@ -2,6 +2,7 @@
  * isomorphic-git FsClient over SharedVFS, chrooted at a project folder.
  * POSIX `dir` for git is always `'/'`. GitRepoRef.path is the VFS folder id.
  */
+import './ensureBuffer.js';
 import type { VfsNode, VfsService } from '@shared-packages/file-system';
 import type { GitFs } from './local.js';
 

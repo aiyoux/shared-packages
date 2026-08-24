@@ -17,13 +17,16 @@
     "./ProjectApp.svelte": "./src/ProjectApp.svelte"
   },
   "types": "./src/index.ts",
-  "files": ["src"],
+  "files": [
+    "src"
+  ],
   "scripts": {
     "test": "vitest run",
     "check": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
     "@shared-packages/file-system": "file:../file-system",
+    "buffer": "^6.0.3",
     "isomorphic-git": "^1.33.2"
   },
   "peerDependencies": {
