@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { applyFrameResize, MIN_SIZE, type FrameRect } from './objectTransform.ts';
+import {
+	applyFrameResize,
+	MIN_SIZE,
+	showMoveHit,
+	showResizeHandles,
+	showRotateHandle,
+	type FrameRect
+} from './objectTransform.ts';
 
 const BASE: FrameRect = { x: 40, y: 50, width: 100, height: 80 };
 
@@ -78,5 +85,32 @@ describe('applyFrameResize', () => {
 			width: 10,
 			height: 80
 		});
+	});
+});
+
+describe('transform chrome visibility', () => {
+	it('resize is move + w/h, no rotate', () => {
+		expect(showMoveHit('resize', true)).toBe(true);
+		expect(showMoveHit('resize', false)).toBe(false);
+		expect(showResizeHandles('resize')).toBe(true);
+		expect(showRotateHandle('resize')).toBe(false);
+	});
+
+	it('rotate is rotate only', () => {
+		expect(showMoveHit('rotate', true)).toBe(false);
+		expect(showResizeHandles('rotate')).toBe(false);
+		expect(showRotateHandle('rotate')).toBe(true);
+	});
+
+	it('all shows move + resize + rotate', () => {
+		expect(showMoveHit('all', true)).toBe(true);
+		expect(showResizeHandles('all')).toBe(true);
+		expect(showRotateHandle('all')).toBe(true);
+	});
+
+	it('allowMove=false hides move-hit in every mode', () => {
+		expect(showMoveHit('all', false)).toBe(false);
+		expect(showMoveHit('resize', false)).toBe(false);
+		expect(showMoveHit('rotate', false)).toBe(false);
 	});
 });

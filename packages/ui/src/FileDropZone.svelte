@@ -1,5 +1,9 @@
 <script lang="ts">
-	import { parseExplorerDropPayload, type ExplorerDropPayload } from './explorer-drop.ts';
+	import {
+		hasExplorerMime,
+		routeFileDrop,
+		type ExplorerDropPayload
+	} from './explorer-drop.ts';
 
 	let {
 		hint = 'Click or drag files here',
@@ -24,11 +28,6 @@
 		idle?: import('svelte').Snippet;
 	} = $props();
 
-	const EXPLORER_ID_TYPES = [
-		'application/x-fe-explorer-ids',
-		'application/x-cm-explorer-ids'
-	];
-
 	let dragOver = $state(false);
 	let fileInput = $state<HTMLInputElement | null>(null);
 	let suppressClick = $state(false);
@@ -39,12 +38,6 @@
 		return Array.from(dt.types ?? []).includes('Files');
 	}
 
-	function hasExplorerMime(dt: DataTransfer | null | undefined): boolean {
-		if (!dt) return false;
-		const types = Array.from(dt.types ?? []);
-		return EXPLORER_ID_TYPES.some((t) => types.includes(t));
-	}
-
 	function hasExplorerIds(dt: DataTransfer | null | undefined): boolean {
 		if (!dt || !onExplorerIds) return false;
 		if (hasExplorerMime(dt)) return true;
@@ -52,24 +45,6 @@
 		// File Explorer also writes text/plain ids; Chrome may only advertise that
 		// type while the drag is over another pane.
 		return types.includes('text/plain') && !types.includes('Files');
-	}
-
-	function readExplorerPayload(dt: DataTransfer | null | undefined): {
-		driverId?: string;
-		ids: string[];
-	} {
-		if (!dt) return { ids: [] };
-		let raw = '';
-		try {
-			raw =
-				dt.getData('application/x-fe-explorer-ids') ||
-				dt.getData('application/x-cm-explorer-ids') ||
-				dt.getData('text/plain') ||
-				'';
-		} catch {
-			raw = '';
-		}
-		return parseExplorerDropPayload(raw);
 	}
 
 	function allowDrop(e: DragEvent) {
@@ -84,34 +59,11 @@
 		onfiles(Array.from(list));
 	}
 
-	function emitExplorerIds(e: DragEvent) {
-		if (!onExplorerIds) return false;
-		const parsed = readExplorerPayload(e.dataTransfer);
-		if (!parsed.ids.length) return false;
-		onExplorerIds({
-			driverId: parsed.driverId,
-			ids: parsed.ids,
-			clientX: e.clientX,
-			clientY: e.clientY
-		});
-		return true;
-	}
-
 	function onDrop(e: DragEvent) {
 		e.preventDefault();
 		dragOver = false;
 		suppressClick = true;
-		// Explorer identity wins even when supportsDragOut also attached File clones.
-		if (hasExplorerMime(e.dataTransfer) && onExplorerIds) {
-			emitExplorerIds(e);
-			return;
-		}
-		const os = e.dataTransfer?.files?.length ? Array.from(e.dataTransfer.files) : [];
-		if (os.length) {
-			onfiles(os);
-			return;
-		}
-		emitExplorerIds(e);
+		routeFileDrop(e, { onfiles, onExplorerIds });
 	}
 </script>
 

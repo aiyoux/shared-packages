@@ -16,14 +16,16 @@
 		onMoveStart,
 		onResizeStart,
 		onRotateStart,
-		onResizeKeydown
+		onResizeKeydown,
+		onRotateKeydown
 	}: {
 		mode: TransformMode;
 		allowMove?: boolean;
-		onMoveStart: (e: PointerEvent) => void;
-		onResizeStart: (e: PointerEvent, handle: ResizeHandle) => void;
-		onRotateStart: (e: PointerEvent) => void;
+		onMoveStart?: (e: PointerEvent) => void;
+		onResizeStart?: (e: PointerEvent, handle: ResizeHandle) => void;
+		onRotateStart?: (e: PointerEvent) => void;
 		onResizeKeydown?: (e: KeyboardEvent, handle: ResizeHandle) => void;
+		onRotateKeydown?: (e: KeyboardEvent) => void;
 	} = $props();
 </script>
 
@@ -34,7 +36,7 @@
 			class="move-hit"
 			data-testid="object-move-hit"
 			style="cursor: move; touch-action: none;"
-			onpointerdown={onMoveStart}
+			onpointerdown={(e) => onMoveStart?.(e)}
 			role="none"
 		></div>
 	{/if}
@@ -50,7 +52,11 @@
 			aria-label="Rotate"
 			title="Rotate"
 			style="cursor: grab; touch-action: none;"
-			onpointerdown={onRotateStart}
+			onpointerdown={(e) => onRotateStart?.(e)}
+			onkeydown={(e) => {
+				if (e.key === 'Enter' || e.key === ' ') e.preventDefault();
+				onRotateKeydown?.(e);
+			}}
 		></div>
 	{/if}
 
@@ -64,7 +70,7 @@
 				data-testid="object-scale-handle"
 				data-handle={handle}
 				style="cursor: {RESIZE_HANDLE_CURSORS[handle]}; touch-action: none;"
-				onpointerdown={(e) => onResizeStart(e, handle)}
+				onpointerdown={(e) => onResizeStart?.(e, handle)}
 				onkeydown={(e) => onResizeKeydown?.(e, handle)}
 			></div>
 		{/each}

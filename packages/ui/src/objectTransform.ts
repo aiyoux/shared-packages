@@ -1,6 +1,7 @@
 /**
  * Shared 2D frame transform for canvas objects (temp bakes, stickers, images).
- * Same handle set and lock modes as ink lasso/rect selection.
+ * Modes: 'all' = move+resize+rotate, 'resize' = move+resize, 'rotate' = rotate only.
+ * Pass allowMove={false} to hide the move hit (sketcher resize-lock).
  */
 
 export type TransformMode = 'all' | 'resize' | 'rotate';
@@ -46,7 +47,7 @@ export const MIN_SIZE = 30;
 
 export function applyFrameResize(
 	base: FrameRect,
-	handle: string,
+	handle: ResizeHandle,
 	dx: number,
 	dy: number,
 	minSize = MIN_SIZE
@@ -92,7 +93,7 @@ export function rotationSvg(box: FrameRect, rotation: number | undefined): strin
 }
 
 export function showMoveHit(mode: TransformMode, allowMove: boolean): boolean {
-	return allowMove && mode === 'all';
+	return allowMove && mode !== 'rotate';
 }
 
 export function showRotateHandle(mode: TransformMode): boolean {
