@@ -8,6 +8,7 @@ import {
 	pasteOps,
 	serializeSlice,
 	sliceBlocks,
+	slicePlaintext,
 	stripHtml
 } from './clipboard.js';
 import { createEditorState, dispatchMany } from './state.js';
@@ -62,6 +63,21 @@ describe('clipboard', () => {
 		});
 		expect(sliced.map((b) => b.id)).toEqual(['c']);
 		expect((sliced[0] as { children?: { id: string }[] }).children?.map((b) => b.id)).toEqual(['n']);
+	});
+
+	it('container in the range is a unit: whole subtree including later siblings, and plain matches json', () => {
+		const doc = page([nest('c', [para('n1', 'one'), para('n2', 'two')], 'Call'), para('z', 'Z')]);
+		const live = { anchor: { blockId: 'c', offset: 0 }, head: { blockId: 'n1', offset: 3 } };
+		const sliced = sliceBlocks(doc, live);
+		expect(sliced.map((b) => b.id)).toEqual(['c']);
+		expect((sliced[0] as { children?: { id: string }[] }).children?.map((b) => b.id)).toEqual([
+			'n1',
+			'n2'
+		]);
+		expect(slicePlaintext(doc, live)).toBe('Call\none\ntwo');
+		const payload = copyPayload({ ...createEditorState(doc), selection: live }, live);
+		expect(payload?.plain).toBe('Call\none\ntwo');
+		expect(parseSlice(payload!.json)?.map((b) => b.id)).toEqual(['c']);
 	});
 
 	it('slice of a missing range is empty; remap walks nested children', () => {

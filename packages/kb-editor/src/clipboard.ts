@@ -113,10 +113,18 @@ export function sliceBlocks(page: KbPage, range: Range): Block[] {
 	return out;
 }
 
+function plaintextOfSlice(block: Block): string {
+	const kids = blockChildren(block);
+	if (!kids || kids.length === 0) return plaintextOf(block);
+	const type = (block as { type: string }).type;
+	if (type === 'table_row') return kids.map(plaintextOfSlice).join('\t');
+	const nested = kids.map(plaintextOfSlice).join('\n');
+	const own = plaintextOf(block);
+	return own ? `${own}\n${nested}` : nested;
+}
+
 export function slicePlaintext(page: KbPage, range: Range): string {
-	return sliceBlocks(page, range)
-		.map((block) => plaintextOf(block))
-		.join('\n');
+	return sliceBlocks(page, range).map(plaintextOfSlice).join('\n');
 }
 
 export function serializeSlice(blocks: Block[]): string {

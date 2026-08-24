@@ -10,7 +10,7 @@ import {
 } from './composition.js';
 import { project, syncView } from './project.js';
 import { applyEditorOps, createEditorState, dispatchMany } from './state.js';
-import { para, page } from './testFixtures.js';
+import { nest, para, page } from './testFixtures.js';
 
 describe('composition state machine (IME freeze)', () => {
 	it('composing flag freezes projection — project is not called while composing', () => {
@@ -78,6 +78,14 @@ describe('composition state machine (IME freeze)', () => {
 		syncView(host, state);
 		expect(host.querySelector('[data-block-id="p"]')?.textContent).toBe('ok');
 		host.remove();
+	});
+
+	it('commitComposition skips delete-range when the snapshot range crosses a parent', () => {
+		const state = createEditorState(page([nest('c', [para('n', 'in')]), para('z', 'zz')]));
+		const live = { anchor: { blockId: 'n', offset: 0 }, head: { blockId: 'z', offset: 1 } };
+		const { ops } = commitComposition(state, snapshotComposition(state, live), 'x');
+		expect(ops.some((op) => op.kind === 'delete-range')).toBe(false);
+		expect(ops).toEqual([{ kind: 'insert-text', at: { blockId: 'n', offset: 0 }, text: 'x' }]);
 	});
 
 	it('compositionend commits one insert-text then re-projects', () => {
