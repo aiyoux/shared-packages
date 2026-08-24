@@ -37,6 +37,15 @@ export function allowlistedHref(href: string): string | null {
 	return value;
 }
 
+/**
+ * Image `src` uses the same scheme block as href, then only page-relative
+ * `assets/<file>`. Return null rather than throw so a bad stored value cannot
+ * XSS the host.
+ */
 export function allowlistedSrc(src: string): string | null {
-	return allowlistedHref(src);
+	const value = allowlistedHref(src);
+	if (!value) return null;
+	if (value.includes('..') || value.includes('\\')) return null;
+	if (!/^assets\/[^/?#]+$/.test(value)) return null;
+	return value;
 }

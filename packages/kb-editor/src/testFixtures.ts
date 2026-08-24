@@ -26,6 +26,10 @@ export function divider(id: string): Block {
 	return { id, type: 'divider' };
 }
 
+export function image(id: string, src = 'assets/diagram.png', alt = 'Diagram'): Block {
+	return { id, type: 'image', src, alt };
+}
+
 export function page(blocks: Block[], extra: Partial<KbPage> = {}): KbPage {
 	return normalizePage({
 		format: 'kb',

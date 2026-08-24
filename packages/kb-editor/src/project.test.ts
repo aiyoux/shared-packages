@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { allowlistedHref } from './href.js';
+import { allowlistedHref, allowlistedSrc } from './href.js';
 import { project } from './project.js';
-import { code, divider, heading, item, page, para } from './testFixtures.js';
+import { code, divider, heading, image, item, page, para } from './testFixtures.js';
 
 function host(): HTMLDivElement {
 	const el = document.createElement('div');
@@ -110,6 +110,35 @@ describe('project', () => {
 		expect(el.querySelector('[data-block-id="d"]')?.tagName).toBe('HR');
 		el.remove();
 	});
+
+	it('projects an image block as createElement img with alt and page-relative src', () => {
+		const el = host();
+		project(el, page([image('i', 'assets/diagram.png', 'Diagram')]));
+		const block = el.querySelector('[data-block-id="i"]') as HTMLElement;
+		expect(block.getAttribute('data-block-type')).toBe('image');
+		const img = block.tagName === 'IMG' ? (block as HTMLImageElement) : block.querySelector('img');
+		expect(img).toBeTruthy();
+		expect(img!.getAttribute('src')).toBe('assets/diagram.png');
+		expect(img!.getAttribute('alt')).toBe('Diagram');
+		el.remove();
+	});
+
+	it('does not set javascript/data image src', () => {
+		const el = host();
+		project(
+			el,
+			page([
+				image('a', 'javascript:alert(1)', 'x'),
+				image('b', 'data:image/png;base64,aaaa', 'y')
+			])
+		);
+		const imgs = [...el.querySelectorAll('img')];
+		expect(imgs.length).toBeGreaterThanOrEqual(2);
+		for (const img of imgs) {
+			expect(img.getAttribute('src')).toBeNull();
+		}
+		el.remove();
+	});
 });
 
 describe('allowlistedHref', () => {
@@ -124,5 +153,19 @@ describe('allowlistedHref', () => {
 		expect(allowlistedHref('\0javascript:alert(1)')).toBeNull();
 		expect(allowlistedHref(' javascript:alert(1)')).toBeNull();
 		expect(allowlistedHref('java\nscript:alert(1)')).toBeNull();
+	});
+});
+
+describe('allowlistedSrc', () => {
+	it('allows page-relative assets/<file> and blocks javascript/data like href', () => {
+		expect(allowlistedSrc('assets/diagram.png')).toBe('assets/diagram.png');
+		expect(allowlistedSrc('javascript:alert(1)')).toBeNull();
+		expect(allowlistedSrc('data:image/png;base64,aaaa')).toBeNull();
+		expect(allowlistedSrc('vbscript:msgbox(1)')).toBeNull();
+		expect(allowlistedSrc('\0javascript:alert(1)')).toBeNull();
+		expect(allowlistedSrc('https://evil.com/x.png')).toBeNull();
+		expect(allowlistedSrc('/assets/x.png')).toBeNull();
+		expect(allowlistedSrc('assets/../secret.png')).toBeNull();
+		expect(allowlistedSrc('diagram.png')).toBeNull();
 	});
 });
