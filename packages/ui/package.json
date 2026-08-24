@@ -18,6 +18,7 @@
     },
     "./ShellFrame.svelte": "./src/ShellFrame.svelte",
     "./FileDropZone.svelte": "./src/FileDropZone.svelte",
+    "./ObjectTransformFrame.svelte": "./src/ObjectTransformFrame.svelte",
     "./PathNodeEditor.svelte": "./src/PathNodeEditor.svelte",
     "./files": {
       "types": "./src/files.ts",
