@@ -1,20 +1,28 @@
 import { convertBlock, normalizeRange, resolvePoint } from './apply.js';
 import { sliceSpans } from './normalize.js';
 import { isAtomic, isTextLike, payloadLength, plaintextOf } from './plaintext.js';
+import { childrenOf, documentOrder, findBlock, parentOf, sameParent, type ParentRef } from './tree.js';
 import type { Block, KbPage, Mark, Op, Point, TextSpan } from './types.js';
 
 function cloneBlock(block: Block): Block {
 	return structuredClone(block);
 }
 
-function prevSiblingId(page: KbPage, index: number): string | null {
-	return index > 0 ? page.blocks[index - 1].id : null;
+function prevSiblingId(page: KbPage, id: string): string | null {
+	const loc = parentOf(page, id);
+	if (!loc || loc.index <= 0) return null;
+	return childrenOf(page, loc.parent)[loc.index - 1].id;
 }
 
-function requireBlock(page: KbPage, id: string, what: string): { block: Block; index: number } {
-	const index = page.blocks.findIndex((item) => item.id === id);
-	if (index < 0) throw new Error(`${what}: unknown block ${id}`);
-	return { block: page.blocks[index], index };
+function requireBlock(
+	page: KbPage,
+	id: string,
+	what: string
+): { block: Block; parent: ParentRef; index: number } {
+	const block = findBlock(page, id);
+	const loc = parentOf(page, id);
+	if (!block || !loc) throw new Error(`${what}: unknown block ${id}`);
+	return { block, parent: loc.parent, index: loc.index };
 }
 
 const STRIP_MARKS: Mark[] = [
@@ -80,14 +88,14 @@ function convertedSuffixLength(start: Block, end: Block, endOffset: number): num
 
 function invertDeleteRange(page: KbPage, op: Extract<Op, { kind: 'delete-range' }>): Op[] {
 	const { start, end } = normalizeRange(page, op.range);
-	if (start.index === end.index && start.offset === end.offset) return [];
+	if (start.block.id === end.block.id && start.offset === end.offset) return [];
 
-	if (start.index === end.index) {
+	if (start.block.id === end.block.id) {
 		if (isAtomic(start.block)) {
 			return [
 				{
 					kind: 'insert-block',
-					afterId: prevSiblingId(page, start.index),
+					afterId: prevSiblingId(page, start.block.id),
 					block: cloneBlock(start.block)
 				}
 			];
@@ -95,9 +103,14 @@ function invertDeleteRange(page: KbPage, op: Extract<Op, { kind: 'delete-range' 
 		return insertSlice(start.block, start.offset, end.offset, start.offset);
 	}
 
+	if (!sameParent(start.parent, end.parent)) {
+		throw new Error('delete-range: start and end must share a parent');
+	}
+
 	const startBlock = start.block;
 	const endBlock = end.block;
-	const middles = page.blocks.slice(start.index + 1, end.index);
+	const list = childrenOf(page, start.parent);
+	const middles = list.slice(start.indexInParent + 1, end.indexInParent);
 	const ops: Op[] = [];
 	const startSurvives = !isAtomic(startBlock);
 	const canConcat =
@@ -138,7 +151,7 @@ function invertDeleteRange(page: KbPage, op: Extract<Op, { kind: 'delete-range' 
 	if (!isAtomic(endBlock) && end.offset > 0) {
 		ops.push(...insertSlice(endBlock, 0, end.offset, 0));
 	}
-	let afterId = prevSiblingId(page, start.index);
+	let afterId = prevSiblingId(page, startBlock.id);
 	for (const block of [startBlock, ...middles]) {
 		ops.push({ kind: 'insert-block', afterId, block: cloneBlock(block) });
 		afterId = block.id;
@@ -148,11 +161,14 @@ function invertDeleteRange(page: KbPage, op: Extract<Op, { kind: 'delete-range' 
 
 function findLinkHref(page: KbPage, range: Extract<Op, { kind: 'format-range' }>['range']): string | null {
 	const { start, end } = normalizeRange(page, range);
-	for (let i = start.index; i <= end.index; i++) {
-		const block = page.blocks[i];
+	const order = documentOrder(page);
+	const si = order.findIndex((block) => block.id === start.block.id);
+	const ei = order.findIndex((block) => block.id === end.block.id);
+	for (let i = si; i <= ei; i++) {
+		const block = order[i];
 		if (!isTextLike(block)) continue;
-		const from = i === start.index ? start.offset : 0;
-		const to = i === end.index ? end.offset : plaintextOf(block).length;
+		const from = i === si ? start.offset : 0;
+		const to = i === ei ? end.offset : plaintextOf(block).length;
 		for (const span of sliceSpans(block.content, from, to)) {
 			const link = span.marks.find((mark): mark is Extract<Mark, { type: 'link' }> => mark.type === 'link');
 			if (link) return link.href;
@@ -163,7 +179,7 @@ function findLinkHref(page: KbPage, range: Extract<Op, { kind: 'format-range' }>
 
 function invertFormatRange(page: KbPage, op: Extract<Op, { kind: 'format-range' }>): Op[] {
 	const { start, end } = normalizeRange(page, op.range);
-	if (start.index === end.index && start.offset === end.offset) return [];
+	if (start.block.id === end.block.id && start.offset === end.offset) return [];
 	let mark = op.mark;
 	if (mark.type === 'link' && !op.on) {
 		const href = findLinkHref(page, op.range);
@@ -227,7 +243,7 @@ function invertMergeBlock(page: KbPage, op: Extract<Op, { kind: 'merge-block' }>
 	}
 	const keep = requireBlock(page, op.keepId, 'merge-block');
 	const drop = requireBlock(page, op.dropId, 'merge-block');
-	if (drop.index !== keep.index + 1) {
+	if (!sameParent(keep.parent, drop.parent) || drop.index !== keep.index + 1) {
 		throw new Error('merge-block: dropId must be the immediate next sibling of keepId');
 	}
 	if (isAtomic(keep.block)) {
@@ -305,7 +321,7 @@ function restoreSolePayload(id: string, snap: Block, coercedLen: number): Op[] {
 }
 
 function invertConvertBlock(page: KbPage, op: Extract<Op, { kind: 'convert-block' }>): Op[] {
-	const { block, index } = requireBlock(page, op.id, 'convert-block');
+	const { block } = requireBlock(page, op.id, 'convert-block');
 	if (op.to === 'image') {
 		throw new Error('cannot convert to image');
 	}
@@ -321,11 +337,11 @@ function invertConvertBlock(page: KbPage, op: Extract<Op, { kind: 'convert-block
 		return [inverse];
 	}
 
-	const others = page.blocks.length - 1;
+	const others = documentOrder(page).length - 1;
 	if (others >= 1) {
 		return [
 			{ kind: 'delete-block', id: op.id },
-			{ kind: 'insert-block', afterId: prevSiblingId(page, index), block: cloneBlock(block) }
+			{ kind: 'insert-block', afterId: prevSiblingId(page, op.id), block: cloneBlock(block) }
 		];
 	}
 
@@ -376,14 +392,14 @@ export function invert(page: KbPage, op: Op): Op[] {
 		case 'insert-block':
 			return [{ kind: 'delete-block', id: op.block.id }];
 		case 'delete-block': {
-			if (page.blocks.length <= 1) return [];
-			const { index, block } = requireBlock(page, op.id, 'delete-block');
-			return [{ kind: 'insert-block', afterId: prevSiblingId(page, index), block: cloneBlock(block) }];
+			if (documentOrder(page).length <= 1) return [];
+			const { block } = requireBlock(page, op.id, 'delete-block');
+			return [{ kind: 'insert-block', afterId: prevSiblingId(page, op.id), block: cloneBlock(block) }];
 		}
 		case 'move-block': {
-			const { index } = requireBlock(page, op.id, 'move-block');
+			requireBlock(page, op.id, 'move-block');
 			if (op.afterId === op.id) throw new Error('cannot move block after itself');
-			return [{ kind: 'move-block', id: op.id, afterId: prevSiblingId(page, index) }];
+			return [{ kind: 'move-block', id: op.id, afterId: prevSiblingId(page, op.id) }];
 		}
 		case 'convert-block':
 			return invertConvertBlock(page, op);

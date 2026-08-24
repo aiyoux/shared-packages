@@ -1,6 +1,14 @@
 import { plaintextOf } from '@shared-packages/kb-model';
 import { describe, expect, it } from 'vitest';
-import { copyPayload, cutOps, KB_CLIPBOARD_MIME, parseSlice, pasteOps, stripHtml } from './clipboard.js';
+import {
+	copyPayload,
+	cutOps,
+	KB_CLIPBOARD_MIME,
+	parseSlice,
+	pasteOps,
+	serializeSlice,
+	stripHtml
+} from './clipboard.js';
 import { createEditorState, dispatchMany } from './state.js';
 import { code, page, para } from './testFixtures.js';
 
@@ -43,6 +51,31 @@ describe('clipboard', () => {
 		const next = dispatchMany(dest, ops);
 		expect(next.page.blocks.length).toBeGreaterThan(1);
 		expect(next.page.blocks.some((b) => b.id === 'a')).toBe(false);
+	});
+
+	it('slice of a missing range is empty; remap walks nested children', () => {
+		const src = createEditorState(page([para('a', 'one'), para('b', 'two')]));
+		expect(
+			copyPayload(src, { anchor: { blockId: 'missing', offset: 0 }, head: { blockId: 'gone', offset: 1 } })
+		).toEqual({ plain: '', json: serializeSlice([]) });
+		const nested = {
+			id: 'c',
+			type: 'paragraph' as const,
+			content: [{ type: 'text' as const, text: '', marks: [] }],
+			children: [{ id: 'n', type: 'paragraph' as const, content: [{ type: 'text' as const, text: 'in', marks: [] }] }]
+		};
+		const json = serializeSlice([nested as never]);
+		const dest = createEditorState(page([para('z', 'keep')]));
+		const ops = pasteOps(dest, dest.selection, { json });
+		expect(ops.some((op) => op.kind === 'insert-block' && op.block.id === 'c')).toBe(false);
+		const inserted = ops.find((op) => op.kind === 'insert-block');
+		expect(inserted?.kind).toBe('insert-block');
+		if (inserted?.kind === 'insert-block') {
+			expect(inserted.block.id).not.toBe('c');
+			const kids = (inserted.block as { children?: { id: string }[] }).children;
+			expect(kids?.[0].id).not.toBe('n');
+			expect(kids?.[0].id).toBeTruthy();
+		}
 	});
 
 	it('text/plain paste inserts at the caret', () => {

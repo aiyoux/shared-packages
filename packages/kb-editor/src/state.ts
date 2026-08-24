@@ -1,5 +1,7 @@
 import {
 	apply,
+	documentOrder,
+	findBlock,
 	invert,
 	isAtomic,
 	normalizePage,
@@ -24,7 +26,8 @@ export type EditorState = {
 
 export function createEditorState(page: KbPage): EditorState {
 	const next = normalizePage(page);
-	const first = next.blocks[0];
+	const first = documentOrder(next)[0];
+	if (!first) throw new Error('empty page');
 	const selection = collapsed({ blockId: first.id, offset: 0 });
 	return {
 		page: next,
@@ -39,7 +42,7 @@ export function createEditorState(page: KbPage): EditorState {
 
 export function blockFocusOf(page: KbPage, selection: Range): string | undefined {
 	if (!isCollapsed(selection)) return undefined;
-	const block = page.blocks.find((item) => item.id === selection.anchor.blockId);
+	const block = findBlock(page, selection.anchor.blockId);
 	if (block && isAtomic(block)) return block.id;
 	return undefined;
 }
@@ -65,24 +68,25 @@ function selectionAfter(pre: KbPage, post: KbPage, op: Op, prev: Range): Range {
 		case 'split-block':
 			return collapsed({ blockId: op.newId, offset: 0 });
 		case 'merge-block': {
-			const keep = pre.blocks.find((item) => item.id === op.keepId);
+			const keep = findBlock(pre, op.keepId);
 			const keepLen = keep ? plaintextOf(keep).length : 0;
 			return collapsed({ blockId: op.keepId, offset: keepLen });
 		}
 		case 'insert-block':
 			return collapsed({ blockId: op.block.id, offset: 0 });
 		case 'delete-block': {
+			const order = documentOrder(pre);
 			const index = blockIndex(pre, op.id);
-			const following = pre.blocks[index + 1];
-			const previous = pre.blocks[index - 1];
-			if (following && post.blocks.some((item) => item.id === following.id)) {
+			const following = order[index + 1];
+			const previous = order[index - 1];
+			if (following && findBlock(post, following.id)) {
 				return collapsed({ blockId: following.id, offset: 0 });
 			}
-			if (previous && post.blocks.some((item) => item.id === previous.id)) {
-				const keep = post.blocks.find((item) => item.id === previous.id)!;
+			if (previous && findBlock(post, previous.id)) {
+				const keep = findBlock(post, previous.id)!;
 				return collapsed({ blockId: previous.id, offset: plaintextOf(keep).length });
 			}
-			const remaining = post.blocks[0];
+			const remaining = documentOrder(post)[0];
 			return collapsed({ blockId: remaining.id, offset: plaintextOf(remaining).length });
 		}
 		case 'move-block': {
@@ -90,7 +94,7 @@ function selectionAfter(pre: KbPage, post: KbPage, op: Op, prev: Range): Range {
 			return current;
 		}
 		case 'convert-block': {
-			const block = post.blocks.find((item) => item.id === op.id);
+			const block = findBlock(post, op.id);
 			const len = block ? plaintextOf(block).length : 0;
 			const offset = Math.min(prev.anchor.offset, len);
 			return collapsed({ blockId: op.id, offset });

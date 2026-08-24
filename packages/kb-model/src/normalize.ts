@@ -1,3 +1,4 @@
+import { blockChildren } from './tree.js';
 import {
 	KB_FORMAT,
 	KB_SCHEMA_VERSION,
@@ -157,30 +158,49 @@ function orderedSpan(span: TextSpan): Inline {
 }
 
 export function orderedBlock(block: Block): Block {
+	let ordered: Block;
 	switch (block.type) {
 		case 'paragraph':
-			return { id: block.id, type: 'paragraph', content: block.content.map(orderedSpan) };
+			ordered = { id: block.id, type: 'paragraph', content: block.content.map(orderedSpan) };
+			break;
 		case 'heading':
-			return {
+			ordered = {
 				id: block.id,
 				type: 'heading',
 				level: block.level,
 				content: block.content.map(orderedSpan)
 			};
+			break;
 		case 'list_item':
-			return {
+			ordered = {
 				id: block.id,
 				type: 'list_item',
 				ordered: block.ordered,
 				content: block.content.map(orderedSpan)
 			};
+			break;
 		case 'code':
-			return { id: block.id, type: 'code', language: block.language, text: block.text };
+			ordered = { id: block.id, type: 'code', language: block.language, text: block.text };
+			break;
 		case 'divider':
-			return { id: block.id, type: 'divider' };
+			ordered = { id: block.id, type: 'divider' };
+			break;
 		case 'image':
-			return { id: block.id, type: 'image', src: block.src, alt: block.alt };
+			ordered = { id: block.id, type: 'image', src: block.src, alt: block.alt };
+			break;
 	}
+	const kids = blockChildren(block);
+	if (kids) (ordered as Block & { children: Block[] }).children = kids.map(orderedBlock);
+	return ordered;
+}
+
+function withChildren(block: Block, rec: Record<string, unknown>): Block {
+	const ordered = orderedBlock(block);
+	if (!Array.isArray(rec.children)) return ordered;
+	(ordered as Block & { children: Block[] }).children = rec.children.map((item) =>
+		normalizeBlock(item as Block)
+	);
+	return ordered;
 }
 
 export function normalizeBlock(block: Block | Record<string, unknown>): Block {
@@ -189,7 +209,7 @@ export function normalizeBlock(block: Block | Record<string, unknown>): Block {
 	switch (rec.type) {
 		case 'paragraph': {
 			const next: ParagraphBlock = { id, type: 'paragraph', content: coerceSpans(rec.content) };
-			return orderedBlock(next);
+			return withChildren(next, rec);
 		}
 		case 'heading': {
 			const next: HeadingBlock = {
@@ -198,7 +218,7 @@ export function normalizeBlock(block: Block | Record<string, unknown>): Block {
 				level: headingLevel(rec.level),
 				content: coerceSpans(rec.content)
 			};
-			return orderedBlock(next);
+			return withChildren(next, rec);
 		}
 		case 'list_item': {
 			const next: ListItemBlock = {
@@ -207,7 +227,7 @@ export function normalizeBlock(block: Block | Record<string, unknown>): Block {
 				ordered: rec.ordered === true,
 				content: coerceSpans(rec.content)
 			};
-			return orderedBlock(next);
+			return withChildren(next, rec);
 		}
 		case 'code': {
 			const next: CodeBlock = {
@@ -216,10 +236,10 @@ export function normalizeBlock(block: Block | Record<string, unknown>): Block {
 				language: typeof rec.language === 'string' ? rec.language : '',
 				text: typeof rec.text === 'string' ? rec.text : ''
 			};
-			return orderedBlock(next);
+			return withChildren(next, rec);
 		}
 		case 'divider':
-			return orderedBlock({ id, type: 'divider' });
+			return withChildren({ id, type: 'divider' }, rec);
 		case 'image': {
 			const next: ImageBlock = {
 				id,
@@ -227,10 +247,10 @@ export function normalizeBlock(block: Block | Record<string, unknown>): Block {
 				src: typeof rec.src === 'string' ? rec.src : '',
 				alt: typeof rec.alt === 'string' ? rec.alt : ''
 			};
-			return orderedBlock(next);
+			return withChildren(next, rec);
 		}
 		default:
-			return orderedBlock(unknownToParagraph(rec));
+			return withChildren(unknownToParagraph(rec), rec);
 	}
 }
 

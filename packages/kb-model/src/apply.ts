@@ -8,6 +8,14 @@ import {
 	splitSpans
 } from './normalize.js';
 import { isAtomic, isTextLike, plaintextOf } from './plaintext.js';
+import {
+	childrenOf,
+	documentOrder,
+	findBlock,
+	parentOf,
+	sameParent,
+	type ParentRef
+} from './tree.js';
 import type { Block, CodeBlock, KbPage, Mark, Op, Point, Range, TextSpan } from './types.js';
 import { snapOffset } from './utf16.js';
 
@@ -18,20 +26,30 @@ export class UnresolvedPointError extends Error {
 	}
 }
 
-type Resolved = { block: Block; index: number; offset: number };
+export type Resolved = {
+	block: Block;
+	parent: ParentRef;
+	indexInParent: number;
+	offset: number;
+};
 
 function clonePage(page: KbPage): KbPage {
 	return structuredClone(page);
 }
 
-function findIndex(page: KbPage, id: string): number {
-	return page.blocks.findIndex((block) => block.id === id);
+function requireLocation(
+	page: KbPage,
+	id: string,
+	what: string
+): { block: Block; parent: ParentRef; index: number } {
+	const block = findBlock(page, id);
+	const loc = parentOf(page, id);
+	if (!block || !loc) throw new Error(`${what}: unknown block ${id}`);
+	return { block, parent: loc.parent, index: loc.index };
 }
 
-function requireIndex(page: KbPage, id: string, what: string): number {
-	const index = findIndex(page, id);
-	if (index < 0) throw new Error(`${what}: unknown block ${id}`);
-	return index;
+function documentIndex(page: KbPage, id: string): number {
+	return documentOrder(page).findIndex((block) => block.id === id);
 }
 
 function blockText(block: Block): string {
@@ -40,11 +58,11 @@ function blockText(block: Block): string {
 }
 
 export function resolvePoint(page: KbPage, point: Point): Resolved {
-	const index = findIndex(page, point.blockId);
-	if (index < 0) {
+	const block = findBlock(page, point.blockId);
+	const loc = parentOf(page, point.blockId);
+	if (!block || !loc) {
 		throw new UnresolvedPointError(`unresolved Point: unknown blockId ${point.blockId}`);
 	}
-	const block = page.blocks[index];
 	if (!Number.isInteger(point.offset)) {
 		throw new UnresolvedPointError(`unresolved Point: offset ${point.offset} is not an integer`);
 	}
@@ -52,7 +70,7 @@ export function resolvePoint(page: KbPage, point: Point): Resolved {
 		if (point.offset !== 0) {
 			throw new UnresolvedPointError(`unresolved Point: illegal offset ${point.offset} on atomic block`);
 		}
-		return { block, index, offset: 0 };
+		return { block, parent: loc.parent, indexInParent: loc.index, offset: 0 };
 	}
 	const text = blockText(block);
 	if (point.offset < 0 || point.offset > text.length) {
@@ -60,7 +78,12 @@ export function resolvePoint(page: KbPage, point: Point): Resolved {
 			`unresolved Point: offset ${point.offset} out of range for block ${point.blockId}`
 		);
 	}
-	return { block, index, offset: snapOffset(text, point.offset) };
+	return {
+		block,
+		parent: loc.parent,
+		indexInParent: loc.index,
+		offset: snapOffset(text, point.offset)
+	};
 }
 
 export function normalizeRange(
@@ -69,7 +92,9 @@ export function normalizeRange(
 ): { start: Resolved; end: Resolved } {
 	const anchor = resolvePoint(page, range.anchor);
 	const head = resolvePoint(page, range.head);
-	if (anchor.index < head.index || (anchor.index === head.index && anchor.offset <= head.offset)) {
+	const ai = documentIndex(page, anchor.block.id);
+	const hi = documentIndex(page, head.block.id);
+	if (ai < hi || (ai === hi && anchor.offset <= head.offset)) {
 		return { start: anchor, end: head };
 	}
 	return { start: head, end: anchor };
@@ -133,16 +158,16 @@ function formatSpans(
 	return normalizeSpans([...left, ...formatted, ...right]);
 }
 
-function replaceBlock(page: KbPage, index: number, block: Block): void {
-	page.blocks[index] = orderedBlock(block);
+function replaceBlock(page: KbPage, parent: ParentRef, index: number, block: Block): void {
+	childrenOf(page, parent)[index] = orderedBlock(block);
 }
 
-function deleteBlockAt(page: KbPage, index: number): void {
-	page.blocks.splice(index, 1);
+function deleteBlockAt(page: KbPage, parent: ParentRef, index: number): void {
+	childrenOf(page, parent).splice(index, 1);
 }
 
-function insertBlockAt(page: KbPage, index: number, block: Block): void {
-	page.blocks.splice(index, 0, orderedBlock(block));
+function insertBlockAt(page: KbPage, parent: ParentRef, index: number, block: Block): void {
+	childrenOf(page, parent).splice(index, 0, orderedBlock(block));
 }
 
 function applySetTitle(page: KbPage, title: string): void {
@@ -160,12 +185,12 @@ function applyInsertText(page: KbPage, op: Extract<Op, { kind: 'insert-text' }>)
 			throw new Error("newline not allowed in text-like block");
 		}
 		const next = { ...at.block, content: insertIntoSpans(at.block.content, at.offset, op.text) };
-		replaceBlock(page, at.index, next);
+		replaceBlock(page, at.parent, at.indexInParent, next);
 		return;
 	}
 	if (at.block.type === 'code') {
 		const text = at.block.text.slice(0, at.offset) + op.text + at.block.text.slice(at.offset);
-		replaceBlock(page, at.index, { ...at.block, text });
+		replaceBlock(page, at.parent, at.indexInParent, { ...at.block, text });
 		return;
 	}
 	throw new Error('cannot insert text into block');
@@ -219,17 +244,17 @@ function trimEndSuffix(block: Block, offset: number): Block | null {
 
 function applyDeleteRange(page: KbPage, op: Extract<Op, { kind: 'delete-range' }>): void {
 	const { start, end } = normalizeRange(page, op.range);
-	if (start.index === end.index && start.offset === end.offset) return;
+	if (start.block.id === end.block.id && start.offset === end.offset) return;
 
-	if (start.index === end.index) {
+	if (start.block.id === end.block.id) {
 		const block = start.block;
 		if (block.type === 'code') {
 			const text = block.text.slice(0, start.offset) + block.text.slice(end.offset);
-			replaceBlock(page, start.index, { ...block, text });
+			replaceBlock(page, start.parent, start.indexInParent, { ...block, text });
 			return;
 		}
 		if (isTextLike(block)) {
-			replaceBlock(page, start.index, {
+			replaceBlock(page, start.parent, start.indexInParent, {
 				...block,
 				content: deleteFromSpans(block.content, start.offset, end.offset)
 			});
@@ -237,12 +262,17 @@ function applyDeleteRange(page: KbPage, op: Extract<Op, { kind: 'delete-range' }
 		return;
 	}
 
-	const startBlock = page.blocks[start.index];
-	const endBlock = page.blocks[end.index];
+	if (!sameParent(start.parent, end.parent)) {
+		throw new Error('delete-range: start and end must share a parent');
+	}
+
+	const list = childrenOf(page, start.parent);
+	const startBlock = list[start.indexInParent];
+	const endBlock = list[end.indexInParent];
 	const prefix = trimStartPrefix(startBlock, start.offset);
 	const suffix = trimEndSuffix(endBlock, end.offset);
-	const before = page.blocks.slice(0, start.index);
-	const after = page.blocks.slice(end.index + 1);
+	const before = list.slice(0, start.indexInParent);
+	const after = list.slice(end.indexInParent + 1);
 	const next: Block[] = [...before];
 
 	if (prefix && suffix && canConcat(startBlock, endBlock)) {
@@ -252,19 +282,24 @@ function applyDeleteRange(page: KbPage, op: Extract<Op, { kind: 'delete-range' }
 		if (suffix) next.push(suffix);
 	}
 	next.push(...after);
-	page.blocks = next;
+	list.splice(0, list.length, ...next);
 }
 
 function applyFormatRange(page: KbPage, op: Extract<Op, { kind: 'format-range' }>): void {
 	const { start, end } = normalizeRange(page, op.range);
-	if (start.index === end.index && start.offset === end.offset) return;
-	for (let i = start.index; i <= end.index; i++) {
-		const block = page.blocks[i];
+	if (start.block.id === end.block.id && start.offset === end.offset) return;
+	const order = documentOrder(page);
+	const si = order.findIndex((block) => block.id === start.block.id);
+	const ei = order.findIndex((block) => block.id === end.block.id);
+	for (let i = si; i <= ei; i++) {
+		const block = order[i];
 		if (!isTextLike(block)) continue;
-		const from = i === start.index ? start.offset : 0;
-		const to = i === end.index ? end.offset : plaintextOf(block).length;
+		const from = i === si ? start.offset : 0;
+		const to = i === ei ? end.offset : plaintextOf(block).length;
 		if (from === to) continue;
-		replaceBlock(page, i, {
+		const loc = parentOf(page, block.id);
+		if (!loc) continue;
+		replaceBlock(page, loc.parent, loc.index, {
 			...block,
 			content: formatSpans(block.content, from, to, op.mark, op.on)
 		});
@@ -276,7 +311,7 @@ function isCodeEmptyLastLine(block: CodeBlock, offset: number): boolean {
 }
 
 function applySplitBlock(page: KbPage, op: Extract<Op, { kind: 'split-block' }>): void {
-	if (findIndex(page, op.newId) >= 0) {
+	if (findBlock(page, op.newId)) {
 		throw new Error(`split-block: newId ${op.newId} already exists`);
 	}
 	const at = resolvePoint(page, op.at);
@@ -289,15 +324,15 @@ function applySplitBlock(page: KbPage, op: Extract<Op, { kind: 'split-block' }>)
 			throw new Error('cannot split code except at empty last line');
 		}
 		const text = block.text.endsWith('\n') ? block.text.slice(0, -1) : block.text;
-		replaceBlock(page, at.index, { ...block, text });
-		insertBlockAt(page, at.index + 1, emptyParagraph(op.newId));
+		replaceBlock(page, at.parent, at.indexInParent, { ...block, text });
+		insertBlockAt(page, at.parent, at.indexInParent + 1, emptyParagraph(op.newId));
 		return;
 	}
 	if (isTextLike(block)) {
 		const [left, right] = splitSpans(block.content, at.offset);
 		const keepContent = normalizeSpans(left);
 		const dropContent = normalizeSpans(right);
-		replaceBlock(page, at.index, { ...block, content: keepContent });
+		replaceBlock(page, at.parent, at.indexInParent, { ...block, content: keepContent });
 		let created: Block;
 		if (block.type === 'heading') {
 			created = { id: op.newId, type: 'heading', level: block.level, content: dropContent };
@@ -306,7 +341,7 @@ function applySplitBlock(page: KbPage, op: Extract<Op, { kind: 'split-block' }>)
 		} else {
 			created = { id: op.newId, type: 'paragraph', content: dropContent };
 		}
-		insertBlockAt(page, at.index + 1, created);
+		insertBlockAt(page, at.parent, at.indexInParent + 1, created);
 	}
 }
 
@@ -314,22 +349,22 @@ function applyMergeBlock(page: KbPage, op: Extract<Op, { kind: 'merge-block' }>)
 	if (op.keepId === op.dropId) {
 		throw new Error('merge-block: keepId and dropId must differ');
 	}
-	const keepIndex = requireIndex(page, op.keepId, 'merge-block');
-	const dropIndex = requireIndex(page, op.dropId, 'merge-block');
-	if (dropIndex !== keepIndex + 1) {
+	const keepLoc = requireLocation(page, op.keepId, 'merge-block');
+	const dropLoc = requireLocation(page, op.dropId, 'merge-block');
+	if (!sameParent(keepLoc.parent, dropLoc.parent) || dropLoc.index !== keepLoc.index + 1) {
 		throw new Error('merge-block: dropId must be the immediate next sibling of keepId');
 	}
-	const keep = page.blocks[keepIndex];
-	const drop = page.blocks[dropIndex];
+	const keep = keepLoc.block;
+	const drop = dropLoc.block;
 	if (isAtomic(keep)) {
 		throw new Error('cannot merge into atomic block');
 	}
 	if (isAtomic(drop)) {
-		deleteBlockAt(page, dropIndex);
+		deleteBlockAt(page, dropLoc.parent, dropLoc.index);
 		return;
 	}
-	replaceBlock(page, keepIndex, concatEndOntoStart(keep, drop));
-	deleteBlockAt(page, dropIndex);
+	replaceBlock(page, keepLoc.parent, keepLoc.index, concatEndOntoStart(keep, drop));
+	deleteBlockAt(page, dropLoc.parent, dropLoc.index);
 }
 
 export function convertBlock(block: Block, op: Extract<Op, { kind: 'convert-block' }>): Block {
@@ -380,49 +415,54 @@ export function convertBlock(block: Block, op: Extract<Op, { kind: 'convert-bloc
 }
 
 function applyConvertBlock(page: KbPage, op: Extract<Op, { kind: 'convert-block' }>): void {
-	const index = requireIndex(page, op.id, 'convert-block');
-	replaceBlock(page, index, convertBlock(page.blocks[index], op));
+	const loc = requireLocation(page, op.id, 'convert-block');
+	replaceBlock(page, loc.parent, loc.index, convertBlock(loc.block, op));
 }
 
 function applyInsertBlock(page: KbPage, op: Extract<Op, { kind: 'insert-block' }>): void {
-	if (findIndex(page, op.block.id) >= 0) {
+	if (findBlock(page, op.block.id)) {
 		throw new Error(`insert-block: duplicate block id ${op.block.id}`);
 	}
 	if (op.afterId === null) {
-		insertBlockAt(page, 0, op.block);
+		insertBlockAt(page, 'page', 0, op.block);
 		return;
 	}
-	const after = requireIndex(page, op.afterId, 'insert-block');
-	insertBlockAt(page, after + 1, op.block);
+	const after = requireLocation(page, op.afterId, 'insert-block');
+	insertBlockAt(page, after.parent, after.index + 1, op.block);
 }
 
 function applyDeleteBlock(page: KbPage, id: string): void {
-	const index = requireIndex(page, id, 'delete-block');
-	deleteBlockAt(page, index);
+	const loc = requireLocation(page, id, 'delete-block');
+	deleteBlockAt(page, loc.parent, loc.index);
 }
 
 function applyMoveBlock(page: KbPage, op: Extract<Op, { kind: 'move-block' }>): void {
 	if (op.afterId === op.id) {
 		throw new Error('cannot move block after itself');
 	}
-	const from = requireIndex(page, op.id, 'move-block');
-	if (op.afterId !== null) requireIndex(page, op.afterId, 'move-block');
-	const [block] = page.blocks.splice(from, 1);
+	const fromLoc = requireLocation(page, op.id, 'move-block');
+	if (op.afterId !== null) requireLocation(page, op.afterId, 'move-block');
+	const fromList = childrenOf(page, fromLoc.parent);
+	const [block] = fromList.splice(fromLoc.index, 1);
 	if (op.afterId === null) {
-		page.blocks.unshift(block);
+		childrenOf(page, 'page').unshift(block);
 		return;
 	}
-	const to = findIndex(page, op.afterId);
-	page.blocks.splice(to + 1, 0, block);
+	const toLoc = parentOf(page, op.afterId);
+	if (!toLoc) throw new Error(`move-block: unknown block ${op.afterId}`);
+	const toList = childrenOf(page, toLoc.parent);
+	const to = toList.findIndex((item) => item.id === op.afterId);
+	if (to < 0) throw new Error(`move-block: unknown block ${op.afterId}`);
+	toList.splice(to + 1, 0, block);
 }
 
 function applySetCode(page: KbPage, op: Extract<Op, { kind: 'set-code' }>): void {
-	const index = requireIndex(page, op.id, 'set-code');
-	const block = page.blocks[index];
+	const loc = requireLocation(page, op.id, 'set-code');
+	const block = loc.block;
 	if (block.type !== 'code') {
 		throw new Error('set-code: block is not code');
 	}
-	replaceBlock(page, index, { ...block, language: op.language });
+	replaceBlock(page, loc.parent, loc.index, { ...block, language: op.language });
 }
 
 function applySetChildren(page: KbPage, children: string[]): void {

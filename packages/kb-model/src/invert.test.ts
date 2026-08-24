@@ -295,4 +295,30 @@ describe('invert golden applyMany(apply(page, op), invert(page, op)) === normali
 		const right = applyMany(apply(src, op), inverse);
 		expect(plaintextOf(right.blocks[0])).toBe('ab');
 	});
+
+	it('round-trips nested same-parent split/merge/delete and throws on cross-parent', () => {
+		function nest(id: string, kids: Block[]): Block {
+			return Object.assign(para(id, ''), { children: kids });
+		}
+		const src = page([nest('c', [para('a', 'ab'), para('b', 'cd')]), para('z', 'z')]);
+		expectInvert(src, { kind: 'split-block', at: { blockId: 'a', offset: 1 }, newId: 'n' });
+		expectInvert(src, { kind: 'merge-block', keepId: 'a', dropId: 'b' });
+		expectInvert(src, {
+			kind: 'delete-range',
+			range: { anchor: { blockId: 'a', offset: 1 }, head: { blockId: 'b', offset: 1 } }
+		});
+		expectInvert(src, { kind: 'insert-block', afterId: 'a', block: para('n', 'n') });
+		expectInvert(src, { kind: 'delete-block', id: 'b' });
+		expectInvert(src, { kind: 'move-block', id: 'b', afterId: 'z' });
+		expect(() => invert(src, { kind: 'merge-block', keepId: 'a', dropId: 'z' })).toThrow(
+			/immediate next/i
+		);
+		expect(() =>
+			invert(src, {
+				kind: 'delete-range',
+				range: { anchor: { blockId: 'a', offset: 0 }, head: { blockId: 'z', offset: 1 } }
+			})
+		).toThrow(/share a parent/i);
+		expect(() => invert(src, { kind: 'delete-block', id: 'missing' })).toThrow(/unknown/i);
+	});
 });

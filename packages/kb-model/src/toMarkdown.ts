@@ -1,4 +1,5 @@
 import { normalizePage } from './normalize.js';
+import { documentOrder } from './tree.js';
 import type { Block, Inline, KbPage, ListItemBlock, Mark, TextSpan } from './types.js';
 
 function linkHref(marks: Mark[]): string | null {
@@ -49,6 +50,9 @@ function renderBlock(block: Block, orderedIndex: number): string {
 			return '---';
 		case 'image':
 			return `![${block.alt}](${block.src})`;
+		default: {
+			return '';
+		}
 	}
 }
 
@@ -60,7 +64,7 @@ function separator(prev: Block, next: Block): string {
 
 /** Derived Markdown of the page body. Not a loader. */
 export function toMarkdown(page: KbPage): string {
-	const { blocks } = normalizePage(page);
+	const blocks = documentOrder(normalizePage(page));
 	const chunks: string[] = [];
 	let orderedIndex = 0;
 	for (let i = 0; i < blocks.length; i++) {

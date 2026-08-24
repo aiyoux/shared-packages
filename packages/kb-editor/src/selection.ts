@@ -1,4 +1,13 @@
-import { isHighSurrogate, isLowSurrogate, plaintextOf, type KbPage, type Point, type Range } from '@shared-packages/kb-model';
+import {
+	documentOrder,
+	findBlock,
+	isHighSurrogate,
+	isLowSurrogate,
+	plaintextOf,
+	type KbPage,
+	type Point,
+	type Range
+} from '@shared-packages/kb-model';
 import { BLOCK_ID_ATTR } from './project.js';
 import { clampRange, collapsed } from './range.js';
 
@@ -195,8 +204,12 @@ function cssEscape(value: string): string {
 }
 
 export function caretIn(page: KbPage, blockId: string, offset: number): Range {
-	const block = page.blocks.find((item) => item.id === blockId);
-	if (!block) return collapsed({ blockId: page.blocks[0].id, offset: 0 });
+	const block = findBlock(page, blockId);
+	if (!block) {
+		const first = documentOrder(page)[0];
+		if (!first) return collapsed({ blockId, offset: 0 });
+		return collapsed({ blockId: first.id, offset: 0 });
+	}
 	const len = plaintextOf(block).length;
 	return collapsed({ blockId, offset: Math.max(0, Math.min(offset, len)) });
 }

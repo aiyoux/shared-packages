@@ -1,7 +1,12 @@
 import {
 	apply,
+	blockChildren,
 	canonicalMarks,
+	childrenOf,
+	documentOrder,
+	findBlock,
 	isTextLike,
+	parentOf,
 	plaintextOf,
 	type Block,
 	type KbPage,
@@ -36,8 +41,10 @@ export function stripHtml(html: string): string {
 
 function remapBlock(block: Block): Block {
 	const id = newBlockId();
-	if (block.type === 'divider') return { id, type: 'divider' };
-	return { ...block, id };
+	const next: Block = block.type === 'divider' ? { id, type: 'divider' } : { ...block, id };
+	const kids = blockChildren(block);
+	if (kids) (next as Block & { children: Block[] }).children = kids.map(remapBlock);
+	return next;
 }
 
 function sliceSpans(content: TextSpan[], from: number, to: number): TextSpan[] {
@@ -70,12 +77,13 @@ function sliceTextLike(block: Extract<Block, { content: TextSpan[] }>, from: num
 export function sliceBlocks(page: KbPage, range: Range): Block[] {
 	if (isCollapsed(range)) return [];
 	const { start, end } = orderedRange(page, range);
-	const si = page.blocks.findIndex((b) => b.id === start.blockId);
-	const ei = page.blocks.findIndex((b) => b.id === end.blockId);
+	const order = documentOrder(page);
+	const si = order.findIndex((b) => b.id === start.blockId);
+	const ei = order.findIndex((b) => b.id === end.blockId);
 	if (si < 0 || ei < 0) return [];
 	const out: Block[] = [];
 	for (let i = si; i <= ei; i++) {
-		const block = page.blocks[i];
+		const block = order[i];
 		const from = i === si ? start.offset : 0;
 		const to = i === ei ? end.offset : plaintextOf(block).length;
 		if (isTextLike(block)) {
@@ -112,7 +120,7 @@ export function parseSlice(raw: string): Block[] | null {
 
 function jsonInsertOps(state: EditorState, at: { blockId: string; offset: number }, jsonBlocks: Block[]): Op[] {
 	const ops: Op[] = [];
-	const block = state.page.blocks.find((item) => item.id === at.blockId);
+	const block = findBlock(state.page, at.blockId);
 	if (block?.type === 'code') {
 		const text = jsonBlocks.map((item) => plaintextOf(item)).join('\n');
 		if (text) return [{ kind: 'insert-text', at, text }];
@@ -130,8 +138,9 @@ function jsonInsertOps(state: EditorState, at: { blockId: string; offset: number
 		ops.push({ kind: 'split-block', at, newId: newBlockId() });
 		afterId = at.blockId;
 	} else if (at.offset === 0) {
-		const index = state.page.blocks.findIndex((item) => item.id === at.blockId);
-		afterId = index > 0 ? state.page.blocks[index - 1].id : null;
+		const loc = parentOf(state.page, at.blockId);
+		afterId =
+			loc && loc.index > 0 ? childrenOf(state.page, loc.parent)[loc.index - 1].id : null;
 	} else {
 		afterId = at.blockId;
 	}
@@ -164,7 +173,7 @@ export function pasteOps(
 	let text = input.plain ?? '';
 	if (!text && input.html) text = stripHtml(input.html);
 	if (!text) return ops;
-	const block = working.page.blocks.find((item) => item.id === at.blockId);
+	const block = findBlock(working.page, at.blockId);
 	if (block?.type === 'code') {
 		ops.push({ kind: 'insert-text', at, text });
 		return ops;

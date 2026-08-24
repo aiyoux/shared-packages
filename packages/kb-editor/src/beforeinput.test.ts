@@ -211,4 +211,14 @@ describe('beforeinput mapping', () => {
 		expect(state.page.blocks[0].type).toBe('paragraph');
 		expect(plaintextOf(state.page.blocks[0])).toBe('');
 	});
+
+	it('returns no ops when the caret names a missing block', () => {
+		const state = createEditorState(page([para('p', 'x')]));
+		const live = { anchor: { blockId: 'gone', offset: 0 }, head: { blockId: 'gone', offset: 0 } };
+		expect(mapBeforeInput(state, { inputType: 'insertText', data: 'z' }, live).ops).toEqual([]);
+		expect(mapBeforeInput(state, { inputType: 'insertParagraph', data: null }, live).ops).toEqual([]);
+		expect(mapBeforeInput(state, { inputType: 'deleteContentForward', data: null }, live).ops).toEqual(
+			[]
+		);
+	});
 });

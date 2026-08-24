@@ -1,5 +1,6 @@
 import {
 	apply,
+	findBlock,
 	isAtomic,
 	isTextLike,
 	plaintextOf,
@@ -63,7 +64,7 @@ function formatOps(_state: EditorState, live: Range, mark: Mark): Op[] {
 }
 
 function enterAtCaret(state: EditorState, point: Point): Op[] {
-	const block = state.page.blocks.find((item) => item.id === point.blockId);
+	const block = findBlock(state.page, point.blockId);
 	if (!block) return [];
 	if (isAtomic(block)) {
 		return [{ kind: 'insert-block', afterId: block.id, block: emptyParagraph(newBlockId()) }];
@@ -106,7 +107,7 @@ function deleteOps(state: EditorState, live: Range, inputType: string): Op[] {
 	if (!isCollapsed(live)) {
 		return [{ kind: 'delete-range', range: live }];
 	}
-	const block = state.page.blocks.find((item) => item.id === live.anchor.blockId);
+	const block = findBlock(state.page, live.anchor.blockId);
 	if (!block) return [];
 	if (isAtomic(block)) return [{ kind: 'delete-block', id: block.id }];
 	if (backward) {
@@ -124,8 +125,9 @@ function deleteOps(state: EditorState, live: Range, inputType: string): Op[] {
 
 function insertAtCaret(state: EditorState, at: Point, text: string): Op[] {
 	if (!text) return [];
-	const block = state.page.blocks.find((item) => item.id === at.blockId);
-	if (block && isAtomic(block)) {
+	const block = findBlock(state.page, at.blockId);
+	if (!block) return [];
+	if (isAtomic(block)) {
 		return [
 			{
 				kind: 'insert-block',

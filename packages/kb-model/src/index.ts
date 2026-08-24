@@ -8,6 +8,17 @@ export { isAtomic, isTextLike, plaintext, plaintextOf } from './plaintext.js';
 export { serializeKb } from './serialize.js';
 export { toMarkdown } from './toMarkdown.js';
 export {
+	blockChildren,
+	childrenOf,
+	documentOrder,
+	findBlock,
+	parentOf,
+	sameParent,
+	visibleOrder,
+	type BlockParent,
+	type ParentRef
+} from './tree.js';
+export {
 	KB_FORMAT,
 	KB_SCHEMA_VERSION,
 	type AtomicBlock,

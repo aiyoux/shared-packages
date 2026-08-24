@@ -139,6 +139,16 @@ describe('project', () => {
 		}
 		el.remove();
 	});
+
+	it('projects nested children as host-direct siblings in visible order', () => {
+		const el = host();
+		const nested = Object.assign(para('c', 'Call'), {
+			children: [para('n', 'inside')]
+		});
+		project(el, page([nested, para('z', 'Z')]));
+		expect([...el.children].map((c) => c.getAttribute('data-block-id'))).toEqual(['c', 'n', 'z']);
+		el.remove();
+	});
 });
 
 describe('allowlistedHref', () => {

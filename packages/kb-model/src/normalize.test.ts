@@ -75,6 +75,33 @@ describe('normalizePage', () => {
 		});
 	});
 
+	it('preserves nested children on a known block through orderedBlock', () => {
+		const page = {
+			format: KB_FORMAT,
+			schemaVersion: 1,
+			id: 'p',
+			title: 't',
+			createdAt: '',
+			updatedAt: '',
+			children: [],
+			blocks: [
+				{
+					id: 'c',
+					type: 'paragraph',
+					content: [span('')],
+					children: [{ id: 'n', type: 'paragraph', content: [span('in')] }]
+				}
+			]
+		} as unknown as KbPage;
+		const normalized = normalizePage(page);
+		expect(normalized.blocks[0].id).toBe('c');
+		expect((normalized.blocks[0] as { children?: { id: string }[] }).children?.[0]).toEqual({
+			id: 'n',
+			type: 'paragraph',
+			content: [span('in')]
+		});
+	});
+
 	it('does not regenerate existing block ids', () => {
 		const page = createEmptyPage({ id: 'p', title: 't' });
 		const id = page.blocks[0].id;

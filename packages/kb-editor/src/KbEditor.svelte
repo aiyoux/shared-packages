@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount, untrack } from 'svelte';
-	import { plaintextOf, type Op } from '@shared-packages/kb-model';
+	import { findBlock, plaintextOf, visibleOrder, type Op } from '@shared-packages/kb-model';
 	import { mapBeforeInput } from './beforeinput.js';
 	import { copyPayload, cutOps, KB_CLIPBOARD_MIME, pasteOps } from './clipboard.js';
 	import {
@@ -105,7 +105,7 @@
 		snapshot = null;
 		const snapPage = snap?.page ?? editor.page;
 		const snapSel = snap?.selection ?? editor.selection;
-		const block = snapPage.blocks.find((item) => item.id === snapSel.anchor.blockId);
+		const block = findBlock(snapPage, snapSel.anchor.blockId);
 		const original = block ? plaintextOf(block) : '';
 		let domText: string | null = null;
 		if (host) {
@@ -258,7 +258,7 @@
 
 <div class="kb-editor" data-testid="kb-editor">
 	<div class="kb-gutter" contenteditable="false" data-testid="kb-gutter">
-		{#each editor.page.blocks as block, i (block.id)}
+		{#each visibleOrder(editor.page) as block, i (block.id)}
 			<button
 				type="button"
 				class="kb-handle"

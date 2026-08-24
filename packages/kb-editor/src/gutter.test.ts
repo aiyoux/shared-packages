@@ -11,6 +11,9 @@ describe('gutter drag', () => {
 		expect(dropAfterId(doc, 'c', 'a', 'after')).toBe('a');
 		expect(dropAfterId(doc, 'a', 'c', 'after')).toBe('c');
 		expect(dropAfterId(doc, 'b', 'b', 'before')).toBe('noop');
+		expect(dropAfterId(doc, 'a', 'b', 'before')).toBe('noop');
+		expect(dropAfterId(doc, 'missing', 'a', 'after')).toBe('noop');
+		expect(dropAfterId(doc, 'a', 'missing', 'after')).toBe('noop');
 		expect(dropWhere(10, { top: 0, height: 40 })).toBe('before');
 		expect(dropWhere(30, { top: 0, height: 40 })).toBe('after');
 	});

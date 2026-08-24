@@ -1,6 +1,7 @@
 import {
 	canonicalMarks,
 	isTextLike,
+	visibleOrder,
 	type Block,
 	type Inline,
 	type KbPage,
@@ -130,7 +131,7 @@ export function renderBlock(doc: Document, block: Block): HTMLElement {
 export function project(host: HTMLElement, page: KbPage): void {
 	const doc = host.ownerDocument;
 	const nodes: HTMLElement[] = [];
-	for (const block of page.blocks) nodes.push(renderBlock(doc, block));
+	for (const block of visibleOrder(page)) nodes.push(renderBlock(doc, block));
 	host.replaceChildren(...nodes);
 	for (const child of host.children) stripMagicBr(child as HTMLElement);
 }

@@ -1,14 +1,17 @@
 import {
+	childrenOf,
+	findBlock,
 	isAtomic,
 	isHighSurrogate,
 	isLowSurrogate,
 	isTextLike,
+	parentOf,
 	plaintextOf,
 	type Block,
 	type KbPage,
 	type Range
 } from '@shared-packages/kb-model';
-import { blockIndex, isCollapsed } from './range.js';
+import { isCollapsed } from './range.js';
 
 function unitBefore(text: string, offset: number): number {
 	if (offset <= 0) return 0;
@@ -43,9 +46,8 @@ export function expandCaretToUnit(
 ): Range | null {
 	if (!isCollapsed(selection)) return selection;
 	const point = selection.anchor;
-	const index = blockIndex(page, point.blockId);
-	if (index < 0) return null;
-	const block = page.blocks[index];
+	const block = findBlock(page, point.blockId);
+	if (!block) return null;
 	if (isAtomic(block)) {
 		return { anchor: { blockId: block.id, offset: 0 }, head: { blockId: block.id, offset: 0 } };
 	}
@@ -61,10 +63,11 @@ export function expandCaretToUnit(
 }
 
 export function backspaceAtStartOps(page: KbPage, blockId: string): import('@shared-packages/kb-model').Op[] {
-	const index = blockIndex(page, blockId);
-	if (index <= 0) return [];
-	const current = page.blocks[index];
-	const prev = page.blocks[index - 1];
+	const loc = parentOf(page, blockId);
+	if (!loc || loc.index <= 0) return [];
+	const siblings = childrenOf(page, loc.parent);
+	const current = siblings[loc.index];
+	const prev = siblings[loc.index - 1];
 	if (current.type === 'list_item' && plaintextOf(current) === '' && prev.type !== 'list_item') {
 		return [{ kind: 'convert-block', id: current.id, to: 'paragraph' }];
 	}
@@ -78,10 +81,12 @@ export function backspaceAtStartOps(page: KbPage, blockId: string): import('@sha
 }
 
 export function deleteAtEndOps(page: KbPage, blockId: string): import('@shared-packages/kb-model').Op[] {
-	const index = blockIndex(page, blockId);
-	if (index < 0 || index >= page.blocks.length - 1) return [];
-	const current = page.blocks[index];
-	const next = page.blocks[index + 1];
+	const loc = parentOf(page, blockId);
+	if (!loc) return [];
+	const siblings = childrenOf(page, loc.parent);
+	if (loc.index >= siblings.length - 1) return [];
+	const current = siblings[loc.index];
+	const next = siblings[loc.index + 1];
 	if (isAtomic(next)) return [{ kind: 'delete-block', id: next.id }];
 	if (isTextLike(next) || next.type === 'code') {
 		return [{ kind: 'merge-block', keepId: current.id, dropId: next.id }];
