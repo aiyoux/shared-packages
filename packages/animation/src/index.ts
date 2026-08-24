@@ -3,6 +3,7 @@ export type {
 	AnimClipSnapshot,
 	AnimDocument,
 	AnimFrame,
+	AnimKeyframe,
 	BindMode,
 	ClipSource,
 	FsBackend
@@ -16,6 +17,8 @@ export {
 	sameFsBackend,
 	serializeAnimDocument
 } from './document.js';
+
+export { sampleClipFrame } from './sample.js';
 
 export { createCompositionClock } from '@shared-packages/composition';
 export type { ClockState, CompositionClock } from '@shared-packages/composition';

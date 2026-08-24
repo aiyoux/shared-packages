@@ -174,6 +174,9 @@ describe('createMonitorWatchStream', () => {
 		h.emit('watch.event_batch', batch(h.subIdFor('/a')!));
 		await vi.waitFor(() => expect(onA).toHaveBeenCalled());
 		expect(onB).not.toHaveBeenCalled();
+		const passed = onA.mock.calls.at(-1)?.[0] as Array<{ kind: string; path?: string }>;
+		expect(passed?.[0]?.kind).toBe('create');
+		expect(passed?.[0]?.path).toBe('/x');
 
 		onA.mockClear();
 		h.emit('watch.event_batch', batch(h.subIdFor('/b')!));

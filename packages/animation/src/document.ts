@@ -4,6 +4,7 @@ import {
 	type AnimClipSnapshot,
 	type AnimDocument,
 	type AnimFrame,
+	type AnimKeyframe,
 	type BindMode,
 	type ClipSource,
 	type FsBackend
@@ -65,12 +66,29 @@ function decodeInput(input: unknown): unknown {
 
 function parseFrame(raw: unknown): AnimFrame {
 	if (!isRecord(raw)) throw new AnimParseError('clip.frame must be an object');
-	return {
+	const frame: AnimFrame = {
 		x: finiteNumber(raw.x, 'frame.x'),
 		y: finiteNumber(raw.y, 'frame.y'),
 		w: finiteNumber(raw.w, 'frame.w'),
 		h: finiteNumber(raw.h, 'frame.h')
 	};
+	if (raw.rotation !== undefined) {
+		frame.rotation = finiteNumber(raw.rotation, 'frame.rotation');
+	}
+	return frame;
+}
+
+function parseKeyframe(raw: unknown, index: number): AnimKeyframe {
+	if (!isRecord(raw)) throw new AnimParseError(`clip.keyframes[${index}] must be an object`);
+	const key: AnimKeyframe = { tMs: finiteNumber(raw.tMs, `keyframes[${index}].tMs`) };
+	if (raw.x !== undefined) key.x = finiteNumber(raw.x, `keyframes[${index}].x`);
+	if (raw.y !== undefined) key.y = finiteNumber(raw.y, `keyframes[${index}].y`);
+	if (raw.w !== undefined) key.w = finiteNumber(raw.w, `keyframes[${index}].w`);
+	if (raw.h !== undefined) key.h = finiteNumber(raw.h, `keyframes[${index}].h`);
+	if (raw.rotation !== undefined) {
+		key.rotation = finiteNumber(raw.rotation, `keyframes[${index}].rotation`);
+	}
+	return key;
 }
 
 function parseSource(raw: unknown): ClipSource {
@@ -125,11 +143,15 @@ function parseBind(raw: unknown): BindMode {
 function parseClip(raw: unknown, index: number): AnimClip {
 	if (!isRecord(raw)) throw new AnimParseError(`clips[${index}] must be an object`);
 	const bind = parseBind(raw.bind);
+	const keyframes = Array.isArray(raw.keyframes)
+		? raw.keyframes.map((k, i) => parseKeyframe(k, i))
+		: undefined;
 	const base = {
 		id: nonEmptyString(raw.id, `clips[${index}].id`),
 		startMs: finiteNumber(raw.startMs, `clips[${index}].startMs`),
 		durationMs: finiteNumber(raw.durationMs, `clips[${index}].durationMs`),
 		frame: parseFrame(raw.frame),
+		...(keyframes && keyframes.length > 0 ? { keyframes } : {}),
 		...(raw.snapshot !== undefined ? { snapshot: parseSnapshot(raw.snapshot) } : {})
 	};
 	if (bind === 'clone') {
@@ -184,12 +206,36 @@ function persistSnapshot(snapshot: AnimClipSnapshot): AnimClipSnapshot {
 	};
 }
 
+function persistFrame(frame: AnimFrame): AnimFrame {
+	return {
+		x: frame.x,
+		y: frame.y,
+		w: frame.w,
+		h: frame.h,
+		...(frame.rotation ? { rotation: frame.rotation } : {})
+	};
+}
+
+function persistKeyframe(key: AnimKeyframe): AnimKeyframe {
+	return {
+		tMs: key.tMs,
+		...(key.x !== undefined ? { x: key.x } : {}),
+		...(key.y !== undefined ? { y: key.y } : {}),
+		...(key.w !== undefined ? { w: key.w } : {}),
+		...(key.h !== undefined ? { h: key.h } : {}),
+		...(key.rotation !== undefined ? { rotation: key.rotation } : {})
+	};
+}
+
 function persistClip(clip: AnimClip): AnimClip {
 	const base = {
 		id: clip.id,
 		startMs: clip.startMs,
 		durationMs: clip.durationMs,
-		frame: { x: clip.frame.x, y: clip.frame.y, w: clip.frame.w, h: clip.frame.h },
+		frame: persistFrame(clip.frame),
+		...(clip.keyframes && clip.keyframes.length > 0
+			? { keyframes: clip.keyframes.map(persistKeyframe) }
+			: {}),
 		...(clip.snapshot ? { snapshot: persistSnapshot(clip.snapshot) } : {})
 	};
 	if (clip.bind === 'clone') return { ...base, bind: 'clone' };

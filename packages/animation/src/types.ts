@@ -8,8 +8,18 @@ export type ClipSource =
 
 export type FsBackend = ClipSource['backend'];
 
-/** Axis-aligned box. Rotation is not part of v1. */
-export type AnimFrame = { x: number; y: number; w: number; h: number };
+/** Canvas box. `rotation` is radians, clockwise, default 0. */
+export type AnimFrame = { x: number; y: number; w: number; h: number; rotation?: number };
+
+/** Pose at `tMs` relative to the clip start. Omitted channels hold the previous pose. */
+export type AnimKeyframe = {
+	tMs: number;
+	x?: number;
+	y?: number;
+	w?: number;
+	h?: number;
+	rotation?: number;
+};
 
 export type AnimClipSnapshot = {
 	bytesRef: string;
@@ -22,6 +32,7 @@ type AnimClipBase = {
 	startMs: number;
 	durationMs: number;
 	frame: AnimFrame;
+	keyframes?: AnimKeyframe[];
 	snapshot?: AnimClipSnapshot;
 };
 

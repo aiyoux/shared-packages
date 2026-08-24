@@ -11,8 +11,11 @@ export {
 export {
 	createMonitorWatchStream,
 	parseSseChunk,
+	parseWatchFsEvents,
+	type MonitorWatchFsEvent,
 	type MonitorWatchStream,
 	type MonitorWatchStreamOptions,
+	type WatchFolderListener,
 	type WatchStreamStatus
 } from './watchStream.js';
 export { createCoalescer, type Coalescer, type CoalesceOptions } from './coalesce.js';

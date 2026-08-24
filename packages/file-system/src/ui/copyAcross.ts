@@ -63,7 +63,7 @@ export function filesFromDataTransfer(dt: DataTransfer | null | undefined): File
 	return Array.from(dt.files);
 }
 
-export type ExplorerDragPayload = { driverId?: string; ids: string[] };
+export type ExplorerDragPayload = { driverId?: string; ids: string[]; connectionId?: string };
 
 function idsFromCommaList(raw: string): string[] {
 	return raw
@@ -80,11 +80,17 @@ export function parseExplorerDragPayload(raw: string): ExplorerDragPayload {
 		try {
 			const parsed = JSON.parse(trimmed) as unknown;
 			if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-				const o = parsed as { driverId?: unknown; ids?: unknown };
+				const o = parsed as { driverId?: unknown; ids?: unknown; connectionId?: unknown };
 				if (Array.isArray(o.ids)) {
 					const ids = o.ids.filter((id): id is string => typeof id === 'string' && id !== '');
 					const driverId = typeof o.driverId === 'string' && o.driverId ? o.driverId : undefined;
-					return driverId ? { driverId, ids } : { ids };
+					const connectionId =
+						typeof o.connectionId === 'string' && o.connectionId ? o.connectionId : undefined;
+					return {
+						ids,
+						...(driverId ? { driverId } : {}),
+						...(connectionId ? { connectionId } : {})
+					};
 				}
 			}
 		} catch {

@@ -39,6 +39,36 @@ import { withLocalAddressSpace } from './localNetwork.js';
 
 export type WatchStreamStatus = 'connecting' | 'subscribed' | 'resync' | 'error' | 'closed';
 
+/** Wire `FsEvent` fields animations (and others) need from `watch.event_batch`. */
+export type MonitorWatchFsEvent = {
+	kind: string;
+	path?: string;
+	path_to?: string;
+	rel_path?: string;
+	rel_path_to?: string;
+	is_dir?: boolean;
+};
+
+export type WatchFolderListener = (events?: MonitorWatchFsEvent[]) => void;
+
+export function parseWatchFsEvents(raw: unknown): MonitorWatchFsEvent[] {
+	if (!Array.isArray(raw)) return [];
+	const out: MonitorWatchFsEvent[] = [];
+	for (const item of raw) {
+		if (!item || typeof item !== 'object') continue;
+		const o = item as Record<string, unknown>;
+		if (typeof o.kind !== 'string' || !o.kind) continue;
+		const ev: MonitorWatchFsEvent = { kind: o.kind };
+		if (typeof o.path === 'string') ev.path = o.path;
+		if (typeof o.path_to === 'string') ev.path_to = o.path_to;
+		if (typeof o.rel_path === 'string') ev.rel_path = o.rel_path;
+		if (typeof o.rel_path_to === 'string') ev.rel_path_to = o.rel_path_to;
+		if (typeof o.is_dir === 'boolean') ev.is_dir = o.is_dir;
+		out.push(ev);
+	}
+	return out;
+}
+
 export type MonitorWatchStreamOptions = {
 	transport: MonitorTransport;
 	/** Coalescing quiet period per folder (default 120ms). */
@@ -70,7 +100,7 @@ export type MonitorWatchStream = {
 	 * called. Several callers may watch the same folder; the subscription is
 	 * shared and only released when the last one leaves.
 	 */
-	watchFolder(path: string, listener: () => void): () => void;
+	watchFolder(path: string, listener: WatchFolderListener): () => void;
 	getStatus(): WatchStreamStatus;
 	/** Absolute paths currently subscribed or held (tests / diagnostics). */
 	watchedPaths(): string[];
@@ -80,12 +110,13 @@ export type MonitorWatchStream = {
 /** One watched folder. */
 type FolderState = {
 	path: string;
-	listeners: Set<() => void>;
+	listeners: Set<WatchFolderListener>;
 	rootId: string | null;
 	subId: string | null;
 	/** Deadline after which an unreferenced folder is released; null while in use. */
 	releaseAt: number | null;
 	coalescer: Coalescer;
+	queued: MonitorWatchFsEvent[];
 };
 
 /**
@@ -142,14 +173,20 @@ export function createMonitorWatchStream(
 		opts.onStatus?.(s);
 	};
 
-	const notify = (folder: FolderState) => {
+	const notify = (folder: FolderState, events?: MonitorWatchFsEvent[]) => {
 		for (const l of folder.listeners) {
 			try {
-				l();
+				l(events);
 			} catch {
 				/* a listener's failure is not the stream's problem */
 			}
 		}
+	};
+
+	const flushFolder = (folder: FolderState) => {
+		const queued = folder.queued;
+		folder.queued = [];
+		notify(folder, queued.length ? queued : undefined);
 	};
 
 	const folderBySubId = (subId: string): FolderState | undefined => {
@@ -357,7 +394,10 @@ export function createMonitorWatchStream(
 		if (type === 'watch.event_batch') {
 			const subId = typeof msg.sub_id === 'string' ? msg.sub_id : null;
 			const folder = subId ? folderBySubId(subId) : undefined;
-			folder?.coalescer.fire();
+			if (folder) {
+				folder.queued.push(...parseWatchFsEvents(msg.events));
+				folder.coalescer.fire();
+			}
 			return;
 		}
 		if (type === 'watch.resync_required') {
@@ -447,7 +487,7 @@ export function createMonitorWatchStream(
 	// -- public API ----------------------------------------------------------
 
 	return {
-		watchFolder(path: string, listener: () => void) {
+		watchFolder(path: string, listener: WatchFolderListener) {
 			let folder = folders.get(path);
 			if (!folder) {
 				const created: FolderState = {
@@ -456,7 +496,8 @@ export function createMonitorWatchStream(
 					rootId: null,
 					subId: null,
 					releaseAt: null,
-					coalescer: createCoalescer(() => notify(created), { debounceMs, maxDebounceMs })
+					queued: [],
+					coalescer: createCoalescer(() => flushFolder(created), { debounceMs, maxDebounceMs })
 				};
 				folder = created;
 				folders.set(path, folder);

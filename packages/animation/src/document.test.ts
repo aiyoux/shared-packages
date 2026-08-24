@@ -49,6 +49,24 @@ describe('parseAnimDocument / serializeAnimDocument', () => {
 		expect(parseAnimDocument(bytes)).toEqual(cloneDoc);
 	});
 
+	it('round-trips rotation and keyframes', () => {
+		const withMotion: AnimDocument = {
+			schemaVersion: 1,
+			durationMs: 4000,
+			clips: [
+				{
+					id: 'c1',
+					startMs: 0,
+					durationMs: 2000,
+					frame: { x: 10, y: 20, w: 100, h: 80, rotation: 0.5 },
+					keyframes: [{ tMs: 1000, x: 40, rotation: 1 }],
+					bind: 'clone'
+				}
+			]
+		};
+		expect(parseAnimDocument(serializeAnimDocument(withMotion))).toEqual(withMotion);
+	});
+
 	it('requires source on live, snapshot, and gitPin', () => {
 		const base = {
 			schemaVersion: 1,
@@ -109,7 +127,7 @@ describe('parseAnimDocument / serializeAnimDocument', () => {
 		).toThrow(/unknown bind/);
 	});
 
-	it('ignores extra fields including rotation and does not persist them', () => {
+	it('keeps frame.rotation and drops unknown extra fields', () => {
 		const parsed = parseAnimDocument({
 			schemaVersion: 1,
 			durationMs: 2000,
@@ -127,10 +145,9 @@ describe('parseAnimDocument / serializeAnimDocument', () => {
 				}
 			]
 		});
-		expect(parsed.clips[0]?.frame).toEqual({ x: 1, y: 2, w: 3, h: 4 });
+		expect(parsed.clips[0]?.frame).toEqual({ x: 1, y: 2, w: 3, h: 4, rotation: 90 });
 		expect(parsed).not.toHaveProperty('name');
 		const json = serializeAnimDocument(parsed);
-		expect(json).not.toMatch(/rotation/);
 		expect(json).not.toMatch(/mystery/);
 		expect(JSON.parse(json)).toEqual({
 			schemaVersion: 1,
@@ -140,7 +157,7 @@ describe('parseAnimDocument / serializeAnimDocument', () => {
 					id: 'r',
 					startMs: 0,
 					durationMs: 2000,
-					frame: { x: 1, y: 2, w: 3, h: 4 },
+					frame: { x: 1, y: 2, w: 3, h: 4, rotation: 90 },
 					bind: 'live',
 					source: { backend: 'shared-vfs', nodeId: 'n' }
 				}

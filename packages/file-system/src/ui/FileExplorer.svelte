@@ -467,7 +467,11 @@
 			e.dataTransfer?.setData('text/plain', ids.join(','));
 			e.dataTransfer?.setData(
 				FE_EXPLORER_IDS_MIME,
-				JSON.stringify({ driverId: driver.id, ids })
+				JSON.stringify({
+					driverId: driver.id,
+					ids,
+					...(driver.connectionId ? { connectionId: driver.connectionId } : {})
+				})
 			);
 		} catch {
 			/* jsdom may lack full DataTransfer */

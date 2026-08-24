@@ -1,6 +1,7 @@
 /** Payload FileDropZone emits for File Explorer / Connections row drags. */
 export type ExplorerDropPayload = {
 	driverId?: string;
+	connectionId?: string;
 	ids: string[];
 	clientX: number;
 	clientY: number;
@@ -53,6 +54,7 @@ function emitExplorerIds(
 		clientY: e.clientY
 	};
 	if (parsed.driverId) payload.driverId = parsed.driverId;
+	if (parsed.connectionId) payload.connectionId = parsed.connectionId;
 	onExplorerIds(payload);
 	return true;
 }
@@ -80,21 +82,30 @@ export function routeFileDrop(
 /** Prefer JSON `{"driverId","ids"}`; fall back to comma-separated ids. */
 export function parseExplorerDropPayload(raw: string): {
 	driverId?: string;
+	connectionId?: string;
 	ids: string[];
 } {
 	const trimmed = raw.trim();
 	if (!trimmed) return { ids: [] };
 	if (trimmed.startsWith('{')) {
 		try {
-			const parsed = JSON.parse(trimmed) as { driverId?: unknown; ids?: unknown };
+			const parsed = JSON.parse(trimmed) as {
+				driverId?: unknown;
+				ids?: unknown;
+				connectionId?: unknown;
+			};
 			const driverId =
 				typeof parsed.driverId === 'string' && parsed.driverId.trim()
 					? parsed.driverId.trim()
 					: undefined;
+			const connectionId =
+				typeof parsed.connectionId === 'string' && parsed.connectionId.trim()
+					? parsed.connectionId.trim()
+					: undefined;
 			const ids = Array.isArray(parsed.ids)
 				? parsed.ids.map((id) => String(id).trim()).filter(Boolean)
 				: [];
-			return { driverId, ids };
+			return { ids, ...(driverId ? { driverId } : {}), ...(connectionId ? { connectionId } : {}) };
 		} catch {
 			/* fall through to comma-separated ids */
 		}
