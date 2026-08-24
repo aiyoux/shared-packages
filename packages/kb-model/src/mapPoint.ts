@@ -31,8 +31,14 @@ function canConcat(start: Block, end: Block): boolean {
 	return canTakeText(start) && canTakeText(end);
 }
 
-function isCodeEmptyLastLine(block: Block, offset: number): boolean {
-	return block.type === 'code' && offset === block.text.length && (block.text === '' || block.text.endsWith('\n'));
+function isCodeEmptyLastLine(text: string, offset: number): boolean {
+	return offset === text.length && (text === '' || text.endsWith('\n'));
+}
+
+/** Offset `apply` would use after range-check + surrogate snap. `null` if apply would throw. */
+function appliedOffset(text: string, offset: number): number | null {
+	if (!Number.isInteger(offset) || offset < 0 || offset > text.length) return null;
+	return snapOffset(text, offset);
 }
 
 function collectSubtreeIds(block: Block, into: string[] = []): string[] {
@@ -92,8 +98,11 @@ function mapInsertText(
 	if (point.blockId !== op.at.blockId || op.text.length === 0) return point;
 	const block = findBlock(page, point.blockId);
 	if (!block || !canTakeText(block)) return point;
+	// apply throws on newline in text-like — mapping is not called for a dropped op.
+	if (isTextLike(block) && op.text.includes('\n')) return point;
 	const text = payload(block);
-	const at = op.at.offset;
+	const at = appliedOffset(text, op.at.offset);
+	if (at === null) return point;
 	let offset = snapOffset(text, point.offset);
 	if (offset > at || (offset === at && assocOf(point) >= 0)) {
 		const next = text.slice(0, at) + op.text + text.slice(at);
@@ -180,10 +189,17 @@ function mapSplitBlock(
 	if (!loc) return point;
 	const block = loc.block;
 	if (isAtomic(block) || !canTakeText(block)) return point;
-	if (block.type === 'code' && !isCodeEmptyLastLine(block, op.at.offset)) return point;
 	const text = payload(block);
-	const at = op.at.offset;
+	const at = appliedOffset(text, op.at.offset);
+	if (at === null) return point;
 	const offset = snapOffset(text, point.offset);
+	if (block.type === 'code') {
+		if (!isCodeEmptyLastLine(text, at)) return point;
+		// apply strips the trailing newline and inserts an empty paragraph at newId.
+		const keepLen = text.endsWith('\n') ? text.length - 1 : text.length;
+		if (assocOf(point) === 1 && offset >= at) return keep(point, op.newId, 0);
+		return keep(point, point.blockId, Math.min(offset, keepLen));
+	}
 	if (offset < at) return keep(point, point.blockId, offset);
 	if (offset === at) {
 		// assoc < 1 (incl. 0 / default) stays on the old block; assoc 1 follows newId.

@@ -63,8 +63,8 @@ export function applyRemoteMany(page: KbPage, ops: Op[]): KbPage {
 }
 
 /**
- * Batch: for each op, map against the page *before that op*, then applyRemote.
- * Do not map later ops against a stale tree.
+ * Batch: clamp each op the way applyRemote will, map against the page *before
+ * that op*, then apply. If applyRemote drops the op, keep the pre-map point.
  */
 export function applyRemoteBatch(
 	page: KbPage,
@@ -74,8 +74,13 @@ export function applyRemoteBatch(
 	let current = page;
 	let mapped: StickyPoint | null = point;
 	for (const op of ops) {
-		mapped = mapped && mapPointThroughOp(current, mapped, op);
-		current = applyRemote(current, op);
+		const clamped = clampOp(current, op);
+		if (!clamped) continue;
+		const nextMapped: StickyPoint | null = mapped && mapPointThroughOp(current, mapped, clamped);
+		const next = applyRemote(current, clamped);
+		if (next === current) continue;
+		mapped = nextMapped;
+		current = next;
 	}
 	return { page: current, point: mapped };
 }

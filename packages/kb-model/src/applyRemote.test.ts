@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { apply, UnresolvedPointError } from './apply.js';
 import { applyRemote, applyRemoteBatch, applyRemoteMany, clampPoint } from './applyRemote.js';
+import { mapPointThroughOp } from './mapPoint.js';
 import { normalizePage } from './normalize.js';
 import { plaintextOf } from './plaintext.js';
 import { KB_FORMAT, type Block, type KbPage, type Mark, type Op, type TextSpan } from './types.js';
@@ -80,5 +81,40 @@ describe('applyRemote', () => {
 		expect(next.blocks[1].id).toBe('C');
 		expect(plaintextOf(next.blocks[1])).toBe('cd');
 		expect(point).toEqual({ blockId: 'C', offset: 2 });
+	});
+
+	it('applyRemoteBatch clamps at before mapping so out-of-range insert agrees with applyRemote', () => {
+		const src = page([para('p', 'hi')]);
+		const op: Op = { kind: 'insert-text', at: { blockId: 'p', offset: 99 }, text: 'X' };
+		expect(mapPointThroughOp(src, { blockId: 'p', offset: 2, assoc: 1 }, op)).toEqual({
+			blockId: 'p',
+			offset: 2,
+			assoc: 1
+		});
+		const { page: next, point } = applyRemoteBatch(src, [op], { blockId: 'p', offset: 2, assoc: 1 });
+		expect(plaintextOf(next.blocks[0])).toBe('hiX');
+		expect(point).toEqual({ blockId: 'p', offset: 3, assoc: 1 });
+	});
+
+	it('applyRemoteBatch does not keep a map when the op is dropped', () => {
+		const src = page([para('p', 'ab')]);
+		const { page: next, point } = applyRemoteBatch(
+			src,
+			[{ kind: 'insert-text', at: { blockId: 'p', offset: 1 }, text: '\n' }],
+			{ blockId: 'p', offset: 2 }
+		);
+		expect(next).toEqual(src);
+		expect(point).toEqual({ blockId: 'p', offset: 2 });
+	});
+
+	it('applyRemoteBatch snaps surrogate-interior at before mapping (a👍b at 2)', () => {
+		const src = page([para('p', 'a👍b')]);
+		const { page: next, point } = applyRemoteBatch(
+			src,
+			[{ kind: 'insert-text', at: { blockId: 'p', offset: 2 }, text: 'X' }],
+			{ blockId: 'p', offset: 1, assoc: 1 }
+		);
+		expect(plaintextOf(next.blocks[0])).toBe('aX👍b');
+		expect(point).toEqual({ blockId: 'p', offset: 2, assoc: 1 });
 	});
 });

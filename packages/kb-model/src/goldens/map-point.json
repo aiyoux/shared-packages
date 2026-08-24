@@ -31,6 +31,35 @@
     "caretBefore": { "blockId": "A", "offset": 10 },
     "caretAfter": { "blockId": "new", "offset": 6 }
   },
+  "splitBlockCode": {
+    "comment": "code split strips the trailing newline and inserts an empty paragraph at newId; fence-end caret stays on code unless assoc=1",
+    "blockId": "c",
+    "newId": "n",
+    "text": "hi\n",
+    "splitAt": 3,
+    "keepText": "hi",
+    "cases": [
+      { "offset": 3, "after": { "blockId": "c", "offset": 2 } },
+      { "offset": 3, "assoc": 0, "after": { "blockId": "c", "offset": 2 } },
+      { "offset": 3, "assoc": 1, "after": { "blockId": "n", "offset": 0 } },
+      { "offset": 2, "after": { "blockId": "c", "offset": 2 } },
+      { "offset": 0, "after": { "blockId": "c", "offset": 0 } }
+    ]
+  },
+  "insertTextSurrogate": {
+    "comment": "apply snaps insert at 2 in a👍b to 1 (same as apply.test.ts); caret at 1 assoc>=0 must shift",
+    "text": "a👍b",
+    "insert": { "at": 2, "text": "X" },
+    "appliedAt": 1,
+    "afterText": "aX👍b",
+    "cases": [
+      { "offset": 1, "assoc": -1, "after": 1 },
+      { "offset": 1, "assoc": 0, "after": 2 },
+      { "offset": 1, "assoc": 1, "after": 2 },
+      { "offset": 3, "after": 4 },
+      { "offset": 0, "after": 0 }
+    ]
+  },
   "deleteBlock": {
     "blocks": ["aa", "bb", "cc"],
     "deleteId": "b",

@@ -36,6 +36,21 @@ const golden = JSON.parse(readFileSync(goldenPath, 'utf8')) as {
 		caretBefore: StickyPoint;
 		caretAfter: StickyPoint;
 	};
+	splitBlockCode: {
+		blockId: string;
+		newId: string;
+		text: string;
+		splitAt: number;
+		keepText: string;
+		cases: { offset: number; assoc?: Assoc; after: StickyPoint }[];
+	};
+	insertTextSurrogate: {
+		text: string;
+		insert: { at: number; text: string };
+		appliedAt: number;
+		afterText: string;
+		cases: { offset: number; after: number; assoc?: Assoc }[];
+	};
 	deleteBlock: {
 		blocks: string[];
 		deleteId: string;
@@ -121,6 +136,45 @@ describe('mapPointThroughOp goldens', () => {
 		expect(plaintextOf(next.blocks[1])).toBe(g.text.slice(g.splitAt));
 	});
 
+	it('code split-block: fence-end caret stays on stripped code, not past the end', () => {
+		const g = golden.splitBlockCode;
+		const src = page([{ id: g.blockId, type: 'code', language: '', text: g.text }]);
+		const op: Op = { kind: 'split-block', at: { blockId: g.blockId, offset: g.splitAt }, newId: g.newId };
+		const next = apply(src, op);
+		expect(next.blocks[0]).toMatchObject({ type: 'code', text: g.keepText });
+		expect(next.blocks[1]).toMatchObject({ type: 'paragraph', id: g.newId });
+		for (const row of g.cases) {
+			const point: StickyPoint =
+				row.assoc === undefined
+					? { blockId: g.blockId, offset: row.offset }
+					: { blockId: g.blockId, offset: row.offset, assoc: row.assoc };
+			const mapped = mapPointThroughOp(src, point, op);
+			expect(mapped, JSON.stringify(row)).toEqual({ ...point, ...row.after });
+			expect(mapped!.offset).toBeLessThanOrEqual(plaintextOf(next.blocks[mapped!.blockId === g.newId ? 1 : 0]).length);
+		}
+	});
+
+	it('insert-text snaps surrogate-interior at the same way apply does (a👍b at 2 → 1)', () => {
+		const g = golden.insertTextSurrogate;
+		const src = page([para('A', g.text)]);
+		const op: Op = {
+			kind: 'insert-text',
+			at: { blockId: 'A', offset: g.insert.at },
+			text: g.insert.text
+		};
+		expect(plaintextOf(apply(src, op).blocks[0])).toBe(g.afterText);
+		for (const row of g.cases) {
+			const point: StickyPoint =
+				row.assoc === undefined
+					? { blockId: 'A', offset: row.offset }
+					: { blockId: 'A', offset: row.offset, assoc: row.assoc };
+			expect(mapPointThroughOp(src, point, op), JSON.stringify(row)).toEqual({
+				...point,
+				offset: row.after
+			});
+		}
+	});
+
 	it('delete-block: caret maps to null then snaps to the following text-like', () => {
 		const g = golden.deleteBlock;
 		const src = page(g.blocks.map((text, i) => para(['a', 'b', 'c'][i], text)));
@@ -148,6 +202,25 @@ describe('mapPointThroughOp v1 op table', () => {
 			range: { anchor: { blockId: 'a', offset: 1 }, head: { blockId: 'c', offset: 1 } }
 		};
 		expect(mapPointThroughOp(mid, { blockId: 'm', offset: 1 }, dropMid)).toBeNull();
+	});
+
+	it('split-block snaps surrogate-interior at (a👍b at 2 → 1) like apply', () => {
+		const src = page([para('A', 'a👍b')]);
+		const op: Op = { kind: 'split-block', at: { blockId: 'A', offset: 2 }, newId: 'N' };
+		const next = apply(src, op);
+		expect(plaintextOf(next.blocks[0])).toBe('a');
+		expect(plaintextOf(next.blocks[1])).toBe('👍b');
+		expect(mapPointThroughOp(src, { blockId: 'A', offset: 3 }, op)).toEqual({ blockId: 'N', offset: 2 });
+		expect(mapPointThroughOp(src, { blockId: 'A', offset: 1, assoc: 1 }, op)).toEqual({
+			blockId: 'N',
+			offset: 0,
+			assoc: 1
+		});
+		expect(mapPointThroughOp(src, { blockId: 'A', offset: 1, assoc: -1 }, op)).toEqual({
+			blockId: 'A',
+			offset: 1,
+			assoc: -1
+		});
 	});
 
 	it('split-block assoc: < 1 stays on old; 1 follows newId', () => {
