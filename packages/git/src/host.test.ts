@@ -57,6 +57,12 @@ describe('createGitHost local backend', () => {
 		await fs.promises.writeFile(path.join(dir, 'README.md'), 'hello world\n');
 		const blob = await host.readBlobAt(repo, sha!, 'README.md');
 		expect(new TextDecoder().decode(blob)).toBe('hello\n');
+		expect(new TextDecoder().decode(await host.readBlobAt(repo, 'HEAD', 'README.md'))).toBe(
+			'hello\n'
+		);
+		expect(new TextDecoder().decode(await host.readBlobAt(repo, sha!.slice(0, 7), 'README.md'))).toBe(
+			'hello\n'
+		);
 		expect(await fs.promises.readFile(path.join(dir, 'README.md'), 'utf8')).toBe('hello world\n');
 	});
 

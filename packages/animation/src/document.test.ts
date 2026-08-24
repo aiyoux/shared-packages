@@ -7,6 +7,7 @@ import {
 	parseAnimDocument,
 	sameFsBackend,
 	serializeAnimDocument,
+	type AnimClip,
 	type AnimDocument
 } from './index.js';
 
@@ -38,7 +39,7 @@ describe('parseAnimDocument / serializeAnimDocument', () => {
 		const json = serializeAnimDocument(cloneDoc);
 		const parsed = parseAnimDocument(json);
 		expect(parsed).toEqual(cloneDoc);
-		expect(parsed.clips[0]?.source).toBeUndefined();
+		expect(parsed.clips[0]).not.toHaveProperty('source');
 		expect(json).not.toMatch(/"source"/);
 	});
 
@@ -169,12 +170,15 @@ describe('parseAnimDocument / serializeAnimDocument', () => {
 				}
 			]
 		});
-		expect(doc.clips[0]?.source).toEqual({
-			backend: 'monitor',
-			profileId: 'p1',
-			relPath: 'clips/a.mp4',
-			ino: '18446744073709551615',
-			dev: '0'
+		expect(doc.clips[0]).toMatchObject({
+			bind: 'gitPin',
+			source: {
+				backend: 'monitor',
+				profileId: 'p1',
+				relPath: 'clips/a.mp4',
+				ino: '18446744073709551615',
+				dev: '0'
+			}
 		});
 		expect(() =>
 			parseAnimDocument({
@@ -212,8 +216,21 @@ describe('sameFsBackend / assertClipMatchesDoc', () => {
 
 	it('throws on cross-backend clips and allows clone-only', () => {
 		expect(() => assertClipMatchesDoc('shared-vfs', liveVfsClip)).not.toThrow();
+		expect(() => assertClipMatchesDoc('monitor', liveVfsClip)).toThrow(AnimParseError);
 		expect(() => assertClipMatchesDoc('monitor', liveVfsClip)).toThrow(/does not match/);
 		expect(() => assertClipMatchesDoc('monitor', cloneDoc.clips[0]!)).not.toThrow();
+	});
+
+	it('throws when a non-clone clip is missing source', () => {
+		const liveNoSource = {
+			id: 'x',
+			startMs: 0,
+			durationMs: 1,
+			frame: { x: 0, y: 0, w: 1, h: 1 },
+			bind: 'live'
+		} as AnimClip;
+		expect(() => assertClipMatchesDoc('shared-vfs', liveNoSource)).toThrow(AnimParseError);
+		expect(() => assertClipMatchesDoc('shared-vfs', liveNoSource)).toThrow(/requires source/);
 	});
 });
 

@@ -17,16 +17,17 @@ export type AnimClipSnapshot = {
 	atCommit?: string;
 };
 
-export type AnimClip = {
+type AnimClipBase = {
 	id: string;
 	startMs: number;
 	durationMs: number;
 	frame: AnimFrame;
-	bind: BindMode;
-	/** Omitted for clone-only clips. */
-	source?: ClipSource;
 	snapshot?: AnimClipSnapshot;
 };
+
+export type AnimClip =
+	| (AnimClipBase & { bind: 'clone' })
+	| (AnimClipBase & { bind: Exclude<BindMode, 'clone'>; source: ClipSource });
 
 export type AnimDocument = {
 	schemaVersion: 1;

@@ -16,8 +16,6 @@ export class AnimParseError extends Error {
 	}
 }
 
-const BINDS_REQUIRING_SOURCE: ReadonlySet<BindMode> = new Set(['live', 'snapshot', 'gitPin']);
-
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return value != null && typeof value === 'object' && !Array.isArray(value);
 }
@@ -127,23 +125,23 @@ function parseBind(raw: unknown): BindMode {
 function parseClip(raw: unknown, index: number): AnimClip {
 	if (!isRecord(raw)) throw new AnimParseError(`clips[${index}] must be an object`);
 	const bind = parseBind(raw.bind);
-	const clip: AnimClip = {
+	const base = {
 		id: nonEmptyString(raw.id, `clips[${index}].id`),
 		startMs: finiteNumber(raw.startMs, `clips[${index}].startMs`),
 		durationMs: finiteNumber(raw.durationMs, `clips[${index}].durationMs`),
 		frame: parseFrame(raw.frame),
-		bind
+		...(raw.snapshot !== undefined ? { snapshot: parseSnapshot(raw.snapshot) } : {})
 	};
-	if (raw.source !== undefined) {
-		if (bind === 'clone') {
+	if (bind === 'clone') {
+		if (raw.source !== undefined) {
 			throw new AnimParseError(`clips[${index}] clone bind must omit source`);
 		}
-		clip.source = parseSource(raw.source);
-	} else if (BINDS_REQUIRING_SOURCE.has(bind)) {
+		return { ...base, bind: 'clone' };
+	}
+	if (raw.source === undefined) {
 		throw new AnimParseError(`clips[${index}] ${bind} bind requires source`);
 	}
-	if (raw.snapshot !== undefined) clip.snapshot = parseSnapshot(raw.snapshot);
-	return clip;
+	return { ...base, bind, source: parseSource(raw.source) };
 }
 
 export function parseAnimDocument(input: Uint8Array | unknown): AnimDocument {
@@ -178,22 +176,24 @@ function persistSource(source: ClipSource): ClipSource {
 	};
 }
 
+function persistSnapshot(snapshot: AnimClipSnapshot): AnimClipSnapshot {
+	return {
+		bytesRef: snapshot.bytesRef,
+		...(snapshot.atGeneration !== undefined ? { atGeneration: snapshot.atGeneration } : {}),
+		...(snapshot.atCommit !== undefined ? { atCommit: snapshot.atCommit } : {})
+	};
+}
+
 function persistClip(clip: AnimClip): AnimClip {
-	const out: AnimClip = {
+	const base = {
 		id: clip.id,
 		startMs: clip.startMs,
 		durationMs: clip.durationMs,
 		frame: { x: clip.frame.x, y: clip.frame.y, w: clip.frame.w, h: clip.frame.h },
-		bind: clip.bind
+		...(clip.snapshot ? { snapshot: persistSnapshot(clip.snapshot) } : {})
 	};
-	if (clip.source) out.source = persistSource(clip.source);
-	if (clip.snapshot) {
-		const snapshot: AnimClipSnapshot = { bytesRef: clip.snapshot.bytesRef };
-		if (clip.snapshot.atGeneration !== undefined) snapshot.atGeneration = clip.snapshot.atGeneration;
-		if (clip.snapshot.atCommit !== undefined) snapshot.atCommit = clip.snapshot.atCommit;
-		out.snapshot = snapshot;
-	}
-	return out;
+	if (clip.bind === 'clone') return { ...base, bind: 'clone' };
+	return { ...base, bind: clip.bind, source: persistSource(clip.source) };
 }
 
 export function serializeAnimDocument(doc: AnimDocument): string {
@@ -210,9 +210,12 @@ export function sameFsBackend(docBackend: FsBackend, source: ClipSource): boolea
 }
 
 export function assertClipMatchesDoc(docBackend: FsBackend, clip: AnimClip): void {
-	if (clip.source == null) return;
+	if (clip.bind === 'clone') return;
+	if (clip.source == null) {
+		throw new AnimParseError(`Clip ${clip.id} ${clip.bind} bind requires source`);
+	}
 	if (!sameFsBackend(docBackend, clip.source)) {
-		throw new Error(
+		throw new AnimParseError(
 			`Clip ${clip.id} source backend '${clip.source.backend}' does not match document backend '${docBackend}'`
 		);
 	}

@@ -30,6 +30,6 @@ export interface GitHost {
 	subscribeRepo(repo: GitRepoRef, onChange: (snap: GitSnapshot) => void): () => void;
 	/** `git.init` for a local working tree (`repo.path` = VFS id or Node dir). */
 	initLocal(repoPath: string): Promise<void>;
-	/** Committed blob at `rev`, not live worktree bytes. */
+	/** Committed blob at `rev` (ref, abbreviated oid, or SHA), not live worktree bytes. */
 	readBlobAt(repo: GitRepoRef, rev: string, filepath: string): Promise<Uint8Array>;
 }

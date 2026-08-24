@@ -46,6 +46,17 @@ export async function localReadBlobAt(
 	rev: string,
 	filepath: string
 ): Promise<Uint8Array> {
-	const { blob } = await git.readBlob({ fs, dir, oid: rev, filepath });
+	// readBlob wants an oid; peel refs (HEAD, branch) and abbreviated SHAs first.
+	let oid = rev;
+	try {
+		oid = await git.resolveRef({ fs, dir, ref: rev });
+	} catch {
+		try {
+			oid = await git.expandOid({ fs, dir, oid: rev });
+		} catch {
+			oid = rev;
+		}
+	}
+	const { blob } = await git.readBlob({ fs, dir, oid, filepath });
 	return blob;
 }
