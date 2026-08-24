@@ -1,6 +1,6 @@
 export { default as FileExplorer } from './FileExplorer.svelte';
 export { default as FeTreeView } from './FeTreeView.svelte';
-export { detectProject, findProjectRoot } from './detectProject.js';
+export { detectProject, findProjectRoot, type ProjectRootHit } from './detectProject.js';
 export type { ExplorerMode, ExplorerContext } from './FileExplorer.svelte';
 export { default as StoragePersistenceStatus } from './StoragePersistenceStatus.svelte';
 export { default as DualPaneExplorer } from './DualPaneExplorer.svelte';

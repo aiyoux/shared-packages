@@ -12,6 +12,7 @@ export type ObserveLiveLinkOpts = {
 	/** Identity captured at bind. Recycled ids after hard-delete become `replaced`. */
 	generation?: number;
 	blobId?: string;
+	createdAt?: number;
 };
 
 /**
@@ -33,15 +34,17 @@ export function observeLiveLink(
 	const bindFromOpts = opts?.generation !== undefined || opts?.blobId !== undefined;
 	let bindGeneration = opts?.generation;
 	let bindBlobId = opts?.blobId;
+	let bindCreatedAt = opts?.createdAt;
 	let sawMissing = false;
 	let emittedLive = false;
 	let lastKey = '';
+	let epoch = 0;
 	let nodeWatchActive = false;
 	let unsubNode: () => void = () => {};
 
 	const emit = (snap: LiveLinkSnapshot) => {
 		if (closed) return;
-		const key = `${snap.state}:${snap.node?.generation ?? ''}:${snap.node?.blobId ?? ''}:${snap.node?.deletedAt ?? ''}`;
+		const key = `${snap.state}:${snap.node?.generation ?? ''}:${snap.node?.blobId ?? ''}:${snap.node?.deletedAt ?? ''}:${snap.node?.createdAt ?? ''}`;
 		if (key === lastKey) return;
 		lastKey = key;
 		if (snap.state === 'live') emittedLive = true;
@@ -64,14 +67,24 @@ export function observeLiveLink(
 		});
 	};
 
-	const identityMismatch = (node: VfsNode): boolean => {
+	const isReplaced = (node: VfsNode): boolean => {
 		const blobMismatch = bindBlobId !== undefined && node.blobId !== bindBlobId;
-		const genMismatch = bindGeneration !== undefined && node.generation !== bindGeneration;
-		if (bindBlobId !== undefined) return blobMismatch;
-		return genMismatch;
+		const createdMismatch = bindCreatedAt !== undefined && node.createdAt !== bindCreatedAt;
+		const genDropped =
+			emittedLive &&
+			bindGeneration !== undefined &&
+			bindGeneration > 1 &&
+			node.generation === 1 &&
+			blobMismatch;
+		if (createdMismatch) return true;
+		if (genDropped) return true;
+		if (sawMissing && blobMismatch) return true;
+		if (!emittedLive && bindFromOpts && blobMismatch) return true;
+		return false;
 	};
 
 	const refresh = async () => {
+		const my = ++epoch;
 		if (closed) return;
 		let node: VfsNode | undefined;
 		try {
@@ -79,7 +92,7 @@ export function observeLiveLink(
 		} catch {
 			node = undefined;
 		}
-		if (closed) return;
+		if (closed || my !== epoch) return;
 
 		if (!node) {
 			sawMissing = true;
@@ -88,16 +101,16 @@ export function observeLiveLink(
 			return;
 		}
 
-		if (!bindFromOpts) {
-			if (bindGeneration === undefined) bindGeneration = node.generation;
-			if (bindBlobId === undefined && node.blobId !== undefined) bindBlobId = node.blobId;
-		}
-
-		const recycled = identityMismatch(node) && (sawMissing || bindFromOpts) && (!emittedLive || sawMissing);
-		if (recycled) {
+		if (isReplaced(node)) {
 			stopNodeWatch();
 			emit({ state: 'replaced', node });
 			return;
+		}
+
+		if (bindCreatedAt === undefined) bindCreatedAt = node.createdAt;
+		if (!bindFromOpts) {
+			if (bindGeneration === undefined) bindGeneration = node.generation;
+			if (bindBlobId === undefined && node.blobId !== undefined) bindBlobId = node.blobId;
 		}
 
 		if (node.deletedAt != null) {
@@ -118,6 +131,7 @@ export function observeLiveLink(
 	return () => {
 		if (closed) return;
 		closed = true;
+		epoch += 1;
 		unsubBus();
 		stopNodeWatch();
 	};

@@ -40,8 +40,22 @@ async function projectCandidates(
 }
 
 /**
+ * Result of walking for a `.git` child.
+ *
+ * `found: false` — no project.
+ * `found: true, id: null` — the explorer root (`parentId` null) is the project.
+ * `found: true, id: string` — that folder contains `.git`.
+ *
+ * `id === null` is not “not a project”; use `found`. `detectProject` is the
+ * boolean for UI (FileExplorer / Open project).
+ */
+export type ProjectRootHit = {
+	found: boolean;
+	id: ExplorerEntryId | null;
+};
+
+/**
  * Nearest folder (self, then ancestors) that has a `.git` child.
- * `null` means none found, or the project is the explorer root (`parentId` null).
  *
  * Drivers that cannot walk parents (`getPath` empty/throws) only check
  * `folderId` and the explorer root.
@@ -49,15 +63,15 @@ async function projectCandidates(
 export async function findProjectRoot(
 	driver: ExplorerDriver,
 	folderId: ExplorerEntryId | null
-): Promise<ExplorerEntryId | null> {
+): Promise<ProjectRootHit> {
 	for (const id of await projectCandidates(driver, folderId)) {
 		try {
-			if (await hasGitChild(driver, id)) return id;
+			if (await hasGitChild(driver, id)) return { found: true, id };
 		} catch {
 			continue;
 		}
 	}
-	return null;
+	return { found: false, id: null };
 }
 
 /**
@@ -68,12 +82,5 @@ export async function detectProject(
 	driver: ExplorerDriver,
 	folderId: ExplorerEntryId | null
 ): Promise<boolean> {
-	for (const id of await projectCandidates(driver, folderId)) {
-		try {
-			if (await hasGitChild(driver, id)) return true;
-		} catch {
-			continue;
-		}
-	}
-	return false;
+	return (await findProjectRoot(driver, folderId)).found;
 }

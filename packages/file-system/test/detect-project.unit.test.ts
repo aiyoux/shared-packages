@@ -168,9 +168,8 @@ describe('detectProject', () => {
 		};
 		const driver = treeDriver([proj]);
 		assert.equal(await detectProject(driver, 'src'), true);
-		assert.equal(await findProjectRoot(driver, 'src'), 'proj');
-		assert.equal(await findProjectRoot(driver, 'proj'), 'proj');
-		assert.equal(await detectProject(driver, 'src'), true);
+		assert.deepEqual(await findProjectRoot(driver, 'src'), { found: true, id: 'proj' });
+		assert.deepEqual(await findProjectRoot(driver, 'proj'), { found: true, id: 'proj' });
 	});
 
 	it('is false for a nested folder with no .git on any ancestor', async () => {
@@ -190,7 +189,7 @@ describe('detectProject', () => {
 		};
 		const driver = treeDriver([proj]);
 		assert.equal(await detectProject(driver, 'src'), false);
-		assert.equal(await findProjectRoot(driver, 'src'), null);
+		assert.deepEqual(await findProjectRoot(driver, 'src'), { found: false, id: null });
 	});
 
 	it('falls back to children-only when getPath cannot walk parents', async () => {
@@ -198,6 +197,35 @@ describe('detectProject', () => {
 		assert.equal(await detectProject(nestedHasNoGit, 'src'), false);
 		const nestedHasGit = driverWith([{ name: '.git', kind: 'folder' }]);
 		assert.equal(await detectProject(nestedHasGit, 'src'), true);
-		assert.equal(await findProjectRoot(nestedHasGit, 'src'), 'src');
+		assert.deepEqual(await findProjectRoot(nestedHasGit, 'src'), { found: true, id: 'src' });
+	});
+
+	it('nested folder with .git only at explorer root: detectProject true, findProjectRoot id null', async () => {
+		const git: TreeNode = {
+			id: 'git',
+			parentId: null,
+			name: '.git',
+			kind: 'folder',
+			children: []
+		};
+		const src: TreeNode = {
+			id: 'src',
+			parentId: null,
+			name: 'src',
+			kind: 'folder',
+			children: [
+				{
+					id: 'main',
+					parentId: 'src',
+					name: 'main.ts',
+					kind: 'file',
+					children: []
+				}
+			]
+		};
+		const driver = treeDriver([git, src]);
+		assert.equal(await detectProject(driver, 'src'), true);
+		assert.deepEqual(await findProjectRoot(driver, 'src'), { found: true, id: null });
+		assert.deepEqual(await findProjectRoot(driver, null), { found: true, id: null });
 	});
 });

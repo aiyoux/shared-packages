@@ -77,6 +77,7 @@ export {
 	isFolderId,
 	parentIdOf,
 	relativeIdFromAbsolute,
+	sanitizeSegment,
 	toAbsolutePath
 } from './pathIds.js';
 export {

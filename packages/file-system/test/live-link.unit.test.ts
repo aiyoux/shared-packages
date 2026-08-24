@@ -87,7 +87,8 @@ describe('observeLiveLink', () => {
 		const snaps: LiveLinkSnapshot[] = [];
 		const unsub = observeLiveLink(vfs, f.id, (s) => snaps.push(s), {
 			generation: f.generation,
-			blobId: f.blobId
+			blobId: f.blobId,
+			createdAt: f.createdAt
 		});
 		await waitFor(snaps, (s) => s.state === 'live');
 		await vfs.permanentDelete(f.id);
@@ -103,6 +104,64 @@ describe('observeLiveLink', () => {
 		const replaced = await waitFor(snaps, (s) => s.state === 'replaced');
 		assert.equal(replaced.node?.id, f.id);
 		assert.equal(replaced.node?.blobId, recycled.blobId);
+		unsub();
+	});
+
+	it('permanentDelete + writeFile({id}) without waiting for missing → replaced', async () => {
+		const f = await vfs.writeFile({
+			parentId: null,
+			name: 'race.png',
+			fileType: 'image',
+			body: new Uint8Array([1, 2])
+		});
+		const snaps: LiveLinkSnapshot[] = [];
+		const unsub = observeLiveLink(vfs, f.id, (s) => snaps.push(s), {
+			generation: f.generation,
+			blobId: f.blobId,
+			createdAt: f.createdAt
+		});
+		await waitFor(snaps, (s) => s.state === 'live');
+		await vfs.permanentDelete(f.id);
+		const recycled = await vfs.writeFile({
+			id: f.id,
+			parentId: null,
+			name: 'other.png',
+			fileType: 'image',
+			body: new Uint8Array([9, 9, 9])
+		});
+		assert.notEqual(recycled.createdAt, f.createdAt);
+		const replaced = await waitFor(snaps, (s) => s.state === 'replaced');
+		assert.equal(replaced.node?.blobId, recycled.blobId);
+		unsub();
+	});
+
+	it('updateFile stays live (snapshot mode, same createdAt)', async () => {
+		const f = await vfs.writeFile({
+			parentId: null,
+			name: 'edit.png',
+			fileType: 'image',
+			body: new Uint8Array([1])
+		});
+		const snaps: LiveLinkSnapshot[] = [];
+		const unsub = observeLiveLink(vfs, f.id, (s) => snaps.push(s), {
+			generation: f.generation,
+			blobId: f.blobId,
+			createdAt: f.createdAt
+		});
+		await waitFor(snaps, (s) => s.state === 'live');
+		const updated = await vfs.updateFile(f.id, new Uint8Array([2, 2]), {
+			expectedGeneration: f.generation
+		});
+		assert.notEqual(updated.blobId, f.blobId);
+		assert.equal(updated.createdAt, f.createdAt);
+		await wait(50);
+		assert.equal(
+			snaps.some((s) => s.state === 'replaced'),
+			false
+		);
+		const last = snaps[snaps.length - 1];
+		assert.equal(last?.state, 'live');
+		assert.equal(last?.node?.id, f.id);
 		unsub();
 	});
 });
@@ -129,6 +188,7 @@ describe('subscribeNode trash/restore', () => {
 		});
 		const events: DocumentEvent[] = [];
 		const unsub = vfs.subscribeNode(f.id, (e) => events.push(e));
+		await wait(30);
 		await vfs.trash(f.id);
 		await wait(40);
 		assert.ok(events.some((e) => e.type === 'deleted' && e.reason === 'trash'));
@@ -148,8 +208,13 @@ describe('subscribeNode trash/restore', () => {
 		});
 		const events: DocumentEvent[] = [];
 		vfs.subscribeNode(f.id, (e) => events.push(e));
+		await wait(30);
 		await vfs.permanentDelete(f.id);
-		await wait(40);
+		const start = Date.now();
+		while (Date.now() - start < 400) {
+			if (events.some((e) => e.type === 'deleted' && e.reason === 'permanent')) return;
+			await wait(15);
+		}
 		assert.ok(events.some((e) => e.type === 'deleted' && e.reason === 'permanent'));
 	});
 });

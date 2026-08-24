@@ -22,6 +22,7 @@ import {
 	isFolderId,
 	parentIdOf,
 	relativeIdFromAbsolute,
+	sanitizeSegment,
 	toAbsolutePath
 } from './pathIds.js';
 import type { MonitorTransport } from './client.js';
@@ -125,13 +126,21 @@ export async function createMonitorExplorerDriver(
 		return `${name.slice(0, i)} (${n})${name.slice(i)}`;
 	}
 
-	async function uniqueName(parentId: ExplorerEntryId | null, base: string): Promise<string> {
+	async function uniqueName(
+		parentId: ExplorerEntryId | null,
+		base: string,
+		excludeId?: ExplorerEntryId
+	): Promise<string> {
 		let used = new Set<string>();
 		try {
 			const result = await transport.list(toAbsolutePath(rootPath, parentId));
 			used = new Set(result.entries.map((e) => e.name));
 		} catch {
 			return base;
+		}
+		// Rename / same-folder move must not treat the source itself as a collision.
+		if (excludeId != null && parentIdOf(excludeId) === parentId) {
+			used.delete(baseName(excludeId));
 		}
 		if (!used.has(base)) return base;
 		for (let i = 1; i < 200; i++) {
@@ -216,40 +225,6 @@ export async function createMonitorExplorerDriver(
 				const truncated =
 					result.truncated || entries.length >= EXPLORER_LIST_MAX_ENTRIES;
 				return { entries: sortFoldersFirst(entries), truncated };
-			} catch (e) {
-				throw mapMonitorError(e);
-			}
-		},
-
-		async rename(id: ExplorerEntryId, name: string) {
-			if (!transport.rename) {
-				throw new ExplorerMonitorError('MONITOR_ERROR', 'Monitor rename is not available');
-			}
-			try {
-				const parent = parentIdOf(id);
-				const destName = await uniqueName(parent, name.trim());
-				const destRel = childId(parent, destName, isFolderId(id));
-				await transport.rename(toAbsolutePath(rootPath, id), toAbsolutePath(rootPath, destRel));
-				return {
-					id: destRel,
-					parentId: parent,
-					name: destName,
-					kind: (isFolderId(id) ? 'folder' : 'file') as 'folder' | 'file',
-					fileType: isFolderId(id) ? undefined : inferFileTypeFromName(destName)
-				};
-			} catch (e) {
-				throw mapMonitorError(e);
-			}
-		},
-
-		async move(id: ExplorerEntryId, newParentId: ExplorerEntryId | null) {
-			if (!transport.rename) {
-				throw new ExplorerMonitorError('MONITOR_ERROR', 'Monitor rename is not available');
-			}
-			try {
-				const destName = await uniqueName(newParentId, baseName(id));
-				const destRel = childId(newParentId, destName, isFolderId(id));
-				await transport.rename(toAbsolutePath(rootPath, id), toAbsolutePath(rootPath, destRel));
 			} catch (e) {
 				throw mapMonitorError(e);
 			}
@@ -351,6 +326,48 @@ export async function createMonitorExplorerDriver(
 			watchStatus = 'closed';
 		}
 	};
+
+	if (canRename && transport.rename) {
+		const renameFn = transport.rename.bind(transport);
+		driver.rename = async (id, name) => {
+			try {
+				const destName = sanitizeSegment(name);
+				const parent = parentIdOf(id);
+				const unique = await uniqueName(parent, destName, id);
+				const destRel = childId(parent, unique, isFolderId(id));
+				if (destRel !== id) {
+					await renameFn(toAbsolutePath(rootPath, id), toAbsolutePath(rootPath, destRel));
+				}
+				return {
+					id: destRel,
+					parentId: parent,
+					name: unique,
+					kind: (isFolderId(id) ? 'folder' : 'file') as 'folder' | 'file',
+					fileType: isFolderId(id) ? undefined : inferFileTypeFromName(unique)
+				};
+			} catch (e) {
+				if (e instanceof ExplorerMonitorError) throw e;
+				if (e instanceof Error && (e.message === 'INVALID_NAME' || e.message === 'INVALID_PATH')) {
+					throw new ExplorerMonitorError('INVALID_NAME', 'Invalid name');
+				}
+				throw mapMonitorError(e);
+			}
+		};
+		driver.move = async (id, newParentId) => {
+			try {
+				const destName = await uniqueName(newParentId, baseName(id), id);
+				const destRel = childId(newParentId, destName, isFolderId(id));
+				if (destRel === id) return;
+				await renameFn(toAbsolutePath(rootPath, id), toAbsolutePath(rootPath, destRel));
+			} catch (e) {
+				if (e instanceof ExplorerMonitorError) throw e;
+				if (e instanceof Error && (e.message === 'INVALID_NAME' || e.message === 'INVALID_PATH')) {
+					throw new ExplorerMonitorError('INVALID_NAME', 'Invalid name');
+				}
+				throw mapMonitorError(e);
+			}
+		};
+	}
 
 	return driver;
 }

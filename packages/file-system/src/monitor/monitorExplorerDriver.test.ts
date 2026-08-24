@@ -35,10 +35,19 @@ const profile = {
 	updatedAt: 1
 };
 
+function listingAPng() {
+	return vi.fn(async () => ({
+		path: '/tmp',
+		truncated: false,
+		entries: [{ name: 'a.png', path: '/tmp/a.png', kind: 'file' as const, size: 12 }]
+	}));
+}
+
 describe('monitor explorer driver capabilities', () => {
 	it('keeps rename/move off when meta capabilities are missing', async () => {
 		const transport = transportStub({
-			meta: vi.fn(async () => ({ name: 'monitor', features: ['fs'] }))
+			meta: vi.fn(async () => ({ name: 'monitor', features: ['fs'] })),
+			rename: vi.fn(async () => {})
 		});
 		const driver = await createMonitorExplorerDriver({
 			profile,
@@ -47,6 +56,8 @@ describe('monitor explorer driver capabilities', () => {
 		});
 		expect(driver.capabilities.supportsRename).toBe(false);
 		expect(driver.capabilities.supportsMove).toBe(false);
+		expect(driver.rename).toBeUndefined();
+		expect(driver.move).toBeUndefined();
 	});
 
 	it('enables rename/move from caps.fs.rename and calls transport.rename', async () => {
@@ -55,7 +66,16 @@ describe('monitor explorer driver capabilities', () => {
 			meta: vi.fn(async () => ({
 				capabilities: { fs: { ino: true, rename: true }, git: { blob: true } }
 			})),
-			list: vi.fn(async () => ({ path: '/tmp', entries: [], truncated: false })),
+			list: vi.fn(async (path: string) => {
+				if (path === '/tmp') {
+					return {
+						path,
+						truncated: false,
+						entries: [{ name: 'a.png', path: '/tmp/a.png', kind: 'file' as const }]
+					};
+				}
+				return { path, truncated: false, entries: [] };
+			}),
 			rename
 		});
 		const driver = await createMonitorExplorerDriver({
@@ -69,6 +89,64 @@ describe('monitor explorer driver capabilities', () => {
 		expect(rename).toHaveBeenCalledWith('/tmp/a.png', '/tmp/b.png');
 		await driver.move!('a.png', 'dir/');
 		expect(rename).toHaveBeenCalledWith('/tmp/a.png', '/tmp/dir/a.png');
+	});
+
+	it('rename a.png → a.png is a no-op (does not suffix, does not POST)', async () => {
+		const rename = vi.fn(async () => {});
+		const transport = transportStub({
+			meta: vi.fn(async () => ({
+				capabilities: { fs: { ino: true, rename: true } }
+			})),
+			list: listingAPng(),
+			rename
+		});
+		const driver = await createMonitorExplorerDriver({
+			profile,
+			transport,
+			enableWatch: false
+		});
+		const out = await driver.rename!('a.png', 'a.png');
+		expect(out.id).toBe('a.png');
+		expect(out.name).toBe('a.png');
+		expect(rename).not.toHaveBeenCalled();
+	});
+
+	it('move a.png into the same parent does not suffix', async () => {
+		const rename = vi.fn(async () => {});
+		const transport = transportStub({
+			meta: vi.fn(async () => ({
+				capabilities: { fs: { ino: true, rename: true } }
+			})),
+			list: listingAPng(),
+			rename
+		});
+		const driver = await createMonitorExplorerDriver({
+			profile,
+			transport,
+			enableWatch: false
+		});
+		await driver.move!('a.png', null);
+		expect(rename).not.toHaveBeenCalled();
+	});
+
+	it('rejects nested rename names', async () => {
+		const rename = vi.fn(async () => {});
+		const transport = transportStub({
+			meta: vi.fn(async () => ({
+				capabilities: { fs: { ino: true, rename: true } }
+			})),
+			list: listingAPng(),
+			rename
+		});
+		const driver = await createMonitorExplorerDriver({
+			profile,
+			transport,
+			enableWatch: false
+		});
+		await expect(driver.rename!('a.png', 'foo/bar.png')).rejects.toMatchObject({
+			code: 'INVALID_NAME'
+		});
+		expect(rename).not.toHaveBeenCalled();
 	});
 
 	it('plumbs ino/dev onto ExplorerEntry.meta', async () => {
