@@ -363,6 +363,30 @@ describe('invert golden applyMany(apply(page, op), invert(page, op)) === normali
 			kind: 'delete-range',
 			range: { anchor: { blockId: 'before', offset: 1 }, head: { blockId: 'z', offset: 1 } }
 		});
+		const fromChrome: Op = {
+			kind: 'delete-range',
+			range: { anchor: { blockId: 'c', offset: 0 }, head: { blockId: 'z', offset: 1 } }
+		};
+		expect(
+			invert(src, fromChrome)
+				.filter((op): op is Extract<Op, { kind: 'insert-block' }> => op.kind === 'insert-block')
+				.map((op) => op.block.id)
+		).toEqual(['c']);
+		expectInvert(src, fromChrome);
+		expectInvert(src, {
+			kind: 'delete-range',
+			range: { anchor: { blockId: 'c', offset: 0 }, head: { blockId: 'z', offset: 0 } }
+		});
+		expectInvert(
+			page([
+				{ id: 't', type: 'toggle', open: false, children: [para('a', 'hid'), para('b', 'two')] },
+				para('z', 'zz')
+			]),
+			{
+				kind: 'delete-range',
+				range: { anchor: { blockId: 't', offset: 0 }, head: { blockId: 'z', offset: 1 } }
+			}
+		);
 	});
 
 	it('round-trips set-toggle', () => {

@@ -247,4 +247,24 @@ describe('parseKb', () => {
 		expect(doc.page.blocks.map((b) => b.id)).toEqual(['a', 'n1', 'n2', 'z']);
 		expect(doc.page.blocks.every((b) => b.type === 'paragraph')).toBe(true);
 	});
+
+	it('marks an empty unknown container unwritable even when children is empty', () => {
+		const doc = parseKbDocument({
+			format: 'kb',
+			schemaVersion: 2,
+			id: 'p',
+			title: 't',
+			createdAt: '2026-01-01T00:00:00.000Z',
+			updatedAt: '2026-01-01T00:00:00.000Z',
+			children: [],
+			blocks: [
+				{ id: 'a', type: 'paragraph', content: [{ type: 'text', text: 'keep', marks: [] }] },
+				{ id: 'acc', type: 'accordion', children: [] }
+			]
+		});
+		expect(doc.understood).toBe(true);
+		expect(doc.flattenedUnknown).toBe(true);
+		expect(doc.writable).toBe(false);
+		expect(doc.page.blocks.map((b) => b.id)).toEqual(['a']);
+	});
 });

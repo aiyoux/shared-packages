@@ -15,6 +15,11 @@ export type ParsedKb = {
 	writable: boolean;
 };
 
+/**
+ * Parse with schema/writable metadata. Save and collab broadcast must check
+ * `writable` (too-new files and locally flattened unknown containers).
+ * `serializeKb(parseKb(...))` has no such gate — do not smash-save from `parseKb` alone.
+ */
 export function parseKbDocument(raw: string | unknown): ParsedKb {
 	const data = typeof raw === 'string' ? JSON.parse(raw) : raw;
 	if (!isRecord(data)) {
@@ -49,6 +54,7 @@ export function parseKbDocument(raw: string | unknown): ParsedKb {
 	};
 }
 
+/** Page only. For save/broadcast use `parseKbDocument` and honor `writable`. */
 export function parseKb(raw: string | unknown): KbPage {
 	return parseKbDocument(raw).page;
 }

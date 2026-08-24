@@ -134,7 +134,12 @@ function fullyCoveredRoots(page: KbPage, startId: string, endId: string): Block[
 	}
 
 	for (const block of order) {
-		if (block.id === startId || block.id === endId) continue;
+		if (block.id === startId || block.id === endId) {
+			// Mark the endpoint so descendants of a dropped start container are not
+			// re-inserted beside the cloned subtree.
+			covered.add(block.id);
+			continue;
+		}
 		const i = idx.get(block.id) ?? -1;
 		const j = idx.get(lastDescendantId(block)) ?? i;
 		if (!(i > startIdx && j < endIdx)) continue;

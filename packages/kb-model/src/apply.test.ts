@@ -623,6 +623,16 @@ describe('N1 callout/toggle apply', () => {
 		expect(covering.blocks.map((b) => b.id)).toEqual(['before']);
 		expect(plaintextOf(findBlock(covering, 'before')!)).toBe('xz');
 		expect(findBlock(covering, 'c')).toBeUndefined();
+
+		const fromChrome = apply(src, {
+			kind: 'delete-range',
+			range: { anchor: { blockId: 'c', offset: 0 }, head: { blockId: 'z', offset: 1 } }
+		});
+		expect(fromChrome.blocks.map((b) => b.id)).toEqual(['before', 'z']);
+		expect(findBlock(fromChrome, 'c')).toBeUndefined();
+		expect(findBlock(fromChrome, 'a')).toBeUndefined();
+		expect(plaintextOf(findBlock(fromChrome, 'z')!)).toBe('z');
+		expect(plaintextOf(findBlock(fromChrome, 'before')!)).toBe('xx');
 	});
 
 	it('moves into and out of a callout and throws on move into a descendant', () => {

@@ -322,7 +322,7 @@ function normalizeBlockList(raws: unknown[], ctx: NormalizeCtx, depth: number): 
 			out.push(normalizeContainer(rec, ctx));
 			continue;
 		}
-		if (!isKnownLeafType(rec.type) && Array.isArray(rec.children) && rec.children.length > 0) {
+		if (!isKnownLeafType(rec.type) && Array.isArray(rec.children)) {
 			ctx.flattenedUnknown = true;
 			out.push(...normalizeBlockList(rec.children, ctx, depth));
 			continue;
