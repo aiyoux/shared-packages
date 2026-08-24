@@ -25,6 +25,7 @@ export { default as DateRangeCalendar } from './DateRangeCalendar.svelte';
 export { default as DateRangePicker } from './DateRangePicker.svelte';
 export { default as DatePicker } from './DatePicker.svelte';
 export { default as FileDropZone } from './FileDropZone.svelte';
+export { parseExplorerDropPayload, type ExplorerDropPayload } from './explorer-drop.ts';
 export { formatBytes, bytesToArrayBuffer, downloadBytes, fileFromBytes } from './files.ts';
 export { default as Separator } from './Separator.svelte';
 export { default as Tabs } from './Tabs.svelte';
@@ -149,6 +150,22 @@ export {
   type DialogStackEntry
 } from './dialogStack.ts';
 export { default as PathNodeEditor } from './PathNodeEditor.svelte';
+export { default as ObjectTransformFrame } from './ObjectTransformFrame.svelte';
+export {
+	applyFrameResize,
+	frameCenter,
+	nextRotation,
+	rotationCss,
+	rotationSvg,
+	showMoveHit,
+	showResizeHandles,
+	showRotateHandle,
+	MIN_SIZE,
+	RESIZE_HANDLES,
+	RESIZE_HANDLE_CURSORS,
+	RESIZE_HANDLE_LABELS
+} from './objectTransform.ts';
+export type { FrameRect, ResizeHandle, TransformMode } from './objectTransform.ts';
 
 // Unified toast system
 export { default as ToastHost } from './ToastHost.svelte';

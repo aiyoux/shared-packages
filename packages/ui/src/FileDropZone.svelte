@@ -1,4 +1,10 @@
 <script lang="ts">
+	import {
+		hasExplorerMime,
+		routeFileDrop,
+		type ExplorerDropPayload
+	} from './explorer-drop.ts';
+
 	let {
 		hint = 'Click or drag files here',
 		dragHint = 'Drop files here',
@@ -18,14 +24,9 @@
 		inputTestId?: string;
 		onfiles: (files: File[]) => void;
 		/** File Explorer row ids (application/x-fe-explorer-ids) from another pane. */
-		onExplorerIds?: (ids: string[]) => void;
+		onExplorerIds?: (payload: ExplorerDropPayload) => void;
 		idle?: import('svelte').Snippet;
 	} = $props();
-
-	const EXPLORER_ID_TYPES = [
-		'application/x-fe-explorer-ids',
-		'application/x-cm-explorer-ids'
-	];
 
 	let dragOver = $state(false);
 	let fileInput = $state<HTMLInputElement | null>(null);
@@ -39,29 +40,11 @@
 
 	function hasExplorerIds(dt: DataTransfer | null | undefined): boolean {
 		if (!dt || !onExplorerIds) return false;
+		if (hasExplorerMime(dt)) return true;
 		const types = Array.from(dt.types ?? []);
-		if (EXPLORER_ID_TYPES.some((t) => types.includes(t))) return true;
 		// File Explorer also writes text/plain ids; Chrome may only advertise that
 		// type while the drag is over another pane.
 		return types.includes('text/plain') && !types.includes('Files');
-	}
-
-	function readExplorerIds(dt: DataTransfer | null | undefined): string[] {
-		if (!dt) return [];
-		let raw = '';
-		try {
-			raw =
-				dt.getData('application/x-fe-explorer-ids') ||
-				dt.getData('application/x-cm-explorer-ids') ||
-				dt.getData('text/plain') ||
-				'';
-		} catch {
-			raw = '';
-		}
-		return raw
-			.split(',')
-			.map((id) => id.trim())
-			.filter(Boolean);
 	}
 
 	function allowDrop(e: DragEvent) {
@@ -80,15 +63,7 @@
 		e.preventDefault();
 		dragOver = false;
 		suppressClick = true;
-		const os = e.dataTransfer?.files?.length ? Array.from(e.dataTransfer.files) : [];
-		if (os.length) {
-			onfiles(os);
-			return;
-		}
-		if (onExplorerIds) {
-			const ids = readExplorerIds(e.dataTransfer);
-			if (ids.length) onExplorerIds(ids);
-		}
+		routeFileDrop(e, { onfiles, onExplorerIds });
 	}
 </script>
 
