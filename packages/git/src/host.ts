@@ -7,6 +7,8 @@ export type CreateGitHostOptions = {
 	/** Node `fs` (or LightningFS). Omit to no-op local snapshots in the browser. */
 	fs?: GitFs;
 	fetchImpl?: typeof fetch;
+	/** Live local working-tree notifications. Omit for a one-shot local snapshot. */
+	subscribeLocal?: (dir: string, onChange: () => void) => () => void;
 };
 
 function newId(): string {
@@ -19,11 +21,49 @@ function newId(): string {
 export function createGitHost(opts: CreateGitHostOptions = {}): GitHost {
 	const fs = opts.fs;
 	const fetchImpl = opts.fetchImpl;
+	const subscribeLocal = opts.subscribeLocal;
 
 	async function requireRepo(id: string): Promise<GitRepoRef> {
 		const repo = await getRepo(id);
 		if (!repo) throw new Error(`Unknown git repo: ${id}`);
 		return repo;
+	}
+
+	async function snapshotRepo(repo: GitRepoRef): Promise<GitSnapshot> {
+		if (repo.backend === 'local') {
+			if (!fs) throw new Error('Local git is not available in this environment');
+			return localSnapshot(fs, repo.path);
+		}
+		return monitorSnapshot(repo, { fetchImpl });
+	}
+
+	function subscribeRepo(repo: GitRepoRef, onChange: (snap: GitSnapshot) => void): () => void {
+		if (repo.backend === 'local') {
+			let cancelled = false;
+			const emit = async () => {
+				if (!fs || cancelled) return;
+				try {
+					const snap = await localSnapshot(fs, repo.path);
+					if (!cancelled) onChange(snap);
+				} catch {
+					/* local snapshot failed */
+				}
+			};
+			void emit();
+			if (!subscribeLocal) {
+				return () => {
+					cancelled = true;
+				};
+			}
+			const unsub = subscribeLocal(repo.path, () => {
+				void emit();
+			});
+			return () => {
+				cancelled = true;
+				unsub();
+			};
+		}
+		return monitorSubscribe(repo, onChange, { fetchImpl });
 	}
 
 	return {
@@ -36,12 +76,7 @@ export function createGitHost(opts: CreateGitHostOptions = {}): GitHost {
 			return deleteRepo(id);
 		},
 		async snapshot(repoId) {
-			const repo = await requireRepo(repoId);
-			if (repo.backend === 'local') {
-				if (!fs) throw new Error('Local git is not available in this environment');
-				return localSnapshot(fs, repo.path);
-			}
-			return monitorSnapshot(repo, { fetchImpl });
+			return snapshotRepo(await requireRepo(repoId));
 		},
 		subscribe(repoId, onChange) {
 			let unsub = () => {};
@@ -49,22 +84,14 @@ export function createGitHost(opts: CreateGitHostOptions = {}): GitHost {
 			void (async () => {
 				const repo = await requireRepo(repoId);
 				if (cancelled) return;
-				if (repo.backend === 'local') {
-					if (!fs) return;
-					try {
-						const snap: GitSnapshot = await localSnapshot(fs, repo.path);
-						if (!cancelled) onChange(snap);
-					} catch {
-						/* local has no live events */
-					}
-					return;
-				}
-				unsub = monitorSubscribe(repo, onChange, { fetchImpl });
+				unsub = subscribeRepo(repo, onChange);
 			})();
 			return () => {
 				cancelled = true;
 				unsub();
 			};
-		}
+		},
+		snapshotRepo,
+		subscribeRepo
 	};
 }

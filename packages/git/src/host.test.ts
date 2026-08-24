@@ -1,11 +1,13 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import git from 'isomorphic-git';
+import { abortAllGitStreams } from '@shared-packages/file-system/monitor';
 import { createGitHost } from './host.js';
 import { closeGitReposDbForTests } from './repos.js';
 import { consumeOpenProject, OPEN_PROJECT_KEY, OPEN_PROJECT_TTL_MS } from './openProject.js';
+import type { GitRepoRef, GitSnapshot } from './types.js';
 
 async function makeRepo(): Promise<string> {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sp-git-'));
@@ -22,6 +24,7 @@ async function makeRepo(): Promise<string> {
 }
 
 afterEach(async () => {
+	abortAllGitStreams();
 	await closeGitReposDbForTests();
 });
 
@@ -43,6 +46,106 @@ describe('createGitHost local backend', () => {
 		await fs.promises.writeFile(path.join(dir, 'README.md'), 'hello world\n');
 		const dirty = await host.snapshot(repo.id);
 		expect(dirty.status.dirty).toBe(true);
+	});
+
+	it('subscribeLocal re-snapshots after a working-tree change', async () => {
+		const dir = await makeRepo();
+		let notify: (() => void) | null = null;
+		const host = createGitHost({
+			fs,
+			subscribeLocal: (_d, onChange) => {
+				notify = onChange;
+				return () => {
+					notify = null;
+				};
+			}
+		});
+		const repo: GitRepoRef = { id: 'local-live', label: 'tiny', backend: 'local', path: dir };
+		const snaps: GitSnapshot[] = [];
+		const unsub = host.subscribeRepo(repo, (s) => snaps.push(s));
+		await vi.waitFor(() => expect(snaps.length).toBe(1));
+		expect(snaps[0]?.status.dirty).toBe(false);
+
+		await fs.promises.writeFile(path.join(dir, 'README.md'), 'hello world\n');
+		expect(notify).toBeTypeOf('function');
+		notify!();
+		await vi.waitFor(() => expect(snaps.length).toBe(2));
+		expect(snaps[1]?.status.dirty).toBe(true);
+		unsub();
+	});
+});
+
+const MONITOR_GIT_JSON = {
+	feature: 'git',
+	branch: 'main',
+	dirty: false,
+	log: [
+		{
+			sha: 'abc123456789',
+			subject: 'hello',
+			author: 't',
+			committed_at: '2026-01-01T00:00:00Z'
+		}
+	]
+};
+
+function fakeMonitorFetch(): typeof fetch {
+	const encoder = new TextEncoder();
+	return vi.fn(async (input: RequestInfo | URL) => {
+		const url = String(input);
+		if (url.includes('/v1/git/snapshot')) {
+			return new Response(JSON.stringify(MONITOR_GIT_JSON), {
+				status: 200,
+				headers: { 'content-type': 'application/json' }
+			});
+		}
+		if (url.includes('/v1/git/events')) {
+			const stream = new ReadableStream<Uint8Array>({
+				start(c) {
+					c.enqueue(
+						encoder.encode(`event: git.snapshot\ndata: ${JSON.stringify(MONITOR_GIT_JSON)}\n\n`)
+					);
+				}
+			});
+			return new Response(stream, {
+				status: 200,
+				headers: { 'content-type': 'text/event-stream' }
+			});
+		}
+		return new Response('Not found', { status: 404 });
+	}) as unknown as typeof fetch;
+}
+
+describe('createGitHost monitor backend', () => {
+	const repo: GitRepoRef = {
+		id: 'mon-1',
+		label: 'proj',
+		backend: 'monitor',
+		path: '/tmp/p',
+		baseUrl: 'http://127.0.0.1:8300'
+	};
+
+	it('snapshotRepo maps a fake /v1/git/snapshot without a live daemon', async () => {
+		const host = createGitHost({ fetchImpl: fakeMonitorFetch() });
+		const snap = await host.snapshotRepo(repo);
+		expect(snap.status).toEqual({ branch: 'main', dirty: false });
+		expect(snap.log[0]).toEqual({
+			sha: 'abc123456789',
+			subject: 'hello',
+			author: 't',
+			committedAt: '2026-01-01T00:00:00Z'
+		});
+	});
+
+	it('subscribeRepo emits the mapped snapshot from a fake fetchImpl', async () => {
+		const host = createGitHost({ fetchImpl: fakeMonitorFetch() });
+		const snaps: GitSnapshot[] = [];
+		const unsub = host.subscribeRepo(repo, (s) => snaps.push(s));
+		await vi.waitFor(() => expect(snaps.length).toBeGreaterThan(0));
+		expect(snaps[0]?.status.branch).toBe('main');
+		expect(snaps[0]?.log[0]?.subject).toBe('hello');
+		expect(snaps[0]?.log[0]?.committedAt).toBe('2026-01-01T00:00:00Z');
+		unsub();
 	});
 });
 
@@ -67,10 +170,22 @@ describe('consumeOpenProject', () => {
 
 		storage.setItem(
 			OPEN_PROJECT_KEY,
-			JSON.stringify({ backend: 'local', path: '/tmp/p', profileId: 'p1', ts: 5_000 })
+			JSON.stringify({
+				backend: 'local',
+				path: '/tmp/p',
+				folderId: 'fld-1',
+				profileId: 'p1',
+				ts: 5_000
+			})
 		);
 		const got = consumeOpenProject(storage, 5_000 + 1_000);
-		expect(got).toEqual({ backend: 'local', path: '/tmp/p', profileId: 'p1', ts: 5_000 });
+		expect(got).toEqual({
+			backend: 'local',
+			path: '/tmp/p',
+			folderId: 'fld-1',
+			profileId: 'p1',
+			ts: 5_000
+		});
 		expect(consumeOpenProject(storage, 5_000 + 1_000)).toBeNull();
 	});
 });

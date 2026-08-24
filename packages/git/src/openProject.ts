@@ -3,7 +3,10 @@ export const OPEN_PROJECT_TTL_MS = 60_000;
 
 export type OpenProjectPayload = {
 	backend: 'local' | 'monitor';
+	/** Git path: VFS id for local, absolute host path for monitor. */
 	path: string;
+	/** Explorer id for the tree, when distinct from `path`. */
+	folderId?: string;
 	profileId?: string;
 	baseUrl?: string;
 	ts?: number;
