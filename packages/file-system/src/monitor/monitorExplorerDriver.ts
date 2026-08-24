@@ -32,19 +32,21 @@ import {
 	type WatchStreamStatus
 } from './watchStream.js';
 
-const MONITOR_CAPS: ExplorerCapabilities = {
-	supportsTrash: false,
-	supportsSoftDelete: false,
-	supportsRename: false,
-	supportsMove: false,
-	supportsCopy: true,
-	supportsMkdir: false,
-	supportsUpload: true,
-	supportsDownload: true,
-	supportsSiblingOrder: false,
-	/** Native drag so DualPane / CM send-zone can copy or download-then-send. */
-	supportsDragOut: true
-};
+function monitorCaps(rename: boolean): ExplorerCapabilities {
+	return {
+		supportsTrash: false,
+		supportsSoftDelete: false,
+		supportsRename: rename,
+		supportsMove: rename,
+		supportsCopy: true,
+		supportsMkdir: false,
+		supportsUpload: true,
+		supportsDownload: true,
+		supportsSiblingOrder: false,
+		/** Native drag so DualPane / CM send-zone can copy or download-then-send. */
+		supportsDragOut: true
+	};
+}
 
 function sortFoldersFirst(entries: ExplorerEntry[]): ExplorerEntry[] {
 	return [...entries].sort((a, b) => {
@@ -80,6 +82,24 @@ export async function createMonitorExplorerDriver(
 
 	let watch: MonitorWatchStream | null = null;
 	let watchStatus: WatchStreamStatus | 'off' = enableWatch ? 'connecting' : 'off';
+	let cachedMeta: Awaited<ReturnType<MonitorTransport['meta']>> | null = null;
+
+	async function loadMeta() {
+		if (cachedMeta) return cachedMeta;
+		if (!transport.meta) {
+			cachedMeta = { capabilities: { fs: { ino: false, rename: false }, git: { blob: false } } };
+			return cachedMeta;
+		}
+		try {
+			cachedMeta = await transport.meta();
+		} catch {
+			cachedMeta = { capabilities: { fs: { ino: false, rename: false }, git: { blob: false } } };
+		}
+		return cachedMeta;
+	}
+
+	const meta = await loadMeta();
+	const canRename = meta.capabilities?.fs?.rename === true;
 
 	function ensureWatch(): MonitorWatchStream | null {
 		if (!enableWatch) return null;
@@ -136,7 +156,7 @@ export async function createMonitorExplorerDriver(
 		id: 'monitor',
 		connectionId: `monitor:${profile.id}`,
 		endpointKey: endpointKeyFromUrl(transport.baseUrl || profile.baseUrl),
-		capabilities: MONITOR_CAPS,
+		capabilities: monitorCaps(canRename),
 
 		getWatchStatus() {
 			return watch?.getStatus() ?? watchStatus;
@@ -179,6 +199,9 @@ export async function createMonitorExplorerDriver(
 					if (!rel && isDir) continue;
 					const id = isDir ? (rel.endsWith('/') ? rel : `${rel}/`) : rel;
 					const parentId = parentIdOf(id);
+					const metaFields: Record<string, unknown> = {};
+					if (item.ino != null) metaFields.ino = item.ino;
+					if (item.dev != null) metaFields.dev = item.dev;
 					entries.push({
 						id,
 						parentId,
@@ -186,12 +209,47 @@ export async function createMonitorExplorerDriver(
 						kind: isDir ? 'folder' : 'file',
 						size: item.size,
 						updatedAt: item.mtime_ms,
-						fileType: isDir ? undefined : inferFileTypeFromName(item.name)
+						fileType: isDir ? undefined : inferFileTypeFromName(item.name),
+						meta: Object.keys(metaFields).length ? metaFields : undefined
 					});
 				}
 				const truncated =
 					result.truncated || entries.length >= EXPLORER_LIST_MAX_ENTRIES;
 				return { entries: sortFoldersFirst(entries), truncated };
+			} catch (e) {
+				throw mapMonitorError(e);
+			}
+		},
+
+		async rename(id: ExplorerEntryId, name: string) {
+			if (!transport.rename) {
+				throw new ExplorerMonitorError('MONITOR_ERROR', 'Monitor rename is not available');
+			}
+			try {
+				const parent = parentIdOf(id);
+				const destName = await uniqueName(parent, name.trim());
+				const destRel = childId(parent, destName, isFolderId(id));
+				await transport.rename(toAbsolutePath(rootPath, id), toAbsolutePath(rootPath, destRel));
+				return {
+					id: destRel,
+					parentId: parent,
+					name: destName,
+					kind: (isFolderId(id) ? 'folder' : 'file') as 'folder' | 'file',
+					fileType: isFolderId(id) ? undefined : inferFileTypeFromName(destName)
+				};
+			} catch (e) {
+				throw mapMonitorError(e);
+			}
+		},
+
+		async move(id: ExplorerEntryId, newParentId: ExplorerEntryId | null) {
+			if (!transport.rename) {
+				throw new ExplorerMonitorError('MONITOR_ERROR', 'Monitor rename is not available');
+			}
+			try {
+				const destName = await uniqueName(newParentId, baseName(id));
+				const destRel = childId(newParentId, destName, isFolderId(id));
+				await transport.rename(toAbsolutePath(rootPath, id), toAbsolutePath(rootPath, destRel));
 			} catch (e) {
 				throw mapMonitorError(e);
 			}

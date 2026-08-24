@@ -63,22 +63,62 @@ export function filesFromDataTransfer(dt: DataTransfer | null | undefined): File
 	return Array.from(dt.files);
 }
 
-export function parseExplorerDragIds(raw: string): string[] {
+export type ExplorerDragPayload = { driverId?: string; ids: string[] };
+
+function idsFromCommaList(raw: string): string[] {
 	return raw
 		.split(',')
 		.map((id) => id.trim())
 		.filter(Boolean);
 }
 
-export function idsFromExplorerDataTransfer(dt: DataTransfer | null | undefined): string[] {
-	if (!dt) return [];
+/** JSON `{driverId,ids}` (current) or a comma-separated id list (legacy). */
+export function parseExplorerDragPayload(raw: string): ExplorerDragPayload {
+	const trimmed = raw.trim();
+	if (!trimmed) return { ids: [] };
+	if (trimmed.startsWith('{')) {
+		try {
+			const parsed = JSON.parse(trimmed) as unknown;
+			if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+				const o = parsed as { driverId?: unknown; ids?: unknown };
+				if (Array.isArray(o.ids)) {
+					const ids = o.ids.filter((id): id is string => typeof id === 'string' && id !== '');
+					const driverId = typeof o.driverId === 'string' && o.driverId ? o.driverId : undefined;
+					return driverId ? { driverId, ids } : { ids };
+				}
+			}
+		} catch {
+			/* fall through to comma list */
+		}
+	}
+	return { ids: idsFromCommaList(trimmed) };
+}
+
+export function parseExplorerDragIds(raw: string): string[] {
+	return parseExplorerDragPayload(raw).ids;
+}
+
+export function explorerDragFromDataTransfer(
+	dt: DataTransfer | null | undefined
+): ExplorerDragPayload {
+	if (!dt) return { ids: [] };
 	let raw = '';
 	try {
-		raw = dt.getData(FE_EXPLORER_IDS_MIME) || dt.getData('text/plain') || '';
+		raw = dt.getData(FE_EXPLORER_IDS_MIME) || '';
 	} catch {
 		raw = '';
 	}
-	return parseExplorerDragIds(raw);
+	if (raw) return parseExplorerDragPayload(raw);
+	try {
+		raw = dt.getData('text/plain') || '';
+	} catch {
+		raw = '';
+	}
+	return parseExplorerDragPayload(raw);
+}
+
+export function idsFromExplorerDataTransfer(dt: DataTransfer | null | undefined): string[] {
+	return explorerDragFromDataTransfer(dt).ids;
 }
 
 /** Drop on a folder row copies into that folder; otherwise dest's open folder. */

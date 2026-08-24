@@ -453,9 +453,11 @@
 		// the native dataTransfer payload below is still set for external drops.
 		if (caps.supportsMove) dnd.startDrag(ids, parentId);
 		try {
-			const payload = ids.join(',');
-			e.dataTransfer?.setData('text/plain', payload);
-			e.dataTransfer?.setData(FE_EXPLORER_IDS_MIME, payload);
+			e.dataTransfer?.setData('text/plain', ids.join(','));
+			e.dataTransfer?.setData(
+				FE_EXPLORER_IDS_MIME,
+				JSON.stringify({ driverId: driver.id, ids })
+			);
 		} catch {
 			/* jsdom may lack full DataTransfer */
 		}
@@ -1115,6 +1117,7 @@
 		if (entry.fileType === 'ob3d') return 'Open in 3D';
 		if (entry.fileType === 'cari') return 'Open in Caricature';
 		if (entry.fileType === 'igfx') return 'Open in Infographic';
+		if (entry.fileType === 'anim') return 'Open in Animations';
 		if (entry.fileType === 'vrec') return 'Open in voice';
 		if (entry.fileType === 'image') return 'Open in Images';
 		if (entry.fileType === 'video') return 'Open in Video';

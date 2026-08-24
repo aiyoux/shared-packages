@@ -1,5 +1,26 @@
+import { createHash } from 'node:crypto';
+import { readFileSync, readdirSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, it, expect, vi } from 'vitest';
-import { createMonitorClient } from './client.js';
+import {
+	coerceGitSnapshot,
+	createMonitorClient
+} from './client.js';
+
+const protocolDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'protocol');
+const fixturesDir = path.join(protocolDir, 'fixtures');
+
+function loadFixture(name: string): unknown {
+	return JSON.parse(readFileSync(path.join(fixturesDir, name), 'utf8'));
+}
+
+function jsonResponse(body: unknown): Response {
+	return new Response(JSON.stringify(body), {
+		status: 200,
+		headers: { 'content-type': 'application/json' }
+	});
+}
 
 describe('monitor client (direct transport)', () => {
 	it('makes direct HTTP requests to base URL without routing through worker proxy', async () => {
@@ -159,5 +180,207 @@ describe('monitor client (direct transport)', () => {
 			'http://127.0.0.1:8300/v1/git/events?path=%2Ftmp%2Frepo'
 		);
 		git.abort();
+	});
+});
+
+describe('monitor protocol fixtures', () => {
+	it('sha256 of each fixture matches fixtures.sha256 (bytes must not drift)', () => {
+		const listed = new Set(readdirSync(fixturesDir).filter((n) => n.endsWith('.json')));
+		const lines = readFileSync(path.join(protocolDir, 'fixtures.sha256'), 'utf8')
+			.trim()
+			.split('\n')
+			.filter(Boolean);
+		expect(lines.length).toBeGreaterThan(0);
+		const hashed = new Set<string>();
+		for (const line of lines) {
+			const m = line.match(/^([0-9a-f]{64})  (.+)$/);
+			expect(m, `sha256sum line: ${line}`).toBeTruthy();
+			const [, hash, filename] = m!;
+			hashed.add(filename);
+			const bytes = readFileSync(path.join(fixturesDir, filename));
+			const actual = createHash('sha256').update(bytes).digest('hex');
+			expect(actual, filename).toBe(hash);
+		}
+		expect(hashed).toEqual(listed);
+	});
+});
+
+describe('monitor client tolerant parse', () => {
+	it('parses old meta with missing capabilities as all-false', async () => {
+		const mockFetch = vi.fn(async (_input: RequestInfo | URL) => jsonResponse(loadFixture('meta.old.json')));
+		const client = createMonitorClient({
+			baseUrl: 'http://127.0.0.1:8300',
+			fetchImpl: mockFetch as unknown as typeof fetch
+		});
+		const meta = await client.meta();
+		expect(meta.name).toBe('monitor');
+		expect(meta.features).toEqual(['watch', 'fs', 'host', 'git']);
+		expect(meta.capabilities?.fs?.ino).toBe(false);
+		expect(meta.capabilities?.fs?.rename).toBe(false);
+		expect(meta.capabilities?.git?.blob).toBe(false);
+		expect(String(mockFetch.mock.calls[0]![0])).toBe('http://127.0.0.1:8300/v1/meta');
+	});
+
+	it('parses new meta capabilities', async () => {
+		const mockFetch = vi.fn(async (_input: RequestInfo | URL) => jsonResponse(loadFixture('meta.new.json')));
+		const client = createMonitorClient({
+			baseUrl: 'http://127.0.0.1:8300',
+			fetchImpl: mockFetch as unknown as typeof fetch
+		});
+		const meta = await client.meta();
+		expect(meta.capabilities?.fs?.ino).toBe(true);
+		expect(meta.capabilities?.fs?.rename).toBe(true);
+		expect(meta.capabilities?.git?.blob).toBe(true);
+	});
+
+	it('ignores extra JSON fields on meta', async () => {
+		const mockFetch = vi.fn(async (_input: RequestInfo | URL) =>
+			jsonResponse({
+				name: 'monitor',
+				version: '0.1.0',
+				features: ['fs'],
+				extra: 'ignored',
+				capabilities: { fs: { ino: true, rename: false, extra: 1 }, git: { blob: false }, other: true }
+			})
+		);
+		const client = createMonitorClient({
+			baseUrl: 'http://127.0.0.1:8300',
+			fetchImpl: mockFetch as unknown as typeof fetch
+		});
+		const meta = await client.meta();
+		expect(meta.capabilities).toEqual({
+			fs: { ino: true, rename: false },
+			git: { blob: false }
+		});
+		expect(meta).not.toHaveProperty('extra');
+	});
+
+	it('parses old list without ino and new list/stat with string ino/dev', async () => {
+		const mockFetch = vi.fn(async (input: RequestInfo | URL) => {
+			const url = String(input);
+			if (url.includes('/v1/fs/list') && url.includes('old')) {
+				return jsonResponse(loadFixture('list.old.json'));
+			}
+			if (url.includes('/v1/fs/list')) return jsonResponse(loadFixture('list.new.json'));
+			if (url.includes('/v1/fs/stat')) return jsonResponse(loadFixture('stat.new.json'));
+			return new Response('Not found', { status: 404 });
+		});
+		const client = createMonitorClient({
+			baseUrl: 'http://127.0.0.1:8300',
+			fetchImpl: mockFetch as unknown as typeof fetch
+		});
+		const oldList = await client.list('/old');
+		expect(oldList.entries[0]?.ino).toBeUndefined();
+		expect(oldList.entries[0]?.dev).toBeUndefined();
+		expect(oldList.entries[0]?.name).toBe('a.png');
+
+		const list = await client.list('/tmp');
+		expect(list.entries[0]?.ino).toBe('12345');
+		expect(list.entries[0]?.dev).toBe('1');
+		expect(typeof list.entries[0]?.ino).toBe('string');
+		expect(typeof list.entries[0]?.dev).toBe('string');
+
+		const st = await client.stat('/tmp/a.png');
+		expect(st.ino).toBe('12345');
+		expect(st.dev).toBe('1');
+		expect(typeof st.ino).toBe('string');
+	});
+
+	it('coerces numeric ino/dev to decimal strings and ignores extra list fields', async () => {
+		const mockFetch = vi.fn(async (input: RequestInfo | URL) => {
+			const url = String(input);
+			if (url.includes('/v1/fs/list')) {
+				return jsonResponse({
+					path: '/tmp',
+					truncated: false,
+					extra: true,
+					entries: [
+						{
+							name: 'a.png',
+							path: '/tmp/a.png',
+							kind: 'file',
+							size: 12,
+							mtime_ms: 1700000000000,
+							ino: 12345,
+							dev: 1,
+							mode: 0o644
+						}
+					]
+				});
+			}
+			if (url.includes('/v1/fs/stat')) {
+				return jsonResponse({
+					name: 'a.png',
+					path: '/tmp/a.png',
+					kind: 'file',
+					size: 12,
+					mtime_ms: 1700000000000,
+					ino: 99,
+					dev: 2,
+					uid: 1000
+				});
+			}
+			return new Response('Not found', { status: 404 });
+		});
+		const client = createMonitorClient({
+			baseUrl: 'http://127.0.0.1:8300',
+			fetchImpl: mockFetch as unknown as typeof fetch
+		});
+		const list = await client.list('/tmp');
+		expect(list.entries[0]?.ino).toBe('12345');
+		expect(list.entries[0]?.dev).toBe('1');
+		expect(list.entries[0]).not.toHaveProperty('mode');
+		expect(list).not.toHaveProperty('extra');
+		const st = await client.stat('/tmp/a.png');
+		expect(st.ino).toBe('99');
+		expect(st.dev).toBe('2');
+		expect(st).not.toHaveProperty('uid');
+	});
+
+	it('rename POSTs /v1/fs/rename {from,to} and gitBlob GETs /v1/git/blob', async () => {
+		const calls: { url: string; method?: string; body?: unknown }[] = [];
+		const mockFetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+			const url = String(input);
+			const method = init?.method ?? 'GET';
+			const body = init?.body && typeof init.body === 'string' ? JSON.parse(init.body) : undefined;
+			calls.push({ url, method, body });
+			if (url.includes('/v1/fs/rename')) return jsonResponse({ ok: true });
+			if (url.includes('/v1/git/blob')) {
+				return new Response(new Uint8Array([1, 2, 3]), { status: 200 });
+			}
+			return new Response('Not found', { status: 404 });
+		});
+		const client = createMonitorClient({
+			baseUrl: 'http://127.0.0.1:8300',
+			fetchImpl: mockFetch as unknown as typeof fetch
+		});
+		await client.rename!('/tmp/a.png', '/tmp/b.png');
+		expect(calls[0]).toEqual({
+			url: 'http://127.0.0.1:8300/v1/fs/rename',
+			method: 'POST',
+			body: { from: '/tmp/a.png', to: '/tmp/b.png' }
+		});
+		const blob = await client.gitBlob!('/tmp/repo', 'HEAD', 'a.png');
+		expect(Array.from(blob)).toEqual([1, 2, 3]);
+		expect(calls[1]!.url).toBe(
+			'http://127.0.0.1:8300/v1/git/blob?path=%2Ftmp%2Frepo&rev=HEAD&file=a.png'
+		);
+		expect(calls[1]!.method).toBe('GET');
+	});
+
+	it('git-snapshot fixture extra fields are ignored', () => {
+		const snap = coerceGitSnapshot(loadFixture('git-snapshot.json'));
+		expect(snap).toEqual({
+			branch: 'main',
+			dirty: false,
+			log: [
+				{
+					sha: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+					subject: 'init',
+					author: 'e2e',
+					committed_at: '2024-01-01T00:00:00Z'
+				}
+			]
+		});
 	});
 });

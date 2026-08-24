@@ -15,7 +15,9 @@ import {
 	filesFromDataTransfer,
 	idsFromExplorerDataTransfer,
 	idsFromExplorerDragTarget,
-	parseExplorerDragIds
+	parseExplorerDragIds,
+	parseExplorerDragPayload,
+	explorerDragFromDataTransfer
 } from '../src/ui/copyAcross.ts';
 import type { ExplorerDriver, ExplorerEntry } from '../src/ui/explorerDriver.ts';
 import { listTransfers, resetTransferRegistryForTests } from '../src/transferRegistry.ts';
@@ -94,6 +96,16 @@ describe('cross-pane drag payload', () => {
 		assert.deepEqual(parseExplorerDragIds(''), []);
 	});
 
+	it('parseExplorerDragPayload accepts JSON {driverId,ids} and legacy comma lists', () => {
+		assert.deepEqual(parseExplorerDragPayload('{"driverId":"monitor","ids":["/tmp/a","/tmp/b"]}'), {
+			driverId: 'monitor',
+			ids: ['/tmp/a', '/tmp/b']
+		});
+		assert.deepEqual(parseExplorerDragPayload('id1,id2'), { ids: ['id1', 'id2'] });
+		assert.deepEqual(parseExplorerDragPayload(''), { ids: [] });
+		assert.deepEqual(parseExplorerDragIds('{"driverId":"local","ids":["a","b"]}'), ['a', 'b']);
+	});
+
 	it('idsFromExplorerDataTransfer prefers the explorer mime', () => {
 		const dt = {
 			getData(type: string) {
@@ -103,6 +115,31 @@ describe('cross-pane drag payload', () => {
 			}
 		} as unknown as DataTransfer;
 		assert.deepEqual(idsFromExplorerDataTransfer(dt), ['id1', 'id2']);
+	});
+
+	it('explorerDragFromDataTransfer reads JSON mime and falls back to text/plain', () => {
+		const jsonDt = {
+			getData(type: string) {
+				if (type === FE_EXPLORER_IDS_MIME)
+					return JSON.stringify({ driverId: 'local', ids: ['n1', 'n2'] });
+				if (type === 'text/plain') return 'n1,n2';
+				return '';
+			}
+		} as unknown as DataTransfer;
+		assert.deepEqual(explorerDragFromDataTransfer(jsonDt), {
+			driverId: 'local',
+			ids: ['n1', 'n2']
+		});
+		assert.deepEqual(idsFromExplorerDataTransfer(jsonDt), ['n1', 'n2']);
+
+		const legacyDt = {
+			getData(type: string) {
+				if (type === FE_EXPLORER_IDS_MIME) return '';
+				if (type === 'text/plain') return 'a,b';
+				return '';
+			}
+		} as unknown as DataTransfer;
+		assert.deepEqual(explorerDragFromDataTransfer(legacyDt), { ids: ['a', 'b'] });
 	});
 
 	it('destParentFromDropEvent uses a folder row id, else fallback', () => {
