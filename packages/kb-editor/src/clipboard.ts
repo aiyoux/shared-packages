@@ -15,7 +15,7 @@ import {
 	type TextSpan
 } from '@shared-packages/kb-model';
 import { newBlockId } from './ids.js';
-import { clampPoint, isCollapsed, orderedRange } from './range.js';
+import { clampPoint, isCollapsed, orderedRange, rangeSharesParent } from './range.js';
 import type { EditorState } from './state.js';
 
 export const KB_CLIPBOARD_MIME = 'application/x-scratch-kb+json';
@@ -81,11 +81,27 @@ export function sliceBlocks(page: KbPage, range: Range): Block[] {
 	const si = order.findIndex((b) => b.id === start.blockId);
 	const ei = order.findIndex((b) => b.id === end.blockId);
 	if (si < 0 || ei < 0) return [];
+	const skip = new Set<string>();
 	const out: Block[] = [];
+	function skipDescendants(block: Block): void {
+		const kids = blockChildren(block);
+		if (!kids) return;
+		for (const child of kids) {
+			skip.add(child.id);
+			skipDescendants(child);
+		}
+	}
 	for (let i = si; i <= ei; i++) {
 		const block = order[i];
+		if (skip.has(block.id)) continue;
 		const from = i === si ? start.offset : 0;
 		const to = i === ei ? end.offset : plaintextOf(block).length;
+		const kids = blockChildren(block);
+		if (kids && kids.length > 0) {
+			out.push(structuredClone(block));
+			skipDescendants(block);
+			continue;
+		}
 		if (isTextLike(block)) {
 			out.push(sliceTextLike(block, from, to));
 		} else if (block.type === 'code') {
@@ -159,7 +175,7 @@ export function pasteOps(
 ): Op[] {
 	const ops: Op[] = [];
 	let working = state;
-	if (!isCollapsed(live)) {
+	if (!isCollapsed(live) && rangeSharesParent(state.page, live)) {
 		ops.push({ kind: 'delete-range', range: live });
 		working = { ...state, page: apply(state.page, ops[0]) };
 	}
@@ -203,7 +219,7 @@ export function copyPayload(state: EditorState, live: Range): { plain: string; j
 	return { plain: slicePlaintext(state.page, live), json: serializeSlice(blocks) };
 }
 
-export function cutOps(live: Range): Op[] {
-	if (isCollapsed(live)) return [];
+export function cutOps(page: KbPage, live: Range): Op[] {
+	if (isCollapsed(live) || !rangeSharesParent(page, live)) return [];
 	return [{ kind: 'delete-range', range: live }];
 }

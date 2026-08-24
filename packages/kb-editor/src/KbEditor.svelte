@@ -174,7 +174,7 @@
 		event.preventDefault();
 		event.clipboardData.setData('text/plain', payload.plain);
 		event.clipboardData.setData(KB_CLIPBOARD_MIME, payload.json);
-		emitOps(cutOps(live));
+		emitOps(cutOps(editor.page, live));
 	}
 
 	function onPaste(event: ClipboardEvent) {

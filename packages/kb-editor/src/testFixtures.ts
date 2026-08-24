@@ -30,6 +30,10 @@ export function image(id: string, src = 'assets/diagram.png', alt = 'Diagram'): 
 	return { id, type: 'image', src, alt };
 }
 
+export function nest(id: string, kids: Block[], text = ''): Block {
+	return Object.assign(para(id, text), { children: kids });
+}
+
 export function page(blocks: Block[], extra: Partial<KbPage> = {}): KbPage {
 	return normalizePage({
 		format: 'kb',

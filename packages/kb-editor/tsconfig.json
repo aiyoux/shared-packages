@@ -11,6 +11,7 @@
     "noEmit": true,
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "types": ["node"],
+    // Worktree node_modules is a repo-root symlink and does not contain file: kb-model.
     "paths": {
       "@shared-packages/kb-model": ["../kb-model/src/index.ts"]
     }

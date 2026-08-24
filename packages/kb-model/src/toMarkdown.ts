@@ -1,5 +1,5 @@
 import { normalizePage } from './normalize.js';
-import { documentOrder } from './tree.js';
+import { blockChildren, documentOrder } from './tree.js';
 import type { Block, Inline, KbPage, ListItemBlock, Mark, TextSpan } from './types.js';
 
 function linkHref(marks: Mark[]): string | null {
@@ -66,17 +66,20 @@ function separator(prev: Block, next: Block): string {
 export function toMarkdown(page: KbPage): string {
 	const blocks = documentOrder(normalizePage(page));
 	const chunks: string[] = [];
+	const emitted: Block[] = [];
 	let orderedIndex = 0;
-	for (let i = 0; i < blocks.length; i++) {
-		const block = blocks[i];
-		const prev = i > 0 ? blocks[i - 1] : undefined;
+	for (const block of blocks) {
+		const prev = emitted[emitted.length - 1];
 		if (block.type === 'list_item' && block.ordered) {
 			orderedIndex = sameListRun(prev, block) ? orderedIndex + 1 : 1;
 		} else {
 			orderedIndex = 0;
 		}
+		const rendered = renderBlock(block, orderedIndex);
+		if (rendered === '' && (blockChildren(block)?.length ?? 0) > 0) continue;
 		if (prev) chunks.push(separator(prev, block));
-		chunks.push(renderBlock(block, orderedIndex));
+		chunks.push(rendered);
+		emitted.push(block);
 	}
 	const body = chunks.join('');
 	if (body === '') return '';

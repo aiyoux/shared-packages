@@ -7,6 +7,12 @@ export type BlockParent = {
 	index: number;
 };
 
+export type BlockLocation = {
+	block: Block;
+	parent: ParentRef;
+	index: number;
+};
+
 export function blockChildren(block: Block): Block[] | undefined {
 	const kids = (block as Block & { children?: unknown }).children;
 	return Array.isArray(kids) ? kids : undefined;
@@ -56,7 +62,7 @@ function locate(
 	blocks: Block[],
 	parent: ParentRef,
 	id: string
-): { block: Block; parent: ParentRef; index: number } | undefined {
+): BlockLocation | undefined {
 	for (let i = 0; i < blocks.length; i++) {
 		const block = blocks[i];
 		if (block.id === id) return { block, parent, index: i };
@@ -69,12 +75,16 @@ function locate(
 	return undefined;
 }
 
+export function locateBlock(page: KbPage, id: string): BlockLocation | undefined {
+	return locate(page.blocks ?? [], 'page', id);
+}
+
 export function findBlock(page: KbPage, id: string): Block | undefined {
-	return locate(page.blocks ?? [], 'page', id)?.block;
+	return locateBlock(page, id)?.block;
 }
 
 export function parentOf(page: KbPage, id: string): BlockParent | undefined {
-	const found = locate(page.blocks ?? [], 'page', id);
+	const found = locateBlock(page, id);
 	if (!found) return undefined;
 	return { parent: found.parent, index: found.index };
 }

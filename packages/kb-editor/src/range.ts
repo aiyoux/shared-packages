@@ -2,8 +2,10 @@ import {
 	documentOrder,
 	findBlock,
 	isAtomic,
+	locateBlock,
 	parentOf,
 	plaintextOf,
+	sameParent,
 	type KbPage,
 	type Point,
 	type Range
@@ -23,10 +25,17 @@ export function blockIndex(page: KbPage, id: string): number {
 }
 
 export function requireBlock(page: KbPage, id: string) {
-	const block = findBlock(page, id);
-	const loc = parentOf(page, id);
-	if (!block || !loc) throw new Error(`unknown block ${id}`);
-	return { block, parent: loc.parent, index: loc.index };
+	const loc = locateBlock(page, id);
+	if (!loc) throw new Error(`unknown block ${id}`);
+	return loc;
+}
+
+export function rangeSharesParent(page: KbPage, range: Range): boolean {
+	if (isCollapsed(range)) return true;
+	const a = parentOf(page, range.anchor.blockId);
+	const b = parentOf(page, range.head.blockId);
+	if (!a || !b) return false;
+	return sameParent(a.parent, b.parent);
 }
 
 /** Document-order start/end. Does not throw on missing ids; missing sorts last. */

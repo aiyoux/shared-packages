@@ -321,4 +321,25 @@ describe('invert golden applyMany(apply(page, op), invert(page, op)) === normali
 		).toThrow(/share a parent/i);
 		expect(() => invert(src, { kind: 'delete-block', id: 'missing' })).toThrow(/unknown/i);
 	});
+
+	it('afterId null is page root: nested first-child delete/move invert does not round-trip', () => {
+		function nest(id: string, kids: Block[]): Block {
+			return Object.assign(para(id, ''), { children: kids });
+		}
+		const src = page([nest('c', [para('a', 'a'), para('b', 'b')]), para('z', 'z')]);
+
+		const deleteOp: Op = { kind: 'delete-block', id: 'a' };
+		expect(invert(src, deleteOp)).toEqual([
+			{ kind: 'insert-block', afterId: null, block: para('a', 'a') }
+		]);
+		const afterDelete = applyMany(apply(src, deleteOp), invert(src, deleteOp));
+		expect(afterDelete.blocks.map((b) => b.id)).toEqual(['a', 'c', 'z']);
+		expect((afterDelete.blocks[1] as { children?: Block[] }).children?.map((b) => b.id)).toEqual(['b']);
+
+		const moveOp: Op = { kind: 'move-block', id: 'a', afterId: 'b' };
+		expect(invert(src, moveOp)).toEqual([{ kind: 'move-block', id: 'a', afterId: null }]);
+		const afterMove = applyMany(apply(src, moveOp), invert(src, moveOp));
+		expect(afterMove.blocks.map((b) => b.id)).toEqual(['a', 'c', 'z']);
+		expect((afterMove.blocks[1] as { children?: Block[] }).children?.map((b) => b.id)).toEqual(['b']);
+	});
 });

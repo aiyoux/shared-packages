@@ -10,7 +10,7 @@ import {
 	type Range
 } from '@shared-packages/kb-model';
 import { newBlockId } from './ids.js';
-import { clampPoint, collapsed, isCollapsed, orderedRange } from './range.js';
+import { clampPoint, collapsed, isCollapsed, orderedRange, rangeSharesParent } from './range.js';
 import { slashOps } from './slash.js';
 import type { EditorState } from './state.js';
 import { backspaceAtStartOps, deleteAtEndOps, expandCaretToUnit, isCodeEmptyLastLine } from './units.js';
@@ -44,7 +44,7 @@ function withDeletedSelection(
 	state: EditorState,
 	live: Range
 ): { state: EditorState; at: Point; prefix: Op[] } {
-	if (isCollapsed(live)) {
+	if (isCollapsed(live) || !rangeSharesParent(state.page, live)) {
 		return { state, at: live.anchor, prefix: [] };
 	}
 	const { start } = orderedRange(state.page, live);
@@ -105,7 +105,7 @@ function deleteOps(state: EditorState, live: Range, inputType: string): Op[] {
 		inputType === 'deleteContent' ||
 		inputType === 'deleteByDrag';
 	if (!isCollapsed(live)) {
-		return [{ kind: 'delete-range', range: live }];
+		return rangeSharesParent(state.page, live) ? [{ kind: 'delete-range', range: live }] : [];
 	}
 	const block = findBlock(state.page, live.anchor.blockId);
 	if (!block) return [];

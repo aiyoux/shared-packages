@@ -7,10 +7,11 @@ import {
 	parseSlice,
 	pasteOps,
 	serializeSlice,
+	sliceBlocks,
 	stripHtml
 } from './clipboard.js';
 import { createEditorState, dispatchMany } from './state.js';
-import { code, page, para } from './testFixtures.js';
+import { code, nest, page, para } from './testFixtures.js';
 
 describe('clipboard', () => {
 	it('copies text/plain and application/x-scratch-kb+json', () => {
@@ -53,6 +54,16 @@ describe('clipboard', () => {
 		expect(next.page.blocks.some((b) => b.id === 'a')).toBe(false);
 	});
 
+	it('copy of a container plus its child is one subtree, not parent and child', () => {
+		const doc = page([nest('c', [para('n', 'in')], 'Call'), para('z', 'Z')]);
+		const sliced = sliceBlocks(doc, {
+			anchor: { blockId: 'c', offset: 0 },
+			head: { blockId: 'n', offset: 2 }
+		});
+		expect(sliced.map((b) => b.id)).toEqual(['c']);
+		expect((sliced[0] as { children?: { id: string }[] }).children?.map((b) => b.id)).toEqual(['n']);
+	});
+
 	it('slice of a missing range is empty; remap walks nested children', () => {
 		const src = createEditorState(page([para('a', 'one'), para('b', 'two')]));
 		expect(
@@ -86,9 +97,14 @@ describe('clipboard', () => {
 	});
 
 	it('cut emits a single delete-range', () => {
+		const doc = page([para('p', 'abcd')]);
 		const live = { anchor: { blockId: 'p', offset: 1 }, head: { blockId: 'p', offset: 3 } };
-		expect(cutOps(live)).toEqual([{ kind: 'delete-range', range: live }]);
-		expect(cutOps({ anchor: { blockId: 'p', offset: 1 }, head: { blockId: 'p', offset: 1 } })).toEqual([]);
+		expect(cutOps(doc, live)).toEqual([{ kind: 'delete-range', range: live }]);
+		expect(cutOps(doc, { anchor: { blockId: 'p', offset: 1 }, head: { blockId: 'p', offset: 1 } })).toEqual([]);
+		const nested = page([nest('c', [para('n', 'in')]), para('z', 'zz')]);
+		expect(
+			cutOps(nested, { anchor: { blockId: 'n', offset: 0 }, head: { blockId: 'z', offset: 1 } })
+		).toEqual([]);
 	});
 
 	it('drop of text/plain reuses pasteOps at the caret', () => {

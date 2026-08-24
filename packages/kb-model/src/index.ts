@@ -12,9 +12,11 @@ export {
 	childrenOf,
 	documentOrder,
 	findBlock,
+	locateBlock,
 	parentOf,
 	sameParent,
 	visibleOrder,
+	type BlockLocation,
 	type BlockParent,
 	type ParentRef
 } from './tree.js';

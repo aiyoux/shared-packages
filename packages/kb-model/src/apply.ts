@@ -9,9 +9,10 @@ import {
 } from './normalize.js';
 import { isAtomic, isTextLike, plaintextOf } from './plaintext.js';
 import {
+	blockChildren,
 	childrenOf,
 	documentOrder,
-	findBlock,
+	locateBlock,
 	parentOf,
 	sameParent,
 	type ParentRef
@@ -42,10 +43,9 @@ function requireLocation(
 	id: string,
 	what: string
 ): { block: Block; parent: ParentRef; index: number } {
-	const block = findBlock(page, id);
-	const loc = parentOf(page, id);
-	if (!block || !loc) throw new Error(`${what}: unknown block ${id}`);
-	return { block, parent: loc.parent, index: loc.index };
+	const loc = locateBlock(page, id);
+	if (!loc) throw new Error(`${what}: unknown block ${id}`);
+	return loc;
 }
 
 function documentIndex(page: KbPage, id: string): number {
@@ -58,11 +58,11 @@ function blockText(block: Block): string {
 }
 
 export function resolvePoint(page: KbPage, point: Point): Resolved {
-	const block = findBlock(page, point.blockId);
-	const loc = parentOf(page, point.blockId);
-	if (!block || !loc) {
+	const loc = locateBlock(page, point.blockId);
+	if (!loc) {
 		throw new UnresolvedPointError(`unresolved Point: unknown blockId ${point.blockId}`);
 	}
+	const { block } = loc;
 	if (!Number.isInteger(point.offset)) {
 		throw new UnresolvedPointError(`unresolved Point: offset ${point.offset} is not an integer`);
 	}
@@ -310,8 +310,15 @@ function isCodeEmptyLastLine(block: CodeBlock, offset: number): boolean {
 	return offset === block.text.length && (block.text === '' || block.text.endsWith('\n'));
 }
 
+function subtreeIds(block: Block, into: string[] = []): string[] {
+	into.push(block.id);
+	const kids = blockChildren(block);
+	if (kids) for (const child of kids) subtreeIds(child, into);
+	return into;
+}
+
 function applySplitBlock(page: KbPage, op: Extract<Op, { kind: 'split-block' }>): void {
-	if (findBlock(page, op.newId)) {
+	if (locateBlock(page, op.newId)) {
 		throw new Error(`split-block: newId ${op.newId} already exists`);
 	}
 	const at = resolvePoint(page, op.at);
@@ -420,8 +427,14 @@ function applyConvertBlock(page: KbPage, op: Extract<Op, { kind: 'convert-block'
 }
 
 function applyInsertBlock(page: KbPage, op: Extract<Op, { kind: 'insert-block' }>): void {
-	if (findBlock(page, op.block.id)) {
-		throw new Error(`insert-block: duplicate block id ${op.block.id}`);
+	const incoming = subtreeIds(op.block);
+	const existing = new Set(documentOrder(page).map((block) => block.id));
+	const seen = new Set<string>();
+	for (const id of incoming) {
+		if (seen.has(id) || existing.has(id)) {
+			throw new Error(`insert-block: duplicate block id ${id}`);
+		}
+		seen.add(id);
 	}
 	if (op.afterId === null) {
 		insertBlockAt(page, 'page', 0, op.block);

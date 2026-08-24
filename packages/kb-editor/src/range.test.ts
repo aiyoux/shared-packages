@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { clampPoint, collapsed, isCollapsed, orderedRange, payloadLength, requireBlock } from './range.js';
-import { page, para } from './testFixtures.js';
+import { nest, page, para } from './testFixtures.js';
 
 describe('range helpers', () => {
 	it('orderedRange treats missing ids as last and does not throw', () => {
@@ -32,6 +32,22 @@ describe('range helpers', () => {
 		expect(clampPoint(doc, { blockId: 'a', offset: -1 })).toEqual({ blockId: 'a', offset: 0 });
 		expect(payloadLength(doc, 'missing')).toBe(0);
 		expect(payloadLength(doc, 'a')).toBe(2);
+	});
+
+	it('orderedRange uses DFS, not indexInParent, for nested vs later root ids', () => {
+		const doc = page([nest('c', [para('n1', 'aa'), para('n2', 'bb')]), para('z', 'zz')]);
+		expect(
+			orderedRange(doc, { anchor: { blockId: 'n2', offset: 1 }, head: { blockId: 'z', offset: 0 } })
+		).toEqual({
+			start: { blockId: 'n2', offset: 1 },
+			end: { blockId: 'z', offset: 0 }
+		});
+		expect(
+			orderedRange(doc, { anchor: { blockId: 'z', offset: 2 }, head: { blockId: 'n1', offset: 0 } })
+		).toEqual({
+			start: { blockId: 'n1', offset: 0 },
+			end: { blockId: 'z', offset: 2 }
+		});
 	});
 
 	it('requireBlock throws on unknown ids; collapsed detects equality', () => {

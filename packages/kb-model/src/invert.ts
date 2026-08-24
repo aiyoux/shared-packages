@@ -1,7 +1,7 @@
 import { convertBlock, normalizeRange, resolvePoint } from './apply.js';
 import { sliceSpans } from './normalize.js';
 import { isAtomic, isTextLike, payloadLength, plaintextOf } from './plaintext.js';
-import { childrenOf, documentOrder, findBlock, parentOf, sameParent, type ParentRef } from './tree.js';
+import { childrenOf, documentOrder, locateBlock, parentOf, sameParent, type ParentRef } from './tree.js';
 import type { Block, KbPage, Mark, Op, Point, TextSpan } from './types.js';
 
 function cloneBlock(block: Block): Block {
@@ -19,10 +19,9 @@ function requireBlock(
 	id: string,
 	what: string
 ): { block: Block; parent: ParentRef; index: number } {
-	const block = findBlock(page, id);
-	const loc = parentOf(page, id);
-	if (!block || !loc) throw new Error(`${what}: unknown block ${id}`);
-	return { block, parent: loc.parent, index: loc.index };
+	const loc = locateBlock(page, id);
+	if (!loc) throw new Error(`${what}: unknown block ${id}`);
+	return loc;
 }
 
 const STRIP_MARKS: Mark[] = [

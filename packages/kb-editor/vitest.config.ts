@@ -18,6 +18,7 @@ export default defineConfig({
 	root,
 	server: {
 		fs: {
+			// Git worktree node_modules may be a symlink; Vite must serve that realpath.
 			allow: [root, realpathSync(path.resolve(root, '../../node_modules'))]
 		}
 	},

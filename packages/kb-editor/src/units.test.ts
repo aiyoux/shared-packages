@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { backspaceAtStartOps, deleteAtEndOps, expandCaretToUnit } from './units.js';
-import { page, para, divider } from './testFixtures.js';
+import { divider, nest, page, para } from './testFixtures.js';
 
 describe('units', () => {
 	it('expandCaretToUnit returns null for missing ids and at edges', () => {
@@ -30,5 +30,13 @@ describe('units', () => {
 		expect(deleteAtEndOps(doc, 'd')).toEqual([]);
 		expect(deleteAtEndOps(doc, 'missing')).toEqual([]);
 		expect(deleteAtEndOps(doc, 'b')).toEqual([{ kind: 'delete-block', id: 'd' }]);
+	});
+
+	it('does not merge a nested first/last child with a DFS neighbor outside the parent', () => {
+		const doc = page([para('z', 'z'), nest('c', [para('a', 'a'), para('b', 'b')]), para('y', 'y')]);
+		expect(backspaceAtStartOps(doc, 'a')).toEqual([]);
+		expect(deleteAtEndOps(doc, 'b')).toEqual([]);
+		expect(backspaceAtStartOps(doc, 'b')).toEqual([{ kind: 'merge-block', keepId: 'a', dropId: 'b' }]);
+		expect(deleteAtEndOps(doc, 'a')).toEqual([{ kind: 'merge-block', keepId: 'a', dropId: 'b' }]);
 	});
 });

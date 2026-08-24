@@ -98,6 +98,7 @@ describe('tree walk', () => {
 	it('toMarkdown walks DFS including nested children', () => {
 		const doc = page([nest('c', [para('n', 'inside')], 'Call'), para('z', 'Z')]);
 		expect(toMarkdown(doc)).toBe('Call\n\ninside\n\nZ\n');
+		expect(toMarkdown(page([nest('c', [para('n', 'inside')]), para('z', 'Z')]))).toBe('inside\n\nZ\n');
 	});
 });
 
@@ -156,6 +157,20 @@ describe('apply uses parent lists', () => {
 		expect(() =>
 			apply(src, { kind: 'insert-block', afterId: 'missing', block: para('n', 'n') })
 		).toThrow(/unknown/i);
+		expect(() =>
+			apply(src, {
+				kind: 'insert-block',
+				afterId: 'z',
+				block: Object.assign(para('n', 'n'), { children: [para('z', 'dup')] })
+			})
+		).toThrow(/duplicate/i);
+		expect(() =>
+			apply(src, {
+				kind: 'insert-block',
+				afterId: 'z',
+				block: Object.assign(para('n', 'n'), { children: [para('n', 'self')] })
+			})
+		).toThrow(/duplicate/i);
 
 		const inserted = apply(src, { kind: 'insert-block', afterId: 'a', block: para('n', 'n') });
 		expect(inserted.blocks.map((b) => b.id)).toEqual(['c', 'z']);
