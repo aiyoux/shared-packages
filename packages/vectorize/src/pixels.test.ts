@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isOffsetOutOfBounds, packImageData } from './pixels.js';
+import { packImageData } from './pixels.js';
 
 function view(width: number, height: number, fill: number, byteOffset = 0): ImageData {
 	const need = width * height * 4;
@@ -44,9 +44,4 @@ describe('packImageData', () => {
 	});
 });
 
-describe('isOffsetOutOfBounds', () => {
-	it('matches the potrace HEAP8.set RangeError', () => {
-		expect(isOffsetOutOfBounds(new RangeError('offset is out of bounds'))).toBe(true);
-		expect(isOffsetOutOfBounds(new Error('nope'))).toBe(false);
-	});
-});
+

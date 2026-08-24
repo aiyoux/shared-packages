@@ -1,4 +1,4 @@
-export type TracerId = 'vtracer' | 'potrace';
+export type TracerId = 'vtracer';
 
 export type VtracerPreset = 'bw' | 'poster' | 'photo';
 export type VtracerClustering = 'color-cluster' | 'bw' | 'watershed';
@@ -45,26 +45,6 @@ export type VtracerOptions = {
 	watershedDetail?: number;
 };
 
-export type PotraceTurnPolicy = 0 | 1 | 2 | 3 | 4 | 5 | 6;
-
-export type PotraceOptions = {
-	/** Ignore speckles of this size (px). */
-	turdsize?: number;
-	/** 0 black, 1 white, 2 left, 3 right, 4 minority, 5 majority, 6 random. */
-	turnpolicy?: PotraceTurnPolicy;
-	/** Corner threshold (0–1.334). Lower = more corners. */
-	alphamax?: number;
-	/** Curve optimization on/off. */
-	opticurve?: boolean;
-	/** Curve optimization tolerance. */
-	opttolerance?: number;
-	pathonly?: boolean;
-	extractcolors?: boolean;
-	posterizelevel?: number;
-	/** 0 simple, 1 interpolation. */
-	posterizationalgorithm?: 0 | 1;
-};
-
 export type TracerInfo = {
 	id: TracerId;
 	label: string;
@@ -77,12 +57,6 @@ export const TRACER_CATALOG: readonly TracerInfo[] = [
 		label: 'VTracer 1.0',
 		description:
 			'Color and B&W tracing with spline fit, curve simplification, cutout, and watershed. MIT/Apache WASM.'
-	},
-	{
-		id: 'potrace',
-		label: 'Potrace',
-		description:
-			'Classic B&W (or posterized color) silhouettes. GPL-2.0 WASM used by SVGcode.'
 	}
 ] as const;
 
@@ -159,18 +133,6 @@ export const VTRACER_PRESETS: Record<
 		spliceThreshold: 45,
 		simplify: 1.5
 	}
-};
-
-export const DEFAULT_POTRACE: Required<PotraceOptions> = {
-	turdsize: 2,
-	turnpolicy: 4,
-	alphamax: 1,
-	opticurve: true,
-	opttolerance: 0.2,
-	pathonly: false,
-	extractcolors: true,
-	posterizelevel: 2,
-	posterizationalgorithm: 0
 };
 
 export type VectorizeInput = {

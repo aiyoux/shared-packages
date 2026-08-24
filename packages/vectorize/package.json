@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": false,
   "type": "module",
-  "description": "Lazy raster-to-SVG engines: VTracer 1.0 (WASM) and Potrace (GPL WASM).",
+  "description": "Lazy raster-to-SVG engine: VTracer 1.0 (MIT/Apache WASM).",
   "exports": {
     ".": {
       "types": "./src/index.ts",
@@ -17,9 +17,6 @@
     "build:wasm": "wasm-pack build crates/vtracer-wasm --target bundler --out-dir src/wasm --release",
     "test": "vitest run",
     "check": "tsc --noEmit -p tsconfig.json"
-  },
-  "dependencies": {
-    "esm-potrace-wasm": "^0.4.1"
   },
   "devDependencies": {
     "@types/node": "^26.1.1",

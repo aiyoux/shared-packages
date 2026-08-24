@@ -3,7 +3,6 @@
 Lazy raster → SVG engines for the hub Images tool.
 
 - **VTracer 1.0** — our `wasm32-unknown-unknown` build of the same crate the desktop app uses (`simplify`, cutout, watershed, adaptive B/W).
-- **Potrace** — `esm-potrace-wasm` (GPL-2.0).
 
 Rebuild WASM after crate changes:
 

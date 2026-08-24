@@ -3,18 +3,8 @@
  *
  * Decoders (jSquash PNG, canvas getImageData, wasm resize) often hand back an
  * ImageData whose `.data` is a view into a larger — sometimes resizable WASM —
- * ArrayBuffer. esm-potrace-wasm's cwrap `"array"` path does HEAP8.set(pixels),
- * which throws `RangeError: offset is out of bounds` on those views and on
- * images whose RGBA blob does not fit the module's heap.
+ * ArrayBuffer. Copy onto a fresh buffer before handing pixels to WASM.
  */
-
-/** Stay under a typical 16 MiB potrace heap after stack/allocator overhead. */
-export const MAX_POTRACE_PIXELS = 1_500_000;
-
-export function isOffsetOutOfBounds(err: unknown): boolean {
-	const msg = err instanceof Error ? err.message : String(err);
-	return /offset.*(?:out of bounds|outside)/i.test(msg) || /out of bounds/i.test(msg);
-}
 
 function makeImageData(data: Uint8ClampedArray<ArrayBuffer>, width: number, height: number): ImageData {
 	if (typeof ImageData === 'function') {
@@ -32,10 +22,7 @@ function sample(src: ArrayLike<number>, width: number, height: number, x: number
 	return i < src.length ? Number(src[i]) || 0 : channel === 3 ? 255 : 0;
 }
 
-/**
- * Copy pixels onto a fresh, non-resizable buffer. Downscale when `maxPixels`
- * is set so the packed RGBA fits potrace's WASM heap.
- */
+/** Copy pixels onto a fresh, non-resizable buffer. Downscale when `maxPixels` is set. */
 export function packImageData(image: ImageData, maxPixels = Number.POSITIVE_INFINITY): ImageData {
 	const width = Math.max(1, image.width | 0);
 	const height = Math.max(1, image.height | 0);
