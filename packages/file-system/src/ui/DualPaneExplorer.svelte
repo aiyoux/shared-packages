@@ -11,9 +11,11 @@
 	 *     (`getMemoryVfs`), shared app-wide so received files are accessible
 	 *     everywhere.
 	 *   - `onOpen`: optional open-file handler (hub opens skch/ob3d/vrec).
-	 *   - `onOpenProject`: optional "Open project" handler, forwarded to every
-	 *     backend (local, memory, b2, rclone, monitor, peer) — unlike `onOpen`,
-	 *     which is still memory-only on the remote branch.
+	 *   - `onOpenProject`: optional "Open project" handler. DualPane wraps each
+	 *     pane's FileExplorer so the handler receives the folder plus
+	 *     `OpenProjectContext` (`kind` from the pane; monitor also gets
+	 *     profileId / baseUrl / rootPath). Unlike `onOpen`, which is still
+	 *     memory-only on the remote branch, this is forwarded to every backend.
 	 *   - `persistenceVfs`: unused for UI (kept so existing callers compile).
 	 *   - `tids`: per-page testid config so each consumer keeps its existing
 	 *     e2e selectors (defaults match the hub `/tools/files` page).
@@ -30,7 +32,12 @@
 	import DualPhaseConfirm from './DualPhaseConfirm.svelte';
 	import { stackTransferItems } from './stackProgress.js';
 	import { listTransfers, subscribeTransfers, type TransferItem } from '../transferRegistry.js';
-	import { type ExplorerDriver, type ExplorerEntry, type ExplorerOpenTarget } from './explorerDriver.js';
+	import {
+		type ExplorerDriver,
+		type ExplorerEntry,
+		type ExplorerOpenTarget,
+		type OpenProjectContext
+	} from './explorerDriver.js';
 	import { createMemoryExplorerDriver } from './memoryExplorerDriver.js';
 	// PaneId + DualPaneTids live in a .ts module so the ui barrel can re-export
 	// them without the *.svelte named-export limitation.
@@ -115,7 +122,7 @@
 	type Props = {
 		localDriver: ExplorerDriver;
 		onOpen?: (entry: ExplorerOpenTarget) => void | Promise<void>;
-		onOpenProject?: (entry: ExplorerOpenTarget) => void | Promise<void>;
+		onOpenProject?: (entry: ExplorerOpenTarget, ctx: OpenProjectContext) => void | Promise<void>;
 		persistenceVfs?: VfsService;
 		dualPaneKey?: string;
 		dualPaneDefault?: boolean;
@@ -372,6 +379,23 @@
 	function sendTargetEntries(id: PaneId, target: ExplorerOpenTarget): ExplorerEntry[] {
 		const row = paneState(id).ctx.entries.find((e) => e.id === target.id);
 		return [row ?? { ...target, parentId: null }];
+	}
+	function paneOpenProjectContext(id: PaneId): OpenProjectContext {
+		if (id === 'right' && overrideRight) return { kind: 'peer' };
+		const p = paneState(id);
+		if (p.activeKind !== 'monitor') return { kind: p.activeKind };
+		const profile = monitorProfiles.find((pr) => pr.id === p.activeId);
+		return {
+			kind: 'monitor',
+			profileId: p.activeId,
+			baseUrl: profile?.baseUrl,
+			rootPath: profile?.rootPath
+		};
+	}
+	/** FileExplorer stays `(entry) => …`; DualPane attaches pane context here. */
+	function paneOpenProject(id: PaneId) {
+		if (!onOpenProject) return undefined;
+		return (entry: ExplorerOpenTarget) => onOpenProject(entry, paneOpenProjectContext(id));
 	}
 	function setPane(id: PaneId, patch: Partial<PaneState>) {
 		if (id === 'left') left = { ...left, ...patch };
@@ -1328,7 +1352,7 @@
 						driver={overrideRight.driver}
 						showPersistence={false}
 						initialParentId={p.ctx.parentId}
-						onOpenProject={onOpenProject}
+						onOpenProject={paneOpenProject(id)}
 						pending={panePending(id)}
 						onContextChange={(ctx) => {
 							right = { ...right, ctx };
@@ -1347,7 +1371,7 @@
 						showPersistence={false}
 						initialParentId={p.ctx.parentId}
 						onOpen={onOpen}
-						onOpenProject={onOpenProject}
+						onOpenProject={paneOpenProject(id)}
 						onSendFile={
 							onSend
 								? (entry) =>
@@ -1376,7 +1400,7 @@
 						showPersistence={false}
 						initialParentId={p.ctx.parentId}
 						onOpen={p.activeKind === 'memory' ? onOpen : undefined}
-						onOpenProject={onOpenProject}
+						onOpenProject={paneOpenProject(id)}
 						onSendFile={
 							onSend
 								? (entry) =>

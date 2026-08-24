@@ -193,6 +193,7 @@
 			data-testid="fe-tree-row"
 			data-id={entry.id}
 			data-kind={entry.kind}
+			data-name={entry.name}
 			role="treeitem"
 			aria-selected={isActive}
 			aria-expanded={isFolder ? isOpen : undefined}

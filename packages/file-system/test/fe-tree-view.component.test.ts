@@ -49,6 +49,7 @@ describe('FeTreeView', () => {
 		expect(await screen.findByText('readme.txt')).toBeTruthy();
 		expect(screen.getByTestId('fe-tree-row-root').textContent).toContain('Project');
 		expect(screen.getByTestId('fe-tree-row').getAttribute('data-kind')).toBe('file');
+		expect(screen.getByTestId('fe-tree-row').getAttribute('data-name')).toBe('readme.txt');
 	});
 
 	it('file click calls onSelect, not onNavigate', async () => {

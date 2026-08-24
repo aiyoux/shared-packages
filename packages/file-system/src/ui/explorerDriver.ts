@@ -22,6 +22,18 @@ export type ExplorerOpenTarget = {
 	fileType?: FileTypeId;
 };
 
+/**
+ * DualPaneExplorer attaches this to `onOpenProject` so Files can tell Projects
+ * whether the folder is local VFS, a monitor path, or another backend.
+ */
+export type OpenProjectContext = {
+	kind: 'local' | 'memory' | 'monitor' | 'b2' | 'rclone' | 'disk' | 'peer';
+	/** Monitor (or other remote) profile id when kind is monitor. */
+	profileId?: string;
+	baseUrl?: string;
+	rootPath?: string;
+};
+
 /** UI-facing list row — thinner than VfsNode (no generation/CAS/trash fields). */
 export interface ExplorerEntry extends ExplorerOpenTarget {
 	parentId: ExplorerEntryId | null;

@@ -53,7 +53,8 @@ export {
 	type ExplorerEntryKind,
 	type ExplorerListOptions,
 	type ExplorerListResult,
-	type ExplorerOpenTarget
+	type ExplorerOpenTarget,
+	type OpenProjectContext
 } from './explorerDriver.js';
 export { createLocalExplorerDriver, type LocalExplorerDriverOptions } from './localExplorerDriver.js';
 export { portal } from './portal.js';
