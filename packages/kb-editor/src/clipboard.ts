@@ -14,6 +14,7 @@ import {
 	type Range,
 	type TextSpan
 } from '@shared-packages/kb-model';
+import { stripCollabWidgetsHtml } from './decorations.js';
 import { newBlockId } from './ids.js';
 import { clampPoint, isCollapsed, orderedRange, rangeSharesParent } from './range.js';
 import type { EditorState } from './state.js';
@@ -26,7 +27,7 @@ export type KbSlice = {
 };
 
 export function stripHtml(html: string): string {
-	return html
+	return stripCollabWidgetsHtml(html)
 		.replace(/<br\s*\/?>/gi, '\n')
 		.replace(/<\/p>/gi, '\n')
 		.replace(/<\/div>/gi, '\n')

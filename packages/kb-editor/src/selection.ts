@@ -8,6 +8,7 @@ import {
 	type Point,
 	type Range
 } from '@shared-packages/kb-model';
+import { COLLAB_WIDGET_ATTR } from './decorations.js';
 import { BLOCK_ID_ATTR } from './project.js';
 import { clampRange, collapsed } from './range.js';
 
@@ -20,12 +21,27 @@ function closestBlock(node: Node | null, host: HTMLElement): HTMLElement | null 
 	return block as HTMLElement;
 }
 
-function textNodes(block: HTMLElement): Text[] {
+function inCollabWidget(node: Node): boolean {
+	const el = node.nodeType === Node.ELEMENT_NODE ? (node as Element) : node.parentElement;
+	return !!el?.closest(`[${COLLAB_WIDGET_ATTR}]`);
+}
+
+/** Document text only. Remote caret widgets are skipped so offsets match KbPage. */
+export function textNodes(block: HTMLElement): Text[] {
 	const out: Text[] = [];
 	const walk = block.ownerDocument.createTreeWalker(block, NodeFilter.SHOW_TEXT);
 	let node: Node | null;
-	while ((node = walk.nextNode())) out.push(node as Text);
+	while ((node = walk.nextNode())) {
+		if (inCollabWidget(node)) continue;
+		out.push(node as Text);
+	}
 	return out;
+}
+
+export function plaintextFromDom(block: HTMLElement): string {
+	return textNodes(block)
+		.map((t) => t.data)
+		.join('');
 }
 
 function snapUtf16(text: string, offset: number): number {

@@ -21,11 +21,25 @@ export {
 	snapshotComposition,
 	type CompositionSnapshot
 } from './composition.js';
+export {
+	COLLAB_SEL_ATTR,
+	COLLAB_WIDGET_ATTR,
+	paintCarets,
+	stripCollabWidgetsHtml,
+	type RemoteCaret
+} from './decorations.js';
 export { dropAfterId, dropWhere } from './gutter.js';
 export { allowlistedHref, allowlistedSrc } from './href.js';
 export { newBlockId } from './ids.js';
 export { mapKeydown, type KeyEvent, type KeymapResult } from './keymap.js';
-export { BLOCK_ID_ATTR, BLOCK_TYPE_ATTR, project, renderBlock, syncView } from './project.js';
+export {
+	BLOCK_ID_ATTR,
+	BLOCK_TYPE_ATTR,
+	project,
+	renderBlock,
+	syncView,
+	type ProjectOpts
+} from './project.js';
 export {
 	blockIndex,
 	clampRange,
@@ -36,10 +50,12 @@ export {
 export {
 	caretIn,
 	pointFromDom,
+	plaintextFromDom,
 	rangeFromEndpoints,
 	rangeFromInputEvent,
 	rangeFromSelection,
-	restoreSelection
+	restoreSelection,
+	textNodes
 } from './selection.js';
 export { matchSlash, slashOps } from './slash.js';
 export {
