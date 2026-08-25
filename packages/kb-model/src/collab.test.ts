@@ -84,6 +84,7 @@ describe('CollabSession', () => {
 		expect(shouldReplaceFromSnapshot(5, 5, 6)).toBe(true);
 		expect(shouldReplaceFromSnapshot(4, 5, 5)).toBe(false);
 		expect(shouldReplaceFromSnapshot(5, 5, 4)).toBe(false);
+		expect(shouldReplaceFromSnapshot(6, 5, 5)).toBe(true);
 	});
 
 	it('drops same-block undo groups after a remote (C5 wires this; no invert-and-hope)', () => {
