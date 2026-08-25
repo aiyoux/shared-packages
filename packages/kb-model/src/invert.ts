@@ -14,7 +14,7 @@ import {
 import type { Block, KbPage, Mark, Op, Point, TableCellBlock, TableRowBlock, TextSpan } from './types.js';
 
 function cloneBlock(block: Block): Block {
-	return structuredClone(block);
+	return JSON.parse(JSON.stringify(block)) as Block;
 }
 
 function prevSiblingId(page: KbPage, id: string): string | null {

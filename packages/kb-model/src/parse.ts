@@ -21,6 +21,9 @@ export type ParsedKb = {
  * `serializeKb(parseKb(...))` has no such gate — do not smash-save from `parseKb` alone.
  */
 export function parseKbDocument(raw: string | unknown): ParsedKb {
+	if (typeof raw === 'string' && raw.trim() === '') {
+		throw new Error('kb document is empty');
+	}
 	const data = typeof raw === 'string' ? JSON.parse(raw) : raw;
 	if (!isRecord(data)) {
 		throw new Error('kb document must be an object');

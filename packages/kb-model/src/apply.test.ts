@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { apply, applyMany } from './apply.js';
 import { normalizePage } from './normalize.js';
 import { plaintext, plaintextOf } from './plaintext.js';
@@ -37,6 +37,21 @@ function page(blocks: Block[], extra: Partial<KbPage> = {}): KbPage {
 function para(id: string, text: string, marks: Mark[] = []): Block {
 	return { id, type: 'paragraph', content: [span(text, marks)] };
 }
+
+describe('clonePage', () => {
+	it('does not structuredClone the page (Svelte $state proxies include Window)', () => {
+		const src = page([para('p', 'hi')]);
+		const spy = vi.spyOn(globalThis, 'structuredClone');
+		const next = apply(src, {
+			kind: 'insert-text',
+			at: { blockId: 'p', offset: 0 },
+			text: 'x'
+		});
+		expect(spy).not.toHaveBeenCalled();
+		expect(plaintextOf(next.blocks[0])).toBe('xhi');
+		spy.mockRestore();
+	});
+});
 
 function heading(id: string, text: string, level: 1 | 2 | 3 = 1): Block {
 	return { id, type: 'heading', level, content: [span(text)] };

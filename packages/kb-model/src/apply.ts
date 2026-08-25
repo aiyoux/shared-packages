@@ -57,7 +57,9 @@ export type Resolved = {
 };
 
 function clonePage(page: KbPage): KbPage {
-	return structuredClone(page);
+	// Pretty JSON is the file. structuredClone throws DataCloneError on Svelte
+	// $state proxies (the clone graph includes Window).
+	return JSON.parse(JSON.stringify(page)) as KbPage;
 }
 
 function requireLocation(

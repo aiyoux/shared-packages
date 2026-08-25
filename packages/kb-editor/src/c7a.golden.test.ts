@@ -106,4 +106,58 @@ describe('C7a editor goldens', () => {
 		expect(schemaCompatible(2, 2, 1)).toBe(true);
 		expect(schemaCompatible(1, 2, 2)).toBe(false);
 	});
+
+	it('sibling insert-block while composing is queued; composing Text identity survives syncView', () => {
+		const host = document.createElement('div');
+		document.body.append(host);
+		let state = createEditorState(page([para('p', 'hi'), para('q', 'yy')]));
+		state = setSelection(state, {
+			anchor: { blockId: 'q', offset: 0 },
+			head: { blockId: 'q', offset: 0 }
+		});
+		project(host, state.page);
+		state = beginComposition(state);
+		const q = host.querySelector('[data-block-id="q"]') as HTMLElement;
+		const text = [...q.childNodes].find((n) => n.nodeType === Node.TEXT_NODE) as Text;
+		text.data = 'あyy';
+
+		const sibling: Op = { kind: 'insert-block', afterId: 'p', block: para('r', 'sib') };
+		state = applyRemoteOps(state, [sibling]);
+		expect(state.page.blocks.map((b) => b.id)).toEqual(['p', 'q']);
+		expect(state.pendingRemote).toEqual([sibling]);
+		syncView(host, state);
+		expect(text.data).toBe('あyy');
+		expect(text.parentElement).toBe(q);
+		expect(host.querySelector('[data-block-id="r"]')).toBeNull();
+
+		const snap = snapshotComposition(state, state.selection);
+		const { ops } = commitComposition(state, snap, 'あ');
+		state = applyEditorOps({ ...state, composing: false }, ops);
+		state = flushPendingRemotes(state);
+		expect(plaintextOf(state.page.blocks.find((b) => b.id === 'q')!)).toBe('あyy');
+		expect(state.page.blocks.map((b) => b.id)).toEqual(['p', 'r', 'q']);
+		expect(plaintextOf(state.page.blocks.find((b) => b.id === 'r')!)).toBe('sib');
+		host.remove();
+	});
+
+	it('sibling delete-block and split-block while composing stay queued', () => {
+		let state = beginComposition(createEditorState(page([para('a', 'aa'), para('b', 'bb'), para('c', 'cc')])));
+		state = setSelection(state, {
+			anchor: { blockId: 'c', offset: 0 },
+			head: { blockId: 'c', offset: 0 }
+		});
+		state = applyRemoteOps(state, [
+			{ kind: 'delete-block', id: 'b' },
+			{ kind: 'split-block', at: { blockId: 'a', offset: 1 }, newId: 'a2' }
+		]);
+		expect(state.page.blocks.map((b) => b.id)).toEqual(['a', 'b', 'c']);
+		expect(state.pendingRemote).toHaveLength(2);
+		expect(state.composing).toBe(true);
+
+		state = applyEditorOps({ ...state, composing: false }, []);
+		state = flushPendingRemotes(state);
+		expect(state.page.blocks.map((b) => b.id)).toEqual(['a', 'a2', 'c']);
+		expect(plaintextOf(state.page.blocks[0])).toBe('a');
+		expect(plaintextOf(state.page.blocks[1])).toBe('a');
+	});
 });

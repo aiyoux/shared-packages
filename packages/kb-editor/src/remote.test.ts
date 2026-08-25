@@ -22,6 +22,17 @@ describe('IME queues remotes (D14)', () => {
 		expect(state.composing).toBe(true);
 	});
 
+	it('queues sibling insert/delete while composing and does not mutate the page until flush', () => {
+		let state = beginComposition(ed([para('p', 'hi'), para('q', 'yy')]));
+		state = applyRemoteOps(state, [
+			{ kind: 'insert-block', afterId: 'p', block: para('r', 'sib') },
+			{ kind: 'delete-block', id: 'p' }
+		]);
+		expect(state.page.blocks.map((b) => b.id)).toEqual(['p', 'q']);
+		expect(state.pendingRemote).toHaveLength(2);
+		expect(state.composing).toBe(true);
+	});
+
 	it('compositionend commits the local snapshot insert first, then remotes', () => {
 		let state = beginComposition(ed([para('p', 'hi'), para('q', 'yy')]));
 		const snap = snapshotComposition(state, state.selection);

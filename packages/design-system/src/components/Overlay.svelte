@@ -48,9 +48,10 @@
 		inset: 0;
 		z-index: 100;
 		display: flex;
-		align-items: center;
+		align-items: safe center;
 		justify-content: center;
 		padding: var(--space-4);
+		overflow: auto;
 	}
 
 	.ds-overlay-scrim {

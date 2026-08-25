@@ -32,6 +32,12 @@ describe('parseKb', () => {
 		expect(() => parseKb('[]')).toThrow(/object/i);
 	});
 
+	it('rejects empty documents without Unexpected end of JSON', () => {
+		expect(() => parseKb('')).toThrow(/empty/i);
+		expect(() => parseKb('   \n')).toThrow(/empty/i);
+		expect(() => parseKbDocument('')).toThrow(/empty/i);
+	});
+
 	it('round-trips serialize identity including trailing newline and indent 2', () => {
 		const empty = createEmptyPage({ id: 'empty-1', title: 'Empty' });
 		empty.createdAt = '2026-01-01T00:00:00.000Z';

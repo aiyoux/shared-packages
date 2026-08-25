@@ -140,6 +140,23 @@ describe('project', () => {
 		el.remove();
 	});
 
+	it('inserting a sibling DOM node during composition keeps the composing Text node', () => {
+		const el = host();
+		project(el, page([para('p', 'hi'), para('q', 'yy')]));
+		const q = el.querySelector('[data-block-id="q"]') as HTMLElement;
+		const text = [...q.childNodes].find((n) => n.nodeType === Node.TEXT_NODE) as Text;
+		text.data = 'あyy';
+		const sib = document.createElement('p');
+		sib.setAttribute('data-block-id', 'r');
+		sib.appendChild(document.createTextNode('sib'));
+		el.insertBefore(sib, q);
+		expect(text.data).toBe('あyy');
+		expect(text.parentElement).toBe(q);
+		expect(el.contains(text)).toBe(true);
+		expect([...el.children].map((c) => c.getAttribute('data-block-id'))).toEqual(['p', 'r', 'q']);
+		el.remove();
+	});
+
 	it('projects nested children as host-direct siblings in visible order', () => {
 		const el = host();
 		project(el, page([callout('c', [para('n', 'inside')]), para('z', 'Z')]));
