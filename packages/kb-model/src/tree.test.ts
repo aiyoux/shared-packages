@@ -110,8 +110,8 @@ describe('tree walk', () => {
 
 	it('toMarkdown walks DFS including nested children', () => {
 		const doc = page([callout('c', [para('n', 'inside')]), para('z', 'Z')]);
-		expect(toMarkdown(doc)).toBe('inside\n\nZ\n');
-		expect(toMarkdown(page([callout('c', [para('n', 'inside')]), para('z', 'Z')]))).toBe('inside\n\nZ\n');
+		expect(toMarkdown(doc)).toBe('> inside\n\nZ\n');
+		expect(toMarkdown(page([callout('c', [para('n', 'inside')]), para('z', 'Z')]))).toBe('> inside\n\nZ\n');
 	});
 });
 
