@@ -202,6 +202,10 @@ describe('N4 table editor', () => {
 		expect(tableBlock?.type).toBe('table');
 		if (tableBlock?.type === 'table') expect(tableBlock.children).toHaveLength(3);
 		expect(atEnd.selection?.anchor.blockId).not.toBe('c22');
+		expect(next.selection.anchor.blockId).toBe(atEnd.selection?.anchor.blockId);
+		if (tableBlock?.type === 'table') {
+			expect(next.selection.anchor.blockId).toBe(tableBlock.children[2]?.children[0]?.id);
+		}
 	});
 
 	it('Enter moves to the cell below, or inserts a row in the last row', () => {
@@ -227,6 +231,22 @@ describe('N4 table editor', () => {
 		expect(atEnd.ops[0]?.kind).toBe('insert-table-row');
 		expect(atEnd.ops.some((op) => op.kind === 'split-block')).toBe(false);
 		expect(() => dispatchMany(last, atEnd.ops)).not.toThrow();
+
+		const lastCol = {
+			...state,
+			selection: { anchor: { blockId: 'c22', offset: 2 }, head: { blockId: 'c22', offset: 2 } }
+		};
+		const enterLast = mapKeydown(
+			lastCol,
+			{ key: 'Enter', metaKey: false, ctrlKey: false, shiftKey: false, altKey: false },
+			lastCol.selection
+		);
+		const afterEnter = dispatchMany(lastCol, enterLast.ops);
+		expect(afterEnter.selection.anchor.blockId).toBe(enterLast.selection?.anchor.blockId);
+		const t = findBlock(afterEnter.page, 't');
+		if (t?.type === 'table') {
+			expect(afterEnter.selection.anchor.blockId).toBe(t.children[2]?.children[1]?.id);
+		}
 	});
 
 	it('blockFocus on table chrome deletes the whole table', () => {
@@ -535,6 +555,31 @@ describe('N4 table editor', () => {
 		expect(dest?.getAttribute('data-col')).toBe('1');
 		expect(dest?.getAttribute('data-parent-id')).not.toBe('r2');
 		second.unmount();
+	});
+
+	it('onDispatch-only last-cell Tab lands on the first cell of the new row', async () => {
+		let state = setSelection(createEditorState(grid()), {
+			anchor: { blockId: 'c22', offset: 2 },
+			head: { blockId: 'c22', offset: 2 }
+		});
+		const onDispatch = (op: Op | Op[]) => {
+			state = applyEditorOps(state, op);
+		};
+		const { container, rerender, unmount } = render(KbEditor, {
+			props: { state, editable: true, onDispatch }
+		});
+		await tick();
+		const kbHost = container.querySelector('[data-testid="kb-host"]') as HTMLElement;
+		kbHost.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true }));
+		await rerender({ state, editable: true, onDispatch });
+		await tick();
+		const hostAfter = container.querySelector('[data-testid="kb-host"]') as HTMLElement;
+		const caret = rangeFromSelection(hostAfter);
+		expect(caret?.anchor.blockId).not.toBe('c22');
+		const dest = hostAfter.querySelector(`[data-block-id="${caret?.anchor.blockId}"]`) as HTMLElement;
+		expect(dest?.getAttribute('data-col')).toBe('0');
+		expect(dest?.getAttribute('data-parent-id')).not.toBe('r2');
+		unmount();
 	});
 
 	it('source grep: no HTML <table> constructor and no per-cell contenteditable', () => {

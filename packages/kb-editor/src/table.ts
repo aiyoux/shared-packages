@@ -124,8 +124,15 @@ export function tabOps(page: KbPage, live: Range, shift: boolean): TableNav | nu
 		return { ops: [], selection: collapsed({ blockId: cell.id, offset: 0 }) };
 	}
 	const row = emptyTableRow(width);
+	const op = {
+		kind: 'insert-table-row' as const,
+		tableId: table.id,
+		afterId: table.children[height - 1]!.id,
+		row,
+		focusCol: 0
+	};
 	return {
-		ops: [{ kind: 'insert-table-row', tableId: table.id, afterId: table.children[height - 1]!.id, row }],
+		ops: [op],
 		selection: collapsed({ blockId: row.children[0]!.id, offset: 0 })
 	};
 }
@@ -143,12 +150,17 @@ export function enterCellOps(page: KbPage, live: Range): TableNav | null {
 		return { ops: prefix, selection: collapsed({ blockId: cell.id, offset: 0 }) };
 	}
 	const row = emptyTableRow(width);
-	const dest = row.children[Math.min(colIndex, row.children.length - 1)]!;
+	const destIndex = Math.min(colIndex, row.children.length - 1);
+	const dest = row.children[destIndex]!;
+	const op = {
+		kind: 'insert-table-row' as const,
+		tableId: table.id,
+		afterId: table.children[height - 1]!.id,
+		row,
+		focusCol: destIndex
+	};
 	return {
-		ops: [
-			...prefix,
-			{ kind: 'insert-table-row', tableId: table.id, afterId: table.children[height - 1]!.id, row }
-		],
+		ops: [...prefix, op],
 		selection: collapsed({ blockId: dest.id, offset: 0 })
 	};
 }
