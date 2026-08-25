@@ -98,15 +98,16 @@ export function schemaCompatible(
 }
 
 /**
- * v1 nack/409 recovery: wait until localSeq === headSeq, then replace from a
- * snapshot whose seq >= headSeq. Never transformOp, never invert-local.
+ * v1 nack/409 recovery: wait until localSeq >= headSeq, then replace from a
+ * snapshot whose seq >= headSeq. Ops that skip past headSeq must not block
+ * replace. Never transformOp, never invert-local.
  */
 export function shouldReplaceFromSnapshot(
 	localSeq: number,
 	nackHeadSeq: number,
 	snapshotSeq: number
 ): boolean {
-	return localSeq === nackHeadSeq && snapshotSeq >= nackHeadSeq;
+	return localSeq >= nackHeadSeq && snapshotSeq >= nackHeadSeq;
 }
 
 function subtreeIds(block: Block, into: string[] = []): string[] {
