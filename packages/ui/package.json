@@ -23,6 +23,16 @@
     "./files": {
       "types": "./src/files.ts",
       "default": "./src/files.ts"
+    },
+    "./pane-layout/tree": {
+      "types": "./src/pane-layout/tree.ts",
+      "svelte": "./src/pane-layout/tree.ts",
+      "default": "./src/pane-layout/tree.ts"
+    },
+    "./pane-layout/types": {
+      "types": "./src/pane-layout/types.ts",
+      "svelte": "./src/pane-layout/types.ts",
+      "default": "./src/pane-layout/types.ts"
     }
   },
   "scripts": {
