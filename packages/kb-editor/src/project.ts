@@ -10,8 +10,15 @@ import {
 	type KbPage,
 	type Mark
 } from '@shared-packages/kb-model';
+import { paintCarets, stripCollabWidgets, type RemoteCaret } from './decorations.js';
 import { allowlistedHref, allowlistedSrc } from './href.js';
 import type { EditorState } from './state.js';
+
+export type ProjectOpts = {
+	carets?: RemoteCaret[];
+	/** IME freeze: project the page but insert no collab widgets. */
+	composing?: boolean;
+};
 
 export const BLOCK_ID_ATTR = 'data-block-id';
 export const BLOCK_TYPE_ATTR = 'data-block-type';
@@ -198,7 +205,7 @@ export function renderBlock(
 }
 
 /** Imperative projection into the one contenteditable host. Never innerHTML. Rows omitted. */
-export function project(host: HTMLElement, page: KbPage): void {
+export function project(host: HTMLElement, page: KbPage, opts?: ProjectOpts): void {
 	const doc = host.ownerDocument;
 	const nodes: HTMLElement[] = [];
 	for (const block of visibleOrder(page)) {
@@ -209,10 +216,25 @@ export function project(host: HTMLElement, page: KbPage): void {
 	}
 	host.replaceChildren(...nodes);
 	for (const child of host.children) stripMagicBr(child as HTMLElement);
+	if (opts?.composing) {
+		stripCollabWidgets(host);
+		return;
+	}
+	if (opts?.carets?.length) paintCarets(host, page, opts.carets);
 }
 
-/** Re-project unless composing (IME freeze). */
-export function syncView(host: HTMLElement, state: EditorState): void {
-	if (state.composing) return;
-	project(host, state.page);
+/**
+ * Re-project unless composing (IME freeze). While composing, strip already-painted
+ * widgets without replaceChildren so compositionend cannot read remote names.
+ */
+export function syncView(
+	host: HTMLElement,
+	state: EditorState,
+	opts?: { carets?: RemoteCaret[] }
+): void {
+	if (state.composing) {
+		stripCollabWidgets(host);
+		return;
+	}
+	project(host, state.page, { carets: opts?.carets });
 }

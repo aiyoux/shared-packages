@@ -1,6 +1,30 @@
 export { apply, applyMany, resolveInsertAnchor, UnresolvedPointError } from './apply.js';
+export { applyRemote, applyRemoteBatch, applyRemoteMany, clampPoint } from './applyRemote.js';
+export {
+	REPLICA_SEND_SNAPSHOT_ERROR,
+	blockIdsTouchedByOp,
+	createLoopbackCollabSession,
+	dropUndoGroupsTouchedByRemote,
+	opNamesBlockIds,
+	schemaCompatible,
+	shouldReplaceFromSnapshot,
+	type AwarenessState,
+	type CollabFrame,
+	type CollabRole,
+	type CollabSession,
+	type CollabSessionOpts,
+	type KbCollabMessage,
+	type MonitorCollabAdapter
+} from './collab.js';
 export { createEmptyPage } from './createEmptyPage.js';
 export { invert } from './invert.js';
+export {
+	mapPointThroughOp,
+	mapRangeThroughOp,
+	snapMappedPoint,
+	type Assoc,
+	type StickyPoint
+} from './mapPoint.js';
 export { isSchemaUnderstood, migrateSchema, migrateV1, schemaWriteAllowed } from './migrate.js';
 export { canonicalMarks, hasNestedTypes, normalizePage, normalizeSpans, writeSchemaVersion } from './normalize.js';
 export { parseKb, parseKbDocument, type ParsedKb } from './parse.js';

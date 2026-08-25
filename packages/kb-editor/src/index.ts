@@ -22,6 +22,14 @@ export {
 	snapshotComposition,
 	type CompositionSnapshot
 } from './composition.js';
+export {
+	COLLAB_SEL_ATTR,
+	COLLAB_WIDGET_ATTR,
+	paintCarets,
+	stripCollabWidgets,
+	stripCollabWidgetsHtml,
+	type RemoteCaret
+} from './decorations.js';
 export { dropAfterId, dropTarget, dropWhere, gutterOrder, handleHeights, overlayBoxes } from './gutter.js';
 export { allowlistedHref, allowlistedSrc } from './href.js';
 export { newBlockId } from './ids.js';
@@ -34,7 +42,8 @@ export {
 	PARENT_ID_ATTR,
 	project,
 	renderBlock,
-	syncView
+	syncView,
+	type ProjectOpts
 } from './project.js';
 export {
 	blockIndex,
@@ -48,10 +57,12 @@ export {
 export {
 	caretIn,
 	pointFromDom,
+	plaintextFromDom,
 	rangeFromEndpoints,
 	rangeFromInputEvent,
 	rangeFromSelection,
-	restoreSelection
+	restoreSelection,
+	textNodes
 } from './selection.js';
 export { matchSlash, slashOps } from './slash.js';
 export {

@@ -11,6 +11,8 @@ import {
 import { BLOCK_ID_ATTR } from './project.js';
 import { clampRange, collapsed } from './range.js';
 
+const COLLAB_WIDGET_SELECTOR = '[data-collab-widget]';
+
 function closestBlock(node: Node | null, host: HTMLElement): HTMLElement | null {
 	if (!node) return null;
 	const el = node.nodeType === Node.ELEMENT_NODE ? (node as Element) : node.parentElement;
@@ -20,12 +22,73 @@ function closestBlock(node: Node | null, host: HTMLElement): HTMLElement | null 
 	return block as HTMLElement;
 }
 
-function textNodes(block: HTMLElement): Text[] {
+function inCollabWidget(node: Node): boolean {
+	const el = node.nodeType === Node.ELEMENT_NODE ? (node as Element) : node.parentElement;
+	return !!el?.closest(COLLAB_WIDGET_SELECTOR);
+}
+
+function widgetRoot(node: Node): Element | null {
+	const el = node.nodeType === Node.ELEMENT_NODE ? (node as Element) : node.parentElement;
+	return el?.closest(COLLAB_WIDGET_SELECTOR) ?? null;
+}
+
+function documentTextIn(node: Node): number {
+	if (node.nodeType === Node.TEXT_NODE) {
+		return inCollabWidget(node) ? 0 : (node as Text).data.length;
+	}
+	if (node.nodeType !== Node.ELEMENT_NODE) return 0;
+	const el = node as Element;
+	if (el.matches?.(COLLAB_WIDGET_SELECTOR) || el.closest(COLLAB_WIDGET_SELECTOR)) return 0;
+	let n = 0;
+	for (const child of el.childNodes) n += documentTextIn(child);
+	return n;
+}
+
+/** Document plaintext before `target` (widgets contribute 0). */
+function plaintextBeforeNode(block: HTMLElement, target: Node): number {
+	if (target === block) return 0;
+	let total = 0;
+	let found = false;
+	const visit = (node: Node): void => {
+		if (found || node === target) {
+			found = true;
+			return;
+		}
+		if (node.nodeType === Node.TEXT_NODE) {
+			if (!inCollabWidget(node)) total += (node as Text).data.length;
+			return;
+		}
+		if (node.nodeType === Node.ELEMENT_NODE && (node as Element).hasAttribute('data-collab-widget')) {
+			return;
+		}
+		for (const child of node.childNodes) {
+			visit(child);
+			if (found) return;
+		}
+	};
+	for (const child of block.childNodes) {
+		visit(child);
+		if (found) break;
+	}
+	return total;
+}
+
+/** Document text only. Remote caret widgets are skipped so offsets match KbPage. */
+export function textNodes(block: HTMLElement): Text[] {
 	const out: Text[] = [];
 	const walk = block.ownerDocument.createTreeWalker(block, NodeFilter.SHOW_TEXT);
 	let node: Node | null;
-	while ((node = walk.nextNode())) out.push(node as Text);
+	while ((node = walk.nextNode())) {
+		if (inCollabWidget(node)) continue;
+		out.push(node as Text);
+	}
 	return out;
+}
+
+export function plaintextFromDom(block: HTMLElement): string {
+	return textNodes(block)
+		.map((t) => t.data)
+		.join('');
 }
 
 function snapUtf16(text: string, offset: number): number {
@@ -38,51 +101,26 @@ function snapUtf16(text: string, offset: number): number {
 }
 
 function plaintextOffsetFromDom(block: HTMLElement, node: Node, offset: number): number {
-	if (node === block) {
-		if (offset <= 0) return 0;
-		return Array.from(textNodes(block)).reduce((sum, t) => sum + t.data.length, 0);
-	}
-	if (node.nodeType === Node.ELEMENT_NODE && (node as Element).tagName === 'BR') {
-		return node === block.firstChild ? 0 : Array.from(textNodes(block)).reduce((sum, t) => sum + t.data.length, 0);
-	}
-	if (node.parentElement?.tagName === 'BR') {
-		return node.parentElement === block.firstChild ? 0 : Array.from(textNodes(block)).reduce((sum, t) => sum + t.data.length, 0);
+	const widget = widgetRoot(node);
+	if (widget && widget !== block && block.contains(widget)) {
+		return plaintextBeforeNode(block, widget);
 	}
 
-	const texts = textNodes(block);
-	let total = 0;
-	for (const text of texts) {
-		if (node === text) {
-			return total + snapUtf16(text.data, offset);
-		}
-		if (node.nodeType === Node.ELEMENT_NODE && (node as Element).contains(text)) {
-			const index = Array.prototype.indexOf.call(node.childNodes, text);
-			if (index >= 0 && offset > index) {
-				total += text.data.length;
-				continue;
-			}
-			if (index >= 0 && offset <= index) return total;
-		}
-		total += text.data.length;
+	if (node.nodeType === Node.TEXT_NODE) {
+		const text = node as Text;
+		return plaintextBeforeNode(block, text) + snapUtf16(text.data, offset);
 	}
 
 	if (node.nodeType === Node.ELEMENT_NODE) {
 		const el = node as Element;
-		if (offset <= 0) {
-			const first = texts.find((t) => el.contains(t) || el === t.parentElement);
-			if (first) {
-				let before = 0;
-				for (const text of texts) {
-					if (text === first) return before;
-					before += text.data.length;
-				}
-			}
-			return 0;
-		}
+		let total = el === block ? 0 : plaintextBeforeNode(block, el);
+		const kids = el.childNodes;
+		const upTo = Math.max(0, Math.min(offset, kids.length));
+		for (let i = 0; i < upTo; i++) total += documentTextIn(kids[i]);
 		return total;
 	}
 
-	return total;
+	return plaintextBeforeNode(block, node);
 }
 
 export function pointFromDom(host: HTMLElement, node: Node, offset: number): Point | null {
@@ -142,7 +180,7 @@ export function rangeFromInputEvent(host: HTMLElement, event: InputEvent, fallba
 	return rangeFromSelection(host) ?? fallback;
 }
 
-function nodeAtOffset(block: HTMLElement, offset: number): { node: Text; offset: number } | null {
+export function nodeAtOffset(block: HTMLElement, offset: number): { node: Text; offset: number } | null {
 	const texts = textNodes(block);
 	if (texts.length === 0) return null;
 	let remaining = Math.max(0, offset);

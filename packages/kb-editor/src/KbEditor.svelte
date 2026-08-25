@@ -23,7 +23,12 @@
 	import { dropTarget, dropWhere, gutterOrder, handleHeights, overlayBoxes, type OverlayBox } from './gutter.js';
 	import { mapKeydown } from './keymap.js';
 	import { BLOCK_ID_ATTR, project } from './project.js';
-	import { rangeFromInputEvent, rangeFromSelection, restoreSelection } from './selection.js';
+	import {
+		plaintextFromDom,
+		rangeFromInputEvent,
+		rangeFromSelection,
+		restoreSelection
+	} from './selection.js';
 	import { applyEditorOps, redo, setSelection, undo, type EditorState } from './state.js';
 
 	let {
@@ -134,7 +139,7 @@
 		let domText: string | null = null;
 		if (host) {
 			const el = host.querySelector(`[${BLOCK_ID_ATTR}="${snapSel.anchor.blockId}"]`);
-			domText = el?.textContent ?? null;
+			domText = el ? plaintextFromDom(el as HTMLElement) : null;
 		}
 		const data = confirmedCompositionText({ data: event.data }, domText, original);
 		if (!data) {
