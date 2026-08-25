@@ -79,6 +79,34 @@ export type AnimClip =
 	| (AnimClipBase & { bind: 'clone' })
 	| (AnimClipBase & { bind: Exclude<BindMode, 'clone'>; source: ClipSource });
 
+/**
+ * A clip that carries a `source` — i.e. every bind mode except `clone`.
+ *
+ * `AnimClip` is discriminated on `bind`, so a plain
+ * `.filter((c) => c.source.backend === 'monitor')` narrows nothing: the
+ * predicate returns `boolean`, and the following `.map` still sees the whole
+ * `ClipSource` union. The guards below narrow both halves at once.
+ */
+export type BoundClip = Extract<AnimClip, { source: ClipSource }>;
+
+/** A bound clip whose source is on a specific backend. */
+export type ClipOnBackend<B extends ClipSource['backend']> = BoundClip & {
+	source: Extract<ClipSource, { backend: B }>;
+};
+
+/** Narrows away `clone` clips, which have no `source`. */
+export function isBoundClip(clip: AnimClip): clip is BoundClip {
+	return clip.bind !== 'clone';
+}
+
+/** Narrows to bound clips sourced from `backend`. */
+export function clipOnBackend<B extends ClipSource['backend']>(
+	clip: AnimClip,
+	backend: B
+): clip is ClipOnBackend<B> {
+	return clip.bind !== 'clone' && clip.source.backend === backend;
+}
+
 export type AnimDocument = {
 	schemaVersion: 1 | 2;
 	durationMs: number;

@@ -2,9 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { EXPLORER_DOWNLOAD_MAX_BYTES, isLocalClass, isRemoteClass } from '../src/ui/explorerDriver.ts';
 import {
-	assertCopyAcrossAllowed,
 	canServerCopy,
-	canShowCopyAcross,
 	classify,
 	copyAcross,
 	CopyAcrossError,
@@ -51,26 +49,6 @@ describe('isLocalClass / isRemoteClass', () => {
 		assert.equal(isLocalClass('b2') || isLocalClass('rclone'), false);
 	});
 
-	it('copy-across chrome: any dual-pane pair, including remote↔remote', () => {
-		assert.equal(canShowCopyAcross('b2', 'monitor'), true);
-		assert.equal(canShowCopyAcross('b2', 'b2'), true);
-		assert.equal(canShowCopyAcross('disk', 'b2'), true);
-		assert.equal(canShowCopyAcross('memory', 'monitor'), true);
-		assert.equal(canShowCopyAcross('local', 'monitor'), true);
-		assert.equal(canShowCopyAcross('disk', 'memory'), true);
-		assert.equal(canShowCopyAcross('local', 'peer-fs'), true);
-		assert.equal(canShowCopyAcross('b2', 'peer-fs'), true);
-	});
-
-	it('assertCopyAcrossAllowed no longer blocks remote↔remote', () => {
-		assertCopyAcrossAllowed('b2', 'monitor');
-		assertCopyAcrossAllowed('monitor', 'rclone');
-		assertCopyAcrossAllowed('b2', 'peer-fs');
-		assertCopyAcrossAllowed('disk', 'b2');
-		assertCopyAcrossAllowed('b2', 'local');
-		assertCopyAcrossAllowed('monitor', 'memory');
-		assertCopyAcrossAllowed('local', 'disk');
-	});
 });
 
 describe('cross-pane drag payload', () => {

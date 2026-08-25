@@ -9,8 +9,6 @@ export { default as RemoteConnectionsDialog } from './RemoteConnectionsDialog.sv
 export type { RemoteKind } from './RemoteConnectionsDialog.svelte';
 export type { DualPaneTids, PaneId as DualPanePaneId } from './dualPaneTypes.js';
 export {
-	canShowCopyAcross,
-	assertCopyAcrossAllowed,
 	canServerCopy,
 	classify,
 	isDualPhaseCopy,

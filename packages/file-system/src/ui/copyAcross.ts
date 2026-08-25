@@ -17,7 +17,6 @@ import {
 
 export type CopyAcrossErrorCode =
 	| 'COPY_ACROSS_REMOTE_REMOTE'
-	| 'COPY_ACROSS_FOLDER_REMOTE'
 	| 'COPY_ACROSS_DEST_NO_FOLDERS'
 	| 'COPY_ACROSS_NO_SELECTION'
 	| 'COPY_ACROSS_NO_SOURCE'
@@ -186,19 +185,6 @@ export type CopyAcrossArgs = {
 
 function entryById(entries: ExplorerEntry[], id: string): ExplorerEntry | undefined {
 	return entries.find((e) => e.id === id);
-}
-
-/**
- * Dual-pane copy-across is available for any pair of panes.
- * Same-connection remotes short-circuit server-side; distinct remotes
- * go through a dual-phase download→upload on this device.
- */
-export function canShowCopyAcross(_leftId?: string, _rightId?: string): boolean {
-	return true;
-}
-
-export function assertCopyAcrossAllowed(_sourceId: string, _destId: string): void {
-	/* Remote↔remote is allowed; dest writability is checked per driver. */
 }
 
 function nonEmptyKey(d: ExplorerDriver): string | null {
@@ -377,8 +363,6 @@ export function describeCopyAcrossPath(
 export async function copyAcross(args: CopyAcrossArgs): Promise<number> {
 	const { sourceDriver, destDriver, selectedIds, sourceEntries, destParentId, confirmDualPhase } =
 		args;
-	assertCopyAcrossAllowed(sourceDriver.id, destDriver.id);
-
 	if (!selectedIds.length) {
 		throw new CopyAcrossError('COPY_ACROSS_NO_SELECTION', 'Select file(s) to copy');
 	}
@@ -936,7 +920,7 @@ async function copyFolderTree(
 	confirmDualPhase?: () => Promise<boolean>
 ): Promise<number> {
 	if (!dest.mkdir) {
-		throw new CopyAcrossError('COPY_ACROSS_NO_SOURCE', 'Destination cannot create folders');
+		throw new CopyAcrossError('COPY_ACROSS_DEST_NO_FOLDERS', 'Destination cannot create folders');
 	}
 	const created = await dest.mkdir(destParentId, folder.name);
 	let count = 1;

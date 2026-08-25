@@ -20,9 +20,34 @@
     "./FileDropZone.svelte": "./src/FileDropZone.svelte",
     "./ObjectTransformFrame.svelte": "./src/ObjectTransformFrame.svelte",
     "./PathNodeEditor.svelte": "./src/PathNodeEditor.svelte",
+    "./objectTransform": {
+    	"types": "./src/objectTransform.ts",
+    	"svelte": "./src/objectTransform.ts",
+    	"default": "./src/objectTransform.ts"
+    },
+    "./bytes": {
+    	"types": "./src/bytes.ts",
+    	"svelte": "./src/bytes.ts",
+    	"default": "./src/bytes.ts"
+    },
+    "./subscribeStorageKey": {
+    	"types": "./src/subscribeStorageKey.ts",
+    	"svelte": "./src/subscribeStorageKey.ts",
+    	"default": "./src/subscribeStorageKey.ts"
+    },
+    "./tabChannel": {
+    	"types": "./src/tabChannel.ts",
+    	"svelte": "./src/tabChannel.ts",
+    	"default": "./src/tabChannel.ts"
+    },
     "./files": {
       "types": "./src/files.ts",
       "default": "./src/files.ts"
+    },
+    "./pane-layout/chrome": {
+    	"types": "./src/pane-layout/chrome.ts",
+    	"svelte": "./src/pane-layout/chrome.ts",
+    	"default": "./src/pane-layout/chrome.ts"
     },
     "./pane-layout/tree": {
       "types": "./src/pane-layout/tree.ts",

@@ -60,7 +60,6 @@
 	import '@shared-packages/design-system/tooltip.css';
 	import '@shared-packages/design-system/segmented.css';
 	import {
-		canShowCopyAcross,
 		classify,
 		describeCopyAcrossPath,
 		copyAcross,
@@ -539,12 +538,7 @@
 		monitorProfiles.map((p) => ({ id: p.id, name: p.name, detail: p.rootPath }))
 	);
 
-	const rightCopyKind = $derived(
-		overrideRight ? overrideRight.driver.id : right.ctx.backend || right.activeKind
-	);
-	const showCopyAcross = $derived(
-		dualPane && canShowCopyAcross(left.ctx.backend || left.activeKind, rightCopyKind)
-	);
+	const showCopyAcross = $derived(dualPane);
 
 	const visibleCopyItems = $derived(copyItems.filter((t) => !dismissedCopyIds.has(t.id)));
 	const destCopyPending = $derived(
@@ -1759,11 +1753,6 @@
 			class:portaled={Boolean(layoutPortal)}
 			use:portal={layoutPortal || undefined}
 		>
-			<CopyProgressHeader
-				items={visibleCopyItems}
-				onDismiss={dismissCopy}
-				onDismissAll={dismissAllSettledCopy}
-			/>
 			<div
 				class="ds-seg dpe-layout"
 				class:portaled={Boolean(layoutPortal)}
@@ -1805,6 +1794,11 @@
 					idleNote={pairCopy.copyIdleNote}
 				/>
 			{/if}
+			<CopyProgressHeader
+				items={visibleCopyItems}
+				onDismiss={dismissCopy}
+				onDismissAll={dismissAllSettledCopy}
+			/>
 		</div>
 	</div>
 {/if}

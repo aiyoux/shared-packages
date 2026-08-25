@@ -10,8 +10,11 @@ export type {
 	FsBackend,
 	SketchFragment,
 	SketchFragmentKind,
-	SketchObjectKind
+	SketchObjectKind,
+	BoundClip,
+	ClipOnBackend
 } from './types.js';
+export { isBoundClip, clipOnBackend } from './types.js';
 export {
 	BIND_MODES,
 	CLIP_MEDIA_KINDS,
