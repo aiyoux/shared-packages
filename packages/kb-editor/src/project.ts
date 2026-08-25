@@ -1,16 +1,30 @@
 import {
 	canonicalMarks,
+	isContainer,
 	isTextLike,
+	parentIdOf,
+	parentOf,
+	visibleOrder,
 	type Block,
 	type Inline,
 	type KbPage,
 	type Mark
 } from '@shared-packages/kb-model';
+import { paintCarets, stripCollabWidgets, type RemoteCaret } from './decorations.js';
 import { allowlistedHref, allowlistedSrc } from './href.js';
 import type { EditorState } from './state.js';
 
+export type ProjectOpts = {
+	carets?: RemoteCaret[];
+	/** IME freeze: project the page but insert no collab widgets. */
+	composing?: boolean;
+};
+
 export const BLOCK_ID_ATTR = 'data-block-id';
 export const BLOCK_TYPE_ATTR = 'data-block-type';
+export const PARENT_ID_ATTR = 'data-parent-id';
+export const DEPTH_ATTR = 'data-depth';
+export const COL_ATTR = 'data-col';
 
 function markElement(doc: Document, mark: Mark): HTMLElement {
 	switch (mark.type) {
@@ -57,18 +71,34 @@ function stripMagicBr(el: HTMLElement): void {
 	for (const br of walk) br.remove();
 }
 
-function renderTextLike(doc: Document, block: Extract<Block, { content: Inline[] }>): HTMLElement {
+function setTreeAttrs(el: HTMLElement, block: Block, parentId: string | null, depth: number): void {
+	el.setAttribute(BLOCK_ID_ATTR, block.id);
+	el.setAttribute(BLOCK_TYPE_ATTR, block.type);
+	el.setAttribute(DEPTH_ATTR, String(depth));
+	if (parentId) el.setAttribute(PARENT_ID_ATTR, parentId);
+}
+
+function renderTextLike(
+	doc: Document,
+	block: Extract<Block, { content: Inline[] }>,
+	parentId: string | null,
+	depth: number,
+	col?: number
+): HTMLElement {
 	let el: HTMLElement;
 	if (block.type === 'heading') {
 		el = doc.createElement(`h${block.level}`);
 	} else if (block.type === 'list_item') {
 		el = doc.createElement('div');
 		el.setAttribute('data-ordered', block.ordered ? 'true' : 'false');
+	} else if (block.type === 'table_cell') {
+		el = doc.createElement('div');
+		if (block.header) el.setAttribute('data-header', 'true');
+		if (col != null) el.setAttribute(COL_ATTR, String(col));
 	} else {
 		el = doc.createElement('p');
 	}
-	el.setAttribute(BLOCK_ID_ATTR, block.id);
-	el.setAttribute(BLOCK_TYPE_ATTR, block.type);
+	setTreeAttrs(el, block, parentId, depth);
 	appendSpans(doc, el, block.content);
 	stripMagicBr(el);
 	if (!hasTextNode(el)) el.appendChild(doc.createTextNode(''));
@@ -88,10 +118,14 @@ function docWalker(el: HTMLElement): TreeWalker {
 	return el.ownerDocument.createTreeWalker(el, NodeFilter.SHOW_TEXT);
 }
 
-function renderCode(doc: Document, block: Extract<Block, { type: 'code' }>): HTMLElement {
+function renderCode(
+	doc: Document,
+	block: Extract<Block, { type: 'code' }>,
+	parentId: string | null,
+	depth: number
+): HTMLElement {
 	const pre = doc.createElement('pre');
-	pre.setAttribute(BLOCK_ID_ATTR, block.id);
-	pre.setAttribute(BLOCK_TYPE_ATTR, 'code');
+	setTreeAttrs(pre, block, parentId, depth);
 	if (block.language) pre.setAttribute('data-language', block.language);
 	const code = doc.createElement('code');
 	code.appendChild(doc.createTextNode(block.text));
@@ -100,17 +134,25 @@ function renderCode(doc: Document, block: Extract<Block, { type: 'code' }>): HTM
 	return pre;
 }
 
-function renderDivider(doc: Document, block: Extract<Block, { type: 'divider' }>): HTMLElement {
+function renderDivider(
+	doc: Document,
+	block: Extract<Block, { type: 'divider' }>,
+	parentId: string | null,
+	depth: number
+): HTMLElement {
 	const hr = doc.createElement('hr');
-	hr.setAttribute(BLOCK_ID_ATTR, block.id);
-	hr.setAttribute(BLOCK_TYPE_ATTR, 'divider');
+	setTreeAttrs(hr, block, parentId, depth);
 	return hr;
 }
 
-function renderImage(doc: Document, block: Extract<Block, { type: 'image' }>): HTMLElement {
+function renderImage(
+	doc: Document,
+	block: Extract<Block, { type: 'image' }>,
+	parentId: string | null,
+	depth: number
+): HTMLElement {
 	const wrap = doc.createElement('div');
-	wrap.setAttribute(BLOCK_ID_ATTR, block.id);
-	wrap.setAttribute(BLOCK_TYPE_ATTR, 'image');
+	setTreeAttrs(wrap, block, parentId, depth);
 	const img = doc.createElement('img');
 	const src = allowlistedSrc(block.src);
 	if (src) img.setAttribute('src', src);
@@ -119,24 +161,80 @@ function renderImage(doc: Document, block: Extract<Block, { type: 'image' }>): H
 	return wrap;
 }
 
-export function renderBlock(doc: Document, block: Block): HTMLElement {
-	if (isTextLike(block)) return renderTextLike(doc, block);
-	if (block.type === 'code') return renderCode(doc, block);
-	if (block.type === 'divider') return renderDivider(doc, block);
-	return renderImage(doc, block);
+/** Chrome only: host-direct sibling of children, never a nested CE wrapper. */
+function renderContainer(
+	doc: Document,
+	block: Extract<Block, { type: 'callout' | 'toggle' | 'table' }>,
+	parentId: string | null,
+	depth: number
+): HTMLElement {
+	const el = doc.createElement('div');
+	setTreeAttrs(el, block, parentId, depth);
+	if (block.type === 'callout') el.setAttribute('data-variant', block.variant);
+	else if (block.type === 'toggle') el.setAttribute('data-open', block.open ? 'true' : 'false');
+	return el;
 }
 
-/** Imperative projection into the one contenteditable host. Never innerHTML. */
-export function project(host: HTMLElement, page: KbPage): void {
+function locAttrs(page: KbPage, id: string): { parentId: string | null; depth: number } {
+	const loc = parentOf(page, id);
+	const parentId = loc ? parentIdOf(loc.parent) : null;
+	return { parentId, depth: parentId ? 1 : 0 };
+}
+
+function cellCol(page: KbPage, id: string): number | undefined {
+	const loc = parentOf(page, id);
+	if (!loc || loc.parent === 'page' || loc.parent.type !== 'table_row') return undefined;
+	return loc.index;
+}
+
+export function renderBlock(
+	doc: Document,
+	block: Block,
+	parentId: string | null = null,
+	depth = 0,
+	col?: number
+): HTMLElement {
+	if (isTextLike(block)) return renderTextLike(doc, block, parentId, depth, col);
+	if (block.type === 'code') return renderCode(doc, block, parentId, depth);
+	if (block.type === 'divider') return renderDivider(doc, block, parentId, depth);
+	if (block.type === 'image') return renderImage(doc, block, parentId, depth);
+	if (isContainer(block) || block.type === 'table') return renderContainer(doc, block, parentId, depth);
+	const el = doc.createElement('div');
+	setTreeAttrs(el, block, parentId, depth);
+	return el;
+}
+
+/** Imperative projection into the one contenteditable host. Never innerHTML. Rows omitted. */
+export function project(host: HTMLElement, page: KbPage, opts?: ProjectOpts): void {
 	const doc = host.ownerDocument;
 	const nodes: HTMLElement[] = [];
-	for (const block of page.blocks) nodes.push(renderBlock(doc, block));
+	for (const block of visibleOrder(page)) {
+		if (block.type === 'table_row') continue;
+		const { parentId, depth } = locAttrs(page, block.id);
+		const col = block.type === 'table_cell' ? cellCol(page, block.id) : undefined;
+		nodes.push(renderBlock(doc, block, parentId, depth, col));
+	}
 	host.replaceChildren(...nodes);
 	for (const child of host.children) stripMagicBr(child as HTMLElement);
+	if (opts?.composing) {
+		stripCollabWidgets(host);
+		return;
+	}
+	if (opts?.carets?.length) paintCarets(host, page, opts.carets);
 }
 
-/** Re-project unless composing (IME freeze). */
-export function syncView(host: HTMLElement, state: EditorState): void {
-	if (state.composing) return;
-	project(host, state.page);
+/**
+ * Re-project unless composing (IME freeze). While composing, strip already-painted
+ * widgets without replaceChildren so compositionend cannot read remote names.
+ */
+export function syncView(
+	host: HTMLElement,
+	state: EditorState,
+	opts?: { carets?: RemoteCaret[] }
+): void {
+	if (state.composing) {
+		stripCollabWidgets(host);
+		return;
+	}
+	project(host, state.page, { carets: opts?.carets });
 }

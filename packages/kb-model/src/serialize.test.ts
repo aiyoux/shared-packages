@@ -97,4 +97,85 @@ describe('serializeKb', () => {
 		expect(golden.endsWith('\n')).toBe(true);
 		expect(serializeKb(parseKb(golden))).toBe(golden);
 	});
+
+	it('emits callout and toggle keys in locked order with children last', () => {
+		const raw = serializeKb({
+			format: KB_FORMAT,
+			schemaVersion: 1,
+			id: 'page-gold',
+			title: 'Nested',
+			createdAt: '2026-01-01T00:00:00.000Z',
+			updatedAt: '2026-01-01T00:00:00.000Z',
+			children: [],
+			blocks: [
+				{
+					id: 'c1',
+					type: 'callout',
+					variant: 'warning',
+					children: [{ id: 'p1', type: 'paragraph', content: [{ type: 'text', text: 'in', marks: [] }] }]
+				},
+				{
+					id: 't1',
+					type: 'toggle',
+					open: false,
+					children: [{ id: 'p2', type: 'paragraph', content: [{ type: 'text', text: 'hid', marks: [] }] }]
+				}
+			]
+		});
+		const parsed = JSON.parse(raw) as Record<string, unknown>;
+		expect(parsed.schemaVersion).toBe(2);
+		const blocks = parsed.blocks as Record<string, unknown>[];
+		expect(Object.keys(blocks[0])).toEqual(['id', 'type', 'variant', 'children']);
+		expect(Object.keys(blocks[1])).toEqual(['id', 'type', 'open', 'children']);
+		const calloutJson = JSON.stringify(blocks[0]);
+		const toggleJson = JSON.stringify(blocks[1]);
+		expect(calloutJson.indexOf('"variant"')).toBeLessThan(calloutJson.indexOf('"children"'));
+		expect(toggleJson.indexOf('"open"')).toBeLessThan(toggleJson.indexOf('"children"'));
+	});
+
+	it('emits table/row/cell keys in locked order with children last', () => {
+		const raw = serializeKb({
+			format: KB_FORMAT,
+			schemaVersion: 1,
+			id: 'page-gold',
+			title: 'Table',
+			createdAt: '2026-01-01T00:00:00.000Z',
+			updatedAt: '2026-01-01T00:00:00.000Z',
+			children: [],
+			blocks: [
+				{
+					id: 't',
+					type: 'table',
+					children: [
+						{
+							id: 'r1',
+							type: 'table_row',
+							children: [
+								{
+									id: 'c11',
+									type: 'table_cell',
+									header: true,
+									content: [{ type: 'text', text: 'H', marks: [] }]
+								},
+								{
+									id: 'c12',
+									type: 'table_cell',
+									content: [{ type: 'text', text: 'B', marks: [] }]
+								}
+							]
+						}
+					]
+				}
+			]
+		});
+		const parsed = JSON.parse(raw) as Record<string, unknown>;
+		expect(parsed.schemaVersion).toBe(2);
+		const table = (parsed.blocks as Record<string, unknown>[])[0];
+		expect(Object.keys(table)).toEqual(['id', 'type', 'children']);
+		const row = (table.children as Record<string, unknown>[])[0];
+		expect(Object.keys(row)).toEqual(['id', 'type', 'children']);
+		const cells = row.children as Record<string, unknown>[];
+		expect(Object.keys(cells[0])).toEqual(['id', 'type', 'header', 'content']);
+		expect(Object.keys(cells[1])).toEqual(['id', 'type', 'content']);
+	});
 });

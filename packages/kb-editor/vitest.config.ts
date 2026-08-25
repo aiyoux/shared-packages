@@ -1,5 +1,6 @@
 import { svelte } from '@sveltejs/vite-plugin-svelte';
 import { svelteTesting } from '@testing-library/svelte/vite';
+import { realpathSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitest/config';
@@ -15,6 +16,12 @@ export default defineConfig({
 		testTimeout: 20_000
 	},
 	root,
+	server: {
+		fs: {
+			// Git worktree node_modules may be a symlink; Vite must serve that realpath.
+			allow: [root, realpathSync(path.resolve(root, '../../node_modules'))]
+		}
+	},
 	resolve: {
 		alias: {
 			'@shared-packages/kb-model': path.resolve(root, '../kb-model/src/index.ts')

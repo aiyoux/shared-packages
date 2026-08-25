@@ -1,0 +1,91 @@
+import { describe, expect, it } from 'vitest';
+import {
+	clampPoint,
+	collapsed,
+	deleteRangeOps,
+	isCollapsed,
+	orderedRange,
+	payloadLength,
+	rangeStartsOnAncestor,
+	requireBlock,
+	textInsertPoint
+} from './range.js';
+import { callout, nest, page, para, toggle } from './testFixtures.js';
+
+describe('range helpers', () => {
+	it('orderedRange treats missing ids as last and does not throw', () => {
+		const doc = page([para('a', 'aa'), para('b', 'bb')]);
+		expect(orderedRange(doc, { anchor: { blockId: 'a', offset: 1 }, head: { blockId: 'b', offset: 0 } })).toEqual({
+			start: { blockId: 'a', offset: 1 },
+			end: { blockId: 'b', offset: 0 }
+		});
+		expect(orderedRange(doc, { anchor: { blockId: 'missing', offset: 0 }, head: { blockId: 'b', offset: 1 } })).toEqual({
+			start: { blockId: 'b', offset: 1 },
+			end: { blockId: 'b', offset: 1 }
+		});
+		expect(orderedRange(doc, { anchor: { blockId: 'a', offset: 1 }, head: { blockId: 'gone', offset: 0 } })).toEqual({
+			start: { blockId: 'a', offset: 1 },
+			end: { blockId: 'a', offset: 1 }
+		});
+		expect(
+			orderedRange(doc, { anchor: { blockId: 'x', offset: 0 }, head: { blockId: 'y', offset: 1 } })
+		).toEqual({
+			start: { blockId: 'x', offset: 0 },
+			end: { blockId: 'y', offset: 1 }
+		});
+	});
+
+	it('clampPoint snaps missing ids to the first block and clamps offsets', () => {
+		const doc = page([para('a', 'aa'), para('b', 'bb')]);
+		expect(clampPoint(doc, { blockId: 'missing', offset: 9 })).toEqual({ blockId: 'a', offset: 0 });
+		expect(clampPoint(doc, { blockId: 'a', offset: 99 })).toEqual({ blockId: 'a', offset: 2 });
+		expect(clampPoint(doc, { blockId: 'a', offset: -1 })).toEqual({ blockId: 'a', offset: 0 });
+		expect(payloadLength(doc, 'missing')).toBe(0);
+		expect(payloadLength(doc, 'a')).toBe(2);
+	});
+
+	it('orderedRange uses DFS, not indexInParent, for nested vs later root ids', () => {
+		const doc = page([nest('c', [para('n1', 'aa'), para('n2', 'bb')]), para('z', 'zz')]);
+		expect(
+			orderedRange(doc, { anchor: { blockId: 'n2', offset: 1 }, head: { blockId: 'z', offset: 0 } })
+		).toEqual({
+			start: { blockId: 'n2', offset: 1 },
+			end: { blockId: 'z', offset: 0 }
+		});
+		expect(
+			orderedRange(doc, { anchor: { blockId: 'z', offset: 2 }, head: { blockId: 'n1', offset: 0 } })
+		).toEqual({
+			start: { blockId: 'n1', offset: 0 },
+			end: { blockId: 'z', offset: 2 }
+		});
+	});
+
+	it('rangeStartsOnAncestor is true for chrome→child and deleteRangeOps skips it', () => {
+		const doc = page([callout('c', [para('n', 'in')]), para('z', 'zz')]);
+		const chromeToChild = { anchor: { blockId: 'c', offset: 0 }, head: { blockId: 'n', offset: 2 } };
+		expect(rangeStartsOnAncestor(doc, chromeToChild)).toBe(true);
+		expect(deleteRangeOps(doc, chromeToChild)).toEqual([]);
+		expect(
+			rangeStartsOnAncestor(doc, { anchor: { blockId: 'n', offset: 0 }, head: { blockId: 'z', offset: 1 } })
+		).toBe(false);
+		expect(textInsertPoint(doc, { blockId: 'c', offset: 0 })).toEqual({ blockId: 'n', offset: 0 });
+		expect(textInsertPoint(page([callout('e', [])]), { blockId: 'e', offset: 0 })).toBeNull();
+	});
+
+	it('clampPoint snaps a closed-toggle child to the toggle header', () => {
+		const doc = page([toggle('t', [para('h', 'hid')], false), para('z', 'zz')]);
+		expect(clampPoint(doc, { blockId: 'h', offset: 2 })).toEqual({ blockId: 't', offset: 0 });
+		expect(clampPoint(doc, { blockId: 't', offset: 9 })).toEqual({ blockId: 't', offset: 0 });
+	});
+
+	it('requireBlock throws on unknown ids; collapsed detects equality', () => {
+		const doc = page([para('a', 'aa')]);
+		expect(() => requireBlock(doc, 'missing')).toThrow(/unknown block/);
+		expect(requireBlock(doc, 'a').index).toBe(0);
+		const c = collapsed({ blockId: 'a', offset: 1 });
+		expect(isCollapsed(c)).toBe(true);
+		expect(isCollapsed({ anchor: { blockId: 'a', offset: 0 }, head: { blockId: 'a', offset: 1 } })).toBe(
+			false
+		);
+	});
+});

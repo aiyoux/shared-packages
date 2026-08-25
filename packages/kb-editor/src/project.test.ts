@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { allowlistedHref, allowlistedSrc } from './href.js';
 import { project } from './project.js';
-import { code, divider, heading, image, item, page, para } from './testFixtures.js';
+import { callout, code, divider, heading, image, item, page, para } from './testFixtures.js';
 
 function host(): HTMLDivElement {
 	const el = document.createElement('div');
@@ -137,6 +137,16 @@ describe('project', () => {
 		for (const img of imgs) {
 			expect(img.getAttribute('src')).toBeNull();
 		}
+		el.remove();
+	});
+
+	it('projects nested children as host-direct siblings in visible order', () => {
+		const el = host();
+		project(el, page([callout('c', [para('n', 'inside')]), para('z', 'Z')]));
+		expect([...el.children].map((c) => c.getAttribute('data-block-id'))).toEqual(['c', 'n', 'z']);
+		expect(el.querySelector('[data-block-id="n"]')?.getAttribute('data-parent-id')).toBe('c');
+		expect(el.querySelector('[data-block-id="n"]')?.getAttribute('data-depth')).toBe('1');
+		expect(el.querySelector('[data-block-id="c"]')?.getAttribute('data-block-type')).toBe('callout');
 		el.remove();
 	});
 });

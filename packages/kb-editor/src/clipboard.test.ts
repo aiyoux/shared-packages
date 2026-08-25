@@ -1,8 +1,18 @@
 import { plaintextOf } from '@shared-packages/kb-model';
 import { describe, expect, it } from 'vitest';
-import { copyPayload, cutOps, KB_CLIPBOARD_MIME, parseSlice, pasteOps, stripHtml } from './clipboard.js';
+import {
+	copyPayload,
+	cutOps,
+	KB_CLIPBOARD_MIME,
+	parseSlice,
+	pasteOps,
+	serializeSlice,
+	sliceBlocks,
+	slicePlaintext,
+	stripHtml
+} from './clipboard.js';
 import { createEditorState, dispatchMany } from './state.js';
-import { code, page, para } from './testFixtures.js';
+import { code, nest, page, para } from './testFixtures.js';
 
 describe('clipboard', () => {
 	it('copies text/plain and application/x-scratch-kb+json', () => {
@@ -45,6 +55,57 @@ describe('clipboard', () => {
 		expect(next.page.blocks.some((b) => b.id === 'a')).toBe(false);
 	});
 
+	it('copy of a container plus its child is one subtree, not parent and child', () => {
+		const doc = page([nest('c', [para('n', 'in')], 'Call'), para('z', 'Z')]);
+		const sliced = sliceBlocks(doc, {
+			anchor: { blockId: 'c', offset: 0 },
+			head: { blockId: 'n', offset: 2 }
+		});
+		expect(sliced.map((b) => b.id)).toEqual(['c']);
+		expect((sliced[0] as { children?: { id: string }[] }).children?.map((b) => b.id)).toEqual(['n']);
+	});
+
+	it('container in the range is a unit: whole subtree including later siblings, and plain matches json', () => {
+		const doc = page([nest('c', [para('n1', 'one'), para('n2', 'two')], 'Call'), para('z', 'Z')]);
+		const live = { anchor: { blockId: 'c', offset: 0 }, head: { blockId: 'n1', offset: 3 } };
+		const sliced = sliceBlocks(doc, live);
+		expect(sliced.map((b) => b.id)).toEqual(['c']);
+		expect((sliced[0] as { children?: { id: string }[] }).children?.map((b) => b.id)).toEqual([
+			'n1',
+			'n2'
+		]);
+		expect(slicePlaintext(doc, live)).toBe('one\ntwo');
+		const payload = copyPayload({ ...createEditorState(doc), selection: live }, live);
+		expect(payload?.plain).toBe('one\ntwo');
+		expect(parseSlice(payload!.json)?.map((b) => b.id)).toEqual(['c']);
+	});
+
+	it('slice of a missing range is empty; remap walks nested children', () => {
+		const src = createEditorState(page([para('a', 'one'), para('b', 'two')]));
+		expect(
+			copyPayload(src, { anchor: { blockId: 'missing', offset: 0 }, head: { blockId: 'gone', offset: 1 } })
+		).toEqual({ plain: '', json: serializeSlice([]) });
+		const nested = {
+			id: 'c',
+			type: 'callout' as const,
+			variant: 'info' as const,
+			children: [{ id: 'n', type: 'paragraph' as const, content: [{ type: 'text' as const, text: 'in', marks: [] }] }]
+		};
+		const json = serializeSlice([nested]);
+		const dest = createEditorState(page([para('z', 'keep')]));
+		const ops = pasteOps(dest, dest.selection, { json });
+		expect(ops.some((op) => op.kind === 'insert-block' && op.block.id === 'c')).toBe(false);
+		const inserted = ops.find((op) => op.kind === 'insert-block');
+		expect(inserted?.kind).toBe('insert-block');
+		if (inserted?.kind === 'insert-block') {
+			expect(inserted.block.id).not.toBe('c');
+			expect(inserted.block.type).toBe('callout');
+			const kids = (inserted.block as { children?: { id: string }[] }).children;
+			expect(kids?.[0].id).not.toBe('n');
+			expect(kids?.[0].id).toBeTruthy();
+		}
+	});
+
 	it('text/plain paste inserts at the caret', () => {
 		const state = createEditorState(page([para('p', 'ab')]));
 		const live = { anchor: { blockId: 'p', offset: 1 }, head: { blockId: 'p', offset: 1 } };
@@ -53,9 +114,13 @@ describe('clipboard', () => {
 	});
 
 	it('cut emits a single delete-range', () => {
+		const doc = page([para('p', 'abcd')]);
 		const live = { anchor: { blockId: 'p', offset: 1 }, head: { blockId: 'p', offset: 3 } };
-		expect(cutOps(live)).toEqual([{ kind: 'delete-range', range: live }]);
-		expect(cutOps({ anchor: { blockId: 'p', offset: 1 }, head: { blockId: 'p', offset: 1 } })).toEqual([]);
+		expect(cutOps(doc, live)).toEqual([{ kind: 'delete-range', range: live }]);
+		expect(cutOps(doc, { anchor: { blockId: 'p', offset: 1 }, head: { blockId: 'p', offset: 1 } })).toEqual([]);
+		const nested = page([nest('c', [para('n', 'in')]), para('z', 'zz')]);
+		const crossed = { anchor: { blockId: 'n', offset: 0 }, head: { blockId: 'z', offset: 1 } };
+		expect(cutOps(nested, crossed)).toEqual([{ kind: 'delete-range', range: crossed }]);
 	});
 
 	it('drop of text/plain reuses pasteOps at the caret', () => {

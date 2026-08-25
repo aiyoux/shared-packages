@@ -6,6 +6,7 @@ export {
 	parseSlice,
 	pasteOps,
 	serializeSlice,
+	remapBlock,
 	sliceBlocks,
 	slicePlaintext,
 	stripHtml,
@@ -21,27 +22,64 @@ export {
 	snapshotComposition,
 	type CompositionSnapshot
 } from './composition.js';
-export { dropAfterId, dropWhere } from './gutter.js';
+export {
+	COLLAB_SEL_ATTR,
+	COLLAB_WIDGET_ATTR,
+	paintCarets,
+	stripCollabWidgets,
+	stripCollabWidgetsHtml,
+	type RemoteCaret
+} from './decorations.js';
+export { dropAfterId, dropTarget, dropWhere, gutterOrder, handleHeights, overlayBoxes } from './gutter.js';
 export { allowlistedHref, allowlistedSrc } from './href.js';
 export { newBlockId } from './ids.js';
 export { mapKeydown, type KeyEvent, type KeymapResult } from './keymap.js';
-export { BLOCK_ID_ATTR, BLOCK_TYPE_ATTR, project, renderBlock, syncView } from './project.js';
+export {
+	BLOCK_ID_ATTR,
+	BLOCK_TYPE_ATTR,
+	COL_ATTR,
+	DEPTH_ATTR,
+	PARENT_ID_ATTR,
+	project,
+	renderBlock,
+	syncView,
+	type ProjectOpts
+} from './project.js';
 export {
 	blockIndex,
 	clampRange,
 	collapsed,
+	deleteRangeOps,
 	isCollapsed,
-	orderedRange
+	orderedRange,
+	textInsertPoint
 } from './range.js';
 export {
 	caretIn,
 	pointFromDom,
+	plaintextFromDom,
 	rangeFromEndpoints,
 	rangeFromInputEvent,
 	rangeFromSelection,
-	restoreSelection
+	restoreSelection,
+	textNodes
 } from './selection.js';
 export { matchSlash, slashOps } from './slash.js';
+export {
+	applyRemoteOps,
+	flushPendingRemotes,
+	queueRemoteWhileComposing,
+	replaceFromSnapshot
+} from './remote.js';
+export {
+	cellCoords,
+	defaultTable,
+	enterCellOps,
+	tabOps,
+	tableRect,
+	type CellCoords,
+	type TableNav
+} from './table.js';
 export {
 	applyEditorOps,
 	blockFocusOf,
@@ -61,14 +99,21 @@ export {
 	apply,
 	applyMany,
 	createEmptyPage,
+	documentOrder,
+	findBlock,
 	invert,
 	isAtomic,
+	isContainer,
+	isNonTextual,
+	isTableStructure,
 	isTextLike,
 	KB_FORMAT,
 	KB_SCHEMA_VERSION,
 	normalizePage,
+	parentOf,
 	plaintext,
 	plaintextOf,
+	visibleOrder,
 	type Block,
 	type Inline,
 	type KbPage,

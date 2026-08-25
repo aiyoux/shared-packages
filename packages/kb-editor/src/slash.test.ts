@@ -18,6 +18,8 @@ describe('slash convert', () => {
 		expect(slashOps('p', '/ol')?.[0]).toMatchObject({ to: 'list_item', ordered: true });
 		expect(slashOps('p', '/code')?.[0]).toMatchObject({ to: 'code' });
 		expect(slashOps('p', '/nope')).toBeNull();
+		expect(slashOps('p', '/callout')?.some((op) => op.kind === 'convert-block')).toBe(false);
+		expect(slashOps('p', '/toggle')?.[0]?.kind).toBe('insert-block');
 	});
 
 	it('insertText of space after /h1 converts and strips the command', () => {

@@ -1,5 +1,5 @@
 import type { KbPage, Op, Range } from '@shared-packages/kb-model';
-import { isCollapsed, orderedRange } from './range.js';
+import { deleteRangeOps, isCollapsed, orderedRange, textInsertPoint } from './range.js';
 import type { EditorState } from './state.js';
 
 export type CompositionSnapshot = {
@@ -33,10 +33,11 @@ export function commitComposition(
 	}
 	const ops: Op[] = [];
 	if (!isCollapsed(snapshot.selection)) {
-		ops.push({ kind: 'delete-range', range: snapshot.selection });
+		ops.push(...deleteRangeOps(snapshot.page, snapshot.selection));
 	}
 	const { start } = orderedRange(snapshot.page, snapshot.selection);
-	ops.push({ kind: 'insert-text', at: start, text: data });
+	const at = textInsertPoint(snapshot.page, start);
+	if (at) ops.push({ kind: 'insert-text', at, text: data });
 	return {
 		state: { ...state, composing: false, justCommittedComposition: true },
 		ops
