@@ -105,8 +105,8 @@ describe('interpretPage', () => {
 			(e): e is PdfIrTextElement => e.type === 'text' && e.str.includes('Heading')
 		);
 		expect(heading).toBeTruthy();
-		expect(typeof heading!.d).toBe('string');
-		if (heading!.d) expect(heading!.d).toMatch(/[MLCQ]/i);
+		expect(heading!.d.length).toBeGreaterThan(0);
+		expect(heading!.d).toMatch(/[MLCQ]/i);
 	});
 
 	it('extracts at least one path from a rectangle page', async () => {
@@ -156,7 +156,10 @@ describe('irToSvg', () => {
 		const handle = await track(await makeTextPdf('Heading'));
 		const result = await interpretPage(handle, 0, { targetWidth: 200, targetHeight: 120 });
 		const text = result.elements.find((e): e is PdfIrTextElement => e.type === 'text');
-		if (text) text.str = '<script>alert(1)</script>';
+		if (text) {
+			text.str = '<script>alert(1)</script>';
+			text.d = '';
+		}
 		const svg = irToSvg(
 			text
 				? [text]
@@ -304,6 +307,41 @@ describe('writePdf', () => {
 		expect(texts.some((e) => e.type === 'text' && e.str.includes('Heading'))).toBe(true);
 		expect(texts.some((e) => e.type === 'text' && e.str.includes('HIDDEN'))).toBe(false);
 		expect(result.elements.some((e) => e.type === 'path')).toBe(true);
+	});
+
+	it('applies group transforms to children', async () => {
+		const bytes = await writePdf([
+			{
+				width: 200,
+				height: 120,
+				elements: [
+					{
+						type: 'group',
+						id: 'g',
+						transform: { x: 50, y: 0 },
+						children: [
+							{
+								type: 'path',
+								id: 'p',
+								d: 'M10 40 L40 40 L40 70 L10 70 Z',
+								fill: '#2266aa',
+								stroke: 'none',
+								strokeWidth: 0
+							}
+						]
+					}
+				]
+			}
+		]);
+		const handle = await track(bytes);
+		const result = await interpretPage(handle, 0, { targetWidth: 200, targetHeight: 120 });
+		const path = result.elements.find((e) => e.type === 'path');
+		expect(path).toBeTruthy();
+		if (path && path.type === 'path') {
+			const nums = path.d.match(/-?\d+\.?\d*/g)?.map(Number) ?? [];
+			const xs = nums.filter((_, i) => i % 2 === 0);
+			expect(Math.min(...xs)).toBeGreaterThan(40);
+		}
 	});
 });
 

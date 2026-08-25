@@ -9,6 +9,13 @@ import type {
 import { calculatePageFit } from './range.js';
 import { getPage, loadPdfjsLib } from './engine.js';
 import { rasterToPngDataUrl } from './png.js';
+import {
+	ensurePath2D,
+	hookPathBank,
+	lookupGlyphPath,
+	stubContext2d,
+	type PathBank
+} from './canvasStub.js';
 
 const DrawOPS = {
 	moveTo: 0,
@@ -222,7 +229,8 @@ async function glyphsToText(
 	ts: TextState,
 	gs: GraphicsState,
 	mapper: Mapper,
-	page: { commonObjs: { has?: (id: string) => boolean; get: (id: string, cb?: (v: unknown) => void) => unknown } }
+	page: { commonObjs: { has?: (id: string) => boolean; get: (id: string, cb?: (v: unknown) => void) => unknown } },
+	bank: PathBank
 ): Promise<PdfIrTextElement | null> {
 	const flat: unknown[] = [];
 	for (const item of glyphs) {
@@ -255,11 +263,15 @@ async function glyphsToText(
 		str += g.unicode ?? '';
 		const character = g.fontChar || g.unicode || '';
 		if (loadedName && character) {
-			const cmds = peekObj(page.commonObjs, `${loadedName}_path_${character}`);
+			const hooked = lookupGlyphPath(bank, loadedName, character);
+			const cmds = hooked
+				? { path: hooked }
+				: peekObj(page.commonObjs, `${loadedName}_path_${character}`);
 			const pathData =
-				cmds && typeof cmds === 'object' && cmds !== null && 'path' in cmds
+				hooked ??
+				(cmds && typeof cmds === 'object' && cmds !== null && 'path' in cmds
 					? (cmds as { path: ArrayLike<number> }).path
-					: null;
+					: null);
 			if (pathData && pathData.length) {
 				const d = drawOpsToPath(pathData, mapper, glyphCtm(gs, ts, glyphX));
 				if (d) parts.push(d);
@@ -295,7 +307,7 @@ async function glyphsToText(
 		y,
 		width: Math.max(width, 1),
 		height: Math.max(height, 1),
-		fill: gs.fill,
+		fill: /^#[0-9a-f]{3,8}$/i.test(gs.fill) ? gs.fill : '#000000',
 		fontSize: Math.abs(ts.fontSize * scaleOf(multiply(gs.ctm, ts.matrix)) * mapper.fit.scale) || height,
 		d: parts.join(' '),
 		fontName
@@ -415,18 +427,16 @@ async function warmGlyphPaths(page: {
 	render: (opts: { canvasContext: CanvasRenderingContext2D; viewport: { width: number; height: number } }) => { promise: Promise<unknown> };
 }) {
 	try {
+		ensurePath2D();
 		const viewport = page.getViewport({ scale: 0.25 });
 		let ctx: CanvasRenderingContext2D | null = null;
-		if (typeof OffscreenCanvas !== 'undefined') {
-			const canvas = new OffscreenCanvas(Math.max(1, Math.ceil(viewport.width)), Math.max(1, Math.ceil(viewport.height)));
-			ctx = canvas.getContext('2d') as unknown as CanvasRenderingContext2D | null;
-		} else if (typeof document !== 'undefined') {
+		if (typeof document !== 'undefined') {
 			const canvas = document.createElement('canvas');
 			canvas.width = Math.max(1, Math.ceil(viewport.width));
 			canvas.height = Math.max(1, Math.ceil(viewport.height));
 			ctx = canvas.getContext('2d');
 		}
-		if (!ctx) return;
+		if (!ctx) ctx = stubContext2d();
 		await page.render({ canvasContext: ctx, viewport }).promise;
 	} catch {
 		// Glyph path objects stay missing; text falls back to live <text>.
@@ -463,6 +473,10 @@ export async function interpretPage(
 		if (top) top.children.push(el);
 		else root.push(el);
 	};
+
+	const pathBank: PathBank = new Map();
+	hookPathBank(page.commonObjs as Parameters<typeof hookPathBank>[0], pathBank);
+	hookPathBank((page as { objs?: Parameters<typeof hookPathBank>[0] }).objs, pathBank);
 
 	await warmGlyphPaths(page);
 
@@ -742,7 +756,7 @@ export async function interpretPage(
 					ts.y = ts.lineY += ts.leading;
 				}
 				const glyphs = (Array.isArray(args[0]) ? args[0] : args) as unknown[];
-				const run = await glyphsToText(glyphs, ts, gs, mapper, page);
+				const run = await glyphsToText(glyphs, ts, gs, mapper, page, pathBank);
 				if (run) {
 					emit(run);
 					stats.texts++;

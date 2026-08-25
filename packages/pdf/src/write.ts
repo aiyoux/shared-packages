@@ -160,20 +160,77 @@ async function embedSrc(doc: PDFDocument, src: string): Promise<PDFImage | null>
 	}
 }
 
+type FontSet = {
+	helvetica: PDFFont;
+	times: PDFFont;
+	courier: PDFFont;
+};
+
+function pickFont(name: string | undefined, fonts: FontSet): PDFFont {
+	const n = (name || '').toLowerCase();
+	if (n.includes('times') || n.includes('roman') || n.includes('georgia')) return fonts.times;
+	if (n.includes('courier') || n.includes('mono')) return fonts.courier;
+	return fonts.helvetica;
+}
+
 async function drawElement(
 	doc: PDFDocument,
 	page: PDFPage,
 	el: PdfIrElement,
 	pageH: number,
-	font: PDFFont
+	fonts: FontSet,
+	flipped: boolean
 ): Promise<void> {
 	if (el.hidden) return;
+
+	const enterYDown = () => {
+		if (!flipped) pushYDown(page, pageH);
+	};
+	const leaveYDown = () => {
+		if (!flipped) popGS(page);
+	};
+
 	if (el.type === 'group') {
-		for (const child of el.children) await drawElement(doc, page, child, pageH, font);
+		enterYDown();
+		page.pushOperators(pushGraphicsState());
+		applyTransform(page, el.transform, localBox(el));
+		for (const child of el.children) {
+			await drawElement(doc, page, child, pageH, fonts, true);
+		}
+		popGS(page);
+		leaveYDown();
 		return;
 	}
 
 	if (el.type === 'text' && !el.d) {
+		if (flipped) {
+			// Current space is y-down (IR). Undo the flip around the baseline so
+			// glyphs are not mirrored, then draw in IR coordinates.
+			page.pushOperators(pushGraphicsState());
+			applyTransform(page, el.transform, localBox(el));
+			const baseline = el.y + el.fontSize;
+			page.pushOperators(
+				concatTransformationMatrix(1, 0, 0, 1, el.x, baseline),
+				concatTransformationMatrix(1, 0, 0, -1, 0, 0)
+			);
+			const color = parseColor(el.fill) ?? rgb(0, 0, 0);
+			const sx = el.transform?.sx ?? 1;
+			const size = Math.max(1, el.fontSize * Math.abs(el.transform?.sy ?? sx));
+			try {
+				page.drawText(el.str, {
+					x: 0,
+					y: 0,
+					size,
+					font: pickFont(el.fontName, fonts),
+					color,
+					opacity: el.opacity
+				});
+			} catch {
+				// Standard fonts cannot encode every Unicode scalar.
+			}
+			popGS(page);
+			return;
+		}
 		const color = parseColor(el.fill) ?? rgb(0, 0, 0);
 		const t = el.transform;
 		const sx = t?.sx ?? 1;
@@ -185,23 +242,20 @@ async function drawElement(
 				x,
 				y,
 				size,
-				font,
+				font: pickFont(el.fontName, fonts),
 				color,
 				opacity: el.opacity,
 				rotate: t?.rotation ? degrees(-((t.rotation * 180) / Math.PI)) : undefined
 			});
 		} catch {
-			// Helvetica cannot encode every Unicode scalar; skip rather than fail the export.
+			// Standard fonts cannot encode every Unicode scalar.
 		}
 		return;
 	}
 
-	pushYDown(page, pageH);
+	enterYDown();
 	page.pushOperators(pushGraphicsState());
 	applyTransform(page, el.transform, localBox(el));
-	if ('opacity' in el && el.opacity != null && el.opacity < 1) {
-		// drawSvgPath/drawImage take opacity on the call
-	}
 
 	if (el.type === 'text' && el.d) {
 		const color = parseColor(el.fill) ?? rgb(0, 0, 0);
@@ -233,18 +287,22 @@ async function drawElement(
 	}
 
 	popGS(page);
-	popGS(page);
+	leaveYDown();
 }
 
 export async function writePdf(pages: PdfWritePage[]): Promise<Uint8Array> {
 	const doc = await PDFDocument.create();
-	const font = await doc.embedFont(StandardFonts.Helvetica);
+	const fonts: FontSet = {
+		helvetica: await doc.embedFont(StandardFonts.Helvetica),
+		times: await doc.embedFont(StandardFonts.TimesRoman),
+		courier: await doc.embedFont(StandardFonts.Courier)
+	};
 	for (const src of pages) {
 		const w = Number.isFinite(src.width) && src.width > 0 ? src.width : 612;
 		const h = Number.isFinite(src.height) && src.height > 0 ? src.height : 792;
 		const page = doc.addPage([w, h]);
 		for (const el of src.elements) {
-			await drawElement(doc, page, el, h, font);
+			await drawElement(doc, page, el, h, fonts, false);
 		}
 	}
 	return new Uint8Array(await doc.save());
