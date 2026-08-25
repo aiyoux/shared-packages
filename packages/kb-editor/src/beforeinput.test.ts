@@ -2,7 +2,7 @@ import { plaintextOf } from '@shared-packages/kb-model';
 import { describe, expect, it } from 'vitest';
 import { mapBeforeInput } from './beforeinput.js';
 import { createEditorState, dispatch, dispatchMany } from './state.js';
-import { code, divider, heading, item, page, para } from './testFixtures.js';
+import { code, divider, heading, item, nest, page, para } from './testFixtures.js';
 
 function applyMapped(
 	blocks: Parameters<typeof page>[0],
@@ -210,5 +210,23 @@ describe('beforeinput mapping', () => {
 		state = dispatchMany(state, result.ops);
 		expect(state.page.blocks[0].type).toBe('paragraph');
 		expect(plaintextOf(state.page.blocks[0])).toBe('');
+	});
+
+	it('emits delete-range when the live range crosses a parent boundary', () => {
+		const state = createEditorState(page([nest('c', [para('n', 'in')]), para('z', 'zz')]));
+		const live = { anchor: { blockId: 'n', offset: 0 }, head: { blockId: 'z', offset: 1 } };
+		expect(mapBeforeInput(state, { inputType: 'deleteContentBackward', data: null }, live).ops).toEqual([
+			{ kind: 'delete-range', range: live }
+		]);
+	});
+
+	it('returns no ops when the caret names a missing block', () => {
+		const state = createEditorState(page([para('p', 'x')]));
+		const live = { anchor: { blockId: 'gone', offset: 0 }, head: { blockId: 'gone', offset: 0 } };
+		expect(mapBeforeInput(state, { inputType: 'insertText', data: 'z' }, live).ops).toEqual([]);
+		expect(mapBeforeInput(state, { inputType: 'insertParagraph', data: null }, live).ops).toEqual([]);
+		expect(mapBeforeInput(state, { inputType: 'deleteContentForward', data: null }, live).ops).toEqual(
+			[]
+		);
 	});
 });

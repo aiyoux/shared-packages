@@ -295,4 +295,175 @@ describe('invert golden applyMany(apply(page, op), invert(page, op)) === normali
 		const right = applyMany(apply(src, op), inverse);
 		expect(plaintextOf(right.blocks[0])).toBe('ab');
 	});
+
+	it('round-trips nested same-parent split/merge/delete and DFS cross-parent delete-range', () => {
+		function callout(id: string, kids: Block[]): Block {
+			return { id, type: 'callout', variant: 'info', children: kids };
+		}
+		const src = page([callout('c', [para('a', 'ab'), para('b', 'cd')]), para('z', 'z')]);
+		expectInvert(src, { kind: 'split-block', at: { blockId: 'a', offset: 1 }, newId: 'n' });
+		expectInvert(src, { kind: 'merge-block', keepId: 'a', dropId: 'b' });
+		expectInvert(src, {
+			kind: 'delete-range',
+			range: { anchor: { blockId: 'a', offset: 1 }, head: { blockId: 'b', offset: 1 } }
+		});
+		expectInvert(src, {
+			kind: 'insert-block',
+			afterId: 'a',
+			parentId: 'c',
+			block: para('n', 'n')
+		});
+		expectInvert(src, { kind: 'delete-block', id: 'b' });
+		expectInvert(src, { kind: 'move-block', id: 'b', afterId: 'z' });
+		expectInvert(src, {
+			kind: 'delete-range',
+			range: { anchor: { blockId: 'a', offset: 0 }, head: { blockId: 'z', offset: 1 } }
+		});
+		expect(() => invert(src, { kind: 'merge-block', keepId: 'a', dropId: 'z' })).toThrow(
+			/immediate next/i
+		);
+		expect(() => invert(src, { kind: 'delete-block', id: 'missing' })).toThrow(/unknown/i);
+	});
+
+	it('parentId on invert restores a nested first-child delete/move', () => {
+		function callout(id: string, kids: Block[]): Block {
+			return { id, type: 'callout', variant: 'info', children: kids };
+		}
+		const src = page([callout('c', [para('a', 'a'), para('b', 'b')]), para('z', 'z')]);
+
+		const deleteOp: Op = { kind: 'delete-block', id: 'a' };
+		expect(invert(src, deleteOp)).toEqual([
+			{ kind: 'insert-block', afterId: null, parentId: 'c', block: para('a', 'a') }
+		]);
+		expectInvert(src, deleteOp);
+		expectInvert(page([callout('c', [para('a', 'a'), para('b', 'b')])]), {
+			kind: 'delete-block',
+			id: 'a'
+		});
+
+		const moveOp: Op = { kind: 'move-block', id: 'a', afterId: 'b', parentId: 'c' };
+		expect(invert(src, moveOp)).toEqual([
+			{ kind: 'move-block', id: 'a', afterId: null, parentId: 'c' }
+		]);
+		expectInvert(src, moveOp);
+	});
+
+	it('round-trips move into/out of a callout and covering delete-range', () => {
+		function callout(id: string, kids: Block[]): Block {
+			return { id, type: 'callout', variant: 'info', children: kids };
+		}
+		const src = page([callout('c', [para('a', 'aa'), para('b', 'bb')]), para('z', 'zz')]);
+		expectInvert(src, { kind: 'move-block', id: 'z', afterId: 'a', parentId: 'c' });
+		expectInvert(src, { kind: 'move-block', id: 'b', afterId: 'c' });
+		expectInvert(src, {
+			kind: 'delete-range',
+			range: { anchor: { blockId: 'a', offset: 1 }, head: { blockId: 'z', offset: 1 } }
+		});
+		expectInvert(page([para('before', 'xx'), callout('c', [para('a', 'aa')]), para('z', 'zz')]), {
+			kind: 'delete-range',
+			range: { anchor: { blockId: 'before', offset: 1 }, head: { blockId: 'z', offset: 1 } }
+		});
+		const fromChrome: Op = {
+			kind: 'delete-range',
+			range: { anchor: { blockId: 'c', offset: 0 }, head: { blockId: 'z', offset: 1 } }
+		};
+		expect(
+			invert(src, fromChrome)
+				.filter((op): op is Extract<Op, { kind: 'insert-block' }> => op.kind === 'insert-block')
+				.map((op) => op.block.id)
+		).toEqual(['c']);
+		expectInvert(src, fromChrome);
+		expectInvert(src, {
+			kind: 'delete-range',
+			range: { anchor: { blockId: 'c', offset: 0 }, head: { blockId: 'z', offset: 0 } }
+		});
+		expectInvert(
+			page([
+				{ id: 't', type: 'toggle', open: false, children: [para('a', 'hid'), para('b', 'two')] },
+				para('z', 'zz')
+			]),
+			{
+				kind: 'delete-range',
+				range: { anchor: { blockId: 't', offset: 0 }, head: { blockId: 'z', offset: 1 } }
+			}
+		);
+	});
+
+	it('round-trips table row/column insert and delete and cell delete-range', () => {
+		function cell(id: string, text: string): Block {
+			return { id, type: 'table_cell', content: [span(text)] };
+		}
+		function row(id: string, cells: Block[]): Block {
+			return { id, type: 'table_row', children: cells as Extract<Block, { type: 'table_cell' }>[] };
+		}
+		function table(id: string, rows: Block[]): Block {
+			return { id, type: 'table', children: rows as Extract<Block, { type: 'table_row' }>[] };
+		}
+		const src = page([
+			table('t', [
+				row('r1', [cell('c11', 'aa'), cell('c12', 'bb')]),
+				row('r2', [cell('c21', 'cc'), cell('c22', 'dd')])
+			]),
+			para('z', 'zz')
+		]);
+		expectInvert(src, { kind: 'insert-text', at: { blockId: 'c11', offset: 1 }, text: 'X' });
+		expectInvert(src, {
+			kind: 'delete-range',
+			range: { anchor: { blockId: 'c11', offset: 1 }, head: { blockId: 'c22', offset: 1 } }
+		});
+		expectInvert(src, {
+			kind: 'delete-range',
+			range: { anchor: { blockId: 'c11', offset: 1 }, head: { blockId: 'c12', offset: 1 } }
+		});
+		expectInvert(src, {
+			kind: 'delete-range',
+			range: { anchor: { blockId: 'c22', offset: 1 }, head: { blockId: 'z', offset: 1 } }
+		});
+		expectInvert(src, {
+			kind: 'delete-range',
+			range: { anchor: { blockId: 'r1', offset: 0 }, head: { blockId: 'z', offset: 1 } }
+		});
+		expectInvert(src, {
+			kind: 'delete-range',
+			range: { anchor: { blockId: 'r1', offset: 0 }, head: { blockId: 'r2', offset: 0 } }
+		});
+		expectInvert(src, { kind: 'delete-block', id: 't' });
+		expect(() => invert(src, { kind: 'delete-block', id: 'r1' })).toThrow(/structural ops/i);
+		expect(() => invert(src, { kind: 'delete-block', id: 'c11' })).toThrow(/structural ops/i);
+		expectInvert(src, {
+			kind: 'insert-table-row',
+			tableId: 't',
+			afterId: 'r1',
+			row: row('rN', [cell('n1', 'x'), cell('n2', 'y')]) as Extract<Block, { type: 'table_row' }>
+		});
+		expectInvert(src, {
+			kind: 'insert-table-column',
+			tableId: 't',
+			index: 1,
+			cells: [cell('n1', 'N'), cell('n2', 'M')] as Extract<Block, { type: 'table_cell' }>[]
+		});
+		expectInvert(src, { kind: 'delete-table-row', tableId: 't', rowId: 'r2' });
+		expectInvert(src, { kind: 'delete-table-column', tableId: 't', index: 1 });
+		expectInvert(src, {
+			kind: 'format-range',
+			range: { anchor: { blockId: 'c11', offset: 0 }, head: { blockId: 'c12', offset: 2 } },
+			mark: { type: 'bold' },
+			on: true
+		});
+	});
+
+	it('round-trips set-toggle', () => {
+		const src = page([
+			{
+				id: 't',
+				type: 'toggle',
+				open: true,
+				children: [para('a', 'hid')]
+			},
+			para('z', 'z')
+		]);
+		expectInvert(src, { kind: 'set-toggle', id: 't', open: false });
+		expectInvert(src, { kind: 'set-toggle', id: 't', open: true });
+		expect(() => invert(src, { kind: 'set-toggle', id: 'a', open: false })).toThrow(/not a toggle/i);
+	});
 });

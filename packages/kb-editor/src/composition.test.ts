@@ -10,7 +10,7 @@ import {
 } from './composition.js';
 import { project, syncView } from './project.js';
 import { applyEditorOps, createEditorState, dispatchMany } from './state.js';
-import { para, page } from './testFixtures.js';
+import { callout, nest, para, page } from './testFixtures.js';
 
 describe('composition state machine (IME freeze)', () => {
 	it('composing flag freezes projection — project is not called while composing', () => {
@@ -78,6 +78,14 @@ describe('composition state machine (IME freeze)', () => {
 		syncView(host, state);
 		expect(host.querySelector('[data-block-id="p"]')?.textContent).toBe('ok');
 		host.remove();
+	});
+
+	it('commitComposition deletes a snapshot range that crosses a parent then inserts', () => {
+		const state = createEditorState(page([nest('c', [para('n', 'in')]), para('z', 'zz')]));
+		const live = { anchor: { blockId: 'n', offset: 0 }, head: { blockId: 'z', offset: 1 } };
+		const { ops } = commitComposition(state, snapshotComposition(state, live), 'x');
+		expect(ops[0]).toEqual({ kind: 'delete-range', range: live });
+		expect(ops[1]).toEqual({ kind: 'insert-text', at: { blockId: 'n', offset: 0 }, text: 'x' });
 	});
 
 	it('compositionend commits one insert-text then re-projects', () => {
@@ -157,6 +165,36 @@ describe('composition state machine (IME freeze)', () => {
 		);
 		expect(follow.ops).toEqual([]);
 		expect(follow.preventDefault).toBe(true);
+	});
+
+	it('IME inside a callout child does not re-project; compositionend inserts on the child', () => {
+		const host = document.createElement('div');
+		document.body.append(host);
+		const doc = page([callout('c', [para('n', '')]), para('z', 'Z')]);
+		project(host, doc);
+		let state = {
+			...beginComposition(createEditorState(doc)),
+			selection: { anchor: { blockId: 'n', offset: 0 }, head: { blockId: 'n', offset: 0 } }
+		};
+		expect(shouldProject(state)).toBe(false);
+		const spy = vi.spyOn(host, 'replaceChildren');
+		syncView(host, state);
+		expect(spy).not.toHaveBeenCalled();
+		const frozen = mapBeforeInput(
+			state,
+			{ inputType: 'insertCompositionText', data: 'あ', isComposing: true },
+			state.selection
+		);
+		expect(frozen.preventDefault).toBe(false);
+		expect(frozen.ops).toEqual([]);
+		const { ops } = commitComposition(state, snapshotComposition(state, state.selection), 'あ');
+		expect(ops).toEqual([{ kind: 'insert-text', at: { blockId: 'n', offset: 0 }, text: 'あ' }]);
+		state = dispatchMany({ ...state, composing: false }, ops);
+		expect(plaintextOf(state.page.blocks[0].type === 'callout' ? state.page.blocks[0].children[0] : state.page.blocks[0])).toBe(
+			'あ'
+		);
+		spy.mockRestore();
+		host.remove();
 	});
 
 	it('never preventDefaults insertCompositionText even when not composing', () => {

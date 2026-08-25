@@ -1,6 +1,14 @@
 <script lang="ts">
 	import { onMount, untrack } from 'svelte';
-	import { plaintextOf, type Op } from '@shared-packages/kb-model';
+	import {
+		findBlock,
+		isNonTextual,
+		parentIdOf,
+		parentOf,
+		plaintextOf,
+		type Op,
+		type Range
+	} from '@shared-packages/kb-model';
 	import { mapBeforeInput } from './beforeinput.js';
 	import { copyPayload, cutOps, KB_CLIPBOARD_MIME, pasteOps } from './clipboard.js';
 	import {
@@ -12,7 +20,7 @@
 		snapshotComposition,
 		type CompositionSnapshot
 	} from './composition.js';
-	import { dropAfterId, dropWhere } from './gutter.js';
+	import { dropTarget, dropWhere, gutterOrder, handleHeights, overlayBoxes, type OverlayBox } from './gutter.js';
 	import { mapKeydown } from './keymap.js';
 	import { BLOCK_ID_ATTR, project } from './project.js';
 	import { rangeFromInputEvent, rangeFromSelection, restoreSelection } from './selection.js';
@@ -32,10 +40,12 @@
 	} = $props();
 
 	let host = $state<HTMLDivElement | undefined>(undefined);
+	let gutterEl = $state<HTMLDivElement | undefined>(undefined);
 	let localComposing = $state(false);
 	let localJustCommitted = $state(false);
 	let snapshot = $state<CompositionSnapshot | null>(null);
-	let heights = $state<number[]>([]);
+	let heightById = $state<Record<string, number>>({});
+	let overlays = $state<OverlayBox[]>([]);
 	let draggingId = $state<string | null>(null);
 
 	const composing = $derived(localComposing || editor.composing);
@@ -47,6 +57,19 @@
 	function emitOps(ops: Op[]) {
 		if (ops.length === 0) return;
 		onDispatch(ops.length === 1 ? ops[0] : ops);
+	}
+
+	function emitMapped(ops: Op[], selection?: Range) {
+		if (ops.length) emitOps(ops);
+		if (!selection) return;
+		const next = ops.length
+			? setSelection(applyEditorOps(editor, ops), selection)
+			: setSelection(editor, selection);
+		emitState(next);
+		if (host) {
+			if (ops.length) project(host, next.page);
+			restoreSelection(host, next.selection, next.page);
+		}
 	}
 
 	function liveRange(event?: InputEvent) {
@@ -61,7 +84,8 @@
 		project(host, page);
 		untrack(() => {
 			restoreSelection(host, editor.selection, page);
-			heights = [...host.children].map((el) => (el as HTMLElement).offsetHeight);
+			heightById = handleHeights(host, page);
+			overlays = overlayBoxes(host, gutterEl);
 		});
 	});
 
@@ -89,7 +113,7 @@
 			emitState(redo(editor));
 			return;
 		}
-		emitOps(mapped.ops);
+		emitMapped(mapped.ops, mapped.selection);
 	}
 
 	function onCompositionStart(_event: CompositionEvent) {
@@ -105,7 +129,7 @@
 		snapshot = null;
 		const snapPage = snap?.page ?? editor.page;
 		const snapSel = snap?.selection ?? editor.selection;
-		const block = snapPage.blocks.find((item) => item.id === snapSel.anchor.blockId);
+		const block = findBlock(snapPage, snapSel.anchor.blockId);
 		const original = block ? plaintextOf(block) : '';
 		let domText: string | null = null;
 		if (host) {
@@ -140,7 +164,11 @@
 
 	function onKeyDown(event: KeyboardEvent) {
 		const result = mapKeydown(
-			{ ...editor, composing },
+			{
+				...editor,
+				composing,
+				justCommittedComposition: localJustCommitted || editor.justCommittedComposition
+			},
 			{
 				key: event.key,
 				metaKey: event.metaKey,
@@ -151,9 +179,15 @@
 			liveRange()
 		);
 		if (result.preventDefault) event.preventDefault();
-		if (result.history === 'undo') emitState(undo(editor));
-		if (result.history === 'redo') emitState(redo(editor));
-		emitOps(result.ops);
+		if (result.history === 'undo') {
+			emitState(undo(editor));
+			return;
+		}
+		if (result.history === 'redo') {
+			emitState(redo(editor));
+			return;
+		}
+		emitMapped(result.ops, result.selection);
 	}
 
 	function onCopy(event: ClipboardEvent) {
@@ -174,7 +208,7 @@
 		event.preventDefault();
 		event.clipboardData.setData('text/plain', payload.plain);
 		event.clipboardData.setData(KB_CLIPBOARD_MIME, payload.json);
-		emitOps(cutOps(live));
+		emitOps(cutOps(editor.page, live, editor.blockFocus));
 	}
 
 	function onPaste(event: ClipboardEvent) {
@@ -227,6 +261,14 @@
 		return () => doc.removeEventListener('selectionchange', onSelectionChange);
 	});
 
+	function onHandlePointerDown(id: string) {
+		if (composing || !editable) return;
+		const block = findBlock(editor.page, id);
+		if (block && isNonTextual(block)) {
+			emitState(setSelection(editor, { anchor: { blockId: id, offset: 0 }, head: { blockId: id, offset: 0 } }));
+		}
+	}
+
 	function onHandleDragStart(event: DragEvent, id: string) {
 		draggingId = id;
 		event.dataTransfer?.setData('text/plain', id);
@@ -246,9 +288,27 @@
 		if (!id) return;
 		const target = event.currentTarget as HTMLElement;
 		const where = dropWhere(event.clientY, target.getBoundingClientRect());
-		const afterId = dropAfterId(editor.page, id, targetId, where);
-		if (afterId === 'noop') return;
-		onDispatch({ kind: 'move-block', id, afterId });
+		const drop = dropTarget(editor.page, id, targetId, where);
+		if (drop === 'noop') return;
+		onDispatch({ kind: 'move-block', id, afterId: drop.afterId, parentId: drop.parentId });
+	}
+
+	function onHostClick(event: MouseEvent) {
+		if (composing || !editable || !host) return;
+		const target = event.target as HTMLElement | null;
+		const el = target?.closest?.('[data-block-id]') as HTMLElement | null;
+		if (!el || !host.contains(el) || el.getAttribute('data-block-type') !== 'toggle') return;
+		const id = el.getAttribute('data-block-id');
+		if (!id) return;
+		const block = findBlock(editor.page, id);
+		if (block?.type !== 'toggle') return;
+		onDispatch({ kind: 'set-toggle', id, open: !block.open });
+	}
+
+	function handleParentId(blockId: string): string | undefined {
+		const loc = parentOf(editor.page, blockId);
+		if (!loc || loc.parent === 'page') return undefined;
+		return parentIdOf(loc.parent) ?? undefined;
 	}
 
 	function onHandleDragEnd() {
@@ -257,15 +317,27 @@
 </script>
 
 <div class="kb-editor" data-testid="kb-editor">
-	<div class="kb-gutter" contenteditable="false" data-testid="kb-gutter">
-		{#each editor.page.blocks as block, i (block.id)}
+	<div class="kb-gutter" bind:this={gutterEl} contenteditable="false" data-testid="kb-gutter">
+		{#each overlays as box (box.parentId)}
+			<div
+				class="kb-overlay"
+				data-testid="kb-gutter-overlay"
+				data-parent-id={box.parentId}
+				style:top="{box.top}px"
+				style:height="{Math.max(box.height, 0)}px"
+				style:pointer-events="none"
+			></div>
+		{/each}
+		{#each gutterOrder(editor.page) as block (block.id)}
 			<button
 				type="button"
 				class="kb-handle"
 				aria-label="Drag to reorder"
 				draggable={editable}
 				data-block-id={block.id}
-				style:height="{Math.max(heights[i] ?? 24, 24)}px"
+				data-parent-id={handleParentId(block.id)}
+				style:height="{heightById[block.id] ?? 24}px"
+				onpointerdown={() => onHandlePointerDown(block.id)}
 				ondragstart={(e) => onHandleDragStart(e, block.id)}
 				ondragover={onHandleDragOver}
 				ondrop={(e) => onHandleDrop(e, block.id)}
@@ -292,6 +364,7 @@
 		onpaste={onPaste}
 		ondragover={onHostDragOver}
 		ondrop={onHostDrop}
+		onclick={onHostClick}
 	></div>
 </div>
 
@@ -304,10 +377,22 @@
 		width: 100%;
 	}
 	.kb-gutter {
+		position: relative;
 		flex: 0 0 1.25rem;
+		width: 1.25rem;
 		display: flex;
 		flex-direction: column;
 		user-select: none;
+	}
+	.kb-overlay {
+		position: absolute;
+		left: 0;
+		width: 100%;
+		max-width: 100%;
+		pointer-events: none;
+		box-sizing: border-box;
+		border-left: 3px solid currentColor;
+		opacity: 0.4;
 	}
 	.kb-handle {
 		display: block;
@@ -318,6 +403,8 @@
 		background: transparent;
 		cursor: grab;
 		position: relative;
+		z-index: 1;
+		pointer-events: auto;
 		flex: 0 0 auto;
 	}
 	.kb-handle::before {
@@ -398,5 +485,26 @@
 	.kb-host :global(code) {
 		font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 		font-size: 0.9em;
+	}
+	.kb-host :global([data-block-type='callout']),
+	.kb-host :global([data-block-type='toggle']),
+	.kb-host :global([data-block-type='table']) {
+		margin: 0;
+		min-height: 24px;
+		height: 24px;
+		box-sizing: border-box;
+	}
+	.kb-host :global([data-block-type='table_cell']) {
+		display: block;
+		margin: 0 0 0.15rem;
+		padding: 0.15rem 0.4rem;
+		border: 1px solid color-mix(in srgb, currentColor 28%, transparent);
+		box-sizing: border-box;
+	}
+	.kb-host :global([data-block-type='table_cell'][data-header='true']) {
+		font-weight: 650;
+	}
+	.kb-host :global([data-depth='1']) {
+		margin-left: 0.75rem;
 	}
 </style>

@@ -1,20 +1,46 @@
 import { convertBlock, normalizeRange, resolvePoint } from './apply.js';
 import { sliceSpans } from './normalize.js';
-import { isAtomic, isTextLike, payloadLength, plaintextOf } from './plaintext.js';
-import type { Block, KbPage, Mark, Op, Point, TextSpan } from './types.js';
+import { isNonTextual, isTextLike, payloadLength, plaintextOf } from './plaintext.js';
+import {
+	childrenOf,
+	documentOrder,
+	lastDescendantId,
+	locateBlock,
+	parentOf,
+	parentIdOf,
+	sameParent,
+	type ParentRef
+} from './tree.js';
+import type { Block, KbPage, Mark, Op, Point, TableCellBlock, TableRowBlock, TextSpan } from './types.js';
 
 function cloneBlock(block: Block): Block {
 	return structuredClone(block);
 }
 
-function prevSiblingId(page: KbPage, index: number): string | null {
-	return index > 0 ? page.blocks[index - 1].id : null;
+function prevSiblingId(page: KbPage, id: string): string | null {
+	const loc = parentOf(page, id);
+	if (!loc || loc.index <= 0) return null;
+	return childrenOf(page, loc.parent)[loc.index - 1].id;
 }
 
-function requireBlock(page: KbPage, id: string, what: string): { block: Block; index: number } {
-	const index = page.blocks.findIndex((item) => item.id === id);
-	if (index < 0) throw new Error(`${what}: unknown block ${id}`);
-	return { block: page.blocks[index], index };
+function requireBlock(
+	page: KbPage,
+	id: string,
+	what: string
+): { block: Block; parent: ParentRef; index: number } {
+	const loc = locateBlock(page, id);
+	if (!loc) throw new Error(`${what}: unknown block ${id}`);
+	return loc;
+}
+
+function insertBlockOp(page: KbPage, block: Block): Extract<Op, { kind: 'insert-block' }> {
+	const loc = requireBlock(page, block.id, 'insert-block');
+	return {
+		kind: 'insert-block',
+		afterId: prevSiblingId(page, block.id),
+		parentId: parentIdOf(loc.parent),
+		block: cloneBlock(block)
+	};
 }
 
 const STRIP_MARKS: Mark[] = [
@@ -78,34 +104,105 @@ function convertedSuffixLength(start: Block, end: Block, endOffset: number): num
 	return 0;
 }
 
+function canConcat(start: Block, end: Block): boolean {
+	if (start.type === 'table_cell' || end.type === 'table_cell') return false;
+	const startOk = isTextLike(start) || start.type === 'code';
+	const endOk = isTextLike(end) || end.type === 'code';
+	return startOk && endOk;
+}
+
+function trimStartPrefixExists(block: Block, offset: number): boolean {
+	if (isNonTextual(block)) return false;
+	return isTextLike(block) || block.type === 'code';
+}
+
+function fullyCoveredRoots(page: KbPage, startId: string, endId: string): Block[] {
+	const order = documentOrder(page);
+	const idx = new Map<string, number>();
+	for (let i = 0; i < order.length; i++) idx.set(order[i].id, i);
+	const startIdx = idx.get(startId) ?? -1;
+	const endIdx = idx.get(endId) ?? -1;
+	const roots: Block[] = [];
+	const covered = new Set<string>();
+
+	function ancestorCovered(block: Block): boolean {
+		let loc = parentOf(page, block.id);
+		while (loc && loc.parent !== 'page') {
+			if (covered.has(loc.parent.id)) return true;
+			loc = parentOf(page, loc.parent.id);
+		}
+		return false;
+	}
+
+	for (const block of order) {
+		if (block.id === startId || block.id === endId) {
+			// Mark the endpoint so descendants of a dropped start container are not
+			// re-inserted beside the cloned subtree.
+			covered.add(block.id);
+			continue;
+		}
+		const i = idx.get(block.id) ?? -1;
+		const j = idx.get(lastDescendantId(block)) ?? i;
+		if (!(i > startIdx && j < endIdx)) continue;
+		if (ancestorCovered(block)) continue;
+		roots.push(block);
+		covered.add(block.id);
+	}
+	return roots;
+}
+
+function restoreClearedTableContent(block: Block): Op[] {
+	if (block.type === 'table_cell') {
+		return restoreInsertedSpans(block.id, 0, block.content);
+	}
+	if (block.type === 'table_row') {
+		const ops: Op[] = [];
+		for (const cell of block.children) {
+			ops.push(...restoreInsertedSpans(cell.id, 0, cell.content));
+		}
+		return ops;
+	}
+	return [];
+}
+
 function invertDeleteRange(page: KbPage, op: Extract<Op, { kind: 'delete-range' }>): Op[] {
 	const { start, end } = normalizeRange(page, op.range);
-	if (start.index === end.index && start.offset === end.offset) return [];
+	if (start.block.id === end.block.id && start.offset === end.offset) return [];
 
-	if (start.index === end.index) {
-		if (isAtomic(start.block)) {
-			return [
-				{
-					kind: 'insert-block',
-					afterId: prevSiblingId(page, start.index),
-					block: cloneBlock(start.block)
-				}
-			];
+	if (start.block.id === end.block.id) {
+		if (isNonTextual(start.block)) {
+			return [insertBlockOp(page, start.block)];
 		}
 		return insertSlice(start.block, start.offset, end.offset, start.offset);
 	}
 
 	const startBlock = start.block;
 	const endBlock = end.block;
-	const middles = page.blocks.slice(start.index + 1, end.index);
-	const ops: Op[] = [];
-	const startSurvives = !isAtomic(startBlock);
-	const canConcat =
-		startSurvives &&
-		(isTextLike(startBlock) || startBlock.type === 'code') &&
-		(isTextLike(endBlock) || endBlock.type === 'code');
+	const roots = fullyCoveredRoots(page, startBlock.id, endBlock.id);
+	const same = sameParent(start.parent, end.parent);
+	const startRowKept = startBlock.type === 'table_row';
+	const startSurvives = trimStartPrefixExists(startBlock, start.offset) || startRowKept;
+	const willConcat = same && startSurvives && canConcat(startBlock, endBlock) && !isNonTextual(endBlock);
+	const cleared = roots.filter((block) => block.type === 'table_cell' || block.type === 'table_row');
+	const insertRoots = roots.filter((block) => block.type !== 'table_cell' && block.type !== 'table_row');
 
-	if (canConcat) {
+	const ops: Op[] = [];
+
+	function restoreStart(): void {
+		if (startRowKept) {
+			ops.push(...restoreClearedTableContent(startBlock));
+			return;
+		}
+		if (startSurvives) {
+			ops.push(...insertSlice(startBlock, start.offset, payloadLength(startBlock), start.offset));
+		}
+	}
+
+	function insertable(block: Block): boolean {
+		return block.type !== 'table_cell' && block.type !== 'table_row';
+	}
+
+	if (willConcat) {
 		const suffixLen = convertedSuffixLength(startBlock, endBlock, end.offset);
 		if (suffixLen > 0) {
 			ops.push({
@@ -116,43 +213,36 @@ function invertDeleteRange(page: KbPage, op: Extract<Op, { kind: 'delete-range' 
 				}
 			});
 		}
-		ops.push(...insertSlice(startBlock, start.offset, payloadLength(startBlock), start.offset));
-		let afterId = startBlock.id;
-		for (const block of [...middles, endBlock]) {
-			ops.push({ kind: 'insert-block', afterId, block: cloneBlock(block) });
-			afterId = block.id;
+		restoreStart();
+		for (const block of cleared) ops.push(...restoreClearedTableContent(block));
+		for (const block of [...insertRoots, endBlock].filter(insertable)) {
+			ops.push(insertBlockOp(page, block));
 		}
 		return ops;
 	}
 
-	if (startSurvives) {
-		ops.push(...insertSlice(startBlock, start.offset, payloadLength(startBlock), start.offset));
-		let afterId = startBlock.id;
-		for (const block of middles) {
-			ops.push({ kind: 'insert-block', afterId, block: cloneBlock(block) });
-			afterId = block.id;
-		}
-		return ops;
+	restoreStart();
+	for (const block of cleared) ops.push(...restoreClearedTableContent(block));
+	const toInsert = (startSurvives ? insertRoots : [startBlock, ...insertRoots]).filter(insertable);
+	for (const block of toInsert) {
+		ops.push(insertBlockOp(page, block));
 	}
-
-	if (!isAtomic(endBlock) && end.offset > 0) {
+	if (!isNonTextual(endBlock) && end.offset > 0) {
 		ops.push(...insertSlice(endBlock, 0, end.offset, 0));
-	}
-	let afterId = prevSiblingId(page, start.index);
-	for (const block of [startBlock, ...middles]) {
-		ops.push({ kind: 'insert-block', afterId, block: cloneBlock(block) });
-		afterId = block.id;
 	}
 	return ops;
 }
 
 function findLinkHref(page: KbPage, range: Extract<Op, { kind: 'format-range' }>['range']): string | null {
 	const { start, end } = normalizeRange(page, range);
-	for (let i = start.index; i <= end.index; i++) {
-		const block = page.blocks[i];
+	const order = documentOrder(page);
+	const si = order.findIndex((block) => block.id === start.block.id);
+	const ei = order.findIndex((block) => block.id === end.block.id);
+	for (let i = si; i <= ei; i++) {
+		const block = order[i];
 		if (!isTextLike(block)) continue;
-		const from = i === start.index ? start.offset : 0;
-		const to = i === end.index ? end.offset : plaintextOf(block).length;
+		const from = i === si ? start.offset : 0;
+		const to = i === ei ? end.offset : plaintextOf(block).length;
 		for (const span of sliceSpans(block.content, from, to)) {
 			const link = span.marks.find((mark): mark is Extract<Mark, { type: 'link' }> => mark.type === 'link');
 			if (link) return link.href;
@@ -163,7 +253,7 @@ function findLinkHref(page: KbPage, range: Extract<Op, { kind: 'format-range' }>
 
 function invertFormatRange(page: KbPage, op: Extract<Op, { kind: 'format-range' }>): Op[] {
 	const { start, end } = normalizeRange(page, op.range);
-	if (start.index === end.index && start.offset === end.offset) return [];
+	if (start.block.id === end.block.id && start.offset === end.offset) return [];
 	let mark = op.mark;
 	if (mark.type === 'link' && !op.on) {
 		const href = findLinkHref(page, op.range);
@@ -227,20 +317,26 @@ function invertMergeBlock(page: KbPage, op: Extract<Op, { kind: 'merge-block' }>
 	}
 	const keep = requireBlock(page, op.keepId, 'merge-block');
 	const drop = requireBlock(page, op.dropId, 'merge-block');
-	if (drop.index !== keep.index + 1) {
+	if (!sameParent(keep.parent, drop.parent) || drop.index !== keep.index + 1) {
 		throw new Error('merge-block: dropId must be the immediate next sibling of keepId');
 	}
-	if (isAtomic(keep.block)) {
+	if (isNonTextual(keep.block) || keep.block.type === 'table_cell') {
 		throw new Error('cannot merge into atomic block');
 	}
 	const dropSnap = cloneBlock(drop.block);
-	if (isAtomic(drop.block)) {
-		return [{ kind: 'insert-block', afterId: op.keepId, block: dropSnap }];
+	if (isNonTextual(drop.block)) {
+		return [
+			{
+				kind: 'insert-block',
+				afterId: op.keepId,
+				parentId: parentIdOf(keep.parent),
+				block: dropSnap
+			}
+		];
 	}
 
 	const keepLen = payloadLength(keep.block);
 
-	// split-block on code is only legal at an empty last line, so restore via delete+insert.
 	if (keep.block.type === 'code') {
 		const added = drop.block.type === 'code' ? drop.block.text : plaintextOf(drop.block);
 		const ops: Op[] = [];
@@ -253,7 +349,12 @@ function invertMergeBlock(page: KbPage, op: Extract<Op, { kind: 'merge-block' }>
 				}
 			});
 		}
-		ops.push({ kind: 'insert-block', afterId: op.keepId, block: dropSnap });
+		ops.push({
+			kind: 'insert-block',
+			afterId: op.keepId,
+			parentId: parentIdOf(keep.parent),
+			block: dropSnap
+		});
 		return ops;
 	}
 
@@ -305,9 +406,16 @@ function restoreSolePayload(id: string, snap: Block, coercedLen: number): Op[] {
 }
 
 function invertConvertBlock(page: KbPage, op: Extract<Op, { kind: 'convert-block' }>): Op[] {
-	const { block, index } = requireBlock(page, op.id, 'convert-block');
-	if (op.to === 'image') {
-		throw new Error('cannot convert to image');
+	const { block, parent } = requireBlock(page, op.id, 'convert-block');
+	if (
+		op.to === 'image' ||
+		op.to === 'callout' ||
+		op.to === 'toggle' ||
+		op.to === 'table' ||
+		op.to === 'table_row' ||
+		op.to === 'table_cell'
+	) {
+		throw new Error(`cannot convert to ${op.to}`);
 	}
 	if (isNoOpConvert(block, op)) return [];
 	if (isLosslessTextLikeConvert(block, op.to)) {
@@ -321,11 +429,16 @@ function invertConvertBlock(page: KbPage, op: Extract<Op, { kind: 'convert-block
 		return [inverse];
 	}
 
-	const others = page.blocks.length - 1;
+	const others = documentOrder(page).length - 1;
 	if (others >= 1) {
 		return [
 			{ kind: 'delete-block', id: op.id },
-			{ kind: 'insert-block', afterId: prevSiblingId(page, index), block: cloneBlock(block) }
+			{
+				kind: 'insert-block',
+				afterId: prevSiblingId(page, op.id),
+				parentId: parentIdOf(parent),
+				block: cloneBlock(block)
+			}
 		];
 	}
 
@@ -344,7 +457,7 @@ function invertConvertBlock(page: KbPage, op: Extract<Op, { kind: 'convert-block
 function invertInsertText(page: KbPage, op: Extract<Op, { kind: 'insert-text' }>): Op[] {
 	const at = resolvePoint(page, op.at);
 	if (op.text === '') return [];
-	if (isAtomic(at.block)) {
+	if (isNonTextual(at.block)) {
 		throw new Error('cannot insert text into atomic block');
 	}
 	if (isTextLike(at.block) && op.text.includes('\n')) {
@@ -376,14 +489,24 @@ export function invert(page: KbPage, op: Op): Op[] {
 		case 'insert-block':
 			return [{ kind: 'delete-block', id: op.block.id }];
 		case 'delete-block': {
-			if (page.blocks.length <= 1) return [];
-			const { index, block } = requireBlock(page, op.id, 'delete-block');
-			return [{ kind: 'insert-block', afterId: prevSiblingId(page, index), block: cloneBlock(block) }];
+			const { block, parent } = requireBlock(page, op.id, 'delete-block');
+			if (block.type === 'table_row' || block.type === 'table_cell') {
+				throw new Error('delete-block: use table structural ops for cells/rows');
+			}
+			if (parent === 'page' && page.blocks.length <= 1) return [];
+			return [insertBlockOp(page, block)];
 		}
 		case 'move-block': {
-			const { index } = requireBlock(page, op.id, 'move-block');
+			const loc = requireBlock(page, op.id, 'move-block');
 			if (op.afterId === op.id) throw new Error('cannot move block after itself');
-			return [{ kind: 'move-block', id: op.id, afterId: prevSiblingId(page, index) }];
+			return [
+				{
+					kind: 'move-block',
+					id: op.id,
+					afterId: prevSiblingId(page, op.id),
+					parentId: parentIdOf(loc.parent)
+				}
+			];
 		}
 		case 'convert-block':
 			return invertConvertBlock(page, op);
@@ -394,6 +517,42 @@ export function invert(page: KbPage, op: Op): Op[] {
 		}
 		case 'set-children':
 			return [{ kind: 'set-children', children: [...page.children] }];
+		case 'set-toggle': {
+			const { block } = requireBlock(page, op.id, 'set-toggle');
+			if (block.type !== 'toggle') throw new Error('set-toggle: block is not a toggle');
+			return [{ kind: 'set-toggle', id: op.id, open: block.open }];
+		}
+		case 'insert-table-row':
+			return [{ kind: 'delete-table-row', tableId: op.tableId, rowId: op.row.id }];
+		case 'insert-table-column':
+			return [{ kind: 'delete-table-column', tableId: op.tableId, index: op.index }];
+		case 'delete-table-row': {
+			const loc = requireBlock(page, op.rowId, 'delete-table-row');
+			if (loc.block.type !== 'table_row') {
+				throw new Error(`delete-table-row: ${op.rowId} is not a table_row`);
+			}
+			return [
+				{
+					kind: 'insert-table-row',
+					tableId: op.tableId,
+					afterId: prevSiblingId(page, op.rowId),
+					row: cloneBlock(loc.block) as TableRowBlock
+				}
+			];
+		}
+		case 'delete-table-column': {
+			const tableLoc = requireBlock(page, op.tableId, 'delete-table-column');
+			if (tableLoc.block.type !== 'table') {
+				throw new Error(`delete-table-column: ${op.tableId} is not a table`);
+			}
+			const cells: TableCellBlock[] = [];
+			for (const row of tableLoc.block.children) {
+				const cell = row.children[op.index];
+				if (!cell) throw new Error('delete-table-column: index out of range');
+				cells.push(cloneBlock(cell) as TableCellBlock);
+			}
+			return [{ kind: 'insert-table-column', tableId: op.tableId, index: op.index, cells }];
+		}
 		default: {
 			const _never: never = op;
 			throw new Error(`unknown op: ${(_never as Op).kind}`);

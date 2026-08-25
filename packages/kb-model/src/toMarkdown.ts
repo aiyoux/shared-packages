@@ -1,5 +1,6 @@
 import { normalizePage } from './normalize.js';
-import type { Block, Inline, KbPage, ListItemBlock, Mark, TextSpan } from './types.js';
+import { blockChildren, documentOrder } from './tree.js';
+import type { Block, Inline, KbPage, ListItemBlock, Mark, TableBlock, TableRowBlock, TextSpan } from './types.js';
 
 function linkHref(marks: Mark[]): string | null {
 	let href: string | null = null;
@@ -29,6 +30,27 @@ function wrapInlines(spans: Inline[]): string {
 	return spans.map(wrapSpan).join('');
 }
 
+function gfmCell(row: TableRowBlock, index: number): string {
+	const cell = row.children[index];
+	const text = cell ? wrapInlines(cell.content) : '';
+	return text.replace(/\|/g, '\\|');
+}
+
+function renderTable(table: TableBlock): string {
+	const rows = table.children;
+	if (rows.length === 0) return '';
+	const width = Math.max(1, ...rows.map((row) => row.children.length));
+	const line = (row: TableRowBlock) => {
+		const cols: string[] = [];
+		for (let i = 0; i < width; i++) cols.push(gfmCell(row, i));
+		return `| ${cols.join(' | ')} |`;
+	};
+	const sep = `| ${Array.from({ length: width }, () => '---').join(' | ')} |`;
+	const out = [line(rows[0]), sep];
+	for (const row of rows.slice(1)) out.push(line(row));
+	return out.join('\n');
+}
+
 function sameListRun(prev: Block | undefined, block: ListItemBlock): boolean {
 	return prev?.type === 'list_item' && prev.ordered === block.ordered;
 }
@@ -49,6 +71,19 @@ function renderBlock(block: Block, orderedIndex: number): string {
 			return '---';
 		case 'image':
 			return `![${block.alt}](${block.src})`;
+		case 'callout':
+		case 'toggle':
+			// Chrome is not textual; children render via documentOrder DFS.
+			return '';
+		case 'table':
+			return renderTable(block);
+		case 'table_row':
+		case 'table_cell':
+			// Rendered as part of the parent table (GFM grid).
+			return '';
+		default: {
+			return '';
+		}
 	}
 }
 
@@ -60,19 +95,23 @@ function separator(prev: Block, next: Block): string {
 
 /** Derived Markdown of the page body. Not a loader. */
 export function toMarkdown(page: KbPage): string {
-	const { blocks } = normalizePage(page);
+	const blocks = documentOrder(normalizePage(page));
 	const chunks: string[] = [];
+	const emitted: Block[] = [];
 	let orderedIndex = 0;
-	for (let i = 0; i < blocks.length; i++) {
-		const block = blocks[i];
-		const prev = i > 0 ? blocks[i - 1] : undefined;
+	for (const block of blocks) {
+		if (block.type === 'table_row' || block.type === 'table_cell') continue;
+		const prev = emitted[emitted.length - 1];
 		if (block.type === 'list_item' && block.ordered) {
 			orderedIndex = sameListRun(prev, block) ? orderedIndex + 1 : 1;
 		} else {
 			orderedIndex = 0;
 		}
+		const rendered = renderBlock(block, orderedIndex);
+		if (rendered === '' && (blockChildren(block)?.length ?? 0) > 0) continue;
 		if (prev) chunks.push(separator(prev, block));
-		chunks.push(renderBlock(block, orderedIndex));
+		chunks.push(rendered);
+		emitted.push(block);
 	}
 	const body = chunks.join('');
 	if (body === '') return '';
