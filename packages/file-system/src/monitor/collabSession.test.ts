@@ -46,6 +46,9 @@ function createHarness() {
 	let streamsOpened = 0;
 	const posts: Array<{ url: string; body: unknown }> = [];
 	let snapshotMem: { seq: number; page: unknown } = { seq: 0, page: paraPage('') };
+	let freezeGet = false;
+	let emitPostSnapshot = true;
+	const gets: number[] = [];
 	let opsHandler: ((body: Record<string, unknown>) => Response | Promise<Response>) | null = null;
 
 	const emit = (event: string, data: unknown) => {
@@ -55,7 +58,8 @@ function createHarness() {
 	const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
 		const url = String(input);
 		const method = (init?.method ?? 'GET').toUpperCase();
-		expect((init as { targetAddressSpace?: string }).targetAddressSpace).toBe('loopback');
+		const space = url.includes('192.168.') ? 'local' : 'loopback';
+		expect((init as { targetAddressSpace?: string }).targetAddressSpace).toBe(space);
 		if (url.includes('/v1/collab/events')) {
 			streamsOpened += 1;
 			const stream = new ReadableStream<Uint8Array>({
@@ -128,15 +132,17 @@ function createHarness() {
 		if (url.includes('/v1/collab/snapshot') && method === 'POST') {
 			const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
 			posts.push({ url, body });
-			snapshotMem = { seq: Number(body.seq), page: body.page };
-			queueMicrotask(() =>
-				emit('collab.snapshot', {
-					type: 'collab.snapshot',
-					sub_id: `sub-${body.path}-0`,
-					seq: body.seq,
-					page: body.page
-				})
-			);
+			if (!freezeGet) snapshotMem = { seq: Number(body.seq), page: body.page };
+			if (emitPostSnapshot) {
+				queueMicrotask(() =>
+					emit('collab.snapshot', {
+						type: 'collab.snapshot',
+						sub_id: `sub-${body.path}-0`,
+						seq: body.seq,
+						page: body.page
+					})
+				);
+			}
 			return new Response(JSON.stringify({ seq: body.seq }), {
 				status: 200,
 				headers: { 'content-type': 'application/json' }
@@ -144,6 +150,7 @@ function createHarness() {
 		}
 		if (url.includes('/v1/collab/snapshot') && method === 'GET') {
 			posts.push({ url, body: null });
+			gets.push(snapshotMem.seq);
 			return new Response(JSON.stringify(snapshotMem), {
 				status: 200,
 				headers: { 'content-type': 'application/json' }
@@ -162,12 +169,19 @@ function createHarness() {
 	return {
 		fetchMock: fetchMock as unknown as typeof fetch,
 		posts,
+		gets,
 		get streamsOpened() {
 			return streamsOpened;
 		},
 		emit,
 		setSnapshot(seq: number, page: KbPage | null) {
 			snapshotMem = { seq, page };
+		},
+		freezeGet(freeze = true) {
+			freezeGet = freeze;
+		},
+		silencePostSnapshotSse() {
+			emitPostSnapshot = false;
 		},
 		onOps(handler: (body: Record<string, unknown>) => Response | Promise<Response>) {
 			opsHandler = handler;
@@ -317,6 +331,8 @@ describe('createMonitorCollabSession', () => {
 		);
 
 		const snap5Before = frames.filter((f) => f.kind === 'snapshot' && f.seq === 5).length;
+		const getsAtReady = h.gets.length;
+		h.freezeGet(true);
 		const send = session.sendOps([insertOp('Z')], 'lost', 5);
 		await vi.waitFor(() => expect(frames.some((f) => f.kind === 'nack')).toBe(true));
 		const nack = frames.find((f) => f.kind === 'nack');
@@ -332,7 +348,16 @@ describe('createMonitorCollabSession', () => {
 			ops: [insertOp('R')]
 		});
 		await vi.waitFor(() => expect(frames.some((f) => f.kind === 'ops' && f.seq === 6)).toBe(true));
+		await vi.waitFor(() => expect(h.gets.length).toBeGreaterThan(getsAtReady));
+		expect(h.gets[h.gets.length - 1]).toBe(5);
 		expect(frames.filter((f) => f.kind === 'snapshot' && f.seq === 5).length).toBe(snap5Before);
+		expect(frames.some((f) => f.kind === 'snapshot' && snapshotText(f.page) === 'old' && f.seq === 5)).toBe(
+			true
+		);
+		expect(
+			frames.filter((f) => f.kind === 'snapshot' && f.seq === 5 && 'reason' in f && f.reason === 'nack')
+				.length
+		).toBe(0);
 
 		h.setSnapshot(6, paraPage('new'));
 		h.emit('collab.snapshot', {
@@ -344,6 +369,43 @@ describe('createMonitorCollabSession', () => {
 		await vi.waitFor(() => expect(frames.some((f) => f.kind === 'snapshot' && f.seq === 6)).toBe(true));
 		await send;
 		expect(frames.filter((f) => f.kind === 'snapshot' && f.seq === 5).length).toBe(snap5Before);
+		session.close();
+	});
+
+	it('409 recovery GET-replaces only when GET seq >= head_seq', async () => {
+		const h = createHarness();
+		h.setSnapshot(5, paraPage('old'));
+		const session = openSession(h, '/tmp/a/index.kb');
+		const frames: CollabFrame[] = [];
+		session.subscribe((f) => frames.push(f));
+		await session.ready;
+		h.onOps(
+			() =>
+				new Response(JSON.stringify({ head_seq: 6 }), {
+					status: 409,
+					headers: { 'content-type': 'application/json' }
+				})
+		);
+		const send = session.sendOps([insertOp('Z')], 'lost', 5);
+		await vi.waitFor(() => expect(frames.some((f) => f.kind === 'nack')).toBe(true));
+		h.setSnapshot(6, paraPage('cas'));
+		h.freezeGet(true);
+		h.silencePostSnapshotSse();
+		h.emit('collab.op_batch', {
+			type: 'collab.op_batch',
+			sub_id: 'sub-/tmp/a/index.kb-0',
+			seq: 6,
+			client_id: 'other-client',
+			ops: [insertOp('R')]
+		});
+		await vi.waitFor(() =>
+			expect(frames.some((f) => f.kind === 'snapshot' && f.seq === 6)).toBe(true)
+		);
+		await send;
+		const snap6 = frames.find((f) => f.kind === 'snapshot' && f.seq === 6);
+		expect(snap6).toMatchObject({ kind: 'snapshot', seq: 6, reason: 'nack' });
+		expect(snapshotText((snap6 as { page: KbPage }).page)).toBe('cas');
+		expect(h.gets.includes(6)).toBe(true);
 		session.close();
 	});
 
@@ -361,9 +423,39 @@ describe('createMonitorCollabSession', () => {
 			reason: 'external_write'
 		});
 		await vi.waitFor(() => expect(frames.some((f) => f.kind === 'resync')).toBe(true));
+		expect(frames.find((f) => f.kind === 'resync')).toMatchObject({
+			kind: 'resync',
+			reason: 'external_write'
+		});
 		await vi.waitFor(() =>
 			expect(frames.some((f) => f.kind === 'snapshot' && f.seq === 2)).toBe(true)
 		);
+		const snap = frames.find((f) => f.kind === 'snapshot' && f.seq === 2);
+		expect(snap).toMatchObject({ kind: 'snapshot', seq: 2, reason: 'resync' });
+		expect(snapshotText((snap as { page: KbPage }).page)).toBe('vim');
+		session.close();
+	});
+
+	it('LAN session fetch uses targetAddressSpace local', async () => {
+		const h = createHarness();
+		const session = createMonitorCollabSession({
+			kind: 'monitor',
+			role: 'replica',
+			pageId: 'page-1',
+			schemaVersion: KB_SCHEMA_VERSION,
+			clientId: 'guest',
+			baseUrl: 'http://192.168.1.10:8300',
+			path: '/tmp/a/index.kb',
+			fetchImpl: h.fetchMock
+		});
+		await session.ready;
+		expect(h.streamsOpened).toBe(1);
+		const eventCall = (h.fetchMock as unknown as ReturnType<typeof vi.fn>).mock.calls.find((c) =>
+			String(c[0]).includes('/v1/collab/events')
+		);
+		expect(
+			(eventCall?.[1] as { targetAddressSpace?: string } | undefined)?.targetAddressSpace
+		).toBe('local');
 		session.close();
 	});
 

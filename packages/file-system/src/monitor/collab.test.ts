@@ -34,6 +34,29 @@ describe('monitor collab client', () => {
 		expect(src).not.toMatch(/new\s+EventSource\b/);
 		expect(src).toMatch(/openJsonSse/);
 		expect(src).toMatch(/withLocalAddressSpace/);
+		expect(src).toMatch(/\/v1\/collab\/events/);
+		expect(src).not.toMatch(/\/v1\/collab\/stream/);
+	});
+
+	it('subscribe annotates LAN URLs with local, not loopback', async () => {
+		const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+			const url = String(input);
+			expect(url).toBe('http://192.168.1.10:8300/v1/collab/events');
+			expect((init as { targetAddressSpace?: string }).targetAddressSpace).toBe('local');
+			expect((init as { targetAddressSpace?: string }).targetAddressSpace).not.toBe(
+				'loopback'
+			);
+			return sseResponse([
+				`event: collab.hello\ndata: ${JSON.stringify({ type: 'collab.hello', client_id: 'c1' })}\n\n`
+			]);
+		});
+		const { abort } = await subscribe({
+			baseUrl: 'http://192.168.1.10:8300',
+			fetchImpl: fetchMock as unknown as typeof fetch,
+			onEvent: () => {}
+		});
+		expect(fetchMock).toHaveBeenCalled();
+		abort();
 	});
 
 	it('subscribe opens SSE with withLocalAddressSpace (loopback)', async () => {
@@ -173,6 +196,40 @@ describe('monitor collab client', () => {
 			expect(e).toBeInstanceOf(CollabConflictError);
 			expect((e as CollabConflictError).headSeq).toBe(6);
 		}
+	});
+
+	it('submitPage matching bytes is a no-op 200; differing bytes 409', async () => {
+		let stored: string | null = null;
+		const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+			expect((init as { targetAddressSpace?: string }).targetAddressSpace).toBe('loopback');
+			const body = JSON.parse(String(init?.body ?? '{}')) as { seq?: number; page?: unknown };
+			const bytes = JSON.stringify(body.page);
+			if (stored === null || stored === bytes) {
+				stored = bytes;
+				return new Response(JSON.stringify({ seq: body.seq ?? 1 }), {
+					status: 200,
+					headers: { 'content-type': 'application/json' }
+				});
+			}
+			return new Response(JSON.stringify({ head_seq: 1 }), {
+				status: 409,
+				headers: { 'content-type': 'application/json' }
+			});
+		});
+		const opts = {
+			baseUrl: 'http://127.0.0.1:8300',
+			path: '/tmp/index.kb',
+			fetchImpl: fetchMock as unknown as typeof fetch
+		};
+		const page = { id: 'p', blocks: [] };
+		await expect(submitPage(opts, 1, page)).resolves.toEqual({ seq: 1 });
+		await expect(submitPage(opts, 1, page)).resolves.toEqual({ seq: 1 });
+		await expect(submitPage(opts, 1, { id: 'other', blocks: [] })).rejects.toMatchObject({
+			name: 'CollabConflictError',
+			headSeq: 1,
+			status: 409
+		});
+		expect(fetchMock).toHaveBeenCalledTimes(3);
 	});
 
 	it('getSnapshot seq is the CAS seq, not inferred from a 409 head', async () => {
