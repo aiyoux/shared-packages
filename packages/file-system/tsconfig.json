@@ -10,6 +10,10 @@
     "resolveJsonModule": true,
     "isolatedModules": true,
     "noEmit": true,
+    // Tests run under `node --test` with native type stripping, which resolves
+    // the literal path and cannot follow a `.js` specifier to a `.ts` file, so
+    // they import with explicit `.ts`. Legal here because noEmit is set.
+    "allowImportingTsExtensions": true,
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "types": ["node"],
     "paths": {

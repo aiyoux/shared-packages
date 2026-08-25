@@ -193,7 +193,8 @@ export interface ExplorerDriver {
 	 * Host-absolute path for a monitor (or similar) entry. Used when two
 	 * panes share a daemon but not a connection root.
 	 */
-	absolutePath?(id: ExplorerEntryId): string;
+	/** `null` is the pane root. */
+	absolutePath?(id: ExplorerEntryId | null): string;
 	/**
 	 * Zip / tar / encrypt / extract on the host (monitor). Paths in `req` are
 	 * host-absolute. Missing on B2/rclone — those always shuttle through this tab.
@@ -266,8 +267,10 @@ export interface ExplorerDriver {
 		},
 		opts?: {
 			onProgress?: (transferred: number, total?: number) => void;
+			// Mirrors MonitorNdjsonEvent: every field is optional, because a
+			// progress line may carry only a phase or only `done`.
 			onEvent?: (ev: {
-				transferred: number;
+				transferred?: number;
 				size?: number;
 				done?: boolean;
 				phase?: string;

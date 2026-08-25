@@ -112,7 +112,11 @@ export async function saveFileToDisk(args: {
 			await args.download({
 				assemble: false,
 				onProgress: args.onProgress,
-				onChunk: (chunk) => writable.write(chunk)
+				// Download chunks are never SharedArrayBuffer-backed; the cast narrows
+				// TS 5.7's generic Uint8Array for the FileSystemWritable boundary.
+				// (Not @shared-packages/ui/bytes: file-system must not take a
+				// dependency on the UI component package for one helper.)
+				onChunk: (chunk) => writable.write(chunk as Uint8Array<ArrayBuffer>)
 			});
 			await writable.close();
 			return 'picker';

@@ -424,20 +424,28 @@ type OpList = { fnArray: number[]; argsArray: unknown[][] };
 
 async function warmGlyphPaths(page: {
 	getViewport: (opts: { scale: number }) => { width: number; height: number };
-	render: (opts: { canvasContext: CanvasRenderingContext2D; viewport: { width: number; height: number } }) => { promise: Promise<unknown> };
+	// Not structurally typed: pdfjs's RenderParameters carries a real
+	// PageViewport plus a dozen optional fields, and under strictFunctionTypes
+	// any stand-in narrow enough to be useful stops accepting a PDFPageProxy.
+	// This is a best-effort warm-up inside a try/catch, so take it as unknown
+	// and call through a cast.
+	render: unknown;
 }) {
 	try {
 		ensurePath2D();
 		const viewport = page.getViewport({ scale: 0.25 });
 		let ctx: CanvasRenderingContext2D | null = null;
+		let canvasEl: HTMLCanvasElement | null = null;
 		if (typeof document !== 'undefined') {
 			const canvas = document.createElement('canvas');
+			canvasEl = canvas;
 			canvas.width = Math.max(1, Math.ceil(viewport.width));
 			canvas.height = Math.max(1, Math.ceil(viewport.height));
 			ctx = canvas.getContext('2d');
 		}
 		if (!ctx) ctx = stubContext2d();
-		await page.render({ canvasContext: ctx, viewport }).promise;
+		const render = page.render as (o: unknown) => { promise: Promise<unknown> };
+		await render({ canvasContext: ctx, canvas: canvasEl as HTMLCanvasElement, viewport }).promise;
 	} catch {
 		// Glyph path objects stay missing; text falls back to live <text>.
 	}

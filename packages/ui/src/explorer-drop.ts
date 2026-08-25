@@ -26,6 +26,7 @@ export function hasExplorerMime(dt: DropTransferLike | null | undefined): boolea
 
 export function readExplorerPayload(dt: DropTransferLike | null | undefined): {
 	driverId?: string;
+	connectionId?: string;
 	ids: string[];
 } {
 	if (!dt) return { ids: [] };

@@ -40,7 +40,13 @@ describe('FileExplorer component', () => {
 			},
 			dropEffect: 'none'
 		};
-		await fireEvent.drop(list, { dataTransfer: dt });
+		// Native DragEvent path — fireEvent.drop does not attach dataTransfer
+		// reliably for Svelte 5 delegated handlers in jsdom, so `e.dataTransfer`
+		// arrives null and the OS-drop guard silently declines. Same pattern as
+		// file-explorer-dnd.component.test.ts.
+		const dropEv = new Event('drop', { bubbles: true, cancelable: true }) as DragEvent;
+		Object.defineProperty(dropEv, 'dataTransfer', { value: dt });
+		list.dispatchEvent(dropEv);
 		await viWaitFor(async () => {
 			const rows = await vfs.list({ parentId: null });
 			return rows.some((n) => n.name === 'from-pc.txt');
@@ -65,7 +71,13 @@ describe('FileExplorer component', () => {
 			},
 			dropEffect: 'none'
 		};
-		await fireEvent.drop(list, { dataTransfer: dt });
+		// Native DragEvent path — fireEvent.drop does not attach dataTransfer
+		// reliably for Svelte 5 delegated handlers in jsdom, so `e.dataTransfer`
+		// arrives null and the OS-drop guard silently declines. Same pattern as
+		// file-explorer-dnd.component.test.ts.
+		const dropEv = new Event('drop', { bubbles: true, cancelable: true }) as DragEvent;
+		Object.defineProperty(dropEv, 'dataTransfer', { value: dt });
+		list.dispatchEvent(dropEv);
 		await viWaitFor(async () => {
 			const root = await vfs.list({ parentId: null });
 			const trip = root.find((n) => n.name === 'Trip' && n.kind === 'folder');
@@ -262,7 +274,7 @@ describe('FileExplorer component', () => {
 		await vfs.writeFile({
 			parentId: null,
 			name: 'note.txt',
-			fileType: 'txt',
+			fileType: 'unknown',
 			body: new Blob(['hello'], { type: 'text/plain' }),
 			contentType: 'text/plain'
 		});
@@ -432,7 +444,7 @@ describe('FileExplorer component', () => {
 		await vfs.writeFile({
 			parentId: folder.id,
 			name: 'inside.txt',
-			fileType: 'txt',
+			fileType: 'unknown',
 			body: new Blob(['hi'], { type: 'text/plain' }),
 			contentType: 'text/plain'
 		});
@@ -580,7 +592,7 @@ describe('FileExplorer component', () => {
 		await fireEvent.click(screen.getByTestId('fe-archive-cancel'));
 
 		await fireEvent.click(screen.getByTestId('fe-file-preview-open-archive'));
-		const inner = await screen.findByTestId('fe-inner-fs-dialog', { timeout: 8000 });
+		const inner = await screen.findByTestId('fe-inner-fs-dialog', undefined, { timeout: 8000 });
 		expect(inner.textContent).toMatch(/archive\.zip|hello/);
 		await viWaitFor(() => {
 			const rows = inner.querySelectorAll('[data-testid="fe-file-row"], [data-testid="fe-folder-row"]');
@@ -698,10 +710,11 @@ async function viWaitForRows(min: number, ms = 4000) {
 	throw new Error(`expected >= ${min} file rows`);
 }
 
-async function viWaitFor(pred: () => boolean, ms = 4000) {
+/** Predicate may be async — two callers await the VFS inside it. */
+async function viWaitFor(pred: () => boolean | Promise<boolean>, ms = 4000) {
 	const start = Date.now();
 	while (Date.now() - start < ms) {
-		if (pred()) return;
+		if (await pred()) return;
 		await new Promise((r) => setTimeout(r, 40));
 	}
 	throw new Error('viWaitFor timeout');

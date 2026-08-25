@@ -295,7 +295,7 @@ describe('monitor explorer driver capabilities', () => {
 			}
 		);
 		expect(push).toHaveBeenCalledTimes(1);
-		const body = push.mock.calls[0]![0] as Record<string, unknown>;
+		const [body] = push.mock.calls[0] as unknown as [Record<string, unknown>];
 		expect(body).toEqual({
 			from: '/tmp/a.png',
 			uploadUrl: 'https://pod.example/u',

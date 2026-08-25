@@ -647,18 +647,19 @@ async function copyFile(
 				let hashDone = false;
 				await source.pushToUpload(entry.id, upload, {
 					onEvent: (ev) => {
-						const size = ev.size ?? known ?? ev.transferred;
+						const moved = ev.transferred ?? 0;
+						const size = ev.size ?? known ?? moved;
 						const phase = ev.phase;
 						const isHash = phase === 'hash' || (!phase && !hashDone && !ev.done);
 						if (isHash) {
 							reportLeg(remoteId, entry.name, {
-								transferred: ev.transferred,
+								transferred: moved,
 								size,
 								status: 'active',
 								hop: 'delegated',
 								hopNote
 							});
-							if (size > 0 && ev.transferred >= size) hashDone = true;
+							if (size > 0 && moved >= size) hashDone = true;
 							return;
 						}
 						hashDone = true;
@@ -671,7 +672,7 @@ async function copyFile(
 							hopNote
 						});
 						reportLeg(wireId, entry.name, {
-							transferred: ev.transferred,
+							transferred: moved,
 							size,
 							done: ev.done === true,
 							status: ev.done ? 'done' : 'active',

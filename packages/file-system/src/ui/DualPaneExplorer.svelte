@@ -159,7 +159,17 @@
 
 	type Props = {
 		localDriver: ExplorerDriver;
-		onOpen?: (entry: ExplorerOpenTarget, ctx?: ExplorerOpenContext) => void | Promise<void>;
+		/**
+		 * Open-file handler. The context depends on which pane raised it:
+		 * `paneFileOpen` (local / memory / monitor panes) substitutes the pane's
+		 * `OpenProjectContext`, so handlers can tell a monitor pane from a local
+		 * one; `paneOnOpen` forwards FileExplorer's own `{ read }` unchanged.
+		 * Narrow on `'kind' in ctx` to tell them apart.
+		 */
+		onOpen?: (
+			entry: ExplorerOpenTarget,
+			ctx?: ExplorerOpenContext | OpenProjectContext
+		) => void | Promise<void>;
 		/** Forward `onOpen` to B2 / monitor / disk / rclone panes. Hub Files keeps this off. */
 		openRemotes?: boolean;
 		accept?: FileTypeId[];

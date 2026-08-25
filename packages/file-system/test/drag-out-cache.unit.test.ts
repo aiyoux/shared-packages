@@ -10,15 +10,24 @@ import {
 	evictDriver,
 	canZipFolderForDragOut,
 	folderZipName,
-	formatDownloadURL
+	formatDownloadURL,
+	type DragOutUrl
 } from '../src/ui/dragOutCache.ts';
 import type { ExplorerDriver, ExplorerEntry } from '../src/ui/explorerDriver.ts';
 import { createVfs } from '../src/index.ts';
 import { createLocalExplorerDriver } from '../src/ui/localExplorerDriver.ts';
 
+
+/** `prefetchForDragOut` may resolve a URL payload; these cases expect a File. */
+function asFile(v: File | DragOutUrl | null | undefined): File {
+	assert.ok(v instanceof File, 'expected a File, got a drag-out URL payload');
+	return v;
+}
+
 function makeEntry(overrides: Partial<ExplorerEntry> = {}): ExplorerEntry {
 	return {
 		id: 'f1',
+		parentId: null,
 		kind: 'file',
 		name: 'test.txt',
 		size: 5,
@@ -31,21 +40,26 @@ function makeDriver(blob: Blob, opts: Partial<ExplorerDriver> = {}): ExplorerDri
 	return {
 		id: 'local',
 		capabilities: {
-			supportsMkdir: true,
+			supportsTrash: false,
+			supportsSoftDelete: false,
 			supportsRename: true,
 			supportsMove: true,
-			supportsDragOut: true,
+			supportsCopy: true,
+			supportsMkdir: true,
+			supportsUpload: false,
+			supportsDownload: true,
 			supportsSiblingOrder: false,
-			canDownload: true
+			supportsDragOut: true
 		},
+		ready: async () => {},
 		list: async () => ({ entries: [], truncated: false }),
 		getPath: async () => [],
-		mkdir: async () => ({ id: 'x', kind: 'folder', name: 'x' }),
-		rename: async () => ({ id: 'x', kind: 'folder', name: 'x' }),
+		mkdir: async () => ({ id: 'x', parentId: null, kind: 'folder' as const, name: 'x' }),
+		rename: async () => ({ id: 'x', parentId: null, kind: 'folder' as const, name: 'x' }),
 		move: async () => {},
 		delete: async () => {},
 		readBlob: async () => blob,
-		writeFile: async () => ({ id: 'x', kind: 'file', name: 'x' }),
+		writeFile: async () => ({ id: 'x', parentId: null, kind: 'file' as const, name: 'x' }),
 		...opts
 	};
 }
@@ -65,15 +79,15 @@ describe('dragOutCache', () => {
 
 		const file = await prefetchForDragOut(driver, entry);
 		assert.notEqual(file, null);
-		assert.equal(file!.name, 'test.txt');
-		assert.equal(file!.type, 'text/plain');
-		assert.equal(file!.size, 5);
+		assert.equal(asFile(file).name, 'test.txt');
+		assert.equal(asFile(file).type, 'text/plain');
+		assert.equal(asFile(file).size, 5);
 
 		// Cached — synchronous get works
 		assert.equal(hasDragOutFile('f1'), true);
 		const cached = getDragOutFile('f1');
 		assert.notEqual(cached, null);
-		assert.equal(cached!.name, 'test.txt');
+		assert.equal(asFile(cached).name, 'test.txt');
 	});
 
 	it('prefetchForDragOut uses download() when readBlob is absent', async () => {
@@ -83,8 +97,8 @@ describe('dragOutCache', () => {
 
 		const file = await prefetchForDragOut(driver, entry);
 		assert.notEqual(file, null);
-		assert.equal(file!.name, 'data.bin');
-		assert.equal(file!.size, 5);
+		assert.equal(asFile(file).name, 'data.bin');
+		assert.equal(asFile(file).size, 5);
 	});
 
 	it('canZipFolderForDragOut is false for disk/B2/rclone (no zip-on-GET URL)', () => {
@@ -143,9 +157,9 @@ describe('dragOutCache', () => {
 		await driver.writeFile!(folder.id, new File([new TextEncoder().encode('hello')], 'a.txt'));
 		const file = await prefetchForDragOut(driver, folder);
 		assert.notEqual(file, null);
-		assert.equal(file!.name, 'Docs.zip');
-		assert.equal(file!.type, 'application/zip');
-		assert.ok(file!.size > 0);
+		assert.equal(asFile(file).name, 'Docs.zip');
+		assert.equal(asFile(file).type, 'application/zip');
+		assert.ok(asFile(file).size > 0);
 		assert.equal(hasDragOutFile(folder.id), true);
 	});
 

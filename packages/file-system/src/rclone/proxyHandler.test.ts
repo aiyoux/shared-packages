@@ -48,10 +48,11 @@ describe('proxyHandler', () => {
 		});
 		expect(r.ok).toBe(true);
 		expect(fetchImpl).toHaveBeenCalled();
-		const [url, init] = fetchImpl.mock.calls[0]!;
+		// vi.fn() with no signature infers a zero-length args tuple.
+		const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
 		expect(String(url)).toContain('127.0.0.1:7750');
 		expect(String(url)).toContain('operations/list');
-		expect((init as RequestInit).headers).toMatchObject({
+		expect(init.headers).toMatchObject({
 			Authorization: 'Basic dGVzdA=='
 		});
 	});

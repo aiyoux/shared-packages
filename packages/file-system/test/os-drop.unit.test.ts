@@ -46,7 +46,7 @@ function mockDriver(opts?: { mkdir?: boolean }): ExplorerDriver & {
 		mkdirs,
 		async ready() {},
 		async list() {
-			return { entries: [] };
+			return { entries: [], truncated: false };
 		},
 		async getPath() {
 			return [];

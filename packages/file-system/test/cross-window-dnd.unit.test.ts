@@ -12,25 +12,30 @@ const stubDriver: ExplorerDriver = {
 	id: 'local',
 	connectionId: undefined,
 	capabilities: {
-		supportsMkdir: true,
+		supportsTrash: false,
+		supportsSoftDelete: false,
 		supportsRename: true,
 		supportsMove: true,
-		supportsDragOut: false,
+		supportsCopy: true,
+		supportsMkdir: true,
+		supportsUpload: false,
+		supportsDownload: false,
 		supportsSiblingOrder: false,
-		canDownload: true
+		supportsDragOut: false
 	},
+	ready: async () => {},
 	list: async () => ({ entries: [], truncated: false }),
 	getPath: async () => [],
-	mkdir: async () => ({ id: 'x', kind: 'folder', name: 'x' }),
-	rename: async () => ({ id: 'x', kind: 'folder', name: 'x' }),
+	mkdir: async () => ({ id: 'x', parentId: null, kind: 'folder' as const, name: 'x' }),
+	rename: async () => ({ id: 'x', parentId: null, kind: 'folder' as const, name: 'x' }),
 	move: async () => {},
 	delete: async () => {},
-	writeFile: async () => ({ id: 'x', kind: 'file', name: 'x' })
+	writeFile: async () => ({ id: 'x', parentId: null, kind: 'file' as const, name: 'x' })
 };
 
 const stubEntries: ExplorerEntry[] = [
-	{ id: 'f1', kind: 'file', name: 'a.txt', size: 10 },
-	{ id: 'f2', kind: 'file', name: 'b.txt', size: 20 }
+	{ id: 'f1', parentId: null, kind: 'file' as const, name: 'a.txt', size: 10 },
+	{ id: 'f2', parentId: null, kind: 'file' as const, name: 'b.txt', size: 20 }
 ];
 
 describe('crossWindowDnd', () => {

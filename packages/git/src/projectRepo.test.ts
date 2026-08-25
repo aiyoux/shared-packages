@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { bindProjectRepo, repoInputFromFolder, sameProjectRepo } from './projectRepo.js';
-import type { ExplorerDriver, ExplorerEntry } from '@shared-packages/file-system/ui';
+import type { ExplorerDriver, ExplorerEntry } from '@shared-packages/file-system/ui/driver';
 import type { GitHost, GitRepoRef } from './types.js';
 
 function folder(id: string, name: string, parentId: string | null = null): ExplorerEntry {

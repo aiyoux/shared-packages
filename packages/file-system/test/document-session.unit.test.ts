@@ -1,7 +1,8 @@
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { createVfs, resetSharedVfsForTests, VfsError } from '../src/index.ts';
-import { diffDocumentSnapshots, type DocumentSnapshot } from '../src/documentSession.ts';
+import { diffDocumentSnapshots } from '../src/documentSession.ts';
+import type { DocumentSnapshot } from '../src/types.ts';
 import type { DocumentEvent } from '../src/types.ts';
 
 function wait(ms = 20): Promise<void> {
