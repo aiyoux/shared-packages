@@ -40,7 +40,7 @@ export type ClipSource =
 
 export type FsBackend = ClipSource['backend'];
 
-export const CLIP_MEDIA_KINDS = ['image', 'sketch-fragment'] as const;
+export const CLIP_MEDIA_KINDS = ['image', 'sketch-fragment', 'video', 'audio'] as const;
 export type ClipMediaKind = (typeof CLIP_MEDIA_KINDS)[number];
 
 /** Canvas box. `rotation` is radians, clockwise, default 0. */
@@ -71,6 +71,8 @@ type AnimClipBase = {
 	snapshot?: AnimClipSnapshot;
 	/** Omit = `'image'`. Required `'sketch-fragment'` on v2 fragment clips. */
 	mediaKind?: ClipMediaKind;
+	/** Links a video clip to the audio clip created from the same file. */
+	pairId?: string;
 };
 
 export type AnimClip =
