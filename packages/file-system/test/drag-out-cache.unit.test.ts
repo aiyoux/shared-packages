@@ -3,12 +3,18 @@ import assert from 'node:assert/strict';
 import {
 	prefetchForDragOut,
 	getDragOutFile,
+	getDragOutUrl,
 	hasDragOutFile,
 	evictDragOutFile,
 	clearDragOutCache,
-	evictDriver
+	evictDriver,
+	canZipFolderForDragOut,
+	folderZipName,
+	formatDownloadURL
 } from '../src/ui/dragOutCache.ts';
 import type { ExplorerDriver, ExplorerEntry } from '../src/ui/explorerDriver.ts';
+import { createVfs } from '../src/index.ts';
+import { createLocalExplorerDriver } from '../src/ui/localExplorerDriver.ts';
 
 function makeEntry(overrides: Partial<ExplorerEntry> = {}): ExplorerEntry {
 	return {
@@ -81,11 +87,94 @@ describe('dragOutCache', () => {
 		assert.equal(file!.size, 5);
 	});
 
-	it('prefetchForDragOut returns null for folders', async () => {
-		const driver = makeDriver(new Blob(['x']));
-		const entry = makeEntry({ kind: 'folder' });
-		const file = await prefetchForDragOut(driver, entry);
-		assert.equal(file, null);
+	it('canZipFolderForDragOut is false for disk/B2/rclone (no zip-on-GET URL)', () => {
+		assert.equal(canZipFolderForDragOut(makeDriver(new Blob(['x']), { id: 'disk' })), false);
+		assert.equal(canZipFolderForDragOut(makeDriver(new Blob(['x']), { id: 'b2' })), false);
+		assert.equal(canZipFolderForDragOut(makeDriver(new Blob(['x']), { id: 'rclone' })), false);
+		assert.equal(folderZipName(makeEntry({ kind: 'folder', name: 'Docs' })), 'Docs.zip');
+	});
+
+	it('prefetchForDragOut skips B2/rclone folders (no zip URL, no in-tab buffer)', async () => {
+		for (const id of ['b2', 'rclone'] as const) {
+			const driver = makeDriver(new Blob(['hello']), { id });
+			const entry = makeEntry({ id: 'docs/', kind: 'folder', name: 'Docs', parentId: null });
+			const file = await prefetchForDragOut(driver, entry);
+			assert.equal(file, null, id);
+		}
+	});
+
+	it('prefetchForDragOut caches a download URL without reading bytes', async () => {
+		let downloaded = 0;
+		const driver = makeDriver(new Blob(['secret']), {
+			id: 'b2',
+			download: async () => {
+				downloaded++;
+				return new Blob(['secret']);
+			},
+			downloadUrl: async () => ({
+				url: 'https://f000.backblazeb2.com/file/bucket/photo.png?Authorization=tok',
+				filename: 'photo.png'
+			})
+		});
+		const entry = makeEntry({ id: 'photo.png', name: 'photo.png', contentType: 'image/png' });
+		const ready = await prefetchForDragOut(driver, entry);
+		assert.equal(downloaded, 0);
+		assert.ok(ready && !(ready instanceof File));
+		assert.equal((ready as { url: string }).url.includes('backblazeb2.com'), true);
+		assert.equal(getDragOutFile('photo.png'), null);
+		const loc = getDragOutUrl('photo.png');
+		assert.ok(loc);
+		assert.equal(
+			formatDownloadURL(loc),
+			'image/png:photo.png:https://f000.backblazeb2.com/file/bucket/photo.png?Authorization=tok'
+		);
+	});
+
+	it('prefetchForDragOut zips a local folder for OS drag-out', async () => {
+		const vfs = createVfs({
+			dbName: `drag-out-folder-${Date.now()}-${Math.random()}`,
+			memoryOpfs: true,
+			requestPersist: false
+		});
+		await vfs.ready();
+		const driver = createLocalExplorerDriver(vfs);
+		await driver.ready();
+		const folder = await driver.mkdir!(null, 'Docs');
+		await driver.writeFile!(folder.id, new File([new TextEncoder().encode('hello')], 'a.txt'));
+		const file = await prefetchForDragOut(driver, folder);
+		assert.notEqual(file, null);
+		assert.equal(file!.name, 'Docs.zip');
+		assert.equal(file!.type, 'application/zip');
+		assert.ok(file!.size > 0);
+		assert.equal(hasDragOutFile(folder.id), true);
+	});
+
+	it('prefetchForDragOut uses monitor zip URL for folders (GET on drop)', async () => {
+		let downloaded = 0;
+		const driver = makeDriver(new Blob(['x']), {
+			id: 'monitor',
+			download: async () => {
+				downloaded++;
+				return new Blob(['nope']);
+			},
+			downloadUrl: async (id) => {
+				if (String(id).endsWith('/')) {
+					return {
+						url: 'http://127.0.0.1:8300/v1/fs/zip?path=%2Ftmp%2FDocs&download=Docs.zip',
+						filename: 'Docs.zip'
+					};
+				}
+				return {
+					url: 'http://127.0.0.1:8300/v1/fs/read?path=%2Ftmp%2Fa.png&download=a.png',
+					filename: 'a.png'
+				};
+			}
+		});
+		const entry = makeEntry({ id: 'Docs/', kind: 'folder', name: 'Docs', parentId: null });
+		const ready = await prefetchForDragOut(driver, entry);
+		assert.equal(downloaded, 0);
+		assert.ok(ready && !(ready instanceof File));
+		assert.equal(getDragOutUrl('Docs/')?.url.includes('/v1/fs/zip'), true);
 	});
 
 	it('prefetchForDragOut returns null for oversized files', async () => {

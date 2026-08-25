@@ -60,7 +60,10 @@ export {
 	type MonitorGitLogEntry,
 	type MonitorGitSnapshot,
 	type MonitorWebrtcJob,
-	type MonitorWebrtcRole
+	type MonitorWebrtcRole,
+	type MonitorArchiveOp,
+	type MonitorArchiveRequest,
+	type MonitorArchiveResult
 } from './client.js';
 export {
 	ferryWebrtcCopy,

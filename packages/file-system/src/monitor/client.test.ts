@@ -327,6 +327,8 @@ describe('monitor client tolerant parse', () => {
 		expect(meta.features).toEqual(['watch', 'fs', 'host', 'git']);
 		expect(meta.capabilities?.fs?.ino).toBe(false);
 		expect(meta.capabilities?.fs?.rename).toBe(false);
+		expect(meta.capabilities?.fs?.archive).toBe(false);
+		expect(meta.capabilities?.fs?.mkdir).toBe(false);
 		expect(meta.capabilities?.git?.blob).toBe(false);
 		expect(String(mockFetch.mock.calls[0]![0])).toBe('http://127.0.0.1:8300/v1/meta');
 	});
@@ -340,6 +342,8 @@ describe('monitor client tolerant parse', () => {
 		const meta = await client.meta();
 		expect(meta.capabilities?.fs?.ino).toBe(true);
 		expect(meta.capabilities?.fs?.rename).toBe(true);
+		expect(meta.capabilities?.fs?.archive).toBe(true);
+		expect(meta.capabilities?.fs?.mkdir).toBe(true);
 		expect(meta.capabilities?.git?.blob).toBe(true);
 	});
 
@@ -359,7 +363,7 @@ describe('monitor client tolerant parse', () => {
 		});
 		const meta = await client.meta();
 		expect(meta.capabilities).toEqual({
-			fs: { ino: true, rename: false },
+			fs: { ino: true, rename: false, archive: false, mkdir: false },
 			git: { blob: false }
 		});
 		expect(meta).not.toHaveProperty('extra');

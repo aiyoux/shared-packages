@@ -33,14 +33,14 @@ import {
 	type WatchStreamStatus
 } from './watchStream.js';
 
-function monitorCaps(rename: boolean): ExplorerCapabilities {
+function monitorCaps(rename: boolean, mkdir: boolean): ExplorerCapabilities {
 	return {
 		supportsTrash: false,
 		supportsSoftDelete: false,
 		supportsRename: rename,
 		supportsMove: rename,
 		supportsCopy: true,
-		supportsMkdir: false,
+		supportsMkdir: mkdir,
 		supportsUpload: true,
 		supportsDownload: true,
 		supportsSiblingOrder: false,
@@ -89,19 +89,21 @@ export async function createMonitorExplorerDriver(
 	async function loadMeta() {
 		if (cachedMeta) return cachedMeta;
 		if (!transport.meta) {
-			cachedMeta = { capabilities: { fs: { ino: false, rename: false }, git: { blob: false } } };
+			cachedMeta = { capabilities: { fs: { ino: false, rename: false, archive: false }, git: { blob: false } } };
 			return cachedMeta;
 		}
 		try {
 			cachedMeta = await transport.meta();
 		} catch {
-			cachedMeta = { capabilities: { fs: { ino: false, rename: false }, git: { blob: false } } };
+			cachedMeta = { capabilities: { fs: { ino: false, rename: false, archive: false }, git: { blob: false } } };
 		}
 		return cachedMeta;
 	}
 
 	const meta = await loadMeta();
 	const canRename = meta.capabilities?.fs?.rename === true;
+	const canArchive = meta.capabilities?.fs?.archive === true;
+	const canMkdir = meta.capabilities?.fs?.mkdir === true;
 
 	function ensureWatch(): MonitorWatchStream | null {
 		if (!enableWatch) return null;
@@ -167,7 +169,7 @@ export async function createMonitorExplorerDriver(
 		connectionId: `monitor:${profile.id}`,
 		endpointKey: endpointKeyFromUrl(transport.baseUrl || profile.baseUrl),
 		monitorClient: transport,
-		capabilities: monitorCaps(canRename),
+		capabilities: monitorCaps(canRename, canMkdir),
 
 		absolutePath(id: ExplorerEntryId) {
 			return toAbsolutePath(rootPath, id);
@@ -391,10 +393,12 @@ export async function createMonitorExplorerDriver(
 		},
 
 		async downloadUrl(id: ExplorerEntryId) {
-			if (isFolderId(id)) {
-				throw new ExplorerMonitorError('MONITOR_ERROR', 'Cannot download a folder');
-			}
 			const abs = toAbsolutePath(rootPath, id);
+			if (isFolderId(id)) {
+				if (!transport.zipUrl) return null;
+				const filename = `${baseName(id)}.zip`;
+				return { url: transport.zipUrl(abs, filename), filename };
+			}
 			const url = new URL(transport.readUrl(abs));
 			url.searchParams.set('download', baseName(id));
 			return { url: url.toString(), filename: baseName(id) };
@@ -454,6 +458,40 @@ export async function createMonitorExplorerDriver(
 				if (e instanceof Error && (e.message === 'INVALID_NAME' || e.message === 'INVALID_PATH')) {
 					throw new ExplorerMonitorError('INVALID_NAME', 'Invalid name');
 				}
+				throw mapMonitorError(e);
+			}
+		};
+	}
+
+	if (canMkdir && transport.mkdir) {
+		const mkdirFn = transport.mkdir.bind(transport);
+		driver.mkdir = async (parentId, name) => {
+			try {
+				const seg = sanitizeSegment(name);
+				const destRel = childId(parentId, seg, true);
+				const st = await mkdirFn(toAbsolutePath(rootPath, destRel));
+				return {
+					id: destRel,
+					parentId,
+					name: seg,
+					kind: 'folder' as const,
+					updatedAt: st.mtime_ms
+				};
+			} catch (e) {
+				if (e instanceof Error && (e.message === 'INVALID_NAME' || e.message === 'INVALID_PATH')) {
+					throw new ExplorerMonitorError('INVALID_NAME', 'Invalid folder name');
+				}
+				throw mapMonitorError(e);
+			}
+		};
+	}
+
+	if (canArchive && transport.archive) {
+		const archiveFn = transport.archive.bind(transport);
+		driver.archive = async (req, opts) => {
+			try {
+				return await archiveFn(req, opts);
+			} catch (e) {
 				throw mapMonitorError(e);
 			}
 		};

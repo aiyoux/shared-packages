@@ -5,6 +5,8 @@ export type { ExplorerMode, ExplorerContext } from './FileExplorer.svelte';
 export { default as StoragePersistenceStatus } from './StoragePersistenceStatus.svelte';
 export { default as DualPaneExplorer } from './DualPaneExplorer.svelte';
 export { default as DualPhaseConfirm } from './DualPhaseConfirm.svelte';
+export { default as RemoteConnectionsDialog } from './RemoteConnectionsDialog.svelte';
+export type { RemoteKind } from './RemoteConnectionsDialog.svelte';
 export type { DualPaneTids, PaneId as DualPanePaneId } from './dualPaneTypes.js';
 export {
 	canShowCopyAcross,
@@ -50,7 +52,11 @@ export {
 } from './crossWindowDnd.js';
 export {
 	prefetchForDragOut,
+	canZipFolderForDragOut,
+	folderZipName,
+	formatDownloadURL,
 	getDragOutFile,
+	getDragOutUrl,
 	hasDragOutFile,
 	evictDragOutFile,
 	clearDragOutCache,

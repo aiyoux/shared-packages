@@ -98,6 +98,11 @@
 	let pickFolders = $state<ExplorerEntry[]>([]);
 	let pickCrumbs = $state<ExplorerEntry[]>([]);
 	let pickBusy = $state(false);
+	/** Monitor host format (zip stays on the computer). */
+	let hostFormat = $state<'zip' | 'tar' | 'tgz'>('zip');
+	/** Monitor default is on-host; opt into the download → process → upload path. */
+	let where = $state<'host' | 'browser'>('host');
+	let destName = $state('');
 
 	const compressEngine = $derived(
 		compressEngines.find((e) => e.id === compressEngineId) ?? compressEngines[0]!
@@ -108,12 +113,54 @@
 			? compressEngine.codecs.filter((c) => c === 'zip' || c === 'tar')
 			: compressEngine.codecs
 	);
-	const canPickFolder = $derived(driver.capabilities.supportsMkdir);
+	const isMonitor = $derived(driver.id === 'monitor');
+	const canHost = $derived(
+		isMonitor && typeof driver.archive === 'function' && typeof driver.absolutePath === 'function'
+	);
+	const useHost = $derived(canHost && where === 'host' && destLocked == null);
+	const isShuttle = $derived(
+		driver.id === 'b2' || driver.id === 'rclone' || (isMonitor && !useHost)
+	);
+	const canPickFolder = $derived(driver.capabilities.supportsMkdir || useHost);
 	const alreadyMemory = $derived(driver.id === 'memory');
-	const canWriteHere = $derived(Boolean(driver.writeFile || driver.upload));
+	const canWriteHere = $derived(Boolean(driver.writeFile || driver.upload) || useHost);
+	const shuttleVerb = $derived(
+		kind === 'compress'
+			? 'compresses'
+			: kind === 'encrypt'
+				? 'encrypts'
+				: kind === 'decompress'
+					? 'decompresses'
+					: 'decrypts'
+	);
+	const defaultPackName = $derived.by(() => {
+		const raw = entries.length === 1 ? entries[0]!.name.replace(/\/+$/, '') : 'archive';
+		if (kind === 'encrypt') return `${raw}.spvault`;
+		const stem = raw.includes('.') && entries.length === 1 && entries[0]!.kind === 'file'
+			? raw.replace(/\.[^./]+$/, '')
+			: raw;
+		if (useHost) {
+			if (hostFormat === 'tar') return `${stem}.tar`;
+			if (hostFormat === 'tgz') return `${stem}.tar.gz`;
+			return `${stem}.zip`;
+		}
+		return `${stem}.zip`;
+	});
 
 	$effect(() => {
 		if (destLocked) dest = destLocked;
+	});
+
+	$effect(() => {
+		if (destLocked || !canHost) where = 'browser';
+	});
+
+	$effect(() => {
+		if (useHost && (dest === 'memory' || dest === 'popup')) dest = 'same';
+	});
+
+	$effect(() => {
+		destName = defaultPackName;
 	});
 
 	$effect(() => {
@@ -151,10 +198,11 @@
 	});
 
 	$effect(() => {
-		if (kind === 'decrypt') {
+		if (useHost || kind === 'decrypt') {
 			engineStatus = 'ready';
 			engineError = '';
-			return;
+			if (useHost) return;
+			if (kind === 'decrypt') return;
 		}
 		const id = isCrypto ? cryptoEngineId : compressEngineId;
 		let cancelled = false;
@@ -211,14 +259,83 @@
 			(dest !== 'same' || canWriteHere) &&
 			(dest !== 'folder' || canPickFolder) &&
 			(kind !== 'encrypt' || (password.length > 0 && password === password2)) &&
-			(kind !== 'decrypt' || password.length > 0)
+			(kind !== 'decrypt' || password.length > 0) &&
+			(!useHost || destName.trim().length > 0 || isExtract)
 	);
+
+	function hostOp(): 'zip' | 'tar' | 'tgz' | 'encrypt' | 'unzip' | 'untar' | 'decrypt' {
+		if (kind === 'encrypt') return 'encrypt';
+		if (kind === 'decrypt') return 'decrypt';
+		if (kind === 'compress') return hostFormat;
+		const name = entries[0]?.name.toLowerCase() ?? '';
+		if (name.endsWith('.spvault')) return 'decrypt';
+		if (name.endsWith('.zip')) return 'unzip';
+		return 'untar';
+	}
+
+	function hostDestPath(): string {
+		const parentId = dest === 'folder' ? pickParent : (entries[0]?.parentId ?? null);
+		const parentAbs = driver.absolutePath!(parentId);
+		if (isExtract) return parentAbs;
+		const name = destName.trim() || defaultPackName;
+		return `${parentAbs.replace(/\/+$/, '')}/${name}`;
+	}
+
+	async function runHost() {
+		const paths = entries.map((e) => driver.absolutePath!(e.id));
+		await driver.archive!({
+			op: hostOp(),
+			paths,
+			to: hostDestPath(),
+			password: kind === 'encrypt' || kind === 'decrypt' ? password : undefined
+		});
+		onDone({ title: titleName });
+	}
+
+	const runLabel = $derived.by(() => {
+		if (busy) {
+			if (useHost) {
+				return kind === 'compress'
+					? 'Zipping on this computer…'
+					: kind === 'encrypt'
+						? 'Encrypting on this computer…'
+						: kind === 'decompress'
+							? 'Extracting on this computer…'
+							: 'Decrypting on this computer…';
+			}
+			return KIND_BUSY[kind];
+		}
+		if (dest === 'popup') return 'Open';
+		if (useHost) {
+			return kind === 'compress'
+				? 'Zip on this computer'
+				: kind === 'encrypt'
+					? 'Encrypt on this computer'
+					: kind === 'decompress'
+						? 'Extract on this computer'
+						: 'Decrypt on this computer';
+		}
+		if (isShuttle) {
+			return kind === 'compress'
+				? 'Download, compress, and upload'
+				: kind === 'encrypt'
+					? 'Download, encrypt, and upload'
+					: kind === 'decompress'
+						? 'Download, decompress, and upload'
+						: 'Download, decrypt, and upload';
+		}
+		return KIND_TITLE[kind];
+	});
 
 	async function run() {
 		if (!canRun) return;
 		busy = true;
 		actionError = '';
 		try {
+			if (useHost) {
+				await runHost();
+				return;
+			}
 			if (kind === 'compress' || kind === 'encrypt') {
 				const packed = await collectPackEntries(driver, entries);
 				if (kind === 'compress') {
@@ -280,15 +397,56 @@
 	class="modal-root"
 	data-testid="fe-archive-dialog"
 	data-kind={kind}
+	data-where={useHost ? 'host' : 'browser'}
 	role="dialog"
 	aria-modal="true"
 	aria-labelledby="fe-archive-title"
 >
 	<div class="scrim" onclick={onCancel} role="presentation"></div>
 	<div class="card">
-		<h2 id="fe-archive-title">{KIND_TITLE[kind]} {titleName}</h2>
+		<h2 id="fe-archive-title">
+			{#if useHost}
+				{kind === 'compress'
+					? 'Zip'
+					: kind === 'encrypt'
+						? 'Encrypt'
+						: kind === 'decompress'
+							? 'Extract'
+							: 'Decrypt'}
+				{titleName} on this computer
+			{:else}
+				{KIND_TITLE[kind]} {titleName}
+			{/if}
+		</h2>
 
-		{#if kind === 'compress'}
+		{#if useHost}
+			<p class="path-note host" data-testid="fe-archive-path-note">
+				Runs on the monitor computer. Files are not downloaded to this browser.
+			</p>
+		{:else if isShuttle}
+			<p class="path-note shuttle" data-testid="fe-archive-path-note">
+				This downloads the files to this browser, {shuttleVerb} them here, then uploads the
+				result.
+			</p>
+		{/if}
+
+		{#if kind === 'compress' && useHost}
+			<div class="fields">
+				<label>
+					<span>Format</span>
+					<select bind:value={hostFormat} data-testid="fe-archive-host-format">
+						<option value="zip">ZIP</option>
+						<option value="tgz">tar.gz</option>
+						<option value="tar">tar (uncompressed)</option>
+					</select>
+				</label>
+				<label>
+					<span>Output name</span>
+					<input type="text" bind:value={destName} data-testid="fe-archive-dest-name" autocomplete="off" />
+				</label>
+			</div>
+			<p class="hint">Creates the archive next to the original files on this computer.</p>
+		{:else if kind === 'compress'}
 			<div class="fields">
 				<label>
 					<span>Library</span>
@@ -314,14 +472,16 @@
 			</p>
 		{:else if kind === 'encrypt'}
 			<div class="fields">
-				<label>
-					<span>Library</span>
-					<select bind:value={cryptoEngineId} data-testid="fe-archive-engine">
-						{#each cryptoEngines as engine (engine.id)}
-							<option value={engine.id}>{engine.label}</option>
-						{/each}
-					</select>
-				</label>
+				{#if !useHost}
+					<label>
+						<span>Library</span>
+						<select bind:value={cryptoEngineId} data-testid="fe-archive-engine">
+							{#each cryptoEngines as engine (engine.id)}
+								<option value={engine.id}>{engine.label}</option>
+							{/each}
+						</select>
+					</label>
+				{/if}
 				<label>
 					<span>Password</span>
 					<input type="password" autocomplete="new-password" bind:value={password} data-testid="fe-archive-password" />
@@ -335,24 +495,38 @@
 						data-testid="fe-archive-password-confirm"
 					/>
 				</label>
+				{#if useHost}
+					<label>
+						<span>Output name</span>
+						<input type="text" bind:value={destName} data-testid="fe-archive-dest-name" autocomplete="off" />
+					</label>
+				{/if}
 			</div>
 			<p class="hint">
-				{cryptoEngine.description} · {cryptoEngine.aead} · {cryptoEngine.kdf}{treePack
-					? ' · Multiple items seal as a vault tree.'
-					: ''}
+				{#if useHost}
+					Writes a Scratch Pad vault (.spvault) on this computer. The original files stay in place.
+				{:else}
+					{cryptoEngine.description} · {cryptoEngine.aead} · {cryptoEngine.kdf}{treePack
+						? ' · Multiple items seal as a vault tree.'
+						: ''}
+				{/if}
 			</p>
 		{:else if kind === 'decompress'}
-			<div class="fields">
-				<label>
-					<span>Library</span>
-					<select bind:value={compressEngineId} data-testid="fe-archive-engine">
-						{#each compressEngines as engine (engine.id)}
-							<option value={engine.id}>{engine.label}</option>
-						{/each}
-					</select>
-				</label>
-			</div>
-			<p class="hint">{compressEngine.description} · Format is detected from the file.</p>
+			{#if !useHost}
+				<div class="fields">
+					<label>
+						<span>Library</span>
+						<select bind:value={compressEngineId} data-testid="fe-archive-engine">
+							{#each compressEngines as engine (engine.id)}
+								<option value={engine.id}>{engine.label}</option>
+							{/each}
+						</select>
+					</label>
+				</div>
+				<p class="hint">{compressEngine.description} · Format is detected from the file.</p>
+			{:else}
+				<p class="hint">Extracts into the folder you choose on this computer.</p>
+			{/if}
 		{:else}
 			<div class="fields">
 				<label>
@@ -365,13 +539,45 @@
 					/>
 				</label>
 			</div>
-			<p class="hint">Unlocks a Scratch Pad vault (.spvault).</p>
+			<p class="hint">
+				{#if useHost}
+					Decrypts the vault on this computer. The .spvault file is left in place.
+				{:else}
+					Unlocks a Scratch Pad vault (.spvault).
+				{/if}
+			</p>
 		{/if}
 
 		{#if engineStatus === 'loading'}
 			<p class="hint">Loading engine…</p>
 		{:else if engineStatus === 'error'}
 			<p class="err" role="alert">{engineError}</p>
+		{/if}
+
+		{#if canHost && !destLocked}
+			<fieldset class="dest where" data-testid="fe-archive-where">
+				<legend>Where it runs</legend>
+				<label>
+					<input
+						type="radio"
+						name="fe-archive-where"
+						value="host"
+						bind:group={where}
+						data-testid="fe-archive-where-host"
+					/>
+					On this computer (no download)
+				</label>
+				<label>
+					<input
+						type="radio"
+						name="fe-archive-where"
+						value="browser"
+						bind:group={where}
+						data-testid="fe-archive-where-browser"
+					/>
+					In this browser (download, then upload)
+				</label>
+			</fieldset>
 		{/if}
 
 		{#if !destLocked}
@@ -386,7 +592,7 @@
 						disabled={!canWriteHere}
 						data-testid="fe-archive-dest-same"
 					/>
-					Same folder
+					{useHost ? 'Same folder on this computer' : 'Same folder'}
 				</label>
 				{#if canPickFolder}
 					<label>
@@ -394,7 +600,7 @@
 						Choose folder…
 					</label>
 				{/if}
-				{#if !alreadyMemory}
+				{#if !alreadyMemory && !useHost}
 					<label>
 						<input
 							type="radio"
@@ -406,7 +612,7 @@
 						In-memory storage
 					</label>
 				{/if}
-				{#if isExtract}
+				{#if isExtract && !useHost}
 					<label>
 						<input
 							type="radio"
@@ -469,7 +675,7 @@
 				disabled={!canRun}
 				onclick={() => void run()}
 			>
-				{busy ? KIND_BUSY[kind] : dest === 'popup' ? 'Open' : KIND_TITLE[kind]}
+				{runLabel}
 			</button>
 		</div>
 	</div>
@@ -492,8 +698,8 @@
 	.card {
 		position: relative;
 		z-index: 1;
-		width: min(420px, calc(100vw - 2rem));
-		max-height: min(80vh, 560px);
+		width: min(440px, calc(100vw - 2rem));
+		max-height: min(80vh, 640px);
 		overflow: auto;
 		padding: 1.1rem 1.2rem;
 		background: var(--surface-2);
@@ -517,7 +723,8 @@
 		font-size: 0.8rem;
 	}
 	select,
-	input[type='password'] {
+	input[type='password'],
+	input[type='text'] {
 		font: inherit;
 		padding: 0.35rem 0.5rem;
 		border: 1px solid var(--line-hairline);
@@ -529,6 +736,21 @@
 		margin: 0 0 0.65rem;
 		font-size: 0.78rem;
 		color: var(--text-muted);
+	}
+	.path-note {
+		margin: 0 0 0.75rem;
+		padding: 0.5rem 0.65rem;
+		font-size: 0.82rem;
+		line-height: 1.35;
+		border: 1px solid var(--line-hairline);
+	}
+	.path-note.shuttle {
+		border-color: var(--accent);
+		color: var(--text-primary);
+		background: rgb(var(--accent-rgb) / 0.08);
+	}
+	.path-note.host {
+		background: var(--surface-1);
 	}
 	.err {
 		margin: 0 0 0.5rem;

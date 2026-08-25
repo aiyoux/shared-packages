@@ -1,33 +1,32 @@
 /**
- * Drag-out file cache for OS drag-and-drop from `<FileExplorer>`.
+ * Drag-out cache for OS drag-and-drop from `<FileExplorer>`.
  *
- * `dragstart` is synchronous — you can't `await` a blob read inside it.
- * So when a file row is selected, we pre-fetch its bytes into this cache.
- * By the time the user starts dragging, the `File` is ready to add to
- * `dataTransfer.items.add(file)`, which makes it available to the OS
- * (drop on desktop / file manager / other apps).
- *
- * Works for all driver types: memory (OPFS read), local (IndexedDB read),
- * and remote (B2/rclone/monitor download). Remote files are subject to
- * `EXPLORER_DOWNLOAD_MAX_BYTES` — larger files skip the cache and fall
- * back to internal-only drag (no OS drag-out).
- *
- * Entries expire after `TTL_MS` to avoid unbounded memory growth.
+ * Prefer a header-free HTTP URL (Chromium `DownloadURL`). Chrome GETs it
+ * only on drop — this tab never buffers the file. Fall back to an in-memory
+ * `File` only when there is no such URL (local VFS).
  *
  * @see docs/design/dnd-inmem-copy.md
  */
+import { packFiles } from '@shared-packages/compress';
 import { EXPLORER_DOWNLOAD_MAX_BYTES, type ExplorerDriver, type ExplorerEntry } from './explorerDriver.js';
+import { collectPackEntries, toArchiveEntries } from './archiveOps.js';
+import { httpDownloadIsSafe } from './saveToDisk.js';
 
 const TTL_MS = 5 * 60 * 1000; // 5 minutes
 
-type CachedFile = {
-	file: File;
-	expiresAt: number;
+export type DragOutUrl = {
+	url: string;
+	filename: string;
+	mime: string;
 };
 
-const cache = new Map<string, CachedFile>();
+type Cached =
+	| { kind: 'url'; payload: DragOutUrl; expiresAt: number }
+	| { kind: 'file'; file: File; expiresAt: number };
+
+const cache = new Map<string, Cached>();
 /** In-flight fetches so concurrent callers share one download. */
-const fetching = new Map<string, Promise<File | null>>();
+const fetching = new Map<string, Promise<File | DragOutUrl | null>>();
 
 function now(): number {
 	return Date.now();
@@ -40,30 +39,81 @@ function evictExpired(): void {
 	}
 }
 
+/** Chromium DownloadURL payload: `mimeType:filename:url`. */
+export function formatDownloadURL(payload: DragOutUrl): string {
+	const filename = payload.filename.replace(/[:\r\n]/g, '_');
+	const mime = payload.mime.replace(/[:\r\n]/g, '_') || 'application/octet-stream';
+	return `${mime}:${filename}:${payload.url}`;
+}
+
+/** Folder name without a trailing slash, used as the zip basename. */
+export function folderZipName(entry: ExplorerEntry): string {
+	const base = entry.name.replace(/\/+$/, '') || 'folder';
+	return `${base}.zip`;
+}
+
 /**
- * Pre-fetch a file's bytes so it's ready for OS drag-out at `dragstart`.
- * Resolves to `null` if the file is too large or the driver can't read it.
+ * Folders can leave this tab as a zip. Monitor: URL that zips on GET (drop).
+ * Local VFS: zip in this tab. B2/rclone folders have no zip URL — skip.
+ */
+export function canZipFolderForDragOut(driver: ExplorerDriver): boolean {
+	if (driver.id === 'disk' || driver.id === 'b2' || driver.id === 'rclone') return false;
+	if (driver.id === 'monitor') return typeof driver.downloadUrl === 'function';
+	return Boolean(driver.readBlob || driver.download);
+}
+
+/**
+ * Resolve a header-free download URL (preferred) or an in-memory File.
  * Concurrent calls for the same id share one fetch.
  */
 export async function prefetchForDragOut(
 	driver: ExplorerDriver,
 	entry: ExplorerEntry
-): Promise<File | null> {
-	// Folders can't be dragged out as single files.
-	if (entry.kind !== 'file') return null;
-	// Size cap — skip large files to avoid buffering 100s of MiB in memory.
-	if (entry.size != null && entry.size > EXPLORER_DOWNLOAD_MAX_BYTES) return null;
+): Promise<File | DragOutUrl | null> {
+	if (entry.kind === 'folder') {
+		if (!canZipFolderForDragOut(driver) && typeof driver.downloadUrl !== 'function') return null;
+	} else if (entry.kind !== 'file') {
+		return null;
+	}
 
-	// Already cached?
 	const hit = cache.get(entry.id);
-	if (hit && hit.expiresAt > now()) return hit.file;
+	if (hit && hit.expiresAt > now()) {
+		return hit.kind === 'url' ? hit.payload : hit.file;
+	}
 
-	// Already fetching?
 	const inflight = fetching.get(entry.id);
 	if (inflight) return inflight;
 
-	const promise = (async (): Promise<File | null> => {
+	const promise = (async (): Promise<File | DragOutUrl | null> => {
 		try {
+			if (driver.downloadUrl && (entry.kind === 'file' || entry.kind === 'folder')) {
+				try {
+					const loc = await driver.downloadUrl(entry.id);
+					if (loc?.url && httpDownloadIsSafe(loc.url)) {
+						const payload: DragOutUrl = {
+							url: loc.url,
+							filename:
+								entry.kind === 'folder' ? folderZipName(entry) : loc.filename || entry.name,
+							mime:
+								entry.kind === 'folder'
+									? 'application/zip'
+									: entry.contentType || 'application/octet-stream'
+						};
+						cache.set(entry.id, { kind: 'url', payload, expiresAt: now() + TTL_MS });
+						return payload;
+					}
+				} catch {
+					/* old daemon / unsigned B2 — fall through */
+				}
+			}
+			if (entry.kind === 'folder') {
+				if (driver.id === 'b2' || driver.id === 'rclone' || driver.id === 'disk') return null;
+				const file = await zipFolderForDragOut(driver, entry);
+				if (!file) return null;
+				cache.set(entry.id, { kind: 'file', file, expiresAt: now() + TTL_MS });
+				return file;
+			}
+			if (entry.size != null && entry.size > EXPLORER_DOWNLOAD_MAX_BYTES) return null;
 			let blob: Blob;
 			if (driver.download) {
 				blob = await driver.download(entry.id);
@@ -76,7 +126,7 @@ export async function prefetchForDragOut(
 			const file = new File([blob], entry.name, {
 				type: entry.contentType || blob.type || 'application/octet-stream'
 			});
-			cache.set(entry.id, { file, expiresAt: now() + TTL_MS });
+			cache.set(entry.id, { kind: 'file', file, expiresAt: now() + TTL_MS });
 			return file;
 		} catch {
 			return null;
@@ -89,18 +139,46 @@ export async function prefetchForDragOut(
 	return promise;
 }
 
+async function zipFolderForDragOut(
+	driver: ExplorerDriver,
+	entry: ExplorerEntry
+): Promise<File | null> {
+	const zipName = folderZipName(entry);
+	const packed = await collectPackEntries(driver, [entry]);
+	const total = packed.reduce((n, p) => n + p.data.byteLength, 0);
+	if (total > EXPLORER_DOWNLOAD_MAX_BYTES) return null;
+	const [out] = await packFiles('fflate', toArchiveEntries(packed), 'zip');
+	if (!out || out.data.byteLength > EXPLORER_DOWNLOAD_MAX_BYTES) return null;
+	return new File([new Uint8Array(out.data)], zipName, { type: 'application/zip' });
+}
+
 /**
- * Get a pre-fetched `File` for OS drag-out, or `null` if not cached.
- * Synchronous — safe to call inside `dragstart`.
+ * In-memory `File` for OS drag-out, or `null`. Synchronous — `dragstart`.
  */
 export function getDragOutFile(entryId: string): File | null {
 	const hit = cache.get(entryId);
-	if (hit && hit.expiresAt > now()) return hit.file;
-	if (hit) cache.delete(entryId);
-	return null;
+	if (!hit) return null;
+	if (hit.expiresAt <= now()) {
+		cache.delete(entryId);
+		return null;
+	}
+	return hit.kind === 'file' ? hit.file : null;
 }
 
-/** Check whether a file is pre-fetched and ready for OS drag-out. */
+/**
+ * Header-free HTTP URL for Chromium `DownloadURL`. Chrome GETs this on drop.
+ */
+export function getDragOutUrl(entryId: string): DragOutUrl | null {
+	const hit = cache.get(entryId);
+	if (!hit) return null;
+	if (hit.expiresAt <= now()) {
+		cache.delete(entryId);
+		return null;
+	}
+	return hit.kind === 'url' ? hit.payload : null;
+}
+
+/** True when a File or URL is ready for OS drag-out. */
 export function hasDragOutFile(entryId: string): boolean {
 	const hit = cache.get(entryId);
 	if (!hit) return false;

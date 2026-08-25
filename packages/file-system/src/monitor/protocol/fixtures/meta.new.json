@@ -1,1 +1,1 @@
-{"name":"monitor","version":"0.1.0","features":["watch","fs","host","git"],"capabilities":{"fs":{"ino":true,"rename":true},"git":{"blob":true}}}
+{"name":"monitor","version":"0.1.0","features":["watch","fs","host","git"],"capabilities":{"fs":{"ino":true,"rename":true,"archive":true,"mkdir":true},"git":{"blob":true}}}

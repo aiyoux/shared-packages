@@ -58,20 +58,15 @@
 		copyIdleNote?: string | null;
 		/** Select local, memory, disk, or a profile id (B2 / rclone / monitor) */
 		onSelect?: (id: 'local' | 'memory' | 'disk' | string) => void;
-		onConfigureB2?: () => void;
-		onConfigureRclone?: () => void;
-		onConfigureMonitor?: () => void;
-		/** Re-pick the native folder when already on disk. */
-		onConfigureDisk?: () => void;
+		/** Gear opens the combined B2 / rclone / monitor connections popup. */
+		onConfigure?: () => void;
 		/**
 		 * `full` (default): backend dropdown + settings gear.
-		 * `settings`: gear + panel only — used for a single module-level host.
+		 * `settings`: gear only — used for a single module-level host.
 		 */
 		variant?: 'full' | 'settings';
 		/** Hide the gear in `full` variant (host already owns settings). Default true. */
 		showSettings?: boolean;
-		/** Show “Choose computer folder” in the settings panel. Default true. */
-		showDisk?: boolean;
 		/** Square chip flush to a parent corner stack. */
 		flush?: boolean;
 		/**
@@ -97,13 +92,9 @@
 		copyOtherLabel = '',
 		copyIdleNote = null,
 		onSelect,
-		onConfigureB2,
-		onConfigureRclone,
-		onConfigureMonitor,
-		onConfigureDisk,
+		onConfigure,
 		variant = 'full',
 		showSettings = true,
-		showDisk = true,
 		flush = false,
 		showInfo = true
 	}: Props = $props();
@@ -112,7 +103,6 @@
 	const renderSettings = $derived(settingsOnly || showSettings);
 
 	let menuOpen = $state(false);
-	let settingsOpen = $state(false);
 	let rootEl = $state<HTMLDivElement | null>(null);
 
 	/** Resolved kind for active option highlighting (back-compat when activeKind omitted). */
@@ -225,44 +215,22 @@
 	function select(id: 'local' | 'memory' | 'disk' | string) {
 		if (busy) return;
 		menuOpen = false;
-		settingsOpen = false;
 		onSelect?.(id);
-	}
-
-	function configure(which: 'b2' | 'rclone' | 'monitor' | 'disk') {
-		if (busy) return;
-		settingsOpen = false;
-		menuOpen = false;
-		if (which === 'b2') onConfigureB2?.();
-		else if (which === 'rclone') onConfigureRclone?.();
-		else if (which === 'monitor') onConfigureMonitor?.();
-		else onConfigureDisk?.();
 	}
 
 	function toggleMenu() {
 		if (busy) return;
 		menuOpen = !menuOpen;
-		if (menuOpen) settingsOpen = false;
-	}
-
-	function toggleSettings() {
-		if (busy) return;
-		settingsOpen = !settingsOpen;
-		if (settingsOpen) menuOpen = false;
 	}
 
 	function onDocPointer(e: PointerEvent) {
 		if (!rootEl) return;
 		if (e.target instanceof Node && rootEl.contains(e.target)) return;
 		menuOpen = false;
-		settingsOpen = false;
 	}
 
 	function onDocKey(e: KeyboardEvent) {
-		if (e.key === 'Escape') {
-			menuOpen = false;
-			settingsOpen = false;
-		}
+		if (e.key === 'Escape') menuOpen = false;
 	}
 
 	$effect(() => {
@@ -338,7 +306,10 @@
 							<p class="copy-path-detail">{copyIn.detail}</p>
 						{/if}
 					{/if}
-					<p class="copy-path-detail">Folder copy only works between local panes.</p>
+					<p class="copy-path-detail">
+						Folder copy walks the tree and copies each item. The destination must support new
+						folders (not In memory).
+					</p>
 				</div>
 			</div>
 		</div>
@@ -459,69 +430,16 @@
 		class="conn-gear"
 		data-testid="conn-settings"
 		disabled={busy}
-		aria-haspopup="true"
-		aria-expanded={settingsOpen}
+		aria-haspopup="dialog"
 		title="Configure connections"
 		aria-label="Configure connections"
-		onclick={toggleSettings}
+		onclick={() => {
+			if (busy) return;
+			onConfigure?.();
+		}}
 	>
 		<FeIcon name="settings" size={15} />
 	</button>
-
-	<div
-		class="conn-settings-panel"
-		class:open={settingsOpen}
-		data-testid="conn-settings-panel"
-		role="menu"
-	>
-		<p class="settings-title">Connections</p>
-		{#if showDisk}
-		<button
-			type="button"
-			role="menuitem"
-			class="ghost"
-			data-testid="conn-disk-config"
-			disabled={busy}
-			onclick={() => configure('disk')}
-		>
-			{kind === 'disk' ? 'Change computer folder' : 'Choose computer folder'}
-		</button>
-		{/if}
-		<button
-			type="button"
-			role="menuitem"
-			class="ghost"
-			data-testid="conn-b2-config"
-			disabled={busy}
-			onclick={() => configure('b2')}
-		>
-			Manage B2
-		</button>
-		{#if showMonitor}
-			<button
-				type="button"
-				role="menuitem"
-				class="ghost"
-				data-testid="conn-monitor-config"
-				disabled={busy}
-				onclick={() => configure('monitor')}
-			>
-				Manage monitor
-			</button>
-		{/if}
-		{#if showRclone}
-			<button
-				type="button"
-				role="menuitem"
-				class="ghost"
-				data-testid="conn-rclone-config"
-				disabled={busy}
-				onclick={() => configure('rclone')}
-			>
-				Manage rclone
-			</button>
-		{/if}
-	</div>
 	</div>
 	{/if}
 </div>
@@ -672,8 +590,7 @@
 		overflow: hidden;
 		clip: rect(0 0 0 0);
 	}
-	.conn-menu button,
-	.conn-settings-panel button {
+	.conn-menu button {
 		padding: 0.35rem 0.7rem;
 		border-radius: var(--radius-md);
 		border: 1px solid var(--line-hairline);
@@ -744,13 +661,11 @@
 	}
 	.conn-trigger:disabled,
 	.conn-gear:disabled,
-	.conn-menu button:disabled,
-	.conn-settings-panel button:disabled {
+	.conn-menu button:disabled {
 		opacity: 0.55;
 		cursor: wait;
 	}
-	.conn-menu,
-	.conn-settings-panel {
+	.conn-menu {
 		display: none;
 		position: absolute;
 		z-index: 40;
@@ -762,31 +677,22 @@
 		background: var(--surface-2);
 		color: var(--text-primary);
 		box-shadow: 0 10px 28px rgb(var(--scrim-rgb) / 0.45);
+		top: calc(100% + 4px);
+		left: 0;
 	}
-	.conn-menu.open,
-	.conn-settings-panel.open {
+	.conn-menu.open {
 		display: flex;
 		flex-direction: column;
 		gap: 0.2rem;
 	}
-	.conn-menu {
-		top: calc(100% + 4px);
-		left: 0;
-	}
-	.conn-settings-panel {
-		top: calc(100% + 4px);
-		right: 0;
-	}
-	.conn-menu button,
-	.conn-settings-panel button {
+	.conn-menu button {
 		width: 100%;
 		background: transparent;
 		border-color: transparent;
 		border-radius: var(--radius-sm, 3px);
 		transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 	}
-	.conn-menu button:hover:not(:disabled),
-	.conn-settings-panel button:hover:not(:disabled) {
+	.conn-menu button:hover:not(:disabled) {
 		background: rgb(var(--overlay-rgb) / 0.12);
 		color: var(--text-primary);
 	}
@@ -799,14 +705,6 @@
 		height: 1px;
 		margin: 0.25rem 0.35rem;
 		background: var(--line-hairline);
-	}
-	.settings-title {
-		margin: 0.15rem 0.45rem 0.25rem;
-		font-size: 0.72rem;
-		font-weight: 650;
-		letter-spacing: 0.04em;
-		text-transform: uppercase;
-		opacity: 0.65;
 	}
 	.chip-name {
 		display: block;

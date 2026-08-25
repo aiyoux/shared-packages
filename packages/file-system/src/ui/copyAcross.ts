@@ -10,7 +10,6 @@ import { ferryWebrtcCopy, isWebrtcCopyPeer } from '../monitor/webrtcCopy.js';
 import { upsertProgress, type CopyHop, type CopyIce, type CopyIcePath } from '../transferRegistry.js';
 import {
 	EXPLORER_DOWNLOAD_MAX_BYTES,
-	isLocalClass,
 	isRemoteClass,
 	type ExplorerDriver,
 	type ExplorerEntry
@@ -389,15 +388,7 @@ export async function copyAcross(args: CopyAcrossArgs): Promise<number> {
 		.filter((e): e is ExplorerEntry => !!e);
 
 	const hasFolder = selected.some((e) => e.kind === 'folder');
-	const bothLocal = isLocalClass(sourceDriver.id) && isLocalClass(destDriver.id);
-	if (hasFolder && !bothLocal) {
-		throw new CopyAcrossError(
-			'COPY_ACROSS_FOLDER_REMOTE',
-			'Folder copy is only supported between local panes'
-		);
-	}
-	// memory is a flat list (no folders) — block folder copy into it even though
-	// it is local-class.
+	// memory is a flat list (no folders) — block even though it is local-class.
 	if (hasFolder && !destDriver.capabilities.supportsMkdir) {
 		throw new CopyAcrossError(
 			'COPY_ACROSS_DEST_NO_FOLDERS',
@@ -899,7 +890,7 @@ async function copyFolderTree(
 	const { entries } = listed;
 	for (const child of entries) {
 		if (child.kind === 'folder') {
-			count += await copyFolderTree(source, dest, child, created.id);
+			count += await copyFolderTree(source, dest, child, created.id, confirmDualPhase);
 		} else {
 			await copyFile(source, dest, child, created.id, confirmDualPhase);
 			count += 1;

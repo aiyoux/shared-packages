@@ -111,7 +111,10 @@
 					<p class="copy-path-detail">{copyIn.detail}</p>
 				{/if}
 			{/if}
-			<p class="copy-path-detail">Folder copy only works between local panes.</p>
+			<p class="copy-path-detail">
+				Folder copy walks the tree and copies each item. The destination must support new folders
+				(not In memory).
+			</p>
 		</div>
 	</div>
 </div>

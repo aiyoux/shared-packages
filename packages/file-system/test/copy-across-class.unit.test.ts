@@ -505,38 +505,103 @@ describe('copyAcross truncated folder', () => {
 		);
 	});
 
-	it('folder + remote still COPY_ACROSS_FOLDER_REMOTE', async () => {
+	it('folder copies onto B2 (mkdir + upload)', async () => {
+		resetTransferRegistryForTests();
 		const folder: ExplorerEntry = {
-			id: 'dir/',
+			id: 'dir',
 			parentId: null,
 			name: 'dir',
 			kind: 'folder'
 		};
+		const child: ExplorerEntry = {
+			id: 'f.txt',
+			parentId: 'dir',
+			name: 'f.txt',
+			kind: 'file',
+			size: 4
+		};
+		const uploaded: string[] = [];
 		const disk = {
 			id: 'disk',
-			capabilities: { supportsMkdir: true },
-			async list() {
-				return { entries: [], truncated: false };
+			capabilities: { supportsMkdir: true, supportsDownload: true },
+			async list({ parentId }: { parentId: string | null }) {
+				return { entries: parentId === 'dir' ? [child] : [], truncated: false };
+			},
+			async download() {
+				return new Blob(['data']);
 			}
 		} as unknown as ExplorerDriver;
 		const b2 = {
 			id: 'b2',
 			capabilities: { supportsMkdir: true, supportsUpload: true },
 			async mkdir() {
-				return { id: 'dir/', parentId: null, name: 'dir', kind: 'folder' };
+				return { id: 'dir/', parentId: null, name: 'dir', kind: 'folder' as const };
+			},
+			async upload(_parent: string | null, file: File) {
+				uploaded.push(file.name);
+				return { id: file.name, parentId: _parent, name: file.name, kind: 'file' as const };
 			}
 		} as unknown as ExplorerDriver;
-		await assert.rejects(
-			() =>
-				copyAcross({
-					sourceDriver: disk,
-					destDriver: b2,
-					selectedIds: [folder.id],
-					sourceEntries: [folder],
-					destParentId: null
-				}),
-			(e: unknown) => e instanceof CopyAcrossError && e.code === 'COPY_ACROSS_FOLDER_REMOTE'
-		);
+		const n = await copyAcross({
+			sourceDriver: disk,
+			destDriver: b2,
+			selectedIds: [folder.id],
+			sourceEntries: [folder],
+			destParentId: null
+		});
+		assert.equal(n, 2);
+		assert.deepEqual(uploaded, ['f.txt']);
+	});
+
+	it('B2 folder copies into local browser VFS (mkdir + file download)', async () => {
+		resetTransferRegistryForTests();
+		const folder: ExplorerEntry = {
+			id: 'photos/',
+			parentId: null,
+			name: 'photos',
+			kind: 'folder'
+		};
+		const child: ExplorerEntry = {
+			id: 'photos/a.txt',
+			parentId: 'photos/',
+			name: 'a.txt',
+			kind: 'file',
+			size: 5
+		};
+		const wrote: string[] = [];
+		const b2 = {
+			id: 'b2',
+			capabilities: { supportsMkdir: true, supportsUpload: true, supportsDownload: true },
+			async list({ parentId }: { parentId: string | null }) {
+				return {
+					entries: parentId === 'photos/' ? [child] : [],
+					truncated: false
+				};
+			},
+			async download() {
+				return new Blob(['hello']);
+			}
+		} as unknown as ExplorerDriver;
+		const local = {
+			id: 'local',
+			capabilities: { supportsMkdir: true, supportsUpload: true },
+			async mkdir(_parent: string | null, name: string) {
+				return { id: `local-${name}`, parentId: _parent, name, kind: 'folder' as const };
+			},
+			async writeFile(_parent: string | null, file: File) {
+				wrote.push(file.name);
+				return { id: file.name, parentId: _parent, name: file.name, kind: 'file' as const };
+			}
+		} as unknown as ExplorerDriver;
+		const n = await copyAcross({
+			sourceDriver: b2,
+			destDriver: local,
+			selectedIds: [folder.id],
+			sourceEntries: [folder],
+			destParentId: null
+		});
+		assert.equal(n, 2);
+		assert.deepEqual(wrote, ['a.txt']);
 	});
 });
 

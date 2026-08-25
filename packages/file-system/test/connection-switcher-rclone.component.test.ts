@@ -6,13 +6,15 @@ import { render, screen, fireEvent } from '@testing-library/svelte';
 import ConnectionSwitcher from '../src/b2/ConnectionSwitcher.svelte';
 
 describe('ConnectionSwitcher multi-backend', () => {
-	it('switcher.menu: local/disk options and rclone settings when showRclone and zero profiles', () => {
+	it('switcher.menu: local/disk options; gear has no Manage submenu', () => {
+		const onConfigure = vi.fn();
 		render(ConnectionSwitcher, {
 			props: {
 				activeId: 'local',
 				profiles: [],
 				rcloneProfiles: [],
-				showRclone: true
+				showRclone: true,
+				onConfigure
 			}
 		});
 		expect(screen.getByTestId('connection-switcher')).toBeTruthy();
@@ -20,13 +22,13 @@ describe('ConnectionSwitcher multi-backend', () => {
 		expect(screen.getByTestId('conn-settings')).toBeTruthy();
 		expect(screen.getByTestId('conn-local')).toBeTruthy();
 		expect(screen.getByTestId('conn-disk')).toBeTruthy();
-		expect(screen.getByTestId('conn-disk-config')).toBeTruthy();
 		expect(screen.queryByTestId('conn-rclone')).toBeNull();
 		expect(screen.queryByTestId('conn-b2')).toBeNull();
 		expect(screen.queryByTestId('conn-monitor')).toBeNull();
-		expect(screen.getByTestId('conn-rclone-config')).toBeTruthy();
-		expect(screen.getByTestId('conn-b2-config')).toBeTruthy();
-		expect(screen.getByTestId('conn-monitor-config')).toBeTruthy();
+		expect(screen.queryByTestId('conn-settings-panel')).toBeNull();
+		expect(screen.queryByTestId('conn-b2-config')).toBeNull();
+		expect(screen.queryByTestId('conn-rclone-config')).toBeNull();
+		expect(screen.queryByTestId('conn-monitor-config')).toBeNull();
 	});
 
 	it('switcher.chips: conn-rclone-profile with data-profile-id', () => {
@@ -58,15 +60,15 @@ describe('ConnectionSwitcher multi-backend', () => {
 		expect(screen.getByTestId('conn-local')).toBeTruthy();
 		expect(screen.getByTestId('conn-b2-profile')).toBeTruthy();
 		expect(screen.getByTestId('conn-b2-profile').getAttribute('data-profile-id')).toBe('b1');
-		expect(screen.getByTestId('conn-b2-config')).toBeTruthy();
+		expect(screen.queryByTestId('conn-b2-config')).toBeNull();
 		// Placeholder only when zero B2 profiles
 		expect(screen.queryByTestId('conn-b2')).toBeNull();
 		// rclone chips also present
 		expect(screen.getByTestId('conn-rclone-profile')).toBeTruthy();
-		expect(screen.getByTestId('conn-rclone-config')).toBeTruthy();
+		expect(screen.queryByTestId('conn-rclone-config')).toBeNull();
 	});
 
-	it('switcher.b2Stable: zero B2 profiles still exposes conn-b2-config', () => {
+	it('switcher.b2Stable: zero B2 profiles still has a settings gear (no Manage menu)', () => {
 		render(ConnectionSwitcher, {
 			props: {
 				activeId: 'local',
@@ -76,13 +78,14 @@ describe('ConnectionSwitcher multi-backend', () => {
 			}
 		});
 		expect(screen.queryByTestId('conn-b2')).toBeNull();
-		expect(screen.getByTestId('conn-b2-config')).toBeTruthy();
+		expect(screen.getByTestId('conn-settings')).toBeTruthy();
+		expect(screen.queryByTestId('conn-b2-config')).toBeNull();
+		expect(screen.queryByTestId('conn-settings-panel')).toBeNull();
 	});
 
 	it('switcher.busy: busy disables all chips; ignore re-entrant select', async () => {
 		const onSelect = vi.fn();
-		const onConfigureB2 = vi.fn();
-		const onConfigureRclone = vi.fn();
+		const onConfigure = vi.fn();
 		render(ConnectionSwitcher, {
 			props: {
 				activeId: 'local',
@@ -91,32 +94,27 @@ describe('ConnectionSwitcher multi-backend', () => {
 				rcloneProfiles: [{ id: 'r1', name: 'RC' }],
 				showRclone: true,
 				onSelect,
-				onConfigureB2,
-				onConfigureRclone
+				onConfigure
 			}
 		});
 
 		const local = screen.getByTestId('conn-local') as HTMLButtonElement;
 		const b2 = screen.getByTestId('conn-b2-profile') as HTMLButtonElement;
 		const rc = screen.getByTestId('conn-rclone-profile') as HTMLButtonElement;
-		const b2Cfg = screen.getByTestId('conn-b2-config') as HTMLButtonElement;
-		const rcCfg = screen.getByTestId('conn-rclone-config') as HTMLButtonElement;
+		const gear = screen.getByTestId('conn-settings') as HTMLButtonElement;
 
 		expect(local.disabled).toBe(true);
 		expect(b2.disabled).toBe(true);
 		expect(rc.disabled).toBe(true);
-		expect(b2Cfg.disabled).toBe(true);
-		expect(rcCfg.disabled).toBe(true);
+		expect(gear.disabled).toBe(true);
 
 		await fireEvent.click(local);
 		await fireEvent.click(b2);
 		await fireEvent.click(rc);
-		await fireEvent.click(b2Cfg);
-		await fireEvent.click(rcCfg);
+		await fireEvent.click(gear);
 
 		expect(onSelect).not.toHaveBeenCalled();
-		expect(onConfigureB2).not.toHaveBeenCalled();
-		expect(onConfigureRclone).not.toHaveBeenCalled();
+		expect(onConfigure).not.toHaveBeenCalled();
 	});
 
 	it('switcher.featureOff: hide rclone; local + B2 remain', () => {
@@ -130,7 +128,7 @@ describe('ConnectionSwitcher multi-backend', () => {
 		});
 		expect(screen.getByTestId('conn-local')).toBeTruthy();
 		expect(screen.queryByTestId('conn-b2')).toBeNull();
-		expect(screen.getByTestId('conn-b2-config')).toBeTruthy();
+		expect(screen.getByTestId('conn-settings')).toBeTruthy();
 		expect(screen.queryByTestId('conn-rclone')).toBeNull();
 		expect(screen.queryByTestId('conn-rclone-profile')).toBeNull();
 		expect(screen.queryByTestId('conn-rclone-config')).toBeNull();
@@ -194,22 +192,23 @@ describe('ConnectionSwitcher multi-backend', () => {
 		expect(path.querySelector('[data-copy-kind="dual-phase"]')).toBeTruthy();
 	});
 
-	it('onSelect / onConfigureRclone fire when not busy', async () => {
+	it('onSelect / onConfigure fire when not busy', async () => {
 		const onSelect = vi.fn();
-		const onConfigureRclone = vi.fn();
+		const onConfigure = vi.fn();
 		render(ConnectionSwitcher, {
 			props: {
 				activeId: 'local',
 				rcloneProfiles: [{ id: 'r1', name: 'Home' }],
 				showRclone: true,
 				onSelect,
-				onConfigureRclone
+				onConfigure
 			}
 		});
 		await fireEvent.click(screen.getByTestId('conn-rclone-profile'));
 		expect(onSelect).toHaveBeenCalledWith('r1');
-		await fireEvent.click(screen.getByTestId('conn-rclone-config'));
-		expect(onConfigureRclone).toHaveBeenCalled();
+		await fireEvent.click(screen.getByTestId('conn-settings'));
+		expect(onConfigure).toHaveBeenCalled();
+		expect(screen.queryByTestId('conn-settings-panel')).toBeNull();
 	});
 
 	it('showSettings=false hides the gear; dropdown remains', () => {
@@ -225,32 +224,24 @@ describe('ConnectionSwitcher multi-backend', () => {
 		expect(screen.queryByTestId('conn-settings-panel')).toBeNull();
 	});
 
-	it('showDisk=false hides the computer-folder settings row', () => {
-		render(ConnectionSwitcher, {
-			props: {
-				variant: 'settings',
-				showDisk: false,
-				showRclone: true,
-				showMonitor: true
-			}
-		});
-		expect(screen.getByTestId('conn-b2-config')).toBeTruthy();
-		expect(screen.queryByTestId('conn-disk-config')).toBeNull();
-	});
-
-	it('variant=settings is gear-only (no dropdown)', () => {
+	it('variant=settings is gear-only (no dropdown, no Manage menu)', async () => {
+		const onConfigure = vi.fn();
 		render(ConnectionSwitcher, {
 			props: {
 				variant: 'settings',
 				profiles: [],
 				showRclone: true,
-				showMonitor: true
+				showMonitor: true,
+				onConfigure
 			}
 		});
 		expect(screen.getByTestId('connection-settings')).toBeTruthy();
 		expect(screen.queryByTestId('connection-switcher')).toBeNull();
 		expect(screen.queryByTestId('conn-trigger')).toBeNull();
 		expect(screen.getByTestId('conn-settings')).toBeTruthy();
-		expect(screen.getByTestId('conn-b2-config')).toBeTruthy();
+		expect(screen.queryByTestId('conn-settings-panel')).toBeNull();
+		expect(screen.queryByTestId('conn-b2-config')).toBeNull();
+		await fireEvent.click(screen.getByTestId('conn-settings'));
+		expect(onConfigure).toHaveBeenCalledTimes(1);
 	});
 });

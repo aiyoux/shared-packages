@@ -10,6 +10,8 @@ function transportStub(partial: Partial<MonitorTransport>): MonitorTransport {
 		meta: vi.fn(async () => ({})),
 		download: vi.fn(),
 		readUrl: (path: string) => `http://127.0.0.1:8300/v1/fs/read?path=${encodeURIComponent(path)}`,
+		zipUrl: (path: string, filename: string) =>
+			`http://127.0.0.1:8300/v1/fs/zip?path=${encodeURIComponent(path)}&download=${encodeURIComponent(filename)}`,
 		write: vi.fn(),
 		copy: vi.fn(),
 		pull: vi.fn(),
@@ -132,6 +134,18 @@ describe('monitor explorer driver capabilities', () => {
 		expect(loc?.url).toContain('/v1/fs/read?path=');
 		expect(loc?.url).toContain(encodeURIComponent('/tmp/a.png'));
 		expect(new URL(loc!.url).searchParams.get('download')).toBe('a.png');
+	});
+
+	it('downloadUrl for a folder is GET /v1/fs/zip (zip on drop)', async () => {
+		const driver = await createMonitorExplorerDriver({
+			profile,
+			transport: transportStub({ list: listingAPng() }),
+			enableWatch: false
+		});
+		const loc = await driver.downloadUrl!('Docs/');
+		expect(loc?.filename).toBe('Docs.zip');
+		expect(loc?.url).toContain('/v1/fs/zip?path=');
+		expect(new URL(loc!.url).searchParams.get('download')).toBe('Docs.zip');
 	});
 
 	it('move a.png into the same parent does not suffix', async () => {

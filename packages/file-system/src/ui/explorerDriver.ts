@@ -195,6 +195,19 @@ export interface ExplorerDriver {
 	 */
 	absolutePath?(id: ExplorerEntryId): string;
 	/**
+	 * Zip / tar / encrypt / extract on the host (monitor). Paths in `req` are
+	 * host-absolute. Missing on B2/rclone — those always shuttle through this tab.
+	 */
+	archive?(
+		req: {
+			op: 'zip' | 'tar' | 'tgz' | 'encrypt' | 'unzip' | 'untar' | 'decrypt';
+			paths: string[];
+			to: string;
+			password?: string;
+		},
+		opts?: { signal?: AbortSignal }
+	): Promise<{ path: string; size?: number; kind: string }>;
+	/**
 	 * Collision-free dest name under `parentId`. WebRTC ferry uniqueNames once
 	 * so ICE-fail dual-phase can reuse the same dest via {@link writeExactName}.
 	 */

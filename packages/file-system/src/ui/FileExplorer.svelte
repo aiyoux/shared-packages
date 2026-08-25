@@ -56,6 +56,8 @@
 	import {
 		prefetchForDragOut,
 		getDragOutFile,
+		getDragOutUrl,
+		formatDownloadURL,
 		clearDragOutCache,
 		evictDragOutFile
 	} from './dragOutCache.js';
@@ -457,18 +459,15 @@
 		});
 	});
 
-	// Pre-fetch selected file blobs so they're ready for OS drag-out at
-	// dragstart (which is synchronous — can't await there). Only for
-	// supportsDragOut drivers; folders and oversized files are skipped.
+	// Prefetch a download URL (preferred) or an in-memory File. Chrome starts
+	// the GET only on drop when DownloadURL is set.
 	$effect(() => {
 		if (!caps.supportsDragOut) return;
 		// Read selected so the effect re-runs on selection change.
 		const ids = [...selected];
 		for (const id of ids) {
 			const entry = nodes.find((n) => n.id === id);
-			if (entry && entry.kind === 'file') {
-				void prefetchForDragOut(driver, entry);
-			}
+			if (entry) void prefetchForDragOut(driver, entry);
 		}
 	});
 
@@ -668,38 +667,22 @@
 			/* jsdom may lack full DataTransfer */
 		}
 
-		// OS drag-out: add pre-fetched File(s) to dataTransfer so the OS
-		// receives real file content when dropped on desktop / file manager.
-		// Works in Chrome, Edge, Firefox. The File was pre-fetched on
-		// selection (see the $effect above) — dragstart is synchronous so
-		// we can only use what's already in the cache.
+		// OS drag-out: Chromium DownloadURL is a URL string only — Chrome GETs
+		// it on drop (mouseup), so this tab does not buffer the file. Fall back
+		// to a cached File for local VFS (no HTTP URL).
 		if (caps.supportsDragOut && e.dataTransfer) {
-			const files: File[] = [];
-			for (const id of ids) {
-				const entry = nodes.find((nn) => nn.id === id);
-				if (entry && entry.kind === 'file') {
-					const file = getDragOutFile(id);
-					if (file) files.push(file);
-				}
-			}
-			if (files.length > 0) {
-				try {
-					for (const file of files) {
-						e.dataTransfer.items.add(file);
+			try {
+				const urls = ids.map((id) => getDragOutUrl(id)).filter((u): u is NonNullable<typeof u> => u != null);
+				if (urls.length === 1) {
+					e.dataTransfer.setData('DownloadURL', formatDownloadURL(urls[0]!));
+				} else {
+					for (const id of ids) {
+						const file = getDragOutFile(id);
+						if (file) e.dataTransfer.items.add(file);
 					}
-					// DownloadURL fallback (Chrome/Edge): lets the OS download
-					// the file by URL when the File payload isn't enough.
-					if (files.length === 1) {
-						const url = URL.createObjectURL(files[0]!);
-						const ct = files[0]!.type || 'application/octet-stream';
-						e.dataTransfer.setData(
-							'DownloadURL',
-							`${files[0]!.name}:${ct}:${url}`
-						);
-					}
-				} catch {
-					/* some browsers / jsdom reject items.add in tests */
 				}
+			} catch {
+				/* some browsers / jsdom reject DownloadURL / items.add */
 			}
 		}
 

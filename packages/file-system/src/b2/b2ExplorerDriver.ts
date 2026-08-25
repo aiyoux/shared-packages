@@ -677,13 +677,8 @@ export async function createB2ExplorerDriver(
 				if (!info) {
 					throw new ExplorerB2Error('B2_NOT_FOUND', id);
 				}
-				const len = info.contentLength ?? 0;
-				if (len > EXPLORER_DOWNLOAD_MAX_BYTES) {
-					throw new ExplorerB2Error(
-						'B2_TOO_LARGE',
-						`File exceeds ${EXPLORER_DOWNLOAD_MAX_BYTES} byte download limit`
-					);
-				}
+				// Mint only — Chrome GETs this on drop; do not apply the in-tab
+				// EXPLORER_DOWNLOAD_MAX_BYTES cap used by download().
 				const url = await nativeGetUrl(id);
 				return { url, filename: baseNameFromKey(id) };
 			} catch (e) {

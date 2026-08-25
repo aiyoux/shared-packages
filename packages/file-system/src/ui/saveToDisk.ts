@@ -23,9 +23,15 @@ export function httpDownloadIsSafe(url: string, pageHref?: string): boolean {
 		return false;
 	}
 	if (target.protocol !== 'http:' && target.protocol !== 'https:') return false;
+	const host = target.hostname.replace(/^\[|\]$/g, '').toLowerCase();
+	const loopback =
+		host === 'localhost' ||
+		host.endsWith('.localhost') ||
+		host === '::1' ||
+		/^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host);
 	const page =
 		pageHref ?? (typeof location !== 'undefined' ? location.href : undefined);
-	if (!page) return target.protocol === 'https:';
+	if (!page) return target.protocol === 'https:' || loopback;
 	let origin: URL;
 	try {
 		origin = new URL(page);
@@ -34,12 +40,6 @@ export function httpDownloadIsSafe(url: string, pageHref?: string): boolean {
 	}
 	if (target.origin === origin.origin) return true;
 	if (target.protocol === 'https:') return true;
-	const host = target.hostname.replace(/^\[|\]$/g, '').toLowerCase();
-	const loopback =
-		host === 'localhost' ||
-		host.endsWith('.localhost') ||
-		host === '::1' ||
-		/^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host);
 	// HTTPS page → HTTP loopback is a mixed-content exemption in Chromium.
 	if (loopback) return true;
 	// HTTPS page → HTTP LAN is mixed content; the existing fetch() path still works.

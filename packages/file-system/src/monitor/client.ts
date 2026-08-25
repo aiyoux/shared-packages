@@ -11,7 +11,7 @@ import { withLocalAddressSpace } from './localNetwork';
 import { openJsonSse } from './sse.js';
 
 export type MonitorCapabilities = {
-	fs?: { ino?: boolean; rename?: boolean };
+	fs?: { ino?: boolean; rename?: boolean; archive?: boolean; mkdir?: boolean };
 	git?: { blob?: boolean };
 };
 
@@ -107,6 +107,28 @@ export type MonitorWebrtcRole = 'offerer' | 'answerer';
 
 export type MonitorWebrtcJob = { jobId: string; token: string };
 
+export type MonitorArchiveOp =
+	| 'zip'
+	| 'tar'
+	| 'tgz'
+	| 'encrypt'
+	| 'unzip'
+	| 'untar'
+	| 'decrypt';
+
+export type MonitorArchiveRequest = {
+	op: MonitorArchiveOp;
+	paths: string[];
+	to: string;
+	password?: string;
+};
+
+export type MonitorArchiveResult = {
+	path: string;
+	size?: number;
+	kind: string;
+};
+
 export type MonitorTransport = {
 	list(path: string): Promise<MonitorListResult>;
 	stat(path: string): Promise<MonitorStatResult>;
@@ -114,6 +136,8 @@ export type MonitorTransport = {
 	meta(): Promise<MonitorMeta>;
 	/** POST /v1/fs/rename `{from,to}`. Callers gate on `capabilities.fs.rename`. */
 	rename?(from: string, to: string): Promise<void>;
+	/** POST /v1/fs/mkdir `{path}`. Callers gate on `capabilities.fs.mkdir`. */
+	mkdir?(path: string): Promise<MonitorStatResult>;
 	/** GET /v1/git/blob?path=&rev=&file=. Callers gate on `capabilities.git.blob`. */
 	gitBlob?(repoPath: string, rev: string, file: string): Promise<Uint8Array>;
 	download(
@@ -127,6 +151,8 @@ export type MonitorTransport = {
 	): Promise<Blob>;
 	/** Absolute GET URL for `/v1/fs/read` (no extra headers). */
 	readUrl(path: string): string;
+	/** Absolute GET URL for `/v1/fs/zip` — Chrome downloads on drop. */
+	zipUrl(path: string, filename: string): string;
 	/** Overwrite/create a file at `path` (parent must exist). */
 	write(
 		path: string,
@@ -213,6 +239,14 @@ export type MonitorTransport = {
 	webrtcAbort(jobId: string, token: string, opts?: { signal?: AbortSignal }): Promise<void>;
 	/** Delete a file (or empty directory) at `path`. */
 	unlink(path: string, opts?: { signal?: AbortSignal }): Promise<void>;
+	/**
+	 * Zip / tar / encrypt / extract on the monitor host.
+	 * Gated on `capabilities.fs.archive`.
+	 */
+	archive?(
+		req: MonitorArchiveRequest,
+		opts?: { signal?: AbortSignal }
+	): Promise<MonitorArchiveResult>;
 	health(): Promise<unknown>;
 	/** Idempotent POST /v1/watch/roots */
 	watchAddRoot(path: string, recursive?: boolean): Promise<MonitorWatchedRoot>;
@@ -275,7 +309,7 @@ export function coerceInoDev(v: unknown): string | undefined {
 }
 
 const FALSE_CAPS: MonitorCapabilities = {
-	fs: { ino: false, rename: false },
+	fs: { ino: false, rename: false, archive: false, mkdir: false },
 	git: { blob: false }
 };
 
@@ -285,7 +319,12 @@ export function coerceMonitorCapabilities(raw: unknown): MonitorCapabilities {
 	const fs = o.fs && typeof o.fs === 'object' ? (o.fs as Record<string, unknown>) : {};
 	const git = o.git && typeof o.git === 'object' ? (o.git as Record<string, unknown>) : {};
 	return {
-		fs: { ino: fs.ino === true, rename: fs.rename === true },
+		fs: {
+			ino: fs.ino === true,
+			rename: fs.rename === true,
+			archive: fs.archive === true,
+			mkdir: fs.mkdir === true
+		},
 		git: { blob: git.blob === true }
 	};
 }
@@ -747,6 +786,13 @@ export function createMonitorClient(opts: {
 		readUrl(path: string) {
 			return joinUrl(base, `/v1/fs/read?path=${encodeURIComponent(path)}`);
 		},
+		zipUrl(path: string, filename: string) {
+			const name = filename.trim() || 'archive.zip';
+			return joinUrl(
+				base,
+				`/v1/fs/zip?path=${encodeURIComponent(path)}&download=${encodeURIComponent(name)}`
+			);
+		},
 		async download(path: string, opts) {
 			const ac = new AbortController();
 			const onAbort = () => ac.abort();
@@ -992,8 +1038,66 @@ export function createMonitorClient(opts: {
 				clearTimeout(t);
 			}
 		},
+		async archive(req, opts) {
+			const ac = new AbortController();
+			const t = setTimeout(() => ac.abort(), 300_000);
+			const onAbort = () => ac.abort();
+			opts?.signal?.addEventListener('abort', onAbort);
+			const url = joinUrl(base, '/v1/fs/archive');
+			try {
+				const res = await fetchFn(
+					url,
+					withLocalAddressSpace(url, {
+						method: 'POST',
+						headers: { 'content-type': 'application/json' },
+						body: JSON.stringify({
+							op: req.op,
+							paths: req.paths,
+							to: req.to,
+							...(req.password ? { password: req.password } : {})
+						}),
+						signal: ac.signal
+					})
+				);
+				const parsed = await res.json().catch(() => ({}));
+				if (!res.ok) {
+					const err = (parsed as { error?: { message?: string; code?: string } | string }).error;
+					const msg =
+						typeof err === 'string'
+							? err
+							: err && typeof err === 'object' && 'message' in err
+								? String(err.message)
+								: res.statusText;
+					throw new Error(msg || `Archive failed (${res.status})`);
+				}
+				const o = parsed as { path?: string; size?: number; kind?: string };
+				return {
+					path: typeof o.path === 'string' ? o.path : req.to,
+					size: typeof o.size === 'number' ? o.size : undefined,
+					kind: typeof o.kind === 'string' ? o.kind : 'file'
+				};
+			} catch (e) {
+				if (e instanceof Error && e.name === 'AbortError') {
+					throw new Error(
+						opts?.signal?.aborted ? 'Monitor archive cancelled' : 'Monitor archive timed out'
+					);
+				}
+				if (e instanceof TypeError) {
+					throw new Error(
+						`Cannot reach monitor at ${base} (network/CORS). Is it running and allowing this origin?`
+					);
+				}
+				throw e;
+			} finally {
+				opts?.signal?.removeEventListener('abort', onAbort);
+				clearTimeout(t);
+			}
+		},
 		async rename(from: string, to: string) {
 			await postJson('/v1/fs/rename', { from, to });
+		},
+		async mkdir(path: string) {
+			return (await postJson('/v1/fs/mkdir', { path })) as MonitorStatResult;
 		},
 		async gitBlob(repoPath: string, rev: string, file: string) {
 			const ac = new AbortController();

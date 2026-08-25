@@ -98,6 +98,7 @@
 		type B2ConnectionProfileV1,
 		type ConnectionKind
 	} from '../b2/index.js';
+	import RemoteConnectionsDialog, { type RemoteKind } from './RemoteConnectionsDialog.svelte';
 	import {
 		RcloneConnectionForm,
 		acquireRcloneDriver,
@@ -279,16 +280,28 @@
 	const hostSettings = $derived(Boolean(settingsPortal) && !hideSettingsGear);
 	/** Combined (i) sits next to Single/Dual. Pane switchers hide their own (i). */
 	const pairInfoInChrome = $derived(!hideToggles);
+	let showRemoteManager = $state(false);
 
-	function openHostForm(which: 'b2' | 'rclone' | 'monitor') {
-		// Module-level settings apply to the explorer as a whole; the form
-		// mounts on the left pane (the only pane when dual is off).
-		setPane('left', {
-			showB2Form: which === 'b2',
-			showRcloneForm: which === 'rclone',
-			showMonitorForm: which === 'monitor',
-			error: ''
-		});
+	function onRemoteConnected(kind: RemoteKind, profile: object) {
+		showRemoteManager = false;
+		if (kind === 'b2') void connectB2('left', profile as B2ConnectionProfileV1);
+		else if (kind === 'rclone') void connectRclone('left', profile as RcloneConnectionProfileV1);
+		else void connectMonitor('left', profile as MonitorConnectionProfileV1);
+	}
+
+	function onRemoteDisconnected(kind: RemoteKind) {
+		for (const paneId of ['left', 'right'] as PaneId[]) {
+			const cur = paneState(paneId);
+			if (cur.activeKind !== kind) continue;
+			releaseRemote(cur.activeKind, cur.activeId);
+			setPane(paneId, {
+				remoteDriver: null,
+				activeId: 'local',
+				activeKind: 'local',
+				explorerKey: cur.explorerKey + 1
+			});
+		}
+		void reloadProfiles();
 	}
 
 	// svelte-ignore state_referenced_locally -- test-id overrides are fixed for
@@ -881,7 +894,7 @@
 			return;
 		}
 		if (selection === 'disk') {
-			await connectDisk(id);
+			await connectDisk(id, { replace: p.activeKind === 'disk' });
 			return;
 		}
 		if (p.activeId === selection && p.remoteDriver) return;
@@ -1394,16 +1407,7 @@
 		showInfo={!pairInfoInChrome}
 		busy={p.busy}
 		onSelect={(sel) => onSelectConnection(id, sel)}
-		onConfigureB2={() => {
-			setPane(id, { showB2Form: true, showRcloneForm: false, showMonitorForm: false, error: '' });
-		}}
-		onConfigureRclone={() => {
-			setPane(id, { showRcloneForm: true, showB2Form: false, showMonitorForm: false, error: '' });
-		}}
-		onConfigureMonitor={() => {
-			setPane(id, { showMonitorForm: true, showB2Form: false, showRcloneForm: false, error: '' });
-		}}
-		onConfigureDisk={() => void connectDisk(id, { replace: true })}
+		onConfigure={() => (showRemoteManager = true)}
 	/>
 {/snippet}
 
@@ -1777,13 +1781,18 @@
 				showRclone={showRclone}
 				showMonitor={showMonitor}
 				showInfo={false}
-				onConfigureB2={() => openHostForm('b2')}
-				onConfigureRclone={() => openHostForm('rclone')}
-				onConfigureMonitor={() => openHostForm('monitor')}
-				onConfigureDisk={() => void connectDisk('left', { replace: true })}
+				onConfigure={() => (showRemoteManager = true)}
 			/>
 		</div>
 	</div>
+{/if}
+
+{#if showRemoteManager}
+	<RemoteConnectionsDialog
+		onClose={() => (showRemoteManager = false)}
+		onConnected={onRemoteConnected}
+		onDisconnected={onRemoteDisconnected}
+	/>
 {/if}
 
 <div class="dpe-shell" class:dual={dualPane}>
