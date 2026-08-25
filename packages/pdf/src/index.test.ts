@@ -14,6 +14,7 @@ import {
 	PDF_PAGE_DIM_MIN,
 	renderRaster,
 	resetPdfEngineForTests,
+	writePdf,
 	type PdfHandle,
 	type PdfIrTextElement
 } from './index.js';
@@ -92,6 +93,20 @@ describe('interpretPage', () => {
 		expect(texts.length).toBeGreaterThanOrEqual(1);
 		expect(texts.some((e) => e.type === 'text' && e.str.includes('Heading'))).toBe(true);
 		expect(result.stats.texts).toBeGreaterThanOrEqual(1);
+		const heading = texts.find((e): e is PdfIrTextElement => e.type === 'text' && e.str.includes('Heading'));
+		expect(heading?.fontName).toBeTruthy();
+		expect(typeof heading?.d).toBe('string');
+	});
+
+	it('attaches glyph outlines when the font path is available', async () => {
+		const handle = await track(await makeTextPdf('Heading'));
+		const result = await interpretPage(handle, 0, { targetWidth: 400, targetHeight: 240 });
+		const heading = result.elements.find(
+			(e): e is PdfIrTextElement => e.type === 'text' && e.str.includes('Heading')
+		);
+		expect(heading).toBeTruthy();
+		expect(typeof heading!.d).toBe('string');
+		if (heading!.d) expect(heading!.d).toMatch(/[MLCQ]/i);
 	});
 
 	it('extracts at least one path from a rectangle page', async () => {
@@ -112,6 +127,29 @@ describe('irToSvg', () => {
 		text!.transform = { x: 42, y: 8 };
 		const svg = irToSvg(result.elements, result.width, result.height);
 		expect(svg).toMatch(/translate/);
+	});
+
+	it('omits hidden elements', () => {
+		const svg = irToSvg(
+			[
+				{
+					type: 'text',
+					id: 't',
+					str: 'Secret',
+					x: 0,
+					y: 0,
+					width: 10,
+					height: 10,
+					fill: '#000',
+					fontSize: 12,
+					d: '',
+					hidden: true
+				}
+			],
+			200,
+			120
+		);
+		expect(svg).not.toContain('Secret');
 	});
 
 	it('never includes <script', async () => {
@@ -213,6 +251,59 @@ describe('clampPageDimension', () => {
 		expect(clampPageDimension(500, 800)).toBe(500);
 		expect(clampPageDimension(PDF_PAGE_DIM_MAX + 1, 800)).toBe(800);
 		expect(clampPageDimension(Number.NaN, 800)).toBe(800);
+	});
+});
+
+describe('writePdf', () => {
+	it('reconstructs a PDF that still contains the edited heading', async () => {
+		const bytes = await writePdf([
+			{
+				width: 200,
+				height: 120,
+				elements: [
+					{
+						type: 'text',
+						id: 't',
+						str: 'Heading',
+						x: 16,
+						y: 40,
+						width: 80,
+						height: 18,
+						fill: '#000000',
+						fontSize: 18,
+						d: ''
+					},
+					{
+						type: 'path',
+						id: 'p',
+						d: 'M20 80 L100 80 L100 110 L20 110 Z',
+						fill: '#e01a1a',
+						stroke: 'none',
+						strokeWidth: 0
+					},
+					{
+						type: 'text',
+						id: 'hidden',
+						str: 'HIDDEN',
+						x: 10,
+						y: 10,
+						width: 40,
+						height: 12,
+						fill: '#000',
+						fontSize: 12,
+						d: '',
+						hidden: true
+					}
+				]
+			}
+		]);
+		expect(String.fromCharCode(...bytes.subarray(0, 5))).toBe('%PDF-');
+		const handle = await track(bytes);
+		const result = await interpretPage(handle, 0, { targetWidth: 200, targetHeight: 120 });
+		const texts = result.elements.filter((e) => e.type === 'text');
+		expect(texts.some((e) => e.type === 'text' && e.str.includes('Heading'))).toBe(true);
+		expect(texts.some((e) => e.type === 'text' && e.str.includes('HIDDEN'))).toBe(false);
+		expect(result.elements.some((e) => e.type === 'path')).toBe(true);
 	});
 });
 

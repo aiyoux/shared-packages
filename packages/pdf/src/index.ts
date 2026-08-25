@@ -19,6 +19,7 @@ export { renderRaster } from './raster.js';
 export { interpretPage } from './interpret.js';
 export { irToSvg } from './svg.js';
 export { paintIr } from './paint.js';
+export { writePdf, type PdfWritePage } from './write.js';
 export {
 	parsePageRange,
 	calculatePageFit,

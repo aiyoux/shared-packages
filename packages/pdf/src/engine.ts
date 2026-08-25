@@ -75,7 +75,8 @@ export async function openPdf(bytes: Uint8Array): Promise<PdfHandle> {
 		disableWorker: true,
 		isEvalSupported: false,
 		useSystemFonts: false,
-		disableFontFace: isNode(),
+		disableFontFace: true,
+		fontExtraProperties: true,
 		isOffscreenCanvasSupported: typeof OffscreenCanvas !== 'undefined',
 		verbosity: 0
 	} as Parameters<typeof pdfjs.getDocument>[0]);

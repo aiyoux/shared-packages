@@ -3,6 +3,7 @@ import type {
 	PdfInterpretResult,
 	PdfIrElement,
 	PdfIrGroupElement,
+	PdfIrTextElement,
 	PdfPageFit
 } from './types.js';
 import { calculatePageFit } from './range.js';
@@ -176,6 +177,131 @@ function scaleOf(ctm: Mat): number {
 	return (Math.hypot(ctm[0], ctm[1]) + Math.hypot(ctm[2], ctm[3])) / 2;
 }
 
+type TextState = {
+	fontRef: string | null;
+	fontSize: number;
+	matrix: Mat;
+	x: number;
+	y: number;
+	lineX: number;
+	lineY: number;
+	leading: number;
+	hScale: number;
+	rise: number;
+	charSpacing: number;
+	wordSpacing: number;
+};
+
+function defaultTextState(): TextState {
+	return {
+		fontRef: null,
+		fontSize: 1,
+		matrix: cloneMat(IDENTITY),
+		x: 0,
+		y: 0,
+		lineX: 0,
+		lineY: 0,
+		leading: 0,
+		hScale: 1,
+		rise: 0,
+		charSpacing: 0,
+		wordSpacing: 0
+	};
+}
+
+function glyphCtm(gs: GraphicsState, ts: TextState, glyphX: number): Mat {
+	const sx = ts.hScale * ts.fontSize;
+	const sy = ts.fontSize;
+	const local: Mat = [sx, 0, 0, sy, ts.hScale * glyphX, 0];
+	const withPos = multiply([1, 0, 0, 1, ts.x, ts.y + ts.rise], local);
+	return multiply(gs.ctm, multiply(ts.matrix, withPos));
+}
+
+async function glyphsToText(
+	glyphs: unknown[],
+	ts: TextState,
+	gs: GraphicsState,
+	mapper: Mapper,
+	page: { commonObjs: { has?: (id: string) => boolean; get: (id: string, cb?: (v: unknown) => void) => unknown } }
+): Promise<PdfIrTextElement | null> {
+	const flat: unknown[] = [];
+	for (const item of glyphs) {
+		if (Array.isArray(item)) flat.push(...item);
+		else flat.push(item);
+	}
+	if (!flat.length) return null;
+
+	const font = ts.fontRef ? peekObj(page.commonObjs, ts.fontRef) : null;
+	const fontRec =
+		font && typeof font === 'object'
+			? (font as { loadedName?: string; name?: string; fontMatrix?: number[] })
+			: null;
+	const loadedName = fontRec?.loadedName ?? ts.fontRef ?? '';
+	const fontName = fontRec?.name || ts.fontRef || undefined;
+	const fontMatrix0 = fontRec?.fontMatrix?.[0] ?? 0.001;
+	const widthAdvanceScale = ts.fontSize * fontMatrix0;
+
+	const parts: string[] = [];
+	let str = '';
+	let glyphX = 0;
+
+	for (const glyph of flat) {
+		if (typeof glyph === 'number') {
+			glyphX += (-glyph * ts.fontSize) / 1000;
+			continue;
+		}
+		if (!glyph || typeof glyph !== 'object') continue;
+		const g = glyph as { unicode?: string; fontChar?: string; width?: number; isSpace?: boolean };
+		str += g.unicode ?? '';
+		const character = g.fontChar || g.unicode || '';
+		if (loadedName && character) {
+			const cmds = peekObj(page.commonObjs, `${loadedName}_path_${character}`);
+			const pathData =
+				cmds && typeof cmds === 'object' && cmds !== null && 'path' in cmds
+					? (cmds as { path: ArrayLike<number> }).path
+					: null;
+			if (pathData && pathData.length) {
+				const d = drawOpsToPath(pathData, mapper, glyphCtm(gs, ts, glyphX));
+				if (d) parts.push(d);
+			}
+		}
+		const spacing = (g.isSpace ? ts.wordSpacing : 0) + ts.charSpacing;
+		glyphX += (g.width ?? 0) * widthAdvanceScale + spacing;
+	}
+
+	if (!str && !parts.length) return null;
+
+	const start = glyphCtm(gs, ts, 0);
+	const fontAdvance = ts.hScale * ts.fontSize !== 0 ? glyphX / (ts.hScale * ts.fontSize) : 0;
+	const corners = [
+		mapPoint(mapper, start, 0, 0),
+		mapPoint(mapper, start, fontAdvance, 0),
+		mapPoint(mapper, start, 0, 1),
+		mapPoint(mapper, start, fontAdvance, 1)
+	];
+	const xs = corners.map((p) => p.x);
+	const ys = corners.map((p) => p.y);
+	const x = Math.min(...xs);
+	const y = Math.min(...ys);
+	const width = Math.max(...xs) - x;
+	const height = Math.max(...ys) - y || Math.abs(ts.fontSize * mapper.fit.scale);
+	ts.x += glyphX;
+
+	return {
+		type: 'text',
+		id: newId(),
+		str,
+		x,
+		y,
+		width: Math.max(width, 1),
+		height: Math.max(height, 1),
+		fill: gs.fill,
+		fontSize: Math.abs(ts.fontSize * scaleOf(multiply(gs.ctm, ts.matrix)) * mapper.fit.scale) || height,
+		d: parts.join(' '),
+		fontName
+	};
+}
+
 type TextItem = {
 	str: string;
 	fontName: string;
@@ -224,23 +350,41 @@ function applyGState(state: GraphicsState, args: unknown) {
 	}
 }
 
-async function getObj(objs: { has?: (id: string) => boolean; get: (id: string, cb?: (v: unknown) => void) => unknown }, id: string): Promise<unknown> {
+function peekObj(
+	objs: { has?: (id: string) => boolean; get: (id: string, cb?: (v: unknown) => void) => unknown },
+	id: string
+): unknown {
 	try {
-		if (typeof objs.has === 'function' && objs.has(id)) {
-			return objs.get(id);
-		}
+		if (typeof objs.has === 'function' && !objs.has(id)) return null;
+		const value = objs.get(id);
+		if (value && typeof value !== 'function') return value;
 	} catch {
-		// fall through to callback form
+		return null;
 	}
+	return null;
+}
+
+async function getObj(objs: { has?: (id: string) => boolean; get: (id: string, cb?: (v: unknown) => void) => unknown }, id: string): Promise<unknown> {
+	const ready = peekObj(objs, id);
+	if (ready) return ready;
 	return new Promise((resolve) => {
+		let settled = false;
+		const done = (value: unknown) => {
+			if (settled) return;
+			settled = true;
+			resolve(value ?? null);
+		};
 		try {
-			const existing = objs.get(id, resolve);
+			const existing = objs.get(id, done);
 			if (existing && existing !== undefined && typeof existing !== 'function') {
-				resolve(existing);
+				done(existing);
+				return;
 			}
 		} catch {
-			resolve(null);
+			done(null);
+			return;
 		}
+		setTimeout(() => done(null), 250);
 	});
 }
 
@@ -265,6 +409,29 @@ function imgToSrc(img: unknown): string | null {
 }
 
 type OpList = { fnArray: number[]; argsArray: unknown[][] };
+
+async function warmGlyphPaths(page: {
+	getViewport: (opts: { scale: number }) => { width: number; height: number };
+	render: (opts: { canvasContext: CanvasRenderingContext2D; viewport: { width: number; height: number } }) => { promise: Promise<unknown> };
+}) {
+	try {
+		const viewport = page.getViewport({ scale: 0.25 });
+		let ctx: CanvasRenderingContext2D | null = null;
+		if (typeof OffscreenCanvas !== 'undefined') {
+			const canvas = new OffscreenCanvas(Math.max(1, Math.ceil(viewport.width)), Math.max(1, Math.ceil(viewport.height)));
+			ctx = canvas.getContext('2d') as unknown as CanvasRenderingContext2D | null;
+		} else if (typeof document !== 'undefined') {
+			const canvas = document.createElement('canvas');
+			canvas.width = Math.max(1, Math.ceil(viewport.width));
+			canvas.height = Math.max(1, Math.ceil(viewport.height));
+			ctx = canvas.getContext('2d');
+		}
+		if (!ctx) return;
+		await page.render({ canvasContext: ctx, viewport }).promise;
+	} catch {
+		// Glyph path objects stay missing; text falls back to live <text>.
+	}
+}
 
 export async function interpretPage(
 	handle: PdfHandle,
@@ -296,6 +463,8 @@ export async function interpretPage(
 		if (top) top.children.push(el);
 		else root.push(el);
 	};
+
+	await warmGlyphPaths(page);
 
 	let opList: OpList;
 	try {
@@ -400,6 +569,8 @@ export async function interpretPage(
 
 	const stack: GraphicsState[] = [];
 	let gs = defaultState();
+	let ts = defaultTextState();
+	const textStack: TextState[] = [];
 
 	const emitPath = (d: string, op: number) => {
 		if (!d) return;
@@ -466,9 +637,12 @@ export async function interpretPage(
 					...gs,
 					ctm: cloneMat(gs.ctm)
 				});
+				textStack.push({ ...ts, matrix: cloneMat(ts.matrix) });
 			} else if (fn === OPS.restore) {
 				const popped = stack.pop();
 				if (popped) gs = popped;
+				const tpop = textStack.pop();
+				if (tpop) ts = tpop;
 			} else if (fn === OPS.transform && args.length >= 6) {
 				gs.ctm = multiply(gs.ctm, args as unknown as Mat);
 			} else if (fn === OPS.setLineWidth && typeof args[0] === 'number') {
@@ -526,51 +700,101 @@ export async function interpretPage(
 				await emitImage(args[0]);
 			} else if (fn === OPS.paintInlineImageXObject) {
 				await emitImage(args[0]);
+			} else if (fn === OPS.beginText) {
+				ts.matrix = cloneMat(IDENTITY);
+				ts.x = ts.lineX = 0;
+				ts.y = ts.lineY = 0;
+			} else if (fn === OPS.setFont) {
+				ts.fontRef = typeof args[0] === 'string' ? args[0] : ts.fontRef;
+				if (typeof args[1] === 'number') ts.fontSize = args[1];
+			} else if (fn === OPS.setTextMatrix && args.length >= 6) {
+				ts.matrix = [Number(args[0]), Number(args[1]), Number(args[2]), Number(args[3]), Number(args[4]), Number(args[5])];
+				ts.x = ts.lineX = 0;
+				ts.y = ts.lineY = 0;
+			} else if (fn === OPS.moveText) {
+				ts.x = ts.lineX += Number(args[0] ?? 0);
+				ts.y = ts.lineY += Number(args[1] ?? 0);
+			} else if (fn === OPS.setLeading && typeof args[0] === 'number') {
+				ts.leading = args[0];
+			} else if (fn === OPS.setLeadingMoveText) {
+				ts.leading = -Number(args[1] ?? 0);
+				ts.x = ts.lineX += Number(args[0] ?? 0);
+				ts.y = ts.lineY += Number(args[1] ?? 0);
+			} else if (fn === OPS.nextLine) {
+				ts.x = ts.lineX += 0;
+				ts.y = ts.lineY += ts.leading;
+			} else if (fn === OPS.setHScale && typeof args[0] === 'number') {
+				ts.hScale = args[0] / 100;
+			} else if (fn === OPS.setCharSpacing && typeof args[0] === 'number') {
+				ts.charSpacing = args[0];
+			} else if (fn === OPS.setWordSpacing && typeof args[0] === 'number') {
+				ts.wordSpacing = args[0];
+			} else if (fn === OPS.setTextRise && typeof args[0] === 'number') {
+				ts.rise = args[0];
+			} else if (
+				fn === OPS.showText ||
+				fn === OPS.showSpacedText ||
+				fn === OPS.nextLineShowText ||
+				fn === OPS.nextLineSetSpacingShowText
+			) {
+				if (fn === OPS.nextLine || fn === OPS.nextLineShowText || fn === OPS.nextLineSetSpacingShowText) {
+					ts.x = ts.lineX;
+					ts.y = ts.lineY += ts.leading;
+				}
+				const glyphs = (Array.isArray(args[0]) ? args[0] : args) as unknown[];
+				const run = await glyphsToText(glyphs, ts, gs, mapper, page);
+				if (run) {
+					emit(run);
+					stats.texts++;
+				}
 			}
 		} catch {
 			stats.unmappedOps++;
 		}
 	}
 
-	const textContent = await page.getTextContent();
-	const rawText: TextItem[] = [];
-	for (const item of textContent.items) {
-		if (!item || typeof item !== 'object' || !('str' in item)) continue;
-		const it = item as {
-			str: string;
-			transform: number[];
-			width: number;
-			height: number;
-			fontName?: string;
-		};
-		const t = it.transform ?? [1, 0, 0, 1, 0, 0];
-		rawText.push({
-			str: it.str,
-			fontName: it.fontName ?? '',
-			fill: '#000000',
-			x: t[4] ?? 0,
-			y: t[5] ?? 0,
-			width: it.width ?? 0,
-			height: it.height || Math.hypot(t[2] ?? 0, t[3] ?? 0) || Math.hypot(t[0] ?? 0, t[1] ?? 0)
-		});
-	}
-	for (const g of groupText(rawText)) {
-		const fontSize = g.height * fit.scale;
-		const x = fit.x + (g.x - xMin) * fit.scale;
-		const baseline = fit.y + (yMax - g.y) * fit.scale;
-		root.push({
-			type: 'text',
-			id: newId(),
-			str: g.str,
-			x,
-			y: baseline - fontSize,
-			width: g.width * fit.scale,
-			height: fontSize,
-			fill: g.fill,
-			fontSize,
-			d: ''
-		});
-		stats.texts++;
+	if (stats.texts === 0) {
+		const textContent = await page.getTextContent();
+		const rawText: TextItem[] = [];
+		for (const item of textContent.items) {
+			if (!item || typeof item !== 'object' || !('str' in item)) continue;
+			const it = item as {
+				str: string;
+				transform: number[];
+				width: number;
+				height: number;
+				fontName?: string;
+			};
+			const t = it.transform ?? [1, 0, 0, 1, 0, 0];
+			rawText.push({
+				str: it.str,
+				fontName: it.fontName ?? '',
+				fill: '#000000',
+				x: t[4] ?? 0,
+				y: t[5] ?? 0,
+				width: it.width ?? 0,
+				height: it.height || Math.hypot(t[2] ?? 0, t[3] ?? 0) || Math.hypot(t[0] ?? 0, t[1] ?? 0)
+			});
+		}
+		for (const g of groupText(rawText)) {
+			const fontSize = g.height * fit.scale;
+			const x = fit.x + (g.x - xMin) * fit.scale;
+			const baseline = fit.y + (yMax - g.y) * fit.scale;
+			root.push({
+				type: 'text',
+				id: newId(),
+				str: g.str,
+				x,
+				y: baseline - fontSize,
+				width: g.width * fit.scale,
+				height: fontSize,
+				fill: g.fill,
+				fontSize,
+				d: '',
+				fontName: g.fontName || undefined
+			});
+			stats.texts++;
+		}
 	}
 
 	return { width: opts.targetWidth, height: opts.targetHeight, elements: root, stats };
