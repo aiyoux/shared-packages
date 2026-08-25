@@ -67,6 +67,11 @@ export function mapPointThroughOp(pageBefore: KbPage, point: StickyPoint, op: Op
 		case 'format-range':
 		case 'insert-block':
 		case 'move-block':
+		case 'set-toggle':
+		case 'insert-table-row':
+		case 'insert-table-column':
+		case 'delete-table-row':
+		case 'delete-table-column':
 			return point;
 		case 'insert-text':
 			return mapInsertText(pageBefore, point, op);

@@ -152,7 +152,15 @@ export function blockIdsTouchedByOp(page: KbPage, op: Op): Set<string> {
 			return new Set([op.id]);
 		case 'convert-block':
 		case 'set-code':
+		case 'set-toggle':
 			return new Set([op.id]);
+		case 'insert-table-row':
+			return new Set([op.tableId, ...subtreeIds(op.row)]);
+		case 'insert-table-column':
+			return new Set([op.tableId, ...op.cells.map((c) => c.id)]);
+		case 'delete-table-row':
+		case 'delete-table-column':
+			return new Set([op.tableId]);
 		default: {
 			const _never: never = op;
 			void _never;
@@ -184,7 +192,15 @@ export function opNamesBlockIds(op: Op): string[] {
 			return [op.id];
 		case 'convert-block':
 		case 'set-code':
+		case 'set-toggle':
 			return [op.id];
+		case 'insert-table-row':
+			return [op.tableId, ...subtreeIds(op.row)];
+		case 'insert-table-column':
+			return [op.tableId, ...op.cells.map((c) => c.id)];
+		case 'delete-table-row':
+		case 'delete-table-column':
+			return [op.tableId];
 		default: {
 			const _never: never = op;
 			void _never;
