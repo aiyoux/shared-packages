@@ -19,7 +19,8 @@ export default defineConfig({
 	resolve: {
 		alias: {
 			// Worktree node_modules is shared with development; pin kb-model to this tree.
-			'@shared-packages/kb-model': path.join(root, '../kb-model/src/index.ts')
+			'@shared-packages/kb-model': path.join(root, '../kb-model/src/index.ts'),
+			'@shared-packages/crypto': path.resolve(root, '../crypto/src/index.ts')
 		}
 	},
 	test: {
@@ -34,10 +35,5 @@ export default defineConfig({
 		],
 		setupFiles: ['./test/setup.mjs']
 	},
-	root,
-	resolve: {
-		alias: {
-			'@shared-packages/crypto': path.resolve(root, '../crypto/src/index.ts')
-		}
-	}
+	root
 });

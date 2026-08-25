@@ -1668,7 +1668,7 @@
 						driver={drv}
 						showPersistence={false}
 						initialParentId={p.ctx.parentId}
-						onOpen={paneOnOpen(p.activeKind)}
+						onOpen={paneFileOpen(id) ?? paneOnOpen(p.activeKind)}
 						onOpenProject={paneOpenProject(id)}
 						onSendFile={
 							onSend
