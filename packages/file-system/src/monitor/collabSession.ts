@@ -6,7 +6,6 @@ import {
 	REPLICA_SEND_SNAPSHOT_ERROR,
 	applyRemoteMany,
 	schemaCompatible,
-	shouldReplaceFromSnapshot,
 	type AwarenessState,
 	type CollabFrame,
 	type CollabSessionOpts,
@@ -32,9 +31,13 @@ export type CreateMonitorCollabSessionOpts = CollabSessionOpts & {
 	path: string;
 	fetchImpl?: typeof fetch;
 	signal?: AbortSignal;
+	/** Used when GET snapshot is `{ seq: 0, page: null }` (no CAS yet). */
+	seedPage?: KbPage;
 };
 
 type InFlight = { clientOpId: string; ops: Op[]; baseSeq: number };
+
+type SnapshotVia = 'join' | 'nack' | 'resync' | 'cas';
 
 type DocState = {
 	opts: CreateMonitorCollabSessionOpts;
@@ -46,10 +49,18 @@ type DocState = {
 	inFlight: InFlight[];
 	wonSeq: number | null;
 	appliedSeq: number;
+	/** Last seq whose ops are already in `ackedPage` (own-echo vs sendOps). */
+	appliedToAckedSeq: number;
+	nackHeadSeq: number | null;
+	sendTail: Promise<void>;
+	lastHello: CollabFrame | null;
+	lastJoinSnapshot: CollabFrame | null;
 	readyResolve: () => void;
 	readyReject: (err: unknown) => void;
 	readySettled: boolean;
 };
+
+const docsByAdapter = new WeakMap<MonitorCollabAdapter, DocState>();
 
 type Mux = {
 	key: string;
@@ -156,6 +167,13 @@ export function clearMonitorCollabMuxForTests(): void {
 	muxes.clear();
 }
 
+/** Seed the acked prefix when GET snapshot has no CAS page yet. */
+export function seedMonitorSessionPage(session: MonitorCollabAdapter, page: KbPage): void {
+	const doc = docsByAdapter.get(session);
+	if (!doc || doc.closed) return;
+	if (!doc.ackedPage) doc.ackedPage = clonePage(page);
+}
+
 function getMux(opts: CreateMonitorCollabSessionOpts): Mux {
 	const key = muxKey(opts.baseUrl);
 	let mux = muxes.get(key);
@@ -256,7 +274,10 @@ function onMuxEvent(mux: Mux, event: string, data: unknown): void {
 		const seq = asNum(o.seq);
 		const page = asPage(o.page);
 		if (seq == null || !page) return;
-		for (const doc of docs) applySnapshot(doc, seq, page, 'sse');
+		for (const doc of docs) {
+			const via: SnapshotVia = doc.nackHeadSeq != null ? 'nack' : 'cas';
+			applySnapshot(doc, seq, page, via);
+		}
 		return;
 	}
 	if (event === 'collab.presence' || o.type === 'collab.presence') {
@@ -280,12 +301,19 @@ function onMuxEvent(mux: Mux, event: string, data: unknown): void {
 	}
 }
 
+function applyWonOnce(doc: DocState, seq: number, ops: Op[]): void {
+	if (seq <= doc.appliedToAckedSeq) return;
+	if (doc.ackedPage) doc.ackedPage = applyRemoteMany(doc.ackedPage, ops);
+	doc.appliedToAckedSeq = seq;
+	doc.localSeq = Math.max(doc.localSeq, seq);
+	doc.appliedSeq = Math.max(doc.appliedSeq, seq);
+}
+
 function onOpBatch(mux: Mux, doc: DocState, seq: number, clientId: string, ops: Op[]): void {
 	if (doc.closed) return;
 	const own = clientId === mux.clientId;
 	if (own) {
-		doc.localSeq = seq;
-		doc.appliedSeq = seq;
+		applyWonOnce(doc, seq, ops);
 		doc.inFlight = doc.inFlight.filter((g) => g.baseSeq >= seq);
 		emit(doc, {
 			kind: 'ops',
@@ -296,14 +324,9 @@ function onOpBatch(mux: Mux, doc: DocState, seq: number, clientId: string, ops: 
 			seq,
 			ops
 		});
-		void maybeSubmit(mux, doc, seq);
 		return;
 	}
-	if (doc.ackedPage) {
-		doc.ackedPage = applyRemoteMany(doc.ackedPage, ops);
-	}
-	doc.localSeq = seq;
-	doc.appliedSeq = seq;
+	applyWonOnce(doc, seq, ops);
 	emit(doc, {
 		kind: 'ops',
 		pageId: doc.opts.pageId,
@@ -316,12 +339,13 @@ function onOpBatch(mux: Mux, doc: DocState, seq: number, clientId: string, ops: 
 	void maybeSubmit(mux, doc, seq);
 }
 
-function applySnapshot(doc: DocState, seq: number, page: KbPage, _via: 'sse' | 'get'): void {
+function applySnapshot(doc: DocState, seq: number, page: KbPage, via: SnapshotVia): void {
 	if (doc.closed) return;
 	doc.ackedPage = clonePage(page);
 	doc.localSeq = Math.max(doc.localSeq, seq);
-	doc.snapshotSeq = seq;
+	doc.snapshotSeq = Math.max(doc.snapshotSeq, seq);
 	doc.appliedSeq = Math.max(doc.appliedSeq, seq);
+	doc.appliedToAckedSeq = Math.max(doc.appliedToAckedSeq, seq);
 	doc.inFlight = doc.inFlight.filter((g) => g.baseSeq >= seq);
 	if (doc.wonSeq != null && doc.wonSeq <= seq) doc.wonSeq = null;
 	if (page.schemaVersion > doc.opts.schemaVersion) {
@@ -331,7 +355,18 @@ function applySnapshot(doc: DocState, seq: number, page: KbPage, _via: 'sse' | '
 			remote: page.schemaVersion
 		});
 	}
-	emit(doc, { kind: 'snapshot', pageId: doc.opts.pageId, seq, page: clonePage(page) });
+	if (via === 'cas') return;
+	const frame: CollabFrame = {
+		kind: 'snapshot',
+		pageId: doc.opts.pageId,
+		seq,
+		page: clonePage(page)
+	};
+	if (via === 'join') doc.lastJoinSnapshot = frame;
+	if (via === 'nack' && doc.nackHeadSeq != null && seq >= doc.nackHeadSeq) {
+		doc.nackHeadSeq = null;
+	}
+	emit(doc, frame);
 	if (!doc.readySettled) {
 		doc.readySettled = true;
 		doc.readyResolve();
@@ -344,7 +379,7 @@ async function resyncDoc(mux: Mux, doc: DocState, reason: string): Promise<void>
 	try {
 		const snap = await getSnapshot(mux.http, doc.opts.path);
 		const page = asPage(snap.page);
-		if (page) applySnapshot(doc, snap.seq, page, 'get');
+		if (page) applySnapshot(doc, snap.seq, page, 'resync');
 	} catch {
 		/* keep waiting for SSE snapshot */
 	}
@@ -365,25 +400,37 @@ async function waitUntil(
 }
 
 async function recoverNack(mux: Mux, doc: DocState, clientOpId: string, headSeq: number): Promise<void> {
+	doc.nackHeadSeq = headSeq;
 	emit(doc, { kind: 'nack', clientOpId, headSeq });
-	const reached = await waitUntil(doc, () => doc.localSeq === headSeq);
-	if (!reached || doc.closed) return;
+	const reached = await waitUntil(doc, () => doc.localSeq >= headSeq);
+	if (doc.closed) {
+		doc.nackHeadSeq = null;
+		return;
+	}
+	if (!reached) {
+		emit(doc, { kind: 'resync', pageId: doc.opts.pageId, reason: 'nack_wait_timeout' });
+		doc.nackHeadSeq = null;
+		return;
+	}
 
 	try {
 		const snap = await getSnapshot(mux.http, doc.opts.path);
-		if (shouldReplaceFromSnapshot(doc.localSeq, headSeq, snap.seq)) {
+		if (snap.seq >= headSeq) {
 			const page = asPage(snap.page);
-			if (page) applySnapshot(doc, snap.seq, page, 'get');
-			return;
+			if (page) {
+				applySnapshot(doc, snap.seq, page, 'nack');
+				return;
+			}
 		}
 	} catch {
 		/* wait for SSE */
 	}
 
-	await waitUntil(
-		doc,
-		() => doc.localSeq === headSeq && doc.snapshotSeq >= headSeq
-	);
+	const got = await waitUntil(doc, () => doc.snapshotSeq >= headSeq);
+	if (!got && !doc.closed) {
+		emit(doc, { kind: 'resync', pageId: doc.opts.pageId, reason: 'nack_snapshot_timeout' });
+	}
+	if (doc.nackHeadSeq === headSeq) doc.nackHeadSeq = null;
 }
 
 async function maybeSubmit(mux: Mux, doc: DocState, seq: number): Promise<void> {
@@ -494,37 +541,34 @@ async function startDoc(mux: Mux, doc: DocState): Promise<void> {
 		await bindPath(mux, doc.opts.path);
 		try {
 			const snap = await getSnapshot(mux.http, doc.opts.path);
-			const page = asPage(snap.page);
-			if (page) {
-				doc.ackedPage = clonePage(page);
-				doc.localSeq = snap.seq;
-				doc.snapshotSeq = snap.seq;
-				doc.appliedSeq = snap.seq;
-				if (!schemaCompatible(doc.opts.schemaVersion, doc.opts.schemaVersion, page.schemaVersion)) {
+			const remotePage = asPage(snap.page);
+			const seed = remotePage ?? doc.opts.seedPage ?? doc.ackedPage;
+			if (seed && !doc.ackedPage) doc.ackedPage = clonePage(seed);
+			if (remotePage) {
+				if (
+					!schemaCompatible(doc.opts.schemaVersion, doc.opts.schemaVersion, remotePage.schemaVersion)
+				) {
 					emit(doc, {
 						kind: 'schema-mismatch',
 						local: doc.opts.schemaVersion,
-						remote: page.schemaVersion
+						remote: remotePage.schemaVersion
 					});
 				}
-				emit(doc, {
-					kind: 'snapshot',
-					pageId: doc.opts.pageId,
-					seq: snap.seq,
-					page: clonePage(page)
-				});
+				applySnapshot(doc, snap.seq, remotePage, 'join');
 			}
 		} catch {
-			/* empty room */
+			if (doc.opts.seedPage && !doc.ackedPage) doc.ackedPage = clonePage(doc.opts.seedPage);
 		}
-		emit(doc, {
+		const hello: CollabFrame = {
 			kind: 'hello',
 			pageId: doc.opts.pageId,
 			schemaVersion: doc.opts.schemaVersion,
 			clientId: mux.clientId ?? doc.opts.clientId,
 			role: 'replica',
 			roomId: roomIdFor(doc.opts.path)
-		});
+		};
+		doc.lastHello = hello;
+		emit(doc, hello);
 		if (!doc.readySettled) {
 			doc.readySettled = true;
 			doc.readyResolve();
@@ -552,12 +596,17 @@ export function createMonitorCollabSession(
 		opts: { ...opts, kind: 'monitor', role: 'replica' },
 		handlers: new Set(),
 		closed: false,
-		ackedPage: null,
+		ackedPage: opts.seedPage ? clonePage(opts.seedPage) : null,
 		localSeq: 0,
 		snapshotSeq: 0,
 		inFlight: [],
 		wonSeq: null,
 		appliedSeq: 0,
+		appliedToAckedSeq: 0,
+		nackHeadSeq: null,
+		sendTail: Promise.resolve(),
+		lastHello: null,
+		lastJoinSnapshot: null,
 		readyResolve,
 		readyReject,
 		readySettled: false
@@ -574,37 +623,42 @@ export function createMonitorCollabSession(
 			return mux.clientId ?? opts.clientId;
 		},
 		ready,
-		async sendOps(ops, clientOpId, baseSeq) {
+		async sendOps(ops, clientOpId, _baseSeq) {
 			if (doc.closed) return;
-			await ready;
-			if (doc.closed) return;
-			const clientId = mux.clientId;
-			if (!clientId) throw new Error('Monitor collab SSE has no client_id');
-			doc.inFlight.push({ clientOpId, ops, baseSeq });
-			try {
-				const { seq } = await postOps(mux.http, {
-					clientId,
-					path: opts.path,
-					baseSeq,
-					ops
-				});
-				doc.inFlight = doc.inFlight.filter((g) => g.clientOpId !== clientOpId);
-				if (doc.ackedPage) {
-					doc.ackedPage = applyRemoteMany(doc.ackedPage, ops);
+			const run = async () => {
+				await ready;
+				if (doc.closed) return;
+				const clientId = mux.clientId;
+				if (!clientId) throw new Error('Monitor collab SSE has no client_id');
+				const baseSeq = doc.localSeq;
+				doc.inFlight.push({ clientOpId, ops, baseSeq });
+				try {
+					const { seq } = await postOps(mux.http, {
+						clientId,
+						path: opts.path,
+						baseSeq,
+						ops
+					});
+					doc.inFlight = doc.inFlight.filter((g) => g.clientOpId !== clientOpId);
+					applyWonOnce(doc, seq, ops);
+					doc.wonSeq = seq;
+					emit(doc, { kind: 'ack', clientOpId, seq });
+					await maybeSubmit(mux, doc, seq);
+				} catch (err) {
+					doc.inFlight = doc.inFlight.filter((g) => g.clientOpId !== clientOpId);
+					if (err instanceof CollabConflictError) {
+						await recoverNack(mux, doc, clientOpId, err.headSeq);
+						return;
+					}
+					throw err;
 				}
-				doc.localSeq = seq;
-				doc.appliedSeq = seq;
-				doc.wonSeq = seq;
-				emit(doc, { kind: 'ack', clientOpId, seq });
-				void maybeSubmit(mux, doc, seq);
-			} catch (err) {
-				doc.inFlight = doc.inFlight.filter((g) => g.clientOpId !== clientOpId);
-				if (err instanceof CollabConflictError) {
-					await recoverNack(mux, doc, clientOpId, err.headSeq);
-					return;
-				}
-				throw err;
-			}
+			};
+			const p = doc.sendTail.then(run, run);
+			doc.sendTail = p.then(
+				() => {},
+				() => {}
+			);
+			await p;
 		},
 		sendPresence(state) {
 			if (doc.closed) return;
@@ -622,10 +676,14 @@ export function createMonitorCollabSession(
 		async submitPage(seq, page) {
 			if (doc.closed) return;
 			await ready;
+			if (!doc.ackedPage) doc.ackedPage = clonePage(page);
+			if (seq <= 0) return;
 			await submitAcked(mux, doc, seq, page);
 		},
 		subscribe(handler) {
 			doc.handlers.add(handler);
+			if (doc.lastHello) handler(doc.lastHello);
+			if (doc.lastJoinSnapshot) handler(doc.lastJoinSnapshot);
 			return () => {
 				doc.handlers.delete(handler);
 			};
@@ -637,5 +695,6 @@ export function createMonitorCollabSession(
 			void removeDoc(mux, opts.path, doc);
 		}
 	};
+	docsByAdapter.set(adapter, doc);
 	return adapter;
 }

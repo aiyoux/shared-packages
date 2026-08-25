@@ -10,7 +10,9 @@
 	 *     CM library driver). The memory backend is the global in-memory VFS
 	 *     (`getMemoryVfs`), shared app-wide so received files are accessible
 	 *     everywhere.
-	 *   - `onOpen`: optional open-file handler (hub opens skch/ob3d/vrec).
+	 *   - `onOpen`: optional open-file handler (hub opens skch/ob3d/vrec/kb).
+	 *     DualPane forwards pane `OpenProjectContext` so monitor `.kb` can
+	 *     start collab. B2/rclone stay open-with off.
 	 *   - `onOpenProject`: optional "Open project" handler. DualPane wraps each
 	 *     pane's FileExplorer so the handler receives the folder plus
 	 *     `OpenProjectContext` (`kind` from the pane; monitor also gets
@@ -130,7 +132,7 @@
 
 	type Props = {
 		localDriver: ExplorerDriver;
-		onOpen?: (entry: ExplorerOpenTarget) => void | Promise<void>;
+		onOpen?: (entry: ExplorerOpenTarget, ctx?: OpenProjectContext) => void | Promise<void>;
 		onOpenProject?: (entry: ExplorerOpenTarget, ctx: OpenProjectContext) => void | Promise<void>;
 		persistenceVfs?: VfsService;
 		dualPaneKey?: string;
@@ -406,6 +408,12 @@
 	function paneOpenProject(id: PaneId) {
 		if (!onOpenProject) return undefined;
 		return (entry: ExplorerOpenTarget) => onOpenProject(entry, paneOpenProjectContext(id));
+	}
+	function paneFileOpen(id: PaneId) {
+		if (!onOpen) return undefined;
+		const kind = paneState(id).activeKind;
+		if (kind !== 'local' && kind !== 'memory' && kind !== 'monitor') return undefined;
+		return (entry: ExplorerOpenTarget) => onOpen(entry, paneOpenProjectContext(id));
 	}
 	function setPane(id: PaneId, patch: Partial<PaneState>) {
 		if (id === 'left') left = { ...left, ...patch };
@@ -1396,7 +1404,7 @@
 						driver={localDriver}
 						showPersistence={false}
 						initialParentId={p.ctx.parentId}
-						onOpen={onOpen}
+						onOpen={paneFileOpen(id)}
 						onOpenProject={paneOpenProject(id)}
 						onSendFile={
 							onSend
@@ -1425,7 +1433,7 @@
 						driver={drv}
 						showPersistence={false}
 						initialParentId={p.ctx.parentId}
-						onOpen={p.activeKind === 'memory' ? onOpen : undefined}
+						onOpen={paneFileOpen(id)}
 						onOpenProject={paneOpenProject(id)}
 						onSendFile={
 							onSend

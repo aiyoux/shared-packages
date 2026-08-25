@@ -13,6 +13,7 @@ import {
 	clearMonitorCollabMuxForTests,
 	createMonitorCollabSession,
 	maySubmitMonitorPage,
+	seedMonitorSessionPage,
 	stripInFlightPage
 } from './collabSession.js';
 
@@ -44,7 +45,7 @@ function createHarness() {
 	let controller: ReadableStreamDefaultController<Uint8Array> | null = null;
 	let streamsOpened = 0;
 	const posts: Array<{ url: string; body: unknown }> = [];
-	let snapshotMem = { seq: 0, page: paraPage('') as unknown };
+	let snapshotMem: { seq: number; page: unknown } = { seq: 0, page: paraPage('') };
 	let opsHandler: ((body: Record<string, unknown>) => Response | Promise<Response>) | null = null;
 
 	const emit = (event: string, data: unknown) => {
@@ -165,7 +166,7 @@ function createHarness() {
 			return streamsOpened;
 		},
 		emit,
-		setSnapshot(seq: number, page: KbPage) {
+		setSnapshot(seq: number, page: KbPage | null) {
 			snapshotMem = { seq, page };
 		},
 		onOps(handler: (body: Record<string, unknown>) => Response | Promise<Response>) {
@@ -177,7 +178,8 @@ function createHarness() {
 function openSession(
 	h: ReturnType<typeof createHarness>,
 	path: string,
-	pageId = 'page-1'
+	pageId = 'page-1',
+	seedPage?: KbPage
 ) {
 	return createMonitorCollabSession({
 		kind: 'monitor',
@@ -187,8 +189,15 @@ function openSession(
 		clientId: 'guest',
 		baseUrl: 'http://127.0.0.1:8300',
 		path,
-		fetchImpl: h.fetchMock
+		fetchImpl: h.fetchMock,
+		seedPage
 	});
+}
+
+function snapshotText(page: KbPage): string {
+	return page.blocks[0] && page.blocks[0].type === 'paragraph'
+		? (page.blocks[0].content[0]?.text ?? '')
+		: '';
 }
 
 afterEach(() => {
@@ -264,10 +273,7 @@ describe('createMonitorCollabSession', () => {
 		);
 		const last = snapPosts[snapPosts.length - 1]!.body as { seq: number; page: KbPage };
 		expect(last.seq).toBe(1);
-		const text =
-			last.page.blocks[0] && last.page.blocks[0].type === 'paragraph'
-				? last.page.blocks[0].content[0]?.text
-				: '';
+		const text = snapshotText(last.page);
 		expect(text).toBe('A');
 		expect(text).not.toBe('BA');
 
@@ -357,6 +363,128 @@ describe('createMonitorCollabSession', () => {
 		await vi.waitFor(() => expect(frames.some((f) => f.kind === 'resync')).toBe(true));
 		await vi.waitFor(() =>
 			expect(frames.some((f) => f.kind === 'snapshot' && f.seq === 2)).toBe(true)
+		);
+		session.close();
+	});
+
+	it('GET {seq:0,page:null} still POSTs snapshot after seed + winning ops', async () => {
+		const h = createHarness();
+		h.setSnapshot(0, null);
+		const seed = paraPage('');
+		const session = openSession(h, '/tmp/a/index.kb', 'page-1', seed);
+		await session.ready;
+		await session.sendOps([insertOp('A')], 'g1', 0);
+		await vi.waitFor(() =>
+			expect(
+				h.posts.some(
+					(p) =>
+						p.url.includes('/v1/collab/snapshot') &&
+						p.body &&
+						typeof p.body === 'object' &&
+						(p.body as { seq?: number }).seq === 1
+				)
+			).toBe(true)
+		);
+		const body = h.posts.find(
+			(p) =>
+				p.url.includes('/v1/collab/snapshot') &&
+				p.body &&
+				typeof p.body === 'object' &&
+				(p.body as { seq?: number }).seq === 1
+		)!.body as { page: KbPage };
+		expect(snapshotText(body.page)).toBe('A');
+		session.close();
+	});
+
+	it('own op_batch echo does not persist the pre-op page', async () => {
+		const h = createHarness();
+		h.setSnapshot(0, paraPage(''));
+		const session = openSession(h, '/tmp/a/index.kb');
+		await session.ready;
+		await session.sendOps([insertOp('A')], 'g1', 0);
+		await vi.waitFor(() =>
+			expect(h.posts.some((p) => p.url.includes('/v1/collab/snapshot') && p.body)).toBe(true)
+		);
+		const bodies = h.posts
+			.filter((p) => p.url.includes('/v1/collab/snapshot') && p.body)
+			.map((p) => snapshotText((p.body as { page: KbPage }).page));
+		expect(bodies.every((t) => t === 'A')).toBe(true);
+		expect(bodies.some((t) => t === '')).toBe(false);
+		session.close();
+	});
+
+	it('serializes sendOps so overlapping calls do not share base_seq', async () => {
+		const h = createHarness();
+		h.setSnapshot(0, paraPage(''));
+		const session = openSession(h, '/tmp/a/index.kb');
+		await session.ready;
+		const p1 = session.sendOps([insertOp('A')], 'g1', 0);
+		const p2 = session.sendOps([insertOp('B')], 'g2', 0);
+		await Promise.all([p1, p2]);
+		const opsPosts = h.posts.filter((p) => p.url.includes('/v1/collab/ops'));
+		expect(opsPosts.map((p) => (p.body as { base_seq: number }).base_seq)).toEqual([0, 1]);
+		session.close();
+	});
+
+	it('409 recovery waits for localSeq >= headSeq (not strict equality)', async () => {
+		const h = createHarness();
+		h.setSnapshot(5, paraPage('old'));
+		const session = openSession(h, '/tmp/a/index.kb');
+		const frames: CollabFrame[] = [];
+		session.subscribe((f) => frames.push(f));
+		await session.ready;
+		h.onOps(
+			() =>
+				new Response(JSON.stringify({ head_seq: 6 }), {
+					status: 409,
+					headers: { 'content-type': 'application/json' }
+				})
+		);
+		const send = session.sendOps([insertOp('Z')], 'lost', 5);
+		await vi.waitFor(() => expect(frames.some((f) => f.kind === 'nack')).toBe(true));
+		h.emit('collab.op_batch', {
+			type: 'collab.op_batch',
+			sub_id: 'sub-/tmp/a/index.kb-0',
+			seq: 6,
+			client_id: 'other-client',
+			ops: [insertOp('R')]
+		});
+		h.emit('collab.op_batch', {
+			type: 'collab.op_batch',
+			sub_id: 'sub-/tmp/a/index.kb-0',
+			seq: 7,
+			client_id: 'other-client',
+			ops: [insertOp('S')]
+		});
+		h.setSnapshot(7, paraPage('caught-up'));
+		h.emit('collab.snapshot', {
+			type: 'collab.snapshot',
+			sub_id: 'sub-/tmp/a/index.kb-0',
+			seq: 7,
+			page: paraPage('caught-up')
+		});
+		await vi.waitFor(() => expect(frames.some((f) => f.kind === 'snapshot' && f.seq === 7)).toBe(true));
+		await send;
+		session.close();
+	});
+
+	it('seedMonitorSessionPage enables persist when join snapshot is empty', async () => {
+		const h = createHarness();
+		h.setSnapshot(0, null);
+		const session = openSession(h, '/tmp/a/index.kb');
+		await session.ready;
+		seedMonitorSessionPage(session, paraPage(''));
+		await session.sendOps([insertOp('Z')], 'g1', 0);
+		await vi.waitFor(() =>
+			expect(
+				h.posts.some(
+					(p) =>
+						p.url.includes('/v1/collab/snapshot') &&
+						typeof p.body === 'object' &&
+						p.body &&
+						(p.body as { seq?: number }).seq === 1
+				)
+			).toBe(true)
 		);
 		session.close();
 	});
