@@ -34,3 +34,9 @@ export {
 export { default as GitHistory } from './GitHistory.svelte';
 export { default as GitApp } from './GitApp.svelte';
 export { default as ProjectApp } from './ProjectApp.svelte';
+export {
+	bindProjectRepo,
+	repoInputFromFolder,
+	sameProjectRepo,
+	type ProjectBackendHint
+} from './projectRepo.js';

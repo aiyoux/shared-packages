@@ -57,6 +57,8 @@
 				{/each}
 			</ol>
 		{/if}
+	{:else if repoId}
+		<p class="empty" data-testid="git-history-empty">Loading…</p>
 	{:else}
 		<p class="empty" data-testid="git-history-empty">No repository selected</p>
 	{/if}

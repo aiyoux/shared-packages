@@ -6,7 +6,20 @@ describe('GitHistory', () => {
 	it('renders empty state when no snapshot', () => {
 		render(GitHistory, { props: { snapshot: null } });
 		expect(screen.getByTestId('git-history')).toBeTruthy();
-		expect(screen.getByTestId('git-history-empty')).toBeTruthy();
+		expect(screen.getByTestId('git-history-empty').textContent).toMatch(/No repository selected/);
+	});
+
+	it('says loading when a repo is selected but snapshot has not arrived', () => {
+		render(GitHistory, {
+			props: {
+				repoId: 'pending',
+				gitHost: {
+					snapshot: () => new Promise(() => {}),
+					subscribe: () => () => {}
+				} as never
+			}
+		});
+		expect(screen.getByTestId('git-history-empty').textContent).toMatch(/Loading/);
 	});
 
 	it('renders branch, dirty, and commits', () => {

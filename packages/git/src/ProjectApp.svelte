@@ -4,6 +4,7 @@
 	import { createGitHost } from './host.js';
 	import GitHistory from './GitHistory.svelte';
 	import { consumeOpenProject, type OpenProjectPayload } from './openProject.js';
+	import { bindProjectRepo, repoInputFromFolder } from './projectRepo.js';
 	import type { GitHost, GitRepoRef } from './types.js';
 
 	let {
@@ -24,6 +25,7 @@
 	let activeRepo = $state<GitRepoRef | null>(null);
 	let rootLabel = $state('Project');
 	let selectedId = $state<ExplorerEntryId | null>(null);
+	let selectReq = 0;
 
 	$effect(() => {
 		selectedId = folderId ?? null;
@@ -40,7 +42,7 @@
 		if (!payload) return;
 		const host = untrack(() => gitHost);
 		void (async () => {
-			const added = await host.addRepo({
+			const added = await bindProjectRepo(host, {
 				label: payload.label || payload.path.split('/').filter(Boolean).pop() || 'Project',
 				backend: payload.backend,
 				path: payload.path,
@@ -50,6 +52,26 @@
 			activeRepo = added;
 		})();
 	});
+
+	async function selectRepoForFolder(id: ExplorerEntryId | null) {
+		const d = driver;
+		if (!d || id == null) return;
+		const req = ++selectReq;
+		const handoff = untrack(() => opened);
+		const current = untrack(() => activeRepo);
+		const hint = {
+			backend: handoff?.backend ?? current?.backend ?? 'local',
+			rootPath: handoff?.rootPath,
+			profileId: handoff?.profileId ?? current?.profileId,
+			baseUrl: handoff?.baseUrl ?? current?.baseUrl
+		} as const;
+		const input = await repoInputFromFolder(d, id, hint);
+		if (req !== selectReq) return;
+		if (!input) return;
+		const bound = await bindProjectRepo(gitHost, input);
+		if (req !== selectReq) return;
+		activeRepo = bound;
+	}
 
 	async function initLocalRepo() {
 		const repoPath =
@@ -76,6 +98,7 @@
 			if (fromPath) rootLabel = fromPath;
 			return;
 		}
+		void selectRepoForFolder(id);
 		void d.getPath(id).then((chain) => {
 			const last = chain[chain.length - 1];
 			if (last?.name) rootLabel = last.name;
@@ -93,6 +116,7 @@
 				{rootLabel}
 				onNavigate={(id) => {
 					selectedId = id;
+					void selectRepoForFolder(id);
 				}}
 			/>
 		{:else}
