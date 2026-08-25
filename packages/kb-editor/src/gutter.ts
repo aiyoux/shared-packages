@@ -57,7 +57,7 @@ export function dropTarget(
 	if (toLoc.parent !== 'page' && isTableStructure(toLoc.parent)) return 'noop';
 
 	if (isContainer(target) && where === 'after') {
-		if (isContainer(dragged)) return 'noop';
+		if (isContainer(dragged) || dragged.type === 'table') return 'noop';
 		if (fromLoc.parent !== 'page' && fromLoc.parent.id === target.id && fromLoc.index === 0) {
 			return 'noop';
 		}

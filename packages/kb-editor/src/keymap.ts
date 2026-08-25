@@ -26,6 +26,15 @@ function formatOp(live: Range, mark: Mark): Op[] {
 /** Keydown is a no-op while composing (do not preventDefault). Backspace is beforeinput-only. */
 export function mapKeydown(state: EditorState, event: KeyEvent, live: Range): KeymapResult {
 	if (state.composing) return { preventDefault: false, ops: [] };
+	if (
+		state.justCommittedComposition &&
+		event.key === 'Enter' &&
+		!event.metaKey &&
+		!event.ctrlKey &&
+		!event.altKey
+	) {
+		return { preventDefault: true, ops: [] };
+	}
 	if (event.key === 'Tab' && !event.metaKey && !event.ctrlKey && !event.altKey) {
 		const nav = tabOps(state.page, live, event.shiftKey);
 		if (!nav) return { preventDefault: false, ops: [] };

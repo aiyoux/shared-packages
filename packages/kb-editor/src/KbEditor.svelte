@@ -60,15 +60,16 @@
 	}
 
 	function emitMapped(ops: Op[], selection?: Range) {
-		if (ops.length === 0) {
-			if (selection) emitState(setSelection(editor, selection));
-			return;
+		if (ops.length) emitOps(ops);
+		if (!selection) return;
+		const next = ops.length
+			? setSelection(applyEditorOps(editor, ops), selection)
+			: setSelection(editor, selection);
+		emitState(next);
+		if (host) {
+			if (ops.length) project(host, next.page);
+			restoreSelection(host, next.selection, next.page);
 		}
-		if (selection && onState) {
-			emitState(setSelection(applyEditorOps(editor, ops), selection));
-			return;
-		}
-		emitOps(ops);
 	}
 
 	function liveRange(event?: InputEvent) {
@@ -163,7 +164,11 @@
 
 	function onKeyDown(event: KeyboardEvent) {
 		const result = mapKeydown(
-			{ ...editor, composing },
+			{
+				...editor,
+				composing,
+				justCommittedComposition: localJustCommitted || editor.justCommittedComposition
+			},
 			{
 				key: event.key,
 				metaKey: event.metaKey,

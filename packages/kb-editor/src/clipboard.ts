@@ -85,12 +85,22 @@ function sliceTextLike(block: Extract<Block, { content: TextSpan[] }>, from: num
 	const content = sliced.length > 0 ? sliced : [{ type: 'text' as const, text: '', marks: [] }];
 	if (block.type === 'heading') return { id: block.id, type: 'heading', level: block.level, content };
 	if (block.type === 'list_item') return { id: block.id, type: 'list_item', ordered: block.ordered, content };
-	if (block.type === 'table_cell') {
-		return block.header
-			? { id: block.id, type: 'table_cell', header: true, content }
-			: { id: block.id, type: 'table_cell', content };
-	}
 	return { id: block.id, type: 'paragraph', content };
+}
+
+/** Never insert-block a bare row/cell (apply throws). Wrap as a table. */
+function wrapGridFragment(block: Block): Block {
+	if (block.type === 'table_cell') {
+		return {
+			id: newBlockId(),
+			type: 'table',
+			children: [{ id: newBlockId(), type: 'table_row', children: [block] }]
+		};
+	}
+	if (block.type === 'table_row') {
+		return { id: newBlockId(), type: 'table', children: [block] };
+	}
+	return block;
 }
 
 export function sliceBlocks(page: KbPage, range: Range): Block[] {
@@ -119,7 +129,7 @@ export function sliceBlocks(page: KbPage, range: Range): Block[] {
 		const to = i === ei ? end.offset : plaintextOf(block).length;
 		const kids = blockChildren(block);
 		if (kids && kids.length > 0) {
-			out.push(structuredClone(block));
+			out.push(wrapGridFragment(structuredClone(block)));
 			skipDescendants(block);
 			continue;
 		}
@@ -172,7 +182,7 @@ function pushRemapped(
 	let destParent = parentId;
 	let destAfter = afterId;
 	for (const item of items) {
-		const next = remapBlock(item);
+		const next = remapBlock(wrapGridFragment(item));
 		if ((isContainer(next) || next.type === 'table') && destParent != null) {
 			destAfter = destParent;
 			destParent = null;
@@ -301,7 +311,8 @@ export function copyPayload(state: EditorState, live: Range): { plain: string; j
 		if (!state.blockFocus) return null;
 		const block = findBlock(state.page, state.blockFocus);
 		if (!block || !isNonTextual(block)) return null;
-		return { plain: plaintextOfSlice(block), json: serializeSlice([structuredClone(block)]) };
+		const copied = wrapGridFragment(structuredClone(block));
+		return { plain: plaintextOfSlice(block), json: serializeSlice([copied]) };
 	}
 	const blocks = sliceBlocks(state.page, live);
 	return { plain: slicePlaintext(state.page, live), json: serializeSlice(blocks) };

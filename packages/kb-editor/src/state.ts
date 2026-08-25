@@ -5,6 +5,7 @@ import {
 	invert,
 	isNonTextual,
 	normalizePage,
+	parentOf,
 	plaintextOf,
 	type KbPage,
 	type Op,
@@ -80,8 +81,13 @@ function selectionAfter(pre: KbPage, post: KbPage, op: Op, prev: Range): Range {
 			return collapsed({ blockId: op.block.id, offset: 0 });
 		}
 		case 'insert-table-row': {
-			const cell = op.row.children[0];
-			if (cell) return collapsed({ blockId: cell.id, offset: 0 });
+			let col = 0;
+			const prevBlock = findBlock(pre, prev.anchor.blockId);
+			if (prevBlock?.type === 'table_cell') {
+				col = parentOf(pre, prevBlock.id)?.index ?? 0;
+			}
+			const dest = op.row.children[Math.min(col, Math.max(0, op.row.children.length - 1))];
+			if (dest) return collapsed({ blockId: dest.id, offset: 0 });
 			return collapsed({ blockId: op.row.id, offset: 0 });
 		}
 		case 'insert-table-column': {

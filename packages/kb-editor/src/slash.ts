@@ -1,4 +1,4 @@
-import { parentOf, type Block, type KbPage, type Op } from '@shared-packages/kb-model';
+import { findBlock, parentOf, type Block, type KbPage, type Op } from '@shared-packages/kb-model';
 import { newBlockId } from './ids.js';
 import { defaultTable } from './table.js';
 
@@ -70,6 +70,11 @@ function wrapOps(
 
 /** Convert when the caret sits at the end of a slash command that is the whole block (or prefix + space). */
 export function slashOps(blockId: string, plaintext: string, page?: KbPage): Op[] | null {
+	if (page && findBlock(page, blockId)?.type === 'table_cell') {
+		const wrap = WRAP[plaintext];
+		if (wrap) return wrapOps(blockId, plaintext, wrap, page);
+		return null;
+	}
 	const wrap = WRAP[plaintext];
 	if (wrap) return wrapOps(blockId, plaintext, wrap, page);
 	const match = matchSlash(plaintext);

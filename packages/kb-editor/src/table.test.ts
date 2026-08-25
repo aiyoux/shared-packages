@@ -6,7 +6,7 @@ import { render } from '@testing-library/svelte';
 import { tick } from 'svelte';
 import { describe, expect, it, vi } from 'vitest';
 import { mapBeforeInput } from './beforeinput.js';
-import { copyPayload, pasteOps, sliceBlocks, slicePlaintext } from './clipboard.js';
+import { copyPayload, parseSlice, pasteOps, sliceBlocks, slicePlaintext } from './clipboard.js';
 import {
 	beginComposition,
 	commitComposition,
@@ -17,10 +17,10 @@ import { dropTarget, gutterOrder, handleHeights, overlayBoxes } from './gutter.j
 import KbEditor from './KbEditor.svelte';
 import { mapKeydown } from './keymap.js';
 import { COL_ATTR, project, syncView } from './project.js';
-import { rangeFromEndpoints } from './selection.js';
+import { rangeFromEndpoints, rangeFromSelection } from './selection.js';
 import { slashOps } from './slash.js';
-import { applyEditorOps, createEditorState, dispatchMany } from './state.js';
-import { cell, page, para, row, table } from './testFixtures.js';
+import { applyEditorOps, createEditorState, dispatchMany, setSelection } from './state.js';
+import { callout, cell, page, para, row, table } from './testFixtures.js';
 import { backspaceAtStartOps, deleteAtEndOps } from './units.js';
 import type { Op } from '@shared-packages/kb-model';
 
@@ -164,6 +164,15 @@ describe('N4 table editor', () => {
 		expect(dropTarget(doc, 't', 'z', 'before')).toBe('noop');
 	});
 
+	it('does not drop a table into a callout', () => {
+		const doc = page([
+			table('t', [row('r1', [cell('c11', 'aa')])]),
+			callout('c', [para('n', 'in')])
+		]);
+		expect(dropTarget(doc, 't', 'c', 'after')).toBe('noop');
+		expect(dropTarget(doc, 't', 'n', 'after')).toBe('noop');
+	});
+
 	it('Tab moves row-major; last cell Tab inserts a row', () => {
 		const state = {
 			...createEditorState(grid()),
@@ -273,6 +282,44 @@ describe('N4 table editor', () => {
 		expect(payload?.json).toContain('table_cell');
 	});
 
+	it('same-cell copy pastes as a paragraph outside the grid; row copy wraps as a table', () => {
+		const src = createEditorState(grid());
+		const cellLive = { anchor: { blockId: 'c11', offset: 0 }, head: { blockId: 'c11', offset: 2 } };
+		const sliced = sliceBlocks(src.page, cellLive);
+		expect(sliced[0]?.type).toBe('paragraph');
+		const cellPayload = copyPayload({ ...src, selection: cellLive }, cellLive);
+		const dest = createEditorState(page([para('z', 'zz')]));
+		const at = { anchor: { blockId: 'z', offset: 2 }, head: { blockId: 'z', offset: 2 } };
+		const cellOps = pasteOps(dest, at, { json: cellPayload!.json });
+		expect(cellOps.every((op) => op.kind !== 'insert-block' || op.block.type !== 'table_cell')).toBe(true);
+		expect(() => dispatchMany(dest, cellOps)).not.toThrow();
+		const pasted = dispatchMany(dest, cellOps);
+		expect(pasted.page.blocks.some((b) => plaintextOf(b).includes('aa'))).toBe(true);
+
+		const rowPayload = copyPayload(
+			{
+				...src,
+				selection: { anchor: { blockId: 'r1', offset: 0 }, head: { blockId: 'r1', offset: 0 } },
+				blockFocus: 'r1'
+			},
+			{ anchor: { blockId: 'r1', offset: 0 }, head: { blockId: 'r1', offset: 0 } }
+		);
+		const rowBlocks = parseSlice(rowPayload!.json);
+		expect(rowBlocks?.[0]?.type).toBe('table');
+		const rowOps = pasteOps(dest, at, { json: rowPayload!.json });
+		expect(rowOps.every((op) => op.kind !== 'insert-block' || op.block.type !== 'table_row')).toBe(true);
+		expect(() => dispatchMany(dest, rowOps)).not.toThrow();
+
+		const mixed = { anchor: { blockId: 'c11', offset: 0 }, head: { blockId: 'z', offset: 1 } };
+		const mixedOps = pasteOps(dest, at, { json: copyPayload({ ...src, selection: mixed }, mixed)!.json });
+		expect(
+			mixedOps.every(
+				(op) => op.kind !== 'insert-block' || (op.block.type !== 'table_cell' && op.block.type !== 'table_row')
+			)
+		).toBe(true);
+		expect(() => dispatchMany(dest, mixedOps)).not.toThrow();
+	});
+
 	it('paste of a table slice into a cell fills rectangularly without split-block', () => {
 		const src = createEditorState(grid());
 		const live = { anchor: { blockId: 'c11', offset: 0 }, head: { blockId: 'c12', offset: 2 } };
@@ -317,6 +364,20 @@ describe('N4 table editor', () => {
 		expect(state.page.blocks[0]?.type).toBe('table');
 	});
 
+	it('slash convert in a cell does not convert-block', () => {
+		const doc = page([table('t', [row('r1', [cell('c11', '/h1')])]), para('z', 'zz')]);
+		let state = {
+			...createEditorState(doc),
+			selection: { anchor: { blockId: 'c11', offset: 3 }, head: { blockId: 'c11', offset: 3 } }
+		};
+		const result = mapBeforeInput(state, { inputType: 'insertText', data: ' ' }, state.selection);
+		expect(result.ops.some((op) => op.kind === 'convert-block')).toBe(false);
+		expect(() => dispatchMany(state, result.ops)).not.toThrow();
+		state = dispatchMany(state, result.ops);
+		expect(findBlock(state.page, 'c11')?.type).toBe('table_cell');
+		expect(plaintextOf(findBlock(state.page, 'c11')!)).toBe('/h1 ');
+	});
+
 	it('does not merge adjacent cells on Backspace/Delete at edges', () => {
 		const doc = grid();
 		expect(backspaceAtStartOps(doc, 'c12')).toEqual([]);
@@ -350,6 +411,14 @@ describe('N4 table editor', () => {
 		expect(ops).toEqual([{ kind: 'insert-text', at: { blockId: 'c11', offset: 2 }, text: 'あ' }]);
 		state = dispatchMany({ ...state, composing: false }, ops);
 		expect(plaintextOf(findBlock(state.page, 'c11')!)).toBe('aaあ');
+		const follow = mapKeydown(
+			{ ...state, justCommittedComposition: true },
+			{ key: 'Enter', metaKey: false, ctrlKey: false, shiftKey: false, altKey: false },
+			{ anchor: { blockId: 'c11', offset: 3 }, head: { blockId: 'c11', offset: 3 } }
+		);
+		expect(follow.preventDefault).toBe(true);
+		expect(follow.ops).toEqual([]);
+		expect(follow.selection).toBeUndefined();
 		spy.mockRestore();
 		el.remove();
 	});
@@ -419,6 +488,53 @@ describe('N4 table editor', () => {
 		expect(mapped?.anchor.blockId).toBe('c11');
 		expect(mapped?.head.blockId).toBe('z');
 		unmount();
+	});
+
+	it('KbEditor onDispatch-only: Tab moves caret; last-row Enter keeps the column', async () => {
+		let state = setSelection(createEditorState(grid()), {
+			anchor: { blockId: 'c11', offset: 2 },
+			head: { blockId: 'c11', offset: 2 }
+		});
+		const { container, unmount } = render(KbEditor, {
+			props: {
+				state,
+				editable: true,
+				onDispatch: (op: Op | Op[]) => {
+					state = applyEditorOps(state, op);
+				}
+			}
+		});
+		await tick();
+		const kbHost = container.querySelector('[data-testid="kb-host"]') as HTMLElement;
+		kbHost.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true }));
+		await tick();
+		expect(rangeFromSelection(kbHost)?.anchor.blockId).toBe('c12');
+
+		unmount();
+
+		state = setSelection(createEditorState(grid()), {
+			anchor: { blockId: 'c22', offset: 2 },
+			head: { blockId: 'c22', offset: 2 }
+		});
+		const second = render(KbEditor, {
+			props: {
+				state,
+				editable: true,
+				onDispatch: (op: Op | Op[]) => {
+					state = applyEditorOps(state, op);
+				}
+			}
+		});
+		await tick();
+		const host2 = second.container.querySelector('[data-testid="kb-host"]') as HTMLElement;
+		host2.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+		await tick();
+		const caret = rangeFromSelection(host2);
+		expect(caret?.anchor.blockId).not.toBe('c22');
+		const dest = host2.querySelector(`[data-block-id="${caret?.anchor.blockId}"]`) as HTMLElement;
+		expect(dest?.getAttribute('data-col')).toBe('1');
+		expect(dest?.getAttribute('data-parent-id')).not.toBe('r2');
+		second.unmount();
 	});
 
 	it('source grep: no HTML <table> constructor and no per-cell contenteditable', () => {
