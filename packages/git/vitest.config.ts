@@ -1,10 +1,33 @@
 import { defineConfig } from 'vitest/config';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
 import { svelteTesting } from '@testing-library/svelte/vite';
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
+
+/** Vite /@fs/ follows realpaths; allow the install even when node_modules is a symlink. */
+function nodeModulesAllow(from: string): string[] {
+	const out: string[] = [];
+	let dir = from;
+	for (;;) {
+		const nm = path.join(dir, 'node_modules');
+		if (fs.existsSync(nm)) {
+			out.push(nm);
+			try {
+				const real = fs.realpathSync(nm);
+				if (real !== nm) out.push(real);
+			} catch {
+				/* dangling symlink */
+			}
+		}
+		const parent = path.dirname(dir);
+		if (parent === dir) break;
+		dir = parent;
+	}
+	return out;
+}
 
 export default defineConfig({
 	plugins: [
@@ -15,7 +38,17 @@ export default defineConfig({
 		include: ['src/**/*.test.ts'],
 		environment: 'jsdom',
 		setupFiles: ['./src/testSetup.ts', '@testing-library/svelte/vitest'],
-		testTimeout: 20_000
+		testTimeout: 20_000,
+		server: {
+			deps: {
+				inline: [/@lucide\/svelte/]
+			}
+		}
+	},
+	server: {
+		fs: {
+			allow: [root, ...nodeModulesAllow(root)]
+		}
 	},
 	root,
 	resolve: {
