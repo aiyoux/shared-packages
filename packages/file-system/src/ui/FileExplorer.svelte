@@ -24,11 +24,22 @@
 		type ArchiveKind,
 		type InnerFsSession
 	} from './archiveOps.js';
-	import { createTreeDndSession, resolveDrop, zoneFromY, type DropZone } from './treeDnd/index.js';
+	import {
+		createTreeDndSession,
+		canonicalizeSiblingZone,
+		resolveDrop,
+		zoneFromY,
+		type DropZone
+	} from './treeDnd/index.js';
 	import {
 		FE_EXPLORER_IDS_MIME,
 		dataTransferHasOsFiles
 	} from './copyAcross.js';
+	import {
+		setCrossWindowDrag,
+		clearCrossWindowDrag,
+		setPointerDragActive
+	} from './crossWindowDnd.js';
 	import {
 		collectOsDrop,
 		importOsDropToDriver,
@@ -36,6 +47,12 @@
 		type OsDropNode
 	} from './osDrop.js';
 	import { formatExplorerError } from './explorerError.js';
+	import { generateId } from '../id.js';
+	import {
+		httpDownloadIsSafe,
+		saveFileToDisk,
+		triggerHttpDownload
+	} from './saveToDisk.js';
 	import {
 		prefetchForDragOut,
 		getDragOutFile,
@@ -119,6 +136,8 @@
 		hideToolbarTrash?: boolean;
 		/** Extra manage-toolbar actions (e.g. Copy across when chrome is in the hub). */
 		toolbarExtra?: Snippet;
+		/** Leading header slot (connection dropdown for DualPaneExplorer). */
+		headerLeading?: Snippet;
 	}
 
 	let {
@@ -145,7 +164,8 @@
 		compatLibraryTestId = false,
 		compatSaveTestId = false,
 		hideToolbarTrash = false,
-		toolbarExtra
+		toolbarExtra,
+		headerLeading
 	}: Props = $props();
 
 	// Resolve driver once from props (local default). Re-create if prop identity changes via effect below.
@@ -188,6 +208,7 @@
 	onDestroy(() => {
 		void innerFs?.dispose();
 		clearDragOutCache();
+		teardownPointerDrag();
 	});
 	/** off → below (horizontal split) → beside (vertical split) → off. */
 	type PreviewDock = 'off' | 'bottom' | 'right';
@@ -273,6 +294,16 @@
 	let trashBusy = $state(false);
 	/** Set while a "download selected" pass is triggering browser downloads. */
 	let downloadBusy = $state(false);
+	/** In-list progress for save-to-PC when we stream instead of a native GET. */
+	let saveOps = $state<
+		Array<{
+			id: string;
+			name: string;
+			transferred: number;
+			size: number;
+			direction?: string;
+		}>
+	>([]);
 	/** True until the first list() completes (empty shell only). */
 	let initialLoad = $state(true);
 
@@ -368,6 +399,9 @@
 	let newFolderOpen = $state(false);
 	let newFolderName = $state('New Folder');
 	let renamingId = $state<string | null>(null);
+	let renameRootEl = $state<HTMLElement | null>(null);
+	let renameBlurTimer: ReturnType<typeof setTimeout> | null = null;
+	let renameBusy = false;
 	let renameValue = $state('');
 	let focusIndex = $state(-1);
 	let clipboard = $state<{ mode: 'copy' | 'cut'; ids: string[] } | null>(null);
@@ -380,6 +414,15 @@
 	const dnd = createTreeDndSession();
 	let dndTargetId = $state<string | null>(null);
 	let dndZone = $state<DropZone | null>(null);
+	/** Overlay gap Y inside `.fe-list` (content coords). Null = hide the line. */
+	let dndLineTop = $state<number | null>(null);
+	let dndDraggingIds = $state<Set<string>>(new Set());
+	let listEl = $state<HTMLDivElement | null>(null);
+	/** Touch/pen drag in progress (HTML5 DnD does not fire on mobile). */
+	let pointerDragActive = $state(false);
+	let pointerListen = false;
+	let longPressTimer: ReturnType<typeof setTimeout> | null = null;
+	const TOUCH_DRAG_DELAY_MS = 220;
 
 	// Cap-gated only — do not fold listBusy into the attribute or rows flicker
 	// non-draggable during refresh paint (and component tests race listBusy).
@@ -435,6 +478,163 @@
 		if (msg) toast.error(msg);
 	}
 
+	function rowSelector(id: string): string {
+		const safe =
+			typeof CSS !== 'undefined' && typeof CSS.escape === 'function' ? CSS.escape(id) : id;
+		return `[data-fe-row-id="${safe}"]`;
+	}
+
+	function rowElById(id: string): HTMLElement | null {
+		const root = listEl;
+		if (!root) return null;
+		return root.querySelector(rowSelector(id));
+	}
+
+	function clearDndHover() {
+		dndTargetId = null;
+		dndZone = null;
+		dndLineTop = null;
+	}
+
+	function clearDndChrome() {
+		clearDndHover();
+		dndDraggingIds = new Set();
+	}
+
+	function updateLineTop(rowEl: HTMLElement, zone: DropZone) {
+		if (zone === 'into') {
+			dndLineTop = null;
+			return;
+		}
+		dndLineTop = zone === 'before' ? rowEl.offsetTop : rowEl.offsetTop + rowEl.offsetHeight - 1;
+	}
+
+	function applyRowHover(n: ExplorerEntry, clientY: number, rowEl: HTMLElement) {
+		if (!dnd.getState().active) return;
+		const rect = rowEl.getBoundingClientRect();
+		let zone = zoneFromY(
+			{ top: rect.top, height: rect.height },
+			clientY,
+			{ kind: n.kind, supportsSiblingOrder: caps.supportsSiblingOrder }
+		);
+		let target = n;
+		let targetEl = rowEl;
+		if (!caps.supportsSiblingOrder) {
+			if (n.kind !== 'folder') {
+				dnd.clearDropTarget();
+				clearDndHover();
+				return;
+			}
+			zone = 'into';
+		} else {
+			const idx = nodes.findIndex((x) => x.id === n.id);
+			if (idx >= 0) {
+				const canon = canonicalizeSiblingZone(idx, zone);
+				if (canon.index !== idx) {
+					target = nodes[canon.index]!;
+					const el = rowElById(target.id);
+					if (el) targetEl = el;
+				}
+				zone = canon.zone;
+			}
+		}
+		dnd.setDropTarget(target.id, zone);
+		dndTargetId = target.id;
+		dndZone = zone;
+		updateLineTop(targetEl, zone);
+	}
+
+	function hoverGapAfterLast() {
+		if (!caps.supportsSiblingOrder || !nodes.length) {
+			dnd.setDropTarget(null, 'into');
+			dndTargetId = null;
+			dndZone = 'into';
+			dndLineTop = null;
+			return;
+		}
+		const last = nodes[nodes.length - 1]!;
+		const lastEl = rowElById(last.id);
+		dnd.setDropTarget(last.id, 'after');
+		dndTargetId = last.id;
+		dndZone = 'after';
+		if (lastEl) updateLineTop(lastEl, 'after');
+		else dndLineTop = null;
+	}
+
+	function hoverFromPoint(clientX: number, clientY: number) {
+		if (!dnd.getState().active) return;
+		const stack =
+			typeof document !== 'undefined' && document.elementsFromPoint
+				? document.elementsFromPoint(clientX, clientY)
+				: (() => {
+						const hit =
+							typeof document !== 'undefined'
+								? document.elementFromPoint(clientX, clientY)
+								: null;
+						return hit ? [hit] : [];
+					})();
+		const inList = stack.find((el) => listEl?.contains(el));
+		if (!inList || !listEl) {
+			dnd.clearDropTarget();
+			clearDndHover();
+			return;
+		}
+		const row = stack.find((el) => el instanceof Element && el.closest('[data-fe-row-id]'));
+		const rowEl =
+			row instanceof Element ? (row.closest('[data-fe-row-id]') as HTMLElement | null) : null;
+		if (!rowEl || !listEl.contains(rowEl)) {
+			hoverGapAfterLast();
+			return;
+		}
+		const id = rowEl.getAttribute('data-fe-row-id');
+		const n = id ? nodes.find((x) => x.id === id) : undefined;
+		if (!n) {
+			hoverGapAfterLast();
+			return;
+		}
+		applyRowHover(n, clientY, rowEl);
+	}
+
+	function idsForDrag(n: ExplorerEntry): string[] {
+		return selected.has(n.id) && selected.size > 0 ? [...selected] : [n.id];
+	}
+
+	function selectForDrag(n: ExplorerEntry) {
+		if (selected.has(n.id)) return;
+		if (canToggleSelect()) {
+			const next = new Set(selected);
+			next.add(n.id);
+			selected = next;
+			lastSelectedId = n.id;
+		} else {
+			selectExclusive(n);
+		}
+	}
+
+	function beginInternalDrag(n: ExplorerEntry): string[] {
+		selectForDrag(n);
+		const ids = idsForDrag(n);
+		dndDraggingIds = new Set(ids);
+		if (caps.supportsMove) dnd.startDrag(ids, parentId);
+		try {
+			setCrossWindowDrag({
+				sourceDriver: driver,
+				sourceEntries: nodes,
+				selectedIds: ids
+			});
+		} catch {
+			/* ignore */
+		}
+		return ids;
+	}
+
+	function stopInternalDrag() {
+		dnd.stopDrag();
+		clearDndChrome();
+		pointerDragActive = false;
+		setPointerDragActive(false);
+	}
+
 	function onRowDragStart(e: DragEvent, n: ExplorerEntry) {
 		dragStarted = true;
 		if (!dragOutEnabled) {
@@ -446,24 +646,7 @@
 			e.preventDefault();
 			return;
 		}
-		// A drag is a send/move of this row — keep it selected, don't toggle off.
-		if (!selected.has(n.id)) {
-			if (canToggleSelect()) {
-				const next = new Set(selected);
-				next.add(n.id);
-				selected = next;
-				lastSelectedId = n.id;
-			} else {
-				selectExclusive(n);
-			}
-		}
-		const ids =
-			selected.has(n.id) && selected.size > 0 ? [...selected] : [n.id];
-		// Only start the internal move/reorder session when the driver actually
-		// supports move — for supportsDragOut-only drivers (e.g. memory), leave
-		// the session inactive so no in-list drop-target chrome/logic engages;
-		// the native dataTransfer payload below is still set for external drops.
-		if (caps.supportsMove) dnd.startDrag(ids, parentId);
+		const ids = beginInternalDrag(n);
 		try {
 			e.dataTransfer?.setData('text/plain', ids.join(','));
 			e.dataTransfer?.setData(
@@ -527,31 +710,14 @@
 		}
 		if (!dnd.getState().active) return;
 		e.preventDefault();
-		const el = e.currentTarget as HTMLElement;
-		const rect = el.getBoundingClientRect();
-		let zone = zoneFromY({ top: rect.top, height: rect.height }, e.clientY);
-		if (!caps.supportsSiblingOrder) {
-			// into-only for remotes; force into when over folder, else ignore
-			if (n.kind !== 'folder') {
-				dnd.clearDropTarget();
-				dndTargetId = null;
-				dndZone = null;
-				return;
-			}
-			zone = 'into';
-		}
-		dnd.setDropTarget(n.id, zone);
-		dndTargetId = n.id;
-		dndZone = zone;
+		applyRowHover(n, e.clientY, e.currentTarget as HTMLElement);
 		if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
 	}
 
 	async function commitDndDrop(target: ExplorerEntry | null) {
 		const st = dnd.getState();
 		if (!st.active || !st.primaryId) {
-			dnd.stopDrag();
-			dndTargetId = null;
-			dndZone = null;
+			stopInternalDrag();
 			return;
 		}
 		const zone = st.zone;
@@ -573,6 +739,12 @@
 						if (id === resolved.newParentId) continue;
 						await driver.move?.(id, resolved.newParentId);
 					} else if (caps.supportsSiblingOrder && driver.reorder) {
+						if (
+							dragIds.length === 1 &&
+							(resolved.afterId === id || resolved.beforeId === id)
+						) {
+							continue;
+						}
 						const node = nodes.find((x) => x.id === id);
 						if (node && node.parentId !== resolved.newParentId) {
 							await driver.move?.(id, resolved.newParentId);
@@ -590,9 +762,7 @@
 		} catch (err) {
 			reportError(err);
 		} finally {
-			dnd.stopDrag();
-			dndTargetId = null;
-			dndZone = null;
+			stopInternalDrag();
 		}
 	}
 
@@ -611,15 +781,114 @@
 		if (!dnd.getState().active) return;
 		e.preventDefault();
 		e.stopPropagation();
-		void commitDndDrop(n);
+		void commitDndDrop(
+			dndTargetId ? (nodes.find((x) => x.id === dndTargetId) ?? n) : n
+		);
 	}
 
 	function onRowDragEnd() {
 		dragStarted = false;
 		press = null;
+		stopInternalDrag();
+		clearCrossWindowDrag();
+	}
+
+	function attachPointerListeners() {
+		if (pointerListen || typeof document === 'undefined') return;
+		pointerListen = true;
+		document.addEventListener('pointermove', onDocPointerMove, { capture: true, passive: false });
+		document.addEventListener('pointerup', onDocPointerUp, { capture: true });
+		document.addEventListener('pointercancel', onDocPointerUp, { capture: true });
+	}
+
+	function detachPointerListeners() {
+		if (!pointerListen || typeof document === 'undefined') return;
+		pointerListen = false;
+		document.removeEventListener('pointermove', onDocPointerMove, true);
+		document.removeEventListener('pointerup', onDocPointerUp, true);
+		document.removeEventListener('pointercancel', onDocPointerUp, true);
+	}
+
+	function teardownPointerDrag() {
+		if (longPressTimer) {
+			clearTimeout(longPressTimer);
+			longPressTimer = null;
+		}
+		detachPointerListeners();
+		pointerDragActive = false;
+		setPointerDragActive(false);
+	}
+
+	function beginPointerDrag() {
+		const start = press;
+		if (!start || !dragOutEnabled) return;
+		const n = nodes.find((x) => x.id === start.id);
+		if (!n) return;
+		dragStarted = true;
+		pointerDragActive = true;
+		setPointerDragActive(true);
+		const ids = beginInternalDrag(n);
+		try {
+			start.rowEl?.setPointerCapture(start.pointerId);
+		} catch {
+			/* jsdom / lost node */
+		}
+		start.rowEl?.dispatchEvent(
+			new CustomEvent('feexplorerdragbegin', { bubbles: true, composed: true, detail: { ids } })
+		);
+		try {
+			navigator.vibrate?.(10);
+		} catch {
+			/* ignore */
+		}
+	}
+
+	function onDocPointerMove(e: PointerEvent) {
+		if (!press || e.pointerId !== press.pointerId) return;
+		const dx = e.clientX - press.x;
+		const dy = e.clientY - press.y;
+		if (longPressTimer && dx * dx + dy * dy > SELECT_SLOP_PX * SELECT_SLOP_PX) {
+			clearTimeout(longPressTimer);
+			longPressTimer = null;
+			detachPointerListeners();
+			return;
+		}
+		if (!pointerDragActive) return;
+		e.preventDefault();
+		hoverFromPoint(e.clientX, e.clientY);
+	}
+
+	function onDocPointerUp(e: PointerEvent) {
+		if (press && e.pointerId !== press.pointerId) return;
+		if (longPressTimer) {
+			clearTimeout(longPressTimer);
+			longPressTimer = null;
+		}
+		detachPointerListeners();
+		if (!pointerDragActive) return;
+		e.preventDefault();
+		finishPointerDrag(e);
+	}
+
+	function finishPointerDrag(e: PointerEvent) {
+		pointerDragActive = false;
+		dragStarted = true;
+		press = null;
+		hoverFromPoint(e.clientX, e.clientY);
+		const el =
+			typeof document !== 'undefined' ? document.elementFromPoint(e.clientX, e.clientY) : null;
+		const inSelf = el instanceof Node && !!listEl?.contains(el);
+		if (inSelf && dnd.getState().active) {
+			setPointerDragActive(false);
+			el instanceof Element &&
+				el.dispatchEvent(new CustomEvent('feexplorerdragend', { bubbles: true, composed: true }));
+			const target = dndTargetId ? (nodes.find((x) => x.id === dndTargetId) ?? null) : null;
+			void commitDndDrop(target);
+			return;
+		}
+		// Foreign drop (other pane / window): DualPaneExplorer handles copy-across.
 		dnd.stopDrag();
-		dndTargetId = null;
-		dndZone = null;
+		clearDndChrome();
 	}
 
 	function beginListBusy(opts?: { immediate?: boolean }) {
@@ -794,15 +1063,6 @@
 
 	function rowActionable(n: ExplorerEntry): boolean {
 		return isActionable(n as never, accept);
-	}
-
-	function readOpenTarget(entry: ExplorerOpenTarget): Promise<Blob> {
-		if (driver.readBlob) return driver.readBlob(entry.id);
-		throw new Error('Cannot read this file from the current backend.');
-	}
-
-	function emitOpen(entry: ExplorerOpenTarget) {
-		return onOpen?.(entry, { read: () => readOpenTarget(entry) });
 	}
 
 	async function refreshTrash() {
@@ -989,16 +1249,46 @@
 		await refreshTrash();
 	}
 
+	function clearRenameBlur() {
+		if (renameBlurTimer != null) {
+			clearTimeout(renameBlurTimer);
+			renameBlurTimer = null;
+		}
+	}
+
+	function cancelRename() {
+		clearRenameBlur();
+		renamingId = null;
+	}
+
 	async function commitRename(n: ExplorerEntry) {
+		if (renamingId !== n.id || renameBusy) return;
+		clearRenameBlur();
+		const next = renameValue.trim();
+		if (!next || next === n.name) {
+			renamingId = null;
+			return;
+		}
 		if (!driver.rename || !caps.supportsRename) return;
+		renameBusy = true;
 		try {
-			await driver.rename(n.id, renameValue);
+			await driver.rename(n.id, next);
 			renamingId = null;
 			error = '';
 			await refresh();
 		} catch (e) {
 			reportError(e);
+		} finally {
+			renameBusy = false;
 		}
+	}
+
+	function scheduleCommitRename(n: ExplorerEntry) {
+		clearRenameBlur();
+		renameBlurTimer = setTimeout(() => {
+			renameBlurTimer = null;
+			if (renamingId === n.id) void commitRename(n);
+		}, 0);
 	}
 
 	function startRename(n: ExplorerEntry) {
@@ -1006,6 +1296,30 @@
 		renamingId = n.id;
 		renameValue = n.name;
 	}
+
+	$effect(() => {
+		if (!renamingId) return;
+		const id = renamingId;
+		const onPointerDown = (e: PointerEvent) => {
+			const root = renameRootEl;
+			if (root && e.target instanceof Node && root.contains(e.target)) return;
+			const n = nodes.find((x) => x.id === id);
+			if (n) void commitRename(n);
+		};
+		document.addEventListener('pointerdown', onPointerDown, true);
+		return () => document.removeEventListener('pointerdown', onPointerDown, true);
+	});
+
+	$effect(() => {
+		if (!renamingId || !renameRootEl) return;
+		const input = renameRootEl.querySelector('input');
+		if (!(input instanceof HTMLInputElement)) return;
+		input.focus();
+		const v = input.value;
+		const dot = v.lastIndexOf('.');
+		if (dot > 0) input.setSelectionRange(0, dot);
+		else input.select();
+	});
 
 	function canToggleSelect(): boolean {
 		return selectMulti && (multiSelect || mode === 'manage' || mode === 'open');
@@ -1149,6 +1463,7 @@
 		if (entry.fileType === 'vrec') return 'Open in voice';
 		if (entry.fileType === 'image') return 'Open in Images';
 		if (entry.fileType === 'video') return 'Open in Video';
+		if (entry.fileType === 'pdf') return 'Open PDF';
 		return 'Open';
 	}
 
@@ -1157,6 +1472,16 @@
 		if (mode !== 'open' && mode !== 'manage') return false;
 		if (mode === 'manage' && looksPackedName(entry.name)) return true;
 		return Boolean(onOpen && rowActionable(entry));
+	}
+
+	function readOpenTarget(entry: ExplorerOpenTarget): Promise<Blob> {
+		if (driver.readBlob) return driver.readBlob(entry.id);
+		if (driver.download) return driver.download(entry.id);
+		return Promise.reject(new Error('This location cannot read files'));
+	}
+
+	function emitOpen(entry: ExplorerOpenTarget) {
+		return onOpen?.(entry, { read: () => readOpenTarget(entry) });
 	}
 
 	async function confirmPreviewOpen() {
@@ -1261,7 +1586,14 @@
 	 */
 	const SELECT_SLOP_PX = 6;
 	let press:
-		| { id: string; x: number; y: number; index: number }
+		| {
+				id: string;
+				x: number;
+				y: number;
+				index: number;
+				pointerId: number;
+				rowEl: HTMLElement | null;
+		  }
 		| null = null;
 	let dragStarted = false;
 	let selectedOnPointerUp = false;
@@ -1272,9 +1604,25 @@
 	function onRowPointerDown(e: PointerEvent, n: ExplorerEntry, i: number) {
 		if (e.button != null && e.button !== 0) return;
 		if (isRowControl(e.target)) return;
-		press = { id: n.id, x: e.clientX, y: e.clientY, index: i };
+		press = {
+			id: n.id,
+			x: e.clientX,
+			y: e.clientY,
+			index: i,
+			pointerId: e.pointerId,
+			rowEl: e.currentTarget instanceof HTMLElement ? e.currentTarget : null
+		};
 		dragStarted = false;
 		selectedOnPointerUp = false;
+		const isTouch = e.pointerType === 'touch' || e.pointerType === 'pen';
+		if (isTouch && dragOutEnabled && renamingId !== n.id) {
+			if (longPressTimer) clearTimeout(longPressTimer);
+			attachPointerListeners();
+			longPressTimer = setTimeout(() => {
+				longPressTimer = null;
+				beginPointerDrag();
+			}, TOUCH_DRAG_DELAY_MS);
+		}
 	}
 
 	function onRowPointerUp(e: PointerEvent, n: ExplorerEntry) {
@@ -1352,7 +1700,10 @@
 	);
 
 	/** Toolbar download button: shown when this driver can hand out blobs. */
-	const supportsDownload = $derived(Boolean(driver.download) && caps.supportsDownload);
+	const supportsDownload = $derived(
+		Boolean((driver.download || driver.downloadUrl) && caps.supportsDownload)
+	);
+	const listPending = $derived([...pending, ...saveOps]);
 	/** Enabled only when at least one selected row is a downloadable file. */
 	const canDownloadSelection = $derived(selectedEntries.some((e) => e.kind === 'file'));
 
@@ -1464,19 +1815,45 @@
 	}
 
 	async function downloadNode(n: ExplorerEntry) {
-		if (!driver.download || !caps.supportsDownload || n.kind !== 'file') return;
+		if (!caps.supportsDownload || n.kind !== 'file') return;
 		try {
-			const blob = await driver.download(n.id);
-			const url = URL.createObjectURL(blob);
-			const a = document.createElement('a');
-			a.href = url;
-			a.download = n.name;
-			a.rel = 'noopener';
-			document.body.appendChild(a);
-			a.click();
-			a.remove();
-			URL.revokeObjectURL(url);
+			if (driver.downloadUrl) {
+				const loc = await driver.downloadUrl(n.id);
+				if (loc && httpDownloadIsSafe(loc.url)) {
+					// Chrome's download manager GETs the URL → real shelf progress.
+					triggerHttpDownload(loc.url, loc.filename);
+					return;
+				}
+			}
+			if (!driver.download) return;
+			const opId = generateId('dl');
+			saveOps = [
+				...saveOps,
+				{
+					id: opId,
+					name: n.name,
+					transferred: 0,
+					size: n.size ?? 0,
+					direction: 'receiving'
+				}
+			];
+			try {
+				await saveFileToDisk({
+					filename: n.name,
+					download: (opts) => driver.download!(n.id, opts),
+					onProgress: (transferred, total) => {
+						saveOps = saveOps.map((o) =>
+							o.id === opId
+								? { ...o, transferred, size: total ?? o.size }
+								: o
+						);
+					}
+				});
+			} finally {
+				saveOps = saveOps.filter((o) => o.id !== opId);
+			}
 		} catch (e) {
+			if (e instanceof Error && e.name === 'AbortError') return;
 			reportError(e);
 		}
 	}
@@ -1498,6 +1875,8 @@
 	}
 
 	const canImportFromDevice = $derived(Boolean(driver.upload || driver.writeFile));
+	/** File-picker chrome is local writeFile only; remotes import via drop / copy-across. */
+	const showDeviceFilePicker = $derived(Boolean(driver.writeFile));
 
 	async function refreshSystemClipboard() {
 		if (typeof navigator === 'undefined' || !navigator.clipboard?.read) return;
@@ -1590,9 +1969,8 @@
 		// empty list / padding → drop into current parent
 		if ((e.target as HTMLElement).closest?.('.fe-row')) return;
 		e.preventDefault();
-		dnd.setDropTarget(null, 'into');
-		dndTargetId = null;
-		dndZone = 'into';
+		hoverGapAfterLast();
+		if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
 	}
 
 	function onListDragLeave(e: DragEvent) {
@@ -1602,13 +1980,20 @@
 	}
 
 	function onListDrop(e: DragEvent) {
-		if (!allowOsFileDrag(e)) return;
+		if (allowOsFileDrag(e)) {
+			e.preventDefault();
+			e.stopPropagation();
+			osDropOver = false;
+			// Capture entries/files now — directory File objects die after this handler.
+			const pending = collectOsDrop(e.dataTransfer);
+			void importOsNodes(pending, parentId);
+			return;
+		}
+		if (!dnd.getState().active) return;
 		e.preventDefault();
 		e.stopPropagation();
-		osDropOver = false;
-		// Capture entries/files now — directory File objects die after this handler.
-		const pending = collectOsDrop(e.dataTransfer);
-		void importOsNodes(pending, parentId);
+		const target = dndTargetId ? (nodes.find((x) => x.id === dndTargetId) ?? null) : null;
+		void commitDndDrop(target);
 	}
 
 	function onListKeydown(e: KeyboardEvent) {
@@ -1792,26 +2177,10 @@
 	onclick={() => { if (viewSwitcherOpen) closeViewSwitcher(); }}
 >
 	<header class="fe-header" data-testid="fe-header">
-		{#if driver.id !== 'memory'}
-			<div class="fe-breadcrumbs" data-testid="fe-breadcrumbs">
-				<button type="button" class="fe-crumb" data-testid="fe-crumb-root" onclick={() => goCrumb(null)}>
-					Root
-				</button>
-				{#each breadcrumbs as crumb (crumb.id)}
-					<span class="fe-sep">/</span>
-					<button
-						type="button"
-						class="fe-crumb"
-						data-testid="fe-crumb"
-						data-id={crumb.id}
-						onclick={() => goCrumb(crumb.id)}
-					>
-						{crumb.name}
-					</button>
-				{/each}
+		{#if headerLeading}
+			<div class="fe-header-leading" data-testid="fe-header-leading">
+				{@render headerLeading()}
 			</div>
-		{:else}
-			<div class="fe-breadcrumbs-spacer" data-testid="fe-breadcrumbs-spacer"></div>
 		{/if}
 		<div class="fe-toolbar" data-testid="fe-toolbar">
 			<div class="fe-toolbar-row">
@@ -1923,7 +2292,7 @@
 							onclick={() => (newFolderOpen = true)}
 						/>
 					{/if}
-					{#if canImportFromDevice}
+					{#if showDeviceFilePicker}
 						<FeTipIconBtn
 							testid="fe-upload"
 							tip={uploadTip}
@@ -2103,17 +2472,19 @@
 		tabindex="0"
 		class:fe-list-busy={listBusy}
 		class:fe-list-covered={showBusyOverlay}
+		class:fe-list-pointer-dnd={pointerDragActive}
 		data-testid="fe-list"
 		role="listbox"
 		aria-busy={listBusy ? 'true' : undefined}
 		class:os-drop={osDropOver}
+		bind:this={listEl}
 		ondragover={onListDragOver}
 		ondragleave={onListDragLeave}
 		ondrop={onListDrop}
 	>
-		{#if pending.length > 0}
+		{#if listPending.length > 0}
 			<div class="fe-pending-list" data-testid="fe-pending-list">
-				{#each pending as p (p.id)}
+				{#each listPending as p (p.id)}
 					{@const behindPct = Math.min(100, Math.round(p.size ? (p.transferred / p.size) * 100 : 0))}
 					{@const aheadN = p.ready ?? p.transferred}
 					{@const aheadPct = Math.min(100, Math.round(p.size ? (aheadN / p.size) * 100 : 0))}
@@ -2150,23 +2521,16 @@
 		{/if}
 		{#if initialLoad && nodes.length === 0}
 			<div class="fe-empty" data-testid="fe-loading">Loading…</div>
-		{:else if nodes.length === 0 && pending.length === 0}
+		{:else if nodes.length === 0 && listPending.length === 0}
 			<div class="fe-empty" data-testid="fe-empty">
 				No files here
 			</div>
 		{:else}
 			{#each nodes as n, i (n.id)}
 				{@const actionable = rowActionable(n)}
-				{@const showBefore =
-					dndEnabled && caps.supportsSiblingOrder && dndTargetId === n.id && dndZone === 'before'}
-				{@const showAfter =
-					dndEnabled && caps.supportsSiblingOrder && dndTargetId === n.id && dndZone === 'after'}
 				{@const showInto =
 					dndEnabled && dndTargetId === n.id && dndZone === 'into' && n.kind === 'folder'}
 				{@const previewKind = showPreview ? getPreviewKind(n) : null}
-				{#if showBefore}
-					<div class="fe-dnd-line" data-testid="fe-dnd-line-before" aria-hidden="true"></div>
-				{/if}
 				<!-- svelte-ignore a11y_click_events_have_key_events -->
 				<!-- svelte-ignore a11y_no_static_element_interactions -->
 				<div
@@ -2178,8 +2542,10 @@
 					class:previewed={previewEntry?.id === n.id}
 					class:focused={i === focusIndex}
 					class:fe-dnd-into={showInto}
+					class:fe-dnd-dragging={dndDraggingIds.has(n.id)}
 					class:fe-row-icon={viewMode === 'icons'}
 					class:fe-row-detailed={viewMode === 'detailed'}
+					class:renaming={renamingId === n.id}
 					data-testid={n.kind === 'folder' ? 'fe-folder-row' : 'fe-file-row'}
 					data-fe-row-id={n.id}
 					data-fe-parent-id={n.parentId ?? ''}
@@ -2201,6 +2567,13 @@
 					onpointerup={(e) => onRowPointerUp(e, n)}
 					onpointercancel={() => {
 						press = null;
+						if (longPressTimer) {
+							clearTimeout(longPressTimer);
+							longPressTimer = null;
+						}
+					}}
+					oncontextmenu={(e) => {
+						if (pointerDragActive || longPressTimer) e.preventDefault();
 					}}
 					onclick={(e) => onRowClick(e, n, i)}
 					ondblclick={(e) => onRowDblClick(e, n, i)}
@@ -2215,7 +2588,7 @@
 								</span>
 							{/if}
 						</span>
-						<span class="fe-row-icon-name" title={n.name}>{#if renamingId === n.id}<input data-testid="fe-rename-input" bind:value={renameValue} onclick={(e) => e.stopPropagation()} onkeydown={(e) => { if (e.key === 'Enter') commitRename(n); if (e.key === 'Escape') renamingId = null; }} />{:else}{n.name}{/if}</span>
+						<span class="fe-row-icon-name" title={n.name}>{#if renamingId === n.id}{@render renameEditor(n)}{:else}{n.name}{/if}</span>
 					{:else if viewMode === 'detailed'}
 						<span class="fe-row-main">
 							<span class="fe-icon">
@@ -2226,15 +2599,7 @@
 								{/if}
 							</span>
 							{#if renamingId === n.id}
-								<input
-									data-testid="fe-rename-input"
-									bind:value={renameValue}
-									onclick={(e) => e.stopPropagation()}
-									onkeydown={(e) => {
-										if (e.key === 'Enter') commitRename(n);
-										if (e.key === 'Escape') renamingId = null;
-									}}
-								/>
+								{@render renameEditor(n)}
 							{:else}
 								<span class="fe-name" title={!actionable && n.kind === 'file' ? 'Wrong type for this app' : n.name}
 									>{n.name}</span
@@ -2254,15 +2619,7 @@
 								{/if}
 							</span>
 							{#if renamingId === n.id}
-								<input
-									data-testid="fe-rename-input"
-									bind:value={renameValue}
-									onclick={(e) => e.stopPropagation()}
-									onkeydown={(e) => {
-										if (e.key === 'Enter') commitRename(n);
-										if (e.key === 'Escape') renamingId = null;
-									}}
-								/>
+								{@render renameEditor(n)}
 							{:else}
 								<span class="fe-name" title={!actionable && n.kind === 'file' ? 'Wrong type for this app' : n.name}
 									>{n.name}</span
@@ -2271,10 +2628,16 @@
 						</span>
 					{/if}
 				</div>
-				{#if showAfter}
-					<div class="fe-dnd-line" data-testid="fe-dnd-line-after" aria-hidden="true"></div>
-				{/if}
 			{/each}
+			{#if dndEnabled && caps.supportsSiblingOrder && dndLineTop != null && (dndZone === 'before' || dndZone === 'after')}
+				<div
+					class="fe-dnd-line"
+					data-testid="fe-dnd-line"
+					data-fe-dnd-zone={dndZone}
+					style="top: {dndLineTop}px"
+					aria-hidden="true"
+				></div>
+			{/if}
 		{/if}
 
 		{#if showBusyOverlay}
@@ -2426,6 +2789,26 @@
 	{/if}
 	</div>
 	</div>
+
+	{#if driver.id !== 'memory'}
+		<nav class="fe-pathbar" data-testid="fe-breadcrumbs" aria-label="Current folder">
+			<button type="button" class="fe-crumb" data-testid="fe-crumb-root" onclick={() => goCrumb(null)}>
+				Root
+			</button>
+			{#each breadcrumbs as crumb (crumb.id)}
+				<span class="fe-sep">/</span>
+				<button
+					type="button"
+					class="fe-crumb"
+					data-testid="fe-crumb"
+					data-id={crumb.id}
+					onclick={() => goCrumb(crumb.id)}
+				>
+					{crumb.name}
+				</button>
+			{/each}
+		</nav>
+	{/if}
 
 	{#if mode === 'save'}
 		<footer class="fe-save-bar" data-testid="fe-save-bar">
@@ -2757,6 +3140,60 @@
 	{/if}
 </div>
 
+{#snippet renameEditor(n: ExplorerEntry)}
+	<!-- svelte-ignore a11y_click_events_have_key_events -->
+	<!-- svelte-ignore a11y_no_static_element_interactions -->
+	<span
+		class="fe-rename"
+		bind:this={renameRootEl}
+		onclick={(e) => e.stopPropagation()}
+		onpointerdown={(e) => e.stopPropagation()}
+	>
+		<input
+			data-testid="fe-rename-input"
+			bind:value={renameValue}
+			aria-label="Rename"
+			onkeydown={(e) => {
+				if (e.key === 'Enter') {
+					e.preventDefault();
+					void commitRename(n);
+				}
+				if (e.key === 'Escape') {
+					e.preventDefault();
+					cancelRename();
+				}
+			}}
+			onblur={() => scheduleCommitRename(n)}
+		/>
+		<button
+			type="button"
+			class="fe-rename-action"
+			data-testid="fe-rename-ok"
+			aria-label="Save name"
+			onpointerdown={(e) => {
+				e.preventDefault();
+				clearRenameBlur();
+			}}
+			onclick={() => void commitRename(n)}
+		>
+			<FeIcon name="check" size={14} />
+		</button>
+		<button
+			type="button"
+			class="fe-rename-action fe-rename-cancel"
+			data-testid="fe-rename-cancel"
+			aria-label="Cancel rename"
+			onpointerdown={(e) => {
+				e.preventDefault();
+				clearRenameBlur();
+			}}
+			onclick={cancelRename}
+		>
+			<FeIcon name="x" size={14} />
+		</button>
+	</span>
+{/snippet}
+
 {#snippet archiveButtons(entry: ExplorerEntry)}
 	<button
 		type="button"
@@ -2831,20 +3268,30 @@
 		position: relative;
 		z-index: 9;
 		display: flex;
-		justify-content: space-between;
+		justify-content: flex-end;
+		align-items: center;
 		gap: var(--space-2);
 		padding: var(--space-2) var(--space-3);
 		border-bottom: 1px solid var(--line-hairline);
 		flex-wrap: wrap;
 	}
-	.fe-breadcrumbs {
+	.fe-header-leading {
+		flex: 1 1 auto;
+		min-width: 0;
+		display: flex;
+		align-items: center;
+		margin-right: auto;
+	}
+	.fe-pathbar {
 		display: flex;
 		flex-wrap: wrap;
 		align-items: center;
 		gap: 4px;
-	}
-	.fe-breadcrumbs-spacer {
-		flex: 1;
+		flex-shrink: 0;
+		padding: 4px 10px;
+		border-top: 1px solid var(--line-hairline);
+		background: var(--surface-1);
+		min-height: 1.75rem;
 	}
 	.fe-crumb {
 		background: none;
@@ -3014,6 +3461,9 @@
 		gap: 8px;
 		min-height: 1.75rem;
 		overflow: hidden;
+	}
+	.fe-row.renaming .fe-row-main {
+		overflow: visible;
 	}
 	.fe-row-actions {
 		display: inline-flex;
@@ -3227,14 +3677,26 @@
 		padding-top: 4px;
 	}
 	.fe-dnd-line {
+		position: absolute;
+		left: 8px;
+		right: 8px;
 		height: 2px;
-		margin: 0 0.5rem;
+		margin: 0;
 		background: var(--accent);
 		border-radius: 1px;
+		pointer-events: none;
+		z-index: 4;
 	}
 	.fe-row.fe-dnd-into {
 		outline: 2px solid var(--accent);
 		outline-offset: -2px;
+	}
+	.fe-row.fe-dnd-dragging {
+		opacity: 0.45;
+	}
+	.fe-list-pointer-dnd,
+	.fe-list-pointer-dnd .fe-row {
+		touch-action: none;
 	}
 	.fe-row.focused {
 		outline: 1px solid var(--accent-light);
@@ -3280,14 +3742,59 @@
 		align-items: center;
 	}
 	.fe-save-bar input,
-	.fe-inline-form input,
-	input[data-testid='fe-rename-input'] {
+	.fe-inline-form input {
 		background: var(--surface-2);
 		border: 1px solid var(--line-hairline);
 		color: inherit;
 		border-radius: var(--radius-md);
 		padding: 4px 8px;
 		font: inherit;
+	}
+	.fe-rename {
+		display: flex;
+		align-items: center;
+		gap: 4px;
+		flex: 1 1 auto;
+		min-width: 0;
+		width: 100%;
+	}
+	.fe-rename input {
+		flex: 1 1 auto;
+		min-width: 8rem;
+		width: 100%;
+		background: var(--surface-2);
+		border: 1px solid var(--accent);
+		color: inherit;
+		border-radius: var(--radius-md);
+		padding: 4px 8px;
+		font: inherit;
+	}
+	.fe-rename-action {
+		flex: 0 0 auto;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 1.5rem;
+		height: 1.5rem;
+		padding: 0;
+		border: 1px solid var(--line-hairline);
+		border-radius: var(--radius-md);
+		background: var(--surface-2);
+		color: var(--text-primary);
+		cursor: pointer;
+	}
+	.fe-rename-action:hover {
+		background: var(--surface-3);
+		border-color: var(--accent);
+	}
+	.fe-rename-cancel:hover {
+		border-color: var(--danger);
+		color: var(--cat-red-soft);
+	}
+	.fe-row-icon-name .fe-rename {
+		white-space: nowrap;
+		-webkit-line-clamp: unset;
+		display: flex;
 	}
 	.fe-hint {
 		opacity: 0.7;

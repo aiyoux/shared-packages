@@ -27,6 +27,44 @@ describe('stackTransferItems', () => {
 		assert.deepEqual(rows[0]!.ids.sort(), ['op1:remote', 'op1:wire']);
 	});
 
+	it('passes hop/ice through stacked and single rows', () => {
+		const stacked = stackTransferItems([
+			item({
+				id: 'op1:remote',
+				name: 'Download · B2',
+				transferred: 80,
+				size: 100,
+				hop: 'dual-phase',
+				hopNote: 'Through this device'
+			}),
+			item({
+				id: 'op1:wire',
+				name: 'photo.jpg',
+				transferred: 30,
+				size: 100,
+				hop: 'dual-phase',
+				hopNote: 'Through this device'
+			})
+		]);
+		assert.equal(stacked[0]!.hop, 'dual-phase');
+		assert.equal(stacked[0]!.hopNote, 'Through this device');
+
+		const single = stackTransferItems([
+			item({
+				id: 'w1',
+				name: 'a.bin',
+				transferred: 4,
+				size: 8,
+				hop: 'webrtc',
+				ice: 'checking',
+				icePath: 'host'
+			})
+		]);
+		assert.equal(single[0]!.hop, 'webrtc');
+		assert.equal(single[0]!.ice, 'checking');
+		assert.equal(single[0]!.icePath, 'host');
+	});
+
 	it('leaves unpaired copy rows as a single fill', () => {
 		const rows = stackTransferItems([
 			item({ id: 'copy-1', name: 'note.txt', transferred: 40, size: 80 })

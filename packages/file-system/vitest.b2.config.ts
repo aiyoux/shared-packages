@@ -14,5 +14,10 @@ export default defineConfig({
 		include: ['src/b2/**/*.test.ts'],
 		setupFiles: ['./test/setup.mjs']
 	},
-	root
+	root,
+	resolve: {
+		alias: {
+			'@shared-packages/crypto': path.resolve(root, '../crypto/src/index.ts')
+		}
+	}
 });

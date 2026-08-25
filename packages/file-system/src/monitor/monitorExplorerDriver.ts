@@ -66,6 +66,7 @@ export type MonitorExplorerDriverOptions = {
 export type MonitorExplorerDriver = ExplorerDriver & {
 	/** Live watch status for UI / e2e (`data-monitor-watch-status`) */
 	getWatchStatus(): WatchStreamStatus | 'off';
+	readonly monitorClient: MonitorTransport;
 };
 
 export async function createMonitorExplorerDriver(
@@ -165,7 +166,16 @@ export async function createMonitorExplorerDriver(
 		id: 'monitor',
 		connectionId: `monitor:${profile.id}`,
 		endpointKey: endpointKeyFromUrl(transport.baseUrl || profile.baseUrl),
+		monitorClient: transport,
 		capabilities: monitorCaps(canRename),
+
+		absolutePath(id: ExplorerEntryId) {
+			return toAbsolutePath(rootPath, id);
+		},
+
+		async uniqueName(parentId, base) {
+			return uniqueName(parentId, base);
+		},
 
 		getWatchStatus() {
 			return watch?.getStatus() ?? watchStatus;
@@ -287,6 +297,75 @@ export async function createMonitorExplorerDriver(
 			}
 		},
 
+		async copyFromAbsolute(fromAbs, destParentId, sourceName, opts) {
+			try {
+				const destName = await uniqueName(destParentId, sourceName);
+				const destRel = childId(destParentId, destName, false);
+				const to = toAbsolutePath(rootPath, destRel);
+				await transport.copy(fromAbs, to, {
+					signal: opts?.signal,
+					onProgress: opts?.onProgress
+				});
+			} catch (e) {
+				throw mapMonitorError(e);
+			}
+		},
+
+		async pullFromUrl(url, destParentId, sourceName, opts) {
+			try {
+				const destName = await uniqueName(destParentId, sourceName);
+				const destRel = childId(destParentId, destName, false);
+				const to = toAbsolutePath(rootPath, destRel);
+				await transport.pull(url, to, {
+					signal: opts?.signal,
+					onProgress: opts?.onProgress
+				});
+			} catch (e) {
+				throw mapMonitorError(e);
+			}
+		},
+
+		async pushToUpload(id, upload, opts) {
+			try {
+				const from = toAbsolutePath(rootPath, id);
+				await transport.push(
+					{
+						from,
+						uploadUrl: upload.uploadUrl,
+						token: upload.authorizationToken,
+						fileName: upload.destFileName,
+						contentType: upload.contentType
+					},
+					{ signal: opts?.signal, onProgress: opts?.onProgress }
+				);
+			} catch (e) {
+				throw mapMonitorError(e);
+			}
+		},
+
+		async writeExactName(parentId, file, exactName, opts) {
+			try {
+				const destRel = childId(parentId, exactName, false);
+				const abs = toAbsolutePath(rootPath, destRel);
+				const st = await transport.write(abs, file, {
+					signal: opts?.signal,
+					onProgress: opts?.onProgress
+				});
+				return {
+					id: destRel,
+					parentId,
+					name: exactName,
+					kind: 'file' as const,
+					size: st.size ?? file.size,
+					updatedAt: st.mtime_ms,
+					contentType: file.type || undefined,
+					fileType: inferFileTypeFromName(exactName)
+				};
+			} catch (e) {
+				throw mapMonitorError(e);
+			}
+		},
+
 		async download(id: ExplorerEntryId, dlOpts) {
 			if (isFolderId(id)) {
 				throw new ExplorerMonitorError('MONITOR_ERROR', 'Cannot download a folder');
@@ -296,7 +375,8 @@ export async function createMonitorExplorerDriver(
 				const blob = await transport.download(abs, {
 					onProgress: dlOpts?.onProgress,
 					onChunk: dlOpts?.onChunk,
-					assemble: dlOpts?.assemble
+					assemble: dlOpts?.assemble,
+					signal: dlOpts?.signal
 				});
 				if (blob.size > EXPLORER_DOWNLOAD_MAX_BYTES) {
 					throw new ExplorerMonitorError(
@@ -308,6 +388,16 @@ export async function createMonitorExplorerDriver(
 			} catch (e) {
 				throw mapMonitorError(e);
 			}
+		},
+
+		async downloadUrl(id: ExplorerEntryId) {
+			if (isFolderId(id)) {
+				throw new ExplorerMonitorError('MONITOR_ERROR', 'Cannot download a folder');
+			}
+			const abs = toAbsolutePath(rootPath, id);
+			const url = new URL(transport.readUrl(abs));
+			url.searchParams.set('download', baseName(id));
+			return { url: url.toString(), filename: baseName(id) };
 		},
 
 		subscribeChanges(listener: () => void, scope?: { parentId: ExplorerEntryId | null }) {

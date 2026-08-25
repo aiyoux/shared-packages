@@ -1,10 +1,11 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { isLocalClass, isRemoteClass } from '../src/ui/explorerDriver.ts';
+import { EXPLORER_DOWNLOAD_MAX_BYTES, isLocalClass, isRemoteClass } from '../src/ui/explorerDriver.ts';
 import {
 	assertCopyAcrossAllowed,
 	canServerCopy,
 	canShowCopyAcross,
+	classify,
 	copyAcross,
 	CopyAcrossError,
 	describeCopyAcrossPath,
@@ -387,10 +388,10 @@ describe('copyAcross truncated folder', () => {
 			}
 		} as unknown as ExplorerDriver;
 		const uploaded: string[] = [];
-		const mon = {
-			id: 'monitor',
-			connectionId: 'monitor:p1',
-			endpointKey: 'monitor:http://127.0.0.1:8300',
+		const rc = {
+			id: 'rclone',
+			connectionId: 'rclone:other',
+			endpointKey: 'rclone:gdrive::/',
 			capabilities: { supportsUpload: true },
 			async upload(_parent: string | null, f: File, opts?: { onProgress?: (pct: number) => void }) {
 				opts?.onProgress?.(1);
@@ -398,8 +399,8 @@ describe('copyAcross truncated folder', () => {
 				return { id: f.name, parentId: null, name: f.name, kind: 'file' };
 			}
 		} as unknown as ExplorerDriver;
-		assert.equal(isDualPhaseCopy(b2, mon), true);
-		const path = describeCopyAcrossPath(b2, mon, { source: 'B2 · shots', dest: 'Monitor · home' });
+		assert.equal(isDualPhaseCopy(b2, rc), true);
+		const path = describeCopyAcrossPath(b2, rc, { source: 'B2 · shots', dest: 'rclone · drive' });
 		assert.equal(path.kind, 'dual-phase');
 		assert.match(path.detail, /confirm/i);
 		const direct = describeCopyAcrossPath(
@@ -421,7 +422,7 @@ describe('copyAcross truncated folder', () => {
 		assert.equal(
 			await copyAcross({
 				sourceDriver: b2,
-				destDriver: mon,
+				destDriver: rc,
 				selectedIds: [file.id],
 				sourceEntries: [file],
 				destParentId: null
@@ -503,4 +504,533 @@ describe('copyAcross truncated folder', () => {
 			(e: unknown) => e instanceof CopyAcrossError && e.code === 'COPY_ACROSS_DEST_READONLY'
 		);
 	});
+
+	it('folder + remote still COPY_ACROSS_FOLDER_REMOTE', async () => {
+		const folder: ExplorerEntry = {
+			id: 'dir/',
+			parentId: null,
+			name: 'dir',
+			kind: 'folder'
+		};
+		const disk = {
+			id: 'disk',
+			capabilities: { supportsMkdir: true },
+			async list() {
+				return { entries: [], truncated: false };
+			}
+		} as unknown as ExplorerDriver;
+		const b2 = {
+			id: 'b2',
+			capabilities: { supportsMkdir: true, supportsUpload: true },
+			async mkdir() {
+				return { id: 'dir/', parentId: null, name: 'dir', kind: 'folder' };
+			}
+		} as unknown as ExplorerDriver;
+		await assert.rejects(
+			() =>
+				copyAcross({
+					sourceDriver: disk,
+					destDriver: b2,
+					selectedIds: [folder.id],
+					sourceEntries: [folder],
+					destParentId: null
+				}),
+			(e: unknown) => e instanceof CopyAcrossError && e.code === 'COPY_ACROSS_FOLDER_REMOTE'
+		);
+	});
 });
+
+function fileEntry(name: string, size = 8): ExplorerEntry {
+	return { id: name, parentId: null, name, kind: 'file', size };
+}
+
+describe('classify copy-across routing', () => {
+	it('same monitor endpointKey, different connectionId → server; copyFromAbsolute not dest.copy', async () => {
+		resetTransferRegistryForTests();
+		const file = fileEntry('shot.png');
+		const copiedRel: string[] = [];
+		const copiedAbs: Array<{ from: string; name: string }> = [];
+		const left = {
+			id: 'monitor',
+			connectionId: 'monitor:p1',
+			endpointKey: 'monitor:http://127.0.0.1:8300',
+			capabilities: { supportsCopy: true, supportsUpload: true },
+			absolutePath: (id: string) => `/home/a/${id}`,
+			async copy(id: string) {
+				copiedRel.push(id);
+			}
+		} as unknown as ExplorerDriver;
+		const right = {
+			id: 'monitor',
+			connectionId: 'monitor:p2',
+			endpointKey: 'monitor:http://127.0.0.1:8300',
+			capabilities: { supportsCopy: true, supportsUpload: true },
+			async copy(id: string) {
+				copiedRel.push(id);
+			},
+			async copyFromAbsolute(fromAbs: string, _parent: string | null, sourceName: string) {
+				copiedAbs.push({ from: fromAbs, name: sourceName });
+			}
+		} as unknown as ExplorerDriver;
+		assert.equal(classify(left, right).kind, 'server');
+		assert.equal(canServerCopy(left, right), true);
+		assert.equal(isDualPhaseCopy(left, right), false);
+		const path = describeCopyAcrossPath(left, right, { source: 'Monitor · a', dest: 'Monitor · b' });
+		assert.equal(path.kind, 'server');
+		assert.match(path.summary, /Server copy on monitor/);
+		assert.match(path.detail, /absolute/i);
+		assert.equal(
+			await copyAcross({
+				sourceDriver: left,
+				destDriver: right,
+				selectedIds: [file.id],
+				sourceEntries: [file],
+				destParentId: 'dest/'
+			}),
+			1
+		);
+		assert.deepEqual(copiedAbs, [{ from: '/home/a/shot.png', name: 'shot.png' }]);
+		assert.deepEqual(copiedRel, []);
+	});
+
+	it('same B2 endpointKey different connectionId → server; dest.copy; no download', async () => {
+		resetTransferRegistryForTests();
+		const file = fileEntry('a.jpg', 12);
+		const copied: string[] = [];
+		const left = {
+			id: 'b2',
+			connectionId: 'b2:acct-a',
+			endpointKey: 'b2:key::bucket',
+			capabilities: { supportsUpload: true, supportsCopy: true },
+			async download() {
+				throw new Error('must not download');
+			}
+		} as unknown as ExplorerDriver;
+		const right = {
+			id: 'b2',
+			connectionId: 'b2:acct-b',
+			endpointKey: 'b2:key::bucket',
+			capabilities: { supportsUpload: true, supportsCopy: true },
+			async copy(id: string) {
+				copied.push(id);
+			},
+			async download() {
+				throw new Error('must not download');
+			}
+		} as unknown as ExplorerDriver;
+		assert.equal(classify(left, right).kind, 'server');
+		assert.equal(
+			await copyAcross({
+				sourceDriver: left,
+				destDriver: right,
+				selectedIds: [file.id],
+				sourceEntries: [file],
+				destParentId: 'archive/'
+			}),
+			1
+		);
+		assert.deepEqual(copied, ['a.jpg']);
+	});
+
+	it('rclone same fs different connectionId → dual-phase NOT server', () => {
+		const left = {
+			id: 'rclone',
+			connectionId: 'rclone:p1',
+			endpointKey: 'rclone:gdrive::/',
+			capabilities: { supportsCopy: true, supportsUpload: true },
+			copy: async () => {}
+		} as unknown as ExplorerDriver;
+		const right = {
+			id: 'rclone',
+			connectionId: 'rclone:p2',
+			endpointKey: 'rclone:gdrive::/',
+			capabilities: { supportsCopy: true, supportsUpload: true },
+			copy: async () => {}
+		} as unknown as ExplorerDriver;
+		assert.equal(classify(left, right).kind, 'dual-phase');
+		assert.equal(canServerCopy(left, right), false);
+		assert.equal(isDualPhaseCopy(left, right), true);
+	});
+
+	it('B2→monitor delegated; monitor→B2 delegated', async () => {
+		resetTransferRegistryForTests();
+		const file = fileEntry('pic.png', 4);
+		const pulled: string[] = [];
+		const pushed: string[] = [];
+		const minted: Array<Record<string, unknown>> = [];
+		const b2 = {
+			id: 'b2',
+			connectionId: 'b2:a',
+			endpointKey: 'b2:key::shots',
+			capabilities: { supportsUpload: true, supportsCopy: true },
+			async mintDownloadUrl(id: string) {
+				const out = { url: `https://f000.example/${id}`, filename: 'pic.png', expiresAt: Date.now() + 300_000 };
+				minted.push(out as unknown as Record<string, unknown>);
+				return out;
+			},
+			async mintUploadUrl(_parent: string | null, fileName: string) {
+				const out = {
+					uploadUrl: 'https://pod.example/upload',
+					authorizationToken: 'tok',
+					destFileName: fileName
+				};
+				minted.push(out);
+				return out;
+			},
+			async download() {
+				throw new Error('must not download for delegated');
+			},
+			async copy() {
+				throw new Error('must not server-copy distinct backends');
+			},
+			async upload() {
+				throw new Error('must not upload for delegated pull');
+			}
+		} as unknown as ExplorerDriver;
+		const mon = {
+			id: 'monitor',
+			connectionId: 'monitor:p1',
+			endpointKey: 'monitor:http://127.0.0.1:8300',
+			capabilities: { supportsUpload: true, supportsCopy: true },
+			async pullFromUrl(url: string, _parent: string | null, name: string) {
+				pulled.push(`${url}::${name}`);
+			},
+			async pushToUpload(id: string) {
+				pushed.push(id);
+			},
+			async upload() {
+				throw new Error('must not upload for delegated');
+			}
+		} as unknown as ExplorerDriver;
+		assert.equal(classify(b2, mon).kind, 'delegated');
+		assert.equal(isDualPhaseCopy(b2, mon), false);
+		const b2toMon = describeCopyAcrossPath(b2, mon, { source: 'B2 · shots', dest: 'Monitor · home' });
+		assert.equal(b2toMon.kind, 'delegated');
+		assert.match(b2toMon.summary, /Delegated:/);
+		assert.match(b2toMon.detail, /keys stay in this tab/i);
+		assert.match(b2toMon.detail, /No confirm/);
+		assert.equal(
+			await copyAcross({
+				sourceDriver: b2,
+				destDriver: mon,
+				selectedIds: [file.id],
+				sourceEntries: [file],
+				destParentId: null
+			}),
+			1
+		);
+		assert.equal(pulled.length, 1);
+		assert.equal(classify(mon, b2).kind, 'delegated');
+		const monToB2 = describeCopyAcrossPath(mon, b2, { source: 'Monitor · home', dest: 'B2 · shots' });
+		assert.match(monToB2.summary, /Delegated:/);
+		assert.equal(
+			await copyAcross({
+				sourceDriver: mon,
+				destDriver: b2,
+				selectedIds: [file.id],
+				sourceEntries: [file],
+				destParentId: null
+			}),
+			1
+		);
+		assert.deepEqual(pushed, ['pic.png']);
+		for (const m of minted) {
+			assert.equal('applicationKey' in m, false);
+			assert.equal('applicationKeyId' in m, false);
+		}
+		const copies = listTransfers().filter((t) => t.direction === 'copying');
+		assert.equal(copies.some((t) => t.id.endsWith(':remote')), false);
+		assert.equal(copies.some((t) => t.hop === 'delegated'), true);
+	});
+
+	it('two monitors different ek → webrtc', () => {
+		const a = {
+			id: 'monitor',
+			connectionId: 'monitor:p1',
+			endpointKey: 'monitor:http://127.0.0.1:8300',
+			capabilities: { supportsUpload: true },
+			upload: async () => ({ id: 'x', parentId: null, name: 'x', kind: 'file' })
+		} as unknown as ExplorerDriver;
+		const b = {
+			id: 'monitor',
+			connectionId: 'monitor:p2',
+			endpointKey: 'monitor:http://10.0.0.2:8300',
+			capabilities: { supportsUpload: true },
+			upload: async () => ({ id: 'x', parentId: null, name: 'x', kind: 'file' })
+		} as unknown as ExplorerDriver;
+		assert.equal(classify(a, b).kind, 'webrtc');
+		assert.equal(isDualPhaseCopy(a, b), false);
+		const path = describeCopyAcrossPath(a, b, { source: 'Monitor · home', dest: 'Monitor · office' });
+		assert.equal(path.kind, 'webrtc');
+		assert.match(path.summary, /WebRTC between monitors/);
+	});
+
+	it('two monitors different endpointKey: copyAcross ferries webrtc', async () => {
+		resetTransferRegistryForTests();
+		const file = fileEntry('note.txt', 8);
+		let confirmCalls = 0;
+		const srcCalls: string[] = [];
+		const dstCalls: string[] = [];
+		const destWritten: string[] = [];
+
+		function fakeTransport(label: 'src' | 'dst', calls: string[]) {
+			return {
+				baseUrl: label === 'src' ? 'http://127.0.0.1:8300' : 'http://10.0.0.2:8300',
+				async webrtcCreateJob(body: { role: string; from?: string; to?: string; size?: number }) {
+					calls.push(`createJob:${body.role}:${body.from ?? ''}:${body.to ?? ''}`);
+					return { jobId: `${label}-job`, token: `${label}-tok` };
+				},
+				async webrtcCreateOffer() {
+					calls.push('createOffer');
+					return { sdp: 'offer-sdp' };
+				},
+				async webrtcGetOffer() {
+					calls.push('getOffer');
+					return { sdp: 'offer-sdp' };
+				},
+				async webrtcPostAnswer(jobId: string, _token: string, sdp: string) {
+					calls.push(`postAnswer:${jobId}:${sdp}`);
+					return { sdp: 'answer-sdp' };
+				},
+				async webrtcProgress(
+					_jobId: string,
+					_token: string,
+					opts?: {
+						onEvent?: (ev: {
+							transferred: number;
+							size?: number;
+							ice?: 'checking' | 'connected' | 'failed';
+							icePath?: 'host' | 'stun';
+							done?: boolean;
+						}) => void;
+					}
+				) {
+					calls.push('progress');
+					if (label === 'dst') {
+						opts?.onEvent?.({
+							transferred: 8,
+							size: 8,
+							ice: 'connected',
+							icePath: 'host',
+							done: true
+						});
+					}
+				},
+				async webrtcAbort() {
+					calls.push('abort');
+				},
+				async unlink() {
+					calls.push('unlink');
+				}
+			};
+		}
+
+		const srcClient = fakeTransport('src', srcCalls);
+		const dstClient = fakeTransport('dst', dstCalls);
+		const left = {
+			id: 'monitor',
+			connectionId: 'monitor:p1',
+			endpointKey: 'monitor:http://127.0.0.1:8300',
+			capabilities: { supportsUpload: true },
+			uniqueName: async (_p: string | null, base: string) => base,
+			absolutePath: (id: string) => `/home/a/${id}`,
+			writeExactName: async () => {
+				throw new Error('source must not writeExactName on webrtc success');
+			},
+			download: async () => new Blob(['xxxxxxxx']),
+			upload: async () => ({ id: 'x', parentId: null, name: 'x', kind: 'file' as const }),
+			monitorClient: srcClient
+		} as unknown as ExplorerDriver;
+		const right = {
+			id: 'monitor',
+			connectionId: 'monitor:p2',
+			endpointKey: 'monitor:http://10.0.0.2:8300',
+			capabilities: { supportsUpload: true },
+			uniqueName: async (_p: string | null, base: string) => base,
+			absolutePath: (id: string) => `/home/b/${id}`,
+			writeExactName: async (_p: string | null, _f: File, exactName: string) => {
+				destWritten.push(exactName);
+				return { id: exactName, parentId: null, name: exactName, kind: 'file' };
+			},
+			download: async () => new Blob(['xxxxxxxx']),
+			upload: async () => ({ id: 'x', parentId: null, name: 'x', kind: 'file' as const }),
+			monitorClient: dstClient
+		} as unknown as ExplorerDriver;
+
+		assert.equal(classify(left, right).kind, 'webrtc');
+		assert.equal(
+			await copyAcross({
+				sourceDriver: left,
+				destDriver: right,
+				selectedIds: [file.id],
+				sourceEntries: [file],
+				destParentId: null,
+				confirmDualPhase: async () => {
+					confirmCalls += 1;
+					return true;
+				}
+			}),
+			1
+		);
+		assert.equal(confirmCalls, 0);
+		assert.ok(srcCalls.some((c) => c.startsWith('createJob:offerer:/home/a/note.txt:')));
+		assert.ok(dstCalls.some((c) => c === 'createJob:answerer::/home/b/note.txt'));
+		assert.ok(srcCalls.includes('createOffer') || srcCalls.includes('getOffer'));
+		assert.ok(dstCalls.includes('progress'));
+		assert.deepEqual(destWritten, []);
+		const copies = listTransfers().filter((t) => t.direction === 'copying');
+		assert.equal(copies.some((t) => t.hop === 'webrtc' && t.done), true);
+		assert.equal(copies.some((t) => t.hop === 'dual-phase'), false);
+	});
+
+	it('distinct B2 buckets → dual-phase', () => {
+		const a = {
+			id: 'b2',
+			connectionId: 'b2:a',
+			endpointKey: 'b2:key::bucket-a',
+			capabilities: { supportsUpload: true, supportsCopy: true },
+			copy: async () => {}
+		} as unknown as ExplorerDriver;
+		const b = {
+			id: 'b2',
+			connectionId: 'b2:b',
+			endpointKey: 'b2:key::bucket-b',
+			capabilities: { supportsUpload: true, supportsCopy: true },
+			copy: async () => {}
+		} as unknown as ExplorerDriver;
+		assert.equal(classify(a, b).kind, 'dual-phase');
+		assert.equal(canServerCopy(a, b), false);
+	});
+
+	it('two disk drivers with dest.copy → canServerCopy false, kind direct', () => {
+		const left = {
+			id: 'disk',
+			capabilities: { supportsCopy: true },
+			copy: async () => {}
+		} as unknown as ExplorerDriver;
+		const right = {
+			id: 'disk',
+			capabilities: { supportsCopy: true, supportsUpload: true },
+			copy: async () => {},
+			writeFile: async () => ({ id: 'x', parentId: null, name: 'x', kind: 'file' })
+		} as unknown as ExplorerDriver;
+		assert.equal(classify(left, right).kind, 'direct');
+		assert.equal(canServerCopy(left, right), false);
+	});
+
+	it('same object local + copy → server; two local drivers no cid → direct', () => {
+		const local = {
+			id: 'local',
+			capabilities: { supportsCopy: true },
+			copy: async () => {}
+		} as unknown as ExplorerDriver;
+		assert.equal(classify(local, local).kind, 'server');
+		assert.equal(canServerCopy(local, local), true);
+		const other = {
+			id: 'local',
+			capabilities: { supportsCopy: true },
+			copy: async () => {},
+			writeFile: async () => ({ id: 'x', parentId: null, name: 'x', kind: 'file' })
+		} as unknown as ExplorerDriver;
+		assert.equal(classify(local, other).kind, 'direct');
+		assert.equal(canServerCopy(local, other), false);
+	});
+
+	it('isDualPhaseCopy only when dual-phase', () => {
+		const b2 = {
+			id: 'b2',
+			connectionId: 'b2:a',
+			endpointKey: 'b2:k::b',
+			capabilities: {},
+			copy: async () => {}
+		} as unknown as ExplorerDriver;
+		const mon = {
+			id: 'monitor',
+			connectionId: 'monitor:p',
+			endpointKey: 'monitor:http://127.0.0.1:8300',
+			capabilities: { supportsUpload: true },
+			upload: async () => ({ id: 'x', parentId: null, name: 'x', kind: 'file' })
+		} as unknown as ExplorerDriver;
+		const rc = {
+			id: 'rclone',
+			connectionId: 'rclone:x',
+			endpointKey: 'rclone:fs::/',
+			capabilities: { supportsUpload: true },
+			upload: async () => ({ id: 'x', parentId: null, name: 'x', kind: 'file' })
+		} as unknown as ExplorerDriver;
+		assert.equal(isDualPhaseCopy(b2, mon), false);
+		assert.equal(isDualPhaseCopy(b2, rc), true);
+		assert.equal(isDualPhaseCopy(b2, b2), false);
+	});
+
+	it('empty endpointKey never matches as server/webrtc', () => {
+		const a = {
+			id: 'monitor',
+			connectionId: 'monitor:p1',
+			endpointKey: '',
+			capabilities: { supportsUpload: true },
+			upload: async () => ({ id: 'x', parentId: null, name: 'x', kind: 'file' })
+		} as unknown as ExplorerDriver;
+		const b = {
+			id: 'monitor',
+			connectionId: 'monitor:p2',
+			endpointKey: '',
+			capabilities: { supportsUpload: true },
+			upload: async () => ({ id: 'x', parentId: null, name: 'x', kind: 'file' })
+		} as unknown as ExplorerDriver;
+		assert.equal(classify(a, b).kind, 'dual-phase');
+	});
+
+	it('server B2 copy size > EXPLORER_DOWNLOAD_MAX_BYTES does NOT throw; dual-phase still throws', async () => {
+		resetTransferRegistryForTests();
+		const huge = fileEntry('huge.bin', EXPLORER_DOWNLOAD_MAX_BYTES + 1);
+		const copied: string[] = [];
+		const b2a = {
+			id: 'b2',
+			connectionId: 'b2:a',
+			endpointKey: 'b2:key::bucket',
+			capabilities: { supportsCopy: true, supportsUpload: true }
+		} as unknown as ExplorerDriver;
+		const b2b = {
+			id: 'b2',
+			connectionId: 'b2:a',
+			endpointKey: 'b2:key::bucket',
+			capabilities: { supportsCopy: true, supportsUpload: true },
+			async copy(id: string) {
+				copied.push(id);
+			}
+		} as unknown as ExplorerDriver;
+		assert.equal(
+			await copyAcross({
+				sourceDriver: b2a,
+				destDriver: b2b,
+				selectedIds: [huge.id],
+				sourceEntries: [huge],
+				destParentId: null
+			}),
+			1
+		);
+		assert.deepEqual(copied, ['huge.bin']);
+
+		const rc = {
+			id: 'rclone',
+			connectionId: 'rclone:z',
+			capabilities: { supportsUpload: true },
+			async upload() {
+				return { id: 'x', parentId: null, name: 'x', kind: 'file' };
+			}
+		} as unknown as ExplorerDriver;
+		await assert.rejects(
+			() =>
+				copyAcross({
+					sourceDriver: b2a,
+					destDriver: rc,
+					selectedIds: [huge.id],
+					sourceEntries: [huge],
+					destParentId: null
+				}),
+			(e: unknown) => e instanceof CopyAcrossError && e.code === 'EXPLORER_TOO_LARGE'
+		);
+	});
+});
+

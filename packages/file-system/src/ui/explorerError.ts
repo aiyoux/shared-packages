@@ -13,10 +13,15 @@ const CODE_ONLY = /^[A-Z][A-Z0-9_]{2,}$/;
 const CODE_LABELS: Record<string, string> = {
 	B2_ERROR: 'Backblaze B2 could not complete that request.',
 	B2_AUTH: 'Invalid Backblaze application key. Check the key id and that it can access this bucket.',
+	B2_MASTER_KEY:
+		'Master application keys are not allowed. Create a bucket-scoped application key in the Backblaze dashboard.',
 	B2_CORS: 'Backblaze B2 blocked this browser request (CORS or proxy).',
 	B2_FORBIDDEN: 'This Backblaze key cannot write here.',
 	B2_NOT_FOUND: 'That file or folder was not found on Backblaze B2.',
 	B2_NETWORK: 'Network error talking to Backblaze B2.',
+	VAULT_LOCKED: 'Unlock the connection vault to use saved keys.',
+	VAULT_WRONG_PASSPHRASE: 'That passphrase does not unlock the connection vault.',
+	SECRET_UNAVAILABLE: 'This key was not saved to disk. Re-enter it to connect.',
 	OPFS_IO: 'Could not write the file to browser storage.',
 	OPFS_UNAVAILABLE: 'Browser file storage is not available in this context.',
 	NOT_FOUND: 'That file or folder was not found.',
@@ -56,6 +61,19 @@ export function formatExplorerError(e: unknown): string {
 
 	const code = codeOf(e);
 	const name = e instanceof Error ? e.name : '';
+
+	if (
+		name === 'VaultLockedError' ||
+		name === 'VaultWrongPassphraseError' ||
+		name === 'SecretUnavailableError' ||
+		code === 'VAULT_LOCKED' ||
+		code === 'VAULT_WRONG_PASSPHRASE' ||
+		code === 'SECRET_UNAVAILABLE'
+	) {
+		if (e instanceof Error && e.message && !CODE_ONLY.test(e.message)) return e.message;
+		if (CODE_LABELS[code]) return CODE_LABELS[code];
+		return e instanceof Error ? e.message : CODE_LABELS.VAULT_LOCKED;
+	}
 
 	if (name === 'ExplorerB2Error' || code.startsWith('B2_')) {
 		const formatted = formatB2ErrorMessage(e);

@@ -59,6 +59,12 @@
       "types": "./src/disk/index.ts",
       "import": "./src/disk/index.ts",
       "default": "./src/disk/index.ts"
+    },
+    "./vault": {
+      "types": "./src/vault/index.ts",
+      "svelte": "./src/vault/index.ts",
+      "import": "./src/vault/index.ts",
+      "default": "./src/vault/index.ts"
     }
   },
   "svelte": "./src/index.ts",

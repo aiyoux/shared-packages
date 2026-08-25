@@ -41,9 +41,13 @@ export {
 	coerceListResult,
 	coerceMonitorCapabilities,
 	coerceMonitorMeta,
+	coerceSdp,
 	coerceStatResult,
+	coerceWebrtcJob,
+	parseNdjsonEvent,
 	type MonitorCapabilities,
 	type MonitorMeta,
+	type MonitorNdjsonEvent,
 	type MonitorTransport,
 	type MonitorListEntry,
 	type MonitorListResult,
@@ -54,8 +58,15 @@ export {
 	type MonitorHostDisk,
 	type MonitorHostSnapshot,
 	type MonitorGitLogEntry,
-	type MonitorGitSnapshot
+	type MonitorGitSnapshot,
+	type MonitorWebrtcJob,
+	type MonitorWebrtcRole
 } from './client.js';
+export {
+	ferryWebrtcCopy,
+	type WebrtcCopyPeer,
+	type WebrtcFerryProgress
+} from './webrtcCopy.js';
 export { getHostStream, abortHostStream, abortAllHostStreams, type HostStream } from './hostStream.js';
 export { getGitStream, abortGitStream, abortAllGitStreams, type GitStream } from './gitStream.js';
 export {

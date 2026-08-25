@@ -170,8 +170,15 @@ export interface ExplorerDriver {
 			 * Pair with `onChunk` for pipelined transfers.
 			 */
 			assemble?: boolean;
+			signal?: AbortSignal;
 		}
 	): Promise<Blob>;
+	/**
+	 * GET URL Chrome can download without extra headers (monitor `/v1/fs/read`,
+	 * B2 signed `?Authorization=` URL). When set, FileExplorer hands the URL to
+	 * the browser download manager so the shelf shows real byte progress.
+	 */
+	downloadUrl?(id: ExplorerEntryId): Promise<{ url: string; filename: string } | null>;
 	/** Optional: bytes for copy-across bridge (local/memory). */
 	readBlob?(id: ExplorerEntryId): Promise<Blob>;
 	/**
@@ -181,6 +188,86 @@ export interface ExplorerDriver {
 	writeFile?(
 		parentId: ExplorerEntryId | null,
 		file: File
+	): Promise<ExplorerEntry>;
+	/**
+	 * Host-absolute path for a monitor (or similar) entry. Used when two
+	 * panes share a daemon but not a connection root.
+	 */
+	absolutePath?(id: ExplorerEntryId): string;
+	/**
+	 * Collision-free dest name under `parentId`. WebRTC ferry uniqueNames once
+	 * so ICE-fail dual-phase can reuse the same dest via {@link writeExactName}.
+	 */
+	uniqueName?(parentId: ExplorerEntryId | null, base: string): Promise<string>;
+	/**
+	 * Same-host copy when source and dest roots differ. `fromAbs` is the source
+	 * host path; dest uniqueNames under `destParentId`.
+	 */
+	copyFromAbsolute?(
+		fromAbs: string,
+		destParentId: ExplorerEntryId | null,
+		sourceName: string,
+		opts?: {
+			onProgress?: (transferred: number, total?: number) => void;
+			signal?: AbortSignal;
+		}
+	): Promise<void>;
+	/**
+	 * Short-lived GET URL for daemon pull (B2 nativeGetUrl, 300s TTL).
+	 * Must not include applicationKey / applicationKeyId.
+	 */
+	mintDownloadUrl?(
+		id: ExplorerEntryId
+	): Promise<{ url: string; filename: string; expiresAt?: number }>;
+	/**
+	 * One-shot B2 upload URL after uniqueName dest key.
+	 * Must not include applicationKey / applicationKeyId.
+	 */
+	mintUploadUrl?(
+		parentId: ExplorerEntryId | null,
+		fileName: string
+	): Promise<{
+		uploadUrl: string;
+		authorizationToken: string;
+		destFileName: string;
+		contentType?: string;
+	}>;
+	/** Daemon GET `url` into dest (B2 → monitor pull). Dest uniqueNames. */
+	pullFromUrl?(
+		url: string,
+		destParentId: ExplorerEntryId | null,
+		sourceName: string,
+		opts?: {
+			onProgress?: (transferred: number, total?: number) => void;
+			signal?: AbortSignal;
+		}
+	): Promise<void>;
+	/** Daemon PUT source bytes to a minted upload URL (monitor → B2 push). */
+	pushToUpload?(
+		id: ExplorerEntryId,
+		upload: {
+			uploadUrl: string;
+			authorizationToken: string;
+			destFileName: string;
+			contentType?: string;
+		},
+		opts?: {
+			onProgress?: (transferred: number, total?: number) => void;
+			signal?: AbortSignal;
+		}
+	): Promise<void>;
+	/**
+	 * Write `file` as `exactName` under `parentId` without uniqueName.
+	 * WebRTC ICE-fail fallback uses the name already reserved.
+	 */
+	writeExactName?(
+		parentId: ExplorerEntryId | null,
+		file: File,
+		exactName: string,
+		opts?: {
+			onProgress?: (transferred: number, total?: number) => void;
+			signal?: AbortSignal;
+		}
 	): Promise<ExplorerEntry>;
 	/**
 	 * Optional live-change subscription (e.g. the monitor watch stream).

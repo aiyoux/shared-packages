@@ -1,6 +1,12 @@
 /**
  * Drop zone detection + resolve (before / into / after).
- * Zone bands match modular-app item-tree: top 25% before, bottom 25% after, middle into.
+ *
+ * Ordered lists (supportsSiblingOrder): files split 50/50 before/after so there
+ * is no "into file" dead zone; folders keep a middle into-band. Adjacent
+ * "after row i" / "before row i+1" collapse to one gap via
+ * {@link canonicalizeSiblingZone}.
+ *
+ * Unordered / legacy (no opts): top 25% before, bottom 25% after, middle into.
  */
 
 export type DropZone = 'before' | 'after' | 'into';
@@ -35,15 +41,45 @@ export type ResolvedDrop =
 	  }
 	| { ok: false; reason: 'null-zone' | 'cycle' | 'unsupported-zone' | 'invalid-target' };
 
+export type ZoneFromYOpts = {
+	kind?: 'file' | 'folder';
+	supportsSiblingOrder?: boolean;
+};
+
 /**
  * Map pointer Y within a row rect to a drop zone.
  */
-export function zoneFromY(rect: { top: number; height: number }, clientY: number): DropZone {
+export function zoneFromY(
+	rect: { top: number; height: number },
+	clientY: number,
+	opts?: ZoneFromYOpts
+): DropZone {
 	if (rect.height <= 0) return 'into';
 	const y = (clientY - rect.top) / rect.height;
+	if (opts?.supportsSiblingOrder) {
+		if (opts.kind === 'folder') {
+			if (y < 0.25) return 'before';
+			if (y > 0.75) return 'after';
+			return 'into';
+		}
+		// Files (and unknown): one in-between gap. Never "into".
+		return y < 0.5 ? 'before' : 'after';
+	}
 	if (y < 0.25) return 'before';
 	if (y > 0.75) return 'after';
 	return 'into';
+}
+
+/**
+ * Collapse "before item i" into "after item i-1" so two adjacent rows share a
+ * single in-between drop target (no before/after flicker).
+ */
+export function canonicalizeSiblingZone(
+	index: number,
+	zone: DropZone
+): { index: number; zone: DropZone } {
+	if (zone === 'before' && index > 0) return { index: index - 1, zone: 'after' };
+	return { index, zone };
 }
 
 function isCycle(

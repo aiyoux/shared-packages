@@ -12,6 +12,7 @@ export {
 	acquireRcloneDriver,
 	releaseRcloneDriver,
 	clearRcloneDriverCacheForTests,
+	evictAllRcloneDrivers,
 	rcloneDriverCacheSize,
 	RCLONE_DRIVER_HOLD_MS,
 	type AcquireRcloneDriverOptions
@@ -52,7 +53,9 @@ export {
 	getActiveProfileId,
 	getProfile,
 	listProfiles,
+	listStoredProfiles,
 	redactProfile,
+	revealRcPass,
 	saveProfile,
 	setActiveProfileId
 } from './credentials.js';

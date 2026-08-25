@@ -22,6 +22,14 @@ function jsonResponse(body: unknown): Response {
 	});
 }
 
+function ndjsonResponse(events: unknown[]): Response {
+	const body = events.map((e) => JSON.stringify(e)).join('\n') + '\n';
+	return new Response(body, {
+		status: 200,
+		headers: { 'content-type': 'application/x-ndjson' }
+	});
+}
+
 describe('monitor client (direct transport)', () => {
 	it('makes direct HTTP requests to base URL without routing through worker proxy', async () => {
 		const calls: { url: string; method?: string; body?: unknown }[] = [];
@@ -180,6 +188,108 @@ describe('monitor client (direct transport)', () => {
 			'http://127.0.0.1:8300/v1/git/events?path=%2Ftmp%2Frepo'
 		);
 		git.abort();
+	});
+
+	it('pull / push / webrtc helpers hit the ferry contract', async () => {
+		const calls: Array<{ url: string; method: string; headers: Headers; body?: unknown }> = [];
+		const mockFetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+			const url = String(input);
+			const method = init?.method ?? 'GET';
+			const headers = new Headers(init?.headers);
+			const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+			calls.push({ url, method, headers, body });
+			if (url.endsWith('/v1/fs/pull') || url.endsWith('/v1/fs/push')) {
+				return ndjsonResponse([{ transferred: 2, size: 2, done: true }]);
+			}
+			if (url.endsWith('/v1/fs/webrtc/jobs') && method === 'POST') {
+				return new Response(JSON.stringify({ jobId: 'job-1', token: 'tok-1' }), {
+					status: 200,
+					headers: { 'content-type': 'application/json', 'X-Fs-Job-Token': 'hdr-tok' }
+				});
+			}
+			if (url.includes('/webrtc/jobs/') && url.endsWith('/offer') && method === 'GET') {
+				return jsonResponse({ sdp: 'o' });
+			}
+			if (url.includes('/webrtc/jobs/') && url.endsWith('/offer') && method === 'POST') {
+				return jsonResponse({ sdp: 'o' });
+			}
+			if (url.includes('/webrtc/jobs/') && url.endsWith('/answer') && method === 'POST') {
+				return jsonResponse({ sdp: 'a' });
+			}
+			if (url.includes('/webrtc/jobs/') && url.endsWith('/answer')) {
+				return jsonResponse({});
+			}
+			if (url.includes('/webrtc/jobs/') && url.endsWith('/progress')) {
+				return ndjsonResponse([{ transferred: 1, size: 1, ice: 'connected', icePath: 'stun' }]);
+			}
+			if (url.includes('/webrtc/jobs/') && url.endsWith('/abort')) {
+				return jsonResponse({ ok: true });
+			}
+			return new Response('Not found', { status: 404 });
+		});
+		const client = createMonitorClient({
+			baseUrl: 'http://127.0.0.1:8300',
+			fetchImpl: mockFetch as unknown as typeof fetch
+		});
+
+		const ticks: number[] = [];
+		await client.pull('https://f000.example/file', '/tmp/out.bin', {
+			jobToken: 'pull-tok',
+			onProgress: (n) => ticks.push(n)
+		});
+		expect(calls[0]!.url).toBe('http://127.0.0.1:8300/v1/fs/pull');
+		expect(calls[0]!.body).toEqual({ url: 'https://f000.example/file', to: '/tmp/out.bin' });
+		expect(calls[0]!.headers.get('X-Fs-Job-Token')).toBe('pull-tok');
+		expect(ticks).toContain(2);
+
+		await client.push({
+			from: '/tmp/in.bin',
+			uploadUrl: 'https://pod.example/u',
+			token: 'b2-up',
+			fileName: 'in.bin',
+			contentType: 'text/plain'
+		});
+		expect(calls[1]!.url).toBe('http://127.0.0.1:8300/v1/fs/push');
+		expect(calls[1]!.body).toEqual({
+			from: '/tmp/in.bin',
+			uploadUrl: 'https://pod.example/u',
+			token: 'b2-up',
+			fileName: 'in.bin',
+			contentType: 'text/plain'
+		});
+
+		const job = await client.webrtcCreateJob({ role: 'offerer', from: '/tmp/in.bin', size: 2 });
+		expect(job).toEqual({ jobId: 'job-1', token: 'tok-1' });
+		expect(calls[2]!.url).toBe('http://127.0.0.1:8300/v1/fs/webrtc/jobs');
+
+		const offer = await client.webrtcGetOffer('job-1', 'tok-1');
+		expect(offer.sdp).toBe('o');
+		expect(calls[3]!.method).toBe('GET');
+		expect(calls[3]!.url).toBe('http://127.0.0.1:8300/v1/fs/webrtc/jobs/job-1/offer');
+		expect(calls[3]!.headers.get('Authorization')).toBe('Bearer tok-1');
+		expect(calls[3]!.headers.get('X-Fs-Job-Token')).toBe('tok-1');
+		expect(calls[3]!.body).toBeUndefined();
+
+		const created = await client.webrtcCreateOffer('job-1', 'tok-1');
+		expect(created.sdp).toBe('o');
+		expect(calls[4]!.method).toBe('POST');
+		expect(calls[4]!.url).toBe('http://127.0.0.1:8300/v1/fs/webrtc/jobs/job-1/offer');
+		expect(calls[4]!.headers.get('Authorization')).toBe('Bearer tok-1');
+		expect(calls[4]!.headers.get('X-Fs-Job-Token')).toBe('tok-1');
+
+		const answer = await client.webrtcPostAnswer('job-1', 'tok-1', 'o');
+		expect(answer.sdp).toBe('a');
+		await client.webrtcPostAnswer('job-1', 'tok-1', 'a');
+
+		const ice: string[] = [];
+		await client.webrtcProgress('job-1', 'tok-1', {
+			onEvent: (ev) => {
+				if (ev.icePath) ice.push(ev.icePath);
+			}
+		});
+		expect(ice).toEqual(['stun']);
+		await client.webrtcAbort('job-1', 'tok-1');
+		expect(calls.some((c) => c.url.endsWith('/abort'))).toBe(true);
 	});
 });
 

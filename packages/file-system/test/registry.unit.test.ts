@@ -23,6 +23,7 @@ describe('registry multi-ext image + forceExtension', () => {
 		assert.deepEqual(acceptedExtensionsFor('kb'), ['.kb']);
 		assert.deepEqual(acceptedExtensionsFor('anim'), ['.anim']);
 		assert.deepEqual(acceptedExtensionsFor('json'), ['.json']);
+		assert.deepEqual(acceptedExtensionsFor('pdf'), ['.pdf']);
 		assert.deepEqual(acceptedExtensionsFor('unknown'), []);
 	});
 
@@ -101,6 +102,6 @@ describe('registry multi-ext image + forceExtension', () => {
 		assert.equal(getFileTypeByExtension('.cari')?.id, 'cari');
 		assert.equal(getFileTypeByExtension('.kb')?.id, 'kb');
 		assert.equal(getFileTypeByExtension('.anim')?.id, 'anim');
-		assert.equal(getFileTypeByExtension('.pdf'), undefined);
+		assert.equal(getFileTypeByExtension('.pdf')?.id, 'pdf');
 	});
 });

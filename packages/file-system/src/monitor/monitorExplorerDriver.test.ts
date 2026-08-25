@@ -9,8 +9,18 @@ function transportStub(partial: Partial<MonitorTransport>): MonitorTransport {
 		stat: vi.fn(),
 		meta: vi.fn(async () => ({})),
 		download: vi.fn(),
+		readUrl: (path: string) => `http://127.0.0.1:8300/v1/fs/read?path=${encodeURIComponent(path)}`,
 		write: vi.fn(),
 		copy: vi.fn(),
+		pull: vi.fn(),
+		push: vi.fn(),
+		webrtcCreateJob: vi.fn(),
+		webrtcCreateOffer: vi.fn(),
+		webrtcGetOffer: vi.fn(),
+		webrtcPostOffer: vi.fn(),
+		webrtcPostAnswer: vi.fn(),
+		webrtcProgress: vi.fn(),
+		webrtcAbort: vi.fn(),
 		unlink: vi.fn(),
 		health: vi.fn(),
 		watchAddRoot: vi.fn(),
@@ -111,6 +121,19 @@ describe('monitor explorer driver capabilities', () => {
 		expect(rename).not.toHaveBeenCalled();
 	});
 
+	it('downloadUrl is a header-free GET Chrome can open', async () => {
+		const driver = await createMonitorExplorerDriver({
+			profile,
+			transport: transportStub({ list: listingAPng() }),
+			enableWatch: false
+		});
+		const loc = await driver.downloadUrl!('a.png');
+		expect(loc?.filename).toBe('a.png');
+		expect(loc?.url).toContain('/v1/fs/read?path=');
+		expect(loc?.url).toContain(encodeURIComponent('/tmp/a.png'));
+		expect(new URL(loc!.url).searchParams.get('download')).toBe('a.png');
+	});
+
 	it('move a.png into the same parent does not suffix', async () => {
 		const rename = vi.fn(async () => {});
 		const transport = transportStub({
@@ -177,5 +200,115 @@ describe('monitor explorer driver capabilities', () => {
 		});
 		const { entries } = await driver.list({ parentId: null });
 		expect(entries[0]?.meta).toEqual({ ino: '12345', dev: '1' });
+	});
+
+	it('copy stays dest-root-relative', async () => {
+		const copy = vi.fn(async () => {});
+		const transport = transportStub({
+			list: listingAPng(),
+			copy
+		});
+		const driver = await createMonitorExplorerDriver({
+			profile,
+			transport,
+			enableWatch: false
+		});
+		await driver.copy!('a.png', null);
+		expect(copy).toHaveBeenCalledWith('/tmp/a.png', '/tmp/a (1).png', expect.anything());
+	});
+
+	it('copyFromAbsolute uniqueNames dest and copies from the source abs path', async () => {
+		const copy = vi.fn(async () => {});
+		const transport = transportStub({
+			list: listingAPng(),
+			copy
+		});
+		const driver = await createMonitorExplorerDriver({
+			profile,
+			transport,
+			enableWatch: false
+		});
+		expect(driver.absolutePath!('shot.png')).toBe('/tmp/shot.png');
+		await driver.copyFromAbsolute!('/home/other/shot.png', null, 'shot.png');
+		expect(copy).toHaveBeenCalledWith('/home/other/shot.png', '/tmp/shot.png', expect.anything());
+		await driver.copyFromAbsolute!('/home/other/a.png', null, 'a.png');
+		expect(copy).toHaveBeenCalledWith('/home/other/a.png', '/tmp/a (1).png', expect.anything());
+	});
+
+	it('pullFromUrl uniqueNames dest and calls transport.pull', async () => {
+		const pull = vi.fn(async () => {});
+		const transport = transportStub({
+			list: listingAPng(),
+			pull
+		});
+		const driver = await createMonitorExplorerDriver({
+			profile,
+			transport,
+			enableWatch: false
+		});
+		await driver.pullFromUrl!('https://f000.example/file', null, 'shot.png');
+		expect(pull).toHaveBeenCalledWith(
+			'https://f000.example/file',
+			'/tmp/shot.png',
+			expect.anything()
+		);
+		await driver.pullFromUrl!('https://f000.example/a.png', null, 'a.png');
+		expect(pull).toHaveBeenCalledWith(
+			'https://f000.example/a.png',
+			'/tmp/a (1).png',
+			expect.anything()
+		);
+	});
+
+	it('pushToUpload calls transport.push with abs from and mint fields', async () => {
+		const push = vi.fn(async () => {});
+		const transport = transportStub({
+			list: listingAPng(),
+			push
+		});
+		const driver = await createMonitorExplorerDriver({
+			profile,
+			transport,
+			enableWatch: false
+		});
+		await driver.pushToUpload!(
+			'a.png',
+			{
+				uploadUrl: 'https://pod.example/u',
+				authorizationToken: 'tok',
+				destFileName: 'a.png',
+				contentType: 'text/plain'
+			}
+		);
+		expect(push).toHaveBeenCalledTimes(1);
+		const body = push.mock.calls[0]![0] as Record<string, unknown>;
+		expect(body).toEqual({
+			from: '/tmp/a.png',
+			uploadUrl: 'https://pod.example/u',
+			token: 'tok',
+			fileName: 'a.png',
+			contentType: 'text/plain'
+		});
+		expect(body).not.toHaveProperty('applicationKey');
+		expect(body).not.toHaveProperty('applicationKeyId');
+		expect(JSON.stringify(body)).not.toMatch(/applicationKey/);
+	});
+
+	it('writeExactName skips uniqueName', async () => {
+		const write = vi.fn(async () => ({ name: 'a.png', path: '/tmp/a.png', kind: 'file' as const }));
+		const transport = transportStub({
+			list: listingAPng(),
+			write
+		});
+		const driver = await createMonitorExplorerDriver({
+			profile,
+			transport,
+			enableWatch: false
+		});
+		await driver.upload!(null, new File(['x'], 'a.png'));
+		expect(write).toHaveBeenCalledWith('/tmp/a (1).png', expect.any(File), expect.anything());
+		write.mockClear();
+		await driver.writeExactName!(null, new File(['y'], 'a.png'), 'a.png');
+		expect(write).toHaveBeenCalledWith('/tmp/a.png', expect.any(File), expect.anything());
 	});
 });

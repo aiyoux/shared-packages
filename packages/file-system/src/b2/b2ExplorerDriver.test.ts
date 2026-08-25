@@ -252,4 +252,29 @@ describe('B2ExplorerDriver (B2Simulator)', () => {
 		expect(driver.reorder).toBeUndefined();
 		expect(driver.id).toBe('b2');
 	});
+
+	it('mintDownloadUrl uses 300s TTL and does not leak application keys', async () => {
+		const { driver } = await bootDriver();
+		await driver.upload!(null, new File([new Uint8Array([1, 2, 3])], 'a.bin'));
+		const minted = await driver.mintDownloadUrl!('a.bin');
+		expect(minted.filename).toBe('a.bin');
+		expect(minted.url).toBeTruthy();
+		expect(minted).not.toHaveProperty('applicationKey');
+		expect(minted).not.toHaveProperty('applicationKeyId');
+		expect(JSON.stringify(minted)).not.toMatch(/applicationKey/);
+		expect(minted.expiresAt).toBeGreaterThan(Date.now() + 290_000);
+		expect(minted.expiresAt).toBeLessThanOrEqual(Date.now() + 310_000);
+	});
+
+	it('mintUploadUrl uniqueNames dest and omits application keys', async () => {
+		const { driver } = await bootDriver();
+		await driver.upload!(null, new File([new Uint8Array([1])], 'a.bin'));
+		const minted = await driver.mintUploadUrl!(null, 'a.bin');
+		expect(minted.uploadUrl).toBeTruthy();
+		expect(minted.authorizationToken).toBeTruthy();
+		expect(minted.destFileName).toBe('a (1).bin');
+		expect(minted).not.toHaveProperty('applicationKey');
+		expect(minted).not.toHaveProperty('applicationKeyId');
+		expect(JSON.stringify(minted)).not.toMatch(/applicationKey/);
+	});
 });

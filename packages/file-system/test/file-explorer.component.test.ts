@@ -643,6 +643,49 @@ describe('FileExplorer component', () => {
 		expect((screen.getByTestId('fe-archive-codec') as HTMLSelectElement).disabled).toBe(true);
 		expect((screen.getByTestId('fe-archive-codec') as HTMLSelectElement).value).toBe('zip');
 	});
+
+	it('rename editor fills the row, commits on check or click-outside, and cancels on x', async () => {
+		await vfs.writeFile({
+			parentId: null,
+			name: 'RenameMe.txt',
+			body: 'hi'
+		});
+		render(FileExplorer, { props: { mode: 'manage', vfs, variant: 'panel' } });
+		await viWaitForRows(1);
+		const row = document.querySelector('[data-testid="fe-file-row"]') as HTMLElement;
+		await fireEvent.click(row);
+		await fireEvent.click(screen.getByTestId('fe-rename-btn'));
+		const input = await screen.findByTestId('fe-rename-input');
+		expect(screen.getByTestId('fe-rename-ok')).toBeTruthy();
+		expect(screen.getByTestId('fe-rename-cancel')).toBeTruthy();
+		expect(input.parentElement?.classList.contains('fe-rename')).toBe(true);
+
+		await fireEvent.input(input, { target: { value: 'ShouldNotStick.txt' } });
+		await fireEvent.click(screen.getByTestId('fe-rename-cancel'));
+		await viWaitFor(() => !document.querySelector('[data-testid="fe-rename-input"]'));
+		expect(document.querySelector('[data-testid="fe-file-row"]')?.getAttribute('data-name')).toBe(
+			'RenameMe.txt'
+		);
+
+		await fireEvent.click(row);
+		await fireEvent.click(screen.getByTestId('fe-rename-btn'));
+		const input2 = await screen.findByTestId('fe-rename-input');
+		await fireEvent.input(input2, { target: { value: 'ClickedCheck.txt' } });
+		await fireEvent.click(screen.getByTestId('fe-rename-ok'));
+		await viWaitFor(() =>
+			document.querySelector('[data-testid="fe-file-row"]')?.getAttribute('data-name') ===
+			'ClickedCheck.txt'
+		);
+
+		await fireEvent.click(screen.getByTestId('fe-rename-btn'));
+		const input3 = await screen.findByTestId('fe-rename-input');
+		await fireEvent.input(input3, { target: { value: 'ClickedOut.txt' } });
+		await fireEvent.pointerDown(screen.getByTestId('fe-list'));
+		await viWaitFor(() =>
+			document.querySelector('[data-testid="fe-file-row"]')?.getAttribute('data-name') ===
+			'ClickedOut.txt'
+		);
+	});
 });
 
 async function viWaitForRows(min: number, ms = 4000) {

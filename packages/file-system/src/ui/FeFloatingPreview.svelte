@@ -1,7 +1,11 @@
 <script lang="ts">
-	import { onDestroy, untrack } from 'svelte';
+	import { onDestroy, tick, untrack } from 'svelte';
 	import FeIcon from './FeIcon.svelte';
-	import { getPreviewKind, renderPdfPageToCanvas } from './feThumbnails.js';
+	import {
+		coerceMediaBlob,
+		getPreviewKind,
+		renderPdfPageToCanvas
+	} from './feThumbnails.js';
 	import type { ExplorerDriver, ExplorerEntry } from './explorerDriver.js';
 
 	let {
@@ -19,6 +23,7 @@
 	let error = $state('');
 	let kind = $derived(getPreviewKind(entry));
 	let pdfBlob = $state<Blob | null>(null);
+	let pdfFallbackUrl = $state<string | null>(null);
 
 	// PDF page state
 	let pdfPageCount = $state(0);
@@ -33,6 +38,10 @@
 		if (blobUrl) {
 			URL.revokeObjectURL(blobUrl);
 			blobUrl = null;
+		}
+		if (pdfFallbackUrl) {
+			URL.revokeObjectURL(pdfFallbackUrl);
+			pdfFallbackUrl = null;
 		}
 	}
 
@@ -68,19 +77,37 @@
 		(async () => {
 			try {
 				const blob = await readBlob.call(d, e.id);
-				if (cancelled || !blob) return;
+				if (cancelled) return;
+				if (!blob) {
+					error = 'File is empty';
+					loading = false;
+					return;
+				}
+				const typed = coerceMediaBlob(blob, e.name, k);
 
 				if (k === 'pdf') {
-					pdfBlob = blob;
-					// Wait for canvas to be bound
+					pdfBlob = typed;
+					// Canvas is behind `{#if loading}` — drop the spinner first so
+					// bind:this can attach, then wait for that DOM flush.
+					loading = false;
 					await tick();
-					if (cancelled || !pdfCanvas) return;
-					pdfPageCount = await renderPdfPageToCanvas(pdfCanvas, blob, 0, 1000);
-					pdfCurrentPage = 0;
+					if (cancelled) return;
+					if (!pdfCanvas) {
+						pdfFallbackUrl = URL.createObjectURL(typed);
+						return;
+					}
+					try {
+						pdfPageCount = await renderPdfPageToCanvas(pdfCanvas, typed, 0, 1000);
+						pdfCurrentPage = 0;
+					} catch {
+						if (cancelled) return;
+						pdfFallbackUrl = URL.createObjectURL(typed);
+						error = '';
+					}
 				} else {
-					blobUrl = URL.createObjectURL(blob);
+					blobUrl = URL.createObjectURL(typed);
+					loading = false;
 				}
-				if (!cancelled) loading = false;
 			} catch (err) {
 				if (!cancelled) {
 					error = err instanceof Error ? err.message : 'Failed to load preview';
@@ -120,9 +147,6 @@
 		}
 	}
 
-	async function tick() {
-		await new Promise((r) => requestAnimationFrame(() => r(null)));
-	}
 </script>
 
 <svelte:window onkeydown={onKeydown} />
@@ -147,10 +171,17 @@
 			{:else if error}
 				<div class="fe-float-error">{error}</div>
 			{:else if kind === 'image' && blobUrl}
-				<img class="fe-float-image" src={blobUrl} alt={entry.name} />
+				<img
+					class="fe-float-image"
+					src={blobUrl}
+					alt={entry.name}
+					onerror={() => (error = 'Image failed to display')}
+				/>
 			{:else if kind === 'video' && blobUrl}
 				<!-- svelte-ignore a11y_media_has_caption -->
 				<video class="fe-float-video" src={blobUrl} controls autoplay playsinline></video>
+			{:else if kind === 'pdf' && pdfFallbackUrl}
+				<iframe class="fe-float-pdf-frame" title={entry.name} src={pdfFallbackUrl}></iframe>
 			{:else if kind === 'pdf'}
 				<div class="fe-float-pdf">
 					<canvas bind:this={pdfCanvas} class="fe-float-pdf-canvas"></canvas>
@@ -284,6 +315,12 @@
 		max-height: calc(100% - 50px);
 		object-fit: contain;
 		box-shadow: 0 4px 12px rgb(0 0 0 / 0.3);
+	}
+	.fe-float-pdf-frame {
+		width: 100%;
+		height: 100%;
+		border: 0;
+		background: #fff;
 	}
 	.fe-float-pdf-nav {
 		display: flex;

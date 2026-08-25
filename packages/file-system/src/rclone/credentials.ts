@@ -1,8 +1,12 @@
 /**
- * IndexedDB store for hub rclone connection profiles (plaintext v1).
+ * IndexedDB store for hub rclone connection profiles.
  * Secrets never leave this origin; never log rcPass.
  */
 import { HUB_RCLONE_PROFILES_CHANNEL, notifyTabChannel } from '../crossTab.js';
+import { clearSessionSecret, getSessionSecret } from '../vault/session.js';
+import { materializeForWrite, readSecret, revealStoredSecret } from '../vault/secrets.js';
+import type { SealedSecret } from '../vault/types.js';
+import { ExplorerRcloneError } from './errors.js';
 import {
 	DEFAULT_RCLONE_BASE_URL,
 	HUB_RCLONE_DB_NAME,
@@ -65,7 +69,20 @@ function txDone(tx: IDBTransaction): Promise<void> {
 	});
 }
 
-export async function listProfiles(): Promise<RcloneConnectionProfileV1[]> {
+function storedSecretOf(row: RcloneConnectionProfileV1) {
+	return {
+		persistSecret: row.persistSecret !== false,
+		plaintext: row.rcPass ?? '',
+		sealed: row.sealedRcPass
+	};
+}
+
+async function hydrate(row: RcloneConnectionProfileV1): Promise<RcloneConnectionProfileV1> {
+	const rcPass = await readSecret('rclone', row.id, storedSecretOf(row));
+	return { ...row, rcPass };
+}
+
+export async function listStoredProfiles(): Promise<RcloneConnectionProfileV1[]> {
 	const db = await openDb();
 	return new Promise((resolve, reject) => {
 		const tx = db.transaction(HUB_RCLONE_STORE, 'readonly');
@@ -78,7 +95,7 @@ export async function listProfiles(): Promise<RcloneConnectionProfileV1[]> {
 	});
 }
 
-export async function getProfile(id: string): Promise<RcloneConnectionProfileV1 | undefined> {
+async function getRawProfile(id: string): Promise<RcloneConnectionProfileV1 | undefined> {
 	const db = await openDb();
 	return new Promise((resolve, reject) => {
 		const tx = db.transaction(HUB_RCLONE_STORE, 'readonly');
@@ -86,6 +103,49 @@ export async function getProfile(id: string): Promise<RcloneConnectionProfileV1 
 		req.onsuccess = () => resolve(req.result as RcloneConnectionProfileV1 | undefined);
 		req.onerror = () => reject(req.error);
 	});
+}
+
+export async function listProfiles(): Promise<RcloneConnectionProfileV1[]> {
+	const rows = await listStoredProfiles();
+	return Promise.all(rows.map(hydrate));
+}
+
+export async function getProfile(id: string): Promise<RcloneConnectionProfileV1 | undefined> {
+	const raw = await getRawProfile(id);
+	return raw ? hydrate(raw) : undefined;
+}
+
+export async function revealRcPass(profile: RcloneConnectionProfileV1): Promise<string> {
+	if (profile.rcPass?.trim()) return profile.rcPass;
+	if (profile.persistSecret === false) {
+		const s = getSessionSecret('rclone', profile.id);
+		if (s) return s;
+	}
+	const raw = await getRawProfile(profile.id);
+	if (!raw) throw new ExplorerRcloneError('RCLONE_ERROR', 'That rclone connection was removed.');
+	return revealStoredSecret('rclone', raw.id, storedSecretOf(raw));
+}
+
+/** Vault rekey: overwrite secret fields without re-running materialize. */
+export async function rewriteStoredSecret(
+	id: string,
+	secret: { persistSecret: boolean; plaintext: string; sealed?: SealedSecret }
+): Promise<void> {
+	const raw = await getRawProfile(id);
+	if (!raw) return;
+	const row: RcloneConnectionProfileV1 = {
+		...raw,
+		persistSecret: secret.persistSecret,
+		rcPass: secret.plaintext,
+		sealedRcPass: secret.sealed,
+		updatedAt: Date.now()
+	};
+	if (!secret.sealed) delete row.sealedRcPass;
+	const db = await openDb();
+	const tx = db.transaction(HUB_RCLONE_STORE, 'readwrite');
+	tx.objectStore(HUB_RCLONE_STORE).put(row);
+	await txDone(tx);
+	notifyTabChannel(HUB_RCLONE_PROFILES_CHANNEL);
 }
 
 /**
@@ -97,7 +157,7 @@ export async function saveProfile(
 	}
 ): Promise<RcloneConnectionProfileV1> {
 	const now = Date.now();
-	const existing = await getProfile(profile.id);
+	const existing = await getRawProfile(profile.id);
 	let rootPath: string | undefined;
 	try {
 		const n = normalizeRootPath(profile.rootPath);
@@ -106,8 +166,13 @@ export async function saveProfile(
 		throw new Error('INVALID_ROOT_PATH');
 	}
 
-	const rcPass =
-		profile.rcPass.trim() === '' && existing ? existing.rcPass : profile.rcPass;
+	const mat = await materializeForWrite(
+		'rclone',
+		profile.id,
+		profile.rcPass ?? '',
+		profile.persistSecret,
+		existing ? storedSecretOf(existing) : undefined
+	);
 
 	const row: RcloneConnectionProfileV1 = {
 		v: 1,
@@ -117,19 +182,23 @@ export async function saveProfile(
 		fs: profile.fs.trim(),
 		rootPath,
 		rcUser: profile.rcUser.trim(),
-		rcPass,
+		rcPass: mat.idbPlaintext,
+		persistSecret: mat.persistSecret,
+		sealedRcPass: mat.sealed,
 		createdAt: profile.createdAt ?? existing?.createdAt ?? now,
 		updatedAt: now
 	};
+	if (!mat.sealed) delete row.sealedRcPass;
 	const db = await openDb();
 	const tx = db.transaction(HUB_RCLONE_STORE, 'readwrite');
 	tx.objectStore(HUB_RCLONE_STORE).put(row);
 	await txDone(tx);
 	notifyTabChannel(HUB_RCLONE_PROFILES_CHANNEL);
-	return row;
+	return { ...row, rcPass: mat.revealed || row.rcPass };
 }
 
 export async function deleteProfile(id: string): Promise<void> {
+	clearSessionSecret('rclone', id);
 	const db = await openDb();
 	await new Promise<void>((resolve, reject) => {
 		const tx = db.transaction([HUB_RCLONE_STORE, HUB_RCLONE_META], 'readwrite');
@@ -181,5 +250,6 @@ export async function setActiveProfileId(id: string | null): Promise<void> {
 export function redactProfile(
 	p: RcloneConnectionProfileV1
 ): Omit<RcloneConnectionProfileV1, 'rcPass'> & { rcPass: '***' } {
-	return { ...p, rcPass: '***' };
+	const { sealedRcPass: _sealed, ...rest } = p;
+	return { ...rest, rcPass: '***' };
 }

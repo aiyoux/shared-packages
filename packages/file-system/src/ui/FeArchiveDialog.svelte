@@ -309,7 +309,7 @@
 			</div>
 			<p class="hint">
 				{compressEngine.description}{treePack
-					? ' · Multiple items pack as a container archive.'
+					? ' · Multiple items pack as a ZIP inner filesystem.'
 					: ''}
 			</p>
 		{:else if kind === 'encrypt'}

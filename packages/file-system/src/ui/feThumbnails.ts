@@ -14,6 +14,18 @@ export type PreviewKind = 'image' | 'video' | 'pdf';
 const IMAGE_EXTS = ['.png', '.jpg', '.jpeg', '.webp', '.gif', '.svg', '.avif', '.bmp', '.ico'];
 const VIDEO_EXTS = ['.mp4', '.webm', '.mov', '.m4v', '.mkv', '.ogv'];
 const PDF_EXTS = ['.pdf'];
+const IMAGE_MIME: Record<string, string> = {
+	'.png': 'image/png',
+	'.jpg': 'image/jpeg',
+	'.jpeg': 'image/jpeg',
+	'.webp': 'image/webp',
+	'.gif': 'image/gif',
+	'.svg': 'image/svg+xml',
+	'.avif': 'image/avif',
+	'.bmp': 'image/bmp',
+	'.ico': 'image/x-icon'
+};
+const LOAD_TIMEOUT_MS = 8_000;
 
 function ext(name: string): string {
 	const dot = name.lastIndexOf('.');
@@ -24,6 +36,7 @@ export function getPreviewKind(entry: ExplorerEntry): PreviewKind | null {
 	if (entry.kind !== 'file') return null;
 	if (entry.fileType === 'image') return 'image';
 	if (entry.fileType === 'video') return 'video';
+	if (entry.fileType === 'pdf') return 'pdf';
 	const e = ext(entry.name);
 	if (IMAGE_EXTS.includes(e)) return 'image';
 	if (VIDEO_EXTS.includes(e)) return 'video';
@@ -43,14 +56,66 @@ export function previewKindIcon(kind: PreviewKind): 'image' | 'film' | 'file-tex
 	return 'file-text';
 }
 
+/** Give the blob a usable MIME so <img>/<iframe>/Image() will actually load it. */
+export function coerceMediaBlob(blob: Blob, name: string, kind: PreviewKind): Blob {
+	const e = ext(name);
+	if (kind === 'pdf' && blob.type !== 'application/pdf') {
+		return new Blob([blob], { type: 'application/pdf' });
+	}
+	if (kind === 'image') {
+		const want = e === '.svg' || blob.type === 'image/svg+xml' ? 'image/svg+xml' : IMAGE_MIME[e];
+		if (want && blob.type !== want) return new Blob([blob], { type: want });
+	}
+	if (kind === 'video' && (!blob.type || blob.type === 'application/octet-stream')) {
+		const want =
+			e === '.webm' ? 'video/webm' : e === '.ogv' ? 'video/ogg' : e === '.mov' ? 'video/quicktime' : 'video/mp4';
+		return new Blob([blob], { type: want });
+	}
+	return blob;
+}
+
+export function isSvgName(name: string): boolean {
+	return ext(name) === '.svg';
+}
+
+function withTimeout<T>(p: Promise<T>, ms: number, message: string): Promise<T> {
+	return new Promise((resolve, reject) => {
+		const t = setTimeout(() => reject(new Error(message)), ms);
+		p.then(
+			(v) => {
+				clearTimeout(t);
+				resolve(v);
+			},
+			(e) => {
+				clearTimeout(t);
+				reject(e);
+			}
+		);
+	});
+}
+
 // ── Image thumbnail ──────────────────────────────────────────────
 
-export async function generateImageThumbnail(blob: Blob, maxDim: number): Promise<string> {
-	const url = URL.createObjectURL(blob);
+export async function generateImageThumbnail(
+	blob: Blob,
+	maxDim: number,
+	name = ''
+): Promise<string> {
+	const typed = coerceMediaBlob(blob, name, 'image');
+	// Rasterizing SVG onto canvas is flaky (0×0 intrinsic size, missing MIME,
+	// external refs). The thumbnail <img> can display the SVG blob directly.
+	if (typed.type === 'image/svg+xml' || isSvgName(name)) {
+		return URL.createObjectURL(typed);
+	}
+	const url = URL.createObjectURL(typed);
 	try {
 		const img = await loadImage(url);
-		const { canvas } = drawScaled(img.width, img.height, maxDim);
-		const ctx = canvas.getContext('2d')!;
+		const w = img.naturalWidth || img.width;
+		const h = img.naturalHeight || img.height;
+		if (!w || !h) throw new Error('Image has no dimensions');
+		const { canvas } = drawScaled(w, h, maxDim);
+		const ctx = canvas.getContext('2d');
+		if (!ctx) throw new Error('Canvas 2D unavailable');
 		ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
 		return canvas.toDataURL('image/webp', 0.82);
 	} finally {
@@ -59,12 +124,16 @@ export async function generateImageThumbnail(blob: Blob, maxDim: number): Promis
 }
 
 function loadImage(src: string): Promise<HTMLImageElement> {
-	return new Promise((resolve, reject) => {
-		const img = new Image();
-		img.onload = () => resolve(img);
-		img.onerror = () => reject(new Error('Image load failed'));
-		img.src = src;
-	});
+	return withTimeout(
+		new Promise((resolve, reject) => {
+			const img = new Image();
+			img.onload = () => resolve(img);
+			img.onerror = () => reject(new Error('Image load failed'));
+			img.src = src;
+		}),
+		LOAD_TIMEOUT_MS,
+		'Image load timed out'
+	);
 }
 
 function drawScaled(w: number, h: number, maxDim: number): { canvas: HTMLCanvasElement } {
@@ -90,18 +159,26 @@ export async function generateVideoThumbnail(blob: Blob, maxDim: number): Promis
 		video.preload = 'metadata';
 		video.src = url;
 
-		await new Promise<void>((resolve, reject) => {
-			video.onloadedmetadata = () => resolve();
-			video.onerror = () => reject(new Error('Video metadata load failed'));
-		});
+		await withTimeout(
+			new Promise<void>((resolve, reject) => {
+				video.onloadedmetadata = () => resolve();
+				video.onerror = () => reject(new Error('Video metadata load failed'));
+			}),
+			LOAD_TIMEOUT_MS,
+			'Video metadata load timed out'
+		);
 
 		// Seek to ~10% or 1s, whichever is smaller
-		const target = Math.min(1, video.duration * 0.1);
-		await new Promise<void>((resolve, reject) => {
-			video.onseeked = () => resolve();
-			video.onerror = () => reject(new Error('Video seek failed'));
-			video.currentTime = target;
-		});
+		const target = Math.min(1, (Number.isFinite(video.duration) ? video.duration : 1) * 0.1);
+		await withTimeout(
+			new Promise<void>((resolve, reject) => {
+				video.onseeked = () => resolve();
+				video.onerror = () => reject(new Error('Video seek failed'));
+				video.currentTime = target;
+			}),
+			LOAD_TIMEOUT_MS,
+			'Video seek timed out'
+		);
 
 		const { canvas } = drawScaled(video.videoWidth, video.videoHeight, maxDim);
 		const ctx = canvas.getContext('2d')!;
@@ -200,14 +277,15 @@ export async function renderPdfPageToCanvas(
 export async function generateThumbnail(
 	blob: Blob,
 	kind: PreviewKind,
-	maxDim: number
+	maxDim: number,
+	name = ''
 ): Promise<string> {
 	switch (kind) {
 		case 'image':
-			return generateImageThumbnail(blob, maxDim);
+			return generateImageThumbnail(blob, maxDim, name);
 		case 'video':
-			return generateVideoThumbnail(blob, maxDim);
+			return generateVideoThumbnail(coerceMediaBlob(blob, name, 'video'), maxDim);
 		case 'pdf':
-			return generatePdfThumbnail(blob, maxDim);
+			return generatePdfThumbnail(coerceMediaBlob(blob, name, 'pdf'), maxDim);
 	}
 }

@@ -18,8 +18,32 @@
 		return Math.min(100, Math.round((n / size) * 100));
 	}
 
+	function hopStatus(t: StackedProgress): string | null {
+		if (t.ice === 'failed') return 'WebRTC failed — through this device';
+		if (t.hopNote) return t.hopNote;
+		if (t.hop === 'server') return 'Server copy';
+		if (t.hop === 'delegated') return 'Delegated';
+		if (t.hop === 'webrtc') {
+			if (t.icePath === 'host') return 'WebRTC (host)';
+			if (t.icePath === 'stun') return 'WebRTC (STUN)';
+			return 'WebRTC (connecting)';
+		}
+		if (t.hop === 'dual-phase' || t.hop === 'direct') return 'Through this device';
+		return null;
+	}
+
+	/** Plan contract: checking | host | stun | failed (host/stun once ICE path is known). */
+	function iceAttr(t: StackedProgress): string | undefined {
+		if (t.ice === 'failed') return 'failed';
+		if (t.icePath === 'host' || t.icePath === 'stun') return t.icePath;
+		if (t.ice === 'checking' || t.ice === 'connected') return 'checking';
+		return t.ice;
+	}
+
 	function label(t: StackedProgress): string {
-		if (t.status === 'failed') return 'Failed';
+		const hop = hopStatus(t);
+		if (t.status === 'failed') return hop && t.ice === 'failed' ? hop : 'Failed';
+		if (hop) return hop;
 		if (t.done) return 'Done';
 		if (t.ahead !== t.behind) {
 			const dl = pct(t.ahead, t.size, false);
@@ -56,6 +80,9 @@
 					class:done={t.done && t.status !== 'failed'}
 					data-testid="fe-op-progress-row"
 					data-name={t.name}
+					data-copy-hop={t.hop}
+					data-ice={iceAttr(t)}
+					data-ice-path={t.icePath}
 				>
 					<div class="op-meta">
 						<span class="op-name" title={t.name}>{t.name}</span>

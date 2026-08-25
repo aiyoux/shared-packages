@@ -6,7 +6,8 @@
  * @see docs/design/dnd-inmem-copy.md
  */
 import { generateId } from '../id.js';
-import { upsertProgress } from '../transferRegistry.js';
+import { ferryWebrtcCopy, isWebrtcCopyPeer } from '../monitor/webrtcCopy.js';
+import { upsertProgress, type CopyHop, type CopyIce, type CopyIcePath } from '../transferRegistry.js';
 import {
 	EXPLORER_DOWNLOAD_MAX_BYTES,
 	isLocalClass,
@@ -180,6 +181,8 @@ export type CopyAcrossArgs = {
 	sourceEntries: ExplorerEntry[];
 	/** Destination open folder id (null = root). */
 	destParentId: string | null;
+	/** ICE-fail fallback: confirm dual-phase through this device. */
+	confirmDualPhase?: () => Promise<boolean>;
 };
 
 function entryById(entries: ExplorerEntry[], id: string): ExplorerEntry | undefined {
@@ -199,22 +202,72 @@ export function assertCopyAcrossAllowed(_sourceId: string, _destId: string): voi
 	/* Remote↔remote is allowed; dest writability is checked per driver. */
 }
 
-/** Same saved connection (shared profile). Roots stay aligned so dest.copy can use source ids. */
-export function canServerCopy(source: ExplorerDriver, dest: ExplorerDriver): boolean {
-	if (!dest.copy) return false;
-	if (source.connectionId && dest.connectionId && source.connectionId === dest.connectionId) {
-		return true;
+function nonEmptyKey(d: ExplorerDriver): string | null {
+	const k = d.endpointKey;
+	return typeof k === 'string' && k !== '' ? k : null;
+}
+
+export type CopyAcrossPathKind =
+	| 'server'
+	| 'delegated'
+	| 'webrtc'
+	| 'dual-phase'
+	| 'direct'
+	| 'blocked'
+	| 'idle';
+
+export type CopyAcrossClass = { kind: CopyAcrossPathKind };
+
+/**
+ * Single routing decision for dual-pane copy-across.
+ * DualPane must not reimplement this — call classify, then execute.
+ */
+export function classify(source: ExplorerDriver, dest: ExplorerDriver): CopyAcrossClass {
+	const blocked = destCannotWrite(dest);
+	if (blocked) return { kind: 'blocked' };
+
+	const srcKey = nonEmptyKey(source);
+	const dstKey = nonEmptyKey(dest);
+	const sameCid = Boolean(
+		source.connectionId && dest.connectionId && source.connectionId === dest.connectionId
+	);
+
+	// Two disk drivers never server-copy even if dest.copy exists.
+	const bothDisk = source.id === 'disk' && dest.id === 'disk';
+	if (!bothDisk) {
+		// a. rclone (and others) only via same connectionId + dest.copy
+		if (sameCid && dest.copy) return { kind: 'server' };
+		// b. DualPane local×local: same object + dest.copy
+		if (source === dest && dest.copy) return { kind: 'server' };
+		// c. same monitor host (non-empty endpointKey)
+		if (source.id === 'monitor' && dest.id === 'monitor' && srcKey && srcKey === dstKey) {
+			return { kind: 'server' };
+		}
+		// d. same B2 bucket
+		if (source.id === 'b2' && dest.id === 'b2' && srcKey && srcKey === dstKey && dest.copy) {
+			return { kind: 'server' };
+		}
 	}
-	return source === dest;
+
+	// Distinct B2 buckets are NOT delegated.
+	if (source.id === 'b2' && dest.id === 'monitor') return { kind: 'delegated' };
+	if (source.id === 'monitor' && dest.id === 'b2') return { kind: 'delegated' };
+
+	if (source.id === 'monitor' && dest.id === 'monitor' && srcKey && dstKey && srcKey !== dstKey) {
+		return { kind: 'webrtc' };
+	}
+
+	if (isRemoteClass(source.id) && isRemoteClass(dest.id)) return { kind: 'dual-phase' };
+	return { kind: 'direct' };
 }
 
-/** Browser-mediated two-leg copy (download, then dest write). */
+export function canServerCopy(source: ExplorerDriver, dest: ExplorerDriver): boolean {
+	return classify(source, dest).kind === 'server';
+}
+
 export function isDualPhaseCopy(source: ExplorerDriver, dest: ExplorerDriver): boolean {
-	if (canServerCopy(source, dest)) return false;
-	return isRemoteClass(source.id) && isRemoteClass(dest.id);
+	return classify(source, dest).kind === 'dual-phase';
 }
-
-export type CopyAcrossPathKind = 'server' | 'dual-phase' | 'direct' | 'blocked' | 'idle';
 
 export type CopyAcrossPath = {
 	kind: CopyAcrossPathKind;
@@ -242,33 +295,80 @@ export function describeCopyAcrossPath(
 	dest: ExplorerDriver,
 	labels: { source: string; dest: string }
 ): CopyAcrossPath {
-	if (canServerCopy(source, dest)) {
-		const where = backendName(source.id);
-		return {
-			kind: 'server',
-			summary: `Server copy on ${where}`,
-			detail: `Both panes are the same ${where} connection. The API copies in place — nothing downloads through this browser.`
-		};
-	}
-	const blocked = destCannotWrite(dest);
-	if (blocked) {
+	const { kind } = classify(source, dest);
+	if (kind === 'blocked') {
+		const blocked = destCannotWrite(dest);
 		return {
 			kind: 'blocked',
 			summary: `Cannot copy into ${labels.dest}`,
-			detail: blocked.message
+			detail: blocked?.message ?? 'Destination cannot accept file writes'
 		};
 	}
-	if (isDualPhaseCopy(source, dest)) {
+	if (kind === 'server') {
+		const where = backendName(source.id);
+		if (source.id === 'monitor') {
+			const rootsDiffer = source.connectionId !== dest.connectionId;
+			return {
+				kind: 'server',
+				summary: 'Server copy on monitor',
+				detail: rootsDiffer
+					? 'Both panes share the same monitor host with different roots. The daemon copies by absolute path — nothing streams through this browser.'
+					: 'Both panes share the same monitor host. The daemon copies on that machine — nothing streams through this browser.'
+			};
+		}
+		const detail =
+			source.id === 'b2'
+				? 'Both panes are the same B2 bucket. B2 copies on the server — nothing downloads through this browser.'
+				: source.id === 'rclone'
+					? 'Both panes are the same rclone remote. rclone copies on the remote — nothing downloads through this browser.'
+					: source.id === 'local'
+						? "Both panes are this browser's files. Copy is a local duplicate in Dexie/OPFS."
+						: source.id === 'memory'
+							? "Both panes are this tab's in-memory list. Copy stays in this tab."
+							: `Both panes are the same ${where} connection. The API copies in place — nothing downloads through this browser.`;
+		return {
+			kind: 'server',
+			summary: `Server copy on ${where}`,
+			detail
+		};
+	}
+	if (kind === 'delegated') {
+		if (source.id === 'b2' && dest.id === 'monitor') {
+			return {
+				kind: 'delegated',
+				summary: `Delegated: ${labels.source} → ${labels.dest}`,
+				detail:
+					'This tab mints a short-lived B2 download URL; the monitor daemon GETs it. Application keys stay in this tab. No confirm.'
+			};
+		}
+		return {
+			kind: 'delegated',
+			summary: `Delegated: ${labels.source} → ${labels.dest}`,
+			detail:
+				'This tab mints a short-lived B2 upload URL; the monitor daemon PUTs the file. Application keys stay in this tab. No confirm.'
+		};
+	}
+	if (kind === 'webrtc') {
+		return {
+			kind: 'webrtc',
+			summary: 'WebRTC between monitors',
+			detail:
+				'This tab only exchanges offer/answer. Each daemon copies over WebRTC. If ICE fails, a dual-phase confirm may appear and the copy can continue through this device.'
+		};
+	}
+	if (kind === 'dual-phase') {
+		const src = backendName(source.id);
+		const dst = backendName(dest.id);
 		return {
 			kind: 'dual-phase',
 			summary: `Dual-phase: ${labels.source} → this device → ${labels.dest}`,
-			detail: 'Download first, then upload. Transfer can start as pieces arrive. A confirm popup appears before it starts.'
+			detail: `${src} and ${dst} cannot talk directly. This browser downloads from ${labels.source}, then uploads to ${labels.dest}. Transfer can start as pieces arrive. A confirm popup appears before it starts.`
 		};
 	}
 	return {
 		kind: 'direct',
 		summary: `Copy through this device`,
-		detail: `Read from ${labels.source} and write to ${labels.dest} with one progress bar.`
+		detail: `Read from ${labels.source} (${backendName(source.id)}) and write to ${labels.dest} (${backendName(dest.id)}) with one progress bar.`
 	};
 }
 
@@ -276,7 +376,8 @@ export function describeCopyAcrossPath(
  * Copy selected items from source driver into dest open folder.
  */
 export async function copyAcross(args: CopyAcrossArgs): Promise<number> {
-	const { sourceDriver, destDriver, selectedIds, sourceEntries, destParentId } = args;
+	const { sourceDriver, destDriver, selectedIds, sourceEntries, destParentId, confirmDualPhase } =
+		args;
 	assertCopyAcrossAllowed(sourceDriver.id, destDriver.id);
 
 	if (!selectedIds.length) {
@@ -307,20 +408,34 @@ export async function copyAcross(args: CopyAcrossArgs): Promise<number> {
 	let count = 0;
 	for (const entry of selected) {
 		if (entry.kind === 'folder') {
-			count += await copyFolderTree(sourceDriver, destDriver, entry, destParentId);
+			count += await copyFolderTree(
+				sourceDriver,
+				destDriver,
+				entry,
+				destParentId,
+				confirmDualPhase
+			);
 		} else {
-			await copyFile(sourceDriver, destDriver, entry, destParentId);
+			await copyFile(sourceDriver, destDriver, entry, destParentId, confirmDualPhase);
 			count += 1;
 		}
 	}
 	return count;
 }
 
-function reportCopy(
-	id: string,
-	entry: ExplorerEntry,
-	patch: { transferred: number; size?: number; done?: boolean; status?: 'active' | 'done' | 'failed'; error?: string }
-): void {
+type CopyProgressPatch = {
+	transferred: number;
+	size?: number;
+	done?: boolean;
+	status?: 'active' | 'done' | 'failed';
+	error?: string;
+	hop?: CopyHop;
+	ice?: CopyIce;
+	icePath?: CopyIcePath;
+	hopNote?: string;
+};
+
+function reportCopy(id: string, entry: ExplorerEntry, patch: CopyProgressPatch): void {
 	const size = patch.size ?? entry.size ?? patch.transferred;
 	upsertProgress({
 		id,
@@ -330,8 +445,25 @@ function reportCopy(
 		direction: 'copying',
 		done: patch.done === true,
 		status: patch.status ?? (patch.done ? 'done' : 'active'),
-		error: patch.error
+		error: patch.error,
+		hop: patch.hop,
+		ice: patch.ice,
+		icePath: patch.icePath,
+		hopNote: patch.hopNote
 	});
+}
+
+function webrtcHopNote(ice?: CopyIce, icePath?: CopyIcePath): string {
+	if (ice === 'failed') return 'WebRTC failed — through this device';
+	if (icePath === 'host') return 'WebRTC (host)';
+	if (icePath === 'stun') return 'WebRTC (STUN)';
+	return 'WebRTC (connecting)';
+}
+
+function delegatedNote(source: ExplorerDriver, dest: ExplorerDriver): string {
+	if (source.id === 'b2' && dest.id === 'monitor') return 'Monitor ← B2';
+	if (source.id === 'monitor' && dest.id === 'b2') return 'Monitor → B2';
+	return 'Delegated';
 }
 
 function destCannotWrite(dest: ExplorerDriver): CopyAcrossError | null {
@@ -349,22 +481,30 @@ async function copyFile(
 	source: ExplorerDriver,
 	dest: ExplorerDriver,
 	entry: ExplorerEntry,
-	destParentId: string | null
+	destParentId: string | null,
+	confirmDualPhase?: () => Promise<boolean>
 ): Promise<void> {
-	if (entry.size != null && entry.size > EXPLORER_DOWNLOAD_MAX_BYTES) {
+	const kind = classify(source, dest).kind;
+	const skipCap = kind === 'server' || kind === 'delegated' || kind === 'webrtc';
+	if (!skipCap && entry.size != null && entry.size > EXPLORER_DOWNLOAD_MAX_BYTES) {
 		throw new CopyAcrossError('EXPLORER_TOO_LARGE', 'File exceeds download size cap');
 	}
 	const opId = generateId('copy');
 	const known = entry.size ?? 0;
-	const dual = isDualPhaseCopy(source, dest);
-	const server = canServerCopy(source, dest);
+	const dual = kind === 'dual-phase';
+	const hop: CopyHop | undefined =
+		kind === 'idle' || kind === 'blocked' ? undefined : kind;
 	const remoteId = `${opId}:remote`;
 	const wireId = `${opId}:wire`;
-	const reportLeg = (
-		id: string,
-		name: string,
-		patch: { transferred: number; size?: number; done?: boolean; status?: 'active' | 'done' | 'failed'; error?: string }
-	) => {
+	const hopNote =
+		kind === 'delegated'
+			? delegatedNote(source, dest)
+			: kind === 'direct' || kind === 'dual-phase'
+				? 'Through this device'
+				: kind === 'server'
+					? 'Server copy'
+					: undefined;
+	const reportLeg = (id: string, name: string, patch: CopyProgressPatch) => {
 		upsertProgress({
 			id,
 			name,
@@ -373,32 +513,103 @@ async function copyFile(
 			direction: 'copying',
 			done: patch.done === true,
 			status: patch.status ?? (patch.done ? 'done' : 'active'),
-			error: patch.error
+			error: patch.error,
+			hop: patch.hop ?? hop,
+			ice: patch.ice,
+			icePath: patch.icePath,
+			hopNote: patch.hopNote ?? hopNote
 		});
 	};
 	const failAll = (err: unknown) => {
 		const msg = err instanceof Error ? err.message : String(err);
 		if (dual) {
-			reportLeg(remoteId, entry.name, { transferred: 0, size: known, done: true, status: 'failed', error: msg });
-			reportLeg(wireId, entry.name, { transferred: 0, size: known, done: true, status: 'failed', error: msg });
+			reportLeg(remoteId, entry.name, {
+				transferred: 0,
+				size: known,
+				done: true,
+				status: 'failed',
+				error: msg,
+				hop: 'dual-phase'
+			});
+			reportLeg(wireId, entry.name, {
+				transferred: 0,
+				size: known,
+				done: true,
+				status: 'failed',
+				error: msg,
+				hop: 'dual-phase'
+			});
 		} else {
-			reportCopy(opId, entry, { transferred: 0, size: known, done: true, status: 'failed', error: msg });
+			reportCopy(opId, entry, {
+				transferred: 0,
+				size: known,
+				done: true,
+				status: 'failed',
+				error: msg,
+				hop,
+				hopNote
+			});
 		}
 	};
 
-	if (server && dest.copy) {
-		reportCopy(opId, entry, { transferred: 0, size: known, status: 'active' });
+	if (kind === 'blocked') {
+		const blocked =
+			destCannotWrite(dest) ??
+			new CopyAcrossError('COPY_ACROSS_NO_DEST', 'Destination cannot accept file writes');
+		failAll(blocked);
+		throw blocked;
+	}
+
+	if (kind === 'server') {
+		reportCopy(opId, entry, { transferred: 0, size: known, status: 'active', hop: 'server', hopNote });
 		try {
-			await dest.copy(entry.id, destParentId, {
-				onProgress: (transferred, total) => {
-					reportCopy(opId, entry, {
-						transferred,
-						size: total ?? known ?? transferred,
-						status: 'active'
-					});
+			const sameMonitorHost =
+				source.id === 'monitor' &&
+				dest.id === 'monitor' &&
+				nonEmptyKey(source) &&
+				nonEmptyKey(source) === nonEmptyKey(dest);
+			const cidDiffer = source.connectionId !== dest.connectionId;
+			if (sameMonitorHost && cidDiffer) {
+				if (!source.absolutePath || !dest.copyFromAbsolute) {
+					throw new CopyAcrossError(
+						'COPY_ACROSS_NO_DEST',
+						'Monitor cannot copy across roots (missing absolutePath/copyFromAbsolute)'
+					);
 				}
+				await dest.copyFromAbsolute(source.absolutePath(entry.id), destParentId, entry.name, {
+					onProgress: (transferred, total) => {
+						reportCopy(opId, entry, {
+							transferred,
+							size: total ?? known ?? transferred,
+							status: 'active',
+							hop: 'server',
+							hopNote
+						});
+					}
+				});
+			} else if (dest.copy) {
+				await dest.copy(entry.id, destParentId, {
+					onProgress: (transferred, total) => {
+						reportCopy(opId, entry, {
+							transferred,
+							size: total ?? known ?? transferred,
+							status: 'active',
+							hop: 'server',
+							hopNote
+						});
+					}
+				});
+			} else {
+				throw new CopyAcrossError('COPY_ACROSS_NO_DEST', 'Destination cannot server-copy');
+			}
+			reportCopy(opId, entry, {
+				transferred: known || 1,
+				size: known || 1,
+				done: true,
+				status: 'done',
+				hop: 'server',
+				hopNote
 			});
-			reportCopy(opId, entry, { transferred: known || 1, size: known || 1, done: true, status: 'done' });
 			return;
 		} catch (e) {
 			failAll(e);
@@ -406,17 +617,145 @@ async function copyFile(
 		}
 	}
 
-	const blocked = destCannotWrite(dest);
-	if (blocked) {
-		failAll(blocked);
-		throw blocked;
+	if (kind === 'delegated') {
+		reportCopy(opId, entry, {
+			transferred: 0,
+			size: known,
+			status: 'active',
+			hop: 'delegated',
+			hopNote
+		});
+		try {
+			if (source.id === 'b2' && dest.id === 'monitor') {
+				if (!source.mintDownloadUrl || !dest.pullFromUrl) {
+					throw new CopyAcrossError(
+						'COPY_ACROSS_NO_DEST',
+						'Delegated B2 → monitor requires mintDownloadUrl and pullFromUrl'
+					);
+				}
+				const minted = await source.mintDownloadUrl(entry.id);
+				await dest.pullFromUrl(minted.url, destParentId, entry.name, {
+					onProgress: (transferred, total) => {
+						reportCopy(opId, entry, {
+							transferred,
+							size: total ?? known ?? transferred,
+							status: 'active',
+							hop: 'delegated',
+							hopNote
+						});
+					}
+				});
+			} else if (source.id === 'monitor' && dest.id === 'b2') {
+				if (!dest.mintUploadUrl || !source.pushToUpload) {
+					throw new CopyAcrossError(
+						'COPY_ACROSS_NO_SOURCE',
+						'Delegated monitor → B2 requires mintUploadUrl and pushToUpload'
+					);
+				}
+				const upload = await dest.mintUploadUrl(destParentId, entry.name);
+				await source.pushToUpload(entry.id, upload, {
+					onProgress: (transferred, total) => {
+						reportCopy(opId, entry, {
+							transferred,
+							size: total ?? known ?? transferred,
+							status: 'active',
+							hop: 'delegated',
+							hopNote
+						});
+					}
+				});
+			} else {
+				throw new CopyAcrossError('COPY_ACROSS_NO_DEST', 'Unsupported delegated pair');
+			}
+			reportCopy(opId, entry, {
+				transferred: known || 1,
+				size: known || 1,
+				done: true,
+				status: 'done',
+				hop: 'delegated',
+				hopNote
+			});
+			return;
+		} catch (e) {
+			failAll(e);
+			throw e;
+		}
+	}
+
+	if (kind === 'webrtc') {
+		reportCopy(opId, entry, {
+			transferred: 0,
+			size: known,
+			status: 'active',
+			hop: 'webrtc',
+			ice: 'checking',
+			hopNote: webrtcHopNote('checking')
+		});
+		try {
+			if (!isWebrtcCopyPeer(source) || !isWebrtcCopyPeer(dest)) {
+				throw new CopyAcrossError(
+					'COPY_ACROSS_NO_DEST',
+					'Both monitors must support WebRTC ferry'
+				);
+			}
+			await ferryWebrtcCopy({
+				source,
+				dest,
+				entry,
+				destParentId,
+				confirmDualPhase,
+				onProgress: (ev) => {
+					const ice = ev.ice;
+					const icePath = ev.icePath;
+					reportCopy(opId, entry, {
+						transferred: ev.transferred,
+						size: ev.size ?? known,
+						status: ev.done ? 'done' : 'active',
+						done: ev.done === true,
+						error: ev.error,
+						hop: ice === 'failed' ? 'dual-phase' : 'webrtc',
+						ice,
+						icePath,
+						hopNote: webrtcHopNote(ice, icePath)
+					});
+				}
+			});
+			reportCopy(opId, entry, {
+				transferred: known || 1,
+				size: known || 1,
+				done: true,
+				status: 'done'
+			});
+			return;
+		} catch (e) {
+			failAll(e);
+			throw e;
+		}
 	}
 
 	if (dual) {
-		reportLeg(remoteId, `Download · ${source.id}`, { transferred: 0, size: known, status: 'active' });
-		reportLeg(wireId, entry.name, { transferred: 0, size: known, status: 'active' });
+		reportLeg(remoteId, `Download · ${source.id}`, {
+			transferred: 0,
+			size: known,
+			status: 'active',
+			hop: 'dual-phase',
+			hopNote
+		});
+		reportLeg(wireId, entry.name, {
+			transferred: 0,
+			size: known,
+			status: 'active',
+			hop: 'dual-phase',
+			hopNote
+		});
 	} else {
-		reportCopy(opId, entry, { transferred: 0, size: known, status: 'active' });
+		reportCopy(opId, entry, {
+			transferred: 0,
+			size: known,
+			status: 'active',
+			hop: 'direct',
+			hopNote
+		});
 	}
 
 	try {
@@ -425,8 +764,23 @@ async function copyFile(
 			blob = await source.download(entry.id, {
 				onProgress: (transferred, total) => {
 					const size = total ?? known ?? transferred;
-					if (dual) reportLeg(remoteId, `Download · ${source.id}`, { transferred, size, status: 'active' });
-					else reportCopy(opId, entry, { transferred, size, status: 'active' });
+					if (dual) {
+						reportLeg(remoteId, `Download · ${source.id}`, {
+							transferred,
+							size,
+							status: 'active',
+							hop: 'dual-phase',
+							hopNote
+						});
+					} else {
+						reportCopy(opId, entry, {
+							transferred,
+							size,
+							status: 'active',
+							hop: 'direct',
+							hopNote
+						});
+					}
 				}
 			});
 		} else if (source.readBlob) {
@@ -442,10 +796,18 @@ async function copyFile(
 				transferred: blob.size,
 				size: blob.size,
 				done: true,
-				status: 'done'
+				status: 'done',
+				hop: 'dual-phase',
+				hopNote
 			});
 		} else {
-			reportCopy(opId, entry, { transferred: blob.size, size: blob.size, status: 'active' });
+			reportCopy(opId, entry, {
+				transferred: blob.size,
+				size: blob.size,
+				status: 'active',
+				hop: 'direct',
+				hopNote
+			});
 		}
 		const file = new File([blob], entry.name, {
 			type: entry.contentType || blob.type || 'application/octet-stream'
@@ -453,23 +815,61 @@ async function copyFile(
 
 		if (dest.writeFile) {
 			await dest.writeFile(destParentId, file);
-			if (dual) reportLeg(wireId, entry.name, { transferred: blob.size, size: blob.size, done: true, status: 'done' });
+			if (dual) {
+				reportLeg(wireId, entry.name, {
+					transferred: blob.size,
+					size: blob.size,
+					done: true,
+					status: 'done',
+					hop: 'dual-phase',
+					hopNote
+				});
+			}
 		} else if (dest.upload) {
 			await dest.upload(destParentId, file, {
 				onProgress: (pct) => {
 					const transferred = Math.round(blob.size * Math.min(1, Math.max(0, pct)));
-					if (dual) reportLeg(wireId, entry.name, { transferred, size: blob.size, status: 'active' });
-					else reportCopy(opId, entry, { transferred, size: blob.size, status: 'active' });
+					if (dual) {
+						reportLeg(wireId, entry.name, {
+							transferred,
+							size: blob.size,
+							status: 'active',
+							hop: 'dual-phase',
+							hopNote
+						});
+					} else {
+						reportCopy(opId, entry, {
+							transferred,
+							size: blob.size,
+							status: 'active',
+							hop: 'direct',
+							hopNote
+						});
+					}
 				}
 			});
 			if (dual) {
-				reportLeg(wireId, entry.name, { transferred: blob.size, size: blob.size, done: true, status: 'done' });
+				reportLeg(wireId, entry.name, {
+					transferred: blob.size,
+					size: blob.size,
+					done: true,
+					status: 'done',
+					hop: 'dual-phase',
+					hopNote
+				});
 			}
 		} else {
 			throw new CopyAcrossError('COPY_ACROSS_NO_DEST', 'Destination cannot accept file writes');
 		}
 		if (!dual) {
-			reportCopy(opId, entry, { transferred: blob.size, size: blob.size, done: true, status: 'done' });
+			reportCopy(opId, entry, {
+				transferred: blob.size,
+				size: blob.size,
+				done: true,
+				status: 'done',
+				hop: 'direct',
+				hopNote
+			});
 		}
 	} catch (e) {
 		failAll(e);
@@ -481,7 +881,8 @@ async function copyFolderTree(
 	source: ExplorerDriver,
 	dest: ExplorerDriver,
 	folder: ExplorerEntry,
-	destParentId: string | null
+	destParentId: string | null,
+	confirmDualPhase?: () => Promise<boolean>
 ): Promise<number> {
 	if (!dest.mkdir) {
 		throw new CopyAcrossError('COPY_ACROSS_NO_SOURCE', 'Destination cannot create folders');
@@ -500,7 +901,7 @@ async function copyFolderTree(
 		if (child.kind === 'folder') {
 			count += await copyFolderTree(source, dest, child, created.id);
 		} else {
-			await copyFile(source, dest, child, created.id);
+			await copyFile(source, dest, child, created.id, confirmDualPhase);
 			count += 1;
 		}
 	}

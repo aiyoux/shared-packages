@@ -14,6 +14,7 @@
 	} from './types.js';
 	import { toast } from '@shared-packages/ui';
 	import { formatExplorerError } from '../ui/explorerError.js';
+	import VaultPanel from '../vault/VaultPanel.svelte';
 
 	interface Props {
 		/** Called after save when user wants to connect with this profile */
@@ -38,6 +39,7 @@
 	let rcPass = $state('');
 	/** When editing, empty pass field means "keep existing secret" */
 	let passDirty = $state(false);
+	let persistSecret = $state(true);
 	let error = $state('');
 	let busy = $state(false);
 
@@ -62,6 +64,7 @@
 		rcUser = '';
 		rcPass = '';
 		passDirty = false;
+		persistSecret = true;
 		error = '';
 	}
 
@@ -75,6 +78,7 @@
 		// Never show stored secret; leave blank to keep
 		rcPass = '';
 		passDirty = false;
+		persistSecret = p.persistSecret !== false;
 		error = '';
 	}
 
@@ -114,6 +118,7 @@
 				rcUser,
 				// Blank pass on edit keeps prior secret inside saveProfile
 				rcPass: passDirty || !existing ? passToSave : '',
+				persistSecret,
 				createdAt: existing?.createdAt
 			});
 			await setActiveProfileId(profile.id);
@@ -154,12 +159,13 @@
 <div class="rclone-form" data-testid="rclone-connection-form">
 	<h3>rclone RC connection</h3>
 	<p class="hint">
-		RC credentials stay only in this browser (IndexedDB). The browser talks
+		RC credentials stay only in this browser. The browser talks
 		<strong>directly</strong> to the Base URL you set (local rcd, SSH tunnel, etc.;
 		default <code>http://127.0.0.1:7750</code>). rcd must allow CORS for this site.
 		Use the remote name from your <code>rclone.conf</code> as <strong>fs</strong>
 		(e.g. <code>remote:</code>).
 	</p>
+	<VaultPanel />
 
 	{#if error}
 		<div class="err" data-testid="rclone-form-error" role="alert">{error}</div>
@@ -174,7 +180,10 @@
 						<div class="profile-main">
 							<span class="profile-name">{p.name}</span>
 							<span class="meta"
-								>{p.fs}{p.rootPath ? ` · ${p.rootPath}` : ''} · {p.baseUrl}</span
+								>{p.fs}{p.rootPath ? ` · ${p.rootPath}` : ''} · {p.baseUrl}{p.persistSecret ===
+								false
+									? ' · this tab'
+									: ''}</span
 							>
 						</div>
 						<button
@@ -259,6 +268,19 @@
 				oninput={() => (passDirty = true)}
 			/>
 		</label>
+		<label class="check">
+			<input
+				data-testid="rclone-persist-secret"
+				type="checkbox"
+				bind:checked={persistSecret}
+			/>
+			Save this password in the browser
+		</label>
+		{#if !persistSecret}
+			<p class="editing-label" data-testid="rclone-session-only-note">
+				This tab only — the password is forgotten when the tab closes.
+			</p>
+		{/if}
 	</div>
 
 	<div class="actions">
@@ -326,6 +348,11 @@
 		flex-direction: column;
 		gap: 0.25rem;
 		font-size: 0.85rem;
+	}
+	label.check {
+		flex-direction: row;
+		align-items: center;
+		gap: 0.45rem;
 	}
 	input {
 		padding: 0.4rem 0.55rem;

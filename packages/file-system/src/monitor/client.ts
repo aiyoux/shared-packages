@@ -94,6 +94,19 @@ export type MonitorMeta = {
 	capabilities?: MonitorCapabilities;
 };
 
+export type MonitorNdjsonEvent = {
+	transferred?: number;
+	size?: number;
+	done?: boolean;
+	error?: string;
+	ice?: 'checking' | 'connected' | 'failed';
+	icePath?: 'host' | 'stun';
+};
+
+export type MonitorWebrtcRole = 'offerer' | 'answerer';
+
+export type MonitorWebrtcJob = { jobId: string; token: string };
+
 export type MonitorTransport = {
 	list(path: string): Promise<MonitorListResult>;
 	stat(path: string): Promise<MonitorStatResult>;
@@ -109,8 +122,11 @@ export type MonitorTransport = {
 			onProgress?: (transferred: number, total?: number) => void;
 			onChunk?: (chunk: Uint8Array) => void | Promise<void>;
 			assemble?: boolean;
+			signal?: AbortSignal;
 		}
 	): Promise<Blob>;
+	/** Absolute GET URL for `/v1/fs/read` (no extra headers). */
+	readUrl(path: string): string;
 	/** Overwrite/create a file at `path` (parent must exist). */
 	write(
 		path: string,
@@ -131,6 +147,70 @@ export type MonitorTransport = {
 			onProgress?: (transferred: number, total?: number) => void;
 		}
 	): Promise<void>;
+	/** Daemon GET `url` to dest path. NDJSON progress; `X-Fs-Job-Token`. */
+	pull(
+		url: string,
+		to: string,
+		opts?: {
+			signal?: AbortSignal;
+			jobToken?: string;
+			onProgress?: (transferred: number, total?: number) => void;
+		}
+	): Promise<void>;
+	/** Daemon PUT local file to a minted upload URL (B2). NDJSON progress. */
+	push(
+		body: {
+			from: string;
+			uploadUrl: string;
+			token: string;
+			fileName: string;
+			contentType?: string;
+		},
+		opts?: {
+			signal?: AbortSignal;
+			onProgress?: (transferred: number, total?: number) => void;
+		}
+	): Promise<void>;
+	webrtcCreateJob(body: {
+		role: MonitorWebrtcRole;
+		from?: string;
+		to?: string;
+		size?: number;
+	}): Promise<MonitorWebrtcJob>;
+	/** POST /offer with no body — start gathering. */
+	webrtcCreateOffer(
+		jobId: string,
+		token: string,
+		opts?: { signal?: AbortSignal }
+	): Promise<{ sdp: string }>;
+	/** GET /offer — poll for SDP. */
+	webrtcGetOffer(
+		jobId: string,
+		token: string,
+		opts?: { signal?: AbortSignal }
+	): Promise<{ sdp: string }>;
+	webrtcPostOffer(
+		jobId: string,
+		token: string,
+		sdp: string,
+		opts?: { signal?: AbortSignal }
+	): Promise<{ sdp: string }>;
+	webrtcPostAnswer(
+		jobId: string,
+		token: string,
+		sdp: string,
+		opts?: { signal?: AbortSignal }
+	): Promise<{ sdp: string }>;
+	webrtcProgress(
+		jobId: string,
+		token: string,
+		opts?: {
+			signal?: AbortSignal;
+			onEvent?: (ev: MonitorNdjsonEvent) => void;
+			onProgress?: (transferred: number, total?: number) => void;
+		}
+	): Promise<void>;
+	webrtcAbort(jobId: string, token: string, opts?: { signal?: AbortSignal }): Promise<void>;
 	/** Delete a file (or empty directory) at `path`. */
 	unlink(path: string, opts?: { signal?: AbortSignal }): Promise<void>;
 	health(): Promise<unknown>;
@@ -221,6 +301,110 @@ export function coerceMonitorMeta(data: unknown): MonitorMeta {
 		out.features = o.features.filter((f): f is string => typeof f === 'string');
 	}
 	return out;
+}
+
+export function coerceWebrtcJob(data: unknown, headerToken?: string | null): MonitorWebrtcJob {
+	const o = data && typeof data === 'object' ? (data as Record<string, unknown>) : {};
+	const jobId =
+		typeof o.jobId === 'string'
+			? o.jobId
+			: typeof o.job_id === 'string'
+				? o.job_id
+				: '';
+	const token =
+		typeof o.token === 'string'
+			? o.token
+			: typeof o.jobToken === 'string'
+				? o.jobToken
+				: headerToken && headerToken !== ''
+					? headerToken
+					: '';
+	if (!jobId || !token) {
+		throw new Error('Monitor webrtc job missing jobId/token');
+	}
+	return { jobId, token };
+}
+
+export function coerceSdp(data: unknown): { sdp: string } {
+	const o = data && typeof data === 'object' ? (data as Record<string, unknown>) : {};
+	return { sdp: typeof o.sdp === 'string' ? o.sdp : '' };
+}
+
+function errorMessageFromBody(parsed: unknown, fallback: string): string {
+	const err = (parsed as { error?: { message?: string; code?: string } | string } | null)?.error;
+	const msg =
+		typeof err === 'string'
+			? err
+			: err && typeof err === 'object' && 'message' in err
+				? String(err.message)
+				: fallback;
+	const code = err && typeof err === 'object' && 'code' in err ? String(err.code) : '';
+	return code ? `[${code}] ${msg}` : msg || fallback;
+}
+
+function jobAuthHeaders(token: string, extra?: Record<string, string>): Record<string, string> {
+	return {
+		Authorization: `Bearer ${token}`,
+		'X-Fs-Job-Token': token,
+		...extra
+	};
+}
+
+function mapMonitorFetchError(
+	e: unknown,
+	base: string,
+	label: string,
+	signal?: AbortSignal
+): Error {
+	if (e instanceof Error && e.name === 'AbortError') {
+		return new Error(signal?.aborted ? `Monitor ${label} cancelled` : `Monitor ${label} timed out`);
+	}
+	if (e instanceof TypeError) {
+		return new Error(
+			`Cannot reach monitor at ${base} (network/CORS). Is it running and allowing this origin?`
+		);
+	}
+	return e instanceof Error ? e : new Error(String(e));
+}
+
+export function parseNdjsonEvent(line: string): MonitorNdjsonEvent | null {
+	const trimmed = line.trim();
+	if (!trimmed) return null;
+	try {
+		return JSON.parse(trimmed) as MonitorNdjsonEvent;
+	} catch {
+		return null;
+	}
+}
+
+async function consumeNdjsonProgress(
+	res: Response,
+	onEvent?: (ev: MonitorNdjsonEvent) => void
+): Promise<void> {
+	if (!res.body || typeof res.body.getReader !== 'function') {
+		onEvent?.({ transferred: 1, size: 1, done: true });
+		return;
+	}
+	const reader = res.body.getReader();
+	const dec = new TextDecoder();
+	let buf = '';
+	let lastError = '';
+	const take = (raw: string) => {
+		const ev = parseNdjsonEvent(raw);
+		if (!ev) return;
+		if (ev.error) lastError = ev.error;
+		onEvent?.(ev);
+	};
+	for (;;) {
+		const { done, value } = await reader.read();
+		if (done) break;
+		buf += dec.decode(value, { stream: true });
+		const lines = buf.split('\n');
+		buf = lines.pop() ?? '';
+		for (const line of lines) take(line);
+	}
+	if (buf.trim()) take(buf);
+	if (lastError) throw new Error(lastError);
 }
 
 function coerceFsEntry(raw: unknown): MonitorListEntry | null {
@@ -412,6 +596,93 @@ export function createMonitorClient(opts: {
 		}
 	}
 
+	async function postNdjson(
+		path: string,
+		body: unknown,
+		opts: {
+			timeoutMs: number;
+			signal?: AbortSignal;
+			onProgress?: (transferred: number, total?: number) => void;
+			onEvent?: (ev: MonitorNdjsonEvent) => void;
+			failLabel: string;
+			timeoutLabel: string;
+			headers?: Record<string, string>;
+		}
+	): Promise<void> {
+		const ac = new AbortController();
+		const t = opts.timeoutMs > 0 ? setTimeout(() => ac.abort(), opts.timeoutMs) : null;
+		const onAbort = () => ac.abort();
+		opts.signal?.addEventListener('abort', onAbort);
+		const url = joinUrl(base, path);
+		try {
+			const res = await fetchFn(
+				url,
+				withLocalAddressSpace(url, {
+					method: 'POST',
+					headers: {
+						'content-type': 'application/json',
+						accept: 'application/x-ndjson',
+						...opts.headers
+					},
+					body: JSON.stringify(body),
+					signal: ac.signal
+				})
+			);
+			if (!res.ok) {
+				const parsed = await res.json().catch(() => ({}));
+				throw new Error(errorMessageFromBody(parsed, `${opts.failLabel} failed (${res.status})`));
+			}
+			await consumeNdjsonProgress(res, (ev) => {
+				opts.onEvent?.(ev);
+				opts.onProgress?.(ev.transferred ?? 0, ev.size);
+			});
+		} catch (e) {
+			throw mapMonitorFetchError(e, base, opts.timeoutLabel, opts.signal);
+		} finally {
+			opts.signal?.removeEventListener('abort', onAbort);
+			if (t) clearTimeout(t);
+		}
+	}
+
+	async function webrtcJson(
+		method: 'GET' | 'POST',
+		jobId: string,
+		token: string,
+		suffix: 'offer' | 'answer',
+		body: unknown,
+		signal?: AbortSignal
+	): Promise<{ sdp: string }> {
+		const ac = new AbortController();
+		const t = setTimeout(() => ac.abort(), 30_000);
+		const onAbort = () => ac.abort();
+		signal?.addEventListener('abort', onAbort);
+		const url = joinUrl(base, `/v1/fs/webrtc/jobs/${encodeURIComponent(jobId)}/${suffix}`);
+		try {
+			const res = await fetchFn(
+				url,
+				withLocalAddressSpace(url, {
+					method,
+					headers: jobAuthHeaders(
+						token,
+						method === 'POST' ? { 'content-type': 'application/json' } : { accept: 'application/json' }
+					),
+					body: method === 'POST' ? JSON.stringify(body ?? {}) : undefined,
+					signal: ac.signal
+				})
+			);
+			const parsed = await res.json().catch(() => ({}));
+			if (!res.ok) {
+				throw new Error(errorMessageFromBody(parsed, `Webrtc ${suffix} failed (${res.status})`));
+			}
+			return coerceSdp(parsed);
+		} catch (e) {
+			throw mapMonitorFetchError(e, base, `webrtc ${suffix}`, signal);
+		} finally {
+			signal?.removeEventListener('abort', onAbort);
+			clearTimeout(t);
+		}
+	}
+
 	return {
 		baseUrl: base,
 		async list(path: string) {
@@ -473,9 +744,13 @@ export function createMonitorClient(opts: {
 				unsubscribe: req.unsubscribe ?? []
 			})) as MonitorSubsResult;
 		},
+		readUrl(path: string) {
+			return joinUrl(base, `/v1/fs/read?path=${encodeURIComponent(path)}`);
+		},
 		async download(path: string, opts) {
 			const ac = new AbortController();
-			const t = setTimeout(() => ac.abort(), 60_000);
+			const onAbort = () => ac.abort();
+			opts?.signal?.addEventListener('abort', onAbort);
 			const url = joinUrl(base, `/v1/fs/read?path=${encodeURIComponent(path)}`);
 			try {
 				const res = await fetchFn(
@@ -493,7 +768,7 @@ export function createMonitorClient(opts: {
 				});
 			} catch (e) {
 				if (e instanceof Error && e.name === 'AbortError') {
-					throw new Error('Monitor download timed out');
+					throw opts?.signal?.aborted ? e : new Error('Monitor download aborted');
 				}
 				if (e instanceof TypeError) {
 					throw new Error(
@@ -502,7 +777,7 @@ export function createMonitorClient(opts: {
 				}
 				throw e;
 			} finally {
-				clearTimeout(t);
+				opts?.signal?.removeEventListener('abort', onAbort);
 			}
 		},
 		async write(path, body, opts) {
@@ -552,81 +827,127 @@ export function createMonitorClient(opts: {
 			}
 		},
 		async copy(from, to, opts) {
+			await postNdjson('/v1/fs/copy', { from, to }, {
+				timeoutMs: 120_000,
+				signal: opts?.signal,
+				onProgress: opts?.onProgress,
+				failLabel: 'Copy',
+				timeoutLabel: 'copy'
+			});
+		},
+		async pull(pullUrl, to, opts) {
+			const jobToken = opts?.jobToken || (typeof crypto !== 'undefined' && crypto.randomUUID
+				? crypto.randomUUID()
+				: `pull_${Date.now()}`);
+			await postNdjson(
+				'/v1/fs/pull',
+				{ url: pullUrl, to },
+				{
+					timeoutMs: 0,
+					signal: opts?.signal,
+					onProgress: opts?.onProgress,
+					failLabel: 'Pull',
+					timeoutLabel: 'pull',
+					headers: { 'X-Fs-Job-Token': jobToken }
+				}
+			);
+		},
+		async push(body, opts) {
+			await postNdjson('/v1/fs/push', body, {
+				timeoutMs: 0,
+				signal: opts?.signal,
+				onProgress: opts?.onProgress,
+				failLabel: 'Push',
+				timeoutLabel: 'push'
+			});
+		},
+		async webrtcCreateJob(body) {
 			const ac = new AbortController();
-			const t = setTimeout(() => ac.abort(), 120_000);
-			const onAbort = () => ac.abort();
-			opts?.signal?.addEventListener('abort', onAbort);
-			const url = joinUrl(base, '/v1/fs/copy');
+			const t = setTimeout(() => ac.abort(), 12_000);
+			const url = joinUrl(base, '/v1/fs/webrtc/jobs');
 			try {
 				const res = await fetchFn(
 					url,
 					withLocalAddressSpace(url, {
 						method: 'POST',
-						headers: { 'content-type': 'application/json', accept: 'application/x-ndjson' },
-						body: JSON.stringify({ from, to }),
+						headers: { 'content-type': 'application/json' },
+						body: JSON.stringify(body),
+						signal: ac.signal
+					})
+				);
+				const parsed = await res.json().catch(() => ({}));
+				if (!res.ok) {
+					throw new Error(errorMessageFromBody(parsed, `Create webrtc job failed (${res.status})`));
+				}
+				return coerceWebrtcJob(parsed, res.headers.get('X-Fs-Job-Token'));
+			} catch (e) {
+				throw mapMonitorFetchError(e, base, 'webrtc job');
+			} finally {
+				clearTimeout(t);
+			}
+		},
+		async webrtcCreateOffer(jobId, token, opts) {
+			return webrtcJson('POST', jobId, token, 'offer', undefined, opts?.signal);
+		},
+		async webrtcGetOffer(jobId, token, opts) {
+			return webrtcJson('GET', jobId, token, 'offer', undefined, opts?.signal);
+		},
+		async webrtcPostOffer(jobId, token, sdp, opts) {
+			return webrtcJson('POST', jobId, token, 'answer', { sdp }, opts?.signal);
+		},
+		async webrtcPostAnswer(jobId, token, sdp, opts) {
+			return webrtcJson('POST', jobId, token, 'answer', { sdp }, opts?.signal);
+		},
+		async webrtcProgress(jobId, token, opts) {
+			const ac = new AbortController();
+			const onAbort = () => ac.abort();
+			opts?.signal?.addEventListener('abort', onAbort);
+			const url = joinUrl(base, `/v1/fs/webrtc/jobs/${encodeURIComponent(jobId)}/progress`);
+			try {
+				const res = await fetchFn(
+					url,
+					withLocalAddressSpace(url, {
+						method: 'GET',
+						headers: jobAuthHeaders(token, { accept: 'application/x-ndjson' }),
 						signal: ac.signal
 					})
 				);
 				if (!res.ok) {
 					const parsed = await res.json().catch(() => ({}));
-					const err = (parsed as { error?: { message?: string } | string }).error;
-					const msg =
-						typeof err === 'string'
-							? err
-							: err && typeof err === 'object' && 'message' in err
-								? String(err.message)
-								: res.statusText;
-					throw new Error(msg || `Copy failed (${res.status})`);
+					throw new Error(errorMessageFromBody(parsed, `Webrtc progress failed (${res.status})`));
 				}
-				if (!res.body || typeof res.body.getReader !== 'function') {
-					opts?.onProgress?.(1, 1);
-					return;
-				}
-				const reader = res.body.getReader();
-				const dec = new TextDecoder();
-				let buf = '';
-				let lastError = '';
-				for (;;) {
-					const { done, value } = await reader.read();
-					if (done) break;
-					buf += dec.decode(value, { stream: true });
-					const lines = buf.split('\n');
-					buf = lines.pop() ?? '';
-					for (const line of lines) {
-						const trimmed = line.trim();
-						if (!trimmed) continue;
-						let ev: { transferred?: number; size?: number; done?: boolean; error?: string };
-						try {
-							ev = JSON.parse(trimmed) as typeof ev;
-						} catch {
-							continue;
-						}
-						if (ev.error) lastError = ev.error;
-						opts?.onProgress?.(ev.transferred ?? 0, ev.size);
-					}
-				}
-				if (buf.trim()) {
-					try {
-						const ev = JSON.parse(buf.trim()) as { transferred?: number; size?: number; error?: string };
-						if (ev.error) lastError = ev.error;
-						opts?.onProgress?.(ev.transferred ?? 0, ev.size);
-					} catch {
-						/* ignore trailer */
-					}
-				}
-				if (lastError) throw new Error(lastError);
+				await consumeNdjsonProgress(res, (ev) => {
+					opts?.onEvent?.(ev);
+					opts?.onProgress?.(ev.transferred ?? 0, ev.size);
+				});
 			} catch (e) {
-				if (e instanceof Error && e.name === 'AbortError') {
-					throw new Error(
-						opts?.signal?.aborted ? 'Monitor copy cancelled' : 'Monitor copy timed out'
-					);
+				throw mapMonitorFetchError(e, base, 'webrtc progress', opts?.signal);
+			} finally {
+				opts?.signal?.removeEventListener('abort', onAbort);
+			}
+		},
+		async webrtcAbort(jobId, token, opts) {
+			const ac = new AbortController();
+			const t = setTimeout(() => ac.abort(), 15_000);
+			const onAbort = () => ac.abort();
+			opts?.signal?.addEventListener('abort', onAbort);
+			const url = joinUrl(base, `/v1/fs/webrtc/jobs/${encodeURIComponent(jobId)}/abort`);
+			try {
+				const res = await fetchFn(
+					url,
+					withLocalAddressSpace(url, {
+						method: 'POST',
+						headers: jobAuthHeaders(token, { 'content-type': 'application/json' }),
+						body: '{}',
+						signal: ac.signal
+					})
+				);
+				if (!res.ok && res.status !== 404) {
+					const parsed = await res.json().catch(() => ({}));
+					throw new Error(errorMessageFromBody(parsed, `Webrtc abort failed (${res.status})`));
 				}
-				if (e instanceof TypeError) {
-					throw new Error(
-						`Cannot reach monitor at ${base} (network/CORS). Is it running and allowing this origin?`
-					);
-				}
-				throw e;
+			} catch (e) {
+				throw mapMonitorFetchError(e, base, 'webrtc abort', opts?.signal);
 			} finally {
 				opts?.signal?.removeEventListener('abort', onAbort);
 				clearTimeout(t);

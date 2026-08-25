@@ -1,4 +1,7 @@
 import type {
+	CopyHop,
+	CopyIce,
+	CopyIcePath,
 	TransferDirection,
 	TransferIntegrity,
 	TransferItem,
@@ -31,6 +34,10 @@ export type StackedProgress = {
 	integrity?: TransferIntegrity;
 	resumed?: boolean;
 	parallelStreams?: number;
+	hop?: CopyHop;
+	ice?: CopyIce;
+	icePath?: CopyIcePath;
+	hopNote?: string;
 };
 
 const STACK_LEGS = ['compress', 'remote', 'wire', 'decompress'] as const;
@@ -114,6 +121,7 @@ export function stackTransferItems(items: TransferItem[]): StackedProgress[] {
 		const streamedBytes = parts
 			.filter((p) => p.size <= 0 && p.transferred > 0)
 			.reduce((n, p) => n + p.transferred, 0);
+		const iced = parts.find((p) => p.ice);
 		out.push({
 			id: `${opId}:stack`,
 			ids: parts.map((p) => p.id),
@@ -131,7 +139,11 @@ export function stackTransferItems(items: TransferItem[]): StackedProgress[] {
 			hashAlg: primary.hashAlg,
 			integrity: primary.integrity,
 			resumed: primary.resumed,
-			parallelStreams: primary.parallelStreams
+			parallelStreams: primary.parallelStreams,
+			hop: primary.hop ?? iced?.hop,
+			ice: iced?.ice ?? primary.ice,
+			icePath: iced?.icePath ?? primary.icePath,
+			hopNote: iced?.hopNote ?? primary.hopNote
 		});
 	}
 
@@ -151,7 +163,11 @@ export function stackTransferItems(items: TransferItem[]): StackedProgress[] {
 			hashAlg: t.hashAlg,
 			integrity: t.integrity,
 			resumed: t.resumed,
-			parallelStreams: t.parallelStreams
+			parallelStreams: t.parallelStreams,
+			hop: t.hop,
+			ice: t.ice,
+			icePath: t.icePath,
+			hopNote: t.hopNote
 		});
 	}
 	return out;

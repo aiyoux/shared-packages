@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { zoneFromY, resolveDrop } from './zones.js';
+import { zoneFromY, canonicalizeSiblingZone, resolveDrop } from './zones.js';
 
 describe('treeDnd zones', () => {
 	const rect = { top: 0, height: 100 };
@@ -8,6 +8,28 @@ describe('treeDnd zones', () => {
 		expect(zoneFromY(rect, 10)).toBe('before');
 		expect(zoneFromY(rect, 50)).toBe('into');
 		expect(zoneFromY(rect, 90)).toBe('after');
+	});
+
+	it('ordered files use a 50/50 before-after split (never into)', () => {
+		const opts = { kind: 'file' as const, supportsSiblingOrder: true };
+		expect(zoneFromY(rect, 10, opts)).toBe('before');
+		expect(zoneFromY(rect, 49, opts)).toBe('before');
+		expect(zoneFromY(rect, 50, opts)).toBe('after');
+		expect(zoneFromY(rect, 90, opts)).toBe('after');
+	});
+
+	it('ordered folders keep a middle into-band', () => {
+		const opts = { kind: 'folder' as const, supportsSiblingOrder: true };
+		expect(zoneFromY(rect, 10, opts)).toBe('before');
+		expect(zoneFromY(rect, 50, opts)).toBe('into');
+		expect(zoneFromY(rect, 90, opts)).toBe('after');
+	});
+
+	it('canonicalize collapses before(i) into after(i-1)', () => {
+		expect(canonicalizeSiblingZone(1, 'before')).toEqual({ index: 0, zone: 'after' });
+		expect(canonicalizeSiblingZone(0, 'before')).toEqual({ index: 0, zone: 'before' });
+		expect(canonicalizeSiblingZone(2, 'after')).toEqual({ index: 2, zone: 'after' });
+		expect(canonicalizeSiblingZone(2, 'into')).toEqual({ index: 2, zone: 'into' });
 	});
 
 	it('null zone does not commit', () => {

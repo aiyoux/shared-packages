@@ -1,7 +1,11 @@
 /**
- * Hub-only rclone RC connection profile (v1 plaintext RC Basic in IndexedDB).
+ * Hub-only rclone RC connection profile.
+ * `rcPass` is plaintext in IDB unless the connection vault is enabled or
+ * `persistSecret` is false (tab-only).
  * @see docs/design/rclone-api-connection.md
  */
+
+import type { SealedSecret } from '../vault/types.js';
 
 export const HUB_RCLONE_DB_NAME = 'HubRclone';
 export const HUB_RCLONE_STORE = 'profiles';
@@ -36,8 +40,12 @@ export type RcloneConnectionProfileV1 = {
 	rootPath?: string;
 	/** RC Basic user */
 	rcUser: string;
-	/** RC Basic password — never log */
+	/** RC Basic password — never log. Empty when sealed, locked, or session-only. */
 	rcPass: string;
+	/** False = keep the password in this tab only. Default true. */
+	persistSecret?: boolean;
+	/** Present when the connection vault has wrapped `rcPass`. */
+	sealedRcPass?: SealedSecret;
 	createdAt: number;
 	updatedAt: number;
 };

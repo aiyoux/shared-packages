@@ -36,8 +36,8 @@
 	import {
 		type ExplorerDriver,
 		type ExplorerEntry,
-		type ExplorerOpenTarget,
 		type ExplorerOpenContext,
+		type ExplorerOpenTarget,
 		type OpenProjectContext
 	} from './explorerDriver.js';
 	import { createMemoryExplorerDriver } from './memoryExplorerDriver.js';
@@ -46,13 +46,14 @@
 	import { type PaneId, type DualPaneTids } from './dualPaneTypes.js';
 	import { portal } from './portal.js';
 	import FeTipIconBtn from './FeTipIconBtn.svelte';
+	import ConnectionPairInfo from './ConnectionPairInfo.svelte';
 	import { SplitHandle, toast } from '@shared-packages/ui';
 	import '@shared-packages/design-system/button.css';
 	import '@shared-packages/design-system/tooltip.css';
 	import '@shared-packages/design-system/segmented.css';
 	import {
 		canShowCopyAcross,
-		isDualPhaseCopy,
+		classify,
 		describeCopyAcrossPath,
 		copyAcross,
 		CopyAcrossError,
@@ -67,7 +68,9 @@
 	import {
 		setCrossWindowDrag,
 		getCrossWindowDrag,
-		clearCrossWindowDrag
+		clearCrossWindowDrag,
+		setPointerDragActive,
+		isPointerDragActive
 	} from './crossWindowDnd.js';
 	import {
 		getMemoryVfs,
@@ -75,6 +78,7 @@
 		HUB_B2_PROFILES_CHANNEL,
 		HUB_MONITOR_PROFILES_CHANNEL,
 		HUB_RCLONE_PROFILES_CHANNEL,
+		HUB_VAULT_CHANNEL,
 		type MemoryVfsService,
 		type VfsService
 	} from '../index.js';
@@ -86,6 +90,7 @@
 		releaseB2Driver,
 		getProfile as getB2Profile,
 		listProfiles as listB2Profiles,
+		revealApplicationKey,
 		setActiveProfileId as setActiveB2ProfileId,
 		mapB2Error,
 		type B2ConnectionProfileV1,
@@ -97,10 +102,19 @@
 		releaseRcloneDriver,
 		getProfile as getRcloneProfile,
 		listProfiles as listRcloneProfiles,
+		revealRcPass,
 		setActiveProfileId as setActiveRcloneProfileId,
 		mapRcloneError,
 		type RcloneConnectionProfileV1
 	} from '../rclone/index.js';
+	import {
+		isVaultLockedError,
+		isSecretUnavailableError,
+		isVaultEnabled,
+		isVaultUnlocked,
+		subscribeVaultSession,
+		syncVaultFromIdb
+	} from '../vault/index.js';
 	import {
 		MonitorConnectionForm,
 		acquireMonitorDriver,
@@ -211,8 +225,8 @@
 		 */
 		settingsPortal?: string;
 		/**
-		 * CSS selector for connection switchers (left of the pane/window header).
-		 * When empty, each files pane keeps its own switcher in pane chrome.
+		 * @deprecated Switchers live in each FileExplorer header. Kept so
+		 * existing callers compile; ignored at runtime.
 		 */
 		switcherPortal?: string;
 		/**
@@ -253,12 +267,13 @@
 		onSend,
 		tids: tidsOverride = {},
 		settingsPortal = '',
-		switcherPortal = '',
+		switcherPortal: _switcherPortal = '',
 		layoutPortal = ''
 	}: Props = $props();
 
 	const hostSettings = $derived(Boolean(settingsPortal));
-	const hostSwitchers = $derived(Boolean(switcherPortal));
+	/** Combined (i) sits next to Single/Dual. Pane switchers hide their own (i). */
+	const pairInfoInChrome = $derived(!hideToggles);
 
 	function openHostForm(which: 'b2' | 'rclone' | 'monitor') {
 		// Module-level settings apply to the explorer as a whole; the form
@@ -374,6 +389,7 @@
 		resolve: (ok: boolean) => void;
 	} | null>(null);
 	let osDropPane = $state<PaneId | null>(null);
+	let dualRootEl = $state<HTMLDivElement | null>(null);
 
 	function getMemoryDriver(): ExplorerDriver {
 		if (!memoryVfs) memoryVfs = getMemoryVfs();
@@ -400,6 +416,7 @@
 	function paneState(id: PaneId): PaneState {
 		return id === 'left' ? left : right;
 	}
+
 	/**
 	 * `onSendFile` hands back an open-target, which is thinner than the list row
 	 * — no `parentId`, no `contentType`. Recover the full row from the pane so
@@ -459,14 +476,24 @@
 		b2Profiles.map((p) => ({
 			id: p.id,
 			name: p.name,
-			detail: p.namePrefix ? `${p.bucketName} · ${p.namePrefix}` : p.bucketName
+			detail: [
+				p.namePrefix ? `${p.bucketName} · ${p.namePrefix}` : p.bucketName,
+				p.persistSecret === false ? 'this tab' : ''
+			]
+				.filter(Boolean)
+				.join(' · ')
 		}))
 	);
 	const rcloneChips = $derived(
 		rcloneProfiles.map((p) => ({
 			id: p.id,
 			name: p.name,
-			detail: p.rootPath ? `${p.fs} · ${p.rootPath}` : p.fs
+			detail: [
+				p.rootPath ? `${p.fs} · ${p.rootPath}` : p.fs,
+				p.persistSecret === false ? 'this tab' : ''
+			]
+				.filter(Boolean)
+				.join(' · ')
 		}))
 	);
 	const monitorChips = $derived(
@@ -530,10 +557,34 @@
 		const reloadOnTab = () => {
 			void reloadProfiles();
 		};
+		const onVault = () => {
+			void (async () => {
+				await syncVaultFromIdb();
+				await reloadProfiles();
+				if ((await isVaultEnabled()) && !isVaultUnlocked()) {
+					for (const paneId of ['left', 'right'] as PaneId[]) {
+						const cur = paneState(paneId);
+						if (cur.activeKind !== 'b2' && cur.activeKind !== 'rclone') continue;
+						releaseRemote(cur.activeKind, cur.activeId);
+						setPane(paneId, {
+							remoteDriver: null,
+							activeId: 'local',
+							activeKind: 'local',
+							showB2Form: cur.activeKind === 'b2',
+							showRcloneForm: cur.activeKind === 'rclone',
+							error: 'Unlock the connection vault to use saved keys.',
+							explorerKey: cur.explorerKey + 1
+						});
+					}
+				}
+			})();
+		};
 		const unsubs = [
 			subscribeTabChannel(HUB_B2_PROFILES_CHANNEL, reloadOnTab),
 			subscribeTabChannel(HUB_RCLONE_PROFILES_CHANNEL, reloadOnTab),
-			subscribeTabChannel(HUB_MONITOR_PROFILES_CHANNEL, reloadOnTab)
+			subscribeTabChannel(HUB_MONITOR_PROFILES_CHANNEL, reloadOnTab),
+			subscribeTabChannel(HUB_VAULT_CHANNEL, onVault),
+			subscribeVaultSession(onVault)
 		];
 		profileTabUnsub = () => {
 			for (const u of unsubs) u();
@@ -548,6 +599,9 @@
 		};
 		pullCopy();
 		copyProgressUnsub = subscribeTransfers(pullCopy);
+		window.addEventListener('pointermove', onWinPointerMove, { passive: true });
+		window.addEventListener('pointerup', onWinPointerUp);
+		window.addEventListener('pointercancel', onWinPointerUp);
 	});
 
 	onDestroy(() => {
@@ -555,6 +609,9 @@
 		copyProgressUnsub = null;
 		profileTabUnsub?.();
 		profileTabUnsub = null;
+		window.removeEventListener('pointermove', onWinPointerMove);
+		window.removeEventListener('pointerup', onWinPointerUp);
+		window.removeEventListener('pointercancel', onWinPointerUp);
 		if (watchPollTimer) {
 			clearInterval(watchPollTimer);
 			watchPollTimer = null;
@@ -594,7 +651,8 @@
 		dropDiskDriver(p);
 		setPane(id, { busy: true, error: '', showRcloneForm: false, showMonitorForm: false });
 		try {
-			const driver = await acquireB2Driver(profile);
+			const applicationKey = await revealApplicationKey(profile);
+			const driver = await acquireB2Driver({ ...profile, applicationKey });
 			if (prevId && !(prevKind === 'b2' && prevId === profile.id)) {
 				releaseRemote(prevKind, prevId);
 			}
@@ -613,6 +671,10 @@
 				ctx: emptyCtx('b2')
 			});
 		} catch (e) {
+			if (isVaultLockedError(e) || isSecretUnavailableError(e)) {
+				showPaneError(id, formatExplorerError(e), { busy: false, showB2Form: true });
+				return;
+			}
 			const mapped = mapB2Error(e);
 			showPaneError(id, formatExplorerError(mapped), { busy: false, showB2Form: true });
 		}
@@ -625,7 +687,8 @@
 		const prevKind = p.activeKind;
 		setPane(id, { busy: true, error: '', showB2Form: false, showMonitorForm: false });
 		try {
-			const driver = await acquireRcloneDriver(profile);
+			const rcPass = await revealRcPass(profile);
+			const driver = await acquireRcloneDriver({ ...profile, rcPass });
 			if (prevId && !(prevKind === 'rclone' && prevId === profile.id)) {
 				releaseRemote(prevKind, prevId);
 			}
@@ -644,6 +707,10 @@
 				ctx: emptyCtx('rclone')
 			});
 		} catch (e) {
+			if (isVaultLockedError(e) || isSecretUnavailableError(e)) {
+				showPaneError(id, formatExplorerError(e), { busy: false, showRcloneForm: true });
+				return;
+			}
 			const mapped = mapRcloneError(e);
 			showPaneError(id, formatExplorerError(mapped), { busy: false, showRcloneForm: true });
 		}
@@ -857,7 +924,8 @@
 			setCrossWindowDrag({
 				sourceDriver: activeDriver(p, id),
 				sourceEntries: p.ctx.entries,
-				selectedIds
+				selectedIds,
+				sourceLabel: paneConnectionLabel(id)
 			});
 		} else {
 			clearCrossWindowDrag();
@@ -940,6 +1008,110 @@
 		crossOver = null;
 		osDropPane = null;
 		clearCrossWindowDrag();
+		setPointerDragActive(false);
+	}
+
+	function onPanePointerDragBegin(id: PaneId, e: Event) {
+		const detail = (e as CustomEvent<{ ids?: string[] }>).detail;
+		const p = paneState(id);
+		const selectedIds = detail?.ids?.length ? detail.ids : p.ctx.selectedIds;
+		if (selectedIds.length) {
+			onExplorerDrag?.({
+				paneId: id,
+				driver: activeDriver(p, id),
+				selectedIds,
+				entries: p.ctx.entries
+			});
+			setCrossWindowDrag({
+				sourceDriver: activeDriver(p, id),
+				sourceEntries: p.ctx.entries,
+				selectedIds,
+				sourceLabel: paneConnectionLabel(id)
+			});
+		}
+		if (!dualPane || !showCopyAcross) return;
+		crossDragFrom = id;
+		crossOver = null;
+	}
+
+	function hitFromPoint(clientX: number, clientY: number): Element | null {
+		const el =
+			typeof document !== 'undefined' ? document.elementFromPoint(clientX, clientY) : null;
+		return el instanceof Element ? el : null;
+	}
+
+	function paneElFromHit(hit: Element | null): HTMLElement | null {
+		if (!hit) return null;
+		const paneEl = hit.closest('[data-pane]');
+		return paneEl instanceof HTMLElement ? paneEl : null;
+	}
+
+	function onWinPointerMove(e: PointerEvent) {
+		if (!isPointerDragActive()) return;
+		const paneEl = paneElFromHit(hitFromPoint(e.clientX, e.clientY));
+		if (!paneEl || !dualRootEl?.contains(paneEl)) {
+			if (crossOver) crossOver = null;
+			return;
+		}
+		const id = paneEl.getAttribute('data-pane') as PaneId | null;
+		if (!id) {
+			crossOver = null;
+			return;
+		}
+		if (crossDragFrom && id !== crossDragFrom) crossOver = id;
+		else if (!crossDragFrom && getCrossWindowDrag()) crossOver = id;
+		else crossOver = null;
+	}
+
+	async function onWinPointerUp(e: PointerEvent) {
+		// HTML5 mouse drags also fire pointerup; ignore unless FileExplorer is
+		// driving a touch/pen session (otherwise we steal the native drop).
+		if (!isPointerDragActive()) return;
+		const hit = hitFromPoint(e.clientX, e.clientY);
+		const paneEl = paneElFromHit(hit);
+		const ours = Boolean(paneEl && dualRootEl?.contains(paneEl));
+
+		if (ours && paneEl) {
+			const id = paneEl.getAttribute('data-pane') as PaneId | null;
+			if (id && crossDragFrom && id !== crossDragFrom) {
+				const from = crossDragFrom;
+				const dst = paneState(id);
+				const destParentId = destParentFromDropEvent({ target: hit }, dst.ctx.parentId);
+				const selectedIds =
+					getCrossWindowDrag()?.selectedIds ?? paneState(from).ctx.selectedIds;
+				onPaneDragEnd();
+				await runCopyAcross(from, { selectedIds, destParentId });
+				return;
+			}
+			if (id && !crossDragFrom) {
+				const crossDrag = getCrossWindowDrag();
+				if (crossDrag) {
+					const dst = paneState(id);
+					const destParentId = destParentFromDropEvent({ target: hit }, dst.ctx.parentId);
+					onPaneDragEnd();
+					await runCrossInstanceCopy(
+						crossDrag.sourceDriver,
+						crossDrag.sourceEntries,
+						crossDrag.selectedIds,
+						id,
+						destParentId,
+						crossDrag.sourceLabel
+					);
+					return;
+				}
+			}
+			onPaneDragEnd();
+			return;
+		}
+
+		if (crossDragFrom) {
+			const anyBody =
+				typeof document !== 'undefined'
+					? document.elementFromPoint(e.clientX, e.clientY)?.closest('.files-body')
+					: null;
+			if (anyBody && anyBody !== dualRootEl) return;
+			onPaneDragEnd();
+		}
 	}
 
 	async function onPaneDrop(id: PaneId, e: DragEvent) {
@@ -982,7 +1154,8 @@
 				crossDrag.sourceEntries,
 				selectedIds,
 				id,
-				destParentId
+				destParentId,
+				crossDrag.sourceLabel
 			);
 			return;
 		}
@@ -1015,6 +1188,26 @@
 			copyIdleNote: null
 		};
 	}
+
+	function pairSide(id: PaneId): {
+		side: string;
+		label: string;
+		kind: string;
+		capabilities: import('./explorerDriver.js').ExplorerCapabilities;
+	} {
+		const p = paneState(id);
+		const drv = activeDriver(p, id);
+		const kind =
+			id === 'right' && overrideRight ? overrideRight.driver.id : p.activeKind;
+		return {
+			side: id === 'left' ? 'Left' : 'Right',
+			label: paneConnectionLabel(id),
+			kind,
+			capabilities: drv.capabilities
+		};
+	}
+
+	const pairCopy = $derived.by(() => copyHints('left'));
 
 	function paneConnectionLabel(id: PaneId): string {
 		const p = paneState(id);
@@ -1053,8 +1246,10 @@
 		const dst = paneState(destId);
 		const sourceDriver = activeDriver(src, from);
 		const destDriver = activeDriver(dst, destId);
-		if (isDualPhaseCopy(sourceDriver, destDriver)) {
-			const ok = await askDualPhase(paneConnectionLabel(from), paneConnectionLabel(destId));
+		const sourceLabel = paneConnectionLabel(from);
+		const destLabel = paneConnectionLabel(destId);
+		if (classify(sourceDriver, destDriver).kind === 'dual-phase') {
+			const ok = await askDualPhase(sourceLabel, destLabel);
 			if (!ok) return;
 		}
 		copyBusy = true;
@@ -1065,7 +1260,8 @@
 				destDriver,
 				selectedIds: opts?.selectedIds ?? src.ctx.selectedIds,
 				sourceEntries: src.ctx.entries,
-				destParentId: opts?.destParentId !== undefined ? opts.destParentId : dst.ctx.parentId
+				destParentId: opts?.destParentId !== undefined ? opts.destParentId : dst.ctx.parentId,
+				confirmDualPhase: () => askDualPhase(sourceLabel, destLabel)
 			});
 			// Live drivers refresh in place. Remotes without subscribeChanges
 			// remount but keep the dest open folder via initialParentId.
@@ -1094,12 +1290,15 @@
 		sourceEntries: ExplorerEntry[],
 		selectedIds: string[],
 		destId: PaneId,
-		destParentId: string | null
+		destParentId: string | null,
+		sourceLabel?: string
 	) {
 		const dst = paneState(destId);
 		const destDriver = activeDriver(dst, destId);
-		if (isDualPhaseCopy(sourceDriver, destDriver)) {
-			const ok = await askDualPhase(sourceDriver.id, paneConnectionLabel(destId));
+		const srcLabel = sourceLabel || sourceDriver.id;
+		const destLabel = paneConnectionLabel(destId);
+		if (classify(sourceDriver, destDriver).kind === 'dual-phase') {
+			const ok = await askDualPhase(srcLabel, destLabel);
 			if (!ok) return;
 		}
 		copyBusy = true;
@@ -1110,7 +1309,8 @@
 				destDriver,
 				selectedIds,
 				sourceEntries,
-				destParentId
+				destParentId,
+				confirmDualPhase: () => askDualPhase(srcLabel, destLabel)
 			});
 			if (!destDriver.subscribeChanges) {
 				setPane(destId, {
@@ -1180,6 +1380,7 @@
 		showMonitor={showMonitor}
 		showMemory={switcherShowMemory}
 		showSettings={!hostSettings}
+		showInfo={!pairInfoInChrome}
 		busy={p.busy}
 		onSelect={(sel) => onSelectConnection(id, sel)}
 		onConfigureB2={() => {
@@ -1263,12 +1464,11 @@
 		ondragleave={(e) => onPaneDragLeave(id, e)}
 		ondrop={(e) => void onPaneDrop(id, e)}
 		ondragend={onPaneDragEnd}
+		onfeexplorerdragbegin={(e) => onPanePointerDragBegin(id, e)}
+		onfeexplorerdragend={onPaneDragEnd}
 	>
 		{#if !hostSettings}
 		<div class="pane-chrome" data-testid={tids.paneChrome(id)}>
-			{#if paneShowsSwitcher(id) && !(id === 'right' && overrideRight)}
-				{@render paneSwitcher(id)}
-			{/if}
 			{#if showCopyAcross}
 				<FeTipIconBtn
 					testid={tids.copyAcross(id)}
@@ -1407,6 +1607,9 @@
 							right = { ...right, ctx };
 						}}
 					>
+						{#snippet headerLeading()}
+							{@render paneConn(id)}
+						{/snippet}
 						{#snippet toolbarExtra()}
 							{@render copyAcrossAction(id)}
 						{/snippet}
@@ -1440,6 +1643,9 @@
 							else right = { ...right, ctx };
 						}}
 					>
+						{#snippet headerLeading()}
+							{@render paneConn(id)}
+						{/snippet}
 						{#snippet toolbarExtra()}
 							{@render copyAcrossAction(id)}
 						{/snippet}
@@ -1471,6 +1677,9 @@
 							else right = { ...right, ctx };
 						}}
 					>
+						{#snippet headerLeading()}
+							{@render paneConn(id)}
+						{/snippet}
 						{#snippet toolbarExtra()}
 							{@render copyAcrossAction(id)}
 						{/snippet}
@@ -1481,71 +1690,67 @@
 	</div>
 {/snippet}
 
-{#if hostSwitchers}
-	<div class="dpe-host-chrome-park" class:parked={Boolean(switcherPortal)}>
+{#snippet paneConn(id: PaneId)}
+	{#if paneShowsSwitcher(id) && !(id === 'right' && overrideRight)}
 		<div
-			class="dpe-host-chrome"
-			class:portaled={Boolean(switcherPortal)}
-			use:portal={switcherPortal || undefined}
+			class="dpe-pane-conn"
+			data-testid="conn-switcher-{id}"
+			data-pane={id}
+			aria-label={id === 'left' ? 'Left pane connection' : 'Right pane connection'}
 		>
-			{#if paneShowsSwitcher('left')}
-				<div
-					class="dpe-host-conn"
-					data-testid="conn-switcher-left"
-					data-pane="left"
-					aria-label="Left pane connection"
-				>
-					{@render paneSwitcher('left')}
-				</div>
-			{/if}
-			{#if dualPane && paneShowsSwitcher('right') && !overrideRight}
-				<div
-					class="dpe-host-conn"
-					data-testid="conn-switcher-right"
-					data-pane="right"
-					aria-label="Right pane connection"
-				>
-					{@render paneSwitcher('right')}
-				</div>
-			{/if}
+			{@render paneSwitcher(id)}
 		</div>
-	</div>
-{/if}
+	{/if}
+{/snippet}
 
 {#if !hideToggles}
 	<div class="dpe-layout-park" class:parked={Boolean(layoutPortal)}>
 		<div
-			class="ds-seg dpe-layout"
+			class="dpe-layout-cluster"
 			class:portaled={Boolean(layoutPortal)}
-			role="radiogroup"
-			aria-label="File manager layout"
-			data-testid={tids.dualToggle}
 			use:portal={layoutPortal || undefined}
 		>
-			<button
-				type="button"
-				role="radio"
-				class="dpe-layout-opt"
-				class:active={!dualPane}
-				aria-checked={!dualPane}
-				data-testid="{tids.dualToggle}-single"
-				title="One file tree"
-				onclick={() => setDualPane(false)}
+			<div
+				class="ds-seg dpe-layout"
+				class:portaled={Boolean(layoutPortal)}
+				role="radiogroup"
+				aria-label="File manager layout"
+				data-testid={tids.dualToggle}
 			>
-				Single
-			</button>
-			<button
-				type="button"
-				role="radio"
-				class="dpe-layout-opt"
-				class:active={dualPane}
-				aria-checked={dualPane}
-				data-testid="{tids.dualToggle}-dual"
-				title="Two independent trees side by side"
-				onclick={() => setDualPane(true)}
-			>
-				Dual
-			</button>
+				<button
+					type="button"
+					role="radio"
+					class="dpe-layout-opt"
+					class:active={!dualPane}
+					aria-checked={!dualPane}
+					data-testid="{tids.dualToggle}-single"
+					title="One file tree"
+					onclick={() => setDualPane(false)}
+				>
+					Single
+				</button>
+				<button
+					type="button"
+					role="radio"
+					class="dpe-layout-opt"
+					class:active={dualPane}
+					aria-checked={dualPane}
+					data-testid="{tids.dualToggle}-dual"
+					title="Two independent trees side by side"
+					onclick={() => setDualPane(true)}
+				>
+					Dual
+				</button>
+			</div>
+			{#if pairInfoInChrome}
+				<ConnectionPairInfo
+					left={pairSide('left')}
+					right={dualPane ? pairSide('right') : null}
+					copyOut={pairCopy.copyOut}
+					copyIn={pairCopy.copyIn}
+					idleNote={pairCopy.copyIdleNote}
+				/>
+			{/if}
 		</div>
 	</div>
 {/if}
@@ -1560,6 +1765,7 @@
 				monitorProfiles={monitorChips}
 				showRclone={showRclone}
 				showMonitor={showMonitor}
+				showInfo={false}
 				onConfigureB2={() => openHostForm('b2')}
 				onConfigureRclone={() => openHostForm('rclone')}
 				onConfigureMonitor={() => openHostForm('monitor')}
@@ -1574,6 +1780,7 @@
 	<div
 		class="files-body"
 		class:dual={dualPane}
+		bind:this={dualRootEl}
 		data-testid={tids.body}
 		style={dualPane
 			? `grid-template-columns: minmax(0, ${dualRatio}fr) auto minmax(0, ${1 - dualRatio}fr)`
@@ -1618,45 +1825,15 @@
 </div>
 
 <style>
-	.dpe-host-chrome-park.parked {
-		position: absolute;
-		width: 0;
-		height: 0;
-		margin: 0;
-		padding: 0;
-		overflow: hidden;
-		pointer-events: none;
+	.dpe-pane-conn {
+		min-width: 0;
+		max-width: 100%;
 	}
-	.dpe-host-chrome {
+	.dpe-layout-cluster {
 		display: flex;
 		align-items: center;
-		gap: 0.65rem;
+		gap: 0.15rem;
 		min-width: 0;
-	}
-	.dpe-host-chrome.portaled :global(.conn-trigger) {
-		box-sizing: border-box;
-		min-height: var(--control-h-sm);
-		height: var(--control-h-sm);
-		padding: 0 0.55rem;
-		font-size: 0.75rem;
-	}
-	.dpe-host-chrome.portaled :global(.conn-select) {
-		min-width: 8rem;
-		max-width: 14rem;
-	}
-	.dpe-host-chrome.portaled :global(.conn-info) {
-		width: var(--control-h-sm);
-		height: var(--control-h-sm);
-	}
-	.dpe-host-conn {
-		display: flex;
-		align-items: center;
-		gap: 0.35rem;
-		min-width: 0;
-	}
-	.dpe-host-conn + .dpe-host-conn {
-		padding-left: 0.65rem;
-		border-left: 1px solid var(--line-hairline);
 	}
 	.dpe-host-settings-park.parked {
 		position: absolute;

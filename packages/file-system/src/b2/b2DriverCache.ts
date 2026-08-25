@@ -29,11 +29,16 @@ export function b2DriverCacheSize(): number {
 	return cache.size;
 }
 
-export function clearB2DriverCacheForTests(): void {
+/** Drop every cached authorized B2 session (vault lock / tests). */
+export function evictAllB2Drivers(): void {
 	for (const e of cache.values()) {
 		if (e.disposeTimer) clearTimeout(e.disposeTimer);
 	}
 	cache.clear();
+}
+
+export function clearB2DriverCacheForTests(): void {
+	evictAllB2Drivers();
 }
 
 function cancelDispose(e: CacheEntry) {

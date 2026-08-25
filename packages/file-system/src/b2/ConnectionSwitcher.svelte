@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { ExplorerCapabilities } from '../ui/explorerDriver.js';
 	import type { CopyAcrossPath } from '../ui/copyAcross.js';
+	import { capabilityRows, connectionKindNote } from '../ui/connectionInfo.js';
 	import FeIcon from '../ui/FeIcon.svelte';
 
 	/** Storage backend kind for the hub connection switcher. */
@@ -69,6 +70,11 @@
 		variant?: 'full' | 'settings';
 		/** Hide the gear in `full` variant (host already owns settings). Default true. */
 		showSettings?: boolean;
+		/**
+		 * Per-switcher (i) tooltip. Hub Files hides this and uses the combined
+		 * pair-info icon next to Single/Dual instead.
+		 */
+		showInfo?: boolean;
 	}
 
 	let {
@@ -92,7 +98,8 @@
 		onConfigureMonitor,
 		onConfigureDisk,
 		variant = 'full',
-		showSettings = true
+		showSettings = true,
+		showInfo = true
 	}: Props = $props();
 
 	const settingsOnly = $derived(variant === 'settings');
@@ -133,19 +140,7 @@
 		return 'Browser files';
 	});
 
-	const kindNote = $derived(
-		kind === 'memory'
-			? 'This tab only — cleared when the tab closes.'
-			: kind === 'disk'
-				? 'Folder on this computer (browser permission).'
-				: kind === 'b2'
-					? 'Remote Backblaze B2. Keys stay in this browser.'
-					: kind === 'monitor'
-						? 'Live folder via monitor (same connection can server-copy).'
-						: kind === 'rclone'
-							? 'Remote folder via rclone.'
-							: 'Saved in this browser (Dexie + OPFS).'
-	);
+	const kindNote = $derived(connectionKindNote(kind));
 
 	const fallbackCaps: Record<ConnectionKind, ExplorerCapabilities> = {
 		local: {
@@ -219,25 +214,7 @@
 		}
 	};
 
-	const capRows = $derived.by(() => {
-		const c = capabilities ?? fallbackCaps[kind];
-		const rows: { label: string; on: boolean }[] = [
-			{ label: 'Trash', on: !!c?.supportsTrash },
-			{ label: 'Soft delete', on: !!c?.supportsSoftDelete },
-			{ label: 'Rename', on: !!c?.supportsRename },
-			{ label: 'Move', on: !!c?.supportsMove },
-			{ label: 'Copy', on: !!c?.supportsCopy },
-			{ label: 'New folders', on: !!c?.supportsMkdir },
-			{ label: 'Select file / drop from PC', on: !!c?.supportsUpload },
-			{ label: 'Download', on: !!c?.supportsDownload },
-			{ label: 'Drag to reorder', on: !!c?.supportsSiblingOrder },
-			{ label: 'Drag files out', on: !!c?.supportsDragOut }
-		];
-		if (!c) {
-			/* No driver yet — still show the list as unavailable rather than empty. */
-		}
-		return rows;
-	});
+	const capRows = $derived(capabilityRows(capabilities ?? fallbackCaps[kind]));
 
 	function select(id: 'local' | 'memory' | 'disk' | string) {
 		if (busy) return;
@@ -315,6 +292,7 @@
 			<span class="conn-trigger-label">{activeLabel}</span>
 			<span class="conn-caret"><FeIcon name="chevron-down" size={14} /></span>
 		</button>
+		{#if showInfo}
 		<div class="conn-info-wrap">
 			<button
 				type="button"
@@ -357,6 +335,7 @@
 				</div>
 			</div>
 		</div>
+		{/if}
 		</div>
 
 		<div class="conn-menu" class:open={menuOpen} data-testid="conn-menu" role="listbox">
@@ -493,6 +472,16 @@
 			type="button"
 			role="menuitem"
 			class="ghost"
+			data-testid="conn-disk-config"
+			disabled={busy}
+			onclick={() => configure('disk')}
+		>
+			{kind === 'disk' ? 'Change computer folder' : 'Choose computer folder'}
+		</button>
+		<button
+			type="button"
+			role="menuitem"
+			class="ghost"
 			data-testid="conn-b2-config"
 			disabled={busy}
 			onclick={() => configure('b2')}
@@ -570,7 +559,7 @@
 	}
 	.conn-select {
 		position: relative;
-		min-width: 10rem;
+		min-width: 0;
 		max-width: 18rem;
 	}
 	.conn-select-row {
@@ -686,7 +675,6 @@
 		overflow: hidden;
 		clip: rect(0 0 0 0);
 	}
-	.conn-trigger,
 	.conn-menu button,
 	.conn-settings-panel button {
 		padding: 0.35rem 0.7rem;
@@ -703,9 +691,23 @@
 	.conn-trigger {
 		display: flex;
 		align-items: center;
-		gap: 0.5rem;
-		width: 100%;
-		min-height: 2rem;
+		gap: 0.35rem;
+		width: auto;
+		max-width: 100%;
+		min-height: var(--control-h-sm, 1.75rem);
+		padding: 0.15rem 0.35rem;
+		border: 0;
+		border-radius: var(--radius-md);
+		background: transparent;
+		color: inherit;
+		cursor: pointer;
+		font-size: 0.85rem;
+		text-align: left;
+		line-height: 1.2;
+		font-family: inherit;
+	}
+	.conn-trigger:hover:not(:disabled) {
+		background: rgb(var(--overlay-rgb) / 0.06);
 	}
 	.conn-trigger-label {
 		flex: 1;

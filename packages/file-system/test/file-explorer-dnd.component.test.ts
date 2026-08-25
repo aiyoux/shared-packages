@@ -117,6 +117,14 @@ describe('FileExplorer DnD', () => {
 		Object.defineProperty(overEv, 'dataTransfer', { value: dt });
 		tgt.dispatchEvent(overEv);
 
+		await viWaitFor(() => document.querySelector('[data-testid="fe-dnd-line"]') != null);
+		const line = document.querySelector('[data-testid="fe-dnd-line"]') as HTMLElement;
+		expect(line.getAttribute('data-fe-dnd-zone')).toBe('before');
+		const firstRow = document.querySelector('[data-testid="fe-file-row"]') as HTMLElement;
+		expect(firstRow.previousElementSibling?.classList.contains('fe-dnd-line') ?? false).toBe(
+			false
+		);
+
 		const dropEv = new Event('drop', { bubbles: true, cancelable: true }) as DragEvent;
 		Object.defineProperty(dropEv, 'dataTransfer', { value: dt });
 		tgt.dispatchEvent(dropEv);
@@ -127,6 +135,153 @@ describe('FileExplorer DnD', () => {
 		expect(call[0]).toBe(b.id);
 		// before zone → afterId = target (a)
 		expect(call[1]).toMatchObject({ afterId: a.id });
+	});
+
+	it('drop on the middle of a file row reorders (no into-file dead zone)', async () => {
+		const a = await vfs.writeFile({ parentId: null, name: 'a.txt', body: 'a' });
+		const b = await vfs.writeFile({ parentId: null, name: 'b.txt', body: 'b' });
+		const base = createLocalExplorerDriver(vfs);
+		const reorder = vi.fn(async (id: string, opts: { beforeId?: string | null; afterId?: string | null }) => {
+			await base.reorder!(id, opts);
+		});
+		const driver: ExplorerDriver = {
+			id: base.id,
+			capabilities: base.capabilities,
+			ready: (...args) => base.ready(...args),
+			list: (...args) => base.list(...args),
+			getPath: (...args) => base.getPath(...args),
+			mkdir: base.mkdir?.bind(base),
+			rename: base.rename?.bind(base),
+			move: base.move?.bind(base),
+			copy: base.copy?.bind(base),
+			delete: (...args) => base.delete(...args),
+			restore: base.restore?.bind(base),
+			permanentDelete: base.permanentDelete?.bind(base),
+			emptyTrash: base.emptyTrash?.bind(base),
+			reorder
+		};
+		render(FileExplorer, { props: { mode: 'manage', driver, variant: 'panel' } });
+		await viWaitFor(() => document.querySelectorAll('[data-testid="fe-file-row"]').length >= 2);
+		await viWaitFor(() => {
+			const list = document.querySelector('[data-testid="fe-list"]');
+			return list?.getAttribute('aria-busy') !== 'true';
+		});
+
+		const rows = Array.from(document.querySelectorAll('[data-testid="fe-file-row"]')) as HTMLElement[];
+		const src = rows.find((r) => r.getAttribute('data-name') === 'a.txt')!;
+		const tgt = rows.find((r) => r.getAttribute('data-name') === 'b.txt')!;
+		const dt = {
+			data: new Map<string, string>(),
+			setData(type: string, val: string) {
+				this.data.set(type, val);
+			},
+			getData(type: string) {
+				return this.data.get(type) ?? '';
+			},
+			effectAllowed: 'all' as string,
+			dropEffect: 'none' as string
+		};
+		vi.spyOn(tgt, 'getBoundingClientRect').mockReturnValue({
+			top: 100,
+			height: 40,
+			bottom: 140,
+			left: 0,
+			right: 100,
+			width: 100,
+			x: 0,
+			y: 100,
+			toJSON: () => ({})
+		} as DOMRect);
+
+		const startEv = new Event('dragstart', { bubbles: true, cancelable: true }) as DragEvent;
+		Object.defineProperty(startEv, 'dataTransfer', { value: dt });
+		src.dispatchEvent(startEv);
+
+		const overEv = new MouseEvent('dragover', {
+			bubbles: true,
+			cancelable: true,
+			clientY: 125 // middle of file → after (not into)
+		}) as DragEvent;
+		Object.defineProperty(overEv, 'dataTransfer', { value: dt });
+		tgt.dispatchEvent(overEv);
+
+		const dropEv = new Event('drop', { bubbles: true, cancelable: true }) as DragEvent;
+		Object.defineProperty(dropEv, 'dataTransfer', { value: dt });
+		tgt.dispatchEvent(dropEv);
+
+		await viWaitFor(() => reorder.mock.calls.length > 0);
+		expect(reorder.mock.calls[0]![0]).toBe(a.id);
+		expect(reorder.mock.calls[0]![1]).toMatchObject({ beforeId: b.id });
+	});
+
+	it('touch long-press then pointer move reorders local files', async () => {
+		const a = await vfs.writeFile({ parentId: null, name: 'a.txt', body: 'a' });
+		const b = await vfs.writeFile({ parentId: null, name: 'b.txt', body: 'b' });
+		const base = createLocalExplorerDriver(vfs);
+		const reorder = vi.fn(async (id: string, opts: { beforeId?: string | null; afterId?: string | null }) => {
+			await base.reorder!(id, opts);
+		});
+		const driver: ExplorerDriver = {
+			id: base.id,
+			capabilities: base.capabilities,
+			ready: (...args) => base.ready(...args),
+			list: (...args) => base.list(...args),
+			getPath: (...args) => base.getPath(...args),
+			mkdir: base.mkdir?.bind(base),
+			rename: base.rename?.bind(base),
+			move: base.move?.bind(base),
+			copy: base.copy?.bind(base),
+			delete: (...args) => base.delete(...args),
+			restore: base.restore?.bind(base),
+			permanentDelete: base.permanentDelete?.bind(base),
+			emptyTrash: base.emptyTrash?.bind(base),
+			reorder
+		};
+		render(FileExplorer, { props: { mode: 'manage', driver, variant: 'panel' } });
+		await viWaitFor(() => document.querySelectorAll('[data-testid="fe-file-row"]').length >= 2);
+		await viWaitFor(() => {
+			const list = document.querySelector('[data-testid="fe-list"]');
+			return list?.getAttribute('aria-busy') !== 'true';
+		});
+
+		const rows = Array.from(document.querySelectorAll('[data-testid="fe-file-row"]')) as HTMLElement[];
+		const src = rows.find((r) => r.getAttribute('data-name') === 'b.txt')!;
+		const tgt = rows.find((r) => r.getAttribute('data-name') === 'a.txt')!;
+		vi.spyOn(tgt, 'getBoundingClientRect').mockReturnValue({
+			top: 100,
+			height: 40,
+			bottom: 140,
+			left: 0,
+			right: 100,
+			width: 100,
+			x: 0,
+			y: 100,
+			toJSON: () => ({})
+		} as DOMRect);
+		Object.defineProperty(document, 'elementFromPoint', {
+			configurable: true,
+			writable: true,
+			value: () => tgt
+		});
+		Object.defineProperty(document, 'elementsFromPoint', {
+			configurable: true,
+			writable: true,
+			value: () => [tgt]
+		});
+
+		src.dispatchEvent(fakePointer('pointerdown', { pointerId: 7, clientX: 20, clientY: 20 }));
+		await new Promise((r) => setTimeout(r, 280));
+
+		document.dispatchEvent(
+			fakePointer('pointermove', { pointerId: 7, clientX: 20, clientY: 105 })
+		);
+		document.dispatchEvent(
+			fakePointer('pointerup', { pointerId: 7, clientX: 20, clientY: 105 })
+		);
+
+		await viWaitFor(() => reorder.mock.calls.length > 0);
+		expect(reorder.mock.calls[0]![0]).toBe(b.id);
+		expect(reorder.mock.calls[0]![1]).toMatchObject({ afterId: a.id });
 	});
 
 	it('remote driver (no sibling order) still marks rows draggable when supportsMove', async () => {
@@ -202,6 +357,22 @@ describe('FileExplorer DnD', () => {
 		expect(Array.isArray(last.entries)).toBe(true);
 	});
 });
+
+function fakePointer(
+	type: string,
+	init: { pointerId: number; clientX: number; clientY: number }
+): Event {
+	const e = new MouseEvent(type, {
+		bubbles: true,
+		cancelable: true,
+		clientX: init.clientX,
+		clientY: init.clientY,
+		button: 0
+	});
+	Object.defineProperty(e, 'pointerId', { value: init.pointerId });
+	Object.defineProperty(e, 'pointerType', { value: 'touch' });
+	return e;
+}
 
 async function viWaitFor(pred: () => boolean, ms = 4000) {
 	const start = Date.now();

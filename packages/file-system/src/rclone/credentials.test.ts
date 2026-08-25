@@ -9,6 +9,7 @@ import {
 	getActiveProfileId,
 	getProfile,
 	listProfiles,
+	listStoredProfiles,
 	redactProfile,
 	saveProfile,
 	setActiveProfileId
@@ -132,5 +133,21 @@ describe('rclone credentials store', () => {
 		await deleteProfile('p1');
 		expect(await listProfiles()).toHaveLength(0);
 		expect(await getActiveProfileId()).toBeNull();
+	});
+
+	it('session-only keeps the password in memory and out of IDB', async () => {
+		const saved = await saveProfile({
+			id: 'p-tab',
+			name: 'Tab',
+			baseUrl: 'http://127.0.0.1:7750',
+			fs: 'home:',
+			rcUser: 'user',
+			rcPass: 'tab-secret',
+			persistSecret: false
+		});
+		expect(saved.rcPass).toBe('tab-secret');
+		const stored = (await listStoredProfiles())[0]!;
+		expect(stored.rcPass).toBe('');
+		expect((await getProfile('p-tab'))?.rcPass).toBe('tab-secret');
 	});
 });

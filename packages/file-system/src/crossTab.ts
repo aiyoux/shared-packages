@@ -9,6 +9,7 @@
 export const HUB_RCLONE_PROFILES_CHANNEL = 'hub-rclone-profiles';
 export const HUB_B2_PROFILES_CHANNEL = 'hub-b2-profiles';
 export const HUB_MONITOR_PROFILES_CHANNEL = 'hub-monitor-profiles';
+export const HUB_VAULT_CHANNEL = 'hub-vault';
 
 const notifyChannels = new Map<string, BroadcastChannel>();
 

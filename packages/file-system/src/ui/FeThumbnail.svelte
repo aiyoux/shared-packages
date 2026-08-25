@@ -26,7 +26,9 @@
 	let loading = $state(false);
 	let failed = $state(false);
 	let kind = $derived(getPreviewKind(entry));
-	let currentId = '';
+	/** Last id we successfully rendered. Not set until the fetch finishes, so a
+	 * cancelled in-flight load can restart instead of sticking on the spinner. */
+	let loadedId = '';
 
 	onDestroy(() => {
 		revoke();
@@ -71,23 +73,29 @@
 			return;
 		}
 
-		// Skip if same entry
-		if (currentId === e.id) return;
-		currentId = e.id;
+		// Already showing this file — list refresh must not cancel a good thumb.
+		if (loadedId === e.id && url && !loading) return;
 
 		let cancelled = false;
 		// untrack: see comment above.
 		untrack(revoke);
 		loading = true;
 		failed = false;
+		loadedId = '';
 
 		(async () => {
 			try {
 				const blob = await readBlob.call(d, e.id);
-				if (cancelled || !blob) return;
-				const thumbUrl = await generateThumbnail(blob, k, maxDim);
+				if (cancelled) return;
+				if (!blob) {
+					failed = true;
+					loading = false;
+					return;
+				}
+				const thumbUrl = await generateThumbnail(blob, k, maxDim, e.name);
 				if (cancelled) return;
 				url = thumbUrl;
+				loadedId = e.id;
 				loading = false;
 			} catch {
 				if (!cancelled) {

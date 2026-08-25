@@ -5,7 +5,8 @@ export {
 	subscribeTabChannel,
 	HUB_RCLONE_PROFILES_CHANNEL,
 	HUB_B2_PROFILES_CHANNEL,
-	HUB_MONITOR_PROFILES_CHANNEL
+	HUB_MONITOR_PROFILES_CHANNEL,
+	HUB_VAULT_CHANNEL
 } from './crossTab.js';
 export * from './names.js';
 export * from './id.js';

@@ -10,6 +10,7 @@ export {
 	canShowCopyAcross,
 	assertCopyAcrossAllowed,
 	canServerCopy,
+	classify,
 	isDualPhaseCopy,
 	describeCopyAcrossPath,
 	copyAcross,
@@ -24,6 +25,7 @@ export {
 	filesFromDataTransfer,
 	FE_EXPLORER_IDS_MIME,
 	type CopyAcrossArgs,
+	type CopyAcrossClass,
 	type CopyAcrossErrorCode,
 	type CopyAcrossPath,
 	type CopyAcrossPathKind,
@@ -42,6 +44,8 @@ export {
 	setCrossWindowDrag,
 	getCrossWindowDrag,
 	clearCrossWindowDrag,
+	setPointerDragActive,
+	isPointerDragActive,
 	type CrossWindowDragSession
 } from './crossWindowDnd.js';
 export {
@@ -89,7 +93,16 @@ export {
 	type StackProgressPhase
 } from './stackProgress.js';
 export {
+	httpDownloadIsSafe,
+	saveFileToDisk,
+	triggerHttpDownload,
+	triggerBlobDownload,
+	type HttpDownloadLocation,
+	type StreamDownload
+} from './saveToDisk.js';
+export {
 	calculateMidOrder,
+	canonicalizeSiblingZone,
 	createTreeDndSession,
 	resolveDrop,
 	zoneFromY,

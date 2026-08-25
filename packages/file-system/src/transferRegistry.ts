@@ -18,6 +18,10 @@ import type { MemoryVfsService } from './memoryVfs.js';
 export type TransferIntegrity = 'pending' | 'ok' | 'mismatch' | 'skipped';
 export type TransferDirection = 'sending' | 'receiving' | 'copying';
 export type TransferStatus = 'hashing' | 'active' | 'done' | 'failed' | 'incomplete';
+/** Which copy-across system is moving bytes (progress popup hop label). */
+export type CopyHop = 'server' | 'delegated' | 'webrtc' | 'dual-phase' | 'direct';
+export type CopyIce = 'checking' | 'connected' | 'failed';
+export type CopyIcePath = 'host' | 'stun';
 
 export interface TransferProgress {
 	id: string;
@@ -34,6 +38,10 @@ export interface TransferProgress {
 	error?: string;
 	resumed?: boolean;
 	parallelStreams?: number;
+	hop?: CopyHop;
+	ice?: CopyIce;
+	icePath?: CopyIcePath;
+	hopNote?: string;
 }
 
 export interface ReceivedFile {
@@ -67,6 +75,10 @@ export interface TransferItem {
 	error?: string;
 	resumed?: boolean;
 	parallelStreams?: number;
+	hop?: CopyHop;
+	ice?: CopyIce;
+	icePath?: CopyIcePath;
+	hopNote?: string;
 	completedAt?: number;
 	savedToLibrary?: {
 		nodeId: string;
@@ -200,6 +212,10 @@ export function upsertProgress(progress: TransferProgress): TransferItem {
 		error: progress.error ?? (progress.status === 'failed' ? prev?.error : undefined),
 		resumed: progress.resumed ?? prev?.resumed,
 		parallelStreams: progress.parallelStreams ?? prev?.parallelStreams,
+		hop: progress.hop ?? prev?.hop,
+		ice: progress.ice ?? prev?.ice,
+		icePath: progress.icePath ?? prev?.icePath,
+		hopNote: progress.hopNote ?? prev?.hopNote,
 		completedAt: prev?.completedAt,
 		savedToLibrary: prev?.savedToLibrary
 	};

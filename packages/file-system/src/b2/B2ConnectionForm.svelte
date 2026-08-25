@@ -10,6 +10,7 @@
 	import { validateProfileInput, type B2ConnectionProfileV1 } from './types.js';
 	import { toast } from '@shared-packages/ui';
 	import { formatExplorerError } from '../ui/explorerError.js';
+	import VaultPanel from '../vault/VaultPanel.svelte';
 
 	interface Props {
 		/** Called after save when user wants to connect with this profile */
@@ -33,6 +34,8 @@
 	let namePrefix = $state('');
 	/** When editing, empty key field means "keep existing secret" */
 	let keyDirty = $state(false);
+	/** Default: persist in IndexedDB. Unchecked = this tab only. */
+	let persistSecret = $state(true);
 	let error = $state('');
 	let busy = $state(false);
 
@@ -56,6 +59,7 @@
 		bucketName = '';
 		namePrefix = '';
 		keyDirty = false;
+		persistSecret = true;
 		error = '';
 	}
 
@@ -67,6 +71,7 @@
 		keyDirty = false;
 		bucketName = p.bucketName;
 		namePrefix = p.namePrefix ?? '';
+		persistSecret = p.persistSecret !== false;
 		error = '';
 	}
 
@@ -76,12 +81,14 @@
 		const keyToSave =
 			keyDirty || !existing ? applicationKey : existing.applicationKey;
 
+		const requireApplicationKey = !existing || keyDirty;
 		const err = validateProfileInput({
 			name,
 			applicationKeyId,
 			applicationKey: keyToSave,
 			bucketName,
-			namePrefix
+			namePrefix,
+			requireApplicationKey
 		});
 		if (err) {
 			error = err;
@@ -99,9 +106,10 @@
 				id,
 				name,
 				applicationKeyId,
-				applicationKey: keyToSave,
+				applicationKey: requireApplicationKey ? keyToSave : '',
 				bucketName,
 				namePrefix: namePrefix || undefined,
+				persistSecret,
 				createdAt: existing?.createdAt
 			});
 			await setActiveProfileId(profile.id);
@@ -142,10 +150,11 @@
 <div class="b2-form" data-testid="b2-connection-form">
 	<h3>Backblaze B2 connection</h3>
 	<p class="hint">
-		Keys stay only in this browser (IndexedDB). Control-plane calls go through this hub; file
-		bytes upload/download direct to B2. Use a <strong>bucket-scoped application key</strong>, never
-		the master key.
+		Keys stay only in this browser. Control-plane calls go through this hub; file bytes
+		upload/download direct to B2. A <strong>bucket-scoped application key</strong> is required —
+		master keys are refused.
 	</p>
+	<VaultPanel />
 
 	{#if error}
 		<div class="err" data-testid="b2-form-error" role="alert">{error}</div>
@@ -160,7 +169,10 @@
 						<div class="profile-main">
 							<span class="profile-name">{p.name}</span>
 							<span class="meta"
-								>{p.bucketName}{p.namePrefix ? ` · ${p.namePrefix}` : ''}</span
+								>{p.bucketName}{p.namePrefix ? ` · ${p.namePrefix}` : ''}{p.persistSecret ===
+								false
+									? ' · this tab'
+									: ''}</span
 							>
 						</div>
 						<button
@@ -226,6 +238,19 @@
 				autocomplete="off"
 			/>
 		</label>
+		<label class="check">
+			<input
+				data-testid="b2-persist-secret"
+				type="checkbox"
+				bind:checked={persistSecret}
+			/>
+			Save this key in the browser
+		</label>
+		{#if !persistSecret}
+			<p class="editing-label" data-testid="b2-session-only-note">
+				This tab only — the key is forgotten when the tab closes.
+			</p>
+		{/if}
 	</div>
 
 	<div class="actions">
@@ -290,6 +315,11 @@
 		flex-direction: column;
 		gap: 0.25rem;
 		font-size: 0.85rem;
+	}
+	label.check {
+		flex-direction: row;
+		align-items: center;
+		gap: 0.45rem;
 	}
 	input {
 		padding: 0.4rem 0.55rem;

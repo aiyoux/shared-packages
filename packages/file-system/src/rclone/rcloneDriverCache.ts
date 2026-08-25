@@ -24,11 +24,16 @@ export function rcloneDriverCacheSize(): number {
 	return cache.size;
 }
 
-export function clearRcloneDriverCacheForTests(): void {
+/** Drop every cached authorized rclone session (vault lock / tests). */
+export function evictAllRcloneDrivers(): void {
 	for (const e of cache.values()) {
 		if (e.disposeTimer) clearTimeout(e.disposeTimer);
 	}
 	cache.clear();
+}
+
+export function clearRcloneDriverCacheForTests(): void {
+	evictAllRcloneDrivers();
 }
 
 function cancelDispose(e: CacheEntry) {

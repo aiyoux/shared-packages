@@ -6,10 +6,12 @@ export {
 } from './order.js';
 export {
 	zoneFromY,
+	canonicalizeSiblingZone,
 	resolveDrop,
 	type DropZone,
 	type DropTarget,
 	type ResolveDropInput,
-	type ResolvedDrop
+	type ResolvedDrop,
+	type ZoneFromYOpts
 } from './zones.js';
 export { createTreeDndSession, type TreeDndSession, type TreeDndSessionState } from './session.js';

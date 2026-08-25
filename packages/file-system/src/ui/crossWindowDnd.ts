@@ -18,13 +18,26 @@ export type CrossWindowDragSession = {
 	sourceDriver: ExplorerDriver;
 	sourceEntries: ExplorerEntry[];
 	selectedIds: string[];
+	/** Connection label for dual-phase confirm (not the driver id). */
+	sourceLabel?: string;
 };
 
 let activeDrag: CrossWindowDragSession | null = null;
+/** True while FileExplorer is driving a touch/pen drag (no HTML5 DragEvents). */
+let pointerDragActive = false;
 
 /** Register the source info for an ongoing drag. Called on pane `dragstart`. */
 export function setCrossWindowDrag(session: CrossWindowDragSession): void {
 	activeDrag = session;
+}
+
+/** Touch/pen drag (HTML5 DnD does not fire on most mobile browsers). */
+export function setPointerDragActive(on: boolean): void {
+	pointerDragActive = on;
+}
+
+export function isPointerDragActive(): boolean {
+	return pointerDragActive;
 }
 
 /**

@@ -9,6 +9,7 @@ import {
 	getActiveProfileId,
 	getProfile,
 	listProfiles,
+	listStoredProfiles,
 	redactProfile,
 	saveProfile,
 	setActiveProfileId
@@ -41,6 +42,14 @@ describe('B2 credentials store', () => {
 				bucketName: 'b'
 			})
 		).toMatch(/Name/);
+		expect(
+			validateProfileInput({
+				name: 'n',
+				applicationKeyId: '4a48fe8875c6214141007211',
+				applicationKey: 's',
+				bucketName: 'ok'
+			})
+		).toMatch(/bucket-scoped|Master/i);
 		expect(
 			validateProfileInput({
 				name: 'n',
@@ -89,5 +98,34 @@ describe('B2 credentials store', () => {
 		await deleteProfile('p1');
 		expect(await listProfiles()).toHaveLength(0);
 		expect(await getActiveProfileId()).toBeNull();
+	});
+
+	it('refuses to save a master application key id', async () => {
+		await expect(
+			saveProfile({
+				id: 'p-master',
+				name: 'Nope',
+				applicationKeyId: '4a48fe8875c6214141007211',
+				applicationKey: 'master-secret',
+				bucketName: 'bucket'
+			})
+		).rejects.toMatchObject({ code: 'B2_MASTER_KEY' });
+		expect(await listProfiles()).toHaveLength(0);
+	});
+
+	it('session-only keeps the key in memory and out of IDB', async () => {
+		const saved = await saveProfile({
+			id: 'p-tab',
+			name: 'Tab',
+			applicationKeyId: '003abc',
+			applicationKey: 'tab-secret',
+			bucketName: 'bucket',
+			persistSecret: false
+		});
+		expect(saved.applicationKey).toBe('tab-secret');
+		expect(saved.persistSecret).toBe(false);
+		const stored = (await listStoredProfiles())[0]!;
+		expect(stored.applicationKey).toBe('');
+		expect((await getProfile('p-tab'))?.applicationKey).toBe('tab-secret');
 	});
 });

@@ -37,10 +37,13 @@ import {
 } from './folderMarkers.js';
 import { createHybridB2Transport } from './hybridTransport.js';
 import { ensureExplorerCors } from './b2Cors.js';
+import { assertBucketScopedAuthorization } from './keyScope.js';
 import { normalizeNamePrefix, type B2ConnectionProfileV1 } from './types.js';
 
 /** Download-auth token lifetime for direct browser GETs (seconds). */
 const DOWNLOAD_AUTH_TTL_SEC = 3600;
+/** Short-lived GET URL for daemon pull (B2 → monitor). */
+const PULL_MINT_TTL_SEC = 300;
 
 const B2_CAPS: ExplorerCapabilities = {
 	supportsTrash: false,
@@ -110,7 +113,11 @@ export async function createB2ExplorerDriver(
 		applicationKey: opts.profile.applicationKey,
 		transport
 	});
-	await client.authorize();
+	const auth = await client.authorize();
+	// Simulator / injected transport is often an unscoped test key — skip.
+	if (!usingCustomTransport) {
+		assertBucketScopedAuthorization(auth, opts.profile.bucketName);
+	}
 	let bucket = await client.getBucket(opts.profile.bucketName);
 	if (!bucket && opts.createBucketIfMissing) {
 		bucket = await client.createBucket({
@@ -140,6 +147,38 @@ export async function createB2ExplorerDriver(
 
 	function absPrefix(parentId: ExplorerEntryId | null): string {
 		return parentId ?? rootPrefix;
+	}
+
+	/** B2 forbids `filename*` in download-authorization tokens (RFC 6266 minus `*`). */
+	function attachmentDisposition(filename: string): string {
+		const ascii = filename.replace(/[^\x20-\x7E]/g, '_').replace(/["\\\r\n]/g, '_');
+		const safe = ascii.trim() || 'download';
+		return `attachment; filename="${safe}"`;
+	}
+
+	async function nativeGetUrl(id: string, ttlSec = DOWNLOAD_AUTH_TTL_SEC): Promise<string> {
+		const disposition = attachmentDisposition(baseNameFromKey(id));
+		const auth = await client.raw.getDownloadAuthorization(
+			client.accountInfo.getApiUrl(),
+			client.accountInfo.getAuthToken(),
+			{
+				bucketId: bucket!.id,
+				fileNamePrefix: id,
+				validDurationInSeconds: ttlSec,
+				b2ContentDisposition: disposition
+			}
+		);
+		const downloadBase = client.accountInfo.getDownloadUrl();
+		const url = createNativeDownloadAuthorizationUrl(
+			downloadBase,
+			opts.profile.bucketName,
+			id,
+			auth.authorizationToken,
+			ttlSec
+		);
+		const parsed = new URL(url);
+		parsed.searchParams.set('b2ContentDisposition', disposition);
+		return parsed.toString();
 	}
 
 	function parentPrefixOf(abs: string): string {
@@ -597,6 +636,61 @@ export async function createB2ExplorerDriver(
 			}
 		},
 
+		async mintDownloadUrl(id) {
+			try {
+				const url = await nativeGetUrl(id, PULL_MINT_TTL_SEC);
+				return {
+					url,
+					filename: baseNameFromKey(id),
+					expiresAt: Date.now() + PULL_MINT_TTL_SEC * 1000
+				};
+			} catch (e) {
+				throw mapB2Error(e);
+			}
+		},
+
+		async mintUploadUrl(parentId, fileName) {
+			try {
+				const parent = absPrefix(parentId);
+				const destName = await uniqueName(parent, fileName);
+				const destKey = `${parent}${destName}`;
+				const up = await client.raw.getUploadUrl(
+					client.accountInfo.getApiUrl(),
+					client.accountInfo.getAuthToken(),
+					{ bucketId: bucket!.id }
+				);
+				return {
+					uploadUrl: up.uploadUrl,
+					authorizationToken: up.authorizationToken,
+					destFileName: destKey,
+					contentType: 'b2/x-auto'
+				};
+			} catch (e) {
+				throw mapB2Error(e);
+			}
+		},
+
+		async downloadUrl(id) {
+			if (!directBrowserDownload) return null;
+			try {
+				const info = await bucket!.getFileInfoByName(id);
+				if (!info) {
+					throw new ExplorerB2Error('B2_NOT_FOUND', id);
+				}
+				const len = info.contentLength ?? 0;
+				if (len > EXPLORER_DOWNLOAD_MAX_BYTES) {
+					throw new ExplorerB2Error(
+						'B2_TOO_LARGE',
+						`File exceeds ${EXPLORER_DOWNLOAD_MAX_BYTES} byte download limit`
+					);
+				}
+				const url = await nativeGetUrl(id);
+				return { url, filename: baseNameFromKey(id) };
+			} catch (e) {
+				throw mapB2Error(e);
+			}
+		},
+
 		async download(id, dlOpts) {
 			try {
 				// Size check via control plane (proxied) — avoid download-host HEAD
@@ -616,15 +710,7 @@ export async function createB2ExplorerDriver(
 				if (directBrowserDownload) {
 					// Restricted download token (control plane) + direct GET to f*.backblazeb2.com
 					// with ?Authorization=… (no Authorization header → CORS-friendly).
-					const auth = await bucket!.getDownloadAuthorization(id, DOWNLOAD_AUTH_TTL_SEC);
-					const downloadBase = client.accountInfo.getDownloadUrl();
-					const url = createNativeDownloadAuthorizationUrl(
-						downloadBase,
-						opts.profile.bucketName,
-						id,
-						auth.authorizationToken,
-						DOWNLOAD_AUTH_TTL_SEC
-					);
+					const url = await nativeGetUrl(id);
 					const res = await fetch(url, { method: 'GET', redirect: 'follow' });
 					if (!res.ok) {
 						throw new ExplorerB2Error(

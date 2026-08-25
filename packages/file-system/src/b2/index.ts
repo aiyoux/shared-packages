@@ -12,6 +12,7 @@ export {
 	acquireB2Driver,
 	releaseB2Driver,
 	clearB2DriverCacheForTests,
+	evictAllB2Drivers,
 	b2DriverCacheSize,
 	B2_DRIVER_HOLD_MS
 } from './b2DriverCache.js';
@@ -53,7 +54,9 @@ export {
 	getActiveProfileId,
 	getProfile,
 	listProfiles,
+	listStoredProfiles,
 	redactProfile,
+	revealApplicationKey,
 	saveProfile,
 	setActiveProfileId
 } from './credentials.js';
@@ -76,6 +79,11 @@ export {
 	validateProfileInput,
 	type B2ConnectionProfileV1
 } from './types.js';
+export {
+	assertBucketScopedAuthorization,
+	looksLikeMasterApplicationKeyId,
+	masterKeyIdError
+} from './keyScope.js';
 
 export { default as B2ConnectionForm } from './B2ConnectionForm.svelte';
 export {
