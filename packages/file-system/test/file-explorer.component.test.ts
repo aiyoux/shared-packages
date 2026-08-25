@@ -90,6 +90,7 @@ describe('FileExplorer component', () => {
 		expect(screen.getByTestId('fe-item-details')).toBeTruthy();
 		expect(screen.getByTestId('fe-trash-view')).toBeTruthy();
 		expect(screen.getByTestId('fe-breadcrumbs')).toBeTruthy();
+		expect(screen.getByTestId('fe-header').querySelector('[data-testid="fe-breadcrumbs"]')).toBeTruthy();
 		expect(screen.getByTestId('fe-system-paste')).toBeTruthy();
 		expect((screen.getByTestId('fe-system-paste') as HTMLButtonElement).disabled).toBe(true);
 		expect(screen.getByTestId('fe-select-multi').parentElement?.getAttribute('data-tooltip')).toBe(

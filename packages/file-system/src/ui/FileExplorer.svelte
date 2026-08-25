@@ -2199,11 +2199,32 @@
 	onclick={() => { if (viewSwitcherOpen) closeViewSwitcher(); }}
 >
 	<header class="fe-header" data-testid="fe-header">
-		{#if headerLeading}
-			<div class="fe-header-leading" data-testid="fe-header-leading">
-				{@render headerLeading()}
-			</div>
-		{/if}
+		<div class="fe-header-left">
+			{#if headerLeading}
+				<div class="fe-header-leading" data-testid="fe-header-leading">
+					{@render headerLeading()}
+				</div>
+			{/if}
+			{#if driver.id !== 'memory'}
+				<nav class="fe-pathbar" data-testid="fe-breadcrumbs" aria-label="Current folder">
+					<button type="button" class="fe-crumb" data-testid="fe-crumb-root" onclick={() => goCrumb(null)}>
+						Root
+					</button>
+					{#each breadcrumbs as crumb (crumb.id)}
+						<span class="fe-sep">/</span>
+						<button
+							type="button"
+							class="fe-crumb"
+							data-testid="fe-crumb"
+							data-id={crumb.id}
+							onclick={() => goCrumb(crumb.id)}
+						>
+							{crumb.name}
+						</button>
+					{/each}
+				</nav>
+			{/if}
+		</div>
 		<div class="fe-toolbar" data-testid="fe-toolbar">
 			<div class="fe-toolbar-row">
 				{#if mode === 'manage' || mode === 'open'}
@@ -2338,9 +2359,6 @@
 							}}
 						/>
 					{/if}
-					{#if toolbarExtra}
-						{@render toolbarExtra()}
-					{/if}
 					{#if caps.supportsTrash && !hideToolbarTrash}
 						<FeTipIconBtn
 							testid="fe-trash-view"
@@ -2408,6 +2426,9 @@
 						disabled={selected.size === 0 || !caps.supportsCopy}
 						onclick={copySelection}
 					/>
+					{#if toolbarExtra}
+						{@render toolbarExtra()}
+					{/if}
 					<FeTipIconBtn
 						testid="fe-compress-selected"
 						tip="Compress"
@@ -2808,26 +2829,6 @@
 	{/if}
 	</div>
 	</div>
-
-	{#if driver.id !== 'memory'}
-		<nav class="fe-pathbar" data-testid="fe-breadcrumbs" aria-label="Current folder">
-			<button type="button" class="fe-crumb" data-testid="fe-crumb-root" onclick={() => goCrumb(null)}>
-				Root
-			</button>
-			{#each breadcrumbs as crumb (crumb.id)}
-				<span class="fe-sep">/</span>
-				<button
-					type="button"
-					class="fe-crumb"
-					data-testid="fe-crumb"
-					data-id={crumb.id}
-					onclick={() => goCrumb(crumb.id)}
-				>
-					{crumb.name}
-				</button>
-			{/each}
-		</nav>
-	{/if}
 
 	{#if mode === 'save'}
 		<footer class="fe-save-bar" data-testid="fe-save-bar">
@@ -3296,29 +3297,36 @@
 		z-index: 9;
 		display: flex;
 		justify-content: flex-end;
-		align-items: center;
+		align-items: flex-start;
 		gap: var(--space-2);
 		padding: var(--space-2) var(--space-3);
 		border-bottom: 1px solid var(--line-hairline);
-		flex-wrap: wrap;
+		flex-wrap: nowrap;
 	}
-	.fe-header-leading {
+	.fe-header-left {
 		flex: 1 1 auto;
 		min-width: 0;
 		display: flex;
-		align-items: center;
+		flex-direction: column;
+		align-items: stretch;
+		justify-content: center;
+		gap: 4px;
 		margin-right: auto;
+		align-self: stretch;
+	}
+	.fe-header-leading {
+		min-width: 0;
+		display: flex;
+		align-items: center;
 	}
 	.fe-pathbar {
 		display: flex;
 		flex-wrap: wrap;
 		align-items: center;
 		gap: 4px;
-		flex-shrink: 0;
-		padding: 4px 10px;
-		border-top: 1px solid var(--line-hairline);
-		background: var(--surface-1);
-		min-height: 1.75rem;
+		min-width: 0;
+		padding: 0 2px;
+		min-height: var(--control-h-sm, 1.75rem);
 	}
 	.fe-crumb {
 		background: none;
@@ -3337,13 +3345,13 @@
 		flex-direction: column;
 		align-items: flex-end;
 		gap: 4px;
-		min-width: 0;
+		flex-shrink: 0;
 	}
 	.fe-toolbar-row {
 		display: flex;
 		gap: 6px;
 		align-items: center;
-		flex-wrap: wrap;
+		flex-wrap: nowrap;
 		justify-content: flex-end;
 	}
 	.fe-toolbar :global(.ds-btn--icon) {
