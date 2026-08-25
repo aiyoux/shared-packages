@@ -360,7 +360,8 @@ function applySnapshot(doc: DocState, seq: number, page: KbPage, via: SnapshotVi
 		kind: 'snapshot',
 		pageId: doc.opts.pageId,
 		seq,
-		page: clonePage(page)
+		page: clonePage(page),
+		reason: via
 	};
 	if (via === 'join') doc.lastJoinSnapshot = frame;
 	if (via === 'nack' && doc.nackHeadSeq != null && seq >= doc.nackHeadSeq) {

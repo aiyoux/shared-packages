@@ -16,7 +16,14 @@ export type CollabRole = 'sequencer' | 'replica';
 
 export type CollabFrame =
 	| { kind: 'hello'; pageId: string; schemaVersion: number; clientId: string; role: CollabRole; roomId: string }
-	| { kind: 'snapshot'; pageId: string; seq: number; page: KbPage }
+	| {
+			kind: 'snapshot';
+			pageId: string;
+			seq: number;
+			page: KbPage;
+			/** Join / nack / resync replace the editor. CAS persist echoes omit this. */
+			reason?: 'join' | 'nack' | 'resync';
+	  }
 	| {
 			kind: 'ops';
 			pageId: string;
