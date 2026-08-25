@@ -72,6 +72,13 @@
 	import FeFloatingPreview from './FeFloatingPreview.svelte';
 	import { getPreviewKind } from './feThumbnails.js';
 	import { detectProject } from './detectProject.js';
+	import FeConfirmDialog from './FeConfirmDialog.svelte';
+	import {
+		emptyTrashCopy,
+		hardDeleteCopy,
+		permanentDeleteCopy,
+		type FeConfirmCopy
+	} from './feConfirm.js';
 
 	export type ExplorerMode = 'manage' | 'open' | 'save' | 'browse';
 
@@ -1150,34 +1157,40 @@
 		}
 	}
 
-	function confirmHardDelete(ids: string[], names: string[]): boolean {
+	let confirmPrompt = $state<{
+		copy: FeConfirmCopy;
+		resolve: (ok: boolean) => void;
+	} | null>(null);
+
+	function askConfirm(copy: FeConfirmCopy): Promise<boolean> {
+		return new Promise((resolve) => {
+			confirmPrompt = { copy, resolve };
+		});
+	}
+
+	function closeConfirm(ok: boolean) {
+		const r = confirmPrompt?.resolve;
+		confirmPrompt = null;
+		r?.(ok);
+	}
+
+	async function confirmHardDelete(ids: string[], names: string[]): Promise<boolean> {
 		if (caps.supportsSoftDelete) return true;
-		const folders = ids.filter((id) => nodes.find((n) => n.id === id)?.kind === 'folder');
-		if (ids.length === 1) {
-			const name = names[0] ?? 'item';
-			if (folders.length) {
-				return window.confirm(
-					`Delete folder “${name}” and everything inside it? This cannot be undone.`
-				);
-			}
-			return window.confirm(
-				`Delete “${name}” permanently from remote storage? This cannot be undone.`
-			);
-		}
-		if (folders.length) {
-			return window.confirm(
-				`Delete ${ids.length} items, including ${folders.length} folder${folders.length === 1 ? '' : 's'} and everything inside them? This cannot be undone.`
-			);
-		}
-		return window.confirm(
-			`Delete ${ids.length} items permanently from remote storage? This cannot be undone.`
+		const folderCount = ids.filter((id) => nodes.find((n) => n.id === id)?.kind === 'folder').length;
+		return askConfirm(
+			hardDeleteCopy({
+				driverId: driver.id,
+				count: ids.length,
+				folderCount,
+				name: names[0] ?? 'item'
+			})
 		);
 	}
 
 	async function deleteIds(ids: string[]) {
 		if (!ids.length) return;
 		const names = ids.map((id) => nodes.find((n) => n.id === id)?.name ?? id);
-		if (!confirmHardDelete(ids, names)) return;
+		if (!(await confirmHardDelete(ids, names))) return;
 		// Optimistic remove so the row doesn't sit there through a slow remote delete
 		const idSet = new Set(ids);
 		const snapshot = nodes;
@@ -1237,14 +1250,14 @@
 
 	async function permanentNode(n: ExplorerEntry) {
 		if (!driver.permanentDelete) return;
-		if (!window.confirm(`Permanently delete “${n.name}”? This cannot be undone.`)) return;
+		if (!(await askConfirm(permanentDeleteCopy(n.name)))) return;
 		await driver.permanentDelete(n.id);
 		await refreshTrash();
 	}
 
 	async function emptyTrash() {
 		if (!driver.emptyTrash) return;
-		if (!window.confirm('Empty trash? All items will be permanently deleted.')) return;
+		if (!(await askConfirm(emptyTrashCopy()))) return;
 		await driver.emptyTrash();
 		await refreshTrash();
 	}
@@ -3065,6 +3078,14 @@
 				</div>
 			</div>
 		</div>
+	{/if}
+
+	{#if confirmPrompt}
+		<FeConfirmDialog
+			copy={confirmPrompt.copy}
+			onConfirm={() => closeConfirm(true)}
+			onCancel={() => closeConfirm(false)}
+		/>
 	{/if}
 
 	{#if archiveKind && archiveEntries.length}

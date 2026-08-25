@@ -11,17 +11,18 @@
 	import { toast } from '@shared-packages/ui';
 	import { formatExplorerError } from '../ui/explorerError.js';
 	import VaultPanel from '../vault/VaultPanel.svelte';
+	import ConnectionProfilesDialog, {
+		type ConnectionFormMode,
+		type ConnectionProfileRow
+	} from '../ui/ConnectionProfilesDialog.svelte';
 
 	interface Props {
-		/** Called after save when user wants to connect with this profile */
 		onConnected?: (profile: B2ConnectionProfileV1) => void;
 		onDisconnected?: () => void;
 		onCancel?: () => void;
-		/** When true, "Save & connect" runs; edit-only save uses Save without connect */
-		autoConnectOnSave?: boolean;
 	}
 
-	let { onConnected, onDisconnected, onCancel, autoConnectOnSave = true }: Props = $props();
+	let { onConnected, onDisconnected, onCancel }: Props = $props();
 
 	let profiles = $state<B2ConnectionProfileV1[]>([]);
 	let activeId = $state<string | null>(null);
@@ -38,6 +39,22 @@
 	let persistSecret = $state(true);
 	let error = $state('');
 	let busy = $state(false);
+	let mode = $state<ConnectionFormMode>('list');
+
+	const rows = $derived<ConnectionProfileRow[]>(
+		profiles.map((p) => ({
+			id: p.id,
+			name: p.name,
+			detail: [
+				p.bucketName,
+				p.namePrefix,
+				p.persistSecret === false ? 'this tab' : ''
+			]
+				.filter(Boolean)
+				.join(' · '),
+			active: p.id === activeId
+		}))
+	);
 
 	async function reload() {
 		profiles = await listProfiles();
@@ -61,6 +78,7 @@
 		keyDirty = false;
 		persistSecret = true;
 		error = '';
+		mode = 'new';
 	}
 
 	function loadForEdit(p: B2ConnectionProfileV1) {
@@ -73,9 +91,16 @@
 		namePrefix = p.namePrefix ?? '';
 		persistSecret = p.persistSecret !== false;
 		error = '';
+		mode = 'edit';
 	}
 
-	async function save(connectAfter: boolean) {
+	function cancelForm() {
+		error = '';
+		editingId = null;
+		mode = 'list';
+	}
+
+	async function save() {
 		error = '';
 		const existing = editingId ? profiles.find((p) => p.id === editingId) : undefined;
 		const keyToSave =
@@ -112,14 +137,11 @@
 				persistSecret,
 				createdAt: existing?.createdAt
 			});
-			await setActiveProfileId(profile.id);
 			await reload();
-			editingId = profile.id;
+			editingId = null;
 			applicationKey = '';
 			keyDirty = false;
-			if (connectAfter && autoConnectOnSave) {
-				onConnected?.(profile);
-			}
+			mode = 'list';
 		} catch (e) {
 			error = formatExplorerError(e);
 			toast.error(error);
@@ -136,74 +158,54 @@
 	}
 
 	async function removeProfile(id: string) {
-		if (!window.confirm('Remove this B2 connection from this browser?')) return;
 		await deleteProfile(id);
-		if (editingId === id) clearFieldsForNew();
+		if (editingId === id) {
+			editingId = null;
+			mode = 'list';
+		}
 		await reload();
 		if (activeId === id) {
 			activeId = null;
 			onDisconnected?.();
 		}
 	}
+
+	function editById(id: string) {
+		const p = profiles.find((x) => x.id === id);
+		if (p) loadForEdit(p);
+	}
+
+	function connectById(id: string) {
+		const p = profiles.find((x) => x.id === id);
+		if (p) void connectProfile(p);
+	}
 </script>
 
-<div class="b2-form" data-testid="b2-connection-form">
-	<h3>Backblaze B2 connection</h3>
-	<p class="hint">
-		Keys stay only in this browser. Control-plane calls go through this hub; file bytes
-		upload/download direct to B2. A <strong>bucket-scoped application key</strong> is required —
-		master keys are refused.
-	</p>
-	<VaultPanel />
-
-	{#if error}
-		<div class="err" data-testid="b2-form-error" role="alert">{error}</div>
-	{/if}
-
-	{#if profiles.length}
-		<div class="saved" data-testid="b2-saved-profiles">
-			<h4>Saved connections</h4>
-			<ul>
-				{#each profiles as p (p.id)}
-					<li class:active={p.id === activeId} class:editing={p.id === editingId}>
-						<div class="profile-main">
-							<span class="profile-name">{p.name}</span>
-							<span class="meta"
-								>{p.bucketName}{p.namePrefix ? ` · ${p.namePrefix}` : ''}{p.persistSecret ===
-								false
-									? ' · this tab'
-									: ''}</span
-							>
-						</div>
-						<button
-							type="button"
-							data-testid="b2-profile-edit"
-							onclick={() => loadForEdit(p)}>Edit</button
-						>
-						<button
-							type="button"
-							data-testid="b2-profile-select"
-							onclick={() => connectProfile(p)}>Connect</button
-						>
-						<button
-							type="button"
-							class="danger"
-							data-testid="b2-profile-delete"
-							onclick={() => removeProfile(p.id)}>Remove</button
-						>
-					</li>
-				{/each}
-			</ul>
-			<button type="button" class="ghost" data-testid="b2-profile-new" onclick={clearFieldsForNew}>
-				+ New connection
-			</button>
-		</div>
-	{/if}
-
-	<div class="fields">
-		{#if editingId}
+<ConnectionProfilesDialog
+	title="Backblaze B2"
+	testid="b2-connection-form"
+	prefix="b2"
+	profiles={rows}
+	{mode}
+	{busy}
+	{error}
+	hint="Keys stay only in this browser. File bytes go direct to B2. A bucket-scoped application key is required — master keys are refused."
+	submitTestid="b2-save-only"
+	onClose={() => onCancel?.()}
+	onNew={clearFieldsForNew}
+	onEdit={editById}
+	onConnect={connectById}
+	onRemove={(id) => void removeProfile(id)}
+	onSubmit={() => void save()}
+	onCancelForm={cancelForm}
+>
+	{#snippet extra()}
+		<VaultPanel />
+	{/snippet}
+	{#snippet fields()}
+		{#if mode === 'edit'}
 			<p class="editing-label" data-testid="b2-editing-banner">
-				Editing saved connection — leave key blank to keep the current key.
+				Leave the key blank to keep the current key.
 			</p>
 		{/if}
 		<label>
@@ -221,7 +223,7 @@
 				type="password"
 				bind:value={applicationKey}
 				autocomplete="off"
-				placeholder={editingId ? '(unchanged if blank)' : ''}
+				placeholder={mode === 'edit' ? '(unchanged if blank)' : ''}
 				oninput={() => (keyDirty = true)}
 			/>
 		</label>
@@ -239,11 +241,7 @@
 			/>
 		</label>
 		<label class="check">
-			<input
-				data-testid="b2-persist-secret"
-				type="checkbox"
-				bind:checked={persistSecret}
-			/>
+			<input data-testid="b2-persist-secret" type="checkbox" bind:checked={persistSecret} />
 			Save this key in the browser
 		</label>
 		{#if !persistSecret}
@@ -251,146 +249,5 @@
 				This tab only — the key is forgotten when the tab closes.
 			</p>
 		{/if}
-	</div>
-
-	<div class="actions">
-		<button
-			type="button"
-			data-testid="b2-save-only"
-			disabled={busy}
-			onclick={() => save(false)}
-		>
-			{busy ? 'Saving…' : editingId ? 'Save changes' : 'Save'}
-		</button>
-		<button
-			type="button"
-			data-testid="b2-save-connect"
-			disabled={busy}
-			onclick={() => save(true)}
-		>
-			{busy ? 'Saving…' : editingId ? 'Save & connect' : 'Save & connect'}
-		</button>
-		{#if onCancel}
-			<button type="button" data-testid="b2-cancel" onclick={onCancel}>Cancel</button>
-		{/if}
-	</div>
-</div>
-
-<style>
-	.b2-form {
-		display: flex;
-		flex-direction: column;
-		gap: 0.75rem;
-		padding: 0.5rem 0 1rem;
-		max-width: 32rem;
-	}
-	h3 {
-		margin: 0;
-		font-size: 1.1rem;
-	}
-	.hint {
-		margin: 0;
-		font-size: 0.9rem;
-		color: var(--text-muted);
-		line-height: 1.4;
-	}
-	.err {
-		padding: 0.5rem 0.75rem;
-		background: rgb(var(--danger-rgb) / 0.16);
-		color: var(--cat-red-soft);
-		font-size: 0.9rem;
-	}
-	.fields {
-		display: flex;
-		flex-direction: column;
-		gap: 0.5rem;
-	}
-	.editing-label {
-		margin: 0;
-		font-size: 0.8rem;
-		color: var(--accent-light);
-	}
-	label {
-		display: flex;
-		flex-direction: column;
-		gap: 0.25rem;
-		font-size: 0.85rem;
-	}
-	label.check {
-		flex-direction: row;
-		align-items: center;
-		gap: 0.45rem;
-	}
-	input {
-		padding: 0.4rem 0.55rem;
-		border-radius: var(--radius-md);
-		border: 1px solid var(--line-hairline);
-		background: var(--surface-2);
-		color: inherit;
-		font: inherit;
-	}
-	.actions {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 0.5rem;
-	}
-	button {
-		padding: 0.4rem 0.75rem;
-		border-radius: var(--radius-md);
-		border: 1px solid var(--line-strong);
-		background: var(--surface-2);
-		color: var(--text-primary);
-		cursor: pointer;
-		font-size: 0.85rem;
-	}
-	button:disabled {
-		opacity: 0.6;
-	}
-	button.danger {
-		border-color: var(--danger);
-		color: var(--cat-red-soft);
-		background: rgb(var(--danger-rgb) / 0.12);
-	}
-	button.ghost {
-		background: transparent;
-		align-self: flex-start;
-	}
-	.saved ul {
-		list-style: none;
-		margin: 0;
-		padding: 0;
-		display: flex;
-		flex-direction: column;
-		gap: 0.35rem;
-	}
-	.saved li {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 0.35rem;
-		align-items: center;
-		padding: 0.35rem 0;
-		border-bottom: 1px solid var(--line-hairline);
-	}
-	.saved li.editing {
-		outline: 1px dashed var(--accent);
-		outline-offset: 2px;
-		border-radius: 4px;
-	}
-	.profile-main {
-		flex: 1 1 8rem;
-		min-width: 0;
-	}
-	.profile-name {
-		display: block;
-		font-weight: 600;
-	}
-	.meta {
-		display: block;
-		font-size: 0.75rem;
-		opacity: 0.7;
-	}
-	h4 {
-		margin: 0 0 0.35rem;
-		font-size: 0.9rem;
-	}
-</style>
+	{/snippet}
+</ConnectionProfilesDialog>

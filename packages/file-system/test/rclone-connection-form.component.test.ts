@@ -33,6 +33,7 @@ describe('RcloneConnectionForm', () => {
 	it('form.required: empty name/fs → form error; no save', async () => {
 		render(RcloneConnectionForm, { props: {} });
 		await screen.findByTestId('rclone-connection-form');
+		await fireEvent.click(screen.getByTestId('rclone-profile-new'));
 
 		const name = screen.getByTestId('rclone-name') as HTMLInputElement;
 		const fs = screen.getByTestId('rclone-fs') as HTMLInputElement;
@@ -62,6 +63,7 @@ describe('RcloneConnectionForm', () => {
 	it('form.host: non-loopback baseUrl is accepted (direct-connect model)', async () => {
 		render(RcloneConnectionForm, { props: {} });
 		await screen.findByTestId('rclone-connection-form');
+		await fireEvent.click(screen.getByTestId('rclone-profile-new'));
 
 		await fireEvent.input(screen.getByTestId('rclone-name'), {
 			target: { value: 'Tunnelled host' }
@@ -89,6 +91,7 @@ describe('RcloneConnectionForm', () => {
 	it('form.validation: credentials embedded in baseUrl are rejected', async () => {
 		render(RcloneConnectionForm, { props: {} });
 		await screen.findByTestId('rclone-connection-form');
+		await fireEvent.click(screen.getByTestId('rclone-profile-new'));
 
 		await fireEvent.input(screen.getByTestId('rclone-name'), {
 			target: { value: 'Creds in URL' }
@@ -112,6 +115,7 @@ describe('RcloneConnectionForm', () => {
 	it('defaults baseUrl to DEFAULT_RCLONE_BASE_URL', async () => {
 		render(RcloneConnectionForm, { props: {} });
 		await screen.findByTestId('rclone-connection-form');
+		await fireEvent.click(screen.getByTestId('rclone-profile-new'));
 		const base = screen.getByTestId('rclone-base-url') as HTMLInputElement;
 		expect(base.value).toBe(DEFAULT_RCLONE_BASE_URL);
 	});
@@ -127,7 +131,7 @@ describe('RcloneConnectionForm', () => {
 		});
 
 		render(RcloneConnectionForm, { props: {} });
-		await screen.findByTestId('rclone-saved-profiles');
+		await screen.findByText('Home');
 
 		await fireEvent.click(screen.getByTestId('rclone-profile-edit'));
 		const passInput = screen.getByTestId('rclone-pass') as HTMLInputElement;
@@ -149,14 +153,45 @@ describe('RcloneConnectionForm', () => {
 
 		const updated = await getProfile(saved.id);
 		expect(updated?.rcPass).toBe('original-secret');
-		// Input still must not display the secret after save
-		expect((screen.getByTestId('rclone-pass') as HTMLInputElement).value).toBe('');
+		// Save returns to the list — fields (and the secret) are gone
+		expect(screen.queryByTestId('rclone-pass')).toBeNull();
+		expect(screen.getByTestId('rclone-saved-profiles').textContent).toMatch(/Home renamed/);
+	});
+
+	it('opens on the saved list; New / Edit swap in fields with Add or Update', async () => {
+		await saveProfile({
+			id: 'prof-list',
+			name: 'Home',
+			baseUrl: DEFAULT_RCLONE_BASE_URL,
+			fs: 'home:',
+			rcUser: 'user',
+			rcPass: 'secret'
+		});
+		render(RcloneConnectionForm, { props: {} });
+		await screen.findByText('Home');
+		expect(screen.queryByTestId('rclone-name')).toBeNull();
+		expect(screen.queryByTestId('rclone-save-connect')).toBeNull();
+		expect(screen.getByTestId('rclone-profile-new').textContent).toMatch(/New connection/i);
+
+		await fireEvent.click(screen.getByTestId('rclone-profile-new'));
+		expect(screen.getByTestId('rclone-name')).toBeTruthy();
+		expect(screen.getByTestId('rclone-save-only').textContent).toMatch(/^Add$/);
+		expect(screen.getByTestId('rclone-cancel')).toBeTruthy();
+
+		await fireEvent.click(screen.getByTestId('rclone-cancel'));
+		await screen.findByTestId('rclone-saved-profiles');
+		expect(screen.queryByTestId('rclone-name')).toBeNull();
+
+		await fireEvent.click(screen.getByTestId('rclone-profile-edit'));
+		expect(screen.getByTestId('rclone-name')).toBeTruthy();
+		expect(screen.getByTestId('rclone-save-only').textContent).toMatch(/^Update$/);
 	});
 
 	it('saves a valid loopback profile', async () => {
 		const onConnected = vi.fn();
 		render(RcloneConnectionForm, { props: { onConnected } });
 		await screen.findByTestId('rclone-connection-form');
+		await fireEvent.click(screen.getByTestId('rclone-profile-new'));
 
 		await fireEvent.input(screen.getByTestId('rclone-name'), {
 			target: { value: 'Local rcd' }
@@ -173,7 +208,7 @@ describe('RcloneConnectionForm', () => {
 		await fireEvent.input(screen.getByTestId('rclone-root'), {
 			target: { value: 'docs' }
 		});
-		await fireEvent.click(screen.getByTestId('rclone-save-connect'));
+		await fireEvent.click(screen.getByTestId('rclone-save-only'));
 
 		await vi.waitFor(async () => {
 			const rows = await listProfiles();
@@ -183,8 +218,9 @@ describe('RcloneConnectionForm', () => {
 			expect(rows[0]?.rootPath).toBe('docs');
 			expect(rows[0]?.baseUrl).toBe(DEFAULT_RCLONE_BASE_URL);
 		});
-		expect(onConnected).toHaveBeenCalled();
-		// Ensure we never assert/log the raw secret in test output beyond IDB round-trip
+		expect(onConnected).not.toHaveBeenCalled();
+		await fireEvent.click(screen.getByTestId('rclone-profile-select'));
+		await vi.waitFor(() => expect(onConnected).toHaveBeenCalled());
 		const connected = onConnected.mock.calls[0]?.[0];
 		expect(connected?.rcPass).toBe('pass-not-logged');
 	});

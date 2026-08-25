@@ -70,6 +70,10 @@
 		variant?: 'full' | 'settings';
 		/** Hide the gear in `full` variant (host already owns settings). Default true. */
 		showSettings?: boolean;
+		/** Show “Choose computer folder” in the settings panel. Default true. */
+		showDisk?: boolean;
+		/** Square chip flush to a parent corner stack. */
+		flush?: boolean;
 		/**
 		 * Per-switcher (i) tooltip. Hub Files hides this and uses the combined
 		 * pair-info icon next to Single/Dual instead.
@@ -99,6 +103,8 @@
 		onConfigureDisk,
 		variant = 'full',
 		showSettings = true,
+		showDisk = true,
+		flush = false,
 		showInfo = true
 	}: Props = $props();
 
@@ -273,6 +279,7 @@
 <div
 	class="conn-switch"
 	class:settings-only={settingsOnly}
+	class:flush
 	bind:this={rootEl}
 	data-testid={settingsOnly ? 'connection-settings' : 'connection-switcher'}
 >
@@ -468,6 +475,7 @@
 		role="menu"
 	>
 		<p class="settings-title">Connections</p>
+		{#if showDisk}
 		<button
 			type="button"
 			role="menuitem"
@@ -478,6 +486,7 @@
 		>
 			{kind === 'disk' ? 'Change computer folder' : 'Choose computer folder'}
 		</button>
+		{/if}
 		<button
 			type="button"
 			role="menuitem"
@@ -486,19 +495,8 @@
 			disabled={busy}
 			onclick={() => configure('b2')}
 		>
-			{profiles.length ? 'Manage B2' : 'B2 settings'}
+			Manage B2
 		</button>
-		{#if profiles.length === 0}
-			<button
-				type="button"
-				role="menuitem"
-				data-testid="conn-b2"
-				disabled={busy}
-				onclick={() => configure('b2')}
-			>
-				Add Backblaze B2
-			</button>
-		{/if}
 		{#if showMonitor}
 			<button
 				type="button"
@@ -508,19 +506,8 @@
 				disabled={busy}
 				onclick={() => configure('monitor')}
 			>
-				{monitorProfiles.length ? 'Manage monitor' : 'Monitor settings'}
+				Manage monitor
 			</button>
-			{#if monitorProfiles.length === 0}
-				<button
-					type="button"
-					role="menuitem"
-					data-testid="conn-monitor"
-					disabled={busy}
-					onclick={() => configure('monitor')}
-				>
-					Add monitor
-				</button>
-			{/if}
 		{/if}
 		{#if showRclone}
 			<button
@@ -531,19 +518,8 @@
 				disabled={busy}
 				onclick={() => configure('rclone')}
 			>
-				{rcloneProfiles.length ? 'Manage rclone' : 'rclone settings'}
+				Manage rclone
 			</button>
-			{#if rcloneProfiles.length === 0}
-				<button
-					type="button"
-					role="menuitem"
-					data-testid="conn-rclone"
-					disabled={busy}
-					onclick={() => configure('rclone')}
-				>
-					Add rclone
-				</button>
-			{/if}
 		{/if}
 	</div>
 	</div>
@@ -556,6 +532,27 @@
 	}
 	.conn-switch.settings-only {
 		display: block;
+	}
+	.conn-switch.flush {
+		display: block;
+	}
+	.conn-switch.flush .conn-settings-wrap {
+		margin-left: 0;
+	}
+	.conn-switch.flush .conn-gear {
+		width: var(--control-h, 2rem);
+		height: var(--control-h, 2rem);
+		padding: 0;
+		border: 1px solid var(--line-strong);
+		border-top: 0;
+		border-right: 0;
+		background: var(--surface-ground);
+		color: var(--text-secondary);
+	}
+	.conn-switch.flush .conn-gear:hover:not(:disabled) {
+		border-color: var(--accent);
+		color: var(--accent);
+		background: var(--accent-glow);
 	}
 	.conn-select {
 		position: relative;

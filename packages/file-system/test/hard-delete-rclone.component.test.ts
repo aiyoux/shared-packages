@@ -2,7 +2,7 @@
  * Hard-delete confirm + capability chrome when supportsSoftDelete is false (rclone-like).
  * Mirrors hard-delete-driver.component.test.ts with id=rclone | mock-rclone.
  */
-import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/svelte';
 import FileExplorer from '../src/ui/FileExplorer.svelte';
 import type { ExplorerDriver, ExplorerEntry, ExplorerListResult } from '../src/ui/explorerDriver.js';
@@ -59,15 +59,6 @@ function mockRcloneHardDeleteDriver(
 }
 
 describe('FileExplorer hard-delete rclone backend', () => {
-	let confirmSpy: ReturnType<typeof vi.spyOn>;
-
-	beforeEach(() => {
-		confirmSpy = vi.spyOn(window, 'confirm');
-	});
-
-	afterEach(() => {
-		confirmSpy.mockRestore();
-	});
 
 	it('hard-delete.chrome: data-fe-backend=rclone; trash hidden; upload + mkdir visible', async () => {
 		const { driver } = mockRcloneHardDeleteDriver([], 'rclone');
@@ -107,12 +98,14 @@ describe('FileExplorer hard-delete rclone backend', () => {
 			kind: 'file'
 		};
 		const { driver, deleted } = mockRcloneHardDeleteDriver([file]);
-		confirmSpy.mockReturnValue(false);
 		render(FileExplorer, { props: { mode: 'manage', driver, variant: 'panel' } });
 		await screen.findByTestId('fe-file-row');
 		await fireEvent.click(screen.getByTestId('fe-file-row'));
 		await fireEvent.click(await screen.findByTestId('fe-trash-selected'));
-		expect(confirmSpy).toHaveBeenCalled();
+		const dialog = await screen.findByTestId('fe-confirm-dialog');
+		expect(dialog.textContent?.toLowerCase()).toMatch(/permanent/);
+		expect(dialog.textContent?.toLowerCase()).toMatch(/remote/);
+		await fireEvent.click(screen.getByTestId('fe-confirm-cancel'));
 		expect(deleted).toHaveLength(0);
 		expect(screen.getByTestId('fe-file-row')).toBeTruthy();
 	});
@@ -125,12 +118,12 @@ describe('FileExplorer hard-delete rclone backend', () => {
 			kind: 'file'
 		};
 		const { driver, deleted } = mockRcloneHardDeleteDriver([file]);
-		confirmSpy.mockReturnValue(true);
 		render(FileExplorer, { props: { mode: 'manage', driver, variant: 'panel' } });
 		await screen.findByTestId('fe-file-row');
 		await fireEvent.click(screen.getByTestId('fe-file-row'));
 		await fireEvent.click(await screen.findByTestId('fe-trash-selected'));
-		expect(confirmSpy).toHaveBeenCalled();
+		await screen.findByTestId('fe-confirm-dialog');
+		await fireEvent.click(screen.getByTestId('fe-confirm-go'));
 		expect(deleted).toEqual(['gone.bin']);
 		await vi.waitFor(() => {
 			expect(screen.queryByTestId('fe-file-row')).toBeNull();
@@ -145,15 +138,14 @@ describe('FileExplorer hard-delete rclone backend', () => {
 			kind: 'file'
 		};
 		const { driver } = mockRcloneHardDeleteDriver([file]);
-		confirmSpy.mockReturnValue(false);
 		render(FileExplorer, { props: { mode: 'manage', driver, variant: 'panel' } });
 		await screen.findByTestId('fe-file-row');
 		await fireEvent.click(screen.getByTestId('fe-file-row'));
 		await fireEvent.click(await screen.findByTestId('fe-trash-selected'));
-		expect(confirmSpy).toHaveBeenCalled();
-		const msg = String(confirmSpy.mock.calls[0]?.[0] ?? '');
-		expect(msg.toLowerCase()).toMatch(/permanent/);
-		expect(msg.toLowerCase()).toMatch(/remote/);
+		const dialog = await screen.findByTestId('fe-confirm-dialog');
+		const msg = (dialog.textContent ?? '').toLowerCase();
+		expect(msg).toMatch(/permanent/);
+		expect(msg).toMatch(/remote/);
 	});
 
 	it('hard-delete.multiSelect: confirm once then batch delete', async () => {
@@ -162,7 +154,6 @@ describe('FileExplorer hard-delete rclone backend', () => {
 			{ id: 'b.bin', parentId: null, name: 'b.bin', kind: 'file' }
 		];
 		const { driver, deleted } = mockRcloneHardDeleteDriver(files);
-		confirmSpy.mockReturnValue(true);
 		render(FileExplorer, {
 			props: { mode: 'manage', driver, variant: 'panel', multiSelect: true }
 		});
@@ -173,9 +164,10 @@ describe('FileExplorer hard-delete rclone backend', () => {
 		await fireEvent.click(rows[1]!.querySelector('.fe-name')!);
 		const batch = await screen.findByTestId('fe-trash-selected');
 		await fireEvent.click(batch);
-		expect(confirmSpy).toHaveBeenCalledTimes(1);
-		const batchMsg = String(confirmSpy.mock.calls[0]?.[0] ?? '');
-		expect(batchMsg.toLowerCase()).toMatch(/permanent/);
+		const dialog = await screen.findByTestId('fe-confirm-dialog');
+		expect(dialog.textContent?.toLowerCase()).toMatch(/permanent/);
+		expect(dialog.textContent?.toLowerCase()).toMatch(/remote/);
+		await fireEvent.click(screen.getByTestId('fe-confirm-go'));
 		expect(deleted.sort()).toEqual(['a.bin', 'b.bin'].sort());
 		await vi.waitFor(() => {
 			expect(screen.queryAllByTestId('fe-file-row')).toHaveLength(0);

@@ -1,19 +1,22 @@
 /**
  * Hard-delete confirm + capability chrome when supportsSoftDelete is false (B2-like).
  */
-import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/svelte';
 import FileExplorer from '../src/ui/FileExplorer.svelte';
 import type { ExplorerDriver, ExplorerEntry, ExplorerListResult } from '../src/ui/explorerDriver.js';
 
-function mockHardDeleteDriver(entries: ExplorerEntry[]): {
+function mockHardDeleteDriver(
+	entries: ExplorerEntry[],
+	driverId = 'mock-b2'
+): {
 	driver: ExplorerDriver;
 	deleted: string[];
 } {
 	const deleted: string[] = [];
 	let rows = [...entries];
 	const driver: ExplorerDriver = {
-		id: 'mock-b2',
+		id: driverId,
 		capabilities: {
 			supportsTrash: false,
 			supportsSoftDelete: false,
@@ -55,15 +58,6 @@ function mockHardDeleteDriver(entries: ExplorerEntry[]): {
 }
 
 describe('FileExplorer hard-delete backend', () => {
-	let confirmSpy: ReturnType<typeof vi.spyOn>;
-
-	beforeEach(() => {
-		confirmSpy = vi.spyOn(window, 'confirm');
-	});
-
-	afterEach(() => {
-		confirmSpy.mockRestore();
-	});
 
 	it('hides trash chrome; shows upload when caps allow', async () => {
 		const { driver } = mockHardDeleteDriver([]);
@@ -83,12 +77,14 @@ describe('FileExplorer hard-delete backend', () => {
 			kind: 'file'
 		};
 		const { driver, deleted } = mockHardDeleteDriver([file]);
-		confirmSpy.mockReturnValue(false);
 		render(FileExplorer, { props: { mode: 'manage', driver, variant: 'panel' } });
 		await screen.findByTestId('fe-file-row');
 		await fireEvent.click(screen.getByTestId('fe-file-row'));
 		await fireEvent.click(await screen.findByTestId('fe-trash-selected'));
-		expect(confirmSpy).toHaveBeenCalled();
+		const dialog = await screen.findByTestId('fe-confirm-dialog');
+		expect(dialog.textContent).toMatch(/file\.bin/);
+		expect(dialog.textContent).not.toMatch(/remote/i);
+		await fireEvent.click(screen.getByTestId('fe-confirm-cancel'));
 		expect(deleted).toHaveLength(0);
 		expect(screen.getByTestId('fe-file-row')).toBeTruthy();
 	});
@@ -101,16 +97,36 @@ describe('FileExplorer hard-delete backend', () => {
 			kind: 'file'
 		};
 		const { driver, deleted } = mockHardDeleteDriver([file]);
-		confirmSpy.mockReturnValue(true);
 		render(FileExplorer, { props: { mode: 'manage', driver, variant: 'panel' } });
 		await screen.findByTestId('fe-file-row');
 		await fireEvent.click(screen.getByTestId('fe-file-row'));
 		await fireEvent.click(await screen.findByTestId('fe-trash-selected'));
-		expect(confirmSpy).toHaveBeenCalled();
+		await screen.findByTestId('fe-confirm-dialog');
+		await fireEvent.click(screen.getByTestId('fe-confirm-go'));
 		expect(deleted).toEqual(['gone.bin']);
 		// After refresh list is empty
 		await vi.waitFor(() => {
 			expect(screen.queryByTestId('fe-file-row')).toBeNull();
 		});
+	});
+
+	it('memory confirm does not call the files remote', async () => {
+		const file: ExplorerEntry = {
+			id: 'clip.wav',
+			parentId: null,
+			name: 'clip.wav',
+			kind: 'file'
+		};
+		const { driver } = mockHardDeleteDriver([file], 'memory');
+		render(FileExplorer, { props: { mode: 'manage', driver, variant: 'panel' } });
+		await screen.findByTestId('fe-file-row');
+		await fireEvent.click(screen.getByTestId('fe-file-row'));
+		await fireEvent.click(await screen.findByTestId('fe-trash-selected'));
+		const dialog = await screen.findByTestId('fe-confirm-dialog');
+		expect(dialog.textContent).toMatch(/clip\.wav/);
+		expect(dialog.textContent).toMatch(/no trash/);
+		expect(dialog.textContent).not.toMatch(/remote/i);
+		await fireEvent.click(screen.getByTestId('fe-confirm-cancel'));
+		expect(screen.queryByTestId('fe-confirm-dialog')).toBeNull();
 	});
 });

@@ -14,15 +14,18 @@
 	} from './types.js';
 	import { toast } from '@shared-packages/ui';
 	import { formatExplorerError } from '../ui/explorerError.js';
+	import ConnectionProfilesDialog, {
+		type ConnectionFormMode,
+		type ConnectionProfileRow
+	} from '../ui/ConnectionProfilesDialog.svelte';
 
 	interface Props {
-		onConnected?: (profile: MonitorConnectionProfileV1) => void;
+		onConnected?: (profile: MonitorConnectionProfileV1) => void | Promise<void>;
 		onDisconnected?: () => void;
 		onCancel?: () => void;
-		autoConnectOnSave?: boolean;
 	}
 
-	let { onConnected, onDisconnected, onCancel, autoConnectOnSave = true }: Props = $props();
+	let { onConnected, onDisconnected, onCancel }: Props = $props();
 
 	let profiles = $state<MonitorConnectionProfileV1[]>([]);
 	let activeId = $state<string | null>(null);
@@ -32,6 +35,16 @@
 	let rootPath = $state('/tmp');
 	let error = $state('');
 	let busy = $state(false);
+	let mode = $state<ConnectionFormMode>('list');
+
+	const rows = $derived<ConnectionProfileRow[]>(
+		profiles.map((p) => ({
+			id: p.id,
+			name: p.name,
+			detail: `${p.rootPath} · ${p.baseUrl}`,
+			active: p.id === activeId
+		}))
+	);
 
 	async function reload() {
 		profiles = await listProfiles();
@@ -51,6 +64,7 @@
 		baseUrl = DEFAULT_MONITOR_BASE_URL;
 		rootPath = '/tmp';
 		error = '';
+		mode = 'new';
 	}
 
 	function loadForEdit(p: MonitorConnectionProfileV1) {
@@ -59,13 +73,16 @@
 		baseUrl = p.baseUrl || DEFAULT_MONITOR_BASE_URL;
 		rootPath = p.rootPath;
 		error = '';
+		mode = 'edit';
 	}
 
-	function newId(): string {
-		return crypto.randomUUID();
+	function cancelForm() {
+		error = '';
+		editingId = null;
+		mode = 'list';
 	}
 
-	async function save(connectAfter: boolean) {
+	async function save() {
 		error = '';
 		const err = validateMonitorProfileInput({ name, baseUrl, rootPath });
 		if (err) {
@@ -74,19 +91,16 @@
 		}
 		busy = true;
 		try {
-			const id = editingId ?? newId();
-			const saved = await saveProfile({
+			const id = editingId ?? crypto.randomUUID();
+			await saveProfile({
 				id,
 				name,
 				baseUrl: baseUrl.trim() || DEFAULT_MONITOR_BASE_URL,
 				rootPath
 			});
-			await setActiveProfileId(saved.id);
 			await reload();
-			editingId = saved.id;
-			if (connectAfter && autoConnectOnSave) {
-				onConnected?.(saved);
-			}
+			editingId = null;
+			mode = 'list';
 		} catch (e) {
 			error = formatExplorerError(e);
 			toast.error(error);
@@ -95,12 +109,15 @@
 		}
 	}
 
-	async function remove(id: string) {
+	async function removeProfile(id: string) {
 		busy = true;
 		try {
 			await deleteProfile(id);
 			if (activeId === id) onDisconnected?.();
-			if (editingId === id) clearFieldsForNew();
+			if (editingId === id) {
+				editingId = null;
+				mode = 'list';
+			}
 			await reload();
 		} catch (e) {
 			error = formatExplorerError(e);
@@ -115,7 +132,9 @@
 		error = '';
 		try {
 			await setActiveProfileId(p.id);
-			onConnected?.(p);
+			activeId = p.id;
+			await onConnected?.(p);
+			onCancel?.();
 		} catch (e) {
 			error = formatExplorerError(e);
 			toast.error(error);
@@ -123,40 +142,38 @@
 			busy = false;
 		}
 	}
+
+	function editById(id: string) {
+		const p = profiles.find((x) => x.id === id);
+		if (p) loadForEdit(p);
+	}
+
+	function connectById(id: string) {
+		const p = profiles.find((x) => x.id === id);
+		if (p) void connectExisting(p);
+	}
 </script>
 
-<div class="mon-form" data-testid="monitor-connection-form">
-	<p class="lead">
-		Browse a directory via the <strong>monitor</strong> service
-		(<code>/v1/fs</code>). The browser talks to the Base URL you set (local,
-		SSH tunnel, etc.). Read-only. Default
-		<code>http://127.0.0.1:8300</code>. Monitor must allow CORS for this site.
-	</p>
-
-	{#if profiles.length}
-		<ul class="profile-list" data-testid="monitor-profile-list">
-			{#each profiles as p (p.id)}
-				<li>
-					<button type="button" class="profile-btn" disabled={busy} onclick={() => loadForEdit(p)}>
-						<span class="pn">{p.name}</span>
-						<span class="pd">{p.rootPath}</span>
-					</button>
-					<button
-						type="button"
-						class="connect"
-						disabled={busy}
-						onclick={() => connectExisting(p)}
-						data-testid="monitor-connect-profile"
-					>
-						Connect
-					</button>
-					<button type="button" class="ghost" disabled={busy} onclick={() => remove(p.id)}>Delete</button>
-				</li>
-			{/each}
-		</ul>
-	{/if}
-
-	<div class="fields">
+<ConnectionProfilesDialog
+	title="Monitor"
+	testid="monitor-connection-form"
+	prefix="monitor"
+	profiles={rows}
+	{mode}
+	{busy}
+	{error}
+	hint="Browse a directory via the monitor service (/v1/fs). The browser talks to the Base URL you set. Default http://127.0.0.1:8300. Monitor must allow CORS for this site."
+	submitTestid="monitor-save-only"
+	connectTestid="monitor-connect-profile"
+	onClose={() => onCancel?.()}
+	onNew={clearFieldsForNew}
+	onEdit={editById}
+	onConnect={connectById}
+	onRemove={(id) => void removeProfile(id)}
+	onSubmit={() => void save()}
+	onCancelForm={cancelForm}
+>
+	{#snippet fields()}
 		<label>
 			Name
 			<input type="text" bind:value={name} data-testid="monitor-name" disabled={busy} />
@@ -169,128 +186,5 @@
 			Root path (absolute)
 			<input type="text" bind:value={rootPath} data-testid="monitor-root-path" disabled={busy} />
 		</label>
-	</div>
-
-	{#if error}
-		<p class="err" role="alert" data-testid="monitor-form-error">{error}</p>
-	{/if}
-
-	<div class="actions">
-		<button type="button" class="primary" disabled={busy} data-testid="monitor-save-connect" onclick={() => save(true)}>
-			{busy ? 'Working…' : 'Save & connect'}
-		</button>
-		<button type="button" class="ghost" disabled={busy} onclick={() => save(false)}>Save</button>
-		<button type="button" class="ghost" disabled={busy} onclick={clearFieldsForNew}>New</button>
-		{#if onCancel}
-			<button type="button" class="ghost" disabled={busy} onclick={() => onCancel?.()}>Cancel</button>
-		{/if}
-	</div>
-</div>
-
-<style>
-	.mon-form {
-		display: flex;
-		flex-direction: column;
-		gap: 12px;
-		padding: 12px;
-		border: 1px solid var(--line-hairline);
-		border-radius: 0;
-		background: var(--surface-2);
-	}
-	.lead {
-		margin: 0;
-		font-size: 0.85rem;
-		color: var(--text-secondary);
-		line-height: 1.45;
-	}
-	.fields {
-		display: flex;
-		flex-direction: column;
-		gap: 8px;
-	}
-	label {
-		display: flex;
-		flex-direction: column;
-		gap: 4px;
-		font-size: 0.8rem;
-		color: var(--text-muted);
-	}
-	input {
-		padding: 8px 10px;
-		border-radius: var(--radius-md);
-		border: 1px solid var(--line-hairline);
-		background: var(--surface-1);
-		color: inherit;
-		font-size: 0.9rem;
-		font: inherit;
-	}
-	.profile-list {
-		list-style: none;
-		margin: 0;
-		padding: 0;
-		display: flex;
-		flex-direction: column;
-		gap: 6px;
-	}
-	.profile-list li {
-		display: flex;
-		gap: 6px;
-		align-items: center;
-	}
-	.profile-btn {
-		flex: 1;
-		text-align: left;
-		display: flex;
-		flex-direction: column;
-		gap: 2px;
-		padding: 8px 10px;
-		border-radius: var(--radius-md);
-		border: 1px solid var(--line-hairline);
-		background: transparent;
-		color: inherit;
-		cursor: pointer;
-	}
-	.pn {
-		font-weight: 600;
-		font-size: 0.9rem;
-	}
-	.pd {
-		font-size: 0.75rem;
-		opacity: 0.8;
-		font-family: ui-monospace, monospace;
-	}
-	.actions {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 8px;
-	}
-	button {
-		padding: 8px 12px;
-		border-radius: var(--radius-md);
-		border: 1px solid var(--line-strong);
-		background: transparent;
-		color: inherit;
-		cursor: pointer;
-		font-size: 0.85rem;
-	}
-	button.primary {
-		background: rgb(var(--accent-rgb) / 0.15);
-		border-color: rgb(var(--accent-rgb) / 0.4);
-		color: var(--text-primary);
-	}
-	button.ghost {
-		opacity: 0.9;
-	}
-	button:disabled {
-		opacity: 0.5;
-		cursor: not-allowed;
-	}
-	.err {
-		margin: 0;
-		color: var(--cat-red-soft);
-		font-size: 0.85rem;
-	}
-	code {
-		font-size: 0.85em;
-	}
-</style>
+	{/snippet}
+</ConnectionProfilesDialog>

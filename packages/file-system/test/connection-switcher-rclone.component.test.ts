@@ -21,8 +21,12 @@ describe('ConnectionSwitcher multi-backend', () => {
 		expect(screen.getByTestId('conn-local')).toBeTruthy();
 		expect(screen.getByTestId('conn-disk')).toBeTruthy();
 		expect(screen.getByTestId('conn-disk-config')).toBeTruthy();
-		expect(screen.getByTestId('conn-rclone')).toBeTruthy();
+		expect(screen.queryByTestId('conn-rclone')).toBeNull();
+		expect(screen.queryByTestId('conn-b2')).toBeNull();
+		expect(screen.queryByTestId('conn-monitor')).toBeNull();
 		expect(screen.getByTestId('conn-rclone-config')).toBeTruthy();
+		expect(screen.getByTestId('conn-b2-config')).toBeTruthy();
+		expect(screen.getByTestId('conn-monitor-config')).toBeTruthy();
 	});
 
 	it('switcher.chips: conn-rclone-profile with data-profile-id', () => {
@@ -62,7 +66,7 @@ describe('ConnectionSwitcher multi-backend', () => {
 		expect(screen.getByTestId('conn-rclone-config')).toBeTruthy();
 	});
 
-	it('switcher.b2Stable: zero B2 profiles still exposes conn-b2 + conn-b2-config', () => {
+	it('switcher.b2Stable: zero B2 profiles still exposes conn-b2-config', () => {
 		render(ConnectionSwitcher, {
 			props: {
 				activeId: 'local',
@@ -71,7 +75,7 @@ describe('ConnectionSwitcher multi-backend', () => {
 				showRclone: true
 			}
 		});
-		expect(screen.getByTestId('conn-b2')).toBeTruthy();
+		expect(screen.queryByTestId('conn-b2')).toBeNull();
 		expect(screen.getByTestId('conn-b2-config')).toBeTruthy();
 	});
 
@@ -125,7 +129,7 @@ describe('ConnectionSwitcher multi-backend', () => {
 			}
 		});
 		expect(screen.getByTestId('conn-local')).toBeTruthy();
-		expect(screen.getByTestId('conn-b2')).toBeTruthy();
+		expect(screen.queryByTestId('conn-b2')).toBeNull();
 		expect(screen.getByTestId('conn-b2-config')).toBeTruthy();
 		expect(screen.queryByTestId('conn-rclone')).toBeNull();
 		expect(screen.queryByTestId('conn-rclone-profile')).toBeNull();
@@ -219,6 +223,19 @@ describe('ConnectionSwitcher multi-backend', () => {
 		expect(screen.getByTestId('conn-trigger')).toBeTruthy();
 		expect(screen.queryByTestId('conn-settings')).toBeNull();
 		expect(screen.queryByTestId('conn-settings-panel')).toBeNull();
+	});
+
+	it('showDisk=false hides the computer-folder settings row', () => {
+		render(ConnectionSwitcher, {
+			props: {
+				variant: 'settings',
+				showDisk: false,
+				showRclone: true,
+				showMonitor: true
+			}
+		});
+		expect(screen.getByTestId('conn-b2-config')).toBeTruthy();
+		expect(screen.queryByTestId('conn-disk-config')).toBeNull();
 	});
 
 	it('variant=settings is gear-only (no dropdown)', () => {

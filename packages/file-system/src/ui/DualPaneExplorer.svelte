@@ -226,6 +226,8 @@
 		 * switchers hide their gears and one settings control is portaled here.
 		 */
 		settingsPortal?: string;
+		/** Hide the connection-settings gear (workspace hosts it on the Apps overlay). */
+		hideSettingsGear?: boolean;
 		/**
 		 * @deprecated Switchers live in each FileExplorer header. Kept so
 		 * existing callers compile; ignored at runtime.
@@ -269,11 +271,12 @@
 		onSend,
 		tids: tidsOverride = {},
 		settingsPortal = '',
+		hideSettingsGear = false,
 		switcherPortal: _switcherPortal = '',
 		layoutPortal = ''
 	}: Props = $props();
 
-	const hostSettings = $derived(Boolean(settingsPortal));
+	const hostSettings = $derived(Boolean(settingsPortal) && !hideSettingsGear);
 	/** Combined (i) sits next to Single/Dual. Pane switchers hide their own (i). */
 	const pairInfoInChrome = $derived(!hideToggles);
 
@@ -1387,7 +1390,7 @@
 		showRclone={showRclone}
 		showMonitor={showMonitor}
 		showMemory={switcherShowMemory}
-		showSettings={!hostSettings}
+		showSettings={!hostSettings && !hideSettingsGear}
 		showInfo={!pairInfoInChrome}
 		busy={p.busy}
 		onSelect={(sel) => onSelectConnection(id, sel)}
@@ -1966,10 +1969,7 @@
 		border-bottom: 1px solid var(--line-hairline);
 	}
 	.pane-form {
-		padding: 0 0.65rem;
-		border-bottom: 1px solid var(--line-hairline);
-		max-height: 50vh;
-		overflow: auto;
+		display: contents;
 	}
 	.pane-explorer {
 		flex: 1;
