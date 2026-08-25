@@ -1,7 +1,9 @@
 import {
 	apply,
+	documentOrder,
+	findBlock,
 	invert,
-	isAtomic,
+	isNonTextual,
 	normalizePage,
 	plaintextOf,
 	type KbPage,
@@ -20,11 +22,14 @@ export type EditorState = {
 	composing: boolean;
 	blockFocus?: string;
 	justCommittedComposition?: boolean;
+	/** Remote ops held during IME freeze; drained after compositionend. */
+	pendingRemote?: Op[];
 };
 
 export function createEditorState(page: KbPage): EditorState {
 	const next = normalizePage(page);
-	const first = next.blocks[0];
+	const first = documentOrder(next)[0];
+	if (!first) throw new Error('empty page');
 	const selection = collapsed({ blockId: first.id, offset: 0 });
 	return {
 		page: next,
@@ -32,15 +37,16 @@ export function createEditorState(page: KbPage): EditorState {
 		undo: [],
 		redo: [],
 		composing: false,
-		blockFocus: isAtomic(first) ? first.id : undefined,
-		justCommittedComposition: false
+		blockFocus: isNonTextual(first) ? first.id : undefined,
+		justCommittedComposition: false,
+		pendingRemote: []
 	};
 }
 
 export function blockFocusOf(page: KbPage, selection: Range): string | undefined {
 	if (!isCollapsed(selection)) return undefined;
-	const block = page.blocks.find((item) => item.id === selection.anchor.blockId);
-	if (block && isAtomic(block)) return block.id;
+	const block = findBlock(page, selection.anchor.blockId);
+	if (block && isNonTextual(block)) return block.id;
 	return undefined;
 }
 
@@ -65,24 +71,76 @@ function selectionAfter(pre: KbPage, post: KbPage, op: Op, prev: Range): Range {
 		case 'split-block':
 			return collapsed({ blockId: op.newId, offset: 0 });
 		case 'merge-block': {
-			const keep = pre.blocks.find((item) => item.id === op.keepId);
+			const keep = findBlock(pre, op.keepId);
 			const keepLen = keep ? plaintextOf(keep).length : 0;
 			return collapsed({ blockId: op.keepId, offset: keepLen });
 		}
-		case 'insert-block':
+		case 'insert-block': {
+			if (op.block.type === 'table') {
+				const cell = op.block.children[0]?.children[0];
+				if (cell) return collapsed({ blockId: cell.id, offset: 0 });
+			}
 			return collapsed({ blockId: op.block.id, offset: 0 });
+		}
+		case 'insert-table-row': {
+			const col = (op as typeof op & { focusCol?: number }).focusCol ?? 0;
+			const dest = op.row.children[Math.min(Math.max(0, col), Math.max(0, op.row.children.length - 1))];
+			if (dest) return collapsed({ blockId: dest.id, offset: 0 });
+			return collapsed({ blockId: op.row.id, offset: 0 });
+		}
+		case 'insert-table-column': {
+			const cell = op.cells[0];
+			if (cell) return collapsed({ blockId: cell.id, offset: 0 });
+			return prev;
+		}
+		case 'delete-table-row': {
+			const table = findBlock(post, op.tableId);
+			if (table?.type === 'table') {
+				const cell = table.children[0]?.children[0];
+				if (cell) return collapsed({ blockId: cell.id, offset: 0 });
+				return collapsed({ blockId: table.id, offset: 0 });
+			}
+			const remaining = documentOrder(post)[0];
+			return collapsed({ blockId: remaining.id, offset: plaintextOf(remaining).length });
+		}
+		case 'delete-table-column': {
+			if (findBlock(post, prev.anchor.blockId)) {
+				return clampRange(post, collapsed(prev.anchor));
+			}
+			const table = findBlock(post, op.tableId);
+			if (table?.type === 'table') {
+				const row = table.children[0];
+				const cell = row?.children[Math.min(op.index, Math.max(0, (row?.children.length ?? 1) - 1))];
+				if (cell) return collapsed({ blockId: cell.id, offset: 0 });
+				return collapsed({ blockId: table.id, offset: 0 });
+			}
+			return prev;
+		}
 		case 'delete-block': {
+			const order = documentOrder(pre);
 			const index = blockIndex(pre, op.id);
-			const following = pre.blocks[index + 1];
-			const previous = pre.blocks[index - 1];
-			if (following && post.blocks.some((item) => item.id === following.id)) {
+			let following: (typeof order)[number] | undefined;
+			for (let i = index + 1; i < order.length; i++) {
+				if (findBlock(post, order[i].id)) {
+					following = order[i];
+					break;
+				}
+			}
+			if (following) {
 				return collapsed({ blockId: following.id, offset: 0 });
 			}
-			if (previous && post.blocks.some((item) => item.id === previous.id)) {
-				const keep = post.blocks.find((item) => item.id === previous.id)!;
+			let previous: (typeof order)[number] | undefined;
+			for (let i = index - 1; i >= 0; i--) {
+				if (findBlock(post, order[i].id)) {
+					previous = order[i];
+					break;
+				}
+			}
+			if (previous) {
+				const keep = findBlock(post, previous.id)!;
 				return collapsed({ blockId: previous.id, offset: plaintextOf(keep).length });
 			}
-			const remaining = post.blocks[0];
+			const remaining = documentOrder(post)[0];
 			return collapsed({ blockId: remaining.id, offset: plaintextOf(remaining).length });
 		}
 		case 'move-block': {
@@ -90,7 +148,7 @@ function selectionAfter(pre: KbPage, post: KbPage, op: Op, prev: Range): Range {
 			return current;
 		}
 		case 'convert-block': {
-			const block = post.blocks.find((item) => item.id === op.id);
+			const block = findBlock(post, op.id);
 			const len = block ? plaintextOf(block).length : 0;
 			const offset = Math.min(prev.anchor.offset, len);
 			return collapsed({ blockId: op.id, offset });
@@ -98,6 +156,7 @@ function selectionAfter(pre: KbPage, post: KbPage, op: Op, prev: Range): Range {
 		case 'set-code':
 		case 'set-title':
 		case 'set-children':
+		case 'set-toggle':
 			return prev;
 		default: {
 			const _never: never = op;

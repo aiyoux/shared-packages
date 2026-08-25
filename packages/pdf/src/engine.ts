@@ -1,5 +1,6 @@
 import type { PDFDocumentProxy, PDFPageProxy } from 'pdfjs-dist';
 import type { PdfHandle, PdfPageSize } from './types.js';
+import { FsStandardFontDataFactory, StubCanvasFactory } from './canvasStub.js';
 
 type PdfjsModule = typeof import('pdfjs-dist/legacy/build/pdf.mjs');
 
@@ -68,6 +69,20 @@ export async function openPdf(bytes: Uint8Array): Promise<PdfHandle> {
 
 	const pdfjs = await loadPdfjs();
 	const data = copyBytes(bytes);
+	const needsStubCanvas = typeof document === 'undefined';
+	let standardFontDataUrl: string | undefined;
+	try {
+		const dir = new URL('../../../node_modules/pdfjs-dist/standard_fonts/', import.meta.url);
+		if (typeof document === 'undefined') {
+			const { fileURLToPath } = await import('node:url');
+			standardFontDataUrl = fileURLToPath(dir);
+			if (!standardFontDataUrl.endsWith('/')) standardFontDataUrl += '/';
+		} else {
+			standardFontDataUrl = dir.href;
+		}
+	} catch {
+		standardFontDataUrl = undefined;
+	}
 	const loadingTask = pdfjs.getDocument({
 		data,
 		// Main-thread parse is slower but avoids Vite failing to serve the
@@ -75,8 +90,13 @@ export async function openPdf(bytes: Uint8Array): Promise<PdfHandle> {
 		disableWorker: true,
 		isEvalSupported: false,
 		useSystemFonts: false,
-		disableFontFace: isNode(),
+		disableFontFace: true,
+		fontExtraProperties: true,
 		isOffscreenCanvasSupported: typeof OffscreenCanvas !== 'undefined',
+		canvasFactory: needsStubCanvas ? new StubCanvasFactory() : undefined,
+		standardFontDataUrl,
+		StandardFontDataFactory:
+			needsStubCanvas && standardFontDataUrl ? FsStandardFontDataFactory : undefined,
 		verbosity: 0
 	} as Parameters<typeof pdfjs.getDocument>[0]);
 	const doc = await loadingTask.promise;

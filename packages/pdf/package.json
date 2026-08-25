@@ -20,11 +20,11 @@
     "check": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
+    "pdf-lib": "^1.17.1",
     "pdfjs-dist": "^5.4.149"
   },
   "devDependencies": {
     "@types/node": "^26.1.1",
-    "pdf-lib": "^1.17.1",
     "typescript": "^5.7.3",
     "vitest": "^4.1.2"
   },

@@ -203,11 +203,13 @@ function parseClip(raw: unknown, index: number, schemaVersion: 1 | 2): AnimClip 
 		? raw.keyframes.map((k, i) => parseKeyframe(k, i))
 		: undefined;
 	const mediaKind = parseMediaKind(raw.mediaKind, `clips[${index}].mediaKind`);
-	if (schemaVersion === 1 && mediaKind === 'sketch-fragment') {
+	if (schemaVersion === 1 && mediaKind && mediaKind !== 'image') {
 		throw new AnimParseError(
-			`clips[${index}] schemaVersion 1 cannot carry mediaKind sketch-fragment`
+			`clips[${index}] schemaVersion 1 cannot carry mediaKind ${mediaKind}`
 		);
 	}
+	const pairId =
+		raw.pairId === undefined ? undefined : nonEmptyString(raw.pairId, `clips[${index}].pairId`);
 	const base = {
 		id: nonEmptyString(raw.id, `clips[${index}].id`),
 		startMs: finiteNumber(raw.startMs, `clips[${index}].startMs`),
@@ -215,7 +217,8 @@ function parseClip(raw: unknown, index: number, schemaVersion: 1 | 2): AnimClip 
 		frame: parseFrame(raw.frame),
 		...(keyframes && keyframes.length > 0 ? { keyframes } : {}),
 		...(raw.snapshot !== undefined ? { snapshot: parseSnapshot(raw.snapshot) } : {}),
-		...(mediaKind && mediaKind !== 'image' ? { mediaKind } : {})
+		...(mediaKind && mediaKind !== 'image' ? { mediaKind } : {}),
+		...(pairId ? { pairId } : {})
 	};
 	if (bind === 'clone') {
 		if (raw.source !== undefined) {
@@ -320,16 +323,25 @@ function persistClip(clip: AnimClip): AnimClip {
 			? { keyframes: clip.keyframes.map(persistKeyframe) }
 			: {}),
 		...(clip.snapshot ? { snapshot: persistSnapshot(clip.snapshot) } : {}),
-		...(clip.mediaKind && clip.mediaKind !== 'image' ? { mediaKind: clip.mediaKind } : {})
+		...(clip.mediaKind && clip.mediaKind !== 'image' ? { mediaKind: clip.mediaKind } : {}),
+		...(clip.pairId ? { pairId: clip.pairId } : {})
 	};
 	if (clip.bind === 'clone') return { ...base, bind: 'clone' };
 	return { ...base, bind: clip.bind, source: persistSource(clip.source) };
 }
 
 export function clipNeedsV2(clip: AnimClip): boolean {
-	if (clip.mediaKind === 'sketch-fragment') return true;
+	if (clip.mediaKind && clip.mediaKind !== 'image') return true;
 	if (clip.bind === 'clone') return false;
 	return fragmentNeedsV2(clip.source.fragment);
+}
+
+export function isAudioClip(clip: AnimClip): boolean {
+	return clip.mediaKind === 'audio';
+}
+
+export function isVisualClip(clip: AnimClip): boolean {
+	return clip.mediaKind !== 'audio';
 }
 
 export function serializeAnimDocument(doc: AnimDocument): string {

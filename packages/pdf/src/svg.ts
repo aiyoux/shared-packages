@@ -30,6 +30,7 @@ function opacityAttr(opacity?: number): string {
 }
 
 function elementToSvg(el: PdfIrElement): string {
+	if (el.hidden) return '';
 	switch (el.type) {
 		case 'text': {
 			const extra = `${transformAttr(el.transform)}${opacityAttr(el.opacity)}`;

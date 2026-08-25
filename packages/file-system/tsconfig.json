@@ -11,7 +11,10 @@
     "isolatedModules": true,
     "noEmit": true,
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
-    "types": ["node"]
+    "types": ["node"],
+    "paths": {
+      "@shared-packages/kb-model": ["../kb-model/src/index.ts"]
+    }
   },
   "include": ["src/**/*", "test/**/*"]
 }

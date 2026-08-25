@@ -16,6 +16,12 @@ const root = path.dirname(fileURLToPath(import.meta.url));
  * because it was added without a matching pattern.
  */
 export default defineConfig({
+	resolve: {
+		alias: {
+			// Worktree node_modules is shared with development; pin kb-model to this tree.
+			'@shared-packages/kb-model': path.join(root, '../kb-model/src/index.ts')
+		}
+	},
 	test: {
 		environment: 'node',
 		include: [

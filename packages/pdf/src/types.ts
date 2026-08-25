@@ -11,8 +11,10 @@ export type PdfIrTextElement = {
 	fill: string;
 	fontSize: number;
 	d: string;
+	fontName?: string;
 	transform?: PdfTransform;
 	opacity?: number;
+	hidden?: boolean;
 };
 
 export type PdfIrImageElement = {
@@ -25,6 +27,7 @@ export type PdfIrImageElement = {
 	height: number;
 	transform?: PdfTransform;
 	opacity?: number;
+	hidden?: boolean;
 };
 
 export type PdfIrPathElement = {
@@ -37,6 +40,7 @@ export type PdfIrPathElement = {
 	fillRule?: 'nonzero' | 'evenodd';
 	transform?: PdfTransform;
 	opacity?: number;
+	hidden?: boolean;
 };
 
 export type PdfIrGroupElement = {
@@ -45,6 +49,7 @@ export type PdfIrGroupElement = {
 	children: PdfIrElement[];
 	transform?: PdfTransform;
 	opacity?: number;
+	hidden?: boolean;
 };
 
 export type PdfIrRasterChip = {
@@ -56,6 +61,7 @@ export type PdfIrRasterChip = {
 	width: number;
 	height: number;
 	transform?: PdfTransform;
+	hidden?: boolean;
 };
 
 export type PdfIrElement =

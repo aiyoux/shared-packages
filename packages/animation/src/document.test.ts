@@ -252,6 +252,58 @@ describe('parseAnimDocument / serializeAnimDocument', () => {
 		).toThrow(/schemaVersion 1 cannot carry a sketch fragment/);
 	});
 
+	it('rejects mediaKind video on schemaVersion 1', () => {
+		expect(() =>
+			parseAnimDocument({
+				schemaVersion: 1,
+				durationMs: 1000,
+				clips: [
+					{
+						id: 'c',
+						startMs: 0,
+						durationMs: 10,
+						frame: { x: 0, y: 0, w: 1, h: 1 },
+						bind: 'clone',
+						mediaKind: 'video',
+						snapshot: { bytesRef: 'data:video/webm;base64,xx' }
+					}
+				]
+			})
+		).toThrow(/mediaKind video/);
+	});
+
+	it('round-trips a paired video+audio clip as schemaVersion 2', () => {
+		const doc: AnimDocument = {
+			schemaVersion: 2,
+			durationMs: 2500,
+			clips: [
+				{
+					id: 'vid',
+					startMs: 0,
+					durationMs: 2500,
+					frame: { x: 0, y: 0, w: 320, h: 180 },
+					bind: 'clone',
+					mediaKind: 'video',
+					pairId: 'pair-1',
+					snapshot: { bytesRef: 'data:video/webm;base64,xx' }
+				},
+				{
+					id: 'aud',
+					startMs: 0,
+					durationMs: 2500,
+					frame: { x: 0, y: 0, w: 0, h: 0 },
+					bind: 'clone',
+					mediaKind: 'audio',
+					pairId: 'pair-1',
+					snapshot: { bytesRef: 'data:audio/webm;base64,xx' }
+				}
+			]
+		};
+		const json = serializeAnimDocument(doc);
+		expect(JSON.parse(json).schemaVersion).toBe(2);
+		expect(parseAnimDocument(json)).toEqual(doc);
+	});
+
 	it('rejects mediaKind sketch-fragment on schemaVersion 1', () => {
 		expect(() =>
 			parseAnimDocument({

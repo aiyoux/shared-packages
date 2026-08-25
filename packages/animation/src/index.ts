@@ -23,6 +23,8 @@ export {
 	AnimParseError,
 	assertClipMatchesDoc,
 	clipNeedsV2,
+	isAudioClip,
+	isVisualClip,
 	parseAnimDocument,
 	sameFsBackend,
 	serializeAnimDocument

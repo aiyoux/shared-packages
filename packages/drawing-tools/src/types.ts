@@ -65,8 +65,10 @@ export type PdfTextElement = {
     fill: string;
     fontSize: number;
     d: string;
+    fontName?: string;
     transform?: PdfTransform;
     opacity?: number;
+    hidden?: boolean;
 };
 export type PdfImageElement = {
     type: 'image';
@@ -78,6 +80,7 @@ export type PdfImageElement = {
     height: number;
     transform?: PdfTransform;
     opacity?: number;
+    hidden?: boolean;
 };
 export type PdfPathElement = {
     type: 'path';
@@ -89,6 +92,7 @@ export type PdfPathElement = {
     fillRule?: 'nonzero' | 'evenodd';
     transform?: PdfTransform;
     opacity?: number;
+    hidden?: boolean;
 };
 export type PdfGroupElement = {
     type: 'group';
@@ -96,6 +100,7 @@ export type PdfGroupElement = {
     children: PdfElement[];
     transform?: PdfTransform;
     opacity?: number;
+    hidden?: boolean;
 };
 export type PdfRasterChip = {
     type: 'chip';
@@ -106,6 +111,7 @@ export type PdfRasterChip = {
     width: number;
     height: number;
     transform?: PdfTransform;
+    hidden?: boolean;
 };
 export type PdfElement =
     | PdfTextElement

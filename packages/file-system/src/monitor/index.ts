@@ -70,6 +70,17 @@ export {
 export { getHostStream, abortHostStream, abortAllHostStreams, type HostStream } from './hostStream.js';
 export { getGitStream, abortGitStream, abortAllGitStreams, type GitStream } from './gitStream.js';
 export {
+	subscribe,
+	postOps,
+	submitPage,
+	postPresence,
+	getSnapshot,
+	postSubs,
+	CollabConflictError,
+	type CollabHttpOptions,
+	type CollabSnapshot
+} from './collab.js';
+export {
 	closeCredentialsDbForTests,
 	deleteProfile,
 	getActiveProfileId,

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { apply, applyMany } from './apply.js';
 import { normalizePage } from './normalize.js';
 import { plaintext, plaintextOf } from './plaintext.js';
+import { blockChildren, findBlock } from './tree.js';
 import {
 	KB_FORMAT,
 	type Block,
@@ -515,5 +516,378 @@ describe('apply other ops and errors', () => {
 	it('plaintext concatenates blocks and keeps code newlines', () => {
 		const src = page([para('a', 'hi'), code('c', 'a\nb')]);
 		expect(plaintext(src)).toBe('hi\na\nb');
+	});
+});
+
+function callout(id: string, kids: Block[], variant: 'info' | 'warning' | 'note' = 'info'): Block {
+	return { id, type: 'callout', variant, children: kids };
+}
+
+function toggle(id: string, kids: Block[], open = true): Block {
+	return { id, type: 'toggle', open, children: kids };
+}
+
+describe('N1 callout/toggle apply', () => {
+	it('inserts inside a callout via parentId and stamps schema 2 only on serialize', () => {
+		const src = page([callout('c', [para('a', 'a')]), para('z', 'z')]);
+		expect(src.schemaVersion).toBe(1);
+		const inserted = apply(src, {
+			kind: 'insert-block',
+			afterId: 'a',
+			parentId: 'c',
+			block: para('n', 'n')
+		});
+		expect(inserted.blocks.map((b) => b.id)).toEqual(['c', 'z']);
+		expect(findKids(inserted, 'c').map((b) => b.id)).toEqual(['a', 'n']);
+		expect(inserted.schemaVersion).toBe(1);
+	});
+
+	it('honors the insert-block parentId / afterId truth table', () => {
+		const src = page([callout('c', [para('a', 'a'), para('b', 'b')]), para('z', 'z')]);
+
+		expect(apply(src, { kind: 'insert-block', afterId: null, block: para('n', 'n') }).blocks.map((b) => b.id)).toEqual([
+			'n',
+			'c',
+			'z'
+		]);
+		expect(
+			apply(src, { kind: 'insert-block', afterId: 'c', block: para('n', 'n') }).blocks.map((b) => b.id)
+		).toEqual(['c', 'n', 'z']);
+		expect(() => apply(src, { kind: 'insert-block', afterId: 'a', block: para('n', 'n') })).toThrow(
+			/not a child of the page/i
+		);
+
+		const prepended = apply(src, {
+			kind: 'insert-block',
+			afterId: null,
+			parentId: 'c',
+			block: para('n', 'n')
+		});
+		expect(findKids(prepended, 'c').map((b) => b.id)).toEqual(['n', 'a', 'b']);
+
+		const afterChild = apply(src, {
+			kind: 'insert-block',
+			afterId: 'a',
+			parentId: 'c',
+			block: para('n', 'n')
+		});
+		expect(findKids(afterChild, 'c').map((b) => b.id)).toEqual(['a', 'n', 'b']);
+
+		expect(() =>
+			apply(src, { kind: 'insert-block', afterId: 'z', parentId: 'c', block: para('n', 'n') })
+		).toThrow(/not a direct child of parentId/i);
+		expect(() =>
+			apply(src, { kind: 'insert-block', afterId: null, parentId: 'a', block: para('n', 'n') })
+		).toThrow(/callout or toggle/i);
+	});
+
+	it('split stays in the parent; merge only same-parent; unique ids are tree-wide', () => {
+		const src = page([callout('c', [para('a', 'ab'), para('b', 'cd')]), para('z', 'z')]);
+		const split = apply(src, { kind: 'split-block', at: { blockId: 'a', offset: 1 }, newId: 'n' });
+		expect(split.blocks.map((b) => b.id)).toEqual(['c', 'z']);
+		expect(findKids(split, 'c').map((b) => b.id)).toEqual(['a', 'n', 'b']);
+
+		const merged = apply(src, { kind: 'merge-block', keepId: 'a', dropId: 'b' });
+		expect(findKids(merged, 'c').map((b) => b.id)).toEqual(['a']);
+		expect(plaintextOf(findBlock(merged, 'a')!)).toBe('abcd');
+		expect(() => apply(src, { kind: 'merge-block', keepId: 'a', dropId: 'z' })).toThrow(/immediate next/i);
+		expect(() => apply(src, { kind: 'merge-block', keepId: 'c', dropId: 'z' })).toThrow(/atomic/i);
+
+		expect(() =>
+			apply(src, { kind: 'insert-block', afterId: 'z', block: para('a', 'dup') })
+		).toThrow(/duplicate/i);
+		expect(() =>
+			apply(src, { kind: 'split-block', at: { blockId: 'z', offset: 0 }, newId: 'a' })
+		).toThrow(/already exists/i);
+		expect(() =>
+			apply(src, { kind: 'insert-block', afterId: 'z', block: callout('n', [para('b', 'dup')]) })
+		).toThrow(/duplicate/i);
+	});
+
+	it('delete-range from inside a callout to after drops covered siblings and does not concat', () => {
+		const src = page([para('before', 'xx'), callout('c', [para('a', 'aa'), para('b', 'bb')]), para('z', 'zz')]);
+		const crossed = apply(src, {
+			kind: 'delete-range',
+			range: { anchor: { blockId: 'a', offset: 1 }, head: { blockId: 'z', offset: 1 } }
+		});
+		expect(crossed.blocks.map((b) => b.id)).toEqual(['before', 'c', 'z']);
+		expect(findKids(crossed, 'c').map((b) => b.id)).toEqual(['a']);
+		expect(plaintextOf(findBlock(crossed, 'a')!)).toBe('a');
+		expect(plaintextOf(findBlock(crossed, 'z')!)).toBe('z');
+		expect(plaintextOf(findBlock(crossed, 'before')!)).toBe('xx');
+
+		const covering = apply(src, {
+			kind: 'delete-range',
+			range: { anchor: { blockId: 'before', offset: 1 }, head: { blockId: 'z', offset: 1 } }
+		});
+		expect(covering.blocks.map((b) => b.id)).toEqual(['before']);
+		expect(plaintextOf(findBlock(covering, 'before')!)).toBe('xz');
+		expect(findBlock(covering, 'c')).toBeUndefined();
+
+		const fromChrome = apply(src, {
+			kind: 'delete-range',
+			range: { anchor: { blockId: 'c', offset: 0 }, head: { blockId: 'z', offset: 1 } }
+		});
+		expect(fromChrome.blocks.map((b) => b.id)).toEqual(['before', 'z']);
+		expect(findBlock(fromChrome, 'c')).toBeUndefined();
+		expect(findBlock(fromChrome, 'a')).toBeUndefined();
+		expect(plaintextOf(findBlock(fromChrome, 'z')!)).toBe('z');
+		expect(plaintextOf(findBlock(fromChrome, 'before')!)).toBe('xx');
+	});
+
+	it('moves into and out of a callout and throws on move into a descendant', () => {
+		const src = page([callout('c', [para('a', 'a'), para('b', 'b')]), para('z', 'z')]);
+		const into = apply(src, { kind: 'move-block', id: 'z', afterId: 'a', parentId: 'c' });
+		expect(into.blocks.map((b) => b.id)).toEqual(['c']);
+		expect(findKids(into, 'c').map((b) => b.id)).toEqual(['a', 'z', 'b']);
+
+		const out = apply(src, { kind: 'move-block', id: 'b', afterId: 'c' });
+		expect(out.blocks.map((b) => b.id)).toEqual(['c', 'b', 'z']);
+		expect(findKids(out, 'c').map((b) => b.id)).toEqual(['a']);
+
+		expect(() => apply(src, { kind: 'move-block', id: 'c', afterId: 'a', parentId: 'c' })).toThrow(
+			/into itself/i
+		);
+		expect(() => apply(src, { kind: 'move-block', id: 'c', parentId: 'a', afterId: null })).toThrow(
+			/descendant|callout or toggle/i
+		);
+		expect(() => apply(src, { kind: 'move-block', id: 'c', afterId: 'a' })).toThrow(/descendant/i);
+	});
+
+	it('rejects nested callout insert, convert-to-container, and set-toggle on a non-toggle', () => {
+		const src = page([callout('c', [para('a', 'a')]), para('z', 'z')]);
+		expect(() =>
+			apply(src, { kind: 'insert-block', afterId: 'a', parentId: 'c', block: callout('n', [para('x', 'x')]) })
+		).toThrow(/nested containers/i);
+		expect(() =>
+			apply(src, {
+				kind: 'insert-block',
+				afterId: 'z',
+				block: callout('n', [callout('inner', [para('x', 'x')])])
+			})
+		).toThrow(/nested containers/i);
+		expect(() => apply(src, { kind: 'convert-block', id: 'z', to: 'callout' })).toThrow(/callout/i);
+		expect(() => apply(src, { kind: 'convert-block', id: 'z', to: 'toggle' })).toThrow(/toggle/i);
+		expect(() => apply(src, { kind: 'convert-block', id: 'c', to: 'paragraph' })).toThrow(/callout/i);
+		expect(() => apply(src, { kind: 'split-block', at: { blockId: 'c', offset: 0 }, newId: 'n' })).toThrow(
+			/atomic/i
+		);
+		expect(() =>
+			apply(src, { kind: 'insert-text', at: { blockId: 'c', offset: 0 }, text: 'x' })
+		).toThrow(/atomic/i);
+		expect(() => apply(src, { kind: 'set-toggle', id: 'c', open: false })).toThrow(/not a toggle/i);
+
+		const withToggle = page([toggle('t', [para('a', 'a')], true)]);
+		const closed = apply(withToggle, { kind: 'set-toggle', id: 't', open: false });
+		expect(closed.blocks[0]).toMatchObject({ type: 'toggle', open: false });
+	});
+});
+
+function findKids(doc: KbPage, id: string): Block[] {
+	return blockChildren(findBlock(doc, id)!) ?? [];
+}
+
+function cell(id: string, text: string, header = false): Block {
+	const next: Block = { id, type: 'table_cell', content: [span(text)] };
+	if (header) (next as { header?: boolean }).header = true;
+	return next;
+}
+
+function row(id: string, cells: Block[]): Block {
+	return { id, type: 'table_row', children: cells as Extract<Block, { type: 'table_cell' }>[] };
+}
+
+function table(id: string, rows: Block[]): Block {
+	return { id, type: 'table', children: rows as Extract<Block, { type: 'table_row' }>[] };
+}
+
+function grid(): KbPage {
+	return page([
+		table('t', [
+			row('r1', [cell('c11', 'aa'), cell('c12', 'bb')]),
+			row('r2', [cell('c21', 'cc'), cell('c22', 'dd')])
+		]),
+		para('z', 'zz')
+	]);
+}
+
+describe('N3 table types', () => {
+	it('types into a table_cell like a paragraph', () => {
+		const src = grid();
+		const next = apply(src, { kind: 'insert-text', at: { blockId: 'c11', offset: 1 }, text: 'X' });
+		expect(plaintextOf(findBlock(next, 'c11')!)).toBe('aXa');
+		expect(plaintextOf(findBlock(next, 'c12')!)).toBe('bb');
+		expect(findBlock(next, 'c11')?.id).toBe('c11');
+		expect(next.blocks[0].type).toBe('table');
+		expect(findKids(next, 'r1').map((b) => b.id)).toEqual(['c11', 'c12']);
+	});
+
+	it('cross-cell delete-range clears cells and does not concat', () => {
+		const src = grid();
+		const next = apply(src, {
+			kind: 'delete-range',
+			range: { anchor: { blockId: 'c11', offset: 1 }, head: { blockId: 'c22', offset: 1 } }
+		});
+		expect(findBlock(next, 't')?.type).toBe('table');
+		expect(findKids(next, 't').map((b) => b.id)).toEqual(['r1', 'r2']);
+		expect(findKids(next, 'r1').map((b) => b.id)).toEqual(['c11', 'c12']);
+		expect(findKids(next, 'r2').map((b) => b.id)).toEqual(['c21', 'c22']);
+		expect(plaintextOf(findBlock(next, 'c11')!)).toBe('a');
+		expect(plaintextOf(findBlock(next, 'c12')!)).toBe('');
+		expect(plaintextOf(findBlock(next, 'c21')!)).toBe('');
+		expect(plaintextOf(findBlock(next, 'c22')!)).toBe('d');
+		expect(plaintextOf(findBlock(next, 'z')!)).toBe('zz');
+		expect(plaintext(next)).toBe('a\t\n\td\nzz');
+	});
+
+	it('same-row delete-range clears the end cell and does not concat leftovers', () => {
+		const src = grid();
+		const next = apply(src, {
+			kind: 'delete-range',
+			range: { anchor: { blockId: 'c11', offset: 1 }, head: { blockId: 'c12', offset: 1 } }
+		});
+		expect(findKids(next, 'r1').map((b) => b.id)).toEqual(['c11', 'c12']);
+		expect(findKids(next, 'r2').map((b) => b.id)).toEqual(['c21', 'c22']);
+		expect(plaintextOf(findBlock(next, 'c11')!)).toBe('a');
+		expect(plaintextOf(findBlock(next, 'c12')!)).toBe('b');
+		expect(plaintextOf(findBlock(next, 'c21')!)).toBe('cc');
+		expect(plaintextOf(findBlock(next, 'c22')!)).toBe('dd');
+	});
+
+	it('delete-range starting on a table_row keeps the row and clears cells', () => {
+		const src = grid();
+		const toPara = apply(src, {
+			kind: 'delete-range',
+			range: { anchor: { blockId: 'r1', offset: 0 }, head: { blockId: 'z', offset: 1 } }
+		});
+		expect(findKids(toPara, 't').map((b) => b.id)).toEqual(['r1', 'r2']);
+		expect(findKids(toPara, 'r1').map((b) => b.id)).toEqual(['c11', 'c12']);
+		expect(plaintextOf(findBlock(toPara, 'c11')!)).toBe('');
+		expect(plaintextOf(findBlock(toPara, 'c12')!)).toBe('');
+		expect(plaintextOf(findBlock(toPara, 'c21')!)).toBe('');
+		expect(plaintextOf(findBlock(toPara, 'c22')!)).toBe('');
+		expect(plaintextOf(findBlock(toPara, 'z')!)).toBe('z');
+
+		const toRow = apply(src, {
+			kind: 'delete-range',
+			range: { anchor: { blockId: 'r1', offset: 0 }, head: { blockId: 'r2', offset: 0 } }
+		});
+		expect(findKids(toRow, 't').map((b) => b.id)).toEqual(['r1', 'r2']);
+		expect(plaintextOf(findBlock(toRow, 'c11')!)).toBe('');
+		expect(plaintextOf(findBlock(toRow, 'c12')!)).toBe('');
+		expect(plaintextOf(findBlock(toRow, 'c21')!)).toBe('cc');
+		expect(plaintextOf(findBlock(toRow, 'c22')!)).toBe('dd');
+	});
+
+	it('does not merge a cell leftover into a following paragraph', () => {
+		const src = grid();
+		const next = apply(src, {
+			kind: 'delete-range',
+			range: { anchor: { blockId: 'c22', offset: 1 }, head: { blockId: 'z', offset: 1 } }
+		});
+		expect(findBlock(next, 't')?.type).toBe('table');
+		expect(plaintextOf(findBlock(next, 'c22')!)).toBe('d');
+		expect(plaintextOf(findBlock(next, 'z')!)).toBe('z');
+		expect(next.blocks.map((b) => b.id)).toEqual(['t', 'z']);
+	});
+
+	it('delete-block removes the whole table as one subtree', () => {
+		const src = grid();
+		const next = apply(src, { kind: 'delete-block', id: 't' });
+		expect(next.blocks.map((b) => b.id)).toEqual(['z']);
+		expect(findBlock(next, 't')).toBeUndefined();
+		expect(findBlock(next, 'c11')).toBeUndefined();
+		expect(findBlock(next, 'r1')).toBeUndefined();
+	});
+
+	it('delete-range covering the table drops it as one node', () => {
+		const src = page([para('a', 'aa'), table('t', [row('r1', [cell('c11', 'x')])]), para('z', 'zz')]);
+		const next = apply(src, {
+			kind: 'delete-range',
+			range: { anchor: { blockId: 'a', offset: 1 }, head: { blockId: 'z', offset: 1 } }
+		});
+		expect(next.blocks.map((b) => b.id)).toEqual(['a']);
+		expect(findBlock(next, 't')).toBeUndefined();
+		expect(plaintextOf(findBlock(next, 'a')!)).toBe('az');
+	});
+
+	it('column insert keeps existing cell ids and uses the provided new ids', () => {
+		const src = grid();
+		const before = new Set(['c11', 'c12', 'c21', 'c22', 'r1', 'r2', 't']);
+		const next = apply(src, {
+			kind: 'insert-table-column',
+			tableId: 't',
+			index: 1,
+			cells: [cell('n1', 'N'), cell('n2', 'M')] as Extract<Block, { type: 'table_cell' }>[]
+		});
+		expect(findKids(next, 'r1').map((b) => b.id)).toEqual(['c11', 'n1', 'c12']);
+		expect(findKids(next, 'r2').map((b) => b.id)).toEqual(['c21', 'n2', 'c22']);
+		expect(plaintextOf(findBlock(next, 'c11')!)).toBe('aa');
+		expect(plaintextOf(findBlock(next, 'c12')!)).toBe('bb');
+		expect(plaintextOf(findBlock(next, 'n1')!)).toBe('N');
+		for (const id of before) expect(findBlock(next, id)?.id).toBe(id);
+	});
+
+	it('insert-table-row inserts after the named row with caller-supplied ids', () => {
+		const src = grid();
+		const next = apply(src, {
+			kind: 'insert-table-row',
+			tableId: 't',
+			afterId: 'r1',
+			row: row('rN', [cell('n1', 'x'), cell('n2', 'y')]) as Extract<Block, { type: 'table_row' }>
+		});
+		expect(findKids(next, 't').map((b) => b.id)).toEqual(['r1', 'rN', 'r2']);
+		expect(findKids(next, 'rN').map((b) => b.id)).toEqual(['n1', 'n2']);
+		expect(findKids(next, 'r1').map((b) => b.id)).toEqual(['c11', 'c12']);
+	});
+
+	it('throws on an illegal Point on table offset !== 0', () => {
+		const src = grid();
+		expect(() =>
+			apply(src, { kind: 'insert-text', at: { blockId: 't', offset: 1 }, text: 'x' })
+		).toThrow(/unresolved Point/i);
+		expect(() =>
+			apply(src, { kind: 'insert-text', at: { blockId: 'r1', offset: 1 }, text: 'x' })
+		).toThrow(/unresolved Point/i);
+		expect(() =>
+			apply(src, {
+				kind: 'delete-range',
+				range: { anchor: { blockId: 't', offset: 1 }, head: { blockId: 't', offset: 1 } }
+			})
+		).toThrow(/unresolved Point/i);
+		expect(() =>
+			apply(src, { kind: 'insert-text', at: { blockId: 't', offset: 0 }, text: 'x' })
+		).toThrow(/atomic/i);
+	});
+
+	it('rejects convert/split/merge/insert-block into the grid', () => {
+		const src = grid();
+		expect(() => apply(src, { kind: 'convert-block', id: 'z', to: 'table' })).toThrow(/table/i);
+		expect(() => apply(src, { kind: 'convert-block', id: 'z', to: 'table_cell' })).toThrow(/table_cell/i);
+		expect(() => apply(src, { kind: 'convert-block', id: 'c11', to: 'paragraph' })).toThrow(/table_cell/i);
+		expect(() =>
+			apply(src, { kind: 'split-block', at: { blockId: 'c11', offset: 1 }, newId: 'n' })
+		).toThrow(/atomic/i);
+		expect(() => apply(src, { kind: 'merge-block', keepId: 'c11', dropId: 'c12' })).toThrow(/atomic/i);
+		expect(() =>
+			apply(src, { kind: 'insert-block', afterId: 'c11', parentId: 'r1', block: para('n', 'n') })
+		).toThrow(/callout or toggle/i);
+		expect(() =>
+			apply(src, {
+				kind: 'insert-block',
+				afterId: 'z',
+				block: row('rx', [cell('cx', 'x')])
+			})
+		).toThrow(/structural ops/i);
+		expect(() => apply(src, { kind: 'delete-block', id: 'r1' })).toThrow(/structural ops/i);
+		expect(() => apply(src, { kind: 'delete-block', id: 'c11' })).toThrow(/structural ops/i);
+		const oneRow = apply(src, { kind: 'delete-table-row', tableId: 't', rowId: 'r2' });
+		expect(() => apply(oneRow, { kind: 'delete-table-row', tableId: 't', rowId: 'r1' })).toThrow(
+			/at least one row/i
+		);
+		const oneCol = apply(src, { kind: 'delete-table-column', tableId: 't', index: 1 });
+		expect(() => apply(oneCol, { kind: 'delete-table-column', tableId: 't', index: 0 })).toThrow(
+			/at least one column/i
+		);
 	});
 });

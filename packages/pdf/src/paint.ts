@@ -8,6 +8,7 @@ function applyTransform(ctx: CanvasRenderingContext2D, t?: PdfTransform) {
 }
 
 function paintOne(ctx: CanvasRenderingContext2D, el: PdfIrElement) {
+	if (el.hidden) return;
 	ctx.save();
 	applyTransform(ctx, el.transform);
 	if ('opacity' in el && el.opacity != null && el.opacity !== 1) {
