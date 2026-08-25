@@ -30,7 +30,7 @@
 		rangeFromSelection,
 		restoreSelection
 	} from './selection.js';
-	import { redo, setSelection, undo, type EditorState } from './state.js';
+	import { applyEditorOps, redo, setSelection, undo, type EditorState } from './state.js';
 
 	let {
 		state: editor,
