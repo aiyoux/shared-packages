@@ -40,6 +40,28 @@ export type StackedProgress = {
 	hopNote?: string;
 };
 
+export function stagePercent(n: number, size: number, done: boolean): number {
+	if (!size) return done ? 100 : 0;
+	return Math.min(100, Math.round((n / size) * 100));
+}
+
+/** First-stage % on the left, second-stage % on the right. */
+export function stackedStageLabel(t: {
+	ahead: number;
+	behind: number;
+	size: number;
+	done: boolean;
+	status?: string;
+}): string {
+	if (t.status === 'failed') return 'Failed';
+	if (t.status === 'hashing') return 'Hashing…';
+	const first = stagePercent(t.ahead, t.size, t.done);
+	const second = stagePercent(t.behind, t.size, t.done);
+	if (first !== second) return `${first}% · ${second}%`;
+	if (t.done || (t.size > 0 && t.behind >= t.size)) return t.done ? 'Done' : 'Writing…';
+	return `${second}%`;
+}
+
 const STACK_LEGS = ['compress', 'remote', 'wire', 'decompress'] as const;
 type StackLeg = (typeof STACK_LEGS)[number];
 

@@ -266,6 +266,12 @@ export interface ExplorerDriver {
 		},
 		opts?: {
 			onProgress?: (transferred: number, total?: number) => void;
+			onEvent?: (ev: {
+				transferred: number;
+				size?: number;
+				done?: boolean;
+				phase?: string;
+			}) => void;
 			signal?: AbortSignal;
 		}
 	): Promise<void>;

@@ -39,6 +39,7 @@ export {
 	snapshotFiles,
 	nodesFromFiles,
 	OsDropError,
+	type OsDropFileProgress,
 	type OsDropNode
 } from './osDrop.js';
 export { formatExplorerError } from './explorerError.js';
@@ -95,6 +96,8 @@ export {
 } from '../disk/index.js';
 export {
 	stackTransferItems,
+	stackedStageLabel,
+	stagePercent,
 	type StackedProgress,
 	type StackProgressPhase
 } from './stackProgress.js';

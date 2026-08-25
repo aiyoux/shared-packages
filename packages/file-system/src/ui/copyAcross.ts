@@ -483,6 +483,8 @@ async function copyFile(
 	const opId = generateId('copy');
 	const known = entry.size ?? 0;
 	const dual = kind === 'dual-phase';
+	const splitPush = kind === 'delegated' && source.id === 'monitor' && dest.id === 'b2';
+	const dualLike = dual || splitPush;
 	const hop: CopyHop | undefined =
 		kind === 'idle' || kind === 'blocked' ? undefined : kind;
 	const remoteId = `${opId}:remote`;
@@ -513,14 +515,14 @@ async function copyFile(
 	};
 	const failAll = (err: unknown) => {
 		const msg = err instanceof Error ? err.message : String(err);
-		if (dual) {
+		if (dualLike) {
 			reportLeg(remoteId, entry.name, {
 				transferred: 0,
 				size: known,
 				done: true,
 				status: 'failed',
 				error: msg,
-				hop: 'dual-phase'
+				hop
 			});
 			reportLeg(wireId, entry.name, {
 				transferred: 0,
@@ -528,7 +530,7 @@ async function copyFile(
 				done: true,
 				status: 'failed',
 				error: msg,
-				hop: 'dual-phase'
+				hop
 			});
 		} else {
 			reportCopy(opId, entry, {
@@ -644,12 +646,51 @@ async function copyFile(
 					);
 				}
 				const upload = await dest.mintUploadUrl(destParentId, entry.name);
+				reportLeg(remoteId, entry.name, {
+					transferred: 0,
+					size: known,
+					status: 'active',
+					hop: 'delegated',
+					hopNote
+				});
+				reportLeg(wireId, entry.name, {
+					transferred: 0,
+					size: known,
+					status: 'active',
+					hop: 'delegated',
+					hopNote
+				});
+				let hashDone = false;
 				await source.pushToUpload(entry.id, upload, {
-					onProgress: (transferred, total) => {
-						reportCopy(opId, entry, {
-							transferred,
-							size: total ?? known ?? transferred,
-							status: 'active',
+					onEvent: (ev) => {
+						const size = ev.size ?? known ?? ev.transferred;
+						const phase = ev.phase;
+						const isHash = phase === 'hash' || (!phase && !hashDone && !ev.done);
+						if (isHash) {
+							reportLeg(remoteId, entry.name, {
+								transferred: ev.transferred,
+								size,
+								status: 'active',
+								hop: 'delegated',
+								hopNote
+							});
+							if (size > 0 && ev.transferred >= size) hashDone = true;
+							return;
+						}
+						hashDone = true;
+						reportLeg(remoteId, entry.name, {
+							transferred: size,
+							size,
+							done: true,
+							status: 'done',
+							hop: 'delegated',
+							hopNote
+						});
+						reportLeg(wireId, entry.name, {
+							transferred: ev.transferred,
+							size,
+							done: ev.done === true,
+							status: ev.done ? 'done' : 'active',
 							hop: 'delegated',
 							hopNote
 						});
@@ -658,14 +699,33 @@ async function copyFile(
 			} else {
 				throw new CopyAcrossError('COPY_ACROSS_NO_DEST', 'Unsupported delegated pair');
 			}
-			reportCopy(opId, entry, {
-				transferred: known || 1,
-				size: known || 1,
-				done: true,
-				status: 'done',
-				hop: 'delegated',
-				hopNote
-			});
+			if (splitPush) {
+				reportLeg(remoteId, entry.name, {
+					transferred: known || 1,
+					size: known || 1,
+					done: true,
+					status: 'done',
+					hop: 'delegated',
+					hopNote
+				});
+				reportLeg(wireId, entry.name, {
+					transferred: known || 1,
+					size: known || 1,
+					done: true,
+					status: 'done',
+					hop: 'delegated',
+					hopNote
+				});
+			} else {
+				reportCopy(opId, entry, {
+					transferred: known || 1,
+					size: known || 1,
+					done: true,
+					status: 'done',
+					hop: 'delegated',
+					hopNote
+				});
+			}
 			return;
 		} catch (e) {
 			failAll(e);

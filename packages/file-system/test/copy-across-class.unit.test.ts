@@ -804,8 +804,59 @@ describe('classify copy-across routing', () => {
 			assert.equal('applicationKeyId' in m, false);
 		}
 		const copies = listTransfers().filter((t) => t.direction === 'copying');
-		assert.equal(copies.some((t) => t.id.endsWith(':remote')), false);
 		assert.equal(copies.some((t) => t.hop === 'delegated'), true);
+		assert.ok(copies.some((t) => t.id.endsWith(':remote')));
+		assert.ok(copies.some((t) => t.id.endsWith(':wire')));
+	});
+
+	it('monitor → B2 push splits hash vs upload into stacked legs', async () => {
+		resetTransferRegistryForTests();
+		const file = fileEntry('clip.wav', 100);
+		const b2 = {
+			id: 'b2',
+			connectionId: 'b2:a',
+			endpointKey: 'b2:key::shots',
+			capabilities: { supportsUpload: true },
+			async mintUploadUrl() {
+				return {
+					uploadUrl: 'https://pod.example/u',
+					authorizationToken: 'tok',
+					destFileName: 'clip.wav'
+				};
+			},
+			async upload() {
+				throw new Error('must not browser-upload for delegated push');
+			}
+		} as unknown as ExplorerDriver;
+		const mon = {
+			id: 'monitor',
+			connectionId: 'monitor:p1',
+			endpointKey: 'monitor:http://127.0.0.1:8300',
+			capabilities: { supportsUpload: true },
+			async pushToUpload(_id: string, _up: unknown, opts?: { onEvent?: (ev: { transferred: number; size?: number; done?: boolean; phase?: string }) => void }) {
+				opts?.onEvent?.({ transferred: 40, size: 100, phase: 'hash' });
+				opts?.onEvent?.({ transferred: 100, size: 100, phase: 'hash' });
+				opts?.onEvent?.({ transferred: 0, size: 100, phase: 'upload' });
+				opts?.onEvent?.({ transferred: 55, size: 100, phase: 'upload' });
+				opts?.onEvent?.({ transferred: 100, size: 100, phase: 'upload', done: true });
+			}
+		} as unknown as ExplorerDriver;
+		await copyAcross({
+			sourceDriver: mon,
+			destDriver: b2,
+			selectedIds: [file.id],
+			sourceEntries: [file],
+			destParentId: null
+		});
+		const copies = listTransfers().filter((t) => t.direction === 'copying');
+		const remote = copies.find((t) => t.id.endsWith(':remote'));
+		const wire = copies.find((t) => t.id.endsWith(':wire'));
+		assert.ok(remote);
+		assert.ok(wire);
+		assert.equal(remote!.done, true);
+		assert.equal(remote!.transferred, 100);
+		assert.equal(wire!.done, true);
+		assert.equal(wire!.transferred, 100);
 	});
 
 	it('two monitors different ek → webrtc', () => {

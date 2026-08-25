@@ -6,6 +6,7 @@
  */
 import type { RcloneCallResult, RcloneTransport } from './rcloneSimulator.js';
 import { mapRcloneError } from './errors.js';
+import { xhrPostForm } from '../uploadProgress.js';
 
 /** @deprecated Proxy paths unused in direct mode; kept for API compatibility. */
 export type RcloneProxyPaths = {
@@ -101,13 +102,32 @@ export function createRcClient(opts: CreateRcClientOptions): RcloneTransport {
 									: uploadOpts.body
 							] as BlobPart[]);
 				form.set('file', blob, 'upload.bin');
-				const res = await fetchFn(rcEndpoint(base, 'operations/uploadfile'), {
-					method: 'POST',
-					headers: { Authorization: auth },
-					body: form,
-					signal: uploadOpts.signal
-				});
-				uploadOpts.onProgress?.(1);
+				const url = rcEndpoint(base, 'operations/uploadfile');
+				let res: {
+					ok: boolean;
+					status: number;
+					statusText: string;
+					text: () => Promise<string>;
+					json: () => Promise<unknown>;
+					headers: { get(name: string): string | null };
+				};
+				if (uploadOpts.onProgress && typeof XMLHttpRequest !== 'undefined') {
+					res = await xhrPostForm({
+						url,
+						form,
+						headers: { Authorization: auth },
+						signal: uploadOpts.signal,
+						onProgress: uploadOpts.onProgress
+					});
+				} else {
+					res = await fetchFn(url, {
+						method: 'POST',
+						headers: { Authorization: auth },
+						body: form,
+						signal: uploadOpts.signal
+					});
+					uploadOpts.onProgress?.(1);
+				}
 				if (!res.ok) {
 					const text = await res.text().catch(() => '');
 					const err = new Error(text || res.statusText) as Error & { status: number };

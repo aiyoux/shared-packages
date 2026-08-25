@@ -338,7 +338,11 @@ export async function createMonitorExplorerDriver(
 						fileName: upload.destFileName,
 						contentType: upload.contentType
 					},
-					{ signal: opts?.signal, onProgress: opts?.onProgress }
+					{
+						signal: opts?.signal,
+						onProgress: opts?.onProgress,
+						onEvent: opts?.onEvent
+					}
 				);
 			} catch (e) {
 				throw mapMonitorError(e);

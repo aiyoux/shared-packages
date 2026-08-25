@@ -44,8 +44,15 @@
 		collectOsDrop,
 		importOsDropToDriver,
 		snapshotFiles,
+		type OsDropFileProgress,
 		type OsDropNode
 	} from './osDrop.js';
+	import {
+		mergeListingWithPending,
+		pendingLabel,
+		pendingPercent,
+		type ListingPending
+	} from './listingPending.js';
 	import { formatExplorerError } from './explorerError.js';
 	import { generateId } from '../id.js';
 	import {
@@ -140,6 +147,8 @@
 			direction?: string;
 			/** Leading leg — downloaded / ready (translucent fill). Defaults to transferred. */
 			ready?: number;
+			status?: string;
+			done?: boolean;
 		}>;
 		/** Hide the toolbar Trash button (popup listing). Default shows it when supportsTrash. */
 		hideToolbarTrash?: boolean;
@@ -304,15 +313,9 @@
 	/** Set while a "download selected" pass is triggering browser downloads. */
 	let downloadBusy = $state(false);
 	/** In-list progress for save-to-PC when we stream instead of a native GET. */
-	let saveOps = $state<
-		Array<{
-			id: string;
-			name: string;
-			transferred: number;
-			size: number;
-			direction?: string;
-		}>
-	>([]);
+	let saveOps = $state<ListingPending[]>([]);
+	/** OS / picker uploads into this listing (one row per file, merged by name). */
+	let inboundOps = $state<ListingPending[]>([]);
 	/** True until the first list() completes (empty shell only). */
 	let initialLoad = $state(true);
 
@@ -1699,7 +1702,8 @@
 	const supportsDownload = $derived(
 		Boolean((driver.download || driver.downloadUrl) && caps.supportsDownload)
 	);
-	const listPending = $derived([...pending, ...saveOps]);
+	const listPending = $derived([...pending, ...saveOps, ...inboundOps]);
+	const listingRows = $derived(mergeListingWithPending(nodes, listPending, parentId));
 	/** Enabled only when at least one selected row is a downloadable file. */
 	const canDownloadSelection = $derived(selectedEntries.some((e) => e.kind === 'file'));
 
@@ -1924,20 +1928,42 @@
 	});
 
 	async function importOsNodes(
-		pending: Promise<OsDropNode[]>,
+		dropNodes: Promise<OsDropNode[]>,
 		destParentId: string | null = parentId
 	) {
 		if (!(driver.upload || driver.writeFile)) return;
 		uploadBusy = true;
 		error = '';
+		const ids: string[] = [];
+		const idByName = new Map<string, string>();
+		const bump = (ev: OsDropFileProgress) => {
+			let id = idByName.get(ev.name);
+			if (!id) {
+				id = generateId('osdrop');
+				idByName.set(ev.name, id);
+				ids.push(id);
+			}
+			const row: ListingPending = {
+				id,
+				name: ev.name,
+				transferred: ev.transferred,
+				size: ev.size,
+				direction: 'receiving',
+				done: ev.done
+			};
+			inboundOps = inboundOps.some((o) => o.id === id)
+				? inboundOps.map((o) => (o.id === id ? row : o))
+				: [...inboundOps, row];
+		};
 		try {
-			const nodes = await pending;
-			if (!nodes.length) return;
-			await importOsDropToDriver(driver, destParentId, nodes);
+			const incoming = await dropNodes;
+			if (!incoming.length) return;
+			await importOsDropToDriver(driver, destParentId, incoming, { onFile: bump });
 			await refresh();
 		} catch (e) {
 			reportError(e);
 		} finally {
+			inboundOps = inboundOps.filter((o) => !ids.includes(o.id));
 			uploadBusy = false;
 		}
 	}
@@ -2478,55 +2504,43 @@
 		ondragleave={onListDragLeave}
 		ondrop={onListDrop}
 	>
-		{#if listPending.length > 0}
-			<div class="fe-pending-list" data-testid="fe-pending-list">
-				{#each listPending as p (p.id)}
-					{@const behindPct = Math.min(100, Math.round(p.size ? (p.transferred / p.size) * 100 : 0))}
-					{@const aheadN = p.ready ?? p.transferred}
-					{@const aheadPct = Math.min(100, Math.round(p.size ? (aheadN / p.size) * 100 : 0))}
-					{@const stacked = aheadPct !== behindPct}
-					<div
-						class="fe-row fe-pending"
-						data-testid="fe-pending-row"
-						data-pending-name={p.name}
-						aria-disabled="true"
-					>
-						<span class="fe-icon">
-							<FeIcon name={p.direction === 'sending' ? 'upload' : 'download'} size={16} />
-						</span>
-						<span class="fe-name" title={p.name}>{p.name}</span>
-						<div
-							class="fe-pending-bar"
-							role="progressbar"
-							aria-valuenow={behindPct}
-							aria-valuemin="0"
-							aria-valuemax="100"
-							aria-label={stacked
-								? `${p.name}: ${behindPct}% transferred, ${aheadPct}% ready`
-								: undefined}
-						>
-							{#if stacked}
-								<div class="fe-pending-fill ahead" style="width: {aheadPct}%"></div>
-							{/if}
-							<div class="fe-pending-fill" class:behind={stacked} style="width: {behindPct}%"></div>
-						</div>
-						<span class="fe-pending-pct">{behindPct}%</span>
-					</div>
-				{/each}
+		{#snippet pendingChrome(p: ListingPending)}
+			{@const behindPct = pendingPercent(p)}
+			{@const aheadN = p.ready ?? p.transferred}
+			{@const aheadPct = Math.min(100, Math.round(p.size ? (aheadN / p.size) * 100 : behindPct))}
+			{@const stacked = aheadPct !== behindPct}
+			<div
+				class="fe-pending-bar"
+				role="progressbar"
+				aria-valuenow={behindPct}
+				aria-valuemin="0"
+				aria-valuemax="100"
+				aria-label={`${p.name}: ${pendingLabel(p)}`}
+			>
+				<div class="fe-pending-fill ahead" style="width: {aheadPct}%"></div>
+				<div class="fe-pending-fill behind" class:behind={stacked} style="width: {behindPct}%"></div>
 			</div>
-		{/if}
-		{#if initialLoad && nodes.length === 0}
+			<span class="fe-pending-pct">{pendingLabel(p)}</span>
+		{/snippet}
+		{#if initialLoad && nodes.length === 0 && listingRows.length === 0}
 			<div class="fe-empty" data-testid="fe-loading">Loading…</div>
-		{:else if nodes.length === 0 && listPending.length === 0}
+		{:else if listingRows.length === 0}
 			<div class="fe-empty" data-testid="fe-empty">
 				No files here
 			</div>
 		{:else}
-			{#each nodes as n, i (n.id)}
-				{@const actionable = rowActionable(n)}
+			{#each listingRows as row (row.key)}
+				{@const n = row.node}
+				{@const i = row.nodeIndex ?? -1}
+				{@const p = row.pending}
+				{@const actionable = !row.placeholder && rowActionable(n)}
 				{@const showInto =
-					dndEnabled && dndTargetId === n.id && dndZone === 'into' && n.kind === 'folder'}
-				{@const previewKind = showPreview ? getPreviewKind(n) : null}
+					!row.placeholder &&
+					dndEnabled &&
+					dndTargetId === n.id &&
+					dndZone === 'into' &&
+					n.kind === 'folder'}
+				{@const previewKind = !row.placeholder && showPreview ? getPreviewKind(n) : null}
 				<!-- svelte-ignore a11y_click_events_have_key_events -->
 				<!-- svelte-ignore a11y_no_static_element_interactions -->
 				<div
@@ -2534,33 +2548,39 @@
 					class:folder={n.kind === 'folder'}
 					class:file={n.kind === 'file'}
 					class:incompatible={!actionable && n.kind === 'file'}
-					class:selected={selected.has(n.id)}
-					class:previewed={previewEntry?.id === n.id}
-					class:focused={i === focusIndex}
+					class:selected={!row.placeholder && selected.has(n.id)}
+					class:previewed={!row.placeholder && previewEntry?.id === n.id}
+					class:focused={!row.placeholder && i === focusIndex}
 					class:fe-dnd-into={showInto}
-					class:fe-dnd-dragging={dndDraggingIds.has(n.id)}
+					class:fe-dnd-dragging={!row.placeholder && dndDraggingIds.has(n.id)}
 					class:fe-row-icon={viewMode === 'icons'}
 					class:fe-row-detailed={viewMode === 'detailed'}
-					class:renaming={renamingId === n.id}
-					data-testid={n.kind === 'folder' ? 'fe-folder-row' : 'fe-file-row'}
-					data-fe-row-id={n.id}
+					class:renaming={!row.placeholder && renamingId === n.id}
+					class:fe-pending={Boolean(p)}
+					data-testid={row.placeholder
+						? 'fe-pending-row'
+						: n.kind === 'folder'
+							? 'fe-folder-row'
+							: 'fe-file-row'}
+					data-pending-name={p?.name ?? undefined}
+					data-fe-row-id={row.placeholder ? undefined : n.id}
 					data-fe-parent-id={n.parentId ?? ''}
 					data-fe-kind={n.kind}
 					data-fe-sort-order={n.sortOrder ?? ''}
 					data-file-type={n.fileType ?? ''}
-					data-id={n.id}
+					data-id={row.placeholder ? undefined : n.id}
 					data-name={n.name}
-					draggable={dragOutEnabled}
-					aria-disabled={!actionable && n.kind === 'file' ? 'true' : undefined}
-					aria-selected={selected.has(n.id) || i === focusIndex}
+					draggable={!row.placeholder && dragOutEnabled}
+					aria-disabled={row.placeholder || (!actionable && n.kind === 'file') ? 'true' : undefined}
+					aria-selected={!row.placeholder && (selected.has(n.id) || i === focusIndex)}
 					role="option"
 					tabindex="-1"
-					ondragstart={(e) => onRowDragStart(e, n)}
-					ondragover={(e) => onRowDragOver(e, n)}
-					ondrop={(e) => onRowDrop(e, n)}
-					ondragend={onRowDragEnd}
-					onpointerdown={(e) => onRowPointerDown(e, n, i)}
-					onpointerup={(e) => onRowPointerUp(e, n)}
+					ondragstart={row.placeholder ? undefined : (e) => onRowDragStart(e, n)}
+					ondragover={row.placeholder ? undefined : (e) => onRowDragOver(e, n)}
+					ondrop={row.placeholder ? undefined : (e) => onRowDrop(e, n)}
+					ondragend={row.placeholder ? undefined : onRowDragEnd}
+					onpointerdown={row.placeholder || i < 0 ? undefined : (e) => onRowPointerDown(e, n, i)}
+					onpointerup={row.placeholder ? undefined : (e) => onRowPointerUp(e, n)}
 					onpointercancel={() => {
 						press = null;
 						if (longPressTimer) {
@@ -2571,8 +2591,8 @@
 					oncontextmenu={(e) => {
 						if (pointerDragActive || longPressTimer) e.preventDefault();
 					}}
-					onclick={(e) => onRowClick(e, n, i)}
-					ondblclick={(e) => onRowDblClick(e, n, i)}
+					onclick={row.placeholder || i < 0 ? undefined : (e) => onRowClick(e, n, i)}
+					ondblclick={row.placeholder || i < 0 ? undefined : (e) => onRowDblClick(e, n, i)}
 				>
 					{#if viewMode === 'icons'}
 						<span class="fe-row-icon-thumb">
@@ -2622,6 +2642,9 @@
 								>
 							{/if}
 						</span>
+					{/if}
+					{#if p}
+						{@render pendingChrome(p)}
 					{/if}
 				</div>
 			{/each}
@@ -3490,20 +3513,30 @@
 		opacity: 0.65;
 		cursor: default;
 	}
+	.fe-row-icon.fe-pending .fe-pending-bar {
+		flex: 1 1 100%;
+		width: 100%;
+		order: 3;
+	}
+	.fe-row-icon.fe-pending .fe-pending-pct {
+		order: 4;
+	}
 	.fe-row.fe-pending:hover {
 		background: transparent;
 	}
 	.fe-pending-bar {
 		position: relative;
-		flex: 0 1 120px;
+		flex: 1 1 72px;
+		min-width: 56px;
+		max-width: 140px;
 		height: 6px;
-		background: rgb(var(--overlay-rgb) / 0.08);
+		background: color-mix(in srgb, var(--text-primary, #e2e8f0) 14%, transparent);
 		border-radius: 999px;
 		overflow: hidden;
 	}
 	.fe-pending-fill {
 		height: 100%;
-		background: var(--accent);
+		background: var(--accent, #38bdf8);
 		border-radius: 999px;
 		transition: width 150ms ease;
 	}
@@ -3513,10 +3546,10 @@
 		inset: 0 auto 0 0;
 	}
 	.fe-pending-fill.ahead {
-		background: rgb(var(--accent-rgb) / 0.35);
+		background: color-mix(in srgb, var(--accent, #38bdf8) 40%, transparent);
 	}
 	.fe-pending-fill.behind {
-		background: var(--accent);
+		background: var(--accent, #38bdf8);
 	}
 	.fe-pending-pct {
 		font-size: 0.72rem;

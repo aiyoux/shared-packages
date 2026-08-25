@@ -31,10 +31,16 @@
 	import { onMount, onDestroy } from 'svelte';
 	import { default as FileExplorer, type ExplorerContext, type ExplorerMode } from './FileExplorer.svelte';
 	import type { FileTypeId } from '../types.js';
-	import OpProgressPopup from './OpProgressPopup.svelte';
+	import CopyProgressHeader from './CopyProgressHeader.svelte';
 	import DualPhaseConfirm from './DualPhaseConfirm.svelte';
 	import { stackTransferItems } from './stackProgress.js';
-	import { listTransfers, subscribeTransfers, type TransferItem } from '../transferRegistry.js';
+	import {
+		listTransfers,
+		subscribeTransfers,
+		upsertProgress,
+		type TransferItem
+	} from '../transferRegistry.js';
+	import { generateId } from '../id.js';
 	import {
 		type ExplorerDriver,
 		type ExplorerEntry,
@@ -65,7 +71,12 @@
 		dataTransferHasOsFiles,
 		dataTransferHasExplorerIds
 	} from './copyAcross.js';
-	import { collectOsDrop, importOsDropToDriver, type OsDropNode } from './osDrop.js';
+	import {
+		collectOsDrop,
+		importOsDropToDriver,
+		type OsDropFileProgress,
+		type OsDropNode
+	} from './osDrop.js';
 	import { formatExplorerError } from './explorerError.js';
 	import {
 		setCrossWindowDrag,
@@ -198,6 +209,8 @@
 			size: number;
 			direction?: string;
 			ready?: number;
+			status?: string;
+			done?: boolean;
 		}>;
 		pendingRight?: Array<{
 			id: string;
@@ -206,6 +219,8 @@
 			size: number;
 			direction?: string;
 			ready?: number;
+			status?: string;
+			done?: boolean;
 		}>;
 		/** Notified when dual-pane toggles (so a page can widen its shell). */
 		onDualChange?: (dual: boolean) => void;
@@ -541,7 +556,9 @@
 				transferred: t.behind,
 				size: t.size || Math.max(t.ahead, 1),
 				ready: t.ahead,
-				direction: 'receiving' as const
+				direction: 'receiving' as const,
+				status: t.status,
+				done: t.done
 			}))
 	);
 
@@ -975,10 +992,27 @@
 		copyBusy = true;
 		copyDestPane = id;
 		const parent = destParentId !== undefined ? destParentId : p.ctx.parentId;
+		const idByName = new Map<string, string>();
+		const bump = (ev: OsDropFileProgress) => {
+			let opId = idByName.get(ev.name);
+			if (!opId) {
+				opId = generateId('osdrop');
+				idByName.set(ev.name, opId);
+			}
+			upsertProgress({
+				id: opId,
+				name: ev.name,
+				size: ev.size,
+				transferred: ev.transferred,
+				direction: 'copying',
+				done: ev.done,
+				status: ev.done ? 'done' : 'active'
+			});
+		};
 		try {
 			const nodes = await pending;
 			if (!nodes.length) return;
-			await importOsDropToDriver(drv, parent, nodes);
+			await importOsDropToDriver(drv, parent, nodes, { onFile: bump });
 			if (!drv.subscribeChanges) {
 				setPane(id, { explorerKey: p.explorerKey + 1 });
 			}
@@ -1725,6 +1759,11 @@
 			class:portaled={Boolean(layoutPortal)}
 			use:portal={layoutPortal || undefined}
 		>
+			<CopyProgressHeader
+				items={visibleCopyItems}
+				onDismiss={dismissCopy}
+				onDismissAll={dismissAllSettledCopy}
+			/>
 			<div
 				class="ds-seg dpe-layout"
 				class:portaled={Boolean(layoutPortal)}
@@ -1821,11 +1860,6 @@
 			</div>
 		{/if}
 	</div>
-	<OpProgressPopup
-		items={visibleCopyItems}
-		onDismiss={dismissCopy}
-		onDismissAll={dismissAllSettledCopy}
-	/>
 	{#if dualPhasePrompt}
 		<DualPhaseConfirm
 			sourceLabel={dualPhasePrompt.sourceLabel}
@@ -1852,8 +1886,12 @@
 	.dpe-layout-cluster {
 		display: flex;
 		align-items: center;
-		gap: 0.15rem;
+		gap: 0.5rem;
 		min-width: 0;
+	}
+	.dpe-layout-cluster :global(.dpe-copy-chip) {
+		flex: 0 1 16rem;
+		min-width: 9rem;
 	}
 	.dpe-host-settings-park.parked {
 		position: absolute;

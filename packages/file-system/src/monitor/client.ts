@@ -7,6 +7,7 @@
  * additionally annotated for Local Network Access — see `./localNetwork`.
  */
 import { blobFromResponse } from '../readProgress.js';
+import { fetchPutBlob } from '../uploadProgress.js';
 import { withLocalAddressSpace } from './localNetwork';
 import { openJsonSse } from './sse.js';
 
@@ -101,6 +102,8 @@ export type MonitorNdjsonEvent = {
 	error?: string;
 	ice?: 'checking' | 'connected' | 'failed';
 	icePath?: 'host' | 'stun';
+	/** Push: `hash` while SHA1-reading the source, `upload` while PUTting to B2. */
+	phase?: 'hash' | 'upload' | string;
 };
 
 export type MonitorWebrtcRole = 'offerer' | 'answerer';
@@ -195,6 +198,7 @@ export type MonitorTransport = {
 		opts?: {
 			signal?: AbortSignal;
 			onProgress?: (transferred: number, total?: number) => void;
+			onEvent?: (ev: MonitorNdjsonEvent) => void;
 		}
 	): Promise<void>;
 	webrtcCreateJob(body: {
@@ -833,15 +837,15 @@ export function createMonitorClient(opts: {
 			opts?.signal?.addEventListener('abort', onAbort);
 			const url = joinUrl(base, `/v1/fs/write?path=${encodeURIComponent(path)}`);
 			try {
-				const res = await fetchFn(
+				const res = await fetchPutBlob({
 					url,
-					withLocalAddressSpace(url, {
-						method: 'PUT',
-						headers: { 'content-type': body.type || 'application/octet-stream' },
-						body,
-						signal: ac.signal
-					})
-				);
+					body,
+					headers: { 'content-type': body.type || 'application/octet-stream' },
+					signal: ac.signal,
+					onProgress: opts?.onProgress,
+					fetchImpl: fetchFn,
+					extraInit: withLocalAddressSpace(url, { method: 'PUT' })
+				});
 				const parsed = await res.json().catch(() => ({}));
 				if (!res.ok) {
 					const err = (parsed as { error?: { message?: string } | string }).error;
@@ -903,6 +907,7 @@ export function createMonitorClient(opts: {
 				timeoutMs: 0,
 				signal: opts?.signal,
 				onProgress: opts?.onProgress,
+				onEvent: opts?.onEvent,
 				failLabel: 'Push',
 				timeoutLabel: 'push'
 			});

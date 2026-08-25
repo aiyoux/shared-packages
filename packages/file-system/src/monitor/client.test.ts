@@ -147,6 +147,33 @@ describe('monitor client (direct transport)', () => {
 		);
 	});
 
+	it('reports PUT /v1/fs/write progress while sending the body', async () => {
+		const ticks: Array<[number, number]> = [];
+		const mockFetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+			const url = String(input);
+			expect(url).toContain('/v1/fs/write');
+			const body = init?.body;
+			if (body && typeof (body as ReadableStream).getReader === 'function') {
+				const reader = (body as ReadableStream<Uint8Array>).getReader();
+				while (true) {
+					const { done } = await reader.read();
+					if (done) break;
+				}
+			}
+			return jsonResponse({ name: 'a.bin', path: '/tmp/a.bin', kind: 'file', size: 4 });
+		});
+		const client = createMonitorClient({
+			baseUrl: 'http://127.0.0.1:8300',
+			fetchImpl: mockFetch as unknown as typeof fetch
+		});
+		await client.write('/tmp/a.bin', new Blob([new Uint8Array([1, 2, 3, 4])]), {
+			onProgress: (n, total) => ticks.push([n, total ?? n])
+		});
+		expect(ticks[0]).toEqual([0, 4]);
+		expect(ticks[ticks.length - 1]).toEqual([4, 4]);
+		expect(ticks.length).toBeGreaterThan(1);
+	});
+
 	it('openHostEvents and openGitEvents parse SSE snapshots', async () => {
 		const encoder = new TextEncoder();
 		const openSse = (event: string, payload: unknown) => {

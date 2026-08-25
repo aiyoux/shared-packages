@@ -236,6 +236,13 @@ export class OsDropError extends Error {
 	}
 }
 
+export type OsDropFileProgress = {
+	name: string;
+	size: number;
+	transferred: number;
+	done: boolean;
+};
+
 /**
  * Recreate a dropped file/folder tree on any explorer backend.
  * Requires `mkdir` when the drop contains nested paths.
@@ -243,7 +250,8 @@ export class OsDropError extends Error {
 export async function importOsDropToDriver(
 	driver: ExplorerDriver,
 	destParentId: ExplorerEntryId | null,
-	nodes: OsDropNode[]
+	nodes: OsDropNode[],
+	opts?: { onFile?: (ev: OsDropFileProgress) => void }
 ): Promise<{ files: number; folders: number }> {
 	const put = driver.upload ?? driver.writeFile;
 	if (!put) {
@@ -287,7 +295,22 @@ export async function importOsDropToDriver(
 		const slash = n.relativePath.lastIndexOf('/');
 		const dir = slash >= 0 ? n.relativePath.slice(0, slash) : '';
 		const parentId = await ensureFolder(dir);
-		await put(parentId, n.file);
+		const file = n.file;
+		const size = file.size;
+		const name = file.name;
+		opts?.onFile?.({ name, size, transferred: 0, done: false });
+		if (typeof driver.upload === 'function') {
+			await driver.upload(parentId, file, {
+				onProgress: (pct) => {
+					const transferred = Math.round(size * Math.min(1, Math.max(0, pct)));
+					opts?.onFile?.({ name, size, transferred, done: false });
+				}
+			});
+		} else {
+			await driver.writeFile!(parentId, file);
+			opts?.onFile?.({ name, size, transferred: size, done: false });
+		}
+		opts?.onFile?.({ name, size, transferred: size, done: true });
 		files += 1;
 	}
 	return { files, folders };

@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { stackTransferItems } from '../src/ui/stackProgress.ts';
+import { stackTransferItems, stackedStageLabel } from '../src/ui/stackProgress.ts';
 import type { TransferItem } from '../src/transferRegistry.ts';
 
 function item(partial: Partial<TransferItem> & Pick<TransferItem, 'id' | 'name'>): TransferItem {
@@ -200,5 +200,13 @@ describe('stackTransferItems', () => {
 		assert.equal(rows[0]!.phase, 'compress');
 		assert.equal(rows[0]!.streamedBytes, 1_200_000);
 		assert.equal(rows[0]!.size, 40_000_000);
+	});
+
+	it('labels first-stage percent on the left of the second stage', () => {
+		const stacked = stackTransferItems([
+			item({ id: 'opA:remote', name: 'Download · monitor', transferred: 100, size: 100 }),
+			item({ id: 'opA:wire', name: 'clip.wav', transferred: 0, size: 100 })
+		]);
+		assert.equal(stackedStageLabel(stacked[0]!), '100% · 0%');
 	});
 });

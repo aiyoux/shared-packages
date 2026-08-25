@@ -106,7 +106,10 @@ describe('os folder drop', () => {
 				file: new File(['snap'], 'shot.txt', { type: 'text/plain' })
 			}
 		];
-		const r = await importOsDropToDriver(drv, null, nodes);
+		const ticks: Array<{ name: string; transferred: number; done: boolean }> = [];
+		const r = await importOsDropToDriver(drv, null, nodes, {
+			onFile: (ev) => ticks.push({ name: ev.name, transferred: ev.transferred, done: ev.done })
+		});
 		assert.equal(r.folders, 2);
 		assert.equal(r.files, 1);
 		assert.deepEqual(drv.mkdirs, [
@@ -117,6 +120,34 @@ describe('os folder drop', () => {
 		assert.equal(drv.writes[0].parentId, 'd2');
 		assert.equal(drv.writes[0].name, 'shot.txt');
 		assert.equal(drv.writes[0].text, 'snap');
+		assert.ok(ticks[0] && ticks[0].transferred === 0 && ticks[0].done === false);
+		assert.ok(ticks.some((t) => t.done && t.name === 'shot.txt' && t.transferred === 4));
+	});
+
+	it('importOsDropToDriver reports upload onProgress for remotes', async () => {
+		const pcts: number[] = [];
+		const files: Array<{ name: string; transferred: number; done: boolean }> = [];
+		const drv = mockDriver();
+		drv.upload = async (_parentId, file, opts) => {
+			opts?.onProgress?.(0.4);
+			pcts.push(0.4);
+			opts?.onProgress?.(1);
+			pcts.push(1);
+			drv.writes.push({ parentId: _parentId, name: file.name, text: await file.text() });
+			return { id: 'u1', parentId: _parentId, name: file.name, kind: 'file' };
+		};
+		await importOsDropToDriver(
+			drv,
+			null,
+			[{ relativePath: 'from-pc.bin', kind: 'file', file: new File(['abcd'], 'from-pc.bin') }],
+			{
+				onFile: (ev) =>
+					files.push({ name: ev.name, transferred: ev.transferred, done: ev.done })
+			}
+		);
+		assert.deepEqual(pcts, [0.4, 1]);
+		assert.ok(files.some((f) => f.transferred === 2 && !f.done));
+		assert.ok(files.some((f) => f.transferred === 4 && f.done));
 	});
 
 	it('importOsDropToDriver rejects nested drops when mkdir is missing', async () => {

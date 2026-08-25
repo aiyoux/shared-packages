@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/svelte';
-import OpProgressPopup from '../src/ui/OpProgressPopup.svelte';
+import CopyProgressHeader from '../src/ui/CopyProgressHeader.svelte';
 import type { TransferItem } from '../src/transferRegistry.ts';
 
 function item(partial: Partial<TransferItem> & Pick<TransferItem, 'id' | 'name'>): TransferItem {
@@ -14,9 +14,9 @@ function item(partial: Partial<TransferItem> & Pick<TransferItem, 'id' | 'name'>
 	};
 }
 
-describe('OpProgressPopup stacked bar', () => {
-	it('renders one row for :remote + :wire with both fills', () => {
-		render(OpProgressPopup, {
+describe('CopyProgressHeader', () => {
+	it('renders one chip for :remote + :wire with first-stage % on the left', () => {
+		render(CopyProgressHeader, {
 			props: {
 				items: [
 					item({ id: 'op1:remote', name: 'Download · B2', transferred: 80, size: 100 }),
@@ -27,13 +27,13 @@ describe('OpProgressPopup stacked bar', () => {
 		const rows = screen.getAllByTestId('fe-op-progress-row');
 		expect(rows).toHaveLength(1);
 		expect(rows[0]!.textContent).toMatch(/photo\.jpg/);
-		expect(rows[0]!.textContent).toMatch(/30% sent · 80% ready/);
-		expect(rows[0]!.querySelector('.op-fill.ahead')).toBeTruthy();
-		expect(rows[0]!.querySelector('.op-fill.behind')).toBeTruthy();
+		expect(rows[0]!.textContent).toMatch(/80% · 30%/);
+		expect(rows[0]!.querySelector('.fill.ahead')).toBeTruthy();
+		expect(rows[0]!.querySelector('.fill.behind')).toBeTruthy();
 	});
 
 	it('surfaces hop and ice on the row', () => {
-		render(OpProgressPopup, {
+		render(CopyProgressHeader, {
 			props: {
 				items: [
 					item({
@@ -50,10 +50,10 @@ describe('OpProgressPopup stacked bar', () => {
 		const row = screen.getByTestId('fe-op-progress-row');
 		expect(row.getAttribute('data-copy-hop')).toBe('webrtc');
 		expect(row.getAttribute('data-ice')).toBe('checking');
-		expect(row.textContent).toMatch(/WebRTC \(connecting\)/);
+		expect(row.getAttribute('title')).toMatch(/WebRTC \(connecting\)/);
 	});
 
-	it('labels server / delegated / host / STUN / failed fallback', () => {
+	it('puts hop notes on the chip title', () => {
 		const cases: Array<{ hop: TransferItem['hop']; ice?: TransferItem['ice']; icePath?: TransferItem['icePath']; hopNote?: string; text: string }> = [
 			{ hop: 'server', text: 'Server copy' },
 			{ hop: 'delegated', hopNote: 'Monitor ← B2', text: 'Monitor ← B2' },
@@ -64,7 +64,7 @@ describe('OpProgressPopup stacked bar', () => {
 			{ hop: 'direct', text: 'Through this device' }
 		];
 		for (const c of cases) {
-			const { unmount } = render(OpProgressPopup, {
+			const { unmount } = render(CopyProgressHeader, {
 				props: {
 					items: [
 						item({
@@ -80,14 +80,15 @@ describe('OpProgressPopup stacked bar', () => {
 					]
 				}
 			});
-			expect(screen.getByTestId('fe-op-progress-row').textContent).toContain(c.text);
+			expect(screen.getByTestId('fe-op-progress-row').getAttribute('title')).toContain(c.text);
 			unmount();
 		}
 	});
 
-	it('dismisses both stacked ids', async () => {
+	it('opens a dropdown to dismiss stacked ids and clear finished', async () => {
 		const onDismiss = vi.fn();
-		render(OpProgressPopup, {
+		const onDismissAll = vi.fn();
+		render(CopyProgressHeader, {
 			props: {
 				items: [
 					item({
@@ -107,10 +108,14 @@ describe('OpProgressPopup stacked bar', () => {
 						status: 'done'
 					})
 				],
-				onDismiss
+				onDismiss,
+				onDismissAll
 			}
 		});
+		await fireEvent.click(screen.getByTestId('fe-op-progress-row'));
 		await fireEvent.click(screen.getByLabelText('Dismiss'));
 		expect(onDismiss.mock.calls.map((c) => c[0]).sort()).toEqual(['op1:remote', 'op1:wire']);
+		await fireEvent.click(screen.getByTestId('fe-op-progress-dismiss'));
+		expect(onDismissAll).toHaveBeenCalledTimes(1);
 	});
 });
