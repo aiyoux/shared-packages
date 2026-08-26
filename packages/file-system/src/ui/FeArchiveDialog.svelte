@@ -9,7 +9,6 @@
 	import {
 		CODEC_LABEL,
 		defaultCodecFor,
-		engineSupports,
 		listEngines as listCompressEngines,
 		loadEngine as loadCompressEngine,
 		type Codec,
@@ -24,7 +23,9 @@
 	import {
 		COMPRESS_STORAGE_KEY,
 		CRYPTO_STORAGE_KEY,
+		archiveJobPhaseLabel,
 		packingAsTree,
+		previewArchiveEnginePlan,
 		readStoredCompressEngine,
 		readStoredCryptoEngine,
 		subjectLabel,
@@ -107,16 +108,26 @@
 		compressEngines.find((e) => e.id === compressEngineId) ?? compressEngines[0]!
 	);
 	const cryptoEngine = $derived(cryptoEngines.find((e) => e.id === cryptoEngineId) ?? cryptoEngines[0]!);
-	const availableCodecs = $derived(
-		treePack && kind === 'compress'
-			? compressEngine.codecs.filter((c) => c === 'zip' || c === 'tar')
-			: compressEngine.codecs
-	);
+	const availableCodecs = $derived.by((): Codec[] => {
+		if (!(treePack && kind === 'compress')) return [...compressEngine.codecs];
+		const containers = compressEngine.codecs.filter((c) => c === 'zip' || c === 'tar');
+		return containers.length ? [...containers] : ['zip'];
+	});
 	const isMonitor = $derived(driver.id === 'monitor');
 	const canHost = $derived(
 		isMonitor && typeof driver.archive === 'function' && typeof driver.absolutePath === 'function'
 	);
 	const useHost = $derived(canHost && where === 'host' && destLocked == null);
+	const enginePlan = $derived(
+		previewArchiveEnginePlan({
+			kind,
+			entries,
+			compressEngineId,
+			codec,
+			cryptoEngineId,
+			useHost
+		})
+	);
 	const isShuttle = $derived(
 		driver.id === 'b2' || driver.id === 'rclone' || (isMonitor && !useHost)
 	);
@@ -168,32 +179,11 @@
 	});
 
 	$effect(() => {
-		if (kind === 'compress' && treePack) {
-			// Multi-file packing needs a container codec (zip or tar).
-			// If the current engine can't do containers, switch to one that can.
-			if (!engineSupports(compressEngineId, 'zip') && !engineSupports(compressEngineId, 'tar')) {
-				const zipEngine = compressEngines.find((e) => e.codecs.includes('zip'));
-				if (zipEngine) compressEngineId = zipEngine.id;
-			}
-			if (codec !== 'zip' && codec !== 'tar') codec = 'zip';
-		}
+		if (kind === 'compress' && treePack && codec !== 'zip' && codec !== 'tar') codec = 'zip';
 	});
 
 	$effect(() => {
 		if (!availableCodecs.includes(codec) && availableCodecs.length) codec = availableCodecs[0]!;
-	});
-
-	// Auto-switch engine when the selected codec isn't supported by the current engine.
-	$effect(() => {
-		if (kind !== 'compress') return;
-		if (codec === 'tar' && !engineSupports(compressEngineId, 'tar')) {
-			const tarEngine = compressEngines.find((e) => e.codecs.includes('tar'));
-			if (tarEngine) compressEngineId = tarEngine.id;
-		}
-		if (codec === 'zip' && !engineSupports(compressEngineId, 'zip')) {
-			const zipEngine = compressEngines.find((e) => e.codecs.includes('zip'));
-			if (zipEngine) compressEngineId = zipEngine.id;
-		}
 	});
 
 	$effect(() => {
@@ -203,14 +193,15 @@
 			if (useHost) return;
 			if (kind === 'decrypt') return;
 		}
-		const id = isCrypto ? cryptoEngineId : compressEngineId;
+		const requested = isCrypto ? cryptoEngineId : compressEngineId;
+		const used = enginePlan.roles[0]?.used ?? requested;
 		let cancelled = false;
 		engineStatus = 'loading';
 		engineError = '';
-		const load = isCrypto
-			? loadCryptoEngine(id as CryptoEngineId)
-			: loadCompressEngine(id as CompressEngineId);
-		void load
+		const loadUsed = isCrypto
+			? loadCryptoEngine(used as CryptoEngineId)
+			: loadCompressEngine(used as CompressEngineId);
+		void loadUsed
 			.then(() => {
 				if (!cancelled) engineStatus = 'ready';
 			})
@@ -219,8 +210,16 @@
 				engineStatus = 'error';
 				engineError = err instanceof Error ? err.message : 'Failed to load engine';
 			});
+		if (!isCrypto && used !== requested) {
+			void loadCompressEngine(requested as CompressEngineId).catch(() => {
+				/* selected library is not required when a fallback will run */
+			});
+		}
 		try {
-			localStorage.setItem(isCrypto ? CRYPTO_STORAGE_KEY : COMPRESS_STORAGE_KEY, id);
+			localStorage.setItem(
+				isCrypto ? CRYPTO_STORAGE_KEY : COMPRESS_STORAGE_KEY,
+				requested
+			);
 		} catch {
 			/* ignore */
 		}
@@ -286,6 +285,17 @@
 	);
 	const running = $derived(busy || jobRunning);
 	const shownPct = $derived(jobRunning ? jobPct : 0);
+	const progressLabel = $derived(
+		jobLabel ||
+			archiveJobPhaseLabel({
+				kind,
+				entries,
+				compressEngineId,
+				codec,
+				cryptoEngineId,
+				useHost
+			})
+	);
 
 	const runLabel = $derived.by(() => {
 		if (running) {
@@ -344,6 +354,7 @@
 	data-kind={kind}
 	data-where={useHost ? 'host' : 'browser'}
 	data-busy={running ? 'true' : undefined}
+	data-engine-fallback={enginePlan.fallback ? 'true' : 'false'}
 	role="dialog"
 	aria-modal="true"
 	aria-labelledby="fe-archive-title"
@@ -516,6 +527,17 @@
 			</p>
 		{/if}
 
+		{#if enginePlan.lines.length}
+			<p
+				class="engine-note"
+				class:fallback={enginePlan.fallback}
+				data-testid="fe-archive-engine-note"
+				data-fallback={enginePlan.fallback ? 'true' : 'false'}
+			>
+				{enginePlan.lines.join(' ')}
+			</p>
+		{/if}
+
 		{#if engineStatus === 'loading'}
 			<p class="hint">Loading engine…</p>
 		{:else if engineStatus === 'error'}
@@ -643,7 +665,7 @@
 				>
 					<div class="progress-fill" style="width: {shownPct}%"></div>
 				</div>
-				<span class="progress-label">{jobLabel || KIND_BUSY[kind]} {shownPct}%</span>
+				<span class="progress-label">{progressLabel} {shownPct}%</span>
 			</div>
 		{/if}
 
@@ -768,6 +790,19 @@
 	}
 	.path-note.host {
 		background: var(--surface-1);
+	}
+	.engine-note {
+		margin: 0 0 0.65rem;
+		padding: 0.5rem 0.65rem;
+		font-size: 0.82rem;
+		line-height: 1.35;
+		border: 1px solid var(--line-hairline);
+		background: var(--surface-1);
+	}
+	.engine-note.fallback {
+		border-color: var(--accent);
+		color: var(--text-primary);
+		background: rgb(var(--accent-rgb) / 0.08);
 	}
 	.err {
 		margin: 0 0 0.5rem;

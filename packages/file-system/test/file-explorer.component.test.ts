@@ -552,11 +552,10 @@ describe('FileExplorer component', () => {
 		const plain = document.querySelector('[data-testid="fe-folder-row"][data-name="plain"]') as HTMLElement;
 		await fireEvent.click(plain);
 		await fireEvent.click(screen.getByTestId('fe-item-details'));
-		const btn = await screen.findByTestId('fe-open-project');
-		expect(btn.textContent).toMatch(/Open project/);
-		await fireEvent.click(btn);
-		expect(await screen.findByTestId('fe-error')).toBeTruthy();
-		expect(screen.getByTestId('fe-error').textContent).toMatch(/Not a git project/);
+		const preview = await screen.findByTestId('fe-file-preview');
+		await viWaitFor(() => preview.querySelector('[data-fe-is-project="false"]') != null);
+		expect(preview.querySelector('[data-testid="fe-open-project"]')).toBeNull();
+		expect(preview.querySelector('[data-testid="fe-init-project"]')).toBeNull();
 		expect(opened).toEqual([]);
 
 		await fireEvent.click(screen.getByTestId('fe-file-preview-close'));
@@ -573,6 +572,53 @@ describe('FileExplorer component', () => {
 		await fireEvent.dblClick(projectRow);
 		await viWaitFor(() => !!document.querySelector('[data-testid="fe-folder-row"][data-name=".git"]'));
 		expect(opened).toEqual(['myproj']);
+	});
+
+	it('preview Init project on a non-git folder; git folder still offers Open project', async () => {
+		const proj = await vfs.mkdir(null, 'myproj');
+		await vfs.mkdir(proj.id, '.git');
+		await vfs.mkdir(null, 'plain');
+		const opened: string[] = [];
+		const inited: string[] = [];
+		render(FileExplorer, {
+			props: {
+				mode: 'manage',
+				vfs,
+				variant: 'panel',
+				onOpenProject: (entry: { name: string }) => {
+					opened.push(entry.name);
+				},
+				onInitProject: (entry: { name: string }) => {
+					inited.push(entry.name);
+				}
+			}
+		});
+		await viWaitFor(() => document.querySelectorAll('[data-testid="fe-folder-row"]').length >= 2);
+
+		const plain = document.querySelector('[data-testid="fe-folder-row"][data-name="plain"]') as HTMLElement;
+		await fireEvent.click(plain);
+		await fireEvent.click(screen.getByTestId('fe-item-details'));
+		const initBtn = await screen.findByTestId('fe-init-project');
+		expect(initBtn.textContent).toMatch(/Init project/);
+		expect(document.querySelector('[data-testid="fe-open-project"]')).toBeNull();
+		await fireEvent.click(initBtn);
+		await viWaitFor(() => inited.length === 1);
+		expect(inited).toEqual(['plain']);
+		expect(opened).toEqual([]);
+
+		await fireEvent.click(screen.getByTestId('fe-file-preview-close'));
+		const projectRow = document.querySelector(
+			'[data-testid="fe-folder-row"][data-name="myproj"]'
+		) as HTMLElement;
+		await fireEvent.click(projectRow);
+		await fireEvent.click(screen.getByTestId('fe-item-details'));
+		const openBtn = await screen.findByTestId('fe-open-project');
+		expect(openBtn.textContent).toMatch(/Open project/);
+		expect(document.querySelector('[data-testid="fe-init-project"]')).toBeNull();
+		await fireEvent.click(openBtn);
+		await viWaitFor(() => opened.length === 1);
+		expect(opened).toEqual(['myproj']);
+		expect(inited).toEqual(['plain']);
 	});
 
 	it('double-click opens a file via onOpen', async () => {

@@ -104,10 +104,17 @@ export const zipkitEngine: CompressionEngine = {
 			out.push({ name, data });
 			opts?.onMember?.({
 				name,
+				transferred: 0,
+				size: data.byteLength,
+				done: false
+			});
+			opts?.onMember?.({
+				name,
 				transferred: data.byteLength,
 				size: data.byteLength,
 				done: true
 			});
+			await new Promise((r) => setTimeout(r, 0));
 		}
 		return out;
 	}

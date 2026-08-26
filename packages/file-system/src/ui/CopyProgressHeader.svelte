@@ -127,6 +127,9 @@
 							</button>
 						{/if}
 					</div>
+					{#if hopStatus(t)}
+						<p class="hop">{hopStatus(t)}</p>
+					{/if}
 					{#if t.error}
 						<p class="err">{t.error}</p>
 					{/if}
@@ -262,6 +265,13 @@
 		padding: 0.3rem 0.25rem;
 		border-top: 1px solid var(--line-hairline);
 		opacity: 0.85;
+	}
+	.hop {
+		margin: 0 0 0.25rem;
+		padding-left: 0.15rem;
+		color: var(--text-muted);
+		font-size: 0.72rem;
+		line-height: 1.3;
 	}
 	.err {
 		margin: 0 0 0.25rem;

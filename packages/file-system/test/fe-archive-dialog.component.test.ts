@@ -102,6 +102,78 @@ describe('FeArchiveDialog path copy', () => {
 		expect(box.closest('label')?.textContent).toMatch(/Skip system files/);
 	});
 
+	it('keeps AddMaple selected for a ZIP tree and states fflate will run', async () => {
+		render(FeArchiveDialog, {
+			props: {
+				kind: 'compress',
+				entries: [
+					entry,
+					{ id: 'other.txt', parentId: null, name: 'other.txt', kind: 'file' }
+				],
+				driver: stubDriver({ id: 'local', writeFile: async () => entry }),
+				onLaunch: vi.fn(),
+				onCancel: vi.fn()
+			}
+		});
+		const select = screen.getByTestId('fe-archive-engine') as HTMLSelectElement;
+		await fireEvent.change(select, { target: { value: 'addmaple' } });
+		expect(select.value).toBe('addmaple');
+		const note = screen.getByTestId('fe-archive-engine-note');
+		expect(note.getAttribute('data-fallback')).toBe('true');
+		expect(note.textContent).toMatch(/AddMaple/i);
+		expect(note.textContent).toMatch(/fflate/i);
+		expect(screen.getByTestId('fe-archive-dialog').getAttribute('data-engine-fallback')).toBe('true');
+	});
+
+	it('states a ZIP decompress fallback when AddMaple is selected', async () => {
+		render(FeArchiveDialog, {
+			props: {
+				kind: 'decompress',
+				entries: [{ ...entry, id: 'bundle.zip', name: 'bundle.zip' }],
+				driver: stubDriver({ id: 'local', writeFile: async () => entry }),
+				onLaunch: vi.fn(),
+				onCancel: vi.fn()
+			}
+		});
+		const select = screen.getByTestId('fe-archive-engine') as HTMLSelectElement;
+		await fireEvent.change(select, { target: { value: 'addmaple' } });
+		const note = screen.getByTestId('fe-archive-engine-note');
+		expect(note.getAttribute('data-fallback')).toBe('true');
+		expect(note.textContent).toMatch(/ZIP/i);
+		expect(note.textContent).toMatch(/fflate/i);
+	});
+
+	it('states encrypt uses the selected crypto library with no fallback', () => {
+		render(FeArchiveDialog, {
+			props: {
+				kind: 'encrypt',
+				entries: [entry],
+				driver: stubDriver({ id: 'local', writeFile: async () => entry }),
+				onLaunch: vi.fn(),
+				onCancel: vi.fn()
+			}
+		});
+		const note = screen.getByTestId('fe-archive-engine-note');
+		expect(note.getAttribute('data-fallback')).toBe('false');
+		expect(note.textContent).toMatch(/Web Crypto/i);
+	});
+
+	it('states decrypt uses the library recorded in the vault', () => {
+		render(FeArchiveDialog, {
+			props: {
+				kind: 'decrypt',
+				entries: [{ ...entry, id: 'a.spvault', name: 'a.spvault' }],
+				driver: stubDriver({ id: 'local', writeFile: async () => entry }),
+				onLaunch: vi.fn(),
+				onCancel: vi.fn()
+			}
+		});
+		expect(screen.queryByTestId('fe-archive-engine')).toBeNull();
+		const note = screen.getByTestId('fe-archive-engine-note');
+		expect(note.getAttribute('data-fallback')).toBe('false');
+		expect(note.textContent).toMatch(/recorded in the vault/i);
+	});
+
 	it.each(['decompress', 'compress', 'encrypt', 'decrypt'] as const)(
 		'%s stays open with a progress bar when the job is running',
 		(kind) => {

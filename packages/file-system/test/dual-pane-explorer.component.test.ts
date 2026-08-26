@@ -87,6 +87,31 @@ describe('DualPaneExplorer onOpenProject context', () => {
 		expect(opened).toEqual([{ name: 'myproj', ctx: { kind: 'local' } }]);
 	});
 
+	it('forwards InitProjectContext.kind from the local pane', async () => {
+		await vfs.mkdir(null, 'plain');
+		const inited: Array<{ name: string; ctx: OpenProjectContext }> = [];
+		render(DualPaneExplorer, {
+			props: {
+				localDriver: createLocalExplorerDriver(vfs),
+				hideToggles: true,
+				dualPaneKey: `dpe:init:${Math.random()}`,
+				onInitProject: (entry, ctx) => {
+					inited.push({ name: entry.name, ctx });
+				}
+			}
+		});
+		await viWaitFor(() => document.querySelectorAll('[data-testid="fe-folder-row"]').length >= 1);
+
+		const row = document.querySelector(
+			'[data-testid="fe-folder-row"][data-name="plain"]'
+		) as HTMLElement;
+		await fireEvent.click(row);
+		await fireEvent.click(screen.getByTestId('fe-item-details'));
+		await fireEvent.click(await screen.findByTestId('fe-init-project'));
+		await viWaitFor(() => inited.length === 1);
+		expect(inited).toEqual([{ name: 'plain', ctx: { kind: 'local' } }]);
+	});
+
 	it('Copy across sits after Download and appears in the details popup', async () => {
 		await vfs.writeFile({
 			parentId: null,

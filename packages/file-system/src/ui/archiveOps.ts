@@ -3,10 +3,12 @@
  * Used by FeArchiveDialog and the inner-filesystem popup.
  */
 import {
+	CODEC_LABEL,
 	ENGINE_CATALOG,
 	DEFAULT_ENGINE as DEFAULT_COMPRESS_ENGINE,
 	detectFormat,
 	detectFormatFromName,
+	engineInfo as compressEngineInfo,
 	engineSupports,
 	expandBytes,
 	isJunkArchivePath,
@@ -17,6 +19,7 @@ import {
 } from '@shared-packages/compress';
 import {
 	DEFAULT_ENGINE as DEFAULT_CRYPTO_ENGINE,
+	engineInfo as cryptoEngineInfo,
 	isVaultBytes,
 	isVaultName,
 	openVault,
@@ -49,6 +52,26 @@ export type ArchiveWriteProgress = {
 	done: boolean;
 	/** Header-chip only — do not paint a dest listing row. */
 	job?: boolean;
+	/** Chip / dialog label — which library is running, including fallbacks. */
+	note?: string;
+};
+
+/** Selected library vs the one that actually ran (or will run). */
+export type EngineRole = {
+	kind: 'compress' | 'crypto';
+	action: 'create' | 'expand' | 'seal' | 'open';
+	requested?: string;
+	requestedLabel?: string;
+	used: string;
+	usedLabel: string;
+	fallback: boolean;
+	reason?: string;
+};
+
+export type ArchiveEnginePlan = {
+	fallback: boolean;
+	lines: string[];
+	roles: EngineRole[];
 };
 
 function yieldPaint(): Promise<void> {
@@ -111,14 +134,178 @@ export function readStoredCryptoEngine(): CryptoEngineId {
 	return DEFAULT_CRYPTO_ENGINE;
 }
 
+export function describeCompressRole(
+	preferred: CompressEngineId,
+	codec: Codec,
+	action: 'create' | 'expand'
+): EngineRole {
+	const requestedLabel = compressEngineInfo(preferred).label;
+	if (engineSupports(preferred, codec)) {
+		return {
+			kind: 'compress',
+			action,
+			requested: preferred,
+			requestedLabel,
+			used: preferred,
+			usedLabel: requestedLabel,
+			fallback: false
+		};
+	}
+	const found = ENGINE_CATALOG.find((e) => e.codecs.includes(codec));
+	if (!found) throw new Error(`No installed library can ${action} ${CODEC_LABEL[codec]}`);
+	return {
+		kind: 'compress',
+		action,
+		requested: preferred,
+		requestedLabel,
+		used: found.id,
+		usedLabel: found.label,
+		fallback: true,
+		reason: `${requestedLabel} cannot ${action} ${CODEC_LABEL[codec]}`
+	};
+}
+
 export function pickEngineForCodec(
 	preferred: CompressEngineId,
 	codec: Codec
 ): CompressEngineId {
-	if (engineSupports(preferred, codec)) return preferred;
-	const found = ENGINE_CATALOG.find((e) => e.codecs.includes(codec));
-	if (!found) throw new Error(`No installed library can expand ${codec}`);
-	return found.id;
+	return describeCompressRole(preferred, codec, 'expand').used as CompressEngineId;
+}
+
+export function formatEngineNote(role: EngineRole, verb: string): string {
+	if (role.fallback && role.reason) return `${verb} with ${role.usedLabel} — ${role.reason}`;
+	return `${verb} with ${role.usedLabel}`;
+}
+
+function looksTarGzName(name: string): boolean {
+	const lower = name.toLowerCase();
+	return lower.endsWith('.tar.gz') || lower.endsWith('.tgz');
+}
+
+export function previewArchiveEnginePlan(args: {
+	kind: ArchiveKind;
+	entries: ExplorerEntry[];
+	compressEngineId: CompressEngineId;
+	codec: Codec;
+	cryptoEngineId: CryptoEngineId;
+	useHost: boolean;
+}): ArchiveEnginePlan {
+	if (args.useHost) {
+		return {
+			fallback: false,
+			roles: [],
+			lines: ['This job runs on the monitor computer, not a browser library.']
+		};
+	}
+	if (args.kind === 'encrypt') {
+		const info = cryptoEngineInfo(args.cryptoEngineId);
+		const role: EngineRole = {
+			kind: 'crypto',
+			action: 'seal',
+			requested: args.cryptoEngineId,
+			requestedLabel: info.label,
+			used: args.cryptoEngineId,
+			usedLabel: info.label,
+			fallback: false
+		};
+		return {
+			fallback: false,
+			roles: [role],
+			lines: [`This job will use ${info.label} (${info.aead}).`]
+		};
+	}
+	if (args.kind === 'decrypt') {
+		return {
+			fallback: false,
+			roles: [],
+			lines: [
+				'This job will use the library recorded in the vault (Web Crypto or libsodium). Encrypt wrote that into the header — it is not a choice here.'
+			]
+		};
+	}
+	if (args.kind === 'compress') {
+		const role = describeCompressRole(args.compressEngineId, args.codec, 'create');
+		if (role.fallback) {
+			return {
+				fallback: true,
+				roles: [role],
+				lines: [
+					`Selected ${role.requestedLabel} cannot create ${CODEC_LABEL[args.codec]}. This job will use ${role.usedLabel}.`
+				]
+			};
+		}
+		return {
+			fallback: false,
+			roles: [role],
+			lines: [`This job will use ${role.usedLabel}.`]
+		};
+	}
+	const names = args.entries.filter((e) => e.kind === 'file').map((e) => e.name);
+	const fmt = names[0] ? detectFormatFromName(names[0]!) : null;
+	if (!fmt) {
+		const label = compressEngineInfo(args.compressEngineId).label;
+		return {
+			fallback: false,
+			roles: [],
+			lines: [
+				`Format is detected from each file. If ${label} cannot expand it, another installed library will be used.`
+			]
+		};
+	}
+	const role = describeCompressRole(args.compressEngineId, fmt.codec, 'expand');
+	const roles: EngineRole[] = [role];
+	const lines: string[] = [];
+	if (role.fallback) {
+		lines.push(
+			`This looks like ${CODEC_LABEL[fmt.codec]}. Selected ${role.requestedLabel} cannot expand it — this job will use ${role.usedLabel}.`
+		);
+	} else {
+		lines.push(`This looks like ${CODEC_LABEL[fmt.codec]}. This job will use ${role.usedLabel}.`);
+	}
+	if (names.some(looksTarGzName)) {
+		const tar = describeCompressRole(args.compressEngineId, 'tar', 'expand');
+		roles.push(tar);
+		if (tar.fallback) {
+			lines.push(
+				`After gzip, the inner TAR will use ${tar.usedLabel} (${role.usedLabel} cannot expand TAR).`
+			);
+		} else {
+			lines.push('After gzip, the inner TAR is expanded with the same library.');
+		}
+	}
+	return { fallback: roles.some((r) => r.fallback), roles, lines };
+}
+
+export function archiveJobPhaseLabel(spec: {
+	kind: ArchiveKind;
+	entries: ExplorerEntry[];
+	compressEngineId: CompressEngineId;
+	codec: Codec;
+	cryptoEngineId: CryptoEngineId;
+	useHost: boolean;
+}): string {
+	const plan = previewArchiveEnginePlan(spec);
+	if (spec.useHost) {
+		return spec.kind === 'compress'
+			? 'Zipping on this computer…'
+			: spec.kind === 'encrypt'
+				? 'Encrypting on this computer…'
+				: spec.kind === 'decompress'
+					? 'Extracting on this computer…'
+					: 'Decrypting on this computer…';
+	}
+	const role = plan.roles[0];
+	const verb =
+		spec.kind === 'compress'
+			? 'Compressing'
+			: spec.kind === 'encrypt'
+				? 'Encrypting'
+				: spec.kind === 'decompress'
+					? 'Decompressing'
+					: 'Decrypting';
+	if (role) return formatEngineNote(role, verb);
+	if (spec.kind === 'decrypt') return 'Decrypting with the vault’s recorded library…';
+	return `${verb}…`;
 }
 
 export function packingAsTree(entries: ExplorerEntry[]): boolean {
@@ -239,7 +426,9 @@ export async function writeEntriesToDriver(
 export async function writeEntriesToVfs(
 	vfs: VfsService,
 	parentId: string | null,
-	files: PackedPath[]
+	files: PackedPath[],
+	onFile?: (ev: ArchiveWriteProgress) => void,
+	signal?: AbortSignal
 ): Promise<void> {
 	const folderIds = new Map<string, string | null>([['', parentId]]);
 
@@ -262,23 +451,30 @@ export async function writeEntriesToVfs(
 	}
 
 	for (const file of files) {
+		throwIfAborted(signal);
 		const { dirs, file: fileName } = splitPackedPath(file.path);
 		if (!fileName) {
 			if (dirs.length) await ensureDir(dirs);
 			continue;
 		}
 		const destParent = await ensureDir(dirs);
+		const size = file.data.byteLength;
+		onFile?.({ name: fileName, parentId: destParent, transferred: 0, size, done: false });
 		await vfs.writeFile({
 			parentId: destParent,
 			name: fileName,
 			body: Uint8Array.from(file.data)
 		});
+		onFile?.({ name: fileName, parentId: destParent, transferred: size, size, done: true });
 	}
 }
 
 export type ExpandPackedOpts = {
 	skipSystemFiles?: boolean;
 	signal?: AbortSignal;
+	/** Preferred compress library. Falls back to a catalog engine that supports the codec. */
+	compressEngineId?: CompressEngineId;
+	onEngine?: (role: EngineRole) => void;
 };
 
 export async function expandPackedBytes(
@@ -290,10 +486,20 @@ export async function expandPackedBytes(
 ): Promise<PackedPath[]> {
 	const skipSystemFiles = opts?.skipSystemFiles !== false;
 	const keep = (path: string) => !skipSystemFiles || !isJunkArchivePath(path);
+	const preferred = opts?.compressEngineId ?? readStoredCompressEngine();
 	throwIfAborted(opts?.signal);
 	if (isVaultBytes(bytes) || isVaultName(name)) {
 		if (!password) throw new Error('Password is required');
 		const opened = await openVault(bytes, password);
+		const info = cryptoEngineInfo(opened.engine);
+		opts?.onEngine?.({
+			kind: 'crypto',
+			action: 'open',
+			used: opened.engine,
+			usedLabel: info.label,
+			fallback: false,
+			reason: 'Recorded in the vault header'
+		});
 		const mapped = opened.entries
 			.filter((e) => keep(e.path))
 			.map((e) => ({ path: e.path, data: e.data }));
@@ -310,8 +516,9 @@ export async function expandPackedBytes(
 	}
 	const fmt = detectFormat(bytes, name);
 	if (!fmt) throw new Error(`Not a recognized archive: ${name}`);
-	const engine = pickEngineForCodec(readStoredCompressEngine(), fmt.codec);
-	const files = await expandBytes(engine, bytes, fmt.codec, name, {
+	const role = describeCompressRole(preferred, fmt.codec, 'expand');
+	opts?.onEngine?.(role);
+	const files = await expandBytes(role.used as CompressEngineId, bytes, fmt.codec, name, {
 		skipSystemFiles,
 		onMember: (ev) => {
 			onMember?.({
@@ -329,10 +536,25 @@ export async function expandPackedBytes(
 		const tarBytes = files[0]!.data;
 		const tarFmt = detectFormat(tarBytes, files[0]!.name);
 		if (tarFmt?.codec === 'tar') {
-			const tarEngine = pickEngineForCodec(readStoredCompressEngine(), 'tar');
-			const tarFiles = await expandBytes(tarEngine, tarBytes, 'tar', files[0]!.name, {
-				skipSystemFiles
-			});
+			const tarRole = describeCompressRole(preferred, 'tar', 'expand');
+			opts?.onEngine?.(tarRole);
+			const tarFiles = await expandBytes(
+				tarRole.used as CompressEngineId,
+				tarBytes,
+				'tar',
+				files[0]!.name,
+				{
+					skipSystemFiles,
+					onMember: (ev) => {
+						onMember?.({
+							path: ev.name,
+							transferred: ev.transferred,
+							size: ev.size ?? ev.transferred,
+							done: ev.done
+						});
+					}
+				}
+			);
 			return tarFiles.filter((f) => keep(f.name)).map((f) => ({ path: f.name, data: f.data }));
 		}
 	}
@@ -365,10 +587,14 @@ export type ArchiveJobSpec = {
 	onProgress?: (ev: ArchiveWriteProgress) => void;
 };
 
-export async function runArchiveJob(spec: ArchiveJobSpec): Promise<{
+export type ArchiveJobResult = {
 	inner?: PackedPath[];
+	innerSession?: InnerFsSession;
 	title: string;
-}> {
+	engines: EngineRole[];
+};
+
+export async function runArchiveJob(spec: ArchiveJobSpec): Promise<ArchiveJobResult> {
 	const {
 		kind,
 		entries,
@@ -381,6 +607,9 @@ export async function runArchiveJob(spec: ArchiveJobSpec): Promise<{
 	} = spec;
 	throwIfAborted(signal);
 
+	const engines: EngineRole[] = [];
+	let jobNote = archiveJobPhaseLabel(spec);
+
 	const emitJob = (transferred: number, size: number, done = false) => {
 		onProgress?.({
 			name: title,
@@ -388,17 +617,49 @@ export async function runArchiveJob(spec: ArchiveJobSpec): Promise<{
 			transferred,
 			size: Math.max(size, 1),
 			done,
-			job: true
+			job: true,
+			note: jobNote
 		});
 	};
 
-	const writeOut = async (files: PackedPath[]) => {
-		const total = files.reduce((n, f) => n + f.data.byteLength, 0) || 1;
-		let finished = 0;
+	const emitJobPct = (pct: number, done = false) => {
+		const n = done ? 100 : Math.min(99, Math.max(0, Math.round(pct)));
+		emitJob(n, 100, done);
+	};
+
+	const setNote = (note: string) => {
+		jobNote = note;
+	};
+
+	const remember = (role: EngineRole, verb: string) => {
+		if (
+			!engines.some(
+				(e) => e.used === role.used && e.action === role.action && e.fallback === role.fallback
+			)
+		) {
+			engines.push(role);
+		}
+		setNote(formatEngineNote(role, verb));
+	};
+
+	const writeOut = async (
+		files: PackedPath[],
+		writeFromPct: number,
+		opts?: { listing?: boolean }
+	) => {
+		const listing = opts?.listing !== false;
+		const totalFiles = Math.max(
+			files.filter((f) => Boolean(packedBasename(f.path)) && !f.path.endsWith('/')).length,
+			1
+		);
+		let filesDone = 0;
 		const onFile = (ev: ArchiveWriteProgress) => {
-			onProgress?.(ev);
-			emitJob(finished + (ev.done ? ev.size : ev.transferred), total);
-			if (ev.done) finished += ev.size;
+			if (listing) onProgress?.(ev);
+			const frac = ev.done
+				? (filesDone + 1) / totalFiles
+				: (filesDone + (ev.size ? ev.transferred / ev.size : 0)) / totalFiles;
+			emitJobPct(writeFromPct + (100 - writeFromPct) * Math.min(1, frac));
+			if (ev.done) filesDone += 1;
 		};
 		if (dest === 'memory') {
 			const mem = createMemoryExplorerDriver(getMemoryVfs());
@@ -422,7 +683,7 @@ export async function runArchiveJob(spec: ArchiveJobSpec): Promise<{
 
 	if (spec.useHost) {
 		if (!driver.archive) throw new Error('This connection cannot archive on the host');
-		emitJob(0, 1);
+		emitJobPct(0);
 		await driver.archive({
 			op: spec.hostOp!,
 			paths: entries.map((e) => driver.absolutePath!(e.id)),
@@ -430,24 +691,58 @@ export async function runArchiveJob(spec: ArchiveJobSpec): Promise<{
 			password: kind === 'encrypt' || kind === 'decrypt' ? spec.password : undefined
 		});
 		throwIfAborted(signal);
-		emitJob(1, 1, true);
-		return { title };
+		emitJobPct(100, true);
+		return { title, engines };
 	}
 
+	const COLLECT_PCT = 30;
+	const PACK_PCT = 40;
+
 	if (kind === 'compress' || kind === 'encrypt') {
-		emitJob(0, 4);
+		emitJobPct(0);
 		const packed = await collectPackEntries(driver, entries, {
 			signal,
-			onFile: (n) => emitJob(n, Math.max(n + 2, 4))
+			onFile: (n) => {
+				emitJobPct((n / Math.max(n + 1, 1)) * COLLECT_PCT);
+			}
 		});
 		throwIfAborted(signal);
-		emitJob(packed.length + 1, packed.length + 3);
+		emitJobPct(COLLECT_PCT);
 		if (kind === 'compress') {
-			const out = await packFiles(spec.compressEngineId, toArchiveEntries(packed), spec.codec);
+			const role = describeCompressRole(spec.compressEngineId, spec.codec, 'create');
+			remember(role, 'Compressing');
+			emitJobPct(COLLECT_PCT);
+			const out = await packFiles(
+				role.used as CompressEngineId,
+				toArchiveEntries(packed),
+				spec.codec
+			);
 			throwIfAborted(signal);
-			emitJob(packed.length + 2, packed.length + 3);
-			await writeOut(namedOutput(out.map((f) => ({ path: f.name, data: f.data }))));
+			emitJobPct(PACK_PCT);
+			setNote(
+				role.fallback
+					? `Writing with ${role.usedLabel} — ${role.reason}`
+					: `Writing with ${role.usedLabel}…`
+			);
+			await writeOut(
+				namedOutput(out.map((f) => ({ path: f.name, data: f.data }))),
+				PACK_PCT
+			);
 		} else {
+			const info = cryptoEngineInfo(spec.cryptoEngineId);
+			remember(
+				{
+					kind: 'crypto',
+					action: 'seal',
+					requested: spec.cryptoEngineId,
+					requestedLabel: info.label,
+					used: spec.cryptoEngineId,
+					usedLabel: info.label,
+					fallback: false
+				},
+				'Encrypting'
+			);
+			emitJobPct(COLLECT_PCT);
 			const sealed = await sealVault(
 				spec.cryptoEngineId,
 				packed,
@@ -455,16 +750,18 @@ export async function runArchiveJob(spec: ArchiveJobSpec): Promise<{
 				packingAsTree(entries) ? { kind: 'tree' } : undefined
 			);
 			throwIfAborted(signal);
-			emitJob(packed.length + 2, packed.length + 3);
-			await writeOut(namedOutput([{ path: sealed.name, data: sealed.data }]));
+			emitJobPct(PACK_PCT);
+			setNote(`Writing with ${info.label}…`);
+			await writeOut(namedOutput([{ path: sealed.name, data: sealed.data }]), PACK_PCT);
 		}
-		emitJob(1, 1, true);
-		return { title };
+		emitJobPct(100, true);
+		return { title, engines };
 	}
 
 	const inner: PackedPath[] = [];
 	const sources = entries.filter((e) => e.kind === 'file');
-	emitJob(0, Math.max(sources.length + 1, 1));
+	const EXPAND_PCT = 40;
+	emitJobPct(0);
 	let membersDone = 0;
 	for (let i = 0; i < sources.length; i++) {
 		throwIfAborted(signal);
@@ -476,62 +773,99 @@ export async function runArchiveJob(spec: ArchiveJobSpec): Promise<{
 				entry.name,
 				spec.password,
 				(ev) => {
-					if (packedIsTopLevel(ev.path)) {
-						onProgress?.({
-							name: packedBasename(ev.path),
-							parentId: destParentId,
-							transferred: ev.transferred,
-							size: ev.size || ev.transferred,
-							done: ev.done
-						});
-					}
+					// Expand ticks are chip-only. Dest listing bars come from writeOut
+					// so nested members are not marked 100% before they hit disk.
 					if (ev.done) membersDone++;
-					emitJob(membersDone, Math.max(membersDone + 1, sources.length + 1));
+					emitJobPct((membersDone / Math.max(membersDone + 1, 1)) * EXPAND_PCT);
 				},
-				{ skipSystemFiles: spec.skipSystemFiles, signal }
+				{
+					skipSystemFiles: spec.skipSystemFiles,
+					signal,
+					compressEngineId: spec.compressEngineId,
+					onEngine: (role) => {
+						remember(
+							role,
+							kind === 'decrypt' ? 'Decrypting' : 'Decompressing'
+						);
+					}
+				}
 			))
 		);
-		emitJob(i + 1, sources.length + 1);
+		emitJobPct(((i + 1) / Math.max(sources.length, 1)) * EXPAND_PCT);
 	}
 	if (!inner.length) throw new Error('Nothing to extract');
-	if (dest === 'popup') return { inner, title };
-	await writeOut(inner);
-	emitJob(1, 1, true);
-	return { title };
+	if (dest === 'popup') {
+		emitJobPct(EXPAND_PCT);
+		const totalFiles = Math.max(
+			inner.filter((f) => Boolean(packedBasename(f.path)) && !f.path.endsWith('/')).length,
+			1
+		);
+		let filesDone = 0;
+		const innerSession = await createInnerFsSession(
+			title,
+			inner,
+			(ev) => {
+				const frac = ev.done
+					? (filesDone + 1) / totalFiles
+					: (filesDone + (ev.size ? ev.transferred / ev.size : 0)) / totalFiles;
+				emitJobPct(EXPAND_PCT + (100 - EXPAND_PCT) * Math.min(1, frac));
+				if (ev.done) filesDone += 1;
+			},
+			signal
+		);
+		emitJobPct(100, true);
+		return { inner, innerSession, title, engines };
+	}
+	emitJobPct(EXPAND_PCT);
+	await writeOut(inner, EXPAND_PCT);
+	emitJobPct(100, true);
+	return { title, engines };
 }
 
 export async function createInnerFsSession(
 	title: string,
-	files: PackedPath[]
+	files: PackedPath[],
+	onFile?: (ev: ArchiveWriteProgress) => void,
+	signal?: AbortSignal
 ): Promise<InnerFsSession> {
 	const vfs: VfsService = createVfs({
 		dbName: `fe-inner-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
 		memoryOpfs: true,
 		requestPersist: false
 	});
-	await vfs.ready();
-	await writeEntriesToVfs(vfs, null, files);
-	const driver = createLocalExplorerDriver(vfs, {
-		id: 'memory',
-		capabilitiesPatch: {
-			supportsDownload: true,
-			supportsTrash: false,
-			supportsSoftDelete: false
-		}
-	});
-	let disposed = false;
-	return {
-		title,
-		driver,
-		dispose: async () => {
-			if (disposed) return;
-			disposed = true;
-			try {
-				vfs.db.close();
-				await vfs.db.delete();
-			} catch {
-				/* ignore */
+	try {
+		await vfs.ready();
+		await writeEntriesToVfs(vfs, null, files, onFile, signal);
+		const driver = createLocalExplorerDriver(vfs, {
+			id: 'memory',
+			capabilitiesPatch: {
+				supportsDownload: true,
+				supportsTrash: false,
+				supportsSoftDelete: false
 			}
+		});
+		let disposed = false;
+		return {
+			title,
+			driver,
+			dispose: async () => {
+				if (disposed) return;
+				disposed = true;
+				try {
+					vfs.db.close();
+					await vfs.db.delete();
+				} catch {
+					/* ignore */
+				}
+			}
+		};
+	} catch (e) {
+		try {
+			vfs.db.close();
+			await vfs.db.delete();
+		} catch {
+			/* ignore */
 		}
-	};
+		throw e;
+	}
 }

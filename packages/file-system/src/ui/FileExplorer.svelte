@@ -130,6 +130,8 @@
 		onOpen?: (entry: ExplorerOpenTarget, ctx?: ExplorerOpenContext) => void | Promise<void>;
 		/** Preview "Open project" for folders that look like git working trees. */
 		onOpenProject?: (entry: ExplorerOpenTarget) => void | Promise<void>;
+		/** Preview "Init project" for folders that are not already a git working tree. */
+		onInitProject?: (entry: ExplorerOpenTarget) => void | Promise<void>;
 		/** Preview "Send this file" — Connections dual-pane send path. */
 		onSendFile?: (entry: ExplorerOpenTarget) => void | Promise<void>;
 		sendLabel?: string;
@@ -187,6 +189,7 @@
 		showPersistence = true,
 		onOpen,
 		onOpenProject,
+		onInitProject,
 		onSendFile,
 		sendLabel = 'Send this file',
 		openLabel,
@@ -236,6 +239,10 @@
 	let selectMulti = $state(false);
 	let previewEntry = $state<ExplorerEntry | null>(null);
 	let previewBusy = $state(false);
+	/** Folder preview: whether self or an ancestor has a `.git` child. `null` while detecting. */
+	let previewIsProject = $state<boolean | null>(null);
+	let previewDetectGen = 0;
+	const hasProjectActions = $derived(Boolean(onOpenProject || onInitProject));
 	let archiveKind = $state<ArchiveKind | null>(null);
 	let archiveEntries = $state<ExplorerEntry[]>([]);
 	let archiveDestLocked = $state<ArchiveDest | null>(null);
@@ -529,6 +536,28 @@
 			const entry = nodes.find((n) => n.id === id);
 			if (entry) void prefetchForDragOut(driver, entry);
 		}
+	});
+
+	$effect(() => {
+		const n = previewEntry;
+		const want = hasProjectActions && n?.kind === 'folder';
+		if (!want || !n) {
+			previewIsProject = null;
+			return;
+		}
+		const folderId = n.id;
+		const gen = ++previewDetectGen;
+		previewIsProject = null;
+		void detectProject(driver, folderId).then(
+			(ok) => {
+				if (gen !== previewDetectGen) return;
+				previewIsProject = ok;
+			},
+			() => {
+				if (gen !== previewDetectGen) return;
+				previewIsProject = false;
+			}
+		);
 	});
 
 	function errMsg(e: unknown): string {
@@ -1918,12 +1947,39 @@
 		previewBusy = true;
 		try {
 			const ok = await detectProject(driver, n.id);
+			previewIsProject = ok;
 			if (!ok) {
 				reportMessage('Not a git project');
 				return;
 			}
 			error = '';
 			await onOpenProject(n);
+		} catch (e) {
+			reportError(e);
+		} finally {
+			previewBusy = false;
+		}
+	}
+
+	async function confirmInitProject() {
+		const n = previewEntry;
+		if (!n || n.kind !== 'folder' || !onInitProject) return;
+		previewBusy = true;
+		try {
+			const already = await detectProject(driver, n.id);
+			if (already) {
+				previewIsProject = true;
+				if (onOpenProject) {
+					error = '';
+					await onOpenProject(n);
+				} else {
+					reportMessage('Already a git project');
+				}
+				return;
+			}
+			error = '';
+			await onInitProject(n);
+			previewIsProject = true;
 		} catch (e) {
 			reportError(e);
 		} finally {
@@ -3539,7 +3595,16 @@
 			</div>
 		{/if}
 	</dl>
-	<div class="fe-preview-actions">
+	<div
+		class="fe-preview-actions"
+		data-fe-is-project={
+			entry.kind === 'folder' && previewIsProject != null
+				? previewIsProject
+					? 'true'
+					: 'false'
+				: undefined
+		}
+	>
 		{#if entry.kind === 'file' && getPreviewKind(entry)}
 			<button
 				type="button"
@@ -3562,7 +3627,7 @@
 				{entry.kind === 'folder' ? 'Open' : defaultOpenLabel(entry)}
 			</button>
 		{/if}
-		{#if onOpenProject && entry.kind === 'folder'}
+		{#if onOpenProject && entry.kind === 'folder' && previewIsProject === true}
 			<button
 				type="button"
 				class="ds-btn ds-btn--sm ds-btn--secondary"
@@ -3571,6 +3636,17 @@
 				onclick={() => void confirmOpenProject()}
 			>
 				Open project
+			</button>
+		{/if}
+		{#if onInitProject && entry.kind === 'folder' && previewIsProject === false}
+			<button
+				type="button"
+				class="ds-btn ds-btn--sm ds-btn--secondary"
+				data-testid="fe-init-project"
+				disabled={previewBusy}
+				onclick={() => void confirmInitProject()}
+			>
+				Init project
 			</button>
 		{/if}
 		{#if onSendFile && entry.kind === 'file'}

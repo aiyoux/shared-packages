@@ -18,6 +18,9 @@
 	 *     `OpenProjectContext` (`kind` from the pane; monitor also gets
 	 *     profileId / baseUrl / rootPath). Unlike `onOpen`, which is still
 	 *     memory-only on the remote branch, this is forwarded to every backend.
+	 *   - `onInitProject`: optional "Init project" (`git init`) handler. Same
+	 *     wrapping as `onOpenProject`, but only the local (Browser files) pane
+	 *     gets the button — init uses the hub VFS, not memory/monitor/b2/rclone.
 	 *   - `persistenceVfs`: unused for UI (kept so existing callers compile).
 	 *   - `tids`: per-page testid config so each consumer keeps its existing
 	 *     e2e selectors (defaults match the hub `/tools/files` page).
@@ -181,6 +184,8 @@
 		openLabel?: string;
 		explorerMode?: ExplorerMode;
 		onOpenProject?: (entry: ExplorerOpenTarget, ctx: OpenProjectContext) => void | Promise<void>;
+		/** Preview "Init project" — local pane only. Same context as `onOpenProject`. */
+		onInitProject?: (entry: ExplorerOpenTarget, ctx: OpenProjectContext) => void | Promise<void>;
 		/** Current explorer folder changed (enter/up/connection). parentId null is the connection root. */
 		onFolder?: (
 			parentId: ExplorerEntryId | null,
@@ -285,6 +290,7 @@
 		openLabel,
 		explorerMode = 'manage',
 		onOpenProject,
+		onInitProject,
 		onFolder,
 		persistenceVfs,
 		dualPaneKey = 'fe:dualPane',
@@ -500,6 +506,12 @@
 	function paneOpenProject(id: PaneId) {
 		if (!onOpenProject) return undefined;
 		return (entry: ExplorerOpenTarget) => onOpenProject(entry, paneOpenProjectContext(id));
+	}
+	/** `git init` is VFS-local; remotes (monitor/b2/rclone/memory) do not get the button. */
+	function paneInitProject(id: PaneId) {
+		if (!onInitProject) return undefined;
+		if (paneState(id).activeKind !== 'local') return undefined;
+		return (entry: ExplorerOpenTarget) => onInitProject(entry, paneOpenProjectContext(id));
 	}
 
 	function applyPaneCtx(id: PaneId, ctx: ExplorerContext) {
@@ -1772,6 +1784,7 @@
 						initialParentId={p.ctx.parentId}
 						onOpen={paneFileOpen(id)}
 						onOpenProject={paneOpenProject(id)}
+						onInitProject={paneInitProject(id)}
 						onSendFile={
 							onSend
 								? (entry) =>

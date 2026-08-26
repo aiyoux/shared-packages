@@ -25,6 +25,7 @@ const CODE_LABELS: Record<string, string> = {
 	OPFS_IO: 'Could not write the file to browser storage.',
 	OPFS_UNAVAILABLE: 'Browser file storage is not available in this context.',
 	NOT_FOUND: 'That file or folder was not found.',
+	TRASH_STATE: 'That folder is in the trash (or was deleted while writing).',
 	NAME_CONFLICT: 'A file or folder with that name already exists.',
 	INVALID_NAME: 'That name is not allowed.',
 	QUOTA_EXCEEDED: 'Browser storage is full.',

@@ -322,5 +322,6 @@ describe('formatExplorerError', () => {
 
 	it('uses a sentence for VfsError codes', () => {
 		assert.match(formatExplorerError(new VfsError('OPFS_IO')), /browser storage/i);
+		assert.match(formatExplorerError(new VfsError('TRASH_STATE')), /trash|deleted/i);
 	});
 });

@@ -7,6 +7,7 @@ import { createLocalExplorerDriver } from '../src/ui/localExplorerDriver.ts';
 import {
 	collectPackEntries,
 	createInnerFsSession,
+	describeCompressRole,
 	expandPackedBytes,
 	looksCompressedName,
 	looksPackedName,
@@ -14,6 +15,7 @@ import {
 	packingAsTree,
 	packedIsTopLevel,
 	pickEngineForCodec,
+	previewArchiveEnginePlan,
 	runArchiveJob,
 	subjectLabel,
 	writeEntriesToDriver
@@ -46,6 +48,61 @@ describe('archiveOps', () => {
 	it('picks an engine that supports the codec', () => {
 		assert.equal(pickEngineForCodec('addmaple', 'zip'), 'fflate');
 		assert.equal(pickEngineForCodec('fflate', 'gzip'), 'fflate');
+		const zipFallback = describeCompressRole('addmaple', 'zip', 'create');
+		assert.equal(zipFallback.used, 'fflate');
+		assert.equal(zipFallback.fallback, true);
+		assert.match(zipFallback.reason ?? '', /cannot create ZIP/i);
+		const gzipOk = describeCompressRole('addmaple', 'gzip', 'create');
+		assert.equal(gzipOk.used, 'addmaple');
+		assert.equal(gzipOk.fallback, false);
+	});
+
+	it('previews selected vs fallback library before the job runs', () => {
+		const tree = previewArchiveEnginePlan({
+			kind: 'compress',
+			entries: [fileEntry({ id: '1', name: 'a.txt' }), fileEntry({ id: '2', name: 'b.txt' })],
+			compressEngineId: 'addmaple',
+			codec: 'zip',
+			cryptoEngineId: 'webcrypto',
+			useHost: false
+		});
+		assert.equal(tree.fallback, true);
+		assert.match(tree.lines.join(' '), /fflate/i);
+		assert.match(tree.lines.join(' '), /AddMaple/i);
+
+		const zip = previewArchiveEnginePlan({
+			kind: 'decompress',
+			entries: [fileEntry({ id: 'z', name: 'bundle.zip' })],
+			compressEngineId: 'addmaple',
+			codec: 'gzip',
+			cryptoEngineId: 'webcrypto',
+			useHost: false
+		});
+		assert.equal(zip.fallback, true);
+		assert.match(zip.lines.join(' '), /ZIP/i);
+		assert.match(zip.lines.join(' '), /fflate/i);
+
+		const tgz = previewArchiveEnginePlan({
+			kind: 'decompress',
+			entries: [fileEntry({ id: 'g', name: 'src.tar.gz' })],
+			compressEngineId: 'zipkit',
+			codec: 'gzip',
+			cryptoEngineId: 'webcrypto',
+			useHost: false
+		});
+		assert.equal(tgz.fallback, true);
+		assert.match(tgz.lines.join(' '), /TAR/i);
+
+		const vault = previewArchiveEnginePlan({
+			kind: 'decrypt',
+			entries: [fileEntry({ id: 'v', name: 'secret.spvault' })],
+			compressEngineId: 'fflate',
+			codec: 'zip',
+			cryptoEngineId: 'webcrypto',
+			useHost: false
+		});
+		assert.equal(vault.fallback, false);
+		assert.match(vault.lines.join(' '), /recorded in the vault/i);
 	});
 
 	it('treats folders and multi-select as a tree pack', () => {
@@ -261,6 +318,69 @@ describe('archiveOps', () => {
 		assert.ok(destRows.length);
 		assert.ok(destRows.every((e) => e.parentId === folder.id));
 		assert.ok(destRows.every((e) => e.name === 'hello.txt'));
+		const expandJob = events.filter((e) => e.job);
+		assert.ok(expandJob.length);
+		await vfs.db.delete();
+	});
+
+	it('nested extract dest rows wait for writeOut; expand job stays under 100%', async () => {
+		const vfs = createVfs({
+			dbName: `archive-ops-nested-${Date.now()}-${Math.random()}`,
+			memoryOpfs: true,
+			requestPersist: false
+		});
+		await vfs.ready();
+		const driver = createLocalExplorerDriver(vfs);
+		await driver.ready();
+		const folder = await driver.mkdir!(null, 'inbox');
+		const zip = await packFiles(
+			'fflate',
+			[
+				{ name: 'repo/a.txt', data: enc.encode('aaaa') },
+				{ name: 'repo/nested/b.txt', data: enc.encode('bbbb') }
+			],
+			'zip'
+		);
+		await driver.writeFile!(folder.id, new File([zip[0]!.data as BlobPart], zip[0]!.name));
+		const listed = await driver.list({ parentId: folder.id });
+		const archive = listed.entries.find((e) => e.name === zip[0]!.name)!;
+		const events: Array<{ name: string; parentId: string | null; job?: boolean; done: boolean; transferred: number; size: number }> = [];
+		await runArchiveJob({
+			kind: 'decompress',
+			entries: [archive],
+			driver,
+			dest: 'same',
+			destParentId: folder.id,
+			title: archive.name,
+			compressEngineId: 'fflate',
+			codec: 'zip',
+			cryptoEngineId: 'webcrypto',
+			password: '',
+			skipSystemFiles: true,
+			useHost: false,
+			onProgress: (ev) =>
+				events.push({
+					name: ev.name,
+					parentId: ev.parentId,
+					job: ev.job,
+					done: ev.done,
+					transferred: ev.transferred,
+					size: ev.size
+				})
+		});
+		const jobBeforeDone = events.filter((e) => e.job && !e.done);
+		assert.ok(jobBeforeDone.length);
+		assert.ok(
+			jobBeforeDone.every((e) => e.size <= 0 || e.transferred / e.size < 1),
+			'expand/write ticks must not report 100% before the job finishes'
+		);
+		const destRows = events.filter((e) => !e.job);
+		assert.ok(destRows.some((e) => e.name === 'a.txt'));
+		assert.ok(destRows.some((e) => e.name === 'b.txt'));
+		assert.ok(destRows.some((e) => e.parentId !== folder.id), 'nested file writes to a subfolder');
+		const kids = await driver.list({ parentId: folder.id });
+		const repo = kids.entries.find((e) => e.name === 'repo' && e.kind === 'folder');
+		assert.ok(repo);
 		await vfs.db.delete();
 	});
 
@@ -304,6 +424,25 @@ describe('archiveOps', () => {
 		assert.ok(destRows.every((e) => e.parentId === folder.id));
 		assert.ok(destRows.every((e) => e.name === 'secret.txt'));
 		assert.ok(destRows.every((e) => e.name !== vault.name));
+		await vfs.db.delete();
+	});
+
+	it('writeEntriesToDriver throws TRASH_STATE if the dest folder is trashed mid-job', async () => {
+		const vfs = createVfs({
+			dbName: `archive-ops-trash-${Date.now()}-${Math.random()}`,
+			memoryOpfs: true,
+			requestPersist: false
+		});
+		await vfs.ready();
+		const driver = createLocalExplorerDriver(vfs);
+		await driver.ready();
+		const folder = await driver.mkdir!(null, 'Dest');
+		await vfs.trash(folder.id);
+		await assert.rejects(
+			() =>
+				writeEntriesToDriver(driver, folder.id, [{ path: 'nested/a.txt', data: enc.encode('a') }]),
+			(e: unknown) => e instanceof Error && 'code' in e && (e as { code: string }).code === 'TRASH_STATE'
+		);
 		await vfs.db.delete();
 	});
 
@@ -409,5 +548,222 @@ describe('archiveOps', () => {
 		const blob = await session.driver.readBlob!(nested.entries[0]!.id);
 		assert.equal(dec.decode(new Uint8Array(await blob.arrayBuffer())), 'inner');
 		await session.dispose();
+	});
+
+	it('expandPackedBytes falls back from AddMaple to fflate for ZIP and reports it', async () => {
+		const zip = await packFiles(
+			'fflate',
+			[{ name: 'hello.txt', data: enc.encode('hello') }],
+			'zip'
+		);
+		const roles: Array<{ used: string; fallback: boolean }> = [];
+		const files = await expandPackedBytes(zip[0]!.data, zip[0]!.name, undefined, undefined, {
+			compressEngineId: 'addmaple',
+			onEngine: (role) => roles.push({ used: role.used, fallback: role.fallback })
+		});
+		assert.equal(files[0]?.path, 'hello.txt');
+		assert.ok(roles.some((r) => r.used === 'fflate' && r.fallback));
+	});
+
+	it('expandPackedBytes unwraps tar.gz with tar member ticks and a tar library fallback', async () => {
+		const tar = await packFiles('tarjs', [{ name: 'nested/a.txt', data: enc.encode('alpha') }], 'tar');
+		const gz = await packFiles('fflate', [{ name: tar[0]!.name, data: tar[0]!.data }], 'gzip');
+		const seen: string[] = [];
+		const roles: Array<{ used: string; action: string; fallback: boolean }> = [];
+		const files = await expandPackedBytes(gz[0]!.data, 'src.tar.gz', undefined, (ev) => {
+			if (ev.done) seen.push(ev.path);
+		}, {
+			compressEngineId: 'addmaple',
+			onEngine: (role) => roles.push({ used: role.used, action: role.action, fallback: role.fallback })
+		});
+		assert.deepEqual(
+			files.map((f) => f.path),
+			['nested/a.txt']
+		);
+		assert.ok(seen.includes('nested/a.txt'));
+		assert.ok(roles.some((r) => r.used === 'addmaple' && r.fallback === false));
+		assert.ok(roles.some((r) => r.used === 'tarjs' && r.fallback));
+	});
+
+	it('compress job with AddMaple+ZIP uses fflate and stays under 100% until write finishes', async () => {
+		const vfs = createVfs({
+			dbName: `archive-ops-fallback-zip-${Date.now()}-${Math.random()}`,
+			memoryOpfs: true,
+			requestPersist: false
+		});
+		await vfs.ready();
+		const driver = createLocalExplorerDriver(vfs);
+		await driver.ready();
+		await driver.writeFile!(null, new File([enc.encode('snap')], 'photo.txt'));
+		const listed = await driver.list({ parentId: null });
+		const photo = listed.entries.find((e) => e.name === 'photo.txt')!;
+		const events: Array<{ job?: boolean; done: boolean; transferred: number; size: number; note?: string }> = [];
+		const result = await runArchiveJob({
+			kind: 'compress',
+			entries: [photo],
+			driver,
+			dest: 'same',
+			destParentId: null,
+			title: 'photo.txt',
+			outputName: 'photo.zip',
+			compressEngineId: 'addmaple',
+			codec: 'zip',
+			cryptoEngineId: 'webcrypto',
+			password: '',
+			skipSystemFiles: true,
+			useHost: false,
+			onProgress: (ev) =>
+				events.push({
+					job: ev.job,
+					done: ev.done,
+					transferred: ev.transferred,
+					size: ev.size,
+					note: ev.note
+				})
+		});
+		assert.equal(result.engines[0]?.used, 'fflate');
+		assert.equal(result.engines[0]?.fallback, true);
+		assert.ok(events.some((e) => e.job && e.note && /fflate/i.test(e.note) && /AddMaple/i.test(e.note)));
+		const jobBeforeDone = events.filter((e) => e.job && !e.done);
+		assert.ok(jobBeforeDone.length);
+		assert.ok(jobBeforeDone.every((e) => e.size <= 0 || e.transferred / e.size < 1));
+		const kids = await driver.list({ parentId: null });
+		assert.ok(kids.entries.some((e) => e.name === 'photo.zip'));
+		await vfs.db.delete();
+	});
+
+	it('decompress job honors the dialog library and reports a codec fallback', async () => {
+		const vfs = createVfs({
+			dbName: `archive-ops-decomp-fallback-${Date.now()}-${Math.random()}`,
+			memoryOpfs: true,
+			requestPersist: false
+		});
+		await vfs.ready();
+		const driver = createLocalExplorerDriver(vfs);
+		await driver.ready();
+		const zip = await packFiles('fflate', [{ name: 'hello.txt', data: enc.encode('hello') }], 'zip');
+		await driver.writeFile!(null, new File([zip[0]!.data as BlobPart], zip[0]!.name));
+		const listed = await driver.list({ parentId: null });
+		const archive = listed.entries.find((e) => e.name === zip[0]!.name)!;
+		const notes: string[] = [];
+		const result = await runArchiveJob({
+			kind: 'decompress',
+			entries: [archive],
+			driver,
+			dest: 'same',
+			destParentId: null,
+			title: archive.name,
+			compressEngineId: 'addmaple',
+			codec: 'gzip',
+			cryptoEngineId: 'webcrypto',
+			password: '',
+			skipSystemFiles: true,
+			useHost: false,
+			onProgress: (ev) => {
+				if (ev.job && ev.note) notes.push(ev.note);
+			}
+		});
+		assert.ok(result.engines.some((e) => e.used === 'fflate' && e.fallback));
+		assert.ok(notes.some((n) => /fflate/i.test(n) && /AddMaple/i.test(n)));
+		await vfs.db.delete();
+	});
+
+	it('decrypt job reports the vault header library and writes after expand', async () => {
+		const vfs = createVfs({
+			dbName: `archive-ops-decrypt-engine-${Date.now()}-${Math.random()}`,
+			memoryOpfs: true,
+			requestPersist: false
+		});
+		await vfs.ready();
+		const driver = createLocalExplorerDriver(vfs);
+		await driver.ready();
+		const sealed = await sealVault(
+			'webcrypto',
+			[{ path: 'secret.txt', data: enc.encode('secret') }],
+			's3cret'
+		);
+		await driver.writeFile!(null, new File([sealed.data as BlobPart], sealed.name));
+		const listed = await driver.list({ parentId: null });
+		const vault = listed.entries.find((e) => e.name === sealed.name)!;
+		const events: Array<{ job?: boolean; done: boolean; transferred: number; size: number; note?: string }> = [];
+		const result = await runArchiveJob({
+			kind: 'decrypt',
+			entries: [vault],
+			driver,
+			dest: 'same',
+			destParentId: null,
+			title: vault.name,
+			compressEngineId: 'fflate',
+			codec: 'zip',
+			cryptoEngineId: 'libsodium',
+			password: 's3cret',
+			skipSystemFiles: true,
+			useHost: false,
+			onProgress: (ev) =>
+				events.push({
+					job: ev.job,
+					done: ev.done,
+					transferred: ev.transferred,
+					size: ev.size,
+					note: ev.note
+				})
+		});
+		assert.equal(result.engines[0]?.used, 'webcrypto');
+		assert.equal(result.engines[0]?.fallback, false);
+		assert.ok(events.some((e) => e.job && e.note && /Web Crypto/i.test(e.note)));
+		const jobBeforeDone = events.filter((e) => e.job && !e.done);
+		assert.ok(jobBeforeDone.every((e) => e.size <= 0 || e.transferred / e.size < 1));
+		await vfs.db.delete();
+	});
+
+	it('popup extract writes the inner filesystem before the job reports done', async () => {
+		const vfs = createVfs({
+			dbName: `archive-ops-popup-${Date.now()}-${Math.random()}`,
+			memoryOpfs: true,
+			requestPersist: false
+		});
+		await vfs.ready();
+		const driver = createLocalExplorerDriver(vfs);
+		await driver.ready();
+		const zip = await packFiles(
+			'fflate',
+			[
+				{ name: 'hello.txt', data: enc.encode('hello') },
+				{ name: 'nested/inner.txt', data: enc.encode('inner') }
+			],
+			'zip'
+		);
+		await driver.writeFile!(null, new File([zip[0]!.data as BlobPart], zip[0]!.name));
+		const listed = await driver.list({ parentId: null });
+		const archive = listed.entries.find((e) => e.name === zip[0]!.name)!;
+		const events: Array<{ job?: boolean; done: boolean; transferred: number; size: number }> = [];
+		const result = await runArchiveJob({
+			kind: 'decompress',
+			entries: [archive],
+			driver,
+			dest: 'popup',
+			destParentId: null,
+			title: archive.name,
+			compressEngineId: 'fflate',
+			codec: 'zip',
+			cryptoEngineId: 'webcrypto',
+			password: '',
+			skipSystemFiles: true,
+			useHost: false,
+			onProgress: (ev) =>
+				events.push({
+					job: ev.job,
+					done: ev.done,
+					transferred: ev.transferred,
+					size: ev.size
+				})
+		});
+		assert.ok(result.innerSession);
+		const jobBeforeDone = events.filter((e) => e.job && !e.done);
+		assert.ok(jobBeforeDone.every((e) => e.size <= 0 || e.transferred / e.size < 1));
+		const inner = await result.innerSession!.driver.list({ parentId: null });
+		assert.ok(inner.entries.some((e) => e.name === 'hello.txt'));
+		await result.innerSession!.dispose();
+		await vfs.db.delete();
 	});
 });
