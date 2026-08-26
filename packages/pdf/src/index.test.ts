@@ -109,6 +109,30 @@ describe('interpretPage', () => {
 		expect(heading!.d).toMatch(/[MLCQ]/i);
 	});
 
+	it('places text at the PDF drawing position, not the page origin', async () => {
+		const handle = await track(await makeTextPdf('Heading'));
+		const result = await interpretPage(handle, 0, { targetWidth: 400, targetHeight: 240 });
+		const heading = result.elements.find(
+			(e): e is PdfIrTextElement => e.type === 'text' && e.str.includes('Heading')
+		);
+		expect(heading).toBeTruthy();
+		// 200×120 page, text at (16, 70) size 18, scaled 2× into 400×240 (y-down).
+		// Baseline ≈ (120-70)*2 = 100; top of em ≈ 64. Packed Tm used to drop this
+		// and park every run at the origin (x≈0, y≈204).
+		expect(heading!.x).toBeGreaterThan(10);
+		expect(heading!.x).toBeLessThan(80);
+		expect(heading!.y).toBeGreaterThan(40);
+		expect(heading!.y).toBeLessThan(140);
+	});
+
+	it('keeps a fill color that pdf.js already stringified', async () => {
+		const handle = await track(await makeRectPdf());
+		const result = await interpretPage(handle, 0, { targetWidth: 400, targetHeight: 240 });
+		const paths = result.elements.filter((e) => e.type === 'path');
+		expect(paths.length).toBeGreaterThanOrEqual(1);
+		expect(paths[0]!.fill.toLowerCase()).toMatch(/#e61a1a|#e41a1a|#c81a1a|#ff0000/);
+	});
+
 	it('extracts at least one path from a rectangle page', async () => {
 		const handle = await track(await makeRectPdf());
 		const result = await interpretPage(handle, 0, { targetWidth: 400, targetHeight: 240 });

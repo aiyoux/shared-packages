@@ -29,6 +29,35 @@ type Mat = [number, number, number, number, number, number];
 
 const IDENTITY: Mat = [1, 0, 0, 1, 0, 0];
 
+/** pdf.js 5 ships 6-number ops either as six args or as one packed typed array. */
+function matFromArgs(args: unknown[]): Mat | null {
+	if (args.length >= 6 && typeof args[0] === 'number') {
+		return [
+			Number(args[0]),
+			Number(args[1]),
+			Number(args[2]),
+			Number(args[3]),
+			Number(args[4]),
+			Number(args[5])
+		];
+	}
+	const packed = args[0];
+	if (packed && typeof packed === 'object' && typeof (packed as ArrayLike<number>).length === 'number') {
+		const m = packed as ArrayLike<number>;
+		if (m.length >= 6) {
+			return [Number(m[0]), Number(m[1]), Number(m[2]), Number(m[3]), Number(m[4]), Number(m[5])];
+		}
+	}
+	return null;
+}
+
+/** pdf.js 5 color ops often pass a CSS string as args[0] instead of channels. */
+function cssFromArgs(args: unknown[], fallback: () => string): string {
+	const a0 = args[0];
+	if (typeof a0 === 'string' && a0.length > 0) return a0;
+	return fallback();
+}
+
 function newId(): string {
 	return crypto.randomUUID();
 }
@@ -665,24 +694,29 @@ export async function interpretPage(
 				if (popped) gs = popped;
 				const tpop = textStack.pop();
 				if (tpop) ts = tpop;
-			} else if (fn === OPS.transform && args.length >= 6) {
-				gs.ctm = multiply(gs.ctm, args as unknown as Mat);
+			} else if (fn === OPS.transform) {
+				const m = matFromArgs(args);
+				if (m) gs.ctm = multiply(gs.ctm, m);
 			} else if (fn === OPS.setLineWidth && typeof args[0] === 'number') {
 				gs.lineWidth = args[0];
 			} else if (fn === OPS.setGState) {
 				applyGState(gs, args[0] ?? args);
 			} else if (fn === OPS.setFillRGBColor) {
-				gs.fill = cssRgb(Number(args[0]), Number(args[1]), Number(args[2]));
+				gs.fill = cssFromArgs(args, () => cssRgb(Number(args[0]), Number(args[1]), Number(args[2])));
 			} else if (fn === OPS.setStrokeRGBColor) {
-				gs.stroke = cssRgb(Number(args[0]), Number(args[1]), Number(args[2]));
+				gs.stroke = cssFromArgs(args, () => cssRgb(Number(args[0]), Number(args[1]), Number(args[2])));
 			} else if (fn === OPS.setFillGray) {
-				gs.fill = cssGray(Number(args[0]));
+				gs.fill = cssFromArgs(args, () => cssGray(Number(args[0])));
 			} else if (fn === OPS.setStrokeGray) {
-				gs.stroke = cssGray(Number(args[0]));
+				gs.stroke = cssFromArgs(args, () => cssGray(Number(args[0])));
 			} else if (fn === OPS.setFillCMYKColor) {
-				gs.fill = cssCmyk(Number(args[0]), Number(args[1]), Number(args[2]), Number(args[3]));
+				gs.fill = cssFromArgs(args, () =>
+					cssCmyk(Number(args[0]), Number(args[1]), Number(args[2]), Number(args[3]))
+				);
 			} else if (fn === OPS.setStrokeCMYKColor) {
-				gs.stroke = cssCmyk(Number(args[0]), Number(args[1]), Number(args[2]), Number(args[3]));
+				gs.stroke = cssFromArgs(args, () =>
+					cssCmyk(Number(args[0]), Number(args[1]), Number(args[2]), Number(args[3]))
+				);
 			} else if (fn === OPS.setFillTransparent) {
 				gs.fillAlpha = 0;
 			} else if (fn === OPS.setStrokeTransparent) {
@@ -729,10 +763,13 @@ export async function interpretPage(
 			} else if (fn === OPS.setFont) {
 				ts.fontRef = typeof args[0] === 'string' ? args[0] : ts.fontRef;
 				if (typeof args[1] === 'number') ts.fontSize = args[1];
-			} else if (fn === OPS.setTextMatrix && args.length >= 6) {
-				ts.matrix = [Number(args[0]), Number(args[1]), Number(args[2]), Number(args[3]), Number(args[4]), Number(args[5])];
-				ts.x = ts.lineX = 0;
-				ts.y = ts.lineY = 0;
+			} else if (fn === OPS.setTextMatrix) {
+				const m = matFromArgs(args);
+				if (m) {
+					ts.matrix = m;
+					ts.x = ts.lineX = 0;
+					ts.y = ts.lineY = 0;
+				}
 			} else if (fn === OPS.moveText) {
 				ts.x = ts.lineX += Number(args[0] ?? 0);
 				ts.y = ts.lineY += Number(args[1] ?? 0);
