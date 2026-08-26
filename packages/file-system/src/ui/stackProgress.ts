@@ -58,7 +58,7 @@ export function stackedStageLabel(t: {
 	const first = stagePercent(t.ahead, t.size, t.done);
 	const second = stagePercent(t.behind, t.size, t.done);
 	if (first !== second) return `${first}% · ${second}%`;
-	if (t.done || (t.size > 0 && t.behind >= t.size)) return t.done ? 'Done' : 'Writing…';
+	if (t.done) return 'Done';
 	return `${second}%`;
 }
 

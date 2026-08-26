@@ -209,4 +209,25 @@ describe('stackTransferItems', () => {
 		]);
 		assert.equal(stackedStageLabel(stacked[0]!), '100% · 0%');
 	});
+
+	it('shows 100% when bytes are in but the dest write is not done', () => {
+		assert.equal(
+			stackedStageLabel({
+				ahead: 100,
+				behind: 100,
+				size: 100,
+				done: false
+			}),
+			'100%'
+		);
+		assert.equal(
+			stackedStageLabel({
+				ahead: 100,
+				behind: 100,
+				size: 100,
+				done: true
+			}),
+			'Done'
+		);
+	});
 });

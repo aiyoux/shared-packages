@@ -836,6 +836,16 @@ async function copyFile(
 				hop: 'dual-phase',
 				hopNote
 			});
+		} else if (dest.upload) {
+			// Local VFS reads finish instantly (often with no download ticks).
+			// Do not paint 100% until dest.upload reports PUT progress.
+			reportCopy(opId, entry, {
+				transferred: 0,
+				size: blob.size,
+				status: 'active',
+				hop: 'direct',
+				hopNote
+			});
 		} else {
 			reportCopy(opId, entry, {
 				transferred: blob.size,

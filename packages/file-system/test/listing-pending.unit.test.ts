@@ -60,12 +60,12 @@ describe('listing pending merge', () => {
 		assert.equal(rows[0].pending, null);
 	});
 
-	it('says Writing… after bytes finish if the dest has not listed the file yet', () => {
+	it('keeps 100% after bytes finish if the dest has not listed the file yet', () => {
 		const p = pending({ name: 'clip.wav', transferred: 100, size: 100 });
-		assert.equal(pendingLabel(p), 'Writing…');
+		assert.equal(pendingLabel(p), '100%');
 		const rows = mergeListingWithPending([], [p]);
 		assert.equal(rows[0].placeholder, true);
-		assert.equal(pendingLabel(rows[0].pending!), 'Writing…');
+		assert.equal(pendingLabel(rows[0].pending!), '100%');
 	});
 
 	it('keeps Hashing… even when the dest file exists', () => {

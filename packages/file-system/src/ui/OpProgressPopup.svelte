@@ -50,7 +50,6 @@
 			const tx = pct(t.behind, t.size, false);
 			return `${tx}% sent · ${dl}% ready`;
 		}
-		if (t.size && t.behind >= t.size) return 'Writing…';
 		return 'Copying…';
 	}
 

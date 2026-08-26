@@ -92,7 +92,7 @@ describe('FileExplorer stacked pending bar', () => {
 		expect(solid.querySelector('.fe-pending-pct')).toBeNull();
 	});
 
-	it('labels a finished transfer Writing… until the dest lists the file', async () => {
+	it('keeps a 100% placeholder until the dest lists the file', async () => {
 		const vfs = createVfs({
 			dbName: `fe-pending-writing-${Date.now()}`,
 			memoryOpfs: true,
@@ -117,6 +117,6 @@ describe('FileExplorer stacked pending bar', () => {
 			}
 		});
 		const row = await screen.findByTestId('fe-pending-row');
-		expect(row.querySelector('.fe-pending-pct')?.textContent).toBe('Writing…');
+		expect(row.querySelector('.fe-pending-pct')?.textContent).toBe('100%');
 	});
 });

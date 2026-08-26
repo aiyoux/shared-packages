@@ -1,8 +1,8 @@
 /**
  * Merge in-flight transfer rows into the explorer listing so a copy/upload
  * occupies one line: translucent with a bar while bytes move, solid once the
- * dest file is in the listing (or still a placeholder labelled "Writing…"
- * after 100% if the dest has not listed it yet).
+ * dest file is in the listing (or still a 100% placeholder if the dest has
+ * not listed it yet).
  */
 import type { ExplorerEntry } from './explorerDriver.js';
 
@@ -58,7 +58,6 @@ export function pendingLabel(p: ListingPending): string {
 	const first = p.size ? Math.min(100, Math.round((firstN / Math.max(p.size, 1)) * 100)) : pendingPercent(p);
 	const second = pendingPercent(p);
 	if (first !== second) return `${first}% · ${second}%`;
-	if (pendingBytesComplete(p)) return 'Writing…';
 	return `${second}%`;
 }
 

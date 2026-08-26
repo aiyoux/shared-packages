@@ -38,6 +38,7 @@ import {
 import { createHybridB2Transport } from './hybridTransport.js';
 import { ensureExplorerCors } from './b2Cors.js';
 import { assertBucketScopedAuthorization } from './keyScope.js';
+import { sha1HexOfBlob, uploadB2SmallFileWithProgress } from './uploadWithProgress.js';
 import { normalizeNamePrefix, type B2ConnectionProfileV1 } from './types.js';
 
 /** Download-auth token lifetime for direct browser GETs (seconds). */
@@ -608,10 +609,46 @@ export async function createB2ExplorerDriver(
 				const parent = absPrefix(parentId);
 				const destName = await uniqueName(parent, file.name);
 				const fileName = `${parent}${destName}`;
+				const contentType = file.type || 'b2/x-auto';
+				const canProgressUpload =
+					Boolean(opts?.onProgress) &&
+					!usingCustomTransport &&
+					typeof crypto !== 'undefined' &&
+					!!crypto.subtle;
+				if (canProgressUpload) {
+					opts!.onProgress?.(0);
+					const contentSha1 = await sha1HexOfBlob(file);
+					const up = await client.raw.getUploadUrl(
+						client.accountInfo.getApiUrl(),
+						client.accountInfo.getAuthToken(),
+						{ bucketId: bucket!.id }
+					);
+					const uploaded = await uploadB2SmallFileWithProgress({
+						uploadUrl: up.uploadUrl,
+						authorizationToken: up.authorizationToken,
+						fileName,
+						file,
+						contentType,
+						contentSha1,
+						signal: opts?.signal,
+						onProgress: opts?.onProgress
+					});
+					return {
+						id: uploaded.fileName,
+						parentId,
+						name: destName,
+						kind: 'file' as const,
+						size: uploaded.contentLength,
+						updatedAt: uploaded.uploadTimestamp,
+						contentType: uploaded.contentType,
+						fileType: inferFileTypeFromName(uploaded.fileName),
+						meta: { fileId: uploaded.fileId }
+					};
+				}
 				const uploaded = await bucket!.upload({
 					fileName,
 					source: new BlobSource(file),
-					contentType: file.type || 'b2/x-auto',
+					contentType,
 					onProgress: opts?.onProgress
 						? (ev) => {
 								const total = ev.totalBytes ?? file.size ?? 1;

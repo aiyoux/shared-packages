@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { fetchPutBlob } from '../src/uploadProgress.ts';
+import { fetchPutBlob, xhrPostBlob } from '../src/uploadProgress.ts';
 
 describe('fetchPutBlob', () => {
 	it('streams the body and reports mid-flight byte progress', async () => {
@@ -44,5 +44,54 @@ describe('fetchPutBlob', () => {
 		};
 		await fetchPutBlob({ url: 'http://127.0.0.1/write', body, fetchImpl });
 		assert.equal(sent, body);
+	});
+});
+
+describe('xhrPostBlob', () => {
+	it('reports upload.onprogress fractions then 1 on load', async () => {
+		const ticks: number[] = [];
+		const orig = globalThis.XMLHttpRequest;
+		class FakeXHR {
+			status = 200;
+			statusText = 'OK';
+			responseText = '{"ok":true}';
+			upload: { onprogress: ((ev: { lengthComputable: boolean; loaded: number; total: number }) => void) | null } =
+				{ onprogress: null };
+			onload: (() => void) | null = null;
+			onerror: (() => void) | null = null;
+			onabort: (() => void) | null = null;
+			open() {}
+			setRequestHeader() {}
+			getResponseHeader() {
+				return null;
+			}
+			abort() {}
+			send() {
+				queueMicrotask(() => {
+					this.upload.onprogress?.({ lengthComputable: true, loaded: 4, total: 8 });
+					this.upload.onprogress?.({ lengthComputable: true, loaded: 8, total: 8 });
+					this.onload?.();
+				});
+			}
+		}
+		(globalThis as { XMLHttpRequest: typeof XMLHttpRequest }).XMLHttpRequest =
+			FakeXHR as unknown as typeof XMLHttpRequest;
+		try {
+			const res = await xhrPostBlob({
+				url: 'https://pod.backblaze.com/b2api/v2/b2_upload_file',
+				body: new Blob([new Uint8Array(8)]),
+				headers: { Authorization: 'tok' },
+				onProgress: (pct) => ticks.push(pct)
+			});
+			assert.equal(res.ok, true);
+			assert.ok(ticks.includes(0.5));
+			assert.equal(ticks[ticks.length - 1], 1);
+		} finally {
+			if (orig) {
+				globalThis.XMLHttpRequest = orig;
+			} else {
+				delete (globalThis as { XMLHttpRequest?: typeof XMLHttpRequest }).XMLHttpRequest;
+			}
+		}
 	});
 });

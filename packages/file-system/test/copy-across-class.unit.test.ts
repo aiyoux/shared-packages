@@ -258,6 +258,51 @@ describe('copyAcross truncated folder', () => {
 		assert.equal(copies[0]!.transferred, 4);
 	});
 
+	it('resets progress to 0 before dest.upload so VFS→B2 is not 100% during the PUT', async () => {
+		resetTransferRegistryForTests();
+		const file: ExplorerEntry = {
+			id: 'clip.bin',
+			parentId: null,
+			name: 'clip.bin',
+			kind: 'file',
+			size: 4
+		};
+		const source = {
+			id: 'local',
+			capabilities: {},
+			async download() {
+				return new Blob([new Uint8Array([1, 2, 3, 4])]);
+			}
+		} as unknown as ExplorerDriver;
+		const seen: number[] = [];
+		const dest = {
+			id: 'b2',
+			capabilities: { supportsUpload: true },
+			async upload(
+				_parent: string | null,
+				f: File,
+				opts?: { onProgress?: (pct: number) => void }
+			) {
+				seen.push(listTransfers().find((t) => t.direction === 'copying')?.transferred ?? -1);
+				opts?.onProgress?.(0.5);
+				seen.push(listTransfers().find((t) => t.direction === 'copying')?.transferred ?? -1);
+				opts?.onProgress?.(1);
+				return { id: f.name, parentId: null, name: f.name, kind: 'file' as const };
+			}
+		} as unknown as ExplorerDriver;
+		await copyAcross({
+			sourceDriver: source,
+			destDriver: dest,
+			selectedIds: [file.id],
+			sourceEntries: [file],
+			destParentId: null
+		});
+		assert.deepEqual(seen, [0, 2]);
+		const copies = listTransfers().filter((t) => t.direction === 'copying');
+		assert.equal(copies[0]!.transferred, 4);
+		assert.equal(copies[0]!.done, true);
+	});
+
 	it('same B2 connection server-copies via the API and is not dual-phase', async () => {
 		resetTransferRegistryForTests();
 		const file: ExplorerEntry = {

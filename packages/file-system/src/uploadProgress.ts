@@ -75,13 +75,22 @@ export async function fetchPutBlob(args: {
 	}
 }
 
-export function xhrPostForm(args: {
+export type XhrPostResult = {
+	ok: boolean;
+	status: number;
+	statusText: string;
+	text: () => Promise<string>;
+	json: () => Promise<unknown>;
+	headers: { get(name: string): string | null };
+};
+
+function xhrPost(args: {
 	url: string;
-	form: FormData;
+	body: Blob | FormData;
 	headers?: Record<string, string>;
 	signal?: AbortSignal;
 	onProgress?: (pct: number) => void;
-}): Promise<{ ok: boolean; status: number; statusText: string; text: () => Promise<string>; json: () => Promise<unknown>; headers: { get(name: string): string | null } }> {
+}): Promise<XhrPostResult> {
 	return new Promise((resolve, reject) => {
 		if (typeof XMLHttpRequest === 'undefined') {
 			reject(new Error('XMLHttpRequest is not available'));
@@ -124,6 +133,27 @@ export function xhrPostForm(args: {
 			e.name = 'AbortError';
 			reject(e);
 		};
-		xhr.send(args.form);
+		xhr.send(args.body);
 	});
+}
+
+export function xhrPostForm(args: {
+	url: string;
+	form: FormData;
+	headers?: Record<string, string>;
+	signal?: AbortSignal;
+	onProgress?: (pct: number) => void;
+}): Promise<XhrPostResult> {
+	return xhrPost({ ...args, body: args.form });
+}
+
+/** POST a Blob (B2 `b2_upload_file`) with `xhr.upload.onprogress`. */
+export function xhrPostBlob(args: {
+	url: string;
+	body: Blob;
+	headers?: Record<string, string>;
+	signal?: AbortSignal;
+	onProgress?: (pct: number) => void;
+}): Promise<XhrPostResult> {
+	return xhrPost(args);
 }
