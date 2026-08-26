@@ -113,12 +113,39 @@ describe('DualPaneExplorer onOpenProject context', () => {
 			toolbarIds.indexOf('fe-download-selected') + 1
 		);
 		expect(left.querySelector('[data-testid="fe-selection-actions"] [data-testid="fe-copy-across-left"]')).toBeNull();
+		expect(left.querySelector('[data-testid="files-pane-chrome-left"] [data-testid="fe-copy-across-left"]')).toBeNull();
 
 		const row = left.querySelector('[data-testid="fe-file-row"]') as HTMLElement;
 		await fireEvent.click(row);
 		await fireEvent.click(left.querySelector('[data-testid="fe-item-details"]') as HTMLElement);
 		const preview = await screen.findByTestId('fe-file-preview');
 		expect(preview.querySelector('[data-testid="fe-file-preview-copy-across"]')).toBeTruthy();
+	});
+
+	it('Copy across sits after Download even when settings are not portaled', async () => {
+		await vfs.writeFile({
+			parentId: null,
+			name: 'across.txt',
+			body: 'payload'
+		});
+		render(DualPaneExplorer, {
+			props: {
+				localDriver: createLocalExplorerDriver(vfs),
+				hideToggles: false,
+				dualPaneDefault: true,
+				dualPaneKey: `dpe:dual:${Math.random()}`
+			}
+		});
+		await viWaitFor(() => document.querySelectorAll('[data-pane="left"] [data-testid="fe-file-row"]').length >= 1);
+
+		const left = document.querySelector('[data-pane="left"]') as HTMLElement;
+		const toolbarIds = [
+			...left.querySelectorAll('[data-testid="fe-toolbar"] > .fe-toolbar-row:first-child [data-testid]')
+		].map((el) => el.getAttribute('data-testid'));
+		expect(toolbarIds.indexOf('fe-copy-across-left')).toBe(
+			toolbarIds.indexOf('fe-download-selected') + 1
+		);
+		expect(left.querySelector('[data-testid="files-pane-chrome-left"]')).toBeNull();
 	});
 });
 

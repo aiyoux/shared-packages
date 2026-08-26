@@ -1492,7 +1492,7 @@
 
 {#snippet copyAcrossAction(id: PaneId, variant: 'icon' | 'label')}
 	{@const p = id === 'left' ? left : right}
-	{#if showCopyAcross && (variant === 'label' || hostSettings)}
+	{#if showCopyAcross}
 		{#if variant === 'label'}
 			<button
 				type="button"
@@ -1535,17 +1535,8 @@
 		onfeexplorerdragbegin={(e) => onPanePointerDragBegin(id, e)}
 		onfeexplorerdragend={onPaneDragEnd}
 	>
-		{#if !hostSettings}
+		{#if !hostSettings && (onSend || subTid || p.busy || (p.activeKind !== 'local' && p.activeKind !== 'memory') || (id === 'right' && overrideRight))}
 		<div class="pane-chrome" data-testid={tids.paneChrome(id)}>
-			{#if showCopyAcross}
-				<FeTipIconBtn
-					testid={tids.copyAcross(id)}
-					tip={copyBusy ? 'Copying…' : 'Copy across'}
-					icon="arrow-left-right"
-					disabled={copyBusy || p.ctx.selectedIds.length === 0}
-					onclick={() => runCopyAcross(id)}
-				/>
-			{/if}
 			{#if onSend}
 			<FeTipIconBtn
 				testid={tids.send(id)}
