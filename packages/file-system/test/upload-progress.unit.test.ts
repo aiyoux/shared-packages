@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { fetchPutBlob, xhrPostBlob } from '../src/uploadProgress.ts';
 
 describe('fetchPutBlob', () => {
-	it('streams the body and reports mid-flight byte progress', async () => {
+	it('streams the body and reports mid-flight byte progress over https', async () => {
 		const ticks: Array<[number, number]> = [];
 		const body = new Blob([new Uint8Array(8).fill(7)]);
 		let sawStream = false;
@@ -23,7 +23,7 @@ describe('fetchPutBlob', () => {
 			});
 		};
 		const res = await fetchPutBlob({
-			url: 'http://127.0.0.1/v1/fs/write',
+			url: 'https://example.test/v1/fs/write',
 			body,
 			onProgress: (sent, total) => ticks.push([sent, total]),
 			fetchImpl
@@ -33,6 +33,28 @@ describe('fetchPutBlob', () => {
 		assert.deepEqual(ticks[0], [0, 8]);
 		assert.deepEqual(ticks[ticks.length - 1], [8, 8]);
 		assert.ok(ticks.some(([sent]) => sent > 0 && sent < 8) || sawStream);
+	});
+
+	it('does not stream duplex bodies to cleartext HTTP (Chrome ALPN hang)', async () => {
+		const ticks: Array<[number, number]> = [];
+		const body = new Blob([new Uint8Array(8).fill(7)]);
+		let sent: unknown;
+		let duplex: unknown;
+		const fetchImpl: typeof fetch = async (_url, init) => {
+			sent = init?.body;
+			duplex = (init as RequestInit & { duplex?: string }).duplex;
+			return new Response('{}', { status: 200 });
+		};
+		await fetchPutBlob({
+			url: 'http://127.0.0.1:8300/v1/fs/write',
+			body,
+			onProgress: (n, total) => ticks.push([n, total]),
+			fetchImpl
+		});
+		assert.equal(sent, body);
+		assert.equal(duplex, undefined);
+		assert.deepEqual(ticks[0], [0, 8]);
+		assert.deepEqual(ticks[ticks.length - 1], [8, 8]);
 	});
 
 	it('sends the blob as-is when no onProgress is given', async () => {

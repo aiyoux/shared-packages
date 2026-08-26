@@ -7,9 +7,11 @@ export {
 	engineInfo,
 	engineSupports,
 	type ArchiveEntry,
+	type ArchiveMemberProgress,
 	type Codec,
 	type CompressOptions,
 	type CompressionEngine,
+	type UnzipProgressOpts,
 	type DetectedFormat,
 	type EngineId,
 	type EngineInfo
@@ -27,6 +29,8 @@ export {
 export { listEngines, loadEngine, peekEngine } from './engines.js';
 
 export { expandBytes, packFiles, resolveExpandCodec, type PackedFile } from './operations.js';
+
+export { isJunkArchivePath } from './junk.js';
 
 export {
 	compressBytes,

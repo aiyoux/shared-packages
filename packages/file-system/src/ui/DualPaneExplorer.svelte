@@ -417,6 +417,7 @@
 	let monitorWatchStatus = $state<Record<string, string>>({});
 	let watchPollTimer: ReturnType<typeof setInterval> | null = null;
 	let copyBusy = $state(false);
+	let copyAbort: AbortController | null = null;
 	/** Pane a FileExplorer row drag started in (cross-pane copy). */
 	let crossDragFrom = $state<PaneId | null>(null);
 	let crossOver = $state<PaneId | null>(null);
@@ -631,7 +632,7 @@
 	const visibleCopyItems = $derived(copyItems.filter((t) => !dismissedCopyIds.has(t.id)));
 	const destCopyPending = $derived(
 		stackTransferItems(visibleCopyItems)
-			.filter((t) => !t.done)
+			.filter((t) => !t.done || t.status === 'failed')
 			.map((t) => ({
 				id: t.id,
 				name: t.name,
@@ -651,6 +652,7 @@
 	}
 
 	function dismissCopy(id: string) {
+		if (copyBusy) copyAbort?.abort();
 		dismissedCopyIds = new Set([...dismissedCopyIds, id]);
 	}
 
@@ -1392,6 +1394,9 @@
 			const ok = await askDualPhase(sourceLabel, destLabel);
 			if (!ok) return;
 		}
+		copyAbort?.abort();
+		copyAbort = new AbortController();
+		const signal = copyAbort.signal;
 		copyBusy = true;
 		copyDestPane = destId;
 		try {
@@ -1401,7 +1406,8 @@
 				selectedIds: opts?.selectedIds ?? src.ctx.selectedIds,
 				sourceEntries: src.ctx.entries,
 				destParentId: opts?.destParentId !== undefined ? opts.destParentId : dst.ctx.parentId,
-				confirmDualPhase: () => askDualPhase(sourceLabel, destLabel)
+				confirmDualPhase: () => askDualPhase(sourceLabel, destLabel),
+				signal
 			});
 			// Live drivers refresh in place. Remotes without subscribeChanges
 			// remount but keep the dest open folder via initialParentId.
@@ -1412,9 +1418,14 @@
 			}
 			if (n === 0) toast.info('Nothing copied');
 		} catch (e) {
-			if (e instanceof CopyAcrossError) toast.error(e.message);
+			if (e instanceof Error && e.name === 'AbortError') toast.info('Copy cancelled');
+			else if (e instanceof CopyAcrossError) toast.error(e.message);
 			else toast.error(formatExplorerError(e));
+			if (!destDriver.subscribeChanges) {
+				setPane(destId, { explorerKey: dst.explorerKey + 1 });
+			}
 		} finally {
+			if (copyAbort?.signal === signal) copyAbort = null;
 			copyBusy = false;
 		}
 	}
@@ -1441,6 +1452,9 @@
 			const ok = await askDualPhase(srcLabel, destLabel);
 			if (!ok) return;
 		}
+		copyAbort?.abort();
+		copyAbort = new AbortController();
+		const signal = copyAbort.signal;
 		copyBusy = true;
 		copyDestPane = destId;
 		try {
@@ -1450,7 +1464,8 @@
 				selectedIds,
 				sourceEntries,
 				destParentId,
-				confirmDualPhase: () => askDualPhase(srcLabel, destLabel)
+				confirmDualPhase: () => askDualPhase(srcLabel, destLabel),
+				signal
 			});
 			if (!destDriver.subscribeChanges) {
 				setPane(destId, {
@@ -1459,9 +1474,14 @@
 			}
 			if (n === 0) toast.info('Nothing copied');
 		} catch (e) {
-			if (e instanceof CopyAcrossError) toast.error(e.message);
+			if (e instanceof Error && e.name === 'AbortError') toast.info('Copy cancelled');
+			else if (e instanceof CopyAcrossError) toast.error(e.message);
 			else toast.error(formatExplorerError(e));
+			if (!destDriver.subscribeChanges) {
+				setPane(destId, { explorerKey: dst.explorerKey + 1 });
+			}
 		} finally {
+			if (copyAbort?.signal === signal) copyAbort = null;
 			copyBusy = false;
 		}
 	}

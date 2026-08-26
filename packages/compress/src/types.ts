@@ -33,6 +33,20 @@ export type CompressOptions = {
 	level?: 'speed' | 'balanced' | 'ratio';
 };
 
+/** One archive member while unzipping (path as stored in the archive). */
+export type ArchiveMemberProgress = {
+	name: string;
+	transferred: number;
+	size?: number;
+	done: boolean;
+};
+
+export type UnzipProgressOpts = {
+	onMember?: (ev: ArchiveMemberProgress) => void;
+	/** Drop Finder `__MACOSX` / `._*` / `.DS_Store`. Default true. */
+	skipSystemFiles?: boolean;
+};
+
 export type DetectedFormat = {
 	codec: Codec;
 	confidence: 'high' | 'low';
@@ -46,7 +60,7 @@ export interface CompressionEngine {
 	compress(bytes: Uint8Array, codec: Exclude<Codec, 'zip' | 'tar'>, options?: CompressOptions): Promise<Uint8Array>;
 	decompress(bytes: Uint8Array, codec: Exclude<Codec, 'zip' | 'tar'>): Promise<Uint8Array>;
 	zip?(entries: ArchiveEntry[], options?: CompressOptions): Promise<Uint8Array>;
-	unzip?(bytes: Uint8Array): Promise<ArchiveEntry[]>;
+	unzip?(bytes: Uint8Array, opts?: UnzipProgressOpts): Promise<ArchiveEntry[]>;
 	tar?(entries: ArchiveEntry[], options?: CompressOptions): Promise<Uint8Array>;
 	untar?(bytes: Uint8Array): Promise<ArchiveEntry[]>;
 }

@@ -36,8 +36,11 @@
 		subjectLabel,
 		toArchiveEntries,
 		writeEntriesToDriver,
+		packedBasename,
+		packedIsTopLevel,
 		type ArchiveDest,
 		type ArchiveKind,
+		type ArchiveWriteProgress,
 		type PackedPath
 	} from './archiveOps.js';
 
@@ -67,7 +70,8 @@
 		driver,
 		destLocked = null,
 		onDone,
-		onCancel
+		onCancel,
+		onProgress
 	}: {
 		kind: ArchiveKind;
 		entries: ExplorerEntry[];
@@ -75,6 +79,7 @@
 		destLocked?: ArchiveDest | null;
 		onDone: (result?: ArchiveDone) => void;
 		onCancel: () => void;
+		onProgress?: (ev: ArchiveWriteProgress) => void;
 	} = $props();
 
 	const compressEngines = listCompressEngines();
@@ -103,6 +108,9 @@
 	/** Monitor default is on-host; opt into the download → process → upload path. */
 	let where = $state<'host' | 'browser'>('host');
 	let destName = $state('');
+	/** Finder `__MACOSX` / `._*` / `.DS_Store` — on by default, uncheck to keep them. */
+	let skipSystemFiles = $state(true);
+	let progressPct = $state<number | null>(null);
 
 	const compressEngine = $derived(
 		compressEngines.find((e) => e.id === compressEngineId) ?? compressEngines[0]!
@@ -283,27 +291,47 @@
 
 	async function runHost() {
 		const paths = entries.map((e) => driver.absolutePath!(e.id));
+		if (!isExtract) {
+			const name = destName.trim() || defaultPackName;
+			emitDest({ name, parentId: destParentId, transferred: 0, size: 1, done: false });
+		}
 		await driver.archive!({
 			op: hostOp(),
 			paths,
 			to: hostDestPath(),
 			password: kind === 'encrypt' || kind === 'decrypt' ? password : undefined
 		});
+		if (!isExtract) {
+			const name = destName.trim() || defaultPackName;
+			emitDest({ name, parentId: destParentId, transferred: 1, size: 1, done: true });
+		}
 		onDone({ title: titleName });
+	}
+
+	const revealListing = $derived(dest === 'same' || dest === 'folder');
+	const destParentId = $derived(
+		dest === 'folder' ? pickParent : (entries[0]?.parentId ?? null)
+	);
+
+	function emitDest(ev: ArchiveWriteProgress) {
+		if (ev.size > 0) progressPct = Math.min(100, Math.round((ev.transferred / ev.size) * 100));
+		if (dest === 'memory' || dest === 'popup') return;
+		onProgress?.(ev);
 	}
 
 	const runLabel = $derived.by(() => {
 		if (busy) {
+			const pct = progressPct != null ? ` ${progressPct}%` : '';
 			if (useHost) {
 				return kind === 'compress'
-					? 'Zipping on this computer…'
+					? `Zipping on this computer…${pct}`
 					: kind === 'encrypt'
-						? 'Encrypting on this computer…'
+						? `Encrypting on this computer…${pct}`
 						: kind === 'decompress'
-							? 'Extracting on this computer…'
-							: 'Decrypting on this computer…';
+							? `Extracting on this computer…${pct}`
+							: `Decrypting on this computer…${pct}`;
 			}
-			return KIND_BUSY[kind];
+			return `${KIND_BUSY[kind]}${pct}`;
 		}
 		if (dest === 'popup') return 'Open';
 		if (useHost) {
@@ -330,6 +358,7 @@
 	async function run() {
 		if (!canRun) return;
 		busy = true;
+		progressPct = 0;
 		actionError = '';
 		try {
 			if (useHost) {
@@ -337,6 +366,8 @@
 				return;
 			}
 			if (kind === 'compress' || kind === 'encrypt') {
+				const guessName = destName.trim() || defaultPackName;
+				emitDest({ name: guessName, parentId: destParentId, transferred: 0, size: 1, done: false });
 				const packed = await collectPackEntries(driver, entries);
 				if (kind === 'compress') {
 					const out = await packFiles(compressEngineId, toArchiveEntries(packed), codec);
@@ -364,7 +395,24 @@
 					if (!blob) throw new Error('This connection cannot read the file');
 					return new Uint8Array(await blob.arrayBuffer());
 				})();
-				inner.push(...(await expandPackedBytes(bytes, entry.name, password)));
+				inner.push(
+					...(await expandPackedBytes(
+						bytes,
+						entry.name,
+						password,
+						(ev) => {
+							if (!packedIsTopLevel(ev.path)) return;
+							emitDest({
+								name: packedBasename(ev.path),
+								parentId: destParentId,
+								transferred: ev.transferred,
+								size: ev.size || ev.transferred,
+								done: ev.done
+							});
+						},
+						{ skipSystemFiles }
+					))
+				);
 			}
 			if (!inner.length) throw new Error('Nothing to extract');
 			if (dest === 'popup') {
@@ -389,15 +437,17 @@
 			return;
 		}
 		const parent = dest === 'same' ? (entries[0]?.parentId ?? null) : pickParent;
-		await writeEntriesToDriver(driver, parent, files);
+		await writeEntriesToDriver(driver, parent, files, emitDest);
 	}
 </script>
 
 <div
 	class="modal-root"
+	class:busy-hidden={busy && revealListing}
 	data-testid="fe-archive-dialog"
 	data-kind={kind}
 	data-where={useHost ? 'host' : 'browser'}
+	data-busy={busy ? 'true' : undefined}
 	role="dialog"
 	aria-modal="true"
 	aria-labelledby="fe-archive-title"
@@ -522,8 +572,20 @@
 							{/each}
 						</select>
 					</label>
+					<label class="check-row">
+						<input
+							type="checkbox"
+							bind:checked={skipSystemFiles}
+							data-testid="fe-archive-skip-system"
+						/>
+						Skip system files
+					</label>
 				</div>
-				<p class="hint">{compressEngine.description} · Format is detected from the file.</p>
+				<p class="hint">
+					{compressEngine.description} · Format is detected from the file.{skipSystemFiles
+						? ' · Skips macOS __MACOSX / ._ files and .DS_Store.'
+						: ''}
+				</p>
 			{:else}
 				<p class="hint">Extracts into the folder you choose on this computer.</p>
 			{/if}
@@ -538,6 +600,16 @@
 						data-testid="fe-archive-password"
 					/>
 				</label>
+				{#if !useHost}
+					<label class="check-row">
+						<input
+							type="checkbox"
+							bind:checked={skipSystemFiles}
+							data-testid="fe-archive-skip-system"
+						/>
+						Skip system files
+					</label>
+				{/if}
 			</div>
 			<p class="hint">
 				{#if useHost}
@@ -690,6 +762,9 @@
 		align-items: center;
 		justify-content: center;
 	}
+	.modal-root.busy-hidden {
+		display: none;
+	}
 	.scrim {
 		position: absolute;
 		inset: 0;
@@ -721,6 +796,11 @@
 		flex-direction: column;
 		gap: 0.2rem;
 		font-size: 0.8rem;
+	}
+	label.check-row {
+		flex-direction: row;
+		align-items: center;
+		gap: 0.4rem;
 	}
 	select,
 	input[type='password'],

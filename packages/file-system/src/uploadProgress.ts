@@ -37,7 +37,11 @@ export async function fetchPutBlob(args: {
 		return res;
 	};
 
-	if (!args.onProgress || typeof args.body.stream !== 'function') {
+	// Duplex ReadableStream bodies make Chrome negotiate HTTP/2. Cleartext
+	// HTTP/1.1 (local monitor) then fails with net::ERR_ALPN_NEGOTIATION_FAILED
+	// and the fetch can hang at a few percent with no reject.
+	const cleartextHttp = /^http:\/\//i.test(args.url);
+	if (!args.onProgress || typeof args.body.stream !== 'function' || cleartextHttp) {
 		base.body = args.body;
 		args.onProgress?.(0, total);
 		return send(base);

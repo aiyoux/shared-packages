@@ -303,6 +303,56 @@ describe('copyAcross truncated folder', () => {
 		assert.equal(copies[0]!.done, true);
 	});
 
+	it('aborts dest.upload when copyAcross is cancelled', async () => {
+		resetTransferRegistryForTests();
+		const file: ExplorerEntry = {
+			id: 'clip.bin',
+			parentId: null,
+			name: 'clip.bin',
+			kind: 'file',
+			size: 4
+		};
+		const ac = new AbortController();
+		const source = {
+			id: 'local',
+			capabilities: {},
+			async download() {
+				return new Blob([new Uint8Array([1, 2, 3, 4])]);
+			}
+		} as unknown as ExplorerDriver;
+		const dest = {
+			id: 'monitor',
+			capabilities: { supportsUpload: true },
+			async upload(
+				_parent: string | null,
+				_f: File,
+				opts?: { signal?: AbortSignal; onProgress?: (pct: number) => void }
+			) {
+				opts?.onProgress?.(0.05);
+				ac.abort();
+				if (opts?.signal?.aborted) {
+					const e = new Error('aborted');
+					e.name = 'AbortError';
+					throw e;
+				}
+			}
+		} as unknown as ExplorerDriver;
+		await assert.rejects(
+			() =>
+				copyAcross({
+					sourceDriver: source,
+					destDriver: dest,
+					selectedIds: [file.id],
+					sourceEntries: [file],
+					destParentId: null,
+					signal: ac.signal
+				}),
+			(e: unknown) => e instanceof Error && e.name === 'AbortError'
+		);
+		const copies = listTransfers().filter((t) => t.direction === 'copying');
+		assert.equal(copies[0]!.status, 'failed');
+	});
+
 	it('same B2 connection server-copies via the API and is not dual-phase', async () => {
 		resetTransferRegistryForTests();
 		const file: ExplorerEntry = {

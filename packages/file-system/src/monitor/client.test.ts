@@ -152,14 +152,8 @@ describe('monitor client (direct transport)', () => {
 		const mockFetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
 			const url = String(input);
 			expect(url).toContain('/v1/fs/write');
-			const body = init?.body;
-			if (body && typeof (body as ReadableStream).getReader === 'function') {
-				const reader = (body as ReadableStream<Uint8Array>).getReader();
-				while (true) {
-					const { done } = await reader.read();
-					if (done) break;
-				}
-			}
+			expect(init?.body).toBeInstanceOf(Blob);
+			expect((init as RequestInit & { duplex?: string }).duplex).toBeUndefined();
 			return jsonResponse({ name: 'a.bin', path: '/tmp/a.bin', kind: 'file', size: 4 });
 		});
 		const client = createMonitorClient({
@@ -171,7 +165,6 @@ describe('monitor client (direct transport)', () => {
 		});
 		expect(ticks[0]).toEqual([0, 4]);
 		expect(ticks[ticks.length - 1]).toEqual([4, 4]);
-		expect(ticks.length).toBeGreaterThan(1);
 	});
 
 	it('openHostEvents and openGitEvents parse SSE snapshots', async () => {

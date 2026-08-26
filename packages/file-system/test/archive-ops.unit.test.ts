@@ -12,6 +12,7 @@ import {
 	looksPackedName,
 	looksVaultName,
 	packingAsTree,
+	packedIsTopLevel,
 	pickEngineForCodec,
 	subjectLabel,
 	writeEntriesToDriver
@@ -53,6 +54,8 @@ describe('archiveOps', () => {
 			true
 		);
 		assert.equal(packingAsTree([{ id: 'd', name: 'Docs', kind: 'folder', parentId: null }]), true);
+		assert.equal(packedIsTopLevel('hello.txt'), true);
+		assert.equal(packedIsTopLevel('nested/inner.txt'), false);
 		assert.equal(subjectLabel([fileEntry({ id: '1', name: 'a.txt' })]), 'a.txt');
 		assert.equal(
 			subjectLabel([fileEntry({ id: '1', name: 'a.txt' }), fileEntry({ id: '2', name: 'b.txt' })]),
@@ -101,6 +104,64 @@ describe('archiveOps', () => {
 		assert.equal(inner.entries[0]?.name, 'b.txt');
 		await vfs.db.delete();
 		await dest.db.delete();
+	});
+
+	it('writeEntriesToDriver reports dest-file progress', async () => {
+		const vfs = createVfs({
+			dbName: `archive-ops-progress-${Date.now()}-${Math.random()}`,
+			memoryOpfs: true,
+			requestPersist: false
+		});
+		await vfs.ready();
+		const driver = createLocalExplorerDriver(vfs);
+		await driver.ready();
+		const ticks: Array<{ name: string; transferred: number; done: boolean }> = [];
+		await writeEntriesToDriver(
+			driver,
+			null,
+			[{ path: 'shot.txt', data: enc.encode('snap') }],
+			(ev) => ticks.push({ name: ev.name, transferred: ev.transferred, done: ev.done })
+		);
+		assert.ok(ticks.some((t) => t.name === 'shot.txt' && t.transferred === 0 && !t.done));
+		assert.ok(ticks.some((t) => t.name === 'shot.txt' && t.done && t.transferred === 4));
+		await vfs.db.delete();
+	});
+
+	it('expandPackedBytes reports zip members', async () => {
+		const zip = await packFiles(
+			'fflate',
+			[{ name: 'hello.txt', data: enc.encode('hello') }],
+			'zip'
+		);
+		const seen: string[] = [];
+		const files = await expandPackedBytes(zip[0]!.data, zip[0]!.name, undefined, (ev) => {
+			if (ev.done) seen.push(ev.path);
+		});
+		assert.deepEqual(seen, ['hello.txt']);
+		assert.equal(files[0]!.path, 'hello.txt');
+	});
+
+	it('expandPackedBytes omits __MACOSX sidecar members', async () => {
+		const zip = await packFiles(
+			'fflate',
+			[
+				{ name: 'hello.txt', data: enc.encode('hello') },
+				{ name: '__MACOSX/._hello.txt', data: enc.encode('appledouble') }
+			],
+			'zip'
+		);
+		const files = await expandPackedBytes(zip[0]!.data, zip[0]!.name);
+		assert.deepEqual(
+			files.map((f) => f.path),
+			['hello.txt']
+		);
+		const kept = await expandPackedBytes(zip[0]!.data, zip[0]!.name, undefined, undefined, {
+			skipSystemFiles: false
+		});
+		assert.deepEqual(
+			kept.map((f) => f.path).sort(),
+			['__MACOSX/._hello.txt', 'hello.txt']
+		);
 	});
 
 	it('expands a zip and a vault tree into an inner filesystem', async () => {

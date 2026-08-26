@@ -9,6 +9,7 @@ import {
 	detectFormatFromName,
 	engineSupports,
 	expandBytes,
+	isJunkArchivePath,
 	type ArchiveEntry,
 	type Codec,
 	type EngineId as CompressEngineId
@@ -34,6 +35,30 @@ export type PackedPath = {
 	path: string;
 	data: Uint8Array;
 };
+
+/** Dest-file listing row while compress / decompress / encrypt / decrypt writes. */
+export type ArchiveWriteProgress = {
+	name: string;
+	parentId: string | null;
+	transferred: number;
+	size: number;
+	done: boolean;
+};
+
+function yieldPaint(): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+export function packedBasename(path: string): string {
+	const parts = path.replace(/\\/g, '/').split('/').filter(Boolean);
+	return parts[parts.length - 1] || path;
+}
+
+/** True when the archive member lands in `parent` rather than a nested folder. */
+export function packedIsTopLevel(path: string): boolean {
+	const parts = path.replace(/\\/g, '/').split('/').filter((p) => p && p !== '.' && p !== '..');
+	return parts.length <= 1;
+}
 
 export type InnerFsSession = {
 	title: string;
@@ -137,7 +162,8 @@ function splitPackedPath(path: string): { dirs: string[]; file: string | null } 
 export async function writeEntriesToDriver(
 	driver: ExplorerDriver,
 	parentId: string | null,
-	files: PackedPath[]
+	files: PackedPath[],
+	onFile?: (ev: ArchiveWriteProgress) => void
 ): Promise<void> {
 	const put = driver.writeFile ?? driver.upload;
 	if (!put) throw new Error('This location cannot receive files');
@@ -172,7 +198,22 @@ export async function writeEntriesToDriver(
 		const destParent = flatten ? parentId : await ensureDir(dirs);
 		const destName = flatten && dirs.length ? `${dirs.join('__')}__${fileName}` : fileName;
 		const copy = Uint8Array.from(file.data);
-		await put(destParent, new File([new Blob([copy])], destName));
+		const blob = new Blob([copy]);
+		const size = blob.size;
+		onFile?.({ name: destName, parentId: destParent, transferred: 0, size, done: false });
+		const out = new File([blob], destName);
+		if (typeof driver.upload === 'function') {
+			await driver.upload(destParent, out, {
+				onProgress: (pct) => {
+					const transferred = Math.round(size * Math.min(1, Math.max(0, pct)));
+					onFile?.({ name: destName, parentId: destParent, transferred, size, done: false });
+				}
+			});
+		} else {
+			await driver.writeFile!(destParent, out);
+		}
+		onFile?.({ name: destName, parentId: destParent, transferred: size, size, done: true });
+		await yieldPaint();
 	}
 }
 
@@ -216,20 +257,50 @@ export async function writeEntriesToVfs(
 	}
 }
 
+export type ExpandPackedOpts = {
+	skipSystemFiles?: boolean;
+};
+
 export async function expandPackedBytes(
 	bytes: Uint8Array,
 	name: string,
-	password?: string
+	password?: string,
+	onMember?: (ev: { path: string; transferred: number; size: number; done: boolean }) => void,
+	opts?: ExpandPackedOpts
 ): Promise<PackedPath[]> {
+	const skipSystemFiles = opts?.skipSystemFiles !== false;
+	const keep = (path: string) => !skipSystemFiles || !isJunkArchivePath(path);
 	if (isVaultBytes(bytes) || isVaultName(name)) {
 		if (!password) throw new Error('Password is required');
 		const opened = await openVault(bytes, password);
-		return opened.entries.map((e) => ({ path: e.path, data: e.data }));
+		const mapped = opened.entries
+			.filter((e) => keep(e.path))
+			.map((e) => ({ path: e.path, data: e.data }));
+		for (const e of mapped) {
+			onMember?.({
+				path: e.path,
+				transferred: e.data.byteLength,
+				size: e.data.byteLength,
+				done: true
+			});
+			await yieldPaint();
+		}
+		return mapped;
 	}
 	const fmt = detectFormat(bytes, name);
 	if (!fmt) throw new Error(`Not a recognized archive: ${name}`);
 	const engine = pickEngineForCodec(readStoredCompressEngine(), fmt.codec);
-	const files = await expandBytes(engine, bytes, fmt.codec, name);
+	const files = await expandBytes(engine, bytes, fmt.codec, name, {
+		skipSystemFiles,
+		onMember: (ev) => {
+			onMember?.({
+				path: ev.name,
+				transferred: ev.transferred,
+				size: ev.size ?? ev.transferred,
+				done: ev.done
+			});
+		}
+	});
 
 	// Two-step expand: if we just decompressed a gzip/deflate/etc. layer
 	// and the result is a single .tar file, automatically untar it.
@@ -238,12 +309,14 @@ export async function expandPackedBytes(
 		const tarFmt = detectFormat(tarBytes, files[0]!.name);
 		if (tarFmt?.codec === 'tar') {
 			const tarEngine = pickEngineForCodec(readStoredCompressEngine(), 'tar');
-			const tarFiles = await expandBytes(tarEngine, tarBytes, 'tar', files[0]!.name);
-			return tarFiles.map((f) => ({ path: f.name, data: f.data }));
+			const tarFiles = await expandBytes(tarEngine, tarBytes, 'tar', files[0]!.name, {
+				skipSystemFiles
+			});
+			return tarFiles.filter((f) => keep(f.name)).map((f) => ({ path: f.name, data: f.data }));
 		}
 	}
 
-	return files.map((f) => ({ path: f.name, data: f.data }));
+	return files.filter((f) => keep(f.name)).map((f) => ({ path: f.name, data: f.data }));
 }
 
 export function toArchiveEntries(files: PackedPath[]): ArchiveEntry[] {

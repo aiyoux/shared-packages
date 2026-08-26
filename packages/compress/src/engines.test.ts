@@ -47,6 +47,46 @@ describe('fflate', () => {
 		);
 	});
 
+	it('expandBytes drops Finder __MACOSX and AppleDouble members', async () => {
+		const packed = await packFiles(
+			'fflate',
+			[
+				{ name: 'photo.jpg', data: SAMPLE },
+				{ name: '__MACOSX/._photo.jpg', data: new Uint8Array([0, 5, 22, 7]) },
+				{ name: '._hidden', data: new Uint8Array([1]) },
+				{ name: '.DS_Store', data: new Uint8Array([2]) }
+			],
+			'zip'
+		);
+		const files = await expandBytes('fflate', packed[0]!.data, 'zip', packed[0]!.name);
+		expect(files.map((f) => f.name)).toEqual(['photo.jpg']);
+		const kept = await expandBytes('fflate', packed[0]!.data, 'zip', packed[0]!.name, {
+			skipSystemFiles: false
+		});
+		expect(kept.map((f) => f.name).sort()).toEqual([
+			'.DS_Store',
+			'._hidden',
+			'__MACOSX/._photo.jpg',
+			'photo.jpg'
+		]);
+	});
+
+	it('unzip reports each member so the UI can tick dest rows', async () => {
+		const engine = await loadEngine('fflate');
+		const archive = await engine.zip!([
+			{ name: 'a.txt', data: SAMPLE },
+			{ name: 'b.txt', data: new TextEncoder().encode('b') }
+		]);
+		const names: string[] = [];
+		const files = await engine.unzip!(archive, {
+			onMember: (ev) => {
+				if (ev.done) names.push(ev.name);
+			}
+		});
+		expect(names.sort()).toEqual(['a.txt', 'b.txt']);
+		expect(files).toHaveLength(2);
+	});
+
 	it('packFiles / expandBytes go through the same path', async () => {
 		const packed = await packFiles(
 			'fflate',

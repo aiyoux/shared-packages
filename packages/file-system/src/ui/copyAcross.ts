@@ -181,6 +181,7 @@ export type CopyAcrossArgs = {
 	destParentId: string | null;
 	/** ICE-fail fallback: confirm dual-phase through this device. */
 	confirmDualPhase?: () => Promise<boolean>;
+	signal?: AbortSignal;
 };
 
 function entryById(entries: ExplorerEntry[], id: string): ExplorerEntry | undefined {
@@ -361,8 +362,15 @@ export function describeCopyAcrossPath(
  * Copy selected items from source driver into dest open folder.
  */
 export async function copyAcross(args: CopyAcrossArgs): Promise<number> {
-	const { sourceDriver, destDriver, selectedIds, sourceEntries, destParentId, confirmDualPhase } =
-		args;
+	const {
+		sourceDriver,
+		destDriver,
+		selectedIds,
+		sourceEntries,
+		destParentId,
+		confirmDualPhase,
+		signal
+	} = args;
 	if (!selectedIds.length) {
 		throw new CopyAcrossError('COPY_ACROSS_NO_SELECTION', 'Select file(s) to copy');
 	}
@@ -388,10 +396,11 @@ export async function copyAcross(args: CopyAcrossArgs): Promise<number> {
 				destDriver,
 				entry,
 				destParentId,
-				confirmDualPhase
+				confirmDualPhase,
+				signal
 			);
 		} else {
-			await copyFile(sourceDriver, destDriver, entry, destParentId, confirmDualPhase);
+			await copyFile(sourceDriver, destDriver, entry, destParentId, confirmDualPhase, signal);
 			count += 1;
 		}
 	}
@@ -457,8 +466,14 @@ async function copyFile(
 	dest: ExplorerDriver,
 	entry: ExplorerEntry,
 	destParentId: string | null,
-	confirmDualPhase?: () => Promise<boolean>
+	confirmDualPhase?: () => Promise<boolean>,
+	signal?: AbortSignal
 ): Promise<void> {
+	if (signal?.aborted) {
+		const err = new Error('Copy cancelled');
+		err.name = 'AbortError';
+		throw err;
+	}
 	const kind = classify(source, dest).kind;
 	const skipCap = kind === 'server' || kind === 'delegated' || kind === 'webrtc';
 	if (!skipCap && entry.size != null && entry.size > EXPLORER_DOWNLOAD_MAX_BYTES) {
@@ -798,6 +813,7 @@ async function copyFile(
 		let blob: Blob;
 		if (source.download) {
 			blob = await source.download(entry.id, {
+				signal,
 				onProgress: (transferred, total) => {
 					const size = total ?? known ?? transferred;
 					if (dual) {
@@ -873,6 +889,7 @@ async function copyFile(
 			}
 		} else if (dest.upload) {
 			await dest.upload(destParentId, file, {
+				signal,
 				onProgress: (pct) => {
 					const transferred = Math.round(blob.size * Math.min(1, Math.max(0, pct)));
 					if (dual) {
@@ -928,7 +945,8 @@ async function copyFolderTree(
 	dest: ExplorerDriver,
 	folder: ExplorerEntry,
 	destParentId: string | null,
-	confirmDualPhase?: () => Promise<boolean>
+	confirmDualPhase?: () => Promise<boolean>,
+	signal?: AbortSignal
 ): Promise<number> {
 	if (!dest.mkdir) {
 		throw new CopyAcrossError('COPY_ACROSS_DEST_NO_FOLDERS', 'Destination cannot create folders');
@@ -945,9 +963,9 @@ async function copyFolderTree(
 	const { entries } = listed;
 	for (const child of entries) {
 		if (child.kind === 'folder') {
-			count += await copyFolderTree(source, dest, child, created.id, confirmDualPhase);
+			count += await copyFolderTree(source, dest, child, created.id, confirmDualPhase, signal);
 		} else {
-			await copyFile(source, dest, child, created.id, confirmDualPhase);
+			await copyFile(source, dest, child, created.id, confirmDualPhase, signal);
 			count += 1;
 		}
 	}

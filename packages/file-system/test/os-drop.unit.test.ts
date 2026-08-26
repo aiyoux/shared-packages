@@ -186,6 +186,113 @@ describe('os folder drop', () => {
 		assert.equal(await nodes[2].file!.text(), 'hi');
 	});
 
+	it('collectOsDrop walks webkitGetAsEntry when a folder is dropped', async () => {
+		const { collectOsDrop } = await import('../src/ui/osDrop.ts');
+		type EntryLike = {
+			isFile: boolean;
+			isDirectory: boolean;
+			name: string;
+			file?: (ok: (f: File) => void, err?: (e: Error) => void) => void;
+			createReader?: () => {
+				readEntries: (ok: (entries: EntryLike[]) => void, err?: (e: Error) => void) => void;
+			};
+		};
+		const fileEntry = (name: string, body: string): EntryLike => ({
+			isFile: true,
+			isDirectory: false,
+			name,
+			file: (ok) => ok(new File([body], name, { type: 'text/plain' }))
+		});
+		const dirEntry = (name: string, kids: EntryLike[]): EntryLike => {
+			let sent = false;
+			return {
+				isFile: false,
+				isDirectory: true,
+				name,
+				createReader: () => ({
+					readEntries: (ok) => {
+						if (sent) {
+							ok([]);
+							return;
+						}
+						sent = true;
+						ok(kids);
+					}
+				})
+			};
+		};
+		const root = dirEntry('Trip', [
+			fileEntry('a.txt', 'alpha'),
+			dirEntry('inner', [fileEntry('b.txt', 'beta')])
+		]);
+		const revoked = new File(['stale'], 'a.txt', { type: 'text/plain' });
+		const dt = {
+			files: {
+				length: 1,
+				0: revoked,
+				item: (i: number) => (i === 0 ? revoked : null),
+				[Symbol.iterator]: function* () {
+					yield revoked;
+				}
+			},
+			items: [
+				{
+					kind: 'file',
+					webkitGetAsEntry: () => root,
+					getAsFile: () => revoked
+				}
+			]
+		} as unknown as DataTransfer;
+		const nodes = await collectOsDrop(dt);
+		assert.deepEqual(
+			nodes.map((n) => `${n.kind}:${n.relativePath}`),
+			['folder:Trip', 'file:Trip/a.txt', 'folder:Trip/inner', 'file:Trip/inner/b.txt']
+		);
+		const a = nodes.find((n) => n.relativePath === 'Trip/a.txt')?.file;
+		const b = nodes.find((n) => n.relativePath === 'Trip/inner/b.txt')?.file;
+		assert.equal(await a!.text(), 'alpha');
+		assert.equal(await b!.text(), 'beta');
+	});
+
+	it('collectOsDrop walks getAsFileSystemHandle directories', async () => {
+		const { collectOsDrop } = await import('../src/ui/osDrop.ts');
+		const fileHandle = (name: string, body: string): FileSystemFileHandle =>
+			({
+				kind: 'file' as const,
+				name,
+				getFile: async () => new File([body], name, { type: 'text/plain' })
+			}) as FileSystemFileHandle;
+		const dirHandle = (
+			name: string,
+			children: FileSystemHandle[]
+		): FileSystemDirectoryHandle =>
+			({
+				kind: 'directory' as const,
+				name,
+				values: async function* () {
+					for (const c of children) yield c;
+				}
+			}) as FileSystemDirectoryHandle;
+		const root = dirHandle('Album', [fileHandle('shot.jpg', 'jpeg')]);
+		const dt = {
+			files: { length: 0, item: () => null, [Symbol.iterator]: function* () {} },
+			items: [
+				{
+					kind: 'file',
+					getAsFileSystemHandle: async () => root,
+					webkitGetAsEntry: () => null,
+					getAsFile: () => null
+				}
+			]
+		} as unknown as DataTransfer;
+		const nodes = await collectOsDrop(dt);
+		assert.deepEqual(
+			nodes.map((n) => `${n.kind}:${n.relativePath}`),
+			['folder:Album', 'file:Album/shot.jpg']
+		);
+		assert.equal(await nodes[1]!.file!.text(), 'jpeg');
+	});
+
 	it('flat file drop works without mkdir', async () => {
 		const drv = mockDriver({ mkdir: false });
 		const r = await importOsDropToDriver(drv, 'root', [

@@ -75,7 +75,7 @@
 			data-ice-path={latest.icePath}
 			aria-expanded={open}
 			aria-haspopup="true"
-			title={hopStatus(latest) ?? latest.name}
+			title={latest.error || hopStatus(latest) || latest.name}
 			onclick={() => (open = !open)}
 		>
 			<div
@@ -116,7 +116,13 @@
 						<span class="name" title={hopStatus(t) ?? t.name}>{t.name}</span>
 						<span class="pct">{stackedStageLabel(t)}</span>
 						{#if onDismiss}
-							<button type="button" class="x" onclick={() => dismissRow(t)} aria-label="Dismiss">
+							<button
+								type="button"
+								class="x"
+								onclick={() => dismissRow(t)}
+								aria-label={t.done || t.status === 'failed' ? 'Dismiss' : 'Cancel'}
+								title={t.done || t.status === 'failed' ? 'Dismiss' : 'Cancel'}
+							>
 								<FeIcon name="x" size={12} />
 							</button>
 						{/if}

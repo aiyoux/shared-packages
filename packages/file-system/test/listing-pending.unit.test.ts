@@ -68,6 +68,19 @@ describe('listing pending merge', () => {
 		assert.equal(pendingLabel(rows[0].pending!), '100%');
 	});
 
+	it('keeps Failed overlay at the last percent so a hung upload is not 100%', () => {
+		const p = pending({
+			name: 'clip.bin',
+			transferred: 5,
+			size: 100,
+			status: 'failed',
+			done: true
+		});
+		assert.equal(pendingLabel(p), 'Failed');
+		assert.equal(pendingPercent(p), 5);
+		assert.ok(pendingOverlay(p, true));
+	});
+
 	it('keeps Hashing… even when the dest file exists', () => {
 		const p = pending({
 			name: 'clip.wav',

@@ -80,4 +80,19 @@ describe('FeArchiveDialog path copy', () => {
 		expect(screen.getByTestId('fe-archive-engine')).toBeTruthy();
 		expect(screen.getByTestId('fe-archive-run').textContent).toMatch(/Download, compress, and upload/);
 	});
+
+	it('decompress Skip system files is on by default', () => {
+		render(FeArchiveDialog, {
+			props: {
+				kind: 'decompress',
+				entries: [{ ...entry, name: 'bundle.zip', id: 'bundle.zip' }],
+				driver: stubDriver({ id: 'local', writeFile: async () => entry }),
+				onDone: vi.fn(),
+				onCancel: vi.fn()
+			}
+		});
+		const box = screen.getByTestId('fe-archive-skip-system') as HTMLInputElement;
+		expect(box.checked).toBe(true);
+		expect(box.closest('label')?.textContent).toMatch(/Skip system files/);
+	});
 });

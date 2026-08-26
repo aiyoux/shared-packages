@@ -22,6 +22,7 @@
 		readEntryBytes,
 		type ArchiveDest,
 		type ArchiveKind,
+		type ArchiveWriteProgress,
 		type InnerFsSession
 	} from './archiveOps.js';
 	import {
@@ -320,6 +321,8 @@
 	let saveOps = $state<ListingPending[]>([]);
 	/** OS / picker uploads into this listing (one row per file, merged by name). */
 	let inboundOps = $state<ListingPending[]>([]);
+	const archiveNameToId = new Map<string, string>();
+	let archiveInboundIds = $state<string[]>([]);
 	/** True until the first list() completes (empty shell only). */
 	let initialLoad = $state(true);
 
@@ -1370,6 +1373,45 @@
 		archiveKind = null;
 		archiveEntries = [];
 		archiveDestLocked = null;
+	}
+
+	function bumpArchiveProgress(ev: ArchiveWriteProgress) {
+		if (ev.parentId !== parentId) return;
+		let id = archiveNameToId.get(ev.name);
+		if (!id) {
+			id = generateId('archive');
+			archiveNameToId.set(ev.name, id);
+			archiveInboundIds = [...archiveInboundIds, id];
+		}
+		const row: ListingPending = {
+			id,
+			name: ev.name,
+			transferred: ev.transferred,
+			size: ev.size,
+			direction: 'receiving',
+			done: ev.done
+		};
+		inboundOps = inboundOps.some((o) => o.id === id)
+			? inboundOps.map((o) => (o.id === id ? row : o))
+			: [...inboundOps, row];
+	}
+
+	async function finishArchive(result?: { inner?: import('./archiveOps.js').PackedPath[]; title: string }) {
+		const ids = archiveInboundIds;
+		archiveNameToId.clear();
+		archiveInboundIds = [];
+		closeArchive();
+		if (result?.inner?.length) {
+			inboundOps = inboundOps.filter((o) => !ids.includes(o.id));
+			try {
+				innerFs = await createInnerFsSession(result.title, result.inner);
+			} catch (e) {
+				reportError(e);
+			}
+			return;
+		}
+		await refresh();
+		inboundOps = inboundOps.filter((o) => !ids.includes(o.id));
 	}
 
 	async function closeInnerFs() {
@@ -2884,21 +2926,9 @@
 			entries={archiveEntries}
 			{driver}
 			destLocked={archiveDestLocked}
-			onDone={(result) => {
-				closeArchive();
-				if (result?.inner?.length) {
-					void createInnerFsSession(result.title, result.inner)
-						.then((session) => {
-							innerFs = session;
-						})
-						.catch((e) => {
-							reportError(e);
-						});
-					return;
-				}
-				void refresh();
-			}}
+			onDone={(result) => void finishArchive(result)}
 			onCancel={closeArchive}
+			onProgress={bumpArchiveProgress}
 		/>
 	{/if}
 

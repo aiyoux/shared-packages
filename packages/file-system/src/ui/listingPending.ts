@@ -26,6 +26,10 @@ export type ListingRow = {
 };
 
 export function pendingPercent(p: ListingPending): number {
+	if (p.status === 'failed') {
+		if (!p.size) return 0;
+		return Math.min(100, Math.round((p.transferred / Math.max(p.size, 1)) * 100));
+	}
 	if (p.done || p.status === 'done') return 100;
 	if (!p.size) return 0;
 	return Math.min(100, Math.round((p.transferred / Math.max(p.size, 1)) * 100));

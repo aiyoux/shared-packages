@@ -1,4 +1,10 @@
-import { engineInfo, type ArchiveEntry, type CompressOptions, type CompressionEngine } from '../types.js';
+import {
+	engineInfo,
+	type ArchiveEntry,
+	type CompressOptions,
+	type CompressionEngine,
+	type UnzipProgressOpts
+} from '../types.js';
 
 type Zipkit = typeof import('@myrialabs/zipkit');
 
@@ -86,7 +92,7 @@ export const zipkitEngine: CompressionEngine = {
 		);
 	},
 
-	async unzip(bytes: Uint8Array) {
+	async unzip(bytes: Uint8Array, opts?: UnzipProgressOpts) {
 		const z = await get();
 		const files = await z.unzip(bytes);
 		const out: ArchiveEntry[] = [];
@@ -96,6 +102,12 @@ export const zipkitEngine: CompressionEngine = {
 			const data = file.data;
 			if (!(data instanceof Uint8Array)) continue;
 			out.push({ name, data });
+			opts?.onMember?.({
+				name,
+				transferred: data.byteLength,
+				size: data.byteLength,
+				done: true
+			});
 		}
 		return out;
 	}

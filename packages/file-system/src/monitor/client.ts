@@ -867,7 +867,7 @@ export function createMonitorClient(opts: {
 				}
 				if (e instanceof TypeError) {
 					throw new Error(
-						`Cannot reach monitor at ${base} (network/CORS). Is it running and allowing this origin?`
+						`Monitor upload failed at ${base} (connection dropped). The file may not have arrived — check the dest folder and retry.`
 					);
 				}
 				throw e;

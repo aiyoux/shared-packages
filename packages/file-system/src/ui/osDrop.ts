@@ -1,10 +1,10 @@
 /**
  * OS / desktop file+folder drops into an ExplorerDriver.
  *
- * Chromium revokes File objects from a dropped *directory* once the drop
- * handler returns. Capture entries synchronously, snapshot bytes immediately,
- * then mkdir + write so B2 / local VFS / disk / rclone / monitor all see a
- * real in-memory File.
+ * Chromium revokes `DataTransfer.files` from a dropped *directory* once the
+ * drop handler returns (`NotFoundError`). `webkitGetAsEntry()` /
+ * `getAsFileSystemHandle()` must be called in that same turn; those handles
+ * stay readable. Snapshot bytes into in-memory `File`s, then mkdir + write.
  */
 import type { ExplorerDriver, ExplorerEntryId } from './explorerDriver.js';
 import { formatExplorerError } from './explorerError.js';
@@ -34,6 +34,25 @@ function relativePathOf(file: File): string {
 }
 
 function readFileBytes(file: File): Promise<ArrayBuffer> {
+	// FileReader starts the read now. `file.arrayBuffer()` on a dropped-folder
+	// File is often deferred until await, which is after Chromium revokes it.
+	if (typeof FileReader !== 'undefined') {
+		return new Promise((resolve, reject) => {
+			const reader = new FileReader();
+			reader.onload = () => {
+				const buf = reader.result;
+				if (buf instanceof ArrayBuffer) resolve(buf);
+				else reject(new Error('Could not read dropped file'));
+			};
+			reader.onerror = () =>
+				reject(reader.error ?? new Error('Could not read dropped file'));
+			try {
+				reader.readAsArrayBuffer(file);
+			} catch (e) {
+				reject(e instanceof Error ? e : new Error('Could not read dropped file'));
+			}
+		});
+	}
 	if (file && typeof file.arrayBuffer === 'function') return file.arrayBuffer();
 	if (typeof Response !== 'undefined') {
 		try {
@@ -149,82 +168,154 @@ async function walkEntry(entry: EntryLike, prefix: string): Promise<OsDropNode[]
 	return [];
 }
 
+async function walkHandle(handle: FileSystemHandle, prefix: string): Promise<OsDropNode[]> {
+	const rel = prefix ? `${prefix}/${handle.name}` : handle.name;
+	if (handle.kind === 'file') {
+		const file = await (handle as FileSystemFileHandle).getFile();
+		const snap = await snapshotFile(file);
+		return [{ relativePath: rel, kind: 'file', file: snap }];
+	}
+	if (handle.kind !== 'directory') return [];
+	const dir = handle as FileSystemDirectoryHandle;
+	const out: OsDropNode[] = [{ relativePath: rel, kind: 'folder' }];
+	if (typeof dir.values === 'function') {
+		for await (const child of dir.values()) {
+			out.push(...(await walkHandle(child, rel)));
+		}
+	}
+	return out;
+}
+
+function nodesFromSnapshottedFiles(
+	files: File[],
+	rels: string[]
+): OsDropNode[] {
+	const folders = new Set<string>();
+	const nodes: OsDropNode[] = [];
+	for (let i = 0; i < files.length; i++) {
+		const rel = rels[i] || files[i]!.name;
+		for (const dir of folderPathsFromFilePath(rel)) folders.add(dir);
+		nodes.push({ relativePath: rel, kind: 'file', file: files[i] });
+	}
+	return [
+		...[...folders].sort().map((p) => ({ relativePath: p, kind: 'folder' as const })),
+		...nodes
+	];
+}
+
+async function snapshotPending(
+	pending: Array<{
+		rel: string;
+		name: string;
+		type: string;
+		lastModified: number;
+		bytes: Promise<ArrayBuffer>;
+	}>
+): Promise<OsDropNode[]> {
+	const files: File[] = [];
+	const rels: string[] = [];
+	for (const p of pending) {
+		let buf: ArrayBuffer;
+		try {
+			buf = await p.bytes;
+		} catch (e) {
+			throw new Error(formatExplorerError(e));
+		}
+		files.push(
+			new File([buf], p.name, {
+				type: p.type || 'application/octet-stream',
+				lastModified: p.lastModified
+			})
+		);
+		rels.push(p.rel);
+	}
+	return nodesFromSnapshottedFiles(files, rels);
+}
+
+type DropItem = DataTransferItem & {
+	getAsFileSystemHandle?: () => Promise<FileSystemHandle | null>;
+	webkitGetAsEntry?: () => EntryLike | null;
+	getAsEntry?: () => EntryLike | null;
+};
+
 /**
- * Capture a DataTransfer on drop. Must run (at least kicking off
- * `file.arrayBuffer()`) inside the drop handler — Chromium revokes
- * directory File objects once the handler returns.
+ * Capture a DataTransfer on drop. Must run inside the drop handler:
+ * Chromium revokes directory `File` objects once the handler returns.
  *
- * Prefer `dt.files` (keeps `webkitRelativePath`). Walk directory entries
- * only when the FileList is empty (empty-folder drops).
+ * Prefer File System Access handles / `webkitGetAsEntry` when the drop
+ * includes a folder. `dt.files` is only safe for flat file drops.
  */
 export function collectOsDrop(dt: DataTransfer | null | undefined): Promise<OsDropNode[]> {
 	if (!dt) return Promise.resolve([]);
 
-	const filesNow: File[] = dt.files?.length ? Array.from(dt.files) : [];
-	const pending = filesNow.map((f) => ({
-		rel: relativePathOf(f),
-		name: f.name,
-		type: f.type,
-		lastModified: f.lastModified,
-		bytes: readFileBytes(f)
-	}));
-
-	const dirEntries: EntryLike[] = [];
+	type Captured = {
+		handleP?: Promise<FileSystemHandle | null>;
+		entry: EntryLike | null;
+	};
+	const captured: Captured[] = [];
 	const items = dt.items;
-	if (!filesNow.length && items && items.length) {
+	const secure =
+		typeof globalThis.isSecureContext !== 'boolean' || globalThis.isSecureContext;
+	if (items?.length) {
 		for (let i = 0; i < items.length; i++) {
-			const item = items[i];
-			if (item.kind !== 'file') continue;
-			const getEntry = (
-				item as DataTransferItem & { webkitGetAsEntry?: () => EntryLike | null }
-			).webkitGetAsEntry;
+			const item = items[i] as DropItem | undefined;
+			if (!item || item.kind !== 'file') continue;
+			const handleP =
+				secure && typeof item.getAsFileSystemHandle === 'function'
+					? item.getAsFileSystemHandle()
+					: undefined;
+			const getEntry = item.getAsEntry ?? item.webkitGetAsEntry;
 			const entry = typeof getEntry === 'function' ? getEntry.call(item) : null;
-			if (entry && (entry.isFile || entry.isDirectory)) dirEntries.push(entry);
+			captured.push({
+				handleP,
+				entry: entry && (entry.isFile || entry.isDirectory) ? entry : null
+			});
 		}
 	}
 
+	const filesNow: File[] = dt.files?.length ? Array.from(dt.files) : [];
+	const listPending = filesNow.map((f) => {
+		const bytes = readFileBytes(f);
+		bytes.catch(() => {
+			/* used only if handles/entries fail; avoid unhandled rejection */
+		});
+		return {
+			rel: relativePathOf(f),
+			name: f.name,
+			type: f.type,
+			lastModified: f.lastModified,
+			bytes
+		};
+	});
+
 	return (async () => {
-		if (pending.length) {
-			const files: File[] = [];
-			const rels: string[] = [];
-			for (const p of pending) {
-				let buf: ArrayBuffer;
-				try {
-					buf = await p.bytes;
-				} catch (e) {
-					throw new Error(formatExplorerError(e));
-				}
-				files.push(
-					new File([buf], p.name, {
-						type: p.type || 'application/octet-stream',
-						lastModified: p.lastModified
-					})
-				);
-				rels.push(p.rel);
+		const fromHandles: OsDropNode[] = [];
+		for (const c of captured) {
+			if (!c.handleP) continue;
+			try {
+				const handle = await c.handleP;
+				if (handle) fromHandles.push(...(await walkHandle(handle, '')));
+			} catch {
+				/* entries / FileList */
 			}
-			const folders = new Set<string>();
-			const nodes: OsDropNode[] = [];
-			for (let i = 0; i < files.length; i++) {
-				const rel = rels[i] || files[i].name;
-				for (const dir of folderPathsFromFilePath(rel)) folders.add(dir);
-				nodes.push({ relativePath: rel, kind: 'file', file: files[i] });
-			}
-			return [
-				...[...folders].sort().map((p) => ({ relativePath: p, kind: 'folder' as const })),
-				...nodes
-			];
 		}
-		if (dirEntries.length) {
-			const out: OsDropNode[] = [];
-			for (const entry of dirEntries) {
-				try {
-					out.push(...(await walkEntry(entry, '')));
-				} catch {
-					/* ignore unreadable entries */
-				}
+		if (fromHandles.length) return fromHandles;
+
+		const fromEntries: OsDropNode[] = [];
+		let entryErr: unknown;
+		for (const c of captured) {
+			if (!c.entry) continue;
+			try {
+				fromEntries.push(...(await walkEntry(c.entry, '')));
+			} catch (e) {
+				entryErr ??= e;
 			}
-			return out;
 		}
+		if (fromEntries.length) return fromEntries;
+
+		if (listPending.length) return snapshotPending(listPending);
+
+		if (entryErr) throw new Error(formatExplorerError(entryErr));
 		return [];
 	})();
 }
