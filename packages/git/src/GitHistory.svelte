@@ -24,13 +24,17 @@
 			live = null;
 			loadError = '';
 		});
-		void host.snapshot(id).then((s) => {
-			live = s;
-			loadError = '';
-		}).catch((e) => {
-			loadError = e instanceof Error ? e.message : 'Could not read git history';
-			live = { status: { branch: null, dirty: false }, log: [] };
-		});
+		void host
+			.snapshot(id)
+			.then((s) => {
+				live = s;
+				loadError = '';
+			})
+			.catch((e) => {
+				// Keep `live` null: a failed read is an error to show, never an
+				// empty log that reads as "this repo has no commits".
+				loadError = e instanceof Error ? e.message : 'Could not read git history';
+			});
 		return host.subscribe(id, (s) => {
 			live = s;
 			loadError = '';
@@ -43,16 +47,16 @@
 </script>
 
 <section class="git-history" data-testid="git-history">
-	{#if shown}
+	{#if loadError}
+		<p class="error" data-testid="git-history-error">{loadError}</p>
+	{:else if shown}
 		<p class="status">
 			<span data-testid="git-history-branch">{shown.status.branch ?? '(detached)'}</span>
 			{#if shown.status.dirty}
 				<span class="dirty" data-testid="git-history-dirty">dirty</span>
 			{/if}
 		</p>
-		{#if loadError}
-			<p class="empty" data-testid="git-history-empty">{loadError}</p>
-		{:else if shown.log.length === 0}
+		{#if shown.log.length === 0}
 			<p class="empty" data-testid="git-history-empty">No commits</p>
 		{:else}
 			<ol class="log" data-testid="git-history-log">
@@ -115,5 +119,10 @@
 		margin: 0;
 		font-size: 0.85rem;
 		color: var(--text-secondary, #666);
+	}
+	.error {
+		margin: 0;
+		font-size: 0.85rem;
+		color: var(--text-danger, #b3261e);
 	}
 </style>

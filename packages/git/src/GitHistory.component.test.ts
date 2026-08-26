@@ -36,4 +36,19 @@ describe('GitHistory', () => {
 		expect(screen.getByTestId('git-history-commit').textContent).toMatch(/abcdef1/);
 		expect(screen.getByTestId('git-history-commit').textContent).toMatch(/hello/);
 	});
+
+	it('shows a read failure as an error, never as "No commits"', async () => {
+		render(GitHistory, {
+			props: {
+				repoId: 'broken',
+				gitHost: {
+					snapshot: () => Promise.reject(new Error('Could not find HEAD')),
+					subscribe: () => () => {}
+				} as never
+			}
+		});
+		const err = await screen.findByTestId('git-history-error');
+		expect(err.textContent).toMatch(/Could not find HEAD/);
+		expect(screen.queryByText('No commits')).toBeNull();
+	});
 });

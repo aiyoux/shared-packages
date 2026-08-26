@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { bindProjectRepo, repoInputFromFolder, sameProjectRepo } from './projectRepo.js';
+import {
+	bindProjectRepo,
+	repoInputFromFolder,
+	resolveProjectRoot,
+	sameProjectRepo
+} from './projectRepo.js';
 import type { ExplorerDriver, ExplorerEntry } from '@shared-packages/file-system/ui/driver';
 import type { GitHost, GitRepoRef } from './types.js';
 
@@ -73,6 +78,52 @@ describe('repoInputFromFolder', () => {
 			path: { 'plain-1': [folder('plain-1', 'plain')] }
 		});
 		expect(await repoInputFromFolder(d, 'plain-1', { backend: 'local' })).toBeNull();
+	});
+});
+
+describe('resolveProjectRoot', () => {
+	it('reports the explorer id the working tree was found at', async () => {
+		const repo = folder('repo-1', 'myrepo');
+		const src = folder('src-1', 'src', 'repo-1');
+		const dotGit = folder('git-1', '.git', 'repo-1');
+		const d = driverWith({
+			children: { 'src-1': [], 'repo-1': [dotGit, src] },
+			path: { 'src-1': [repo, src], 'repo-1': [repo] }
+		});
+		const hit = await resolveProjectRoot(d, 'src-1', { backend: 'local' });
+		// Clicking `src` roots Projects at `repo-1`, not at `src`.
+		expect(hit?.folderId).toBe('repo-1');
+		expect(hit?.input.path).toBe('repo-1');
+	});
+
+	it('keeps the monitor root path on the ref so later clicks stay absolute', async () => {
+		const repo = folder('myrepo/', 'myrepo');
+		const dotGit = folder('myrepo/.git', '.git', 'myrepo/');
+		const d = driverWith({
+			children: { 'myrepo/': [dotGit] },
+			path: { 'myrepo/': [repo] }
+		});
+		const hit = await resolveProjectRoot(d, 'myrepo/', {
+			backend: 'monitor',
+			rootPath: '/home/me/code',
+			profileId: 'p1',
+			baseUrl: 'http://127.0.0.1:8300'
+		});
+		expect(hit?.input).toMatchObject({
+			backend: 'monitor',
+			path: '/home/me/code/myrepo',
+			rootPath: '/home/me/code',
+			profileId: 'p1'
+		});
+		expect(hit?.folderId).toBe('myrepo/');
+	});
+
+	it('is null when neither the folder nor an ancestor is a working tree', async () => {
+		const d = driverWith({
+			children: { 'plain-1': [folder('a', 'notes', 'plain-1')] },
+			path: { 'plain-1': [folder('plain-1', 'plain')] }
+		});
+		expect(await resolveProjectRoot(d, 'plain-1', { backend: 'local' })).toBeNull();
 	});
 });
 

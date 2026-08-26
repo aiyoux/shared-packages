@@ -26,8 +26,12 @@ export {
 } from './repos.js';
 export {
 	consumeOpenProject,
+	forgetProject,
+	LAST_PROJECT_KEY,
 	OPEN_PROJECT_KEY,
 	OPEN_PROJECT_TTL_MS,
+	recallProject,
+	rememberProject,
 	type OpenProjectPayload
 } from './openProject.js';
 
@@ -38,6 +42,8 @@ export {
 	bindProjectRepo,
 	bindRepoIfProject,
 	repoInputFromFolder,
+	resolveProjectRoot,
 	sameProjectRepo,
-	type ProjectBackendHint
+	type ProjectBackendHint,
+	type ProjectRootResolution
 } from './projectRepo.js';

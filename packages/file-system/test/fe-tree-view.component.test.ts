@@ -52,6 +52,26 @@ describe('FeTreeView', () => {
 		expect(screen.getByTestId('fe-tree-row').getAttribute('data-name')).toBe('readme.txt');
 	});
 
+	it('rootId scopes the tree to one folder', async () => {
+		const project = await vfs.mkdir(null, 'project');
+		await vfs.mkdir(project.id, 'src');
+		await vfs.mkdir(null, 'elsewhere');
+		const driver = createLocalExplorerDriver(vfs);
+		render(FeTreeView, {
+			props: {
+				driver,
+				activeId: project.id,
+				rootId: project.id,
+				rootLabel: 'project',
+				onNavigate: () => {}
+			}
+		});
+		expect(await screen.findByText('src')).toBeTruthy();
+		// Siblings of the root are outside the tree entirely.
+		expect(screen.queryByText('elsewhere')).toBeNull();
+		expect(screen.getByTestId('fe-tree-row-root').textContent).toContain('project');
+	});
+
 	it('file click calls onSelect, not onNavigate', async () => {
 		await vfs.writeFile({ parentId: null, name: 'a.txt', body: 'x' });
 		const driver = createLocalExplorerDriver(vfs);

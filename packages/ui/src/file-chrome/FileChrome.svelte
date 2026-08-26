@@ -1,12 +1,16 @@
 <script lang="ts">
 	import { portalToPaneWindowHeader } from '../pane-layout/chrome.js';
 
+	type FileChromeItem = 'new' | 'open' | 'save' | 'saveAs' | 'close';
+
 	let {
 		hasDocument,
 		isDirty = false,
 		testidPrefix = 'file',
 		showWindows = false,
 		windowEditOpen = $bindable(false),
+		items = undefined,
+		labels = undefined,
 		onNew,
 		onOpen,
 		onSave,
@@ -18,12 +22,24 @@
 		testidPrefix?: string;
 		showWindows?: boolean;
 		windowEditOpen?: boolean;
+		/**
+		 * Which menu entries this app has. Omitted entries stay visible, so an
+		 * app that saves documents needs no config; one that only opens things
+		 * (Projects) passes `{ new: false, save: false, saveAs: false }`.
+		 * `save: false` also drops the quick-save button.
+		 */
+		items?: Partial<Record<FileChromeItem, boolean>>;
+		/** Per-entry label overrides, e.g. `{ open: 'Open project…' }`. */
+		labels?: Partial<Record<FileChromeItem, string>>;
 		onNew: () => void;
 		onOpen: () => void;
 		onSave: () => void;
 		onSaveAs: () => void;
 		onClose: () => void;
 	} = $props();
+
+	const shows = (item: FileChromeItem) => items?.[item] !== false;
+	const labelOf = (item: FileChromeItem, fallback: string) => labels?.[item] ?? fallback;
 
 	let menuOpen = $state(false);
 	let wrapEl: HTMLDivElement | undefined = $state();
@@ -63,42 +79,52 @@
 			</button>
 			{#if menuOpen}
 				<div class="file-menu" role="menu" aria-label="File" data-testid="{testidPrefix}-file-menu">
-					<button type="button" class="file-item" role="menuitem" data-testid="{testidPrefix}-file-new" onclick={() => pick(onNew)}>
-						New
-					</button>
-					<button type="button" class="file-item" role="menuitem" data-testid="{testidPrefix}-file-open" onclick={() => pick(onOpen)}>
-						Open
-					</button>
-					<button
-						type="button"
-						class="file-item"
-						role="menuitem"
-						data-testid="{testidPrefix}-file-save"
-						disabled={!hasDocument}
-						onclick={() => pick(onSave)}
-					>
-						Save
-					</button>
-					<button
-						type="button"
-						class="file-item"
-						role="menuitem"
-						data-testid="{testidPrefix}-file-save-as"
-						disabled={!hasDocument}
-						onclick={() => pick(onSaveAs)}
-					>
-						Save as
-					</button>
-					<button
-						type="button"
-						class="file-item"
-						role="menuitem"
-						data-testid="{testidPrefix}-file-close"
-						disabled={!hasDocument}
-						onclick={() => pick(onClose)}
-					>
-						Close
-					</button>
+					{#if shows('new')}
+						<button type="button" class="file-item" role="menuitem" data-testid="{testidPrefix}-file-new" onclick={() => pick(onNew)}>
+							{labelOf('new', 'New')}
+						</button>
+					{/if}
+					{#if shows('open')}
+						<button type="button" class="file-item" role="menuitem" data-testid="{testidPrefix}-file-open" onclick={() => pick(onOpen)}>
+							{labelOf('open', 'Open')}
+						</button>
+					{/if}
+					{#if shows('save')}
+						<button
+							type="button"
+							class="file-item"
+							role="menuitem"
+							data-testid="{testidPrefix}-file-save"
+							disabled={!hasDocument}
+							onclick={() => pick(onSave)}
+						>
+							{labelOf('save', 'Save')}
+						</button>
+					{/if}
+					{#if shows('saveAs')}
+						<button
+							type="button"
+							class="file-item"
+							role="menuitem"
+							data-testid="{testidPrefix}-file-save-as"
+							disabled={!hasDocument}
+							onclick={() => pick(onSaveAs)}
+						>
+							{labelOf('saveAs', 'Save as')}
+						</button>
+					{/if}
+					{#if shows('close')}
+						<button
+							type="button"
+							class="file-item"
+							role="menuitem"
+							data-testid="{testidPrefix}-file-close"
+							disabled={!hasDocument}
+							onclick={() => pick(onClose)}
+						>
+							{labelOf('close', 'Close')}
+						</button>
+					{/if}
 				</div>
 			{/if}
 		</div>
@@ -118,6 +144,7 @@
 				<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M12 3v18"/></svg>
 			</button>
 		{/if}
+		{#if shows('save')}
 		<button
 			type="button"
 			class="file-btn"
@@ -135,6 +162,7 @@
 				<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7"/><path d="M7 3v4a1 1 0 0 0 1 1h7"/></svg>
 			</span>
 		</button>
+		{/if}
 	</div>
 </div>
 

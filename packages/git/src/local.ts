@@ -6,11 +6,14 @@ export type GitFs = Parameters<typeof git.init>[0]['fs'];
 
 export async function localSnapshot(fs: GitFs, dir: string): Promise<GitSnapshot> {
 	let branch: string | null = null;
+	/** `.git` was readable at all — false means this is not a usable repo here. */
+	let headReadable = true;
 	try {
 		const current = await git.currentBranch({ fs, dir, fullname: false });
 		branch = current ?? null;
 	} catch {
 		branch = null;
+		headReadable = false;
 	}
 
 	let dirty = false;
@@ -33,11 +36,26 @@ export async function localSnapshot(fs: GitFs, dir: string): Promise<GitSnapshot
 			if (typeof ts === 'number') row.committedAt = new Date(ts * 1000).toISOString();
 			return row;
 		});
-	} catch {
+	} catch (e) {
+		// A fresh repo has a readable HEAD that points at no commit yet — empty,
+		// not broken. Anything else (unreadable objects, a `.git` file worktree
+		// pointer isomorphic-git cannot follow) must surface as an error rather
+		// than render as "No commits".
+		if (!headReadable || (await hasCommits(fs, dir))) throw e;
 		log = [];
 	}
 
 	return { status: { branch, dirty }, log };
+}
+
+/** HEAD resolves to a commit — i.e. the repo has at least one commit. */
+async function hasCommits(fs: GitFs, dir: string): Promise<boolean> {
+	try {
+		await git.resolveRef({ fs, dir, ref: 'HEAD' });
+		return true;
+	} catch {
+		return false;
+	}
 }
 
 export async function localReadBlobAt(

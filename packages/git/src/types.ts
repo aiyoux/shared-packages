@@ -16,6 +16,11 @@ export type GitRepoRef = {
 	path: string;
 	profileId?: string;
 	baseUrl?: string;
+	/**
+	 * Monitor profile root the explorer ids are relative to. Kept on the ref so
+	 * a later folder click can rebuild absolute paths without the Files handoff.
+	 */
+	rootPath?: string;
 };
 
 export interface GitHost {

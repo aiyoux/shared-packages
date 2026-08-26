@@ -6,7 +6,15 @@ import git from 'isomorphic-git';
 import { abortAllGitStreams } from '@shared-packages/file-system/monitor';
 import { createGitHost } from './host.js';
 import { closeGitReposDbForTests } from './repos.js';
-import { consumeOpenProject, OPEN_PROJECT_KEY, OPEN_PROJECT_TTL_MS } from './openProject.js';
+import {
+	consumeOpenProject,
+	forgetProject,
+	LAST_PROJECT_KEY,
+	OPEN_PROJECT_KEY,
+	OPEN_PROJECT_TTL_MS,
+	recallProject,
+	rememberProject
+} from './openProject.js';
 import type { GitRepoRef, GitSnapshot } from './types.js';
 
 async function makeRepo(): Promise<string> {
@@ -243,5 +251,50 @@ describe('consumeOpenProject', () => {
 			ts: 5_000
 		});
 		expect(store.has(OPEN_PROJECT_KEY)).toBe(false);
+	});
+});
+
+describe('rememberProject', () => {
+	function fakeStorage() {
+		const store = new Map<string, string>();
+		return {
+			store,
+			getItem: (k: string) => store.get(k) ?? null,
+			removeItem: (k: string) => {
+				store.delete(k);
+			},
+			setItem: (k: string, v: string) => {
+				store.set(k, v);
+			}
+		};
+	}
+
+	it('recalls the project after a reload, without a TTL', () => {
+		const storage = fakeStorage();
+		rememberProject(
+			{ backend: 'monitor', path: '/home/me/repo', folderId: 'repo/', ts: 1 },
+			storage
+		);
+		expect(storage.store.has(LAST_PROJECT_KEY)).toBe(true);
+		// Recall does not consume, and old timestamps stay valid.
+		expect(recallProject(storage)).toEqual({
+			backend: 'monitor',
+			path: '/home/me/repo',
+			folderId: 'repo/',
+			ts: 1
+		});
+		expect(recallProject(storage)).not.toBeNull();
+	});
+
+	it('drops malformed entries and forgets on close', () => {
+		const storage = fakeStorage();
+		storage.setItem(LAST_PROJECT_KEY, '{not json');
+		expect(recallProject(storage)).toBeNull();
+		storage.setItem(LAST_PROJECT_KEY, JSON.stringify({ backend: 'nope', path: '/x' }));
+		expect(recallProject(storage)).toBeNull();
+
+		rememberProject({ backend: 'local', path: 'fld_1' }, storage);
+		forgetProject(storage);
+		expect(recallProject(storage)).toBeNull();
 	});
 });

@@ -26,6 +26,7 @@
 		treeVersion = 0,
 		onNavigate,
 		includeFiles = false,
+		rootId = null,
 		rootLabel = 'Root',
 		showRoot = true,
 		onSelect
@@ -36,6 +37,12 @@
 		onNavigate: (id: ExplorerEntryId | null) => void;
 		/** When true, list files as well as folders. FileExplorer dock stays folders-only. */
 		includeFiles?: boolean;
+		/**
+		 * Folder the tree is rooted at. `null` (default) is the driver root.
+		 * Projects roots the tree at the git working tree, so the tree shows the
+		 * project rather than everything on the connection.
+		 */
+		rootId?: ExplorerEntryId | null;
 		rootLabel?: string;
 		showRoot?: boolean;
 		/** File row click when includeFiles. Folders still use onNavigate. */
@@ -102,8 +109,8 @@
 		}
 	}
 
-	async function refreshVisible(d: ExplorerDriver): Promise<void> {
-		await loadChildren(d, null, true);
+	async function refreshVisible(d: ExplorerDriver, root: ExplorerEntryId | null): Promise<void> {
+		await loadChildren(d, root, true);
 		for (const id of expanded) {
 			await loadChildren(d, id, true);
 		}
@@ -120,15 +127,16 @@
 		expanded = next;
 	}
 
-	// Driver swap (e.g. switching connections): old ids don't exist under
-	// the new driver, so reset everything and reload the root.
+	// Driver swap (e.g. switching connections) or a new tree root: old ids
+	// don't exist under the new driver, so reset everything and reload.
 	$effect(() => {
 		const d = driver;
+		const root = rootId;
 		untrack(() => {
 			children = new Map();
 			expanded = new Set();
 			loading = new Set();
-			void loadChildren(d, null);
+			void loadChildren(d, root);
 		});
 	});
 
@@ -151,10 +159,11 @@
 		const v = treeVersion;
 		const files = includeFiles;
 		const d = driver;
+		const root = rootId;
 		untrack(() => {
 			void v;
 			void files;
-			void refreshVisible(d);
+			void refreshVisible(d, root);
 		});
 	});
 
@@ -162,13 +171,14 @@
 	// same driver watch stream FileExplorer already uses (no second client).
 	$effect(() => {
 		const d = driver;
+		const root = rootId;
 		const expandedIds = expanded;
 		const unsubs: Array<() => void> = [];
 		untrack(() => {
 			if (!d.subscribeChanges) return;
-			unsubs.push(d.subscribeChanges(() => void refreshVisible(d), { parentId: null }));
+			unsubs.push(d.subscribeChanges(() => void refreshVisible(d, root), { parentId: root }));
 			for (const id of expandedIds) {
-				unsubs.push(d.subscribeChanges(() => void refreshVisible(d), { parentId: id }));
+				unsubs.push(d.subscribeChanges(() => void refreshVisible(d, root), { parentId: id }));
 			}
 		});
 		return () => {
@@ -247,23 +257,23 @@
 	<!-- svelte-ignore a11y_no_static_element_interactions -->
 	<div
 		class="fe-tree-row fe-tree-root"
-		class:active={activeId === null}
+		class:active={activeId === rootId}
 		class:hidden={!showRoot}
 		data-testid="fe-tree-row-root"
 		role="treeitem"
-		aria-selected={activeId === null}
+		aria-selected={activeId === rootId}
 		tabindex="-1"
-		onclick={() => onNavigate(null)}
+		onclick={() => onNavigate(rootId)}
 	>
 		<span class="fe-tree-toggle invisible" aria-hidden="true"></span>
 		<FeIcon name="folder" size={14} />
 		<span class="fe-tree-name">{rootLabel}</span>
 	</div>
 	<div class="fe-tree-children" role="group">
-		{#if loading.has(ROOT_KEY) && !children.has(ROOT_KEY)}
+		{#if loading.has(keyFor(rootId)) && !children.has(keyFor(rootId))}
 			<div class="fe-tree-hint" style="padding-left: 18px">Loading…</div>
 		{:else}
-			{#each children.get(ROOT_KEY) ?? [] as child (child.id)}
+			{#each children.get(keyFor(rootId)) ?? [] as child (child.id)}
 				{@render node(child, 1)}
 			{/each}
 		{/if}
