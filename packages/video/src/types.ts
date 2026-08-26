@@ -9,7 +9,7 @@ export type VideoInterpolator = {
 	interpolate: (blob: Blob, opts: { fps: number; id: string }) => Promise<Blob>;
 };
 
-export type EngineId = 'native' | 'ffmpeg';
+export type EngineId = 'native';
 
 export type VideoFormat = 'mp4' | 'webm';
 
@@ -42,12 +42,6 @@ export const ENGINE_CATALOG: readonly EngineInfo[] = [
 		label: 'WebCodecs + mediabunny',
 		description: 'Trim and re-encode H.264 MP4 in Chromium. No extra download.',
 		formats: ['mp4']
-	},
-	{
-		id: 'ffmpeg',
-		label: 'FFmpeg (WASM)',
-		description: 'Lazy FFmpeg core — MP4 or WebM, keeps audio. Loaded only when you pick it.',
-		formats: ['mp4', 'webm']
 	}
 ] as const;
 

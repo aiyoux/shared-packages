@@ -1,11 +1,6 @@
 # `@shared-packages/video`
 
-Browser video **trim / resize / export** with lazy engines:
-
-- **native** — WebCodecs + mediabunny (H.264 MP4, Chromium)
-- **ffmpeg** — `@ffmpeg/ffmpeg` WASM core, loaded only when selected (MP4 or WebM)
-
-and reusable editor/player UI.
+Browser video **trim / resize / export** with WebCodecs + mediabunny (H.264 MP4, Chromium) and reusable editor/player UI.
 
 Product chrome (attach-to-sign, RIFE bridge, dictionary captions) stays in the consumer.
 
@@ -15,10 +10,10 @@ Product chrome (attach-to-sign, RIFE bridge, dictionary captions) stays in the c
 import { processVideo, getVideoDuration, createVideoUrl } from '@shared-packages/video';
 
 const clip = await processVideo(blob, { start: 0.5, end: 3.2, bitrate: '1M' });
-const out = await exportVideo('ffmpeg', blob, {
+const out = await exportVideo('native', blob, {
   start: 0,
   end: 4,
-  format: 'webm',
+  format: 'mp4',
   bitrate: '1M',
   name: 'clip.mp4'
 });

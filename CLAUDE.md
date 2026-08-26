@@ -10,7 +10,7 @@ Canonical source for the published shared packages:
 | `@shared-packages/compress` | `packages/compress` | `~/Code/scratch-pad` (lazy fflate / ZipKit / AddMaple pack+expand) |
 | `@shared-packages/crypto` | `packages/crypto` | `~/Code/scratch-pad` (Web Crypto / libsodium hash + .spvault) |
 | `@shared-packages/image` | `packages/image` | `~/Code/scratch-pad` (native Canvas / jSquash convert+resize) |
-| `@shared-packages/video` | `packages/video` | `~/Code/scratch-pad` hub Video tool + Language Hub (lazy WebCodecs / FFmpeg trim+export) |
+| `@shared-packages/video` | `packages/video` | `~/Code/scratch-pad` hub Video tool + Language Hub (WebCodecs + mediabunny H.264 trim+export) |
 | `@shared-packages/composition` | `packages/composition` | `~/Code/scratch-pad` (clock, clip protocol, composite; no infographic/video import) |
 | `@shared-packages/scan` | `packages/scan` | `~/Code/scratch-pad` hub Scan tool (lazy OpenCV.js detect/warp + optional OCR) |
 | `@shared-packages/scene-bake` | `packages/scene-bake` | `~/Code/scratch-pad` sketcher temp-bake + infographic `scene3d` (software SVG encode + hidden-line worker) |

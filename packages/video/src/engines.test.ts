@@ -4,17 +4,15 @@ import { DEFAULT_ENGINE, engineSupports } from './types.js';
 import { detectFormatFromName, suggestOutputName } from './detect.js';
 
 describe('video engines catalog', () => {
-	it('lists native and ffmpeg without loading WASM', () => {
-		expect(listEngines().map((e) => e.id)).toEqual(['native', 'ffmpeg']);
+	it('lists only WebCodecs', () => {
+		expect(listEngines().map((e) => e.id)).toEqual(['native']);
 		expect(peekEngine('native')).toBeNull();
-		expect(peekEngine('ffmpeg')).toBeNull();
 	});
 
-	it('defaults to WebCodecs and only native does MP4-only', () => {
+	it('defaults to WebCodecs and is MP4-only', () => {
 		expect(DEFAULT_ENGINE).toBe('native');
 		expect(engineSupports('native', 'mp4')).toBe(true);
 		expect(engineSupports('native', 'webm')).toBe(false);
-		expect(engineSupports('ffmpeg', 'webm')).toBe(true);
 	});
 });
 

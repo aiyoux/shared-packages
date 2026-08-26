@@ -12,7 +12,7 @@ export const nativeEngine: VideoEngine = {
 
 	async process(input, options: ProcessOptions) {
 		if (options.format && options.format !== 'mp4') {
-			throw new Error('WebCodecs export is MP4 only. Switch to FFmpeg for WebM.');
+			throw new Error('WebCodecs export is MP4 only.');
 		}
 		return processVideo(input, options);
 	}
