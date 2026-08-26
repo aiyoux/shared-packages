@@ -98,6 +98,7 @@
 	import {
 		emptyTrashCopy,
 		hardDeleteCopy,
+		overwriteSaveCopy,
 		permanentDeleteCopy,
 		type FeConfirmCopy
 	} from './feConfirm.js';
@@ -141,6 +142,8 @@
 			parentId: string | null;
 			name: string;
 			entry?: ExplorerOpenTarget;
+			/** Set by the dialog when the user confirmed overwriting an existing file. */
+			overwrite?: boolean;
 		}) => void | Promise<void>;
 		onClose?: () => void;
 		/** Selection + open folder for dual-pane copy-across. */
@@ -1233,6 +1236,8 @@
 			() => {
 				// Empty trash owns its list until it finishes — live ticks were the flash.
 				if (emptyTrashRunning) return;
+				// Archive writes thousands of small files; live re-list freezes Cancel.
+				if (archiveJobRunning) return;
 				// Silent — keeps selection, and paints no busy chrome for a change the
 				// user did not initiate.
 				void refresh(true, 'delay', true);
@@ -1315,6 +1320,23 @@
 		if (accept?.[0]) {
 			const { forceExtension } = await import('../registry.js');
 			name = forceExtension(name, accept[0]);
+		}
+		// Saving onto an existing name: confirm overwrite before delegating.
+		// A folder with the same name is never a valid overwrite target.
+		const sameName = nodes.find((n) => n.name === name);
+		if (sameName) {
+			if (sameName.kind === 'folder') {
+				error = `A folder named “${name}” already exists. Choose a different name.`;
+				return;
+			}
+			const ok = await askConfirm(overwriteSaveCopy(name));
+			if (!ok) return;
+			try {
+				await onSave({ parentId, name, overwrite: true });
+			} catch (e) {
+				reportError(e);
+			}
+			return;
 		}
 		try {
 			await onSave({ parentId, name });
@@ -1502,8 +1524,8 @@
 				transferred: emptyTrashPct,
 				direction: 'copying',
 				done: true,
-				status: 'failed',
-				error: cancelled ? 'Cancelled' : formatExplorerError(e),
+				status: cancelled ? 'cancelled' : 'failed',
+				error: cancelled ? undefined : formatExplorerError(e),
 				hopNote: cancelled ? 'Cancelled' : 'Failed'
 			});
 			if (cancelled) toast.info('Cancelled');
@@ -1644,8 +1666,33 @@
 		archiveDialogOpen = false;
 	}
 
+	const archivePendingScratch = new Map<string, ListingPending>();
+	let archiveListingFlush: ReturnType<typeof setTimeout> | null = null;
+
+	function flushArchiveListing() {
+		archiveListingFlush = null;
+		const archiveIds = new Set(archiveInboundIds);
+		inboundOps = [
+			...inboundOps.filter((o) => !archiveIds.has(o.id)),
+			...archivePendingScratch.values()
+		];
+	}
+
+	function settleArchiveListing() {
+		if (archiveListingFlush) {
+			clearTimeout(archiveListingFlush);
+			archiveListingFlush = null;
+		}
+		const ids = archiveInboundIds;
+		archivePendingScratch.clear();
+		archiveNameToId.clear();
+		archiveInboundIds = [];
+		inboundOps = inboundOps.filter((o) => !ids.includes(o.id));
+	}
+
 	function bumpArchiveProgress(ev: ArchiveWriteProgress) {
 		if (ev.job) {
+			if (ev.note) archiveJobLabel = ev.note;
 			if (ev.size > 0) {
 				const pct = Math.min(100, Math.round((ev.transferred / ev.size) * 100));
 				archiveJobPct = Math.max(archiveJobPct, pct);
@@ -1664,10 +1711,11 @@
 			}
 			return;
 		}
-		let id = archiveNameToId.get(ev.name);
+		const key = `${ev.parentId ?? ''}::${ev.entryKind ?? 'file'}::${ev.name}`;
+		let id = archiveNameToId.get(key);
 		if (!id) {
 			id = generateId('archive');
-			archiveNameToId.set(ev.name, id);
+			archiveNameToId.set(key, id);
 			archiveInboundIds = [...archiveInboundIds, id];
 		}
 		const row: ListingPending = {
@@ -1677,14 +1725,29 @@
 			size: ev.size,
 			direction: 'receiving',
 			done: ev.done,
-			destParentId: ev.parentId
+			destParentId: ev.parentId,
+			entryKind: ev.entryKind ?? 'file'
 		};
-		inboundOps = inboundOps.some((o) => o.id === id)
-			? inboundOps.map((o) => (o.id === id ? row : o))
-			: [...inboundOps, row];
+		archivePendingScratch.set(id, row);
+		if (!archiveListingFlush) {
+			archiveListingFlush = setTimeout(flushArchiveListing, 50);
+		}
 	}
 
 	function abortArchiveJob() {
+		archiveJobLabel = 'Cancelling…';
+		if (archiveTransferId) {
+			upsertProgress({
+				id: archiveTransferId,
+				name: archiveChipName || 'Archive',
+				size: 100,
+				transferred: archiveJobPct,
+				direction: 'copying',
+				done: false,
+				status: 'active',
+				hopNote: 'Cancelling…'
+			});
+		}
 		archiveAbort?.abort();
 		if (archiveTransferId) abortTransfer(archiveTransferId);
 	}
@@ -1743,16 +1806,13 @@
 				transferred: archiveJobPct,
 				direction: 'copying',
 				done: true,
-				status: 'failed',
-				error: cancelled ? 'Cancelled' : formatExplorerError(e),
+				status: cancelled ? 'cancelled' : 'failed',
+				error: cancelled ? undefined : formatExplorerError(e),
 				hopNote: cancelled ? 'Cancelled' : 'Failed'
 			});
 			if (cancelled) toast.info('Cancelled');
 			else toast.error(formatExplorerError(e));
-			const ids = archiveInboundIds;
-			archiveNameToId.clear();
-			archiveInboundIds = [];
-			inboundOps = inboundOps.filter((o) => !ids.includes(o.id));
+			settleArchiveListing();
 			hideArchiveDialog();
 			closeArchive();
 		} finally {
@@ -1762,14 +1822,17 @@
 		}
 	}
 
-	async function finishArchive(result?: { inner?: import('./archiveOps.js').PackedPath[]; title: string }) {
-		const ids = archiveInboundIds;
-		archiveNameToId.clear();
-		archiveInboundIds = [];
+	async function finishArchive(
+		result?: import('./archiveOps.js').ArchiveJobResult
+	) {
+		settleArchiveListing();
 		hideArchiveDialog();
 		closeArchive();
+		if (result?.innerSession) {
+			innerFs = result.innerSession;
+			return;
+		}
 		if (result?.inner?.length) {
-			inboundOps = inboundOps.filter((o) => !ids.includes(o.id));
 			try {
 				innerFs = await createInnerFsSession(result.title, result.inner);
 			} catch (e) {
@@ -1778,7 +1841,6 @@
 			return;
 		}
 		await refresh();
-		inboundOps = inboundOps.filter((o) => !ids.includes(o.id));
 	}
 
 	async function closeInnerFs() {
@@ -2730,7 +2792,7 @@
 				onDismissAll={() => {
 					const next = new Set(archiveDismissed);
 					for (const t of visibleArchiveOps) {
-						if (t.done || t.status === 'failed') next.add(t.id);
+						if (t.done || t.status === 'failed' || t.status === 'cancelled') next.add(t.id);
 					}
 					archiveDismissed = next;
 				}}
@@ -3100,7 +3162,7 @@
 					class:fe-row-detailed={viewMode === 'detailed'}
 					class:renaming={!row.placeholder && renamingId === n.id}
 					class:fe-pending={Boolean(p)}
-					data-testid={row.placeholder
+					data-testid={row.placeholder && n.kind !== 'folder'
 						? 'fe-pending-row'
 						: n.kind === 'folder'
 							? 'fe-folder-row'

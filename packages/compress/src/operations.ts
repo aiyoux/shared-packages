@@ -73,7 +73,13 @@ export async function expandBytes(
 	if (codec === 'zip') {
 		if (!engine.unzip) throw new Error(`${engine.info.label} cannot expand ZIP archives`);
 		const files = await engine.unzip(bytes, {
+			signal: opts?.signal,
 			onMember: (ev) => {
+				if (opts?.signal?.aborted) {
+					const e = new Error('Cancelled');
+					e.name = 'AbortError';
+					throw e;
+				}
 				if (!keep(ev.name)) return;
 				opts?.onMember?.(ev);
 			}
@@ -84,6 +90,11 @@ export async function expandBytes(
 		if (!engine.untar) throw new Error(`${engine.info.label} cannot expand TAR archives`);
 		const files = (await engine.untar(bytes)).filter((f) => keep(f.name));
 		for (const f of files) {
+			if (opts?.signal?.aborted) {
+				const e = new Error('Cancelled');
+				e.name = 'AbortError';
+				throw e;
+			}
 			opts?.onMember?.({
 				name: f.name,
 				transferred: f.data.byteLength,

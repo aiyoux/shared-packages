@@ -97,6 +97,11 @@ export const zipkitEngine: CompressionEngine = {
 		const files = await z.unzip(bytes);
 		const out: ArchiveEntry[] = [];
 		for (const file of files) {
+			if (opts?.signal?.aborted) {
+				const e = new Error('Cancelled');
+				e.name = 'AbortError';
+				throw e;
+			}
 			const name = typeof file?.name === 'string' ? file.name : '';
 			if (!name || name.endsWith('/')) continue;
 			const data = file.data;

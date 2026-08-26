@@ -21,7 +21,7 @@ function stubDriver(partial: Partial<ExplorerDriver> & Pick<ExplorerDriver, 'id'
 			supportsRename: false,
 			supportsMove: false,
 			supportsCopy: false,
-			supportsMkdir: false,
+			supportsMkdir: true,
 			supportsUpload: true,
 			supportsDownload: true,
 			supportsSiblingOrder: false
@@ -30,6 +30,7 @@ function stubDriver(partial: Partial<ExplorerDriver> & Pick<ExplorerDriver, 'id'
 		list: async () => ({ entries: [], truncated: false }),
 		getPath: async () => [],
 		delete: async () => {},
+		mkdir: async () => ({ ...entry, id: 'dir', name: 'dir', kind: 'folder' as const }),
 		upload: async () => entry,
 		...partial
 	};
@@ -100,6 +101,51 @@ describe('FeArchiveDialog path copy', () => {
 		const box = screen.getByTestId('fe-archive-skip-system') as HTMLInputElement;
 		expect(box.checked).toBe(true);
 		expect(box.closest('label')?.textContent).toMatch(/Skip system files/);
+		const wrap = screen.getByTestId('fe-archive-wrap-subfolder') as HTMLInputElement;
+		expect(wrap.checked).toBe(true);
+		expect(screen.getByTestId('fe-archive-wrap-subfolder-row').textContent).toMatch(
+			kind === 'decrypt' ? /same name as vault/i : /same name as zip/i
+		);
+	});
+
+	it('hides the extract subfolder checkbox for in-memory and popup dests', async () => {
+		const { unmount } = render(FeArchiveDialog, {
+			props: {
+				kind: 'decompress',
+				entries: [{ ...entry, id: 'bundle.zip', name: 'bundle.zip' }],
+				driver: stubDriver({ id: 'local', writeFile: async () => entry }),
+				onLaunch: vi.fn(),
+				onCancel: vi.fn()
+			}
+		});
+		expect(screen.getByTestId('fe-archive-wrap-subfolder')).toBeTruthy();
+		await fireEvent.click(screen.getByTestId('fe-archive-dest-memory'));
+		expect(screen.queryByTestId('fe-archive-wrap-subfolder')).toBeNull();
+		unmount();
+		render(FeArchiveDialog, {
+			props: {
+				kind: 'decompress',
+				entries: [{ ...entry, id: 'bundle.zip', name: 'bundle.zip' }],
+				driver: stubDriver({ id: 'local', writeFile: async () => entry }),
+				destLocked: 'popup',
+				onLaunch: vi.fn(),
+				onCancel: vi.fn()
+			}
+		});
+		expect(screen.queryByTestId('fe-archive-wrap-subfolder')).toBeNull();
+	});
+
+	it('does not offer an extract subfolder when compressing', () => {
+		render(FeArchiveDialog, {
+			props: {
+				kind: 'compress',
+				entries: [entry],
+				driver: stubDriver({ id: 'local', writeFile: async () => entry }),
+				onLaunch: vi.fn(),
+				onCancel: vi.fn()
+			}
+		});
+		expect(screen.queryByTestId('fe-archive-wrap-subfolder')).toBeNull();
 	});
 
 	it('keeps AddMaple selected for a ZIP tree and states fflate will run', async () => {
@@ -201,4 +247,26 @@ describe('FeArchiveDialog path copy', () => {
 			expect(screen.queryByTestId('fe-archive-run')).toBeNull();
 		}
 	);
+
+	it('Cancel immediately says Cancelling so a stalled write is not silent', async () => {
+		const onAbort = vi.fn();
+		render(FeArchiveDialog, {
+			props: {
+				kind: 'decompress',
+				entries: [{ ...entry, name: 'bundle.zip' }],
+				driver: stubDriver({ id: 'local', writeFile: async () => entry }),
+				jobRunning: true,
+				jobPct: 40,
+				jobLabel: 'Writing extracted files…',
+				onLaunch: vi.fn(),
+				onHide: vi.fn(),
+				onAbort,
+				onCancel: vi.fn()
+			}
+		});
+		await fireEvent.click(screen.getByTestId('fe-archive-abort'));
+		expect(onAbort).toHaveBeenCalledTimes(1);
+		expect(screen.getByTestId('fe-archive-progress').textContent).toMatch(/Cancelling/i);
+		expect((screen.getByTestId('fe-archive-abort') as HTMLButtonElement).disabled).toBe(true);
+	});
 });

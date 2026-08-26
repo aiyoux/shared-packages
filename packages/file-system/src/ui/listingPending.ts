@@ -17,6 +17,8 @@ export type ListingPending = {
 	done?: boolean;
 	/** When set, only merge into this folder's listing (not the viewed root). */
 	destParentId?: ExplorerEntry['parentId'];
+	/** Folder rows aggregate descendant writes. Default file. */
+	entryKind?: 'file' | 'folder';
 };
 
 export type ListingRow = {
@@ -71,10 +73,17 @@ function nameKey(name: string): string {
 	return name.toLowerCase();
 }
 
-function lastPendingByName(pending: ListingPending[]): Map<string, ListingPending> {
+function pendingKind(p: ListingPending): 'file' | 'folder' {
+	return p.entryKind === 'folder' ? 'folder' : 'file';
+}
+
+function lastPendingByName(
+	pending: ListingPending[],
+	kind: 'file' | 'folder'
+): Map<string, ListingPending> {
 	const map = new Map<string, ListingPending>();
 	for (const p of pending) {
-		if (!p.name) continue;
+		if (!p.name || pendingKind(p) !== kind) continue;
 		map.set(nameKey(p.name), p);
 	}
 	return map;
@@ -85,7 +94,7 @@ function placeholderEntry(p: ListingPending, parentId: ExplorerEntry['parentId']
 		id: `pending:${p.id}`,
 		parentId,
 		name: p.name,
-		kind: 'file',
+		kind: pendingKind(p),
 		size: p.size || undefined
 	};
 }
@@ -112,25 +121,29 @@ export function mergeListingWithPending(
 	parentId: ExplorerEntry['parentId'] = null
 ): ListingRow[] {
 	pending = pendingForViewedParent(pending, parentId);
-	const byName = lastPendingByName(pending);
-	const used = new Set<string>();
+	const filesByName = lastPendingByName(pending, 'file');
+	const foldersByName = lastPendingByName(pending, 'folder');
+	const usedFiles = new Set<string>();
+	const usedFolders = new Set<string>();
 	const folders: ListingRow[] = [];
 	const files: ListingRow[] = [];
 
 	for (let i = 0; i < nodes.length; i++) {
 		const n = nodes[i]!;
 		if (n.kind === 'folder') {
+			const p = foldersByName.get(nameKey(n.name));
+			if (p) usedFolders.add(nameKey(n.name));
 			folders.push({
 				key: n.id,
 				node: n,
-				pending: null,
+				pending: pendingOverlay(p, true),
 				placeholder: false,
 				nodeIndex: i
 			});
 			continue;
 		}
-		const p = byName.get(nameKey(n.name));
-		if (p) used.add(nameKey(n.name));
+		const p = filesByName.get(nameKey(n.name));
+		if (p) usedFiles.add(nameKey(n.name));
 		files.push({
 			key: n.id,
 			node: n,
@@ -140,25 +153,31 @@ export function mergeListingWithPending(
 		});
 	}
 
-	const incoming: ListingRow[] = [];
-	for (const p of pending) {
-		const key = nameKey(p.name);
-		if (!p.name || used.has(key)) continue;
-		used.add(key);
-		incoming.push({
-			key: `pending:${p.id}`,
-			node: placeholderEntry(p, parentId),
-			pending: p,
-			placeholder: true,
-			nodeIndex: null
-		});
+	function insertIncoming(kind: 'file' | 'folder', used: Set<string>, rows: ListingRow[]) {
+		const incoming: ListingRow[] = [];
+		for (const p of pending) {
+			if (pendingKind(p) !== kind || !p.name) continue;
+			const key = nameKey(p.name);
+			if (used.has(key)) continue;
+			used.add(key);
+			incoming.push({
+				key: `pending:${p.id}`,
+				node: placeholderEntry(p, parentId),
+				pending: p,
+				placeholder: true,
+				nodeIndex: null
+			});
+		}
+		incoming.sort((a, b) => cmpName(a.node.name, b.node.name));
+		for (const row of incoming) {
+			let i = 0;
+			while (i < rows.length && cmpName(rows[i]!.node.name, row.node.name) <= 0) i++;
+			rows.splice(i, 0, row);
+		}
 	}
-	incoming.sort((a, b) => cmpName(a.node.name, b.node.name));
-	for (const row of incoming) {
-		let i = 0;
-		while (i < files.length && cmpName(files[i]!.node.name, row.node.name) <= 0) i++;
-		files.splice(i, 0, row);
-	}
+
+	insertIncoming('folder', usedFolders, folders);
+	insertIncoming('file', usedFiles, files);
 
 	return [...folders, ...files];
 }

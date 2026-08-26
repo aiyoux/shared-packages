@@ -9,6 +9,7 @@ import {
 	createInnerFsSession,
 	describeCompressRole,
 	expandPackedBytes,
+	extractContainerName,
 	looksCompressedName,
 	looksPackedName,
 	looksVaultName,
@@ -17,6 +18,7 @@ import {
 	pickEngineForCodec,
 	previewArchiveEnginePlan,
 	runArchiveJob,
+	uniqueChildFolderName,
 	subjectLabel,
 	writeEntriesToDriver
 } from '../src/ui/archiveOps.ts';
@@ -34,6 +36,13 @@ function fileEntry(partial: Partial<ExplorerEntry> & Pick<ExplorerEntry, 'id' | 
 }
 
 describe('archiveOps', () => {
+	it('names an extract subfolder after the archive', () => {
+		assert.equal(extractContainerName('photos.zip'), 'photos');
+		assert.equal(extractContainerName('src.tar.gz'), 'src');
+		assert.equal(extractContainerName('notes.tgz'), 'notes');
+		assert.equal(extractContainerName('secret.txt.spvault'), 'secret.txt');
+	});
+
 	it('recognizes compressed and vault names', () => {
 		assert.equal(looksCompressedName('notes.txt.gz'), true);
 		assert.equal(looksCompressedName('bundle.zip'), true);
@@ -323,6 +332,55 @@ describe('archiveOps', () => {
 		await vfs.db.delete();
 	});
 
+	it('wrapInSubfolder extracts into a new folder named after the zip', async () => {
+		const vfs = createVfs({
+			dbName: `archive-ops-wrap-${Date.now()}-${Math.random()}`,
+			memoryOpfs: true,
+			requestPersist: false
+		});
+		await vfs.ready();
+		const driver = createLocalExplorerDriver(vfs);
+		await driver.ready();
+		const folder = await driver.mkdir!(null, 'inbox');
+		const zip = await packFiles(
+			'fflate',
+			[
+				{ name: 'hello.txt', data: enc.encode('hello') },
+				{ name: 'nested/inner.txt', data: enc.encode('inner') }
+			],
+			'zip'
+		);
+		await driver.writeFile!(folder.id, new File([zip[0]!.data as BlobPart], zip[0]!.name));
+		const listed = await driver.list({ parentId: folder.id });
+		const archive = listed.entries.find((e) => e.name === zip[0]!.name)!;
+		const stem = extractContainerName(archive.name);
+		assert.equal(await uniqueChildFolderName(driver, folder.id, stem), stem);
+		await runArchiveJob({
+			kind: 'decompress',
+			entries: [archive],
+			driver,
+			dest: 'same',
+			destParentId: folder.id,
+			title: archive.name,
+			compressEngineId: 'fflate',
+			codec: 'zip',
+			cryptoEngineId: 'webcrypto',
+			password: '',
+			skipSystemFiles: true,
+			wrapInSubfolder: true,
+			useHost: false
+		});
+		const kids = await driver.list({ parentId: folder.id });
+		assert.equal(kids.entries.some((e) => e.name === 'hello.txt'), false);
+		const wrapped = kids.entries.find((e) => e.name === stem && e.kind === 'folder');
+		assert.ok(wrapped);
+		const inner = await driver.list({ parentId: wrapped.id });
+		assert.ok(inner.entries.some((e) => e.name === 'hello.txt'));
+		assert.ok(inner.entries.some((e) => e.name === 'nested' && e.kind === 'folder'));
+		assert.equal(await uniqueChildFolderName(driver, folder.id, stem), `${stem} (1)`);
+		await vfs.db.delete();
+	});
+
 	it('nested extract dest rows wait for writeOut; expand job stays under 100%', async () => {
 		const vfs = createVfs({
 			dbName: `archive-ops-nested-${Date.now()}-${Math.random()}`,
@@ -344,7 +402,15 @@ describe('archiveOps', () => {
 		await driver.writeFile!(folder.id, new File([zip[0]!.data as BlobPart], zip[0]!.name));
 		const listed = await driver.list({ parentId: folder.id });
 		const archive = listed.entries.find((e) => e.name === zip[0]!.name)!;
-		const events: Array<{ name: string; parentId: string | null; job?: boolean; done: boolean; transferred: number; size: number }> = [];
+		const events: Array<{
+			name: string;
+			parentId: string | null;
+			job?: boolean;
+			done: boolean;
+			transferred: number;
+			size: number;
+			entryKind?: string;
+		}> = [];
 		await runArchiveJob({
 			kind: 'decompress',
 			entries: [archive],
@@ -365,7 +431,8 @@ describe('archiveOps', () => {
 					job: ev.job,
 					done: ev.done,
 					transferred: ev.transferred,
-					size: ev.size
+					size: ev.size,
+					entryKind: ev.entryKind
 				})
 		});
 		const jobBeforeDone = events.filter((e) => e.job && !e.done);
@@ -378,6 +445,13 @@ describe('archiveOps', () => {
 		assert.ok(destRows.some((e) => e.name === 'a.txt'));
 		assert.ok(destRows.some((e) => e.name === 'b.txt'));
 		assert.ok(destRows.some((e) => e.parentId !== folder.id), 'nested file writes to a subfolder');
+		const repoFolder = destRows.filter((e) => e.entryKind === 'folder' && e.name === 'repo');
+		assert.ok(repoFolder.length, 'dest listing paints the extract folder');
+		assert.ok(repoFolder.some((e) => e.parentId === folder.id));
+		assert.ok(repoFolder.some((e) => !e.done), 'folder bar moves before all children land');
+		assert.ok(repoFolder.some((e) => e.done), 'folder bar completes after its children');
+		const nestedFolder = destRows.filter((e) => e.entryKind === 'folder' && e.name === 'nested');
+		assert.ok(nestedFolder.length, 'nested folders report their own child progress');
 		const kids = await driver.list({ parentId: folder.id });
 		const repo = kids.entries.find((e) => e.name === 'repo' && e.kind === 'folder');
 		assert.ok(repo);
@@ -764,6 +838,44 @@ describe('archiveOps', () => {
 		const inner = await result.innerSession!.driver.list({ parentId: null });
 		assert.ok(inner.entries.some((e) => e.name === 'hello.txt'));
 		await result.innerSession!.dispose();
+		await vfs.db.delete();
+	});
+
+	it('writeEntriesToDriver stops mid-tree when the abort signal fires', async () => {
+		const vfs = createVfs({
+			dbName: `archive-ops-abort-write-${Date.now()}-${Math.random()}`,
+			memoryOpfs: true,
+			requestPersist: false
+		});
+		await vfs.ready();
+		const driver = createLocalExplorerDriver(vfs);
+		await driver.ready();
+		const ac = new AbortController();
+		const files = Array.from({ length: 24 }, (_, i) => ({
+			path: `tree/f${i}.txt`,
+			data: enc.encode(`x${i}`)
+		}));
+		let seen = 0;
+		await assert.rejects(
+			() =>
+				writeEntriesToDriver(
+					driver,
+					null,
+					files,
+					() => {
+						seen += 1;
+						if (seen >= 4) ac.abort();
+					},
+					ac.signal
+				),
+			(e: unknown) => e instanceof Error && e.name === 'AbortError'
+		);
+		assert.ok(seen >= 4);
+		const root = await driver.list({ parentId: null });
+		const tree = root.entries.find((e) => e.name === 'tree' && e.kind === 'folder');
+		assert.ok(tree);
+		const kids = await driver.list({ parentId: tree.id });
+		assert.ok(kids.entries.length < 24);
 		await vfs.db.delete();
 	});
 });

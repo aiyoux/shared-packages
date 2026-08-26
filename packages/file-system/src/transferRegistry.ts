@@ -17,7 +17,7 @@ import type { MemoryVfsService } from './memoryVfs.js';
 
 export type TransferIntegrity = 'pending' | 'ok' | 'mismatch' | 'skipped';
 export type TransferDirection = 'sending' | 'receiving' | 'copying';
-export type TransferStatus = 'hashing' | 'active' | 'done' | 'failed' | 'incomplete';
+export type TransferStatus = 'hashing' | 'active' | 'done' | 'failed' | 'cancelled' | 'incomplete';
 /** Which copy-across system is moving bytes (progress popup hop label). */
 export type CopyHop = 'server' | 'delegated' | 'webrtc' | 'dual-phase' | 'direct';
 export type CopyIce = 'checking' | 'connected' | 'failed';

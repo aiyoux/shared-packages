@@ -9,6 +9,7 @@ import {
 	detectFormat,
 	detectFormatFromName,
 	engineInfo as compressEngineInfo,
+	stripCompressionExt,
 	engineSupports,
 	expandBytes,
 	isJunkArchivePath,
@@ -54,6 +55,8 @@ export type ArchiveWriteProgress = {
 	job?: boolean;
 	/** Chip / dialog label — which library is running, including fallbacks. */
 	note?: string;
+	/** Folder rows aggregate descendant writes. Default file. */
+	entryKind?: 'file' | 'folder';
 };
 
 /** Selected library vs the one that actually ran (or will run). */
@@ -112,6 +115,47 @@ export function looksVaultName(name: string): boolean {
 
 export function looksPackedName(name: string): boolean {
 	return looksCompressedName(name) || looksVaultName(name);
+}
+
+/** Folder name for “extract into a subfolder named after the archive”. */
+export function extractContainerName(archiveName: string): string {
+	const base = packedBasename(archiveName);
+	if (isVaultName(base)) {
+		return base.slice(0, -'.spvault'.length) || 'vault';
+	}
+	const fmt = detectFormatFromName(base);
+	if (fmt) {
+		let stem = stripCompressionExt(base, fmt.codec);
+		if (stem.toLowerCase().endsWith('.tar')) stem = stem.slice(0, -4) || stem;
+		return packedBasename(stem) || 'archive';
+	}
+	const dot = base.lastIndexOf('.');
+	if (dot > 0) return base.slice(0, dot);
+	return base || 'archive';
+}
+
+export async function uniqueChildFolderName(
+	driver: ExplorerDriver,
+	parentId: string | null,
+	base: string
+): Promise<string> {
+	const clean = base.trim() || 'archive';
+	if (!driver.list) return clean;
+	const listed = await driver.list({ parentId });
+	const taken = new Set(listed.entries.map((e) => e.name.toLowerCase()));
+	if (!taken.has(clean.toLowerCase())) return clean;
+	for (let i = 1; i < 1000; i++) {
+		const name = `${clean} (${i})`;
+		if (!taken.has(name.toLowerCase())) return name;
+	}
+	return `${clean} (${Date.now()})`;
+}
+
+function prefixPackedPaths(files: PackedPath[], folder: string): PackedPath[] {
+	return files.map((f) => {
+		const rel = f.path.replace(/^\/+/, '');
+		return { path: rel ? `${folder}/${rel}` : `${folder}/`, data: f.data };
+	});
 }
 
 export function readStoredCompressEngine(): CompressEngineId {
@@ -374,25 +418,87 @@ export async function writeEntriesToDriver(
 	const flatten = !driver.mkdir || !driver.capabilities.supportsMkdir;
 	const folderIds = new Map<string, string | null>([['', parentId]]);
 
+	type FolderAgg = {
+		name: string;
+		parentKey: string;
+		totalBytes: number;
+		totalFiles: number;
+		doneBytes: number;
+		doneFiles: number;
+	};
+	const folderAgg = new Map<string, FolderAgg>();
+	if (!flatten) {
+		for (const file of files) {
+			const { dirs, file: fileName } = splitPackedPath(file.path);
+			if (!fileName) continue;
+			let parentKey = '';
+			for (const seg of dirs) {
+				const key = parentKey ? `${parentKey}/${seg}` : seg;
+				let agg = folderAgg.get(key);
+				if (!agg) {
+					agg = {
+						name: seg,
+						parentKey,
+						totalBytes: 0,
+						totalFiles: 0,
+						doneBytes: 0,
+						doneFiles: 0
+					};
+					folderAgg.set(key, agg);
+				}
+				agg.totalBytes += file.data.byteLength;
+				agg.totalFiles += 1;
+				parentKey = key;
+			}
+		}
+	}
+
+	function emitFolder(relKey: string) {
+		const agg = folderAgg.get(relKey);
+		if (!agg) return;
+		const destParent = folderIds.get(agg.parentKey);
+		if (destParent === undefined) return;
+		onFile?.({
+			name: agg.name,
+			parentId: destParent,
+			transferred: agg.doneBytes,
+			size: Math.max(agg.totalBytes, 1),
+			done: agg.totalFiles > 0 && agg.doneFiles >= agg.totalFiles,
+			entryKind: 'folder'
+		});
+	}
+
 	async function ensureDir(dirs: string[]): Promise<string | null> {
 		if (!dirs.length) return parentId;
 		if (flatten) return parentId;
 		const key = dirs.join('/');
 		const hit = folderIds.get(key);
 		if (hit !== undefined) return hit;
+		throwIfAborted(signal);
 		const parent = await ensureDir(dirs.slice(0, -1));
+		throwIfAborted(signal);
 		const name = dirs[dirs.length - 1]!;
 		const listed = await driver.list({ parentId: parent });
+		throwIfAborted(signal);
 		const existing = listed.entries.find((e) => e.kind === 'folder' && e.name === name);
 		if (existing) {
 			folderIds.set(key, existing.id);
+			emitFolder(key);
 			return existing.id;
 		}
 		const created = await driver.mkdir!(parent, name);
 		folderIds.set(key, created.id);
+		emitFolder(key);
 		return created.id;
 	}
 
+	if (!flatten) {
+		for (const [key, agg] of folderAgg) {
+			if (agg.parentKey === '') emitFolder(key);
+		}
+	}
+
+	let written = 0;
 	for (const file of files) {
 		throwIfAborted(signal);
 		const { dirs, file: fileName } = splitPackedPath(file.path);
@@ -401,25 +507,63 @@ export async function writeEntriesToDriver(
 			continue;
 		}
 		const destParent = flatten ? parentId : await ensureDir(dirs);
+		throwIfAborted(signal);
 		const destName = flatten && dirs.length ? `${dirs.join('__')}__${fileName}` : fileName;
 		const copy = Uint8Array.from(file.data);
 		const blob = new Blob([copy]);
 		const size = blob.size;
-		onFile?.({ name: destName, parentId: destParent, transferred: 0, size, done: false });
+		onFile?.({
+			name: destName,
+			parentId: destParent,
+			transferred: 0,
+			size,
+			done: false,
+			entryKind: 'file'
+		});
 		const out = new File([blob], destName);
 		if (typeof driver.upload === 'function') {
 			await driver.upload(destParent, out, {
 				signal,
 				onProgress: (pct) => {
+					if (signal?.aborted) return;
 					const transferred = Math.round(size * Math.min(1, Math.max(0, pct)));
-					onFile?.({ name: destName, parentId: destParent, transferred, size, done: false });
+					onFile?.({
+						name: destName,
+						parentId: destParent,
+						transferred,
+						size,
+						done: false,
+						entryKind: 'file'
+					});
 				}
 			});
 		} else {
 			await driver.writeFile!(destParent, out);
 		}
-		onFile?.({ name: destName, parentId: destParent, transferred: size, size, done: true });
-		await yieldPaint();
+		throwIfAborted(signal);
+		onFile?.({
+			name: destName,
+			parentId: destParent,
+			transferred: size,
+			size,
+			done: true,
+			entryKind: 'file'
+		});
+		if (!flatten && dirs.length) {
+			let parentKey = '';
+			for (const seg of dirs) {
+				const key = parentKey ? `${parentKey}/${seg}` : seg;
+				const agg = folderAgg.get(key);
+				if (agg) {
+					agg.doneBytes += size;
+					agg.doneFiles += 1;
+					emitFolder(key);
+				}
+				parentKey = key;
+			}
+		}
+		written += 1;
+		if ((written & 7) === 0) await yieldPaint();
 	}
 }
 
@@ -504,6 +648,7 @@ export async function expandPackedBytes(
 			.filter((e) => keep(e.path))
 			.map((e) => ({ path: e.path, data: e.data }));
 		for (const e of mapped) {
+			throwIfAborted(opts?.signal);
 			onMember?.({
 				path: e.path,
 				transferred: e.data.byteLength,
@@ -520,7 +665,9 @@ export async function expandPackedBytes(
 	opts?.onEngine?.(role);
 	const files = await expandBytes(role.used as CompressEngineId, bytes, fmt.codec, name, {
 		skipSystemFiles,
+		signal: opts?.signal,
 		onMember: (ev) => {
+			throwIfAborted(opts?.signal);
 			onMember?.({
 				path: ev.name,
 				transferred: ev.transferred,
@@ -545,7 +692,9 @@ export async function expandPackedBytes(
 				files[0]!.name,
 				{
 					skipSystemFiles,
+					signal: opts?.signal,
 					onMember: (ev) => {
+						throwIfAborted(opts?.signal);
 						onMember?.({
 							path: ev.name,
 							transferred: ev.transferred,
@@ -580,6 +729,8 @@ export type ArchiveJobSpec = {
 	cryptoEngineId: CryptoEngineId;
 	password: string;
 	skipSystemFiles: boolean;
+	/** Extract into a new folder named after the archive. Dialog default is on. */
+	wrapInSubfolder?: boolean;
 	useHost: boolean;
 	hostOp?: 'zip' | 'tar' | 'tgz' | 'encrypt' | 'unzip' | 'untar' | 'decrypt';
 	hostDestPath?: string;
@@ -796,6 +947,8 @@ export async function runArchiveJob(spec: ArchiveJobSpec): Promise<ArchiveJobRes
 	if (!inner.length) throw new Error('Nothing to extract');
 	if (dest === 'popup') {
 		emitJobPct(EXPAND_PCT);
+		setNote('Writing extracted files…');
+		emitJobPct(EXPAND_PCT);
 		const totalFiles = Math.max(
 			inner.filter((f) => Boolean(packedBasename(f.path)) && !f.path.endsWith('/')).length,
 			1
@@ -817,7 +970,17 @@ export async function runArchiveJob(spec: ArchiveJobSpec): Promise<ArchiveJobRes
 		return { inner, innerSession, title, engines };
 	}
 	emitJobPct(EXPAND_PCT);
-	await writeOut(inner, EXPAND_PCT);
+	setNote('Writing extracted files…');
+	emitJobPct(EXPAND_PCT);
+	let toWrite = inner;
+	const wrapDest = dest === 'same' || dest === 'folder';
+	if (spec.wrapInSubfolder && wrapDest && driver.mkdir) {
+		throwIfAborted(signal);
+		const stem = extractContainerName(sources[0]?.name ?? title);
+		const folder = await uniqueChildFolderName(driver, destParentId, stem);
+		toWrite = prefixPackedPaths(inner, folder);
+	}
+	await writeOut(toWrite, EXPAND_PCT);
 	emitJobPct(100, true);
 	return { title, engines };
 }

@@ -54,6 +54,7 @@ export function stackedStageLabel(t: {
 	status?: string;
 }): string {
 	if (t.status === 'failed') return 'Failed';
+	if (t.status === 'cancelled') return 'Cancelled';
 	if (t.status === 'hashing') return 'Hashing…';
 	const first = stagePercent(t.ahead, t.size, t.done);
 	const second = stagePercent(t.behind, t.size, t.done);
@@ -80,7 +81,13 @@ function stackPhase(
 	g: Partial<Record<StackLeg, TransferItem>>,
 	parts: TransferItem[]
 ): StackProgressPhase {
-	if (g.compress && !g.compress.done && g.compress.status !== 'done' && g.compress.status !== 'failed') {
+	if (
+		g.compress &&
+		!g.compress.done &&
+		g.compress.status !== 'done' &&
+		g.compress.status !== 'failed' &&
+		g.compress.status !== 'cancelled'
+	) {
 		return 'compress';
 	}
 	if (parts.some((p) => p.status === 'hashing')) return 'hashing';
@@ -88,7 +95,8 @@ function stackPhase(
 		g.decompress &&
 		!g.decompress.done &&
 		g.decompress.status !== 'done' &&
-		g.decompress.status !== 'failed'
+		g.decompress.status !== 'failed' &&
+		g.decompress.status !== 'cancelled'
 	) {
 		return 'decompress';
 	}
@@ -97,6 +105,7 @@ function stackPhase(
 
 function itemStatus(items: TransferItem[]): TransferStatus {
 	if (items.some((t) => t.status === 'failed')) return 'failed';
+	if (items.some((t) => t.status === 'cancelled')) return 'cancelled';
 	if (items.length > 0 && items.every((t) => t.done || t.status === 'done')) return 'done';
 	if (items.some((t) => t.status === 'hashing')) return 'hashing';
 	if (items.some((t) => t.status === 'incomplete')) return 'incomplete';

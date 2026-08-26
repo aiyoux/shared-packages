@@ -230,4 +230,30 @@ describe('stackTransferItems', () => {
 			'Done'
 		);
 	});
+
+	it('labels a cancelled job Cancelled, not Failed', () => {
+		assert.equal(
+			stackedStageLabel({
+				ahead: 40,
+				behind: 40,
+				size: 100,
+				done: true,
+				status: 'cancelled'
+			}),
+			'Cancelled'
+		);
+		const stacked = stackTransferItems([
+			item({
+				id: 'op-cancel',
+				name: 'bundle.zip',
+				transferred: 40,
+				size: 100,
+				done: true,
+				status: 'cancelled',
+				hopNote: 'Cancelled'
+			})
+		]);
+		assert.equal(stacked[0]!.status, 'cancelled');
+		assert.equal(stackedStageLabel(stacked[0]!), 'Cancelled');
+	});
 });

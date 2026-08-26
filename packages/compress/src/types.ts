@@ -45,6 +45,7 @@ export type UnzipProgressOpts = {
 	onMember?: (ev: ArchiveMemberProgress) => void;
 	/** Drop Finder `__MACOSX` / `._*` / `.DS_Store`. Default true. */
 	skipSystemFiles?: boolean;
+	signal?: AbortSignal;
 };
 
 export type DetectedFormat = {

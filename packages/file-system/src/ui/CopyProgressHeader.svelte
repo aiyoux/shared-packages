@@ -15,10 +15,14 @@
 	const stacked = $derived(stackTransferItems(items));
 	const latest = $derived.by((): StackedProgress | null => {
 		if (!stacked.length) return null;
-		const active = [...stacked].reverse().find((t) => !t.done && t.status !== 'failed');
+		const active = [...stacked]
+			.reverse()
+			.find((t) => !t.done && t.status !== 'failed' && t.status !== 'cancelled');
 		return active ?? stacked[stacked.length - 1]!;
 	});
-	const hasFinished = $derived(stacked.some((t) => t.done || t.status === 'failed'));
+	const hasFinished = $derived(
+		stacked.some((t) => t.done || t.status === 'failed' || t.status === 'cancelled')
+	);
 
 	let open = $state(false);
 	let rootEl = $state<HTMLDivElement | null>(null);
@@ -67,8 +71,10 @@
 			type="button"
 			class="chip"
 			class:failed={latest.status === 'failed'}
-			class:done={latest.done && latest.status !== 'failed'}
+			class:cancelled={latest.status === 'cancelled'}
+			class:done={latest.done && latest.status !== 'failed' && latest.status !== 'cancelled'}
 			data-testid="fe-op-progress-row"
+			data-status={latest.status}
 			data-name={latest.name}
 			data-copy-hop={latest.hop}
 			data-ice={iceAttr(latest)}
@@ -98,8 +104,10 @@
 					<div
 						class="menu-row"
 						class:failed={t.status === 'failed'}
-						class:done={t.done && t.status !== 'failed'}
+						class:cancelled={t.status === 'cancelled'}
+						class:done={t.done && t.status !== 'failed' && t.status !== 'cancelled'}
 						data-testid="fe-op-progress-menu-row"
+						data-status={t.status}
 						data-name={t.name}
 						data-copy-hop={t.hop}
 					>
@@ -120,8 +128,8 @@
 								type="button"
 								class="x"
 								onclick={() => dismissRow(t)}
-								aria-label={t.done || t.status === 'failed' ? 'Dismiss' : 'Cancel'}
-								title={t.done || t.status === 'failed' ? 'Dismiss' : 'Cancel'}
+								aria-label={t.done || t.status === 'failed' || t.status === 'cancelled' ? 'Dismiss' : 'Cancel'}
+								title={t.done || t.status === 'failed' || t.status === 'cancelled' ? 'Dismiss' : 'Cancel'}
 							>
 								<FeIcon name="x" size={12} />
 							</button>
@@ -130,7 +138,7 @@
 					{#if hopStatus(t)}
 						<p class="hop">{hopStatus(t)}</p>
 					{/if}
-					{#if t.error}
+					{#if t.error && t.status !== 'cancelled'}
 						<p class="err">{t.error}</p>
 					{/if}
 				{/each}
@@ -206,6 +214,14 @@
 	}
 	.failed .fill.behind {
 		background: var(--danger, #f87171);
+	}
+	.cancelled .fill.ahead,
+	.cancelled .fill.behind {
+		background: color-mix(in srgb, var(--text-muted, #94a3b8) 70%, transparent);
+	}
+	.cancelled .pct,
+	.cancelled .name {
+		color: var(--text-muted, #94a3b8);
 	}
 	.done .fill.ahead,
 	.done .fill.behind {

@@ -411,7 +411,7 @@ type CopyProgressPatch = {
 	transferred: number;
 	size?: number;
 	done?: boolean;
-	status?: 'active' | 'done' | 'failed';
+	status?: 'active' | 'done' | 'failed' | 'cancelled';
 	error?: string;
 	hop?: CopyHop;
 	ice?: CopyIce;
@@ -513,33 +513,38 @@ async function copyFile(
 		});
 	};
 	const failAll = (err: unknown) => {
+		const aborted = err instanceof Error && err.name === 'AbortError';
 		const msg = err instanceof Error ? err.message : String(err);
+		const status = aborted ? ('cancelled' as const) : ('failed' as const);
+		const note = aborted ? 'Cancelled' : hopNote;
 		if (dualLike) {
 			reportLeg(remoteId, entry.name, {
 				transferred: 0,
 				size: known,
 				done: true,
-				status: 'failed',
-				error: msg,
-				hop
+				status,
+				error: aborted ? undefined : msg,
+				hop,
+				hopNote: note
 			});
 			reportLeg(wireId, entry.name, {
 				transferred: 0,
 				size: known,
 				done: true,
-				status: 'failed',
-				error: msg,
-				hop
+				status,
+				error: aborted ? undefined : msg,
+				hop,
+				hopNote: note
 			});
 		} else {
 			reportCopy(opId, entry, {
 				transferred: 0,
 				size: known,
 				done: true,
-				status: 'failed',
-				error: msg,
+				status,
+				error: aborted ? undefined : msg,
 				hop,
-				hopNote
+				hopNote: note
 			});
 		}
 	};

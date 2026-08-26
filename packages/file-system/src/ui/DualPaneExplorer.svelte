@@ -707,7 +707,7 @@
 	function dismissAllSettledCopy() {
 		const next = new Set(dismissedCopyIds);
 		for (const t of copyItems) {
-			if (t.done || t.status === 'failed') next.add(t.id);
+			if (t.done || t.status === 'failed' || t.status === 'cancelled') next.add(t.id);
 		}
 		dismissedCopyIds = next;
 	}

@@ -26,6 +26,7 @@
 		archiveJobPhaseLabel,
 		packingAsTree,
 		previewArchiveEnginePlan,
+		extractContainerName,
 		readStoredCompressEngine,
 		readStoredCryptoEngine,
 		subjectLabel,
@@ -103,6 +104,9 @@
 	let destName = $state('');
 	/** Finder `__MACOSX` / `._*` / `.DS_Store` — on by default, uncheck to keep them. */
 	let skipSystemFiles = $state(true);
+	/** Extract into a new folder named after the archive. Default on. */
+	let wrapInSubfolder = $state(true);
+	let abortRequested = $state(false);
 
 	const compressEngine = $derived(
 		compressEngines.find((e) => e.id === compressEngineId) ?? compressEngines[0]!
@@ -275,26 +279,40 @@
 	function hostDestPath(): string {
 		const parentId = dest === 'folder' ? pickParent : (entries[0]?.parentId ?? null);
 		const parentAbs = driver.absolutePath!(parentId);
-		if (isExtract) return parentAbs;
+		const parent = parentAbs.replace(/\/+$/, '');
+		if (isExtract) {
+			if (wrapInSubfolder && (dest === 'same' || dest === 'folder')) {
+				const stem = extractContainerName(entries[0]?.name ?? 'archive');
+				return `${parent}/${stem}`;
+			}
+			return parentAbs;
+		}
 		const name = destName.trim() || defaultPackName;
-		return `${parentAbs.replace(/\/+$/, '')}/${name}`;
+		return `${parent}/${name}`;
 	}
+
+	const showWrapSubfolder = $derived(isExtract && (dest === 'same' || dest === 'folder'));
 
 	const destParentId = $derived(
 		dest === 'folder' ? pickParent : (entries[0]?.parentId ?? null)
 	);
 	const running = $derived(busy || jobRunning);
 	const shownPct = $derived(jobRunning ? jobPct : 0);
+	$effect(() => {
+		if (!running) abortRequested = false;
+	});
 	const progressLabel = $derived(
-		jobLabel ||
-			archiveJobPhaseLabel({
-				kind,
-				entries,
-				compressEngineId,
-				codec,
-				cryptoEngineId,
-				useHost
-			})
+		abortRequested || jobLabel === 'Cancelling…'
+			? 'Cancelling…'
+			: jobLabel ||
+				archiveJobPhaseLabel({
+					kind,
+					entries,
+					compressEngineId,
+					codec,
+					cryptoEngineId,
+					useHost
+				})
 	);
 
 	const runLabel = $derived.by(() => {
@@ -341,6 +359,7 @@
 			cryptoEngineId,
 			password,
 			skipSystemFiles,
+			wrapInSubfolder: showWrapSubfolder && wrapInSubfolder,
 			useHost,
 			hostOp: useHost ? hostOp() : undefined,
 			hostDestPath: useHost ? hostDestPath() : undefined
@@ -619,6 +638,19 @@
 			<p class="hint">Contents open as an inner filesystem in a popup.</p>
 		{/if}
 
+		{#if showWrapSubfolder}
+			<label class="check-row wrap-sub" data-testid="fe-archive-wrap-subfolder-row">
+				<input
+					type="checkbox"
+					bind:checked={wrapInSubfolder}
+					data-testid="fe-archive-wrap-subfolder"
+				/>
+				{kind === 'decrypt'
+					? 'Create sub folder with same name as vault'
+					: 'Create sub folder with same name as zip'}
+			</label>
+		{/if}
+
 		{#if dest === 'folder'}
 			<div class="picker" data-testid="fe-archive-folder-pick">
 				<div class="crumbs">
@@ -674,8 +706,17 @@
 				<button type="button" class="ds-btn ds-btn--sm ds-btn--ghost" data-testid="fe-archive-hide" onclick={() => onHide?.()}>
 					Hide
 				</button>
-				<button type="button" class="ds-btn ds-btn--sm ds-btn--ghost" data-testid="fe-archive-abort" onclick={() => onAbort?.()}>
-					Cancel
+				<button
+					type="button"
+					class="ds-btn ds-btn--sm ds-btn--ghost"
+					data-testid="fe-archive-abort"
+					disabled={abortRequested}
+					onclick={() => {
+						abortRequested = true;
+						onAbort?.();
+					}}
+				>
+					{abortRequested ? 'Cancelling…' : 'Cancel'}
 				</button>
 			{:else}
 				<button type="button" class="ds-btn ds-btn--sm ds-btn--ghost" data-testid="fe-archive-cancel" onclick={onCancel}>
@@ -760,6 +801,10 @@
 		flex-direction: row;
 		align-items: center;
 		gap: 0.4rem;
+	}
+	label.wrap-sub {
+		margin: 0 0 0.65rem;
+		font-size: 0.85rem;
 	}
 	select,
 	input[type='password'],

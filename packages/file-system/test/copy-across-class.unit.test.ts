@@ -350,7 +350,7 @@ describe('copyAcross truncated folder', () => {
 			(e: unknown) => e instanceof Error && e.name === 'AbortError'
 		);
 		const copies = listTransfers().filter((t) => t.direction === 'copying');
-		assert.equal(copies[0]!.status, 'failed');
+		assert.equal(copies[0]!.status, 'cancelled');
 	});
 
 	it('same B2 connection server-copies via the API and is not dual-phase', async () => {

@@ -27,7 +27,8 @@ function pending(p: Partial<ListingPending> & { name: string }): ListingPending 
 		ready: p.ready,
 		status: p.status,
 		done: p.done,
-		destParentId: p.destParentId
+		destParentId: p.destParentId,
+		entryKind: p.entryKind
 	};
 }
 
@@ -133,6 +134,67 @@ describe('listing pending merge', () => {
 			rows.map((r) => r.node.name),
 			['Zed', 'zebra.txt', 'apple.txt']
 		);
+	});
+
+	it('attaches descendant progress to an existing dest folder', () => {
+		const rows = mergeListingWithPending(
+			[folder('repo'), file('other.txt')],
+			[
+				pending({
+					name: 'repo',
+					transferred: 40,
+					size: 100,
+					entryKind: 'folder',
+					destParentId: null
+				})
+			]
+		);
+		const repo = rows.find((r) => r.node.name === 'repo');
+		assert.ok(repo);
+		assert.equal(repo.placeholder, false);
+		assert.equal(repo.node.kind, 'folder');
+		assert.ok(repo.pending);
+		assert.equal(pendingPercent(repo.pending!), 40);
+		assert.equal(repo.pending?.entryKind, 'folder');
+	});
+
+	it('shows a ghost folder placeholder for a nested extract dest', () => {
+		const rows = mergeListingWithPending(
+			[],
+			[
+				pending({
+					name: 'repo',
+					transferred: 10,
+					size: 100,
+					entryKind: 'folder',
+					destParentId: null
+				})
+			],
+			null
+		);
+		assert.equal(rows.length, 1);
+		assert.equal(rows[0]!.placeholder, true);
+		assert.equal(rows[0]!.node.kind, 'folder');
+		assert.equal(rows[0]!.pending?.name, 'repo');
+	});
+
+	it('does not treat a folder pending as a file with the same name', () => {
+		const rows = mergeListingWithPending(
+			[file('repo')],
+			[
+				pending({
+					name: 'repo',
+					transferred: 50,
+					size: 100,
+					entryKind: 'folder'
+				})
+			]
+		);
+		assert.equal(rows.length, 2);
+		assert.equal(rows[0]!.node.kind, 'folder');
+		assert.equal(rows[0]!.placeholder, true);
+		assert.equal(rows[1]!.node.kind, 'file');
+		assert.equal(rows[1]!.pending, null);
 	});
 
 	it('inserts unmatched pending among files by name without re-sorting existing files', () => {

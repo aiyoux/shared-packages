@@ -42,6 +42,7 @@
 
 	function label(t: StackedProgress): string {
 		const hop = hopStatus(t);
+		if (t.status === 'cancelled') return 'Cancelled';
 		if (t.status === 'failed') return hop && t.ice === 'failed' ? hop : 'Failed';
 		if (hop) return hop;
 		if (t.done) return 'Done';
@@ -76,8 +77,10 @@
 				<li
 					class="op-row"
 					class:failed={t.status === 'failed'}
-					class:done={t.done && t.status !== 'failed'}
+					class:cancelled={t.status === 'cancelled'}
+					class:done={t.done && t.status !== 'failed' && t.status !== 'cancelled'}
 					data-testid="fe-op-progress-row"
+					data-status={t.status}
 					data-name={t.name}
 					data-copy-hop={t.hop}
 					data-ice={iceAttr(t)}
@@ -86,7 +89,7 @@
 					<div class="op-meta">
 						<span class="op-name" title={t.name}>{t.name}</span>
 						<span class="op-status">{label(t)}</span>
-						{#if onDismiss && (t.done || t.status === 'failed')}
+						{#if onDismiss && (t.done || t.status === 'failed' || t.status === 'cancelled')}
 							<button type="button" class="op-x" onclick={() => dismissRow(t)} aria-label="Dismiss">
 								<FeIcon name="x" size={12} />
 							</button>
@@ -103,7 +106,7 @@
 						<div class="op-fill ahead" style="width: {aheadPct}%"></div>
 						<div class="op-fill behind" style="width: {behindPct}%"></div>
 					</div>
-					{#if t.error}
+					{#if t.error && t.status !== 'cancelled'}
 						<p class="op-err">{t.error}</p>
 					{/if}
 				</li>
@@ -200,6 +203,14 @@
 	}
 	.op-row.failed .op-fill.behind {
 		background: var(--danger);
+	}
+	.op-row.cancelled .op-fill.ahead,
+	.op-row.cancelled .op-fill.behind {
+		background: color-mix(in srgb, var(--text-muted, #94a3b8) 70%, transparent);
+	}
+	.op-row.cancelled .op-status,
+	.op-row.cancelled .op-name {
+		color: var(--text-muted, #94a3b8);
 	}
 	.op-row.done .op-fill.ahead,
 	.op-row.done .op-fill.behind {
