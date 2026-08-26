@@ -156,6 +156,17 @@ export class MemoryVfsService {
 		if (taken && input.onConflict === 'error') {
 			throw new VfsError('NAME_CONFLICT', `Name already exists: ${name}`);
 		}
+		if (taken && input.onConflict === 'overwrite') {
+			// Flat model: every node is a file, so a taken name is a file to replace.
+			const existing = [...getState().nodes.values()].find((n) => n.name === name);
+			if (existing) {
+				return this.updateFile(existing.id, input.body, {
+					force: true,
+					meta: input.meta,
+					contentType: input.contentType
+				});
+			}
+		}
 		name = ensureUnique(name, undefined);
 		const { bytes, contentType } = await serializeBody(input.body, input.contentType);
 		const nodeId = input.id ?? generateId('file');
@@ -198,7 +209,7 @@ export class MemoryVfsService {
 		if (!opts.force && opts.expectedGeneration !== node.generation) {
 			throw new VfsError('GENERATION_CONFLICT');
 		}
-		const { bytes, contentType } = await serializeBody(body, node.contentType);
+		const { bytes, contentType } = await serializeBody(body, opts.contentType ?? node.contentType);
 		const prevBlobId = node.blobId;
 		const blobId = generateId('blob');
 		getState().blobs.set(blobId, { bytes: new Uint8Array(bytes), contentType });

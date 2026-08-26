@@ -16,7 +16,11 @@
 		accept: FileTypeId[];
 		defaultName?: string;
 		testid?: string;
-		onSave?: (args: { parentId: string | null; name: string }) => void | Promise<void>;
+		onSave?: (args: {
+			parentId: string | null;
+			name: string;
+			overwrite?: boolean;
+		}) => void | Promise<void>;
 		onOpen?: (entry: ExplorerOpenTarget) => void | Promise<void>;
 		onClose: () => void;
 	} = $props();

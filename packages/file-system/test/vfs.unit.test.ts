@@ -34,6 +34,53 @@ describe('VfsService', () => {
 		assert.equal(b.name, 'a (1).skch');
 	});
 
+	it('writeFile onConflict overwrite replaces the same-name file in place', async () => {
+		const a = await vfs.writeFile({ parentId: null, name: 'o.skch', fileType: 'skch', body: { v: 1 } });
+		const b = await vfs.writeFile({
+			parentId: null,
+			name: 'o.skch',
+			fileType: 'skch',
+			body: { v: 2 },
+			onConflict: 'overwrite'
+		});
+		assert.equal(b.id, a.id, 'keeps the existing node id');
+		assert.equal(b.name, 'o.skch');
+		assert.equal(b.generation, a.generation + 1, 'bumps generation for cross-tab CAS');
+		assert.deepEqual(await vfs.readJson(b.id), { v: 2 });
+		// A later CAS save with the old generation must conflict.
+		await assert.rejects(
+			() => vfs.updateFile(b.id, { v: 3 }, { expectedGeneration: a.generation }),
+			(e: unknown) => e instanceof VfsError && e.code === 'GENERATION_CONFLICT'
+		);
+	});
+
+	it('writeFile onConflict overwrite with no collision creates a fresh node', async () => {
+		const n = await vfs.writeFile({
+			parentId: null,
+			name: 'fresh.skch',
+			fileType: 'skch',
+			body: { v: 1 },
+			onConflict: 'overwrite'
+		});
+		assert.equal(n.name, 'fresh.skch');
+		assert.equal(n.generation, 1);
+	});
+
+	it('writeFile onConflict overwrite refuses a same-name folder', async () => {
+		await vfs.mkdir(null, 'dir.skch');
+		await assert.rejects(
+			() =>
+				vfs.writeFile({
+					parentId: null,
+					name: 'dir.skch',
+					fileType: 'skch',
+					body: { v: 1 },
+					onConflict: 'overwrite'
+				}),
+			(e: unknown) => e instanceof VfsError && e.code === 'NAME_CONFLICT'
+		);
+	});
+
 	it('updateFile generation CAS', async () => {
 		const f = await vfs.writeFile({ parentId: null, name: 'x.skch', fileType: 'skch', body: { v: 1 } });
 		const u1 = await vfs.updateFile(f.id, { v: 2 }, { expectedGeneration: f.generation });

@@ -118,3 +118,12 @@ export function emptyTrashCopy(): FeConfirmCopy {
 		body: 'Permanently delete all items in trash? This cannot be undone.'
 	};
 }
+
+/** Save-as onto an existing file: confirm before replacing it. */
+export function overwriteSaveCopy(name: string): FeConfirmCopy {
+	return {
+		title: 'Overwrite file?',
+		confirmLabel: 'Overwrite',
+		body: `A file named “${name}” already exists in this folder. Do you want to replace it?`
+	};
+}

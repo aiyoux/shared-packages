@@ -1,8 +1,19 @@
 export { default as FileExplorer } from './FileExplorer.svelte';
 export { default as FileExplorerDialog } from './FileExplorerDialog.svelte';
 export { default as FeTreeView } from './FeTreeView.svelte';
+export { default as UnsavedChangesDialog } from './UnsavedChangesDialog.svelte';
 export { detectProject, findProjectRoot, type ProjectRootHit } from './detectProject.js';
 export type { ExplorerMode, ExplorerContext } from './FileExplorer.svelte';
+export {
+	saveWithConflictConfirm,
+	openFileWithGuard,
+	SaveCancelledError,
+	DEFAULT_CONFLICT_MSG,
+	type SaveConflictConfirmOpts,
+	type DirtyOpenChoice,
+	type OpenFileWithGuardOpts
+} from './saveFlow.js';
+export { showDirtyOpenDialog } from './dirtyOpenDialog.js';
 export { default as StoragePersistenceStatus } from './StoragePersistenceStatus.svelte';
 export { default as DualPaneExplorer } from './DualPaneExplorer.svelte';
 export { default as DualPhaseConfirm } from './DualPhaseConfirm.svelte';

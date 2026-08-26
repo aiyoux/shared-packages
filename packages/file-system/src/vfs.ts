@@ -401,7 +401,7 @@ export class VfsService {
 		parentId: string | null,
 		name: string,
 		excludeId?: string,
-		onConflict: 'rename' | 'error' = 'rename'
+		onConflict: 'rename' | 'error' | 'overwrite' = 'rename'
 	): Promise<string> {
 		const siblings = await this.activeSiblings(parentId, excludeId);
 		const taken = new Set(siblings.map((s) => s.name));
@@ -409,6 +409,7 @@ export class VfsService {
 		if (onConflict === 'error') {
 			throw new VfsError('NAME_CONFLICT', `Name already exists: ${name}`);
 		}
+		if (onConflict === 'overwrite') return name;
 		let i = 1;
 		while (taken.has(withNumericSuffix(name, i))) i++;
 		return withNumericSuffix(name, i);
@@ -463,6 +464,24 @@ export class VfsService {
 		const fileType = input.fileType ?? inferFileTypeFromName(name);
 		if (fileType !== 'unknown' && getFileType(fileType)) {
 			name = forceExtension(name, fileType);
+		}
+
+		// Overwrite-in-place: a live sibling file with this exact name is replaced
+		// (same id/parent, new bytes, generation bump so bound docs elsewhere see
+		// GENERATION_CONFLICT). A same-name folder is not a valid overwrite target.
+		if (input.onConflict === 'overwrite') {
+			const siblings = await this.activeSiblings(input.parentId);
+			const sameName = siblings.find((n) => n.name === name);
+			if (sameName?.kind === 'folder') {
+				throw new VfsError('NAME_CONFLICT', `A folder named ${name} already exists`);
+			}
+			if (sameName?.kind === 'file') {
+				return this.updateFile(sameName.id, input.body, {
+					force: true,
+					meta: input.meta,
+					contentType: input.contentType
+				});
+			}
 		}
 
 		const nodeId = input.id ?? generateId('file');
@@ -614,7 +633,7 @@ export class VfsService {
 		const blobId = generateId('blob');
 		const writeId = generateId('w');
 		const finalPath = `blobs/${blobId}.bin`;
-		const { bytes, contentType } = await serializeBody(body, node.contentType);
+		const { bytes, contentType } = await serializeBody(body, opts.contentType ?? node.contentType);
 		const leaseKey = `write:${blobId}`;
 		const owner = generateId('lease');
 		const now = Date.now();

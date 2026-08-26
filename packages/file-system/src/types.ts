@@ -87,13 +87,17 @@ export interface WriteFileInput {
 	 * (no resurrection).
 	 */
 	id?: string;
-	onConflict?: 'rename' | 'error';
+	onConflict?: 'rename' | 'error' | 'overwrite';
 }
 
 export type UpdateFileOpts = (
 	| { expectedGeneration: number; force?: false }
 	| { force: true; expectedGeneration?: never }
-) & { meta?: Record<string, unknown> };
+) & {
+	meta?: Record<string, unknown>;
+	/** Serialize/stamp the new bytes with this content type instead of the node's current one. */
+	contentType?: string;
+};
 
 /** Latest `get(id)` + `getPath(id)` snapshot for a document watch. */
 export type DocumentSnapshot = {
