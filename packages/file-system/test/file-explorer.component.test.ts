@@ -234,6 +234,9 @@ describe('FileExplorer component', () => {
 		await fireEvent.click(screen.getByTestId('fe-item-details'));
 		const preview = await screen.findByTestId('fe-file-preview');
 		expect(preview).toBeTruthy();
+		const previewZ = Number(getComputedStyle(preview).zIndex);
+		const headerZ = Number(getComputedStyle(screen.getByTestId('fe-header')).zIndex);
+		expect(previewZ).toBeGreaterThan(headerZ);
 		expect(screen.getByTestId('fe-file-preview-name').textContent).toMatch(/Sketch/);
 		expect(preview.querySelector('[data-testid="fe-rename-btn"]')).toBeTruthy();
 		expect(preview.querySelector('[data-testid="fe-row-copy"]')).toBeTruthy();

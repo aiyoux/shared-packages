@@ -551,6 +551,81 @@
 		monitorProfiles.map((p) => ({ id: p.id, name: p.name, detail: p.rootPath }))
 	);
 
+	type ConnDotStatus = 'connecting' | 'subscribed' | 'connected' | 'resync' | 'error' | 'off' | 'closed';
+	type ConnDotInfo = {
+		wrapTestId: string;
+		watchTestId?: string;
+		status: ConnDotStatus;
+		title: string;
+		lines: string[];
+	};
+
+	/** Inline status next to the connection dropdown — never a pane-status strip. */
+	function paneConnDot(id: PaneId): ConnDotInfo | null {
+		const p = id === 'left' ? left : right;
+		if (id === 'right' && overrideRight) {
+			return {
+				wrapTestId: 'peer-fs-badge',
+				status: 'connected',
+				title: 'Peer filesystem',
+				lines: [`Their · ${overrideRight.label}`]
+			};
+		}
+		if (p.busy) {
+			const kind =
+				p.activeKind === 'monitor' || p.showMonitorForm
+					? 'monitor'
+					: p.activeKind === 'rclone' || p.showRcloneForm
+						? 'rclone'
+						: 'b2';
+			const title = kind === 'monitor' ? 'Monitor' : kind === 'rclone' ? 'rclone' : 'B2';
+			return {
+				wrapTestId: `${kind}-connecting-${id}`,
+				status: 'connecting',
+				title,
+				lines: ['Connecting…']
+			};
+		}
+		if (p.activeKind === 'monitor') {
+			const status = (monitorWatchStatus[id] ?? 'off') as ConnDotStatus;
+			const chip = monitorChips.find((c) => c.id === p.activeId);
+			return {
+				wrapTestId: `monitor-remote-badge-${id}`,
+				watchTestId: `monitor-watch-status-${id}`,
+				status,
+				title: chip?.name ? `Monitor · ${chip.name}` : 'Monitor',
+				lines: ['Open-with off', `Watch · ${status}`]
+			};
+		}
+		if (p.activeKind === 'b2') {
+			const chip = b2Chips.find((c) => c.id === p.activeId);
+			return {
+				wrapTestId: `b2-remote-badge-${id}`,
+				status: 'connected',
+				title: chip?.name ? `B2 · ${chip.name}` : 'B2',
+				lines: [...(chip?.detail ? [chip.detail] : []), 'Open-with off']
+			};
+		}
+		if (p.activeKind === 'rclone') {
+			const chip = rcloneChips.find((c) => c.id === p.activeId);
+			return {
+				wrapTestId: `rclone-remote-badge-${id}`,
+				status: 'connected',
+				title: chip?.name ? `rclone · ${chip.name}` : 'rclone',
+				lines: [...(chip?.detail ? [chip.detail] : []), 'Open-with off']
+			};
+		}
+		if (p.activeKind === 'disk') {
+			return {
+				wrapTestId: `disk-badge-${id}`,
+				status: 'connected',
+				title: 'This computer',
+				lines: p.diskName ? [p.diskName] : []
+			};
+		}
+		return null;
+	}
+
 	const showCopyAcross = $derived(dualPane);
 
 	const visibleCopyItems = $derived(copyItems.filter((t) => !dismissedCopyIds.has(t.id)));
@@ -1452,44 +1527,6 @@
 	/>
 {/snippet}
 
-{#snippet paneBadges(id: PaneId)}
-	{@const p = id === 'left' ? left : right}
-	{#if p.busy}
-		<span
-			class="busy"
-			data-testid={p.activeKind === 'monitor' || p.showMonitorForm
-				? `monitor-connecting-${id}`
-				: p.activeKind === 'rclone' || p.showRcloneForm
-					? `rclone-connecting-${id}`
-					: `b2-connecting-${id}`}
-		>
-			Connecting…
-		</span>
-	{/if}
-	{#if p.activeKind === 'b2'}
-		<span class="remote-badge" data-testid="b2-remote-badge-{id}">Remote · open-with off</span>
-	{:else if p.activeKind === 'rclone'}
-		<span class="remote-badge" data-testid="rclone-remote-badge-{id}">rclone · open-with off</span>
-	{:else if p.activeKind === 'monitor'}
-		<span class="remote-badge" data-testid="monitor-remote-badge-{id}">monitor · open-with off</span>
-		<span
-			class="remote-badge mon-watch"
-			data-testid="monitor-watch-status-{id}"
-			data-status={monitorWatchStatus[id] ?? 'off'}
-			title="Live filesystem watch (monitor SSE)"
-		>
-			watch · {monitorWatchStatus[id] ?? 'off'}
-		</span>
-	{:else if p.activeKind === 'disk'}
-		<span class="remote-badge" data-testid="disk-badge-{id}"
-			>This computer{p.diskName ? ` · ${p.diskName}` : ''}</span
-		>
-	{/if}
-	{#if id === 'right' && overrideRight}
-		<span class="remote-badge" data-testid="peer-fs-badge">Their · {overrideRight.label}</span>
-	{/if}
-{/snippet}
-
 {#snippet copyAcrossAction(id: PaneId, variant: 'icon' | 'label')}
 	{@const p = id === 'left' ? left : right}
 	{#if showCopyAcross}
@@ -1535,7 +1572,7 @@
 		onfeexplorerdragbegin={(e) => onPanePointerDragBegin(id, e)}
 		onfeexplorerdragend={onPaneDragEnd}
 	>
-		{#if !hostSettings && (onSend || subTid || p.busy || (p.activeKind !== 'local' && p.activeKind !== 'memory') || (id === 'right' && overrideRight))}
+		{#if !hostSettings && (onSend || subTid)}
 		<div class="pane-chrome" data-testid={tids.paneChrome(id)}>
 			{#if onSend}
 			<FeTipIconBtn
@@ -1546,18 +1583,10 @@
 				onclick={() => runSend(id)}
 			/>
 		{/if}
-		{@render paneBadges(id)}
 		{#if subTid}
 			<span class="pane-sub" data-testid={subTid.testid}>{subTid.text}</span>
 		{/if}
 	</div>
-	{:else if p.busy || (p.activeKind !== 'local' && p.activeKind !== 'memory') || (id === 'right' && overrideRight) || subTid}
-	<div class="pane-status" data-testid={tids.paneChrome(id)}>
-		{@render paneBadges(id)}
-		{#if subTid}
-			<span class="pane-sub" data-testid={subTid.testid}>{subTid.text}</span>
-		{/if}
-		</div>
 		{/if}
 		{#if p.error}
 			<div
@@ -1752,15 +1781,49 @@
 	</div>
 {/snippet}
 
+{#snippet paneConnStatus(id: PaneId)}
+	{@const info = paneConnDot(id)}
+	{#if info}
+		<div
+			class="conn-status"
+			data-testid={info.wrapTestId}
+			aria-label="{info.title}: {info.lines.join(', ')}"
+		>
+			{#if info.watchTestId}
+				<span
+					class="conn-status-dot"
+					data-testid={info.watchTestId}
+					data-status={info.status}
+				></span>
+			{:else}
+				<span class="conn-status-dot" data-status={info.status}></span>
+			{/if}
+			<div class="conn-status-tip" role="tooltip">
+				<p class="conn-status-title">{info.title}</p>
+				{#each info.lines as line}
+					<p>{line}</p>
+				{/each}
+			</div>
+		</div>
+	{/if}
+{/snippet}
+
 {#snippet paneConn(id: PaneId)}
-	{#if paneShowsSwitcher(id) && !(id === 'right' && overrideRight)}
+	{@const showSwitcher = paneShowsSwitcher(id) && !(id === 'right' && overrideRight)}
+	{@const showStatus = paneConnDot(id) != null}
+	{#if showSwitcher || showStatus}
 		<div
 			class="dpe-pane-conn"
 			data-testid="conn-switcher-{id}"
 			data-pane={id}
 			aria-label={id === 'left' ? 'Left pane connection' : 'Right pane connection'}
 		>
-			{@render paneSwitcher(id)}
+			{#if showSwitcher}
+				{@render paneSwitcher(id)}
+			{/if}
+			{#if showStatus}
+				{@render paneConnStatus(id)}
+			{/if}
 		</div>
 	{/if}
 {/snippet}
@@ -1895,6 +1958,64 @@
 	.dpe-pane-conn {
 		min-width: 0;
 		max-width: 100%;
+		display: flex;
+		align-items: center;
+		gap: 0.3rem;
+	}
+	.conn-status {
+		position: relative;
+		flex-shrink: 0;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 1.45rem;
+		height: 1.45rem;
+		cursor: help;
+	}
+	.conn-status-dot {
+		width: 8px;
+		height: 8px;
+		border-radius: 50%;
+		background: var(--text-muted);
+	}
+	.conn-status-dot[data-status='subscribed'],
+	.conn-status-dot[data-status='connected'] {
+		background: var(--accent-emerald);
+	}
+	.conn-status-dot[data-status='connecting'],
+	.conn-status-dot[data-status='resync'] {
+		background: var(--accent-amber);
+	}
+	.conn-status-dot[data-status='error'] {
+		background: var(--danger);
+	}
+	.conn-status-tip {
+		display: none;
+		position: absolute;
+		z-index: 45;
+		top: calc(100% + 6px);
+		left: 0;
+		min-width: 10rem;
+		padding: 0.45rem 0.55rem;
+		border: 1px solid var(--line-hairline);
+		background: var(--surface-2);
+		color: var(--text-primary);
+		box-shadow: 0 10px 28px rgb(var(--scrim-rgb) / 0.45);
+		font-size: 0.78rem;
+		line-height: 1.35;
+		white-space: nowrap;
+	}
+	.conn-status-title {
+		margin: 0 0 0.15rem;
+		font-weight: 700;
+		font-size: 0.82rem;
+	}
+	.conn-status-tip p {
+		margin: 0;
+	}
+	.conn-status:hover .conn-status-tip,
+	.conn-status:focus-within .conn-status-tip {
+		display: block;
 	}
 	.dpe-layout-cluster {
 		display: flex;
@@ -1919,14 +2040,6 @@
 		display: flex;
 		align-items: center;
 		margin-left: auto;
-	}
-	.pane-status {
-		display: flex;
-		flex-wrap: wrap;
-		align-items: center;
-		gap: 0.45rem;
-		padding: 0.35rem 0.65rem;
-		border-bottom: 1px solid var(--line-hairline);
 	}
 	.dpe-shell {
 		display: flex;
@@ -1962,28 +2075,12 @@
 		letter-spacing: 0.04em;
 		text-transform: uppercase;
 	}
-	.busy {
-		font-size: 0.8rem;
-		opacity: 0.8;
-	}
 	.b2-error {
 		margin: 0;
 		padding: 0.4rem 0.65rem;
 		background: rgb(var(--danger-rgb) / 0.16);
 		color: var(--cat-red-soft);
 		font-size: 0.85rem;
-	}
-	.remote-badge {
-		font-size: 0.75rem;
-		color: var(--accent-light);
-		white-space: nowrap;
-	}
-	.remote-badge.mem {
-		color: var(--accent-violet);
-	}
-	.remote-badge.mon-watch {
-		color: var(--accent-emerald);
-		text-transform: lowercase;
 	}
 	.pane-sub {
 		font-size: 0.72rem;

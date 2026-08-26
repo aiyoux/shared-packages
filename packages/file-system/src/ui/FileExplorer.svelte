@@ -3627,7 +3627,10 @@
 	.fe-preview-backdrop {
 		position: absolute;
 		inset: 0;
-		z-index: 8;
+		/* Above .fe-header (9) and the view-switcher popup (20). On a short
+		   pane the details card overlaps the toolbar; 8 left those mini icons
+		   painting over the dialog. Archive (60) / confirm (80) stay on top. */
+		z-index: 40;
 		display: flex;
 		align-items: center;
 		justify-content: center;
