@@ -556,6 +556,7 @@ describe('FileExplorer component', () => {
 		await viWaitFor(() => preview.querySelector('[data-fe-is-project="false"]') != null);
 		expect(preview.querySelector('[data-testid="fe-open-project"]')).toBeNull();
 		expect(preview.querySelector('[data-testid="fe-init-project"]')).toBeNull();
+		// onOpenProject only — Init is omitted; Open hides once detect says not a project.
 		expect(opened).toEqual([]);
 
 		await fireEvent.click(screen.getByTestId('fe-file-preview-close'));
@@ -598,9 +599,11 @@ describe('FileExplorer component', () => {
 		const plain = document.querySelector('[data-testid="fe-folder-row"][data-name="plain"]') as HTMLElement;
 		await fireEvent.click(plain);
 		await fireEvent.click(screen.getByTestId('fe-item-details'));
+		const preview = await screen.findByTestId('fe-file-preview');
+		await viWaitFor(() => preview.querySelector('[data-fe-is-project="false"]') != null);
 		const initBtn = await screen.findByTestId('fe-init-project');
 		expect(initBtn.textContent).toMatch(/Init project/);
-		expect(document.querySelector('[data-testid="fe-open-project"]')).toBeNull();
+		expect(preview.querySelector('[data-testid="fe-open-project"]')).toBeNull();
 		await fireEvent.click(initBtn);
 		await viWaitFor(() => inited.length === 1);
 		expect(inited).toEqual(['plain']);
@@ -612,9 +615,11 @@ describe('FileExplorer component', () => {
 		) as HTMLElement;
 		await fireEvent.click(projectRow);
 		await fireEvent.click(screen.getByTestId('fe-item-details'));
+		const projPreview = await screen.findByTestId('fe-file-preview');
+		await viWaitFor(() => projPreview.querySelector('[data-fe-is-project="true"]') != null);
 		const openBtn = await screen.findByTestId('fe-open-project');
 		expect(openBtn.textContent).toMatch(/Open project/);
-		expect(document.querySelector('[data-testid="fe-init-project"]')).toBeNull();
+		expect(projPreview.querySelector('[data-testid="fe-init-project"]')).toBeNull();
 		await fireEvent.click(openBtn);
 		await viWaitFor(() => opened.length === 1);
 		expect(opened).toEqual(['myproj']);

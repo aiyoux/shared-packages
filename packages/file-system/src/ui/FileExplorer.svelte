@@ -242,6 +242,7 @@
 	/** Folder preview: whether self or an ancestor has a `.git` child. `null` while detecting. */
 	let previewIsProject = $state<boolean | null>(null);
 	let previewDetectGen = 0;
+	let previewDetectId: string | null = null;
 	const hasProjectActions = $derived(Boolean(onOpenProject || onInitProject));
 	let archiveKind = $state<ArchiveKind | null>(null);
 	let archiveEntries = $state<ExplorerEntry[]>([]);
@@ -542,13 +543,18 @@
 		const n = previewEntry;
 		const want = hasProjectActions && n?.kind === 'folder';
 		if (!want || !n) {
+			previewDetectId = null;
+			previewDetectGen++;
 			previewIsProject = null;
 			return;
 		}
 		const folderId = n.id;
+		const d = driver;
+		if (previewDetectId === folderId) return;
+		previewDetectId = folderId;
 		const gen = ++previewDetectGen;
 		previewIsProject = null;
-		void detectProject(driver, folderId).then(
+		void detectProject(d, folderId).then(
 			(ok) => {
 				if (gen !== previewDetectGen) return;
 				previewIsProject = ok;
@@ -3627,7 +3633,7 @@
 				{entry.kind === 'folder' ? 'Open' : defaultOpenLabel(entry)}
 			</button>
 		{/if}
-		{#if onOpenProject && entry.kind === 'folder' && previewIsProject === true}
+		{#if onOpenProject && entry.kind === 'folder' && previewIsProject !== false}
 			<button
 				type="button"
 				class="ds-btn ds-btn--sm ds-btn--secondary"
@@ -3638,7 +3644,7 @@
 				Open project
 			</button>
 		{/if}
-		{#if onInitProject && entry.kind === 'folder' && previewIsProject === false}
+		{#if onInitProject && entry.kind === 'folder' && previewIsProject !== true}
 			<button
 				type="button"
 				class="ds-btn ds-btn--sm ds-btn--secondary"
