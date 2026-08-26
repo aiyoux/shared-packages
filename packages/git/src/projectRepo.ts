@@ -1,5 +1,8 @@
-import { findProjectRoot } from '@shared-packages/file-system/ui/detectProject';
-import type { ExplorerDriver, ExplorerEntryId } from '@shared-packages/file-system/ui/driver';
+import {
+	findProjectRoot,
+	type ExplorerDriver,
+	type ExplorerEntryId
+} from '@shared-packages/file-system/ui';
 import { toAbsolutePath } from '@shared-packages/file-system/monitor';
 import type { GitHost, GitRepoRef } from './types.js';
 
