@@ -1,14 +1,5 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import {
-		HUB_MONITOR_PROFILES_CHANNEL,
-		subscribeTabChannel
-	} from '@shared-packages/file-system';
-	import {
-		DEFAULT_MONITOR_BASE_URL,
-		listProfiles,
-		type MonitorConnectionProfileV1
-	} from '@shared-packages/file-system/monitor';
 	import GitHistory from './GitHistory.svelte';
 	import { createGitHost } from './host.js';
 	import type { GitHost, GitRepoRef } from './types.js';
@@ -23,43 +14,15 @@
 	let selectedId = $state<string | null>(null);
 	let error = $state('');
 
-	function sameMonitor(repo: GitRepoRef, profile: MonitorConnectionProfileV1): boolean {
-		if (repo.backend !== 'monitor') return false;
-		if (repo.profileId && repo.profileId === profile.id) return true;
-		return (
-			repo.path === profile.rootPath &&
-			(repo.baseUrl || DEFAULT_MONITOR_BASE_URL) === profile.baseUrl
-		);
-	}
-
 	async function reload() {
 		error = '';
-		const saved = await gitHost.listRepos();
-		const profiles = await listProfiles();
-		const merged = [...saved];
-		for (const p of profiles) {
-			if (merged.some((r) => sameMonitor(r, p))) continue;
-			merged.push(
-				await gitHost.addRepo({
-					label: p.name,
-					backend: 'monitor',
-					path: p.rootPath,
-					profileId: p.id,
-					baseUrl: p.baseUrl
-				})
-			);
-		}
-		repos = merged.sort((a, b) => a.label.localeCompare(b.label));
+		repos = (await gitHost.listRepos()).sort((a, b) => a.label.localeCompare(b.label));
 		if (selectedId && !repos.some((r) => r.id === selectedId)) selectedId = null;
-		if (!selectedId) selectedId = repos[0]?.id ?? null;
 	}
 
 	onMount(() => {
 		void reload().catch((e) => {
 			error = e instanceof Error ? e.message : String(e);
-		});
-		return subscribeTabChannel(HUB_MONITOR_PROFILES_CHANNEL, () => {
-			void reload();
 		});
 	});
 </script>
@@ -72,7 +35,7 @@
 		<ul class="list" data-testid="git-repo-list">
 			{#if !repos.length}
 				<li class="empty" data-testid="git-repo-empty">
-					Save a monitor connection in Files, or open a git folder there.
+					Pick a connection and open a git folder from that file system.
 				</li>
 			{/if}
 			{#each repos as repo (repo.id)}
