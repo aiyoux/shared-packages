@@ -58,6 +58,16 @@
       "types": "./src/pane-layout/types.ts",
       "svelte": "./src/pane-layout/types.ts",
       "default": "./src/pane-layout/types.ts"
+    },
+    "./app-windows": {
+      "types": "./src/app-windows/manager.ts",
+      "svelte": "./src/app-windows/AppWindows.svelte",
+      "default": "./src/app-windows/manager.ts"
+    },
+    "./file-chrome/FileChrome.svelte": "./src/file-chrome/FileChrome.svelte",
+    "./file-chrome/unsaved": {
+      "types": "./src/file-chrome/unsaved.ts",
+      "default": "./src/file-chrome/unsaved.ts"
     }
   },
   "scripts": {

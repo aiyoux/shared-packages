@@ -44,7 +44,32 @@ export { default as VelocityScroller } from './VelocityScroller.svelte';
 export { default as ResizableSidePanel } from './ResizableSidePanel.svelte';
 export { default as PaneLayout } from './pane-layout/PaneLayout.svelte';
 export { default as SplitHandle } from './pane-layout/SplitHandle.svelte';
-export { paneChromeSlotId } from './pane-layout/chrome.ts';
+export { default as FileChrome } from './file-chrome/FileChrome.svelte';
+export {
+	confirmDiscardUnsaved,
+	installBeforeUnload,
+	installSaveHotkey,
+	DEFAULT_CONFLICT_MSG
+} from './file-chrome/unsaved.ts';
+export { default as AppWindows } from './app-windows/AppWindows.svelte';
+export type { AppWindowLeaf, AppWindowRoleDef } from './app-windows/types.ts';
+export {
+	canCloseAppWindow,
+	clampUnavailableRoles,
+	closeAppWindow,
+	createAppWindowRoot,
+	defaultAppWindows,
+	pickNewRole,
+	roleCount,
+	setAppWindowRole,
+	splitAppWindow
+} from './app-windows/manager.ts';
+export {
+	paneChromeSlotId,
+	findPaneWindowHeader,
+	portalToPaneWindowHeader,
+	portalToPaneChrome
+} from './pane-layout/chrome.ts';
 export {
 	createLeaf,
 	splitLeaf,

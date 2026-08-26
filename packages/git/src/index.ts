@@ -36,6 +36,7 @@ export { default as GitApp } from './GitApp.svelte';
 export { default as ProjectApp } from './ProjectApp.svelte';
 export {
 	bindProjectRepo,
+	bindRepoIfProject,
 	repoInputFromFolder,
 	sameProjectRepo,
 	type ProjectBackendHint

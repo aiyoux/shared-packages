@@ -73,3 +73,18 @@ export async function bindProjectRepo(
 	if (existing) return existing;
 	return host.addRepo(input);
 }
+
+/**
+ * If `folderId` (or an ancestor) is already a git working tree, bind that
+ * repo. Does not `initLocal` — callers that want to create a repo do that
+ * separately.
+ */
+export async function bindRepoIfProject(
+	host: GitHost,
+	driver: ExplorerDriver,
+	folderId: ExplorerEntryId | null
+): Promise<GitRepoRef | null> {
+	const input = await repoInputFromFolder(driver, folderId, { backend: 'local' });
+	if (!input) return null;
+	return bindProjectRepo(host, input);
+}

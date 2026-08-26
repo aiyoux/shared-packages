@@ -1,4 +1,5 @@
 export { default as FileExplorer } from './FileExplorer.svelte';
+export { default as FileExplorerDialog } from './FileExplorerDialog.svelte';
 export { default as FeTreeView } from './FeTreeView.svelte';
 export { detectProject, findProjectRoot, type ProjectRootHit } from './detectProject.js';
 export type { ExplorerMode, ExplorerContext } from './FileExplorer.svelte';
