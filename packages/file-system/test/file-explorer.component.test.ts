@@ -723,6 +723,25 @@ describe('FileExplorer component', () => {
 		expect(screen.getByTestId('fe-select-multi').getAttribute('aria-pressed')).toBe('false');
 		expect(aRow.classList.contains('selected')).toBe(false);
 		expect(bRow.classList.contains('selected')).toBe(false);
+		expect(aRow.classList.contains('focused')).toBe(false);
+		expect(bRow.classList.contains('focused')).toBe(false);
+		expect((screen.getByTestId('fe-trash-selected') as HTMLButtonElement).disabled).toBe(true);
+	});
+
+	it('delete does not leave the next row looking selected', async () => {
+		await vfs.writeFile({ parentId: null, name: 'a.txt', body: 'alpha' });
+		await vfs.writeFile({ parentId: null, name: 'b.txt', body: 'beta' });
+		render(FileExplorer, { props: { mode: 'manage', vfs, variant: 'panel' } });
+		await viWaitFor(() => document.querySelectorAll('[data-testid="fe-file-row"]').length >= 2);
+		const aRow = document.querySelector('[data-testid="fe-file-row"][data-name="a.txt"]') as HTMLElement;
+		await fireEvent.click(aRow);
+		expect(aRow.classList.contains('selected')).toBe(true);
+		await fireEvent.click(screen.getByTestId('fe-trash-selected'));
+		await viWaitFor(() => document.querySelectorAll('[data-testid="fe-file-row"]').length === 1);
+		const bRow = document.querySelector('[data-testid="fe-file-row"][data-name="b.txt"]') as HTMLElement;
+		expect(bRow).toBeTruthy();
+		expect(bRow.classList.contains('selected')).toBe(false);
+		expect(bRow.classList.contains('focused')).toBe(false);
 		expect((screen.getByTestId('fe-trash-selected') as HTMLButtonElement).disabled).toBe(true);
 	});
 

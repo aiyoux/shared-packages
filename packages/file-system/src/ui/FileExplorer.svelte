@@ -1189,7 +1189,9 @@
 		const snapshot = nodes;
 		nodes = nodes.filter((n) => !idSet.has(n.id));
 		selected = new Set();
-		if (focusIndex >= nodes.length) focusIndex = nodes.length ? nodes.length - 1 : -1;
+		lastSelectedId = null;
+		previewEntry = null;
+		focusIndex = -1;
 
 		const failures: string[] = [];
 		// Single busy span for delete + reconcile (avoids overlay flash off/on)
@@ -1340,6 +1342,7 @@
 		selected = new Set();
 		lastSelectedId = null;
 		previewEntry = null;
+		focusIndex = -1;
 	}
 
 	function selectExclusive(n: ExplorerEntry) {
@@ -2121,6 +2124,7 @@
 			if (selected.size > 0) {
 				selected = new Set();
 				lastSelectedId = null;
+				focusIndex = -1;
 				return;
 			}
 			if (variant === 'dialog' && onClose) onClose();
@@ -2670,7 +2674,7 @@
 					data-name={n.name}
 					draggable={!row.placeholder && dragOutEnabled}
 					aria-disabled={row.placeholder || (!actionable && n.kind === 'file') ? 'true' : undefined}
-					aria-selected={!row.placeholder && (selected.has(n.id) || i === focusIndex)}
+					aria-selected={!row.placeholder && selected.has(n.id)}
 					role="option"
 					tabindex="-1"
 					ondragstart={row.placeholder ? undefined : (e) => onRowDragStart(e, n)}
