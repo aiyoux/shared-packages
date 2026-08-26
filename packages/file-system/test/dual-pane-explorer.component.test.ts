@@ -86,6 +86,39 @@ describe('DualPaneExplorer onOpenProject context', () => {
 		await viWaitFor(() => opened.length === 1);
 		expect(opened).toEqual([{ name: 'myproj', ctx: { kind: 'local' } }]);
 	});
+
+	it('Copy across sits after Decrypt and appears in the details popup', async () => {
+		await vfs.writeFile({
+			parentId: null,
+			name: 'across.txt',
+			body: 'payload'
+		});
+		render(DualPaneExplorer, {
+			props: {
+				localDriver: createLocalExplorerDriver(vfs),
+				hideToggles: false,
+				dualPaneDefault: true,
+				dualPaneKey: `dpe:dual:${Math.random()}`,
+				settingsPortal: '#dpe-settings-missing'
+			}
+		});
+		await viWaitFor(() => document.querySelectorAll('[data-pane="left"] [data-testid="fe-file-row"]').length >= 1);
+
+		const left = document.querySelector('[data-pane="left"]') as HTMLElement;
+		const actions = left.querySelector('[data-testid="fe-selection-actions"]') as HTMLElement;
+		const actionIds = [...actions.querySelectorAll('[data-testid]')].map((el) =>
+			el.getAttribute('data-testid')
+		);
+		expect(actionIds.indexOf('fe-copy-across-left')).toBe(
+			actionIds.indexOf('fe-decrypt-selected') + 1
+		);
+
+		const row = left.querySelector('[data-testid="fe-file-row"]') as HTMLElement;
+		await fireEvent.click(row);
+		await fireEvent.click(left.querySelector('[data-testid="fe-item-details"]') as HTMLElement);
+		const preview = await screen.findByTestId('fe-file-preview');
+		expect(preview.querySelector('[data-testid="fe-file-preview-copy-across"]')).toBeTruthy();
+	});
 });
 
 async function viWaitFor(pred: () => boolean, ms = 4000) {

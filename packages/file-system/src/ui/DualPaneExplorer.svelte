@@ -1487,16 +1487,28 @@
 	{/if}
 {/snippet}
 
-{#snippet copyAcrossAction(id: PaneId)}
+{#snippet copyAcrossAction(id: PaneId, variant: 'icon' | 'label')}
 	{@const p = id === 'left' ? left : right}
-	{#if hostSettings && showCopyAcross}
-		<FeTipIconBtn
-			testid={tids.copyAcross(id)}
-			tip={copyBusy ? 'Copying…' : 'Copy across'}
-			icon="arrow-left-right"
-			disabled={copyBusy || p.ctx.selectedIds.length === 0}
-			onclick={() => runCopyAcross(id)}
-		/>
+	{#if showCopyAcross && (variant === 'label' || hostSettings)}
+		{#if variant === 'label'}
+			<button
+				type="button"
+				class="ds-btn ds-btn--sm ds-btn--secondary"
+				data-testid="fe-file-preview-copy-across"
+				disabled={copyBusy || p.ctx.selectedIds.length === 0}
+				onclick={() => runCopyAcross(id)}
+			>
+				{copyBusy ? 'Copying…' : 'Copy across'}
+			</button>
+		{:else}
+			<FeTipIconBtn
+				testid={tids.copyAcross(id)}
+				tip={copyBusy ? 'Copying…' : 'Copy across'}
+				icon="arrow-left-right"
+				disabled={copyBusy || p.ctx.selectedIds.length === 0}
+				onclick={() => runCopyAcross(id)}
+			/>
+		{/if}
 	{/if}
 {/snippet}
 
@@ -1663,8 +1675,8 @@
 						{#snippet headerLeading()}
 							{@render paneConn(id)}
 						{/snippet}
-						{#snippet toolbarExtra()}
-							{@render copyAcrossAction(id)}
+						{#snippet toolbarExtra({ variant }: { variant: 'icon' | 'label' })}
+							{@render copyAcrossAction(id, variant)}
 						{/snippet}
 					</FileExplorer>
 				{:else if p.activeKind === 'local'}
@@ -1699,8 +1711,8 @@
 						{#snippet headerLeading()}
 							{@render paneConn(id)}
 						{/snippet}
-						{#snippet toolbarExtra()}
-							{@render copyAcrossAction(id)}
+						{#snippet toolbarExtra({ variant }: { variant: 'icon' | 'label' })}
+							{@render copyAcrossAction(id, variant)}
 						{/snippet}
 					</FileExplorer>
 				{:else}
@@ -1733,8 +1745,8 @@
 						{#snippet headerLeading()}
 							{@render paneConn(id)}
 						{/snippet}
-						{#snippet toolbarExtra()}
-							{@render copyAcrossAction(id)}
+						{#snippet toolbarExtra({ variant }: { variant: 'icon' | 'label' })}
+							{@render copyAcrossAction(id, variant)}
 						{/snippet}
 					</FileExplorer>
 				{/if}

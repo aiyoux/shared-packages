@@ -152,8 +152,12 @@
 		}>;
 		/** Hide the toolbar Trash button (popup listing). Default shows it when supportsTrash. */
 		hideToolbarTrash?: boolean;
-		/** Extra manage-toolbar actions (e.g. Copy across when chrome is in the hub). */
-		toolbarExtra?: Snippet;
+		/**
+		 * Extra manage-toolbar / details actions (e.g. DualPane Copy across).
+		 * `icon` sits in the selection-action row; `label` is the details panel
+		 * text button.
+		 */
+		toolbarExtra?: Snippet<[{ variant: 'icon' | 'label' }]>;
 		/** Leading header slot (connection dropdown for DualPaneExplorer). */
 		headerLeading?: Snippet;
 	}
@@ -1328,7 +1332,11 @@
 		selectMulti = on;
 		if (on) {
 			previewEntry = null;
+			return;
 		}
+		selected = new Set();
+		lastSelectedId = null;
+		previewEntry = null;
 	}
 
 	function selectExclusive(n: ExplorerEntry) {
@@ -1427,8 +1435,19 @@
 	}
 
 	$effect(() => {
-		if (previewDock === 'off') return;
-		previewEntry = selectedPrimary();
+		if (previewDock !== 'off') {
+			previewEntry = selectedPrimary();
+			return;
+		}
+		if (!previewEntry) return;
+		if (selected.size === 0) {
+			previewEntry = null;
+			return;
+		}
+		const primary = selectedPrimary();
+		if (primary && (selected.size === 1 || !selected.has(previewEntry.id))) {
+			previewEntry = primary;
+		}
 	});
 
 	function formatBytes(n: number | undefined): string {
@@ -1437,6 +1456,22 @@
 		if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
 		if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 		return `${(n / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+	}
+
+	function selectionSizeLabel(entries: ExplorerEntry[]): string {
+		let known = 0;
+		let unknown = 0;
+		let bytes = 0;
+		for (const e of entries) {
+			if (e.size == null) unknown += 1;
+			else {
+				known += 1;
+				bytes += e.size;
+			}
+		}
+		if (known === 0) return 'Unknown size';
+		if (unknown === 0) return formatBytes(bytes);
+		return `${formatBytes(bytes)} + ${unknown} unknown`;
 	}
 
 	function formatWhen(ts: number | undefined): string {
@@ -2426,9 +2461,6 @@
 						disabled={selected.size === 0 || !caps.supportsCopy}
 						onclick={copySelection}
 					/>
-					{#if toolbarExtra}
-						{@render toolbarExtra()}
-					{/if}
 					<FeTipIconBtn
 						testid="fe-compress-selected"
 						tip="Compress"
@@ -2457,6 +2489,9 @@
 						disabled={!canDecryptSelection}
 						onclick={() => startArchive('decrypt', selectedEntries)}
 					/>
+					{#if toolbarExtra}
+						{@render toolbarExtra({ variant: 'icon' })}
+					{/if}
 				</div>
 			{/if}
 		</div>
@@ -2697,131 +2732,13 @@
 			class="fe-preview-dock"
 			data-testid="fe-preview-dock"
 			data-placement={previewDock}
+			data-multi={selected.size > 1 ? 'true' : undefined}
 			aria-label="File preview"
 		>
-			{#if previewEntry}
-				<h2 class="fe-preview-name" data-testid="fe-file-preview-name">{previewEntry.name}</h2>
-				{#if showPreview && previewEntry.kind === 'file' && getPreviewKind(previewEntry)}
-					<div class="fe-preview-thumb" data-testid="fe-preview-thumb">
-						<FeThumbnail entry={previewEntry} {driver} maxDim={previewDock === 'right' ? 240 : 160} enabled={true} />
-					</div>
-				{/if}
-				<dl class="fe-preview-meta">
-					<div>
-						<dt>Size</dt>
-						<dd data-testid="fe-file-preview-size">{formatBytes(previewEntry.size)}</dd>
-					</div>
-					{#if previewEntry.fileType}
-						<div>
-							<dt>Type</dt>
-							<dd data-testid="fe-file-preview-type">{previewEntry.fileType}</dd>
-						</div>
-					{/if}
-					{#if previewEntry.contentType}
-						<div>
-							<dt>MIME</dt>
-							<dd>{previewEntry.contentType}</dd>
-						</div>
-					{/if}
-					{#if previewEntry.updatedAt}
-						<div>
-							<dt>Updated</dt>
-							<dd>{formatWhen(previewEntry.updatedAt)}</dd>
-						</div>
-					{/if}
-				</dl>
-				<div class="fe-preview-actions">
-					{#if previewEntry.kind === 'file' && getPreviewKind(previewEntry)}
-						<button
-							type="button"
-							class="ds-btn ds-btn--sm ds-btn--secondary"
-							data-testid="fe-file-preview-float"
-							onclick={openFloatingPreview}
-						>
-							<FeIcon name="maximize-2" size={14} />
-							Preview
-						</button>
-					{/if}
-					{#if previewShowsOpen(previewEntry)}
-						<button
-							type="button"
-							class="ds-btn ds-btn--sm ds-btn--primary"
-							data-testid="fe-file-preview-open"
-							disabled={previewBusy}
-							onclick={() => void confirmPreviewOpen()}
-						>
-							{previewEntry.kind === 'folder' ? 'Open' : defaultOpenLabel(previewEntry)}
-						</button>
-					{/if}
-					{#if onOpenProject && previewEntry.kind === 'folder'}
-						<button
-							type="button"
-							class="ds-btn ds-btn--sm ds-btn--secondary"
-							data-testid="fe-open-project"
-							disabled={previewBusy}
-							onclick={() => void confirmOpenProject()}
-						>
-							Open project
-						</button>
-					{/if}
-					{#if onSendFile && previewEntry.kind === 'file'}
-						<button
-							type="button"
-							class="ds-btn ds-btn--sm ds-btn--primary"
-							data-testid="fe-file-preview-send"
-							disabled={previewBusy}
-							onclick={() => void confirmPreviewSend()}
-						>
-							{sendLabel}
-						</button>
-					{/if}
-					{#if mode === 'manage'}
-						{#if caps.supportsRename}
-							<button
-								type="button"
-								class="ds-btn ds-btn--sm ds-btn--secondary"
-								data-testid="fe-rename-btn"
-								disabled={listBusy}
-								onclick={renamePreviewItem}
-							>
-								Rename
-							</button>
-						{/if}
-						{#if caps.supportsCopy && previewEntry.kind === 'file'}
-							<button
-								type="button"
-								class="ds-btn ds-btn--sm ds-btn--secondary"
-								data-testid="fe-row-copy"
-								disabled={listBusy}
-								onclick={() => void copyPreviewItem()}
-							>
-								Copy
-							</button>
-						{/if}
-						{#if caps.supportsDownload && previewEntry.kind === 'file'}
-							{@const downloadEntry = previewEntry}
-							<button
-								type="button"
-								class="ds-btn ds-btn--sm ds-btn--secondary"
-								data-testid="fe-row-download"
-								disabled={listBusy}
-								onclick={() => void downloadNode(downloadEntry)}
-							>
-								Download
-							</button>
-						{/if}
-						<button
-							type="button"
-							class="ds-btn ds-btn--sm ds-btn--danger"
-							data-testid="fe-row-trash"
-							disabled={listBusy}
-							onclick={() => void deletePreviewItem()}
-						>
-							Delete
-						</button>
-						{@render archiveButtons(previewEntry)}
-					{/if}
-				</div>
+			{#if selected.size > 1}
+				{@render multiDetails(false)}
+			{:else if previewEntry}
+				{@render singleDetails(previewEntry, previewDock === 'right' ? 240 : 160, false)}
 			{:else}
 				<p class="fe-preview-empty">Select a file or folder</p>
 			{/if}
@@ -2857,9 +2774,10 @@
 		<div
 			class="fe-preview-backdrop"
 			data-testid="fe-file-preview"
+			data-multi={selected.size > 1 ? 'true' : undefined}
 			role="dialog"
 			aria-modal="true"
-			aria-label={previewEntry.name}
+			aria-label={selected.size > 1 ? `${selected.size} items selected` : previewEntry.name}
 		>
 			<button
 				type="button"
@@ -2867,139 +2785,12 @@
 				aria-label="Close preview"
 				onclick={() => (previewEntry = null)}
 			></button>
-			<div class="fe-preview-card">
-				<h2 class="fe-preview-name" data-testid="fe-file-preview-name">{previewEntry.name}</h2>
-				{#if showPreview && previewEntry.kind === 'file' && getPreviewKind(previewEntry)}
-					<div class="fe-preview-thumb" data-testid="fe-preview-thumb">
-						<FeThumbnail entry={previewEntry} {driver} maxDim={200} enabled={true} />
-					</div>
+			<div class="fe-preview-card" class:fe-preview-card-multi={selected.size > 1}>
+				{#if selected.size > 1}
+					{@render multiDetails(true)}
+				{:else}
+					{@render singleDetails(previewEntry, 200, true)}
 				{/if}
-				<dl class="fe-preview-meta">
-					<div>
-						<dt>Size</dt>
-						<dd data-testid="fe-file-preview-size">{formatBytes(previewEntry.size)}</dd>
-					</div>
-					{#if previewEntry.fileType}
-						<div>
-							<dt>Type</dt>
-							<dd data-testid="fe-file-preview-type">{previewEntry.fileType}</dd>
-						</div>
-					{/if}
-					{#if previewEntry.contentType}
-						<div>
-							<dt>MIME</dt>
-							<dd>{previewEntry.contentType}</dd>
-						</div>
-					{/if}
-					{#if previewEntry.updatedAt}
-						<div>
-							<dt>Updated</dt>
-							<dd>{formatWhen(previewEntry.updatedAt)}</dd>
-						</div>
-					{/if}
-				</dl>
-				<div class="fe-preview-actions">
-					{#if previewEntry.kind === 'file' && getPreviewKind(previewEntry)}
-						<button
-							type="button"
-							class="ds-btn ds-btn--sm ds-btn--secondary"
-							data-testid="fe-file-preview-float"
-							onclick={openFloatingPreview}
-						>
-							<FeIcon name="maximize-2" size={14} />
-							Preview
-						</button>
-					{/if}
-					{#if previewShowsOpen(previewEntry)}
-						<button
-							type="button"
-							class="ds-btn ds-btn--sm ds-btn--primary"
-							data-testid="fe-file-preview-open"
-							disabled={previewBusy}
-							onclick={() => void confirmPreviewOpen()}
-						>
-							{previewEntry.kind === 'folder' ? 'Open' : defaultOpenLabel(previewEntry)}
-						</button>
-					{/if}
-					{#if onOpenProject && previewEntry.kind === 'folder'}
-						<button
-							type="button"
-							class="ds-btn ds-btn--sm ds-btn--secondary"
-							data-testid="fe-open-project"
-							disabled={previewBusy}
-							onclick={() => void confirmOpenProject()}
-						>
-							Open project
-						</button>
-					{/if}
-					{#if onSendFile && previewEntry.kind === 'file'}
-						<button
-							type="button"
-							class="ds-btn ds-btn--sm ds-btn--primary"
-							data-testid="fe-file-preview-send"
-							disabled={previewBusy}
-							onclick={() => void confirmPreviewSend()}
-						>
-							{sendLabel}
-						</button>
-					{/if}
-					{#if mode === 'manage'}
-						{#if caps.supportsRename}
-							<button
-								type="button"
-								class="ds-btn ds-btn--sm ds-btn--secondary"
-								data-testid="fe-rename-btn"
-								disabled={listBusy}
-								onclick={renamePreviewItem}
-							>
-								Rename
-							</button>
-						{/if}
-						{#if caps.supportsCopy && previewEntry.kind === 'file'}
-							<button
-								type="button"
-								class="ds-btn ds-btn--sm ds-btn--secondary"
-								data-testid="fe-row-copy"
-								disabled={listBusy}
-								onclick={() => void copyPreviewItem()}
-							>
-								Copy
-							</button>
-						{/if}
-						{#if caps.supportsDownload && previewEntry.kind === 'file'}
-							<!-- previewEntry is $state, so the onclick closure widens it back
-							     to ExplorerEntry | null; bind the narrowed value here. -->
-							{@const downloadEntry = previewEntry}
-							<button
-								type="button"
-								class="ds-btn ds-btn--sm ds-btn--secondary"
-								data-testid="fe-row-download"
-								disabled={listBusy}
-								onclick={() => void downloadNode(downloadEntry)}
-							>
-								Download
-							</button>
-						{/if}
-						<button
-							type="button"
-							class="ds-btn ds-btn--sm ds-btn--danger"
-							data-testid="fe-row-trash"
-							disabled={listBusy}
-							onclick={() => void deletePreviewItem()}
-						>
-							Delete
-						</button>
-						{@render archiveButtons(previewEntry)}
-					{/if}
-					<button
-						type="button"
-						class="ds-btn ds-btn--sm ds-btn--ghost"
-						data-testid="fe-file-preview-close"
-						onclick={() => (previewEntry = null)}
-					>
-						Close
-					</button>
-				</div>
 			</div>
 		</div>
 	{/if}
@@ -3269,6 +3060,267 @@
 			{looksVaultName(entry.name) ? 'Open vault' : 'Open archive'}
 		</button>
 	{/if}
+{/snippet}
+
+{#snippet detailsCopyAcross()}
+	{#if toolbarExtra}
+		{@render toolbarExtra({ variant: 'label' })}
+	{/if}
+{/snippet}
+
+{#snippet singleDetails(entry: ExplorerEntry, maxDim: number, showClose: boolean)}
+	<h2 class="fe-preview-name" data-testid="fe-file-preview-name">{entry.name}</h2>
+	{#if showPreview && entry.kind === 'file' && getPreviewKind(entry)}
+		<div class="fe-preview-thumb" data-testid="fe-preview-thumb">
+			<FeThumbnail {entry} {driver} {maxDim} enabled={true} />
+		</div>
+	{/if}
+	<dl class="fe-preview-meta">
+		<div>
+			<dt>Size</dt>
+			<dd data-testid="fe-file-preview-size">{formatBytes(entry.size)}</dd>
+		</div>
+		{#if entry.fileType}
+			<div>
+				<dt>Type</dt>
+				<dd data-testid="fe-file-preview-type">{entry.fileType}</dd>
+			</div>
+		{/if}
+		{#if entry.contentType}
+			<div>
+				<dt>MIME</dt>
+				<dd>{entry.contentType}</dd>
+			</div>
+		{/if}
+		{#if entry.updatedAt}
+			<div>
+				<dt>Updated</dt>
+				<dd>{formatWhen(entry.updatedAt)}</dd>
+			</div>
+		{/if}
+	</dl>
+	<div class="fe-preview-actions">
+		{#if entry.kind === 'file' && getPreviewKind(entry)}
+			<button
+				type="button"
+				class="ds-btn ds-btn--sm ds-btn--secondary"
+				data-testid="fe-file-preview-float"
+				onclick={openFloatingPreview}
+			>
+				<FeIcon name="maximize-2" size={14} />
+				Preview
+			</button>
+		{/if}
+		{#if previewShowsOpen(entry)}
+			<button
+				type="button"
+				class="ds-btn ds-btn--sm ds-btn--primary"
+				data-testid="fe-file-preview-open"
+				disabled={previewBusy}
+				onclick={() => void confirmPreviewOpen()}
+			>
+				{entry.kind === 'folder' ? 'Open' : defaultOpenLabel(entry)}
+			</button>
+		{/if}
+		{#if onOpenProject && entry.kind === 'folder'}
+			<button
+				type="button"
+				class="ds-btn ds-btn--sm ds-btn--secondary"
+				data-testid="fe-open-project"
+				disabled={previewBusy}
+				onclick={() => void confirmOpenProject()}
+			>
+				Open project
+			</button>
+		{/if}
+		{#if onSendFile && entry.kind === 'file'}
+			<button
+				type="button"
+				class="ds-btn ds-btn--sm ds-btn--primary"
+				data-testid="fe-file-preview-send"
+				disabled={previewBusy}
+				onclick={() => void confirmPreviewSend()}
+			>
+				{sendLabel}
+			</button>
+		{/if}
+		{#if mode === 'manage'}
+			{#if caps.supportsRename}
+				<button
+					type="button"
+					class="ds-btn ds-btn--sm ds-btn--secondary"
+					data-testid="fe-rename-btn"
+					disabled={listBusy}
+					onclick={renamePreviewItem}
+				>
+					Rename
+				</button>
+			{/if}
+			{#if caps.supportsCopy && entry.kind === 'file'}
+				<button
+					type="button"
+					class="ds-btn ds-btn--sm ds-btn--secondary"
+					data-testid="fe-row-copy"
+					disabled={listBusy}
+					onclick={() => void copyPreviewItem()}
+				>
+					Copy
+				</button>
+			{/if}
+			{#if caps.supportsDownload && entry.kind === 'file'}
+				<button
+					type="button"
+					class="ds-btn ds-btn--sm ds-btn--secondary"
+					data-testid="fe-row-download"
+					disabled={listBusy}
+					onclick={() => void downloadNode(entry)}
+				>
+					Download
+				</button>
+			{/if}
+			<button
+				type="button"
+				class="ds-btn ds-btn--sm ds-btn--danger"
+				data-testid="fe-row-trash"
+				disabled={listBusy}
+				onclick={() => void deletePreviewItem()}
+			>
+				Delete
+			</button>
+			{@render archiveButtons(entry)}
+			{@render detailsCopyAcross()}
+		{/if}
+		{#if showClose}
+			<button
+				type="button"
+				class="ds-btn ds-btn--sm ds-btn--ghost"
+				data-testid="fe-file-preview-close"
+				onclick={() => (previewEntry = null)}
+			>
+				Close
+			</button>
+		{/if}
+	</div>
+{/snippet}
+
+{#snippet multiDetails(showClose: boolean)}
+	<h2 class="fe-preview-name" data-testid="fe-file-preview-name">
+		{selected.size} items selected
+	</h2>
+	<ul class="fe-preview-items" data-testid="fe-file-preview-items">
+		{#each selectedEntries as n (n.id)}
+			<li data-testid="fe-file-preview-item" data-name={n.name} data-kind={n.kind}>
+				<FeIcon name={n.kind === 'folder' ? 'folder' : 'file'} size={14} />
+				<span class="fe-preview-item-name">{n.name}</span>
+				{#if n.size != null}
+					<span class="fe-preview-item-size">{formatBytes(n.size)}</span>
+				{/if}
+			</li>
+		{/each}
+	</ul>
+	<dl class="fe-preview-meta">
+		<div>
+			<dt>Items</dt>
+			<dd data-testid="fe-file-preview-count">{selected.size}</dd>
+		</div>
+		<div>
+			<dt>Size</dt>
+			<dd data-testid="fe-file-preview-size">{selectionSizeLabel(selectedEntries)}</dd>
+		</div>
+	</dl>
+	<div class="fe-preview-actions">
+		{#if mode === 'manage'}
+			{#if caps.supportsCopy}
+				<button
+					type="button"
+					class="ds-btn ds-btn--sm ds-btn--secondary"
+					data-testid="fe-row-copy"
+					disabled={listBusy}
+					onclick={copySelection}
+				>
+					Copy
+				</button>
+			{/if}
+			{#if caps.supportsMove}
+				<button
+					type="button"
+					class="ds-btn ds-btn--sm ds-btn--secondary"
+					data-testid="fe-cut"
+					disabled={listBusy}
+					onclick={cutSelection}
+				>
+					Cut
+				</button>
+			{/if}
+			{#if supportsDownload && canDownloadSelection}
+				<button
+					type="button"
+					class="ds-btn ds-btn--sm ds-btn--secondary"
+					data-testid="fe-row-download"
+					disabled={listBusy || downloadBusy}
+					onclick={() => void downloadSelected()}
+				>
+					Download
+				</button>
+			{/if}
+			<button
+				type="button"
+				class="ds-btn ds-btn--sm ds-btn--danger"
+				data-testid="fe-row-trash"
+				disabled={listBusy}
+				onclick={() => void trashSelected()}
+			>
+				Delete
+			</button>
+			<button
+				type="button"
+				class="ds-btn ds-btn--sm ds-btn--secondary"
+				data-testid="fe-file-preview-compress"
+				onclick={() => startArchive('compress', selectedEntries)}
+			>
+				Compress
+			</button>
+			<button
+				type="button"
+				class="ds-btn ds-btn--sm ds-btn--secondary"
+				data-testid="fe-file-preview-encrypt"
+				onclick={() => startArchive('encrypt', selectedEntries)}
+			>
+				Encrypt
+			</button>
+			{#if canDecompressSelection}
+				<button
+					type="button"
+					class="ds-btn ds-btn--sm ds-btn--secondary"
+					data-testid="fe-file-preview-decompress"
+					onclick={() => startArchive('decompress', selectedEntries)}
+				>
+					Decompress
+				</button>
+			{/if}
+			{#if canDecryptSelection}
+				<button
+					type="button"
+					class="ds-btn ds-btn--sm ds-btn--secondary"
+					data-testid="fe-file-preview-decrypt"
+					onclick={() => startArchive('decrypt', selectedEntries)}
+				>
+					Decrypt
+				</button>
+			{/if}
+			{@render detailsCopyAcross()}
+		{/if}
+		{#if showClose}
+			<button
+				type="button"
+				class="ds-btn ds-btn--sm ds-btn--ghost"
+				data-testid="fe-file-preview-close"
+				onclick={() => (previewEntry = null)}
+			>
+				Close
+			</button>
+		{/if}
+	</div>
 {/snippet}
 
 <style>
@@ -3605,6 +3657,34 @@
 		border: 1px solid var(--line-hairline);
 		border-radius: 0;
 		box-shadow: 0 12px 32px rgb(var(--scrim-rgb) / 0.4);
+	}
+	.fe-preview-card-multi {
+		max-width: 440px;
+	}
+	.fe-preview-items {
+		list-style: none;
+		margin: 0 0 12px;
+		padding: 0;
+		max-height: 180px;
+		overflow: auto;
+		display: grid;
+		gap: 4px;
+	}
+	.fe-preview-items li {
+		display: grid;
+		grid-template-columns: 16px minmax(0, 1fr) auto;
+		gap: 8px;
+		align-items: center;
+		font-size: 0.85rem;
+	}
+	.fe-preview-item-name {
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.fe-preview-item-size {
+		opacity: 0.65;
+		font-variant-numeric: tabular-nums;
 	}
 	.fe-preview-name {
 		margin: 0 0 12px;

@@ -7,6 +7,7 @@ import { render, screen, fireEvent } from '@testing-library/svelte';
 import { packFiles } from '@shared-packages/compress';
 import { sealVault } from '@shared-packages/crypto';
 import FileExplorer from '../src/ui/FileExplorer.svelte';
+import FileExplorerToolbarExtraHarness from './FileExplorerToolbarExtraHarness.svelte';
 import { createVfs, resetSharedVfsForTests, type VfsService } from '../src/index.ts';
 
 describe('FileExplorer component', () => {
@@ -697,6 +698,86 @@ describe('FileExplorer component', () => {
 		await viWaitFor(() =>
 			document.querySelector('[data-testid="fe-file-row"]')?.getAttribute('data-name') ===
 			'ClickedOut.txt'
+		);
+	});
+
+	it('turning Select multiple off deselects every selected row', async () => {
+		await vfs.writeFile({ parentId: null, name: 'a.txt', body: 'alpha' });
+		await vfs.writeFile({ parentId: null, name: 'b.txt', body: 'beta' });
+		render(FileExplorer, { props: { mode: 'manage', vfs, variant: 'panel' } });
+		await viWaitFor(() => document.querySelectorAll('[data-testid="fe-file-row"]').length >= 2);
+		const aRow = document.querySelector('[data-testid="fe-file-row"][data-name="a.txt"]') as HTMLElement;
+		const bRow = document.querySelector('[data-testid="fe-file-row"][data-name="b.txt"]') as HTMLElement;
+		await fireEvent.click(aRow);
+		await fireEvent.click(screen.getByTestId('fe-select-multi'));
+		expect(screen.getByTestId('fe-select-multi').getAttribute('aria-pressed')).toBe('true');
+		await fireEvent.click(bRow);
+		expect(aRow.classList.contains('selected')).toBe(true);
+		expect(bRow.classList.contains('selected')).toBe(true);
+		await fireEvent.click(screen.getByTestId('fe-select-multi'));
+		expect(screen.getByTestId('fe-select-multi').getAttribute('aria-pressed')).toBe('false');
+		expect(aRow.classList.contains('selected')).toBe(false);
+		expect(bRow.classList.contains('selected')).toBe(false);
+		expect((screen.getByTestId('fe-trash-selected') as HTMLButtonElement).disabled).toBe(true);
+	});
+
+	it('details popup lists multi-selected items, combined size, and bulk ops', async () => {
+		await vfs.writeFile({ parentId: null, name: 'a.txt', body: 'alpha' });
+		await vfs.writeFile({ parentId: null, name: 'b.txt', body: 'beta' });
+		await vfs.mkdir(null, 'Docs');
+		render(FileExplorer, { props: { mode: 'manage', vfs, variant: 'panel' } });
+		await viWaitFor(() => document.querySelectorAll('[data-testid="fe-file-row"]').length >= 2);
+		await viWaitFor(() => !!document.querySelector('[data-testid="fe-folder-row"]'));
+		const aRow = document.querySelector('[data-testid="fe-file-row"][data-name="a.txt"]') as HTMLElement;
+		const bRow = document.querySelector('[data-testid="fe-file-row"][data-name="b.txt"]') as HTMLElement;
+		const folder = document.querySelector('[data-testid="fe-folder-row"]') as HTMLElement;
+		await fireEvent.click(aRow);
+		await fireEvent.click(screen.getByTestId('fe-select-multi'));
+		await fireEvent.click(bRow);
+		await fireEvent.click(folder);
+		await fireEvent.click(screen.getByTestId('fe-item-details'));
+		const preview = await screen.findByTestId('fe-file-preview');
+		expect(preview.getAttribute('data-multi')).toBe('true');
+		expect(screen.getByTestId('fe-file-preview-name').textContent).toMatch(/3 items selected/);
+		expect(screen.getByTestId('fe-file-preview-count').textContent).toBe('3');
+		const names = [...preview.querySelectorAll('[data-testid="fe-file-preview-item"]')].map((el) =>
+			el.getAttribute('data-name')
+		);
+		expect(names.sort()).toEqual(['Docs', 'a.txt', 'b.txt']);
+		expect(screen.getByTestId('fe-file-preview-size').textContent).toMatch(/\d+ B \+ 1 unknown/);
+		expect(preview.querySelector('[data-testid="fe-file-preview-compress"]')).toBeTruthy();
+		expect(preview.querySelector('[data-testid="fe-file-preview-encrypt"]')).toBeTruthy();
+		expect(preview.querySelector('[data-testid="fe-row-copy"]')).toBeTruthy();
+		expect(preview.querySelector('[data-testid="fe-cut"]')).toBeTruthy();
+		expect(preview.querySelector('[data-testid="fe-row-trash"]')).toBeTruthy();
+		expect(preview.querySelector('[data-testid="fe-rename-btn"]')).toBeNull();
+		await fireEvent.click(screen.getByTestId('fe-file-preview-compress'));
+		const compressDlg = await screen.findByTestId('fe-archive-dialog');
+		expect(compressDlg.getAttribute('data-kind')).toBe('compress');
+		expect(compressDlg.textContent).toMatch(/3 items/);
+	});
+
+	it('Copy across sits after Decrypt and appears in the details popup', async () => {
+		await vfs.writeFile({ parentId: null, name: 'note.txt', body: 'hello' });
+		render(FileExplorerToolbarExtraHarness, { props: { vfs } });
+		await viWaitForRows(1);
+		const actions = screen.getByTestId('fe-selection-actions');
+		const actionIds = [...actions.querySelectorAll('[data-testid]')].map((el) =>
+			el.getAttribute('data-testid')
+		);
+		expect(actionIds.indexOf('fe-copy-across-stub')).toBe(
+			actionIds.indexOf('fe-decrypt-selected') + 1
+		);
+		const row = document.querySelector('[data-testid="fe-file-row"]') as HTMLElement;
+		await fireEvent.click(row);
+		await fireEvent.click(screen.getByTestId('fe-item-details'));
+		const preview = await screen.findByTestId('fe-file-preview');
+		expect(preview.querySelector('[data-testid="fe-file-preview-copy-across"]')).toBeTruthy();
+		const previewIds = [...preview.querySelectorAll('[data-testid]')].map((el) =>
+			el.getAttribute('data-testid')
+		);
+		expect(previewIds.indexOf('fe-file-preview-copy-across')).toBeGreaterThan(
+			previewIds.indexOf('fe-file-preview-encrypt')
 		);
 	});
 });
