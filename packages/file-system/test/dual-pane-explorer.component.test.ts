@@ -87,7 +87,7 @@ describe('DualPaneExplorer onOpenProject context', () => {
 		expect(opened).toEqual([{ name: 'myproj', ctx: { kind: 'local' } }]);
 	});
 
-	it('Copy across sits after Decrypt and appears in the details popup', async () => {
+	it('Copy across sits after Download and appears in the details popup', async () => {
 		await vfs.writeFile({
 			parentId: null,
 			name: 'across.txt',
@@ -105,13 +105,14 @@ describe('DualPaneExplorer onOpenProject context', () => {
 		await viWaitFor(() => document.querySelectorAll('[data-pane="left"] [data-testid="fe-file-row"]').length >= 1);
 
 		const left = document.querySelector('[data-pane="left"]') as HTMLElement;
-		const actions = left.querySelector('[data-testid="fe-selection-actions"]') as HTMLElement;
-		const actionIds = [...actions.querySelectorAll('[data-testid]')].map((el) =>
-			el.getAttribute('data-testid')
+		const toolbar = left.querySelector('[data-testid="fe-toolbar"]') as HTMLElement;
+		const toolbarIds = [
+			...toolbar.querySelectorAll(':scope > .fe-toolbar-row:first-child [data-testid]')
+		].map((el) => el.getAttribute('data-testid'));
+		expect(toolbarIds.indexOf('fe-copy-across-left')).toBe(
+			toolbarIds.indexOf('fe-download-selected') + 1
 		);
-		expect(actionIds.indexOf('fe-copy-across-left')).toBe(
-			actionIds.indexOf('fe-decrypt-selected') + 1
-		);
+		expect(left.querySelector('[data-testid="fe-selection-actions"] [data-testid="fe-copy-across-left"]')).toBeNull();
 
 		const row = left.querySelector('[data-testid="fe-file-row"]') as HTMLElement;
 		await fireEvent.click(row);

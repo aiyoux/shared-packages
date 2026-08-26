@@ -759,17 +759,18 @@ describe('FileExplorer component', () => {
 		expect(compressDlg.textContent).toMatch(/3 items/);
 	});
 
-	it('Copy across sits after Decrypt and appears in the details popup', async () => {
+	it('Copy across sits after Download and appears in the details popup', async () => {
 		await vfs.writeFile({ parentId: null, name: 'note.txt', body: 'hello' });
 		render(FileExplorerToolbarExtraHarness, { props: { vfs } });
 		await viWaitForRows(1);
-		const actions = screen.getByTestId('fe-selection-actions');
-		const actionIds = [...actions.querySelectorAll('[data-testid]')].map((el) =>
-			el.getAttribute('data-testid')
+		const toolbar = screen.getByTestId('fe-toolbar');
+		const toolbarIds = [...toolbar.querySelectorAll(':scope > .fe-toolbar-row:first-child [data-testid]')].map(
+			(el) => el.getAttribute('data-testid')
 		);
-		expect(actionIds.indexOf('fe-copy-across-stub')).toBe(
-			actionIds.indexOf('fe-decrypt-selected') + 1
+		expect(toolbarIds.indexOf('fe-copy-across-stub')).toBe(
+			toolbarIds.indexOf('fe-download-selected') + 1
 		);
+		expect(screen.getByTestId('fe-selection-actions').querySelector('[data-testid="fe-copy-across-stub"]')).toBeNull();
 		const row = document.querySelector('[data-testid="fe-file-row"]') as HTMLElement;
 		await fireEvent.click(row);
 		await fireEvent.click(screen.getByTestId('fe-item-details'));

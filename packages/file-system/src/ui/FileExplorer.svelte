@@ -154,8 +154,8 @@
 		hideToolbarTrash?: boolean;
 		/**
 		 * Extra manage-toolbar / details actions (e.g. DualPane Copy across).
-		 * `icon` sits in the selection-action row; `label` is the details panel
-		 * text button.
+		 * `icon` sits in the main toolbar after Download; `label` is the details
+		 * panel text button.
 		 */
 		toolbarExtra?: Snippet<[{ variant: 'icon' | 'label' }]>;
 		/** Leading header slot (connection dropdown for DualPaneExplorer). */
@@ -2414,6 +2414,9 @@
 							onclick={() => void downloadSelected()}
 						/>
 					{/if}
+					{#if toolbarExtra}
+						{@render toolbarExtra({ variant: 'icon' })}
+					{/if}
 					{#if clipboard?.ids.length && (caps.supportsMove || caps.supportsCopy)}
 						<FeTipIconBtn
 							testid="fe-paste"
@@ -2489,9 +2492,6 @@
 						disabled={!canDecryptSelection}
 						onclick={() => startArchive('decrypt', selectedEntries)}
 					/>
-					{#if toolbarExtra}
-						{@render toolbarExtra({ variant: 'icon' })}
-					{/if}
 				</div>
 			{/if}
 		</div>
@@ -3821,8 +3821,20 @@
 	}
 	.fe-icon {
 		display: inline-flex;
+		align-items: center;
+		justify-content: center;
 		color: var(--text-secondary);
 		flex-shrink: 0;
+		width: 16px;
+		height: 16px;
+		overflow: hidden;
+	}
+	.fe-icon :global(.fe-thumb),
+	.fe-icon :global(.fe-thumb-img),
+	.fe-icon :global(.fe-thumb-loading),
+	.fe-icon :global(.fe-thumb-fallback) {
+		width: 16px;
+		height: 16px;
 	}
 	.fe-row.folder .fe-icon {
 		color: var(--accent-light);
@@ -4044,10 +4056,11 @@
 	.fe-row-modified {
 		min-width: 8rem;
 	}
-	.fe-list-detailed .fe-icon {
-		width: 20px;
-		height: 20px;
-		overflow: hidden;
+	.fe-list-detailed .fe-icon,
+	.fe-list-detailed .fe-icon :global(.fe-thumb),
+	.fe-list-detailed .fe-icon :global(.fe-thumb-img) {
+		width: 16px;
+		height: 16px;
 	}
 
 	/* ── Preview thumbnail in dock/popup ──────────────────────── */

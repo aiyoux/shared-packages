@@ -83,4 +83,29 @@ describe('FeThumbnail', () => {
 			expect(document.querySelector('.fe-thumb-spinner')).toBeNull();
 		});
 	});
+
+	it('caps the thumbnail box to maxDim so list rows cannot grow with the image', async () => {
+		const driver: ExplorerDriver = {
+			id: 'memory',
+			capabilities: caps,
+			ready: async () => {},
+			list: async () => ({ entries: [], truncated: false }),
+			getPath: async () => [],
+			delete: async () => {},
+			readBlob: async () => pngBlob()
+		};
+		const entry: ExplorerEntry = {
+			id: 'img-2',
+			kind: 'file',
+			name: 'wide.png',
+			parentId: null,
+			fileType: 'image'
+		};
+		render(FeThumbnail, {
+			props: { entry, driver, maxDim: 16, enabled: true }
+		});
+		const box = document.querySelector('[data-testid="fe-thumb"]') as HTMLElement;
+		expect(box).toBeTruthy();
+		expect(box.style.getPropertyValue('--fe-thumb-max')).toBe('16px');
+	});
 });

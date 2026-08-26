@@ -115,30 +115,44 @@
 	);
 </script>
 
-{#if url}
-	<img class="fe-thumb-img" src={url} alt={entry.name} loading="lazy" />
-{:else if loading}
-	<div class="fe-thumb-loading" aria-label="Loading preview">
-		<div class="fe-thumb-spinner"></div>
-	</div>
-{:else if failed}
-	<div class="fe-thumb-fallback">
-		<FeIcon name={fallbackIcon} size={Math.min(maxDim * 0.4, 32)} />
-	</div>
-{:else if kind}
-	<div class="fe-thumb-fallback">
-		<FeIcon name={fallbackIcon} size={Math.min(maxDim * 0.4, 32)} />
-	</div>
-{:else}
-	<div class="fe-thumb-fallback">
-		<FeIcon name={entry.kind === 'folder' ? 'folder' : 'file'} size={Math.min(maxDim * 0.4, 32)} />
-	</div>
-{/if}
+<div class="fe-thumb" style:--fe-thumb-max="{maxDim}px" data-testid="fe-thumb">
+	{#if url}
+		<img class="fe-thumb-img" src={url} alt={entry.name} loading="lazy" />
+	{:else if loading}
+		<div class="fe-thumb-loading" aria-label="Loading preview">
+			<div class="fe-thumb-spinner"></div>
+		</div>
+	{:else if failed}
+		<div class="fe-thumb-fallback">
+			<FeIcon name={fallbackIcon} size={Math.min(maxDim * 0.4, 32)} />
+		</div>
+	{:else if kind}
+		<div class="fe-thumb-fallback">
+			<FeIcon name={fallbackIcon} size={Math.min(maxDim * 0.4, 32)} />
+		</div>
+	{:else}
+		<div class="fe-thumb-fallback">
+			<FeIcon name={entry.kind === 'folder' ? 'folder' : 'file'} size={Math.min(maxDim * 0.4, 32)} />
+		</div>
+	{/if}
+</div>
 
 <style>
+	.fe-thumb {
+		width: 100%;
+		height: 100%;
+		max-width: var(--fe-thumb-max, 96px);
+		max-height: var(--fe-thumb-max, 96px);
+		overflow: hidden;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+	}
 	.fe-thumb-img {
 		width: 100%;
 		height: 100%;
+		max-width: 100%;
+		max-height: 100%;
 		object-fit: contain;
 		display: block;
 	}
