@@ -170,6 +170,8 @@
 			entry: ExplorerOpenTarget,
 			ctx?: ExplorerOpenContext | OpenProjectContext
 		) => void | Promise<void>;
+		/** Dialog close (X on each FileExplorer toolbar). */
+		onClose?: () => void;
 		/** Forward `onOpen` to B2 / monitor / disk / rclone panes. Hub Files keeps this off. */
 		openRemotes?: boolean;
 		accept?: FileTypeId[];
@@ -269,6 +271,7 @@
 	let {
 		localDriver,
 		onOpen,
+		onClose,
 		openRemotes = false,
 		accept,
 		hideIncompatible = false,
@@ -1662,6 +1665,7 @@
 						{hideIncompatible}
 						{openLabel}
 						variant="panel"
+						{onClose}
 						driver={overrideRight.driver}
 						showPersistence={false}
 						initialParentId={p.ctx.parentId}
@@ -1687,6 +1691,7 @@
 						{hideIncompatible}
 						{openLabel}
 						variant="panel"
+						{onClose}
 						driver={localDriver}
 						showPersistence={false}
 						initialParentId={p.ctx.parentId}
@@ -1722,6 +1727,7 @@
 						{hideIncompatible}
 						{openLabel}
 						variant="panel"
+						{onClose}
 						driver={drv}
 						showPersistence={false}
 						initialParentId={p.ctx.parentId}

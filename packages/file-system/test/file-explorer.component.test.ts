@@ -212,6 +212,8 @@ describe('FileExplorer component', () => {
 		const incompatible = Array.from(rows).find((r) => r.classList.contains('incompatible'));
 		expect(incompatible).toBeTruthy();
 		expect(incompatible?.getAttribute('data-file-type')).toBe('vrec');
+		expect(screen.queryByText('Click a row to select it')).toBeNull();
+		expect(document.querySelector('[data-testid="fe-open-bar"]')).toBeNull();
 	});
 
 	it('pointerup selects the row; Details opens the item popup', async () => {

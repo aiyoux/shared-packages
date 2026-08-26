@@ -2762,14 +2762,6 @@
 		</footer>
 	{/if}
 
-	{#if mode === 'open'}
-		<footer class="fe-open-bar" data-testid="fe-open-bar">
-			<span class="fe-hint">
-				{selectMulti ? 'Select a compatible file, then Open' : 'Click a row to select it'}
-			</span>
-		</footer>
-	{/if}
-
 	{#if previewEntry && previewDock === 'off'}
 		<div
 			class="fe-preview-backdrop"
@@ -3858,7 +3850,6 @@
 		font-size: var(--text-sm);
 	}
 	.fe-save-bar,
-	.fe-open-bar,
 	.fe-inline-form {
 		display: flex;
 		gap: 8px;
@@ -3920,10 +3911,6 @@
 		white-space: nowrap;
 		-webkit-line-clamp: unset;
 		display: flex;
-	}
-	.fe-hint {
-		opacity: 0.7;
-		font-size: 12px;
 	}
 
 	/* ── View switcher popup ──────────────────────────────────── */
