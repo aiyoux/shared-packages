@@ -29,7 +29,11 @@
 		rootId = null,
 		rootLabel = 'Root',
 		showRoot = true,
-		onSelect
+		onSelect,
+		dropActive = false,
+		dropTargetId = undefined as ExplorerEntryId | null | undefined,
+		onDropInto,
+		onDragOverInto
 	}: {
 		driver: ExplorerDriver;
 		activeId: ExplorerEntryId | null;
@@ -47,7 +51,26 @@
 		showRoot?: boolean;
 		/** File row click when includeFiles. Folders still use onNavigate. */
 		onSelect?: (entry: ExplorerEntry) => void;
+		/** Same-pane move: highlight folders as drop targets. */
+		dropActive?: boolean;
+		dropTargetId?: ExplorerEntryId | null;
+		onDropInto?: (parentId: ExplorerEntryId | null) => void;
+		onDragOverInto?: (parentId: ExplorerEntryId | null) => void;
 	} = $props();
+
+	function onFolderDragOver(e: DragEvent, parentId: ExplorerEntryId | null) {
+		if (!dropActive) return;
+		e.preventDefault();
+		e.stopPropagation();
+		onDragOverInto?.(parentId);
+	}
+
+	function onFolderDrop(e: DragEvent, parentId: ExplorerEntryId | null) {
+		if (!dropActive) return;
+		e.preventDefault();
+		e.stopPropagation();
+		onDropInto?.(parentId);
+	}
 
 	const ROOT_KEY = '__root__';
 
@@ -199,11 +222,14 @@
 		<div
 			class="fe-tree-row"
 			class:active={isActive}
+			class:drop-ready={dropActive && isFolder}
+			class:drop-target={dropActive && isFolder && dropTargetId === entry.id}
 			style="padding-left: {depth * 14 + 4}px"
 			data-testid="fe-tree-row"
 			data-id={entry.id}
 			data-kind={entry.kind}
 			data-name={entry.name}
+			data-fe-drop-parent={isFolder ? entry.id : undefined}
 			role="treeitem"
 			aria-selected={isActive}
 			aria-expanded={isFolder ? isOpen : undefined}
@@ -216,6 +242,8 @@
 					onSelect?.(entry);
 				}
 			}}
+			ondragover={isFolder ? (e) => onFolderDragOver(e, entry.id) : undefined}
+			ondrop={isFolder ? (e) => onFolderDrop(e, entry.id) : undefined}
 		>
 			<button
 				type="button"
@@ -259,11 +287,16 @@
 		class="fe-tree-row fe-tree-root"
 		class:active={activeId === rootId}
 		class:hidden={!showRoot}
+		class:drop-ready={dropActive}
+		class:drop-target={dropActive && dropTargetId === rootId}
 		data-testid="fe-tree-row-root"
+		data-fe-drop-parent=""
 		role="treeitem"
 		aria-selected={activeId === rootId}
 		tabindex="-1"
 		onclick={() => onNavigate(rootId)}
+		ondragover={(e) => onFolderDragOver(e, rootId)}
+		ondrop={(e) => onFolderDrop(e, rootId)}
 	>
 		<span class="fe-tree-toggle invisible" aria-hidden="true"></span>
 		<FeIcon name="folder" size={14} />
@@ -300,6 +333,15 @@
 	}
 	.fe-tree-row.active {
 		background: var(--accent-soft, rgb(var(--accent-rgb, 74 153 255) / 0.16));
+		color: var(--text-primary);
+	}
+	.fe-tree-row.drop-ready {
+		outline: 1px dashed color-mix(in srgb, var(--accent, #38bdf8) 45%, transparent);
+		outline-offset: -1px;
+	}
+	.fe-tree-row.drop-target {
+		outline: 1px solid var(--accent, #38bdf8);
+		background: rgb(var(--accent-rgb, 56 189 248) / 0.16);
 		color: var(--text-primary);
 	}
 	.fe-tree-toggle {

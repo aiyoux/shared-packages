@@ -26,7 +26,8 @@ function pending(p: Partial<ListingPending> & { name: string }): ListingPending 
 		direction: p.direction,
 		ready: p.ready,
 		status: p.status,
-		done: p.done
+		done: p.done,
+		destParentId: p.destParentId
 	};
 }
 
@@ -93,14 +94,55 @@ describe('listing pending merge', () => {
 		assert.equal(rows[0].pending?.status, 'hashing');
 	});
 
-	it('inserts unmatched pending among files after folders, sorted by name', () => {
+	it('root dest pending does not appear inside another folder or as a memory-wide ghost', () => {
+		const p = pending({
+			name: 'clip.wav',
+			transferred: 50,
+			destParentId: null
+		});
+		assert.equal(mergeListingWithPending([], [p], 'folder-a').length, 0);
+		const root = mergeListingWithPending([], [p], null);
+		assert.equal(root.length, 1);
+		assert.equal(root[0]!.pending?.name, 'clip.wav');
+	});
+
+	it('does not show dest pending rows in a different folder (not root)', () => {
+		const p = pending({
+			name: 'hello.txt',
+			transferred: 100,
+			size: 100,
+			destParentId: 'folder-a'
+		});
+		const rootRows = mergeListingWithPending([], [p], null);
+		assert.equal(rootRows.length, 0);
+		const destRows = mergeListingWithPending([], [p], 'folder-a');
+		assert.equal(destRows.length, 1);
+		assert.equal(destRows[0]!.placeholder, true);
+		assert.equal(destRows[0]!.pending?.name, 'hello.txt');
+		const listed = mergeListingWithPending([file('hello.txt', 'hello.txt')], [p], 'folder-a');
+		assert.equal(listed[0]!.pending, null);
+		assert.equal(listed[0]!.placeholder, false);
+	});
+
+	it('keeps driver file order so sibling reorder is visible', () => {
 		const rows = mergeListingWithPending(
-			[folder('Zed'), file('beta.txt'), file('alpha.txt')],
+			[folder('Zed'), file('zebra.txt'), file('apple.txt')],
+			[]
+		);
+		assert.deepEqual(
+			rows.map((r) => r.node.name),
+			['Zed', 'zebra.txt', 'apple.txt']
+		);
+	});
+
+	it('inserts unmatched pending among files by name without re-sorting existing files', () => {
+		const rows = mergeListingWithPending(
+			[folder('Zed'), file('zebra.txt'), file('apple.txt')],
 			[pending({ name: 'aa-incoming.bin', transferred: 10 })]
 		);
 		assert.deepEqual(
 			rows.map((r) => r.node.name),
-			['Zed', 'aa-incoming.bin', 'alpha.txt', 'beta.txt']
+			['Zed', 'aa-incoming.bin', 'zebra.txt', 'apple.txt']
 		);
 		assert.equal(rows[0].node.kind, 'folder');
 		assert.equal(rows[1].placeholder, true);

@@ -128,8 +128,8 @@ export function createLocalExplorerDriver(
 			await vfs.permanentDelete(entryId, { recursive: true });
 		},
 
-		async emptyTrash() {
-			await vfs.emptyTrash();
+		async emptyTrash(opts) {
+			await vfs.emptyTrash(opts);
 		},
 
 		async readBlob(entryId) {

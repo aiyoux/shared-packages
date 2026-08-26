@@ -15,6 +15,8 @@ export type ListingPending = {
 	ready?: number;
 	status?: string;
 	done?: boolean;
+	/** When set, only merge into this folder's listing (not the viewed root). */
+	destParentId?: ExplorerEntry['parentId'];
 };
 
 export type ListingRow = {
@@ -93,14 +95,23 @@ function cmpName(a: string, b: string): number {
 }
 
 /**
- * Folders first (existing list order), then files + unmatched pending
- * placeholders sorted by name. Matching dest files reuse the live row.
+ * Folders first (driver list order), then files in that same order, then
+ * unmatched pending placeholders inserted among files by name. Existing
+ * files are not re-sorted — sibling reorder has to stick.
  */
+export function pendingForViewedParent(
+	pending: ListingPending[],
+	parentId: ExplorerEntry['parentId']
+): ListingPending[] {
+	return pending.filter((p) => p.destParentId === undefined || p.destParentId === parentId);
+}
+
 export function mergeListingWithPending(
 	nodes: ExplorerEntry[],
 	pending: ListingPending[],
 	parentId: ExplorerEntry['parentId'] = null
 ): ListingRow[] {
+	pending = pendingForViewedParent(pending, parentId);
 	const byName = lastPendingByName(pending);
 	const used = new Set<string>();
 	const folders: ListingRow[] = [];
@@ -129,11 +140,12 @@ export function mergeListingWithPending(
 		});
 	}
 
+	const incoming: ListingRow[] = [];
 	for (const p of pending) {
 		const key = nameKey(p.name);
 		if (!p.name || used.has(key)) continue;
 		used.add(key);
-		files.push({
+		incoming.push({
 			key: `pending:${p.id}`,
 			node: placeholderEntry(p, parentId),
 			pending: p,
@@ -141,7 +153,12 @@ export function mergeListingWithPending(
 			nodeIndex: null
 		});
 	}
+	incoming.sort((a, b) => cmpName(a.node.name, b.node.name));
+	for (const row of incoming) {
+		let i = 0;
+		while (i < files.length && cmpName(files[i]!.node.name, row.node.name) <= 0) i++;
+		files.splice(i, 0, row);
+	}
 
-	files.sort((a, b) => cmpName(a.node.name, b.node.name));
 	return [...folders, ...files];
 }

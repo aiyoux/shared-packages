@@ -1,8 +1,9 @@
 <script lang="ts">
-	import { onDestroy, tick, type Snippet } from 'svelte';
+	import { onDestroy, onMount, tick, type Snippet } from 'svelte';
 	import FileExplorer from './FileExplorer.svelte';
 	import { getSharedVfs, isActionable, type FileTypeId, type VfsService } from '../index.js';
 	import {
+		readExplorerBlob,
 		type ExplorerDriver,
 		type ExplorerEntry,
 		type ExplorerOpenTarget,
@@ -13,6 +14,7 @@
 	import FeIcon from './FeIcon.svelte';
 	import FeTipIconBtn from './FeTipIconBtn.svelte';
 	import FeArchiveDialog from './FeArchiveDialog.svelte';
+	import CopyProgressHeader from './CopyProgressHeader.svelte';
 	import {
 		createInnerFsSession,
 		expandPackedBytes,
@@ -20,16 +22,26 @@
 		looksPackedName,
 		looksVaultName,
 		readEntryBytes,
+		runArchiveJob,
 		type ArchiveDest,
+		type ArchiveJobSpec,
 		type ArchiveKind,
 		type ArchiveWriteProgress,
 		type InnerFsSession
 	} from './archiveOps.js';
 	import {
+		abortTransfer,
+		attachTransferAbort,
+		listTransfers,
+		subscribeTransfers,
+		upsertProgress,
+		type TransferItem
+	} from '../transferRegistry.js';
+	import {
 		createTreeDndSession,
 		canonicalizeSiblingZone,
 		resolveDrop,
-		zoneFromY,
+		zoneFromPoint,
 		type DropZone
 	} from './treeDnd/index.js';
 	import {
@@ -227,8 +239,32 @@
 	let archiveKind = $state<ArchiveKind | null>(null);
 	let archiveEntries = $state<ExplorerEntry[]>([]);
 	let archiveDestLocked = $state<ArchiveDest | null>(null);
+	let archiveDialogOpen = $state(false);
+	let archiveJobRunning = $state(false);
+	let archiveJobPct = $state(0);
+	let archiveJobLabel = $state('');
+	let archiveChipName = $state('');
+	let archiveTransferId: string | null = null;
+	let archiveAbort: AbortController | null = null;
+	let archiveOpItems = $state<TransferItem[]>([]);
+	let archiveDismissed = $state<Set<string>>(new Set());
+	const visibleArchiveOps = $derived(archiveOpItems.filter((t) => !archiveDismissed.has(t.id)));
 	let innerFs = $state<InnerFsSession | null>(null);
+	let archiveProgressUnsub: (() => void) | null = null;
+	onMount(() => {
+		const pull = () => {
+			archiveOpItems = listTransfers().filter((t) => t.direction === 'copying');
+		};
+		pull();
+		archiveProgressUnsub = subscribeTransfers(pull);
+		return () => {
+			archiveProgressUnsub?.();
+			archiveProgressUnsub = null;
+		};
+	});
 	onDestroy(() => {
+		archiveAbort?.abort();
+		emptyTrashAbort?.abort();
 		void innerFs?.dispose();
 		clearDragOutCache();
 		teardownPointerDrag();
@@ -315,6 +351,11 @@
 	let trashOpen = $state(false);
 	let trashNodes = $state<ExplorerEntry[]>([]);
 	let trashBusy = $state(false);
+	let emptyTrashRunning = $state(false);
+	let emptyTrashPct = $state(0);
+	let emptyTrashLabel = $state('');
+	let emptyTrashTransferId: string | null = null;
+	let emptyTrashAbort: AbortController | null = null;
 	/** Set while a "download selected" pass is triggering browser downloads. */
 	let downloadBusy = $state(false);
 	/** In-list progress for save-to-PC when we stream instead of a native GET. */
@@ -433,8 +474,17 @@
 	const dnd = createTreeDndSession();
 	let dndTargetId = $state<string | null>(null);
 	let dndZone = $state<DropZone | null>(null);
-	/** Overlay gap Y inside `.fe-list` (content coords). Null = hide the line. */
-	let dndLineTop = $state<number | null>(null);
+	/** Same-pane move: dest folder from breadcrumb / tree. `undefined` = not a nav drop. */
+	let dndIntoId = $state<string | null | undefined>(undefined);
+	let moveDragActive = $state(false);
+	let moveDragLabel = $state('');
+	/** Overlay gap inside `.fe-list` (content coords). Null = hide the line. */
+	let dndLine = $state<{
+		axis: 'x' | 'y';
+		top: number;
+		left: number;
+		size: number;
+	} | null>(null);
 	let dndDraggingIds = $state<Set<string>>(new Set());
 	let listEl = $state<HTMLDivElement | null>(null);
 	/** Touch/pen drag in progress (HTML5 DnD does not fire on mobile). */
@@ -509,7 +559,8 @@
 	function clearDndHover() {
 		dndTargetId = null;
 		dndZone = null;
-		dndLineTop = null;
+		dndLine = null;
+		dndIntoId = undefined;
 	}
 
 	function clearDndChrome() {
@@ -519,19 +570,38 @@
 
 	function updateLineTop(rowEl: HTMLElement, zone: DropZone) {
 		if (zone === 'into') {
-			dndLineTop = null;
+			dndLine = null;
 			return;
 		}
-		dndLineTop = zone === 'before' ? rowEl.offsetTop : rowEl.offsetTop + rowEl.offsetHeight - 1;
+		const grid = viewMode === 'icons';
+		if (grid) {
+			dndLine = {
+				axis: 'x',
+				top: rowEl.offsetTop,
+				left: zone === 'before' ? rowEl.offsetLeft : rowEl.offsetLeft + Math.max(rowEl.offsetWidth, 2) - 2,
+				size: rowEl.offsetHeight
+			};
+			return;
+		}
+		dndLine = {
+			axis: 'y',
+			top: zone === 'before' ? rowEl.offsetTop : rowEl.offsetTop + Math.max(rowEl.offsetHeight, 2) - 2,
+			left: 8,
+			size: Math.max((listEl?.clientWidth ?? rowEl.offsetWidth) - 16, 8)
+		};
 	}
 
-	function applyRowHover(n: ExplorerEntry, clientY: number, rowEl: HTMLElement) {
+	function applyRowHover(n: ExplorerEntry, clientX: number, clientY: number, rowEl: HTMLElement) {
 		if (!dnd.getState().active) return;
 		const rect = rowEl.getBoundingClientRect();
-		let zone = zoneFromY(
-			{ top: rect.top, height: rect.height },
-			clientY,
-			{ kind: n.kind, supportsSiblingOrder: caps.supportsSiblingOrder }
+		let zone = zoneFromPoint(
+			{ top: rect.top, left: rect.left, height: rect.height, width: rect.width },
+			{ x: clientX, y: clientY },
+			{
+				kind: n.kind,
+				supportsSiblingOrder: caps.supportsSiblingOrder,
+				layout: viewMode === 'icons' ? 'grid' : 'row'
+			}
 		);
 		let target = n;
 		let targetEl = rowEl;
@@ -557,15 +627,26 @@
 		dnd.setDropTarget(target.id, zone);
 		dndTargetId = target.id;
 		dndZone = zone;
+		dndIntoId = undefined;
 		updateLineTop(targetEl, zone);
 	}
 
+	function hoverNavParent(parentId: string | null) {
+		if (!dnd.getState().active || !caps.supportsMove) return;
+		dnd.setDropTarget(null, 'into');
+		dndTargetId = null;
+		dndZone = 'into';
+		dndLine = null;
+		dndIntoId = parentId;
+	}
+
 	function hoverGapAfterLast() {
+		dndIntoId = undefined;
 		if (!caps.supportsSiblingOrder || !nodes.length) {
 			dnd.setDropTarget(null, 'into');
 			dndTargetId = null;
 			dndZone = 'into';
-			dndLineTop = null;
+			dndLine = null;
 			return;
 		}
 		const last = nodes[nodes.length - 1]!;
@@ -574,7 +655,7 @@
 		dndTargetId = last.id;
 		dndZone = 'after';
 		if (lastEl) updateLineTop(lastEl, 'after');
-		else dndLineTop = null;
+		else dndLine = null;
 	}
 
 	function hoverFromPoint(clientX: number, clientY: number) {
@@ -589,6 +670,18 @@
 								: null;
 						return hit ? [hit] : [];
 					})();
+		const dropHost = stack.find(
+			(el) => el instanceof Element && el.closest('[data-fe-drop-parent]')
+		);
+		const dropEl =
+			dropHost instanceof Element
+				? (dropHost.closest('[data-fe-drop-parent]') as HTMLElement | null)
+				: null;
+		if (dropEl) {
+			const raw = dropEl.getAttribute('data-fe-drop-parent');
+			hoverNavParent(raw === '' || raw == null ? null : raw);
+			return;
+		}
 		const inList = stack.find((el) => listEl?.contains(el));
 		if (!inList || !listEl) {
 			dnd.clearDropTarget();
@@ -608,7 +701,7 @@
 			hoverGapAfterLast();
 			return;
 		}
-		applyRowHover(n, clientY, rowEl);
+		applyRowHover(n, clientX, clientY, rowEl);
 	}
 
 	function idsForDrag(n: ExplorerEntry): string[] {
@@ -631,7 +724,16 @@
 		selectForDrag(n);
 		const ids = idsForDrag(n);
 		dndDraggingIds = new Set(ids);
-		if (caps.supportsMove) dnd.startDrag(ids, parentId);
+		if (caps.supportsMove) {
+			dnd.startDrag(ids, parentId);
+			moveDragActive = true;
+			if (ids.length === 1) {
+				const name = nodes.find((x) => x.id === ids[0])?.name ?? n.name;
+				moveDragLabel = `Moving item: ${name}`;
+			} else {
+				moveDragLabel = `Moving ${ids.length} items`;
+			}
+		}
 		try {
 			setCrossWindowDrag({
 				sourceDriver: driver,
@@ -647,6 +749,8 @@
 	function stopInternalDrag() {
 		dnd.stopDrag();
 		clearDndChrome();
+		moveDragActive = false;
+		moveDragLabel = '';
 		pointerDragActive = false;
 		setPointerDragActive(false);
 	}
@@ -710,8 +814,47 @@
 		}
 		if (!dnd.getState().active) return;
 		e.preventDefault();
-		applyRowHover(n, e.clientY, e.currentTarget as HTMLElement);
+		applyRowHover(n, e.clientX, e.clientY, e.currentTarget as HTMLElement);
 		if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+	}
+
+	function onNavDragOver(e: DragEvent, destParentId: string | null) {
+		if (allowOsFileDrag(e)) return;
+		if (!dnd.getState().active || !caps.supportsMove) return;
+		e.preventDefault();
+		e.stopPropagation();
+		hoverNavParent(destParentId);
+		if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+	}
+
+	function onNavDrop(e: DragEvent, destParentId: string | null) {
+		if (allowOsFileDrag(e)) return;
+		if (!dnd.getState().active) return;
+		e.preventDefault();
+		e.stopPropagation();
+		void commitMoveInto(destParentId);
+	}
+
+	async function commitMoveInto(destParentId: string | null) {
+		const st = dnd.getState();
+		if (!st.active || !driver.move) {
+			stopInternalDrag();
+			return;
+		}
+		const dragIds = st.dragIds;
+		try {
+			for (const id of dragIds) {
+				if (id === destParentId) continue;
+				const node = nodes.find((x) => x.id === id);
+				if (node && node.parentId === destParentId) continue;
+				await driver.move(id, destParentId);
+			}
+			await refresh();
+		} catch (err) {
+			reportError(err);
+		} finally {
+			stopInternalDrag();
+		}
 	}
 
 	async function commitDndDrop(target: ExplorerEntry | null) {
@@ -877,11 +1020,16 @@
 		hoverFromPoint(e.clientX, e.clientY);
 		const el =
 			typeof document !== 'undefined' ? document.elementFromPoint(e.clientX, e.clientY) : null;
-		const inSelf = el instanceof Node && !!listEl?.contains(el);
+		const root = listEl?.closest('.fe-root') ?? listEl;
+		const inSelf = el instanceof Node && !!root?.contains(el);
 		if (inSelf && dnd.getState().active) {
 			setPointerDragActive(false);
 			el instanceof Element &&
 				el.dispatchEvent(new CustomEvent('feexplorerdragend', { bubbles: true, composed: true }));
+			if (dndIntoId !== undefined) {
+				void commitMoveInto(dndIntoId);
+				return;
+			}
 			const target = dndTargetId ? (nodes.find((x) => x.id === dndTargetId) ?? null) : null;
 			void commitDndDrop(target);
 			return;
@@ -1048,6 +1196,8 @@
 		if (!d.subscribeChanges) return;
 		const unsub = d.subscribeChanges(
 			() => {
+				// Empty trash owns its list until it finishes — live ticks were the flash.
+				if (emptyTrashRunning) return;
 				// Silent — keeps selection, and paints no busy chrome for a change the
 				// user did not initiate.
 				void refresh(true, 'delay', true);
@@ -1250,11 +1400,86 @@
 		await refreshTrash();
 	}
 
+	function bumpEmptyTrashProgress(done: number, total: number, name?: string) {
+		emptyTrashPct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
+		emptyTrashLabel = name ? `Deleting ${name}` : 'Emptying trash…';
+		if (!emptyTrashTransferId) return;
+		upsertProgress({
+			id: emptyTrashTransferId,
+			name: 'Trash',
+			size: 100,
+			transferred: emptyTrashPct,
+			direction: 'copying',
+			done: false,
+			status: 'active',
+			hopNote: 'Emptying trash…'
+		});
+	}
+
+	function abortEmptyTrash() {
+		emptyTrashAbort?.abort();
+		if (emptyTrashTransferId) abortTransfer(emptyTrashTransferId);
+	}
+
 	async function emptyTrash() {
-		if (!driver.emptyTrash) return;
+		if (!driver.emptyTrash || emptyTrashRunning) return;
 		if (!(await askConfirm(emptyTrashCopy()))) return;
-		await driver.emptyTrash();
-		await refreshTrash();
+		emptyTrashAbort?.abort();
+		const ac = new AbortController();
+		emptyTrashAbort = ac;
+		const id = generateId('empty-trash');
+		emptyTrashTransferId = id;
+		emptyTrashRunning = true;
+		emptyTrashPct = 0;
+		emptyTrashLabel = 'Emptying trash…';
+		attachTransferAbort(id, ac);
+		upsertProgress({
+			id,
+			name: 'Trash',
+			size: 100,
+			transferred: 0,
+			direction: 'copying',
+			done: false,
+			status: 'active',
+			hopNote: 'Emptying trash…'
+		});
+		try {
+			await driver.emptyTrash({
+				signal: ac.signal,
+				onProgress: (ev) => bumpEmptyTrashProgress(ev.done, ev.total, ev.name)
+			});
+			upsertProgress({
+				id,
+				name: 'Trash',
+				size: 100,
+				transferred: 100,
+				direction: 'copying',
+				done: true,
+				status: 'done',
+				hopNote: 'Done'
+			});
+		} catch (e) {
+			const cancelled = e instanceof Error && e.name === 'AbortError';
+			upsertProgress({
+				id,
+				name: 'Trash',
+				size: 100,
+				transferred: emptyTrashPct,
+				direction: 'copying',
+				done: true,
+				status: 'failed',
+				error: cancelled ? 'Cancelled' : formatExplorerError(e),
+				hopNote: cancelled ? 'Cancelled' : 'Failed'
+			});
+			if (cancelled) toast.info('Cancelled');
+			else toast.error(formatExplorerError(e));
+		} finally {
+			emptyTrashRunning = false;
+			if (emptyTrashAbort === ac) emptyTrashAbort = null;
+			if (emptyTrashTransferId === id) emptyTrashTransferId = null;
+			await refreshTrash();
+			await refresh(true, 'delay', true);
+		}
 	}
 
 	function clearRenameBlur() {
@@ -1370,16 +1595,40 @@
 		archiveKind = kind;
 		archiveEntries = targets;
 		archiveDestLocked = destLocked;
+		archiveDialogOpen = true;
 	}
 
 	function closeArchive() {
+		archiveDialogOpen = false;
 		archiveKind = null;
 		archiveEntries = [];
 		archiveDestLocked = null;
 	}
 
+	function hideArchiveDialog() {
+		archiveDialogOpen = false;
+	}
+
 	function bumpArchiveProgress(ev: ArchiveWriteProgress) {
-		if (ev.parentId !== parentId) return;
+		if (ev.job) {
+			if (ev.size > 0) {
+				const pct = Math.min(100, Math.round((ev.transferred / ev.size) * 100));
+				archiveJobPct = Math.max(archiveJobPct, pct);
+			}
+			if (archiveTransferId) {
+				upsertProgress({
+					id: archiveTransferId,
+					name: archiveChipName || ev.name || 'Archive',
+					size: 100,
+					transferred: archiveJobPct,
+					direction: 'copying',
+					done: false,
+					status: 'active',
+					hopNote: archiveJobLabel || 'Working…'
+				});
+			}
+			return;
+		}
 		let id = archiveNameToId.get(ev.name);
 		if (!id) {
 			id = generateId('archive');
@@ -1392,17 +1641,97 @@
 			transferred: ev.transferred,
 			size: ev.size,
 			direction: 'receiving',
-			done: ev.done
+			done: ev.done,
+			destParentId: ev.parentId
 		};
 		inboundOps = inboundOps.some((o) => o.id === id)
 			? inboundOps.map((o) => (o.id === id ? row : o))
 			: [...inboundOps, row];
 	}
 
+	function abortArchiveJob() {
+		archiveAbort?.abort();
+		if (archiveTransferId) abortTransfer(archiveTransferId);
+	}
+
+	async function launchArchive(spec: ArchiveJobSpec) {
+		archiveAbort?.abort();
+		const ac = new AbortController();
+		archiveAbort = ac;
+		const id = generateId('archive');
+		archiveTransferId = id;
+		archiveJobRunning = true;
+		archiveJobPct = 0;
+		archiveChipName = spec.title;
+		archiveJobLabel =
+			spec.kind === 'compress'
+				? 'Compressing…'
+				: spec.kind === 'encrypt'
+					? 'Encrypting…'
+					: spec.kind === 'decompress'
+						? 'Decompressing…'
+						: 'Decrypting…';
+		attachTransferAbort(id, ac);
+		upsertProgress({
+			id,
+			name: spec.title,
+			size: 100,
+			transferred: 0,
+			direction: 'copying',
+			done: false,
+			status: 'active',
+			hopNote: archiveJobLabel
+		});
+		try {
+			const result = await runArchiveJob({
+				...spec,
+				signal: ac.signal,
+				onProgress: bumpArchiveProgress
+			});
+			upsertProgress({
+				id,
+				name: spec.title,
+				size: 100,
+				transferred: 100,
+				direction: 'copying',
+				done: true,
+				status: 'done',
+				hopNote: 'Done'
+			});
+			await finishArchive(result);
+		} catch (e) {
+			const cancelled = e instanceof Error && e.name === 'AbortError';
+			upsertProgress({
+				id,
+				name: spec.title,
+				size: 100,
+				transferred: archiveJobPct,
+				direction: 'copying',
+				done: true,
+				status: 'failed',
+				error: cancelled ? 'Cancelled' : formatExplorerError(e),
+				hopNote: cancelled ? 'Cancelled' : 'Failed'
+			});
+			if (cancelled) toast.info('Cancelled');
+			else toast.error(formatExplorerError(e));
+			const ids = archiveInboundIds;
+			archiveNameToId.clear();
+			archiveInboundIds = [];
+			inboundOps = inboundOps.filter((o) => !ids.includes(o.id));
+			hideArchiveDialog();
+			closeArchive();
+		} finally {
+			archiveJobRunning = false;
+			if (archiveAbort === ac) archiveAbort = null;
+			if (archiveTransferId === id) archiveTransferId = null;
+		}
+	}
+
 	async function finishArchive(result?: { inner?: import('./archiveOps.js').PackedPath[]; title: string }) {
 		const ids = archiveInboundIds;
 		archiveNameToId.clear();
 		archiveInboundIds = [];
+		hideArchiveDialog();
 		closeArchive();
 		if (result?.inner?.length) {
 			inboundOps = inboundOps.filter((o) => !ids.includes(o.id));
@@ -1542,6 +1871,7 @@
 		if (entry.fileType === 'vrec') return 'Open in voice';
 		if (entry.fileType === 'image') return 'Open in Images';
 		if (entry.fileType === 'video') return 'Open in Video';
+		if (entry.fileType === 'audio') return 'Open in Audio';
 		if (entry.fileType === 'pdf') return 'Open PDF';
 		return 'Open';
 	}
@@ -1554,9 +1884,7 @@
 	}
 
 	function readOpenTarget(entry: ExplorerOpenTarget): Promise<Blob> {
-		if (driver.readBlob) return driver.readBlob(entry.id);
-		if (driver.download) return driver.download(entry.id);
-		return Promise.reject(new Error('This location cannot read files'));
+		return readExplorerBlob(driver, entry.id);
 	}
 
 	function emitOpen(entry: ExplorerOpenTarget) {
@@ -2109,8 +2437,8 @@
 				void closeInnerFs();
 				return;
 			}
-			if (archiveKind) {
-				closeArchive();
+			if (archiveDialogOpen) {
+				hideArchiveDialog();
 				return;
 			}
 			if (trashOpen) {
@@ -2287,8 +2615,22 @@
 				</div>
 			{/if}
 			{#if driver.id !== 'memory'}
-				<nav class="fe-pathbar" data-testid="fe-breadcrumbs" aria-label="Current folder">
-					<button type="button" class="fe-crumb" data-testid="fe-crumb-root" onclick={() => goCrumb(null)}>
+				<nav
+					class="fe-pathbar"
+					class:drop-ready={moveDragActive}
+					data-testid="fe-breadcrumbs"
+					aria-label="Current folder"
+				>
+					<button
+						type="button"
+						class="fe-crumb"
+						class:drop-target={moveDragActive && dndIntoId === null}
+						data-testid="fe-crumb-root"
+						data-fe-drop-parent=""
+						onclick={() => goCrumb(null)}
+						ondragover={(e) => onNavDragOver(e, null)}
+						ondrop={(e) => onNavDrop(e, null)}
+					>
 						Root
 					</button>
 					{#each breadcrumbs as crumb (crumb.id)}
@@ -2296,9 +2638,13 @@
 						<button
 							type="button"
 							class="fe-crumb"
+							class:drop-target={moveDragActive && dndIntoId === crumb.id}
 							data-testid="fe-crumb"
 							data-id={crumb.id}
+							data-fe-drop-parent={crumb.id}
 							onclick={() => goCrumb(crumb.id)}
+							ondragover={(e) => onNavDragOver(e, crumb.id)}
+							ondrop={(e) => onNavDrop(e, crumb.id)}
 						>
 							{crumb.name}
 						</button>
@@ -2306,6 +2652,28 @@
 				</nav>
 			{/if}
 		</div>
+		{#if moveDragActive}
+			<div class="fe-move-banner" data-testid="fe-move-banner" role="status" aria-live="polite">
+				{moveDragLabel}
+			</div>
+		{/if}
+		{#if !headerLeading}
+			<CopyProgressHeader
+				items={visibleArchiveOps}
+				onDismiss={(id) => {
+					abortTransfer(id);
+					if (id === archiveTransferId) abortArchiveJob();
+					archiveDismissed = new Set([...archiveDismissed, id]);
+				}}
+				onDismissAll={() => {
+					const next = new Set(archiveDismissed);
+					for (const t of visibleArchiveOps) {
+						if (t.done || t.status === 'failed') next.add(t.id);
+					}
+					archiveDismissed = next;
+				}}
+			/>
+		{/if}
 		<div class="fe-toolbar" data-testid="fe-toolbar">
 			<div class="fe-toolbar-row">
 				{#if mode === 'manage' || mode === 'open'}
@@ -2579,7 +2947,16 @@
 			aria-label="Folder tree"
 			style="flex: 0 0 {treeRatio * 100}%"
 		>
-			<FeTreeView {driver} activeId={parentId} {treeVersion} onNavigate={goCrumb} />
+			<FeTreeView
+				{driver}
+				activeId={parentId}
+				{treeVersion}
+				onNavigate={goCrumb}
+				dropActive={moveDragActive}
+				dropTargetId={dndIntoId}
+				onDragOverInto={hoverNavParent}
+				onDropInto={(id) => void commitMoveInto(id)}
+			/>
 		</aside>
 		<SplitHandle
 			axis={treeDock === 'left' ? 'x' : 'y'}
@@ -2606,13 +2983,15 @@
 		ondragleave={onListDragLeave}
 		ondrop={onListDrop}
 	>
-		{#snippet pendingChrome(p: ListingPending)}
+		{#snippet pendingChrome(p: ListingPending, onIcon: boolean = false)}
 			{@const behindPct = pendingPercent(p)}
 			{@const aheadN = p.ready ?? p.transferred}
 			{@const aheadPct = Math.min(100, Math.round(p.size ? (aheadN / p.size) * 100 : behindPct))}
 			{@const stacked = aheadPct !== behindPct}
 			<div
 				class="fe-pending-bar"
+				class:on-icon={onIcon}
+				data-testid="fe-pending-bar"
 				role="progressbar"
 				aria-valuenow={behindPct}
 				aria-valuemin="0"
@@ -2622,7 +3001,7 @@
 				<div class="fe-pending-fill ahead" style="width: {aheadPct}%"></div>
 				<div class="fe-pending-fill behind" class:behind={stacked} style="width: {behindPct}%"></div>
 			</div>
-			<span class="fe-pending-pct">{pendingLabel(p)}</span>
+			<span class="fe-pending-pct" class:on-icon={onIcon}>{pendingLabel(p)}</span>
 		{/snippet}
 		{#if initialLoad && nodes.length === 0 && listingRows.length === 0}
 			<div class="fe-empty" data-testid="fe-loading">Loading…</div>
@@ -2705,6 +3084,9 @@
 									<FeIcon name={n.kind === 'folder' ? 'folder' : 'file'} size={48} />
 								</span>
 							{/if}
+							{#if p}
+								{@render pendingChrome(p, true)}
+							{/if}
 						</span>
 						<span class="fe-row-icon-name" title={n.name}>{#if renamingId === n.id}{@render renameEditor(n)}{:else}{n.name}{/if}</span>
 					{:else if viewMode === 'detailed'}
@@ -2745,17 +3127,21 @@
 							{/if}
 						</span>
 					{/if}
-					{#if p}
-						{@render pendingChrome(p)}
+					{#if p && viewMode !== 'icons'}
+						{@render pendingChrome(p, false)}
 					{/if}
 				</div>
 			{/each}
-			{#if dndEnabled && caps.supportsSiblingOrder && dndLineTop != null && (dndZone === 'before' || dndZone === 'after')}
+			{#if dndEnabled && caps.supportsSiblingOrder && dndLine && (dndZone === 'before' || dndZone === 'after')}
 				<div
 					class="fe-dnd-line"
+					class:vertical={dndLine.axis === 'x'}
 					data-testid="fe-dnd-line"
 					data-fe-dnd-zone={dndZone}
-					style="top: {dndLineTop}px"
+					data-fe-dnd-axis={dndLine.axis}
+					style={dndLine.axis === 'y'
+						? `top: ${dndLine.top}px; left: ${dndLine.left}px; width: ${dndLine.size}px`
+						: `top: ${dndLine.top}px; left: ${dndLine.left}px; height: ${dndLine.size}px`}
 					aria-hidden="true"
 				></div>
 			{/if}
@@ -2847,21 +3233,45 @@
 				aria-label="Close trash"
 				onclick={() => (trashOpen = false)}
 			></button>
-			<div class="fe-trash-card">
+			<div class="fe-trash-card" data-emptying={emptyTrashRunning ? 'true' : undefined}>
 				<div class="fe-trash-head">
 					<h2 class="fe-preview-name">Trash</h2>
-					{#if trashNodes.length}
+					{#if emptyTrashRunning}
+						<button
+							type="button"
+							class="ds-btn ds-btn--sm ds-btn--ghost"
+							data-testid="fe-empty-trash-abort"
+							onclick={() => abortEmptyTrash()}
+						>
+							Cancel
+						</button>
+					{:else if trashNodes.length}
 						<button
 							type="button"
 							class="ds-btn ds-btn--sm ds-btn--danger"
 							data-testid="fe-empty-trash"
+							disabled={trashBusy}
 							onclick={() => void emptyTrash()}
 						>
 							Empty trash
 						</button>
 					{/if}
 				</div>
-				{#if trashBusy && trashNodes.length === 0}
+				{#if emptyTrashRunning}
+					<div class="fe-trash-progress" data-testid="fe-empty-trash-progress">
+						<div
+							class="fe-trash-progress-bar"
+							role="progressbar"
+							aria-valuemin="0"
+							aria-valuemax="100"
+							aria-valuenow={emptyTrashPct}
+						>
+							<div class="fe-trash-progress-fill" style="width: {emptyTrashPct}%"></div>
+						</div>
+						<span class="fe-trash-progress-label">{emptyTrashLabel} {emptyTrashPct}%</span>
+					</div>
+				{/if}
+				{#if trashBusy && trashNodes.length === 0 && !emptyTrashRunning}
 					<div class="fe-empty">Loading…</div>
 				{:else if trashNodes.length === 0}
 					<div class="fe-empty" data-testid="fe-trash-empty">Trash is empty</div>
@@ -2887,14 +3297,14 @@
 										type="button"
 										class="ds-btn ds-btn--sm ds-btn--secondary"
 										data-testid="fe-restore"
-										disabled={trashBusy}
+										disabled={trashBusy || emptyTrashRunning}
 										onclick={() => void restoreNode(n)}>Restore</button
 									>
 									<button
 										type="button"
 										class="ds-btn ds-btn--sm ds-btn--danger"
 										data-testid="fe-permanent-delete"
-										disabled={trashBusy}
+										disabled={trashBusy || emptyTrashRunning}
 										onclick={() => void permanentNode(n)}>Delete forever</button
 									>
 								</span>
@@ -2924,15 +3334,19 @@
 		/>
 	{/if}
 
-	{#if archiveKind && archiveEntries.length}
+	{#if archiveDialogOpen && archiveKind && archiveEntries.length}
 		<FeArchiveDialog
 			kind={archiveKind}
 			entries={archiveEntries}
 			{driver}
 			destLocked={archiveDestLocked}
-			onDone={(result) => void finishArchive(result)}
+			jobRunning={archiveJobRunning}
+			jobPct={archiveJobPct}
+			jobLabel={archiveJobLabel}
+			onLaunch={(spec) => void launchArchive(spec)}
+			onHide={hideArchiveDialog}
+			onAbort={abortArchiveJob}
 			onCancel={closeArchive}
-			onProgress={bumpArchiveProgress}
 		/>
 	{/if}
 
@@ -3381,6 +3795,26 @@
 		border-bottom: 1px solid var(--line-hairline);
 		flex-wrap: nowrap;
 	}
+	.fe-move-banner {
+		position: absolute;
+		left: 50%;
+		top: 50%;
+		transform: translate(-50%, -50%);
+		z-index: 2;
+		pointer-events: none;
+		max-width: min(48%, 28rem);
+		padding: 0.2rem 0.65rem;
+		border-radius: 999px;
+		background: color-mix(in srgb, var(--surface-2, #1e293b) 88%, var(--accent, #38bdf8));
+		border: 1px solid var(--accent, #38bdf8);
+		color: var(--text-primary, #e2e8f0);
+		font-size: 0.8rem;
+		font-weight: 600;
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		box-shadow: 0 4px 16px rgb(var(--scrim-rgb, 0 0 0) / 0.25);
+	}
 	.fe-header-left {
 		flex: 1 1 auto;
 		min-width: 0;
@@ -3413,6 +3847,16 @@
 		cursor: pointer;
 		padding: 2px var(--space-1);
 		font: inherit;
+		border-radius: var(--radius-sm, 3px);
+	}
+	.fe-pathbar.drop-ready .fe-crumb {
+		outline: 1px dashed color-mix(in srgb, var(--accent, #38bdf8) 55%, transparent);
+		outline-offset: 1px;
+	}
+	.fe-crumb.drop-target {
+		outline: 1px solid var(--accent, #38bdf8);
+		background: rgb(var(--accent-rgb, 56 189 248) / 0.16);
+		color: var(--text-primary);
 	}
 	.fe-crumb.active {
 		color: var(--text-primary);
@@ -3599,14 +4043,6 @@
 		opacity: 0.65;
 		cursor: default;
 	}
-	.fe-row-icon.fe-pending .fe-pending-bar {
-		flex: 1 1 100%;
-		width: 100%;
-		order: 3;
-	}
-	.fe-row-icon.fe-pending .fe-pending-pct {
-		order: 4;
-	}
 	.fe-row.fe-pending:hover {
 		background: transparent;
 	}
@@ -3619,6 +4055,21 @@
 		background: color-mix(in srgb, var(--text-primary, #e2e8f0) 14%, transparent);
 		border-radius: 999px;
 		overflow: hidden;
+	}
+	.fe-pending-bar.on-icon {
+		position: absolute;
+		left: 8px;
+		right: 8px;
+		bottom: 6px;
+		flex: 0 0 4px;
+		flex-grow: 0;
+		flex-shrink: 0;
+		width: auto;
+		min-width: 0;
+		max-width: none;
+		height: 4px;
+		min-height: 4px;
+		max-height: 4px;
 	}
 	.fe-pending-fill {
 		height: 100%;
@@ -3643,6 +4094,18 @@
 		min-width: 34px;
 		text-align: right;
 		font-variant-numeric: tabular-nums;
+	}
+	.fe-pending-pct.on-icon {
+		position: absolute;
+		left: 4px;
+		right: 4px;
+		bottom: 12px;
+		min-width: 0;
+		text-align: center;
+		font-size: 0.68rem;
+		font-weight: 600;
+		color: var(--text-primary, #e2e8f0);
+		text-shadow: 0 1px 2px rgb(0 0 0 / 0.7);
 	}
 	.fe-row.incompatible {
 		opacity: 0.45;
@@ -3826,20 +4289,43 @@
 		overflow: auto;
 		margin: 10px 0;
 	}
+	.fe-trash-progress {
+		display: flex;
+		flex-direction: column;
+		gap: 0.35rem;
+		margin: 8px 0 0;
+	}
+	.fe-trash-progress-bar {
+		height: 8px;
+		border-radius: 999px;
+		background: color-mix(in srgb, var(--text-primary, #e2e8f0) 14%, transparent);
+		overflow: hidden;
+	}
+	.fe-trash-progress-fill {
+		height: 100%;
+		background: var(--accent, #38bdf8);
+	}
+	.fe-trash-progress-label {
+		font-size: 0.78rem;
+		color: var(--text-muted, inherit);
+		opacity: 0.85;
+	}
 	.fe-trash-foot {
 		justify-content: flex-end;
 		padding-top: 4px;
 	}
 	.fe-dnd-line {
 		position: absolute;
-		left: 8px;
-		right: 8px;
 		height: 2px;
 		margin: 0;
 		background: var(--accent);
 		border-radius: 1px;
 		pointer-events: none;
 		z-index: 4;
+	}
+	.fe-dnd-line.vertical {
+		width: 2px;
+		right: auto;
 	}
 	.fe-row.fe-dnd-into {
 		outline: 2px solid var(--accent);
@@ -4022,13 +4508,16 @@
 		grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
 		gap: 4px;
 		align-content: start;
+		align-items: start;
 		padding: 8px;
 	}
 	.fe-row.fe-row-icon {
 		flex-direction: column;
+		flex: none;
 		padding: 6px;
 		gap: 4px;
 		align-items: center;
+		align-self: start;
 		text-align: center;
 		border: 1px solid transparent;
 	}
@@ -4039,8 +4528,10 @@
 		border-color: var(--accent);
 	}
 	.fe-row-icon-thumb {
+		position: relative;
 		width: 96px;
 		height: 96px;
+		flex: none;
 		display: flex;
 		align-items: center;
 		justify-content: center;

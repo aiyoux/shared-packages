@@ -41,10 +41,29 @@ export type ResolvedDrop =
 	  }
 	| { ok: false; reason: 'null-zone' | 'cycle' | 'unsupported-zone' | 'invalid-target' };
 
+export type DropLayout = 'row' | 'grid';
+
 export type ZoneFromYOpts = {
 	kind?: 'file' | 'folder';
 	supportsSiblingOrder?: boolean;
+	/** Icon tiles use left/right; list/detailed use top/bottom. Default row. */
+	layout?: DropLayout;
 };
+
+function zoneFromT(t: number, opts?: ZoneFromYOpts): DropZone {
+	if (opts?.supportsSiblingOrder) {
+		if (opts.kind === 'folder') {
+			if (t < 0.25) return 'before';
+			if (t > 0.75) return 'after';
+			return 'into';
+		}
+		// Files (and unknown): one in-between gap. Never "into".
+		return t < 0.5 ? 'before' : 'after';
+	}
+	if (t < 0.25) return 'before';
+	if (t > 0.75) return 'after';
+	return 'into';
+}
 
 /**
  * Map pointer Y within a row rect to a drop zone.
@@ -55,19 +74,23 @@ export function zoneFromY(
 	opts?: ZoneFromYOpts
 ): DropZone {
 	if (rect.height <= 0) return 'into';
-	const y = (clientY - rect.top) / rect.height;
-	if (opts?.supportsSiblingOrder) {
-		if (opts.kind === 'folder') {
-			if (y < 0.25) return 'before';
-			if (y > 0.75) return 'after';
-			return 'into';
-		}
-		// Files (and unknown): one in-between gap. Never "into".
-		return y < 0.5 ? 'before' : 'after';
+	return zoneFromT((clientY - rect.top) / rect.height, opts);
+}
+
+/**
+ * Map pointer within a tile/row rect to a drop zone.
+ * Grid (Icons): left / right. Row (list): top / bottom.
+ */
+export function zoneFromPoint(
+	rect: { top: number; left: number; height: number; width: number },
+	point: { x: number; y: number },
+	opts?: ZoneFromYOpts
+): DropZone {
+	if (opts?.layout === 'grid') {
+		if (rect.width <= 0) return 'into';
+		return zoneFromT((point.x - rect.left) / rect.width, opts);
 	}
-	if (y < 0.25) return 'before';
-	if (y > 0.75) return 'after';
-	return 'into';
+	return zoneFromY(rect, point.y, opts);
 }
 
 /**

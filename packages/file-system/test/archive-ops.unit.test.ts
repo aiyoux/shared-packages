@@ -14,6 +14,7 @@ import {
 	packingAsTree,
 	packedIsTopLevel,
 	pickEngineForCodec,
+	runArchiveJob,
 	subjectLabel,
 	writeEntriesToDriver
 } from '../src/ui/archiveOps.ts';
@@ -124,6 +125,210 @@ describe('archiveOps', () => {
 		);
 		assert.ok(ticks.some((t) => t.name === 'shot.txt' && t.transferred === 0 && !t.done));
 		assert.ok(ticks.some((t) => t.name === 'shot.txt' && t.done && t.transferred === 4));
+		await vfs.db.delete();
+	});
+
+	it('writeEntriesToDriver reports destParentId of the extract folder not root', async () => {
+		const vfs = createVfs({
+			dbName: `archive-ops-parent-${Date.now()}-${Math.random()}`,
+			memoryOpfs: true,
+			requestPersist: false
+		});
+		await vfs.ready();
+		const driver = createLocalExplorerDriver(vfs);
+		await driver.ready();
+		const folder = await driver.mkdir!(null, 'Dest');
+		const parents: Array<string | null> = [];
+		await writeEntriesToDriver(
+			driver,
+			folder.id,
+			[{ path: 'hello.txt', data: enc.encode('hello') }],
+			(ev) => parents.push(ev.parentId)
+		);
+		assert.ok(parents.length);
+		assert.ok(parents.every((p) => p === folder.id));
+		assert.ok(parents.every((p) => p !== null));
+		await vfs.db.delete();
+	});
+
+	it('compress job ticks are chip-only; dest rows use the zip name in the dest folder', async () => {
+		const vfs = createVfs({
+			dbName: `archive-ops-compress-${Date.now()}-${Math.random()}`,
+			memoryOpfs: true,
+			requestPersist: false
+		});
+		await vfs.ready();
+		const driver = createLocalExplorerDriver(vfs);
+		await driver.ready();
+		const folder = await driver.mkdir!(null, 'shots');
+		await driver.writeFile!(folder.id, new File([enc.encode('snap')], 'photo.txt'));
+		const listed = await driver.list({ parentId: folder.id });
+		const photo = listed.entries.find((e) => e.name === 'photo.txt')!;
+		const events: Array<{ name: string; parentId: string | null; job?: boolean }> = [];
+		await runArchiveJob({
+			kind: 'compress',
+			entries: [photo],
+			driver,
+			dest: 'same',
+			destParentId: folder.id,
+			title: 'photo.txt',
+			outputName: 'photo.zip',
+			compressEngineId: 'fflate',
+			codec: 'zip',
+			cryptoEngineId: 'webcrypto',
+			password: '',
+			skipSystemFiles: true,
+			useHost: false,
+			onProgress: (ev) => events.push({ name: ev.name, parentId: ev.parentId, job: ev.job })
+		});
+		assert.ok(events.some((e) => e.job && e.name === 'photo.txt'));
+		const destRows = events.filter((e) => !e.job);
+		assert.ok(destRows.length);
+		assert.ok(destRows.every((e) => e.parentId === folder.id));
+		assert.ok(destRows.every((e) => e.name === 'photo.zip'));
+		await vfs.db.delete();
+	});
+
+	it('encrypt dest rows are the vault in the dest folder, not the source name', async () => {
+		const vfs = createVfs({
+			dbName: `archive-ops-encrypt-${Date.now()}-${Math.random()}`,
+			memoryOpfs: true,
+			requestPersist: false
+		});
+		await vfs.ready();
+		const driver = createLocalExplorerDriver(vfs);
+		await driver.ready();
+		const folder = await driver.mkdir!(null, 'safe');
+		await driver.writeFile!(folder.id, new File([enc.encode('secret')], 'note.txt'));
+		const listed = await driver.list({ parentId: folder.id });
+		const note = listed.entries.find((e) => e.name === 'note.txt')!;
+		const events: Array<{ name: string; parentId: string | null; job?: boolean }> = [];
+		await runArchiveJob({
+			kind: 'encrypt',
+			entries: [note],
+			driver,
+			dest: 'same',
+			destParentId: folder.id,
+			title: 'note.txt',
+			outputName: 'note.spvault',
+			compressEngineId: 'fflate',
+			codec: 'zip',
+			cryptoEngineId: 'webcrypto',
+			password: 's3cret',
+			skipSystemFiles: true,
+			useHost: false,
+			onProgress: (ev) => events.push({ name: ev.name, parentId: ev.parentId, job: ev.job })
+		});
+		assert.ok(events.some((e) => e.job === true));
+		const destRows = events.filter((e) => !e.job);
+		assert.ok(destRows.every((e) => e.parentId === folder.id));
+		assert.ok(destRows.every((e) => e.name === 'note.spvault'));
+		await vfs.db.delete();
+	});
+
+	it('decompress dest rows are extracted files in the dest folder, not the zip name', async () => {
+		const vfs = createVfs({
+			dbName: `archive-ops-decompress-${Date.now()}-${Math.random()}`,
+			memoryOpfs: true,
+			requestPersist: false
+		});
+		await vfs.ready();
+		const driver = createLocalExplorerDriver(vfs);
+		await driver.ready();
+		const folder = await driver.mkdir!(null, 'inbox');
+		const zip = await packFiles('fflate', [{ name: 'hello.txt', data: enc.encode('hello') }], 'zip');
+		await driver.writeFile!(folder.id, new File([zip[0]!.data as BlobPart], zip[0]!.name));
+		const listed = await driver.list({ parentId: folder.id });
+		const archive = listed.entries.find((e) => e.name === zip[0]!.name)!;
+		const events: Array<{ name: string; parentId: string | null; job?: boolean }> = [];
+		await runArchiveJob({
+			kind: 'decompress',
+			entries: [archive],
+			driver,
+			dest: 'same',
+			destParentId: folder.id,
+			title: archive.name,
+			compressEngineId: 'fflate',
+			codec: 'zip',
+			cryptoEngineId: 'webcrypto',
+			password: '',
+			skipSystemFiles: true,
+			useHost: false,
+			onProgress: (ev) => events.push({ name: ev.name, parentId: ev.parentId, job: ev.job })
+		});
+		assert.ok(events.some((e) => e.job && e.name === archive.name));
+		const destRows = events.filter((e) => !e.job);
+		assert.ok(destRows.length);
+		assert.ok(destRows.every((e) => e.parentId === folder.id));
+		assert.ok(destRows.every((e) => e.name === 'hello.txt'));
+		await vfs.db.delete();
+	});
+
+	it('decrypt dest rows are vault members in the dest folder, not the vault name', async () => {
+		const vfs = createVfs({
+			dbName: `archive-ops-decrypt-${Date.now()}-${Math.random()}`,
+			memoryOpfs: true,
+			requestPersist: false
+		});
+		await vfs.ready();
+		const driver = createLocalExplorerDriver(vfs);
+		await driver.ready();
+		const folder = await driver.mkdir!(null, 'safe');
+		const sealed = await sealVault(
+			'webcrypto',
+			[{ path: 'secret.txt', data: enc.encode('secret') }],
+			's3cret'
+		);
+		await driver.writeFile!(folder.id, new File([sealed.data as BlobPart], sealed.name));
+		const listed = await driver.list({ parentId: folder.id });
+		const vault = listed.entries.find((e) => e.name === sealed.name)!;
+		const events: Array<{ name: string; parentId: string | null; job?: boolean }> = [];
+		await runArchiveJob({
+			kind: 'decrypt',
+			entries: [vault],
+			driver,
+			dest: 'same',
+			destParentId: folder.id,
+			title: vault.name,
+			compressEngineId: 'fflate',
+			codec: 'zip',
+			cryptoEngineId: 'webcrypto',
+			password: 's3cret',
+			skipSystemFiles: true,
+			useHost: false,
+			onProgress: (ev) => events.push({ name: ev.name, parentId: ev.parentId, job: ev.job })
+		});
+		assert.ok(events.some((e) => e.job === true));
+		const destRows = events.filter((e) => !e.job);
+		assert.ok(destRows.length);
+		assert.ok(destRows.every((e) => e.parentId === folder.id));
+		assert.ok(destRows.every((e) => e.name === 'secret.txt'));
+		assert.ok(destRows.every((e) => e.name !== vault.name));
+		await vfs.db.delete();
+	});
+
+	it('writeEntriesToDriver stops when the abort signal fires', async () => {
+		const vfs = createVfs({
+			dbName: `archive-ops-abort-${Date.now()}-${Math.random()}`,
+			memoryOpfs: true,
+			requestPersist: false
+		});
+		await vfs.ready();
+		const driver = createLocalExplorerDriver(vfs);
+		await driver.ready();
+		const ac = new AbortController();
+		ac.abort();
+		await assert.rejects(
+			() =>
+				writeEntriesToDriver(
+					driver,
+					null,
+					[{ path: 'a.txt', data: enc.encode('a') }],
+					undefined,
+					ac.signal
+				),
+			(e: unknown) => e instanceof Error && e.name === 'AbortError'
+		);
 		await vfs.db.delete();
 	});
 

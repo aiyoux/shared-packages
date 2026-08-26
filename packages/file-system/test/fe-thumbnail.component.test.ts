@@ -108,4 +108,28 @@ describe('FeThumbnail', () => {
 		expect(box).toBeTruthy();
 		expect(box.style.getPropertyValue('--fe-thumb-max')).toBe('16px');
 	});
+
+	it('loads a remote image via download when readBlob is missing (B2)', async () => {
+		const driver: ExplorerDriver = {
+			id: 'b2',
+			capabilities: caps,
+			ready: async () => {},
+			list: async () => ({ entries: [], truncated: false }),
+			getPath: async () => [],
+			delete: async () => {},
+			download: async () => pngBlob()
+		};
+		const entry: ExplorerEntry = {
+			id: 'photos/shot.png',
+			kind: 'file',
+			name: 'shot.png',
+			parentId: null,
+			fileType: 'image'
+		};
+		render(FeThumbnail, { props: { entry, driver, maxDim: 32, enabled: true } });
+		await waitFor(() => {
+			expect(document.querySelector('.fe-thumb-img')).toBeTruthy();
+		});
+		expect(document.querySelector('.fe-thumb-spinner')).toBeNull();
+	});
 });

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { zoneFromY, canonicalizeSiblingZone, resolveDrop } from './zones.js';
+import { zoneFromY, zoneFromPoint, canonicalizeSiblingZone, resolveDrop } from './zones.js';
 
 describe('treeDnd zones', () => {
 	const rect = { top: 0, height: 100 };
@@ -8,6 +8,18 @@ describe('treeDnd zones', () => {
 		expect(zoneFromY(rect, 10)).toBe('before');
 		expect(zoneFromY(rect, 50)).toBe('into');
 		expect(zoneFromY(rect, 90)).toBe('after');
+	});
+
+	it('grid (icons) uses left/right instead of top/bottom', () => {
+		const tile = { top: 0, left: 0, height: 100, width: 100 };
+		const opts = { kind: 'file' as const, supportsSiblingOrder: true, layout: 'grid' as const };
+		expect(zoneFromPoint(tile, { x: 10, y: 80 }, opts)).toBe('before');
+		expect(zoneFromPoint(tile, { x: 49, y: 80 }, opts)).toBe('before');
+		expect(zoneFromPoint(tile, { x: 60, y: 10 }, opts)).toBe('after');
+		const folderOpts = { kind: 'folder' as const, supportsSiblingOrder: true, layout: 'grid' as const };
+		expect(zoneFromPoint(tile, { x: 50, y: 10 }, folderOpts)).toBe('into');
+		expect(zoneFromPoint(tile, { x: 10, y: 50 }, folderOpts)).toBe('before');
+		expect(zoneFromPoint(tile, { x: 90, y: 50 }, folderOpts)).toBe('after');
 	});
 
 	it('ordered files use a 50/50 before-after split (never into)', () => {

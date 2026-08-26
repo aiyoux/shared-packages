@@ -8,13 +8,20 @@ import { packFiles } from '@shared-packages/compress';
 import { sealVault } from '@shared-packages/crypto';
 import FileExplorer from '../src/ui/FileExplorer.svelte';
 import FileExplorerToolbarExtraHarness from './FileExplorerToolbarExtraHarness.svelte';
-import { createVfs, resetSharedVfsForTests, type VfsService } from '../src/index.ts';
+import { createLocalExplorerDriver } from '../src/ui/localExplorerDriver.ts';
+import {
+	createVfs,
+	resetSharedVfsForTests,
+	resetTransferRegistryForTests,
+	type VfsService
+} from '../src/index.ts';
 
 describe('FileExplorer component', () => {
 	let vfs: VfsService;
 
 	beforeEach(async () => {
 		resetSharedVfsForTests();
+		resetTransferRegistryForTests();
 		localStorage.removeItem('fe:previewDock');
 		vfs = createVfs({
 			dbName: `fe-comp-${Date.now()}-${Math.random()}`,
@@ -443,6 +450,68 @@ describe('FileExplorer component', () => {
 		expect(screen.getByTestId('fe-permanent-delete')).toBeTruthy();
 		const stillLive = document.querySelectorAll('[data-testid="fe-list"] [data-testid="fe-file-row"]');
 		expect([...stillLive].some((r) => /KeepMe/.test(r.textContent || ''))).toBe(true);
+	});
+
+	it('empty trash keeps the popup open with progress and a header chip', async () => {
+		await vfs.writeFile({ parentId: null, name: 'KeepMe.txt', body: 'keep' });
+		const dir = await vfs.mkdir(null, 'repo');
+		for (let i = 0; i < 6; i++) {
+			await vfs.writeFile({ parentId: dir.id, name: `n${i}.txt`, body: `x${i}` });
+		}
+		await vfs.trash(dir.id);
+		const driver = createLocalExplorerDriver(vfs);
+		const realEmpty = driver.emptyTrash!.bind(driver);
+		driver.emptyTrash = async (opts) => {
+			opts?.onProgress?.({ done: 2, total: 10, name: 'repo' });
+			await new Promise((r) => setTimeout(r, 80));
+			opts?.onProgress?.({ done: 6, total: 10, name: 'n3.txt' });
+			await new Promise((r) => setTimeout(r, 80));
+			await realEmpty(opts);
+		};
+		render(FileExplorer, { props: { mode: 'manage', driver, variant: 'panel' } });
+		await viWaitFor(
+			() => !!document.querySelector('[data-testid="fe-list"] [data-testid="fe-file-row"][data-name="KeepMe.txt"]')
+		);
+		await fireEvent.click(screen.getByTestId('fe-trash-view'));
+		await viWaitFor(() => !!document.querySelector('[data-testid="fe-trash-popup"] [data-name="repo"]'));
+		await fireEvent.click(screen.getByTestId('fe-empty-trash'));
+		await fireEvent.click(await screen.findByTestId('fe-confirm-go'));
+		await viWaitFor(() => !!document.querySelector('[data-testid="fe-empty-trash-progress"]'));
+		expect(screen.getByTestId('fe-empty-trash-progress').textContent).toMatch(/%/);
+		expect(screen.getByTestId('fe-empty-trash-abort')).toBeTruthy();
+		expect(screen.getByTestId('fe-op-progress-row').getAttribute('data-name')).toBe('Trash');
+		expect(screen.getByTestId('fe-op-progress-row').getAttribute('title')).toMatch(/Emptying trash/i);
+		expect(screen.getByTestId('fe-trash-popup')).toBeTruthy();
+		await viWaitFor(() => !!document.querySelector('[data-testid="fe-trash-empty"]'), 8000);
+		const live = document.querySelectorAll('[data-testid="fe-list"] [data-testid="fe-file-row"]');
+		expect([...live].some((r) => /KeepMe/.test(r.textContent || ''))).toBe(true);
+	});
+
+	it('empty trash cancel stops the job', async () => {
+		const doomed = await vfs.writeFile({ parentId: null, name: 'Trashed.txt', body: 'gone' });
+		await vfs.trash(doomed.id);
+		const driver = createLocalExplorerDriver(vfs);
+		driver.emptyTrash = async (opts) => {
+			opts?.onProgress?.({ done: 1, total: 8, name: 'Trashed.txt' });
+			await new Promise<void>((resolve, reject) => {
+				const t = setTimeout(resolve, 30_000);
+				opts?.signal?.addEventListener('abort', () => {
+					clearTimeout(t);
+					const e = new Error('Cancelled');
+					e.name = 'AbortError';
+					reject(e);
+				});
+			});
+		};
+		render(FileExplorer, { props: { mode: 'manage', driver, variant: 'panel' } });
+		await fireEvent.click(screen.getByTestId('fe-trash-view'));
+		await viWaitFor(() => !!document.querySelector('[data-testid="fe-trash-popup"] [data-name="Trashed.txt"]'));
+		await fireEvent.click(screen.getByTestId('fe-empty-trash'));
+		await fireEvent.click(await screen.findByTestId('fe-confirm-go'));
+		await viWaitFor(() => !!document.querySelector('[data-testid="fe-empty-trash-abort"]'));
+		await fireEvent.click(screen.getByTestId('fe-empty-trash-abort'));
+		await viWaitFor(() => !document.querySelector('[data-testid="fe-empty-trash-progress"]'));
+		expect(screen.getByTestId('fe-trash-popup').textContent).toMatch(/Trashed/);
 	});
 
 	it('double-click enters a folder', async () => {

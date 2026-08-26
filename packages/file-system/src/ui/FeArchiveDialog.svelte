@@ -12,44 +12,28 @@
 		engineSupports,
 		listEngines as listCompressEngines,
 		loadEngine as loadCompressEngine,
-		packFiles,
 		type Codec,
 		type EngineId as CompressEngineId
 	} from '@shared-packages/compress';
 	import {
 		listEngines as listCryptoEngines,
 		loadEngine as loadCryptoEngine,
-		sealVault,
 		type EngineId as CryptoEngineId
 	} from '@shared-packages/crypto';
-	import { getMemoryVfs } from '../memoryVfs.js';
-	import { createMemoryExplorerDriver } from './memoryExplorerDriver.js';
 	import type { ExplorerDriver, ExplorerEntry } from './explorerDriver.js';
 	import {
 		COMPRESS_STORAGE_KEY,
 		CRYPTO_STORAGE_KEY,
-		collectPackEntries,
-		expandPackedBytes,
 		packingAsTree,
 		readStoredCompressEngine,
 		readStoredCryptoEngine,
 		subjectLabel,
-		toArchiveEntries,
-		writeEntriesToDriver,
-		packedBasename,
-		packedIsTopLevel,
 		type ArchiveDest,
-		type ArchiveKind,
-		type ArchiveWriteProgress,
-		type PackedPath
+		type ArchiveJobSpec,
+		type ArchiveKind
 	} from './archiveOps.js';
 
 	export type { ArchiveDest, ArchiveKind };
-
-	export type ArchiveDone = {
-		inner?: PackedPath[];
-		title: string;
-	};
 
 	const KIND_TITLE: Record<ArchiveKind, string> = {
 		compress: 'Compress',
@@ -69,17 +53,25 @@
 		entries,
 		driver,
 		destLocked = null,
-		onDone,
-		onCancel,
-		onProgress
+		jobRunning = false,
+		jobPct = 0,
+		jobLabel = '',
+		onLaunch,
+		onHide,
+		onAbort,
+		onCancel
 	}: {
 		kind: ArchiveKind;
 		entries: ExplorerEntry[];
 		driver: ExplorerDriver;
 		destLocked?: ArchiveDest | null;
-		onDone: (result?: ArchiveDone) => void;
+		jobRunning?: boolean;
+		jobPct?: number;
+		jobLabel?: string;
+		onLaunch: (spec: ArchiveJobSpec) => void;
+		onHide?: () => void;
+		onAbort?: () => void;
 		onCancel: () => void;
-		onProgress?: (ev: ArchiveWriteProgress) => void;
 	} = $props();
 
 	const compressEngines = listCompressEngines();
@@ -110,7 +102,6 @@
 	let destName = $state('');
 	/** Finder `__MACOSX` / `._*` / `.DS_Store` — on by default, uncheck to keep them. */
 	let skipSystemFiles = $state(true);
-	let progressPct = $state<number | null>(null);
 
 	const compressEngine = $derived(
 		compressEngines.find((e) => e.id === compressEngineId) ?? compressEngines[0]!
@@ -264,6 +255,7 @@
 	const canRun = $derived(
 		engineStatus === 'ready' &&
 			!busy &&
+			!jobRunning &&
 			(dest !== 'same' || canWriteHere) &&
 			(dest !== 'folder' || canPickFolder) &&
 			(kind !== 'encrypt' || (password.length > 0 && password === password2)) &&
@@ -289,48 +281,15 @@
 		return `${parentAbs.replace(/\/+$/, '')}/${name}`;
 	}
 
-	async function runHost() {
-		const paths = entries.map((e) => driver.absolutePath!(e.id));
-		if (!isExtract) {
-			const name = destName.trim() || defaultPackName;
-			emitDest({ name, parentId: destParentId, transferred: 0, size: 1, done: false });
-		}
-		await driver.archive!({
-			op: hostOp(),
-			paths,
-			to: hostDestPath(),
-			password: kind === 'encrypt' || kind === 'decrypt' ? password : undefined
-		});
-		if (!isExtract) {
-			const name = destName.trim() || defaultPackName;
-			emitDest({ name, parentId: destParentId, transferred: 1, size: 1, done: true });
-		}
-		onDone({ title: titleName });
-	}
-
-	const revealListing = $derived(dest === 'same' || dest === 'folder');
 	const destParentId = $derived(
 		dest === 'folder' ? pickParent : (entries[0]?.parentId ?? null)
 	);
-
-	function emitDest(ev: ArchiveWriteProgress) {
-		if (ev.size > 0) progressPct = Math.min(100, Math.round((ev.transferred / ev.size) * 100));
-		if (dest === 'memory' || dest === 'popup') return;
-		onProgress?.(ev);
-	}
+	const running = $derived(busy || jobRunning);
+	const shownPct = $derived(jobRunning ? jobPct : 0);
 
 	const runLabel = $derived.by(() => {
-		if (busy) {
-			const pct = progressPct != null ? ` ${progressPct}%` : '';
-			if (useHost) {
-				return kind === 'compress'
-					? `Zipping on this computer…${pct}`
-					: kind === 'encrypt'
-						? `Encrypting on this computer…${pct}`
-						: kind === 'decompress'
-							? `Extracting on this computer…${pct}`
-							: `Decrypting on this computer…${pct}`;
-			}
+		if (running) {
+			const pct = ` ${shownPct}%`;
 			return `${KIND_BUSY[kind]}${pct}`;
 		}
 		if (dest === 'popup') return 'Open';
@@ -355,104 +314,41 @@
 		return KIND_TITLE[kind];
 	});
 
-	async function run() {
+	function run() {
 		if (!canRun) return;
 		busy = true;
-		progressPct = 0;
 		actionError = '';
-		try {
-			if (useHost) {
-				await runHost();
-				return;
-			}
-			if (kind === 'compress' || kind === 'encrypt') {
-				const guessName = destName.trim() || defaultPackName;
-				emitDest({ name: guessName, parentId: destParentId, transferred: 0, size: 1, done: false });
-				const packed = await collectPackEntries(driver, entries);
-				if (kind === 'compress') {
-					const out = await packFiles(compressEngineId, toArchiveEntries(packed), codec);
-					await writeOutputs(out.map((f) => ({ path: f.name, data: f.data })));
-				} else {
-					const sealed = await sealVault(
-						cryptoEngineId,
-						packed,
-						password,
-						treePack ? { kind: 'tree' } : undefined
-					);
-					await writeOutputs([{ path: sealed.name, data: sealed.data }]);
-				}
-				onDone({ title: titleName });
-				return;
-			}
-
-			const inner: PackedPath[] = [];
-			for (const entry of entries) {
-				if (entry.kind !== 'file') continue;
-				const bytes = await (async () => {
-					const blob = driver.readBlob
-						? await driver.readBlob(entry.id)
-						: await driver.download?.(entry.id);
-					if (!blob) throw new Error('This connection cannot read the file');
-					return new Uint8Array(await blob.arrayBuffer());
-				})();
-				inner.push(
-					...(await expandPackedBytes(
-						bytes,
-						entry.name,
-						password,
-						(ev) => {
-							if (!packedIsTopLevel(ev.path)) return;
-							emitDest({
-								name: packedBasename(ev.path),
-								parentId: destParentId,
-								transferred: ev.transferred,
-								size: ev.size || ev.transferred,
-								done: ev.done
-							});
-						},
-						{ skipSystemFiles }
-					))
-				);
-			}
-			if (!inner.length) throw new Error('Nothing to extract');
-			if (dest === 'popup') {
-				onDone({ inner, title: titleName });
-				return;
-			}
-			await writeOutputs(inner);
-			onDone({ title: titleName });
-		} catch (e) {
-			actionError = formatExplorerError(e);
-			toast.error(actionError);
-		} finally {
-			busy = false;
-		}
-	}
-
-	async function writeOutputs(files: PackedPath[]) {
-		if (dest === 'memory') {
-			const mem = createMemoryExplorerDriver(getMemoryVfs());
-			await mem.ready();
-			await writeEntriesToDriver(mem, null, files);
-			return;
-		}
-		const parent = dest === 'same' ? (entries[0]?.parentId ?? null) : pickParent;
-		await writeEntriesToDriver(driver, parent, files, emitDest);
+		onLaunch({
+			kind,
+			entries,
+			driver,
+			dest,
+			destParentId,
+			title: titleName,
+			outputName: destName.trim() || defaultPackName,
+			compressEngineId,
+			codec,
+			cryptoEngineId,
+			password,
+			skipSystemFiles,
+			useHost,
+			hostOp: useHost ? hostOp() : undefined,
+			hostDestPath: useHost ? hostDestPath() : undefined
+		});
 	}
 </script>
 
 <div
 	class="modal-root"
-	class:busy-hidden={busy && revealListing}
 	data-testid="fe-archive-dialog"
 	data-kind={kind}
 	data-where={useHost ? 'host' : 'browser'}
-	data-busy={busy ? 'true' : undefined}
+	data-busy={running ? 'true' : undefined}
 	role="dialog"
 	aria-modal="true"
 	aria-labelledby="fe-archive-title"
 >
-	<div class="scrim" onclick={onCancel} role="presentation"></div>
+	<div class="scrim" onclick={() => (running ? onHide?.() : onCancel())} role="presentation"></div>
 	<div class="card">
 		<h2 id="fe-archive-title">
 			{#if useHost}
@@ -736,19 +632,43 @@
 			<p class="err" role="alert" data-testid="fe-archive-error">{actionError}</p>
 		{/if}
 
+		{#if running}
+			<div class="progress" data-testid="fe-archive-progress">
+				<div
+					class="progress-bar"
+					role="progressbar"
+					aria-valuemin="0"
+					aria-valuemax="100"
+					aria-valuenow={shownPct}
+				>
+					<div class="progress-fill" style="width: {shownPct}%"></div>
+				</div>
+				<span class="progress-label">{jobLabel || KIND_BUSY[kind]} {shownPct}%</span>
+			</div>
+		{/if}
+
 		<div class="actions">
-			<button type="button" class="ds-btn ds-btn--sm ds-btn--ghost" data-testid="fe-archive-cancel" onclick={onCancel}>
-				Cancel
-			</button>
-			<button
-				type="button"
-				class="ds-btn ds-btn--sm ds-btn--primary"
-				data-testid="fe-archive-run"
-				disabled={!canRun}
-				onclick={() => void run()}
-			>
-				{runLabel}
-			</button>
+			{#if running}
+				<button type="button" class="ds-btn ds-btn--sm ds-btn--ghost" data-testid="fe-archive-hide" onclick={() => onHide?.()}>
+					Hide
+				</button>
+				<button type="button" class="ds-btn ds-btn--sm ds-btn--ghost" data-testid="fe-archive-abort" onclick={() => onAbort?.()}>
+					Cancel
+				</button>
+			{:else}
+				<button type="button" class="ds-btn ds-btn--sm ds-btn--ghost" data-testid="fe-archive-cancel" onclick={onCancel}>
+					Cancel
+				</button>
+				<button
+					type="button"
+					class="ds-btn ds-btn--sm ds-btn--primary"
+					data-testid="fe-archive-run"
+					disabled={!canRun}
+					onclick={() => run()}
+				>
+					{runLabel}
+				</button>
+			{/if}
 		</div>
 	</div>
 </div>
@@ -762,8 +682,25 @@
 		align-items: center;
 		justify-content: center;
 	}
-	.modal-root.busy-hidden {
-		display: none;
+	.progress {
+		display: flex;
+		flex-direction: column;
+		gap: 0.35rem;
+		margin: 0 0 0.65rem;
+	}
+	.progress-bar {
+		height: 8px;
+		border-radius: 999px;
+		background: color-mix(in srgb, var(--text-primary, #e2e8f0) 14%, transparent);
+		overflow: hidden;
+	}
+	.progress-fill {
+		height: 100%;
+		background: var(--accent, #38bdf8);
+	}
+	.progress-label {
+		font-size: 0.78rem;
+		color: var(--text-muted);
 	}
 	.scrim {
 		position: absolute;

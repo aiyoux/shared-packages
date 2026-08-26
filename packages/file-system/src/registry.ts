@@ -65,6 +65,13 @@ const DEFAULT_TYPES: FileTypeDef[] = [
 		schemaVersion: 1
 	},
 	{
+		id: 'audio',
+		extension: '.mp3',
+		mime: 'audio/mpeg',
+		label: 'Audio',
+		schemaVersion: 1
+	},
+	{
 		id: 'pdf',
 		extension: '.pdf',
 		mime: 'application/pdf',
@@ -87,7 +94,8 @@ const DEFAULT_TYPES: FileTypeDef[] = [
  */
 const MULTI_EXT: Partial<Record<FileTypeId, readonly string[]>> = {
 	image: ['.png', '.jpg', '.jpeg', '.webp', '.gif', '.svg'],
-	video: ['.mp4', '.webm', '.mov', '.m4v', '.mkv', '.ogv']
+	video: ['.mp4', '.webm', '.mov', '.m4v', '.mkv', '.ogv'],
+	audio: ['.mp3', '.wav', '.ogg', '.oga', '.m4a', '.aac', '.flac', '.opus', '.weba', '.aiff', '.aif']
 };
 
 /** Product extensions stripped before re-applying a forced primary extension. */

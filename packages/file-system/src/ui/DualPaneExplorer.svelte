@@ -35,6 +35,7 @@
 	import DualPhaseConfirm from './DualPhaseConfirm.svelte';
 	import { stackTransferItems } from './stackProgress.js';
 	import {
+		abortTransfer,
 		listTransfers,
 		subscribeTransfers,
 		upsertProgress,
@@ -431,6 +432,10 @@
 	let sendBusy = $state(false);
 	/** Dest pane of the in-flight copy-across (pending rows land here). */
 	let copyDestPane = $state<PaneId | null>(null);
+	/** Dest driver identity so pending rows do not follow a pane that switched to In memory. */
+	let copyDestDriverKey = $state<string | null>(null);
+	/** Dest folder for listing placeholders (`null` = dest root only). */
+	let copyDestParentId = $state<ExplorerEntry['parentId'] | undefined>(undefined);
 	let copyItems = $state<TransferItem[]>([]);
 	let dismissedCopyIds = $state<Set<string>>(new Set());
 	let copyProgressUnsub: (() => void) | null = null;
@@ -647,7 +652,7 @@
 	const visibleCopyItems = $derived(copyItems.filter((t) => !dismissedCopyIds.has(t.id)));
 	const destCopyPending = $derived(
 		stackTransferItems(visibleCopyItems)
-			.filter((t) => !t.done || t.status === 'failed')
+			.filter((t) => t.hop && (!t.done || t.status === 'failed'))
 			.map((t) => ({
 				id: t.id,
 				name: t.name,
@@ -656,17 +661,33 @@
 				ready: t.ahead,
 				direction: 'receiving' as const,
 				status: t.status,
-				done: t.done
+				done: t.done,
+				destParentId: copyDestParentId
 			}))
 	);
 
+	function destDriverKey(drv: ExplorerDriver): string {
+		return `${drv.id}:${drv.connectionId ?? drv.endpointKey ?? ''}`;
+	}
+
+	function markCopyDest(id: PaneId, drv: ExplorerDriver, parentId: ExplorerEntry['parentId']) {
+		copyDestPane = id;
+		copyDestDriverKey = destDriverKey(drv);
+		copyDestParentId = parentId;
+	}
+
 	function panePending(id: PaneId) {
-		const extra = id === copyDestPane ? destCopyPending : [];
+		const drv = activeDriver(paneState(id), id);
+		const extra =
+			id === copyDestPane && copyDestDriverKey != null && destDriverKey(drv) === copyDestDriverKey
+				? destCopyPending
+				: [];
 		const base = id === 'left' ? pendingLeft : pendingRight;
 		return extra.length ? [...base, ...extra] : base;
 	}
 
 	function dismissCopy(id: string) {
+		abortTransfer(id);
 		if (copyBusy) copyAbort?.abort();
 		dismissedCopyIds = new Set([...dismissedCopyIds, id]);
 	}
@@ -1089,8 +1110,8 @@
 		const drv = activeDriver(p, id);
 		if (!(drv.upload || drv.writeFile)) return;
 		copyBusy = true;
-		copyDestPane = id;
 		const parent = destParentId !== undefined ? destParentId : p.ctx.parentId;
+		markCopyDest(id, drv, parent);
 		const idByName = new Map<string, string>();
 		const bump = (ev: OsDropFileProgress) => {
 			let opId = idByName.get(ev.name);
@@ -1413,14 +1434,15 @@
 		copyAbort = new AbortController();
 		const signal = copyAbort.signal;
 		copyBusy = true;
-		copyDestPane = destId;
+		const destParent = opts?.destParentId !== undefined ? opts.destParentId : dst.ctx.parentId;
+		markCopyDest(destId, destDriver, destParent);
 		try {
 			const n = await copyAcross({
 				sourceDriver: activeDriver(src, from),
 				destDriver,
 				selectedIds: opts?.selectedIds ?? src.ctx.selectedIds,
 				sourceEntries: src.ctx.entries,
-				destParentId: opts?.destParentId !== undefined ? opts.destParentId : dst.ctx.parentId,
+				destParentId: destParent,
 				confirmDualPhase: () => askDualPhase(sourceLabel, destLabel),
 				signal
 			});
@@ -1471,7 +1493,7 @@
 		copyAbort = new AbortController();
 		const signal = copyAbort.signal;
 		copyBusy = true;
-		copyDestPane = destId;
+		markCopyDest(destId, destDriver, destParentId);
 		try {
 			const n = await copyAcross({
 				sourceDriver,

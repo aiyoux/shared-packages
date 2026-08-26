@@ -49,6 +49,13 @@ describe('registry multi-ext image + forceExtension', () => {
 		assert.equal(forceExtension('take', 'video'), 'take.mp4');
 	});
 
+	it('forceExtension preserves multi-ext audio names', () => {
+		assert.equal(forceExtension('song.mp3', 'audio'), 'song.mp3');
+		assert.equal(forceExtension('take.wav', 'audio'), 'take.wav');
+		assert.equal(forceExtension('loop.FLAC', 'audio'), 'loop.FLAC');
+		assert.equal(forceExtension('track', 'audio'), 'track.mp3');
+	});
+
 	it('forceExtension still enforces product single extensions', () => {
 		assert.equal(forceExtension('demo', 'skch'), 'demo.skch');
 		assert.equal(forceExtension('demo.skch', 'skch'), 'demo.skch');
@@ -79,6 +86,9 @@ describe('registry multi-ext image + forceExtension', () => {
 		assert.equal(inferFileTypeFromName('a.png'), 'image');
 		assert.equal(inferFileTypeFromName('clip.mp4'), 'video');
 		assert.equal(inferFileTypeFromName('clip.webm'), 'video');
+		assert.equal(inferFileTypeFromName('song.mp3'), 'audio');
+		assert.equal(inferFileTypeFromName('take.wav'), 'audio');
+		assert.equal(inferFileTypeFromName('loop.flac'), 'audio');
 		assert.equal(inferFileTypeFromName('draft.skch'), 'skch');
 		assert.equal(inferFileTypeFromName('mesh.ob3d'), 'ob3d');
 		assert.equal(inferFileTypeFromName('face.cari'), 'cari');

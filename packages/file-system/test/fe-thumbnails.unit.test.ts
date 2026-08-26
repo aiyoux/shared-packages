@@ -34,6 +34,10 @@ describe('getPreviewKind', () => {
 		assert.equal(getPreviewKind(file({ name: 'a.bin', fileType: 'pdf' })), 'pdf');
 		assert.equal(getPreviewKind(file({ name: 'photo.SVG' })), 'image');
 		assert.equal(getPreviewKind(file({ name: 'clip.webm' })), 'video');
+		assert.equal(getPreviewKind(file({ name: 'song.mp3' })), 'audio');
+		assert.equal(getPreviewKind(file({ name: 'take.WAV' })), 'audio');
+		assert.equal(getPreviewKind(file({ name: 'x', fileType: 'audio' })), 'audio');
+		assert.equal(getPreviewKind(file({ name: 'x', contentType: 'audio/mpeg' })), 'audio');
 		assert.equal(getPreviewKind(file({ name: 'x', contentType: 'application/pdf' })), 'pdf');
 		assert.equal(getPreviewKind(file({ name: 'notes.txt' })), null);
 		assert.equal(getPreviewKind({ id: 'f', kind: 'folder', name: 'dir', parentId: null }), null);
@@ -46,6 +50,8 @@ describe('coerceMediaBlob', () => {
 		assert.equal(coerceMediaBlob(raw, 'icon.svg', 'image').type, 'image/svg+xml');
 		assert.equal(coerceMediaBlob(raw, 'doc.pdf', 'pdf').type, 'application/pdf');
 		assert.equal(coerceMediaBlob(raw, 'shot.png', 'image').type, 'image/png');
+		assert.equal(coerceMediaBlob(raw, 'song.mp3', 'audio').type, 'audio/mpeg');
+		assert.equal(coerceMediaBlob(raw, 'take.wav', 'audio').type, 'audio/wav');
 	});
 });
 

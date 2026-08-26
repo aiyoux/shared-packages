@@ -94,6 +94,7 @@ type Listener = () => void;
 
 const items = new Map<string, TransferItem>();
 const listeners = new Set<Listener>();
+const abortById = new Map<string, AbortController>();
 /** Pending sent File blobs keyed by progress id (attached when send completes). */
 const pendingSentFiles = new Map<string, File>();
 /** Files enqueued for send before progress id is known. */
@@ -110,6 +111,21 @@ export function subscribeTransfers(listener: Listener): () => void {
 	return () => {
 		listeners.delete(listener);
 	};
+}
+
+export function attachTransferAbort(id: string, ac: AbortController): void {
+	abortById.set(id, ac);
+	const clear = () => abortById.delete(id);
+	ac.signal.addEventListener('abort', clear, { once: true });
+}
+
+/** Abort an in-flight transfer. No-op if it has no controller. */
+export function abortTransfer(id: string): boolean {
+	const ac = abortById.get(id);
+	if (!ac) return false;
+	ac.abort();
+	abortById.delete(id);
+	return true;
 }
 
 export function listTransfers(): TransferItem[] {

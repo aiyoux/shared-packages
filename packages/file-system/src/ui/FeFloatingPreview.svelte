@@ -7,6 +7,7 @@
 		renderPdfPageToCanvas
 	} from './feThumbnails.js';
 	import type { ExplorerDriver, ExplorerEntry } from './explorerDriver.js';
+	import { canReadExplorerBlob, loadExplorerMediaSrc, readExplorerBlob } from './explorerDriver.js';
 
 	let {
 		entry,
@@ -35,24 +36,17 @@
 	});
 
 	function revokeUrl() {
-		if (blobUrl) {
-			URL.revokeObjectURL(blobUrl);
-			blobUrl = null;
-		}
-		if (pdfFallbackUrl) {
-			URL.revokeObjectURL(pdfFallbackUrl);
-			pdfFallbackUrl = null;
-		}
+		if (blobUrl?.startsWith('blob:')) URL.revokeObjectURL(blobUrl);
+		blobUrl = null;
+		if (pdfFallbackUrl?.startsWith('blob:')) URL.revokeObjectURL(pdfFallbackUrl);
+		pdfFallbackUrl = null;
 	}
 
 	$effect(() => {
 		const e = entry;
 		const d = driver;
 		const k = kind;
-		// Captured, not re-read: see FeThumbnail — the narrowing would not
-		// survive into the async block below.
-		const readBlob = d.readBlob;
-		if (!k || !readBlob) {
+		if (!k || !canReadExplorerBlob(d)) {
 			// untrack: revokeUrl() reads `blobUrl`. Reading it inside this effect
 			// (even transitively) makes the effect depend on it — and the async
 			// block below writes `blobUrl` once the fetch resolves, which would
@@ -76,7 +70,18 @@
 
 		(async () => {
 			try {
-				const blob = await readBlob.call(d, e.id);
+				if (k === 'image' || k === 'video' || k === 'audio') {
+					const src = await loadExplorerMediaSrc(d, e.id);
+					if (cancelled) {
+						if (src.url.startsWith('blob:')) URL.revokeObjectURL(src.url);
+						return;
+					}
+					blobUrl = src.url;
+					loading = false;
+					return;
+				}
+
+				const blob = await readExplorerBlob(d, e.id);
 				if (cancelled) return;
 				if (!blob) {
 					error = 'File is empty';
@@ -180,6 +185,11 @@
 			{:else if kind === 'video' && blobUrl}
 				<!-- svelte-ignore a11y_media_has_caption -->
 				<video class="fe-float-video" src={blobUrl} controls autoplay playsinline></video>
+			{:else if kind === 'audio' && blobUrl}
+				<div class="fe-float-audio" data-testid="fe-float-audio">
+					<FeIcon name="music" size={48} />
+					<audio class="fe-float-audio-player" src={blobUrl} controls autoplay></audio>
+				</div>
 			{:else if kind === 'pdf' && pdfFallbackUrl}
 				<iframe class="fe-float-pdf-frame" title={entry.name} src={pdfFallbackUrl}></iframe>
 			{:else if kind === 'pdf'}
@@ -300,6 +310,19 @@
 		max-width: 100%;
 		max-height: 100%;
 		display: block;
+	}
+	.fe-float-audio {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		justify-content: center;
+		gap: 1.25rem;
+		width: min(28rem, calc(100% - 2rem));
+		padding: 1.5rem 1rem;
+		color: var(--text-muted, #888);
+	}
+	.fe-float-audio-player {
+		width: 100%;
 	}
 	.fe-float-pdf {
 		display: flex;

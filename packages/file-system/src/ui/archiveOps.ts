@@ -10,6 +10,7 @@ import {
 	engineSupports,
 	expandBytes,
 	isJunkArchivePath,
+	packFiles,
 	type ArchiveEntry,
 	type Codec,
 	type EngineId as CompressEngineId
@@ -19,8 +20,11 @@ import {
 	isVaultBytes,
 	isVaultName,
 	openVault,
+	sealVault,
 	type EngineId as CryptoEngineId
 } from '@shared-packages/crypto';
+import { getMemoryVfs } from '../memoryVfs.js';
+import { createMemoryExplorerDriver } from './memoryExplorerDriver.js';
 import { createVfs, type VfsService } from '../vfs.js';
 import type { ExplorerDriver, ExplorerEntry } from './explorerDriver.js';
 import { createLocalExplorerDriver } from './localExplorerDriver.js';
@@ -43,10 +47,19 @@ export type ArchiveWriteProgress = {
 	transferred: number;
 	size: number;
 	done: boolean;
+	/** Header-chip only — do not paint a dest listing row. */
+	job?: boolean;
 };
 
 function yieldPaint(): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+export function throwIfAborted(signal?: AbortSignal): void {
+	if (!signal?.aborted) return;
+	const e = new Error('Cancelled');
+	e.name = 'AbortError';
+	throw e;
 }
 
 export function packedBasename(path: string): string {
@@ -131,14 +144,17 @@ export async function readEntryBytes(
 
 export async function collectPackEntries(
 	driver: ExplorerDriver,
-	entries: ExplorerEntry[]
+	entries: ExplorerEntry[],
+	opts?: { signal?: AbortSignal; onFile?: (packed: number) => void }
 ): Promise<PackedPath[]> {
 	const out: PackedPath[] = [];
 	async function walk(entry: ExplorerEntry, prefix: string) {
+		throwIfAborted(opts?.signal);
 		if (entry.kind === 'file') {
 			const data = await readEntryBytes(driver, entry);
 			const path = prefix ? `${prefix}/${entry.name}` : entry.name;
 			out.push({ path, data });
+			opts?.onFile?.(out.length);
 			return;
 		}
 		const listed = await driver.list({ parentId: entry.id });
@@ -163,7 +179,8 @@ export async function writeEntriesToDriver(
 	driver: ExplorerDriver,
 	parentId: string | null,
 	files: PackedPath[],
-	onFile?: (ev: ArchiveWriteProgress) => void
+	onFile?: (ev: ArchiveWriteProgress) => void,
+	signal?: AbortSignal
 ): Promise<void> {
 	const put = driver.writeFile ?? driver.upload;
 	if (!put) throw new Error('This location cannot receive files');
@@ -190,6 +207,7 @@ export async function writeEntriesToDriver(
 	}
 
 	for (const file of files) {
+		throwIfAborted(signal);
 		const { dirs, file: fileName } = splitPackedPath(file.path);
 		if (!fileName) {
 			if (dirs.length && !flatten) await ensureDir(dirs);
@@ -204,6 +222,7 @@ export async function writeEntriesToDriver(
 		const out = new File([blob], destName);
 		if (typeof driver.upload === 'function') {
 			await driver.upload(destParent, out, {
+				signal,
 				onProgress: (pct) => {
 					const transferred = Math.round(size * Math.min(1, Math.max(0, pct)));
 					onFile?.({ name: destName, parentId: destParent, transferred, size, done: false });
@@ -259,6 +278,7 @@ export async function writeEntriesToVfs(
 
 export type ExpandPackedOpts = {
 	skipSystemFiles?: boolean;
+	signal?: AbortSignal;
 };
 
 export async function expandPackedBytes(
@@ -270,6 +290,7 @@ export async function expandPackedBytes(
 ): Promise<PackedPath[]> {
 	const skipSystemFiles = opts?.skipSystemFiles !== false;
 	const keep = (path: string) => !skipSystemFiles || !isJunkArchivePath(path);
+	throwIfAborted(opts?.signal);
 	if (isVaultBytes(bytes) || isVaultName(name)) {
 		if (!password) throw new Error('Password is required');
 		const opened = await openVault(bytes, password);
@@ -321,6 +342,162 @@ export async function expandPackedBytes(
 
 export function toArchiveEntries(files: PackedPath[]): ArchiveEntry[] {
 	return files.map((f) => ({ name: f.path, data: f.data }));
+}
+
+export type ArchiveJobSpec = {
+	kind: ArchiveKind;
+	entries: ExplorerEntry[];
+	driver: ExplorerDriver;
+	dest: ArchiveDest;
+	destParentId: string | null;
+	title: string;
+	/** Compress/encrypt output filename (zip / spvault). */
+	outputName?: string;
+	compressEngineId: CompressEngineId;
+	codec: Codec;
+	cryptoEngineId: CryptoEngineId;
+	password: string;
+	skipSystemFiles: boolean;
+	useHost: boolean;
+	hostOp?: 'zip' | 'tar' | 'tgz' | 'encrypt' | 'unzip' | 'untar' | 'decrypt';
+	hostDestPath?: string;
+	signal?: AbortSignal;
+	onProgress?: (ev: ArchiveWriteProgress) => void;
+};
+
+export async function runArchiveJob(spec: ArchiveJobSpec): Promise<{
+	inner?: PackedPath[];
+	title: string;
+}> {
+	const {
+		kind,
+		entries,
+		driver,
+		dest,
+		destParentId,
+		title,
+		signal,
+		onProgress
+	} = spec;
+	throwIfAborted(signal);
+
+	const emitJob = (transferred: number, size: number, done = false) => {
+		onProgress?.({
+			name: title,
+			parentId: destParentId,
+			transferred,
+			size: Math.max(size, 1),
+			done,
+			job: true
+		});
+	};
+
+	const writeOut = async (files: PackedPath[]) => {
+		const total = files.reduce((n, f) => n + f.data.byteLength, 0) || 1;
+		let finished = 0;
+		const onFile = (ev: ArchiveWriteProgress) => {
+			onProgress?.(ev);
+			emitJob(finished + (ev.done ? ev.size : ev.transferred), total);
+			if (ev.done) finished += ev.size;
+		};
+		if (dest === 'memory') {
+			const mem = createMemoryExplorerDriver(getMemoryVfs());
+			await mem.ready();
+			await writeEntriesToDriver(mem, null, files, onFile, signal);
+			return;
+		}
+		await writeEntriesToDriver(driver, destParentId, files, onFile, signal);
+	};
+
+	/** Browser dest filename from the dialog (zip / tar / vault only). */
+	const namedOutput = (files: PackedPath[]): PackedPath[] => {
+		const name = spec.outputName?.trim();
+		if (!name || files.length !== 1) return files;
+		if (kind === 'encrypt') return [{ path: name, data: files[0]!.data }];
+		if (kind === 'compress' && (spec.codec === 'zip' || spec.codec === 'tar')) {
+			return [{ path: name, data: files[0]!.data }];
+		}
+		return files;
+	};
+
+	if (spec.useHost) {
+		if (!driver.archive) throw new Error('This connection cannot archive on the host');
+		emitJob(0, 1);
+		await driver.archive({
+			op: spec.hostOp!,
+			paths: entries.map((e) => driver.absolutePath!(e.id)),
+			to: spec.hostDestPath!,
+			password: kind === 'encrypt' || kind === 'decrypt' ? spec.password : undefined
+		});
+		throwIfAborted(signal);
+		emitJob(1, 1, true);
+		return { title };
+	}
+
+	if (kind === 'compress' || kind === 'encrypt') {
+		emitJob(0, 4);
+		const packed = await collectPackEntries(driver, entries, {
+			signal,
+			onFile: (n) => emitJob(n, Math.max(n + 2, 4))
+		});
+		throwIfAborted(signal);
+		emitJob(packed.length + 1, packed.length + 3);
+		if (kind === 'compress') {
+			const out = await packFiles(spec.compressEngineId, toArchiveEntries(packed), spec.codec);
+			throwIfAborted(signal);
+			emitJob(packed.length + 2, packed.length + 3);
+			await writeOut(namedOutput(out.map((f) => ({ path: f.name, data: f.data }))));
+		} else {
+			const sealed = await sealVault(
+				spec.cryptoEngineId,
+				packed,
+				spec.password,
+				packingAsTree(entries) ? { kind: 'tree' } : undefined
+			);
+			throwIfAborted(signal);
+			emitJob(packed.length + 2, packed.length + 3);
+			await writeOut(namedOutput([{ path: sealed.name, data: sealed.data }]));
+		}
+		emitJob(1, 1, true);
+		return { title };
+	}
+
+	const inner: PackedPath[] = [];
+	const sources = entries.filter((e) => e.kind === 'file');
+	emitJob(0, Math.max(sources.length + 1, 1));
+	let membersDone = 0;
+	for (let i = 0; i < sources.length; i++) {
+		throwIfAborted(signal);
+		const entry = sources[i]!;
+		const bytes = await readEntryBytes(driver, entry);
+		inner.push(
+			...(await expandPackedBytes(
+				bytes,
+				entry.name,
+				spec.password,
+				(ev) => {
+					if (packedIsTopLevel(ev.path)) {
+						onProgress?.({
+							name: packedBasename(ev.path),
+							parentId: destParentId,
+							transferred: ev.transferred,
+							size: ev.size || ev.transferred,
+							done: ev.done
+						});
+					}
+					if (ev.done) membersDone++;
+					emitJob(membersDone, Math.max(membersDone + 1, sources.length + 1));
+				},
+				{ skipSystemFiles: spec.skipSystemFiles, signal }
+			))
+		);
+		emitJob(i + 1, sources.length + 1);
+	}
+	if (!inner.length) throw new Error('Nothing to extract');
+	if (dest === 'popup') return { inner, title };
+	await writeOut(inner);
+	emitJob(1, 1, true);
+	return { title };
 }
 
 export async function createInnerFsSession(

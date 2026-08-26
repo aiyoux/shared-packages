@@ -6,9 +6,11 @@ export {
 } from './order.js';
 export {
 	zoneFromY,
+	zoneFromPoint,
 	canonicalizeSiblingZone,
 	resolveDrop,
 	type DropZone,
+	type DropLayout,
 	type DropTarget,
 	type ResolveDropInput,
 	type ResolvedDrop,

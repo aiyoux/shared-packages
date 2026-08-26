@@ -9,6 +9,7 @@
 		type PreviewKind
 	} from './feThumbnails.js';
 	import type { ExplorerDriver, ExplorerEntry } from './explorerDriver.js';
+	import { canReadExplorerBlob, readExplorerBlob } from './explorerDriver.js';
 
 	let {
 		entry,
@@ -56,12 +57,7 @@
 		// fetch — leaving the thumbnail stuck on "loading" forever.
 		const k = kind;
 
-		// Captured, not re-read: the async block below runs after this effect
-		// returns, and a narrowing on `d.readBlob` does not survive into it —
-		// the driver is a mutable reference and TS cannot know it still has the
-		// method by then.
-		const readBlob = d.readBlob;
-		if (!en || !k || !readBlob) {
+		if (!en || !k || k === 'audio' || !canReadExplorerBlob(d)) {
 			// untrack: revoke() reads `url`. Reading it inside this effect (even
 			// transitively) would make the effect depend on it — and the async
 			// block below writes `url` once generation resolves, which would
@@ -85,7 +81,21 @@
 
 		(async () => {
 			try {
-				const blob = await readBlob.call(d, e.id);
+				if (k === 'image' && d.downloadUrl) {
+					try {
+						const loc = await d.downloadUrl(e.id);
+						if (cancelled) return;
+						if (loc?.url) {
+							url = loc.url;
+							loadedId = e.id;
+							loading = false;
+							return;
+						}
+					} catch {
+						/* fall through to bytes */
+					}
+				}
+				const blob = await readExplorerBlob(d, e.id);
 				if (cancelled) return;
 				if (!blob) {
 					failed = true;

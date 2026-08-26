@@ -148,7 +148,10 @@ export interface ExplorerDriver {
 	delete(id: ExplorerEntryId): Promise<void>;
 	restore?(id: ExplorerEntryId): Promise<void>;
 	permanentDelete?(id: ExplorerEntryId): Promise<void>;
-	emptyTrash?(): Promise<void>;
+	emptyTrash?(opts?: {
+		onProgress?: (ev: { done: number; total: number; name?: string }) => void;
+		signal?: AbortSignal;
+	}): Promise<void>;
 	upload?(
 		parentId: ExplorerEntryId | null,
 		file: File,
@@ -359,4 +362,44 @@ export function isRemoteClass(driverId: string): boolean {
 		driverId === 'monitor' ||
 		driverId === 'peer-fs'
 	);
+}
+
+export type ExplorerReadDriver = Pick<ExplorerDriver, 'readBlob' | 'download' | 'downloadUrl'>;
+
+/** True when preview / open can load file bytes or a GET URL. */
+export function canReadExplorerBlob(driver: ExplorerReadDriver): boolean {
+	return Boolean(driver.readBlob || driver.download || driver.downloadUrl);
+}
+
+/**
+ * Bytes for preview/open. Local uses `readBlob`; remotes (B2/rclone/monitor)
+ * typically only implement `download`.
+ */
+export async function readExplorerBlob(
+	driver: ExplorerReadDriver,
+	id: ExplorerEntryId
+): Promise<Blob> {
+	if (driver.readBlob) return driver.readBlob(id);
+	if (driver.download) return driver.download(id);
+	throw new Error('This location cannot read files');
+}
+
+/**
+ * Direct GET URL for `<img>` / `<video>` / iframe when the backend can mint one
+ * (B2 download-auth, monitor `/v1/fs/read`). Falls back to a blob: URL.
+ */
+export async function loadExplorerMediaSrc(
+	driver: ExplorerReadDriver,
+	id: ExplorerEntryId
+): Promise<{ url: string; blob?: Blob }> {
+	if (driver.downloadUrl) {
+		try {
+			const loc = await driver.downloadUrl(id);
+			if (loc?.url) return { url: loc.url };
+		} catch {
+			/* fall through to bytes */
+		}
+	}
+	const blob = await readExplorerBlob(driver, id);
+	return { url: URL.createObjectURL(blob), blob };
 }

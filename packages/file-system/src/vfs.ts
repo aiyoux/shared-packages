@@ -46,6 +46,28 @@ export interface VfsServiceOptions {
 
 const DEFAULT_GRACE = 120_000;
 
+export type EmptyTrashProgress = {
+	done: number;
+	total: number;
+	name?: string;
+};
+
+export type EmptyTrashOpts = {
+	onProgress?: (ev: EmptyTrashProgress) => void;
+	signal?: AbortSignal;
+};
+
+function throwIfAborted(signal?: AbortSignal): void {
+	if (!signal?.aborted) return;
+	const e = new Error('Cancelled');
+	e.name = 'AbortError';
+	throw e;
+}
+
+function yieldPaint(): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
 export class VfsService {
 	readonly db: SharedVfsDatabase;
 	readonly opfs: OpfsBlobStore;
@@ -965,19 +987,56 @@ export class VfsService {
 		this.emitChange();
 	}
 
-	async emptyTrash(): Promise<void> {
+	async emptyTrash(opts?: EmptyTrashOpts): Promise<void> {
 		await this.ready();
+		throwIfAborted(opts?.signal);
 		const trashed = await this.db.nodes.filter((n) => n.deletedAt != null).toArray();
-		// delete leaves-first-ish: all with recursive
+		if (!trashed.length) {
+			opts?.onProgress?.({ done: 0, total: 0 });
+			return;
+		}
+
+		const blobIds: string[] = [];
+		const nameByBlob = new Map<string, string>();
 		for (const n of trashed) {
-			const still = await this.db.nodes.get(n.id);
-			if (still) {
+			if (!n.blobId) continue;
+			blobIds.push(n.blobId);
+			nameByBlob.set(n.blobId, n.name);
+		}
+		const uniqueBlobIds = [...new Set(blobIds)];
+		const opfsPaths: Array<{ path: string; name: string }> = [];
+		for (const bid of uniqueBlobIds) {
+			const ref = await this.db.blobRefs.get(bid);
+			if (ref?.opfsPath) opfsPaths.push({ path: ref.opfsPath, name: nameByBlob.get(bid) ?? 'file' });
+		}
+
+		const nodeCount = trashed.length;
+		const blobCount = opfsPaths.length;
+		const total = nodeCount + blobCount;
+		opts?.onProgress?.({ done: 0, total, name: 'Emptying trash…' });
+		throwIfAborted(opts?.signal);
+
+		try {
+			await this.db.transaction('rw', this.db.nodes, this.db.blobRefs, async () => {
+				await this.db.nodes.bulkDelete(trashed.map((n) => n.id));
+				if (uniqueBlobIds.length) await this.db.blobRefs.bulkDelete(uniqueBlobIds);
+			});
+			opts?.onProgress?.({ done: nodeCount, total, name: 'Emptying trash…' });
+			await yieldPaint();
+
+			for (let i = 0; i < opfsPaths.length; i++) {
+				throwIfAborted(opts?.signal);
+				const item = opfsPaths[i]!;
 				try {
-					await this.permanentDelete(n.id, { recursive: true });
+					await this.opfs.remove(item.path);
 				} catch {
-					/* continue */
+					/* GC later */
 				}
+				opts?.onProgress?.({ done: nodeCount + i + 1, total, name: item.name });
+				if ((i & 7) === 7) await yieldPaint();
 			}
+		} finally {
+			this.emitChange();
 		}
 	}
 

@@ -72,6 +72,48 @@ describe('VfsService', () => {
 		assert.equal((await vfs.list({ parentId: dir.id })).length, 1);
 	});
 
+	it('emptyTrash bulk-deletes a folder tree and reports progress without per-file notifies', async () => {
+		await vfs.writeFile({ parentId: null, name: 'keep.txt', body: 'keep' });
+		const dir = await vfs.mkdir(null, 'repo');
+		for (let i = 0; i < 20; i++) {
+			await vfs.writeFile({ parentId: dir.id, name: `n${i}.txt`, body: `x${i}` });
+		}
+		await vfs.trash(dir.id);
+		assert.equal((await vfs.list({ parentId: null, trashOnly: true })).length, 1);
+
+		let notifies = 0;
+		const unsub = vfs.subscribe(() => {
+			notifies++;
+		});
+		const ticks: Array<{ done: number; total: number }> = [];
+		await vfs.emptyTrash({
+			onProgress: (ev) => ticks.push({ done: ev.done, total: ev.total })
+		});
+		unsub();
+
+		assert.ok(notifies >= 1 && notifies <= 2);
+		assert.ok(ticks.length >= 2);
+		assert.equal(ticks[0]!.done, 0);
+		assert.ok(ticks[0]!.total >= 21);
+		assert.equal(ticks[ticks.length - 1]!.done, ticks[ticks.length - 1]!.total);
+		assert.equal((await vfs.list({ parentId: null, trashOnly: true })).length, 0);
+		const live = await vfs.list({ parentId: null });
+		assert.equal(live.length, 1);
+		assert.equal(live[0]!.name, 'keep.txt');
+	});
+
+	it('emptyTrash abort before work leaves trash in place', async () => {
+		const f = await vfs.writeFile({ parentId: null, name: 'gone.txt', body: 'x' });
+		await vfs.trash(f.id);
+		const ac = new AbortController();
+		ac.abort();
+		await assert.rejects(
+			() => vfs.emptyTrash({ signal: ac.signal }),
+			(e: unknown) => e instanceof Error && e.name === 'AbortError'
+		);
+		assert.equal((await vfs.list({ parentId: null, trashOnly: true })).length, 1);
+	});
+
 	it('isActionable grey-out helper', () => {
 		assert.equal(isActionable({ kind: 'folder' } as any, ['skch']), true);
 		assert.equal(

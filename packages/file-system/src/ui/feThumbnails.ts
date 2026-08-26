@@ -2,18 +2,33 @@
  * Thumbnail generation utilities for FileExplorer.
  *
  * Supports images (canvas resize), videos (frame capture via <video>),
- * and PDFs (first page render via dynamically-imported `@shared-packages/pdf`).
+ * audio (player in the floating preview), and PDFs (first page render via
+ * dynamically-imported `@shared-packages/pdf`).
  *
  * All functions are browser-only and return blob: URLs that the caller
  * must revoke via `URL.revokeObjectURL`.
  */
 import type { ExplorerEntry } from './explorerDriver.js';
 
-export type PreviewKind = 'image' | 'video' | 'pdf';
+export type PreviewKind = 'image' | 'video' | 'audio' | 'pdf';
 
 const IMAGE_EXTS = ['.png', '.jpg', '.jpeg', '.webp', '.gif', '.svg', '.avif', '.bmp', '.ico'];
 const VIDEO_EXTS = ['.mp4', '.webm', '.mov', '.m4v', '.mkv', '.ogv'];
+const AUDIO_EXTS = ['.mp3', '.wav', '.ogg', '.oga', '.m4a', '.aac', '.flac', '.opus', '.weba', '.aiff', '.aif'];
 const PDF_EXTS = ['.pdf'];
+const AUDIO_MIME: Record<string, string> = {
+	'.mp3': 'audio/mpeg',
+	'.wav': 'audio/wav',
+	'.ogg': 'audio/ogg',
+	'.oga': 'audio/ogg',
+	'.m4a': 'audio/mp4',
+	'.aac': 'audio/aac',
+	'.flac': 'audio/flac',
+	'.opus': 'audio/ogg',
+	'.weba': 'audio/webm',
+	'.aiff': 'audio/aiff',
+	'.aif': 'audio/aiff'
+};
 const IMAGE_MIME: Record<string, string> = {
 	'.png': 'image/png',
 	'.jpg': 'image/jpeg',
@@ -36,23 +51,27 @@ export function getPreviewKind(entry: ExplorerEntry): PreviewKind | null {
 	if (entry.kind !== 'file') return null;
 	if (entry.fileType === 'image') return 'image';
 	if (entry.fileType === 'video') return 'video';
+	if (entry.fileType === 'audio') return 'audio';
 	if (entry.fileType === 'pdf') return 'pdf';
 	const e = ext(entry.name);
 	if (IMAGE_EXTS.includes(e)) return 'image';
 	if (VIDEO_EXTS.includes(e)) return 'video';
+	if (AUDIO_EXTS.includes(e)) return 'audio';
 	if (PDF_EXTS.includes(e)) return 'pdf';
 	// Also check contentType for robustness
 	const ct = entry.contentType ?? '';
 	if (ct.startsWith('image/')) return 'image';
 	if (ct.startsWith('video/')) return 'video';
+	if (ct.startsWith('audio/')) return 'audio';
 	if (ct === 'application/pdf') return 'pdf';
 	return null;
 }
 
 /** Icon name for a preview kind (used as fallback when no thumbnail). */
-export function previewKindIcon(kind: PreviewKind): 'image' | 'film' | 'file-text' {
+export function previewKindIcon(kind: PreviewKind): 'image' | 'film' | 'music' | 'file-text' {
 	if (kind === 'image') return 'image';
 	if (kind === 'video') return 'film';
+	if (kind === 'audio') return 'music';
 	return 'file-text';
 }
 
@@ -70,6 +89,10 @@ export function coerceMediaBlob(blob: Blob, name: string, kind: PreviewKind): Bl
 		const want =
 			e === '.webm' ? 'video/webm' : e === '.ogv' ? 'video/ogg' : e === '.mov' ? 'video/quicktime' : 'video/mp4';
 		return new Blob([blob], { type: want });
+	}
+	if (kind === 'audio') {
+		const want = AUDIO_MIME[e];
+		if (want && blob.type !== want) return new Blob([blob], { type: want });
 	}
 	return blob;
 }
@@ -287,5 +310,7 @@ export async function generateThumbnail(
 			return generateVideoThumbnail(coerceMediaBlob(blob, name, 'video'), maxDim);
 		case 'pdf':
 			return generatePdfThumbnail(coerceMediaBlob(blob, name, 'pdf'), maxDim);
+		case 'audio':
+			throw new Error('Audio has no raster thumbnail');
 	}
 }

@@ -99,6 +99,78 @@ describe('FeFloatingPreview', () => {
 		expect(img?.src).toMatch(/^blob:/);
 	});
 
+	it('previews a PDF from download when the driver has no readBlob (B2)', async () => {
+		const driver: ExplorerDriver = {
+			id: 'b2',
+			capabilities: caps,
+			ready: async () => {},
+			list: async () => ({ entries: [], truncated: false }),
+			getPath: async () => [],
+			delete: async () => {},
+			download: async () => new Blob([new Uint8Array([37, 80, 68, 70])], { type: 'application/pdf' })
+		};
+		render(FeFloatingPreview, {
+			props: { entry: pdfEntry, driver, onClose: () => {} }
+		});
+		await waitFor(() => {
+			expect(document.querySelector('.fe-float-spinner')).toBeNull();
+		});
+		expect(document.querySelector('.fe-float-pdf-canvas')).toBeTruthy();
+		expect(screen.queryByText(/not available/i)).toBeNull();
+	});
+
+	it('previews audio with a player from downloadUrl', async () => {
+		const driver: ExplorerDriver = {
+			id: 'b2',
+			capabilities: caps,
+			ready: async () => {},
+			list: async () => ({ entries: [], truncated: false }),
+			getPath: async () => [],
+			delete: async () => {},
+			downloadUrl: async () => ({ url: 'https://f000.example/song.mp3?Authorization=t', filename: 'song.mp3' })
+		};
+		render(FeFloatingPreview, {
+			props: {
+				entry: {
+					id: 'song.mp3',
+					kind: 'file',
+					name: 'song.mp3',
+					parentId: null,
+					fileType: 'audio',
+					contentType: 'audio/mpeg'
+				},
+				driver,
+				onClose: () => {}
+			}
+		});
+		await waitFor(() => {
+			expect(document.querySelector('.fe-float-spinner')).toBeNull();
+		});
+		const audio = document.querySelector('[data-testid="fe-float-audio"] audio') as HTMLAudioElement | null;
+		expect(audio).toBeTruthy();
+		expect(audio?.getAttribute('src')).toBe('https://f000.example/song.mp3?Authorization=t');
+	});
+
+	it('previews an image from downloadUrl without buffering bytes', async () => {
+		const driver: ExplorerDriver = {
+			id: 'b2',
+			capabilities: caps,
+			ready: async () => {},
+			list: async () => ({ entries: [], truncated: false }),
+			getPath: async () => [],
+			delete: async () => {},
+			downloadUrl: async () => ({ url: 'https://f000.example/pic.png?Authorization=t', filename: 'pic.png' })
+		};
+		render(FeFloatingPreview, {
+			props: { entry: { ...svgEntry, name: 'pic.png', id: 'pic.png' }, driver, onClose: () => {} }
+		});
+		await waitFor(() => {
+			expect(document.querySelector('.fe-float-spinner')).toBeNull();
+		});
+		const img = document.querySelector('.fe-float-image') as HTMLImageElement | null;
+		expect(img?.src).toBe('https://f000.example/pic.png?Authorization=t');
+	});
+
 	it('falls back to an iframe when PDF rendering throws', async () => {
 		const { renderPdfPageToCanvas } = await import('../src/ui/feThumbnails.js');
 		vi.mocked(renderPdfPageToCanvas).mockRejectedValue(new Error('no wasm'));

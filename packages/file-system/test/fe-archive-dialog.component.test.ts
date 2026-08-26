@@ -42,7 +42,7 @@ describe('FeArchiveDialog path copy', () => {
 				kind: 'compress',
 				entries: [entry],
 				driver: stubDriver({ id: 'b2' }),
-				onDone: vi.fn(),
+				onLaunch: vi.fn(),
 				onCancel: vi.fn()
 			}
 		});
@@ -64,7 +64,7 @@ describe('FeArchiveDialog path copy', () => {
 					absolutePath: (id) => (id ? `/tmp/${id}` : '/tmp'),
 					archive
 				}),
-				onDone: vi.fn(),
+				onLaunch: vi.fn(),
 				onCancel: vi.fn()
 			}
 		});
@@ -81,13 +81,19 @@ describe('FeArchiveDialog path copy', () => {
 		expect(screen.getByTestId('fe-archive-run').textContent).toMatch(/Download, compress, and upload/);
 	});
 
-	it('decompress Skip system files is on by default', () => {
+	it.each(['decompress', 'decrypt'] as const)('%s Skip system files is on by default', (kind) => {
 		render(FeArchiveDialog, {
 			props: {
-				kind: 'decompress',
-				entries: [{ ...entry, name: 'bundle.zip', id: 'bundle.zip' }],
+				kind,
+				entries: [
+					{
+						...entry,
+						name: kind === 'decrypt' ? 'bundle.spvault' : 'bundle.zip',
+						id: kind === 'decrypt' ? 'bundle.spvault' : 'bundle.zip'
+					}
+				],
 				driver: stubDriver({ id: 'local', writeFile: async () => entry }),
-				onDone: vi.fn(),
+				onLaunch: vi.fn(),
 				onCancel: vi.fn()
 			}
 		});
@@ -95,4 +101,32 @@ describe('FeArchiveDialog path copy', () => {
 		expect(box.checked).toBe(true);
 		expect(box.closest('label')?.textContent).toMatch(/Skip system files/);
 	});
+
+	it.each(['decompress', 'compress', 'encrypt', 'decrypt'] as const)(
+		'%s stays open with a progress bar when the job is running',
+		(kind) => {
+			render(FeArchiveDialog, {
+				props: {
+					kind,
+					entries: [{ ...entry, name: kind === 'decrypt' ? 'a.spvault' : entry.name }],
+					driver: stubDriver({ id: 'local', writeFile: async () => entry }),
+					jobRunning: true,
+					jobPct: 40,
+					jobLabel: 'working',
+					onLaunch: vi.fn(),
+					onHide: vi.fn(),
+					onAbort: vi.fn(),
+					onCancel: vi.fn()
+				}
+			});
+			const dlg = screen.getByTestId('fe-archive-dialog');
+			expect(dlg.classList.contains('busy-hidden')).toBe(false);
+			expect(dlg.getAttribute('data-busy')).toBe('true');
+			expect(dlg.getAttribute('data-kind')).toBe(kind);
+			expect(screen.getByTestId('fe-archive-progress').textContent).toMatch(/40%/);
+			expect(screen.getByTestId('fe-archive-hide')).toBeTruthy();
+			expect(screen.getByTestId('fe-archive-abort')).toBeTruthy();
+			expect(screen.queryByTestId('fe-archive-run')).toBeNull();
+		}
+	);
 });
