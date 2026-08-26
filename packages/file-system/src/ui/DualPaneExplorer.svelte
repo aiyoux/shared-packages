@@ -44,6 +44,7 @@
 	import {
 		type ExplorerDriver,
 		type ExplorerEntry,
+		type ExplorerEntryId,
 		type ExplorerOpenContext,
 		type ExplorerOpenTarget,
 		type OpenProjectContext
@@ -179,6 +180,11 @@
 		openLabel?: string;
 		explorerMode?: ExplorerMode;
 		onOpenProject?: (entry: ExplorerOpenTarget, ctx: OpenProjectContext) => void | Promise<void>;
+		/** Current explorer folder changed (enter/up/connection). parentId null is the connection root. */
+		onFolder?: (
+			parentId: ExplorerEntryId | null,
+			ctx: OpenProjectContext
+		) => void | Promise<void>;
 		persistenceVfs?: VfsService;
 		dualPaneKey?: string;
 		dualPaneDefault?: boolean;
@@ -278,6 +284,7 @@
 		openLabel,
 		explorerMode = 'manage',
 		onOpenProject,
+		onFolder,
 		persistenceVfs,
 		dualPaneKey = 'fe:dualPane',
 		dualPaneDefault = false,
@@ -488,6 +495,14 @@
 	function paneOpenProject(id: PaneId) {
 		if (!onOpenProject) return undefined;
 		return (entry: ExplorerOpenTarget) => onOpenProject(entry, paneOpenProjectContext(id));
+	}
+
+	function applyPaneCtx(id: PaneId, ctx: ExplorerContext) {
+		const p = paneState(id);
+		const folderChanged = p.ctx.parentId !== ctx.parentId || p.ctx.backend !== ctx.backend;
+		if (id === 'left') left = { ...left, ctx };
+		else right = { ...right, ctx };
+		if (folderChanged) void onFolder?.(ctx.parentId, paneOpenProjectContext(id));
 	}
 	function paneFileOpen(id: PaneId) {
 		if (!onOpen) return undefined;
@@ -1712,9 +1727,7 @@
 						onOpen={paneOnOpen('peer')}
 						onOpenProject={paneOpenProject(id)}
 						pending={panePending(id)}
-						onContextChange={(ctx) => {
-							right = { ...right, ctx };
-						}}
+						onContextChange={(ctx) => applyPaneCtx(id, ctx)}
 					>
 						{#snippet headerLeading()}
 							{@render paneConn(id)}
@@ -1747,11 +1760,7 @@
 								: undefined
 						}
 						pending={panePending(id)}
-						onContextChange={(ctx) => {
-							// Avoid full-pane rewrite storms — only patch ctx fields
-							if (id === 'left') left = { ...left, ctx };
-							else right = { ...right, ctx };
-						}}
+						onContextChange={(ctx) => applyPaneCtx(id, ctx)}
 					>
 						{#snippet headerLeading()}
 							{@render paneConn(id)}
@@ -1783,10 +1792,7 @@
 								: undefined
 						}
 						pending={panePending(id)}
-						onContextChange={(ctx) => {
-							if (id === 'left') left = { ...left, ctx };
-							else right = { ...right, ctx };
-						}}
+						onContextChange={(ctx) => applyPaneCtx(id, ctx)}
 					>
 						{#snippet headerLeading()}
 							{@render paneConn(id)}

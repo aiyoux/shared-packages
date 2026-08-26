@@ -13,6 +13,7 @@
 	} = $props();
 
 	let live = $state<GitSnapshot | null>(null);
+	let loadError = $state('');
 	const shown = $derived(snapshot ?? live);
 
 	$effect(() => {
@@ -21,14 +22,18 @@
 		if (!host || !id) return;
 		untrack(() => {
 			live = null;
+			loadError = '';
 		});
 		void host.snapshot(id).then((s) => {
 			live = s;
-		}).catch(() => {
+			loadError = '';
+		}).catch((e) => {
+			loadError = e instanceof Error ? e.message : 'Could not read git history';
 			live = { status: { branch: null, dirty: false }, log: [] };
 		});
 		return host.subscribe(id, (s) => {
 			live = s;
+			loadError = '';
 		});
 	});
 
@@ -45,7 +50,9 @@
 				<span class="dirty" data-testid="git-history-dirty">dirty</span>
 			{/if}
 		</p>
-		{#if shown.log.length === 0}
+		{#if loadError}
+			<p class="empty" data-testid="git-history-empty">{loadError}</p>
+		{:else if shown.log.length === 0}
 			<p class="empty" data-testid="git-history-empty">No commits</p>
 		{:else}
 			<ol class="log" data-testid="git-history-log">

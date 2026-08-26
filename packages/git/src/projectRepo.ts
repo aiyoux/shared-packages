@@ -19,7 +19,7 @@ export type ProjectBackendHint = {
  */
 export async function repoInputFromFolder(
 	driver: ExplorerDriver,
-	folderId: ExplorerEntryId,
+	folderId: ExplorerEntryId | null,
 	hint: ProjectBackendHint
 ): Promise<Omit<GitRepoRef, 'id'> | null> {
 	const hit = await findProjectRoot(driver, folderId);
