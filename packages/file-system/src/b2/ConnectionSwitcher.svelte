@@ -500,7 +500,7 @@
 		transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 	}
 	.conn-info:hover {
-		background: rgb(var(--overlay-rgb) / 0.06);
+		background: var(--overlay-light);
 		color: var(--text-primary);
 	}
 	.conn-caps-tip {
@@ -621,7 +621,7 @@
 		font-family: inherit;
 	}
 	.conn-trigger:hover:not(:disabled) {
-		background: rgb(var(--overlay-rgb) / 0.06);
+		background: var(--overlay-light);
 	}
 	.conn-trigger-label {
 		flex: 1;
@@ -656,7 +656,7 @@
 		transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 	}
 	.conn-gear:hover:not(:disabled) {
-		background: rgb(var(--overlay-rgb) / 0.06);
+		background: var(--overlay-light);
 		color: var(--text-primary);
 	}
 	.conn-trigger:disabled,
@@ -693,7 +693,7 @@
 		transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 	}
 	.conn-menu button:hover:not(:disabled) {
-		background: rgb(var(--overlay-rgb) / 0.12);
+		background: var(--overlay-medium);
 		color: var(--text-primary);
 	}
 	.conn-menu button.active {

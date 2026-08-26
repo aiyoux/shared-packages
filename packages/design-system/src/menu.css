@@ -1,6 +1,11 @@
 /*
  * Shared menu-row hover. One place so Import/Export, input-mode menus,
- * timezone pickers, and any `[role=menu]` popup do not each invent a wash.
+ * connection switchers, timezone pickers, and any `[role=menu]` popup
+ * share the same wash.
+ *
+ * Unlayered on purpose. Svelte scoped sheets set rest backgrounds
+ * (`.dropdown-item { background: transparent }`) unlayered, and unlayered
+ * always beats `@layer components` — so a layered hover never paints.
  *
  * Layout (padding, min-width, icons) stays in the caller. This sheet only
  * owns the "which row is under the pointer" treatment.
@@ -8,19 +13,19 @@
  * Import from the host layout next to tokens.css:
  *   import '@shared-packages/design-system/menu.css';
  */
-@layer components {
-	.dropdown-item:is(:hover, :focus-visible):not(:disabled),
-	[role='menu'] > button:is(:hover, :focus-visible):not(:disabled),
-	[role='menuitem']:is(:hover, :focus-visible):not(:disabled),
-	[role='menuitemcheckbox']:is(:hover, :focus-visible):not(:disabled),
-	[role='menuitemradio']:is(:hover, :focus-visible):not(:disabled) {
-		background: var(--overlay-medium);
-		color: var(--text-primary);
-	}
+.dropdown-item:is(:hover, :focus-visible):not(:disabled),
+[role='menu'] > button:is(:hover, :focus-visible):not(:disabled),
+[role='listbox'] > button:is(:hover, :focus-visible):not(:disabled),
+[role='menuitem']:is(:hover, :focus-visible):not(:disabled),
+[role='menuitemcheckbox']:is(:hover, :focus-visible):not(:disabled),
+[role='menuitemradio']:is(:hover, :focus-visible):not(:disabled) {
+	background: var(--overlay-medium);
+	color: var(--text-primary);
+}
 
-	.dropdown-item:disabled,
-	[role='menu'] > button:disabled,
-	[role='menuitem'][aria-disabled='true'] {
-		cursor: not-allowed;
-	}
+.dropdown-item:disabled,
+[role='menu'] > button:disabled,
+[role='listbox'] > button:disabled,
+[role='menuitem'][aria-disabled='true'] {
+	cursor: not-allowed;
 }

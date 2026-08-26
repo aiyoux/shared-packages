@@ -54,12 +54,12 @@
 	}
 
 	::-webkit-scrollbar-thumb {
-		background: rgb(var(--overlay-rgb) / 0.12);
+		background: rgba(var(--overlay-rgb), 0.12);
 		border-radius: var(--radius-sm);
 	}
 
 	::-webkit-scrollbar-thumb:hover {
-		background: rgb(var(--overlay-rgb) / 0.22);
+		background: rgba(var(--overlay-rgb), 0.22);
 	}
 
 	@media (prefers-reduced-motion: reduce) {
