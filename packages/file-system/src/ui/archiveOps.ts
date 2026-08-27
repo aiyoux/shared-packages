@@ -509,9 +509,7 @@ export async function writeEntriesToDriver(
 		const destParent = flatten ? parentId : await ensureDir(dirs);
 		throwIfAborted(signal);
 		const destName = flatten && dirs.length ? `${dirs.join('__')}__${fileName}` : fileName;
-		const copy = Uint8Array.from(file.data);
-		const blob = new Blob([copy]);
-		const size = blob.size;
+		const size = file.data.byteLength;
 		onFile?.({
 			name: destName,
 			parentId: destParent,
@@ -520,7 +518,9 @@ export async function writeEntriesToDriver(
 			done: false,
 			entryKind: 'file'
 		});
-		const out = new File([blob], destName);
+		// No defensive copy: the File constructor snapshots the bytes once, and
+		// every extra copy doubled peak memory for large members.
+		const out = new File([file.data as BlobPart], destName);
 		if (typeof driver.upload === 'function') {
 			await driver.upload(destParent, out, {
 				signal,
@@ -619,6 +619,8 @@ export type ExpandPackedOpts = {
 	/** Preferred compress library. Falls back to a catalog engine that supports the codec. */
 	compressEngineId?: CompressEngineId;
 	onEngine?: (role: EngineRole) => void;
+	/** Vault (decrypt) stage ticks while unsealing — monolithic, not byte-granular. */
+	onVaultProgress?: (stage: number, total: number) => void;
 };
 
 export async function expandPackedBytes(
@@ -634,7 +636,9 @@ export async function expandPackedBytes(
 	throwIfAborted(opts?.signal);
 	if (isVaultBytes(bytes) || isVaultName(name)) {
 		if (!password) throw new Error('Password is required');
-		const opened = await openVault(bytes, password);
+		const opened = await openVault(bytes, password, {
+			onProgress: opts?.onVaultProgress
+		});
 		const info = cryptoEngineInfo(opened.engine);
 		opts?.onEngine?.({
 			kind: 'crypto',
@@ -806,6 +810,10 @@ export async function runArchiveJob(spec: ArchiveJobSpec): Promise<ArchiveJobRes
 		let filesDone = 0;
 		const onFile = (ev: ArchiveWriteProgress) => {
 			if (listing) onProgress?.(ev);
+			// Folder rows aggregate their children's bytes — counting them here
+			// as well double-counts and pushed the job chip to 99% before the
+			// last file was written. Only file rows advance the job fraction.
+			if (ev.entryKind === 'folder') return;
 			const frac = ev.done
 				? (filesDone + 1) / totalFiles
 				: (filesDone + (ev.size ? ev.transferred / ev.size : 0)) / totalFiles;
@@ -835,12 +843,23 @@ export async function runArchiveJob(spec: ArchiveJobSpec): Promise<ArchiveJobRes
 	if (spec.useHost) {
 		if (!driver.archive) throw new Error('This connection cannot archive on the host');
 		emitJobPct(0);
-		await driver.archive({
-			op: spec.hostOp!,
-			paths: entries.map((e) => driver.absolutePath!(e.id)),
-			to: spec.hostDestPath!,
-			password: kind === 'encrypt' || kind === 'decrypt' ? spec.password : undefined
-		});
+		await driver.archive(
+			{
+				op: spec.hostOp!,
+				paths: entries.map((e) => driver.absolutePath!(e.id)),
+				to: spec.hostDestPath!,
+				password: kind === 'encrypt' || kind === 'decrypt' ? spec.password : undefined
+			},
+			{
+				signal,
+				onProgress: (transferred, size) => {
+					if (signal?.aborted) return;
+					// The daemon streams (transferred, total); emitJobPct caps at 99
+					// until the awaited result confirms completion.
+					emitJobPct((transferred / Math.max(size ?? 0, 1)) * 100);
+				}
+			}
+		);
 		throwIfAborted(signal);
 		emitJobPct(100, true);
 		return { title, engines };
@@ -898,7 +917,16 @@ export async function runArchiveJob(spec: ArchiveJobSpec): Promise<ArchiveJobRes
 				spec.cryptoEngineId,
 				packed,
 				spec.password,
-				packingAsTree(entries) ? { kind: 'tree' } : undefined
+				packingAsTree(entries)
+					? {
+							kind: 'tree',
+							// PBKDF2 + AES-GCM are monolithic — stage ticks spread across
+							// the collect→pack window so the chip is not dead air.
+							onProgress: (stage, total) => {
+								emitJobPct(COLLECT_PCT + (PACK_PCT - COLLECT_PCT) * (stage / total));
+							}
+						}
+					: undefined
 			);
 			throwIfAborted(signal);
 			emitJobPct(PACK_PCT);
@@ -933,6 +961,11 @@ export async function runArchiveJob(spec: ArchiveJobSpec): Promise<ArchiveJobRes
 					skipSystemFiles: spec.skipSystemFiles,
 					signal,
 					compressEngineId: spec.compressEngineId,
+					onVaultProgress: (stage, total) => {
+						// Unseal is the whole expand phase for a decrypt — spread its
+						// stage ticks across the expand window.
+						emitJobPct((stage / total) * EXPAND_PCT);
+					},
 					onEngine: (role) => {
 						remember(
 							role,

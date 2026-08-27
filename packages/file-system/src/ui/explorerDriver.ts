@@ -209,7 +209,10 @@ export interface ExplorerDriver {
 			to: string;
 			password?: string;
 		},
-		opts?: { signal?: AbortSignal }
+		opts?: {
+			signal?: AbortSignal;
+			onProgress?: (transferred: number, size?: number) => void;
+		}
 	): Promise<{ path: string; size?: number; kind: string }>;
 	/**
 	 * Collision-free dest name under `parentId`. WebRTC ferry uniqueNames once

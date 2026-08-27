@@ -101,6 +101,9 @@ export async function expandBytes(
 				size: f.data.byteLength,
 				done: true
 			});
+			// tar engines parse synchronously — yield so the UI can paint the
+			// per-member ticks instead of one frozen burst.
+			await new Promise((r) => setTimeout(r, 0));
 		}
 		return files;
 	}

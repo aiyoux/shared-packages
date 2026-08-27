@@ -313,6 +313,19 @@ export class VfsService {
 	}
 
 	private async nextAppendSortOrder(parentId: string | null): Promise<number> {
+		// Indexed max-sortOrder read: extracting thousands of files into one
+		// folder used to load and sort every sibling per write (quadratic).
+		// Rows without a sortOrder fall outside the compound index, but the v2
+		// upgrade backfilled every active row and every writer sets one, so the
+		// indexed max is the real max. Root (parentId null) cannot use the
+		// index — null is not an IndexedDB key — so it keeps the scan.
+		if (parentId !== null) {
+			const last = await this.db.nodes
+				.where('[parentId+sortOrder]')
+				.between([parentId, -Infinity], [parentId, Infinity])
+				.last();
+			return (last?.sortOrder ?? -16384) + 16384;
+		}
 		const siblings = this.sortSiblingsForOrder(await this.activeSiblings(parentId));
 		if (!siblings.length) return 0;
 		const last = siblings[siblings.length - 1]!;
@@ -403,15 +416,32 @@ export class VfsService {
 		excludeId?: string,
 		onConflict: 'rename' | 'error' | 'overwrite' = 'rename'
 	): Promise<string> {
-		const siblings = await this.activeSiblings(parentId, excludeId);
-		const taken = new Set(siblings.map((s) => s.name));
-		if (!taken.has(name)) return name;
+		// Name-probe via the [parentId+name] index instead of loading every
+		// sibling: writing thousands of extracted files used to rescan the
+		// whole folder per file (quadratic). Root keeps the scan — null parent
+		// cannot ride a compound index.
+		let taken: (candidate: string) => Promise<boolean>;
+		if (parentId === null) {
+			const siblings = await this.activeSiblings(parentId, excludeId);
+			const names = new Set(siblings.map((s) => s.name));
+			taken = async (candidate) => names.has(candidate);
+		} else {
+			taken = async (candidate) => {
+				const hit = await this.db.nodes
+					.where('[parentId+name]')
+					.equals([parentId, candidate])
+					.and((n) => n.deletedAt == null && n.id !== excludeId)
+					.first();
+				return hit != null;
+			};
+		}
+		if (!(await taken(name))) return name;
 		if (onConflict === 'error') {
 			throw new VfsError('NAME_CONFLICT', `Name already exists: ${name}`);
 		}
 		if (onConflict === 'overwrite') return name;
 		let i = 1;
-		while (taken.has(withNumericSuffix(name, i))) i++;
+		while (await taken(withNumericSuffix(name, i))) i++;
 		return withNumericSuffix(name, i);
 	}
 

@@ -3129,7 +3129,11 @@
 		{#snippet pendingChrome(p: ListingPending, onIcon: boolean = false)}
 			{@const behindPct = pendingPercent(p)}
 			{@const aheadN = p.ready ?? p.transferred}
-			{@const aheadPct = Math.min(100, Math.round(p.size ? (aheadN / p.size) * 100 : behindPct))}
+			{@const rowDone = p.done || p.status === 'done'}
+			{@const aheadPct = Math.min(
+				rowDone ? 100 : 99,
+				Math.round(p.size ? (aheadN / p.size) * 100 : behindPct)
+			)}
 			{@const stacked = aheadPct !== behindPct}
 			<div
 				class="fe-pending-bar"

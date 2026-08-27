@@ -210,7 +210,7 @@ describe('stackTransferItems', () => {
 		assert.equal(stackedStageLabel(stacked[0]!), '100% · 0%');
 	});
 
-	it('shows 100% when bytes are in but the dest write is not done', () => {
+	it('labels bytes-in-but-not-done Finishing…, never a premature 100%', () => {
 		assert.equal(
 			stackedStageLabel({
 				ahead: 100,
@@ -218,7 +218,7 @@ describe('stackTransferItems', () => {
 				size: 100,
 				done: false
 			}),
-			'100%'
+			'Finishing…'
 		);
 		assert.equal(
 			stackedStageLabel({

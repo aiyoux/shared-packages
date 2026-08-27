@@ -249,7 +249,10 @@ export type MonitorTransport = {
 	 */
 	archive?(
 		req: MonitorArchiveRequest,
-		opts?: { signal?: AbortSignal }
+		opts?: {
+			signal?: AbortSignal;
+			onProgress?: (transferred: number, total?: number) => void;
+		}
 	): Promise<MonitorArchiveResult>;
 	health(): Promise<unknown>;
 	/** Idempotent POST /v1/watch/roots */
@@ -1048,7 +1051,10 @@ export function createMonitorClient(opts: {
 			const t = setTimeout(() => ac.abort(), 300_000);
 			const onAbort = () => ac.abort();
 			opts?.signal?.addEventListener('abort', onAbort);
-			const url = joinUrl(base, '/v1/fs/archive');
+			// `progress=1` streams NDJSON CopyProgress ticks plus a final
+			// {done:true, path, size, kind} line. Older daemons (and validation
+			// errors) answer with plain JSON — both are handled.
+			const url = joinUrl(base, '/v1/fs/archive?progress=1');
 			try {
 				const res = await fetchFn(
 					url,
@@ -1064,6 +1070,26 @@ export function createMonitorClient(opts: {
 						signal: ac.signal
 					})
 				);
+				const contentType = res.headers.get('content-type') ?? '';
+				if (contentType.includes('ndjson') && res.ok && res.body) {
+					let result: MonitorArchiveResult | null = null;
+					await consumeNdjsonProgress(res, (ev) => {
+						if (ev.done && typeof (ev as { path?: unknown }).path === 'string') {
+							const o = ev as { path: string; size?: number; kind?: string };
+							result = {
+								path: o.path,
+								size: typeof o.size === 'number' ? o.size : undefined,
+								kind: typeof o.kind === 'string' ? o.kind : 'file'
+							};
+							return;
+						}
+						if (ev.transferred != null || ev.size != null) {
+							opts?.onProgress?.(ev.transferred ?? 0, ev.size);
+						}
+					});
+					if (result) return result;
+					throw new Error('Archive stream ended without a result');
+				}
 				const parsed = await res.json().catch(() => ({}));
 				if (!res.ok) {
 					const err = (parsed as { error?: { message?: string; code?: string } | string }).error;

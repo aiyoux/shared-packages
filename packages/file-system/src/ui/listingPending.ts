@@ -1,8 +1,9 @@
 /**
  * Merge in-flight transfer rows into the explorer listing so a copy/upload
  * occupies one line: translucent with a bar while bytes move, solid once the
- * dest file is in the listing (or still a 100% placeholder if the dest has
- * not listed it yet).
+ * dest file is in the listing. Bytes can be fully sent while the dest write /
+ * confirm is still running — the row stays at 99% "Finishing…" until the job
+ * reports done, matching the header chip's never-100%-early rule.
  */
 import type { ExplorerEntry } from './explorerDriver.js';
 
@@ -36,7 +37,10 @@ export function pendingPercent(p: ListingPending): number {
 	}
 	if (p.done || p.status === 'done') return 100;
 	if (!p.size) return 0;
-	return Math.min(100, Math.round((p.transferred / Math.max(p.size, 1)) * 100));
+	// Cap at 99 until the job confirms: bytes can be fully sent while the
+	// dest write/listing is still finishing, and a row at 100% next to a
+	// header at 99% reads as two different jobs.
+	return Math.min(99, Math.round((p.transferred / Math.max(p.size, 1)) * 100));
 }
 
 /** Bytes are in; dest write/hash may still be finishing. */
@@ -62,8 +66,15 @@ export function pendingOverlay(
 export function pendingLabel(p: ListingPending): string {
 	if (p.status === 'failed') return 'Failed';
 	if (p.status === 'hashing') return 'Hashing…';
+	const done = p.done || p.status === 'done';
+	if (!done && p.status !== 'cancelled' && pendingBytesComplete(p)) return 'Finishing…';
 	const firstN = p.ready ?? p.transferred;
-	const first = p.size ? Math.min(100, Math.round((firstN / Math.max(p.size, 1)) * 100)) : pendingPercent(p);
+	// Both legs cap at 99 until the job confirms — a "100% · 99%" split is
+	// the same two-numbers confusion the cap exists to prevent.
+	const cap = done ? 100 : 99;
+	const first = p.size
+		? Math.min(cap, Math.round((firstN / Math.max(p.size, 1)) * 100))
+		: pendingPercent(p);
 	const second = pendingPercent(p);
 	if (first !== second) return `${first}% · ${second}%`;
 	return `${second}%`;

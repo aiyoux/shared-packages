@@ -60,6 +60,9 @@ export function stackedStageLabel(t: {
 	const second = stagePercent(t.behind, t.size, t.done);
 	if (first !== second) return `${first}% · ${second}%`;
 	if (t.done) return 'Done';
+	// Bytes fully in but the dest write/confirm still running — never claim
+	// 100% before the job does (listing rows show the same Finishing… rule).
+	if (t.size > 0 && t.behind >= t.size) return 'Finishing…';
 	return `${second}%`;
 }
 

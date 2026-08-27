@@ -60,5 +60,16 @@ export class SharedVfsDatabase extends Dexie {
 					}
 				}
 			});
+		// v3: compound sortOrder index so nextAppendSortOrder can read the last
+		// sibling without loading and sorting the whole folder (extracting
+		// thousands of files was quadratic).
+		this.version(3).stores({
+			nodes:
+				'id, parentId, kind, fileType, name, updatedAt, deletedAt, [parentId+name], [parentId+deletedAt], [parentId+sortOrder]',
+			blobRefs: 'id, opfsPath, createdAt',
+			drafts: 'id, appId, updatedAt',
+			meta: 'key',
+			leases: 'key, expiresAt'
+		});
 	}
 }

@@ -145,16 +145,17 @@ export function createLocalExplorerDriver(
 		},
 
 		async writeFile(parentId, file) {
-			const body = new Uint8Array(await file.arrayBuffer());
+			// Pass the File through: serializeBody snapshots it once, and the
+			// old arrayBuffer() rewrap added a full extra copy per written file.
 			const n = await (vfs as unknown as { writeFile: (i: {
 				parentId: string | null;
 				name: string;
-				body: Uint8Array;
+				body: unknown;
 				contentType?: string;
 			}) => Promise<import('../types.js').VfsNode> }).writeFile({
 				parentId,
 				name: file.name,
-				body,
+				body: file,
 				contentType: file.type || undefined
 			});
 			return nodeToEntry(n);

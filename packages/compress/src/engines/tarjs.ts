@@ -43,8 +43,13 @@ export const tarjsEngine: CompressionEngine = {
 		const out: ArchiveEntry[] = [];
 		for (const info of reader.fileInfos) {
 			if (!info.name || info.name.endsWith('/')) continue;
-			// type 0 = regular file; skip directories/symlinks/etc.
-			if (info.type !== 0) continue;
+			// Runtime `type` is an ASCII char code number (48 = '0' regular
+			// file, 53 = '5' directory), despite being typed as a string.
+			// Accept the regular-file codes ('0' ustar, NUL v7, '7' contiguous)
+			// and skip directories/symlinks/etc.
+			const typeChar =
+				typeof info.type === 'number' ? String.fromCharCode(info.type) : String(info.type ?? '0');
+			if (typeChar !== '0' && typeChar !== '\x00' && typeChar !== '7') continue;
 			const fileBlob = reader.getFileBlob(info.name);
 			if (!fileBlob) continue;
 			const data = new Uint8Array(await fileBlob.arrayBuffer());

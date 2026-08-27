@@ -148,6 +148,9 @@ export const fflateEngine: CompressionEngine = {
 					size: data.byteLength,
 					done: true
 				});
+				// unzipSync is fully synchronous — yield so each member tick can
+				// paint and pending UI work (cancel, progress) can run between.
+				await new Promise((r) => setTimeout(r, 0));
 			}
 			return out;
 		}

@@ -135,6 +135,47 @@ describe('tarjs', () => {
 		expect(expanded[0]!.name).toBe('note.txt');
 		expect(new TextDecoder().decode(expanded[0]!.data)).toBe(new TextDecoder().decode(SAMPLE));
 	});
+
+	it('reads a real ustar tar (GNU-style headers, numeric type codes)', async () => {
+		// Field report: legitimate tar files did not extract at all. tarjs's
+		// TarReader reports header `type` as an ASCII char code at runtime
+		// (48 = '0' regular file, 53 = '5' directory) while the engine wrapper
+		// compared against 0 — so every regular file was filtered out and
+		// untar returned [] ("Nothing to extract").
+		const header = (name: string, type: string, size: number): Uint8Array => {
+			const block = new Uint8Array(512);
+			block.set(new TextEncoder().encode(name).slice(0, 100), 0);
+			block.set(new TextEncoder().encode('0000644'), 100);
+			block.set(new TextEncoder().encode('0000000'), 108);
+			block.set(new TextEncoder().encode('0000000'), 116);
+			block.set(new TextEncoder().encode(size.toString(8).padStart(11, '0')), 124);
+			block.set(new TextEncoder().encode(type), 156);
+			block.set(new TextEncoder().encode('ustar'), 257);
+			block.set(new TextEncoder().encode('00'), 263);
+			return block;
+		};
+		const fileData = new TextEncoder().encode('tar body');
+		const blocks: Uint8Array[] = [
+			header('tooldir/', '5', 0),
+			header('tooldir/a.txt', '0', fileData.length),
+			new Uint8Array(fileData),
+			// pad to 512
+			new Uint8Array((512 - (fileData.length % 512)) % 512),
+			new Uint8Array(1024) // end-of-archive
+		];
+		const archive = new Uint8Array(blocks.reduce((n, b) => n + b.length, 0));
+		let off = 0;
+		for (const b of blocks) {
+			archive.set(b, off);
+			off += b.length;
+		}
+		for (const id of ['tarjs', 'nanotar'] as const) {
+			const engine = await loadEngine(id);
+			const files = await engine.untar!(archive);
+			expect(files.map((f) => f.name)).toEqual(['tooldir/a.txt']);
+			expect(new TextDecoder().decode(files[0]!.data)).toBe('tar body');
+		}
+	});
 });
 
 describe('nanotar', () => {

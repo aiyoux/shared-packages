@@ -32,6 +32,12 @@ export type SealOptions = {
 	kind?: VaultKind;
 	/** Override KDF cost (PBKDF2 iterations or Argon2 opslimit). */
 	kdf?: KdfParams;
+	/**
+	 * Coarse stage progress for the UI: (stage, total) where stage counts
+	 * payload-encoded → key-derived → ciphertext-sealed → written. AES-GCM is
+	 * monolithic, so this is stage-granular, not byte-granular.
+	 */
+	onProgress?: (stage: number, total: number) => void;
 };
 
 export type OpenedVault = {
@@ -181,6 +187,8 @@ export async function sealVault(
 	if (kind === 'single' && entries.length !== 1) {
 		throw new Error('Single-file vaults can hold exactly one file');
 	}
+	const onProgress = options?.onProgress ?? (() => {});
+	onProgress(0, 4);
 
 	const engine = await loadEngine(engineId);
 	const kdf = options?.kdf ?? engine.defaultKdf();
@@ -188,23 +196,36 @@ export async function sealVault(
 	const nonce = engine.randomBytes(Math.max(engine.nonceLength, 24));
 	const header = writeHeader(engineId, kind, salt, nonce, kdf);
 	const aad = header.subarray(0, 20);
-	const key = await engine.deriveKey(password, salt, kdf);
 	const plain = encodeEntries(kind, entries);
+	onProgress(1, 4);
+	const key = await engine.deriveKey(password, salt, kdf);
+	onProgress(2, 4);
 	const cipher = await engine.encrypt(plain, key, nonce, aad);
+	onProgress(3, 4);
 	const data = new Uint8Array(header.length + cipher.length);
 	data.set(header, 0);
 	data.set(cipher, header.length);
+	onProgress(4, 4);
 	return { name: suggestVaultName(entries), data, kind };
 }
 
-export async function openVault(bytes: Uint8Array, password: string): Promise<OpenedVault> {
+export async function openVault(
+	bytes: Uint8Array,
+	password: string,
+	opts?: { onProgress?: (stage: number, total: number) => void }
+): Promise<OpenedVault> {
 	if (!password) throw new Error('Password is required');
+	const onProgress = opts?.onProgress ?? (() => {});
+	onProgress(0, 3);
 	const header = parseVaultHeader(bytes);
 	const engine = await loadEngine(header.engine);
 	const aad = bytes.subarray(0, 20);
 	const key = await engine.deriveKey(password, header.salt, header.kdf);
+	onProgress(1, 3);
 	const cipher = bytes.subarray(VAULT_HEADER_SIZE);
 	const plain = await engine.decrypt(cipher, key, header.nonce, aad);
+	onProgress(2, 3);
 	const entries = decodeEntries(plain, header.kind);
+	onProgress(3, 3);
 	return { kind: header.kind, engine: header.engine, entries };
 }

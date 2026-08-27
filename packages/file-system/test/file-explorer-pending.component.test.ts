@@ -94,7 +94,9 @@ describe('FileExplorer stacked pending bar', () => {
 		expect(solid.querySelector('.fe-pending-pct')).toBeNull();
 	});
 
-	it('keeps a 100% placeholder until the dest lists the file', async () => {
+	it('caps the placeholder at Finishing… until the dest lists the file', async () => {
+		// Row and header must never disagree: bytes fully sent but the dest
+		// write/listing still running stays sub-100 with a Finishing… label.
 		const vfs = createVfs({
 			dbName: `fe-pending-writing-${Date.now()}`,
 			memoryOpfs: true,
@@ -119,7 +121,7 @@ describe('FileExplorer stacked pending bar', () => {
 			}
 		});
 		const row = await screen.findByTestId('fe-pending-row');
-		expect(row.querySelector('.fe-pending-pct')?.textContent).toBe('100%');
+		expect(row.querySelector('.fe-pending-pct')?.textContent).toBe('Finishing…');
 	});
 
 	it('icon view keeps the pending bar a thin strip on the thumbnail', async () => {

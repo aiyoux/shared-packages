@@ -62,12 +62,23 @@ describe('listing pending merge', () => {
 		assert.equal(rows[0].pending, null);
 	});
 
-	it('keeps 100% after bytes finish if the dest has not listed the file yet', () => {
+	it('caps at Finishing… after bytes finish if the dest has not listed the file yet', () => {
+		// Row and header must never disagree: bytes can be fully sent while the
+		// dest write/listing is still running, and a row at 100% next to a
+		// header at 99% reads as two different jobs.
 		const p = pending({ name: 'clip.wav', transferred: 100, size: 100 });
-		assert.equal(pendingLabel(p), '100%');
+		assert.equal(pendingLabel(p), 'Finishing…');
+		assert.equal(pendingPercent(p), 99);
 		const rows = mergeListingWithPending([], [p]);
 		assert.equal(rows[0].placeholder, true);
-		assert.equal(pendingLabel(rows[0].pending!), '100%');
+		assert.equal(pendingLabel(rows[0].pending!), 'Finishing…');
+		assert.equal(pendingPercent(rows[0].pending!), 99);
+	});
+
+	it('shows 100% only once the job reports done', () => {
+		const p = pending({ name: 'clip.wav', transferred: 100, size: 100, done: true });
+		assert.equal(pendingLabel(p), '100%');
+		assert.equal(pendingPercent(p), 100);
 	});
 
 	it('keeps Failed overlay at the last percent so a hung upload is not 100%', () => {
