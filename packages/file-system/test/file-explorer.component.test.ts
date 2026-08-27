@@ -102,6 +102,48 @@ describe('FileExplorer component', () => {
 		);
 	});
 
+	it('uploads a picked folder through the folder-upload picker input', async () => {
+		render(FileExplorer, { props: { mode: 'manage', vfs, variant: 'panel' } });
+		await screen.findByTestId('fe-list');
+		expect(screen.getByTestId('fe-folder-upload').parentElement?.getAttribute('data-tooltip')).toBe(
+			'Select folder'
+		);
+		const input = document.querySelector(
+			'[data-testid="fe-folder-upload-input"]'
+		) as HTMLInputElement | null;
+		expect(input?.hasAttribute('webkitdirectory')).toBe(true);
+		if (!input) return;
+		const a = new File(['a-body'], 'a.txt', { type: 'text/plain' });
+		Object.defineProperty(a, 'webkitRelativePath', { value: 'Picked/a.txt' });
+		const b = new File(['b-body'], 'b.txt', { type: 'text/plain' });
+		Object.defineProperty(b, 'webkitRelativePath', { value: 'Picked/inner/b.txt' });
+		const files = [a, b];
+		// Same FileList-literal pattern as the drop tests — jsdom inputs cannot
+		// be assigned real FileLists.
+		const fileList = {
+			length: 2,
+			0: a,
+			1: b,
+			item: (i: number) => files[i] ?? null,
+			[Symbol.iterator]: function* () {
+				yield* files;
+			}
+		};
+		Object.defineProperty(input, 'files', { value: fileList, configurable: true });
+		await fireEvent.change(input);
+		// Same result as dragging the folder in: mkdir tree, nested write.
+		await viWaitFor(async () => {
+			const root = await vfs.list({ parentId: null });
+			const picked = root.find((n) => n.name === 'Picked' && n.kind === 'folder');
+			if (!picked) return false;
+			const inner = await vfs.list({ parentId: picked.id });
+			const dir = inner.find((n) => n.name === 'inner' && n.kind === 'folder');
+			if (!dir) return false;
+			const out = await vfs.list({ parentId: dir.id });
+			return out.some((n) => n.name === 'b.txt');
+		});
+	});
+
 	it('renders manage chrome with new folder and trash controls', async () => {
 		render(FileExplorer, { props: { mode: 'manage', vfs, variant: 'panel' } });
 		expect(await screen.findByTestId('file-explorer')).toBeTruthy();

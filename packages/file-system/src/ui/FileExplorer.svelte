@@ -472,6 +472,7 @@
 	let uploadBusy = $state(false);
 	let osDropOver = $state(false);
 	let fileInputEl = $state<HTMLInputElement | null>(null);
+	let folderInputEl = $state<HTMLInputElement | null>(null);
 
 	/** Per-instance DnD session (dual-pane safe). */
 	const dnd = createTreeDndSession();
@@ -2681,6 +2682,7 @@
 	const copyTip = $derived(selected.size && caps.supportsCopy ? 'Copy' : 'Select an item to copy');
 	const detailsTip = $derived(selected.size ? 'Details' : 'Select an item for details');
 	const uploadTip = $derived(uploadBusy ? 'Uploading…' : 'Select file');
+	const folderUploadTip = $derived(uploadBusy ? 'Uploading…' : 'Select folder');
 	const previewTip = $derived(
 		previewDock === 'off'
 			? 'Show preview below the list'
@@ -2914,6 +2916,31 @@
 							multiple
 							hidden
 							data-testid="fe-upload-input"
+							onchange={(e) => {
+								const list = (e.currentTarget as HTMLInputElement).files;
+								if (!list?.length) return;
+								const el = e.currentTarget;
+								void importDeviceFiles(Array.from(list), parentId).finally(() => {
+									el.value = '';
+								});
+							}}
+						/>
+						<FeTipIconBtn
+							testid="fe-folder-upload"
+							tip={folderUploadTip}
+							icon="folder-up"
+							disabled={uploadBusy}
+							onclick={() => folderInputEl?.click()}
+						/>
+						<input
+							bind:this={folderInputEl}
+							type="file"
+							multiple
+							hidden
+							data-testid="fe-folder-upload-input"
+							// Folder picker: each File carries webkitRelativePath, so the
+							// import recreates the tree exactly like a dragged-in folder.
+							{...({ webkitdirectory: '' } as Record<string, string>)}
 							onchange={(e) => {
 								const list = (e.currentTarget as HTMLInputElement).files;
 								if (!list?.length) return;
