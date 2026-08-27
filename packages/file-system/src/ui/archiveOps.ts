@@ -415,7 +415,14 @@ export async function writeEntriesToDriver(
 ): Promise<void> {
 	const put = driver.writeFile ?? driver.upload;
 	if (!put) throw new Error('This location cannot receive files');
-	const flatten = !driver.mkdir || !driver.capabilities.supportsMkdir;
+	// Same contract as dropping/picking folders in (osDrop.ts): never silently
+	// flatten a nested tree into dir__file names on a driver that cannot mkdir.
+	const nested = files.some((f) => splitPackedPath(f.path).dirs.length > 0);
+	if (nested && (!driver.mkdir || !driver.capabilities.supportsMkdir)) {
+		throw new Error(
+			'This connection cannot create folders. Extract individual files instead, or pick another location.'
+		);
+	}
 	const folderIds = new Map<string, string | null>([['', parentId]]);
 
 	type FolderAgg = {
@@ -427,29 +434,27 @@ export async function writeEntriesToDriver(
 		doneFiles: number;
 	};
 	const folderAgg = new Map<string, FolderAgg>();
-	if (!flatten) {
-		for (const file of files) {
-			const { dirs, file: fileName } = splitPackedPath(file.path);
-			if (!fileName) continue;
-			let parentKey = '';
-			for (const seg of dirs) {
-				const key = parentKey ? `${parentKey}/${seg}` : seg;
-				let agg = folderAgg.get(key);
-				if (!agg) {
-					agg = {
-						name: seg,
-						parentKey,
-						totalBytes: 0,
-						totalFiles: 0,
-						doneBytes: 0,
-						doneFiles: 0
-					};
-					folderAgg.set(key, agg);
-				}
-				agg.totalBytes += file.data.byteLength;
-				agg.totalFiles += 1;
-				parentKey = key;
+	for (const file of files) {
+		const { dirs, file: fileName } = splitPackedPath(file.path);
+		if (!fileName) continue;
+		let parentKey = '';
+		for (const seg of dirs) {
+			const key = parentKey ? `${parentKey}/${seg}` : seg;
+			let agg = folderAgg.get(key);
+			if (!agg) {
+				agg = {
+					name: seg,
+					parentKey,
+					totalBytes: 0,
+					totalFiles: 0,
+					doneBytes: 0,
+					doneFiles: 0
+				};
+				folderAgg.set(key, agg);
 			}
+			agg.totalBytes += file.data.byteLength;
+			agg.totalFiles += 1;
+			parentKey = key;
 		}
 	}
 
@@ -470,7 +475,6 @@ export async function writeEntriesToDriver(
 
 	async function ensureDir(dirs: string[]): Promise<string | null> {
 		if (!dirs.length) return parentId;
-		if (flatten) return parentId;
 		const key = dirs.join('/');
 		const hit = folderIds.get(key);
 		if (hit !== undefined) return hit;
@@ -492,10 +496,8 @@ export async function writeEntriesToDriver(
 		return created.id;
 	}
 
-	if (!flatten) {
-		for (const [key, agg] of folderAgg) {
-			if (agg.parentKey === '') emitFolder(key);
-		}
+	for (const [key, agg] of folderAgg) {
+		if (agg.parentKey === '') emitFolder(key);
 	}
 
 	let written = 0;
@@ -503,12 +505,12 @@ export async function writeEntriesToDriver(
 		throwIfAborted(signal);
 		const { dirs, file: fileName } = splitPackedPath(file.path);
 		if (!fileName) {
-			if (dirs.length && !flatten) await ensureDir(dirs);
+			if (dirs.length) await ensureDir(dirs);
 			continue;
 		}
-		const destParent = flatten ? parentId : await ensureDir(dirs);
+		const destParent = await ensureDir(dirs);
 		throwIfAborted(signal);
-		const destName = flatten && dirs.length ? `${dirs.join('__')}__${fileName}` : fileName;
+		const destName = fileName;
 		const size = file.data.byteLength;
 		onFile?.({
 			name: destName,
@@ -549,7 +551,7 @@ export async function writeEntriesToDriver(
 			done: true,
 			entryKind: 'file'
 		});
-		if (!flatten && dirs.length) {
+		if (dirs.length) {
 			let parentKey = '';
 			for (const seg of dirs) {
 				const key = parentKey ? `${parentKey}/${seg}` : seg;

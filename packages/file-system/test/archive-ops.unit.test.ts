@@ -35,6 +35,40 @@ function fileEntry(partial: Partial<ExplorerEntry> & Pick<ExplorerEntry, 'id' | 
 	};
 }
 
+/** Driver that can receive files but cannot create folders. */
+function noMkdirDriver(writes: string[]): Parameters<typeof writeEntriesToDriver>[0] {
+	return {
+		id: 'mock-nomkdir',
+		capabilities: {
+			supportsTrash: false,
+			supportsSoftDelete: false,
+			supportsRename: false,
+			supportsMove: false,
+			supportsCopy: false,
+			supportsMkdir: false,
+			supportsUpload: false,
+			supportsDownload: false,
+			supportsSiblingOrder: false,
+			supportsDragOut: false
+		},
+		async ready() {},
+		async list() {
+			return { entries: [], truncated: false };
+		},
+		async getPath() {
+			return [];
+		},
+		async delete() {},
+		async writeFile(
+			_parentId: string | null,
+			file: File
+		) {
+			writes.push(file.name);
+			return { id: `f${writes.length}`, parentId: _parentId, name: file.name, kind: 'file' };
+		}
+	} as unknown as Parameters<typeof writeEntriesToDriver>[0];
+}
+
 describe('archiveOps', () => {
 	it('names an extract subfolder after the archive', () => {
 		assert.equal(extractContainerName('photos.zip'), 'photos');
@@ -215,6 +249,30 @@ describe('archiveOps', () => {
 		assert.ok(parents.every((p) => p === folder.id));
 		assert.ok(parents.every((p) => p !== null));
 		await vfs.db.delete();
+	});
+
+	it('writeEntriesToDriver throws on nested entries for a mkdir-less driver', async () => {
+		const writes: string[] = [];
+		const driver = noMkdirDriver(writes);
+		// No silent dir__file flattening — same refusal as dropping a folder in.
+		await assert.rejects(
+			writeEntriesToDriver(driver, null, [
+				{ path: 'trip/inner/a.txt', data: enc.encode('a') },
+				{ path: 'trip/b.txt', data: enc.encode('b') }
+			]),
+			/cannot create folders/i
+		);
+		assert.deepEqual(writes, []);
+	});
+
+	it('writeEntriesToDriver still extracts flat entries for a mkdir-less driver', async () => {
+		const writes: string[] = [];
+		const driver = noMkdirDriver(writes);
+		await writeEntriesToDriver(driver, null, [
+			{ path: 'a.txt', data: enc.encode('a') },
+			{ path: 'b.txt', data: enc.encode('b') }
+		]);
+		assert.deepEqual(writes.sort(), ['a.txt', 'b.txt']);
 	});
 
 	it('compress job ticks are chip-only; dest rows use the zip name in the dest folder', async () => {
