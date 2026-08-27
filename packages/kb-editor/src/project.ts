@@ -83,7 +83,9 @@ function renderTextLike(
 	block: Extract<Block, { content: Inline[] }>,
 	parentId: string | null,
 	depth: number,
-	col?: number
+	col?: number,
+	cols?: number,
+	rowIndex?: number
 ): HTMLElement {
 	let el: HTMLElement;
 	if (block.type === 'heading') {
@@ -95,6 +97,13 @@ function renderTextLike(
 		el = doc.createElement('div');
 		if (block.header) el.setAttribute('data-header', 'true');
 		if (col != null) el.setAttribute(COL_ATTR, String(col));
+		if (cols != null && cols > 0) {
+			el.setAttribute('data-cols', String(cols));
+			el.style.width = `calc(100% / ${cols})`;
+		}
+		if (rowIndex != null) {
+			el.setAttribute('data-row', String(rowIndex));
+		}
 	} else {
 		el = doc.createElement('p');
 	}
@@ -181,10 +190,16 @@ function locAttrs(page: KbPage, id: string): { parentId: string | null; depth: n
 	return { parentId, depth: parentId ? 1 : 0 };
 }
 
-function cellCol(page: KbPage, id: string): number | undefined {
+function cellTableInfo(page: KbPage, id: string): { col: number; cols: number; rowIndex: number } | undefined {
 	const loc = parentOf(page, id);
 	if (!loc || loc.parent === 'page' || loc.parent.type !== 'table_row') return undefined;
-	return loc.index;
+	const row = loc.parent;
+	const tableLoc = parentOf(page, row.id);
+	return {
+		col: loc.index,
+		cols: row.children.length,
+		rowIndex: tableLoc && tableLoc.parent !== 'page' ? tableLoc.index : 0
+	};
 }
 
 export function renderBlock(
@@ -192,9 +207,11 @@ export function renderBlock(
 	block: Block,
 	parentId: string | null = null,
 	depth = 0,
-	col?: number
+	col?: number,
+	cols?: number,
+	rowIndex?: number
 ): HTMLElement {
-	if (isTextLike(block)) return renderTextLike(doc, block, parentId, depth, col);
+	if (isTextLike(block)) return renderTextLike(doc, block, parentId, depth, col, cols, rowIndex);
 	if (block.type === 'code') return renderCode(doc, block, parentId, depth);
 	if (block.type === 'divider') return renderDivider(doc, block, parentId, depth);
 	if (block.type === 'image') return renderImage(doc, block, parentId, depth);
@@ -211,8 +228,16 @@ export function project(host: HTMLElement, page: KbPage, opts?: ProjectOpts): vo
 	for (const block of visibleOrder(page)) {
 		if (block.type === 'table_row') continue;
 		const { parentId, depth } = locAttrs(page, block.id);
-		const col = block.type === 'table_cell' ? cellCol(page, block.id) : undefined;
-		nodes.push(renderBlock(doc, block, parentId, depth, col));
+		let col: number | undefined;
+		let cols: number | undefined;
+		let rowIndex: number | undefined;
+		if (block.type === 'table_cell') {
+			const info = cellTableInfo(page, block.id);
+			col = info?.col;
+			cols = info?.cols;
+			rowIndex = info?.rowIndex;
+		}
+		nodes.push(renderBlock(doc, block, parentId, depth, col, cols, rowIndex));
 	}
 	host.replaceChildren(...nodes);
 	for (const child of host.children) stripMagicBr(child as HTMLElement);

@@ -91,6 +91,31 @@
 		return rangeFromSelection(host) ?? editor.selection;
 	}
 
+	function syncTableHeights(host: HTMLElement) {
+		const rowGroups = new Map<string, HTMLElement[]>();
+		for (const child of host.children) {
+			const el = child as HTMLElement;
+			if (el.getAttribute('data-block-type') === 'table_cell') {
+				const parentId = el.getAttribute('data-parent-id');
+				if (parentId) {
+					const group = rowGroups.get(parentId);
+					if (group) group.push(el);
+					else rowGroups.set(parentId, [el]);
+				}
+			}
+		}
+		for (const [, cells] of rowGroups) {
+			for (const cell of cells) cell.style.minHeight = '';
+			let maxH = 0;
+			for (const cell of cells) {
+				if (cell.offsetHeight > maxH) maxH = cell.offsetHeight;
+			}
+			if (maxH > 0) {
+				for (const cell of cells) cell.style.minHeight = `${maxH}px`;
+			}
+		}
+	}
+
 	$effect(() => {
 		const page = editor.page;
 		const remoteCarets = carets;
@@ -100,6 +125,7 @@
 			return;
 		}
 		project(host, page, { carets: remoteCarets });
+		syncTableHeights(host);
 		untrack(() => {
 			restoreSelection(host, editor.selection, page);
 			heightById = handleHeights(host, page);
@@ -500,25 +526,50 @@
 		font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 		font-size: 0.9em;
 	}
+	.kb-host::after {
+		content: '';
+		display: table;
+		clear: both;
+	}
 	.kb-host :global([data-block-type='callout']),
-	.kb-host :global([data-block-type='toggle']),
-	.kb-host :global([data-block-type='table']) {
+	.kb-host :global([data-block-type='toggle']) {
 		margin: 0;
 		min-height: 24px;
 		height: 24px;
 		box-sizing: border-box;
 	}
+	.kb-host :global([data-block-type='table']) {
+		margin: 0.5rem 0 0;
+		height: 0;
+		min-height: 0;
+		clear: both;
+	}
 	.kb-host :global([data-block-type='table_cell']) {
-		display: block;
-		margin: 0 0 0.15rem;
-		padding: 0.15rem 0.4rem;
-		border: 1px solid color-mix(in srgb, currentColor 28%, transparent);
+		display: inline-block;
+		float: left;
+		margin: 0;
+		padding: 0.4rem 0.65rem;
+		min-height: 2.25rem;
+		border-right: 1px solid color-mix(in srgb, currentColor 28%, transparent);
+		border-bottom: 1px solid color-mix(in srgb, currentColor 28%, transparent);
 		box-sizing: border-box;
+		word-break: break-word;
+	}
+	.kb-host :global([data-block-type='table_cell'][data-col='0']) {
+		clear: left;
+		border-left: 1px solid color-mix(in srgb, currentColor 28%, transparent);
+	}
+	.kb-host :global([data-block-type='table_cell'][data-row='0']) {
+		border-top: 1px solid color-mix(in srgb, currentColor 28%, transparent);
 	}
 	.kb-host :global([data-block-type='table_cell'][data-header='true']) {
 		font-weight: 650;
+		background: color-mix(in srgb, currentColor 6%, transparent);
 	}
-	.kb-host :global([data-depth='1']) {
+	.kb-host :global(> :not([data-block-type='table_cell'])) {
+		clear: both;
+	}
+	.kb-host :global([data-depth='1']:not([data-block-type='table_cell'])) {
 		margin-left: 0.75rem;
 	}
 </style>

@@ -83,6 +83,21 @@ describe('N4 table editor', () => {
 		el.remove();
 	});
 
+	it('projects table cells with column width and row attributes for multi-column grid', () => {
+		const el = host();
+		project(el, grid());
+		const c11 = el.querySelector('[data-block-id="c11"]') as HTMLElement;
+		const c12 = el.querySelector('[data-block-id="c12"]') as HTMLElement;
+		const c21 = el.querySelector('[data-block-id="c21"]') as HTMLElement;
+		expect(c11.getAttribute('data-cols')).toBe('2');
+		expect(c11.getAttribute('data-row')).toBe('0');
+		expect(c11.style.width).toBe('calc(50%)');
+		expect(c12.getAttribute('data-cols')).toBe('2');
+		expect(c12.getAttribute('data-row')).toBe('0');
+		expect(c21.getAttribute('data-row')).toBe('1');
+		el.remove();
+	});
+
 	it('empty cell has a persistent empty Text node and no magic br', () => {
 		const el = host();
 		project(el, page([table('t', [row('r1', [cell('c11', '')])])]));
