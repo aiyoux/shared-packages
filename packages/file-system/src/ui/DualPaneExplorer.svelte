@@ -32,7 +32,8 @@
 	 * `__MEMORY_VFS_FILES__` (memory) and `__MONITOR_WATCH__` hooks.
 	 */
 	import { onMount, onDestroy } from 'svelte';
-	import { default as FileExplorer, type ExplorerContext, type ExplorerMode } from './FileExplorer.svelte';
+	import { default as FileExplorer } from './FileExplorer.svelte';
+	import type { ExplorerContext, ExplorerMode, RemoteKind } from './componentTypes.js';
 	import type { FileTypeId } from '../types.js';
 	import CopyProgressHeader from './CopyProgressHeader.svelte';
 	import DualPhaseConfirm from './DualPhaseConfirm.svelte';
@@ -113,7 +114,7 @@
 		type B2ConnectionProfileV1,
 		type ConnectionKind
 	} from '../b2/index.js';
-	import RemoteConnectionsDialog, { type RemoteKind } from './RemoteConnectionsDialog.svelte';
+	import RemoteConnectionsDialog from './RemoteConnectionsDialog.svelte';
 	import {
 		RcloneConnectionForm,
 		acquireRcloneDriver,

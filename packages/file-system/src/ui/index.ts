@@ -3,7 +3,7 @@ export { default as FileExplorerDialog } from './FileExplorerDialog.svelte';
 export { default as FeTreeView } from './FeTreeView.svelte';
 export { default as UnsavedChangesDialog } from './UnsavedChangesDialog.svelte';
 export { detectProject, findProjectRoot, type ProjectRootHit } from './detectProject.js';
-export type { ExplorerMode, ExplorerContext } from './FileExplorer.svelte';
+export type { ExplorerMode, ExplorerContext, RemoteKind } from './componentTypes.js';
 export {
 	saveWithConflictConfirm,
 	openFileWithGuard,
@@ -18,7 +18,6 @@ export { default as StoragePersistenceStatus } from './StoragePersistenceStatus.
 export { default as DualPaneExplorer } from './DualPaneExplorer.svelte';
 export { default as DualPhaseConfirm } from './DualPhaseConfirm.svelte';
 export { default as RemoteConnectionsDialog } from './RemoteConnectionsDialog.svelte';
-export type { RemoteKind } from './RemoteConnectionsDialog.svelte';
 export type { DualPaneTids, PaneId as DualPanePaneId } from './dualPaneTypes.js';
 export {
 	canServerCopy,

@@ -50,8 +50,7 @@
 	import FeConfirmDialog from './FeConfirmDialog.svelte';
 	import type { FeConfirmCopy } from './feConfirm.js';
 	import { portal } from './portal.js';
-
-	export type RemoteKind = 'b2' | 'rclone' | 'monitor';
+	import type { RemoteKind } from './componentTypes.js';
 
 	type Row = {
 		kind: RemoteKind;

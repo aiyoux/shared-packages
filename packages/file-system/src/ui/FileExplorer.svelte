@@ -102,15 +102,7 @@
 		permanentDeleteCopy,
 		type FeConfirmCopy
 	} from './feConfirm.js';
-
-	export type ExplorerMode = 'manage' | 'open' | 'save' | 'browse';
-
-	export type ExplorerContext = {
-		parentId: string | null;
-		selectedIds: string[];
-		backend: string;
-		entries: ExplorerEntry[];
-	};
+	import type { ExplorerMode, ExplorerContext } from './componentTypes.js';
 
 	interface Props {
 		mode?: ExplorerMode;

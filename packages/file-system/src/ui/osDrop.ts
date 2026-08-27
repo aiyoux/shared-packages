@@ -168,6 +168,11 @@ async function walkEntry(entry: EntryLike, prefix: string): Promise<OsDropNode[]
 	return [];
 }
 
+/** `values()` post-dates the TS lib types for FileSystemDirectoryHandle. */
+type DirHandleWithValues = FileSystemDirectoryHandle & {
+	values?: () => AsyncIterableIterator<FileSystemHandle>;
+};
+
 async function walkHandle(handle: FileSystemHandle, prefix: string): Promise<OsDropNode[]> {
 	const rel = prefix ? `${prefix}/${handle.name}` : handle.name;
 	if (handle.kind === 'file') {
@@ -176,7 +181,7 @@ async function walkHandle(handle: FileSystemHandle, prefix: string): Promise<OsD
 		return [{ relativePath: rel, kind: 'file', file: snap }];
 	}
 	if (handle.kind !== 'directory') return [];
-	const dir = handle as FileSystemDirectoryHandle;
+	const dir = handle as DirHandleWithValues;
 	const out: OsDropNode[] = [{ relativePath: rel, kind: 'folder' }];
 	if (typeof dir.values === 'function') {
 		for await (const child of dir.values()) {

@@ -272,7 +272,7 @@ describe('os folder drop', () => {
 				values: async function* () {
 					for (const c of children) yield c;
 				}
-			}) as FileSystemDirectoryHandle;
+			}) as unknown as FileSystemDirectoryHandle;
 		const root = dirHandle('Album', [fileHandle('shot.jpg', 'jpeg')]);
 		const dt = {
 			files: { length: 0, item: () => null, [Symbol.iterator]: function* () {} },
