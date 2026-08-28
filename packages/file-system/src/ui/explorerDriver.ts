@@ -193,6 +193,18 @@ export interface ExplorerDriver {
 		file: File
 	): Promise<ExplorerEntry>;
 	/**
+	 * Bulk dest write for extract jobs (decompress / decrypt). Drivers whose
+	 * store can share a transaction across files implement this; writeEntriesToDriver
+	 * batches per dest parent when present and falls back to writeFile/upload
+	 * per file otherwise. Same per-file semantics as writeFile: unique-name on
+	 * collision, one entry per file, same order as `files`.
+	 */
+	writeFiles?(
+		parentId: ExplorerEntryId | null,
+		files: File[],
+		opts?: { signal?: AbortSignal }
+	): Promise<ExplorerEntry[]>;
+	/**
 	 * Host-absolute path for a monitor (or similar) entry. Used when two
 	 * panes share a daemon but not a connection root.
 	 */

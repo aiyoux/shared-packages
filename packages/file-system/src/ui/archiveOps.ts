@@ -500,7 +500,32 @@ export async function writeEntriesToDriver(
 		if (agg.parentKey === '') emitFolder(key);
 	}
 
-	let written = 0;
+	/** Mark one written file's bytes on its folder aggregate chain. */
+	function bumpFolderAggs(dirs: string[], size: number) {
+		let parentKey = '';
+		for (const seg of dirs) {
+			const key = parentKey ? `${parentKey}/${seg}` : seg;
+			const agg = folderAgg.get(key);
+			if (agg) {
+				agg.doneBytes += size;
+				agg.doneFiles += 1;
+				emitFolder(key);
+			}
+			parentKey = key;
+		}
+	}
+
+	// Resolve dest parents first (folders are memoized in `folderIds`), then
+	// write. Same-parent members share vfs.writeFiles chunks: one reserve
+	// txn + one confirm txn + one clear-pending txn per chunk instead of
+	// three transactions per member, which dominated large extracts.
+	type Planned = {
+		dirs: string[];
+		destParent: string | null;
+		name: string;
+		file: PackedPath;
+	};
+	const planned: Planned[] = [];
 	for (const file of files) {
 		throwIfAborted(signal);
 		const { dirs, file: fileName } = splitPackedPath(file.path);
@@ -510,11 +535,64 @@ export async function writeEntriesToDriver(
 		}
 		const destParent = await ensureDir(dirs);
 		throwIfAborted(signal);
-		const destName = fileName;
-		const size = file.data.byteLength;
+		planned.push({ dirs, destParent, name: fileName, file });
+	}
+
+	if (typeof driver.writeFiles === 'function') {
+		const groups = new Map<string | null, Planned[]>();
+		for (const plan of planned) {
+			const group = groups.get(plan.destParent);
+			if (group) group.push(plan);
+			else groups.set(plan.destParent, [plan]);
+		}
+		for (const [destParent, group] of groups) {
+			let done = 0;
+			while (done < group.length) {
+				throwIfAborted(signal);
+				const batch = group.slice(done, done + 24);
+				for (const plan of batch) {
+					onFile?.({
+						name: plan.name,
+						parentId: destParent,
+						transferred: 0,
+						size: plan.file.data.byteLength,
+						done: false,
+						entryKind: 'file'
+					});
+				}
+				// The File constructor snapshots bytes once per member, same as
+				// the per-file path — no extra defensive copies.
+				await driver.writeFiles(
+					destParent,
+					batch.map((plan) => new File([plan.file.data as BlobPart], plan.name)),
+					{ signal }
+				);
+				throwIfAborted(signal);
+				for (const plan of batch) {
+					onFile?.({
+						name: plan.name,
+						parentId: destParent,
+						transferred: plan.file.data.byteLength,
+						size: plan.file.data.byteLength,
+						done: true,
+						entryKind: 'file'
+					});
+					if (plan.dirs.length) bumpFolderAggs(plan.dirs, plan.file.data.byteLength);
+				}
+				done += batch.length;
+				await yieldPaint();
+			}
+		}
+		return;
+	}
+
+	let written = 0;
+	for (const plan of planned) {
+		throwIfAborted(signal);
+		const size = plan.file.data.byteLength;
 		onFile?.({
-			name: destName,
-			parentId: destParent,
+			name: plan.name,
+			parentId: plan.destParent,
 			transferred: 0,
 			size,
 			done: false,
@@ -522,16 +600,16 @@ export async function writeEntriesToDriver(
 		});
 		// No defensive copy: the File constructor snapshots the bytes once, and
 		// every extra copy doubled peak memory for large members.
-		const out = new File([file.data as BlobPart], destName);
+		const out = new File([plan.file.data as BlobPart], plan.name);
 		if (typeof driver.upload === 'function') {
-			await driver.upload(destParent, out, {
+			await driver.upload(plan.destParent, out, {
 				signal,
 				onProgress: (pct) => {
 					if (signal?.aborted) return;
 					const transferred = Math.round(size * Math.min(1, Math.max(0, pct)));
 					onFile?.({
-						name: destName,
-						parentId: destParent,
+						name: plan.name,
+						parentId: plan.destParent,
 						transferred,
 						size,
 						done: false,
@@ -540,30 +618,18 @@ export async function writeEntriesToDriver(
 				}
 			});
 		} else {
-			await driver.writeFile!(destParent, out);
+			await driver.writeFile!(plan.destParent, out);
 		}
 		throwIfAborted(signal);
 		onFile?.({
-			name: destName,
-			parentId: destParent,
+			name: plan.name,
+			parentId: plan.destParent,
 			transferred: size,
 			size,
 			done: true,
 			entryKind: 'file'
 		});
-		if (dirs.length) {
-			let parentKey = '';
-			for (const seg of dirs) {
-				const key = parentKey ? `${parentKey}/${seg}` : seg;
-				const agg = folderAgg.get(key);
-				if (agg) {
-					agg.doneBytes += size;
-					agg.doneFiles += 1;
-					emitFolder(key);
-				}
-				parentKey = key;
-			}
-		}
+		bumpFolderAggs(plan.dirs, size);
 		written += 1;
 		if ((written & 7) === 0) await yieldPaint();
 	}
@@ -596,6 +662,8 @@ export async function writeEntriesToVfs(
 		return created.id;
 	}
 
+	type Planned = { dirs: string[]; destParent: string | null; name: string; file: PackedPath };
+	const planned: Planned[] = [];
 	for (const file of files) {
 		throwIfAborted(signal);
 		const { dirs, file: fileName } = splitPackedPath(file.path);
@@ -604,14 +672,51 @@ export async function writeEntriesToVfs(
 			continue;
 		}
 		const destParent = await ensureDir(dirs);
-		const size = file.data.byteLength;
-		onFile?.({ name: fileName, parentId: destParent, transferred: 0, size, done: false });
-		await vfs.writeFile({
-			parentId: destParent,
-			name: fileName,
-			body: Uint8Array.from(file.data)
-		});
-		onFile?.({ name: fileName, parentId: destParent, transferred: size, size, done: true });
+		planned.push({ dirs, destParent, name: fileName, file });
+	}
+
+	// Same-parent members share writeFiles chunks (popup dest = a fresh inner
+	// VFS, so the per-file txn churn would dominate the whole job).
+	const groups = new Map<string | null, Planned[]>();
+	for (const plan of planned) {
+		const group = groups.get(plan.destParent);
+		if (group) group.push(plan);
+		else groups.set(plan.destParent, [plan]);
+	}
+	for (const [destParent, group] of groups) {
+		let done = 0;
+		while (done < group.length) {
+			throwIfAborted(signal);
+			const batch = group.slice(done, done + 24);
+			for (const plan of batch) {
+				onFile?.({
+					name: plan.name,
+					parentId: destParent,
+					transferred: 0,
+					size: plan.file.data.byteLength,
+					done: false
+				});
+			}
+			await vfs.writeFiles(
+				batch.map((plan) => ({
+					parentId: destParent,
+					name: plan.name,
+					body: Uint8Array.from(plan.file.data)
+				})),
+				{ signal }
+			);
+			for (const plan of batch) {
+				onFile?.({
+					name: plan.name,
+					parentId: destParent,
+					transferred: plan.file.data.byteLength,
+					size: plan.file.data.byteLength,
+					done: true
+				});
+			}
+			done += batch.length;
+			await yieldPaint();
+		}
 	}
 }
 

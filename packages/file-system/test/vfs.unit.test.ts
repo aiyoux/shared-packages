@@ -66,6 +66,56 @@ describe('VfsService', () => {
 		assert.equal(n.generation, 1);
 	});
 
+	it('writeFiles bulk-writes many members with unique names and readable bytes', async () => {
+		const folder = await vfs.mkdir(null, 'extract');
+		const inputs = Array.from({ length: 60 }, (_, i) => ({
+			parentId: folder.id,
+			name: `member-${i}.txt`,
+			body: new TextEncoder().encode(`content-${i}`)
+		}));
+		const nodes = await vfs.writeFiles(inputs);
+		assert.equal(nodes.length, inputs.length, 'one node per input, in order');
+		const listed = await vfs.list({ parentId: folder.id });
+		assert.equal(listed.length, inputs.length);
+		for (let i = 0; i < nodes.length; i++) {
+			assert.equal(nodes[i]!.name, `member-${i}.txt`);
+			const blob = await vfs.readBlob(nodes[i]!.id);
+			const text = new TextDecoder().decode(new Uint8Array(await blob.arrayBuffer()));
+			assert.equal(text, `content-${i}`);
+		}
+	});
+
+	it('writeFiles renames collisions against existing siblings and within the batch', async () => {
+		const enc = new TextEncoder();
+		await vfs.writeFile({ parentId: null, name: 'dup.txt', body: enc.encode('existing') });
+		const nodes = await vfs.writeFiles([
+			{ parentId: null, name: 'dup.txt', body: enc.encode('first') },
+			{ parentId: null, name: 'dup.txt', body: enc.encode('second') }
+		]);
+		assert.equal(nodes[0]!.name, 'dup (1).txt');
+		assert.equal(nodes[1]!.name, 'dup (2).txt');
+		const read = async (id: string) =>
+			new TextDecoder().decode(new Uint8Array(await (await vfs.readBlob(id)).arrayBuffer()));
+		assert.equal(await read(nodes[0]!.id), 'first');
+		assert.equal(await read(nodes[1]!.id), 'second');
+		const existing = await vfs.list({ parentId: null });
+		const original = existing.find((n) => n.name === 'dup.txt');
+		assert.ok(original, 'existing sibling untouched');
+		assert.equal(await read(original!.id), 'existing');
+	});
+
+	it('writeFiles rejects explicit ids and non-rename conflict modes', async () => {
+		await assert.rejects(
+			() => vfs.writeFiles([{ parentId: null, name: 'x.txt', body: 'x', id: 'file_x' }]),
+			(e: unknown) => e instanceof VfsError && e.code === 'API_MISUSE'
+		);
+		await assert.rejects(
+			() =>
+				vfs.writeFiles([{ parentId: null, name: 'x.txt', body: 'x', onConflict: 'overwrite' }]),
+			(e: unknown) => e instanceof VfsError && e.code === 'API_MISUSE'
+		);
+	});
+
 	it('writeFile onConflict overwrite refuses a same-name folder', async () => {
 		await vfs.mkdir(null, 'dir.skch');
 		await assert.rejects(

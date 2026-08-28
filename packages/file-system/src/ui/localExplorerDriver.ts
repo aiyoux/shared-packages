@@ -53,7 +53,7 @@ export type LocalVfsLike = Pick<
 	| 'readBlob'
 	| 'subscribe'
 > &
-	Partial<Pick<VfsService, 'liveList'>>;
+	Partial<Pick<VfsService, 'liveList' | 'writeFiles'>>;
 
 export type LocalExplorerDriverOptions = {
 	/** Driver id: `local` (default) or `memory`. */
@@ -159,6 +159,28 @@ export function createLocalExplorerDriver(
 				contentType: file.type || undefined
 			});
 			return nodeToEntry(n);
+		},
+
+		async writeFiles(parentId, files, opts) {
+			if (!vfs.writeFiles) {
+				// Older VfsService without the bulk path: per-file fallback.
+				const out: ExplorerEntry[] = [];
+				for (const file of files) {
+					if (opts?.signal?.aborted) break;
+					out.push(await this.writeFile!(parentId, file));
+				}
+				return out;
+			}
+			const nodes = await vfs.writeFiles(
+				files.map((file) => ({
+					parentId,
+					name: file.name,
+					body: file,
+					contentType: file.type || undefined
+				})),
+				{ signal: opts?.signal }
+			);
+			return nodes.map(nodeToEntry);
 		},
 
 		subscribeChanges(listener, scope) {

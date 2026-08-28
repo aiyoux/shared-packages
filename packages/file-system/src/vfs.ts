@@ -646,6 +646,246 @@ export class VfsService {
 		return final;
 	}
 
+	/**
+	 * Bulk-write files for extract jobs (decompress / decrypt dest writes).
+	 *
+	 * Same durability guarantees as writeFile — a pending blobRef + lease
+	 * reserve the name before any bytes land, and GC reclaims everything if a
+	 * chunk dies mid-flight — but the whole chunk shares two IndexedDB
+	 * transactions instead of paying three per file, and each member is one
+	 * direct OPFS blob write instead of the writePartial→promote cycle that
+	 * wrote every byte twice. Extracting thousands of members was dominated by
+	 * that per-write churn, not by the inflate itself.
+	 *
+	 * Extract-shaped inputs only: no explicit `id`, conflict 'rename' (the
+	 * writeFile default). A failed chunk rolls back best-effort exactly like
+	 * writeFile's catch, and later chunks do not run.
+	 */
+	async writeFiles(
+		inputs: WriteFileInput[],
+		opts?: { signal?: AbortSignal }
+	): Promise<VfsNode[]> {
+		await this.ready();
+		const out: VfsNode[] = [];
+		const CHUNK_FILES = 24;
+		const CHUNK_BYTES = 16 << 20;
+		// Bodies are serialized before chunking (outside any txn) so the chunk
+		// size cap can count real bytes.
+		let chunk: Array<{ input: WriteFileInput; bytes: Uint8Array; contentType: string }> = [];
+		let chunkBytes = 0;
+		const flush = async () => {
+			if (!chunk.length) return;
+			if (opts?.signal?.aborted) {
+				const e = new Error('Cancelled');
+				e.name = 'AbortError';
+				throw e;
+			}
+			const group = chunk;
+			chunk = [];
+			chunkBytes = 0;
+			out.push(...(await this.writeFilesChunk(group, opts?.signal)));
+		};
+		for (const input of inputs) {
+			const { bytes, contentType } = await serializeBody(input.body, input.contentType);
+			chunk.push({ input, bytes, contentType });
+			chunkBytes += bytes.byteLength;
+			if (chunk.length >= CHUNK_FILES || chunkBytes >= CHUNK_BYTES) await flush();
+		}
+		await flush();
+		return out;
+	}
+
+	/** One reserve→blob-write→confirm cycle for a batch of files. */
+	private async writeFilesChunk(
+		inputs: Array<{ input: WriteFileInput; bytes: Uint8Array; contentType: string }>,
+		signal?: AbortSignal
+	): Promise<VfsNode[]> {
+		const prepared = inputs.map(({ input, bytes, contentType }) => {
+			let name = sanitizeName(input.name);
+			const fileType = input.fileType ?? inferFileTypeFromName(name);
+			if (fileType !== 'unknown' && getFileType(fileType)) {
+				name = forceExtension(name, fileType);
+			}
+			const nodeId = input.id ?? generateId('file');
+			return {
+				input,
+				bytes,
+				contentType,
+				name,
+				fileType,
+				nodeId,
+				blobId: generateId('blob'),
+				now: Date.now()
+			};
+		});
+		for (const p of prepared) {
+			if (p.input.onConflict && p.input.onConflict !== 'rename') {
+				throw new VfsError(
+					'API_MISUSE',
+					'writeFiles only supports onConflict "rename"; write conflicting files individually'
+				);
+			}
+			if (p.input.id) {
+				throw new VfsError('API_MISUSE', 'writeFiles does not accept explicit ids');
+			}
+		}
+
+		type Reserved = {
+			p: (typeof prepared)[number];
+			name: string;
+		};
+		const reserved: Reserved[] = [];
+		const leaseKeys = prepared.map((p) => `write:${p.blobId}`);
+		const owner = generateId('lease');
+		const abortError = () => {
+			const e = new Error('Cancelled');
+			e.name = 'AbortError';
+			return e;
+		};
+		const cleanup = async () => {
+			// Best-effort rollback, matching writeFile's catch. If the failure
+			// was inside the reserve txn, Dexie already rolled the puts back and
+			// these deletes are no-ops.
+			for (const p of prepared) {
+				try {
+					await this.db.nodes.delete(p.nodeId);
+				} catch {
+					/* ignore */
+				}
+				try {
+					await this.db.blobRefs.delete(p.blobId);
+				} catch {
+					/* ignore */
+				}
+			}
+			for (const key of leaseKeys) {
+				try {
+					await this.db.leases.delete(key);
+				} catch {
+					/* ignore */
+				}
+			}
+			for (const p of prepared) {
+				try {
+					await this.opfs.remove(`blobs/${p.blobId}.bin`);
+				} catch {
+					/* ignore */
+				}
+			}
+		};
+		try {
+			// Reserve names + pending blobRefs + leases for the whole chunk in
+			// one txn. Parent state and name collisions are re-checked inside
+			// the txn exactly like writeFile. The blobRef names the FINAL blob
+			// path from the start; GC already treats blobs/<id>.bin as live for
+			// pendingPromote refs, so a crash mid-write leaves a GC-able orphan,
+			// same window as the old tmp→promote protocol.
+			await this.db.transaction(
+				'rw',
+				this.db.nodes,
+				this.db.blobRefs,
+				this.db.leases,
+				async () => {
+					for (const p of prepared) {
+						if (signal?.aborted) throw abortError();
+						if (p.input.parentId) {
+							const parent = await this.db.nodes.get(p.input.parentId);
+							if (!parent || parent.kind !== 'folder') throw new VfsError('NOT_A_FOLDER');
+							if (parent.deletedAt != null) throw new VfsError('TRASH_STATE');
+						}
+						const unique = await this.ensureUniqueName(p.input.parentId, p.name);
+						const sortOrder = await this.nextAppendSortOrder(p.input.parentId);
+						await this.db.blobRefs.put({
+							id: p.blobId,
+							opfsPath: `blobs/${p.blobId}.bin`,
+							byteLength: 0,
+							createdAt: p.now,
+							contentType: p.contentType,
+							pending: true,
+							pendingPromote: true
+						});
+						await this.db.leases.put({
+							key: `write:${p.blobId}`,
+							owner,
+							expiresAt: p.now + this.graceMs
+						});
+						await this.db.nodes.put({
+							id: p.nodeId,
+							parentId: p.input.parentId,
+							name: unique,
+							kind: 'file',
+							fileType: p.fileType === 'unknown' ? undefined : p.fileType,
+							size: 0,
+							createdAt: p.now,
+							updatedAt: p.now,
+							generation: 1,
+							blobId: p.blobId,
+							meta: p.input.meta,
+							contentType: p.contentType,
+							deletedAt: null,
+							sortOrder
+						} satisfies VfsNode);
+						reserved.push({ p, name: unique });
+					}
+				}
+			);
+			// Blob writes: one OPFS write per member (no partial + promote
+			// double-write), overlapping a few at a time. The blobRef is pending
+			// until the confirm txn, so no reader can reach a half-written blob.
+			const WRITE_CONCURRENCY = 4;
+			let cursor = 0;
+			const workers = Array.from({ length: WRITE_CONCURRENCY }, async () => {
+				while (cursor < reserved.length) {
+					if (signal?.aborted) throw abortError();
+					const r = reserved[cursor++]!;
+					await this.opfs.writeFinal(`blobs/${r.p.blobId}.bin`, r.p.bytes);
+				}
+			});
+			await Promise.all(workers);
+			// Confirm sizes + clear pending + drop leases for the whole chunk in
+			// one txn (parent re-checked so a concurrent trash cannot park a
+			// live child under it, as in writeFile).
+			await this.db.transaction(
+				'rw',
+				this.db.nodes,
+				this.db.blobRefs,
+				this.db.leases,
+				async () => {
+					for (const [i, r] of reserved.entries()) {
+						if (r.p.input.parentId) {
+							const parent = await this.db.nodes.get(r.p.input.parentId);
+							if (!parent || parent.kind !== 'folder' || parent.deletedAt != null) {
+								throw new VfsError('TRASH_STATE');
+							}
+						}
+						const byteLength = r.p.bytes.byteLength;
+						const ref = await this.db.blobRefs.get(r.p.blobId);
+						if (ref) {
+							ref.byteLength = byteLength;
+							ref.pending = false;
+							ref.pendingPromote = false;
+							await this.db.blobRefs.put(ref);
+						}
+						const node = await this.db.nodes.get(r.p.nodeId);
+						if (!node) throw new VfsError('NOT_FOUND');
+						node.size = byteLength;
+						node.updatedAt = Date.now();
+						await this.db.nodes.put(node);
+						await this.db.leases.delete(leaseKeys[i]!);
+					}
+				}
+			);
+		} catch (e) {
+			await cleanup();
+			throw e;
+		}
+
+		const nodes = await this.db.nodes.bulkGet(reserved.map((r) => r.p.nodeId));
+		const out = nodes.filter((n): n is VfsNode => n != null);
+		this.emitChange();
+		return out;
+	}
+
 	async updateFile(id: string, body: unknown, opts: UpdateFileOpts): Promise<VfsNode> {
 		await this.ready();
 		const force = 'force' in opts && opts.force === true;

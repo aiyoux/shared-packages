@@ -8,6 +8,15 @@ export interface OpfsBlobStore {
 	): Promise<{ tmpPath: string; byteLength: number }>;
 	promote(tmpPath: string, finalOpfsPath: string): Promise<void>;
 	writeAtomic(opfsPath: string, data: BufferSource | Blob): Promise<{ byteLength: number }>;
+	/**
+	 * Direct write of final bytes — no tmp, no promote. Bulk extract uses this:
+	 * the writePartial→promote cycle writes every byte twice (partial, then
+	 * promote's read-back re-write), which dominated large extract jobs.
+	 */
+	writeFinal(
+		opfsPath: string,
+		data: BufferSource | Blob | Uint8Array
+	): Promise<{ byteLength: number }>;
 	read(opfsPath: string): Promise<Uint8Array>;
 	readBlob(opfsPath: string, contentType?: string): Promise<Blob>;
 	remove(opfsPath: string): Promise<void>;
@@ -52,6 +61,11 @@ export function createMemoryOpfs(): OpfsBlobStore {
 			const { tmpPath, byteLength } = await this.writePartial(writeId, data);
 			await this.promote(tmpPath, opfsPath);
 			return { byteLength };
+		},
+		async writeFinal(opfsPath, data) {
+			const bytes = await toUint8Array(data);
+			files.set(opfsPath, { bytes: new Uint8Array(bytes), mtimeMs: Date.now() });
+			return { byteLength: bytes.byteLength };
 		},
 		async read(opfsPath) {
 			const entry = files.get(opfsPath);
@@ -175,6 +189,12 @@ export function createOpfsBlobStore(rootDirName = 'shared-vfs'): OpfsBlobStore {
 			const { tmpPath, byteLength } = await this.writePartial(writeId, data);
 			await this.promote(tmpPath, opfsPath);
 			return { byteLength };
+		},
+		async writeFinal(opfsPath, data) {
+			const bytes = await toUint8Array(data);
+			const handle = await getFile(opfsPath, true);
+			await writeFileHandle(handle, bytes);
+			return { byteLength: bytes.byteLength };
 		},
 		async read(opfsPath) {
 			try {
