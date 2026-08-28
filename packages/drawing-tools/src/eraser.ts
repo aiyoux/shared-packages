@@ -1288,7 +1288,23 @@ export const eraserOutlinePolygon = (eraserPoints: Point[], radius: number): Mul
  *  document's stored `eraserPaths` are stroked polylines that must stay
  *  stroked. */
 export const eraserSweptRegionPath = (points: Point[], radius: number): string => {
-    if (points.length === 0) return '';
+    const polygon = eraserSweptRegionPolygon(points, radius);
+    return polygon ? polygonToD(polygon) : '';
+};
+
+/**
+ * The swept region for `eraserSweptRegionPath`, as geometry rather than a path
+ * string — the same rounded rings the `d` paints, for callers that need to
+ * test against the region instead of rendering it. The vector fade preview
+ * classifies paths against it (fully covered → thin by element opacity rather
+ * than wear the per-path mask; see RasterRenderer), which needs the polygon.
+ *
+ * Null for an empty trail. The rings are the SAME construction the commit
+ * cuts with, snapped to the same 0.1 grid — so a containment answered here is
+ * answered about the exact shape the stand-in paints and the pass cuts.
+ */
+export const eraserSweptRegionPolygon = (points: Point[], radius: number): Polygon | null => {
+    if (points.length === 0) return null;
     const deduped: Point[] = [points[0]];
     for (let i = 1; i < points.length; i++) {
         const p = points[i], q = deduped[deduped.length - 1];
@@ -1297,7 +1313,72 @@ export const eraserSweptRegionPath = (points: Point[], radius: number): string =
     const polygon: Polygon = deduped.length === 1
         ? circlePolygon(deduped[0], radius)
         : [strokeOutlineRing(deduped, radius)];
-    return polygonToD(roundPolygon(polygon));
+    return roundPolygon(polygon);
+};
+
+/**
+ * Whether an axis-aligned rect sits inside, outside, or straddles a resolved
+ * region. The fade preview's classification primitive: 'inside' lets a path
+ * render with element opacity — exactly what masking it would have produced —
+ * 'outside' lets it skip the mask entirely, and 'partial' keeps the mask,
+ * whose per-pixel multiply is the only thing that can answer a straddle.
+ *
+ * Conservative on purpose at both boundaries: rounding the region onto the
+ * 0.1 grid can shave a hair off a rect that lies against an edge (reads as
+ * 'partial' → mask, which is correct), and a hairline real overlap rounds to a
+ * sliver of area (also 'partial' → mask). Only a clean geometric answer skips
+ * the mask, so a misclassification can never show ink thinned that the commit
+ * leaves at full strength. A degenerate rect (zero area) is 'partial' for the
+ * same reason.
+ */
+export const rectRegionContainment = (
+    rect: { minX: number; minY: number; maxX: number; maxY: number },
+    region: MultiPolygon | null,
+): 'outside' | 'inside' | 'partial' => {
+    const w = rect.maxX - rect.minX;
+    const h = rect.maxY - rect.minY;
+    if (!(w > 0) || !(h > 0) || !region || region.length === 0) return 'partial';
+
+    // Cheap reject first: a rect that misses the region's own bounds cannot
+    // intersect it.
+    let rMinX = Infinity, rMinY = Infinity, rMaxX = -Infinity, rMaxY = -Infinity;
+    for (const polygon of region) {
+        for (const ring of polygon) {
+            for (const pt of ring) {
+                if (pt[0] < rMinX) rMinX = pt[0];
+                if (pt[0] > rMaxX) rMaxX = pt[0];
+                if (pt[1] < rMinY) rMinY = pt[1];
+                if (pt[1] > rMaxY) rMaxY = pt[1];
+            }
+        }
+    }
+    if (rect.maxX <= rMinX || rect.minX >= rMaxX || rect.maxY <= rMinY || rect.minY >= rMaxY) {
+        return 'outside';
+    }
+
+    const rectPoly: MultiPolygon = [[
+        [
+            [rect.minX, rect.minY],
+            [rect.maxX, rect.minY],
+            [rect.maxX, rect.maxY],
+            [rect.minX, rect.maxY],
+        ],
+    ]];
+    let inter: MultiPolygon;
+    try {
+        inter = intersection(rectPoly, region);
+    } catch {
+        // The engines can throw on degenerate input. Unclassifiable → mask.
+        return 'partial';
+    }
+    const area = multiPolygonFilledArea(inter);
+    const rectArea = w * h;
+    if (area <= 1e-9) return 'outside';
+    // 'inside' demands the whole rect back. A strict relative epsilon: a rect
+    // lying against a rounded edge loses area linear in its perimeter, and any
+    // real deficit reads as 'partial' — the safe side.
+    if (area >= rectArea - Math.max(1e-6, rectArea * 1e-6)) return 'inside';
+    return 'partial';
 };
 
 const unionGeometryParts = (parts: Geometry[]) => {
