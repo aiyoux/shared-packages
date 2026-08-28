@@ -13,6 +13,7 @@ import {
 	engineSupports,
 	expandBytes,
 	isJunkArchivePath,
+	loadEngine as loadCompressEngine,
 	packFiles,
 	type ArchiveEntry,
 	type Codec,
@@ -207,6 +208,57 @@ export function describeCompressRole(
 		fallback: true,
 		reason: `${requestedLabel} cannot ${action} ${CODEC_LABEL[codec]}`
 	};
+}
+
+/**
+ * Instantiate the engines an expand will need, before the job starts.
+ *
+ * WASM instantiation is the single most expensive thing in the whole matrix
+ * and it is a ONE-TIME cost: `loadEngine('addmaple')` measured ~8s cold
+ * (fetch + compile + instantiate for three modules) while the codec calls
+ * themselves are milliseconds and never block a frame once warm. Doing it
+ * while the user is still reading a dialog — or hovering a file — takes that
+ * cost off the job entirely.
+ *
+ * Fire-and-forget: a failed prewarm is not an error (the real load inside the
+ * job reports properly), so every rejection is swallowed here.
+ */
+export function prewarmExpandEngines(
+	names: string[],
+	preferred: CompressEngineId = readStoredCompressEngine()
+): void {
+	for (const engine of enginesToPrewarm(names, preferred)) {
+		void loadCompressEngine(engine).catch(() => {
+			/* prewarm is best-effort */
+		});
+	}
+}
+
+/** Which libraries `prewarmExpandEngines` would instantiate. Pure; testable. */
+export function enginesToPrewarm(
+	names: string[],
+	preferred: CompressEngineId
+): CompressEngineId[] {
+	const codecs = new Set<Codec>();
+	for (const name of names) {
+		// Vaults are opened by the crypto engine recorded in their header, so
+		// no compress library is involved.
+		if (isVaultName(name)) continue;
+		const fmt = detectFormatFromName(name);
+		if (fmt) codecs.add(fmt.codec);
+		// `.tar.gz` / `.tgz` expand in two stages, and the inner TAR may need a
+		// different library than the outer gzip — warm both.
+		if (looksTarGzName(name)) codecs.add('tar');
+	}
+	const engines = new Set<CompressEngineId>();
+	for (const codec of codecs) {
+		try {
+			engines.add(pickEngineForCodec(preferred, codec));
+		} catch {
+			// No installed library handles it; the job itself reports that.
+		}
+	}
+	return [...engines];
 }
 
 export function pickEngineForCodec(

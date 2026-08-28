@@ -219,6 +219,17 @@
 				/* selected library is not required when a fallback will run */
 			});
 		}
+		// Warm every OTHER role the plan names — a .tar.gz expand runs gzip and
+		// then TAR, sometimes on different libraries, and instantiating the
+		// second one mid-job costs seconds (WASM load measured ~8s cold).
+		if (!isCrypto) {
+			for (const role of enginePlan.roles.slice(1)) {
+				if (role.kind !== 'compress') continue;
+				void loadCompressEngine(role.used as CompressEngineId).catch(() => {
+					/* prewarm is best-effort */
+				});
+			}
+		}
 		try {
 			localStorage.setItem(
 				isCrypto ? CRYPTO_STORAGE_KEY : COMPRESS_STORAGE_KEY,

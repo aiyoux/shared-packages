@@ -18,6 +18,7 @@
 	import {
 		createInnerFsSession,
 		expandPackedBytes,
+		prewarmExpandEngines,
 		looksCompressedName,
 		looksPackedName,
 		looksVaultName,
@@ -1855,6 +1856,11 @@
 		previewBusy = true;
 		error = '';
 		try {
+			// Opening straight from the listing skips FeArchiveDialog, so nothing
+			// has instantiated the engine yet. Start that in parallel with the
+			// read: cold WASM load measured ~8s, and it is a one-time cost that
+			// should overlap the I/O rather than sit inside the click.
+			prewarmExpandEngines([entry.name]);
 			const bytes = await readEntryBytes(driver, entry);
 			const files = await expandPackedBytes(bytes, entry.name);
 			innerFs = await createInnerFsSession(entry.name, files);

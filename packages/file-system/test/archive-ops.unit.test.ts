@@ -17,6 +17,7 @@ import {
 	packedIsTopLevel,
 	pickEngineForCodec,
 	previewArchiveEnginePlan,
+	enginesToPrewarm,
 	runArchiveJob,
 	uniqueChildFolderName,
 	subjectLabel,
@@ -98,6 +99,24 @@ describe('archiveOps', () => {
 		const gzipOk = describeCompressRole('addmaple', 'gzip', 'create');
 		assert.equal(gzipOk.used, 'addmaple');
 		assert.equal(gzipOk.fallback, false);
+	});
+
+	it('prewarm covers both stages of a tar.gz and skips vaults', () => {
+		// WASM instantiation is the one big cost in the matrix (~8s cold for
+		// AddMaple), so an expand must warm every library it will need BEFORE
+		// the job. A .tar.gz needs two: gzip outside, tar inside.
+		const tgz = enginesToPrewarm(['bundle.tar.gz'], 'fflate');
+		assert.ok(tgz.includes('fflate'), 'outer gzip layer warmed');
+		assert.ok(
+			tgz.some((id) => id === 'tarjs' || id === 'nanotar'),
+			'inner tar stage warmed too'
+		);
+		assert.deepEqual(enginesToPrewarm(['secrets.spvault'], 'fflate'), [],
+			'vaults use crypto engines, not compress ones');
+		assert.deepEqual(enginesToPrewarm(['notes.txt'], 'fflate'), [],
+			'unrecognized names warm nothing');
+		assert.deepEqual(enginesToPrewarm(['a.zip', 'b.zip'], 'fflate'), ['fflate'],
+			'one entry per library, not per file');
 	});
 
 	it('previews selected vs fallback library before the job runs', () => {
