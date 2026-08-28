@@ -13,6 +13,7 @@
 	import StoragePersistenceStatus from './StoragePersistenceStatus.svelte';
 	import FeStorageDialog from './FeStorageDialog.svelte';
 	import { packBadges } from './storageInspect.js';
+	import { deleteFromProject } from '../projectPack.js';
 	import FeIcon from './FeIcon.svelte';
 	import FeTipIconBtn from './FeTipIconBtn.svelte';
 	import FeArchiveDialog from './FeArchiveDialog.svelte';
@@ -1477,6 +1478,53 @@
 	async function permanentNode(n: ExplorerEntry) {
 		if (!driver.permanentDelete) return;
 		if (!(await askConfirm(permanentDeleteCopy(n.name)))) return;
+
+		// A packed file's delete does real work beyond unlinking a row — it may
+		// rewrite a shared pack to give the space back — so the stages are
+		// surfaced rather than leaving the UI silent through them.
+		const packed = localVfs ? (await packBadges(localVfs, [n.id])).get(n.id)?.packed : false;
+		if (localVfs && packed) {
+			const opId = generateId('packdel');
+			const paint = (label: string, done = false) =>
+				upsertProgress({
+					id: opId,
+					name: n.name,
+					size: 100,
+					transferred: done ? 100 : 50,
+					direction: 'copying',
+					done,
+					status: done ? 'done' : 'active',
+					hopNote: label
+				});
+			paint('Deleting — wiping from blob…');
+			try {
+				const result = await deleteFromProject(localVfs, [n.id], {
+					onProgress: (ev) => paint(ev.label, ev.stage === 'done')
+				});
+				if (!result.reclaimedBytes) paint('Success! Blob integrity checked, delete successful', true);
+			} catch (e) {
+				// Reclamation is part of the delete: if it fails, the delete
+				// failed, and the user is told rather than left with a success
+				// that quietly kept the bytes.
+				upsertProgress({
+					id: opId,
+					name: n.name,
+					size: 100,
+					transferred: 100,
+					direction: 'copying',
+					done: true,
+					status: 'failed',
+					error: formatExplorerError(e),
+					hopNote: 'Delete failed'
+				});
+				reportError(e);
+				await refreshTrash();
+				return;
+			}
+			await refreshTrash();
+			return;
+		}
+
 		await driver.permanentDelete(n.id);
 		await refreshTrash();
 	}
