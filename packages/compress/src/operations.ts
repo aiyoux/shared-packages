@@ -82,7 +82,15 @@ export async function expandBytes(
 				}
 				if (!keep(ev.name)) return;
 				opts?.onMember?.(ev);
-			}
+			},
+			// Junk members are dropped here rather than handed to the consumer,
+			// keeping the streaming and buffered paths filtered identically.
+			onEntry: opts?.onEntry
+				? async (entry) => {
+						if (!keep(entry.name)) return;
+						await opts.onEntry!(entry);
+					}
+				: undefined
 		});
 		return files.filter((f) => keep(f.name));
 	}
@@ -96,6 +104,10 @@ export async function expandBytes(
 				e.name = 'AbortError';
 				throw e;
 			}
+			// The tar engines parse the whole archive up front, so this does not
+			// bound OUR memory — but handing members off one at a time still lets
+			// the consumer write and release as it goes instead of after the end.
+			if (opts?.onEntry) await opts.onEntry(f);
 			opts?.onMember?.({
 				name: f.name,
 				transferred: f.data.byteLength,
@@ -106,18 +118,19 @@ export async function expandBytes(
 			// can paint ticks without a macrotask delay per member.
 			if ((++i & 15) === 0) await new Promise((r) => setTimeout(r, 0));
 		}
-		return files;
+		return opts?.onEntry ? [] : files;
 	}
 	const destName = stripCompressionExt(name, codec);
 	opts?.onMember?.({ name: destName, transferred: 0, size: bytes.byteLength, done: false });
 	const data = await engine.decompress(bytes, codec);
+	if (opts?.onEntry) await opts.onEntry({ name: destName, data });
 	opts?.onMember?.({
 		name: destName,
 		transferred: data.byteLength,
 		size: data.byteLength,
 		done: true
 	});
-	return [{ name: destName, data }];
+	return opts?.onEntry ? [] : [{ name: destName, data }];
 }
 
 /** Pick a codec for expand: magic bytes, then filename, then the UI fallback. */

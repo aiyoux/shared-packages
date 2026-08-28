@@ -458,6 +458,82 @@ function splitPackedPath(path: string): { dirs: string[]; file: string | null } 
 	return { dirs: parts, file };
 }
 
+/**
+ * Write members to a driver AS THEY ARRIVE, instead of after the whole archive
+ * is expanded.
+ *
+ * Pipelining turns a job's wall clock from `inflate + write` into roughly
+ * `max(inflate, write)`, and — more importantly — bounds peak memory: only the
+ * current window is held, not every member of the archive at once.
+ *
+ * Members accumulate into a window and flush together, because the batched
+ * dest write is far cheaper per file than one write per member. `push` awaits
+ * the flush, so a slow disk throttles the expander rather than queueing behind
+ * it (that backpressure is what makes the memory bound real).
+ *
+ * Folder aggregate rows can only report what has arrived so far — a stream
+ * does not know an archive's folder totals up front — so they stay
+ * indeterminate until `finish` confirms the job.
+ */
+export function createStreamingWriter(opts: {
+	driver: ExplorerDriver;
+	parentId: string | null;
+	onFile?: (ev: ArchiveWriteProgress) => void;
+	signal?: AbortSignal;
+	/** Members per flush. Matches the vfs bulk-write chunk. */
+	windowFiles?: number;
+	/** Bytes per flush; whichever cap trips first wins. */
+	windowBytes?: number;
+}): {
+	push: (entry: PackedPath) => Promise<void>;
+	finish: () => Promise<number>;
+} {
+	const { driver, parentId, onFile, signal } = opts;
+	const windowFiles = opts.windowFiles ?? 24;
+	const windowBytes = opts.windowBytes ?? 16 << 20;
+	const put = driver.writeFile ?? driver.upload;
+	if (!put) throw new Error('This location cannot receive files');
+
+	let window: PackedPath[] = [];
+	let windowSize = 0;
+	let written = 0;
+	let checkedNesting = false;
+
+	const flush = async () => {
+		if (!window.length) return;
+		const batch = window;
+		window = [];
+		windowSize = 0;
+		throwIfAborted(signal);
+		await writeEntriesToDriver(driver, parentId, batch, onFile, signal);
+		written += batch.length;
+	};
+
+	return {
+		async push(entry) {
+			throwIfAborted(signal);
+			// Same contract as the buffered path: never silently flatten a nested
+			// tree onto a driver that cannot mkdir. Checked on the first nested
+			// member, since a stream has no up-front view of the whole archive.
+			if (!checkedNesting && splitPackedPath(entry.path).dirs.length > 0) {
+				checkedNesting = true;
+				if (!driver.mkdir || !driver.capabilities.supportsMkdir) {
+					throw new Error(
+						'This connection cannot create folders. Extract individual files instead, or pick another location.'
+					);
+				}
+			}
+			window.push(entry);
+			windowSize += entry.data.byteLength;
+			if (window.length >= windowFiles || windowSize >= windowBytes) await flush();
+		},
+		async finish() {
+			await flush();
+			return written;
+		}
+	};
+}
+
 export async function writeEntriesToDriver(
 	driver: ExplorerDriver,
 	parentId: string | null,
@@ -780,6 +856,13 @@ export type ExpandPackedOpts = {
 	onEngine?: (role: EngineRole) => void;
 	/** Vault (decrypt) stage ticks while unsealing — monolithic, not byte-granular. */
 	onVaultProgress?: (stage: number, total: number) => void;
+	/**
+	 * Streaming sink. When set, each member is handed over as soon as it is
+	 * expanded and NOT accumulated — the returned array is empty and the sink
+	 * owns the bytes. Awaited, so a slow writer throttles the expander, which
+	 * is what keeps peak memory to a window instead of the whole archive.
+	 */
+	onEntry?: (entry: PackedPath) => void | Promise<void>;
 };
 
 export async function expandPackedBytes(
@@ -810,8 +893,14 @@ export async function expandPackedBytes(
 		const mapped = opened.entries
 			.filter((e) => keep(e.path))
 			.map((e) => ({ path: e.path, data: e.data }));
+		const out: PackedPath[] = [];
 		for (const e of mapped) {
 			throwIfAborted(opts?.signal);
+			// openVault decrypts the whole payload at once, so this does not bound
+			// OUR memory — but streaming still lets the writer land members as
+			// they come instead of after the last one.
+			if (opts?.onEntry) await opts.onEntry(e);
+			else out.push(e);
 			onMember?.({
 				path: e.path,
 				transferred: e.data.byteLength,
@@ -820,15 +909,25 @@ export async function expandPackedBytes(
 			});
 			await yieldPaint();
 		}
-		return mapped;
+		return out;
 	}
 	const fmt = detectFormat(bytes, name);
 	if (!fmt) throw new Error(`Not a recognized archive: ${name}`);
 	const role = describeCompressRole(preferred, fmt.codec, 'expand');
 	opts?.onEngine?.(role);
+	// A .tar.gz expands in two stages, and only the SECOND yields real members
+	// — so the sink is attached to the final stage, never the intermediate tar.
+	const twoStage = looksTarGzName(name);
 	const files = await expandBytes(role.used as CompressEngineId, bytes, fmt.codec, name, {
 		skipSystemFiles,
 		signal: opts?.signal,
+		onEntry:
+			opts?.onEntry && !twoStage
+				? async (entry) => {
+						throwIfAborted(opts.signal);
+						await opts.onEntry!({ path: entry.name, data: entry.data });
+					}
+				: undefined,
 		onMember: (ev) => {
 			throwIfAborted(opts?.signal);
 			onMember?.({
@@ -856,6 +955,13 @@ export async function expandPackedBytes(
 				{
 					skipSystemFiles,
 					signal: opts?.signal,
+					onEntry: opts?.onEntry
+						? async (entry) => {
+								throwIfAborted(opts.signal);
+								if (!keep(entry.name)) return;
+								await opts.onEntry!({ path: entry.name, data: entry.data });
+							}
+						: undefined,
 					onMember: (ev) => {
 						throwIfAborted(opts?.signal);
 						onMember?.({
@@ -1105,6 +1211,65 @@ export async function runArchiveJob(spec: ArchiveJobSpec): Promise<ArchiveJobRes
 	let membersDone = 0;
 	let expandEngineLabel = '';
 	const expandVerb = kind === 'decrypt' ? 'Decrypting' : 'Decompressing';
+
+	// Pipeline when the destination is a plain folder write: members stream from
+	// the expander into the writer, so wall clock is ~max(inflate, write) rather
+	// than their sum and peak memory is one window, not the whole archive.
+	//
+	// The other destinations need the full set first — `popup` and `memory`
+	// build a fresh inner filesystem from it, and wrapInSubfolder has to name a
+	// unique container before anything lands — so they keep the buffered path.
+	// 'same' / 'folder' write straight into an existing folder; 'memory' and
+	// 'popup' both need the whole set first to build an inner filesystem.
+	const writesToFolder = dest === 'same' || dest === 'folder';
+	const canPipeline = writesToFolder && !(spec.wrapInSubfolder && driver.mkdir);
+
+	if (canPipeline) {
+		setNote(`${expandVerb}…`);
+		const writer = createStreamingWriter({
+			driver,
+			parentId: destParentId,
+			onFile: (ev) => {
+				onProgress?.(ev);
+			},
+			signal
+		});
+		let streamed = 0;
+		for (const entry of sources) {
+			throwIfAborted(signal);
+			const bytes = await readEntryBytes(driver, entry);
+			await expandPackedBytes(bytes, entry.name, spec.password, undefined, {
+				skipSystemFiles: spec.skipSystemFiles,
+				signal,
+				compressEngineId: spec.compressEngineId,
+				onVaultProgress: (stage, total) => {
+					setNote(`Unsealing vault — stage ${stage} of ${total}…`);
+				},
+				onEngine: (role) => {
+					remember(role, expandVerb);
+					expandEngineLabel = role.usedLabel;
+				},
+				onEntry: async (member) => {
+					await writer.push(member);
+					streamed += 1;
+					// Member counts are the honest signal: a stream never knows the
+					// archive's total up front, so there is no fraction to report.
+					setNote(
+						expandEngineLabel
+							? `${expandVerb} with ${expandEngineLabel} — ${streamed} file${
+									streamed === 1 ? '' : 's'
+								}…`
+							: `${streamed} file${streamed === 1 ? '' : 's'}…`
+					);
+				}
+			});
+		}
+		const written = await writer.finish();
+		if (!written) throw new Error('Nothing to extract');
+		emitJobPct(100, true);
+		return { title, engines };
+	}
+
 	for (let i = 0; i < sources.length; i++) {
 		throwIfAborted(signal);
 		const entry = sources[i]!;

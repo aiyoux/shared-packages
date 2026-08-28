@@ -82,6 +82,9 @@ export const fflateEngine: CompressionEngine = {
 		const input = asU8(bytes);
 		type Pending = { name: string; size?: number; data: Promise<Uint8Array> };
 		const pending: Pending[] = [];
+		// Declared outside the try: the catch needs to know whether a streaming
+		// consumer already received members before falling back.
+		let delivered = 0;
 		try {
 			let received = 0; // members whose final chunk has arrived (in order)
 			const uz = new f.Unzip((file) => {
@@ -121,7 +124,13 @@ export const fflateEngine: CompressionEngine = {
 					const p = pending[next++]!;
 					opts?.onMember?.({ name: p.name, transferred: 0, size: p.size, done: false });
 					const data = await p.data;
-					out.push({ name: p.name, data });
+					// Streaming: hand the member off and drop our reference, so
+					// peak memory is the consumer's window rather than the whole
+					// archive. Awaiting also lets a slow writer throttle inflate.
+					if (opts?.onEntry) await opts.onEntry({ name: p.name, data });
+					else out.push({ name: p.name, data });
+					delivered += 1;
+					pending[next - 1] = undefined as unknown as Pending;
 					opts?.onMember?.({
 						name: p.name,
 						transferred: data.byteLength,
@@ -144,19 +153,24 @@ export const fflateEngine: CompressionEngine = {
 				if (end < input.length) await new Promise((r) => setTimeout(r, 0));
 			}
 			await settle();
-			if (!out.length) throw new Error('empty zip');
+			// `out` stays empty when streaming, so count deliveries instead.
+			if (!delivered) throw new Error('empty zip');
 			return out;
 		} catch (err) {
 			// Members never awaited above must not surface as unhandled
 			// rejections once we fall back.
-			for (const p of pending) p.data.catch(() => {});
-			void err;
+			for (const p of pending) p?.data.catch(() => {});
+			// The fallback re-parses from byte zero. If a streaming consumer has
+			// already taken members, replaying them would deliver duplicates —
+			// so once anything is handed off, the error is final.
+			if (delivered) throw err;
 			const tree = f.unzipSync(input);
 			const out: ArchiveEntry[] = [];
 			let i = 0;
 			for (const [name, data] of Object.entries(tree)) {
 				if (!name || name.endsWith('/')) continue;
-				out.push({ name, data });
+				if (opts?.onEntry) await opts.onEntry({ name, data });
+				else out.push({ name, data });
 				opts?.onMember?.({
 					name,
 					transferred: data.byteLength,

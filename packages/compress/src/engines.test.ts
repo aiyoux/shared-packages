@@ -206,3 +206,75 @@ describe('nanotar', () => {
 		expect(new TextDecoder().decode(expanded[0]!.data)).toBe(new TextDecoder().decode(SAMPLE));
 	});
 });
+
+describe('streaming expand (onEntry)', () => {
+	it('hands members off as they inflate and applies backpressure', async () => {
+		const enc = new TextEncoder();
+		const members = Array.from({ length: 40 }, (_, i) => ({
+			name: `m-${i}.txt`,
+			data: enc.encode(`payload-${i}`)
+		}));
+		const zipped = await packFiles('fflate', members, 'zip');
+
+		const seen: string[] = [];
+		let inFlight = 0;
+		let maxInFlight = 0;
+		const files = await expandBytes('fflate', zipped[0]!.data, 'zip', zipped[0]!.name, {
+			onEntry: async (entry) => {
+				inFlight++;
+				maxInFlight = Math.max(maxInFlight, inFlight);
+				// A slow consumer must throttle the producer, not queue behind it.
+				await new Promise((r) => setTimeout(r, 0));
+				seen.push(new TextDecoder().decode(entry.data));
+				inFlight--;
+			}
+		});
+
+		expect(files.length, 'streaming consumer owns the bytes; nothing retained').toBe(0);
+		expect(seen.length, 'every member delivered').toBe(members.length);
+		expect(seen[0]).toBe('payload-0');
+		expect(seen[members.length - 1]).toBe(`payload-${members.length - 1}`);
+		expect(maxInFlight, 'awaited sink is never called concurrently').toBe(1);
+	});
+
+	it('still returns members when no sink is given', async () => {
+		const enc = new TextEncoder();
+		const zipped = await packFiles(
+			'fflate',
+			[{ name: 'a.txt', data: enc.encode('a') }],
+			'zip'
+		);
+		const files = await expandBytes('fflate', zipped[0]!.data, 'zip', zipped[0]!.name);
+		expect(files.length).toBe(1);
+		expect(files[0]!.name).toBe('a.txt');
+	});
+
+	it('streams single-stream codecs and skips junk members', async () => {
+		const enc = new TextEncoder();
+		const gz = await packFiles('fflate', [{ name: 'solo.txt', data: enc.encode('solo') }], 'gzip');
+		const streamed: string[] = [];
+		const out = await expandBytes('fflate', gz[0]!.data, 'gzip', gz[0]!.name, {
+			onEntry: (entry) => {
+				streamed.push(entry.name);
+			}
+		});
+		expect(streamed).toEqual(['solo.txt']);
+		expect(out.length).toBe(0);
+
+		const withJunk = await packFiles(
+			'fflate',
+			[
+				{ name: 'keep.txt', data: enc.encode('keep') },
+				{ name: '__MACOSX/._keep.txt', data: enc.encode('junk') }
+			],
+			'zip'
+		);
+		const names: string[] = [];
+		await expandBytes('fflate', withJunk[0]!.data, 'zip', withJunk[0]!.name, {
+			onEntry: (entry) => {
+				names.push(entry.name);
+			}
+		});
+		expect(names, 'junk filtered on the streaming path too').toEqual(['keep.txt']);
+	});
+});

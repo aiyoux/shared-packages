@@ -43,6 +43,16 @@ export type ArchiveMemberProgress = {
 
 export type UnzipProgressOpts = {
 	onMember?: (ev: ArchiveMemberProgress) => void;
+	/**
+	 * Streaming sink: called with each member's bytes as soon as they are
+	 * complete, instead of accumulating the whole archive first.
+	 *
+	 * It is AWAITED, so returning a promise applies backpressure — the engine
+	 * will not race ahead of a slow consumer, which is what bounds peak memory.
+	 * When this is set the engine hands each member off and does NOT retain it:
+	 * the returned array is empty, and the consumer owns the bytes.
+	 */
+	onEntry?: (entry: ArchiveEntry) => void | Promise<void>;
 	/** Drop Finder `__MACOSX` / `._*` / `.DS_Store`. Default true. */
 	skipSystemFiles?: boolean;
 	signal?: AbortSignal;

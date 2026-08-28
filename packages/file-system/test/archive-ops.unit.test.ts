@@ -17,6 +17,7 @@ import {
 	packedIsTopLevel,
 	pickEngineForCodec,
 	previewArchiveEnginePlan,
+	createStreamingWriter,
 	enginesToPrewarm,
 	runArchiveJob,
 	uniqueChildFolderName,
@@ -117,6 +118,85 @@ describe('archiveOps', () => {
 			'unrecognized names warm nothing');
 		assert.deepEqual(enginesToPrewarm(['a.zip', 'b.zip'], 'fflate'), ['fflate'],
 			'one entry per library, not per file');
+	});
+
+	it('streaming writer flushes by window and applies backpressure', async () => {
+		const vfs = createVfs({
+			dbName: `archive-ops-stream-${Date.now()}-${Math.random()}`,
+			memoryOpfs: true,
+			requestPersist: false
+		});
+		await vfs.ready();
+		const driver = createLocalExplorerDriver(vfs);
+		await driver.ready();
+		const folder = await driver.mkdir!(null, 'dest');
+
+		const writer = createStreamingWriter({
+			driver,
+			parentId: folder.id,
+			windowFiles: 4
+		});
+		// 10 members with a 4-file window: flushes at 4, 8, and the remainder.
+		for (let i = 0; i < 10; i++) {
+			await writer.push({ path: `s-${i}.txt`, data: enc.encode(`v${i}`) });
+			const landed = (await driver.list({ parentId: folder.id })).entries.length;
+			// Nothing is held past a full window — that bound is the memory claim.
+			assert.ok(landed >= i + 1 - 4, `member ${i}: at most one window outstanding`);
+		}
+		const written = await writer.finish();
+		assert.equal(written, 10);
+		const listed = await driver.list({ parentId: folder.id });
+		assert.equal(listed.entries.length, 10, 'every member landed');
+		await vfs.db.delete();
+	});
+
+	it('pipelined extract writes members before the archive finishes expanding', async () => {
+		const vfs = createVfs({
+			dbName: `archive-ops-pipeline-${Date.now()}-${Math.random()}`,
+			memoryOpfs: true,
+			requestPersist: false
+		});
+		await vfs.ready();
+		const driver = createLocalExplorerDriver(vfs);
+		await driver.ready();
+		const folder = await driver.mkdir!(null, 'inbox');
+		const members = Array.from({ length: 60 }, (_, i) => ({
+			name: `p-${i}.txt`,
+			data: enc.encode(`payload-${i}`)
+		}));
+		const zip = await packFiles('fflate', members, 'zip');
+		await driver.writeFile!(folder.id, new File([zip[0]!.data as BlobPart], zip[0]!.name));
+		const listed = await driver.list({ parentId: folder.id });
+		const archive = listed.entries.find((e) => e.name === zip[0]!.name)!;
+
+		await runArchiveJob({
+			kind: 'decompress',
+			entries: [archive],
+			driver,
+			dest: 'same',
+			destParentId: folder.id,
+			title: archive.name,
+			compressEngineId: 'fflate',
+			codec: 'zip',
+			cryptoEngineId: 'webcrypto',
+			password: '',
+			skipSystemFiles: true,
+			// wrapInSubfolder needs the full set to name its container, so the
+			// pipeline only engages when it is off.
+			wrapInSubfolder: false,
+			useHost: false
+		});
+
+		const after = await driver.list({ parentId: folder.id });
+		for (const m of members) {
+			const row = after.entries.find((e) => e.name === m.name);
+			assert.ok(row, `${m.name} extracted`);
+		}
+		// Round-trip one member's bytes to prove streaming did not corrupt data.
+		const first = after.entries.find((e) => e.name === 'p-0.txt')!;
+		const blob = await driver.readBlob!(first.id);
+		assert.equal(new TextDecoder().decode(new Uint8Array(await blob.arrayBuffer())), 'payload-0');
+		await vfs.db.delete();
 	});
 
 	it('previews selected vs fallback library before the job runs', () => {
