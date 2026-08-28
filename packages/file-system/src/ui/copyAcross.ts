@@ -11,6 +11,7 @@ import { upsertProgress, type CopyHop, type CopyIce, type CopyIcePath } from '..
 import {
 	EXPLORER_DOWNLOAD_MAX_BYTES,
 	isRemoteClass,
+	readExplorerBlob,
 	type ExplorerDriver,
 	type ExplorerEntry
 } from './explorerDriver.js';
@@ -966,13 +967,72 @@ async function copyFolderTree(
 		);
 	}
 	const { entries } = listed;
+	const bulk = canBulkWriteDest(source, dest);
+	// Files are windowed so a huge folder does not sit fully in memory before
+	// anything lands; the window matches the store's own write chunk.
+	const WINDOW = 512;
+	let pending: Array<{ entry: ExplorerEntry; file: File }> = [];
+	const flush = async () => {
+		if (!pending.length) return;
+		const batch = pending;
+		pending = [];
+		await dest.writeFiles!(
+			created.id,
+			batch.map((b) => b.file),
+			{ signal }
+		);
+		for (const b of batch) {
+			reportCopy(generateId('copy'), b.entry, {
+				transferred: b.file.size,
+				size: b.file.size,
+				done: true,
+				status: 'done',
+				hop: 'direct'
+			});
+		}
+	};
+
 	for (const child of entries) {
 		if (child.kind === 'folder') {
+			await flush();
 			count += await copyFolderTree(source, dest, child, created.id, confirmDualPhase, signal);
-		} else {
-			await copyFile(source, dest, child, created.id, confirmDualPhase, signal);
-			count += 1;
+			continue;
 		}
+		if (bulk) {
+			if (signal?.aborted) {
+				const err = new Error('Copy cancelled');
+				err.name = 'AbortError';
+				throw err;
+			}
+			const blob = await readExplorerBlob(source, child.id);
+			pending.push({
+				entry: child,
+				file: new File([blob], child.name, {
+					type: child.contentType || blob.type || 'application/octet-stream'
+				})
+			});
+			count += 1;
+			if (pending.length >= WINDOW) await flush();
+			continue;
+		}
+		await copyFile(source, dest, child, created.id, confirmDualPhase, signal);
+		count += 1;
 	}
+	await flush();
 	return count;
+}
+
+/**
+ * True when a whole folder's files can be handed to the destination in one
+ * bulk write instead of one call per file.
+ *
+ * Only the `direct` shape qualifies: the file is already a Blob in this tab
+ * and the destination is a local store with a bulk write. Every other shape
+ * (`server`, `delegated`, `webrtc`, `dual-phase`) carries per-file transfer
+ * reporting — hops, ICE paths, integrity, resume — that a single bulk call
+ * cannot express, and those are network-bound anyway, where per-file OPFS
+ * overhead is not what costs.
+ */
+function canBulkWriteDest(source: ExplorerDriver, dest: ExplorerDriver): boolean {
+	return classify(source, dest).kind === 'direct' && typeof dest.writeFiles === 'function';
 }

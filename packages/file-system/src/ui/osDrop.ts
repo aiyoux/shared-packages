@@ -386,28 +386,67 @@ export async function importOsDropToDriver(
 			folders += 1;
 		}
 	}
+	// Group by destination folder so a driver with a bulk write can take a
+	// whole folder in one call. Dropping a 3000-file tree used to be 3000
+	// separate writes; each one is ~4 OPFS round trips, and that per-file cost
+	// dominates the drop regardless of how large the files are.
+	const byParent = new Map<string, { parentId: string | null; files: File[] }>();
 	for (const n of nodes) {
 		if (n.kind !== 'file' || !n.file) continue;
 		const slash = n.relativePath.lastIndexOf('/');
 		const dir = slash >= 0 ? n.relativePath.slice(0, slash) : '';
 		const parentId = await ensureFolder(dir);
-		const file = n.file;
-		const size = file.size;
-		const name = file.name;
-		opts?.onFile?.({ name, size, transferred: 0, done: false });
-		if (typeof driver.upload === 'function') {
-			await driver.upload(parentId, file, {
-				onProgress: (pct) => {
-					const transferred = Math.round(size * Math.min(1, Math.max(0, pct)));
-					opts?.onFile?.({ name, size, transferred, done: false });
+		const key = parentId ?? '';
+		const group = byParent.get(key);
+		if (group) group.files.push(n.file);
+		else byParent.set(key, { parentId, files: [n.file] });
+	}
+
+	for (const { parentId, files: group } of byParent.values()) {
+		// upload() carries per-file progress that the bulk path cannot express,
+		// so a driver offering it keeps the per-file route.
+		const bulk = typeof driver.upload !== 'function' && typeof driver.writeFiles === 'function';
+		if (bulk) {
+			for (const file of group) {
+				opts?.onFile?.({ name: file.name, size: file.size, transferred: 0, done: false });
+			}
+			let settled = 0;
+			const settle = (upTo: number) => {
+				while (settled < upTo) {
+					const file = group[settled++]!;
+					opts?.onFile?.({
+						name: file.name,
+						size: file.size,
+						transferred: file.size,
+						done: true
+					});
+					files += 1;
 				}
+			};
+			await driver.writeFiles!(parentId, group, {
+				onProgress: (written) => settle(Math.min(settled + written.length, group.length))
 			});
-		} else {
-			await driver.writeFile!(parentId, file);
-			opts?.onFile?.({ name, size, transferred: size, done: false });
+			settle(group.length);
+			continue;
 		}
-		opts?.onFile?.({ name, size, transferred: size, done: true });
-		files += 1;
+		for (const file of group) {
+			const size = file.size;
+			const name = file.name;
+			opts?.onFile?.({ name, size, transferred: 0, done: false });
+			if (typeof driver.upload === 'function') {
+				await driver.upload(parentId, file, {
+					onProgress: (pct) => {
+						const transferred = Math.round(size * Math.min(1, Math.max(0, pct)));
+						opts?.onFile?.({ name, size, transferred, done: false });
+					}
+				});
+			} else {
+				await driver.writeFile!(parentId, file);
+				opts?.onFile?.({ name, size, transferred: size, done: false });
+			}
+			opts?.onFile?.({ name, size, transferred: size, done: true });
+			files += 1;
+		}
 	}
 	return { files, folders };
 }

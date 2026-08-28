@@ -325,3 +325,122 @@ describe('formatExplorerError', () => {
 		assert.match(formatExplorerError(new VfsError('TRASH_STATE')), /trash|deleted/i);
 	});
 });
+
+describe('os folder drop batching', () => {
+	function fileAt(name: string, rel: string): OsDropNode {
+		return {
+			kind: 'file',
+			relativePath: rel,
+			file: new File([`bytes-${name}`], name, { type: 'text/plain' })
+		};
+	}
+
+	/** Records how the drop reached the driver: one call per file, or in bulk. */
+	function recordingDriver(opts: { bulk: boolean; upload?: boolean }) {
+		const calls: string[] = [];
+		const written: Array<{ parentId: string | null; names: string[] }> = [];
+		let folderSeq = 0;
+		const driver = {
+			id: 'local',
+			capabilities: {
+				supportsTrash: false, supportsSoftDelete: false, supportsRename: true,
+				supportsMove: true, supportsCopy: true, supportsMkdir: true,
+				supportsUpload: Boolean(opts.upload), supportsDownload: true,
+				supportsSiblingOrder: true
+			},
+			ready: async () => {},
+			list: async () => ({ entries: [], truncated: false }),
+			getPath: async () => [],
+			mkdir: async (parentId: string | null, name: string) => {
+				calls.push('mkdir');
+				return { id: `dir-${++folderSeq}`, parentId, kind: 'folder' as const, name };
+			},
+			delete: async () => {},
+			writeFile: async (parentId: string | null, file: File) => {
+				calls.push('writeFile');
+				written.push({ parentId, names: [file.name] });
+				return { id: `f-${file.name}`, parentId, kind: 'file' as const, name: file.name };
+			}
+		} as unknown as ExplorerDriver;
+		if (opts.upload) {
+			(driver as { upload?: unknown }).upload = async (parentId: string | null, file: File) => {
+				calls.push('upload');
+				written.push({ parentId, names: [file.name] });
+				return { id: `f-${file.name}`, parentId, kind: 'file', name: file.name };
+			};
+		}
+		if (opts.bulk) {
+			(driver as { writeFiles?: unknown }).writeFiles = async (
+				parentId: string | null,
+				files: File[]
+			) => {
+				calls.push('writeFiles');
+				written.push({ parentId, names: files.map((f) => f.name) });
+				return files.map((f) => ({ id: `f-${f.name}`, parentId, kind: 'file', name: f.name }));
+			};
+		}
+		return { driver, calls, written };
+	}
+
+	it('sends a folder to a bulk-capable driver in one call per destination', async () => {
+		const { driver, calls, written } = recordingDriver({ bulk: true });
+		const nodes: OsDropNode[] = [
+			{ kind: 'folder', relativePath: 'Trip' },
+			fileAt('a.txt', 'Trip/a.txt'),
+			fileAt('b.txt', 'Trip/b.txt'),
+			fileAt('c.txt', 'Trip/c.txt')
+		];
+		const seen: string[] = [];
+		const res = await importOsDropToDriver(driver, null, nodes, {
+			onFile: (ev) => {
+				if (ev.done) seen.push(ev.name);
+			}
+		});
+		assert.equal(res.files, 3);
+		assert.equal(calls.filter((c) => c === 'writeFiles').length, 1, 'one bulk call');
+		assert.equal(calls.filter((c) => c === 'writeFile').length, 0, 'no per-file writes');
+		assert.deepEqual(written[0]!.names, ['a.txt', 'b.txt', 'c.txt']);
+		// Per-file UI ticks must survive batching.
+		assert.deepEqual(seen.sort(), ['a.txt', 'b.txt', 'c.txt']);
+	});
+
+	it('keeps the per-file path when the driver reports upload progress', async () => {
+		// upload() carries byte progress a bulk call cannot express, so a driver
+		// offering it must not be batched.
+		const { driver, calls } = recordingDriver({ bulk: true, upload: true });
+		const nodes: OsDropNode[] = [
+			{ kind: 'folder', relativePath: 'Trip' },
+			fileAt('a.txt', 'Trip/a.txt'),
+			fileAt('b.txt', 'Trip/b.txt')
+		];
+		await importOsDropToDriver(driver, null, nodes);
+		assert.equal(calls.filter((c) => c === 'writeFiles').length, 0, 'not batched');
+		assert.equal(calls.filter((c) => c === 'upload').length, 2, 'per-file upload kept');
+	});
+
+	it('falls back to per-file writes when the driver has no bulk path', async () => {
+		const { driver, calls } = recordingDriver({ bulk: false });
+		const nodes: OsDropNode[] = [
+			{ kind: 'folder', relativePath: 'Trip' },
+			fileAt('a.txt', 'Trip/a.txt'),
+			fileAt('b.txt', 'Trip/b.txt')
+		];
+		const res = await importOsDropToDriver(driver, null, nodes);
+		assert.equal(res.files, 2);
+		assert.equal(calls.filter((c) => c === 'writeFile').length, 2);
+	});
+
+	it('groups by destination folder so nested trees stay in their own folders', async () => {
+		const { driver, written } = recordingDriver({ bulk: true });
+		const nodes: OsDropNode[] = [
+			{ kind: 'folder', relativePath: 'Trip' },
+			{ kind: 'folder', relativePath: 'Trip/inner' },
+			fileAt('a.txt', 'Trip/a.txt'),
+			fileAt('b.txt', 'Trip/inner/b.txt')
+		];
+		await importOsDropToDriver(driver, null, nodes);
+		assert.equal(written.length, 2, 'one bulk call per destination folder');
+		const parents = new Set(written.map((w) => w.parentId));
+		assert.equal(parents.size, 2, 'files landed under different parents');
+	});
+});
