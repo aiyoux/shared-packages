@@ -71,5 +71,18 @@ export class SharedVfsDatabase extends Dexie {
 			meta: 'key',
 			leases: 'key, expiresAt'
 		});
+		// v4: packed blobs. Several members can share one OPFS file, so
+		// releasing storage must ask "does any ref still name this path?" —
+		// `opfsPath` was already indexed, which makes that a lookup. Pure index
+		// metadata: no upgrade body, existing rows keep no packOffset and take
+		// the standalone path unchanged.
+		this.version(4).stores({
+			nodes:
+				'id, parentId, kind, fileType, name, updatedAt, deletedAt, [parentId+name], [parentId+deletedAt], [parentId+sortOrder]',
+			blobRefs: 'id, opfsPath, createdAt',
+			drafts: 'id, appId, updatedAt',
+			meta: 'key',
+			leases: 'key, expiresAt'
+		});
 	}
 }

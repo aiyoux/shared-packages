@@ -47,6 +47,15 @@ export interface VfsServiceOptions {
 
 const DEFAULT_GRACE = 120_000;
 
+/**
+ * Upper bound on one packed file, and the only knob for the layout.
+ *
+ * Bigger packs mean fewer OPFS round trips but a coarser unit of reclamation:
+ * a pack's storage is only freed once every member in it is gone. 64MB matches
+ * the write chunk cap, so a chunk maps to at most one pack.
+ */
+const PACK_CAP_BYTES = 64 << 20;
+
 export type EmptyTrashProgress = {
 	done: number;
 	total: number;
@@ -802,6 +811,41 @@ export class VfsService {
 			// treats blobs/<id>.bin as live for pendingPromote refs, so a crash
 			// mid-write leaves a GC-able orphan, same window as the old
 			// tmp→promote protocol.
+			// Layout decision, before anything is reserved.
+			//
+			// OPFS charges per operation regardless of payload, so writing N
+			// members as N files costs N x (getFileHandle + createWritable +
+			// write + close) round trips. Writing them as ONE multi-part Blob
+			// into ONE pack file costs four, total — `new Blob([...])` is a
+			// zero-copy reference list, not a buffer.
+			//
+			// A member at or above half the pack cap gets its own file: it would
+			// dominate a pack, and its per-file overhead is already amortised.
+			// Packing needs a store that can read a byte range back cheaply;
+			// `readRange` is that capability gate (the in-memory store, used by
+			// inner-fs sessions, deliberately lacks it and stays unpacked).
+			const packable = typeof this.opfs.readRange === 'function' && prepared.length > 1;
+			const packId = generateId('pack');
+			const packPath = `packs/${packId}.bin`;
+			const packMembers: Array<{ index: number; offset: number }> = [];
+			let packBytes = 0;
+			if (packable) {
+				for (let i = 0; i < prepared.length; i++) {
+					const len = prepared[i]!.bytes.byteLength;
+					if (len >= PACK_CAP_BYTES / 2) continue;
+					packMembers.push({ index: i, offset: packBytes });
+					packBytes += len;
+				}
+			}
+			// One member in a pack is byte-identical to a standalone blob at the
+			// same cost, so don't pay the shared-storage semantics for it.
+			const packedIndexes = new Set(
+				packMembers.length > 1 ? packMembers.map((m) => m.index) : []
+			);
+			const packOffsetByIndex = new Map(
+				packMembers.length > 1 ? packMembers.map((m) => [m.index, m.offset]) : []
+			);
+
 			const nextAppend = new Map<string, number>();
 			const siblingNames = new Map<string, Set<string>>();
 			const refPuts: BlobRef[] = [];
@@ -813,7 +857,7 @@ export class VfsService {
 				this.db.blobRefs,
 				this.db.leases,
 				async () => {
-					for (const p of prepared) {
+					for (const [pIndex, p] of prepared.entries()) {
 						if (signal?.aborted) throw abortError();
 						const pid = p.input.parentId;
 						const stateKey = pid ?? '';
@@ -842,14 +886,18 @@ export class VfsService {
 						taken.add(unique.toLowerCase());
 						const sortOrder = nextSortOrder;
 						nextAppend.set(stateKey, nextSortOrder + 16384);
+						const packOffset = packOffsetByIndex.get(pIndex);
 						refPuts.push({
 							id: p.blobId,
-							opfsPath: `blobs/${p.blobId}.bin`,
+							opfsPath: packOffset != null ? packPath : `blobs/${p.blobId}.bin`,
 							byteLength: 0,
 							createdAt: p.now,
 							contentType: p.contentType,
 							pending: true,
-							pendingPromote: true
+							// A packed member's bytes are inside a shared file, so the
+							// standalone promote convention does not apply to it.
+							pendingPromote: packOffset == null,
+							...(packOffset != null ? { packOffset } : {})
 						});
 						leasePuts.push({
 							key: `write:${p.blobId}`,
@@ -879,15 +927,27 @@ export class VfsService {
 					await this.db.nodes.bulkPut(nodePuts);
 				}
 			);
-			// Blob writes: one OPFS write per member (no partial + promote
-			// double-write), overlapping a few at a time. The blobRef is pending
-			// until the confirm txn, so no reader can reach a half-written blob.
+			// The pack is ONE write for every member in it. Blob assembly is
+			// zero-copy (a reference list), so this does not duplicate the
+			// chunk in memory. Refs stay pending until the confirm txn, so no
+			// reader can reach a half-written pack.
+			if (packedIndexes.size) {
+				if (signal?.aborted) throw abortError();
+				const parts: BlobPart[] = [];
+				for (let i = 0; i < prepared.length; i++) {
+					if (packedIndexes.has(i)) parts.push(prepared[i]!.bytes as BlobPart);
+				}
+				await this.opfs.writeFinal(packPath, new Blob(parts));
+			}
+			// Anything not packed (large members, or a chunk too small to be
+			// worth a pack) keeps the one-file-per-blob path.
+			const standalone = reserved.filter((_, i) => !packedIndexes.has(i));
 			const WRITE_CONCURRENCY = 4;
 			let cursor = 0;
 			const workers = Array.from({ length: WRITE_CONCURRENCY }, async () => {
-				while (cursor < reserved.length) {
+				while (cursor < standalone.length) {
 					if (signal?.aborted) throw abortError();
-					const r = reserved[cursor++]!;
+					const r = standalone[cursor++]!;
 					await this.opfs.writeFinal(`blobs/${r.p.blobId}.bin`, r.p.bytes);
 				}
 			});
@@ -1118,7 +1178,28 @@ export class VfsService {
 		if (!node.blobId) throw new VfsError('OPFS_IO', 'Missing blobId', { nodeId });
 		const ref = await this.db.blobRefs.get(node.blobId);
 		if (!ref) throw new VfsError('OPFS_IO', 'Missing blobRef', { nodeId, blobId: node.blobId });
+		if (ref.packOffset != null) {
+			const slice = await this.readPacked(ref);
+			return new Uint8Array(await slice.arrayBuffer());
+		}
 		return this.opfs.read(ref.opfsPath);
+	}
+
+	/**
+	 * One member out of a shared pack file. Lazy where the store supports it,
+	 * so pulling a 40KB member out of a 64MB pack costs a slice rather than a
+	 * full read.
+	 */
+	private async readPacked(ref: BlobRef, contentType?: string): Promise<Blob> {
+		const offset = ref.packOffset ?? 0;
+		if (this.opfs.readRange) {
+			return this.opfs.readRange(ref.opfsPath, offset, ref.byteLength, contentType);
+		}
+		// A store without range reads should never have been given packs, but
+		// degrade correctly rather than returning the wrong bytes.
+		const all = await this.opfs.read(ref.opfsPath);
+		const view = all.subarray(offset, offset + ref.byteLength);
+		return new Blob([view as BlobPart], { type: contentType ?? 'application/octet-stream' });
 	}
 
 	async readJson<T = unknown>(nodeId: string): Promise<T> {
@@ -1134,7 +1215,9 @@ export class VfsService {
 		if (!node.blobId) throw new VfsError('OPFS_IO', 'Missing blobId');
 		const ref = await this.db.blobRefs.get(node.blobId);
 		if (!ref) throw new VfsError('OPFS_IO', 'Missing blobRef');
-		return this.opfs.readBlob(ref.opfsPath, node.contentType ?? ref.contentType);
+		const contentType = node.contentType ?? ref.contentType;
+		if (ref.packOffset != null) return this.readPacked(ref, contentType);
+		return this.opfs.readBlob(ref.opfsPath, contentType);
 	}
 
 	// ── rename / move / copy ──────────────────────────────────────

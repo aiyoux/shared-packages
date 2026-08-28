@@ -56,12 +56,25 @@ export interface VfsNode {
 
 export interface BlobRef {
 	id: string;
+	/**
+	 * Where the bytes live. For a packed member this is the PACK's path, shared
+	 * with its siblings — never unlink it directly; go through the release
+	 * funnel in VfsService, which only unlinks when no ref still names it.
+	 */
 	opfsPath: string;
 	byteLength: number;
 	createdAt: number;
 	contentType?: string;
 	pendingPromote?: boolean;
 	pending?: boolean;
+	/**
+	 * Byte offset of this member inside a shared pack file. Absent means the
+	 * ref owns `opfsPath` outright (the pre-pack layout, still used for large
+	 * members and every existing install).
+	 *
+	 * Length is `byteLength` — deliberately not duplicated here.
+	 */
+	packOffset?: number;
 }
 
 export interface AppDraft {
