@@ -199,6 +199,77 @@ describe('archiveOps', () => {
 		await vfs.db.delete();
 	});
 
+	it('pipelines with wrapInSubfolder on (the dialog default) and reports progress early', async () => {
+		const vfs = createVfs({
+			dbName: `archive-ops-wrap-pipe-${Date.now()}-${Math.random()}`,
+			memoryOpfs: true,
+			requestPersist: false
+		});
+		await vfs.ready();
+		const driver = createLocalExplorerDriver(vfs);
+		await driver.ready();
+		const folder = await driver.mkdir!(null, 'inbox');
+		const members = Array.from({ length: 60 }, (_, i) => ({
+			name: `w-${i}.txt`,
+			data: enc.encode(`payload-${i}`)
+		}));
+		const zip = await packFiles('fflate', members, 'zip');
+		await driver.writeFile!(folder.id, new File([zip[0]!.data as BlobPart], zip[0]!.name));
+		const archive = (await driver.list({ parentId: folder.id })).entries.find(
+			(e) => e.name === zip[0]!.name
+		)!;
+
+		// Job ticks in order, so we can tell whether a real fraction appears
+		// while expanding or only once dest rows start landing.
+		const jobPcts: number[] = [];
+		let firstDestRowAt = -1;
+		let ticks = 0;
+		await runArchiveJob({
+			kind: 'decompress',
+			entries: [archive],
+			driver,
+			dest: 'same',
+			destParentId: folder.id,
+			title: archive.name,
+			compressEngineId: 'fflate',
+			codec: 'zip',
+			cryptoEngineId: 'webcrypto',
+			password: '',
+			skipSystemFiles: true,
+			// The dialog defaults this ON — it used to disable pipelining entirely.
+			wrapInSubfolder: true,
+			useHost: false,
+			onProgress: (ev) => {
+				ticks++;
+				if (ev.job) {
+					if (ev.size > 0) jobPcts.push(Math.round((ev.transferred / ev.size) * 100));
+				} else if (firstDestRowAt < 0) {
+					firstDestRowAt = ticks;
+				}
+			}
+		});
+
+		const firstNonZero = jobPcts.findIndex((p) => p > 0);
+		assert.ok(firstNonZero >= 0, 'job reports a real percentage, not only 0 then 100');
+		assert.ok(
+			jobPcts.slice(0, -1).some((p) => p > 0 && p < 100),
+			'progress moves through the middle instead of jumping 0 -> 100'
+		);
+
+		// wrapInSubfolder still holds: members land in a container, not the root.
+		const kids = await driver.list({ parentId: folder.id });
+		const wrapped = kids.entries.find((e) => e.kind === 'folder');
+		assert.ok(wrapped, 'extract container created');
+		const inner = await driver.list({ parentId: wrapped.id });
+		assert.equal(inner.entries.length, members.length, 'every member landed in the container');
+		assert.equal(
+			kids.entries.filter((e) => e.name.startsWith('w-')).length,
+			0,
+			'nothing leaked into the parent folder'
+		);
+		await vfs.db.delete();
+	});
+
 	it('previews selected vs fallback library before the job runs', () => {
 		const tree = previewArchiveEnginePlan({
 			kind: 'compress',

@@ -152,13 +152,6 @@ export async function uniqueChildFolderName(
 	return `${clean} (${Date.now()})`;
 }
 
-function prefixPackedPaths(files: PackedPath[], folder: string): PackedPath[] {
-	return files.map((f) => {
-		const rel = f.path.replace(/^\/+/, '');
-		return { path: rel ? `${folder}/${rel}` : `${folder}/`, data: f.data };
-	});
-}
-
 export function readStoredCompressEngine(): CompressEngineId {
 	try {
 		const v = localStorage.getItem(COMPRESS_STORAGE_KEY);
@@ -493,6 +486,10 @@ export function createStreamingWriter(opts: {
 	const windowBytes = opts.windowBytes ?? 16 << 20;
 	const put = driver.writeFile ?? driver.upload;
 	if (!put) throw new Error('This location cannot receive files');
+	// ONE folder context for the whole stream. Rebuilding it per flush cost a
+	// driver.list() per directory per batch — at 3000 files across ~125
+	// flushes that dominated the job.
+	const folders = createDestFolders(driver, parentId, signal);
 
 	let window: PackedPath[] = [];
 	let windowSize = 0;
@@ -505,7 +502,7 @@ export function createStreamingWriter(opts: {
 		window = [];
 		windowSize = 0;
 		throwIfAborted(signal);
-		await writeEntriesToDriver(driver, parentId, batch, onFile, signal);
+		await writeEntriesToDriver(driver, parentId, batch, onFile, signal, folders);
 		written += batch.length;
 	};
 
@@ -534,12 +531,60 @@ export function createStreamingWriter(opts: {
 	};
 }
 
+/**
+ * Destination folder resolution shared across writes.
+ *
+ * `ensureDir` memoizes every folder it resolves or creates. A streaming writer
+ * keeps ONE of these for the whole job: rebuilding it per flush meant a
+ * `driver.list()` per directory per batch, which is most of why a 3000-file
+ * extract crawled — the folder lookups, not the bytes.
+ */
+export type DestFolders = {
+	ensureDir: (dirs: string[]) => Promise<string | null>;
+	/** Folder rows already painted, so a re-flush does not repaint them. */
+	painted: Set<string>;
+};
+
+export function createDestFolders(
+	driver: ExplorerDriver,
+	parentId: string | null,
+	signal?: AbortSignal
+): DestFolders {
+	const folderIds = new Map<string, string | null>([['', parentId]]);
+	const painted = new Set<string>();
+
+	async function ensureDir(dirs: string[]): Promise<string | null> {
+		if (!dirs.length) return parentId;
+		const key = dirs.join('/');
+		const hit = folderIds.get(key);
+		if (hit !== undefined) return hit;
+		throwIfAborted(signal);
+		const parent = await ensureDir(dirs.slice(0, -1));
+		throwIfAborted(signal);
+		const name = dirs[dirs.length - 1]!;
+		const listed = await driver.list({ parentId: parent });
+		throwIfAborted(signal);
+		const existing = listed.entries.find((e) => e.kind === 'folder' && e.name === name);
+		if (existing) {
+			folderIds.set(key, existing.id);
+			return existing.id;
+		}
+		const created = await driver.mkdir!(parent, name);
+		folderIds.set(key, created.id);
+		return created.id;
+	}
+
+	return { ensureDir, painted };
+}
+
 export async function writeEntriesToDriver(
 	driver: ExplorerDriver,
 	parentId: string | null,
 	files: PackedPath[],
 	onFile?: (ev: ArchiveWriteProgress) => void,
-	signal?: AbortSignal
+	signal?: AbortSignal,
+	/** Reused across flushes by a streaming writer; created per call otherwise. */
+	folders?: DestFolders
 ): Promise<void> {
 	const put = driver.writeFile ?? driver.upload;
 	if (!put) throw new Error('This location cannot receive files');
@@ -551,7 +596,8 @@ export async function writeEntriesToDriver(
 			'This connection cannot create folders. Extract individual files instead, or pick another location.'
 		);
 	}
-	const folderIds = new Map<string, string | null>([['', parentId]]);
+	const dest = folders ?? createDestFolders(driver, parentId, signal);
+	const ensureDir = dest.ensureDir;
 
 	type FolderAgg = {
 		name: string;
@@ -586,10 +632,12 @@ export async function writeEntriesToDriver(
 		}
 	}
 
+	const folderParents = new Map<string, string | null>();
+
 	function emitFolder(relKey: string) {
 		const agg = folderAgg.get(relKey);
 		if (!agg) return;
-		const destParent = folderIds.get(agg.parentKey);
+		const destParent = folderParents.get(relKey);
 		if (destParent === undefined) return;
 		onFile?.({
 			name: agg.name,
@@ -599,33 +647,6 @@ export async function writeEntriesToDriver(
 			done: agg.totalFiles > 0 && agg.doneFiles >= agg.totalFiles,
 			entryKind: 'folder'
 		});
-	}
-
-	async function ensureDir(dirs: string[]): Promise<string | null> {
-		if (!dirs.length) return parentId;
-		const key = dirs.join('/');
-		const hit = folderIds.get(key);
-		if (hit !== undefined) return hit;
-		throwIfAborted(signal);
-		const parent = await ensureDir(dirs.slice(0, -1));
-		throwIfAborted(signal);
-		const name = dirs[dirs.length - 1]!;
-		const listed = await driver.list({ parentId: parent });
-		throwIfAborted(signal);
-		const existing = listed.entries.find((e) => e.kind === 'folder' && e.name === name);
-		if (existing) {
-			folderIds.set(key, existing.id);
-			emitFolder(key);
-			return existing.id;
-		}
-		const created = await driver.mkdir!(parent, name);
-		folderIds.set(key, created.id);
-		emitFolder(key);
-		return created.id;
-	}
-
-	for (const [key, agg] of folderAgg) {
-		if (agg.parentKey === '') emitFolder(key);
 	}
 
 	/** Mark one written file's bytes on its folder aggregate chain. */
@@ -663,7 +684,26 @@ export async function writeEntriesToDriver(
 		}
 		const destParent = await ensureDir(dirs);
 		throwIfAborted(signal);
+		// Folder rows need the dest id of each ancestor's PARENT; resolving the
+		// chain here reuses ensureDir's cache instead of listing again.
+		let parentKey = '';
+		for (let d = 0; d < dirs.length; d++) {
+			const key = dirs.slice(0, d + 1).join('/');
+			if (!folderParents.has(key)) {
+				folderParents.set(key, await ensureDir(dirs.slice(0, d)));
+			}
+			parentKey = key;
+		}
+		void parentKey;
 		planned.push({ dirs, destParent, name: fileName, file });
+	}
+
+	// Paint top-level folder rows once their dest parent is known.
+	for (const [key, agg] of folderAgg) {
+		if (agg.parentKey === '' && !dest.painted.has(key)) {
+			dest.painted.add(key);
+			emitFolder(key);
+		}
 	}
 
 	if (typeof driver.writeFiles === 'function') {
@@ -1212,23 +1252,38 @@ export async function runArchiveJob(spec: ArchiveJobSpec): Promise<ArchiveJobRes
 	let expandEngineLabel = '';
 	const expandVerb = kind === 'decrypt' ? 'Decrypting' : 'Decompressing';
 
-	// Pipeline when the destination is a plain folder write: members stream from
-	// the expander into the writer, so wall clock is ~max(inflate, write) rather
-	// than their sum and peak memory is one window, not the whole archive.
+	// Pipeline whenever the destination is a real folder. `popup` and `memory`
+	// build a fresh inner filesystem and genuinely need the whole set first.
 	//
-	// The other destinations need the full set first — `popup` and `memory`
-	// build a fresh inner filesystem from it, and wrapInSubfolder has to name a
-	// unique container before anything lands — so they keep the buffered path.
-	// 'same' / 'folder' write straight into an existing folder; 'memory' and
-	// 'popup' both need the whole set first to build an inner filesystem.
+	// wrapInSubfolder does NOT need it: the container name only depends on the
+	// archive's own name, so it can be created up front and streamed into.
+	// (It used to gate the pipeline off — and since the dialog defaults it ON,
+	// the default extract never pipelined at all.)
 	const writesToFolder = dest === 'same' || dest === 'folder';
-	const canPipeline = writesToFolder && !(spec.wrapInSubfolder && driver.mkdir);
 
-	if (canPipeline) {
+	if (writesToFolder) {
 		setNote(`${expandVerb}…`);
+		// A stream cannot know the expanded total up front, but the archive's own
+		// compressed size IS known — and expanded output is reliably larger. So
+		// progress rides bytes-out against a running estimate that starts at the
+		// compressed size and grows if the archive turns out to expand further.
+		// This moves from 0% on the first member instead of after the last one.
+		const compressedBytes = Math.max(
+			sources.reduce((n, e) => n + (e.size ?? 0), 0),
+			1
+		);
+		let bytesOut = 0;
+		let estimatedTotal = compressedBytes;
+		let streamParent = destParentId;
+		if (spec.wrapInSubfolder && driver.mkdir) {
+			throwIfAborted(signal);
+			const stem = extractContainerName(sources[0]?.name ?? title);
+			const folderName = await uniqueChildFolderName(driver, destParentId, stem);
+			streamParent = (await driver.mkdir(destParentId, folderName)).id;
+		}
 		const writer = createStreamingWriter({
 			driver,
-			parentId: destParentId,
+			parentId: streamParent,
 			onFile: (ev) => {
 				onProgress?.(ev);
 			},
@@ -1252,8 +1307,12 @@ export async function runArchiveJob(spec: ArchiveJobSpec): Promise<ArchiveJobRes
 				onEntry: async (member) => {
 					await writer.push(member);
 					streamed += 1;
-					// Member counts are the honest signal: a stream never knows the
-					// archive's total up front, so there is no fraction to report.
+					bytesOut += member.data.byteLength;
+					// Never let the estimate be overtaken: if output exceeds it, the
+					// archive compressed better than assumed, so grow the denominator
+					// rather than report a fraction over 1.
+					if (bytesOut > estimatedTotal) estimatedTotal = Math.ceil(bytesOut * 1.25);
+					emitJobPct((bytesOut / estimatedTotal) * 100);
 					setNote(
 						expandEngineLabel
 							? `${expandVerb} with ${expandEngineLabel} — ${streamed} file${
@@ -1337,16 +1396,10 @@ export async function runArchiveJob(spec: ArchiveJobSpec): Promise<ArchiveJobRes
 		emitJobPct(100, true);
 		return { inner, innerSession, title, engines };
 	}
+	// Folder destinations return from the streaming branch above; only the
+	// inner-filesystem dests (memory) reach here.
 	setNote('Writing extracted files…');
-	let toWrite = inner;
-	const wrapDest = dest === 'same' || dest === 'folder';
-	if (spec.wrapInSubfolder && wrapDest && driver.mkdir) {
-		throwIfAborted(signal);
-		const stem = extractContainerName(sources[0]?.name ?? title);
-		const folder = await uniqueChildFolderName(driver, destParentId, stem);
-		toWrite = prefixPackedPaths(inner, folder);
-	}
-	await writeOut(toWrite);
+	await writeOut(inner);
 	emitJobPct(100, true);
 	return { title, engines };
 }
