@@ -133,3 +133,4 @@ export {
 export * from './sizeTreemap.js';
 export * from './storageInspect.js';
 export { default as FeStorageInspector } from './FeStorageInspector.svelte';
+export { default as FeStorageDialog } from './FeStorageDialog.svelte';

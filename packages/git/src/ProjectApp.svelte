@@ -1,10 +1,12 @@
 <script lang="ts">
 	import { untrack } from 'svelte';
 	import {
+		FeStorageDialog,
 		FeTreeView,
 		type ExplorerDriver,
 		type ExplorerEntryId
 	} from '@shared-packages/file-system/ui';
+	import type { VfsService } from '@shared-packages/file-system';
 	import { createGitHost } from './host.js';
 	import GitHistory from './GitHistory.svelte';
 	import { consumeOpenProject, type OpenProjectPayload } from './openProject.js';
@@ -23,7 +25,8 @@
 		/** When passed (including `null`), skip sessionStorage consume — the parent already did. */
 		opened = undefined,
 		connection = undefined,
-		connectionLabel = 'Files'
+		connectionLabel = 'Files',
+		localVfs = undefined
 	}: {
 		driver?: ExplorerDriver;
 		folderId?: ExplorerEntryId | null;
@@ -36,6 +39,13 @@
 		connection?: ProjectBackendHint;
 		/** Tree root label while no project is open. */
 		connectionLabel?: string;
+		/**
+		 * Durable local VFS, when this project lives there. Enables the storage
+		 * map and integrity check — a project's packs are OPFS files, so a
+		 * monitor- or B2-backed project has nothing to inspect and the controls
+		 * stay hidden.
+		 */
+		localVfs?: VfsService;
 	} = $props();
 
 	// Fallback for parents that do not own the handoff. Consumed once, at init.
@@ -48,6 +58,12 @@
 	 * shows the project rather than everything on the connection.
 	 */
 	let projectRootId = $state<ExplorerEntryId | null>(null);
+	/**
+	 * Storage map + integrity check for this project. Only meaningful on the
+	 * local VFS: a project's packs are OPFS files, so a monitor- or B2-backed
+	 * project has nothing to inspect.
+	 */
+	let storageDialogOpen = $state(false);
 	let projectLabel = $state('');
 	let selectedId = $state<ExplorerEntryId | null>(null);
 	/** Newest resolve wins; late replies from a previous folder are dropped. */
@@ -171,10 +187,28 @@
 			<p class="empty">No folder open</p>
 		{/if}
 	</div>
+	{#if storageDialogOpen && localVfs && projectRootId}
+		<FeStorageDialog
+			vfs={localVfs}
+			scope="project"
+			rootId={projectRootId}
+			title="Project storage"
+			onClose={() => (storageDialogOpen = false)}
+		/>
+	{/if}
 	<div class="hist">
 		{#if activeRepo?.backend === 'local'}
 			<button type="button" data-testid="projects-init-repo" onclick={() => void initLocalRepo()}>
 				Init
+			</button>
+		{/if}
+		{#if localVfs && projectRootId}
+			<button
+				type="button"
+				data-testid="projects-check-integrity"
+				onclick={() => (storageDialogOpen = true)}
+			>
+				Check project integrity
 			</button>
 		{/if}
 		{#if activeRepo}

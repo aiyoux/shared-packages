@@ -11,6 +11,8 @@
 	} from './explorerDriver.js';
 	import { createLocalExplorerDriver } from './localExplorerDriver.js';
 	import StoragePersistenceStatus from './StoragePersistenceStatus.svelte';
+	import FeStorageDialog from './FeStorageDialog.svelte';
+	import { packBadges } from './storageInspect.js';
 	import FeIcon from './FeIcon.svelte';
 	import FeTipIconBtn from './FeTipIconBtn.svelte';
 	import FeArchiveDialog from './FeArchiveDialog.svelte';
@@ -214,6 +216,19 @@
 		driver.id === 'local' ? (vfsProp ?? getSharedVfs()) : null
 	);
 	let showPersistChip = $derived(showPersistence && driver.id === 'local' && !!localVfs);
+	/**
+	 * The storage map reads OPFS state, so it needs the local VFS — but it is
+	 * independent of the persistence chip, which DualPaneExplorer suppresses.
+	 */
+	let showStorageBtn = $derived(mode === 'manage' && driver.id === 'local' && !!localVfs);
+	/** Storage inspector + integrity check. Local only — it reads OPFS state. */
+	let storageDialogOpen = $state(false);
+	/**
+	 * Which visible files live inside a shared pack. Surfaced on the row because
+	 * a packed file behaves differently on delete: its space only returns once
+	 * every member of its pack is gone.
+	 */
+	let packedRows = $state<Map<string, { packed: boolean; packPath?: string }>>(new Map());
 
 	$effect(() => {
 		if (driverProp) {
@@ -1170,6 +1185,21 @@
 			nodes = nextNodes;
 			listTruncated = nextTruncated;
 			breadcrumbs = nextCrumbs;
+			// Pack membership for the rows now on screen. Best-effort and
+			// non-blocking: a listing must never fail to render because a badge
+			// could not be resolved.
+			if (localVfs) {
+				const forRows = nextNodes.filter((n) => n.kind === 'file').map((n) => n.id);
+				void packBadges(localVfs, forRows)
+					.then((badges) => {
+						packedRows = badges;
+					})
+					.catch(() => {
+						packedRows = new Map();
+					});
+			} else if (packedRows.size) {
+				packedRows = new Map();
+			}
 			if (focusIndex >= nodes.length) focusIndex = nodes.length ? nodes.length - 1 : -1;
 			silentRetries = 0;
 			// Folder structure may have changed (mkdir/rename/move/delete/restore,
@@ -2849,6 +2879,14 @@
 				{#if showPersistChip && localVfs}
 					<StoragePersistenceStatus vfs={localVfs} compact class="fe-persist-slot" />
 				{/if}
+				{#if showStorageBtn}
+					<FeTipIconBtn
+						testid="fe-storage-open"
+						tip="Storage map and integrity check"
+						icon="storage-map"
+						onclick={() => (storageDialogOpen = true)}
+					/>
+				{/if}
 				{#if mode === 'manage' && canImportFromDevice}
 					<FeTipIconBtn
 						testid="fe-system-paste"
@@ -3280,6 +3318,14 @@
 								<span class="fe-name" title={!actionable && n.kind === 'file' ? 'Wrong type for this app' : n.name}
 									>{n.name}</span
 								>
+								{#if packedRows.get(n.id)?.packed}
+									<span
+										class="fe-pack-badge"
+										data-testid="fe-pack-badge"
+										title="Stored in a shared pack — its space is reclaimed when every file in that pack is deleted"
+										aria-label="in a shared pack">pack</span
+									>
+								{/if}
 							{/if}
 						</span>
 					{/if}
@@ -3487,6 +3533,15 @@
 			copy={confirmPrompt.copy}
 			onConfirm={() => closeConfirm(true)}
 			onCancel={() => closeConfirm(false)}
+		/>
+	{/if}
+
+	{#if storageDialogOpen && localVfs}
+		<FeStorageDialog
+			vfs={localVfs}
+			scope="filesystem"
+			rootId={parentId}
+			onClose={() => (storageDialogOpen = false)}
 		/>
 	{/if}
 
@@ -4538,6 +4593,18 @@
 	.fe-row.folder .fe-icon {
 		color: var(--accent-light);
 	}
+	.fe-pack-badge {
+		margin-left: 0.35rem;
+		padding: 0 0.3rem;
+		font-size: 0.62rem;
+		line-height: 1.4;
+		border-radius: 3px;
+		border: 1px dashed var(--accent-light, var(--accent));
+		color: var(--text-muted);
+		vertical-align: 1px;
+		flex: none;
+	}
+
 	.fe-name {
 		flex: 1;
 		overflow: hidden;

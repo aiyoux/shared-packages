@@ -25,6 +25,7 @@ export type FeIconName =
 	| 'chevron-right'
 	| 'info'
 	| 'layout'
+	| 'storage-map'
 	| 'layout-grid'
 	| 'list'
 	| 'table'
@@ -65,6 +66,8 @@ const paths: Record<FeIconName, string> = {
 	'chevron-down': `<polyline points="6 9 12 15 18 9"/>`,
 	info: `<circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>`,
 	layout: `<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 15h18"/>`,
+	'storage-map':
+		'<rect x="3" y="3" width="18" height="18" rx="2"/><rect x="3" y="3" width="10" height="11"/><rect x="13" y="3" width="8" height="6"/><rect x="13" y="14" width="8" height="7"/>',
 	'file-archive': `<path d="M10 12v-1"/><path d="M10 18v-2"/><path d="M10 7V6"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M15.5 22H18a2 2 0 0 0 2-2V7l-5-5H6a2 2 0 0 0-2 2v16a2 2 0 0 0 .274 1.01"/><circle cx="10" cy="20" r="2"/>`,
 	'package-open': `<path d="M12 22v-9"/><path d="M15.17 2.21a1.67 1.67 0 0 1 1.63 0L21 4.57a1.93 1.93 0 0 1 0 3.36L8.82 14.79a1.66 1.66 0 0 1-1.64 0L3 12.43a1.93 1.93 0 0 1 0-3.36z"/><path d="M20 13v3.78a2 2 0 0 1-1.11 1.79l-6.3 3.12a2 2 0 0 1-1.69 0l-6.3-3.12A2 2 0 0 1 3 16.25V13"/><path d="m7.5 10.5 5 2.5 5-2.5"/>`,
 	lock: `<rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>`,
