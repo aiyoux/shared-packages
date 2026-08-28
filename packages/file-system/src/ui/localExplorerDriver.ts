@@ -178,7 +178,12 @@ export function createLocalExplorerDriver(
 					body: file,
 					contentType: file.type || undefined
 				})),
-				{ signal: opts?.signal }
+				{
+					signal: opts?.signal,
+					onProgress: opts?.onProgress
+						? (written) => opts.onProgress!(written.map(nodeToEntry))
+						: undefined
+				}
 			);
 			return nodes.map(nodeToEntry);
 		},

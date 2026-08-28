@@ -202,7 +202,11 @@ export interface ExplorerDriver {
 	writeFiles?(
 		parentId: ExplorerEntryId | null,
 		files: File[],
-		opts?: { signal?: AbortSignal }
+		opts?: {
+			signal?: AbortSignal;
+			/** Fires as each internal chunk lands, so callers can paint per file. */
+			onProgress?: (written: ExplorerEntry[]) => void;
+		}
 	): Promise<ExplorerEntry[]>;
 	/**
 	 * Host-absolute path for a monitor (or similar) entry. Used when two

@@ -664,14 +664,26 @@ export class VfsService {
 	 */
 	async writeFiles(
 		inputs: WriteFileInput[],
-		opts?: { signal?: AbortSignal }
+		opts?: {
+			signal?: AbortSignal;
+			/**
+			 * Called as each chunk lands, with the nodes just written. Callers
+			 * paint per-member UI from this instead of pre-slicing their own
+			 * small batches — chunking belongs here, where the cost lives.
+			 */
+			onProgress?: (written: VfsNode[]) => void;
+		}
 	): Promise<VfsNode[]> {
 		await this.ready();
 		const out: VfsNode[] = [];
-		const CHUNK_FILES = 24;
-		const CHUNK_BYTES = 16 << 20;
-		// Bodies are serialized before chunking (outside any txn) so the chunk
-		// size cap can count real bytes.
+		// Chunk size is governed by BYTES, not file count. OPFS charges per
+		// operation regardless of payload, so a bigger chunk is strictly fewer
+		// round trips; the byte cap exists to bound how much sits in the heap
+		// at once (bodies are serialized up front, before any transaction).
+		// Measured on 3000 members: 2015ms at 24/chunk, 1391ms at 128,
+		// 1237ms at 512 — past ~512 the curve is flat.
+		const CHUNK_FILES = 512;
+		const CHUNK_BYTES = 64 << 20;
 		let chunk: Array<{ input: WriteFileInput; bytes: Uint8Array; contentType: string }> = [];
 		let chunkBytes = 0;
 		const flush = async () => {
@@ -684,7 +696,9 @@ export class VfsService {
 			const group = chunk;
 			chunk = [];
 			chunkBytes = 0;
-			out.push(...(await this.writeFilesChunk(group, opts?.signal)));
+			const written = await this.writeFilesChunk(group, opts?.signal);
+			out.push(...written);
+			opts?.onProgress?.(written);
 		};
 		for (const input of inputs) {
 			const { bytes, contentType } = await serializeBody(input.body, input.contentType);

@@ -482,8 +482,13 @@ export function createStreamingWriter(opts: {
 	finish: () => Promise<number>;
 } {
 	const { driver, parentId, onFile, signal } = opts;
-	const windowFiles = opts.windowFiles ?? 24;
-	const windowBytes = opts.windowBytes ?? 16 << 20;
+	// The window is what the pipeline holds in memory before handing a batch to
+	// the dest. It must not be SMALLER than the store's own chunk size or it
+	// re-caps the write path from above: at 24 the extract path never saw the
+	// raised cap and paid ~60% more OPFS round trips than the bulk path.
+	// Bytes are the real governor; the file count is a backstop for tiny members.
+	const windowFiles = opts.windowFiles ?? 512;
+	const windowBytes = opts.windowBytes ?? 64 << 20;
 	const put = driver.writeFile ?? driver.upload;
 	if (!put) throw new Error('This location cannot receive files');
 	// ONE folder context for the whole stream. Rebuilding it per flush cost a
@@ -714,42 +719,64 @@ export async function writeEntriesToDriver(
 			else groups.set(plan.destParent, [plan]);
 		}
 		for (const [destParent, group] of groups) {
-			let done = 0;
-			while (done < group.length) {
-				throwIfAborted(signal);
-				const batch = group.slice(done, done + 24);
-				for (const plan of batch) {
-					onFile?.({
-						name: plan.name,
-						parentId: destParent,
-						transferred: 0,
-						size: plan.file.data.byteLength,
-						done: false,
-						entryKind: 'file'
-					});
-				}
-				// The File constructor snapshots bytes once per member, same as
-				// the per-file path — no extra defensive copies.
-				await driver.writeFiles(
-					destParent,
-					batch.map((plan) => new File([plan.file.data as BlobPart], plan.name)),
-					{ signal }
-				);
-				throwIfAborted(signal);
-				for (const plan of batch) {
-					onFile?.({
-						name: plan.name,
-						parentId: destParent,
-						transferred: plan.file.data.byteLength,
-						size: plan.file.data.byteLength,
-						done: true,
-						entryKind: 'file'
-					});
-					if (plan.dirs.length) bumpFolderAggs(plan.dirs, plan.file.data.byteLength);
-				}
-				done += batch.length;
-				await yieldPaint();
+			throwIfAborted(signal);
+			// Hand the WHOLE group over and let the driver chunk it. Slicing into
+			// 24s here capped every internal batch at 24 and cost ~60% more OPFS
+			// round trips (2015ms vs 1237ms per 3000 members); chunking belongs
+			// where the cost is. Per-file UI ticks still fire via onProgress.
+			for (const plan of group) {
+				onFile?.({
+					name: plan.name,
+					parentId: destParent,
+					transferred: 0,
+					size: plan.file.data.byteLength,
+					done: false,
+					entryKind: 'file'
+				});
 			}
+			// The File constructor snapshots bytes once per member, same as the
+			// per-file path — no extra defensive copies.
+			let settled = 0;
+			await driver.writeFiles(
+				destParent,
+				group.map((plan) => new File([plan.file.data as BlobPart], plan.name)),
+				{
+					signal,
+					onProgress: (written) => {
+						// Written entries arrive in input order, so they line up
+						// with `group` and each chunk can be marked done as it lands.
+						for (let i = 0; i < written.length && settled < group.length; i++) {
+							const plan = group[settled++]!;
+							const size = plan.file.data.byteLength;
+							onFile?.({
+								name: plan.name,
+								parentId: destParent,
+								transferred: size,
+								size,
+								done: true,
+								entryKind: 'file'
+							});
+							if (plan.dirs.length) bumpFolderAggs(plan.dirs, size);
+						}
+					}
+				}
+			);
+			throwIfAborted(signal);
+			// Drivers without onProgress support settle everything at the end.
+			while (settled < group.length) {
+				const plan = group[settled++]!;
+				const size = plan.file.data.byteLength;
+				onFile?.({
+					name: plan.name,
+					parentId: destParent,
+					transferred: size,
+					size,
+					done: true,
+					entryKind: 'file'
+				});
+				if (plan.dirs.length) bumpFolderAggs(plan.dirs, size);
+			}
+			await yieldPaint();
 		}
 		return;
 	}
@@ -852,28 +879,22 @@ export async function writeEntriesToVfs(
 		else groups.set(plan.destParent, [plan]);
 	}
 	for (const [destParent, group] of groups) {
-		let done = 0;
-		while (done < group.length) {
-			throwIfAborted(signal);
-			const batch = group.slice(done, done + 24);
-			for (const plan of batch) {
-				onFile?.({
-					name: plan.name,
-					parentId: destParent,
-					transferred: 0,
-					size: plan.file.data.byteLength,
-					done: false
-				});
-			}
-			await vfs.writeFiles(
-				batch.map((plan) => ({
-					parentId: destParent,
-					name: plan.name,
-					body: Uint8Array.from(plan.file.data)
-				})),
-				{ signal }
-			);
-			for (const plan of batch) {
+		throwIfAborted(signal);
+		// Whole group in one call — vfs.writeFiles owns chunking (see the driver
+		// path above for why slicing at 24 here was costing round trips).
+		for (const plan of group) {
+			onFile?.({
+				name: plan.name,
+				parentId: destParent,
+				transferred: 0,
+				size: plan.file.data.byteLength,
+				done: false
+			});
+		}
+		let settled = 0;
+		const settle = (upTo: number) => {
+			while (settled < upTo) {
+				const plan = group[settled++]!;
 				onFile?.({
 					name: plan.name,
 					parentId: destParent,
@@ -882,9 +903,20 @@ export async function writeEntriesToVfs(
 					done: true
 				});
 			}
-			done += batch.length;
-			await yieldPaint();
-		}
+		};
+		await vfs.writeFiles(
+			group.map((plan) => ({
+				parentId: destParent,
+				name: plan.name,
+				body: Uint8Array.from(plan.file.data)
+			})),
+			{
+				signal,
+				onProgress: (written) => settle(Math.min(settled + written.length, group.length))
+			}
+		);
+		settle(group.length);
+		await yieldPaint();
 	}
 }
 

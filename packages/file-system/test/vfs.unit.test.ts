@@ -104,6 +104,36 @@ describe('VfsService', () => {
 		assert.equal(await read(original!.id), 'existing');
 	});
 
+	it('writeFiles reports progress per chunk without capping the batch', async () => {
+		// Callers must NOT pre-slice into small batches: chunking belongs in
+		// writeFiles, where the OPFS round-trip cost actually lives. onProgress
+		// is what lets a caller still paint per file after handing over a whole
+		// group.
+		const folder = await vfs.mkdir(null, 'progress');
+		const N = 60;
+		const seen: number[] = [];
+		const nodes = await vfs.writeFiles(
+			Array.from({ length: N }, (_, i) => ({
+				parentId: folder.id,
+				name: `p-${i}.txt`,
+				body: new TextEncoder().encode(`v${i}`)
+			})),
+			{ onProgress: (written) => seen.push(written.length) }
+		);
+		assert.equal(nodes.length, N);
+		assert.ok(seen.length > 0, 'onProgress fired');
+		assert.equal(
+			seen.reduce((a, b) => a + b, 0),
+			N,
+			'every written node is reported exactly once'
+		);
+		// Order must match the inputs so callers can zip progress back to their
+		// own list.
+		for (let i = 0; i < N; i++) assert.equal(nodes[i]!.name, `p-${i}.txt`);
+		const listed = await vfs.list({ parentId: folder.id });
+		assert.equal(listed.length, N);
+	});
+
 	it('writeFiles rejects explicit ids and non-rename conflict modes', async () => {
 		await assert.rejects(
 			() => vfs.writeFiles([{ parentId: null, name: 'x.txt', body: 'x', id: 'file_x' }]),
