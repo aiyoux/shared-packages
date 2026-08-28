@@ -101,6 +101,7 @@ export function overlayBoxes(host: HTMLElement, gutter?: HTMLElement | null): Ov
 	const groups = new Map<string, HTMLElement[]>();
 	for (const child of host.children) {
 		const el = child as HTMLElement;
+		if (el.getAttribute('data-block-type') === 'table_cell') continue;
 		const parentId = el.getAttribute(PARENT_ID_ATTR);
 		if (!parentId) continue;
 		const list = groups.get(parentId);
@@ -125,9 +126,9 @@ function cssEscape(value: string): string {
 	return value.replace(/"/g, '\\"');
 }
 
-/** Gutter handles: visibleOrder minus cells (rows are synthetic; cells are not independently draggable). */
+/** Gutter handles: visibleOrder minus cells and rows (table has a single handle; cells/rows are not draggable). */
 export function gutterOrder(page: KbPage): Block[] {
-	return visibleOrder(page).filter((block) => block.type !== 'table_cell');
+	return visibleOrder(page).filter((block) => block.type !== 'table_cell' && block.type !== 'table_row');
 }
 
 export function handleHeights(host: HTMLElement, page?: KbPage): Record<string, number> {
@@ -139,15 +140,28 @@ export function handleHeights(host: HTMLElement, page?: KbPage): Record<string, 
 	}
 	if (!page) return next;
 	for (const block of visibleOrder(page)) {
-		if (block.type !== 'table_row') continue;
-		const cells = block.children;
-		if (cells.length === 0) continue;
-		const first = host.querySelector(`[data-block-id="${cssEscape(cells[0].id)}"]`) as HTMLElement | null;
-		const last = host.querySelector(
-			`[data-block-id="${cssEscape(cells[cells.length - 1].id)}"]`
-		) as HTMLElement | null;
-		if (!first || !last) continue;
-		next[block.id] = Math.max(0, last.getBoundingClientRect().bottom - first.getBoundingClientRect().top);
+		if (block.type === 'table') {
+			const rows = block.children;
+			if (rows.length === 0) continue;
+			const firstRow = rows[0];
+			const lastRow = rows[rows.length - 1];
+			if (firstRow.children.length === 0 || lastRow.children.length === 0) continue;
+			const firstCell = firstRow.children[0];
+			const lastCell = lastRow.children[lastRow.children.length - 1];
+			const first = host.querySelector(`[data-block-id="${cssEscape(firstCell.id)}"]`) as HTMLElement | null;
+			const last = host.querySelector(`[data-block-id="${cssEscape(lastCell.id)}"]`) as HTMLElement | null;
+			if (!first || !last) continue;
+			next[block.id] = Math.max(0, last.getBoundingClientRect().bottom - first.getBoundingClientRect().top);
+		} else if (block.type === 'table_row') {
+			const cells = block.children;
+			if (cells.length === 0) continue;
+			const first = host.querySelector(`[data-block-id="${cssEscape(cells[0].id)}"]`) as HTMLElement | null;
+			const last = host.querySelector(
+				`[data-block-id="${cssEscape(cells[cells.length - 1].id)}"]`
+			) as HTMLElement | null;
+			if (!first || !last) continue;
+			next[block.id] = Math.max(0, last.getBoundingClientRect().bottom - first.getBoundingClientRect().top);
+		}
 	}
 	return next;
 }

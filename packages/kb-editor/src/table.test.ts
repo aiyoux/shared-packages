@@ -110,37 +110,16 @@ describe('N4 table editor', () => {
 		el.remove();
 	});
 
-	it('gutter overlay is per-row, column-width, pointer-events none, not over the host', () => {
+	it('gutter handles table as single block without row handles or cell overlay rails', () => {
 		const el = host();
 		project(el, grid());
 		const boxes = overlayBoxes(el);
-		expect(boxes.map((b) => b.parentId).sort()).toEqual(['r1', 'r2']);
-		expect(gutterOrder(grid()).map((b) => b.id)).toEqual(['t', 'r1', 'r2', 'z']);
-
-		const wrap = document.createElement('div');
-		wrap.style.display = 'flex';
-		const gutter = document.createElement('div');
-		gutter.className = 'kb-gutter';
-		gutter.contentEditable = 'false';
-		gutter.style.position = 'relative';
-		gutter.style.flex = '0 0 1.25rem';
-		gutter.style.width = '1.25rem';
-		const overlay = document.createElement('div');
-		overlay.dataset.testid = 'kb-gutter-overlay';
-		overlay.style.position = 'absolute';
-		overlay.style.left = '0';
-		overlay.style.width = '100%';
-		overlay.style.pointerEvents = 'none';
-		gutter.append(overlay);
-		wrap.append(gutter, el);
-		document.body.append(wrap);
-		expect(el.contains(overlay)).toBe(false);
-		expect(gutter.contains(overlay)).toBe(true);
-		expect(overlay.style.pointerEvents).toBe('none');
-		wrap.remove();
+		expect(boxes).toEqual([]);
+		expect(gutterOrder(grid()).map((b) => b.id)).toEqual(['t', 'z']);
+		el.remove();
 	});
 
-	it('synthetic row handle height spans the row cells', () => {
+	it('table handle height spans the full table from first to last cell', () => {
 		function rect(top: number, height: number, left = 0, width = 40): DOMRect {
 			return {
 				x: left,
@@ -159,13 +138,13 @@ describe('N4 table editor', () => {
 		const el = host();
 		project(el, grid());
 		const c11 = el.querySelector('[data-block-id="c11"]') as HTMLElement;
-		const c12 = el.querySelector('[data-block-id="c12"]') as HTMLElement;
+		const c22 = el.querySelector('[data-block-id="c22"]') as HTMLElement;
 		c11.getBoundingClientRect = () => rect(100, 20);
-		c12.getBoundingClientRect = () => rect(120, 20);
+		c22.getBoundingClientRect = () => rect(140, 20);
 		Object.defineProperty(c11, 'offsetHeight', { configurable: true, value: 20 });
-		Object.defineProperty(c12, 'offsetHeight', { configurable: true, value: 20 });
+		Object.defineProperty(c22, 'offsetHeight', { configurable: true, value: 20 });
 		const heights = handleHeights(el, grid());
-		expect(heights.r1).toBe(40);
+		expect(heights.t).toBe(60);
 		el.remove();
 	});
 
@@ -506,15 +485,11 @@ describe('N4 table editor', () => {
 			expect(cellEl.getAttribute('contenteditable')).not.toBe('true');
 		}
 		expect(kbHost.querySelector('[data-block-id="r1"]')).toBeNull();
-		expect(gutter.querySelector('[data-block-id="r1"]')).toBeTruthy();
+		expect(gutter.querySelector('[data-block-id="r1"]')).toBeNull();
+		expect(gutter.querySelector('[data-block-id="t"]')).toBeTruthy();
 		expect(gutter.querySelector('[data-block-id="c11"]')).toBeNull();
 		const overlays = [...container.querySelectorAll('[data-testid="kb-gutter-overlay"]')];
-		expect(overlays.length).toBeGreaterThan(0);
-		for (const overlay of overlays) {
-			expect(gutter.contains(overlay)).toBe(true);
-			expect(kbHost.contains(overlay)).toBe(false);
-			expect((overlay as HTMLElement).style.pointerEvents).toBe('none');
-		}
+		expect(overlays.length).toBe(0);
 		const a = kbHost.querySelector('[data-block-id="c11"]') as HTMLElement;
 		const z = kbHost.querySelector('[data-block-id="z"]') as HTMLElement;
 		const tA = [...a.childNodes].find((n) => n.nodeType === Node.TEXT_NODE) as Text;
