@@ -473,6 +473,8 @@ export function createStreamingWriter(opts: {
 	parentId: string | null;
 	onFile?: (ev: ArchiveWriteProgress) => void;
 	signal?: AbortSignal;
+	/** Opt into shared-pack storage for these writes (Projects only). */
+	pack?: boolean;
 	/** Members per flush. Matches the vfs bulk-write chunk. */
 	windowFiles?: number;
 	/** Bytes per flush; whichever cap trips first wins. */
@@ -507,7 +509,7 @@ export function createStreamingWriter(opts: {
 		window = [];
 		windowSize = 0;
 		throwIfAborted(signal);
-		await writeEntriesToDriver(driver, parentId, batch, onFile, signal, folders);
+		await writeEntriesToDriver(driver, parentId, batch, onFile, signal, folders, opts.pack);
 		written += batch.length;
 	};
 
@@ -589,7 +591,9 @@ export async function writeEntriesToDriver(
 	onFile?: (ev: ArchiveWriteProgress) => void,
 	signal?: AbortSignal,
 	/** Reused across flushes by a streaming writer; created per call otherwise. */
-	folders?: DestFolders
+	folders?: DestFolders,
+	/** Shared-pack storage for these members (Projects only). */
+	pack?: boolean
 ): Promise<void> {
 	const put = driver.writeFile ?? driver.upload;
 	if (!put) throw new Error('This location cannot receive files');
@@ -742,6 +746,7 @@ export async function writeEntriesToDriver(
 				group.map((plan) => new File([plan.file.data as BlobPart], plan.name)),
 				{
 					signal,
+					pack,
 					onProgress: (written) => {
 						// Written entries arrive in input order, so they line up
 						// with `group` and each chunk can be marked done as it lands.
@@ -1073,6 +1078,11 @@ export type ArchiveJobSpec = {
 	/** Extract into a new folder named after the archive. Dialog default is on. */
 	wrapInSubfolder?: boolean;
 	useHost: boolean;
+	/**
+	 * Store extracted members in shared packs. Projects only — the general
+	 * filesystem leaves this off (see VfsService.writeFiles for why).
+	 */
+	pack?: boolean;
 	hostOp?: 'zip' | 'tar' | 'tgz' | 'encrypt' | 'unzip' | 'untar' | 'decrypt';
 	hostDestPath?: string;
 	signal?: AbortSignal;
@@ -1316,6 +1326,7 @@ export async function runArchiveJob(spec: ArchiveJobSpec): Promise<ArchiveJobRes
 		const writer = createStreamingWriter({
 			driver,
 			parentId: streamParent,
+			pack: spec.pack,
 			onFile: (ev) => {
 				onProgress?.(ev);
 			},

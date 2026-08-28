@@ -163,7 +163,14 @@ export function createLocalExplorerDriver(
 
 		async writeFiles(parentId, files, opts) {
 			if (!vfs.writeFiles) {
-				// Older VfsService without the bulk path: per-file fallback.
+				// Older VfsService without the bulk path. Correct but far
+				// slower (one write per file instead of a batched chunk), so it
+				// is announced rather than left to look like an unexplained
+				// slowdown.
+				console.warn(
+					'[vfs] bulk write unavailable on this VfsService; writing ' +
+						`${files.length} files one at a time.`
+				);
 				const out: ExplorerEntry[] = [];
 				for (const file of files) {
 					if (opts?.signal?.aborted) break;

@@ -1,0 +1,129 @@
+/**
+ * Dedicated worker that owns the heavy half of an extract.
+ *
+ * It opens its own VfsService against the same IndexedDB database and OPFS
+ * root as the page, so a job names ids rather than shipping bytes: the
+ * archive is read from OPFS here, inflated here, and members are written
+ * here. Only progress goes back.
+ *
+ * Two measurements shape this:
+ *  - inflate is ~12x faster here than on the main thread (fflate's async
+ *    main-thread path, not the codec)
+ *  - writes use sync access handles, which exist in dedicated workers ONLY
+ *
+ * The worker is the single owner of OPFS *writes* while a job runs. Sync
+ * handles lock their file, so a concurrent main-thread write to the same blob
+ * would fail loudly rather than corrupt — but the page is expected to route
+ * writes here rather than race them.
+ */
+import { createVfs, type VfsService } from '../vfs.js';
+import { createSyncOpfsStore, canUseSyncAccessHandles } from './syncOpfs.js';
+import { createLocalExplorerDriver } from '../ui/localExplorerDriver.js';
+import { runArchiveJob } from '../ui/archiveOps.js';
+import type { ExtractJobRequest, WorkerRequest, WorkerResponse } from './protocol.js';
+import type { EngineId as CompressEngineId } from '@shared-packages/compress';
+
+const ctx = self as unknown as {
+	onmessage: ((e: MessageEvent) => void) | null;
+	postMessage: (msg: WorkerResponse) => void;
+};
+
+const services = new Map<string, VfsService>();
+const cancels = new Map<string, AbortController>();
+
+function vfsFor(dbName: string, opfsRoot: string): VfsService {
+	const key = `${dbName}::${opfsRoot}`;
+	let vfs = services.get(key);
+	if (!vfs) {
+		vfs = createVfs({
+			dbName,
+			opfs: createSyncOpfsStore(opfsRoot),
+			// The page negotiates persistence; a second request here is noise.
+			requestPersist: false
+		});
+		services.set(key, vfs);
+	}
+	return vfs;
+}
+
+async function runExtract(req: ExtractJobRequest): Promise<void> {
+	const vfs = vfsFor(req.dbName, req.opfsRoot);
+	await vfs.ready();
+	const driver = createLocalExplorerDriver(vfs);
+	await driver.ready();
+
+	const controller = new AbortController();
+	cancels.set(req.jobId, controller);
+
+	const entries = [];
+	for (const id of req.entryIds) {
+		const node = await vfs.get(id);
+		if (!node) throw new Error(`Archive is gone: ${id}`);
+		entries.push({
+			id: node.id,
+			parentId: node.parentId,
+			kind: 'file' as const,
+			name: node.name,
+			size: node.size,
+			contentType: node.contentType
+		});
+	}
+
+	try {
+		await runArchiveJob({
+			kind: req.kind,
+			entries,
+			driver,
+			dest: 'same',
+			destParentId: req.destParentId,
+			title: req.title,
+			compressEngineId: req.compressEngineId as CompressEngineId,
+			codec: 'zip',
+			cryptoEngineId: 'webcrypto',
+			password: req.password,
+			skipSystemFiles: req.skipSystemFiles,
+			wrapInSubfolder: req.wrapInSubfolder,
+			useHost: false,
+			pack: req.pack,
+			signal: controller.signal,
+			onProgress: (ev) => ctx.postMessage({ type: 'progress', jobId: req.jobId, ev })
+		});
+		ctx.postMessage({ type: 'done', jobId: req.jobId, written: 0 });
+	} finally {
+		cancels.delete(req.jobId);
+	}
+}
+
+ctx.onmessage = (e: MessageEvent) => {
+	const msg = e.data as WorkerRequest;
+	if (!msg || typeof msg !== 'object') return;
+
+	if (msg.type === 'ping') {
+		ctx.postMessage({ type: 'ready' });
+		return;
+	}
+
+	if (msg.type === 'cancel') {
+		cancels.get(msg.jobId)?.abort();
+		return;
+	}
+
+	if (msg.type === 'extract') {
+		if (!canUseSyncAccessHandles()) {
+			ctx.postMessage({
+				type: 'failed',
+				jobId: msg.jobId,
+				error: 'Sync access handles are unavailable in this worker'
+			});
+			return;
+		}
+		void runExtract(msg).catch((err: unknown) => {
+			ctx.postMessage({
+				type: 'failed',
+				jobId: msg.jobId,
+				error: err instanceof Error ? err.message : String(err),
+				errorName: err instanceof Error ? err.name : undefined
+			});
+		});
+	}
+};

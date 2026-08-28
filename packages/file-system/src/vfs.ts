@@ -1234,8 +1234,16 @@ export class VfsService {
 		if (this.opfs.readRange) {
 			return this.opfs.readRange(ref.opfsPath, offset, ref.byteLength, contentType);
 		}
-		// A store without range reads should never have been given packs, but
-		// degrade correctly rather than returning the wrong bytes.
+		// A store without range reads should never have been given packs — the
+		// packable check gates on readRange — so reaching here means a pack was
+		// written by a store that can slice and is now being read by one that
+		// cannot. The bytes are still correct, but every member read pulls the
+		// WHOLE pack, so this is loud rather than a quiet slowdown.
+		console.warn(
+			`[vfs] reading packed blob ${ref.id} without readRange: the whole pack ` +
+				`(${ref.opfsPath}) is being read for a ${ref.byteLength}-byte member. ` +
+				`This is a correctness-preserving fallback, not a supported path.`
+		);
 		const all = await this.opfs.read(ref.opfsPath);
 		const view = all.subarray(offset, offset + ref.byteLength);
 		return new Blob([view as BlobPart], { type: contentType ?? 'application/octet-stream' });

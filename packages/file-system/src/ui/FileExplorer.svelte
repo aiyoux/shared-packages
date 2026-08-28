@@ -14,6 +14,7 @@
 	import FeStorageDialog from './FeStorageDialog.svelte';
 	import { packBadges } from './storageInspect.js';
 	import { deleteFromProject } from '../projectPack.js';
+	import { getVfsWorkerClient, vfsWorkerUnavailableReason } from '../worker/client.js';
 	import FeIcon from './FeIcon.svelte';
 	import FeTipIconBtn from './FeTipIconBtn.svelte';
 	import FeArchiveDialog from './FeArchiveDialog.svelte';
@@ -1856,11 +1857,78 @@
 			hopNote: archiveJobLabel
 		});
 		try {
-			const result = await runArchiveJob({
-				...spec,
-				signal: ac.signal,
-				onProgress: bumpArchiveProgress
-			});
+			// Prefer the worker for plain extracts into a folder: it reads the
+			// archive from OPFS itself and writes members with sync access
+			// handles, so no bytes cross the boundary and inflate is ~12x
+			// faster than on this thread. Everything else — popup/memory
+			// destinations, host jobs, compress/encrypt — stays here, and any
+			// worker failure falls through to the same path.
+			const workerClient =
+				localVfs && !spec.useHost && (spec.kind === 'decompress' || spec.kind === 'decrypt')
+					? getVfsWorkerClient()
+					: null;
+			const destSupported = spec.dest === 'same' || spec.dest === 'folder';
+			const workerEligible = workerClient != null && driver.id === 'local' && destSupported;
+			// Distinguish "this job was never a worker candidate" (popup dest,
+			// host job, compress) from "we wanted the worker and could not have
+			// it". Only the second is a degradation worth telling anyone about.
+			const workerWanted =
+				localVfs != null &&
+				driver.id === 'local' &&
+				destSupported &&
+				!spec.useHost &&
+				(spec.kind === 'decompress' || spec.kind === 'decrypt');
+
+			let result: Awaited<ReturnType<typeof runArchiveJob>> | undefined;
+			let ranOnWorker = false;
+			/** Non-null once we have degraded, so the UI can say WHY. */
+			let fallbackReason: string | null = null;
+			if (workerEligible && localVfs) {
+				try {
+					await workerClient!.extract(
+						{
+							dbName: localVfs.db.name,
+							opfsRoot: 'shared-vfs',
+							kind: spec.kind === 'decrypt' ? 'decrypt' : 'decompress',
+							entryIds: spec.entries.filter((e) => e.kind === 'file').map((e) => e.id),
+							destParentId: spec.destParentId,
+							title: spec.title,
+							password: spec.password,
+							skipSystemFiles: spec.skipSystemFiles,
+							wrapInSubfolder: spec.wrapInSubfolder !== false,
+							compressEngineId: spec.compressEngineId,
+							pack: spec.pack === true
+						},
+						{ signal: ac.signal, onProgress: bumpArchiveProgress }
+					);
+					ranOnWorker = true;
+					result = { title: spec.title, engines: [] };
+				} catch (e) {
+					// A cancel is the user's decision, not a worker fault.
+					if (e instanceof Error && e.name === 'AbortError') throw e;
+					// Anything else: fall back rather than fail the job. The
+					// main-thread path is always correct, only slower — but say
+					// so. A silent fallback looks identical to "it got slower
+					// for no reason", which is how performance regressions hide.
+					ranOnWorker = false;
+					fallbackReason = formatExplorerError(e);
+				}
+			}
+			if (!ranOnWorker) {
+				if (!fallbackReason && workerWanted && workerClient == null) {
+					fallbackReason =
+						vfsWorkerUnavailableReason() ?? 'Background file workers are unavailable.';
+				}
+				if (fallbackReason) {
+					archiveJobLabel = 'Extracting on this tab (background worker unavailable)…';
+					toast.info(`Background extract unavailable — running here instead. ${fallbackReason}`);
+				}
+				result = await runArchiveJob({
+					...spec,
+					signal: ac.signal,
+					onProgress: bumpArchiveProgress
+				});
+			}
 			upsertProgress({
 				id,
 				name: spec.title,
