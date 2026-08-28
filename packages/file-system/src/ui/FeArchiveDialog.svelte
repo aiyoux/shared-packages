@@ -298,6 +298,9 @@
 	);
 	const running = $derived(busy || jobRunning);
 	const shownPct = $derived(jobRunning ? jobPct : 0);
+	// Label-only phases (reading members, compressing, unsealing) hold the bar
+	// at 0 — show the phase label alone rather than a meaningless "0%".
+	const indeterminate = $derived(running && shownPct <= 0);
 	$effect(() => {
 		if (!running) abortRequested = false;
 	});
@@ -314,10 +317,13 @@
 					useHost
 				})
 	);
+	const progressText = $derived(
+		shownPct > 0 ? `${progressLabel} ${shownPct}%` : progressLabel
+	);
 
 	const runLabel = $derived.by(() => {
 		if (running) {
-			const pct = ` ${shownPct}%`;
+			const pct = shownPct > 0 ? ` ${shownPct}%` : '';
 			return `${KIND_BUSY[kind]}${pct}`;
 		}
 		if (dest === 'popup') return 'Open';
@@ -687,17 +693,17 @@
 		{/if}
 
 		{#if running}
-			<div class="progress" data-testid="fe-archive-progress">
+			<div class="progress" class:indeterminate data-testid="fe-archive-progress">
 				<div
 					class="progress-bar"
 					role="progressbar"
 					aria-valuemin="0"
 					aria-valuemax="100"
-					aria-valuenow={shownPct}
+					aria-valuenow={indeterminate ? undefined : shownPct}
 				>
 					<div class="progress-fill" style="width: {shownPct}%"></div>
 				</div>
-				<span class="progress-label">{progressLabel} {shownPct}%</span>
+				<span class="progress-label">{progressText}</span>
 			</div>
 		{/if}
 
@@ -760,6 +766,25 @@
 	.progress-fill {
 		height: 100%;
 		background: var(--accent, #38bdf8);
+	}
+	/* Label-only phase: the bar holds at 0 but still reads as alive. */
+	.progress.indeterminate .progress-fill {
+		width: 18%;
+		animation: fe-archive-indeterminate 1.2s ease-in-out infinite alternate;
+	}
+	@keyframes fe-archive-indeterminate {
+		from {
+			margin-left: 0;
+		}
+		to {
+			margin-left: 82%;
+		}
+	}
+	@media (prefers-reduced-motion: reduce) {
+		.progress.indeterminate .progress-fill {
+			width: 6%;
+			animation: none;
+		}
 	}
 	.progress-label {
 		font-size: 0.78rem;

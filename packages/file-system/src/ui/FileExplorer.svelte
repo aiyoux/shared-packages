@@ -1688,7 +1688,10 @@
 			if (ev.note) archiveJobLabel = ev.note;
 			if (ev.size > 0) {
 				const pct = Math.min(100, Math.round((ev.transferred / ev.size) * 100));
-				archiveJobPct = Math.max(archiveJobPct, pct);
+				// Assign, don't pin with Math.max: job phases own the full 0–100
+				// scale and legitimately reset between phases (reading → writing),
+				// and one job emits sequentially so there is nothing to clamp.
+				archiveJobPct = pct;
 			}
 			if (archiveTransferId) {
 				upsertProgress({

@@ -779,13 +779,19 @@ export async function runArchiveJob(spec: ArchiveJobSpec): Promise<ArchiveJobRes
 		});
 	};
 
+	let lastJobPct = 0;
 	const emitJobPct = (pct: number, done = false) => {
 		const n = done ? 100 : Math.min(99, Math.max(0, Math.round(pct)));
+		lastJobPct = n;
 		emitJob(n, 100, done);
 	};
 
+	// Notes ride their own tick so labels set between fraction ticks (engine
+	// chosen, member counts, unseal stages) still reach the chip/dialog.
 	const setNote = (note: string) => {
+		if (jobNote === note) return;
 		jobNote = note;
+		emitJob(lastJobPct, 100);
 	};
 
 	const remember = (role: EngineRole, verb: string) => {
@@ -799,28 +805,28 @@ export async function runArchiveJob(spec: ArchiveJobSpec): Promise<ArchiveJobRes
 		setNote(formatEngineNote(role, verb));
 	};
 
-	const writeOut = async (
-		files: PackedPath[],
-		writeFromPct: number,
-		opts?: { listing?: boolean }
-	) => {
+	const writeOut = async (files: PackedPath[], opts?: { listing?: boolean }) => {
 		const listing = opts?.listing !== false;
-		const totalFiles = Math.max(
-			files.filter((f) => Boolean(packedBasename(f.path)) && !f.path.endsWith('/')).length,
+		// The job fraction is byte-based — the same measure the dest listing
+		// rows show — so the header can be read against them: identical for a
+		// single output, the byte-weighted average for many. The old file-count
+		// fraction read 40+ points ahead of the rows it sat next to.
+		const totalBytes = Math.max(
+			files
+				.filter((f) => Boolean(packedBasename(f.path)) && !f.path.endsWith('/'))
+				.reduce((n, f) => n + f.data.byteLength, 0),
 			1
 		);
-		let filesDone = 0;
+		let doneBytes = 0;
 		const onFile = (ev: ArchiveWriteProgress) => {
 			if (listing) onProgress?.(ev);
 			// Folder rows aggregate their children's bytes — counting them here
 			// as well double-counts and pushed the job chip to 99% before the
 			// last file was written. Only file rows advance the job fraction.
 			if (ev.entryKind === 'folder') return;
-			const frac = ev.done
-				? (filesDone + 1) / totalFiles
-				: (filesDone + (ev.size ? ev.transferred / ev.size : 0)) / totalFiles;
-			emitJobPct(writeFromPct + (100 - writeFromPct) * Math.min(1, frac));
-			if (ev.done) filesDone += 1;
+			const frac = (doneBytes + Math.min(ev.transferred, ev.size)) / totalBytes;
+			emitJobPct(Math.min(1, frac) * 100);
+			if (ev.done) doneBytes += ev.size;
 		};
 		if (dest === 'memory') {
 			const mem = createMemoryExplorerDriver(getMemoryVfs());
@@ -867,39 +873,38 @@ export async function runArchiveJob(spec: ArchiveJobSpec): Promise<ArchiveJobRes
 		return { title, engines };
 	}
 
-	const COLLECT_PCT = 30;
-	const PACK_PCT = 40;
+	// Phases each own the full 0–100 scale; the note names the phase, and a
+	// phase without a byte-true signal (monolithic crypto, per-member counts)
+	// stays at 0 — an indeterminate bar — instead of a fabricated fraction.
+	// The write phase is the one where dest rows are visible, and its fraction
+	// is the same byte measure they show.
 
 	if (kind === 'compress' || kind === 'encrypt') {
 		emitJobPct(0);
 		const packed = await collectPackEntries(driver, entries, {
 			signal,
 			onFile: (n) => {
-				emitJobPct((n / Math.max(n + 1, 1)) * COLLECT_PCT);
+				// Collect ticks are label-only: no dest rows exist yet, and the
+				// total is unknown until the walk finishes.
+				setNote(`${n} file${n === 1 ? '' : 's'}…`);
 			}
 		});
 		throwIfAborted(signal);
-		emitJobPct(COLLECT_PCT);
 		if (kind === 'compress') {
 			const role = describeCompressRole(spec.compressEngineId, spec.codec, 'create');
 			remember(role, 'Compressing');
-			emitJobPct(COLLECT_PCT);
 			const out = await packFiles(
 				role.used as CompressEngineId,
 				toArchiveEntries(packed),
 				spec.codec
 			);
 			throwIfAborted(signal);
-			emitJobPct(PACK_PCT);
 			setNote(
 				role.fallback
 					? `Writing with ${role.usedLabel} — ${role.reason}`
 					: `Writing with ${role.usedLabel}…`
 			);
-			await writeOut(
-				namedOutput(out.map((f) => ({ path: f.name, data: f.data }))),
-				PACK_PCT
-			);
+			await writeOut(namedOutput(out.map((f) => ({ path: f.name, data: f.data }))));
 		} else {
 			const info = cryptoEngineInfo(spec.cryptoEngineId);
 			remember(
@@ -914,7 +919,6 @@ export async function runArchiveJob(spec: ArchiveJobSpec): Promise<ArchiveJobRes
 				},
 				'Encrypting'
 			);
-			emitJobPct(COLLECT_PCT);
 			const sealed = await sealVault(
 				spec.cryptoEngineId,
 				packed,
@@ -922,18 +926,17 @@ export async function runArchiveJob(spec: ArchiveJobSpec): Promise<ArchiveJobRes
 				packingAsTree(entries)
 					? {
 							kind: 'tree',
-							// PBKDF2 + AES-GCM are monolithic — stage ticks spread across
-							// the collect→pack window so the chip is not dead air.
+							// PBKDF2 + AES-GCM are monolithic — coarse stage ticks name
+							// themselves in the note instead of a fabricated fraction.
 							onProgress: (stage, total) => {
-								emitJobPct(COLLECT_PCT + (PACK_PCT - COLLECT_PCT) * (stage / total));
+								setNote(`Encrypting with ${info.label} — stage ${stage} of ${total}…`);
 							}
 						}
 					: undefined
 			);
 			throwIfAborted(signal);
-			emitJobPct(PACK_PCT);
 			setNote(`Writing with ${info.label}…`);
-			await writeOut(namedOutput([{ path: sealed.name, data: sealed.data }]), PACK_PCT);
+			await writeOut(namedOutput([{ path: sealed.name, data: sealed.data }]));
 		}
 		emitJobPct(100, true);
 		return { title, engines };
@@ -941,9 +944,10 @@ export async function runArchiveJob(spec: ArchiveJobSpec): Promise<ArchiveJobRes
 
 	const inner: PackedPath[] = [];
 	const sources = entries.filter((e) => e.kind === 'file');
-	const EXPAND_PCT = 40;
 	emitJobPct(0);
 	let membersDone = 0;
+	let expandEngineLabel = '';
+	const expandVerb = kind === 'decrypt' ? 'Decrypting' : 'Decompressing';
 	for (let i = 0; i < sources.length; i++) {
 		throwIfAborted(signal);
 		const entry = sources[i]!;
@@ -954,59 +958,64 @@ export async function runArchiveJob(spec: ArchiveJobSpec): Promise<ArchiveJobRes
 				entry.name,
 				spec.password,
 				(ev) => {
-					// Expand ticks are chip-only. Dest listing bars come from writeOut
-					// so nested members are not marked 100% before they hit disk.
+					// Expand ticks are label-only member counts: no dest rows exist
+					// yet (writeOut paints those), and member sizes are not known in
+					// advance, so a per-member count is the honest signal.
 					if (ev.done) membersDone++;
-					emitJobPct((membersDone / Math.max(membersDone + 1, 1)) * EXPAND_PCT);
+					if (membersDone > 0) {
+						setNote(
+							expandEngineLabel
+								? `${expandVerb} with ${expandEngineLabel} — ${membersDone} file${
+										membersDone === 1 ? '' : 's'
+									}…`
+								: `${membersDone} file${membersDone === 1 ? '' : 's'}…`
+						);
+					}
 				},
 				{
 					skipSystemFiles: spec.skipSystemFiles,
 					signal,
 					compressEngineId: spec.compressEngineId,
 					onVaultProgress: (stage, total) => {
-						// Unseal is the whole expand phase for a decrypt — spread its
-						// stage ticks across the expand window.
-						emitJobPct((stage / total) * EXPAND_PCT);
+						// Unseal is the whole expand phase for a decrypt — coarse
+						// stages name themselves instead of a fabricated fraction.
+						setNote(`Unsealing vault — stage ${stage} of ${total}…`);
 					},
 					onEngine: (role) => {
-						remember(
-							role,
-							kind === 'decrypt' ? 'Decrypting' : 'Decompressing'
-						);
+						remember(role, expandVerb);
+						expandEngineLabel = role.usedLabel;
 					}
 				}
 			))
 		);
-		emitJobPct(((i + 1) / Math.max(sources.length, 1)) * EXPAND_PCT);
 	}
 	if (!inner.length) throw new Error('Nothing to extract');
 	if (dest === 'popup') {
-		emitJobPct(EXPAND_PCT);
 		setNote('Writing extracted files…');
-		emitJobPct(EXPAND_PCT);
-		const totalFiles = Math.max(
-			inner.filter((f) => Boolean(packedBasename(f.path)) && !f.path.endsWith('/')).length,
+		// Same byte-based fraction as writeOut — the inner session's rows and
+		// the header read against each other.
+		const totalBytes = Math.max(
+			inner
+				.filter((f) => Boolean(packedBasename(f.path)) && !f.path.endsWith('/'))
+				.reduce((n, f) => n + f.data.byteLength, 0),
 			1
 		);
-		let filesDone = 0;
+		let doneBytes = 0;
 		const innerSession = await createInnerFsSession(
 			title,
 			inner,
 			(ev) => {
-				const frac = ev.done
-					? (filesDone + 1) / totalFiles
-					: (filesDone + (ev.size ? ev.transferred / ev.size : 0)) / totalFiles;
-				emitJobPct(EXPAND_PCT + (100 - EXPAND_PCT) * Math.min(1, frac));
-				if (ev.done) filesDone += 1;
+				if (ev.entryKind === 'folder') return;
+				const frac = (doneBytes + Math.min(ev.transferred, ev.size)) / totalBytes;
+				emitJobPct(Math.min(1, frac) * 100);
+				if (ev.done) doneBytes += ev.size;
 			},
 			signal
 		);
 		emitJobPct(100, true);
 		return { inner, innerSession, title, engines };
 	}
-	emitJobPct(EXPAND_PCT);
 	setNote('Writing extracted files…');
-	emitJobPct(EXPAND_PCT);
 	let toWrite = inner;
 	const wrapDest = dest === 'same' || dest === 'folder';
 	if (spec.wrapInSubfolder && wrapDest && driver.mkdir) {
@@ -1015,7 +1024,7 @@ export async function runArchiveJob(spec: ArchiveJobSpec): Promise<ArchiveJobRes
 		const folder = await uniqueChildFolderName(driver, destParentId, stem);
 		toWrite = prefixPackedPaths(inner, folder);
 	}
-	await writeOut(toWrite, EXPAND_PCT);
+	await writeOut(toWrite);
 	emitJobPct(100, true);
 	return { title, engines };
 }

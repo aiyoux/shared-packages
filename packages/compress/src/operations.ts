@@ -89,6 +89,7 @@ export async function expandBytes(
 	if (codec === 'tar') {
 		if (!engine.untar) throw new Error(`${engine.info.label} cannot expand TAR archives`);
 		const files = (await engine.untar(bytes)).filter((f) => keep(f.name));
+		let i = 0;
 		for (const f of files) {
 			if (opts?.signal?.aborted) {
 				const e = new Error('Cancelled');
@@ -101,9 +102,9 @@ export async function expandBytes(
 				size: f.data.byteLength,
 				done: true
 			});
-			// tar engines parse synchronously — yield so the UI can paint the
-			// per-member ticks instead of one frozen burst.
-			await new Promise((r) => setTimeout(r, 0));
+			// tar engines parse synchronously — yield every 16 members so the UI
+			// can paint ticks without a macrotask delay per member.
+			if ((++i & 15) === 0) await new Promise((r) => setTimeout(r, 0));
 		}
 		return files;
 	}

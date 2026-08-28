@@ -83,62 +83,77 @@ export const fflateEngine: CompressionEngine = {
 		type Pending = { name: string; size?: number; data: Promise<Uint8Array> };
 		const pending: Pending[] = [];
 		try {
-			await new Promise<void>((resolve, reject) => {
-				const uz = new f.Unzip((file) => {
-					if (!file.name || file.name.endsWith('/')) return;
-					pending.push({
-						name: file.name,
-						size: file.originalSize,
-						data: new Promise<Uint8Array>((res, rej) => {
-							const chunks: Uint8Array[] = [];
-							file.ondata = (err, data, final) => {
-								if (err) {
-									rej(err);
-									return;
-								}
-								if (data?.byteLength) chunks.push(data);
-								if (final) res(concatChunks(chunks));
-							};
-							try {
-								file.start();
-							} catch (e) {
-								rej(e instanceof Error ? e : new Error(String(e)));
+			let received = 0; // members whose final chunk has arrived (in order)
+			const uz = new f.Unzip((file) => {
+				if (!file.name || file.name.endsWith('/')) return;
+				pending.push({
+					name: file.name,
+					size: file.originalSize,
+					data: new Promise<Uint8Array>((res, rej) => {
+						const chunks: Uint8Array[] = [];
+						file.ondata = (err, data, final) => {
+							if (err) {
+								rej(err);
+								return;
 							}
-						})
-					});
+							if (data?.byteLength) chunks.push(data);
+							if (final) {
+								received += 1;
+								res(concatChunks(chunks));
+							}
+						};
+						try {
+							file.start();
+						} catch (e) {
+							rej(e instanceof Error ? e : new Error(String(e)));
+						}
+					})
 				});
-				uz.register(f.UnzipPassThrough);
-				uz.register(f.UnzipInflate);
-				try {
-					uz.push(input, true);
-					resolve();
-				} catch (e) {
-					reject(e);
-				}
 			});
-			if (!pending.length) throw new Error('empty zip');
+			uz.register(f.UnzipPassThrough);
+			uz.register(f.UnzipInflate);
 			const out: ArchiveEntry[] = [];
-			for (const p of pending) {
-				opts?.onMember?.({
-					name: p.name,
-					transferred: 0,
-					size: p.size,
-					done: false
-				});
-				const data = await p.data;
-				out.push({ name: p.name, data });
-				opts?.onMember?.({
-					name: p.name,
-					transferred: data.byteLength,
-					size: p.size ?? data.byteLength,
-					done: true
-				});
-				await new Promise((r) => setTimeout(r, 0));
+			let next = 0;
+			// Members 0..received-1 have all chunks in (fflate finishes members
+			// in order), so their data promises resolve without further push.
+			const settle = async () => {
+				while (next < received && next < pending.length) {
+					const p = pending[next++]!;
+					opts?.onMember?.({ name: p.name, transferred: 0, size: p.size, done: false });
+					const data = await p.data;
+					out.push({ name: p.name, data });
+					opts?.onMember?.({
+						name: p.name,
+						transferred: data.byteLength,
+						size: p.size ?? data.byteLength,
+						done: true
+					});
+				}
+			};
+			// Push in ~2 MB slices and breathe between them. One giant push
+			// inflates the whole archive inside a single frozen burst — no
+			// progress, no cancel — and replaying per-member setTimeout yields
+			// afterwards cost seconds on thousand-member archives (~1.2 ms each).
+			// Slicing gives real per-member ticks during inflate at ~1 tick per
+			// slice instead of per member.
+			const SLICE = 1 << 21;
+			for (let off = 0; off < input.length; off += SLICE) {
+				const end = Math.min(off + SLICE, input.length);
+				uz.push(input.subarray(off, end), end >= input.length);
+				await settle();
+				if (end < input.length) await new Promise((r) => setTimeout(r, 0));
 			}
+			await settle();
+			if (!out.length) throw new Error('empty zip');
 			return out;
-		} catch {
+		} catch (err) {
+			// Members never awaited above must not surface as unhandled
+			// rejections once we fall back.
+			for (const p of pending) p.data.catch(() => {});
+			void err;
 			const tree = f.unzipSync(input);
 			const out: ArchiveEntry[] = [];
+			let i = 0;
 			for (const [name, data] of Object.entries(tree)) {
 				if (!name || name.endsWith('/')) continue;
 				out.push({ name, data });
@@ -148,9 +163,10 @@ export const fflateEngine: CompressionEngine = {
 					size: data.byteLength,
 					done: true
 				});
-				// unzipSync is fully synchronous — yield so each member tick can
-				// paint and pending UI work (cancel, progress) can run between.
-				await new Promise((r) => setTimeout(r, 0));
+				// unzipSync is fully synchronous — yield every 16 members so ticks
+				// can paint and cancel can run without paying a macrotask delay
+				// per member (thousand-member archives spent seconds in yields).
+				if ((++i & 15) === 0) await new Promise((r) => setTimeout(r, 0));
 			}
 			return out;
 		}
