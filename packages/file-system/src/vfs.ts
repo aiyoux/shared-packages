@@ -953,6 +953,52 @@ export class VfsService {
 		return out;
 	}
 
+	/**
+	 * Release blob storage for refs whose nodes are gone. THE ONLY PLACE
+	 * ALLOWED TO UNLINK A BLOB FILE.
+	 *
+	 * Today every ref owns its file 1:1 (vfs.copy re-writes bytes rather than
+	 * sharing), so this is exactly the old behaviour. It exists as one funnel
+	 * because a shared-storage layout — several members inside one packed file
+	 * — turns each scattered `opfs.remove(ref.opfsPath)` into a mass delete:
+	 * the first dead member would unlink the whole file and every live sibling
+	 * would become a dangling ref, silently, since these unlinks are wrapped in
+	 * `catch { /* GC later *\/ }`. With one funnel that becomes a single
+	 * "is anything still naming this path?" check.
+	 *
+	 * Callers pass ref ids; rows are deleted here. Unlink failures are
+	 * swallowed and left to gc(), as before.
+	 */
+	private async releaseBlobRefs(refIds: string[]): Promise<void> {
+		if (!refIds.length) return;
+		const unique = [...new Set(refIds)];
+		const refs = (await this.db.blobRefs.bulkGet(unique)).filter(
+			(r): r is BlobRef => r != null
+		);
+		if (!refs.length) return;
+		const releasing = new Set(refs.map((r) => r.id));
+		await this.db.blobRefs.bulkDelete([...releasing]);
+
+		// Unlink a path only when NOTHING still names it. With one ref per file
+		// this is always true and behaves exactly as before; with several
+		// members sharing one packed file it is what stops the first dead
+		// member destroying every live sibling.
+		const candidates = new Set(refs.map((r) => r.opfsPath));
+		if (!candidates.size) return;
+		const survivors = await this.db.blobRefs
+			.where('opfsPath')
+			.anyOf([...candidates])
+			.toArray();
+		for (const s of survivors) candidates.delete(s.opfsPath);
+		for (const path of candidates) {
+			try {
+				await this.opfs.remove(path);
+			} catch {
+				/* GC later */
+			}
+		}
+	}
+
 	async updateFile(id: string, body: unknown, opts: UpdateFileOpts): Promise<VfsNode> {
 		await this.ready();
 		const force = 'force' in opts && opts.force === true;
@@ -1053,15 +1099,7 @@ export class VfsService {
 
 		// best-effort previous blob cleanup (node now points at the new blob)
 		if (prevBlobId && prevBlobId !== blobId) {
-			const oldRef = await this.db.blobRefs.get(prevBlobId);
-			if (oldRef) {
-				try {
-					await this.opfs.remove(oldRef.opfsPath);
-				} catch {
-					/* GC later */
-				}
-				await this.db.blobRefs.delete(prevBlobId);
-			}
+			await this.releaseBlobRefs([prevBlobId]);
 		}
 
 		const final = await this.db.nodes.get(id);
@@ -1321,25 +1359,14 @@ export class VfsService {
 			}
 
 			for (const n of toDelete) {
-				if (n.blobId) {
-					blobIds.push(n.blobId);
-					const ref = await this.db.blobRefs.get(n.blobId);
-					if (ref) opfsPaths.push(ref.opfsPath);
-				}
+				if (n.blobId) blobIds.push(n.blobId);
 				await this.db.nodes.delete(n.id);
-			}
-			for (const bid of blobIds) {
-				await this.db.blobRefs.delete(bid);
 			}
 		});
 
-		for (const p of opfsPaths) {
-			try {
-				await this.opfs.remove(p);
-			} catch {
-				/* GC later */
-			}
-		}
+		// Rows and files are released together, after the node txn commits, so
+		// storage is never unlinked while a node could still name it.
+		await this.releaseBlobRefs(blobIds);
 		this.emitChange();
 	}
 
@@ -1380,13 +1407,22 @@ export class VfsService {
 			opts?.onProgress?.({ done: nodeCount, total, name: 'Emptying trash…' });
 			await yieldPaint();
 
+			// Unlink one distinct path at a time so progress stays per file and
+			// the op remains cancellable. Ref rows were already dropped in the
+			// txn above, so this is the release half of releaseBlobRefs — kept
+			// inline for the progress/abort contract, and it must stay the only
+			// other place that unlinks a blob path.
+			const seen = new Set<string>();
 			for (let i = 0; i < opfsPaths.length; i++) {
 				throwIfAborted(opts?.signal);
 				const item = opfsPaths[i]!;
-				try {
-					await this.opfs.remove(item.path);
-				} catch {
-					/* GC later */
+				if (!seen.has(item.path)) {
+					seen.add(item.path);
+					try {
+						await this.opfs.remove(item.path);
+					} catch {
+						/* GC later */
+					}
 				}
 				opts?.onProgress?.({ done: nodeCount + i + 1, total, name: item.name });
 				if ((i & 7) === 7) await yieldPaint();
@@ -1484,19 +1520,21 @@ export class VfsService {
 			if (ref.pendingPromote) namedPaths.add(`blobs/${ref.id}.bin`);
 		}
 
+		const releasable: string[] = [];
 		for (const ref of refs) {
 			if (referenced.has(ref.id)) continue;
 			if (activeLeases.has(ref.id)) continue;
 			const inFlight = !!(ref.pending || ref.pendingPromote);
 			if (inFlight && now - ref.createdAt < this.graceMs) continue;
-			try {
-				await this.opfs.remove(ref.opfsPath);
-			} catch {
-				/* ignore */
-			}
-			await this.db.blobRefs.delete(ref.id);
-			report.orphanBlobRefsRemoved++;
-			report.unreferencedBlobsRemoved++;
+			releasable.push(ref.id);
+		}
+		if (releasable.length) {
+			// Through the one funnel: it drops the rows and unlinks each distinct
+			// path once, so a shared-storage layout cannot turn this sweep into a
+			// mass delete of live siblings.
+			await this.releaseBlobRefs(releasable);
+			report.orphanBlobRefsRemoved += releasable.length;
+			report.unreferencedBlobsRemoved += releasable.length;
 		}
 
 		// tmp GC — never unlink a path a blobRef still names

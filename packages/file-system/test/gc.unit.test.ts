@@ -112,3 +112,55 @@ describe('VfsService.gc', () => {
 		assert.deepEqual(await vfs.readJson(f.id), { keep: true });
 	});
 });
+
+describe('blob release funnel', () => {
+	it('never unlinks a storage path another live ref still names', async () => {
+		// The invariant that makes shared storage (several members in one packed
+		// file) safe later: releasing a ref must ask "is anything still naming
+		// this path?" rather than unlinking blindly. Today refs are 1:1 with
+		// files, so this simulates sharing by pointing two refs at one path.
+		resetSharedVfsForTests();
+		const vfs = createVfs({
+			dbName: `gc-share-${Date.now()}-${Math.random()}`,
+			memoryOpfs: true,
+			requestPersist: false
+		});
+		await vfs.ready();
+		const enc = new TextEncoder();
+		const keep = await vfs.writeFile({ parentId: null, name: 'keep.txt', body: enc.encode('keep') });
+		const drop = await vfs.writeFile({ parentId: null, name: 'drop.txt', body: enc.encode('drop') });
+
+		// Point both refs at the SAME stored path, as a pack would.
+		const keepRef = await vfs.db.blobRefs.get(keep.blobId!);
+		const shared = keepRef!.opfsPath;
+		await vfs.db.blobRefs.update(drop.blobId!, { opfsPath: shared });
+
+		// Permanently deleting one must not destroy the other's bytes.
+		await vfs.trash(drop.id);
+		await vfs.permanentDelete(drop.id);
+
+		const stillThere = await vfs.opfs.exists(shared);
+		assert.equal(stillThere, true, 'shared storage survives releasing one of its refs');
+		const bytes = await vfs.readBytes(keep.id);
+		assert.equal(new TextDecoder().decode(bytes), 'keep', 'surviving ref still reads');
+		await vfs.db.delete();
+	});
+
+	it('unlinks storage once the last ref naming it is gone', async () => {
+		resetSharedVfsForTests();
+		const vfs = createVfs({
+			dbName: `gc-last-${Date.now()}-${Math.random()}`,
+			memoryOpfs: true,
+			requestPersist: false
+		});
+		await vfs.ready();
+		const enc = new TextEncoder();
+		const only = await vfs.writeFile({ parentId: null, name: 'only.txt', body: enc.encode('x') });
+		const ref = await vfs.db.blobRefs.get(only.blobId!);
+		const path = ref!.opfsPath;
+		await vfs.trash(only.id);
+		await vfs.permanentDelete(only.id);
+		assert.equal(await vfs.opfs.exists(path), false, 'last ref gone => storage reclaimed');
+		await vfs.db.delete();
+	});
+});
