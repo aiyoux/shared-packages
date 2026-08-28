@@ -130,3 +130,6 @@ export {
 	type DropZone,
 	type TreeDndSession
 } from './treeDnd/index.js';
+export * from './sizeTreemap.js';
+export * from './storageInspect.js';
+export { default as FeStorageInspector } from './FeStorageInspector.svelte';

@@ -17,6 +17,7 @@ export * from './vfs.js';
 export * from './documentSession.js';
 export * from './liveLink.js';
 export * from './memoryVfs.js';
+export * from './projectPack.js';
 export * from './transferRegistry.js';
 export {
 	blobFromResponse,
