@@ -164,3 +164,56 @@ describe('blob release funnel', () => {
 		await vfs.db.delete();
 	});
 });
+
+describe('gc scheduling', () => {
+	const mk = async (tag: string) => {
+		resetSharedVfsForTests();
+		const vfs = createVfs({
+			dbName: `gc-sched-${tag}-${Date.now()}-${Math.random()}`,
+			memoryOpfs: true,
+			requestPersist: false
+		});
+		await vfs.ready();
+		return vfs;
+	};
+
+	it('sweeps once, then skips until the interval elapses', async () => {
+		const vfs = await mk('interval');
+		const first = await vfs.maybeGc({ minIntervalMs: 60_000 });
+		assert.ok(first, 'first call sweeps');
+		const second = await vfs.maybeGc({ minIntervalMs: 60_000 });
+		assert.equal(second, null, 'second call inside the interval skips');
+		const forced = await vfs.maybeGc({ force: true });
+		assert.ok(forced, 'force overrides the interval');
+		await vfs.db.delete();
+	});
+
+	it('a stale claim from a dead tab does not block future sweeps', async () => {
+		const vfs = await mk('stale');
+		// Simulate a tab that claimed the sweep and died: expired lease left behind.
+		await vfs.db.leases.put({ key: 'gc:run', owner: 'dead-tab', expiresAt: Date.now() - 1 });
+		const report = await vfs.maybeGc({ minIntervalMs: 0 });
+		assert.ok(report, 'expired claim is ignored');
+		await vfs.db.delete();
+	});
+
+	it('a live claim from another tab is respected', async () => {
+		const vfs = await mk('live');
+		await vfs.db.leases.put({
+			key: 'gc:run',
+			owner: 'other-tab',
+			expiresAt: Date.now() + 60_000
+		});
+		const report = await vfs.maybeGc({ minIntervalMs: 0 });
+		assert.equal(report, null, 'only one tab sweeps at a time');
+		await vfs.db.delete();
+	});
+
+	it('releases its claim so the next interval can sweep again', async () => {
+		const vfs = await mk('release');
+		await vfs.maybeGc({ minIntervalMs: 0 });
+		const held = await vfs.db.leases.get('gc:run');
+		assert.equal(held, undefined, 'claim cleared after the sweep');
+		await vfs.db.delete();
+	});
+});

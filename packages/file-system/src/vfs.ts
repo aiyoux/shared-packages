@@ -1494,6 +1494,95 @@ export class VfsService {
 
 	// ── GC ────────────────────────────────────────────────────────
 
+	/**
+	 * Run gc() at most once per interval per origin, across all tabs.
+	 *
+	 * gc() had no production caller at all — it existed only in tests — so every
+	 * "a crash leaves an orphan and GC reclaims it" guarantee in this file was
+	 * really "leaks until the origin is cleared". This is the caller.
+	 *
+	 * Cross-tab safety reuses the lease table rather than inventing anything:
+	 * whichever tab claims `gc:run` inside the claim transaction is the one that
+	 * sweeps, and the claim expires on its own if that tab dies mid-run. Callers
+	 * fire and forget; failures are swallowed because a missed sweep is a
+	 * deferred cleanup, never a correctness problem.
+	 *
+	 * Returns the report when this call actually swept, or null when it skipped
+	 * (too soon, or another tab holds the claim).
+	 */
+	async maybeGc(opts?: { minIntervalMs?: number; force?: boolean }): Promise<GcReport | null> {
+		await this.ready();
+		const minInterval = opts?.minIntervalMs ?? 6 * 60 * 60 * 1000;
+		const now = Date.now();
+		const CLAIM = 'gc:run';
+		const LAST_RUN = 'gc:lastRun';
+
+		try {
+			const claimed = await this.db.transaction(
+				'rw',
+				this.db.meta,
+				this.db.leases,
+				async () => {
+					if (!opts?.force) {
+						const last = (await this.db.meta.get(LAST_RUN))?.value;
+						if (typeof last === 'number' && now - last < minInterval) return false;
+					}
+					const held = await this.db.leases.get(CLAIM);
+					if (held && held.expiresAt > now) return false;
+					// Stamp the run BEFORE sweeping: a tab that dies mid-sweep must
+					// not leave every other tab retrying immediately.
+					await this.db.meta.put({ key: LAST_RUN, value: now });
+					await this.db.leases.put({
+						key: CLAIM,
+						owner: generateId('gc'),
+						expiresAt: now + Math.max(this.graceMs, 60_000)
+					});
+					return true;
+				}
+			);
+			if (!claimed) return null;
+		} catch {
+			return null;
+		}
+
+		try {
+			return await this.gc();
+		} catch {
+			return null;
+		} finally {
+			try {
+				await this.db.leases.delete(CLAIM);
+			} catch {
+				/* the lease expires on its own */
+			}
+		}
+	}
+
+	/**
+	 * Schedule `maybeGc` for when the tab is idle. Safe to call on every boot;
+	 * the interval guard and the cross-tab claim make repeats cheap.
+	 */
+	scheduleGc(opts?: { minIntervalMs?: number; delayMs?: number }): () => void {
+		if (typeof window === 'undefined') return () => {};
+		let cancelled = false;
+		const run = () => {
+			if (cancelled) return;
+			void this.maybeGc({ minIntervalMs: opts?.minIntervalMs });
+		};
+		const idle = (globalThis as { requestIdleCallback?: (cb: () => void) => number })
+			.requestIdleCallback;
+		// Delay past first paint either way: a sweep must never compete with the
+		// work the user is actually waiting for.
+		const timer = setTimeout(() => {
+			if (idle) idle(run);
+			else run();
+		}, opts?.delayMs ?? 10_000);
+		return () => {
+			cancelled = true;
+			clearTimeout(timer);
+		};
+	}
+
 	async gc(): Promise<GcReport> {
 		await this.ready();
 		const report: GcReport = {
