@@ -180,6 +180,7 @@ export function createLocalExplorerDriver(
 				})),
 				{
 					signal: opts?.signal,
+					pack: opts?.pack,
 					onProgress: opts?.onProgress
 						? (written) => opts.onProgress!(written.map(nodeToEntry))
 						: undefined

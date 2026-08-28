@@ -32,7 +32,8 @@ describe('reclaim', () => {
 		const nodes = await vfs.writeFiles(
 			Array.from({ length: 6 }, (_, i) => ({
 				parentId: folder.id, name: `e-${i}.txt`, body: enc.encode(`keep-${i}`)
-			}))
+			})),
+			{ pack: true }
 		);
 		const packPath = (await vfs.db.blobRefs.get(nodes[0]!.blobId!))!.opfsPath;
 
@@ -59,7 +60,8 @@ describe('reclaim', () => {
 		const nodes = await vfs.writeFiles(
 			Array.from({ length: 4 }, (_, i) => ({
 				parentId: folder.id, name: `a-${i}.txt`, body: enc.encode(`a${i}`)
-			}))
+			})),
+			{ pack: true }
 		);
 		const packPath = (await vfs.db.blobRefs.get(nodes[0]!.blobId!))!.opfsPath;
 		for (const n of nodes) await vfs.trash(n.id);
@@ -80,7 +82,8 @@ describe('reclaim', () => {
 		const nodes = await vfs.writeFiles(
 			Array.from({ length: 4 }, (_, i) => ({
 				parentId: folder.id, name: `s-${i}.txt`, body: enc.encode(`s${i}`)
-			}))
+			})),
+			{ pack: true }
 		);
 		const livePack = (await vfs.db.blobRefs.get(nodes[0]!.blobId!))!.opfsPath;
 
@@ -112,7 +115,8 @@ describe('reclaim', () => {
 		const nodes = await vfs.writeFiles(
 			Array.from({ length: 4 }, (_, i) => ({
 				parentId: folder.id, name: `g-${i}.txt`, body: enc.encode(`g${i}`)
-			}))
+			})),
+			{ pack: true }
 		);
 		const packPath = (await vfs.db.blobRefs.get(nodes[0]!.blobId!))!.opfsPath;
 		// Drop the NODES only, leaving refs orphaned — what a crashed delete looks like.

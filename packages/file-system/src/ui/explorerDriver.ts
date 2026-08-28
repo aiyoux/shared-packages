@@ -206,6 +206,12 @@ export interface ExplorerDriver {
 			signal?: AbortSignal;
 			/** Fires as each internal chunk lands, so callers can paint per file. */
 			onProgress?: (written: ExplorerEntry[]) => void;
+			/**
+			 * Opt into shared-pack storage for this write. Off by default; see
+			 * VfsService.writeFiles for why it is not the general default.
+			 * Drivers whose backend has no pack concept ignore it.
+			 */
+			pack?: boolean;
 		}
 	): Promise<ExplorerEntry[]>;
 	/**

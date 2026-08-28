@@ -47,7 +47,8 @@ describe('packed blobs', () => {
 				parentId: folder.id,
 				name: `m-${i}.txt`,
 				body: enc.encode(`member-${i}`)
-			}))
+			})),
+			{ pack: true }
 		);
 		assert.equal(nodes.length, N);
 
@@ -80,7 +81,8 @@ describe('packed blobs', () => {
 				parentId: folder.id,
 				name: `d-${i}.txt`,
 				body: enc.encode(`payload-${i}`)
-			}))
+			})),
+			{ pack: true }
 		);
 		const victim = nodes[3]!;
 		const packPath = (await vfs.db.blobRefs.get(victim.blobId!))!.opfsPath;
@@ -104,7 +106,8 @@ describe('packed blobs', () => {
 				parentId: folder.id,
 				name: `r-${i}.txt`,
 				body: enc.encode(`r${i}`)
-			}))
+			})),
+			{ pack: true }
 		);
 		const packPath = (await vfs.db.blobRefs.get(nodes[0]!.blobId!))!.opfsPath;
 		for (const n of nodes.slice(0, 4)) {
@@ -126,7 +129,8 @@ describe('packed blobs', () => {
 				parentId: folder.id,
 				name: `u-${i}.txt`,
 				body: enc.encode(`before-${i}`)
-			}))
+			})),
+			{ pack: true }
 		);
 		const packPath = (await vfs.db.blobRefs.get(nodes[0]!.blobId!))!.opfsPath;
 
@@ -146,14 +150,46 @@ describe('packed blobs', () => {
 		const vfs = await mk('large');
 		const folder = await vfs.mkdir(null, 'p');
 		const big = new Uint8Array(33 * 1024 * 1024); // over half the 64MB cap
-		const nodes = await vfs.writeFiles([
-			{ parentId: folder.id, name: 'big.bin', body: big },
-			{ parentId: folder.id, name: 'small.txt', body: enc.encode('small') }
-		]);
+		const nodes = await vfs.writeFiles(
+			[
+				{ parentId: folder.id, name: 'big.bin', body: big },
+				{ parentId: folder.id, name: 'small.txt', body: enc.encode('small') }
+			],
+			{ pack: true }
+		);
 		const bigRef = await vfs.db.blobRefs.get(nodes[0]!.blobId!);
 		assert.equal(bigRef!.packOffset, undefined, 'large member is not packed');
 		assert.ok(bigRef!.opfsPath.startsWith('blobs/'));
 		assert.equal(dec.decode(await vfs.readBytes(nodes[1]!.id)), 'small');
+		await vfs.db.delete();
+	});
+
+	it('does NOT pack unless the caller opts in', async () => {
+		// The general filesystem must not create packs: members sharing storage
+		// is a good trade only where deletion happens at pack granularity (a
+		// project deleted whole), and a bad one where arbitrary files are
+		// deleted in arbitrary order. Opt-in keeps that decision at the call
+		// site rather than inferred from the data.
+		const vfs = await mk('optin');
+		const folder = await vfs.mkdir(null, 'p');
+		const nodes = await vfs.writeFiles(
+			Array.from({ length: 12 }, (_, i) => ({
+				parentId: folder.id,
+				name: `o-${i}.txt`,
+				body: enc.encode(`o${i}`)
+			}))
+		);
+		const refs = await Promise.all(nodes.map((n) => vfs.db.blobRefs.get(n.blobId!)));
+		assert.ok(
+			refs.every((r) => r!.packOffset === undefined),
+			'no packOffset without pack: true'
+		);
+		assert.ok(
+			refs.every((r) => r!.opfsPath.startsWith('blobs/')),
+			'every member owns its own file'
+		);
+		// And the bytes still round-trip on the unpacked path.
+		assert.equal(dec.decode(await vfs.readBytes(nodes[5]!.id)), 'o5');
 		await vfs.db.delete();
 	});
 
@@ -173,7 +209,8 @@ describe('packed blobs', () => {
 				parentId: folder.id,
 				name: `n-${i}.txt`,
 				body: enc.encode(`n${i}`)
-			}))
+			})),
+			{ pack: true }
 		);
 		const refs = await Promise.all(nodes.map((n) => vfs.db.blobRefs.get(n.blobId!)));
 		assert.ok(

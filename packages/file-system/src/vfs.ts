@@ -690,6 +690,23 @@ export class VfsService {
 			 * small batches — chunking belongs here, where the cost lives.
 			 */
 			onProgress?: (written: VfsNode[]) => void;
+			/**
+			 * Store this chunk's small members inside one shared pack file
+			 * instead of one file each. OFF by default, and deliberately so.
+			 *
+			 * Packing trades robustness for write speed: members share storage,
+			 * so releasing one has to prove no sibling still needs the file, and
+			 * space only comes back when the last member of a pack dies. That is
+			 * a good trade only where deletion happens at the same granularity
+			 * as the pack — a project, deleted whole — and a bad one for a
+			 * general filesystem where arbitrary files are deleted in arbitrary
+			 * order.
+			 *
+			 * Currently opted in only by the Projects app. The general
+			 * extract/decrypt/drop paths leave it off and get their speed from
+			 * write concurrency instead.
+			 */
+			pack?: boolean;
 		}
 	): Promise<VfsNode[]> {
 		await this.ready();
@@ -714,7 +731,7 @@ export class VfsService {
 			const group = chunk;
 			chunk = [];
 			chunkBytes = 0;
-			const written = await this.writeFilesChunk(group, opts?.signal);
+			const written = await this.writeFilesChunk(group, opts?.signal, opts?.pack === true);
 			out.push(...written);
 			opts?.onProgress?.(written);
 		};
@@ -731,7 +748,8 @@ export class VfsService {
 	/** One reserve→blob-write→confirm cycle for a batch of files. */
 	private async writeFilesChunk(
 		inputs: Array<{ input: WriteFileInput; bytes: Uint8Array; contentType: string }>,
-		signal?: AbortSignal
+		signal?: AbortSignal,
+		pack = false
 	): Promise<VfsNode[]> {
 		const prepared = inputs.map(({ input, bytes, contentType }) => {
 			let name = sanitizeName(input.name);
@@ -833,7 +851,7 @@ export class VfsService {
 			// Packing needs a store that can read a byte range back cheaply;
 			// `readRange` is that capability gate (the in-memory store, used by
 			// inner-fs sessions, deliberately lacks it and stays unpacked).
-			const packable = typeof this.opfs.readRange === 'function' && prepared.length > 1;
+			const packable = pack && typeof this.opfs.readRange === 'function' && prepared.length > 1;
 			const packId = generateId('pack');
 			const packPath = `packs/${packId}.bin`;
 			const packMembers: Array<{ index: number; offset: number }> = [];
@@ -951,7 +969,14 @@ export class VfsService {
 			// Anything not packed (large members, or a chunk too small to be
 			// worth a pack) keeps the one-file-per-blob path.
 			const standalone = reserved.filter((_, i) => !packedIndexes.has(i));
-			const WRITE_CONCURRENCY = 4;
+			// Each standalone write is ~4 IPC round trips to the browser process,
+			// so overlapping them hides latency that no amount of batching can
+			// remove. Swept on the real path: 1-way 6.19 ms/file, 4-way 3.49,
+			// 8-way 2.83, 12-way 2.26, 16-way 2.59, 24-way 2.68, 32-way 4.87 —
+			// the curve turns once the browser's own IO queue saturates, so
+			// this sits at the measured floor rather than "as parallel as
+			// possible".
+			const WRITE_CONCURRENCY = 12;
 			let cursor = 0;
 			const workers = Array.from({ length: WRITE_CONCURRENCY }, async () => {
 				while (cursor < standalone.length) {
