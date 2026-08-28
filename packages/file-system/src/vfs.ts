@@ -17,6 +17,7 @@ import {
 	type DocumentHost
 } from './documentSession.js';
 import {
+	type BlobRef,
 	type DocumentEvent,
 	type DocumentSnapshot,
 	type FileTypeId,
@@ -775,11 +776,23 @@ export class VfsService {
 		};
 		try {
 			// Reserve names + pending blobRefs + leases for the whole chunk in
-			// one txn. Parent state and name collisions are re-checked inside
-			// the txn exactly like writeFile. The blobRef names the FINAL blob
-			// path from the start; GC already treats blobs/<id>.bin as live for
-			// pendingPromote refs, so a crash mid-write leaves a GC-able orphan,
-			// same window as the old tmp→promote protocol.
+			// one txn. Parent rows are read and sibling names loaded once per
+			// parent (root included); names and append sortOrders are then
+			// assigned in memory — the write txn excludes other writers, so this
+			// is the same result per-file probes would produce, without the
+			// per-file sibling scan (quadratic for root, which has no compound
+			// index). In-memory naming also makes collisions WITHIN the batch
+			// visible, which per-file probes could not see now that rows land
+			// via bulkPut after the loop.
+			// The blobRef names the FINAL blob path from the start; GC already
+			// treats blobs/<id>.bin as live for pendingPromote refs, so a crash
+			// mid-write leaves a GC-able orphan, same window as the old
+			// tmp→promote protocol.
+			const nextAppend = new Map<string, number>();
+			const siblingNames = new Map<string, Set<string>>();
+			const refPuts: BlobRef[] = [];
+			const leasePuts: Array<{ key: string; owner: string; expiresAt: number }> = [];
+			const nodePuts: VfsNode[] = [];
 			await this.db.transaction(
 				'rw',
 				this.db.nodes,
@@ -788,14 +801,34 @@ export class VfsService {
 				async () => {
 					for (const p of prepared) {
 						if (signal?.aborted) throw abortError();
-						if (p.input.parentId) {
-							const parent = await this.db.nodes.get(p.input.parentId);
-							if (!parent || parent.kind !== 'folder') throw new VfsError('NOT_A_FOLDER');
-							if (parent.deletedAt != null) throw new VfsError('TRASH_STATE');
+						const pid = p.input.parentId;
+						const stateKey = pid ?? '';
+						let taken = siblingNames.get(stateKey);
+						let nextSortOrder = nextAppend.get(stateKey);
+						if (taken === undefined || nextSortOrder === undefined) {
+							if (pid !== null) {
+								const parent = await this.db.nodes.get(pid);
+								if (!parent || parent.kind !== 'folder') throw new VfsError('NOT_A_FOLDER');
+								if (parent.deletedAt != null) throw new VfsError('TRASH_STATE');
+							}
+							taken = new Set(
+								(await this.activeSiblings(pid)).map((n) => n.name.toLowerCase())
+							);
+							nextSortOrder = await this.nextAppendSortOrder(pid);
+							siblingNames.set(stateKey, taken);
+							nextAppend.set(stateKey, nextSortOrder);
 						}
-						const unique = await this.ensureUniqueName(p.input.parentId, p.name);
-						const sortOrder = await this.nextAppendSortOrder(p.input.parentId);
-						await this.db.blobRefs.put({
+						// Same 'rename' resolution ensureUniqueName performs.
+						let unique = p.name;
+						if (taken.has(unique.toLowerCase())) {
+							let i = 1;
+							while (taken.has(withNumericSuffix(unique, i).toLowerCase())) i++;
+							unique = withNumericSuffix(unique, i);
+						}
+						taken.add(unique.toLowerCase());
+						const sortOrder = nextSortOrder;
+						nextAppend.set(stateKey, nextSortOrder + 16384);
+						refPuts.push({
 							id: p.blobId,
 							opfsPath: `blobs/${p.blobId}.bin`,
 							byteLength: 0,
@@ -804,14 +837,14 @@ export class VfsService {
 							pending: true,
 							pendingPromote: true
 						});
-						await this.db.leases.put({
+						leasePuts.push({
 							key: `write:${p.blobId}`,
 							owner,
 							expiresAt: p.now + this.graceMs
 						});
-						await this.db.nodes.put({
+						nodePuts.push({
 							id: p.nodeId,
-							parentId: p.input.parentId,
+							parentId: pid,
 							name: unique,
 							kind: 'file',
 							fileType: p.fileType === 'unknown' ? undefined : p.fileType,
@@ -824,9 +857,12 @@ export class VfsService {
 							contentType: p.contentType,
 							deletedAt: null,
 							sortOrder
-						} satisfies VfsNode);
+						});
 						reserved.push({ p, name: unique });
 					}
+					await this.db.blobRefs.bulkPut(refPuts);
+					await this.db.leases.bulkPut(leasePuts);
+					await this.db.nodes.bulkPut(nodePuts);
 				}
 			);
 			// Blob writes: one OPFS write per member (no partial + promote
@@ -843,36 +879,53 @@ export class VfsService {
 			});
 			await Promise.all(workers);
 			// Confirm sizes + clear pending + drop leases for the whole chunk in
-			// one txn (parent re-checked so a concurrent trash cannot park a
-			// live child under it, as in writeFile).
+			// one txn (parent re-checked inside the txn so a concurrent trash
+			// cannot park a live child under it, as in writeFile). Rows are read
+			// in one bulkGet and written back in one bulkPut — per-file get/put
+			// round trips were the remaining IDB cost after batching.
 			await this.db.transaction(
 				'rw',
 				this.db.nodes,
 				this.db.blobRefs,
 				this.db.leases,
 				async () => {
+					const confirmAt = Date.now();
+					const [refs, nodes] = await Promise.all([
+						this.db.blobRefs.bulkGet(reserved.map((r) => r.p.blobId)),
+						this.db.nodes.bulkGet(reserved.map((r) => r.p.nodeId))
+					]);
+					const refUpdates: BlobRef[] = [];
+					const nodeUpdates: VfsNode[] = [];
+					const checkedParents = new Set<string>();
 					for (const [i, r] of reserved.entries()) {
-						if (r.p.input.parentId) {
-							const parent = await this.db.nodes.get(r.p.input.parentId);
+						const pid = r.p.input.parentId;
+						if (pid !== null && !checkedParents.has(pid)) {
+							const parent = await this.db.nodes.get(pid);
 							if (!parent || parent.kind !== 'folder' || parent.deletedAt != null) {
 								throw new VfsError('TRASH_STATE');
 							}
+							checkedParents.add(pid);
 						}
-						const byteLength = r.p.bytes.byteLength;
-						const ref = await this.db.blobRefs.get(r.p.blobId);
+						const ref = refs[i]!;
 						if (ref) {
-							ref.byteLength = byteLength;
-							ref.pending = false;
-							ref.pendingPromote = false;
-							await this.db.blobRefs.put(ref);
+							refUpdates.push({
+								...ref,
+								byteLength: r.p.bytes.byteLength,
+								pending: false,
+								pendingPromote: false
+							});
 						}
-						const node = await this.db.nodes.get(r.p.nodeId);
+						const node = nodes[i];
 						if (!node) throw new VfsError('NOT_FOUND');
-						node.size = byteLength;
-						node.updatedAt = Date.now();
-						await this.db.nodes.put(node);
-						await this.db.leases.delete(leaseKeys[i]!);
+						nodeUpdates.push({
+							...node,
+							size: r.p.bytes.byteLength,
+							updatedAt: confirmAt
+						});
 					}
+					await this.db.nodes.bulkPut(nodeUpdates);
+					await this.db.blobRefs.bulkPut(refUpdates);
+					await this.db.leases.bulkDelete(leaseKeys);
 				}
 			);
 		} catch (e) {
