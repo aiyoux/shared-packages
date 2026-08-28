@@ -86,6 +86,8 @@ export class VfsService {
 	private requestPersist: boolean;
 	private lastPersistence: PersistenceResult | null = null;
 	private readonly changeBus = createChangeBus();
+	/** `sweepOnLoad` is once per instance, however many mounts call it. */
+	private sweptThisLoad = false;
 
 	constructor(opts: VfsServiceOptions = {}) {
 		this.db = new SharedVfsDatabase(opts.dbName ?? 'SharedVFS');
@@ -1628,24 +1630,34 @@ export class VfsService {
 	// ── GC ────────────────────────────────────────────────────────
 
 	/**
-	 * Run gc() at most once per interval per origin, across all tabs.
+	 * Sweep crash debris, at most once per VFS load.
 	 *
-	 * gc() had no production caller at all — it existed only in tests — so every
-	 * "a crash leaves an orphan and GC reclaims it" guarantee in this file was
-	 * really "leaks until the origin is cleared". This is the caller.
+	 * Reclaiming space that a delete should have freed is NOT this method's job
+	 * — deletes do their own reclamation synchronously and fail loudly if they
+	 * cannot (see `releaseBlobRefs` and `deleteFromProject`). What is left for a
+	 * sweep is genuine debris: a tab killed mid-write leaves a pending blobRef
+	 * and an orphaned file that no delete will ever visit.
+	 *
+	 * That distinction sets the schedule. This runs on load, not on a timer: an
+	 * interval long enough to be unobtrusive is one that short sessions never
+	 * reach, and an app used in short bursts would sweep approximately never.
+	 * Debris only appears when a session dies, so the next session opening the
+	 * store is exactly when it is worth looking.
 	 *
 	 * Cross-tab safety reuses the lease table rather than inventing anything:
 	 * whichever tab claims `gc:run` inside the claim transaction is the one that
 	 * sweeps, and the claim expires on its own if that tab dies mid-run. Callers
-	 * fire and forget; failures are swallowed because a missed sweep is a
-	 * deferred cleanup, never a correctness problem.
+	 * fire and forget; failures are swallowed because a missed sweep is deferred
+	 * cleanup, never a correctness problem.
 	 *
 	 * Returns the report when this call actually swept, or null when it skipped
-	 * (too soon, or another tab holds the claim).
+	 * (already swept this load, or another tab holds the claim).
 	 */
 	async maybeGc(opts?: { minIntervalMs?: number; force?: boolean }): Promise<GcReport | null> {
 		await this.ready();
-		const minInterval = opts?.minIntervalMs ?? 6 * 60 * 60 * 1000;
+		// Default 0: every load is eligible. A caller can still pass an interval
+		// to throttle a hot path, but nothing in the app does.
+		const minInterval = opts?.minIntervalMs ?? 0;
 		const now = Date.now();
 		const CLAIM = 'gc:run';
 		const LAST_RUN = 'gc:lastRun';
@@ -1692,24 +1704,28 @@ export class VfsService {
 	}
 
 	/**
-	 * Schedule `maybeGc` for when the tab is idle. Safe to call on every boot;
-	 * the interval guard and the cross-tab claim make repeats cheap.
+	 * Sweep once for this VFS instance, off the critical path.
+	 *
+	 * Idempotent per instance, so callers can invoke it from any mount without
+	 * coordinating. Deferred behind a timeout (and `requestIdleCallback` where
+	 * available) so it never competes with the work the user is waiting for,
+	 * and returns a canceller for teardown.
 	 */
-	scheduleGc(opts?: { minIntervalMs?: number; delayMs?: number }): () => void {
+	sweepOnLoad(opts?: { delayMs?: number }): () => void {
+		if (this.sweptThisLoad) return () => {};
+		this.sweptThisLoad = true;
 		if (typeof window === 'undefined') return () => {};
 		let cancelled = false;
 		const run = () => {
 			if (cancelled) return;
-			void this.maybeGc({ minIntervalMs: opts?.minIntervalMs });
+			void this.maybeGc();
 		};
 		const idle = (globalThis as { requestIdleCallback?: (cb: () => void) => number })
 			.requestIdleCallback;
-		// Delay past first paint either way: a sweep must never compete with the
-		// work the user is actually waiting for.
 		const timer = setTimeout(() => {
 			if (idle) idle(run);
 			else run();
-		}, opts?.delayMs ?? 10_000);
+		}, opts?.delayMs ?? 2_000);
 		return () => {
 			cancelled = true;
 			clearTimeout(timer);

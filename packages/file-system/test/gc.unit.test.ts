@@ -177,14 +177,28 @@ describe('gc scheduling', () => {
 		return vfs;
 	};
 
-	it('sweeps once, then skips until the interval elapses', async () => {
+	it('sweeps on every load by default, and honours an explicit interval', async () => {
 		const vfs = await mk('interval');
-		const first = await vfs.maybeGc({ minIntervalMs: 60_000 });
-		assert.ok(first, 'first call sweeps');
-		const second = await vfs.maybeGc({ minIntervalMs: 60_000 });
-		assert.equal(second, null, 'second call inside the interval skips');
-		const forced = await vfs.maybeGc({ force: true });
-		assert.ok(forced, 'force overrides the interval');
+		// Default is every load: debris only appears when a session dies, so a
+		// throttle long enough to be unobtrusive is one short sessions never hit.
+		assert.ok(await vfs.maybeGc(), 'first load sweeps');
+		assert.ok(await vfs.maybeGc(), 'and so does the next — no hidden throttle');
+		// A caller can still throttle deliberately.
+		assert.equal(await vfs.maybeGc({ minIntervalMs: 60_000 }), null, 'explicit interval respected');
+		assert.ok(await vfs.maybeGc({ force: true }), 'force overrides it');
+		await vfs.db.delete();
+	});
+
+	it('sweepOnLoad runs at most once per instance', async () => {
+		const vfs = await mk('once');
+		const first = vfs.sweepOnLoad();
+		const second = vfs.sweepOnLoad();
+		// Both return cancellers; the second is a no-op so repeated mounts do
+		// not queue repeated sweeps.
+		assert.equal(typeof first, 'function');
+		assert.equal(typeof second, 'function');
+		first();
+		second();
 		await vfs.db.delete();
 	});
 
@@ -192,7 +206,7 @@ describe('gc scheduling', () => {
 		const vfs = await mk('stale');
 		// Simulate a tab that claimed the sweep and died: expired lease left behind.
 		await vfs.db.leases.put({ key: 'gc:run', owner: 'dead-tab', expiresAt: Date.now() - 1 });
-		const report = await vfs.maybeGc({ minIntervalMs: 0 });
+		const report = await vfs.maybeGc();
 		assert.ok(report, 'expired claim is ignored');
 		await vfs.db.delete();
 	});
@@ -204,14 +218,14 @@ describe('gc scheduling', () => {
 			owner: 'other-tab',
 			expiresAt: Date.now() + 60_000
 		});
-		const report = await vfs.maybeGc({ minIntervalMs: 0 });
+		const report = await vfs.maybeGc();
 		assert.equal(report, null, 'only one tab sweeps at a time');
 		await vfs.db.delete();
 	});
 
 	it('releases its claim so the next interval can sweep again', async () => {
 		const vfs = await mk('release');
-		await vfs.maybeGc({ minIntervalMs: 0 });
+		await vfs.maybeGc();
 		const held = await vfs.db.leases.get('gc:run');
 		assert.equal(held, undefined, 'claim cleared after the sweep');
 		await vfs.db.delete();
