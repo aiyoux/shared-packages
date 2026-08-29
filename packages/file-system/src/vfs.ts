@@ -29,6 +29,7 @@ import {
 	type WriteFileInput,
 	VfsError
 } from './types.js';
+import type { PackOpProgress, PackOpStage } from './types.js';
 
 export interface VfsServiceOptions {
 	dbName?: string;
@@ -55,6 +56,18 @@ const DEFAULT_GRACE = 120_000;
  * the write chunk cap, so a chunk maps to at most one pack.
  */
 const PACK_CAP_BYTES = 64 << 20;
+/** Fraction of a pack that must be dead before rewriting it is worth the IO. */
+const COMPACT_WHEN_DEAD_FRACTION = 0.5;
+/** Never rewrite a pack to reclaim a trivial amount. */
+const COMPACT_MIN_RECLAIM_BYTES = 1 << 20;
+
+/** Byte sizes for pack progress lines. */
+function formatPackBytes(n: number): string {
+	if (n < 1024) return `${n} B`;
+	if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
+	if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+	return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
 /** Never shrink the budget below this — a tiny cap costs round trips for nothing. */
 const MIN_PACK_BUDGET_BYTES = 4 << 20;
 /** At most this share of what storage says is still free may sit in one pack. */
@@ -70,7 +83,27 @@ export type EmptyTrashProgress = {
 
 export type EmptyTrashOpts = {
 	onProgress?: (ev: EmptyTrashProgress) => void;
+	/** Staged pack messages (wiping -> compacting -> verifying). */
+	onPackProgress?: (ev: PackOpProgress) => void;
 	signal?: AbortSignal;
+	/** Skip reclaiming dead space in packs the trashed files shared. */
+	skipCompaction?: boolean;
+};
+
+export type EmptyTrashResult = {
+	deleted: number;
+	compactedPacks: number;
+	reclaimedBytes: number;
+	/**
+	 * Packs whose dead space could not be reclaimed.
+	 *
+	 * The node and ref rows are dropped in a transaction BEFORE compaction runs,
+	 * and compaction needs that — survivors are defined by what is left. So a
+	 * failure here cannot un-delete anything; it leaves dead space. The
+	 * operation is therefore reported as incomplete rather than successful,
+	 * which is the honest reading of "the op did not finish".
+	 */
+	failedPacks: string[];
 };
 
 function throwIfAborted(signal?: AbortSignal): void {
@@ -1555,13 +1588,13 @@ export class VfsService {
 		this.emitChange();
 	}
 
-	async emptyTrash(opts?: EmptyTrashOpts): Promise<void> {
+	async emptyTrash(opts?: EmptyTrashOpts): Promise<EmptyTrashResult> {
 		await this.ready();
 		throwIfAborted(opts?.signal);
 		const trashed = await this.db.nodes.filter((n) => n.deletedAt != null).toArray();
 		if (!trashed.length) {
 			opts?.onProgress?.({ done: 0, total: 0 });
-			return;
+			return { deleted: 0, compactedPacks: 0, reclaimedBytes: 0, failedPacks: [] };
 		}
 
 		const blobIds: string[] = [];
@@ -1573,9 +1606,15 @@ export class VfsService {
 		}
 		const uniqueBlobIds = [...new Set(blobIds)];
 		const opfsPaths: Array<{ path: string; name: string }> = [];
+		// Which packs are about to lose members. Collected NOW, because the refs
+		// that name them are dropped in the transaction below — after that there
+		// is nothing left to tell us which packs were touched.
+		const touchedPacks = new Set<string>();
 		for (const bid of uniqueBlobIds) {
 			const ref = await this.db.blobRefs.get(bid);
-			if (ref?.opfsPath) opfsPaths.push({ path: ref.opfsPath, name: nameByBlob.get(bid) ?? 'file' });
+			if (!ref?.opfsPath) continue;
+			opfsPaths.push({ path: ref.opfsPath, name: nameByBlob.get(bid) ?? 'file' });
+			if (ref.packOffset != null) touchedPacks.add(ref.opfsPath);
 		}
 
 		const nodeCount = trashed.length;
@@ -1583,6 +1622,10 @@ export class VfsService {
 		const total = nodeCount + blobCount;
 		opts?.onProgress?.({ done: 0, total, name: 'Emptying trash…' });
 		throwIfAborted(opts?.signal);
+
+		let compactedPacks = 0;
+		let reclaimedBytes = 0;
+		let failedPacks: string[] = [];
 
 		try {
 			await this.db.transaction('rw', this.db.nodes, this.db.blobRefs, async () => {
@@ -1619,9 +1662,43 @@ export class VfsService {
 				opts?.onProgress?.({ done: nodeCount + i + 1, total, name: item.name });
 				if ((i & 7) === 7) await yieldPaint();
 			}
+
+			// Packs that lost members but kept survivors are now carrying dead
+			// space. Whole-pack unlinking above only covers packs nothing
+			// survives in; without this, emptying the trash of packed files
+			// appears to free nothing at all. Only packs past the thresholds are
+			// rewritten, so five files across two packs costs two rewrites at
+			// most, not one per file.
+			if (!opts?.skipCompaction && touchedPacks.size) {
+				const stillThere: string[] = [];
+				for (const p of touchedPacks) {
+					if (await this.opfs.exists(p)) stillThere.push(p);
+				}
+				try {
+					const res = await this.compactPacks(stillThere, {
+						onProgress: opts?.onPackProgress,
+						signal: opts?.signal
+					});
+					compactedPacks = res.compactedPacks;
+					reclaimedBytes = res.reclaimedBytes;
+				} catch (e) {
+					// The delete itself already committed and cannot be undone, so
+					// this is reported as an incomplete operation rather than
+					// swallowed or raised as a failed delete.
+					if (e instanceof Error && e.name === 'AbortError') throw e;
+					failedPacks = stillThere;
+					opts?.onPackProgress?.({
+						stage: 'failed',
+						label: `Files deleted, but ${stillThere.length} pack${
+							stillThere.length === 1 ? '' : 's'
+						} could not be compacted — space will be reclaimed later.`
+					});
+				}
+			}
 		} finally {
 			this.emitChange();
 		}
+		return { deleted: nodeCount, compactedPacks, reclaimedBytes, failedPacks };
 	}
 
 	// ── Drafts ────────────────────────────────────────────────────
@@ -1787,6 +1864,164 @@ export class VfsService {
 			cancelled = true;
 			clearTimeout(timer);
 		};
+	}
+
+	/**
+	 * Rewrite one pack without its dead space.
+	 *
+	 * Order matters and is the whole safety argument:
+	 *   1. build the new pack from SLICES of the old (lazy Blobs — no bytes in JS)
+	 *   2. verify it is the size the new layout demands
+	 *   3. swap every affected ref in one transaction, re-reading each row so a
+	 *      ref changed by a concurrent write is skipped rather than clobbered
+	 *   4. only then unlink the old file
+	 * A crash at any point before 3 leaves the old pack authoritative.
+	 */
+	private async compactOnePack(
+			packPath: string,
+			survivors: BlobRef[],
+			report: (stage: PackOpStage, label: string, bytes?: number) => void
+		): Promise<number> {
+		const source = await this.opfs.readBlob(packPath);
+		const before = source.size;
+
+		const ordered = [...survivors].sort((a, b) => (a.packOffset ?? 0) - (b.packOffset ?? 0));
+		const parts: BlobPart[] = [];
+		const layout: Array<{ id: string; offset: number; length: number }> = [];
+		let cursor = 0;
+		for (const ref of ordered) {
+			const from = ref.packOffset ?? 0;
+			// slice() is lazy: the bytes are copied browser-side on write, never
+			// materialised here, so a 64MB pack costs no heap to compact.
+			parts.push(source.slice(from, from + ref.byteLength));
+			layout.push({ id: ref.id, offset: cursor, length: ref.byteLength });
+			cursor += ref.byteLength;
+		}
+
+		const newPath = `packs/${`pack_${crypto.randomUUID()}`}.bin`;
+		await this.opfs.writeFinal(newPath, new Blob(parts));
+
+		report('verifying', 'Deleting — verifying blob integrity…');
+		const written = await this.opfs.readBlob(newPath);
+		if (written.size !== cursor) {
+			// Nothing has been swapped yet, so the old pack is still authoritative.
+			try {
+				await this.opfs.remove(newPath);
+			} catch {
+				/* gc sweeps packs/ */
+			}
+			throw new Error(
+				`Pack compaction verification failed: expected ${cursor} bytes, wrote ${written.size}`
+			);
+		}
+
+		await this.db.transaction('rw', this.db.blobRefs, async () => {
+			for (const item of layout) {
+				// Re-read inside the txn: a concurrent updateFile may have moved this
+				// node to its own blob, in which case its ref must not be dragged
+				// into the new pack.
+				const current = await this.db.blobRefs.get(item.id);
+				if (!current || current.opfsPath !== packPath) continue;
+				await this.db.blobRefs.put({
+					...current,
+					opfsPath: newPath,
+					packOffset: item.offset
+				});
+			}
+		});
+
+		// Retire the old pack only when NOTHING still names it.
+		//
+		// The swap deliberately skips refs that changed underneath it, and a ref
+		// can also appear between the survivor scan and the swap. Either way it may
+		// still point into the old pack, so unlinking unconditionally would destroy
+		// live bytes — the same shared-storage trap that releaseBlobRefs exists to
+		// avoid, and it applies here too.
+		const stillNamed = await this.db.blobRefs.where('opfsPath').equals(packPath).first();
+		if (stillNamed) {
+			// The new pack is a superset copy, so nothing is lost — but the space is
+			// not reclaimed either, and a caller reporting bytes freed must not lie.
+			console.warn(
+				`[vfs] pack ${packPath} still has live references after compaction; ` +
+					'keeping it. Space will be reclaimed on a later delete.'
+			);
+			return 0;
+		}
+		try {
+			await this.opfs.remove(packPath);
+		} catch {
+			/* gc sweeps packs/ */
+		}
+		return Math.max(0, before - cursor);
+	}
+
+	/**
+	 * Reclaim dead space in the packs named by `packPaths`.
+	 *
+	 * Pack mutation lives here because this class also creates packs: one owner
+	 * for the format means a caller cannot compact without the survivor rules
+	 * that make it safe. `deleteFromProject`, `emptyTrash` and `permanentDelete`
+	 * all funnel through it.
+	 *
+	 * Only packs worth rewriting are touched. Compaction rewrites the LIVE bytes
+	 * to reclaim the dead ones, so at 50% dead it writes one byte per byte
+	 * returned — below that it costs more than it gives back, and the absolute
+	 * floor stops a favourable ratio on a tiny pack paying several OPFS round
+	 * trips for nothing.
+	 */
+	async compactPacks(
+		packPaths: Iterable<string>,
+		opts?: {
+			onProgress?: (ev: PackOpProgress) => void;
+			signal?: AbortSignal;
+		}
+	): Promise<{ compactedPacks: number; reclaimedBytes: number }> {
+		await this.ready();
+		const report = (stage: PackOpStage, label: string, reclaimedBytes?: number) =>
+			opts?.onProgress?.({ stage, label, reclaimedBytes });
+
+		let compactedPacks = 0;
+		let reclaimedBytes = 0;
+		for (const packPath of new Set(packPaths)) {
+			if (opts?.signal?.aborted) break;
+			// Survivors decide the outcome: none means releaseBlobRefs already
+			// unlinked the file and there is nothing to compact.
+			const survivors = await this.db.blobRefs.where('opfsPath').equals(packPath).toArray();
+			if (!survivors.length) continue;
+
+			let onDisk = 0;
+			try {
+				onDisk = (await this.opfs.readBlob(packPath)).size;
+			} catch {
+				continue;
+			}
+			const live = survivors.reduce((n, r) => n + r.byteLength, 0);
+			const dead = onDisk - live;
+			if (
+				dead < COMPACT_MIN_RECLAIM_BYTES ||
+				dead / Math.max(onDisk, 1) < COMPACT_WHEN_DEAD_FRACTION
+			) {
+				continue;
+			}
+
+			report('compacting', `Compacting ${formatPackBytes(dead)}…`);
+			const freed = await this.compactOnePack(packPath, survivors, report);
+			reclaimedBytes += freed;
+			// compactOnePack returns 0 when it had to keep the old file because a
+			// live ref still names it; counting that would overstate the result.
+			if (freed > 0) compactedPacks += 1;
+		}
+		return { compactedPacks, reclaimedBytes };
+	}
+
+	/** Packs named by the given blob refs — the set a delete may leave dead space in. */
+	async packPathsForBlobs(blobIds: Iterable<string>): Promise<string[]> {
+		const paths = new Set<string>();
+		for (const id of new Set(blobIds)) {
+			const ref = await this.db.blobRefs.get(id);
+			if (ref?.packOffset != null) paths.add(ref.opfsPath);
+		}
+		return [...paths];
 	}
 
 	async gc(): Promise<GcReport> {

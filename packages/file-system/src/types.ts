@@ -242,3 +242,14 @@ export class VfsError extends Error {
 		this.details = details;
 	}
 }
+
+/** Stage labels surfaced by delete-with-compaction and trash compaction. */
+export type PackOpStage = 'wiping' | 'compacting' | 'verifying' | 'done' | 'failed';
+
+export type PackOpProgress = {
+	stage: PackOpStage;
+	/** Human-readable line for the file manager / Projects chip. */
+	label: string;
+	/** Bytes reclaimed, once known. */
+	reclaimedBytes?: number;
+};

@@ -16,7 +16,7 @@
  * thousands of files.
  */
 import type { VfsService } from './vfs.js';
-import type { BlobRef, VfsNode } from './types.js';
+import type { BlobRef, PackOpProgress, PackOpStage, VfsNode } from './types.js';
 
 /** Marks a folder as a project whose file bytes live in shared packs. */
 export const PROJECT_PACK_META = 'projectPack';
@@ -223,21 +223,9 @@ export async function checkProjectPacks(
 	};
 }
 
-/** Stage labels surfaced by delete-with-compaction (see `deleteFromProject`). */
-export type PackOpStage =
-	| 'wiping'
-	| 'compacting'
-	| 'verifying'
-	| 'done'
-	| 'failed';
-
-export type PackOpProgress = {
-	stage: PackOpStage;
-	/** Human-readable line for the file manager / Projects chip. */
-	label: string;
-	/** Bytes reclaimed, once known. */
-	reclaimedBytes?: number;
-};
+// Pack progress types live in types.ts because VfsService owns pack mutation
+// and cannot import this module. Re-exported so callers keep one import site.
+export type { PackOpStage, PackOpProgress } from './types.js';
 
 export type DeleteFromProjectResult = {
 	deleted: number;
@@ -245,10 +233,6 @@ export type DeleteFromProjectResult = {
 	reclaimedBytes: number;
 };
 
-/** Fraction of a pack that must be dead before rewriting it is worth the IO. */
-const COMPACT_WHEN_DEAD_FRACTION = 0.5;
-/** Never rewrite a pack to reclaim a trivial amount. */
-const COMPACT_MIN_RECLAIM_BYTES = 1 << 20;
 
 /**
  * Delete nodes from a project and reclaim their pack space in the same
@@ -296,37 +280,11 @@ export async function deleteFromProject(
 		deleted += 1;
 	}
 
-	let compactedPacks = 0;
-	let reclaimedBytes = 0;
-
-	for (const [packPath] of touched) {
-		if (opts?.signal?.aborted) break;
-		// Survivors decide the outcome: no survivors means releaseBlobRefs
-		// already unlinked the file, and there is nothing to compact.
-		const survivors = await vfs.db.blobRefs.where('opfsPath').equals(packPath).toArray();
-		if (!survivors.length) continue;
-
-		let onDisk = 0;
-		try {
-			onDisk = (await vfs.opfs.readBlob(packPath)).size;
-		} catch {
-			continue;
-		}
-		const live = survivors.reduce((n, r) => n + r.byteLength, 0);
-		const dead = onDisk - live;
-		if (dead < COMPACT_MIN_RECLAIM_BYTES || dead / Math.max(onDisk, 1) < COMPACT_WHEN_DEAD_FRACTION) {
-			continue;
-		}
-
-		report('compacting', `Deleting — compacting ${formatBytes(dead)}…`);
-		const freed = await compactPack(vfs, packPath, survivors, report);
-		reclaimedBytes += freed;
-		// Only count a pack as compacted when its space actually came back.
-		// compactPack returns 0 when it had to keep the old file because a live
-		// ref still names it, and reporting that as a compaction would overstate
-		// what the delete achieved.
-		if (freed > 0) compactedPacks += 1;
-	}
+	report('compacting', 'Deleting — reclaiming pack space…');
+	const { compactedPacks, reclaimedBytes } = await vfs.compactPacks(touched.keys(), {
+		onProgress: opts?.onProgress,
+		signal: opts?.signal
+	});
 
 	report(
 		'done',
@@ -338,99 +296,6 @@ export async function deleteFromProject(
 	return { deleted, compactedPacks, reclaimedBytes };
 }
 
-/**
- * Rewrite one pack without its dead space.
- *
- * Order matters and is the whole safety argument:
- *   1. build the new pack from SLICES of the old (lazy Blobs — no bytes in JS)
- *   2. verify it is the size the new layout demands
- *   3. swap every affected ref in one transaction, re-reading each row so a
- *      ref changed by a concurrent write is skipped rather than clobbered
- *   4. only then unlink the old file
- * A crash at any point before 3 leaves the old pack authoritative.
- */
-async function compactPack(
-	vfs: VfsService,
-	packPath: string,
-	survivors: BlobRef[],
-	report: (stage: PackOpStage, label: string, bytes?: number) => void
-): Promise<number> {
-	const source = await vfs.opfs.readBlob(packPath);
-	const before = source.size;
-
-	const ordered = [...survivors].sort((a, b) => (a.packOffset ?? 0) - (b.packOffset ?? 0));
-	const parts: BlobPart[] = [];
-	const layout: Array<{ id: string; offset: number; length: number }> = [];
-	let cursor = 0;
-	for (const ref of ordered) {
-		const from = ref.packOffset ?? 0;
-		// slice() is lazy: the bytes are copied browser-side on write, never
-		// materialised here, so a 64MB pack costs no heap to compact.
-		parts.push(source.slice(from, from + ref.byteLength));
-		layout.push({ id: ref.id, offset: cursor, length: ref.byteLength });
-		cursor += ref.byteLength;
-	}
-
-	const newPath = `packs/${cryptoRandomId()}.bin`;
-	await vfs.opfs.writeFinal(newPath, new Blob(parts));
-
-	report('verifying', 'Deleting — verifying blob integrity…');
-	const written = await vfs.opfs.readBlob(newPath);
-	if (written.size !== cursor) {
-		// Nothing has been swapped yet, so the old pack is still authoritative.
-		try {
-			await vfs.opfs.remove(newPath);
-		} catch {
-			/* gc sweeps packs/ */
-		}
-		throw new Error(
-			`Pack compaction verification failed: expected ${cursor} bytes, wrote ${written.size}`
-		);
-	}
-
-	await vfs.db.transaction('rw', vfs.db.blobRefs, async () => {
-		for (const item of layout) {
-			// Re-read inside the txn: a concurrent updateFile may have moved this
-			// node to its own blob, in which case its ref must not be dragged
-			// into the new pack.
-			const current = await vfs.db.blobRefs.get(item.id);
-			if (!current || current.opfsPath !== packPath) continue;
-			await vfs.db.blobRefs.put({
-				...current,
-				opfsPath: newPath,
-				packOffset: item.offset
-			});
-		}
-	});
-
-	// Retire the old pack only when NOTHING still names it.
-	//
-	// The swap deliberately skips refs that changed underneath it, and a ref
-	// can also appear between the survivor scan and the swap. Either way it may
-	// still point into the old pack, so unlinking unconditionally would destroy
-	// live bytes — the same shared-storage trap that releaseBlobRefs exists to
-	// avoid, and it applies here too.
-	const stillNamed = await vfs.db.blobRefs.where('opfsPath').equals(packPath).first();
-	if (stillNamed) {
-		// The new pack is a superset copy, so nothing is lost — but the space is
-		// not reclaimed either, and a caller reporting bytes freed must not lie.
-		console.warn(
-			`[vfs] pack ${packPath} still has live references after compaction; ` +
-				'keeping it. Space will be reclaimed on a later delete.'
-		);
-		return 0;
-	}
-	try {
-		await vfs.opfs.remove(packPath);
-	} catch {
-		/* gc sweeps packs/ */
-	}
-	return Math.max(0, before - cursor);
-}
-
-function cryptoRandomId(): string {
-	return `pack_${crypto.randomUUID()}`;
-}
 
 function formatBytes(n: number): string {
 	if (n < 1024) return `${n} B`;
