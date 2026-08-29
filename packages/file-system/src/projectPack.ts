@@ -319,8 +319,13 @@ export async function deleteFromProject(
 		}
 
 		report('compacting', `Deleting — compacting ${formatBytes(dead)}…`);
-		reclaimedBytes += await compactPack(vfs, packPath, survivors, report);
-		compactedPacks += 1;
+		const freed = await compactPack(vfs, packPath, survivors, report);
+		reclaimedBytes += freed;
+		// Only count a pack as compacted when its space actually came back.
+		// compactPack returns 0 when it had to keep the old file because a live
+		// ref still names it, and reporting that as a compaction would overstate
+		// what the delete achieved.
+		if (freed > 0) compactedPacks += 1;
 	}
 
 	report(
@@ -398,7 +403,23 @@ async function compactPack(
 		}
 	});
 
-	// Retire the old pack only after the swap has committed.
+	// Retire the old pack only when NOTHING still names it.
+	//
+	// The swap deliberately skips refs that changed underneath it, and a ref
+	// can also appear between the survivor scan and the swap. Either way it may
+	// still point into the old pack, so unlinking unconditionally would destroy
+	// live bytes — the same shared-storage trap that releaseBlobRefs exists to
+	// avoid, and it applies here too.
+	const stillNamed = await vfs.db.blobRefs.where('opfsPath').equals(packPath).first();
+	if (stillNamed) {
+		// The new pack is a superset copy, so nothing is lost — but the space is
+		// not reclaimed either, and a caller reporting bytes freed must not lie.
+		console.warn(
+			`[vfs] pack ${packPath} still has live references after compaction; ` +
+				'keeping it. Space will be reclaimed on a later delete.'
+		);
+		return 0;
+	}
 	try {
 		await vfs.opfs.remove(packPath);
 	} catch {

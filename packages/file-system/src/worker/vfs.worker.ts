@@ -59,6 +59,12 @@ async function runExtract(req: ExtractJobRequest): Promise<void> {
 	for (const id of req.entryIds) {
 		const node = await vfs.get(id);
 		if (!node) throw new Error(`Archive is gone: ${id}`);
+		// Do not take the caller's word for it: casting a folder to kind:'file'
+		// here would send it into readEntryBytes and fail somewhere less
+		// obvious than this line.
+		if (node.kind !== 'file') {
+			throw new Error(`Not a file, cannot extract: ${node.name}`);
+		}
 		entries.push({
 			id: node.id,
 			parentId: node.parentId,
@@ -109,6 +115,17 @@ ctx.onmessage = (e: MessageEvent) => {
 	}
 
 	if (msg.type === 'extract') {
+		// A duplicate id would leave two jobs sharing one AbortController, so
+		// cancelling either would stop both and the second 'done' would settle
+		// an already-settled caller.
+		if (cancels.has(msg.jobId)) {
+			ctx.postMessage({
+				type: 'failed',
+				jobId: msg.jobId,
+				error: `Job ${msg.jobId} is already running`
+			});
+			return;
+		}
 		if (!canUseSyncAccessHandles()) {
 			ctx.postMessage({
 				type: 'failed',
