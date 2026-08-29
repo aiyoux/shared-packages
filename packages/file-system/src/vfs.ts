@@ -1171,7 +1171,22 @@ export class VfsService {
 			const survivor = await this.db.blobRefs.where('opfsPath').equals(path).first();
 			if (survivor) candidates.delete(path);
 		}
-		for (const path of candidates) {
+		await this.unlinkUnreferenced(candidates);
+	}
+
+	/**
+	 * Unlink each path that no blobRef names any more.
+	 *
+	 * The second half of releaseBlobRefs, split out because repacking REPOINTS
+	 * refs rather than deleting them: the rows must live on while their old
+	 * storage is retired. Same rule either way — a path is only unlinked once
+	 * nothing names it, which is what stops shared storage turning a rewrite
+	 * into a mass delete of live siblings.
+	 */
+	private async unlinkUnreferenced(paths: Iterable<string>): Promise<void> {
+		for (const path of new Set(paths)) {
+			const survivor = await this.db.blobRefs.where('opfsPath').equals(path).first();
+			if (survivor) continue;
 			try {
 				await this.opfs.remove(path);
 			} catch {
@@ -2095,6 +2110,180 @@ export class VfsService {
 			if (freed > 0) compactedPacks += 1;
 		}
 		return { compactedPacks, reclaimedBytes };
+	}
+
+	/**
+	 * Read a blob ref's bytes as a LAZY Blob, wherever they currently live.
+	 *
+	 * Lazy matters: a repack builds its new pack from these, and slices are not
+	 * materialised until the write, so rewriting a 25MB pack costs no heap.
+	 */
+	private async refAsBlob(ref: BlobRef): Promise<Blob> {
+		const file = await this.opfs.readBlob(ref.opfsPath);
+		if (ref.packOffset == null) return file;
+		return file.slice(ref.packOffset, ref.packOffset + ref.byteLength);
+	}
+
+	/**
+	 * Move the given nodes' bytes OUT of packs into one blob each.
+	 *
+	 * This is what "turn packing off" means for a project that already has
+	 * packs: afterwards every file is an ordinary standalone blob and the
+	 * folder behaves like any other part of the filesystem.
+	 *
+	 * The ref row is kept and repointed rather than replaced, so node.blobId
+	 * never changes and nothing holding an id goes stale.
+	 */
+	async unpackNodes(
+		nodeIds: string[],
+		opts?: { signal?: AbortSignal; onProgress?: (ev: PackOpProgress) => void }
+	): Promise<{ movedFiles: number }> {
+		await this.ready();
+		const report = (stage: PackOpStage, label: string) => opts?.onProgress?.({ stage, label });
+
+		const packed: BlobRef[] = [];
+		for (const id of new Set(nodeIds)) {
+			const node = await this.db.nodes.get(id);
+			if (!node?.blobId) continue;
+			const ref = await this.db.blobRefs.get(node.blobId);
+			if (ref?.packOffset != null) packed.push(ref);
+		}
+		if (!packed.length) return { movedFiles: 0 };
+
+		report('compacting', `Unpacking ${packed.length} file${packed.length === 1 ? '' : 's'}…`);
+		const oldPaths = new Set(packed.map((r) => r.opfsPath));
+		let moved = 0;
+		for (const ref of packed) {
+			throwIfAborted(opts?.signal);
+			const blob = await this.refAsBlob(ref);
+			const destPath = `blobs/${ref.id}.bin`;
+			await this.opfs.writeFinal(destPath, blob);
+			// Re-read inside the transaction: a concurrent updateFile may have
+			// already moved this ref off the pack, and must not be dragged back.
+			const swapped = await this.db.transaction('rw', this.db.blobRefs, async () => {
+				const current = await this.db.blobRefs.get(ref.id);
+				if (!current || current.opfsPath !== ref.opfsPath) return false;
+				const { packOffset: _drop, ...rest } = current;
+				await this.db.blobRefs.put({ ...rest, opfsPath: destPath });
+				return true;
+			});
+			if (swapped) moved += 1;
+			else {
+				try {
+					await this.opfs.remove(destPath);
+				} catch {
+					/* gc sweeps blobs/ */
+				}
+			}
+		}
+
+		// Only now, and only where nothing still points into them.
+		await this.unlinkUnreferenced(oldPaths);
+		report('done', `Unpacked ${moved} file${moved === 1 ? '' : 's'}`);
+		this.emitChange();
+		return { movedFiles: moved };
+	}
+
+	/**
+	 * Rewrite the given nodes' storage into fresh packs.
+	 *
+	 * Does double duty, because both halves are the same operation: it drops
+	 * dead space (the members it copies are the live ones) AND re-absorbs files
+	 * that drifted out to standalone blobs when they were edited. The automatic
+	 * sweep can only do the first half — nothing may silently pull a file back
+	 * into shared storage — so this is always user-initiated.
+	 *
+	 * Order is the safety argument, same as compaction: build, verify the size
+	 * the layout demands, swap refs re-reading each row, and only then retire
+	 * whatever nothing names any more.
+	 */
+	async repackNodes(
+		nodeIds: string[],
+		opts?: { signal?: AbortSignal; onProgress?: (ev: PackOpProgress) => void }
+	): Promise<{ packs: number; movedFiles: number }> {
+		await this.ready();
+		if (typeof this.opfs.readRange !== 'function') return { packs: 0, movedFiles: 0 };
+		const report = (stage: PackOpStage, label: string) => opts?.onProgress?.({ stage, label });
+
+		const budget = await this.packBudgetBytes();
+		const standaloneAt = budget / 2;
+		const refs: BlobRef[] = [];
+		for (const id of new Set(nodeIds)) {
+			const node = await this.db.nodes.get(id);
+			if (!node?.blobId) continue;
+			const ref = await this.db.blobRefs.get(node.blobId);
+			// Members at or above half the budget stay on their own: a pack one
+			// file nearly fills buys nothing and complicates everything.
+			if (ref && ref.byteLength < standaloneAt) refs.push(ref);
+		}
+		if (refs.length < 2) return { packs: 0, movedFiles: 0 };
+
+		let packs = 0;
+		let movedFiles = 0;
+		const retired = new Set<string>();
+		for (let i = 0; i < refs.length; ) {
+			throwIfAborted(opts?.signal);
+			const group: BlobRef[] = [];
+			let bytes = 0;
+			while (i < refs.length && group.length < 512 && bytes + refs[i]!.byteLength <= budget) {
+				bytes += refs[i]!.byteLength;
+				group.push(refs[i]!);
+				i += 1;
+			}
+			if (!group.length) break;
+
+			report('compacting', `Packing ${group.length} file${group.length === 1 ? '' : 's'}…`);
+			const parts: BlobPart[] = [];
+			const layout: Array<{ id: string; from: string; offset: number; length: number }> = [];
+			let cursor = 0;
+			for (const ref of group) {
+				parts.push(await this.refAsBlob(ref));
+				layout.push({ id: ref.id, from: ref.opfsPath, offset: cursor, length: ref.byteLength });
+				cursor += ref.byteLength;
+			}
+
+			const newPath = `packs/pack_${crypto.randomUUID()}.bin`;
+			await this.opfs.writeFinal(newPath, new Blob(parts));
+
+			report('verifying', 'Verifying pack integrity…');
+			const written = await this.opfs.readBlob(newPath);
+			if (written.size !== cursor) {
+				try {
+					await this.opfs.remove(newPath);
+				} catch {
+					/* gc sweeps packs/ */
+				}
+				throw new VfsError(
+					'OPFS_IO',
+					`Repack verification failed: expected ${cursor} bytes, wrote ${written.size}`
+				);
+			}
+
+			let swapped = 0;
+			await this.db.transaction('rw', this.db.blobRefs, async () => {
+				for (const item of layout) {
+					const current = await this.db.blobRefs.get(item.id);
+					// Changed underneath us — a concurrent save moved it to its own
+					// blob. Leave it there; the new pack simply carries a copy that
+					// nothing points at, which the sweep reclaims.
+					if (!current || current.opfsPath !== item.from) continue;
+					await this.db.blobRefs.put({
+						...current,
+						opfsPath: newPath,
+						packOffset: item.offset
+					});
+					swapped += 1;
+				}
+			});
+			movedFiles += swapped;
+			if (swapped > 0) packs += 1;
+			for (const item of layout) retired.add(item.from);
+		}
+
+		await this.unlinkUnreferenced(retired);
+		report('done', `Packed ${movedFiles} file${movedFiles === 1 ? '' : 's'} into ${packs}`);
+		this.emitChange();
+		return { packs, movedFiles };
 	}
 
 	/** Packs named by the given blob refs — the set a delete may leave dead space in. */
