@@ -28,6 +28,13 @@ export interface FileTypeDef {
 export interface VfsNode {
 	id: string;
 	parentId: string | null;
+	/**
+	 * Indexable stand-in for `parentId` (see ROOT_PARENT_KEY): IndexedDB cannot
+	 * index null, so root listings had no index to use. Maintained by a Dexie
+	 * hook, never by callers — setting it by hand only makes it disagree with
+	 * parentId.
+	 */
+	parentKey?: string;
 	name: string;
 	kind: VfsNodeKind;
 	fileType?: FileTypeId;

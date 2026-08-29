@@ -1,7 +1,7 @@
 import { liveQuery, type Observable } from 'dexie';
 import { createChangeBus } from './changeBus.js';
 import { notifyTabChannel, subscribeTabChannel } from './crossTab.js';
-import { SharedVfsDatabase } from './db.js';
+import { ROOT_PARENT_KEY, SharedVfsDatabase } from './db.js';
 import { generateId } from './id.js';
 import { sanitizeName, withNumericSuffix } from './names.js';
 import { createMemoryOpfs, createOpfsBlobStore, type OpfsBlobStore } from './opfs.js';
@@ -250,13 +250,13 @@ export class VfsService {
 				return !deletedIds.has(n.parentId);
 			});
 		} else {
-			const collection = this.db.nodes.where('parentId').equals(parentId as string);
-			// Dexie: null parentId — use filter when null
-			if (parentId === null) {
-				rows = await this.db.nodes.filter((n) => n.parentId === null).toArray();
-			} else {
-				rows = await collection.toArray();
-			}
+			// parentKey exists so the root is an index hit like any other folder:
+			// IndexedDB cannot index null, so this used to be a full table scan
+			// and filter for root listings.
+			rows = await this.db.nodes
+				.where('parentKey')
+				.equals(parentId ?? ROOT_PARENT_KEY)
+				.toArray();
 			if (!opts.includeDeleted) {
 				rows = rows.filter((n) => n.deletedAt == null);
 			}
