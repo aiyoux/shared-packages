@@ -327,6 +327,12 @@ export function createOpfsBlobStore(rootDirName = 'shared-vfs'): OpfsBlobStore {
 			} catch {
 				// ignore
 			}
+			// resolveDir caches handles on the premise that these directories
+			// live as long as the store does — which is true of everything
+			// EXCEPT this method, which just deleted them. A cached handle to a
+			// removed directory throws NotFoundError on every later write, so
+			// the session would be unable to write anything until a reload.
+			dirCache.clear();
 		}
 	};
 }
