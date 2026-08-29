@@ -41,6 +41,23 @@ export interface OpfsBlobStore {
 	clearAll?(): Promise<void>;
 }
 
+/**
+ * `FileSystemDirectoryHandle.entries()` is present in every browser we target
+ * but is only in some TS DOM libs — the hub (TS 6) has it, this package's own
+ * config does not. A `@ts-expect-error` is therefore *unused* in one config
+ * and *required* in the other, so neither suppression can satisfy both. One
+ * narrow cast satisfies both and keeps the iteration itself typed.
+ */
+function dirEntries(
+	h: FileSystemDirectoryHandle
+): AsyncIterableIterator<[string, FileSystemHandle]> {
+	return (
+		h as unknown as {
+			entries(): AsyncIterableIterator<[string, FileSystemHandle]>;
+		}
+	).entries();
+}
+
 async function toUint8Array(data: BufferSource | Blob | Uint8Array): Promise<Uint8Array> {
 	if (data instanceof Blob) {
 		const ab = await data.arrayBuffer();
@@ -319,8 +336,7 @@ export function createOpfsBlobStore(rootDirName = 'shared-vfs'): OpfsBlobStore {
 				const d = await resolveDir(baseDir.includes('/') ? baseDir.split('/')[0]! : baseDir);
 				// list top-level under blobs/ or tmp/
 				const target = await resolveDir(prefix.replace(/\/$/, ''));
-				// @ts-expect-error async iterator
-				for await (const [name, handle] of target.entries()) {
+				for await (const [name, handle] of dirEntries(target)) {
 					if (handle.kind === 'file') {
 						out.push(`${prefix.replace(/\/$/, '')}/${name}`);
 					}
@@ -335,8 +351,7 @@ export function createOpfsBlobStore(rootDirName = 'shared-vfs'): OpfsBlobStore {
 			const out: Array<{ path: string; mtimeMs?: number }> = [];
 			try {
 				const tmpDir = await resolveDir('tmp');
-				// @ts-expect-error async iterator
-				for await (const [name, handle] of tmpDir.entries()) {
+				for await (const [name, handle] of dirEntries(tmpDir)) {
 					if (handle.kind === 'file') {
 						const file = await (handle as FileSystemFileHandle).getFile();
 						out.push({ path: `tmp/${name}`, mtimeMs: file.lastModified });
@@ -350,8 +365,7 @@ export function createOpfsBlobStore(rootDirName = 'shared-vfs'): OpfsBlobStore {
 		async clearAll() {
 			try {
 				const r = await root();
-				// @ts-expect-error async iterator
-				for await (const [name] of r.entries()) {
+				for await (const [name] of dirEntries(r)) {
 					await r.removeEntry(name, { recursive: true });
 				}
 			} catch {

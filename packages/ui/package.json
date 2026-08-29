@@ -1,90 +1,105 @@
 {
-  "name": "@shared-packages/ui",
-  "version": "0.1.0",
-  "private": false,
-  "type": "module",
-  "svelte": "./src/index.ts",
-  "publishConfig": {
-    "access": "public"
-  },
-  "exports": {
-    ".": {
-      "svelte": "./src/index.ts",
-      "default": "./src/index.ts"
-    },
-    "./date": {
-      "svelte": "./src/date/index.ts",
-      "default": "./src/date/index.ts"
-    },
-    "./ShellFrame.svelte": "./src/ShellFrame.svelte",
-    "./FileDropZone.svelte": "./src/FileDropZone.svelte",
-    "./ObjectTransformFrame.svelte": "./src/ObjectTransformFrame.svelte",
-    "./PathNodeEditor.svelte": "./src/PathNodeEditor.svelte",
-    "./objectTransform": {
-    	"types": "./src/objectTransform.ts",
-    	"svelte": "./src/objectTransform.ts",
-    	"default": "./src/objectTransform.ts"
-    },
-    "./bytes": {
-    	"types": "./src/bytes.ts",
-    	"svelte": "./src/bytes.ts",
-    	"default": "./src/bytes.ts"
-    },
-    "./subscribeStorageKey": {
-    	"types": "./src/subscribeStorageKey.ts",
-    	"svelte": "./src/subscribeStorageKey.ts",
-    	"default": "./src/subscribeStorageKey.ts"
-    },
-    "./tabChannel": {
-    	"types": "./src/tabChannel.ts",
-    	"svelte": "./src/tabChannel.ts",
-    	"default": "./src/tabChannel.ts"
-    },
-    "./files": {
-      "types": "./src/files.ts",
-      "default": "./src/files.ts"
-    },
-    "./pane-layout/chrome": {
-    	"types": "./src/pane-layout/chrome.ts",
-    	"svelte": "./src/pane-layout/chrome.ts",
-    	"default": "./src/pane-layout/chrome.ts"
-    },
-    "./pane-layout/tree": {
-      "types": "./src/pane-layout/tree.ts",
-      "svelte": "./src/pane-layout/tree.ts",
-      "default": "./src/pane-layout/tree.ts"
-    },
-    "./pane-layout/types": {
-      "types": "./src/pane-layout/types.ts",
-      "svelte": "./src/pane-layout/types.ts",
-      "default": "./src/pane-layout/types.ts"
-    },
-    "./app-windows": {
-      "types": "./src/app-windows/manager.ts",
-      "svelte": "./src/app-windows/AppWindows.svelte",
-      "default": "./src/app-windows/manager.ts"
-    },
-    "./file-chrome/FileChrome.svelte": "./src/file-chrome/FileChrome.svelte",
-    "./file-chrome/unsaved": {
-      "types": "./src/file-chrome/unsaved.ts",
-      "default": "./src/file-chrome/unsaved.ts"
-    }
-  },
-  "scripts": {
-    "test": "vitest run"
-  },
-  "dependencies": {
-    "@types/dompurify": "^3.0.5",
-    "clsx": "^2.1.1",
-    "dompurify": "^3.4.3",
-    "tailwind-merge": "^3.4.0"
-  },
-  "peerDependencies": {
-    "svelte": "^5.0.0",
-    "@shared-packages/design-system": "*"
-  },
-  "devDependencies": {
-    "@sveltejs/vite-plugin-svelte": "^7.0.0",
-    "vitest": "^4.1.2"
-  }
+	"name": "@shared-packages/ui",
+	"version": "0.1.0",
+	"private": false,
+	"type": "module",
+	"svelte": "./src/index.ts",
+	"publishConfig": {
+		"access": "public"
+	},
+	"exports": {
+		".": {
+			"svelte": "./src/index.ts",
+			"default": "./src/index.ts"
+		},
+		"./date": {
+			"svelte": "./src/date/index.ts",
+			"default": "./src/date/index.ts"
+		},
+		"./ShellFrame.svelte": "./src/ShellFrame.svelte",
+		"./FileDropZone.svelte": "./src/FileDropZone.svelte",
+		"./ObjectTransformFrame.svelte": "./src/ObjectTransformFrame.svelte",
+		"./PathNodeEditor.svelte": "./src/PathNodeEditor.svelte",
+		"./objectTransform": {
+			"types": "./src/objectTransform.ts",
+			"svelte": "./src/objectTransform.ts",
+			"default": "./src/objectTransform.ts"
+		},
+		"./bytes": {
+			"types": "./src/bytes.ts",
+			"svelte": "./src/bytes.ts",
+			"default": "./src/bytes.ts"
+		},
+		"./subscribeStorageKey": {
+			"types": "./src/subscribeStorageKey.ts",
+			"svelte": "./src/subscribeStorageKey.ts",
+			"default": "./src/subscribeStorageKey.ts"
+		},
+		"./tabChannel": {
+			"types": "./src/tabChannel.ts",
+			"svelte": "./src/tabChannel.ts",
+			"default": "./src/tabChannel.ts"
+		},
+		"./files": {
+			"types": "./src/files.ts",
+			"default": "./src/files.ts"
+		},
+		"./pane-layout/chrome": {
+			"types": "./src/pane-layout/chrome.ts",
+			"svelte": "./src/pane-layout/chrome.ts",
+			"default": "./src/pane-layout/chrome.ts"
+		},
+		"./pane-layout/tree": {
+			"types": "./src/pane-layout/tree.ts",
+			"svelte": "./src/pane-layout/tree.ts",
+			"default": "./src/pane-layout/tree.ts"
+		},
+		"./pane-layout/types": {
+			"types": "./src/pane-layout/types.ts",
+			"svelte": "./src/pane-layout/types.ts",
+			"default": "./src/pane-layout/types.ts"
+		},
+		"./app-windows": {
+			"types": "./src/app-windows/manager.ts",
+			"svelte": "./src/app-windows/AppWindows.svelte",
+			"default": "./src/app-windows/manager.ts"
+		},
+		"./app-windows/manager": {
+			"types": "./src/app-windows/manager.ts",
+			"svelte": "./src/app-windows/manager.ts",
+			"default": "./src/app-windows/manager.ts"
+		},
+		"./app-windows/types": {
+			"types": "./src/app-windows/types.ts",
+			"svelte": "./src/app-windows/types.ts",
+			"default": "./src/app-windows/types.ts"
+		},
+		"./app-windows/leafHome": {
+			"types": "./src/app-windows/leafHome.ts",
+			"svelte": "./src/app-windows/leafHome.ts",
+			"default": "./src/app-windows/leafHome.ts"
+		},
+		"./file-chrome/FileChrome.svelte": "./src/file-chrome/FileChrome.svelte",
+		"./file-chrome/unsaved": {
+			"types": "./src/file-chrome/unsaved.ts",
+			"default": "./src/file-chrome/unsaved.ts"
+		}
+	},
+	"scripts": {
+		"test": "vitest run"
+	},
+	"dependencies": {
+		"@types/dompurify": "^3.0.5",
+		"clsx": "^2.1.1",
+		"dompurify": "^3.4.3",
+		"tailwind-merge": "^3.4.0"
+	},
+	"peerDependencies": {
+		"svelte": "^5.0.0",
+		"@shared-packages/design-system": "*"
+	},
+	"devDependencies": {
+		"@sveltejs/vite-plugin-svelte": "^7.0.0",
+		"vitest": "^4.1.2"
+	}
 }

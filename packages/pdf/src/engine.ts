@@ -6,6 +6,11 @@ type PdfjsModule = typeof import('pdfjs-dist/legacy/build/pdf.mjs');
 
 type HandleState = {
 	doc: PDFDocumentProxy;
+	/**
+	 * pdfjs 6 moved `destroy()` off PDFDocumentProxy onto the loading task, so
+	 * the task has to outlive `openPdf` — dropping it leaks the worker/transport.
+	 */
+	task: { destroy(): Promise<void> };
 	sizes: PdfPageSize[];
 	destroyed: boolean;
 };
@@ -119,7 +124,7 @@ export async function openPdf(bytes: Uint8Array): Promise<PdfHandle> {
 		})
 	);
 	const id = nextId++;
-	handles.set(id, { doc, sizes, destroyed: false });
+	handles.set(id, { doc, task: loadingTask, sizes, destroyed: false });
 	return { id };
 }
 
@@ -140,7 +145,7 @@ export function destroy(handle: PdfHandle): void {
 	state.destroyed = true;
 	handles.delete(handle.id);
 	try {
-		void state.doc.destroy();
+		void state.task.destroy();
 	} catch {
 		// ignore
 	}
@@ -162,7 +167,7 @@ export function resetPdfEngineForTests(): void {
 	for (const state of handles.values()) {
 		state.destroyed = true;
 		try {
-			void state.doc.destroy();
+			void state.task.destroy();
 		} catch {
 			// ignore
 		}
