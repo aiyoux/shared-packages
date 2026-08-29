@@ -32,14 +32,14 @@ async function loadPdfjs(): Promise<PdfjsModule> {
 	if (!pdfjsPromise) {
 		pdfjsPromise = import('pdfjs-dist/legacy/build/pdf.mjs')
 			.then((mod) => {
-				if (!mod.GlobalWorkerOptions.workerSrc) {
+				if (!mod.GlobalWorkerOptions.workerSrc && typeof document !== 'undefined') {
 					try {
 						mod.GlobalWorkerOptions.workerSrc = new URL(
-							'pdfjs-dist/legacy/build/pdf.worker.mjs',
+							'../../../pdfjs-dist/legacy/build/pdf.worker.mjs',
 							import.meta.url
 						).toString();
 					} catch {
-						// Node / vitest fall through to disableWorker on getDocument.
+						// Fallback in environments where URL resolution isn't supported
 					}
 				}
 				return mod;
@@ -72,13 +72,15 @@ export async function openPdf(bytes: Uint8Array): Promise<PdfHandle> {
 	const needsStubCanvas = typeof document === 'undefined';
 	let standardFontDataUrl: string | undefined;
 	try {
-		const dir = new URL('../../../node_modules/pdfjs-dist/standard_fonts/', import.meta.url);
+		const dir = new URL('../../../pdfjs-dist/standard_fonts/', import.meta.url);
 		if (typeof document === 'undefined') {
 			const { fileURLToPath } = await import('node:url');
 			standardFontDataUrl = fileURLToPath(dir);
-			if (!standardFontDataUrl.endsWith('/')) standardFontDataUrl += '/';
 		} else {
 			standardFontDataUrl = dir.href;
+		}
+		if (standardFontDataUrl && !standardFontDataUrl.endsWith('/')) {
+			standardFontDataUrl += '/';
 		}
 	} catch {
 		standardFontDataUrl = undefined;
