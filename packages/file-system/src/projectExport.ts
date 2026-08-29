@@ -371,7 +371,6 @@ async function importFiles(
 	if (meta) {
 		await writeProjectMeta(vfs, root.id, {
 			...meta,
-			packed: mode !== 'none',
 			updatedAt: new Date().toISOString()
 		});
 	}
@@ -496,7 +495,6 @@ async function importBundle(
 	if (manifest.meta) {
 		await writeProjectMeta(vfs, root.id, {
 			...manifest.meta,
-			packed: true,
 			updatedAt: new Date().toISOString()
 		});
 	}

@@ -20,14 +20,6 @@ export type ProjectMeta = {
 	schemaVersion: number;
 	name: string;
 	description?: string;
-	/**
-	 * Whether the project's files are stored in shared packs.
-	 *
-	 * Recorded so an export can say how it was, and an import can offer to
-	 * rebuild it that way — not as the source of truth for what storage
-	 * currently looks like, which is always the blobRefs.
-	 */
-	packed?: boolean;
 	createdAt?: string;
 	updatedAt?: string;
 };
@@ -106,53 +98,102 @@ export async function initProject(
 		schemaVersion: PROJECT_META_SCHEMA_VERSION,
 		name: opts.name,
 		description: opts.description,
-		packed: opts.pack === true,
 		createdAt: existing?.createdAt ?? now,
 		updatedAt: now
 	};
 	await writeProjectMeta(vfs, rootId, meta);
 	if (opts.pack) {
-		await setProjectPacked(vfs, rootId, true, {
-			signal: opts.signal,
-			onProgress: opts.onProgress
-		});
+		await packProject(vfs, rootId, { signal: opts.signal, onProgress: opts.onProgress });
 	}
 	return meta;
 }
 
+/** Files whose storage these actions may rewrite — everything but the metadata. */
+async function packableFileIds(vfs: VfsService, rootId: string): Promise<string[]> {
+	const files = await descendantFiles(vfs, rootId);
+	return files.filter((f) => f.name !== PROJECT_META_FILE).map((f) => f.id);
+}
+
 /**
- * Switch a project between packed and ordinary storage.
+ * Pack everything in the project.
  *
- * Unpacked, the folder is indistinguishable from any other part of the
- * filesystem — which is the point: packing should be reversible, not a
- * one-way door.
+ * There is deliberately no persisted "packed mode". Packs never build
+ * themselves, and editing a file moves it out of its pack, so a stored flag
+ * would claim the project was packed while half of it had drifted into
+ * standalone blobs. What storage actually looks like is always the blobRefs;
+ * this is an action, not a setting.
  *
- * The metadata file itself is deliberately left OUT of the pack. It has to be
- * readable to know what the project is, and burying identity inside the shared
- * blob it describes is a bad trade for the few hundred bytes it saves.
+ * The metadata file is left out on purpose: it has to be readable to know what
+ * the project is, and burying identity inside the shared blob it describes is
+ * a bad trade for a few hundred bytes.
  */
-export async function setProjectPacked(
+export async function packProject(
 	vfs: VfsService,
 	rootId: string,
-	packed: boolean,
 	opts?: { signal?: AbortSignal; onProgress?: (ev: PackOpProgress) => void }
-): Promise<{ packed: boolean; movedFiles: number }> {
+): Promise<{ packs: number; movedFiles: number }> {
+	return vfs.repackNodes(await packableFileIds(vfs, rootId), opts);
+}
+
+/** Move everything back to one blob per file, so the folder is an ordinary folder. */
+export async function unpackProject(
+	vfs: VfsService,
+	rootId: string,
+	opts?: { signal?: AbortSignal; onProgress?: (ev: PackOpProgress) => void }
+): Promise<{ movedFiles: number }> {
+	return vfs.unpackNodes(await packableFileIds(vfs, rootId), opts);
+}
+
+/**
+ * What the project's storage actually looks like right now.
+ *
+ * Computed, never stored, for the reason above: any cached answer is wrong as
+ * soon as someone saves a file.
+ */
+export async function projectStorageStats(
+	vfs: VfsService,
+	rootId: string
+): Promise<{
+	files: number;
+	packedFiles: number;
+	driftedFiles: number;
+	packs: number;
+	liveBytes: number;
+	deadBytes: number;
+}> {
 	const files = await descendantFiles(vfs, rootId);
-	const ids = files.filter((f) => f.name !== PROJECT_META_FILE).map((f) => f.id);
-
-	const result = packed
-		? await vfs.repackNodes(ids, opts)
-		: await vfs.unpackNodes(ids, opts);
-
-	const meta = await readProjectMeta(vfs, rootId);
-	if (meta) {
-		await writeProjectMeta(vfs, rootId, {
-			...meta,
-			packed,
-			updatedAt: new Date().toISOString()
-		});
+	const packLive = new Map<string, number>();
+	let packedFiles = 0;
+	let driftedFiles = 0;
+	let liveBytes = 0;
+	for (const f of files) {
+		if (!f.blobId) continue;
+		const ref = await vfs.db.blobRefs.get(f.blobId);
+		if (!ref) continue;
+		liveBytes += ref.byteLength;
+		if (ref.packOffset != null) {
+			packedFiles += 1;
+			packLive.set(ref.opfsPath, (packLive.get(ref.opfsPath) ?? 0) + ref.byteLength);
+		} else if (f.name !== PROJECT_META_FILE) {
+			driftedFiles += 1;
+		}
 	}
-	return { packed, movedFiles: result.movedFiles };
+	let deadBytes = 0;
+	for (const [path, live] of packLive) {
+		try {
+			deadBytes += Math.max(0, (await vfs.opfs.readBlob(path)).size - live);
+		} catch {
+			/* pack gone; gc reports it separately */
+		}
+	}
+	return {
+		files: files.length,
+		packedFiles,
+		driftedFiles,
+		packs: packLive.size,
+		liveBytes,
+		deadBytes
+	};
 }
 
 /**
@@ -167,9 +208,5 @@ export async function compactProject(
 	rootId: string,
 	opts?: { signal?: AbortSignal; onProgress?: (ev: PackOpProgress) => void }
 ): Promise<{ packs: number; movedFiles: number }> {
-	const meta = await readProjectMeta(vfs, rootId);
-	if (meta?.packed === false) return { packs: 0, movedFiles: 0 };
-	const files = await descendantFiles(vfs, rootId);
-	const ids = files.filter((f) => f.name !== PROJECT_META_FILE).map((f) => f.id);
-	return vfs.repackNodes(ids, opts);
+	return vfs.repackNodes(await packableFileIds(vfs, rootId), opts);
 }
