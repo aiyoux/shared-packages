@@ -56,7 +56,7 @@ export type PackIntegrityReport = {
 };
 
 /** Every live descendant file of `rootId`, depth-first. */
-async function descendantFiles(vfs: VfsService, rootId: string): Promise<VfsNode[]> {
+export async function descendantFiles(vfs: VfsService, rootId: string): Promise<VfsNode[]> {
 	const out: VfsNode[] = [];
 	const stack: string[] = [rootId];
 	while (stack.length) {
