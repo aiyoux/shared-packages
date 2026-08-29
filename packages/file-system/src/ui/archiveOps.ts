@@ -1424,7 +1424,7 @@ export async function runArchiveJob(spec: ArchiveJobSpec): Promise<ArchiveJobRes
 						// Cap the inflate phase below the top of the bar: the writes
 						// that follow are real work too, and must have somewhere to
 						// go. emitJobPct is monotonic, so this never snaps back.
-						void inMemoryEstimate; // TEMP sabotage: no in-memory progress
+						emitJobPct((inMemoryBytesOut / inMemoryEstimate) * 90);
 					}
 					if (membersDone > 0) {
 						setNote(
