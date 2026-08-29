@@ -142,6 +142,12 @@ function mapVfsError(e: unknown, path: string): never {
 export function createVfsGitFs(vfs: VfsService, opts: CreateVfsGitFsOptions): VfsGitFs {
 	const rootId = opts.rootId;
 
+	// Every delete here passes `compact: false`. permanentDelete compacts by
+	// default, which is right for a user deleting one file and catastrophic
+	// for git: a single checkout unlinks hundreds of paths, and each one would
+	// rewrite a whole pack. Dead space is reclaimed by the load sweep and by
+	// emptying the trash, both of which do it once instead of N times.
+
 	const promises = {
 		async readFile(path: string, options?: unknown) {
 			const w = await walk(vfs, rootId, path);
@@ -188,7 +194,7 @@ export function createVfsGitFs(vfs: VfsService, opts: CreateVfsGitFsOptions): Vf
 			if ('root' in w && w.root) throw nodeErr('EPERM', path);
 			if (w.node.kind !== 'folder') throw nodeErr('ENOTDIR', path);
 			try {
-				await vfs.permanentDelete(w.node.id);
+				await vfs.permanentDelete(w.node.id, { compact: false });
 			} catch (e) {
 				const code = e && typeof e === 'object' && 'code' in e ? String((e as { code: string }).code) : '';
 				if (code === 'HAS_CHILDREN') throw nodeErr('ENOTEMPTY', path);
@@ -201,7 +207,7 @@ export function createVfsGitFs(vfs: VfsService, opts: CreateVfsGitFsOptions): Vf
 			if (!w.node) throw nodeErr('ENOENT', path);
 			if ('root' in w && w.root) throw nodeErr('EPERM', path);
 			if (w.node.kind !== 'file') throw nodeErr('EISDIR', path);
-			await vfs.permanentDelete(w.node.id);
+			await vfs.permanentDelete(w.node.id, { compact: false });
 		},
 
 		async readdir(path: string) {
@@ -250,7 +256,7 @@ export function createVfsGitFs(vfs: VfsService, opts: CreateVfsGitFsOptions): Vf
 			try {
 				// VFS rename/move suffixes on collision; POSIX overwrite must delete dest first.
 				if (dest.node?.kind === 'file') {
-					await vfs.permanentDelete(dest.node.id);
+					await vfs.permanentDelete(dest.node.id, { compact: false });
 				}
 				if (src.parentId === destParentId) {
 					await vfs.rename(src.node.id, destName);

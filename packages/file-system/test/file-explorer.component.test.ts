@@ -596,9 +596,11 @@ describe('FileExplorer component', () => {
 		await fireEvent.click(screen.getByTestId('fe-item-details'));
 		const preview = await screen.findByTestId('fe-file-preview');
 		await viWaitFor(() => preview.querySelector('[data-fe-is-project="false"]') != null);
-		expect(preview.querySelector('[data-testid="fe-open-project"]')).toBeNull();
+		// Open project is offered on ANY folder (f9ddf6a): opening is how you
+		// find out, and the git app toasts "Not a git project" if it isn't one.
+		// Detection only drives Init, which is omitted here (no onInitProject).
+		expect(preview.querySelector('[data-testid="fe-open-project"]')).not.toBeNull();
 		expect(preview.querySelector('[data-testid="fe-init-project"]')).toBeNull();
-		// onOpenProject only — Init is omitted; Open hides once detect says not a project.
 		expect(opened).toEqual([]);
 
 		await fireEvent.click(screen.getByTestId('fe-file-preview-close'));
@@ -645,7 +647,8 @@ describe('FileExplorer component', () => {
 		await viWaitFor(() => preview.querySelector('[data-fe-is-project="false"]') != null);
 		const initBtn = await screen.findByTestId('fe-init-project');
 		expect(initBtn.textContent).toMatch(/Init project/);
-		expect(preview.querySelector('[data-testid="fe-open-project"]')).toBeNull();
+		// Open is unconditional; only Init is gated on detection.
+		expect(preview.querySelector('[data-testid="fe-open-project"]')).not.toBeNull();
 		await fireEvent.click(initBtn);
 		await viWaitFor(() => inited.length === 1);
 		expect(inited).toEqual(['plain']);

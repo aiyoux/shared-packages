@@ -72,12 +72,21 @@ export async function openPdf(bytes: Uint8Array): Promise<PdfHandle> {
 	const needsStubCanvas = typeof document === 'undefined';
 	let standardFontDataUrl: string | undefined;
 	try {
-		const dir = new URL('../../../pdfjs-dist/standard_fonts/', import.meta.url);
 		if (typeof document === 'undefined') {
-			const { fileURLToPath } = await import('node:url');
-			standardFontDataUrl = fileURLToPath(dir);
+			// Ask the resolver where pdfjs-dist actually is. A fixed relative
+			// depth is a guess about hoisting, and npm is free to change it —
+			// this package has been nested and hoisted in the same month.
+			const [{ createRequire }, path] = await Promise.all([
+				import('node:module'),
+				import('node:path')
+			]);
+			const pkg = createRequire(import.meta.url).resolve('pdfjs-dist/package.json');
+			standardFontDataUrl = path.join(path.dirname(pkg), 'standard_fonts') + path.sep;
 		} else {
-			standardFontDataUrl = dir.href;
+			// In the browser there is no resolver to ask; the bundler has
+			// already rewritten module URLs, so relative is all we have.
+			standardFontDataUrl = new URL('../../../pdfjs-dist/standard_fonts/', import.meta.url)
+				.href;
 		}
 		if (standardFontDataUrl && !standardFontDataUrl.endsWith('/')) {
 			standardFontDataUrl += '/';

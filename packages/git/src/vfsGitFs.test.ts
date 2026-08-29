@@ -142,6 +142,27 @@ describe('createVfsGitFs', () => {
 		expect(st.isSymbolicLink()).toBe(false);
 	});
 
+	it('never compacts packs on delete — a checkout must not rewrite a pack per file', async () => {
+		const { vfs, fs } = await makeProject();
+		await git.init({ fs, dir: '/' });
+		await fs.promises.writeFile('/a.txt', 'a');
+		await fs.promises.writeFile('/b.txt', 'b');
+		await vfs.mkdir((await vfs.list({ parentId: null }))[0]!.id, 'sub').catch(() => {});
+
+		const spy = vi.spyOn(vfs, 'permanentDelete');
+		await fs.promises.unlink('/a.txt');
+		await fs.promises.rename('/b.txt', '/a.txt'); // overwrite path deletes dest
+
+		expect(spy).toHaveBeenCalled();
+		// permanentDelete compacts by DEFAULT. git deletes in bulk, so every
+		// call from this shim must opt out; one missed call is a whole pack
+		// rewritten per deleted file.
+		for (const call of spy.mock.calls) {
+			expect(call[1]).toMatchObject({ compact: false });
+		}
+		spy.mockRestore();
+	});
+
 	it('readdir uses vfs.list (uncapped), not the explorer 2000 cap', async () => {
 		const { vfs, folderId, fs } = await makeProject();
 		const dump = await vfs.mkdir(folderId, 'dump');
