@@ -63,8 +63,10 @@
 			<g
 				class="cell {rect.group}"
 				class:folder={rect.kind === 'folder'}
+				class:has-packed={rect.packedBytes > 0}
 				data-testid="fe-treemap-cell"
 				data-group={rect.group}
+				data-packed-bytes={rect.packedBytes}
 				data-name={rect.name}
 				role="button"
 				tabindex="0"
@@ -107,7 +109,9 @@
 			{#if hovered}
 				{hovered.name} — {formatSize(hovered.size)}{hovered.group === 'pack'
 					? ' (shared pack: space returns when every member is deleted)'
-					: ''}
+					: hovered.packedBytes > 0
+						? ` (${formatSize(hovered.packedBytes)} in shared packs)`
+						: ''}
 			{:else}
 				Area is proportional to size
 			{/if}
@@ -157,7 +161,11 @@
 		stroke-width: 2;
 		stroke-dasharray: none;
 	}
-	.cell.pack rect {
+	/* A folder is what gets drawn once the map stops descending, so packed
+	   storage has to be visible on folders too — not only on leaf files that
+	   a deep tree never reaches. */
+	.cell.pack rect,
+	.cell.has-packed rect {
 		stroke: var(--accent-light, var(--accent));
 		stroke-width: 2;
 		stroke-dasharray: 4 2;

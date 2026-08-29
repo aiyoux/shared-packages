@@ -801,6 +801,24 @@ export class VfsService {
 		const CHUNK_BYTES = await this.packBudgetBytes();
 		let chunk: Array<{ input: WriteFileInput; bytes: Uint8Array; contentType: string }> = [];
 		let chunkBytes = 0;
+
+		// Chunks overlap, but only from the byte-writing stage onward.
+		//
+		// The reserve transaction reads and allocates sibling names, so running
+		// two of those at once against one folder would hand out the same
+		// `dup (1).txt` twice. `reserveChain` keeps them strictly ordered while
+		// the writes — which are the slow part, and touch disjoint blobs — run
+		// together.
+		//
+		// In-flight bytes are capped at one chunk's budget rather than a chunk
+		// COUNT, because a chunk can be up to a quarter of free storage: many
+		// small chunks overlap freely, one enormous one does not, and heap
+		// stays bounded either way.
+		let reserveChain: Promise<void> = Promise.resolve();
+		const inFlight = new Set<Promise<void>>();
+		const ordered: VfsNode[][] = [];
+		let inFlightBytes = 0;
+
 		const flush = async () => {
 			if (!chunk.length) return;
 			if (opts?.signal?.aborted) {
@@ -809,19 +827,64 @@ export class VfsService {
 				throw e;
 			}
 			const group = chunk;
+			const groupBytes = chunkBytes;
 			chunk = [];
 			chunkBytes = 0;
-			const written = await this.writeFilesChunk(group, opts?.signal, opts?.pack === true);
-			out.push(...written);
-			opts?.onProgress?.(written);
+
+			const slot = ordered.length;
+			ordered.push([]);
+			const waitFor = reserveChain;
+			let release!: () => void;
+			reserveChain = new Promise<void>((r) => (release = r));
+
+			inFlightBytes += groupBytes;
+			const task = (async () => {
+				await waitFor;
+				try {
+					ordered[slot] = await this.writeFilesChunk(
+						group,
+						opts?.signal,
+						opts?.pack === true,
+						release
+					);
+				} finally {
+					// Idempotent, and mandatory: a chunk that throws before its
+					// reserve commits would otherwise leave every later chunk
+					// waiting on a promise nothing resolves.
+					release();
+				}
+				opts?.onProgress?.(ordered[slot]!);
+			})();
+			const tracked = task.finally(() => {
+				inFlight.delete(tracked);
+				inFlightBytes -= groupBytes;
+			});
+			inFlight.add(tracked);
+			// Swallow here only so an early rejection cannot surface as an
+			// unhandled rejection; it is re-thrown by the awaits below.
+			tracked.catch(() => {});
+
+			while (inFlight.size > 1 && inFlightBytes >= CHUNK_BYTES) {
+				await Promise.race(inFlight);
+			}
 		};
-		for (const input of inputs) {
-			const { bytes, contentType } = await serializeBody(input.body, input.contentType);
-			chunk.push({ input, bytes, contentType });
-			chunkBytes += bytes.byteLength;
-			if (chunk.length >= CHUNK_FILES || chunkBytes >= CHUNK_BYTES) await flush();
+
+		try {
+			for (const input of inputs) {
+				const { bytes, contentType } = await serializeBody(input.body, input.contentType);
+				chunk.push({ input, bytes, contentType });
+				chunkBytes += bytes.byteLength;
+				if (chunk.length >= CHUNK_FILES || chunkBytes >= CHUNK_BYTES) await flush();
+			}
+			await flush();
+			await Promise.all(inFlight);
+		} catch (e) {
+			// Let the rest settle before rethrowing, so a failure does not leave
+			// writes running against a store the caller thinks it is done with.
+			await Promise.allSettled(inFlight);
+			throw e;
 		}
-		await flush();
+		for (const group of ordered) out.push(...group);
 		return out;
 	}
 
@@ -829,7 +892,16 @@ export class VfsService {
 	private async writeFilesChunk(
 		inputs: Array<{ input: WriteFileInput; bytes: Uint8Array; contentType: string }>,
 		signal?: AbortSignal,
-		pack = false
+		pack = false,
+		/**
+		 * Fired the instant the reserve transaction commits.
+		 *
+		 * That transaction is where sibling names are read and allocated, so it
+		 * has to stay strictly ordered between chunks — two chunks writing into
+		 * one folder would otherwise both hand out `dup (1).txt`. Everything
+		 * after it is byte writing, which is the slow part and safe to overlap.
+		 */
+		onReserved?: () => void
 	): Promise<VfsNode[]> {
 		const prepared = inputs.map(({ input, bytes, contentType }) => {
 			let name = sanitizeName(input.name);
@@ -1038,6 +1110,9 @@ export class VfsService {
 					await this.db.nodes.bulkPut(nodePuts);
 				}
 			);
+			// Names are settled and committed, so the next chunk may start its
+			// own reserve while this one writes bytes.
+			onReserved?.();
 			// The pack is ONE write for every member in it. Blob assembly is
 			// zero-copy (a reference list), so this does not duplicate the
 			// chunk in memory. Refs stay pending until the confirm txn, so no

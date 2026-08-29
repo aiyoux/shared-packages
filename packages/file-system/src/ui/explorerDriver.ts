@@ -215,6 +215,26 @@ export interface ExplorerDriver {
 		}
 	): Promise<ExplorerEntry[]>;
 	/**
+	 * Bulk write where each file names its OWN destination folder.
+	 *
+	 * `writeFiles` takes a single parentId, which forces callers extracting a
+	 * tree to group by folder and issue one call per directory. That is fine
+	 * for plain writes, but a pack is formed per call — so a wide archive
+	 * produced one pack per directory (571 of them for one 117MB zip), which is
+	 * strictly worse than not packing at all.
+	 *
+	 * Optional: only a driver whose backend can place a batch across folders in
+	 * one operation implements it.
+	 */
+	writeFilesAcross?(
+		files: Array<{ parentId: ExplorerEntryId | null; file: File }>,
+		opts?: {
+			signal?: AbortSignal;
+			onProgress?: (written: ExplorerEntry[]) => void;
+			pack?: boolean;
+		}
+	): Promise<ExplorerEntry[]>;
+	/**
 	 * Host-absolute path for a monitor (or similar) entry. Used when two
 	 * panes share a daemon but not a connection root.
 	 */

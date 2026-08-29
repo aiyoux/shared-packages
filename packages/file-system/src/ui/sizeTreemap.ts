@@ -14,6 +14,15 @@ export type TreemapInput = {
 	kind: 'file' | 'folder';
 	/** Distinguishes ordinary files from project files and packs. */
 	group?: 'plain' | 'project' | 'pack';
+	/**
+	 * Bytes under this entry that live in a shared pack.
+	 *
+	 * Needed on FOLDERS, not just files: the map stops descending at maxDepth,
+	 * so on any deep tree the tiles actually drawn are folders — and a folder
+	 * that only ever reported 'plain' made packed storage invisible exactly
+	 * when there was most of it to see.
+	 */
+	packedBytes?: number;
 	children?: TreemapInput[];
 };
 
@@ -23,6 +32,8 @@ export type TreemapRect = {
 	size: number;
 	kind: 'file' | 'folder';
 	group: 'plain' | 'project' | 'pack';
+	/** Bytes under this rect stored in a shared pack; 0 when none are. */
+	packedBytes: number;
 	x: number;
 	y: number;
 	w: number;
@@ -139,6 +150,7 @@ export function layoutTreemap(
 				size: item.size,
 				kind: item.kind,
 				group: item.group ?? 'plain',
+				packedBytes: item.packedBytes ?? (item.group === 'pack' ? item.size : 0),
 				depth,
 				...rect
 			});

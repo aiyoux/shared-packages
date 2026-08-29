@@ -715,6 +715,49 @@ export async function writeEntriesToDriver(
 		}
 	}
 
+	// One batch across every destination folder, when the driver can do it.
+	// Grouping by folder below is only a limitation of `writeFiles`, which takes
+	// a single parentId — and a pack is formed per call, so a wide archive was
+	// producing one pack per directory instead of one per chunk.
+	if (pack && typeof driver.writeFilesAcross === 'function' && planned.length) {
+		throwIfAborted(signal);
+		for (const plan of planned) {
+			onFile?.({
+				name: plan.name,
+				parentId: plan.destParent,
+				transferred: 0,
+				size: plan.file.data.byteLength,
+				done: false,
+				entryKind: 'file'
+			});
+		}
+		let settled = 0;
+		await driver.writeFilesAcross(
+			planned.map((plan) => ({
+				parentId: plan.destParent,
+				file: new File([plan.file.data as BlobPart], plan.name)
+			})),
+			{
+				signal,
+				pack,
+				onProgress: (written) => {
+					for (const entry of written) {
+						const plan = planned[settled++];
+						onFile?.({
+							name: entry.name,
+							parentId: entry.parentId ?? null,
+							transferred: plan?.file.data.byteLength ?? entry.size ?? 0,
+							size: plan?.file.data.byteLength ?? entry.size ?? 0,
+							done: true,
+							entryKind: 'file'
+						});
+					}
+				}
+			}
+		);
+		return;
+	}
+
 	if (typeof driver.writeFiles === 'function') {
 		const groups = new Map<string | null, Planned[]>();
 		for (const plan of planned) {

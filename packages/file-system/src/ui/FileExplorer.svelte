@@ -1787,10 +1787,17 @@
 			if (ev.note) archiveJobLabel = ev.note;
 			if (ev.size > 0) {
 				const pct = Math.min(100, Math.round((ev.transferred / ev.size) * 100));
-				// Assign, don't pin with Math.max: job phases own the full 0–100
-				// scale and legitimately reset between phases (reading → writing),
-				// and one job emits sequentially so there is nothing to clamp.
-				archiveJobPct = pct;
+				// Monotonic within a job, reset explicitly when one starts.
+				//
+				// "One job emits sequentially" does not hold: a worker extract
+				// that fails partway hands over to the main-thread runner, which
+				// starts its own count at zero — so the bar ran up to nearly full
+				// and dropped back, repeatedly, exactly as reported. The runners
+				// each emit sensibly; it is the handover between them that the
+				// user sees. Clamping here makes the guarantee hold however many
+				// runners contribute, rather than trusting each one to be the
+				// only one.
+				if (pct > archiveJobPct) archiveJobPct = pct;
 			}
 			if (archiveTransferId) {
 				upsertProgress({

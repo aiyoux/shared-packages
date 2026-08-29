@@ -196,6 +196,35 @@ export function createLocalExplorerDriver(
 			return nodes.map(nodeToEntry);
 		},
 
+		async writeFilesAcross(files, opts) {
+			if (!vfs.writeFiles) {
+				const out: ExplorerEntry[] = [];
+				for (const { parentId, file } of files) {
+					if (opts?.signal?.aborted) break;
+					out.push(await this.writeFile!(parentId, file));
+				}
+				return out;
+			}
+			// One call, mixed parents: the store chunks it, and a pack spans the
+			// whole chunk rather than one per folder.
+			const nodes = await vfs.writeFiles(
+				files.map(({ parentId, file }) => ({
+					parentId,
+					name: file.name,
+					body: file,
+					contentType: file.type || undefined
+				})),
+				{
+					signal: opts?.signal,
+					pack: opts?.pack,
+					onProgress: opts?.onProgress
+						? (written) => opts.onProgress!(written.map(nodeToEntry))
+						: undefined
+				}
+			);
+			return nodes.map(nodeToEntry);
+		},
+
 		subscribeChanges(listener, scope) {
 			const unsubs: Array<() => void> = [];
 			if (vfs.subscribe) unsubs.push(vfs.subscribe(listener));
