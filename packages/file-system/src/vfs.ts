@@ -55,6 +55,12 @@ const DEFAULT_GRACE = 120_000;
  * the write chunk cap, so a chunk maps to at most one pack.
  */
 const PACK_CAP_BYTES = 64 << 20;
+/** Never shrink the budget below this — a tiny cap costs round trips for nothing. */
+const MIN_PACK_BUDGET_BYTES = 4 << 20;
+/** At most this share of what storage says is still free may sit in one pack. */
+const PACK_BUDGET_SHARE = 0.25;
+/** Re-asking storage on every batch is wasted work; the number moves slowly. */
+const BUDGET_TTL_MS = 30_000;
 
 export type EmptyTrashProgress = {
 	done: number;
@@ -683,6 +689,44 @@ export class VfsService {
 	 * writeFile default). A failed chunk rolls back best-effort exactly like
 	 * writeFile's catch, and later chunks do not run.
 	 */
+	private budgetCache: { at: number; bytes: number } | null = null;
+
+	/**
+	 * How many bytes one pack / write chunk may hold, given actual free space.
+	 *
+	 * The fixed 64MB cap assumes desktop-sized storage. Chrome incognito caps
+	 * an origin near 100MB, so a single pack was ~64% of the entire budget and
+	 * a project large enough to fill one simply could not be written. Sizing
+	 * against `navigator.storage.estimate()` keeps the cap proportionate.
+	 *
+	 * Advisory, not a guarantee: the estimate is deliberately imprecise and can
+	 * be stale, so this only shrinks the batch — the write still has to handle
+	 * QUOTA_EXCEEDED, which is why that error path exists.
+	 */
+	private async packBudgetBytes(): Promise<number> {
+		const now = Date.now();
+		if (this.budgetCache && now - this.budgetCache.at < BUDGET_TTL_MS) {
+			return this.budgetCache.bytes;
+		}
+		let bytes = PACK_CAP_BYTES;
+		try {
+			const est = await navigator?.storage?.estimate?.();
+			const quota = est?.quota;
+			const usage = est?.usage ?? 0;
+			if (typeof quota === 'number' && quota > 0) {
+				const free = Math.max(0, quota - usage);
+				bytes = Math.max(
+					MIN_PACK_BUDGET_BYTES,
+					Math.min(PACK_CAP_BYTES, Math.floor(free * PACK_BUDGET_SHARE))
+				);
+			}
+		} catch {
+			// No estimate available — keep the fixed cap rather than guess.
+		}
+		this.budgetCache = { at: now, bytes };
+		return bytes;
+	}
+
 	async writeFiles(
 		inputs: WriteFileInput[],
 		opts?: {
@@ -721,7 +765,7 @@ export class VfsService {
 		// Measured on 3000 members: 2015ms at 24/chunk, 1391ms at 128,
 		// 1237ms at 512 — past ~512 the curve is flat.
 		const CHUNK_FILES = 512;
-		const CHUNK_BYTES = 64 << 20;
+		const CHUNK_BYTES = await this.packBudgetBytes();
 		let chunk: Array<{ input: WriteFileInput; bytes: Uint8Array; contentType: string }> = [];
 		let chunkBytes = 0;
 		const flush = async () => {
@@ -855,6 +899,10 @@ export class VfsService {
 			// `readRange` is that capability gate (the in-memory store, used by
 			// inner-fs sessions, deliberately lacks it and stays unpacked).
 			const packable = pack && typeof this.opfs.readRange === 'function' && prepared.length > 1;
+			// Scale the "too big to share a pack" line with the same budget the
+			// chunk uses, so a shrunken budget does not end up with a pack that
+			// one member nearly fills on its own.
+			const standaloneAt = (await this.packBudgetBytes()) / 2;
 			const packId = generateId('pack');
 			const packPath = `packs/${packId}.bin`;
 			const packMembers: Array<{ index: number; offset: number }> = [];
@@ -862,7 +910,7 @@ export class VfsService {
 			if (packable) {
 				for (let i = 0; i < prepared.length; i++) {
 					const len = prepared[i]!.bytes.byteLength;
-					if (len >= PACK_CAP_BYTES / 2) continue;
+					if (len >= standaloneAt) continue;
 					packMembers.push({ index: i, offset: packBytes });
 					packBytes += len;
 				}

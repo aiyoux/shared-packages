@@ -46,6 +46,31 @@ function vfsFor(dbName: string, opfsRoot: string): VfsService {
 	return vfs;
 }
 
+/**
+ * Run `fn` while holding a Web Lock, so the browser treats this context as
+ * busy.
+ *
+ * Chrome and Edge suspend backgrounded tabs, which stalls a long extract in a
+ * tab the user has switched away from — the common case, since the whole point
+ * of moving extraction into a worker was that you could go and do something
+ * else. A held Web Lock is the documented signal that work is in flight; it is
+ * what the SQLite-on-OPFS implementations use for the same reason.
+ *
+ * The lock name is per-job so two jobs do not serialise behind each other:
+ * this is a liveness hint, not mutual exclusion. If the API is missing the
+ * work still runs — losing suspension protection is not a reason to fail.
+ */
+async function withJobLock<T>(jobId: string, fn: () => Promise<T>): Promise<T> {
+	const locks = (globalThis as { navigator?: { locks?: LockManager } }).navigator?.locks;
+	if (!locks?.request) return fn();
+	try {
+		return await locks.request(`vfs-job:${jobId}`, fn);
+	} catch {
+		// A lock manager that refuses must not take the job down with it.
+		return fn();
+	}
+}
+
 async function runExtract(req: ExtractJobRequest): Promise<void> {
 	const vfs = vfsFor(req.dbName, req.opfsRoot);
 	await vfs.ready();
@@ -134,7 +159,7 @@ ctx.onmessage = (e: MessageEvent) => {
 			});
 			return;
 		}
-		void runExtract(msg).catch((err: unknown) => {
+		void withJobLock(msg.jobId, () => runExtract(msg)).catch((err: unknown) => {
 			ctx.postMessage({
 				type: 'failed',
 				jobId: msg.jobId,
