@@ -276,7 +276,9 @@ export async function deleteFromProject(
 			e.name = 'AbortError';
 			throw e;
 		}
-		await vfs.permanentDelete(id, { recursive: true });
+		// One compaction for the whole batch, not one per node: deleting N
+		// members of a pack must not rewrite that pack N times.
+		await vfs.permanentDelete(id, { recursive: true, compact: false });
 		deleted += 1;
 	}
 

@@ -1539,7 +1539,10 @@ export class VfsService {
 		});
 	}
 
-	async permanentDelete(id: string, opts?: { recursive?: boolean }): Promise<void> {
+	async permanentDelete(
+		id: string,
+		opts?: { recursive?: boolean; compact?: boolean }
+	): Promise<void> {
 		await this.ready();
 		const recursive = opts?.recursive ?? false;
 		const blobIds: string[] = [];
@@ -1582,9 +1585,30 @@ export class VfsService {
 			}
 		});
 
+		// Which packs are about to lose members. Collected BEFORE the release,
+		// because releaseBlobRefs drops the very refs that name them.
+		const touchedPacks = await this.packPathsForBlobs(blobIds);
+
 		// Rows and files are released together, after the node txn commits, so
 		// storage is never unlinked while a node could still name it.
 		await this.releaseBlobRefs(blobIds);
+
+		// Deleting permanently bypasses the trash entirely — from the Projects
+		// app, or "delete permanently" on a single trashed item — so without
+		// this the space would sit dead until some unrelated emptyTrash
+		// happened to run. Only packs past the thresholds are rewritten.
+		if (opts?.compact !== false && touchedPacks.length) {
+			const alive: string[] = [];
+			for (const p of touchedPacks) {
+				if (await this.opfs.exists(p)) alive.push(p);
+			}
+			try {
+				await this.compactPacks(alive);
+			} catch {
+				// The delete has committed and cannot be undone; leaving dead
+				// space is the lesser outcome, and the load sweep retries.
+			}
+		}
 		this.emitChange();
 	}
 
@@ -1845,6 +1869,58 @@ export class VfsService {
 	 * available) so it never competes with the work the user is waiting for,
 	 * and returns a canceller for teardown.
 	 */
+	/**
+	 * Reclaim packs that have quietly gone mostly-dead.
+	 *
+	 * Nothing in the delete path sees this: `updateFile` moves a file OUT of
+	 * its pack to a standalone blob (packs are immutable and never appended
+	 * to), releasing the old member without any delete ever happening. Edit
+	 * enough of a project and its packs are mostly dead bytes with nothing to
+	 * trigger cleanup.
+	 *
+	 * No marker set is kept. Per-pack live bytes come from blobRefs, which is
+	 * one query, and the only added cost is a `.size` per pack — cheap because
+	 * readBlob is lazy. That also makes this self-correcting: it reclaims drift
+	 * from any source, including one nobody thought to instrument.
+	 *
+	 * Deliberately NOT part of `gc()`. Those four gc tests encode its contract,
+	 * and rewriting packs is not in it — a sweep that collects garbage is a
+	 * different promise from one that rewrites live data.
+	 */
+	async compactStalePacks(opts?: {
+		signal?: AbortSignal;
+		onProgress?: (ev: PackOpProgress) => void;
+	}): Promise<{ compactedPacks: number; reclaimedBytes: number }> {
+		await this.ready();
+		const refs = await this.db.blobRefs.toArray();
+		const liveByPack = new Map<string, number>();
+		for (const r of refs) {
+			if (r.packOffset == null) continue;
+			liveByPack.set(r.opfsPath, (liveByPack.get(r.opfsPath) ?? 0) + r.byteLength);
+		}
+		if (!liveByPack.size) return { compactedPacks: 0, reclaimedBytes: 0 };
+
+		const candidates: string[] = [];
+		for (const [path, live] of liveByPack) {
+			if (opts?.signal?.aborted) break;
+			let onDisk = 0;
+			try {
+				onDisk = (await this.opfs.readBlob(path)).size;
+			} catch {
+				continue;
+			}
+			const dead = onDisk - live;
+			if (
+				dead >= COMPACT_MIN_RECLAIM_BYTES &&
+				dead / Math.max(onDisk, 1) >= COMPACT_WHEN_DEAD_FRACTION
+			) {
+				candidates.push(path);
+			}
+		}
+		if (!candidates.length) return { compactedPacks: 0, reclaimedBytes: 0 };
+		return this.compactPacks(candidates, opts);
+	}
+
 	sweepOnLoad(opts?: { delayMs?: number }): () => void {
 		if (this.sweptThisLoad) return () => {};
 		this.sweptThisLoad = true;
@@ -1852,7 +1928,14 @@ export class VfsService {
 		let cancelled = false;
 		const run = () => {
 			if (cancelled) return;
-			void this.maybeGc();
+			void this.maybeGc().then(() => {
+				if (cancelled) return;
+				// After the garbage is gone, reclaim packs that editing left
+				// mostly dead. Idle time is the right place for it: it rewrites
+				// live data, so it must never land on a save the user is waiting
+				// on.
+				return this.compactStalePacks().catch(() => {});
+			});
 		};
 		const idle = (globalThis as { requestIdleCallback?: (cb: () => void) => number })
 			.requestIdleCallback;
