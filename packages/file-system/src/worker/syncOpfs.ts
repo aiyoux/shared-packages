@@ -56,13 +56,28 @@ function splitPath(opfsPath: string): { dir: string; base: string } {
 	return { dir: normalized.slice(0, i), base: normalized.slice(i + 1) };
 }
 
-function toBytes(data: BufferSource | Blob | Uint8Array): Uint8Array {
+/**
+ * A sync access handle writes from a buffer view, so a Blob has to be read
+ * first.
+ *
+ * Packing hands this store one multi-part Blob per pack — that is the whole
+ * zero-copy trick on the main thread, where the browser concatenates the parts
+ * during the write and JS never holds them. There is no sync equivalent, so
+ * refusing Blobs here made packing and the worker mutually exclusive: ticking
+ * "pack" simply failed the worker job. Reading it costs one copy of the pack,
+ * bounded by the pack budget (a quarter of free space, at most 64MB), which is
+ * the price of having both.
+ */
+async function toBytes(data: BufferSource | Blob | Uint8Array): Promise<Uint8Array> {
 	if (data instanceof Uint8Array) return data;
 	if (data instanceof ArrayBuffer) return new Uint8Array(data);
 	if (ArrayBuffer.isView(data)) {
 		return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
 	}
-	throw new VfsError('API_MISUSE', 'Blob bodies must be read to bytes before the sync store');
+	if (typeof Blob !== 'undefined' && data instanceof Blob) {
+		return new Uint8Array(await data.arrayBuffer());
+	}
+	throw new VfsError('API_MISUSE', `Unsupported body for the sync store: ${typeof data}`);
 }
 
 export function createSyncOpfsStore(rootDirName = 'shared-vfs'): OpfsBlobStore {
@@ -148,7 +163,7 @@ export function createSyncOpfsStore(rootDirName = 'shared-vfs'): OpfsBlobStore {
 		opfsPath: string,
 		data: BufferSource | Blob | Uint8Array
 	): Promise<{ byteLength: number }> {
-		const bytes = toBytes(data);
+		const bytes = await toBytes(data);
 		return withHandle(opfsPath, true, (h) => {
 			// write() returns the count it ACTUALLY wrote, and a short write is
 			// a legal outcome (the spec defines the return value precisely so
