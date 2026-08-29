@@ -1770,6 +1770,49 @@ export class VfsService {
 		await this.db.nodes.put(node);
 	}
 
+	/**
+	 * Restore a pack whole, with refs pointing into it at recorded offsets.
+	 *
+	 * The counterpart of `migratePutBlob` for pack-preserving import: the whole
+	 * point of that format is that a project of thousands of files is a handful
+	 * of pack blobs, so importing it must not re-extract every member.
+	 *
+	 * Offsets come from the bundle that was exported, and the pack is written
+	 * before any ref names it — a crash in between leaves an unreferenced pack
+	 * for the sweep, never a ref pointing at bytes that are not there.
+	 */
+	async migratePutPack(
+		packPath: string,
+		body: Blob | BufferSource,
+		members: Array<{
+			blobId: string;
+			offset: number;
+			byteLength: number;
+			contentType?: string;
+		}>
+	): Promise<void> {
+		await this.ready();
+		const { byteLength } = await this.opfs.writeFinal(packPath, body as never);
+		for (const m of members) {
+			if (m.offset + m.byteLength > byteLength) {
+				throw new VfsError(
+					'OPFS_IO',
+					`Pack member runs past the end of ${packPath}: ${m.offset}+${m.byteLength} > ${byteLength}`
+				);
+			}
+		}
+		await this.db.blobRefs.bulkPut(
+			members.map((m) => ({
+				id: m.blobId,
+				opfsPath: packPath,
+				packOffset: m.offset,
+				byteLength: m.byteLength,
+				createdAt: Date.now(),
+				contentType: m.contentType ?? 'application/octet-stream'
+			}))
+		);
+	}
+
 	async migratePutBlob(
 		blobId: string,
 		body: unknown,
