@@ -134,6 +134,21 @@ async function ensureDir(
 	return parent.getDirectoryHandle(name, { create: true });
 }
 
+/**
+ * Storage exhaustion is the one OPFS failure the UI has specific wording for
+ * ("Browser storage is full."), but nothing used to raise the code that selects
+ * it, so a full disk surfaced as a generic I/O error. Quota shows up as a
+ * DOMException named QuotaExceededError.
+ */
+function asWriteError(e: unknown, what: string): VfsError {
+	if (e instanceof VfsError) return e;
+	const name = (e as { name?: string } | null)?.name;
+	if (name === 'QuotaExceededError') {
+		return new VfsError('QUOTA_EXCEEDED', 'Browser storage is full.', { cause: String(e) });
+	}
+	return new VfsError('OPFS_IO', `Failed to ${what}`, { cause: String(e) });
+}
+
 async function writeFileHandle(handle: FileSystemFileHandle, bytes: Uint8Array): Promise<void> {
 	// Prefer createWritable when available
 	const anyHandle = handle as FileSystemFileHandle & {
@@ -141,8 +156,23 @@ async function writeFileHandle(handle: FileSystemFileHandle, bytes: Uint8Array):
 	};
 	if (typeof anyHandle.createWritable === 'function') {
 		const writable = await anyHandle.createWritable();
-		await writable.write(bytes as BufferSource);
-		await writable.close();
+		try {
+			await writable.write(bytes as BufferSource);
+			await writable.close();
+		} catch (e) {
+			// Abandoning a failed stream leaks it. Chrome backs createWritable
+			// with a .crswap file and holds a lock on the target until the stream
+			// is closed or aborted, so an unclosed one leaves BOTH files on disk
+			// and makes them unremovable — gc sees the orphans, its remove() is
+			// refused, and the debris survives every later sweep. Aborting drops
+			// the swap file and releases the lock, so the next sweep can reclaim.
+			try {
+				await writable.abort();
+			} catch {
+				/* already faulted — nothing further to release */
+			}
+			throw asWriteError(e, 'write');
+		}
 		return;
 	}
 	throw new VfsError('OPFS_IO', 'createWritable not supported');
