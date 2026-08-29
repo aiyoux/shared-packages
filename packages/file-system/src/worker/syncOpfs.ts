@@ -150,7 +150,20 @@ export function createSyncOpfsStore(rootDirName = 'shared-vfs'): OpfsBlobStore {
 	): Promise<{ byteLength: number }> {
 		const bytes = toBytes(data);
 		return withHandle(opfsPath, true, (h) => {
-			h.write(bytes, { at: 0 });
+			// write() returns the count it ACTUALLY wrote, and a short write is
+			// a legal outcome (the spec defines the return value precisely so
+			// callers can detect one). Ignoring it is silent corruption here:
+			// we would report the full length, the blobRef would record it, and
+			// for a pack every member past the cut would read another member's
+			// bytes or run off the end. Fail loudly instead — a failed write is
+			// recoverable, a wrong length is not.
+			const written = h.write(bytes, { at: 0 });
+			if (written !== bytes.byteLength) {
+				throw new VfsError(
+					'OPFS_IO',
+					`Short write to ${opfsPath}: wrote ${written} of ${bytes.byteLength} bytes`
+				);
+			}
 			// Only shrink when there is something to shrink: an unconditional
 			// truncate cost measurable time on fresh files.
 			if (h.getSize() > bytes.byteLength) h.truncate(bytes.byteLength);
@@ -174,8 +187,17 @@ export function createSyncOpfsStore(rootDirName = 'shared-vfs'): OpfsBlobStore {
 		},
 		read(opfsPath) {
 			return withHandle(opfsPath, false, (h) => {
-				const buf = new Uint8Array(h.getSize());
-				h.read(buf, { at: 0 });
+				const size = h.getSize();
+				const buf = new Uint8Array(size);
+				// Same reasoning as write: a short read would hand back a
+				// zero-filled tail that looks like real data.
+				const got = h.read(buf, { at: 0 });
+				if (got !== size) {
+					throw new VfsError(
+						'OPFS_IO',
+						`Short read from ${opfsPath}: got ${got} of ${size} bytes`
+					);
+				}
 				return buf;
 			});
 		},
