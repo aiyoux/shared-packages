@@ -228,4 +228,44 @@ describe('detectProject', () => {
 		assert.deepEqual(await findProjectRoot(driver, 'src'), { found: true, id: null });
 		assert.deepEqual(await findProjectRoot(driver, null), { found: true, id: null });
 	});
+
+	it('is true when folder has projectPack metadata', async () => {
+		const driver: ExplorerDriver = {
+			id: 'local',
+			capabilities: {
+				supportsTrash: false,
+				supportsSoftDelete: false,
+				supportsRename: false,
+				supportsMove: false,
+				supportsCopy: false,
+				supportsMkdir: false,
+				supportsUpload: false,
+				supportsDownload: false,
+				supportsSiblingOrder: false
+			},
+			async ready() {},
+			async list() {
+				return { entries: [], truncated: false };
+			},
+			async getPath() {
+				return [
+					{
+						id: 'proj',
+						parentId: null,
+						name: 'my-project',
+						kind: 'folder',
+						meta: { projectPack: true }
+					}
+				];
+			},
+			async delete() {}
+		};
+		assert.equal(await detectProject(driver, 'proj'), true);
+		assert.deepEqual(await findProjectRoot(driver, 'proj'), { found: true, id: 'proj' });
+	});
+
+	it('is true when folder contains .project file', async () => {
+		const ok = await detectProject(driverWith([{ name: '.project', kind: 'file' }]), 'folder');
+		assert.equal(ok, true);
+	});
 });

@@ -352,6 +352,7 @@ export function nodeToEntry(n: {
 	updatedAt?: number;
 	contentType?: string;
 	sortOrder?: number;
+	meta?: Record<string, unknown>;
 }): ExplorerEntry {
 	return {
 		id: n.id,
@@ -362,7 +363,8 @@ export function nodeToEntry(n: {
 		size: n.size,
 		updatedAt: n.updatedAt,
 		contentType: n.contentType,
-		sortOrder: n.sortOrder
+		sortOrder: n.sortOrder,
+		meta: n.meta
 	};
 }
 

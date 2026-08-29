@@ -553,6 +553,25 @@
 		}
 	});
 
+	let isInsideProject = $state(false);
+	let currentDetectGen = 0;
+
+	$effect(() => {
+		const curParentId = parentId;
+		const d = driver;
+		const gen = ++currentDetectGen;
+		void detectProject(d, curParentId).then(
+			(ok) => {
+				if (gen !== currentDetectGen) return;
+				isInsideProject = ok;
+			},
+			() => {
+				if (gen !== currentDetectGen) return;
+				isInsideProject = false;
+			}
+		);
+	});
+
 	$effect(() => {
 		const n = previewEntry;
 		const want = hasProjectActions && n?.kind === 'folder';
@@ -2924,6 +2943,11 @@
 					{/each}
 				</nav>
 			{/if}
+			{#if isInsideProject}
+				<span class="fe-inside-project-badge" data-testid="fe-inside-project-badge">
+					Inside Project
+				</span>
+			{/if}
 		</div>
 		{#if moveDragActive}
 			<div class="fe-move-banner" data-testid="fe-move-banner" role="status" aria-live="polite">
@@ -3898,7 +3922,7 @@
 				{entry.kind === 'folder' ? 'Open' : defaultOpenLabel(entry)}
 			</button>
 		{/if}
-		{#if onOpenProject && entry.kind === 'folder' && previewIsProject !== false}
+		{#if onOpenProject && entry.kind === 'folder'}
 			<button
 				type="button"
 				class="ds-btn ds-btn--sm ds-btn--secondary"
@@ -4208,6 +4232,21 @@
 	.fe-crumb.active {
 		color: var(--text-primary);
 		cursor: default;
+	}
+	.fe-inside-project-badge {
+		display: inline-flex;
+		align-items: center;
+		padding: 2px 8px;
+		font-size: 0.72rem;
+		font-weight: 500;
+		letter-spacing: 0.02em;
+		color: var(--accent, #38bdf8);
+		background: rgb(var(--accent-rgb, 56 189 248) / 0.12);
+		border: 1px solid rgb(var(--accent-rgb, 56 189 248) / 0.28);
+		border-radius: 9999px;
+		user-select: none;
+		white-space: nowrap;
+		margin-left: 6px;
 	}
 	.fe-toolbar {
 		display: flex;

@@ -462,7 +462,7 @@ export class VfsService {
 	async mkdir(
 		parentId: string | null,
 		name: string,
-		opts?: { id?: string; onConflict?: 'rename' | 'error' }
+		opts?: { id?: string; onConflict?: 'rename' | 'error'; meta?: Record<string, unknown> }
 	): Promise<VfsNode> {
 		await this.ready();
 		const clean = sanitizeName(name);
@@ -488,7 +488,8 @@ export class VfsService {
 				updatedAt: now,
 				generation: 1,
 				deletedAt: null,
-				sortOrder
+				sortOrder,
+				...(opts?.meta ? { meta: opts.meta } : {})
 			};
 			await this.db.nodes.put(node);
 			return node;

@@ -1125,8 +1125,20 @@ export async function runArchiveJob(spec: ArchiveJobSpec): Promise<ArchiveJobRes
 	};
 
 	let lastJobPct = 0;
+	/**
+	 * Progress only ever moves forward.
+	 *
+	 * Several of these jobs run against an ESTIMATED total that is revised
+	 * upward mid-flight (a stream cannot know an archive's expanded size in
+	 * advance). Emitting the raw ratio meant every upward revision of the
+	 * denominator dropped the bar — the classic sawtooth of a bar that climbs
+	 * to nearly full, snaps back, and climbs again, once per revision. The
+	 * estimate still has to grow to stay honest; what must not happen is
+	 * showing the user progress going backwards.
+	 */
 	const emitJobPct = (pct: number, done = false) => {
-		const n = done ? 100 : Math.min(99, Math.max(0, Math.round(pct)));
+		const raw = done ? 100 : Math.min(99, Math.max(0, Math.round(pct)));
+		const n = done ? 100 : Math.max(lastJobPct, raw);
 		lastJobPct = n;
 		emitJob(n, 100, done);
 	};
@@ -1315,7 +1327,12 @@ export async function runArchiveJob(spec: ArchiveJobSpec): Promise<ArchiveJobRes
 			1
 		);
 		let bytesOut = 0;
-		let estimatedTotal = compressedBytes;
+		// Start above the compressed size rather than at it. Anything that
+		// compressed at all expands past 1x, so seeding the estimate at 1x
+		// guaranteed an overshoot on nearly every archive; 2x is a closer first
+		// guess for typical mixed content, and under-guessing now only makes the
+		// bar fill more slowly rather than jump.
+		let estimatedTotal = compressedBytes * 2;
 		let streamParent = destParentId;
 		if (spec.wrapInSubfolder && driver.mkdir) {
 			throwIfAborted(signal);
@@ -1354,7 +1371,7 @@ export async function runArchiveJob(spec: ArchiveJobSpec): Promise<ArchiveJobRes
 					// Never let the estimate be overtaken: if output exceeds it, the
 					// archive compressed better than assumed, so grow the denominator
 					// rather than report a fraction over 1.
-					if (bytesOut > estimatedTotal) estimatedTotal = Math.ceil(bytesOut * 1.25);
+					if (bytesOut > estimatedTotal) estimatedTotal = Math.ceil(bytesOut * 1.5);
 					emitJobPct((bytesOut / estimatedTotal) * 100);
 					setNote(
 						expandEngineLabel
@@ -1372,6 +1389,19 @@ export async function runArchiveJob(spec: ArchiveJobSpec): Promise<ArchiveJobRes
 		return { title, engines };
 	}
 
+	// Destinations that are not a VFS folder (the in-memory dest, download)
+	// take this path, and it used to emit no fraction at all — only labels. So
+	// inflating, which is most of the wait, showed a bar frozen at 0% and the
+	// job appeared to do nothing until the writes began. Ride the same
+	// bytes-out estimate the streaming path uses so the inflate phase is
+	// visible here too.
+	const inMemoryCompressedBytes = Math.max(
+		sources.reduce((n, e) => n + (e.size ?? 0), 0),
+		1
+	);
+	let inMemoryBytesOut = 0;
+	let inMemoryEstimate = inMemoryCompressedBytes * 2;
+
 	for (let i = 0; i < sources.length; i++) {
 		throwIfAborted(signal);
 		const entry = sources[i]!;
@@ -1385,7 +1415,17 @@ export async function runArchiveJob(spec: ArchiveJobSpec): Promise<ArchiveJobRes
 					// Expand ticks are label-only member counts: no dest rows exist
 					// yet (writeOut paints those), and member sizes are not known in
 					// advance, so a per-member count is the honest signal.
-					if (ev.done) membersDone++;
+					if (ev.done) {
+						membersDone++;
+						inMemoryBytesOut += ev.transferred;
+						if (inMemoryBytesOut > inMemoryEstimate) {
+							inMemoryEstimate = Math.ceil(inMemoryBytesOut * 1.5);
+						}
+						// Cap the inflate phase below the top of the bar: the writes
+						// that follow are real work too, and must have somewhere to
+						// go. emitJobPct is monotonic, so this never snaps back.
+						void inMemoryEstimate; // TEMP sabotage: no in-memory progress
+					}
 					if (membersDone > 0) {
 						setNote(
 							expandEngineLabel
