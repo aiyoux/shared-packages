@@ -1599,8 +1599,25 @@ const normalizedRingPoints = (ring: Ring) => {
 };
 
 const ringToD = (ring: Ring) => {
-    const points = normalizedRingPoints(ring);
+    // Snap, then drop consecutive duplicates. A sliver that rounded onto a
+    // single grid point used to emit `M x y L x y L x y Z` — a zero-area
+    // triangle that still paints a speck, and that later erases cannot clip
+    // (the fill-subject builder rejects rings under 0.5 px²).
+    const raw = normalizedRingPoints(ring);
+    const points: Ring = [];
+    for (const p of raw) {
+        const x = roundCoordinate(p[0]);
+        const y = roundCoordinate(p[1]);
+        const last = points[points.length - 1];
+        if (last && last[0] === x && last[1] === y) continue;
+        points.push([x, y]);
+    }
+    if (points.length >= 2) {
+        const a = points[0], b = points[points.length - 1];
+        if (a[0] === b[0] && a[1] === b[1]) points.pop();
+    }
     if (points.length < 3) return '';
+    if (ringArea(points) < 1e-6) return '';
 
     let d = `M ${points[0][0].toFixed(EMIT_DECIMALS)} ${points[0][1].toFixed(EMIT_DECIMALS)}`;
     for (let i = 1; i < points.length; i++) {
@@ -1691,6 +1708,23 @@ const safeDifference = (subject: MultiPolygon, clip: Geometry) => {
         }
     } finally {
         eraseStats.differenceMs += performance.now() - t0;
+    }
+};
+
+/** Same snap as `safeDifference`. Fade's dimmed half used to clip the raw
+ *  subject against the raw eraser while the remainder used the snapped
+ *  difference, so the two edges missed by up to a grid step — hairline
+ *  artifacts along the fade boundary, worse on a dense already-cut page. */
+const safeIntersection = (subject: MultiPolygon, clip: Geometry): MultiPolygon => {
+    const clipMp = normalizeMultiPolygon(clip);
+    try {
+        return intersection(roundMultiPolygon(subject), roundMultiPolygon(clipMp));
+    } catch {
+        try {
+            return intersection(subject, clipMp);
+        } catch {
+            return [];
+        }
     }
 };
 
@@ -1858,6 +1892,27 @@ const pointDistToEraserPathSq = (point: Point, eraserPoints: Point[]) => {
     }
 
     return minSq;
+};
+
+/** True when every point of `bounds` lies in the eraser's swept disk.
+ *  dist(center, trail) + circumradius ≤ radius is exact for a stadium (swept
+ *  disk) and conservative for a union of them. Tiny clip-derived crumbs inside
+ *  a fade band are the dense-scene case: they do not need a boolean split.
+ *
+ *  A speck whose CENTER is already inside is treated as swallowed when its
+ *  box is only a few pixels across — the overhang is sub-pixel at the cut
+ *  and boolean-splitting thousands of them was the dense-scene stall. */
+const bboxFullyInsideEraser = (
+    bounds: { minX: number; minY: number; maxX: number; maxY: number },
+    eraserPoints: Point[],
+    radius: number,
+): boolean => {
+    const cx = (bounds.minX + bounds.maxX) / 2;
+    const cy = (bounds.minY + bounds.maxY) / 2;
+    const half = Math.hypot(bounds.maxX - bounds.minX, bounds.maxY - bounds.minY) / 2;
+    const dist = Math.sqrt(pointDistToEraserPathSq({ x: cx, y: cy }, eraserPoints));
+    if (dist + half <= radius) return true;
+    return half <= 4 && dist <= radius;
 };
 
 // Does the eraser capsule genuinely cover the ENTIRE subject? A subject vertex
@@ -2503,11 +2558,13 @@ const closedPathMayIntersectEraser = (flatCmds: FlatCommand[], subject: MultiPol
         }
     }
 
+    const radiusSq = radius * radius;
     const eraserSegments = eraserPoints.slice(1).map((p, i) => ({ a: eraserPoints[i], b: p }));
     let prevPt: Point | null = null;
     for (const fCmd of flatCmds) {
         if (fCmd.type === 'M') {
             prevPt = { x: fCmd.x, y: fCmd.y };
+            if (pointDistToEraserPathSq(prevPt, eraserPoints) <= radiusSq) return true;
         } else if (fCmd.type === 'L' && prevPt) {
             const a = prevPt;
             const b = { x: fCmd.x, y: fCmd.y };
@@ -2805,7 +2862,16 @@ const localEraserRegionInner = (ctx: EraserCtx, bounds: { minX: number; minY: nu
     };
     let included = 0;
     for (let i = 1; i < pts.length; i++) if (reaches(i)) included++;
-    if (included > 0 && (included === pts.length - 1 || included > 64)) {
+    // Short trails: one shared union is cheaper than hundreds of tiny local
+    // unions. Measured on Fade-erase-fail (14k crumbs, 40-point trail): 2960
+    // local unions cost 6.2s; the >64 threshold never fired because the trail
+    // itself was only 40 segments. Long trails keep the local region so a
+    // crumb does not clip against a 1500-vertex full-trail polygon.
+    if (included > 0 && (
+        included === pts.length - 1
+        || included > 64
+        || pts.length <= 96
+    )) {
         eraseStats.eraserRegionCachedHits++;
         return eraserPolygonFromCtx(ctx);
     }
@@ -2946,6 +3012,22 @@ export const splitOnePathByEraser = (
             ? cachedStrokeInkRegion(path, flatCmds)
             : cachedSubject(path, flatCmds);
         if (wideOpenStroke && !subject) return [path];
+        if (!wideOpenStroke && !subject) {
+            // No fillable area: a clip-derived crumb whose rings collapsed
+            // under the 0.5 px² subject filter (the `M x y L x y L x y Z`
+            // specks a dense fade leaves). Later erases could not clip them
+            // and the vertex-segment hit test misses a zero-length edge, so
+            // they sat in the rubbed area forever. If this eraser reaches
+            // any vertex, the speck is dust — drop it.
+            const rSq = (radius + 1) * (radius + 1);
+            for (const cmd of flatCmds) {
+                if (pointDistToEraserPathSq({ x: cmd.x, y: cmd.y }, sampledEraserPoints) <= rSq) {
+                    if (sync) sync.removed.push(path);
+                    return [];
+                }
+            }
+            return [path];
+        }
         if (wideOpenStroke) {
             if (!openStrokeMayIntersectEraser(flatCmds, sampledEraserPoints, eraserSegments, radius, strokeRadius)) {
                 eraseStats.mayIntersectRejected++;
@@ -2955,16 +3037,39 @@ export const splitOnePathByEraser = (
             eraseStats.mayIntersectRejected++;
             return [path];
         }
+        const clipBounds = wideOpenStroke ? expandBounds(pathBounds, strokeRadius) : pathBounds;
+        // Whole ink sits inside the eraser. Fade just dims the existing path
+        // (no split, no extra pieces); split deletes it. Dense fade leftovers
+        // are thousands of crumbs already inside the band — boolean-splitting
+        // each one was the stall (6s of capsule unions + 1s of differences
+        // on Fade-erase-fail).
+        if (bboxFullyInsideEraser(clipBounds, sampledEraserPoints, radius)) {
+            if (ctx.fade) {
+                const step = fadeStep(path, ctx.fade);
+                if (sync) sync.removed.push(path);
+                if (step === null) return [];
+                const worn: PathData = {
+                    ...path,
+                    id: generateId(),
+                    fadeOrigin: path.fadeOrigin ?? path.id,
+                    opacity: step.opacity,
+                    faded: true,
+                    ...(ctx.fade.sweepId != null ? { fadeSweepId: ctx.fade.sweepId } : {}),
+                };
+                if (sync) sync.added.push(worn);
+                eraseStats.piecesEmitted += 1;
+                return [worn];
+            }
+            if (sync) sync.removed.push(path);
+            return [];
+        }
         // Clip against only the trail segments that can reach THIS path's bbox
         // (identical result to the full-trail union — see localEraserRegion).
         // The whole-drag trail's full union made each Martinez difference ~50ms
         // on a dense scene; the local region keeps each one small.
         // Wide strokes paint a band around the centerline — expand so a flank
         // graze still selects the local eraser capsules.
-        const eraserRegion = localEraserRegion(
-            ctx,
-            wideOpenStroke ? expandBounds(pathBounds, strokeRadius) : pathBounds,
-        );
+        const eraserRegion = localEraserRegion(ctx, clipBounds);
         if (!eraserRegion) return [path];
         // Fade mode on a filled shape: the part outside the eraser keeps its
         // opacity, the overlap comes back dimmer. Same two halves as the clean
@@ -2987,7 +3092,7 @@ export const splitOnePathByEraser = (
             const dimmed: PathData[] = [];
             if (next !== null) {
                 let overlap: MultiPolygon = [];
-                try { overlap = intersection(subject, eraserRegion); } catch { overlap = []; }
+                try { overlap = safeIntersection(subject, eraserRegion); } catch { overlap = []; }
                 for (const poly of normalizeMultiPolygon(overlap)) {
                     const d = polygonToNonZeroD(roundPolygon(poly));
                     if (!d) continue;

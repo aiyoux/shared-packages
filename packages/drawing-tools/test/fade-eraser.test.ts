@@ -364,6 +364,94 @@ describe('fade eraser on filled shapes', () => {
 		assert.equal(after.length, 1);
 		assert.equal(after[0].d, original.d);
 	});
+
+	it('does not emit collapsed triangles along a fade cut', () => {
+		const after = splitPathsByEraser([rect()], trail(50, 50, 60, 50), 15, () => false, { fade: DEFAULT_FADE });
+		for (const p of after) {
+			const nums = (p.d.match(/-?\d+\.?\d*/g) || []).map(Number);
+			const pts: string[] = [];
+			for (let i = 0; i + 1 < nums.length; i += 2) pts.push(`${nums[i]},${nums[i + 1]}`);
+			assert.ok(new Set(pts).size >= 3, `collapsed crumb: ${p.d}`);
+		}
+	});
+
+	it('dims a filled shape swallowed whole without splitting it', () => {
+		const tiny: PathData = {
+			id: 'dot',
+			d: 'M 50 50 L 54 50 L 54 54 L 50 54 Z',
+			fill: '#000', stroke: 'none', strokeWidth: 0, layerId: 'default',
+		};
+		const after = splitPathsByEraser([tiny], trail(40, 52, 70, 52), 20, () => false, { fade: DEFAULT_FADE });
+		assert.equal(after.length, 1, `swallowed fade should stay one path, got ${after.length}`);
+		assert.equal(after[0].d, tiny.d, 'geometry must not be re-clipped when fully inside');
+		assert.ok((after[0].opacity ?? 1) < 1, 'must still dim');
+	});
+});
+
+describe('degenerate fade crumbs are erasable', () => {
+	// Real leftovers from Fade erase fail.skch: clip-derived highlighter
+	// slivers that rounded onto a single grid point. Split/fade could not
+	// rebuild a fill subject (area < 0.5) and the zero-length edge missed
+	// the segment hit test, so they sat in the rubbed area forever.
+	const crumb = (id: string): PathData => ({
+		id,
+		d: 'M 566.0 348.5 L 566.0 348.5 L 566.0 348.5 Z',
+		stroke: 'none',
+		fill: '#ffb703',
+		strokeWidth: 0,
+		layerId: 'default',
+		opacity: 0.031,
+		clipDerived: true,
+		faded: true,
+	});
+
+	it('a split rub over a collapsed triangle deletes it', () => {
+		const after = splitPathsByEraser(
+			[crumb('c1')],
+			trail(560, 348, 572, 348),
+			12,
+			() => false,
+		);
+		assert.equal(after.length, 0, `crumb survived split erase: ${JSON.stringify(after)}`);
+	});
+
+	it('a fade rub over a collapsed triangle deletes it too', () => {
+		const after = splitPathsByEraser(
+			[crumb('c2')],
+			trail(560, 348, 572, 348),
+			12,
+			() => false,
+			{ fade: DEFAULT_FADE },
+		);
+		assert.equal(after.length, 0, `crumb survived fade erase: ${JSON.stringify(after)}`);
+	});
+
+	it('a collapsed triangle far from the eraser is left alone', () => {
+		const original = crumb('c3');
+		const after = splitPathsByEraser(
+			[original],
+			trail(10, 10, 20, 10),
+			8,
+			() => false,
+		);
+		assert.equal(after.length, 1);
+		assert.equal(after[0].d, original.d);
+	});
+
+	it('a sub-pixel sliver (area < 0.5, so no fill subject) is deleted when covered', () => {
+		const sliver: PathData = {
+			id: 'sliver',
+			d: 'M 10 10 L 10.4 10 L 10.2 10.3 Z',
+			stroke: 'none',
+			fill: '#000',
+			strokeWidth: 0,
+			layerId: 'default',
+			clipDerived: true,
+			faded: true,
+		};
+		const after = splitPathsByEraser([sliver], trail(8, 10, 14, 10), 6, () => false);
+		assert.equal(after.length, 0, `sub-pixel sliver survived: ${JSON.stringify(after)}`);
+	});
 });
 
 describe('fade eraser normalising a stack', () => {
