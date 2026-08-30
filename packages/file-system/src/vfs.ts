@@ -175,6 +175,11 @@ export class VfsService {
 	private readonly changeBus = createChangeBus();
 	/** `sweepOnLoad` is once per instance, however many mounts call it. */
 	private sweptThisLoad = false;
+	/**
+	 * Instance hook for e2e (Vite may load a second module copy of vfs.ts).
+	 * Unit tests can still assign `compactCrash.hook`.
+	 */
+	compactCrashHook: typeof compactCrash.hook = null;
 
 	constructor(opts: VfsServiceOptions = {}) {
 		this.db = new SharedVfsDatabase(opts.dbName ?? 'SharedVFS');
@@ -2359,7 +2364,7 @@ export class VfsService {
 					`Pack compaction verification failed: expected ${cursor} bytes, wrote ${onDisk.size}`
 				);
 			}
-			if (compactCrash.hook) await compactCrash.hook('after-write', newPath, packPath);
+			await this.runCompactCrash('after-write', newPath, packPath);
 
 			let swapped = 0;
 			await this.db.transaction('rw', this.db.blobRefs, async () => {
@@ -2376,7 +2381,7 @@ export class VfsService {
 				}
 			});
 
-			if (compactCrash.hook) await compactCrash.hook('after-swap', newPath, packPath);
+			await this.runCompactCrash('after-swap', newPath, packPath);
 
 			const stillNamed = await this.db.blobRefs.where('opfsPath').equals(packPath).first();
 			if (stillNamed) {
@@ -2389,7 +2394,7 @@ export class VfsService {
 				// happened; the old file goes away when those refs are released.
 				return swapped > 0 ? Math.max(0, before - cursor) : 0;
 			}
-			if (compactCrash.hook) await compactCrash.hook('before-unlink', newPath, packPath);
+			await this.runCompactCrash('before-unlink', newPath, packPath);
 			try {
 				await this.opfs.remove(packPath);
 			} catch {
@@ -2407,6 +2412,15 @@ export class VfsService {
 			owner: generateId('packw'),
 			expiresAt: Date.now() + Math.max(this.graceMs, 60_000)
 		});
+	}
+
+	private async runCompactCrash(
+		phase: CompactCrashPhase,
+		newPath: string,
+		oldPath: string
+	): Promise<void> {
+		const hook = this.compactCrashHook ?? compactCrash.hook;
+		if (hook) await hook(phase, newPath, oldPath);
 	}
 
 	private async dropPackWrite(opfsPath: string): Promise<void> {

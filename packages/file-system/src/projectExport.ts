@@ -407,6 +407,17 @@ async function importBundle(
 		}>;
 	};
 
+	if (mode === 'as-before') {
+		for (const f of manifest.files) {
+			if (f.pack && !byName.get(f.pack)) {
+				throw new VfsError(
+					'OPFS_IO',
+					`Bundle is missing pack ${f.pack}; refusing to import a tree with no bytes`
+				);
+			}
+		}
+	}
+
 	const root = await vfs.mkdir(parentId, nameHint ?? manifest.name ?? 'Imported project');
 	const dirIds = await ensureFolders(vfs, root.id, manifest.folders ?? []);
 
