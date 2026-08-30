@@ -50,7 +50,26 @@ export type SvgPathElement = {
     opacity?: number;
 };
 
-export type SvgElement = SvgLineElement | SvgPathElement;
+export type SvgTextAnchor = 'start' | 'middle' | 'end';
+
+export type SvgTextElement = {
+    type: 'text';
+    id: string;
+    x: number;
+    y: number;
+    text: string;
+    fontFamily: string;
+    fontSize: number;
+    fill: string;
+    fontWeight?: number;
+    anchor?: SvgTextAnchor;
+    rotation?: number;
+    /** Optional wrap width in user units. */
+    width?: number;
+    opacity?: number;
+};
+
+export type SvgElement = SvgLineElement | SvgPathElement | SvgTextElement;
 
 export type PdfTransform = { x: number; y: number; rotation?: number; sx?: number; sy?: number };
 
