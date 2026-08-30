@@ -84,7 +84,9 @@
 		getCrossWindowDrag,
 		clearCrossWindowDrag,
 		setPointerDragActive,
-		isPointerDragActive
+		isPointerDragActive,
+		isFileDragLive,
+		subscribeCrossWindowDrag
 	} from './crossWindowDnd.js';
 	import {
 		getMemoryVfs,
@@ -374,6 +376,13 @@
 	let crossDragFrom = $state<PaneId | null>(null);
 	let crossOver = $state<PaneId | null>(null);
 	let sendBusy = $state(false);
+	/** Source pane while the user picks a copy-across dest (3+ windows). */
+	let copyPickFrom = $state<PaneId | null>(null);
+	/** Other DualPaneExplorer instances (hub panes) publishing a file drag. */
+	let foreignDragLive = $state(false);
+	const hideTargetChrome = $derived(
+		Boolean(crossDragFrom || copyPickFrom || foreignDragLive)
+	);
 
 	let copyDestPane = $state<PaneId | null>(null);
 	let copyDestDriverKey = $state<string | null>(null);
@@ -713,9 +722,6 @@
 			subscribeTabChannel(HUB_VAULT_CHANNEL, onVault),
 			subscribeVaultSession(onVault)
 		];
-		profileTabUnsub = () => {
-			for (const u of unsubs) u();
-		};
 		const mem = getMemoryVfs();
 		memoryVfs = mem;
 		void mem.ready().then(() => installMemoryFilesHook(mem));
@@ -727,6 +733,14 @@
 		window.addEventListener('pointermove', onWinPointerMove, { passive: true });
 		window.addEventListener('pointerup', onWinPointerUp);
 		window.addEventListener('pointercancel', onWinPointerUp);
+		const unsubDrag = subscribeCrossWindowDrag(() => {
+			foreignDragLive = isFileDragLive();
+			if (!foreignDragLive && !crossDragFrom) clearWindowDropTargets();
+		});
+		profileTabUnsub = () => {
+			for (const u of unsubs) u();
+			unsubDrag();
+		};
 	});
 
 	onDestroy(() => {
@@ -737,6 +751,7 @@
 		window.removeEventListener('pointermove', onWinPointerMove);
 		window.removeEventListener('pointerup', onWinPointerUp);
 		window.removeEventListener('pointercancel', onWinPointerUp);
+		clearWindowDropTargets();
 		if (watchPollTimer) {
 			clearInterval(watchPollTimer);
 			watchPollTimer = null;
@@ -1062,6 +1077,7 @@
 		} else {
 			clearCrossWindowDrag();
 		}
+		copyPickFrom = null;
 		if (!dualPane || !showCopyAcross) return;
 		crossDragFrom = id;
 		crossOver = null;
@@ -1127,6 +1143,7 @@
 			e.stopPropagation();
 			if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
 			crossOver = id;
+			markWindowDropTargetsFromEl(e.currentTarget as HTMLElement, crossDragFrom);
 			return;
 		}
 		if (
@@ -1138,6 +1155,7 @@
 			e.stopPropagation();
 			if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
 			crossOver = id;
+			markWindowDropTargetsFromEl(e.currentTarget as HTMLElement, null);
 			return;
 		}
 	}
@@ -1153,6 +1171,7 @@
 		crossDragFrom = null;
 		crossOver = null;
 		osDropPane = null;
+		clearWindowDropTargets();
 		clearCrossWindowDrag();
 		setPointerDragActive(false);
 	}
@@ -1175,14 +1194,17 @@
 				sourceLabel: paneConnectionLabel(id)
 			});
 		}
+		copyPickFrom = null;
 		if (!dualPane || !showCopyAcross) return;
 		crossDragFrom = id;
 		crossOver = null;
 	}
 
 	function hitFromPoint(clientX: number, clientY: number): Element | null {
-		const el =
-			typeof document !== 'undefined' ? document.elementFromPoint(clientX, clientY) : null;
+		if (typeof document === 'undefined' || typeof document.elementFromPoint !== 'function') {
+			return null;
+		}
+		const el = document.elementFromPoint(clientX, clientY);
 		return el instanceof Element ? el : null;
 	}
 
@@ -1190,6 +1212,28 @@
 		if (!hit) return null;
 		const paneEl = hit.closest('[data-pane]');
 		return paneEl instanceof HTMLElement ? paneEl : null;
+	}
+
+	function clearWindowDropTargets() {
+		if (typeof document === 'undefined') return;
+		for (const el of document.querySelectorAll('.pl-leaf.is-file-drop-target, .aw-leaf.is-file-drop-target')) {
+			el.classList.remove('is-file-drop-target');
+		}
+	}
+
+	function markWindowDropTargetsFromEl(paneEl: HTMLElement | null, sourcePane: PaneId | null) {
+		clearWindowDropTargets();
+		if (!paneEl) return;
+		const id = paneEl.getAttribute('data-pane');
+		if (!id || id === sourcePane) return;
+		const aw = paneEl.closest('.aw-leaf');
+		if (aw instanceof HTMLElement) aw.classList.add('is-file-drop-target');
+		const pl = paneEl.closest('.pl-leaf');
+		if (pl instanceof HTMLElement) pl.classList.add('is-file-drop-target');
+	}
+
+	function markWindowDropTargets(clientX: number, clientY: number, sourcePane: PaneId | null) {
+		markWindowDropTargetsFromEl(paneElFromHit(hitFromPoint(clientX, clientY)), sourcePane);
 	}
 
 	function onWinPointerMove(e: PointerEvent) {
@@ -1204,9 +1248,16 @@
 			crossOver = null;
 			return;
 		}
-		if (crossDragFrom && id !== crossDragFrom) crossOver = id;
-		else if (!crossDragFrom && getCrossWindowDrag()) crossOver = id;
-		else crossOver = null;
+		if (crossDragFrom && id !== crossDragFrom) {
+			crossOver = id;
+			markWindowDropTargets(e.clientX, e.clientY, crossDragFrom);
+		} else if (!crossDragFrom && getCrossWindowDrag()) {
+			crossOver = id;
+			markWindowDropTargets(e.clientX, e.clientY, null);
+		} else {
+			crossOver = null;
+			clearWindowDropTargets();
+		}
 	}
 
 	async function onWinPointerUp(e: PointerEvent) {
@@ -1224,7 +1275,7 @@
 				const selectedIds =
 					getCrossWindowDrag()?.selectedIds ?? paneState(from).ctx.selectedIds;
 				onPaneDragEnd();
-				await runCopyAcross(from, { selectedIds, destParentId });
+				await runCopyAcross(from, { selectedIds, destParentId, destId: id });
 				return;
 			}
 			if (id && !crossDragFrom) {
@@ -1278,7 +1329,7 @@
 			const selectedIds = dragged.length ? dragged : src.ctx.selectedIds;
 			const destParentId = destParentFromDropEvent(e, dst.ctx.parentId);
 			onPaneDragEnd();
-			await runCopyAcross(from, { selectedIds, destParentId });
+			await runCopyAcross(from, { selectedIds, destParentId, destId: id });
 			return;
 		}
 		const crossDrag = !crossDragFrom ? getCrossWindowDrag() : null;
@@ -1303,14 +1354,18 @@
 		onPaneDragEnd();
 	}
 
+	function otherLeaves(from: PaneId) {
+		return listLeaves(windowRoot).filter((l) => l.id !== from);
+	}
+
 	function copyHints(id: PaneId): {
 		copyOut: ReturnType<typeof describeCopyAcrossPath> | null;
 		copyIn: ReturnType<typeof describeCopyAcrossPath> | null;
 		copyOtherLabel: string;
 		copyIdleNote: string | null;
 	} {
-		const leaves = listLeaves(windowRoot);
-		if (leaves.length <= 1) {
+		const dests = otherLeaves(id);
+		if (dests.length === 0) {
 			return {
 				copyOut: null,
 				copyIn: null,
@@ -1318,8 +1373,15 @@
 				copyIdleNote: 'Open another window to copy between locations.'
 			};
 		}
-		const otherLeaf = leaves.find((l) => l.id !== id) ?? leaves[0]!;
-		const otherId: PaneId = otherLeaf.id;
+		if (dests.length > 1) {
+			return {
+				copyOut: null,
+				copyIn: null,
+				copyOtherLabel: 'another window',
+				copyIdleNote: 'Click Copy across, then choose a destination window.'
+			};
+		}
+		const otherId: PaneId = dests[0]!.id;
 		const mine = activeDriver(paneState(id), id);
 		const other = activeDriver(paneState(otherId), otherId);
 		const myLabel = paneConnectionLabel(id);
@@ -1379,14 +1441,30 @@
 		});
 	}
 
+	function cancelCopyPick() {
+		copyPickFrom = null;
+	}
+
+	function confirmCopyPick(destId: PaneId) {
+		const from = copyPickFrom;
+		copyPickFrom = null;
+		if (!from || from === destId) return;
+		void runCopyAcross(from, { destId });
+	}
+
 	async function runCopyAcross(
 		from: PaneId,
 		opts?: { selectedIds?: string[]; destParentId?: string | null; destId?: PaneId }
 	) {
-		const leaves = listLeaves(windowRoot);
-		if (leaves.length <= 1) return;
+		const dests = otherLeaves(from);
+		if (dests.length === 0) return;
+		if (!opts?.destId && dests.length > 1) {
+			copyPickFrom = copyPickFrom === from ? null : from;
+			return;
+		}
 		const src = paneState(from);
-		let destId: PaneId = opts?.destId ?? (targetPaneId !== from ? targetPaneId : (leaves.find((l) => l.id !== from)?.id ?? 'left'));
+		const destId: PaneId = opts?.destId ?? dests[0]!.id;
+		copyPickFrom = null;
 		const dst = paneState(destId);
 		const sourceDriver = activeDriver(src, from);
 		const destDriver = activeDriver(dst, destId);
@@ -1597,7 +1675,21 @@
 			releaseRemote(p.activeKind, p.activeId);
 		}
 		targetPaneId = resolveTargetFilePaneId(windows, focusedId, targetPaneId);
+		if (copyPickFrom === leafId || otherLeaves(copyPickFrom ?? '').length < 2) {
+			copyPickFrom = null;
+		}
 	}
+
+	$effect(() => {
+		if (!copyPickFrom) return;
+		const onKey = (e: KeyboardEvent) => {
+			if (e.key !== 'Escape') return;
+			e.preventDefault();
+			cancelCopyPick();
+		};
+		window.addEventListener('keydown', onKey);
+		return () => window.removeEventListener('keydown', onKey);
+	});
 
 </script>
 
@@ -1629,6 +1721,15 @@
 
 {#snippet copyAcrossAction(id: PaneId, variant: 'icon' | 'label')}
 	{@const p = paneState(id)}
+	{@const picking = copyPickFrom === id}
+	{@const manyDests = otherLeaves(id).length > 1}
+	{@const copyTip = copyBusy
+		? 'Copying…'
+		: picking
+			? 'Cancel copy'
+			: manyDests
+				? 'Copy across — then click a destination window'
+				: 'Copy across'}
 	{#if showCopyAcross}
 		{#if variant === 'label'}
 			<button
@@ -1636,15 +1737,17 @@
 				class="ds-btn ds-btn--sm ds-btn--secondary"
 				data-testid="fe-file-preview-copy-across"
 				disabled={copyBusy || p.ctx.selectedIds.length === 0}
+				aria-pressed={picking}
 				onclick={() => runCopyAcross(id)}
 			>
-				{copyBusy ? 'Copying…' : 'Copy across'}
+				{copyBusy ? 'Copying…' : picking ? 'Choose a window…' : 'Copy across'}
 			</button>
 		{:else}
 			<FeTipIconBtn
 				testid={tids.copyAcross(id)}
-				tip={copyBusy ? 'Copying…' : 'Copy across'}
+				tip={copyTip}
 				icon="arrow-left-right"
+				pressed={picking}
 				disabled={copyBusy || p.ctx.selectedIds.length === 0}
 				onclick={() => runCopyAcross(id)}
 			/>
@@ -1660,11 +1763,13 @@
 	<!-- svelte-ignore a11y_no_static_element_interactions -->
 	<div
 		class="files-pane"
-		class:is-target={id === targetPaneId}
+		class:is-target={id === targetPaneId && !hideTargetChrome}
 		class:drop-target={crossOver === id || osDropPane === id}
+		class:copy-pick-dest={copyPickFrom != null && copyPickFrom !== id}
 		data-testid={tids.pane(id)}
 		data-pane={id}
 		data-fe-target={id === targetPaneId ? 'true' : 'false'}
+		data-copy-pick={copyPickFrom != null && copyPickFrom !== id ? 'dest' : copyPickFrom === id ? 'source' : undefined}
 		ondragstart={(e) => onPaneDragStart(id, e)}
 		ondragover={(e) => onPaneDragOver(id, e)}
 		ondragleave={(e) => onPaneDragLeave(id, e)}
@@ -1679,6 +1784,20 @@
 			targetPaneId = id;
 		}}
 	>
+		{#if copyPickFrom && copyPickFrom !== id}
+			<button
+				type="button"
+				class="files-copy-dest-overlay"
+				data-testid="fe-copy-dest-overlay-{id}"
+				onclick={(e) => {
+					e.stopPropagation();
+					confirmCopyPick(id);
+				}}
+			>
+				<span class="files-copy-dest-overlay-title">Copy here</span>
+				<span class="files-copy-dest-overlay-label">{paneConnectionLabel(id)}</span>
+			</button>
+		{/if}
 		{#if !hostSettings && (onSend || subTid)}
 			<div class="pane-chrome" data-testid={tids.paneChrome(id)}>
 				{#if onSend}
@@ -1799,7 +1918,7 @@
 						onOpen={paneOnOpen('peer')}
 						onOpenProject={paneOpenProject(id)}
 						pending={panePending(id)}
-						isTarget={id === targetPaneId}
+						isTarget={id === targetPaneId && !hideTargetChrome}
 						onCopyAcrossFromClipboard={(payload, destParent) =>
 							handleClipboardCopyAcross(payload, id, destParent)}
 						onContextChange={(ctx) => applyPaneCtx(id, ctx)}
@@ -1836,7 +1955,7 @@
 								: undefined
 						}
 						pending={panePending(id)}
-						isTarget={id === targetPaneId}
+						isTarget={id === targetPaneId && !hideTargetChrome}
 						onCopyAcrossFromClipboard={(payload, destParent) =>
 							handleClipboardCopyAcross(payload, id, destParent)}
 						onContextChange={(ctx) => applyPaneCtx(id, ctx)}
@@ -1871,7 +1990,7 @@
 								: undefined
 						}
 						pending={panePending(id)}
-						isTarget={id === targetPaneId}
+						isTarget={id === targetPaneId && !hideTargetChrome}
 						onCopyAcrossFromClipboard={(payload, destParent) =>
 							handleClipboardCopyAcross(payload, id, destParent)}
 						onContextChange={(ctx) => applyPaneCtx(id, ctx)}
@@ -2007,14 +2126,19 @@
 				targetPaneId = id;
 			}}
 			{onAfterClose}
-			leafClass={(id) => (id === targetPaneId ? 'files-pane-slot is-target' : 'files-pane-slot')}
+			leafClass={(id) => {
+				const bits = ['files-pane-slot'];
+				if (id === targetPaneId && !hideTargetChrome) bits.push('is-target');
+				if (crossOver === id || osDropPane === id) bits.push('drop-target');
+				return bits.join(' ');
+			}}
 			leafProps={(id) => ({
-				'data-fe-target': id === targetPaneId ? 'true' : 'false',
+				'data-fe-target': id === targetPaneId && !hideTargetChrome ? 'true' : 'false',
 				'data-pane': id
 			})}
 		>
 			{#snippet leafChrome({ id })}
-				{#if id === targetPaneId && !windowEditOpen && leafCount(windowRoot) > 1}
+				{#if id === targetPaneId && !windowEditOpen && leafCount(windowRoot) > 1 && !hideTargetChrome}
 					<div class="fe-target-chip" data-testid="files-window-target">Target</div>
 				{/if}
 			{/snippet}
@@ -2207,6 +2331,7 @@
 		border-color: var(--accent, #3b82f6);
 	}
 	.files-pane {
+		position: relative;
 		min-width: 0;
 		min-height: 0;
 		flex: 1 1 0;
@@ -2218,6 +2343,45 @@
 		outline: 2px solid var(--accent);
 		outline-offset: -2px;
 		background: var(--accent-glow);
+	}
+	:global(.aw-leaf.drop-target),
+	:global(.aw-leaf.is-file-drop-target),
+	:global(.pl-leaf.is-file-drop-target) {
+		outline: 2px solid var(--accent);
+		outline-offset: -2px;
+		box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 55%, transparent);
+	}
+	.files-copy-dest-overlay {
+		position: absolute;
+		inset: 0;
+		z-index: 30;
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		justify-content: center;
+		gap: 0.35rem;
+		margin: 0;
+		padding: 1rem;
+		border: 2px dashed var(--accent);
+		background: color-mix(in srgb, var(--accent) 28%, var(--surface-1));
+		color: var(--text-primary);
+		cursor: pointer;
+		font: inherit;
+	}
+	.files-copy-dest-overlay:hover,
+	.files-copy-dest-overlay:focus-visible {
+		background: color-mix(in srgb, var(--accent) 42%, var(--surface-1));
+		outline: none;
+	}
+	.files-copy-dest-overlay-title {
+		font-size: var(--text-sm);
+		font-weight: 650;
+		letter-spacing: 0.04em;
+		text-transform: uppercase;
+	}
+	.files-copy-dest-overlay-label {
+		font-size: var(--text-xs);
+		color: var(--text-muted);
 	}
 	.pane-chrome {
 		display: flex;

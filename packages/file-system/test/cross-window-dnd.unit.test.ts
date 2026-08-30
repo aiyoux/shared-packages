@@ -4,6 +4,8 @@ import {
 	setCrossWindowDrag,
 	getCrossWindowDrag,
 	clearCrossWindowDrag,
+	subscribeCrossWindowDrag,
+	isFileDragLive,
 	type CrossWindowDragSession
 } from '../src/ui/crossWindowDnd.ts';
 import type { ExplorerDriver, ExplorerEntry } from '../src/ui/explorerDriver.ts';
@@ -68,6 +70,23 @@ describe('crossWindowDnd', () => {
 		assert.notEqual(getCrossWindowDrag(), null);
 		clearCrossWindowDrag();
 		assert.equal(getCrossWindowDrag(), null);
+	});
+
+	it('subscribeCrossWindowDrag fires on set and clear', () => {
+		let n = 0;
+		const off = subscribeCrossWindowDrag(() => {
+			n += 1;
+		});
+		setCrossWindowDrag({
+			sourceDriver: stubDriver,
+			sourceEntries: stubEntries,
+			selectedIds: ['f1']
+		});
+		assert.equal(isFileDragLive(), true);
+		clearCrossWindowDrag();
+		assert.equal(isFileDragLive(), false);
+		assert.equal(n, 2);
+		off();
 	});
 
 	it('setCrossWindowDrag overwrites a previous session', () => {

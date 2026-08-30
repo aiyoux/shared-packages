@@ -164,6 +164,12 @@ export function destParentFromDropEvent(
 ): string | null {
 	const el = e.target as { closest?: (sel: string) => { getAttribute(name: string): string | null } | null } | null;
 	if (!el || typeof el.closest !== 'function') return fallback;
+	const dropParent = el.closest('[data-fe-drop-parent]');
+	if (dropParent) {
+		const raw = dropParent.getAttribute('data-fe-drop-parent');
+		if (raw === '') return null;
+		if (raw) return raw;
+	}
 	const row = el.closest('[data-fe-row-id]');
 	if (row?.getAttribute('data-fe-kind') === 'folder') {
 		return row.getAttribute('data-fe-row-id');

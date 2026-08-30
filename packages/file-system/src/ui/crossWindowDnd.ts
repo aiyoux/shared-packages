@@ -25,15 +25,34 @@ export type CrossWindowDragSession = {
 let activeDrag: CrossWindowDragSession | null = null;
 /** True while FileExplorer is driving a touch/pen drag (no HTML5 DragEvents). */
 let pointerDragActive = false;
+const listeners = new Set<() => void>();
+
+function notifyDragListeners(): void {
+	for (const fn of listeners) fn();
+}
+
+/** Subscribe to start/end of a cross-window file drag (Target chip, drop outlines). */
+export function subscribeCrossWindowDrag(fn: () => void): () => void {
+	listeners.add(fn);
+	return () => {
+		listeners.delete(fn);
+	};
+}
+
+export function isFileDragLive(): boolean {
+	return activeDrag != null || pointerDragActive;
+}
 
 /** Register the source info for an ongoing drag. Called on pane `dragstart`. */
 export function setCrossWindowDrag(session: CrossWindowDragSession): void {
 	activeDrag = session;
+	notifyDragListeners();
 }
 
 /** Touch/pen drag (HTML5 DnD does not fire on most mobile browsers). */
 export function setPointerDragActive(on: boolean): void {
 	pointerDragActive = on;
+	notifyDragListeners();
 }
 
 export function isPointerDragActive(): boolean {
@@ -52,4 +71,5 @@ export function getCrossWindowDrag(): CrossWindowDragSession | null {
 /** Clear the shared session. Called on pane `dragend`. */
 export function clearCrossWindowDrag(): void {
 	activeDrag = null;
+	notifyDragListeners();
 }

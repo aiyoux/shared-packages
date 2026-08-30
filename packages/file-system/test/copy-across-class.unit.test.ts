@@ -129,11 +129,30 @@ describe('cross-pane drag payload', () => {
 				return null;
 			},
 			closest(sel: string) {
+				if (sel === '[data-fe-drop-parent]') return null;
 				return sel === '[data-fe-row-id]' ? folder : null;
 			}
 		};
-		const name = { closest: (sel: string) => (sel === '[data-fe-row-id]' ? folder : null) };
+		const name = {
+			closest(sel: string) {
+				if (sel === '[data-fe-drop-parent]') return null;
+				return sel === '[data-fe-row-id]' ? folder : null;
+			}
+		};
 		assert.equal(destParentFromDropEvent({ target: name as unknown as EventTarget }, 'root'), 'fld1');
+
+		const treeFolder = {
+			getAttribute(name: string) {
+				return name === 'data-fe-drop-parent' ? 'tree-fld' : null;
+			},
+			closest(sel: string) {
+				return sel === '[data-fe-drop-parent]' ? treeFolder : null;
+			}
+		};
+		assert.equal(
+			destParentFromDropEvent({ target: treeFolder as unknown as EventTarget }, 'root'),
+			'tree-fld'
+		);
 
 		const file = {
 			getAttribute(name: string) {
@@ -142,6 +161,7 @@ describe('cross-pane drag payload', () => {
 				return null;
 			},
 			closest(sel: string) {
+				if (sel === '[data-fe-drop-parent]') return null;
 				return sel === '[data-fe-row-id]' ? file : null;
 			}
 		};

@@ -72,6 +72,8 @@ export {
 	clearCrossWindowDrag,
 	setPointerDragActive,
 	isPointerDragActive,
+	isFileDragLive,
+	subscribeCrossWindowDrag,
 	type CrossWindowDragSession
 } from './crossWindowDnd.js';
 export {
@@ -129,6 +131,7 @@ export {
 } from './stackProgress.js';
 export {
 	httpDownloadIsSafe,
+	mediaSrcIsEmbeddable,
 	saveFileToDisk,
 	triggerHttpDownload,
 	triggerBlobDownload,

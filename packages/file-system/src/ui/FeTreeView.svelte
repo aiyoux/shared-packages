@@ -19,6 +19,7 @@
 	import { untrack } from 'svelte';
 	import FeIcon from './FeIcon.svelte';
 	import type { ExplorerDriver, ExplorerEntry, ExplorerEntryId } from './explorerDriver.js';
+	import { dataTransferHasExplorerIds } from './copyAcross.js';
 
 	let {
 		driver,
@@ -59,17 +60,22 @@
 	} = $props();
 
 	function onFolderDragOver(e: DragEvent, parentId: ExplorerEntryId | null) {
-		if (!dropActive) return;
+		const foreign = dataTransferHasExplorerIds(e.dataTransfer);
+		if (!dropActive && !foreign) return;
 		e.preventDefault();
-		e.stopPropagation();
+		if (onDropInto) e.stopPropagation();
+		if (e.dataTransfer && !onDropInto) e.dataTransfer.dropEffect = 'copy';
 		onDragOverInto?.(parentId);
 	}
 
 	function onFolderDrop(e: DragEvent, parentId: ExplorerEntryId | null) {
-		if (!dropActive) return;
-		e.preventDefault();
-		e.stopPropagation();
-		onDropInto?.(parentId);
+		if (onDropInto) {
+			e.preventDefault();
+			e.stopPropagation();
+			onDropInto(parentId);
+			return;
+		}
+		if (dataTransferHasExplorerIds(e.dataTransfer)) e.preventDefault();
 	}
 
 	const ROOT_KEY = '__root__';

@@ -10,6 +10,7 @@
 	} from './feThumbnails.js';
 	import type { ExplorerDriver, ExplorerEntry } from './explorerDriver.js';
 	import { canReadExplorerBlob, readExplorerBlob } from './explorerDriver.js';
+	import { mediaSrcIsEmbeddable } from './saveToDisk.js';
 
 	let {
 		entry,
@@ -85,7 +86,7 @@
 					try {
 						const loc = await d.downloadUrl(e.id);
 						if (cancelled) return;
-						if (loc?.url) {
+						if (loc?.url && mediaSrcIsEmbeddable(loc.url)) {
 							url = loc.url;
 							loadedId = e.id;
 							loading = false;

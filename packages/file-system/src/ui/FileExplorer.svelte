@@ -51,12 +51,16 @@
 	} from './treeDnd/index.js';
 	import {
 		FE_EXPLORER_IDS_MIME,
-		dataTransferHasOsFiles
+		dataTransferHasOsFiles,
+		dataTransferHasExplorerIds
 	} from './copyAcross.js';
 	import {
 		setCrossWindowDrag,
 		clearCrossWindowDrag,
-		setPointerDragActive
+		setPointerDragActive,
+		getCrossWindowDrag,
+		isPointerDragActive,
+		subscribeCrossWindowDrag
 	} from './crossWindowDnd.js';
 	import {
 		collectOsDrop,
@@ -294,9 +298,15 @@
 		};
 		pull();
 		archiveProgressUnsub = subscribeTransfers(pull);
+		const unsubDrag = subscribeCrossWindowDrag(() => {
+			if (getCrossWindowDrag() || isPointerDragActive()) return;
+			copyHoverActive = false;
+			if (!dnd.getState().active) clearDndHover();
+		});
 		return () => {
 			archiveProgressUnsub?.();
 			archiveProgressUnsub = null;
+			unsubDrag();
 		};
 	});
 	onDestroy(() => {
@@ -514,7 +524,10 @@
 	let dndZone = $state<DropZone | null>(null);
 	/** Same-pane move: dest folder from breadcrumb / tree. `undefined` = not a nav drop. */
 	let dndIntoId = $state<string | null | undefined>(undefined);
+	/** Hover chrome for a copy-across drag that started in another explorer. */
+	let copyHoverActive = $state(false);
 	let moveDragActive = $state(false);
+	const dropChromeActive = $derived(moveDragActive || copyHoverActive);
 	let moveDragLabel = $state('');
 	/** Overlay gap inside `.fe-list` (content coords). Null = hide the line. */
 	let dndLine = $state<{
@@ -675,6 +688,27 @@
 		};
 	}
 
+	function isForeignCopyDrag(e?: DragEvent): boolean {
+		if (dnd.getState().active) return false;
+		if (getCrossWindowDrag() || isPointerDragActive()) return true;
+		return Boolean(e && dataTransferHasExplorerIds(e.dataTransfer));
+	}
+
+	function applyForeignRowHover(n: ExplorerEntry) {
+		copyHoverActive = true;
+		if (n.kind === 'folder') {
+			dndTargetId = n.id;
+			dndZone = 'into';
+			dndIntoId = undefined;
+			dndLine = null;
+			return;
+		}
+		dndTargetId = null;
+		dndZone = 'into';
+		dndIntoId = parentId;
+		dndLine = null;
+	}
+
 	function applyRowHover(n: ExplorerEntry, clientX: number, clientY: number, rowEl: HTMLElement) {
 		if (!dnd.getState().active) return;
 		const rect = rowEl.getBoundingClientRect();
@@ -716,8 +750,12 @@
 	}
 
 	function hoverNavParent(parentId: string | null) {
-		if (!dnd.getState().active || !caps.supportsMove) return;
-		dnd.setDropTarget(null, 'into');
+		if (dnd.getState().active) {
+			if (!caps.supportsMove) return;
+			dnd.setDropTarget(null, 'into');
+		} else {
+			copyHoverActive = true;
+		}
 		dndTargetId = null;
 		dndZone = 'into';
 		dndLine = null;
@@ -896,6 +934,12 @@
 			osDropOver = true;
 			return;
 		}
+		if (isForeignCopyDrag(e)) {
+			e.preventDefault();
+			if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+			applyForeignRowHover(n);
+			return;
+		}
 		if (!dnd.getState().active) return;
 		e.preventDefault();
 		applyRowHover(n, e.clientX, e.clientY, e.currentTarget as HTMLElement);
@@ -904,6 +948,12 @@
 
 	function onNavDragOver(e: DragEvent, destParentId: string | null) {
 		if (allowOsFileDrag(e)) return;
+		if (isForeignCopyDrag(e)) {
+			e.preventDefault();
+			if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+			hoverNavParent(destParentId);
+			return;
+		}
 		if (!dnd.getState().active || !caps.supportsMove) return;
 		e.preventDefault();
 		e.stopPropagation();
@@ -913,6 +963,10 @@
 
 	function onNavDrop(e: DragEvent, destParentId: string | null) {
 		if (allowOsFileDrag(e)) return;
+		if (isForeignCopyDrag(e)) {
+			e.preventDefault();
+			return;
+		}
 		if (!dnd.getState().active) return;
 		e.preventDefault();
 		e.stopPropagation();
@@ -2807,6 +2861,13 @@
 			osDropOver = true;
 			return;
 		}
+		if (isForeignCopyDrag(e)) {
+			if ((e.target as HTMLElement).closest?.('.fe-row')) return;
+			e.preventDefault();
+			if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+			hoverNavParent(parentId);
+			return;
+		}
 		if (!dnd.getState().active) return;
 		// empty list / padding → drop into current parent
 		if ((e.target as HTMLElement).closest?.('.fe-row')) return;
@@ -3032,14 +3093,14 @@
 			{#if driver.id !== 'memory'}
 				<nav
 					class="fe-pathbar"
-					class:drop-ready={moveDragActive}
+					class:drop-ready={dropChromeActive}
 					data-testid="fe-breadcrumbs"
 					aria-label="Current folder"
 				>
 					<button
 						type="button"
 						class="fe-crumb"
-						class:drop-target={moveDragActive && dndIntoId === null}
+						class:drop-target={dropChromeActive && dndIntoId === null}
 						data-testid="fe-crumb-root"
 						data-fe-drop-parent=""
 						onclick={() => goCrumb(null)}
@@ -3053,7 +3114,7 @@
 						<button
 							type="button"
 							class="fe-crumb"
-							class:drop-target={moveDragActive && dndIntoId === crumb.id}
+							class:drop-target={dropChromeActive && dndIntoId === crumb.id}
 							data-testid="fe-crumb"
 							data-id={crumb.id}
 							data-fe-drop-parent={crumb.id}
@@ -3405,10 +3466,10 @@
 				activeId={parentId}
 				{treeVersion}
 				onNavigate={goCrumb}
-				dropActive={moveDragActive}
+				dropActive={dropChromeActive}
 				dropTargetId={dndIntoId}
 				onDragOverInto={hoverNavParent}
-				onDropInto={(id) => void commitMoveInto(id)}
+				onDropInto={moveDragActive ? (id) => void commitMoveInto(id) : undefined}
 			/>
 		</aside>
 		<SplitHandle
@@ -3430,7 +3491,7 @@
 		data-testid="fe-list"
 		role="listbox"
 		aria-busy={listBusy ? 'true' : undefined}
-		class:os-drop={osDropOver}
+		class:os-drop={osDropOver || copyHoverActive}
 		bind:this={listEl}
 		ondragover={onListDragOver}
 		ondragleave={onListDragLeave}

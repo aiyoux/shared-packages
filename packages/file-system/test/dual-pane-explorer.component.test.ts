@@ -8,12 +8,17 @@ import DualPaneExplorer from '../src/ui/DualPaneExplorer.svelte';
 import { createLocalExplorerDriver } from '../src/ui/localExplorerDriver.ts';
 import type { OpenProjectContext } from '../src/ui/explorerDriver.ts';
 import { createVfs, resetSharedVfsForTests, type VfsService } from '../src/index.ts';
+import { getMemoryVfs, resetMemoryVfsForTests } from '../src/memoryVfs.ts';
+import { resetLayoutIdsForTests } from '@shared-packages/ui';
+import { FE_EXPLORER_IDS_MIME } from '../src/ui/copyAcross.ts';
 
 describe('DualPaneExplorer onOpenProject context', () => {
 	let vfs: VfsService;
 
 	beforeEach(async () => {
 		resetSharedVfsForTests();
+		resetMemoryVfsForTests();
+		resetLayoutIdsForTests();
 		localStorage.removeItem('fe:previewDock');
 		vfs = createVfs({
 			dbName: `dpe-open-${Date.now()}-${Math.random()}`,
@@ -174,10 +179,212 @@ describe('DualPaneExplorer onOpenProject context', () => {
 	});
 });
 
-async function viWaitFor(pred: () => boolean, ms = 4000) {
+function explorerDt(ids: string[]) {
+	const data = new Map<string, string>();
+	return {
+		data,
+		setData(type: string, val: string) {
+			data.set(type, val);
+		},
+		getData(type: string) {
+			return data.get(type) ?? '';
+		},
+		types: [FE_EXPLORER_IDS_MIME],
+		effectAllowed: 'copyMove',
+		dropEffect: 'copy'
+	};
+}
+
+async function splitToThreePanes(): Promise<{ pane2: string; pane3: string }> {
+	await viWaitFor(() => document.querySelectorAll('.files-pane[data-pane]').length >= 2);
+	await fireEvent.click(screen.getByTestId('fe-windows-btn'));
+	const splits = [...document.querySelectorAll('[data-testid="files-window-split-col"]')];
+	expect(splits.length).toBeGreaterThanOrEqual(2);
+	await fireEvent.click(splits[splits.length - 1]!);
+	await viWaitFor(() => document.querySelectorAll('.files-pane[data-pane]').length >= 3);
+	await fireEvent.click(screen.getByTestId('fe-windows-btn'));
+	const ids = [...document.querySelectorAll('.files-pane[data-pane]')].map(
+		(el) => el.getAttribute('data-pane')!
+	);
+	const unique = [...new Set(ids)];
+	expect(unique.length).toBeGreaterThanOrEqual(3);
+	const pane2 = unique.find((id) => id !== 'left')!;
+	const pane3 = unique.find((id) => id !== 'left' && id !== pane2)!;
+	return { pane2, pane3 };
+}
+
+async function switchPaneToMemory(paneId: string) {
+	const root =
+		(document.querySelector(`.files-pane[data-pane="${paneId}"]`) as HTMLElement | null) ??
+		(document.querySelector(`[data-testid="conn-switcher-${paneId}"]`) as HTMLElement | null);
+	if (!root) throw new Error(`pane ${paneId} not found`);
+	const trigger = root.querySelector('[data-testid="conn-trigger"]') as HTMLElement;
+	await fireEvent.click(trigger);
+	const mem =
+		(root.querySelector('[data-testid="conn-memory"]') as HTMLElement | null) ??
+		(document.querySelector('[data-testid="conn-memory"]') as HTMLElement | null);
+	if (!mem) throw new Error('conn-memory not found');
+	await fireEvent.click(mem);
+	await viWaitFor(() => {
+		const label = root.querySelector('[data-testid="conn-trigger"]')?.textContent ?? '';
+		return /memory/i.test(label);
+	});
+}
+
+describe('DualPaneExplorer copy-across destinations', () => {
+	let vfs: VfsService;
+
+	beforeEach(async () => {
+		resetSharedVfsForTests();
+		resetMemoryVfsForTests();
+		resetLayoutIdsForTests();
+		localStorage.removeItem('fe:previewDock');
+		vfs = createVfs({
+			dbName: `dpe-copy-${Date.now()}-${Math.random()}`,
+			memoryOpfs: true,
+			requestPersist: false
+		});
+		await vfs.ready();
+	});
+
+	it('hides Target and outlines the dest window while dragging across', async () => {
+		await vfs.writeFile({ parentId: null, name: 'drag-outline.txt', body: 'x' });
+		render(DualPaneExplorer, {
+			props: {
+				localDriver: createLocalExplorerDriver(vfs),
+				hideToggles: false,
+				dualPaneDefault: true,
+				dualPaneKey: `dpe:outline:${Math.random()}`
+			}
+		});
+		await viWaitFor(
+			() => document.querySelectorAll('[data-pane="left"] [data-testid="fe-file-row"]').length >= 1
+		);
+		await viWaitFor(() => document.querySelectorAll('.files-pane[data-pane]').length >= 2);
+		expect(document.querySelector('[data-testid="files-window-target"]')).toBeTruthy();
+
+		const src = document.querySelector(
+			'[data-pane="left"] [data-testid="fe-file-row"]'
+		) as HTMLElement;
+		const dest = [...document.querySelectorAll('.files-pane[data-pane]')].find(
+			(el) => el.getAttribute('data-pane') !== 'left'
+		) as HTMLElement;
+		const dt = explorerDt([src.getAttribute('data-fe-row-id')!]);
+		const startEv = new Event('dragstart', { bubbles: true, cancelable: true }) as DragEvent;
+		Object.defineProperty(startEv, 'dataTransfer', { value: dt });
+		src.dispatchEvent(startEv);
+		await viWaitFor(() => document.querySelector('[data-testid="files-window-target"]') == null);
+
+		const overEv = new MouseEvent('dragover', {
+			bubbles: true,
+			cancelable: true,
+			clientX: 8,
+			clientY: 8
+		}) as DragEvent;
+		Object.defineProperty(overEv, 'dataTransfer', { value: dt });
+		dest.dispatchEvent(overEv);
+		await viWaitFor(() => dest.classList.contains('drop-target'));
+		const aw = dest.closest('.aw-leaf');
+		expect(aw?.classList.contains('drop-target') || aw?.classList.contains('is-file-drop-target')).toBe(
+			true
+		);
+	});
+
+	it('two windows copy across immediately with no dest overlay', async () => {
+		await vfs.writeFile({ parentId: null, name: 'solo.txt', body: 'x' });
+		const key = `dpe:dual:${Math.random()}`;
+		render(DualPaneExplorer, {
+			props: {
+				localDriver: createLocalExplorerDriver(vfs),
+				hideToggles: false,
+				dualPaneDefault: true,
+				dualPaneKey: key
+			}
+		});
+		await viWaitFor(
+			() => document.querySelectorAll('[data-pane="left"] [data-testid="fe-file-row"]').length >= 1
+		);
+		const left = document.querySelector('[data-pane="left"]') as HTMLElement;
+		await fireEvent.click(left.querySelector('[data-testid="fe-file-row"]') as HTMLElement);
+		await fireEvent.click(left.querySelector('[data-testid="fe-copy-across-left"]') as HTMLElement);
+		expect(document.querySelectorAll('[data-testid^="fe-copy-dest-overlay-"]').length).toBe(0);
+	});
+
+	it('three windows: Copy across overlays every pane except the source', async () => {
+		await vfs.writeFile({ parentId: null, name: 'pick.txt', body: 'payload' });
+		render(DualPaneExplorer, {
+			props: {
+				localDriver: createLocalExplorerDriver(vfs),
+				hideToggles: false,
+				dualPaneDefault: true,
+				dualPaneKey: `dpe:triple:${Math.random()}`
+			}
+		});
+		await viWaitFor(
+			() => document.querySelectorAll('[data-pane="left"] [data-testid="fe-file-row"]').length >= 1
+		);
+		const { pane2, pane3 } = await splitToThreePanes();
+		await switchPaneToMemory(pane3);
+
+		expect(document.querySelectorAll('[data-testid^="fe-copy-dest-overlay-"]').length).toBe(0);
+		const left = document.querySelector('[data-pane="left"]') as HTMLElement;
+		await fireEvent.click(left.querySelector('[data-testid="fe-file-row"]') as HTMLElement);
+		await fireEvent.click(left.querySelector('[data-testid="fe-copy-across-left"]') as HTMLElement);
+
+		await viWaitFor(() => document.querySelector(`[data-testid="fe-copy-dest-overlay-${pane2}"]`) != null);
+		expect(document.querySelector(`[data-testid="fe-copy-dest-overlay-${pane3}"]`)).toBeTruthy();
+		expect(document.querySelector('[data-testid="fe-copy-dest-overlay-left"]')).toBeNull();
+
+		await fireEvent.click(
+			document.querySelector(`[data-testid="fe-copy-dest-overlay-${pane3}"]`) as HTMLElement
+		);
+		await viWaitFor(() => document.querySelectorAll('[data-testid^="fe-copy-dest-overlay-"]').length === 0);
+
+		await viWaitFor(async () => (await getMemoryVfs().list()).length >= 1);
+		const local = await vfs.list({ parentId: null });
+		expect(local.filter((n) => n.kind === 'file').length).toBe(1);
+	});
+
+	it('drop copies into the pane under the pointer, not the first other window', async () => {
+		const written = await vfs.writeFile({ parentId: null, name: 'drag-me.txt', body: 'payload' });
+		render(DualPaneExplorer, {
+			props: {
+				localDriver: createLocalExplorerDriver(vfs),
+				hideToggles: false,
+				dualPaneDefault: true,
+				dualPaneKey: `dpe:drop:${Math.random()}`
+			}
+		});
+		await viWaitFor(
+			() => document.querySelectorAll('[data-pane="left"] [data-testid="fe-file-row"]').length >= 1
+		);
+		const { pane2: _pane2, pane3 } = await splitToThreePanes();
+		await switchPaneToMemory(pane3);
+
+		const src = document.querySelector(
+			'[data-pane="left"] [data-testid="fe-file-row"]'
+		) as HTMLElement;
+		const dest = document.querySelector(`.files-pane[data-pane="${pane3}"]`) as HTMLElement;
+		const dt = explorerDt([written.id]);
+
+		const startEv = new Event('dragstart', { bubbles: true, cancelable: true }) as DragEvent;
+		Object.defineProperty(startEv, 'dataTransfer', { value: dt });
+		src.dispatchEvent(startEv);
+
+		const dropEv = new Event('drop', { bubbles: true, cancelable: true }) as DragEvent;
+		Object.defineProperty(dropEv, 'dataTransfer', { value: dt });
+		dest.dispatchEvent(dropEv);
+
+		await viWaitFor(async () => (await getMemoryVfs().list()).length >= 1);
+		const local = await vfs.list({ parentId: null });
+		expect(local.filter((n) => n.kind === 'file').length).toBe(1);
+	});
+});
+
+async function viWaitFor(pred: () => boolean | Promise<boolean>, ms = 4000) {
 	const start = Date.now();
 	while (Date.now() - start < ms) {
-		if (pred()) return;
+		if (await pred()) return;
 		await new Promise((r) => setTimeout(r, 40));
 	}
 	throw new Error('viWaitFor timeout');

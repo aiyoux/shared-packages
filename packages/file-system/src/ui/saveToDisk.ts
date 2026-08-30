@@ -47,6 +47,32 @@ export function httpDownloadIsSafe(url: string, pageHref?: string): boolean {
 	return true;
 }
 
+/**
+ * True when `<img>` / `<video>` / iframe may use `url` under hub CSP
+ * (`img-src`/`media-src`/`frame-src` = `'self' data: blob:`).
+ * Monitor `/v1/fs/read` is a different origin (port 8300 vs the hub) so it
+ * must not go in `src=` — fetch bytes and use a blob: URL instead.
+ */
+export function mediaSrcIsEmbeddable(url: string, pageHref?: string): boolean {
+	if (url.startsWith('blob:') || url.startsWith('data:')) return true;
+	let target: URL;
+	try {
+		target = new URL(
+			url,
+			pageHref ?? (typeof location !== 'undefined' ? location.href : undefined)
+		);
+	} catch {
+		return false;
+	}
+	const page = pageHref ?? (typeof location !== 'undefined' ? location.href : undefined);
+	if (!page) return false;
+	try {
+		return target.origin === new URL(page).origin;
+	} catch {
+		return false;
+	}
+}
+
 export function triggerHttpDownload(url: string, filename: string): void {
 	if (typeof document === 'undefined') return;
 	const a = document.createElement('a');

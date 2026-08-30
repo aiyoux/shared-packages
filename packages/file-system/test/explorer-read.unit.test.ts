@@ -6,6 +6,11 @@ import {
 	readExplorerBlob
 } from '../src/ui/explorerDriver.ts';
 
+if (typeof URL.createObjectURL !== 'function') {
+	URL.createObjectURL = () => `blob:node/${Math.random()}`;
+	URL.revokeObjectURL = () => {};
+}
+
 describe('readExplorerBlob', () => {
 	it('prefers readBlob then download', async () => {
 		const blob = new Blob(['from-read']);
@@ -23,15 +28,36 @@ describe('readExplorerBlob', () => {
 		assert.equal(canReadExplorerBlob({}), false);
 	});
 
-	it('loadExplorerMediaSrc uses downloadUrl when present', async () => {
+	it('loadExplorerMediaSrc uses same-origin downloadUrl', async () => {
 		const src = await loadExplorerMediaSrc(
 			{
-				downloadUrl: async () => ({ url: 'https://f000.example/file.pdf?Authorization=t', filename: 'file.pdf' }),
+				downloadUrl: async () => ({
+					url: 'http://127.0.0.1:7990/api/file.pdf',
+					filename: 'file.pdf'
+				}),
 				download: async () => new Blob(['nope'])
 			},
-			'file.pdf'
+			'file.pdf',
+			{ pageHref: 'http://127.0.0.1:7990/tools/files' }
 		);
-		assert.equal(src.url.startsWith('https://'), true);
+		assert.equal(src.url, 'http://127.0.0.1:7990/api/file.pdf');
 		assert.equal(src.blob, undefined);
+	});
+
+	it('loadExplorerMediaSrc blobs a cross-origin monitor read URL', async () => {
+		const src = await loadExplorerMediaSrc(
+			{
+				downloadUrl: async () => ({
+					url: 'http://127.0.0.1:8300/v1/fs/read?path=%2Fissue.png&download=issue.png',
+					filename: 'issue.png'
+				}),
+				download: async () => new Blob(['png-bytes'])
+			},
+			'issue.png',
+			{ pageHref: 'http://127.0.0.1:7990/tools/files' }
+		);
+		assert.equal(src.url.startsWith('blob:'), true);
+		assert.ok(src.blob);
+		assert.equal(await src.blob!.text(), 'png-bytes');
 	});
 });
