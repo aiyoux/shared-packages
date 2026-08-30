@@ -234,6 +234,57 @@ describe('fade eraser accumulation within one drag', () => {
 		assert.equal(passes.length, 2, `a retrace is two sweeps, got ${passes.length}`);
 	});
 
+	// Real thin-highlighter zigzag saved from the app (Highlighter issue.skch).
+	// Fast samples are 2–4px apart and the ink radius is 1.22px, so the last
+	// segment of a corner is longer than the retrace skip window. That used
+	// to classify the corner as a second pass — four fragments, each ending
+	// in a round cap, which stacked into the mini-circles at the peaks.
+	const HIGHLIGHTER_CORNER_STROKE: { x: number; y: number }[] = [
+		{ x: 237.2, y: 214.5 }, { x: 237.1, y: 216.4 }, { x: 236.6, y: 219.3 },
+		{ x: 235.7, y: 222.9 }, { x: 234.7, y: 227.4 }, { x: 233.6, y: 232.7 },
+		{ x: 232.6, y: 238.7 }, { x: 231.4, y: 245.4 }, { x: 230.1, y: 252.3 },
+		{ x: 228.7, y: 259.5 }, { x: 227.2, y: 266.0 }, { x: 225.6, y: 271.2 },
+		{ x: 224.2, y: 274.0 }, { x: 223.0, y: 274.7 }, { x: 221.7, y: 273.9 },
+		{ x: 219.5, y: 270.9 }, { x: 217.0, y: 266.5 }, { x: 214.4, y: 261.4 },
+		{ x: 211.6, y: 256.0 }, { x: 208.2, y: 251.0 }, { x: 204.9, y: 246.7 },
+		{ x: 201.6, y: 243.2 }, { x: 198.6, y: 240.2 }, { x: 195.9, y: 237.3 },
+		{ x: 193.0, y: 234.4 }, { x: 189.9, y: 230.9 }, { x: 186.8, y: 226.8 },
+		{ x: 183.9, y: 222.1 }, { x: 181.7, y: 217.1 }, { x: 179.9, y: 211.9 },
+		{ x: 178.4, y: 207.8 }, { x: 177.2, y: 205.1 }, { x: 176.6, y: 204.2 },
+		{ x: 176.3, y: 204.2 }, { x: 176.0, y: 204.8 }, { x: 175.5, y: 206.7 },
+		{ x: 174.9, y: 210.1 }, { x: 174.5, y: 214.1 }, { x: 174.0, y: 218.7 },
+		{ x: 173.6, y: 222.9 }, { x: 173.1, y: 226.6 }, { x: 172.5, y: 230.4 },
+		{ x: 171.6, y: 234.2 }, { x: 170.5, y: 238.1 }, { x: 169.1, y: 241.8 },
+		{ x: 167.6, y: 245.1 }, { x: 166.0, y: 248.1 }, { x: 164.3, y: 250.2 },
+		{ x: 162.4, y: 251.4 }, { x: 160.7, y: 251.7 }, { x: 159.0, y: 251.1 },
+		{ x: 157.1, y: 249.5 }, { x: 155.3, y: 247.1 }, { x: 153.6, y: 244.5 },
+		{ x: 152.1, y: 242.3 }, { x: 150.7, y: 240.9 }, { x: 149.4, y: 240.1 },
+		{ x: 147.9, y: 239.9 }, { x: 145.9, y: 240.4 }, { x: 143.6, y: 242.0 },
+		{ x: 141.0, y: 244.4 }, { x: 138.1, y: 247.3 }, { x: 135.7, y: 249.7 },
+		{ x: 133.7, y: 251.8 }, { x: 131.9, y: 253.7 }, { x: 130.0, y: 255.7 },
+		{ x: 128.3, y: 257.8 }, { x: 127.0, y: 259.8 }, { x: 125.8, y: 261.6 },
+		{ x: 124.6, y: 263.2 }, { x: 123.7, y: 264.4 }, { x: 122.6, y: 265.2 },
+		{ x: 122.3, y: 265.4 },
+	];
+
+	it('does not split a thin highlighter zigzag at its corners', () => {
+		const inkRadius = 2.44 / 2;
+		const passes = splitTrailIntoPasses(HIGHLIGHTER_CORNER_STROKE, inkRadius);
+		assert.equal(
+			passes.length,
+			1,
+			`a single zigzag is one stroke, got ${passes.length} (seams would stamp round-cap mini-circles)`,
+		);
+	});
+
+	it('still splits a thin back-and-forth scribble that retraces itself', () => {
+		const pts: { x: number; y: number }[] = [];
+		for (let x = 0; x <= 80; x += 4) pts.push({ x, y: 10 });
+		for (let x = 76; x >= 0; x -= 4) pts.push({ x, y: 10 });
+		const passes = splitTrailIntoPasses(pts, 2.44 / 2);
+		assert.ok(passes.length >= 2, `a retracing scribble must still split, got ${passes.length}`);
+	});
+
 	// Where the cut goes matters as much as whether there is one. The backtrack
 	// only ADDS UP to a radius well after the trail turned, and cutting there
 	// leaves the tip beyond the turn inside one pass while the ink around it is

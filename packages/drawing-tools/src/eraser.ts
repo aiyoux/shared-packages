@@ -623,10 +623,17 @@ const RETRACE_NEARNESS = 1;
 const retracesOwnPath = (current: Point[], b: Point, minBacktrack: number): boolean => {
     const skipBy = minBacktrack * (1 + RETRACE_NEARNESS);
     let skipped = 0;
+    // Walk back from `b` until the skip window is behind us, then search only
+    // that remaining prefix. The previous loop `break`s without stepping `i`
+    // off the live tail, so a last segment longer than `skipBy` (thin
+    // highlighter, a fast stroke whose samples are a few pixels apart) left
+    // `i` on the segment that *ends at b*. Distance-to-self is 0, every
+    // corner "retraced", and each seam stamped two overlapping round caps —
+    // the mini-circles on translucent marker.
     let i = current.length - 1;
-    for (; i > 1; i--) {
+    while (i > 1 && skipped < skipBy) {
         skipped += Math.hypot(current[i].x - current[i - 1].x, current[i].y - current[i - 1].y);
-        if (skipped >= skipBy) break;
+        i--;
     }
     const nearSq = (minBacktrack * RETRACE_NEARNESS) ** 2;
     for (let k = 1; k <= i; k++) {
