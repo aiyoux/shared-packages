@@ -156,7 +156,12 @@
 		{#if stats}
 			<dl class="stats" data-testid="project-stats">
 				<div><dt>Files</dt><dd data-testid="stat-files">{stats.files}</dd></div>
-				<div><dt>In packs</dt><dd data-testid="stat-packed">{stats.packedFiles}</dd></div>
+				<div>
+					<dt>In packs</dt>
+					<dd data-testid="stat-packed">
+						{stats.packedFiles}<span class="of">/{stats.files}</span>
+					</dd>
+				</div>
 				<div>
 					<dt title="Files that left their pack when they were edited">Drifted out</dt>
 					<dd data-testid="stat-drifted">{stats.driftedFiles}</dd>
@@ -167,10 +172,14 @@
 					<dd data-testid="stat-dead">{fmt(stats.deadBytes)}</dd>
 				</div>
 			</dl>
-			{#if stats.driftedFiles > 0 && stats.packs > 0}
+			{#if stats.packs > 0 && stats.files > stats.packedFiles}
 				<p class="hint" data-testid="project-drift-hint">
-					{stats.driftedFiles} file{stats.driftedFiles === 1 ? ' has' : 's have'} left their pack
-					through editing. Repacking pulls them back in.
+					{stats.files - stats.packedFiles} of {stats.files} files sit outside the pack{stats.driftedFiles >
+					0
+						? ` — ${stats.driftedFiles} drifted out when edited`
+						: ''}. Nothing joins a pack on its own: files added since, and every object git
+					writes, stay separate until you pack again. Packing is maintenance you repeat, not a
+					setting — in an active repo the packed share drops quickly.
 				</p>
 			{/if}
 		{/if}
@@ -390,6 +399,9 @@
 		font-family: var(--font-mono);
 		font-size: var(--text-sm);
 		color: var(--text-primary);
+	}
+	.stats dd .of {
+		color: var(--text-muted);
 	}
 	.note {
 		margin: 0;
