@@ -4,7 +4,7 @@ import { generateId } from './id.ts';
 import { flattenPathData } from './flatten.ts';
 import { strokeToRegion } from './offset.ts';
 import { safeUnionBarriers } from './bucketVector.ts';
-import { multiPolygonBox, type Box, boxesIntersect } from './rings.ts';
+import { multiPolygonBox, ringsToMultiPolygon, type Box, boxesIntersect } from './rings.ts';
 
 /**
  * Flatten overlapping ink into single shapes.
@@ -66,22 +66,22 @@ function combineKey(p: PathData): string | null {
 function pathRegion(p: PathData, tolerance: number): MultiPolygon {
     const subpaths = flattenPathData(p, tolerance);
     const hasFill = !!p.fill && p.fill !== 'none';
-    const parts: MultiPolygon[] = [];
 
+    if (hasFill) {
+        // Every subpath is a ring of ONE filled shape, so they have to be
+        // resolved TOGETHER. A ring nested inside another is that shape's hole,
+        // not a second solid blob: treating each ring as its own polygon and
+        // unioning them paints the hole in, so anything ring-shaped — a circle
+        // that was already combined once, a stroke the eraser punched a gap in,
+        // a bucket fill around an island — came back a solid disc.
+        return ringsToMultiPolygon(subpaths.filter(sub => sub.points.length > 2).map(sub => sub.points as Ring));
+    }
+
+    const parts: MultiPolygon[] = [];
     for (const sub of subpaths) {
         if (sub.points.length < 2) continue;
-        if (hasFill) {
-            const ring = sub.points.slice() as Ring;
-            if (ring.length > 2) {
-                const first = ring[0];
-                const last = ring[ring.length - 1];
-                if (first[0] !== last[0] || first[1] !== last[1]) ring.push([first[0], first[1]]);
-                parts.push([[ring]]);
-            }
-        } else {
-            const region = strokeToRegion(sub.points as Ring, p.strokeWidth || 1, sub.closed, tolerance);
-            if (region.length) parts.push(region);
-        }
+        const region = strokeToRegion(sub.points as Ring, p.strokeWidth || 1, sub.closed, tolerance);
+        if (region.length) parts.push(region);
     }
 
     if (parts.length === 0) return [];

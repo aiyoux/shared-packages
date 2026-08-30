@@ -94,6 +94,52 @@ function coverageMatches(before: PathData[], after: PathData[], box = { x0: -20,
 	return misses;
 }
 
+/**
+ * Does a filled path paint (x, y) under the NONZERO rule it is emitted with?
+ * `covered` above counts crossings across every ring together, which is the
+ * EVEN-ODD reading — it reports a hole as a hole no matter which way the rings
+ * are wound, so it cannot see a ring that renders solid. This can.
+ */
+function fillsUnderNonzero(p: PathData, x: number, y: number): boolean {
+	let winding = 0;
+	for (const sub of flattenPathData(p, 0.25)) {
+		const r = sub.points;
+		if (r.length < 3) continue;
+		for (let i = 0, j = r.length - 1; i < r.length; j = i++) {
+			const [xi, yi] = r[i], [xj, yj] = r[j];
+			const side = (xi - xj) * (y - yj) - (x - xj) * (yi - yj);
+			if (yj <= y) { if (yi > y && side > 0) winding++; }
+			else if (yi <= y && side < 0) winding--;
+		}
+	}
+	return winding !== 0;
+}
+
+/** A closed polygonal circle, as an SVG subpath. */
+function circleRing(cx: number, cy: number, r: number, reverse = false, steps = 48): string {
+	const pts: string[] = [];
+	for (let i = 0; i < steps; i++) {
+		const a = ((reverse ? -i : i) / steps) * Math.PI * 2;
+		pts.push(`${(cx + r * Math.cos(a)).toFixed(3)} ${(cy + r * Math.sin(a)).toFixed(3)}`);
+	}
+	return `M ${pts[0]} L ${pts.slice(1).join(' L ')} Z`;
+}
+
+/** A filled annulus: outer ring plus a hole wound the other way. */
+function ring(_label: string, extra: Partial<PathData>): PathData {
+	return stroke(`${circleRing(100, 100, 64)} ${circleRing(100, 100, 56, true)}`, { fillRule: 'nonzero', ...extra });
+}
+
+/** One quarter of a circle, as an open stroke. `a0`/`a1` are in half-turns. */
+function arcStroke(a0: number, a1: number, r = 60, cx = 100, cy = 100): PathData {
+	const pts: string[] = [];
+	for (let i = 0; i <= 24; i++) {
+		const a = (a0 + (a1 - a0) * (i / 24)) * Math.PI;
+		pts.push(`${(cx + r * Math.cos(a)).toFixed(3)} ${(cy + r * Math.sin(a)).toFixed(3)}`);
+	}
+	return stroke(`M ${pts[0]} L ${pts.slice(1).join(' L ')}`);
+}
+
 describe('combineStrokes', () => {
 	it('merges a stack of overlapping same-ink strokes into one shape', () => {
 		const before = [
@@ -188,6 +234,38 @@ describe('combineStrokes', () => {
 		const result = combineStrokes(before);
 		assert.equal(result.produced, 1, 'a distant stroke should not block combining');
 		assert.equal(result.paths.length, 2);
+	});
+
+	it('keeps the hole in a ring-shaped path instead of filling it solid', () => {
+		// A path whose `d` carries an outer ring AND a hole ring is ONE filled
+		// shape, not two blobs — a circle that was combined once already, or a
+		// stroke the eraser punched a gap in. Merging it must not paint the
+		// middle in.
+		const before = [
+			ring('M 100 100 r 64 + hole r 56', { fill: '#000', stroke: 'none', strokeWidth: 0 }),
+			stroke(circleRing(100, 36, 10), { fill: '#000', stroke: 'none', strokeWidth: 0 })
+		];
+		const result = combineStrokes(before);
+		assert.equal(result.produced, 1, 'the ring and the blob touch, so they should merge');
+		assert.equal(fillsUnderNonzero(result.paths[0], 100, 100), false,
+			'the middle of the ring must stay blank');
+		assert.equal(fillsUnderNonzero(result.paths[0], 100, 40), true,
+			'the ink itself must still be painted');
+	});
+
+	it('is stable when run twice over the same circle', () => {
+		// The user-facing shape of the bug: combine a circle drawn from a few
+		// arcs, add one more stroke, combine again — the second pass used to
+		// flood the circle.
+		const arcs = [arcStroke(0, 0.5), arcStroke(0.5, 1), arcStroke(1, 1.5), arcStroke(1.5, 2)];
+		const once = combineStrokes(arcs).paths;
+		assert.equal(once.length, 1);
+		assert.equal(fillsUnderNonzero(once[0], 100, 100), false, 'one pass already keeps the hole');
+
+		const twice = combineStrokes([...once, stroke(circleRing(100, 36, 10), { fill: '#000', stroke: 'none', strokeWidth: 0 })]);
+		assert.equal(twice.produced, 1);
+		assert.equal(fillsUnderNonzero(twice.paths[0], 100, 100), false,
+			'a second pass must not fill the circle in');
 	});
 
 	it('removes the geometry that was buried, not just the look of it', () => {
