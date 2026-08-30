@@ -3,6 +3,7 @@ import git from 'isomorphic-git';
 import {
 	createMemoryOpfs,
 	createVfs,
+	packProject,
 	type OpfsBlobStore,
 	type VfsService
 } from '@shared-packages/file-system';
@@ -385,10 +386,11 @@ function packedRangeStore(): OpfsBlobStore {
 				throw new Error(`short pack ${path}`);
 			}
 			const view = all.slice(offset, offset + length);
+			const copy = Uint8Array.from(view);
 			return {
-				size: view.byteLength,
+				size: copy.byteLength,
 				type: contentType ?? 'application/octet-stream',
-				arrayBuffer: async () => view.buffer.slice(view.byteOffset, view.byteOffset + view.byteLength)
+				arrayBuffer: async () => copy.buffer.slice(copy.byteOffset, copy.byteOffset + copy.byteLength)
 			} as Blob;
 		}
 	};
@@ -410,9 +412,9 @@ describe('git on packed working-tree files', () => {
 				parentId: folder.id,
 				name: `n-${i}.txt`,
 				body: new TextEncoder().encode(`note-${i}\n`)
-			})),
-			{ pack: true }
+			}))
 		);
+		await packProject(vfs, folder.id);
 		const packedRef = await vfs.db.blobRefs.get(files[0]!.blobId!);
 		expect(packedRef?.packOffset).toBeTypeOf('number');
 
@@ -448,6 +450,64 @@ describe('git on packed working-tree files', () => {
 		expect(String(await fs.promises.readFile('/moved.txt', 'utf8'))).toBe('note-1\n');
 		await fs.promises.unlink('/n-2.txt');
 		await expect(fs.promises.readFile('/n-2.txt')).rejects.toMatchObject({ code: 'ENOENT' });
+		await vfs.db.delete();
+	});
+
+	it('pending packed member is EBUSY on write and hidden from stat', async () => {
+		const vfs = createVfs({
+			dbName: `git-busy-${crypto.randomUUID()}`,
+			opfs: packedRangeStore(),
+			requestPersist: false
+		});
+		await vfs.ready();
+		const folder = await vfs.mkdir(null, 'repo');
+		const fs = createVfsGitFs(vfs, { rootId: folder.id });
+		await git.init({ fs, dir: '/' });
+		const files = await vfs.writeFiles(
+			[
+				{ parentId: folder.id, name: 'n-0.txt', body: new TextEncoder().encode('note-0\n') },
+				{ parentId: folder.id, name: 'n-1.txt', body: new TextEncoder().encode('note-1\n') }
+			],
+			{ pack: true }
+		);
+		const ref = await vfs.db.blobRefs.get(files[0]!.blobId!);
+		await vfs.db.blobRefs.put({ ...ref!, pending: true });
+		expect(await vfs.childByName(folder.id, 'n-0.txt')).toBeUndefined();
+		await expect(fs.promises.stat('/n-0.txt')).rejects.toMatchObject({ code: 'ENOENT' });
+		await expect(fs.promises.writeFile('/n-0.txt', 'x\n')).rejects.toMatchObject({ code: 'EBUSY' });
+		await vfs.db.delete();
+	});
+
+	it('localSnapshot rethrows a short packed read of a tracked file', async () => {
+		const vfs = createVfs({
+			dbName: `git-short-${crypto.randomUUID()}`,
+			opfs: packedRangeStore(),
+			requestPersist: false
+		});
+		await vfs.ready();
+		const folder = await vfs.mkdir(null, 'repo');
+		const fs = createVfsGitFs(vfs, { rootId: folder.id });
+		await git.init({ fs, dir: '/' });
+		const files = await vfs.writeFiles(
+			[
+				{ parentId: folder.id, name: 'n-0.txt', body: new TextEncoder().encode('note-0\n') },
+				{ parentId: folder.id, name: 'n-1.txt', body: new TextEncoder().encode('note-1\n') }
+			],
+			{ pack: true }
+		);
+		expect((await fs.promises.readdir('/')).sort()).toEqual(
+			expect.arrayContaining(['.git', 'n-0.txt', 'n-1.txt'])
+		);
+		await git.add({ fs, dir: '/', filepath: 'n-0.txt' });
+		await git.add({ fs, dir: '/', filepath: 'n-1.txt' });
+		await git.commit({ fs, dir: '/', message: 'packed', author: AUTHOR });
+		const ref = await vfs.db.blobRefs.get(files[0]!.blobId!);
+		const pack = await vfs.opfs.read(ref!.opfsPath);
+		await vfs.opfs.writeFinal(ref!.opfsPath, pack.subarray(0, 1));
+		await expect(fs.promises.readFile('/n-0.txt')).rejects.toBeTruthy();
+		const node = await vfs.get(files[0]!.id);
+		await vfs.db.nodes.put({ ...node!, size: 1, generation: (node!.generation ?? 1) + 1 });
+		await expect(localSnapshot(fs, '/')).rejects.toBeTruthy();
 		await vfs.db.delete();
 	});
 });

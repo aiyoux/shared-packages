@@ -18,6 +18,11 @@ function rangeCapableStore(): OpfsBlobStore {
 		writeFinal: (path, data) => base.writeFinal(path, data),
 		async readRange(path, offset, length, contentType) {
 			const all = await base.read(path);
+			if (offset < 0 || length < 0 || offset + length > all.byteLength) {
+				throw new Error(
+					`Short pack read from ${path}: ${offset}+${length} past ${all.byteLength}`
+				);
+			}
 			const view = all.subarray(offset, offset + length);
 			return new Blob([view as BlobPart], {
 				type: contentType ?? 'application/octet-stream'

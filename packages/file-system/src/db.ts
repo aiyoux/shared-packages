@@ -18,7 +18,10 @@ export class SharedVfsDatabase extends Dexie {
 	leases!: Table<LeaseRow, string>;
 
 	constructor(name = 'SharedVFS') {
-		super(name);
+		// Confirm txns publish pack refs. Chrome 121+ defaults IDB to 'relaxed'
+		// (complete when the OS buffer is hit, not disk). Strict is still not a
+		// joint commit with OPFS, but it is the IDB half of durable-then-confirm.
+		super(name, { chromeTransactionDurability: 'strict' });
 		this.version(1).stores({
 			nodes:
 				'id, parentId, kind, fileType, name, updatedAt, deletedAt, [parentId+name], [parentId+deletedAt]',

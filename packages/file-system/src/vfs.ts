@@ -99,12 +99,18 @@ export const compactCrash = {
 	hook: null as ((phase: CompactCrashPhase, newPath: string, oldPath: string) => Promise<void>) | null
 };
 
-async function withWebLock<T>(name: string, fn: () => Promise<T>): Promise<T> {
+/** Exclusive Web Lock. If the API is missing, run anyway. Never re-invoke `fn` after it threw. */
+export async function withWebLock<T>(name: string, fn: () => Promise<T>): Promise<T> {
 	const locks = (globalThis as { navigator?: { locks?: { request: Function } } }).navigator?.locks;
 	if (!locks?.request) return fn();
+	let started = false;
 	try {
-		return await locks.request(name, { mode: 'exclusive' }, fn);
-	} catch {
+		return await locks.request(name, { mode: 'exclusive' }, () => {
+			started = true;
+			return fn();
+		});
+	} catch (e) {
+		if (started) throw e;
 		return fn();
 	}
 }
@@ -138,18 +144,23 @@ export type EmptyTrashOpts = {
 	skipCompaction?: boolean;
 };
 
+export type CompactPacksResult = {
+	compactedPacks: number;
+	reclaimedBytes: number;
+	/** Packs skipped because a claim/pending/IO blocked a delete-time compact. */
+	failedPacks: string[];
+};
+
 export type EmptyTrashResult = {
 	deleted: number;
 	compactedPacks: number;
 	reclaimedBytes: number;
 	/**
-	 * Packs whose dead space could not be reclaimed.
+	 * Packs that could not be compacted before the drop.
 	 *
-	 * The node and ref rows are dropped in a transaction BEFORE compaction runs,
-	 * and compaction needs that — survivors are defined by what is left. So a
-	 * failure here cannot un-delete anything; it leaves dead space. The
-	 * operation is therefore reported as incomplete rather than successful,
-	 * which is the honest reading of "the op did not finish".
+	 * Compaction runs FIRST (C3). Members whose pack is listed here are left in
+	 * the trash rather than deleted, so a busy or pending rewrite cannot strand
+	 * survivors on a pack that this tab then unlinks.
 	 */
 	failedPacks: string[];
 };
@@ -408,11 +419,26 @@ export class VfsService {
 	 */
 	async childByName(parentId: string | null, name: string): Promise<VfsNode | undefined> {
 		await this.ready();
-		return this.db.nodes
+		const node = await this.db.nodes
 			.where('[parentKey+name]')
 			.equals([parentId ?? ROOT_PARENT_KEY, name])
 			.and((n) => n.deletedAt == null)
 			.first();
+		if (!node) return undefined;
+		if (await this.isPendingBlob(node.blobId)) return undefined;
+		return node;
+	}
+
+	private async isPendingBlob(blobId: string | undefined): Promise<boolean> {
+		if (!blobId) return false;
+		const ref = await this.db.blobRefs.get(blobId);
+		return !!ref?.pending;
+	}
+
+	private async throwIfPendingBlob(blobId: string | undefined, nodeId?: string): Promise<void> {
+		if (await this.isPendingBlob(blobId)) {
+			throw new VfsError('WRITE_IN_FLIGHT', 'File is still being written', { nodeId, blobId });
+		}
 	}
 
 	async getPath(id: string): Promise<VfsNode[]> {
@@ -642,21 +668,22 @@ export class VfsService {
 			name = forceExtension(name, fileType);
 		}
 
+		const sameName =
+			input.parentId === null
+				? (await this.activeSiblings(null)).find((n) => n.name === name)
+				: await this.db.nodes
+						.where('[parentId+name]')
+						.equals([input.parentId, name])
+						.and((n) => n.deletedAt == null)
+						.first();
+		if (sameName?.kind === 'file') {
+			await this.throwIfPendingBlob(sameName.blobId, sameName.id);
+		}
+
 		// Overwrite-in-place: a live sibling file with this exact name is replaced
 		// (same id/parent, new bytes, generation bump so bound docs elsewhere see
 		// GENERATION_CONFLICT). A same-name folder is not a valid overwrite target.
 		if (input.onConflict === 'overwrite') {
-			// Look the one name up rather than loading every sibling to find it:
-			// the [parentId+name] index exists for exactly this. Root keeps the
-			// scan — null is not an IndexedDB key.
-			const sameName =
-				input.parentId === null
-					? (await this.activeSiblings(null)).find((n) => n.name === name)
-					: await this.db.nodes
-							.where('[parentId+name]')
-							.equals([input.parentId, name])
-							.and((n) => n.deletedAt == null)
-							.first();
 			if (sameName?.kind === 'folder') {
 				throw new VfsError('NAME_CONFLICT', `A folder named ${name} already exists`);
 			}
@@ -776,6 +803,7 @@ export class VfsService {
 					ref.opfsPath = finalPath;
 					ref.pendingPromote = false;
 					ref.pending = false;
+					ref.crc32 = crc32(bytes);
 					await this.db.blobRefs.put(ref);
 				}
 				await this.db.leases.delete(leaseKey);
@@ -1042,6 +1070,7 @@ export class VfsService {
 			return e;
 		};
 		let packPathToUnlink: string | undefined;
+		let heldPackPath: string | undefined;
 		const cleanup = async () => {
 			// Best-effort rollback, matching writeFile's catch. If the failure
 			// was inside the reserve txn, Dexie already rolled the puts back and
@@ -1224,28 +1253,35 @@ export class VfsService {
 			// reader can reach a half-written pack.
 			if (packedIndexes.size) {
 				if (signal?.aborted) throw abortError();
-				const parts: BlobPart[] = [];
-				for (let i = 0; i < prepared.length; i++) {
-					if (packedIndexes.has(i)) parts.push(prepared[i]!.bytes as BlobPart);
-				}
-				const blobOk =
-					typeof (globalThis.Blob && Blob.prototype && Blob.prototype.arrayBuffer) ===
-					'function';
-				let payload: Blob | Uint8Array;
-				if (blobOk) {
-					payload = new Blob(parts);
-				} else {
-					payload = new Uint8Array(packBytes);
-					for (const m of packMembers) {
-						if (!packedIndexes.has(m.index)) continue;
-						payload.set(prepared[m.index]!.bytes, m.offset);
-					}
+				heldPackPath = packPath;
+				await this.holdPackWrite(packPath);
+				const payload = new Uint8Array(packBytes);
+				for (const m of packMembers) {
+					if (!packedIndexes.has(m.index)) continue;
+					payload.set(prepared[m.index]!.bytes, m.offset);
 				}
 				const written = await this.opfs.writeAtomic(packPath, payload);
 				if (written.byteLength !== packBytes) {
 					throw new VfsError(
 						'OPFS_IO',
 						`Pack write short: expected ${packBytes} bytes, wrote ${written.byteLength}`
+					);
+				}
+				const onDisk = await this.opfs.readBlob(packPath);
+				if (onDisk.size !== packBytes) {
+					throw new VfsError(
+						'OPFS_IO',
+						`Pack write short: expected ${packBytes} bytes, disk has ${onDisk.size}`
+					);
+				}
+				for (const m of packMembers) {
+					if (!packedIndexes.has(m.index)) continue;
+					const expected = crc32(prepared[m.index]!.bytes);
+					await this.checksumSlice(
+						packPath,
+						m.offset,
+						prepared[m.index]!.bytes.byteLength,
+						expected
 					);
 				}
 			}
@@ -1325,6 +1361,8 @@ export class VfsService {
 		} catch (e) {
 			await cleanup();
 			throw e;
+		} finally {
+			if (heldPackPath) await this.dropPackWrite(heldPackPath);
 		}
 
 		const nodes = await this.db.nodes.bulkGet(reserved.map((r) => r.p.nodeId));
@@ -1387,14 +1425,36 @@ export class VfsService {
 	 */
 	private async unlinkUnreferenced(paths: Iterable<string>): Promise<void> {
 		for (const path of new Set(paths)) {
-			const survivor = await this.db.blobRefs.where('opfsPath').equals(path).first();
-			if (survivor) continue;
+			await this.unlinkIfOrphanNow(path);
+		}
+	}
+
+	/**
+	 * Re-stat immediately before unlink so a dest/pack born after gc's snapshot
+	 * is not deleted out from under a live compact or writeFiles confirm.
+	 */
+	private async unlinkIfOrphanNow(path: string): Promise<boolean> {
+		const now = Date.now();
+		const packLease = await this.db.leases.get(packWriteKey(path));
+		if (packLease && packLease.expiresAt > now) return false;
+		const named = await this.db.blobRefs.where('opfsPath').equals(path).first();
+		if (named) return false;
+		if (path.startsWith('blobs/')) {
+			const blobId = path.replace(/^blobs\//, '').replace(/\.bin$/, '');
+			const writeLease = await this.db.leases.get(`write:${blobId}`);
+			if (writeLease && writeLease.expiresAt > now) return false;
+		}
+		for (let attempt = 0; attempt < 3; attempt++) {
 			try {
 				await this.opfs.remove(path);
+				return true;
 			} catch {
-				/* GC later */
+				if (attempt < 2) {
+					await new Promise((r) => setTimeout(r, 80 * (attempt + 1)));
+				}
 			}
 		}
+		return false;
 	}
 
 	async updateFile(id: string, body: unknown, opts: UpdateFileOpts): Promise<VfsNode> {
@@ -1409,6 +1469,7 @@ export class VfsService {
 		if (!node) throw new VfsError('NOT_FOUND');
 		if (node.kind !== 'file') throw new VfsError('NOT_A_FILE');
 		if (node.deletedAt != null) throw new VfsError('TRASH_STATE');
+		await this.throwIfPendingBlob(node.blobId, id);
 
 		const prevBlobId = node.blobId;
 		const blobId = generateId('blob');
@@ -1471,6 +1532,7 @@ export class VfsService {
 					if (ref) {
 						ref.opfsPath = finalPath;
 						ref.pendingPromote = false;
+						ref.crc32 = crc32(bytes);
 						await this.db.blobRefs.put(ref);
 					}
 					cur.blobId = blobId;
@@ -1566,6 +1628,57 @@ export class VfsService {
 		return bytes;
 	}
 
+	private async checksumSlice(
+		opfsPath: string,
+		offset: number,
+		length: number,
+		expected?: number
+	): Promise<number> {
+		const all = await this.opfs.read(opfsPath);
+		const bytes = all.subarray(offset, offset + length);
+		if (bytes.byteLength !== length) {
+			throw new VfsError(
+				'OPFS_IO',
+				`Short pack read from ${opfsPath}: got ${bytes.byteLength} of ${length} at ${offset}`
+			);
+		}
+		const got = crc32(bytes);
+		if (expected != null && got !== expected) {
+			throw new VfsError(
+				'OPFS_IO',
+				`Checksum mismatch at ${opfsPath}:${offset}`
+			);
+		}
+		return got;
+	}
+
+	/** Flatten Blob parts; some test Blobs do not concatenate. */
+	private async materializePack(parts: BlobPart[], expected: number): Promise<Uint8Array> {
+		const out = new Uint8Array(expected);
+		let offset = 0;
+		for (const part of parts) {
+			const bytes =
+				part instanceof Uint8Array
+					? part
+					: await blobToBytes(part as Blob);
+			if (offset + bytes.byteLength > expected) {
+				throw new VfsError(
+					'OPFS_IO',
+					`Pack assembly overflow: ${offset}+${bytes.byteLength} > ${expected}`
+				);
+			}
+			out.set(bytes, offset);
+			offset += bytes.byteLength;
+		}
+		if (offset !== expected) {
+			throw new VfsError(
+				'OPFS_IO',
+				`Pack assembly short: expected ${expected} bytes, assembled ${offset}`
+			);
+		}
+		return out;
+	}
+
 	/**
 	 * One member out of a shared pack file. Lazy where the store supports it,
 	 * so pulling a 40KB member out of a 64MB pack costs a slice rather than a
@@ -1638,7 +1751,12 @@ export class VfsService {
 		if (!node.blobId) throw new VfsError('OPFS_IO', 'Missing blobId');
 		const ref = await this.loadReadableRef(node.blobId);
 		const contentType = node.contentType ?? ref.contentType;
-		if (ref.packOffset != null) return this.readPacked(ref, contentType);
+		if (ref.packOffset != null) {
+			const slice = await this.readPacked(ref, contentType);
+			const bytes = await blobToBytes(slice);
+			this.assertMemberChecksum(ref, bytes);
+			return new Blob([bytes as BlobPart], { type: contentType ?? 'application/octet-stream' });
+		}
 		if (ref.pendingPromote) {
 			try {
 				return this.opfs.readBlob(ref.opfsPath, contentType);
@@ -1885,7 +2003,13 @@ export class VfsService {
 			for (const p of touchedPacks) {
 				if (await this.opfs.exists(p)) alive.push(p);
 			}
-			await this.compactPacks(alive, { excludeBlobIds: blobIds });
+			const compacted = await this.compactPacks(alive, { excludeBlobIds: blobIds });
+			if (compacted.failedPacks.length) {
+				throw new VfsError(
+					'WRITE_IN_FLIGHT',
+					`Cannot delete: pack still being rewritten (${compacted.failedPacks.join(', ')})`
+				);
+			}
 		}
 
 		await this.db.transaction('rw', this.db.nodes, async () => {
@@ -1952,13 +2076,19 @@ export class VfsService {
 				});
 				compactedPacks = res.compactedPacks;
 				reclaimedBytes = res.reclaimedBytes;
+				failedPacks = res.failedPacks;
 			}
 
+			const blockedPacks = new Set(failedPacks);
 			await this.db.transaction('rw', this.db.nodes, this.db.blobRefs, async () => {
 				const still: VfsNode[] = [];
 				for (const n of trashed) {
 					const cur = await this.db.nodes.get(n.id);
 					if (!cur || cur.deletedAt == null) continue;
+					if (cur.blobId) {
+						const ref = await this.db.blobRefs.get(cur.blobId);
+						if (ref?.opfsPath && blockedPacks.has(ref.opfsPath)) continue;
+					}
 					still.push(cur);
 				}
 				deletedIds = still.map((n) => n.id);
@@ -2240,7 +2370,7 @@ export class VfsService {
 			if (r.pending) inFlight.add(r.opfsPath);
 			liveByPack.set(r.opfsPath, (liveByPack.get(r.opfsPath) ?? 0) + r.byteLength);
 		}
-		if (!liveByPack.size) return { compactedPacks: 0, reclaimedBytes: 0 };
+		if (!liveByPack.size) return { compactedPacks: 0, reclaimedBytes: 0, failedPacks: [] };
 
 		const candidates: string[] = [];
 		for (const [path, live] of liveByPack) {
@@ -2260,7 +2390,7 @@ export class VfsService {
 				candidates.push(path);
 			}
 		}
-		if (!candidates.length) return { compactedPacks: 0, reclaimedBytes: 0 };
+		if (!candidates.length) return { compactedPacks: 0, reclaimedBytes: 0, failedPacks: [] };
 		return this.compactPacks(candidates, opts);
 	}
 
@@ -2321,26 +2451,31 @@ export class VfsService {
 		survivors: BlobRef[],
 		report: (stage: PackOpStage, label: string, bytes?: number) => void
 	): Promise<number> {
-		const source = await this.opfs.readBlob(packPath);
-		const before = source.size;
+		const sourceBytes = await this.opfs.read(packPath);
+		const before = sourceBytes.byteLength;
 
 		const ordered = [...survivors].sort((a, b) => (a.packOffset ?? 0) - (b.packOffset ?? 0));
-		const parts: BlobPart[] = [];
+		const parts: Uint8Array[] = [];
 		const layout: Array<{ id: string; offset: number; length: number }> = [];
 		let cursor = 0;
 		for (const ref of ordered) {
 			const from = ref.packOffset ?? 0;
-			// slice() is lazy: the bytes are copied browser-side on write, never
-			// materialised here, so a 64MB pack costs no heap to compact.
-			parts.push(source.slice(from, from + ref.byteLength));
+			parts.push(sourceBytes.subarray(from, from + ref.byteLength));
 			layout.push({ id: ref.id, offset: cursor, length: ref.byteLength });
 			cursor += ref.byteLength;
 		}
 
+		for (const ref of ordered) {
+			if (ref.crc32 != null) {
+				await this.checksumSlice(packPath, ref.packOffset ?? 0, ref.byteLength, ref.crc32);
+			}
+		}
+
 		const newPath = `packs/${`pack_${crypto.randomUUID()}`}.bin`;
 		await this.holdPackWrite(newPath);
+		const stopBeat = this.startLeaseHeartbeat([packWriteKey(newPath), packClaimKey(packPath)]);
 		try {
-			const written = await this.opfs.writeAtomic(newPath, new Blob(parts));
+			const written = await this.opfs.writeAtomic(newPath, await this.materializePack(parts, cursor));
 			if (written.byteLength !== cursor) {
 				try {
 					await this.opfs.remove(newPath);
@@ -2364,7 +2499,23 @@ export class VfsService {
 					`Pack compaction verification failed: expected ${cursor} bytes, wrote ${onDisk.size}`
 				);
 			}
+			for (const item of layout) {
+				const src = ordered.find((r) => r.id === item.id);
+				await this.checksumSlice(newPath, item.offset, item.length, src?.crc32);
+			}
 			await this.runCompactCrash('after-write', newPath, packPath);
+
+			if (!(await this.leaseStillHeld(packWriteKey(newPath)))) {
+				try {
+					await this.opfs.remove(newPath);
+				} catch {
+					/* gc */
+				}
+				throw new VfsError(
+					'WRITE_IN_FLIGHT',
+					`Pack dest ${newPath} lease expired before swap`
+				);
+			}
 
 			let swapped = 0;
 			await this.db.transaction('rw', this.db.blobRefs, async () => {
@@ -2402,16 +2553,43 @@ export class VfsService {
 			}
 			return Math.max(0, before - cursor);
 		} finally {
+			stopBeat();
 			await this.dropPackWrite(newPath);
 		}
+	}
+
+	private leaseTtlMs(): number {
+		return Math.max(this.graceMs, 60_000);
 	}
 
 	private async holdPackWrite(opfsPath: string): Promise<void> {
 		await this.db.leases.put({
 			key: packWriteKey(opfsPath),
 			owner: generateId('packw'),
-			expiresAt: Date.now() + Math.max(this.graceMs, 60_000)
+			expiresAt: Date.now() + this.leaseTtlMs()
 		});
+	}
+
+	private async leaseStillHeld(key: string): Promise<boolean> {
+		const row = await this.db.leases.get(key);
+		return !!row && row.expiresAt > Date.now();
+	}
+
+	/** Renew live leases; never resurrect an expired one. */
+	private startLeaseHeartbeat(keys: string[]): () => void {
+		const ttl = () => this.leaseTtlMs();
+		const tick = async () => {
+			const now = Date.now();
+			for (const key of keys) {
+				const row = await this.db.leases.get(key);
+				if (!row || row.expiresAt <= now) continue;
+				await this.db.leases.put({ ...row, expiresAt: now + ttl() });
+			}
+		};
+		const iv = setInterval(() => void tick().catch(() => {}), 15_000);
+		(iv as unknown as { unref?: () => void }).unref?.();
+		void tick().catch(() => {});
+		return () => clearInterval(iv);
 	}
 
 	private async runCompactCrash(
@@ -2450,7 +2628,7 @@ export class VfsService {
 				await this.db.leases.put({
 					key,
 					owner,
-					expiresAt: now + Math.max(this.graceMs, 60_000)
+					expiresAt: now + this.leaseTtlMs()
 				});
 				return true;
 			});
@@ -2494,21 +2672,27 @@ export class VfsService {
 			/** Compact as if these members were already gone (delete-fails-if-compact-fails). */
 			excludeBlobIds?: Iterable<string>;
 		}
-	): Promise<{ compactedPacks: number; reclaimedBytes: number }> {
+	): Promise<CompactPacksResult> {
 		await this.ready();
 		const report = (stage: PackOpStage, label: string, reclaimedBytes?: number) =>
 			opts?.onProgress?.({ stage, label, reclaimedBytes });
 		const exclude = new Set(opts?.excludeBlobIds ?? []);
+		const deleting = exclude.size > 0;
 
 		let compactedPacks = 0;
 		let reclaimedBytes = 0;
+		const failedPacks: string[] = [];
 		const owner = generateId('compact');
 		for (const packPath of new Set(packPaths)) {
 			if (opts?.signal?.aborted) break;
 			// Claimed BEFORE the survivors are read: a claim taken afterwards
 			// would still let two tabs plan the same rewrite from the same
 			// snapshot, which is the whole race.
-			if (!(await this.claimPack(packPath, owner))) continue;
+			if (!(await this.claimPack(packPath, owner))) {
+				if (deleting) failedPacks.push(packPath);
+				continue;
+			}
+			const stopBeat = this.startLeaseHeartbeat([packClaimKey(packPath)]);
 			try {
 				// Survivors decide the outcome: none means releaseBlobRefs already
 				// unlinked the file and there is nothing to compact.
@@ -2517,12 +2701,16 @@ export class VfsService {
 				if (!survivors.length) continue;
 				// Mid-write: byteLength is 0 until the confirm txn, so the dead-space
 				// sum below would read the whole pack as garbage. Leave it alone.
-				if (survivors.some((r) => r.pending)) continue;
+				if (survivors.some((r) => r.pending)) {
+					if (deleting) failedPacks.push(packPath);
+					continue;
+				}
 
 				let onDisk = 0;
 				try {
 					onDisk = (await this.opfs.readBlob(packPath)).size;
 				} catch {
+					if (deleting) failedPacks.push(packPath);
 					continue;
 				}
 				const live = survivors.reduce((n, r) => n + r.byteLength, 0);
@@ -2541,6 +2729,7 @@ export class VfsService {
 				// live ref still names it; counting that would overstate the result.
 				if (freed > 0) compactedPacks += 1;
 			} finally {
+				stopBeat();
 				try {
 					await this.db.leases.delete(packClaimKey(packPath));
 				} catch {
@@ -2548,7 +2737,7 @@ export class VfsService {
 				}
 			}
 		}
-		return { compactedPacks, reclaimedBytes };
+		return { compactedPacks, reclaimedBytes, failedPacks };
 	}
 
 	/**
@@ -2600,15 +2789,23 @@ export class VfsService {
 				throw new VfsError('WRITE_IN_FLIGHT', `Pack ${path} is being rewritten`);
 			}
 		}
+		const stopClaims = this.startLeaseHeartbeat([...oldPaths].map((p) => packClaimKey(p)));
 		let moved = 0;
 		try {
 		for (const ref of packed) {
 			throwIfAborted(opts?.signal);
+			if (ref.crc32 != null) {
+				await this.checksumSlice(ref.opfsPath, ref.packOffset ?? 0, ref.byteLength, ref.crc32);
+			}
 			const blob = await this.refAsBlob(ref);
 			const destPath = `blobs/${ref.id}.bin`;
 			await this.holdPackWrite(destPath);
+			const stopDest = this.startLeaseHeartbeat([packWriteKey(destPath)]);
 			try {
 				await this.opfs.writeAtomic(destPath, blob);
+				if (!(await this.leaseStillHeld(packWriteKey(destPath)))) {
+					throw new VfsError('WRITE_IN_FLIGHT', `Unpack dest ${destPath} lease expired`);
+				}
 				const swapped = await this.db.transaction('rw', this.db.blobRefs, async () => {
 					const current = await this.db.blobRefs.get(ref.id);
 					if (!current || current.opfsPath !== ref.opfsPath || current.pending) return false;
@@ -2628,10 +2825,12 @@ export class VfsService {
 					}
 				}
 			} finally {
+				stopDest();
 				await this.dropPackWrite(destPath);
 			}
 		}
 		} finally {
+			stopClaims();
 			for (const path of oldPaths) {
 				try {
 					await this.db.leases.delete(packClaimKey(path));
@@ -2687,9 +2886,19 @@ export class VfsService {
 		}
 		if (refs.length < 2) return { packs: 0, movedFiles: 0 };
 
+		const sourcePaths = [...new Set(refs.filter((r) => r.packOffset != null).map((r) => r.opfsPath))];
+		const owner = generateId('repack');
+		for (const path of sourcePaths) {
+			if (!(await this.claimPack(path, owner))) {
+				throw new VfsError('WRITE_IN_FLIGHT', `Pack ${path} is being rewritten`);
+			}
+		}
+		const stopSources = this.startLeaseHeartbeat(sourcePaths.map((p) => packClaimKey(p)));
+
 		let packs = 0;
 		let movedFiles = 0;
 		const retired = new Set<string>();
+		try {
 		for (let i = 0; i < refs.length; ) {
 			throwIfAborted(opts?.signal);
 			const group: BlobRef[] = [];
@@ -2702,19 +2911,34 @@ export class VfsService {
 			if (!group.length) break;
 
 			report('compacting', `Packing ${group.length} file${group.length === 1 ? '' : 's'}…`);
-			const parts: BlobPart[] = [];
+			const parts: Uint8Array[] = [];
 			const layout: Array<{ id: string; from: string; offset: number; length: number }> = [];
 			let cursor = 0;
 			for (const ref of group) {
-				parts.push(await this.refAsBlob(ref));
+				if (ref.packOffset != null && ref.crc32 != null) {
+					await this.checksumSlice(ref.opfsPath, ref.packOffset, ref.byteLength, ref.crc32);
+				}
+				const raw = await this.opfs.read(ref.opfsPath);
+				const bytes =
+					ref.packOffset != null
+						? raw.subarray(ref.packOffset, ref.packOffset + ref.byteLength)
+						: raw;
+				if (bytes.byteLength !== ref.byteLength) {
+					throw new VfsError(
+						'OPFS_IO',
+						`Short pack read from ${ref.opfsPath}: got ${bytes.byteLength} of ${ref.byteLength}`
+					);
+				}
+				parts.push(bytes);
 				layout.push({ id: ref.id, from: ref.opfsPath, offset: cursor, length: ref.byteLength });
 				cursor += ref.byteLength;
 			}
 
 			const newPath = `packs/pack_${crypto.randomUUID()}.bin`;
 			await this.holdPackWrite(newPath);
+			const stopDest = this.startLeaseHeartbeat([packWriteKey(newPath)]);
 			try {
-			const written = await this.opfs.writeAtomic(newPath, new Blob(parts));
+			const written = await this.opfs.writeAtomic(newPath, await this.materializePack(parts, cursor));
 			if (written.byteLength !== cursor) {
 				try {
 					await this.opfs.remove(newPath);
@@ -2740,6 +2964,18 @@ export class VfsService {
 					`Repack verification failed: expected ${cursor} bytes, wrote ${onDisk.size}`
 				);
 			}
+			for (const item of layout) {
+				const src = group.find((r) => r.id === item.id);
+				await this.checksumSlice(newPath, item.offset, item.length, src?.crc32);
+			}
+			if (!(await this.leaseStillHeld(packWriteKey(newPath)))) {
+				try {
+					await this.opfs.remove(newPath);
+				} catch {
+					/* gc */
+				}
+				throw new VfsError('WRITE_IN_FLIGHT', `Repack dest ${newPath} lease expired before swap`);
+			}
 
 			let swapped = 0;
 			await this.db.transaction('rw', this.db.blobRefs, async () => {
@@ -2763,7 +2999,18 @@ export class VfsService {
 			if (swapped > 0) packs += 1;
 			for (const item of layout) retired.add(item.from);
 			} finally {
+				stopDest();
 				await this.dropPackWrite(newPath);
+			}
+		}
+		} finally {
+			stopSources();
+			for (const path of sourcePaths) {
+				try {
+					await this.db.leases.delete(packClaimKey(path));
+				} catch {
+					/* expires */
+				}
 			}
 		}
 
@@ -2853,15 +3100,14 @@ export class VfsService {
 		// tmp GC — never unlink a path a blobRef still names
 		const tmps = await this.opfs.listTmp();
 		for (const t of tmps) {
+			if (t.path.endsWith('.crswap')) {
+				if (await this.unlinkIfOrphanNow(t.path)) report.tmpPartialsRemoved++;
+				continue;
+			}
 			if (namedPaths.has(t.path)) continue;
 			const age = t.mtimeMs != null ? now - t.mtimeMs : this.graceMs + 1;
 			if (age > this.graceMs) {
-				try {
-					await this.opfs.remove(t.path);
-					report.tmpPartialsRemoved++;
-				} catch {
-					/* ignore */
-				}
+				if (await this.unlinkIfOrphanNow(t.path)) report.tmpPartialsRemoved++;
 			}
 		}
 
@@ -2885,18 +3131,17 @@ export class VfsService {
 			try {
 				const found = await this.opfs.listOrphans(prefix);
 				for (const p of found) {
+					if (p.endsWith('.crswap')) {
+						if (await this.unlinkIfOrphanNow(p)) report.orphanOpfsRemoved++;
+						continue;
+					}
 					if (namedPaths.has(p)) continue;
 					if (packWriteLeases.has(p)) continue;
 					if (prefix === 'blobs') {
 						const blobId = p.replace(/^blobs\//, '').replace(/\.bin$/, '');
 						if (activeLeases.has(blobId)) continue;
 					}
-					try {
-						await this.opfs.remove(p);
-						report.orphanOpfsRemoved++;
-					} catch {
-						/* ignore */
-					}
+					if (await this.unlinkIfOrphanNow(p)) report.orphanOpfsRemoved++;
 				}
 			} catch {
 				/* ignore */

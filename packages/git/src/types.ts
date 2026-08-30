@@ -49,9 +49,17 @@ export interface GitHost {
 	/** Look up a saved ref, then `snapshotRepo`. */
 	snapshot(repoId: string): Promise<GitSnapshot>;
 	/** Look up a saved ref, then `subscribeRepo`. */
-	subscribe(repoId: string, onChange: (snap: GitSnapshot) => void): () => void;
+	subscribe(
+		repoId: string,
+		onChange: (snap: GitSnapshot) => void,
+		onError?: (err: unknown) => void
+	): () => void;
 	snapshotRepo(repo: GitRepoRef): Promise<GitSnapshot>;
-	subscribeRepo(repo: GitRepoRef, onChange: (snap: GitSnapshot) => void): () => void;
+	subscribeRepo(
+		repo: GitRepoRef,
+		onChange: (snap: GitSnapshot) => void,
+		onError?: (err: unknown) => void
+	): () => void;
 	/** `git.init` for a local working tree (`repo.path` = VFS id or Node dir). */
 	initLocal(repoPath: string): Promise<void>;
 	/** Committed blob at `rev` (ref, abbreviated oid, or SHA), not live worktree bytes. */

@@ -17,6 +17,7 @@
  */
 import type { VfsService } from './vfs.js';
 import type { BlobRef, PackOpProgress, PackOpStage, VfsNode } from './types.js';
+import { crc32 } from './crc32.js';
 
 /** Marks a folder as a project whose file bytes live in shared packs. */
 export const PROJECT_PACK_META = 'projectPack';
@@ -50,7 +51,8 @@ export type PackIntegrityIssue = {
 		| 'orphan-pack'
 		| 'overlap'
 		| 'missing-ref'
-		| 'pending-write';
+		| 'pending-write'
+		| 'checksum-mismatch';
 	detail: string;
 	packPath?: string;
 	nodeId?: string;
@@ -86,6 +88,41 @@ async function refsFor(vfs: VfsService, nodes: VfsNode[]): Promise<Map<string, B
 	const map = new Map<string, BlobRef>();
 	for (const r of rows) if (r) map.set(r.id, r);
 	return map;
+}
+
+async function pushChecksumIssue(
+	vfs: VfsService,
+	ref: BlobRef,
+	name: string,
+	nodeId: string,
+	issues: PackIntegrityIssue[]
+): Promise<void> {
+	if (ref.crc32 == null || ref.packOffset == null) return;
+	try {
+		let bytes: Uint8Array;
+		if (vfs.opfs.readRange) {
+			const slice = await vfs.opfs.readRange(ref.opfsPath, ref.packOffset, ref.byteLength);
+			bytes = new Uint8Array(await slice.arrayBuffer());
+		} else {
+			const all = await vfs.opfs.read(ref.opfsPath);
+			bytes = all.subarray(ref.packOffset, ref.packOffset + ref.byteLength);
+		}
+		if (crc32(bytes) !== ref.crc32) {
+			issues.push({
+				kind: 'checksum-mismatch',
+				detail: `${name} crc32 does not match the slice at ${ref.opfsPath}:${ref.packOffset}`,
+				packPath: ref.opfsPath,
+				nodeId
+			});
+		}
+	} catch {
+		issues.push({
+			kind: 'short-pack',
+			detail: `${name} could not be read for checksum at ${ref.opfsPath}`,
+			packPath: ref.opfsPath,
+			nodeId
+		});
+	}
 }
 
 /**
@@ -160,10 +197,7 @@ export async function readProjectManifest(
  * ref says it lives.
  *
  * This is the check behind the "check integrity" buttons. It reads sizes and
- * bounds rather than hashing content — the failure modes that packing can
- * introduce are structural (a pack unlinked while members still point at it,
- * an offset past the end, two members claiming the same bytes), and those are
- * all visible without rehashing every byte.
+ * bounds, and when a member stored a crc32 it also rehashes that slice.
  */
 export async function checkProjectPacks(
 	vfs: VfsService,
@@ -229,6 +263,7 @@ export async function checkProjectPacks(
 			});
 			continue;
 		}
+		await pushChecksumIssue(vfs, ref, f.name, f.id, issues);
 		const list = claims.get(ref.opfsPath) ?? [];
 		list.push({ from: ref.packOffset, to: end, nodeId: f.id });
 		claims.set(ref.opfsPath, list);
@@ -315,6 +350,11 @@ export async function deleteFromProject(
 			onProgress: opts?.onProgress,
 			signal: opts?.signal
 		});
+		if (compacted.failedPacks.length) {
+			throw new Error(
+				`Cannot delete: pack still being rewritten (${compacted.failedPacks.join(', ')})`
+			);
+		}
 		compactedPacks = compacted.compactedPacks;
 		reclaimedBytes = compacted.reclaimedBytes;
 	}
@@ -509,6 +549,8 @@ export async function checkFilesystem(vfs: VfsService): Promise<PackIntegrityRep
 					packPath: ref.opfsPath,
 					nodeId: node.id
 				});
+			} else {
+				await pushChecksumIssue(vfs, ref, node.name, node.id, issues);
 			}
 		}
 	}

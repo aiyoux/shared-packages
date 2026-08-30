@@ -108,10 +108,16 @@
 				// empty log that reads as "this repo has no commits".
 				loadError = e instanceof Error ? e.message : 'Could not read git history';
 			});
-		return host.subscribe(id, (s) => {
-			live = s;
-			loadError = '';
-		});
+		return host.subscribe(
+			id,
+			(s) => {
+				live = s;
+				loadError = '';
+			},
+			(e) => {
+				loadError = e instanceof Error ? e.message : 'Could not read git history';
+			}
+		);
 	});
 
 	function shortSha(sha: string): string {
@@ -122,7 +128,8 @@
 <section class="git-history" data-testid="git-history">
 	{#if loadError}
 		<p class="error" data-testid="git-history-error">{loadError}</p>
-	{:else if shown}
+	{/if}
+	{#if shown}
 		<p class="status">
 			<span data-testid="git-history-branch">{shown.status.branch ?? '(detached)'}</span>
 			{#if shown.status.dirty}
@@ -197,6 +204,8 @@
 				{/each}
 			</ol>
 		{/if}
+	{:else if loadError}
+		<!-- error is already shown; do not replace it with Loading / No commits -->
 	{:else if repoId}
 		<p class="empty" data-testid="git-history-empty">Loading…</p>
 	{:else}

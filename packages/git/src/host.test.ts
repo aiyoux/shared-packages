@@ -99,6 +99,20 @@ describe('createGitHost local backend', () => {
 		expect(snaps[1]?.status.dirty).toBe(true);
 		unsub();
 	});
+
+	it('subscribeRepo forwards snapshot failures to onError', async () => {
+		const host = createGitHost({ fs });
+		const errors: unknown[] = [];
+		const repo: GitRepoRef = {
+			id: 'err',
+			label: 'tiny',
+			backend: 'local',
+			path: path.join(os.tmpdir(), `missing-git-${Date.now()}`)
+		};
+		const unsub = host.subscribeRepo(repo, () => {}, (e) => errors.push(e));
+		await vi.waitFor(() => expect(errors.length).toBeGreaterThan(0));
+		unsub();
+	});
 });
 
 const MONITOR_GIT_JSON = {

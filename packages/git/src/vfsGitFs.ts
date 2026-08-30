@@ -171,6 +171,7 @@ function mapVfsError(e: unknown, path: string): never {
 	const code = e && typeof e === 'object' && 'code' in e ? String((e as { code: string }).code) : '';
 	if (code === 'NOT_FOUND') throw nodeErr('ENOENT', path);
 	if (code === 'NAME_CONFLICT') throw nodeErr('EEXIST', path);
+	if (code === 'WRITE_IN_FLIGHT') throw nodeErr('EBUSY', path);
 	if (code === 'CYCLE' || code === 'INVALID_NAME') throw nodeErr('EINVAL', path);
 	throw e;
 }
@@ -189,29 +190,37 @@ export function createVfsGitFs(vfs: VfsService, opts: CreateVfsGitFsOptions): Vf
 			const w = await walk(vfs, rootId, path);
 			if (!w.node) throw nodeErr('ENOENT', path);
 			if (w.node.kind !== 'file') throw nodeErr('EISDIR', path);
-			const bytes = await vfs.readBytes(w.node.id);
-			const enc = encodingOf(options);
-			if (enc === 'utf8' || enc === 'utf-8') return new TextDecoder().decode(bytes);
-			return bytes;
+			try {
+				const bytes = await vfs.readBytes(w.node.id);
+				const enc = encodingOf(options);
+				if (enc === 'utf8' || enc === 'utf-8') return new TextDecoder().decode(bytes);
+				return bytes;
+			} catch (e) {
+				mapVfsError(e, path);
+			}
 		},
 
 		async writeFile(path: string, data: unknown, _options?: unknown) {
 			const bytes = toBytes(data);
 			const w = await walk(vfs, rootId, path);
 			if ('root' in w && w.root) throw nodeErr('EPERM', path);
-			if (w.node) {
-				if (w.node.kind !== 'file') throw nodeErr('EISDIR', path);
-				await vfs.updateFile(w.node.id, bytes, { force: true });
-				return;
+			try {
+				if (w.node) {
+					if (w.node.kind !== 'file') throw nodeErr('EISDIR', path);
+					await vfs.updateFile(w.node.id, bytes, { force: true });
+					return;
+				}
+				await vfs.writeFile({
+					parentId: w.parentId,
+					name: w.name,
+					body: bytes,
+					fileType: 'unknown',
+					contentType: 'application/octet-stream',
+					onConflict: 'error'
+				});
+			} catch (e) {
+				mapVfsError(e, path);
 			}
-			await vfs.writeFile({
-				parentId: w.parentId,
-				name: w.name,
-				body: bytes,
-				fileType: 'unknown',
-				contentType: 'application/octet-stream',
-				onConflict: 'error'
-			});
 		},
 
 		async mkdir(path: string, _mode?: unknown) {

@@ -9,10 +9,11 @@
  *   drop flush()                       2.69 ms
  *   drop flush() and truncate()        2.05 ms
  *
- * `flush()` was ~72% of the cost and is NOT needed: `close()` persists (a file
- * written without flush reads back at full size). `truncate()` is only needed
- * when overwriting a longer file, so it is applied conditionally rather than
- * unconditionally.
+ * `flush()` is ~72% of the cost. Same-session reads see the bytes after
+ * `close()`, but WHATWG FileSystemSyncAccessHandle.close() only releases the
+ * exclusive lock and does not guarantee the device has the data — that is
+ * `flush()`. Pack publish (writeAtomic / writeFinal that IDB will confirm)
+ * always flushes. `truncate()` is only needed when overwriting a longer file.
  *
  * Availability is narrow and worth stating: `createSyncAccessHandle` exists in
  * DEDICATED workers only — it is undefined on the main thread and in a
@@ -138,7 +139,11 @@ export function createSyncOpfsStore(rootDirName = 'shared-vfs'): OpfsBlobStore {
 		fn: (h: SyncAccessHandle) => T
 	): Promise<T> {
 		let lastErr: unknown;
-		for (let attempt = 0; attempt < 4; attempt++) {
+		// Tab-kill / Worker.terminate() can leave the exclusive SAH lock held
+		// for seconds (sometimes until the browser restarts). 40ms was only
+		// enough for a same-process straggler close.
+		const waits = [200, 500, 1000, 2000, 5000];
+		for (let attempt = 0; attempt < waits.length; attempt++) {
 			let handle: SyncAccessHandle | null = null;
 			try {
 				handle = await open(opfsPath, create);
@@ -147,7 +152,8 @@ export function createSyncOpfsStore(rootDirName = 'shared-vfs'): OpfsBlobStore {
 				lastErr = e;
 				const name = (e as Error)?.name ?? '';
 				if (name !== 'NoModificationAllowedError' && name !== 'InvalidStateError') throw e;
-				await new Promise((r) => setTimeout(r, 4 * (attempt + 1)));
+				if (attempt === waits.length - 1) break;
+				await new Promise((r) => setTimeout(r, waits[attempt]));
 			} finally {
 				try {
 					handle?.close();
@@ -182,23 +188,62 @@ export function createSyncOpfsStore(rootDirName = 'shared-vfs'): OpfsBlobStore {
 			// Only shrink when there is something to shrink: an unconditional
 			// truncate cost measurable time on fresh files.
 			if (h.getSize() > bytes.byteLength) h.truncate(bytes.byteLength);
-			// No flush(): close() persists, and flush measured ~6.9ms/file.
+			h.flush();
 			return { byteLength: bytes.byteLength };
 		});
 	}
 
+	async function moveFile(fromPath: string, toPath: string): Promise<void> {
+		const { dir, base } = splitPath(toPath);
+		const tmpHandle = (await fileHandle(fromPath, false)) as FileSystemFileHandle & {
+			move?: (destination: FileSystemDirectoryHandle, name: string) => Promise<void>;
+		};
+		if (typeof tmpHandle.move === 'function') {
+			await tmpHandle.move(await resolveDir(dir), base);
+			return;
+		}
+		const bytes = await store.read(fromPath);
+		await writeBytes(toPath, bytes);
+		await store.remove(fromPath);
+	}
+
 	const store: OpfsBlobStore = {
 		writeFinal: (opfsPath, data) => writeBytes(opfsPath, data),
-		writeAtomic: (opfsPath, data) => writeBytes(opfsPath, data),
+		async writeAtomic(opfsPath, data) {
+			const writeId = `w_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+			const tmpPath = `tmp/${writeId}.partial`;
+			const { byteLength } = await writeBytes(tmpPath, data);
+			try {
+				if (await store.exists(opfsPath)) {
+					await store.remove(opfsPath);
+				}
+				await moveFile(tmpPath, opfsPath);
+			} catch {
+				await writeBytes(opfsPath, data);
+				try {
+					await store.remove(tmpPath);
+				} catch {
+					/* gc sweeps tmp/ */
+				}
+			}
+			return { byteLength };
+		},
 		async writePartial(writeId, data) {
 			const tmpPath = `tmp/${writeId}.partial`;
 			const { byteLength } = await writeBytes(tmpPath, data);
 			return { tmpPath, byteLength };
 		},
 		async promote(tmpPath, finalOpfsPath) {
-			const bytes = await store.read(tmpPath);
-			await writeBytes(finalOpfsPath, bytes);
-			await store.remove(tmpPath);
+			try {
+				if (await store.exists(finalOpfsPath)) {
+					await store.remove(finalOpfsPath);
+				}
+				await moveFile(tmpPath, finalOpfsPath);
+			} catch {
+				const bytes = await store.read(tmpPath);
+				await writeBytes(finalOpfsPath, bytes);
+				await store.remove(tmpPath);
+			}
 		},
 		read(opfsPath) {
 			return withHandle(opfsPath, false, (h) => {

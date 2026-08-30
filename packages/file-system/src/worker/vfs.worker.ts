@@ -63,10 +63,17 @@ function vfsFor(dbName: string, opfsRoot: string): VfsService {
 async function withJobLock<T>(jobId: string, fn: () => Promise<T>): Promise<T> {
 	const locks = (globalThis as { navigator?: { locks?: LockManager } }).navigator?.locks;
 	if (!locks?.request) return fn();
+	// request() rejects with the callback's throw. Retrying fn() after that
+	// re-runs extract (rename-on-conflict duplicates packed members). Only
+	// fall back when the lock API itself failed before fn started.
+	let started = false;
 	try {
-		return await locks.request(`vfs-job:${jobId}`, fn);
-	} catch {
-		// A lock manager that refuses must not take the job down with it.
+		return await locks.request(`vfs-job:${jobId}`, () => {
+			started = true;
+			return fn();
+		});
+	} catch (e) {
+		if (started) throw e;
 		return fn();
 	}
 }

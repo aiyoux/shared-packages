@@ -45,6 +45,11 @@ function rangeStore(onWriteFinal?: (path: string) => Promise<void>): OpfsBlobSto
 		},
 		async readRange(path, offset, length, contentType) {
 			const all = await base.read(path);
+			if (offset < 0 || length < 0 || offset + length > all.byteLength) {
+				throw new Error(
+					`Short pack read from ${path}: ${offset}+${length} past ${all.byteLength}`
+				);
+			}
 			return new Blob([all.subarray(offset, offset + length) as BlobPart], {
 				type: contentType ?? 'application/octet-stream'
 			});

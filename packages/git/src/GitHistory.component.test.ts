@@ -52,4 +52,36 @@ describe('GitHistory', () => {
 		expect(err.textContent).toMatch(/Could not find HEAD/);
 		expect(screen.queryByText('No commits')).toBeNull();
 	});
+
+	it('keeps the last snapshot when subscribe emits an error', async () => {
+		render(GitHistory, {
+			props: {
+				repoId: 'live',
+				gitHost: {
+					snapshot: () =>
+						Promise.resolve({
+							status: { branch: 'main', dirty: false },
+							log: [{ sha: 'abcdef123456', subject: 'hello' }],
+							changes: []
+						}),
+					subscribe: (
+						_id: string,
+						onChange: (s: unknown) => void,
+						onError?: (e: unknown) => void
+					) => {
+						onChange({
+							status: { branch: 'main', dirty: false },
+							log: [{ sha: 'abcdef123456', subject: 'hello' }],
+							changes: []
+						});
+						queueMicrotask(() => onError?.(new Error('WRITE_IN_FLIGHT')));
+						return () => {};
+					}
+				} as never
+			}
+		});
+		const err = await screen.findByTestId('git-history-error');
+		expect(err.textContent).toMatch(/WRITE_IN_FLIGHT/);
+		expect(screen.getByTestId('git-history-commit').textContent).toMatch(/hello/);
+	});
 });

@@ -52,7 +52,11 @@ export function createGitHost(opts: CreateGitHostOptions = {}): GitHost {
 		return monitorSnapshot(repo, { fetchImpl });
 	}
 
-	function subscribeRepo(repo: GitRepoRef, onChange: (snap: GitSnapshot) => void): () => void {
+	function subscribeRepo(
+		repo: GitRepoRef,
+		onChange: (snap: GitSnapshot) => void,
+		onError?: (err: unknown) => void
+	): () => void {
 		if (repo.backend === 'local') {
 			let cancelled = false;
 			const bound = bindLocal(repo.path);
@@ -61,8 +65,8 @@ export function createGitHost(opts: CreateGitHostOptions = {}): GitHost {
 				try {
 					const snap = await localSnapshot(bound.fs, bound.dir);
 					if (!cancelled) onChange(snap);
-				} catch {
-					/* local snapshot failed */
+				} catch (e) {
+					if (!cancelled) onError?.(e);
 				}
 			};
 			void emit();
@@ -106,13 +110,13 @@ export function createGitHost(opts: CreateGitHostOptions = {}): GitHost {
 			return commitOn(await requireRepo(repoId), opts);
 		},
 		commitRepo: commitOn,
-		subscribe(repoId, onChange) {
+		subscribe(repoId, onChange, onError) {
 			let unsub = () => {};
 			let cancelled = false;
 			void (async () => {
 				const repo = await requireRepo(repoId);
 				if (cancelled) return;
-				unsub = subscribeRepo(repo, onChange);
+				unsub = subscribeRepo(repo, onChange, onError);
 			})();
 			return () => {
 				cancelled = true;
