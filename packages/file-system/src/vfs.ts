@@ -11,6 +11,19 @@ import {
 } from './persist.js';
 import { forceExtension, getFileType, inferFileTypeFromName } from './registry.js';
 import { parseJsonBytes, serializeBody } from './serialize.js';
+import { crc32 } from './crc32.js';
+
+async function blobToBytes(blob: Blob): Promise<Uint8Array> {
+	if (typeof blob.arrayBuffer === 'function') {
+		return new Uint8Array(await blob.arrayBuffer());
+	}
+	const bytes = (blob as Blob & { bytes?: () => Promise<Uint8Array> }).bytes;
+	if (typeof bytes === 'function') return bytes.call(blob);
+	if (typeof Response !== 'undefined') {
+		return new Uint8Array(await new Response(blob).arrayBuffer());
+	}
+	throw new VfsError('OPFS_IO', 'Blob has no arrayBuffer()');
+}
 import {
 	createOpenDocument,
 	watchNode,
@@ -70,6 +83,30 @@ const COMPACT_MIN_RECLAIM_BYTES = 1 << 20;
  */
 function packClaimKey(packPath: string): string {
 	return `compact:${packPath}`;
+}
+
+/** Lease on a dest pack/blob path that does not yet have a blobRef naming it. */
+function packWriteKey(opfsPath: string): string {
+	return `packwrite:${opfsPath}`;
+}
+
+/**
+ * Tests inject a crash between compact phases. Production leaves this null.
+ * after-write: dest bytes exist, no refs yet. after-swap: refs name dest, old still there.
+ */
+export type CompactCrashPhase = 'after-write' | 'after-swap' | 'before-unlink';
+export const compactCrash = {
+	hook: null as ((phase: CompactCrashPhase, newPath: string, oldPath: string) => Promise<void>) | null
+};
+
+async function withWebLock<T>(name: string, fn: () => Promise<T>): Promise<T> {
+	const locks = (globalThis as { navigator?: { locks?: { request: Function } } }).navigator?.locks;
+	if (!locks?.request) return fn();
+	try {
+		return await locks.request(name, { mode: 'exclusive' }, fn);
+	} catch {
+		return fn();
+	}
 }
 
 /** Byte sizes for pack progress lines. */
@@ -230,6 +267,10 @@ export class VfsService {
 						/* ignore */
 					}
 				}
+				// Crash debris belongs to the next session that opens the store,
+				// not only the Files page. sweepOnLoad is once-per-instance, so
+				// a later mount calling it is a no-op.
+				this.sweepOnLoad({ delayMs: 0 });
 			})();
 		}
 		return this.readyPromise;
@@ -318,13 +359,30 @@ export class VfsService {
 			}
 			return a.name.localeCompare(b.name);
 		});
-		return rows;
+		return this.hidePendingWrites(rows);
 	}
 
 	/** Reactive list (Dexie liveQuery). Querier must be async so awaits inside
 	 * `list()` stay in Dexie's observation zone. */
 	liveList(opts: VfsListOptions): Observable<VfsNode[]> {
 		return liveQuery(async () => this.list(opts));
+	}
+
+	/**
+	 * Reserved packed/standalone writes are live IDB rows with size 0 until
+	 * confirm. Listing them looks like a successful empty file; hide them so
+	 * copy/git/the explorer cannot persist that empty view.
+	 */
+	private async hidePendingWrites(rows: VfsNode[]): Promise<VfsNode[]> {
+		const blobIds = rows.map((n) => n.blobId).filter((id): id is string => !!id);
+		if (!blobIds.length) return rows;
+		const refs = await this.db.blobRefs.bulkGet(blobIds);
+		const pending = new Set<string>();
+		for (const r of refs) {
+			if (r?.pending) pending.add(r.id);
+		}
+		if (!pending.size) return rows;
+		return rows.filter((n) => !n.blobId || !pending.has(n.blobId));
 	}
 
 	async get(id: string): Promise<VfsNode | undefined> {
@@ -868,6 +926,12 @@ export class VfsService {
 			let release!: () => void;
 			reserveChain = new Promise<void>((r) => (release = r));
 
+			// Wait BEFORE starting this chunk so in-flight bytes stay at one
+			// budget, not two overlapping max packs. An empty set still starts
+			// even when this group is the full budget.
+			while (inFlight.size > 0 && inFlightBytes + groupBytes > CHUNK_BYTES) {
+				await Promise.race(inFlight);
+			}
 			inFlightBytes += groupBytes;
 			const task = (async () => {
 				await waitFor;
@@ -894,10 +958,6 @@ export class VfsService {
 			// Swallow here only so an early rejection cannot surface as an
 			// unhandled rejection; it is re-thrown by the awaits below.
 			tracked.catch(() => {});
-
-			while (inFlight.size > 1 && inFlightBytes >= CHUNK_BYTES) {
-				await Promise.race(inFlight);
-			}
 		};
 
 		try {
@@ -976,6 +1036,7 @@ export class VfsService {
 			e.name = 'AbortError';
 			return e;
 		};
+		let packPathToUnlink: string | undefined;
 		const cleanup = async () => {
 			// Best-effort rollback, matching writeFile's catch. If the failure
 			// was inside the reserve txn, Dexie already rolled the puts back and
@@ -1002,6 +1063,13 @@ export class VfsService {
 			for (const p of prepared) {
 				try {
 					await this.opfs.remove(`blobs/${p.blobId}.bin`);
+				} catch {
+					/* ignore */
+				}
+			}
+			if (packPathToUnlink) {
+				try {
+					await this.opfs.remove(packPathToUnlink);
 				} catch {
 					/* ignore */
 				}
@@ -1056,6 +1124,7 @@ export class VfsService {
 			const packedIndexes = new Set(
 				packMembers.length > 1 ? packMembers.map((m) => m.index) : []
 			);
+			if (packedIndexes.size) packPathToUnlink = packPath;
 			const packOffsetByIndex = new Map(
 				packMembers.length > 1 ? packMembers.map((m) => [m.index, m.offset]) : []
 			);
@@ -1154,7 +1223,26 @@ export class VfsService {
 				for (let i = 0; i < prepared.length; i++) {
 					if (packedIndexes.has(i)) parts.push(prepared[i]!.bytes as BlobPart);
 				}
-				await this.opfs.writeFinal(packPath, new Blob(parts));
+				const blobOk =
+					typeof (globalThis.Blob && Blob.prototype && Blob.prototype.arrayBuffer) ===
+					'function';
+				let payload: Blob | Uint8Array;
+				if (blobOk) {
+					payload = new Blob(parts);
+				} else {
+					payload = new Uint8Array(packBytes);
+					for (const m of packMembers) {
+						if (!packedIndexes.has(m.index)) continue;
+						payload.set(prepared[m.index]!.bytes, m.offset);
+					}
+				}
+				const written = await this.opfs.writeAtomic(packPath, payload);
+				if (written.byteLength !== packBytes) {
+					throw new VfsError(
+						'OPFS_IO',
+						`Pack write short: expected ${packBytes} bytes, wrote ${written.byteLength}`
+					);
+				}
 			}
 			// Anything not packed (large members, or a chunk too small to be
 			// worth a pack) keeps the one-file-per-blob path.
@@ -1210,7 +1298,9 @@ export class VfsService {
 								...ref,
 								byteLength: r.p.bytes.byteLength,
 								pending: false,
-								pendingPromote: false
+								pendingPromote: false,
+								crc32: crc32(r.p.bytes),
+								packGeneration: packedIndexes.has(i) ? 1 : undefined
 							});
 						}
 						const node = nodes[i];
@@ -1226,6 +1316,7 @@ export class VfsService {
 					await this.db.leases.bulkDelete(leaseKeys);
 				}
 			);
+			packPathToUnlink = undefined;
 		} catch (e) {
 			await cleanup();
 			throw e;
@@ -1360,31 +1451,43 @@ export class VfsService {
 
 			await this.opfs.promote(tmpPath, finalPath);
 
-			await this.db.transaction('rw', this.db.nodes, this.db.blobRefs, this.db.leases, async () => {
-				const cur = await this.db.nodes.get(id);
-				if (!cur) throw new VfsError('NOT_FOUND');
-				if (cur.deletedAt != null) throw new VfsError('TRASH_STATE');
-				if (!force && cur.generation !== expected) {
-					throw new VfsError('GENERATION_CONFLICT', 'File changed in another tab', {
-						expected,
-						actual: cur.generation
-					});
+			try {
+				await this.db.transaction('rw', this.db.nodes, this.db.blobRefs, this.db.leases, async () => {
+					const cur = await this.db.nodes.get(id);
+					if (!cur) throw new VfsError('NOT_FOUND');
+					if (cur.deletedAt != null) throw new VfsError('TRASH_STATE');
+					if (!force && cur.generation !== expected) {
+						throw new VfsError('GENERATION_CONFLICT', 'File changed in another tab', {
+							expected,
+							actual: cur.generation
+						});
+					}
+					const ref = await this.db.blobRefs.get(blobId);
+					if (ref) {
+						ref.opfsPath = finalPath;
+						ref.pendingPromote = false;
+						await this.db.blobRefs.put(ref);
+					}
+					cur.blobId = blobId;
+					cur.size = partial.byteLength;
+					cur.updatedAt = Date.now();
+					cur.generation = cur.generation + 1;
+					cur.contentType = contentType;
+					if (opts.meta !== undefined) cur.meta = opts.meta;
+					await this.db.nodes.put(cur);
+					await this.db.leases.delete(leaseKey);
+				});
+			} catch (e) {
+				// Promote already moved bytes to the final path. Put them back
+				// so IDB (still naming tmp) and OPFS agree, then the outer
+				// cleanup can drop both.
+				try {
+					await this.opfs.promote(finalPath, tmpPath!);
+				} catch {
+					/* read path still falls back blobs/<id>.bin */
 				}
-				const ref = await this.db.blobRefs.get(blobId);
-				if (ref) {
-					ref.opfsPath = finalPath;
-					ref.pendingPromote = false;
-					await this.db.blobRefs.put(ref);
-				}
-				cur.blobId = blobId;
-				cur.size = partial.byteLength;
-				cur.updatedAt = Date.now();
-				cur.generation = cur.generation + 1;
-				cur.contentType = contentType;
-				if (opts.meta !== undefined) cur.meta = opts.meta;
-				await this.db.nodes.put(cur);
-				await this.db.leases.delete(leaseKey);
-			});
+				throw e;
+			}
 		} catch (e) {
 			await this.db.blobRefs.delete(blobId);
 			await this.db.leases.delete(leaseKey);
@@ -1418,13 +1521,44 @@ export class VfsService {
 		if (!node) throw new VfsError('NOT_FOUND');
 		if (node.kind !== 'file') throw new VfsError('NOT_A_FILE');
 		if (!node.blobId) throw new VfsError('OPFS_IO', 'Missing blobId', { nodeId });
-		const ref = await this.db.blobRefs.get(node.blobId);
-		if (!ref) throw new VfsError('OPFS_IO', 'Missing blobRef', { nodeId, blobId: node.blobId });
+		const ref = await this.loadReadableRef(node.blobId, nodeId);
 		if (ref.packOffset != null) {
 			const slice = await this.readPacked(ref);
-			return new Uint8Array(await slice.arrayBuffer());
+			const bytes = await blobToBytes(slice);
+			this.assertMemberChecksum(ref, bytes);
+			return bytes;
 		}
-		return this.opfs.read(ref.opfsPath);
+		if (ref.pendingPromote) {
+			try {
+				return this.assertMemberChecksum(ref, await this.opfs.read(ref.opfsPath));
+			} catch (e) {
+				const alt = `blobs/${ref.id}.bin`;
+				if (alt !== ref.opfsPath && (await this.opfs.exists(alt))) {
+					return this.assertMemberChecksum(ref, await this.opfs.read(alt));
+				}
+				throw e;
+			}
+		}
+		return this.assertMemberChecksum(ref, await this.opfs.read(ref.opfsPath));
+	}
+
+	private async loadReadableRef(blobId: string, nodeId?: string): Promise<BlobRef> {
+		const ref = await this.db.blobRefs.get(blobId);
+		if (!ref) throw new VfsError('OPFS_IO', 'Missing blobRef', { nodeId, blobId });
+		if (ref.pending) {
+			throw new VfsError('WRITE_IN_FLIGHT', 'File is still being written', { nodeId, blobId });
+		}
+		return ref;
+	}
+
+	private assertMemberChecksum(ref: BlobRef, bytes: Uint8Array): Uint8Array {
+		if (ref.crc32 != null && crc32(bytes) !== ref.crc32) {
+			throw new VfsError(
+				'OPFS_IO',
+				`Checksum mismatch for blob ${ref.id} at ${ref.opfsPath}:${ref.packOffset ?? 0}`
+			);
+		}
+		return bytes;
 	}
 
 	/**
@@ -1433,9 +1567,37 @@ export class VfsService {
 	 * full read.
 	 */
 	private async readPacked(ref: BlobRef, contentType?: string): Promise<Blob> {
+		try {
+			return await this.readPackedOnce(ref, contentType);
+		} catch (e) {
+			const latest = await this.db.blobRefs.get(ref.id);
+			if (
+				latest &&
+				!latest.pending &&
+				(latest.opfsPath !== ref.opfsPath ||
+					latest.packOffset !== ref.packOffset ||
+					latest.packGeneration !== ref.packGeneration)
+			) {
+				return this.readPackedOnce(latest, contentType);
+			}
+			throw e;
+		}
+	}
+
+	private async readPackedOnce(ref: BlobRef, contentType?: string): Promise<Blob> {
+		if (ref.pending) {
+			throw new VfsError('WRITE_IN_FLIGHT', 'File is still being written', { blobId: ref.id });
+		}
 		const offset = ref.packOffset ?? 0;
 		if (this.opfs.readRange) {
-			return this.opfs.readRange(ref.opfsPath, offset, ref.byteLength, contentType);
+			const slice = await this.opfs.readRange(ref.opfsPath, offset, ref.byteLength, contentType);
+			if (slice.size !== ref.byteLength) {
+				throw new VfsError(
+					'OPFS_IO',
+					`Short pack read from ${ref.opfsPath}: got ${slice.size} of ${ref.byteLength} at ${offset}`
+				);
+			}
+			return slice;
 		}
 		// A store without range reads should never have been given packs — the
 		// packable check gates on readRange — so reaching here means a pack was
@@ -1449,6 +1611,12 @@ export class VfsService {
 		);
 		const all = await this.opfs.read(ref.opfsPath);
 		const view = all.subarray(offset, offset + ref.byteLength);
+		if (view.byteLength !== ref.byteLength) {
+			throw new VfsError(
+				'OPFS_IO',
+				`Short pack read from ${ref.opfsPath}: got ${view.byteLength} of ${ref.byteLength} at ${offset}`
+			);
+		}
 		return new Blob([view as BlobPart], { type: contentType ?? 'application/octet-stream' });
 	}
 
@@ -1463,10 +1631,20 @@ export class VfsService {
 		if (!node) throw new VfsError('NOT_FOUND');
 		if (node.kind !== 'file') throw new VfsError('NOT_A_FILE');
 		if (!node.blobId) throw new VfsError('OPFS_IO', 'Missing blobId');
-		const ref = await this.db.blobRefs.get(node.blobId);
-		if (!ref) throw new VfsError('OPFS_IO', 'Missing blobRef');
+		const ref = await this.loadReadableRef(node.blobId);
 		const contentType = node.contentType ?? ref.contentType;
 		if (ref.packOffset != null) return this.readPacked(ref, contentType);
+		if (ref.pendingPromote) {
+			try {
+				return this.opfs.readBlob(ref.opfsPath, contentType);
+			} catch (e) {
+				const alt = `blobs/${ref.id}.bin`;
+				if (alt !== ref.opfsPath && (await this.opfs.exists(alt))) {
+					return this.opfs.readBlob(alt, contentType);
+				}
+				throw e;
+			}
+		}
 		return this.opfs.readBlob(ref.opfsPath, contentType);
 	}
 
@@ -1667,69 +1845,51 @@ export class VfsService {
 		await this.ready();
 		const recursive = opts?.recursive ?? false;
 		const blobIds: string[] = [];
-		const opfsPaths: string[] = [];
+		const nodeIds: string[] = [];
 
-		await this.db.transaction('rw', this.db.nodes, this.db.blobRefs, async () => {
-			const node = await this.db.nodes.get(id);
-			if (!node) throw new VfsError('NOT_FOUND');
-
-			const toDelete: VfsNode[] = [node];
-			if (node.kind === 'folder') {
-				if (!recursive) {
-					// Existence, not enumeration: an unindexed scan that loaded
-					// every child to ask "are there any?" measured 43ms against
-					// 1.3ms for an indexed lookup on a folder of 800.
-					const firstChild = await this.db.nodes
-						.where('parentId')
-						.equals(id)
-						.first();
-					if (firstChild) throw new VfsError('HAS_CHILDREN', 'Folder has children');
-				}
-				if (recursive) {
-					const all = await this.db.nodes.toArray();
-					const stack = [id];
-					while (stack.length) {
-						const pid = stack.pop()!;
-						for (const c of all) {
-							if (c.parentId === pid) {
-								toDelete.push(c);
-								if (c.kind === 'folder') stack.push(c.id);
-							}
+		const node = await this.db.nodes.get(id);
+		if (!node) throw new VfsError('NOT_FOUND');
+		const toDelete: VfsNode[] = [node];
+		if (node.kind === 'folder') {
+			if (!recursive) {
+				const firstChild = await this.db.nodes.where('parentId').equals(id).first();
+				if (firstChild) throw new VfsError('HAS_CHILDREN', 'Folder has children');
+			}
+			if (recursive) {
+				const all = await this.db.nodes.toArray();
+				const stack = [id];
+				while (stack.length) {
+					const pid = stack.pop()!;
+					for (const c of all) {
+						if (c.parentId === pid) {
+							toDelete.push(c);
+							if (c.kind === 'folder') stack.push(c.id);
 						}
 					}
 				}
 			}
+		}
+		for (const n of toDelete) {
+			nodeIds.push(n.id);
+			if (n.blobId) blobIds.push(n.blobId);
+		}
 
-			for (const n of toDelete) {
-				if (n.blobId) blobIds.push(n.blobId);
-				await this.db.nodes.delete(n.id);
-			}
-		});
-
-		// Which packs are about to lose members. Collected BEFORE the release,
-		// because releaseBlobRefs drops the very refs that name them.
 		const touchedPacks = await this.packPathsForBlobs(blobIds);
-
-		// Rows and files are released together, after the node txn commits, so
-		// storage is never unlinked while a node could still name it.
-		await this.releaseBlobRefs(blobIds);
-
-		// Deleting permanently bypasses the trash entirely — from the Projects
-		// app, or "delete permanently" on a single trashed item — so without
-		// this the space would sit dead until some unrelated emptyTrash
-		// happened to run. Only packs past the thresholds are rewritten.
 		if (opts?.compact !== false && touchedPacks.length) {
 			const alive: string[] = [];
 			for (const p of touchedPacks) {
 				if (await this.opfs.exists(p)) alive.push(p);
 			}
-			try {
-				await this.compactPacks(alive);
-			} catch {
-				// The delete has committed and cannot be undone; leaving dead
-				// space is the lesser outcome, and the load sweep retries.
-			}
+			await this.compactPacks(alive, { excludeBlobIds: blobIds });
 		}
+
+		await this.db.transaction('rw', this.db.nodes, async () => {
+			for (const nid of nodeIds) {
+				const cur = await this.db.nodes.get(nid);
+				if (cur) await this.db.nodes.delete(nid);
+			}
+		});
+		await this.releaseBlobRefs(blobIds);
 		this.emitChange();
 	}
 
@@ -1762,21 +1922,57 @@ export class VfsService {
 			if (ref.packOffset != null) touchedPacks.add(ref.opfsPath);
 		}
 
-		const nodeCount = trashed.length;
-		const blobCount = opfsPaths.length;
-		const total = nodeCount + blobCount;
-		opts?.onProgress?.({ done: 0, total, name: 'Emptying trash…' });
-		throwIfAborted(opts?.signal);
-
 		let compactedPacks = 0;
 		let reclaimedBytes = 0;
 		let failedPacks: string[] = [];
+		let deletedIds: string[] = [];
+		let deletedBlobIds: string[] = [];
+		let nodeCount = 0;
 
 		try {
+			const dropIds: string[] = [];
+			for (const n of trashed) {
+				const cur = await this.db.nodes.get(n.id);
+				if (cur?.deletedAt != null && cur.blobId) dropIds.push(cur.blobId);
+			}
+			if (!opts?.skipCompaction && touchedPacks.size) {
+				const stillThere: string[] = [];
+				for (const p of touchedPacks) {
+					if (await this.opfs.exists(p)) stillThere.push(p);
+				}
+				const res = await this.compactPacks(stillThere, {
+					excludeBlobIds: dropIds,
+					onProgress: opts?.onPackProgress,
+					signal: opts?.signal
+				});
+				compactedPacks = res.compactedPacks;
+				reclaimedBytes = res.reclaimedBytes;
+			}
+
 			await this.db.transaction('rw', this.db.nodes, this.db.blobRefs, async () => {
-				await this.db.nodes.bulkDelete(trashed.map((n) => n.id));
-				if (uniqueBlobIds.length) await this.db.blobRefs.bulkDelete(uniqueBlobIds);
+				const still: VfsNode[] = [];
+				for (const n of trashed) {
+					const cur = await this.db.nodes.get(n.id);
+					if (!cur || cur.deletedAt == null) continue;
+					still.push(cur);
+				}
+				deletedIds = still.map((n) => n.id);
+				deletedBlobIds = [
+					...new Set(still.map((n) => n.blobId).filter((id): id is string => !!id))
+				];
+				if (deletedIds.length) await this.db.nodes.bulkDelete(deletedIds);
+				if (deletedBlobIds.length) await this.db.blobRefs.bulkDelete(deletedBlobIds);
 			});
+		const deletedBlobSet = new Set(deletedBlobIds);
+		const releasedPaths = opfsPaths.filter((_, i) => {
+			const bid = uniqueBlobIds[i];
+			return bid != null && deletedBlobSet.has(bid);
+		});
+		nodeCount = deletedIds.length;
+		const blobCount = releasedPaths.length;
+		const total = Math.max(nodeCount + blobCount, 1);
+		opts?.onProgress?.({ done: 0, total, name: 'Emptying trash…' });
+		throwIfAborted(opts?.signal);
 			opts?.onProgress?.({ done: nodeCount, total, name: 'Emptying trash…' });
 			await yieldPaint();
 
@@ -1787,9 +1983,9 @@ export class VfsService {
 			// check: emptying the trash must never take storage that a file
 			// still outside the trash is sharing.
 			const seen = new Set<string>();
-			for (let i = 0; i < opfsPaths.length; i++) {
+			for (let i = 0; i < releasedPaths.length; i++) {
 				throwIfAborted(opts?.signal);
-				const item = opfsPaths[i]!;
+				const item = releasedPaths[i]!;
 				if (!seen.has(item.path)) {
 					seen.add(item.path);
 					const survivor = await this.db.blobRefs
@@ -1808,38 +2004,8 @@ export class VfsService {
 				if ((i & 7) === 7) await yieldPaint();
 			}
 
-			// Packs that lost members but kept survivors are now carrying dead
-			// space. Whole-pack unlinking above only covers packs nothing
-			// survives in; without this, emptying the trash of packed files
-			// appears to free nothing at all. Only packs past the thresholds are
-			// rewritten, so five files across two packs costs two rewrites at
-			// most, not one per file.
-			if (!opts?.skipCompaction && touchedPacks.size) {
-				const stillThere: string[] = [];
-				for (const p of touchedPacks) {
-					if (await this.opfs.exists(p)) stillThere.push(p);
-				}
-				try {
-					const res = await this.compactPacks(stillThere, {
-						onProgress: opts?.onPackProgress,
-						signal: opts?.signal
-					});
-					compactedPacks = res.compactedPacks;
-					reclaimedBytes = res.reclaimedBytes;
-				} catch (e) {
-					// The delete itself already committed and cannot be undone, so
-					// this is reported as an incomplete operation rather than
-					// swallowed or raised as a failed delete.
-					if (e instanceof Error && e.name === 'AbortError') throw e;
-					failedPacks = stillThere;
-					opts?.onPackProgress?.({
-						stage: 'failed',
-						label: `Files deleted, but ${stillThere.length} pack${
-							stillThere.length === 1 ? '' : 's'
-						} could not be compacted — space will be reclaimed later.`
-					});
-				}
-			}
+			// Compaction ran before the delete (C3: compact failure fails the
+			// empty). Unlink above only drops packs nothing still names.
 		} finally {
 			this.emitChange();
 		}
@@ -2142,6 +2308,14 @@ export class VfsService {
 		// wasting a rewrite.
 		if (survivors.some((r) => r.pending)) return 0;
 
+		return withWebLock(`vfs-pack:${packPath}`, () => this.compactOnePackLocked(packPath, survivors, report));
+	}
+
+	private async compactOnePackLocked(
+		packPath: string,
+		survivors: BlobRef[],
+		report: (stage: PackOpStage, label: string, bytes?: number) => void
+	): Promise<number> {
 		const source = await this.opfs.readBlob(packPath);
 		const before = source.size;
 
@@ -2159,63 +2333,88 @@ export class VfsService {
 		}
 
 		const newPath = `packs/${`pack_${crypto.randomUUID()}`}.bin`;
-		await this.opfs.writeFinal(newPath, new Blob(parts));
+		await this.holdPackWrite(newPath);
+		try {
+			const written = await this.opfs.writeAtomic(newPath, new Blob(parts));
+			if (written.byteLength !== cursor) {
+				try {
+					await this.opfs.remove(newPath);
+				} catch {
+					/* gc */
+				}
+				throw new Error(
+					`Pack compaction verification failed: expected ${cursor} bytes, wrote ${written.byteLength}`
+				);
+			}
 
-		report('verifying', 'Deleting — verifying blob integrity…');
-		const written = await this.opfs.readBlob(newPath);
-		if (written.size !== cursor) {
-			// Nothing has been swapped yet, so the old pack is still authoritative.
+			report('verifying', 'Deleting — verifying blob integrity…');
+			const onDisk = await this.opfs.readBlob(newPath);
+			if (onDisk.size !== cursor) {
+				try {
+					await this.opfs.remove(newPath);
+				} catch {
+					/* gc sweeps packs/ */
+				}
+				throw new Error(
+					`Pack compaction verification failed: expected ${cursor} bytes, wrote ${onDisk.size}`
+				);
+			}
+			if (compactCrash.hook) await compactCrash.hook('after-write', newPath, packPath);
+
+			let swapped = 0;
+			await this.db.transaction('rw', this.db.blobRefs, async () => {
+				for (const item of layout) {
+					const current = await this.db.blobRefs.get(item.id);
+					if (!current || current.opfsPath !== packPath || current.pending) continue;
+					await this.db.blobRefs.put({
+						...current,
+						opfsPath: newPath,
+						packOffset: item.offset,
+						packGeneration: (current.packGeneration ?? 0) + 1
+					});
+					swapped += 1;
+				}
+			});
+
+			if (compactCrash.hook) await compactCrash.hook('after-swap', newPath, packPath);
+
+			const stillNamed = await this.db.blobRefs.where('opfsPath').equals(packPath).first();
+			if (stillNamed) {
+				console.warn(
+					`[vfs] pack ${packPath} still has live references after compaction; ` +
+						'keeping it. Space will be reclaimed on a later delete.'
+				);
+				// Compact-before-delete leaves the soon-to-drop members on the
+				// old pack on purpose. Count the rewrite so the caller knows it
+				// happened; the old file goes away when those refs are released.
+				return swapped > 0 ? Math.max(0, before - cursor) : 0;
+			}
+			if (compactCrash.hook) await compactCrash.hook('before-unlink', newPath, packPath);
 			try {
-				await this.opfs.remove(newPath);
+				await this.opfs.remove(packPath);
 			} catch {
 				/* gc sweeps packs/ */
 			}
-			throw new Error(
-				`Pack compaction verification failed: expected ${cursor} bytes, wrote ${written.size}`
-			);
+			return Math.max(0, before - cursor);
+		} finally {
+			await this.dropPackWrite(newPath);
 		}
+	}
 
-		await this.db.transaction('rw', this.db.blobRefs, async () => {
-			for (const item of layout) {
-				// Re-read inside the txn: a concurrent updateFile may have moved this
-				// node to its own blob, in which case its ref must not be dragged
-				// into the new pack.
-				const current = await this.db.blobRefs.get(item.id);
-				// `pending` means a concurrent write is mid-flight on this ref and
-				// its byteLength is not yet true, so the slice this layout took is
-				// not its content. Skipping keeps the old pack authoritative for it.
-				if (!current || current.opfsPath !== packPath || current.pending) continue;
-				await this.db.blobRefs.put({
-					...current,
-					opfsPath: newPath,
-					packOffset: item.offset
-				});
-			}
+	private async holdPackWrite(opfsPath: string): Promise<void> {
+		await this.db.leases.put({
+			key: packWriteKey(opfsPath),
+			owner: generateId('packw'),
+			expiresAt: Date.now() + Math.max(this.graceMs, 60_000)
 		});
+	}
 
-		// Retire the old pack only when NOTHING still names it.
-		//
-		// The swap deliberately skips refs that changed underneath it, and a ref
-		// can also appear between the survivor scan and the swap. Either way it may
-		// still point into the old pack, so unlinking unconditionally would destroy
-		// live bytes — the same shared-storage trap that releaseBlobRefs exists to
-		// avoid, and it applies here too.
-		const stillNamed = await this.db.blobRefs.where('opfsPath').equals(packPath).first();
-		if (stillNamed) {
-			// The new pack is a superset copy, so nothing is lost — but the space is
-			// not reclaimed either, and a caller reporting bytes freed must not lie.
-			console.warn(
-				`[vfs] pack ${packPath} still has live references after compaction; ` +
-					'keeping it. Space will be reclaimed on a later delete.'
-			);
-			return 0;
-		}
+	private async dropPackWrite(opfsPath: string): Promise<void> {
 		try {
-			await this.opfs.remove(packPath);
+			await this.db.leases.delete(packWriteKey(opfsPath));
 		} catch {
-			/* gc sweeps packs/ */
+			/* expires on its own */
 		}
-		return Math.max(0, before - cursor);
 	}
 
 	/**
@@ -2278,11 +2477,14 @@ export class VfsService {
 		opts?: {
 			onProgress?: (ev: PackOpProgress) => void;
 			signal?: AbortSignal;
+			/** Compact as if these members were already gone (delete-fails-if-compact-fails). */
+			excludeBlobIds?: Iterable<string>;
 		}
 	): Promise<{ compactedPacks: number; reclaimedBytes: number }> {
 		await this.ready();
 		const report = (stage: PackOpStage, label: string, reclaimedBytes?: number) =>
 			opts?.onProgress?.({ stage, label, reclaimedBytes });
+		const exclude = new Set(opts?.excludeBlobIds ?? []);
 
 		let compactedPacks = 0;
 		let reclaimedBytes = 0;
@@ -2296,7 +2498,8 @@ export class VfsService {
 			try {
 				// Survivors decide the outcome: none means releaseBlobRefs already
 				// unlinked the file and there is nothing to compact.
-				const survivors = await this.db.blobRefs.where('opfsPath').equals(packPath).toArray();
+				const all = await this.db.blobRefs.where('opfsPath').equals(packPath).toArray();
+				const survivors = exclude.size ? all.filter((r) => !exclude.has(r.id)) : all;
 				if (!survivors.length) continue;
 				// Mid-write: byteLength is 0 until the confirm txn, so the dead-space
 				// sum below would read the whole pack as garbage. Leave it alone.
@@ -2377,27 +2580,49 @@ export class VfsService {
 
 		report('compacting', `Unpacking ${packed.length} file${packed.length === 1 ? '' : 's'}…`);
 		const oldPaths = new Set(packed.map((r) => r.opfsPath));
+		const owner = generateId('unpack');
+		for (const path of oldPaths) {
+			if (!(await this.claimPack(path, owner))) {
+				throw new VfsError('WRITE_IN_FLIGHT', `Pack ${path} is being rewritten`);
+			}
+		}
 		let moved = 0;
+		try {
 		for (const ref of packed) {
 			throwIfAborted(opts?.signal);
 			const blob = await this.refAsBlob(ref);
 			const destPath = `blobs/${ref.id}.bin`;
-			await this.opfs.writeFinal(destPath, blob);
-			// Re-read inside the transaction: a concurrent updateFile may have
-			// already moved this ref off the pack, and must not be dragged back.
-			const swapped = await this.db.transaction('rw', this.db.blobRefs, async () => {
-				const current = await this.db.blobRefs.get(ref.id);
-				if (!current || current.opfsPath !== ref.opfsPath || current.pending) return false;
-				const { packOffset: _drop, ...rest } = current;
-				await this.db.blobRefs.put({ ...rest, opfsPath: destPath });
-				return true;
-			});
-			if (swapped) moved += 1;
-			else {
+			await this.holdPackWrite(destPath);
+			try {
+				await this.opfs.writeAtomic(destPath, blob);
+				const swapped = await this.db.transaction('rw', this.db.blobRefs, async () => {
+					const current = await this.db.blobRefs.get(ref.id);
+					if (!current || current.opfsPath !== ref.opfsPath || current.pending) return false;
+					const { packOffset: _drop, ...rest } = current;
+					await this.db.blobRefs.put({ ...rest, opfsPath: destPath });
+					return true;
+				});
+				if (swapped) moved += 1;
+				else {
+					const named = await this.db.blobRefs.where('opfsPath').equals(destPath).first();
+					if (!named) {
+						try {
+							await this.opfs.remove(destPath);
+						} catch {
+							/* gc sweeps blobs/ */
+						}
+					}
+				}
+			} finally {
+				await this.dropPackWrite(destPath);
+			}
+		}
+		} finally {
+			for (const path of oldPaths) {
 				try {
-					await this.opfs.remove(destPath);
+					await this.db.leases.delete(packClaimKey(path));
 				} catch {
-					/* gc sweeps blobs/ */
+					/* expires */
 				}
 			}
 		}
@@ -2473,11 +2698,10 @@ export class VfsService {
 			}
 
 			const newPath = `packs/pack_${crypto.randomUUID()}.bin`;
-			await this.opfs.writeFinal(newPath, new Blob(parts));
-
-			report('verifying', 'Verifying pack integrity…');
-			const written = await this.opfs.readBlob(newPath);
-			if (written.size !== cursor) {
+			await this.holdPackWrite(newPath);
+			try {
+			const written = await this.opfs.writeAtomic(newPath, new Blob(parts));
+			if (written.byteLength !== cursor) {
 				try {
 					await this.opfs.remove(newPath);
 				} catch {
@@ -2485,7 +2709,21 @@ export class VfsService {
 				}
 				throw new VfsError(
 					'OPFS_IO',
-					`Repack verification failed: expected ${cursor} bytes, wrote ${written.size}`
+					`Repack verification failed: expected ${cursor} bytes, wrote ${written.byteLength}`
+				);
+			}
+
+			report('verifying', 'Verifying pack integrity…');
+			const onDisk = await this.opfs.readBlob(newPath);
+			if (onDisk.size !== cursor) {
+				try {
+					await this.opfs.remove(newPath);
+				} catch {
+					/* gc sweeps packs/ */
+				}
+				throw new VfsError(
+					'OPFS_IO',
+					`Repack verification failed: expected ${cursor} bytes, wrote ${onDisk.size}`
 				);
 			}
 
@@ -2501,7 +2739,8 @@ export class VfsService {
 					await this.db.blobRefs.put({
 						...current,
 						opfsPath: newPath,
-						packOffset: item.offset
+						packOffset: item.offset,
+						packGeneration: (current.packGeneration ?? 0) + 1
 					});
 					swapped += 1;
 				}
@@ -2509,6 +2748,9 @@ export class VfsService {
 			movedFiles += swapped;
 			if (swapped > 0) packs += 1;
 			for (const item of layout) retired.add(item.from);
+			} finally {
+				await this.dropPackWrite(newPath);
+			}
 		}
 
 		await this.unlinkUnreferenced(retired);
@@ -2529,6 +2771,10 @@ export class VfsService {
 
 	async gc(): Promise<GcReport> {
 		await this.ready();
+		return withWebLock(`vfs-gc:${this.db.name}`, () => this.gcLocked());
+	}
+
+	private async gcLocked(): Promise<GcReport> {
 		const report: GcReport = {
 			orphanOpfsRemoved: 0,
 			orphanBlobRefsRemoved: 0,
@@ -2552,14 +2798,34 @@ export class VfsService {
 			// the live row still names tmp/… — treat both as live.
 			if (ref.pendingPromote) namedPaths.add(`blobs/${ref.id}.bin`);
 		}
+		const packWriteLeases = new Set(
+			leases
+				.filter((l) => l.expiresAt > now && l.key.startsWith('packwrite:'))
+				.map((l) => l.key.slice('packwrite:'.length))
+		);
+		for (const p of packWriteLeases) namedPaths.add(p);
 
 		const releasable: string[] = [];
+		const stalePendingNodes: string[] = [];
+		const refById = new Map(refs.map((r) => [r.id, r]));
+		for (const n of nodes) {
+			if (!n.blobId) continue;
+			const ref = refById.get(n.blobId);
+			if (!ref?.pending) continue;
+			if (activeLeases.has(ref.id)) continue;
+			if (now - ref.createdAt < this.graceMs) continue;
+			stalePendingNodes.push(n.id);
+			releasable.push(ref.id);
+		}
+		if (stalePendingNodes.length) {
+			await this.db.nodes.bulkDelete(stalePendingNodes);
+		}
 		for (const ref of refs) {
-			if (referenced.has(ref.id)) continue;
+			if (referenced.has(ref.id) && !releasable.includes(ref.id)) continue;
 			if (activeLeases.has(ref.id)) continue;
 			const inFlight = !!(ref.pending || ref.pendingPromote);
 			if (inFlight && now - ref.createdAt < this.graceMs) continue;
-			releasable.push(ref.id);
+			if (!releasable.includes(ref.id)) releasable.push(ref.id);
 		}
 		if (releasable.length) {
 			// Through the one funnel: it drops the rows and unlinks each distinct
@@ -2606,6 +2872,7 @@ export class VfsService {
 				const found = await this.opfs.listOrphans(prefix);
 				for (const p of found) {
 					if (namedPaths.has(p)) continue;
+					if (packWriteLeases.has(p)) continue;
 					if (prefix === 'blobs') {
 						const blobId = p.replace(/^blobs\//, '').replace(/\.bin$/, '');
 						if (activeLeases.has(blobId)) continue;

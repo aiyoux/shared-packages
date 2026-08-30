@@ -38,6 +38,11 @@ function rangeStore(onWriteFinal?: (path: string) => Promise<void>): OpfsBlobSto
 			if (onWriteFinal) await onWriteFinal(path);
 			return result;
 		},
+		async writeAtomic(path, data) {
+			const result = await base.writeAtomic(path, data as never);
+			if (onWriteFinal) await onWriteFinal(path);
+			return result;
+		},
 		async readRange(path, offset, length, contentType) {
 			const all = await base.read(path);
 			return new Blob([all.subarray(offset, offset + length) as BlobPart], {

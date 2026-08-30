@@ -44,7 +44,13 @@ export type ProjectPackManifest = {
 };
 
 export type PackIntegrityIssue = {
-	kind: 'missing-pack' | 'short-pack' | 'orphan-pack' | 'overlap' | 'missing-ref';
+	kind:
+		| 'missing-pack'
+		| 'short-pack'
+		| 'orphan-pack'
+		| 'overlap'
+		| 'missing-ref'
+		| 'pending-write';
 	detail: string;
 	packPath?: string;
 	nodeId?: string;
@@ -65,8 +71,10 @@ export async function descendantFiles(vfs: VfsService, rootId: string): Promise<
 		const parentId = stack.pop()!;
 		const kids = await vfs.list({ parentId });
 		for (const k of kids) {
-			if (k.kind === 'folder') stack.push(k.id);
-			else out.push(k);
+			if (k.kind === 'folder') {
+				if (k.name === '.git') continue;
+				stack.push(k.id);
+			} else out.push(k);
 		}
 	}
 	return out;
@@ -181,6 +189,15 @@ export async function checkProjectPacks(
 			});
 			continue;
 		}
+		if (ref.pending) {
+			issues.push({
+				kind: 'pending-write',
+				detail: `${f.name} is reserved but never confirmed`,
+				packPath: ref.opfsPath,
+				nodeId: f.id
+			});
+			continue;
+		}
 		if (ref.packOffset == null) continue;
 		packPaths.add(ref.opfsPath);
 
@@ -284,6 +301,24 @@ export async function deleteFromProject(
 		touched.set(ref.opfsPath, (touched.get(ref.opfsPath) ?? 0) + ref.byteLength);
 	}
 
+	const dropBlobIds = new Set<string>();
+	for (const id of nodeIds) {
+		const node = await vfs.get(id);
+		if (node?.blobId) dropBlobIds.add(node.blobId);
+	}
+	let compactedPacks = 0;
+	let reclaimedBytes = 0;
+	if (touched.size) {
+		report('compacting', 'Deleting — compacting packs before drop…');
+		const compacted = await vfs.compactPacks(touched.keys(), {
+			excludeBlobIds: dropBlobIds,
+			onProgress: opts?.onProgress,
+			signal: opts?.signal
+		});
+		compactedPacks = compacted.compactedPacks;
+		reclaimedBytes = compacted.reclaimedBytes;
+	}
+
 	report('wiping', `Deleting — wiping ${nodeIds.length} from blob…`);
 	let deleted = 0;
 	for (const id of nodeIds) {
@@ -298,12 +333,6 @@ export async function deleteFromProject(
 		deleted += 1;
 	}
 
-	report('compacting', 'Deleting — reclaiming pack space…');
-	const { compactedPacks, reclaimedBytes } = await vfs.compactPacks(touched.keys(), {
-		onProgress: opts?.onProgress,
-		signal: opts?.signal
-	});
-
 	report(
 		'done',
 		reclaimedBytes > 0
@@ -311,7 +340,7 @@ export async function deleteFromProject(
 			: 'Success! Blob integrity checked, delete successful',
 		reclaimedBytes
 	);
-	return { deleted, compactedPacks, reclaimedBytes };
+	return { deleted, compactedPacks: compactedPacks, reclaimedBytes: reclaimedBytes };
 }
 
 
@@ -457,6 +486,15 @@ export async function checkFilesystem(vfs: VfsService): Promise<PackIntegrityRep
 			issues.push({
 				kind: 'missing-pack',
 				detail: `${node.name} points at ${ref.opfsPath}, which is gone`,
+				packPath: ref.opfsPath,
+				nodeId: node.id
+			});
+			continue;
+		}
+		if (ref.pending) {
+			issues.push({
+				kind: 'pending-write',
+				detail: `${node.name} is reserved but never confirmed (size 0 / pending blobRef)`,
 				packPath: ref.opfsPath,
 				nodeId: node.id
 			});

@@ -30,9 +30,10 @@ export async function localSnapshot(fs: GitFs, dir: string): Promise<GitSnapshot
 				head === 0 ? 'added' : workdir === 0 ? 'deleted' : 'modified';
 			return [{ path: String(path), status }];
 		});
-	} catch {
-		dirty = false;
-		changes = [];
+	} catch (e) {
+		// A packed-object OPFS error (short pack, write in flight) must not
+		// render as a clean tree. Empty repos still have a readable statusMatrix.
+		throw e;
 	}
 
 	let log: GitSnapshot['log'] = [];

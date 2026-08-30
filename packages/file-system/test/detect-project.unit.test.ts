@@ -264,8 +264,8 @@ describe('detectProject', () => {
 		assert.deepEqual(await findProjectRoot(driver, 'proj'), { found: true, id: 'proj' });
 	});
 
-	it('is true when folder contains .project file', async () => {
-		const ok = await detectProject(driverWith([{ name: '.project', kind: 'file' }]), 'folder');
+	it('is true when folder contains .project.json file', async () => {
+		const ok = await detectProject(driverWith([{ name: '.project.json', kind: 'file' }]), 'folder');
 		assert.equal(ok, true);
 	});
 });
