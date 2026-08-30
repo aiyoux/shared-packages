@@ -108,8 +108,12 @@ async function walk(
 	let parentId = rootId;
 	for (let i = 0; i < segs.length; i++) {
 		const name = segs[i]!;
-		const kids = await vfs.list({ parentId });
-		const hit = kids.find((n) => n.name === name);
+		// One indexed lookup per segment. Listing the folder and scanning for
+		// the name made every path resolution cost the folder's size, and git
+		// resolves a path for each stat/read/write — measured at 41,123
+		// directory entries scanned to commit 60 files, growing linearly per
+		// file (427/file at N=30, 1182/file at N=120), i.e. O(N^2) overall.
+		const hit = await vfs.childByName(parentId, name);
 		const last = i === segs.length - 1;
 		if (!hit) {
 			if (last) return { node: null, parentId, name };

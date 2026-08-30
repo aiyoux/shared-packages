@@ -321,6 +321,26 @@ export class VfsService {
 		return this.db.nodes.get(id);
 	}
 
+	/**
+	 * The one live child of `parentId` named `name`, or undefined.
+	 *
+	 * Exists because "does this folder contain X?" is the hot operation in path
+	 * resolution, and answering it by listing every sibling makes any repeated
+	 * walk quadratic in directory size. Uses [parentKey+name], which covers the
+	 * root as well as ordinary folders.
+	 *
+	 * Trashed nodes are skipped: a path names a live file, and a deleted one
+	 * must not shadow a new file that reuses its name.
+	 */
+	async childByName(parentId: string | null, name: string): Promise<VfsNode | undefined> {
+		await this.ready();
+		return this.db.nodes
+			.where('[parentKey+name]')
+			.equals([parentId ?? ROOT_PARENT_KEY, name])
+			.and((n) => n.deletedAt == null)
+			.first();
+	}
+
 	async getPath(id: string): Promise<VfsNode[]> {
 		const chain: VfsNode[] = [];
 		let cur = await this.get(id);

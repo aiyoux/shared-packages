@@ -119,6 +119,24 @@ export class SharedVfsDatabase extends Dexie {
 					});
 			});
 
+		// v6 adds [parentKey+name]. v5 gave root LISTING an index but left
+		// single-name LOOKUP scanning: [parentId+name] cannot serve the root
+		// (null is not an IndexedDB key), so every "does this folder contain
+		// X?" walked the siblings. Path resolution does that once per segment,
+		// which made git-on-VFS O(N^2) in directory entries scanned — measured
+		// at 427 entries/file for a 30-file commit and 1182/file at 120.
+		// Index only; parentKey was already backfilled by v5, so no data
+		// migration is needed here.
+		this.version(6).stores({
+			nodes:
+				'id, parentId, parentKey, kind, fileType, name, updatedAt, deletedAt, ' +
+				'[parentId+name], [parentKey+name], [parentId+deletedAt], [parentId+sortOrder]',
+			blobRefs: 'id, opfsPath, createdAt',
+			drafts: 'id, appId, updatedAt',
+			meta: 'key',
+			leases: 'key, expiresAt'
+		});
+
 		// Derive parentKey here rather than at each call site. Node writes happen
 		// in many places (mkdir, writeFile, writeFiles, move, restore, copy,
 		// migration), and one that forgot to set it would silently drop those
