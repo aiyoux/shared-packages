@@ -52,7 +52,9 @@
 		defaultFileWindows,
 		emptyFileContext,
 		emptyFileWindowState,
+		loadFileWindows,
 		resolveTargetFilePaneId,
+		saveFileWindows,
 		type FileWindowState
 	} from './fileWindows.js';
 	import '@shared-packages/design-system/button.css';
@@ -328,6 +330,19 @@
 		const next = { ...windows };
 		for (const leaf of missing) next[leaf.id] = emptyPane(leftDefault);
 		windows = next;
+	});
+
+	$effect(() => {
+		void windowRoot;
+		void windows;
+		void focusedId;
+		void targetPaneId;
+		saveFileWindows(dualPaneKey, {
+			root: windowRoot,
+			windows,
+			focusedId,
+			targetPaneId
+		});
 	});
 
 	function paneOnOpen(kind: string) {
@@ -646,14 +661,14 @@
 	}
 
 	onMount(() => {
-		try {
-			const stored = localStorage.getItem(dualPaneKey);
-			if (stored !== null) {
-				const isDual = stored === '1';
-				windowRoot = createFileWindowRoot(isDual);
+		const saved = loadFileWindows(dualPaneKey, leftDefault, rightDefault);
+		if (saved) {
+			windowRoot = saved.root;
+			if (Object.keys(saved.windows).length > 0) {
+				windows = saved.windows;
 			}
-		} catch {
-			/* keep default */
+			focusedId = saved.focusedId;
+			targetPaneId = saved.targetPaneId;
 		}
 		onDualChange?.(dualPane);
 		void reloadProfiles();
@@ -1923,38 +1938,6 @@
 				bind:editing={windowEditOpen}
 				testid="fe-windows-btn"
 			/>
-			<div
-				class="ds-seg dpe-layout"
-				class:portaled={Boolean(layoutPortal)}
-				role="radiogroup"
-				aria-label="File manager layout"
-				data-testid={tids.dualToggle}
-			>
-				<button
-					type="button"
-					role="radio"
-					class="dpe-layout-opt"
-					class:active={!dualPane}
-					aria-checked={!dualPane}
-					data-testid="{tids.dualToggle}-single"
-					title="One file tree"
-					onclick={() => setDualPane(false)}
-				>
-					Single
-				</button>
-				<button
-					type="button"
-					role="radio"
-					class="dpe-layout-opt"
-					class:active={dualPane}
-					aria-checked={dualPane}
-					data-testid="{tids.dualToggle}-dual"
-					title="Two independent trees side by side"
-					onclick={() => setDualPane(true)}
-				>
-					Dual
-				</button>
-			</div>
 			{#if pairInfoInChrome}
 				<ConnectionPairInfo
 					left={pairSide('left')}

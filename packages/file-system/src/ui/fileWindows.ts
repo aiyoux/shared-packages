@@ -128,3 +128,83 @@ export function resolveTargetFilePaneId(
 	if (previousTarget && windows[previousTarget]) return previousTarget;
 	return Object.keys(windows)[0] ?? 'left';
 }
+
+export function saveFileWindows(
+	key: string,
+	data: {
+		root: LayoutNode;
+		windows: Record<string, FileWindowState>;
+		focusedId: string;
+		targetPaneId: string;
+	}
+) {
+	if (typeof localStorage === 'undefined') return;
+	try {
+		const serializedWindows: Record<string, { role: string; activeId: string; activeKind: ConnectionKind }> = {};
+		for (const [id, w] of Object.entries(data.windows)) {
+			serializedWindows[id] = {
+				role: w.role,
+				activeId: w.activeId,
+				activeKind: w.activeKind
+			};
+		}
+		localStorage.setItem(
+			key,
+			JSON.stringify({
+				root: data.root,
+				windows: serializedWindows,
+				focusedId: data.focusedId,
+				targetPaneId: data.targetPaneId
+			})
+		);
+	} catch {
+		/* ignore */
+	}
+}
+
+export function loadFileWindows(
+	key: string,
+	leftDefault: ConnectionKind = 'local',
+	rightDefault: ConnectionKind = 'local'
+): {
+	root: LayoutNode;
+	windows: Record<string, FileWindowState>;
+	focusedId: string;
+	targetPaneId: string;
+} | null {
+	if (typeof localStorage === 'undefined') return null;
+	try {
+		const raw = localStorage.getItem(key);
+		if (!raw) return null;
+		if (raw === '0' || raw === '1') {
+			const isDual = raw === '1';
+			return {
+				root: createFileWindowRoot(isDual),
+				windows: defaultFileWindows(leftDefault, rightDefault),
+				focusedId: 'left',
+				targetPaneId: 'left'
+			};
+		}
+		const parsed = JSON.parse(raw);
+		if (!parsed || typeof parsed !== 'object' || !parsed.root) return null;
+		const windows: Record<string, FileWindowState> = {};
+		if (parsed.windows && typeof parsed.windows === 'object') {
+			for (const [id, w] of Object.entries(
+				parsed.windows as Record<string, { role?: string; activeId?: string; activeKind?: ConnectionKind }>
+			)) {
+				const state = emptyFileWindowState(w.activeKind || 'local', w.role || 'local');
+				if (w.activeId) state.activeId = w.activeId;
+				windows[id] = state;
+			}
+		}
+		return {
+			root: parsed.root,
+			windows,
+			focusedId: parsed.focusedId || Object.keys(windows)[0] || 'left',
+			targetPaneId: parsed.targetPaneId || Object.keys(windows)[0] || 'left'
+		};
+	} catch {
+		return null;
+	}
+}
+
