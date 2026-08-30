@@ -9,6 +9,13 @@
     "esModuleInterop": true,
     "isolatedModules": true,
     "noEmit": true,
+    // `projectRepo.ts` imports `@shared-packages/file-system/ui`, which now
+    // reaches `@shared-packages/ui` — and that package's source imports with
+    // explicit `.ts`. Type-checking pulls those files in whether this package
+    // names them or not, so the option has to be set here too. Legal because
+    // noEmit is set, and the same allowance file-system, drawing-tools,
+    // scene-bake and component-library already make.
+    "allowImportingTsExtensions": true,
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "types": ["node"]
   },

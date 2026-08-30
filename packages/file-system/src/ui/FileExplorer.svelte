@@ -2498,23 +2498,19 @@
 		clipboard = { mode: 'cut', ids };
 		const entries = selectedEntries;
 		const label = `Files: ${ids.length} item${ids.length === 1 ? '' : 's'} (cut)`;
-		await appClipboard.copy({
-			type: 'application/x-scratchpad-files',
-			data: {
-				mode: 'cut',
-				sourceDriverId: driver.id,
-				sourceConnectionId: driver.connectionId,
-				sourceParentId: parentId,
-				ids,
-				entries: entries.map((e) => ({
-					id: e.id,
-					name: e.name,
-					kind: e.kind,
-					size: e.size,
-					fileType: e.fileType
-				}))
-			},
-			label
+		await appClipboard.copy('application/x-scratchpad-files', label, {
+			mode: 'cut',
+			sourceDriverId: driver.id,
+			sourceConnectionId: driver.connectionId,
+			sourceParentId: parentId,
+			ids,
+			entries: entries.map((e) => ({
+				id: e.id,
+				name: e.name,
+				kind: e.kind,
+				size: e.size,
+				fileType: e.fileType
+			}))
 		});
 	}
 
@@ -2525,23 +2521,19 @@
 		clipboard = { mode: 'copy', ids };
 		const entries = selectedEntries;
 		const label = `Files: ${ids.length} item${ids.length === 1 ? '' : 's'}`;
-		await appClipboard.copy({
-			type: 'application/x-scratchpad-files',
-			data: {
-				mode: 'copy',
-				sourceDriverId: driver.id,
-				sourceConnectionId: driver.connectionId,
-				sourceParentId: parentId,
-				ids,
-				entries: entries.map((e) => ({
-					id: e.id,
-					name: e.name,
-					kind: e.kind,
-					size: e.size,
-					fileType: e.fileType
-				}))
-			},
-			label
+		await appClipboard.copy('application/x-scratchpad-files', label, {
+			mode: 'copy',
+			sourceDriverId: driver.id,
+			sourceConnectionId: driver.connectionId,
+			sourceParentId: parentId,
+			ids,
+			entries: entries.map((e) => ({
+				id: e.id,
+				name: e.name,
+				kind: e.kind,
+				size: e.size,
+				fileType: e.fileType
+			}))
 		});
 	}
 

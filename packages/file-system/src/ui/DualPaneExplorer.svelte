@@ -313,6 +313,22 @@
 
 	const dualPane = $derived(listLeaves(windowRoot).length > 1);
 
+	// Panes are registered here, not on first read.
+	//
+	// The window manager creates leaves; their pane state has to exist before
+	// anything renders them. Filling it in lazily inside `paneState` meant the
+	// template wrote state while computing, which Svelte 5 refuses outright
+	// (`state_unsafe_mutation`) — so opening a third window took the whole
+	// explorer down. An effect is where that write is legal, and it runs after
+	// the paint that `readPane` covers with a default.
+	$effect(() => {
+		const missing = listLeaves(windowRoot).filter((l) => !windows[l.id]);
+		if (!missing.length) return;
+		const next = { ...windows };
+		for (const leaf of missing) next[leaf.id] = emptyPane(leftDefault);
+		windows = next;
+	});
+
 	function paneOnOpen(kind: string) {
 		if (!onOpen) return undefined;
 		if (kind === 'local' || kind === 'memory' || openRemotes) return onOpen;
@@ -379,11 +395,20 @@
 		(window as unknown as { __MEMORY_VFS_FILES__?: typeof hook }).__MEMORY_VFS_FILES__ = hook;
 	}
 
+	/**
+	 * A pane's state. Reading NEVER registers it.
+	 *
+	 * This used to fill in a missing pane on read, which is fine for the
+	 * imperative callers but fatal for the many that rendering reaches: a
+	 * template expression or `$derived` that touched a leaf with no entry yet
+	 * was writing state while computing, which Svelte 5 refuses outright
+	 * (`state_unsafe_mutation`) — it took the whole explorer down rather than
+	 * degrading. Registration belongs to the effect below, which owns the one
+	 * question "which leaves exist?"; a leaf's first paint reads the default
+	 * this returns, and the effect has registered it by the next one.
+	 */
 	function paneState(id: PaneId): PaneState {
-		if (!windows[id]) {
-			windows[id] = emptyPane(leftDefault);
-		}
-		return windows[id]!;
+		return windows[id] ?? emptyPane(leftDefault);
 	}
 
 	function sendTargetEntries(id: PaneId, target: ExplorerOpenTarget): ExplorerEntry[] {
