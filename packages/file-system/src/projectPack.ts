@@ -35,8 +35,10 @@ export type ProjectPackManifest = {
 	/** Bytes the pack files actually occupy on disk. */
 	packBytesOnDisk: number;
 	/**
-	 * Bytes held by packs but no longer referenced by any live member — the
-	 * cost of the trade, and what compaction reclaims.
+	 * Bytes held by packs that no blobRef claims any more — the cost of the
+	 * trade, and what compaction reclaims. Bytes belonging to a TRASHED member
+	 * are not dead: they are still owned, and only emptying the trash releases
+	 * them.
 	 */
 	deadBytes: number;
 };
@@ -110,14 +112,28 @@ export async function readProjectManifest(
 
 	// On-disk size is measured, not assumed: a pack can outlive some of its
 	// members, and the gap is exactly the dead space.
+	//
+	// The gap is measured against EVERY ref naming the pack, not just the live
+	// descendants walked above. A trashed member still holds its ref and its
+	// bytes come back only when the trash is emptied, so counting it as dead
+	// would promise space that no action available to the user can reclaim —
+	// the same live-only reading that made the integrity check cry orphan.
 	let packBytesOnDisk = 0;
+	let claimedBytes = 0;
 	for (const path of packPaths) {
 		try {
 			const blob = await vfs.opfs.readBlob(path);
 			packBytesOnDisk += blob.size;
 		} catch {
 			/* a missing pack is an integrity problem, reported by checkProjectPacks */
+			continue;
 		}
+		await vfs.db.blobRefs
+			.where('opfsPath')
+			.equals(path)
+			.each((r) => {
+				claimedBytes += r.byteLength;
+			});
 	}
 
 	return {
@@ -127,7 +143,7 @@ export async function readProjectManifest(
 		standaloneFiles,
 		packedBytes,
 		packBytesOnDisk,
-		deadBytes: Math.max(0, packBytesOnDisk - packedBytes)
+		deadBytes: Math.max(0, packBytesOnDisk - claimedBytes)
 	};
 }
 

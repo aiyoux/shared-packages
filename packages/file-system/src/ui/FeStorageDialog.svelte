@@ -41,6 +41,8 @@
 	let tree = $state<TreemapInput[]>([]);
 	let loading = $state(true);
 	let checking = $state(false);
+	let reclaiming = $state(false);
+	let reclaimed = $state<string>('');
 	let report = $state<PackIntegrityReport | null>(null);
 	let manifest = $state<ProjectPackManifest | null>(null);
 	let error = $state('');
@@ -86,6 +88,41 @@
 			error = e instanceof Error ? e.message : 'Integrity check failed';
 		} finally {
 			checking = false;
+		}
+	}
+
+	/**
+	 * Reclaim what the check calls garbage.
+	 *
+	 * The report could name orphaned packs and stray blobs but offered no way
+	 * to act on them, so the only thing left to try was deleting real files —
+	 * which cannot help, because an orphan is by definition what no file
+	 * points at. `gc()` removes exactly the set the check reports (both ask
+	 * the same question: does any blobRef name this path?), so re-running the
+	 * check afterwards is the honest proof it worked.
+	 *
+	 * It normally runs on its own a couple of seconds after a page load; this
+	 * is the same sweep on demand, for when you are standing in front of the
+	 * report and want it gone now.
+	 */
+	async function runReclaim() {
+		reclaiming = true;
+		reclaimed = '';
+		error = '';
+		try {
+			const swept = await vfs.gc();
+			const files =
+				swept.orphanOpfsRemoved + swept.unreferencedBlobsRemoved + swept.tmpPartialsRemoved;
+			reclaimed = files
+				? `Reclaimed ${files} unused file${files === 1 ? '' : 's'}.`
+				: 'Nothing to reclaim — every file on disk is still spoken for.';
+			// Re-check so the verdict reflects what was just swept rather than
+			// leaving a stale list of problems that no longer exist.
+			if (report) await runCheck();
+		} catch (e) {
+			error = e instanceof Error ? e.message : 'Could not reclaim storage';
+		} finally {
+			reclaiming = false;
 		}
 	}
 </script>
@@ -150,7 +187,17 @@
 						<li class="muted">…and {report.issues.length - 12} more</li>
 					{/if}
 				</ul>
+				{#if report.issues.some((i) => i.kind === 'orphan-pack')}
+					<p class="muted small" data-testid="fe-storage-orphan-hint">
+						An orphaned pack is storage no file points at — wasted space, not damage.
+						Deleting files cannot clear it; “Reclaim unused storage” can.
+					</p>
+				{/if}
 			{/if}
+		{/if}
+
+		{#if reclaimed}
+			<p class="muted small" role="status" data-testid="fe-storage-reclaimed">{reclaimed}</p>
 		{/if}
 
 		<div class="actions">
@@ -158,11 +205,23 @@
 				type="button"
 				class="ds-btn ds-btn--sm"
 				data-testid="fe-storage-check"
-				disabled={checking}
+				disabled={checking || reclaiming}
 				onclick={() => void runCheck()}
 			>
 				{checking ? 'Checking…' : checkLabel}
 			</button>
+			{#if scope !== 'project'}
+				<button
+					type="button"
+					class="ds-btn ds-btn--sm ds-btn--ghost"
+					data-testid="fe-storage-reclaim"
+					disabled={checking || reclaiming}
+					title="Delete pack and blob files that no file points at any more"
+					onclick={() => void runReclaim()}
+				>
+					{reclaiming ? 'Reclaiming…' : 'Reclaim unused storage'}
+				</button>
+			{/if}
 			<button
 				type="button"
 				class="ds-btn ds-btn--sm ds-btn--ghost"

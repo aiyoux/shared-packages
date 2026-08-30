@@ -2303,7 +2303,10 @@ export class VfsService {
 			const node = await this.db.nodes.get(id);
 			if (!node?.blobId) continue;
 			const ref = await this.db.blobRefs.get(node.blobId);
-			if (ref?.packOffset != null) packed.push(ref);
+			// Mid-write: byteLength is 0 until the confirm txn, so refAsBlob would
+			// hand back an empty slice and this would "move" nothing into the
+			// file's new home, destroying it. Same rule as compaction.
+			if (ref?.packOffset != null && !ref.pending) packed.push(ref);
 		}
 		if (!packed.length) return { movedFiles: 0 };
 
@@ -2319,7 +2322,7 @@ export class VfsService {
 			// already moved this ref off the pack, and must not be dragged back.
 			const swapped = await this.db.transaction('rw', this.db.blobRefs, async () => {
 				const current = await this.db.blobRefs.get(ref.id);
-				if (!current || current.opfsPath !== ref.opfsPath) return false;
+				if (!current || current.opfsPath !== ref.opfsPath || current.pending) return false;
 				const { packOffset: _drop, ...rest } = current;
 				await this.db.blobRefs.put({ ...rest, opfsPath: destPath });
 				return true;
@@ -2371,7 +2374,12 @@ export class VfsService {
 			const ref = await this.db.blobRefs.get(node.blobId);
 			// Members at or above half the budget stay on their own: a pack one
 			// file nearly fills buys nothing and complicates everything.
-			if (ref && ref.byteLength < standaloneAt) refs.push(ref);
+			//
+			// A pending ref is excluded on the same rule compaction uses: its
+			// byteLength is 0 until the bytes land, which both slips it under any
+			// size test and makes refAsBlob return an empty slice — so repacking
+			// it would write a zero-length copy over a file still being saved.
+			if (ref && !ref.pending && ref.byteLength < standaloneAt) refs.push(ref);
 		}
 		if (refs.length < 2) return { packs: 0, movedFiles: 0 };
 
@@ -2421,9 +2429,10 @@ export class VfsService {
 				for (const item of layout) {
 					const current = await this.db.blobRefs.get(item.id);
 					// Changed underneath us — a concurrent save moved it to its own
-					// blob. Leave it there; the new pack simply carries a copy that
-					// nothing points at, which the sweep reclaims.
-					if (!current || current.opfsPath !== item.from) continue;
+					// blob, or started writing new bytes into this one. Leave it
+					// there; the new pack simply carries a copy that nothing points
+					// at, which the sweep reclaims.
+					if (!current || current.opfsPath !== item.from || current.pending) continue;
 					await this.db.blobRefs.put({
 						...current,
 						opfsPath: newPath,
