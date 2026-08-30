@@ -125,6 +125,16 @@ export interface ExplorerDriver {
 	 */
 	getPath(id: ExplorerEntryId): Promise<ExplorerEntry[]>;
 	mkdir?(parentId: ExplorerEntryId | null, name: string): Promise<ExplorerEntry>;
+	/** Coalesce explorer/git notifies across a dump. */
+	batch?<T>(fn: () => Promise<T>): Promise<T>;
+	/**
+	 * Create missing folders for many relative paths in a few writes.
+	 * Keys are posix-ish joins of the segment arrays (`src/lib`).
+	 */
+	ensureFolders?(
+		parentId: ExplorerEntryId | null,
+		paths: string[][]
+	): Promise<Map<string, string | null>>;
 	/** File-only on B2 v1; folders throw B2_FOLDER_OP_UNSUPPORTED. */
 	rename?(id: ExplorerEntryId, name: string): Promise<ExplorerEntry>;
 	move?(id: ExplorerEntryId, newParentId: ExplorerEntryId | null): Promise<void>;

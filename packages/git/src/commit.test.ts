@@ -21,6 +21,19 @@ async function repo() {
 }
 
 describe('localCommit', () => {
+	it('coalesces VFS notifies across a localCommit', async () => {
+		const { vfs, fs } = await repo();
+		await fs.promises.writeFile('/a.txt', 'A');
+		let n = 0;
+		const unsub = vfs.subscribe(() => {
+			n += 1;
+		});
+		await localCommit(fs, '/', { message: 'a', paths: ['a.txt'], author: AUTHOR });
+		unsub();
+		expect(n).toBe(1);
+		expect((await localSnapshot(fs, '/')).log[0]?.subject).toBe('a');
+	});
+
 	it('reports added files as changes, then commits only what is selected', async () => {
 		const { fs } = await repo();
 		await fs.promises.writeFile('/a.txt', 'A');

@@ -119,6 +119,11 @@ export interface WriteFileInput {
 	 */
 	id?: string;
 	onConflict?: 'rename' | 'error' | 'overwrite';
+	/**
+	 * Skip tmp+promote. Reserve pending, `writeFinal` to blobs/<id>.bin, confirm.
+	 * For bulk dumps (git objects, extract standalones) where the dest is new.
+	 */
+	direct?: boolean;
 }
 
 export type UpdateFileOpts = (

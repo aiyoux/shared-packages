@@ -191,6 +191,9 @@ export class VfsService {
 	 * Unit tests can still assign `compactCrash.hook`.
 	 */
 	compactCrashHook: typeof compactCrash.hook = null;
+	/** Nested: suppress explorer/git notify until the outer dump/commit ends. */
+	private changeMute = 0;
+	private changeMutedDirty = false;
 
 	constructor(opts: VfsServiceOptions = {}) {
 		this.db = new SharedVfsDatabase(opts.dbName ?? 'SharedVFS');
@@ -252,8 +255,30 @@ export class VfsService {
 	}
 
 	private emitChange(): void {
+		if (this.changeMute > 0) {
+			this.changeMutedDirty = true;
+			return;
+		}
 		this.changeBus.notify();
 		notifyTabChannel(this.tabChannelName());
+	}
+
+	/**
+	 * Run a dump/commit without notifying listeners per inner write.
+	 * One notify fires if anything changed, when the outermost batch ends.
+	 */
+	async batch<T>(fn: () => Promise<T>): Promise<T> {
+		this.changeMute += 1;
+		try {
+			return await fn();
+		} finally {
+			this.changeMute -= 1;
+			if (this.changeMute === 0 && this.changeMutedDirty) {
+				this.changeMutedDirty = false;
+				this.changeBus.notify();
+				notifyTabChannel(this.tabChannelName());
+			}
+		}
 	}
 
 	async ready(): Promise<void> {
@@ -658,6 +683,104 @@ export class VfsService {
 		});
 	}
 
+	/**
+	 * Create missing folders for many relative paths in a few IDB writes.
+	 *
+	 * Extract/git dumps were paying `list()` + `mkdir` per directory. Paths are
+	 * segment arrays relative to `parentId` (`[['src','lib'], ['docs']]`).
+	 * Existing folders are reused (childByName, not a full listing).
+	 */
+	async ensureFolders(
+		parentId: string | null,
+		paths: Iterable<string[]>,
+		opts?: { signal?: AbortSignal }
+	): Promise<Map<string, string | null>> {
+		await this.ready();
+		const map = new Map<string, string | null>([['', parentId]]);
+		const byDepth: string[][][] = [];
+		const seen = new Set<string>();
+		for (const raw of paths) {
+			const segs = raw.map((s) => sanitizeName(s)).filter(Boolean);
+			for (let i = 1; i <= segs.length; i++) {
+				const slice = segs.slice(0, i);
+				const key = slice.join('/');
+				if (seen.has(key)) continue;
+				seen.add(key);
+				(byDepth[i - 1] ??= []).push(slice);
+			}
+		}
+		if (!byDepth.length) return map;
+
+		return this.batch(async () => {
+			for (const level of byDepth) {
+				throwIfAborted(opts?.signal);
+				const grouped = new Map<string, string[][]>();
+				for (const segs of level) {
+					const parentKey = segs.slice(0, -1).join('/');
+					const g = grouped.get(parentKey);
+					if (g) g.push(segs);
+					else grouped.set(parentKey, [segs]);
+				}
+				for (const [parentKey, children] of grouped) {
+					const pid = map.get(parentKey);
+					if (pid === undefined) {
+						throw new VfsError('NOT_FOUND', `Missing parent folder ${parentKey}`);
+					}
+					if (pid !== null) {
+						const parent = await this.db.nodes.get(pid);
+						if (!parent || parent.kind !== 'folder') throw new VfsError('NOT_A_FOLDER');
+						if (parent.deletedAt != null) throw new VfsError('TRASH_STATE');
+					}
+					const siblings = await this.activeSiblings(pid);
+					const folderByName = new Map(
+						siblings.filter((n) => n.kind === 'folder').map((n) => [n.name, n])
+					);
+					const taken = new Set(siblings.map((n) => n.name.toLowerCase()));
+					const toCreate: VfsNode[] = [];
+					let sortOrder = await this.nextAppendSortOrder(pid);
+					const now = Date.now();
+					for (const segs of children) {
+						const name = segs[segs.length - 1]!;
+						const key = segs.join('/');
+						const hit = folderByName.get(name);
+						if (hit) {
+							map.set(key, hit.id);
+							continue;
+						}
+						const fileHit = siblings.find((n) => n.name === name && n.kind === 'file');
+						if (fileHit) {
+							throw new VfsError('NAME_CONFLICT', `A file named ${name} already exists`);
+						}
+						let unique = name;
+						if (taken.has(unique.toLowerCase())) {
+							let i = 1;
+							while (taken.has(withNumericSuffix(name, i).toLowerCase())) i++;
+							unique = withNumericSuffix(name, i);
+						}
+						taken.add(unique.toLowerCase());
+						const node: VfsNode = {
+							id: generateId('fld'),
+							parentId: pid,
+							name: unique,
+							kind: 'folder',
+							createdAt: now,
+							updatedAt: now,
+							generation: 1,
+							deletedAt: null,
+							sortOrder
+						};
+						sortOrder += 16384;
+						toCreate.push(node);
+						folderByName.set(unique, node);
+						map.set(key, node.id);
+					}
+					if (toCreate.length) await this.db.nodes.bulkPut(toCreate);
+				}
+			}
+			return map;
+		});
+	}
+
 	// ── write / update ────────────────────────────────────────────
 
 	async writeFile(input: WriteFileInput): Promise<VfsNode> {
@@ -701,6 +824,7 @@ export class VfsService {
 		const writeId = generateId('w');
 		const tmpPath = `tmp/${writeId}.partial`;
 		const finalPath = `blobs/${blobId}.bin`;
+		const direct = input.direct === true;
 		const { bytes, contentType } = await serializeBody(input.body, input.contentType);
 		const leaseKey = `write:${blobId}`;
 		const owner = generateId('lease');
@@ -740,12 +864,12 @@ export class VfsService {
 			}
 			await this.db.blobRefs.put({
 				id: blobId,
-				opfsPath: tmpPath,
+				opfsPath: direct ? finalPath : tmpPath,
 				byteLength: 0,
 				createdAt: now,
 				contentType,
 				pending: true,
-				pendingPromote: true
+				pendingPromote: !direct
 			});
 			await this.db.leases.put({
 				key: leaseKey,
@@ -773,6 +897,32 @@ export class VfsService {
 		});
 
 		try {
+			if (direct) {
+				await this.opfs.writeFinal(finalPath, bytes);
+				await this.db.transaction('rw', this.db.nodes, this.db.blobRefs, this.db.leases, async () => {
+					if (input.parentId) {
+						const parent = await this.db.nodes.get(input.parentId);
+						if (!parent || parent.kind !== 'folder' || parent.deletedAt != null) {
+							throw new VfsError('TRASH_STATE');
+						}
+					}
+					const ref = await this.db.blobRefs.get(blobId);
+					if (ref) {
+						ref.opfsPath = finalPath;
+						ref.byteLength = bytes.byteLength;
+						ref.pending = false;
+						ref.pendingPromote = false;
+						ref.crc32 = crc32(bytes);
+						await this.db.blobRefs.put(ref);
+					}
+					const node = await this.db.nodes.get(nodeId);
+					if (!node) throw new VfsError('NOT_FOUND');
+					node.size = bytes.byteLength;
+					node.updatedAt = Date.now();
+					await this.db.nodes.put(node);
+					await this.db.leases.delete(leaseKey);
+				});
+			} else {
 			const partial = await this.opfs.writePartial(writeId, bytes);
 			await this.db.transaction('rw', this.db.nodes, this.db.blobRefs, async () => {
 				if (input.parentId) {
@@ -808,6 +958,7 @@ export class VfsService {
 				}
 				await this.db.leases.delete(leaseKey);
 			});
+			}
 		} catch (e) {
 			await this.db.nodes.delete(nodeId);
 			await this.db.blobRefs.delete(blobId);
@@ -912,6 +1063,7 @@ export class VfsService {
 		}
 	): Promise<VfsNode[]> {
 		await this.ready();
+		return this.batch(async () => {
 		const out: VfsNode[] = [];
 		// Chunk size is governed by BYTES, not file count. OPFS charges per
 		// operation regardless of payload, so a bigger chunk is strictly fewer
@@ -1010,6 +1162,7 @@ export class VfsService {
 		}
 		for (const group of ordered) out.push(...group);
 		return out;
+		});
 	}
 
 	/** One reserve→blob-write→confirm cycle for a batch of files. */

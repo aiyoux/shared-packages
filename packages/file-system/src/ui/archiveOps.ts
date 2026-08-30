@@ -550,6 +550,8 @@ export type DestFolders = {
 	ensureDir: (dirs: string[]) => Promise<string | null>;
 	/** Folder rows already painted, so a re-flush does not repaint them. */
 	painted: Set<string>;
+	/** Create every missing folder in `paths` in a few writes, then cache ids. */
+	prefetch: (paths: string[][]) => Promise<void>;
 };
 
 export function createDestFolders(
@@ -581,7 +583,15 @@ export function createDestFolders(
 		return created.id;
 	}
 
-	return { ensureDir, painted };
+	async function prefetch(paths: string[][]): Promise<void> {
+		if (typeof driver.ensureFolders !== 'function' || !paths.length) return;
+		const mapped = await driver.ensureFolders(parentId, paths);
+		for (const [key, id] of mapped) {
+			if (!folderIds.has(key)) folderIds.set(key, id);
+		}
+	}
+
+	return { ensureDir, painted, prefetch };
 }
 
 export async function writeEntriesToDriver(
@@ -606,7 +616,9 @@ export async function writeEntriesToDriver(
 		);
 	}
 	const dest = folders ?? createDestFolders(driver, parentId, signal);
+	const run = async () => {
 	const ensureDir = dest.ensureDir;
+	await dest.prefetch(files.map((f) => splitPackedPath(f.path).dirs).filter((d) => d.length > 0));
 
 	type FolderAgg = {
 		name: string;
@@ -876,6 +888,9 @@ export async function writeEntriesToDriver(
 		written += 1;
 		if ((written & 7) === 0) await yieldPaint();
 	}
+	};
+	if (typeof driver.batch === 'function') return driver.batch(run);
+	return run();
 }
 
 export async function writeEntriesToVfs(
@@ -885,7 +900,14 @@ export async function writeEntriesToVfs(
 	onFile?: (ev: ArchiveWriteProgress) => void,
 	signal?: AbortSignal
 ): Promise<void> {
+	return vfs.batch(async () => {
 	const folderIds = new Map<string, string | null>([['', parentId]]);
+	const prefetched = await vfs.ensureFolders(
+		parentId,
+		files.map((f) => splitPackedPath(f.path).dirs).filter((d) => d.length > 0),
+		{ signal }
+	);
+	for (const [key, id] of prefetched) folderIds.set(key, id);
 
 	async function ensureDir(dirs: string[]): Promise<string | null> {
 		if (!dirs.length) return parentId;
@@ -966,6 +988,7 @@ export async function writeEntriesToVfs(
 		settle(group.length);
 		await yieldPaint();
 	}
+	});
 }
 
 export type ExpandPackedOpts = {

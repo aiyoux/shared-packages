@@ -103,18 +103,23 @@ export async function localCommit(fs: GitFs, dir: string, opts: CommitInput): Pr
 	if (!message) throw new Error('A commit needs a message.');
 	if (!opts.paths.length) throw new Error('Select at least one file to commit.');
 
-	for (const filepath of opts.paths) {
-		let exists = true;
-		try {
-			await (fs as unknown as { promises: { lstat(p: string): Promise<unknown> } }).promises.lstat(
-				`/${filepath}`
-			);
-		} catch {
-			exists = false;
+	const run = async () => {
+		for (const filepath of opts.paths) {
+			let exists = true;
+			try {
+				await (fs as unknown as { promises: { lstat(p: string): Promise<unknown> } }).promises.lstat(
+					`/${filepath}`
+				);
+			} catch {
+				exists = false;
+			}
+			if (exists) await git.add({ fs, dir, filepath });
+			else await git.remove({ fs, dir, filepath });
 		}
-		if (exists) await git.add({ fs, dir, filepath });
-		else await git.remove({ fs, dir, filepath });
-	}
 
-	return git.commit({ fs, dir, message, author: opts.author });
+		return git.commit({ fs, dir, message, author: opts.author });
+	};
+	const buffered = fs as { withBuffer?: <T>(fn: () => Promise<T>) => Promise<T> };
+	if (typeof buffered.withBuffer === 'function') return buffered.withBuffer(run);
+	return run();
 }

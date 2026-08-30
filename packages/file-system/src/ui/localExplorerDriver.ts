@@ -42,6 +42,8 @@ export type LocalVfsLike = Pick<
 	| 'list'
 	| 'getPath'
 	| 'mkdir'
+	| 'ensureFolders'
+	| 'batch'
 	| 'rename'
 	| 'move'
 	| 'copy'
@@ -97,6 +99,16 @@ export function createLocalExplorerDriver(
 		async mkdir(parentId, name) {
 			const n = await vfs.mkdir(parentId, name);
 			return nodeToEntry(n);
+		},
+
+		batch: typeof vfs.batch === 'function' ? (fn) => vfs.batch!(fn) : undefined,
+
+		async ensureFolders(parentId, paths) {
+			if (typeof vfs.ensureFolders !== 'function') {
+				const out = new Map<string, string | null>([['', parentId]]);
+				return out;
+			}
+			return vfs.ensureFolders(parentId, paths);
 		},
 
 		async rename(entryId, name) {

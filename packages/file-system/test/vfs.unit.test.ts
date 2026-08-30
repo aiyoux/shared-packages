@@ -473,4 +473,57 @@ describe('VfsService', () => {
 		const afterRestore = await vfs.updateFile(f.id, { v: 3 }, { expectedGeneration: gen + 1 });
 		assert.equal(afterRestore.generation, gen + 2);
 	});
+
+	it('batch notifies subscribers once for many mkdirs', async () => {
+		let n = 0;
+		const unsub = vfs.subscribe(() => {
+			n += 1;
+		});
+		await vfs.batch(async () => {
+			await vfs.mkdir(null, 'a');
+			await vfs.mkdir(null, 'b');
+			await vfs.mkdir(null, 'c');
+		});
+		unsub();
+		assert.equal(n, 1);
+		assert.equal((await vfs.list({ parentId: null })).length, 3);
+	});
+
+	it('ensureFolders creates a tree without listing every parent', async () => {
+		const root = await vfs.mkdir(null, 'ex');
+		const map = await vfs.ensureFolders(root.id, [
+			['src', 'lib'],
+			['src', 'bin'],
+			['docs']
+		]);
+		assert.ok(map.get('src'));
+		assert.ok(map.get('src/lib'));
+		assert.ok(map.get('src/bin'));
+		assert.ok(map.get('docs'));
+		const src = await vfs.childByName(root.id, 'src');
+		assert.equal(src?.kind, 'folder');
+		assert.ok(await vfs.childByName(src!.id, 'lib'));
+		assert.ok(await vfs.childByName(src!.id, 'bin'));
+		assert.ok(await vfs.childByName(root.id, 'docs'));
+	});
+
+	it('writeFile direct skips tmp+promote', async () => {
+		const orig = vfs.opfs.writePartial.bind(vfs.opfs);
+		let partials = 0;
+		vfs.opfs.writePartial = async (id, data) => {
+			partials += 1;
+			return orig(id, data);
+		};
+		const node = await vfs.writeFile({
+			parentId: null,
+			name: 'blob.bin',
+			body: new Uint8Array([1, 2, 3, 4]),
+			fileType: 'unknown',
+			direct: true
+		});
+		assert.equal(partials, 0);
+		assert.equal(node.size, 4);
+		assert.equal((await vfs.readBytes(node.id))[0], 1);
+		assert.equal(await vfs.opfs.exists(`blobs/${node.blobId}.bin`), true);
+	});
 });

@@ -14,6 +14,8 @@ type VfsGitFs = {
 		symlink(target: string, path: string): Promise<never>;
 		readlink(path: string): Promise<never>;
 	};
+	/** Coalesce VFS notifies and flush mkdir/write/unlink at the end of a git op. */
+	withBuffer<T>(fn: () => Promise<T>): Promise<T>;
 };
 
 export type CreateVfsGitFsOptions = {
@@ -176,8 +178,31 @@ function mapVfsError(e: unknown, path: string): never {
 	throw e;
 }
 
+function posixKey(p: string): string {
+	return '/' + normalizeSegments(p).join('/');
+}
+
+function keyParent(key: string): string {
+	const segs = normalizeSegments(key);
+	segs.pop();
+	return '/' + segs.join('/');
+}
+
+function keyBase(key: string): string {
+	const segs = normalizeSegments(key);
+	return segs[segs.length - 1] ?? '';
+}
+
+type GitBuf = {
+	depth: number;
+	files: Map<string, Uint8Array>;
+	dirs: Set<string>;
+	unlinks: Set<string>;
+};
+
 export function createVfsGitFs(vfs: VfsService, opts: CreateVfsGitFsOptions): VfsGitFs {
 	const rootId = opts.rootId;
+	let buf: GitBuf | null = null;
 
 	// Every delete here passes `compact: false`. permanentDelete compacts by
 	// default, which is right for a user deleting one file and catastrophic
@@ -185,8 +210,71 @@ export function createVfsGitFs(vfs: VfsService, opts: CreateVfsGitFsOptions): Vf
 	// rewrite a whole pack. Dead space is reclaimed by the load sweep and by
 	// emptying the trash, both of which do it once instead of N times.
 
+	async function diskWrite(path: string, bytes: Uint8Array): Promise<void> {
+		const w = await walk(vfs, rootId, path);
+		if ('root' in w && w.root) throw nodeErr('EPERM', path);
+		if (w.node) {
+			if (w.node.kind !== 'file') throw nodeErr('EISDIR', path);
+			await vfs.updateFile(w.node.id, bytes, { force: true });
+			return;
+		}
+		await vfs.writeFile({
+			parentId: w.parentId,
+			name: w.name,
+			body: bytes,
+			fileType: 'unknown',
+			contentType: 'application/octet-stream',
+			onConflict: 'error',
+			direct: true
+		});
+	}
+
+	async function flushGitBuf(snap: GitBuf): Promise<void> {
+		const dirPaths = [...snap.dirs]
+			.filter((d) => d !== '/')
+			.map((d) => normalizeSegments(d))
+			.filter((s) => s.length);
+		if (dirPaths.length) await vfs.ensureFolders(rootId, dirPaths);
+		for (const [path, bytes] of snap.files) {
+			if (snap.unlinks.has(path)) continue;
+			await diskWrite(path, bytes);
+		}
+		for (const path of snap.unlinks) {
+			if (path === '/') continue;
+			const w = await walk(vfs, rootId, path);
+			if (!w.node || 'root' in w) continue;
+			await vfs.permanentDelete(w.node.id, {
+				compact: false,
+				recursive: w.node.kind === 'folder'
+			});
+		}
+	}
+
+	async function withBuffer<T>(fn: () => Promise<T>): Promise<T> {
+		if (!buf) buf = { depth: 0, files: new Map(), dirs: new Set(), unlinks: new Set() };
+		buf.depth += 1;
+		try {
+			return await vfs.batch(fn);
+		} finally {
+			buf.depth -= 1;
+			if (buf.depth === 0) {
+				const snap = buf;
+				buf = null;
+				await vfs.batch(() => flushGitBuf(snap));
+			}
+		}
+	}
+
 	const promises = {
 		async readFile(path: string, options?: unknown) {
+			const key = posixKey(path);
+			if (buf?.unlinks.has(key)) throw nodeErr('ENOENT', path);
+			const hit = buf?.files.get(key);
+			if (hit) {
+				const enc = encodingOf(options);
+				if (enc === 'utf8' || enc === 'utf-8') return new TextDecoder().decode(hit);
+				return hit;
+			}
 			const w = await walk(vfs, rootId, path);
 			if (!w.node) throw nodeErr('ENOENT', path);
 			if (w.node.kind !== 'file') throw nodeErr('EISDIR', path);
@@ -202,28 +290,37 @@ export function createVfsGitFs(vfs: VfsService, opts: CreateVfsGitFsOptions): Vf
 
 		async writeFile(path: string, data: unknown, _options?: unknown) {
 			const bytes = toBytes(data);
-			const w = await walk(vfs, rootId, path);
-			if ('root' in w && w.root) throw nodeErr('EPERM', path);
-			try {
-				if (w.node) {
-					if (w.node.kind !== 'file') throw nodeErr('EISDIR', path);
-					await vfs.updateFile(w.node.id, bytes, { force: true });
-					return;
+			if (buf) {
+				const key = posixKey(path);
+				if (key === '/') throw nodeErr('EPERM', path);
+				buf.files.set(key, bytes);
+				buf.unlinks.delete(key);
+				const segs = normalizeSegments(key);
+				for (let i = 1; i < segs.length; i++) {
+					buf.dirs.add('/' + segs.slice(0, i).join('/'));
 				}
-				await vfs.writeFile({
-					parentId: w.parentId,
-					name: w.name,
-					body: bytes,
-					fileType: 'unknown',
-					contentType: 'application/octet-stream',
-					onConflict: 'error'
-				});
+				return;
+			}
+			try {
+				await diskWrite(path, bytes);
 			} catch (e) {
 				mapVfsError(e, path);
 			}
 		},
 
 		async mkdir(path: string, _mode?: unknown) {
+			const key = posixKey(path);
+			if (key === '/') throw nodeErr('EEXIST', path);
+			if (buf) {
+				if (buf.files.has(key)) throw nodeErr('EEXIST', path);
+				buf.dirs.add(key);
+				buf.unlinks.delete(key);
+				const segs = normalizeSegments(key);
+				for (let i = 1; i < segs.length; i++) {
+					buf.dirs.add('/' + segs.slice(0, i).join('/'));
+				}
+				return;
+			}
 			const w = await walk(vfs, rootId, path);
 			if ('root' in w && w.root) throw nodeErr('EEXIST', path);
 			if (w.node) {
@@ -234,6 +331,12 @@ export function createVfsGitFs(vfs: VfsService, opts: CreateVfsGitFsOptions): Vf
 		},
 
 		async rmdir(path: string) {
+			const key = posixKey(path);
+			if (buf) {
+				buf.dirs.delete(key);
+				buf.unlinks.add(key);
+				return;
+			}
 			const w = await walk(vfs, rootId, path);
 			if (!w.node) throw nodeErr('ENOENT', path);
 			if ('root' in w && w.root) throw nodeErr('EPERM', path);
@@ -248,6 +351,12 @@ export function createVfsGitFs(vfs: VfsService, opts: CreateVfsGitFsOptions): Vf
 		},
 
 		async unlink(path: string) {
+			const key = posixKey(path);
+			if (buf) {
+				buf.files.delete(key);
+				buf.unlinks.add(key);
+				return;
+			}
 			const w = await walk(vfs, rootId, path);
 			if (!w.node) throw nodeErr('ENOENT', path);
 			if ('root' in w && w.root) throw nodeErr('EPERM', path);
@@ -256,14 +365,59 @@ export function createVfsGitFs(vfs: VfsService, opts: CreateVfsGitFsOptions): Vf
 		},
 
 		async readdir(path: string) {
-			const w = await walk(vfs, rootId, path);
-			if (!w.node) throw nodeErr('ENOENT', path);
-			if (w.node.kind !== 'folder') throw nodeErr('ENOTDIR', path);
-			const kids = await vfs.list({ parentId: w.node.id });
-			return kids.map((n) => n.name);
+			const key = posixKey(path);
+			const names = new Set<string>();
+			try {
+				const w = await walk(vfs, rootId, path);
+				if (w.node?.kind === 'folder') {
+					for (const n of await vfs.list({ parentId: w.node.id })) names.add(n.name);
+				} else if (w.node && !buf?.dirs.has(key)) throw nodeErr('ENOTDIR', path);
+			} catch (e) {
+				if (!buf?.dirs.has(key) && key !== '/') throw e;
+			}
+			if (buf) {
+				const prefix = key === '/' ? '/' : key + '/';
+				for (const d of buf.dirs) {
+					if (keyParent(d) === key) names.add(keyBase(d));
+				}
+				for (const f of buf.files.keys()) {
+					if (keyParent(f) === key) names.add(keyBase(f));
+				}
+				for (const u of buf.unlinks) {
+					if (keyParent(u) === key) names.delete(keyBase(u));
+				}
+				void prefix;
+			}
+			if (!names.size && key !== '/') {
+				const w = await walk(vfs, rootId, path).catch(() => null);
+				if (!w?.node && !buf?.dirs.has(key)) throw nodeErr('ENOENT', path);
+			}
+			return [...names];
 		},
 
 		async stat(path: string) {
+			const key = posixKey(path);
+			if (buf?.unlinks.has(key)) throw nodeErr('ENOENT', path);
+			const file = buf?.files.get(key);
+			if (file) {
+				const now = Date.now();
+				return statsFor({
+					id: key,
+					kind: 'file',
+					size: file.byteLength,
+					updatedAt: now,
+					createdAt: now
+				});
+			}
+			if (buf?.dirs.has(key) || key === '/') {
+				const now = Date.now();
+				return statsFor({
+					id: key,
+					kind: 'folder',
+					updatedAt: now,
+					createdAt: now
+				});
+			}
 			const w = await walk(vfs, rootId, path);
 			if (!w.node) throw nodeErr('ENOENT', path);
 			return statsFor(w.node);
@@ -314,5 +468,5 @@ export function createVfsGitFs(vfs: VfsService, opts: CreateVfsGitFsOptions): Vf
 		}
 	};
 
-	return { promises } as VfsGitFs;
+	return { promises, withBuffer };
 }

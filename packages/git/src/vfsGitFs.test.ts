@@ -444,7 +444,7 @@ describe('git on packed working-tree files', () => {
 
 		await fs.promises.writeFile('/n-3.txt', 'edited\n');
 		expect((await localSnapshot(fs, '/')).status.dirty).toBe(true);
-		await git.checkout({ fs, dir: '/', ref: 'HEAD', force: true });
+		await fs.withBuffer(() => git.checkout({ fs, dir: '/', ref: 'HEAD', force: true }));
 		expect(String(await fs.promises.readFile('/n-3.txt', 'utf8'))).toBe('note-3\n');
 		await fs.promises.rename('/n-1.txt', '/moved.txt');
 		expect(String(await fs.promises.readFile('/moved.txt', 'utf8'))).toBe('note-1\n');

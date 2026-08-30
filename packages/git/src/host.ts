@@ -127,7 +127,10 @@ export function createGitHost(opts: CreateGitHostOptions = {}): GitHost {
 		subscribeRepo,
 		async initLocal(repoPath) {
 			const bound = bindLocal(repoPath);
-			await git.init({ fs: bound.fs, dir: bound.dir });
+			const run = () => git.init({ fs: bound.fs, dir: bound.dir });
+			const buffered = bound.fs as { withBuffer?: <T>(fn: () => Promise<T>) => Promise<T> };
+			if (typeof buffered.withBuffer === 'function') await buffered.withBuffer(run);
+			else await run();
 		},
 		async readBlobAt(repo, rev, filepath) {
 			if (repo.backend === 'monitor') {
