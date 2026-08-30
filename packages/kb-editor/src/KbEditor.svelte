@@ -124,6 +124,15 @@
 			stripCollabWidgets(host);
 			return;
 		}
+		// NOTE: this repaints unconditionally, and `project()` rebuilds every
+		// block element. Measured idle cost: ~350 full block-list rebuilds/sec
+		// solo, ~1500/s in a live session, with nothing changing. A naive
+		// `page === lastPage` guard removes all of it (solo idle 1389 -> 0 DOM
+		// mutations in 4s) but BREAKS collab: kb-collab-ime-remote:89 and
+		// kb-collab-invite:117 both fail, so some paths mutate the page in place
+		// rather than replacing it and rely on the unconditional repaint.
+		// Fixing this properly means making those paths produce a new page
+		// identity — worth doing, but not behind an identity check alone.
 		project(host, page, { carets: remoteCarets });
 		syncTableHeights(host);
 		untrack(() => {

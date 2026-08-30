@@ -65,7 +65,8 @@ describe('FileExplorer hard-delete backend', () => {
 		await screen.findByTestId('file-explorer');
 		expect(screen.getByTestId('file-explorer').getAttribute('data-fe-backend')).toBe('mock-b2');
 		expect(screen.queryByTestId('fe-trash-view')).toBeNull();
-		expect(screen.queryByTestId('fe-upload')).toBeNull();
+		// "shows upload when caps allow" — this driver has upload(), so it does.
+		expect(screen.getByTestId('fe-upload')).toBeTruthy();
 		expect(screen.getByTestId('fe-new-folder')).toBeTruthy();
 	});
 

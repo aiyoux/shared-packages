@@ -2582,7 +2582,11 @@
 
 	const canImportFromDevice = $derived(Boolean(driver.upload || driver.writeFile));
 	/** File-picker chrome is local writeFile only; remotes import via drop / copy-across. */
-	const showDeviceFilePicker = $derived(Boolean(driver.writeFile));
+	// osDrop takes `driver.upload ?? driver.writeFile`, so an upload-only driver
+	// (rclone, B2, monitor) can import device files perfectly well. Gating the
+	// picker on writeFile alone hid the button on every remote backend while
+	// drag-and-drop to the same pane still worked.
+	const showDeviceFilePicker = $derived(Boolean(driver.writeFile || driver.upload));
 
 	async function refreshSystemClipboard() {
 		if (typeof navigator === 'undefined' || !navigator.clipboard?.read) return;
