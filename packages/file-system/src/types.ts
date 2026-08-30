@@ -87,6 +87,12 @@ export interface BlobRef {
 	 * when present, a packed read that doesn't match is a neighbour-byte fail.
 	 */
 	crc32?: number;
+	/**
+	 * Identity of the pack generation this offset is valid for. Compact bumps
+	 * it; a stale in-memory ref with the old offset on a rewritten pack fails
+	 * instead of reading a neighbour.
+	 */
+	packGeneration?: number;
 }
 
 export interface AppDraft {

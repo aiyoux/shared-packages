@@ -5,11 +5,11 @@ export const PROJECT_PACK_META = 'projectPack';
 /**
  * What counts as "already a project".
  *
- * `any` (default) — a `.git` child, a `.project` child, or project metadata.
+ * `any` (default) — a `.git` child, a `.project.json` child, or project metadata.
  * `git` — a `.git` child ONLY.
  *
  * The Git app needs `git`: a folder can be a project (packed, or carrying
- * `.project`) and still have no repo, and under `any` its Init button would be
+ * `.project.json`) and still have no repo, and under `any` its Init button would be
  * hidden with no way to create one.
  */
 export type ProjectMarker = 'any' | 'git';
@@ -37,9 +37,7 @@ async function isProjectFolder(
 	try {
 		const { entries } = await driver.list({ parentId: folderId });
 		return entries.some(
-			(e) =>
-				e.name === '.git' ||
-				(marker === 'any' && (e.name === '.project' || e.name === '.project.json'))
+			(e) => e.name === '.git' || (marker === 'any' && e.name === '.project.json')
 		);
 	} catch {
 		return false;
@@ -117,7 +115,7 @@ export async function findProjectRoot(
 
 /**
  * True when `folderId` or an ancestor looks like a project: a child
- * named `.git` / `.project`, or metadata marking it as a project.
+ * named `.git` / `.project.json`, or metadata marking it as a project.
  */
 export async function detectProject(
 	driver: ExplorerDriver,

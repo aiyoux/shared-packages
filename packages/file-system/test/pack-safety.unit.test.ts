@@ -5,8 +5,12 @@ import {
 	createMemoryOpfs,
 	resetSharedVfsForTests,
 	crc32,
-	packProject
+	packProject,
+	exportProjectAsBundle,
+	importProject
 } from '../src/index.ts';
+import * as vfsMod from '../src/vfs.ts';
+import { expandBytes, packFiles } from '@shared-packages/compress';
 import type { OpfsBlobStore } from '../src/opfs.ts';
 
 const enc = new TextEncoder();
@@ -91,6 +95,13 @@ describe('pack safety', () => {
 					throw new Error('quota');
 				}
 				return base.writeFinal(path, data);
+			},
+			async writeAtomic(path, data) {
+				if (path.startsWith('packs/') && blows++ === 0) {
+					await base.writeAtomic(path, data);
+					throw new Error('quota');
+				}
+				return base.writeAtomic(path, data);
 			}
 		};
 		const vfs = createVfs({
@@ -219,6 +230,101 @@ describe('pack safety', () => {
 		await vfs.db.blobRefs.put({ ...ref!, pending: true, createdAt: Date.now() - 10_000 });
 		await vfs.gc();
 		assert.equal(await vfs.get(nodes[0]!.id), undefined);
+		await vfs.db.delete();
+	});
+
+	it('gc during compact after-write does not steal the dest pack', async () => {
+		const vfs = await mk('crash-compact');
+		const folder = await vfs.mkdir(null, 'p');
+		const nodes = await vfs.writeFiles(
+			Array.from({ length: 80 }, (_, i) => ({
+				parentId: folder.id,
+				name: `m-${i}.bin`,
+				body: new Uint8Array(16 * 1024).fill(i & 0xff)
+			})),
+			{ pack: true }
+		);
+		for (const n of nodes.slice(0, 70)) await vfs.trash(n.id);
+		await vfs.emptyTrash({ skipCompaction: true });
+		vfsMod.compactCrash.hook = async (phase, newPath) => {
+			if (phase !== 'after-write') return;
+			await vfs.gc();
+			assert.equal(await vfs.opfs.exists(newPath), true, 'gc must not unlink dest mid-compact');
+		};
+		try {
+			await vfs.compactPacks([(await vfs.db.blobRefs.get(nodes[70]!.blobId!))!.opfsPath]);
+		} finally {
+			vfsMod.compactCrash.hook = null;
+		}
+		for (const n of nodes.slice(70)) {
+			assert.equal((await vfs.readBytes(n.id)).byteLength, 16 * 1024);
+		}
+		await vfs.db.delete();
+	});
+
+	it('two unpackers: the loser does not delete the winner dest', async () => {
+		resetSharedVfsForTests();
+		let interleave: (() => Promise<void>) | null = null;
+		const base = rangeCapableStore();
+		const opfs: OpfsBlobStore = {
+			...base,
+			async writeAtomic(path, data) {
+				const result = await base.writeAtomic!(path, data);
+				if (path.startsWith('blobs/') && interleave) {
+					const run = interleave;
+					interleave = null;
+					await run();
+				}
+				return result;
+			}
+		};
+		const dbName = `unpack-tabs-${Date.now()}`;
+		const a = createVfs({ dbName, opfs, requestPersist: false });
+		const b = createVfs({ dbName, opfs, requestPersist: false });
+		await a.ready();
+		await b.ready();
+		const folder = await a.mkdir(null, 'p');
+		const nodes = await a.writeFiles(
+			[
+				{ parentId: folder.id, name: 'a.bin', body: new Uint8Array(64).fill(1) },
+				{ parentId: folder.id, name: 'b.bin', body: new Uint8Array(64).fill(2) }
+			],
+			{ pack: true }
+		);
+		const ids = nodes.map((n) => n.id);
+		interleave = async () => {
+			await b.unpackNodes(ids).catch(() => {});
+		};
+		await a.unpackNodes(ids);
+		assert.equal((await a.readBytes(nodes[0]!.id))[0], 1);
+		assert.equal((await a.readBytes(nodes[1]!.id))[0], 2);
+		await a.db.delete();
+	});
+
+	it('truncated .sprj import refuses rather than creating empty nodes', async () => {
+		const vfs = await mk('sprj');
+		const folder = await vfs.mkdir(null, 'Proj');
+		await vfs.writeFiles(
+			[
+				{ parentId: folder.id, name: 'a.bin', body: new Uint8Array(32).fill(3) },
+				{ parentId: folder.id, name: 'b.bin', body: new Uint8Array(32).fill(4) }
+			],
+			{ pack: true }
+		);
+		const { initProject } = await import('../src/projectMeta.ts');
+		await initProject(vfs, folder.id, { name: 'Proj' });
+		const bundle = await exportProjectAsBundle(vfs, folder.id);
+		const members = await expandBytes('fflate', bundle.bytes, 'zip', bundle.name);
+		const stripped = members.filter((m) => !m.name.startsWith('packs/'));
+		const zipped = await packFiles(
+			'fflate',
+			stripped.map((m) => ({ name: m.name, data: m.data })),
+			'zip'
+		);
+		await assert.rejects(
+			() => importProject(vfs, null, zipped[0]!.data),
+			/missing pack|refusing to import/i
+		);
 		await vfs.db.delete();
 	});
 });

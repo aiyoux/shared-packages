@@ -435,10 +435,19 @@ describe('git on packed working-tree files', () => {
 			expect.arrayContaining(['.git', 'n-0.txt', 'n-3.txt'])
 		);
 		expect(String(await fs.promises.readFile('/n-3.txt', 'utf8'))).toBe('note-3\n');
-		await git.add({ fs, dir: '/', filepath: 'n-0.txt' });
+		for (let i = 0; i < 12; i++) await git.add({ fs, dir: '/', filepath: `n-${i}.txt` });
 		await git.commit({ fs, dir: '/', message: 'packed notes', author: AUTHOR });
 		const snap = await localSnapshot(fs, '/');
 		expect(snap.log[0]?.subject).toBe('packed notes');
+
+		await fs.promises.writeFile('/n-3.txt', 'edited\n');
+		expect((await localSnapshot(fs, '/')).status.dirty).toBe(true);
+		await git.checkout({ fs, dir: '/', ref: 'HEAD', force: true });
+		expect(String(await fs.promises.readFile('/n-3.txt', 'utf8'))).toBe('note-3\n');
+		await fs.promises.rename('/n-1.txt', '/moved.txt');
+		expect(String(await fs.promises.readFile('/moved.txt', 'utf8'))).toBe('note-1\n');
+		await fs.promises.unlink('/n-2.txt');
+		await expect(fs.promises.readFile('/n-2.txt')).rejects.toMatchObject({ code: 'ENOENT' });
 		await vfs.db.delete();
 	});
 });

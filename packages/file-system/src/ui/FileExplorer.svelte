@@ -1948,12 +1948,11 @@
 				} catch (e) {
 					// A cancel is the user's decision, not a worker fault.
 					if (e instanceof Error && e.name === 'AbortError') throw e;
-					// Anything else: fall back rather than fail the job. The
-					// main-thread path is always correct, only slower — but say
-					// so. A silent fallback looks identical to "it got slower
-					// for no reason", which is how performance regressions hide.
-					ranOnWorker = false;
-					fallbackReason = formatExplorerError(e);
+					// Do not re-run the extract on this tab. The worker may
+					// already have packed members into OPFS; a second pass
+					// duplicates them. Unavailable worker (null client) still
+					// takes the main-thread path below.
+					throw e;
 				}
 			}
 			if (!ranOnWorker) {
