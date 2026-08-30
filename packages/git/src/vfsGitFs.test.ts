@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import git from 'isomorphic-git';
-import { createVfs, type VfsService } from '@shared-packages/file-system';
+import {
+	createMemoryOpfs,
+	createVfs,
+	type OpfsBlobStore,
+	type VfsService
+} from '@shared-packages/file-system';
 import { createGitHost } from './host.js';
 import { localSnapshot } from './local.js';
 import { closeGitReposDbForTests } from './repos.js';
@@ -367,6 +372,74 @@ describe('createVfsGitFs.promises.rename', () => {
 		expect(after['README.md']).toBeUndefined();
 		expect(after['MOVED.md']).toEqual([1, 1, 1]);
 		expect((await localSnapshot(fs, '/')).status.dirty).toBe(false);
+	});
+});
+
+function packedRangeStore(): OpfsBlobStore {
+	const base = createMemoryOpfs();
+	return {
+		...base,
+		async readRange(path, offset, length, contentType) {
+			const all = await base.read(path);
+			if (offset + length > all.byteLength) {
+				throw new Error(`short pack ${path}`);
+			}
+			const view = all.slice(offset, offset + length);
+			return {
+				size: view.byteLength,
+				type: contentType ?? 'application/octet-stream',
+				arrayBuffer: async () => view.buffer.slice(view.byteOffset, view.byteOffset + view.byteLength)
+			} as Blob;
+		}
+	};
+}
+
+describe('git on packed working-tree files', () => {
+	it('status, commit, and read survive packProject without packing .git', async () => {
+		const vfs = createVfs({
+			dbName: `git-pack-${crypto.randomUUID()}`,
+			opfs: packedRangeStore(),
+			requestPersist: false
+		});
+		await vfs.ready();
+		const folder = await vfs.mkdir(null, 'repo');
+		const fs = createVfsGitFs(vfs, { rootId: folder.id });
+		await git.init({ fs, dir: '/' });
+		const files = await vfs.writeFiles(
+			Array.from({ length: 12 }, (_, i) => ({
+				parentId: folder.id,
+				name: `n-${i}.txt`,
+				body: new TextEncoder().encode(`note-${i}\n`)
+			})),
+			{ pack: true }
+		);
+		const packedRef = await vfs.db.blobRefs.get(files[0]!.blobId!);
+		expect(packedRef?.packOffset).toBeTypeOf('number');
+
+		const gitDir = (await vfs.list({ parentId: folder.id })).find((n) => n.name === '.git')!;
+		const gitKids = await vfs.list({ parentId: gitDir.id });
+		const objects = gitKids.find((n) => n.name === 'objects');
+		if (objects) {
+			const hex = (await vfs.list({ parentId: objects.id })).filter((n) => n.kind === 'folder');
+			for (const h of hex) {
+				const objs = await vfs.list({ parentId: h.id });
+				for (const o of objs) {
+					if (!o.blobId) continue;
+					const ref = await vfs.db.blobRefs.get(o.blobId);
+					expect(ref?.packOffset, `${o.name} under .git must stay standalone`).toBeUndefined();
+				}
+			}
+		}
+
+		expect(await fs.promises.readdir('/')).toEqual(
+			expect.arrayContaining(['.git', 'n-0.txt', 'n-3.txt'])
+		);
+		expect(String(await fs.promises.readFile('/n-3.txt', 'utf8'))).toBe('note-3\n');
+		await git.add({ fs, dir: '/', filepath: 'n-0.txt' });
+		await git.commit({ fs, dir: '/', message: 'packed notes', author: AUTHOR });
+		const snap = await localSnapshot(fs, '/');
+		expect(snap.log[0]?.subject).toBe('packed notes');
+		await vfs.db.delete();
 	});
 });
 
