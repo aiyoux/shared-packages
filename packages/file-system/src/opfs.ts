@@ -257,6 +257,28 @@ export function createOpfsBlobStore(rootDirName = 'shared-vfs'): OpfsBlobStore {
 			return { tmpPath, byteLength: bytes.byteLength };
 		},
 		async promote(tmpPath, finalOpfsPath) {
+			// Prefer a rename. The copy path below reads the whole tmp file
+			// back and writes every byte a second time, which made a single
+			// file write ~10 OPFS round trips: measured at 19.4ms per
+			// vfs.writeFile against ~2.3ms for one OPFS operation, and writes
+			// are 59% of the cost of a git commit.
+			//
+			// `move` is not universally available, and a rename across a
+			// directory can still fail, so any failure falls back to the copy
+			// rather than leaving the write half-done.
+			const { dir, base } = splitPath(finalOpfsPath);
+			try {
+				const tmpHandle = await getFile(tmpPath, false);
+				const movable = tmpHandle as FileSystemFileHandle & {
+					move?: (destination: FileSystemDirectoryHandle, name: string) => Promise<void>;
+				};
+				if (typeof movable.move === 'function') {
+					await movable.move(await resolveDir(dir), base);
+					return;
+				}
+			} catch {
+				// fall through to copy
+			}
 			const bytes = await this.read(tmpPath);
 			const finalHandle = await getFile(finalOpfsPath, true);
 			await writeFileHandle(finalHandle, bytes);
