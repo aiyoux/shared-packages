@@ -40,6 +40,7 @@
 		AppWindowsButton,
 		appClipboard,
 		createLeaf,
+		leafCount,
 		listLeaves,
 		splitLeaf,
 		type LayoutNode,
@@ -2022,6 +2023,11 @@
 				'data-pane': id
 			})}
 		>
+			{#snippet leafChrome({ id })}
+				{#if id === targetPaneId && !windowEditOpen && leafCount(windowRoot) > 1}
+					<div class="fe-target-chip" data-testid="files-window-target">Target</div>
+				{/if}
+			{/snippet}
 			{#snippet pane({ id })}
 				{@render explorerPane(id)}
 			{/snippet}
@@ -2243,5 +2249,22 @@
 		max-height: none;
 		border: none;
 		border-radius: 0;
+	}
+	.fe-target-chip {
+		position: absolute;
+		top: 0;
+		right: 0;
+		z-index: 10;
+		padding: 2px 8px;
+		border-radius: 0 0 0 var(--radius-sm);
+		background: var(--accent-glow);
+		color: var(--accent);
+		font-size: var(--text-xs);
+		letter-spacing: 0.08em;
+		text-transform: uppercase;
+		pointer-events: none;
+	}
+	:global(.files-app-windows:not(.editing) .aw-leaf.is-target) {
+		box-shadow: inset 0 0 0 1px var(--accent);
 	}
 </style>

@@ -3025,9 +3025,6 @@
 >
 	<header class="fe-header" data-testid="fe-header">
 		<div class="fe-header-left">
-			{#if isTarget}
-				<span class="fe-target-tag" data-testid="fe-target-tag" title="Target window for clipboard and operations">TARGET</span>
-			{/if}
 			{#if headerLeading}
 				<div class="fe-header-leading" data-testid="fe-header-leading">
 					{@render headerLeading()}
@@ -4281,24 +4278,6 @@
 		min-height: 280px;
 		max-height: 70vh;
 		height: auto;
-	}
-	.fe-root.is-target {
-		outline: 1px solid var(--accent, #3b82f6);
-		outline-offset: -1px;
-	}
-	.fe-target-tag {
-		display: inline-flex;
-		align-items: center;
-		padding: 2px 6px;
-		border-radius: 4px;
-		background: var(--accent, #3b82f6);
-		color: #ffffff;
-		font-size: 0.65rem;
-		font-weight: 700;
-		letter-spacing: 0.05em;
-		text-transform: uppercase;
-		flex-shrink: 0;
-		user-select: none;
 	}
 	.fe-header {
 		position: relative;
