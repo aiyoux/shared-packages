@@ -6,6 +6,7 @@
 		parentIdOf,
 		parentOf,
 		plaintextOf,
+		type KbPage,
 		type Op,
 		type Range
 	} from '@shared-packages/kb-model';
@@ -116,29 +117,62 @@
 		}
 	}
 
+	/**
+	 * What `project()` last painted, and whether the DOM still matches it.
+	 *
+	 * `project()` rebuilds every block element, and this effect re-runs far more
+	 * often than the document changes — measured at ~350 full block-list
+	 * rebuilds/second on an idle solo page and ~1500/s in a live session, with
+	 * nothing happening. Every `<p>` was destroyed and recreated each time, so
+	 * clicking a block raced its own teardown.
+	 *
+	 * Page identity alone is NOT a sufficient guard, because three paths change
+	 * the DOM without changing the page:
+	 *   - while composing, beforeinput deliberately never preventDefaults, so
+	 *     the browser writes IME text straight into the text nodes
+	 *   - `stripCollabWidgets` removes remote carets from the DOM
+	 *   - the composition-cancel path calls `project()` itself
+	 * After any of those the DOM has diverged from `paintedPage` and must be
+	 * re-projected even though the model is unchanged. `domDiverged` records
+	 * that, so the guard reflects what is actually on screen rather than a
+	 * guess. Plain `let`, not `$state`: marking divergence must not itself
+	 * schedule a repaint — the next real update reconciles it.
+	 */
+	let paintedPage: KbPage | undefined;
+	let paintedCaretKey = '';
+	let domDiverged = true;
+
+	/** Carets arrive as a fresh array each render, so compare by content. */
+	function caretKey(list: RemoteCaret[]): string {
+		let out = '';
+		for (const c of list) {
+			out += `${c.clientId}:${c.anchor.blockId}:${c.anchor.offset}:${c.head.blockId}:${c.head.offset}:${c.user.color}|`;
+		}
+		return out;
+	}
+
 	$effect(() => {
 		const page = editor.page;
 		const remoteCarets = carets;
-		if (!host) return;
+		const el = host;
+		if (!el) return;
 		if (composing) {
-			stripCollabWidgets(host);
+			stripCollabWidgets(el);
+			domDiverged = true;
 			return;
 		}
-		// NOTE: this repaints unconditionally, and `project()` rebuilds every
-		// block element. Measured idle cost: ~350 full block-list rebuilds/sec
-		// solo, ~1500/s in a live session, with nothing changing. A naive
-		// `page === lastPage` guard removes all of it (solo idle 1389 -> 0 DOM
-		// mutations in 4s) but BREAKS collab: kb-collab-ime-remote:89 and
-		// kb-collab-invite:117 both fail, so some paths mutate the page in place
-		// rather than replacing it and rely on the unconditional repaint.
-		// Fixing this properly means making those paths produce a new page
-		// identity — worth doing, but not behind an identity check alone.
-		project(host, page, { carets: remoteCarets });
-		syncTableHeights(host);
+		const key = caretKey(remoteCarets);
+		if (domDiverged || page !== paintedPage || key !== paintedCaretKey) {
+			project(el, page, { carets: remoteCarets });
+			syncTableHeights(el);
+			paintedPage = page;
+			paintedCaretKey = key;
+			domDiverged = false;
+		}
 		untrack(() => {
-			restoreSelection(host, editor.selection, page);
-			heightById = handleHeights(host, page);
-			overlays = overlayBoxes(host, gutterEl);
+			restoreSelection(el, editor.selection, page);
+			heightById = handleHeights(el, page);
+			overlays = overlayBoxes(el, gutterEl);
 		});
 	});
 
@@ -158,6 +192,9 @@
 		);
 
 		if (mapped.preventDefault) event.preventDefault();
+		// Not prevented means the browser edits the DOM itself, so whatever is
+		// on screen no longer matches what we last painted.
+		else domDiverged = true;
 		if (mapped.history === 'undo') {
 			emitState(undo(editor));
 			return;
@@ -173,12 +210,14 @@
 		const live = liveRange();
 		snapshot = snapshotComposition(editor, live);
 		localComposing = true;
+		domDiverged = true;
 		onComposing?.(true);
 		emitState(beginComposition(editor));
 	}
 
 	function onCompositionEnd(event: CompositionEvent) {
 		localComposing = false;
+		domDiverged = true;
 		onComposing?.(false);
 		const snap = snapshot;
 		snapshot = null;
