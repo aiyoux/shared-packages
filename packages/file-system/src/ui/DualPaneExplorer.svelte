@@ -42,6 +42,7 @@
 		createLeaf,
 		leafCount,
 		listLeaves,
+		portalToPaneWindowHeader,
 		splitLeaf,
 		type LayoutNode,
 		toast
@@ -273,6 +274,14 @@
 	const hostSettings = $derived(Boolean(settingsPortal) && !hideSettingsGear);
 	const pairInfoInChrome = $derived(!hideToggles);
 	let showRemoteManager = $state(false);
+
+	function portalLayoutCluster(node: HTMLElement) {
+		if (layoutPortal) {
+			const res = portal(node, layoutPortal);
+			if (res) return res;
+		}
+		return portalToPaneWindowHeader(node);
+	}
 
 	function onRemoteConnected(kind: RemoteKind, profile: object) {
 		showRemoteManager = false;
@@ -1928,31 +1937,29 @@
 {/snippet}
 
 {#if !hideToggles}
-	<div class="dpe-layout-park" class:parked={Boolean(layoutPortal)}>
-		<div
-			class="dpe-layout-cluster"
-			class:portaled={Boolean(layoutPortal)}
-			use:portal={layoutPortal || undefined}
-		>
-			<AppWindowsButton
-				bind:editing={windowEditOpen}
-				testid="fe-windows-btn"
+	<div
+		class="dpe-layout-cluster"
+		class:portaled={Boolean(layoutPortal)}
+		use:portalLayoutCluster
+	>
+		<AppWindowsButton
+			bind:editing={windowEditOpen}
+			testid="fe-windows-btn"
+		/>
+		{#if pairInfoInChrome}
+			<ConnectionPairInfo
+				left={pairSide('left')}
+				right={dualPane ? pairSide(targetPaneId !== 'left' ? targetPaneId : 'right') : null}
+				copyOut={pairCopy.copyOut}
+				copyIn={pairCopy.copyIn}
+				idleNote={pairCopy.copyIdleNote}
 			/>
-			{#if pairInfoInChrome}
-				<ConnectionPairInfo
-					left={pairSide('left')}
-					right={dualPane ? pairSide(targetPaneId !== 'left' ? targetPaneId : 'right') : null}
-					copyOut={pairCopy.copyOut}
-					copyIn={pairCopy.copyIn}
-					idleNote={pairCopy.copyIdleNote}
-				/>
-			{/if}
-			<CopyProgressHeader
-				items={visibleCopyItems}
-				onDismiss={dismissCopy}
-				onDismissAll={dismissAllSettledCopy}
-			/>
-		</div>
+		{/if}
+		<CopyProgressHeader
+			items={visibleCopyItems}
+			onDismiss={dismissCopy}
+			onDismissAll={dismissAllSettledCopy}
+		/>
 	</div>
 {/if}
 
@@ -2130,24 +2137,28 @@
 		width: 100%;
 		height: 100%;
 	}
-	.dpe-layout-park.parked {
+	.dpe-layout-cluster {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		visibility: hidden;
+	}
+	.dpe-layout-cluster:global(.in-overlay),
+	.dpe-layout-cluster:global(.in-chrome),
+	.dpe-layout-cluster:global(.portaled) {
+		visibility: visible;
+	}
+	.dpe-layout-cluster:global(.in-overlay) {
 		position: absolute;
-		width: 0;
-		height: 0;
-		margin: 0;
-		padding: 0;
-		overflow: hidden;
-		pointer-events: none;
+		top: calc(12px + env(safe-area-inset-top, 0px));
+		left: calc(12px + env(safe-area-inset-left, 0px));
+		z-index: var(--z-popover, 40);
 	}
-	.dpe-layout {
-		flex-wrap: nowrap;
-		width: max-content;
-		flex-shrink: 0;
-	}
-	.dpe-layout.portaled {
-		height: var(--control-h-sm);
-		padding: 2px;
-		gap: 2px;
+	.dpe-layout-cluster:global(.in-chrome) {
+		position: relative;
+		z-index: 3;
+		height: 100%;
+		gap: 4px;
 	}
 	.dpe-layout-opt {
 		padding: 0 0.65rem;
