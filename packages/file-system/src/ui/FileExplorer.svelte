@@ -93,7 +93,7 @@
 	} from './systemClipboard.js';
 	import '@shared-packages/design-system/button.css';
 	import '@shared-packages/design-system/tooltip.css';
-	import { SplitHandle, toast } from '@shared-packages/ui';
+	import { SplitHandle, toast, appClipboard } from '@shared-packages/ui';
 	import FeThumbnail from './FeThumbnail.svelte';
 	import FeTreeView from './FeTreeView.svelte';
 	import FeFloatingPreview from './FeFloatingPreview.svelte';
@@ -170,14 +170,24 @@
 		}>;
 		/** Hide the toolbar Trash button (popup listing). Default shows it when supportsTrash. */
 		hideToolbarTrash?: boolean;
-		/**
-		 * Extra manage-toolbar / details actions (e.g. DualPane Copy across).
-		 * `icon` sits in the main toolbar after Download; `label` is the details
-		 * panel text button.
-		 */
+		/** Extra manage-toolbar / details actions (e.g. DualPane Copy across). */
 		toolbarExtra?: Snippet<[{ variant: 'icon' | 'label' }]>;
 		/** Leading header slot (connection dropdown for DualPaneExplorer). */
 		headerLeading?: Snippet;
+		/** Whether this explorer instance is the active TARGET window. */
+		isTarget?: boolean;
+		/** Handle cross-driver copy across from app clipboard. */
+		onCopyAcrossFromClipboard?: (
+			payload: {
+				mode: 'copy' | 'cut';
+				sourceDriverId?: string;
+				sourceConnectionId?: string;
+				sourceParentId?: string | null;
+				ids: string[];
+				entries?: ExplorerEntry[];
+			},
+			destParentId: string | null
+		) => Promise<void>;
 	}
 
 	let {
@@ -207,7 +217,9 @@
 		compatSaveTestId = false,
 		hideToolbarTrash = false,
 		toolbarExtra,
-		headerLeading
+		headerLeading,
+		isTarget = false,
+		onCopyAcrossFromClipboard
 	}: Props = $props();
 
 	// Resolve driver once from props (local default). Re-create if prop identity changes via effect below.
@@ -2479,36 +2491,139 @@
 		return n ? [n.id] : [];
 	}
 
-	function cutSelection() {
+	async function cutSelection() {
 		if (mode !== 'manage' || !caps.supportsMove) return;
 		const ids = idsForClipboard();
 		if (!ids.length) return;
 		clipboard = { mode: 'cut', ids };
+		const entries = selectedEntries;
+		const label = `Files: ${ids.length} item${ids.length === 1 ? '' : 's'} (cut)`;
+		await appClipboard.copy({
+			type: 'application/x-scratchpad-files',
+			data: {
+				mode: 'cut',
+				sourceDriverId: driver.id,
+				sourceConnectionId: driver.connectionId,
+				sourceParentId: parentId,
+				ids,
+				entries: entries.map((e) => ({
+					id: e.id,
+					name: e.name,
+					kind: e.kind,
+					size: e.size,
+					fileType: e.fileType
+				}))
+			},
+			label
+		});
 	}
 
-	function copySelection() {
+	async function copySelection() {
 		if (mode !== 'manage' || !caps.supportsCopy) return;
 		const ids = idsForClipboard();
 		if (!ids.length) return;
 		clipboard = { mode: 'copy', ids };
+		const entries = selectedEntries;
+		const label = `Files: ${ids.length} item${ids.length === 1 ? '' : 's'}`;
+		await appClipboard.copy({
+			type: 'application/x-scratchpad-files',
+			data: {
+				mode: 'copy',
+				sourceDriverId: driver.id,
+				sourceConnectionId: driver.connectionId,
+				sourceParentId: parentId,
+				ids,
+				entries: entries.map((e) => ({
+					id: e.id,
+					name: e.name,
+					kind: e.kind,
+					size: e.size,
+					fileType: e.fileType
+				}))
+			},
+			label
+		});
 	}
 
 	async function pasteClipboard() {
-		if (mode !== 'manage' || !clipboard?.ids.length) return;
+		if (mode !== 'manage') return;
 		error = '';
 		try {
-			for (const id of clipboard.ids) {
-				if (clipboard.mode === 'cut') {
-					if (!driver.move || !caps.supportsMove) throw new Error('MOVE_UNSUPPORTED');
-					await driver.move(id, parentId);
-				} else {
-					if (!driver.copy || !caps.supportsCopy) throw new Error('COPY_UNSUPPORTED');
-					await driver.copy(id, parentId);
+			// 1. Check appClipboard first
+			const appClip = await appClipboard.paste<{
+				mode: 'copy' | 'cut';
+				sourceDriverId?: string;
+				sourceConnectionId?: string;
+				sourceParentId?: string | null;
+				ids: string[];
+				entries?: ExplorerEntry[];
+			}>('application/x-scratchpad-files');
+
+			const payload =
+				appClip ??
+				(appClipboard.current?.type === 'application/x-scratchpad-files'
+					? (appClipboard.current.data as {
+							mode: 'copy' | 'cut';
+							sourceDriverId?: string;
+							sourceConnectionId?: string;
+							sourceParentId?: string | null;
+							ids: string[];
+							entries?: ExplorerEntry[];
+						})
+					: null);
+
+			if (payload && payload.ids && payload.ids.length > 0) {
+				const isSameDriver =
+					payload.sourceDriverId === driver.id &&
+					(payload.sourceConnectionId ?? '') === (driver.connectionId ?? '');
+				if (isSameDriver) {
+					for (const id of payload.ids) {
+						if (payload.mode === 'cut') {
+							if (!driver.move || !caps.supportsMove) throw new Error('MOVE_UNSUPPORTED');
+							await driver.move(id, parentId);
+						} else {
+							if (!driver.copy || !caps.supportsCopy) throw new Error('COPY_UNSUPPORTED');
+							await driver.copy(id, parentId);
+						}
+					}
+					if (payload.mode === 'cut') {
+						clipboard = null;
+						appClipboard.clear();
+					}
+					selected = new Set();
+					await refresh();
+					return;
+				} else if (onCopyAcrossFromClipboard) {
+					await onCopyAcrossFromClipboard(payload, parentId);
+					if (payload.mode === 'cut') {
+						appClipboard.clear();
+					}
+					await refresh();
+					return;
 				}
 			}
-			if (clipboard.mode === 'cut') clipboard = null;
-			selected = new Set();
-			await refresh();
+
+			// 2. Fallback to local clipboard state
+			if (clipboard?.ids.length) {
+				for (const id of clipboard.ids) {
+					if (clipboard.mode === 'cut') {
+						if (!driver.move || !caps.supportsMove) throw new Error('MOVE_UNSUPPORTED');
+						await driver.move(id, parentId);
+					} else {
+						if (!driver.copy || !caps.supportsCopy) throw new Error('COPY_UNSUPPORTED');
+						await driver.copy(id, parentId);
+					}
+				}
+				if (clipboard.mode === 'cut') clipboard = null;
+				selected = new Set();
+				await refresh();
+				return;
+			}
+
+			// 3. Fallback to system clipboard
+			if (canImportFromDevice) {
+				await pasteSystemClipboard();
+			}
 		} catch (e) {
 			reportError(e);
 		}
@@ -2899,7 +3014,9 @@
 	class="fe-root {variant} {className}"
 	class:preview-bottom={previewDock === 'bottom'}
 	class:preview-right={previewDock === 'right'}
+	class:is-target={isTarget}
 	data-testid={rootTestId}
+	data-fe-target={isTarget ? 'true' : 'false'}
 	data-fe-backend={driver.id}
 	data-fe-mode={mode}
 	data-fe-select-multi={selectMulti ? 'on' : 'off'}
@@ -2916,6 +3033,9 @@
 >
 	<header class="fe-header" data-testid="fe-header">
 		<div class="fe-header-left">
+			{#if isTarget}
+				<span class="fe-target-tag" data-testid="fe-target-tag" title="Target window for clipboard and operations">TARGET</span>
+			{/if}
 			{#if headerLeading}
 				<div class="fe-header-leading" data-testid="fe-header-leading">
 					{@render headerLeading()}
@@ -4169,6 +4289,24 @@
 		min-height: 280px;
 		max-height: 70vh;
 		height: auto;
+	}
+	.fe-root.is-target {
+		outline: 1px solid var(--accent, #3b82f6);
+		outline-offset: -1px;
+	}
+	.fe-target-tag {
+		display: inline-flex;
+		align-items: center;
+		padding: 2px 6px;
+		border-radius: 4px;
+		background: var(--accent, #3b82f6);
+		color: #ffffff;
+		font-size: 0.65rem;
+		font-weight: 700;
+		letter-spacing: 0.05em;
+		text-transform: uppercase;
+		flex-shrink: 0;
+		user-select: none;
 	}
 	.fe-header {
 		position: relative;

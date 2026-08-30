@@ -52,6 +52,7 @@ export {
 	DEFAULT_CONFLICT_MSG
 } from './file-chrome/unsaved.ts';
 export { default as AppWindows } from './app-windows/AppWindows.svelte';
+export { default as AppWindowsButton } from './app-windows/AppWindowsButton.svelte';
 export type { AppWindowLeaf, AppWindowRoleDef } from './app-windows/types.ts';
 export {
 	canCloseAppWindow,
@@ -60,6 +61,7 @@ export {
 	createAppWindowRoot,
 	defaultAppWindows,
 	pickNewRole,
+	resolveTargetLeafId,
 	roleCount,
 	setAppWindowRole,
 	splitAppWindow

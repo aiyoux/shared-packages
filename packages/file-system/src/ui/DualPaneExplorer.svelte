@@ -1,35 +1,11 @@
 <script lang="ts">
 	/**
-	 * Dual-pane file explorer with switchable backends (local / memory / b2 /
-	 * rclone / monitor) and copy-across between panes.
+	 * Multi-window file explorer with switchable backends (local / memory / b2 /
+	 * rclone / monitor / disk) and copy-across between windows.
 	 *
-	 * Shared by the hub `/tools/files` page and the Connections `FileTransferPanel`
-	 * so the dual-pane + remote-connection + copy-across wiring is single-sourced.
-	 * Page-owned concerns are passed in as props:
-	 *   - `localDriver`: the durable local-class driver (hub: SharedVFS; CM: the
-	 *     CM library driver). The memory backend is the global in-memory VFS
-	 *     (`getMemoryVfs`), shared app-wide so received files are accessible
-	 *     everywhere.
-	 *   - `onOpen`: optional open-file handler (hub opens skch/ob3d/vrec/kb).
-	 *     DualPane forwards pane `OpenProjectContext` so monitor `.kb` can
-	 *     start collab. B2/rclone stay open-with off.
-	 *   - `onOpenProject`: optional "Open project" handler. DualPane wraps each
-	 *     pane's FileExplorer so the handler receives the folder plus
-	 *     `OpenProjectContext` (`kind` from the pane; monitor also gets
-	 *     profileId / baseUrl / rootPath). Unlike `onOpen`, which is still
-	 *     memory-only on the remote branch, this is forwarded to every backend.
-	 *   - `onInitProject`: optional "Init project" (`git init`) handler. Same
-	 *     wrapping as `onOpenProject`, but only the local (Browser files) pane
-	 *     gets the button — init uses the hub VFS, not memory/monitor/b2/rclone.
-	 *   - `persistenceVfs`: unused for UI (kept so existing callers compile).
-	 *   - `tids`: per-page testid config so each consumer keeps its existing
-	 *     e2e selectors (defaults match the hub `/tools/files` page).
-	 *
-	 * Memory VFS is global (see memoryVfs.ts): it is NOT disposed on pagehide —
-	 * received files must survive SPA navigation between /tools/files and /cm.
-	 * A hard reload still empties it (the JS realm is torn down). The durable
-	 * `__VFS_TEST__` hook stays page-owned; this component only owns the
-	 * `__MEMORY_VFS_FILES__` (memory) and `__MONITOR_WATCH__` hooks.
+	 * Uses the shared AppWindows windowing system to provide dynamic splitting,
+	 * top-left window management, TARGET window tracking for clipboard and system
+	 * operations, and full copy-across matrix execution between any window pair.
 	 */
 	import { onMount, onDestroy } from 'svelte';
 	import { default as FileExplorer } from './FileExplorer.svelte';
@@ -55,13 +31,29 @@
 		type OpenProjectContext
 	} from './explorerDriver.js';
 	import { createMemoryExplorerDriver } from './memoryExplorerDriver.js';
-	// PaneId + DualPaneTids live in a .ts module so the ui barrel can re-export
-	// them without the *.svelte named-export limitation.
 	import { type PaneId, type DualPaneTids } from './dualPaneTypes.js';
 	import { portal } from './portal.js';
 	import FeTipIconBtn from './FeTipIconBtn.svelte';
 	import ConnectionPairInfo from './ConnectionPairInfo.svelte';
-	import { SplitHandle, toast } from '@shared-packages/ui';
+	import {
+		AppWindows,
+		AppWindowsButton,
+		appClipboard,
+		createLeaf,
+		listLeaves,
+		splitLeaf,
+		type LayoutNode,
+		toast
+	} from '@shared-packages/ui';
+	import {
+		buildFileWindowRoles,
+		createFileWindowRoot,
+		defaultFileWindows,
+		emptyFileContext,
+		emptyFileWindowState,
+		resolveTargetFilePaneId,
+		type FileWindowState
+	} from './fileWindows.js';
 	import '@shared-packages/design-system/button.css';
 	import '@shared-packages/design-system/tooltip.css';
 	import '@shared-packages/design-system/segmented.css';
@@ -165,31 +157,19 @@
 
 	type Props = {
 		localDriver: ExplorerDriver;
-		/**
-		 * Open-file handler. The context depends on which pane raised it:
-		 * `paneFileOpen` (local / memory / monitor panes) substitutes the pane's
-		 * `OpenProjectContext`, so handlers can tell a monitor pane from a local
-		 * one; `paneOnOpen` forwards FileExplorer's own `{ read }` unchanged.
-		 * Narrow on `'kind' in ctx` to tell them apart.
-		 */
 		onOpen?: (
 			entry: ExplorerOpenTarget,
 			ctx?: ExplorerOpenContext | OpenProjectContext
 		) => void | Promise<void>;
-		/** Dialog close (X on each FileExplorer toolbar). */
 		onClose?: () => void;
-		/** Forward `onOpen` to B2 / monitor / disk / rclone panes. Hub Files keeps this off. */
 		openRemotes?: boolean;
 		accept?: FileTypeId[];
 		hideIncompatible?: boolean;
 		openLabel?: string;
 		explorerMode?: ExplorerMode;
 		onOpenProject?: (entry: ExplorerOpenTarget, ctx: OpenProjectContext) => void | Promise<void>;
-		/** Preview "Init project" — local pane only. Same context as `onOpenProject`. */
 		onInitProject?: (entry: ExplorerOpenTarget, ctx: OpenProjectContext) => void | Promise<void>;
-		/** Passed through to FileExplorer; see its `projectMarker`. */
 		projectMarker?: import('./detectProject.js').ProjectMarker;
-		/** Current explorer folder changed (enter/up/connection). parentId null is the connection root. */
 		onFolder?: (
 			parentId: ExplorerEntryId | null,
 			ctx: OpenProjectContext
@@ -198,36 +178,22 @@
 		dualPaneKey?: string;
 		dualPaneDefault?: boolean;
 		memoryScope?: string;
-		/** Default backend for each pane on first mount. */
 		leftDefault?: ConnectionKind;
 		rightDefault?: ConnectionKind;
-		/** Hide the dual-pane / feature toggles row (e.g. CM is always dual). */
 		hideToggles?: boolean;
-		/** @deprecated pane Left/Right labels are gone. Kept so existing callers compile. */
 		hidePaneLabels?: boolean;
-		/** Hide the connection/backend switcher in each pane (locks its backend). */
 		hideConnectionSwitcher?: boolean;
-		/** When set, only these panes show the backend switcher. */
 		switcherPanes?: PaneId[];
-		/** @deprecated monitor is always enabled. Kept so existing callers compile. */
 		monitorEnabled?: boolean;
-		/** @deprecated rclone is always enabled. Kept so existing callers compile. */
 		rcloneEnabled?: boolean;
-		/** Show the In memory chip in the switcher. Default true. */
 		switcherShowMemory?: boolean;
-		/**
-		 * Fired when a FileExplorer row drag starts in a pane. CM uses this to
-		 * download-then-send from B2/monitor as well as local/memory VFS.
-		 */
 		onExplorerDrag?: (args: {
 			paneId: PaneId;
 			driver: ExplorerDriver;
 			selectedIds: string[];
 			entries: ExplorerEntry[];
 		}) => void;
-		/** Guest peer-filesystem on the right pane (Connections share tab). */
 		overrideRight?: { driver: ExplorerDriver; label: string } | null;
-		/** In-progress transfer rows for each pane's explorer listing. */
 		pendingLeft?: Array<{
 			id: string;
 			name: string;
@@ -248,14 +214,7 @@
 			status?: string;
 			done?: boolean;
 		}>;
-		/** Notified when dual-pane toggles (so a page can widen its shell). */
 		onDualChange?: (dual: boolean) => void;
-		/**
-		 * When provided, renders a "Send" button next to Copy across on each
-		 * pane, enabled once that pane has a selection — e.g. CM sending
-		 * selected files to the connected peer. Omit to hide the button
-		 * entirely (the default; unrelated to copy-across compatibility).
-		 */
 		onSend?: (args: {
 			paneId: PaneId;
 			driver: ExplorerDriver;
@@ -263,23 +222,9 @@
 			entries: ExplorerEntry[];
 		}) => void | Promise<void>;
 		tids?: Partial<DualPaneTids>;
-		/**
-		 * CSS selector for a single module settings gear. When set, pane
-		 * switchers hide their gears and one settings control is portaled here.
-		 */
 		settingsPortal?: string;
-		/** Hide the connection-settings gear (workspace hosts it on the Apps overlay). */
 		hideSettingsGear?: boolean;
-		/**
-		 * @deprecated Switchers live in each FileExplorer header. Kept so
-		 * existing callers compile; ignored at runtime.
-		 */
 		switcherPortal?: string;
-		/**
-		 * CSS selector for the single/dual layout switcher. Files injects into
-		 * the pane chrome (workspace) or hub topbar (fullscreen /tools/files).
-		 * When empty, the switcher stays in this component's own controls row.
-		 */
 		layoutPortal?: string;
 	};
 
@@ -323,128 +268,52 @@
 	}: Props = $props();
 
 	const hostSettings = $derived(Boolean(settingsPortal) && !hideSettingsGear);
-	/** Combined (i) sits next to Single/Dual. Pane switchers hide their own (i). */
 	const pairInfoInChrome = $derived(!hideToggles);
 	let showRemoteManager = $state(false);
 
-	function onRemoteConnected(kind: RemoteKind, profile: object) {
-		showRemoteManager = false;
-		if (kind === 'b2') void connectB2('left', profile as B2ConnectionProfileV1);
-		else if (kind === 'rclone') void connectRclone('left', profile as RcloneConnectionProfileV1);
-		else void connectMonitor('left', profile as MonitorConnectionProfileV1);
-	}
-
-	function onRemoteDisconnected(kind: RemoteKind) {
-		for (const paneId of ['left', 'right'] as PaneId[]) {
-			const cur = paneState(paneId);
-			if (cur.activeKind !== kind) continue;
-			releaseRemote(cur.activeKind, cur.activeId);
-			setPane(paneId, {
-				remoteDriver: null,
-				activeId: 'local',
-				activeKind: 'local',
-				explorerKey: cur.explorerKey + 1
-			});
-		}
-		void reloadProfiles();
-	}
-
-	// svelte-ignore state_referenced_locally -- test-id overrides are fixed for
-	// the lifetime of the component; they are not meant to react.
 	const tids: DualPaneTids = { ...defaultTids, ...tidsOverride };
 
-	type PaneState = {
-		activeId: 'local' | 'memory' | string;
-		activeKind: ConnectionKind;
-		remoteDriver: ExplorerDriver | null;
-		memoryDriver: ExplorerDriver | null;
-		busy: boolean;
-		error: string;
-		showB2Form: boolean;
-		showRcloneForm: boolean;
-		showMonitorForm: boolean;
-		explorerKey: number;
-		/** Picked folder name when activeKind is disk. */
-		diskName: string;
-		/** Open folder + selection for copy-across */
-		ctx: ExplorerContext;
-	};
+	type PaneState = FileWindowState;
 
-	function emptyCtx(backend: string = 'local'): ExplorerContext {
-		return { parentId: null, selectedIds: [], backend, entries: [] };
+	function emptyCtx(backend = 'local'): ExplorerContext {
+		return emptyFileContext(backend);
 	}
 
 	function emptyPane(kind: ConnectionKind): PaneState {
-		return {
-			activeId: kind === 'memory' ? 'memory' : 'local',
-			activeKind: kind,
-			remoteDriver: null,
-			memoryDriver: null,
-			busy: false,
-			error: '',
-			showB2Form: false,
-			showRcloneForm: false,
-			showMonitorForm: false,
-			explorerKey: 0,
-			diskName: '',
-			ctx: emptyCtx(kind)
-		};
+		return emptyFileWindowState(kind, kind);
 	}
 
-	// svelte-ignore state_referenced_locally -- `default` props, by contract:
-	// they seed the panes once and are not meant to track later changes.
-	let left = $state<PaneState>(emptyPane(leftDefault));
-	// svelte-ignore state_referenced_locally
-	let right = $state<PaneState>(emptyPane(rightDefault));
-	let dualPane = $state(false);
-	/** Left pane share of dual-mode width (same clamp as window-manager splits). */
-	let dualRatio = $state(0.5);
-	const dualRatioKey = $derived(`${dualPaneKey}:ratio`);
-	const MIN_DUAL_RATIO = 0.15;
-	const MAX_DUAL_RATIO = 0.85;
+	let windowRoot = $state<LayoutNode>(createFileWindowRoot(dualPaneDefault));
+	let windows = $state<Record<string, PaneState>>(defaultFileWindows(leftDefault, rightDefault));
+	let focusedId = $state<string>('left');
+	let targetPaneId = $state<string>('left');
+	let windowEditOpen = $state<boolean>(false);
 
-	function clampDualRatio(n: number): number {
-		if (!Number.isFinite(n)) return 0.5;
-		return Math.min(MAX_DUAL_RATIO, Math.max(MIN_DUAL_RATIO, n));
-	}
-
-	function persistDualRatio(n: number) {
-		try {
-			localStorage.setItem(dualRatioKey, String(n));
-		} catch {
-			/* ignore */
-		}
-	}
-
-	function onDualRatioDelta(delta: number) {
-		dualRatio = clampDualRatio(dualRatio + delta);
-		persistDualRatio(dualRatio);
-	}
+	const dualPane = $derived(listLeaves(windowRoot).length > 1);
 
 	function paneOnOpen(kind: string) {
 		if (!onOpen) return undefined;
 		if (kind === 'local' || kind === 'memory' || openRemotes) return onOpen;
 		return undefined;
 	}
+
 	let b2Profiles = $state<B2ConnectionProfileV1[]>([]);
 	let rcloneProfiles = $state<RcloneConnectionProfileV1[]>([]);
 	let monitorProfiles = $state<MonitorConnectionProfileV1[]>([]);
 	const showRclone = true;
 	const showMonitor = true;
-	/** Live watch status per pane (from monitor driver). */
+
 	let monitorWatchStatus = $state<Record<string, string>>({});
 	let watchPollTimer: ReturnType<typeof setInterval> | null = null;
 	let copyBusy = $state(false);
 	let copyAbort: AbortController | null = null;
-	/** Pane a FileExplorer row drag started in (cross-pane copy). */
+
 	let crossDragFrom = $state<PaneId | null>(null);
 	let crossOver = $state<PaneId | null>(null);
 	let sendBusy = $state(false);
-	/** Dest pane of the in-flight copy-across (pending rows land here). */
+
 	let copyDestPane = $state<PaneId | null>(null);
-	/** Dest driver identity so pending rows do not follow a pane that switched to In memory. */
 	let copyDestDriverKey = $state<string | null>(null);
-	/** Dest folder for listing placeholders (`null` = dest root only). */
 	let copyDestParentId = $state<ExplorerEntry['parentId'] | undefined>(undefined);
 	let copyItems = $state<TransferItem[]>([]);
 	let dismissedCopyIds = $state<Set<string>>(new Set());
@@ -458,6 +327,13 @@
 	} | null>(null);
 	let osDropPane = $state<PaneId | null>(null);
 	let dualRootEl = $state<HTMLDivElement | null>(null);
+
+	const availableRoleDefs = $derived(
+		buildFileWindowRoles(b2Profiles, rcloneProfiles, monitorProfiles, {
+			showMemory: switcherShowMemory,
+			hasPeer: Boolean(overrideRight)
+		})
+	);
 
 	function getMemoryDriver(): ExplorerDriver {
 		if (!memoryVfs) memoryVfs = getMemoryVfs();
@@ -482,18 +358,17 @@
 	}
 
 	function paneState(id: PaneId): PaneState {
-		return id === 'left' ? left : right;
+		if (!windows[id]) {
+			windows[id] = emptyPane(leftDefault);
+		}
+		return windows[id]!;
 	}
 
-	/**
-	 * `onSendFile` hands back an open-target, which is thinner than the list row
-	 * — no `parentId`, no `contentType`. Recover the full row from the pane so
-	 * `onSend` consumers get the mime type they read off it.
-	 */
 	function sendTargetEntries(id: PaneId, target: ExplorerOpenTarget): ExplorerEntry[] {
 		const row = paneState(id).ctx.entries.find((e) => e.id === target.id);
 		return [row ?? { ...target, parentId: null }];
 	}
+
 	function paneOpenProjectContext(id: PaneId): OpenProjectContext {
 		if (id === 'right' && overrideRight) return { kind: 'peer' };
 		const p = paneState(id);
@@ -506,12 +381,12 @@
 			rootPath: profile?.rootPath
 		};
 	}
-	/** FileExplorer stays `(entry) => …`; DualPane attaches pane context here. */
+
 	function paneOpenProject(id: PaneId) {
 		if (!onOpenProject) return undefined;
 		return (entry: ExplorerOpenTarget) => onOpenProject(entry, paneOpenProjectContext(id));
 	}
-	/** `git init` is VFS-local; remotes (monitor/b2/rclone/memory) do not get the button. */
+
 	function paneInitProject(id: PaneId) {
 		if (!onInitProject) return undefined;
 		if (paneState(id).activeKind !== 'local') return undefined;
@@ -521,30 +396,37 @@
 	function applyPaneCtx(id: PaneId, ctx: ExplorerContext) {
 		const p = paneState(id);
 		const folderChanged = p.ctx.parentId !== ctx.parentId || p.ctx.backend !== ctx.backend;
-		if (id === 'left') left = { ...left, ctx };
-		else right = { ...right, ctx };
+		setPane(id, { ctx });
 		if (folderChanged) void onFolder?.(ctx.parentId, paneOpenProjectContext(id));
 	}
+
 	function paneFileOpen(id: PaneId) {
 		if (!onOpen) return undefined;
 		const kind = paneState(id).activeKind;
 		if (kind !== 'local' && kind !== 'memory' && kind !== 'monitor') return undefined;
 		return (entry: ExplorerOpenTarget) => onOpen(entry, paneOpenProjectContext(id));
 	}
+
 	function setPane(id: PaneId, patch: Partial<PaneState>) {
-		if (id === 'left') left = { ...left, ...patch };
-		else right = { ...right, ...patch };
+		const cur = paneState(id);
+		windows = {
+			...windows,
+			[id]: { ...cur, ...patch }
+		};
 	}
+
 	function showPaneError(id: PaneId, message: string, extra: Partial<PaneState> = {}) {
 		setPane(id, { error: message, ...extra });
 		if (message) toast.error(message);
 	}
+
 	function activeDriver(p: PaneState, id?: PaneId): ExplorerDriver {
 		if (id === 'right' && overrideRight) return overrideRight.driver;
 		if (p.activeKind === 'memory') return p.memoryDriver ?? getMemoryDriver();
 		if (p.activeKind !== 'local' && p.remoteDriver) return p.remoteDriver;
 		return localDriver;
 	}
+
 	function releaseRemote(kind: ConnectionKind, profileId: string | null | undefined) {
 		if (!profileId || profileId === 'local' || profileId === 'memory' || profileId === 'disk') return;
 		if (kind === 'b2') releaseB2Driver(profileId);
@@ -597,9 +479,8 @@
 		lines: string[];
 	};
 
-	/** Inline status next to the connection dropdown — never a pane-status strip. */
 	function paneConnDot(id: PaneId): ConnDotInfo | null {
-		const p = id === 'left' ? left : right;
+		const p = paneState(id);
 		if (id === 'right' && overrideRight) {
 			return {
 				wrapTestId: 'peer-fs-badge',
@@ -698,7 +579,7 @@
 			id === copyDestPane && copyDestDriverKey != null && destDriverKey(drv) === copyDestDriverKey
 				? destCopyPending
 				: [];
-		const base = id === 'left' ? pendingLeft : pendingRight;
+		const base = id === 'left' ? pendingLeft : id === 'right' ? pendingRight : [];
 		return extra.length ? [...base, ...extra] : base;
 	}
 
@@ -719,13 +600,10 @@
 	onMount(() => {
 		try {
 			const stored = localStorage.getItem(dualPaneKey);
-			dualPane = stored === null ? dualPaneDefault : stored === '1';
-		} catch {
-			dualPane = dualPaneDefault;
-		}
-		try {
-			const storedRatio = localStorage.getItem(dualRatioKey);
-			if (storedRatio != null) dualRatio = clampDualRatio(Number(storedRatio));
+			if (stored !== null) {
+				const isDual = stored === '1';
+				windowRoot = createFileWindowRoot(isDual);
+			}
 		} catch {
 			/* keep default */
 		}
@@ -739,7 +617,7 @@
 				await syncVaultFromIdb();
 				await reloadProfiles();
 				if ((await isVaultEnabled()) && !isVaultUnlocked()) {
-					for (const paneId of ['left', 'right'] as PaneId[]) {
+					for (const paneId of Object.keys(windows)) {
 						const cur = paneState(paneId);
 						if (cur.activeKind !== 'b2' && cur.activeKind !== 'rclone') continue;
 						releaseRemote(cur.activeKind, cur.activeId);
@@ -766,8 +644,6 @@
 		profileTabUnsub = () => {
 			for (const u of unsubs) u();
 		};
-		// Hub files memory singleton hook (separate from durable page-owned __VFS_TEST__).
-		// Memory is global/shared: NOT disposed on pagehide.
 		const mem = getMemoryVfs();
 		memoryVfs = mem;
 		void mem.ready().then(() => installMemoryFilesHook(mem));
@@ -793,8 +669,7 @@
 			clearInterval(watchPollTimer);
 			watchPollTimer = null;
 		}
-		// Release any held remote drivers on teardown (memory VFS is global: NOT disposed).
-		for (const id of ['left', 'right'] as PaneId[]) {
+		for (const id of Object.keys(windows)) {
 			const p = paneState(id);
 			dropDiskDriver(p);
 			if (p.activeId !== 'local' && p.activeId !== 'memory' && p.activeId !== 'disk') {
@@ -804,20 +679,19 @@
 	});
 
 	function setDualPane(on: boolean) {
-		dualPane = on;
 		onDualChange?.(on);
 		try {
 			localStorage.setItem(dualPaneKey, on ? '1' : '0');
 		} catch {
 			/* ignore */
 		}
-		if (!on) {
-			const r = right;
-			dropDiskDriver(r);
-			if (r.activeId !== 'local' && r.activeId !== 'memory' && r.activeId !== 'disk') {
-				releaseRemote(r.activeKind, r.activeId);
+		if (on) {
+			if (!windows['right']) {
+				windows['right'] = emptyPane(rightDefault);
 			}
-			right = emptyPane(rightDefault);
+			windowRoot = createFileWindowRoot(true);
+		} else {
+			windowRoot = createLeaf('left');
 		}
 	}
 
@@ -835,6 +709,7 @@
 			}
 			void setActiveB2ProfileId(profile.id);
 			setPane(id, {
+				role: `b2:${profile.id}`,
 				remoteDriver: driver,
 				memoryDriver: null,
 				activeId: profile.id,
@@ -871,6 +746,7 @@
 			}
 			void setActiveRcloneProfileId(profile.id);
 			setPane(id, {
+				role: `rclone:${profile.id}`,
 				remoteDriver: driver,
 				memoryDriver: null,
 				activeId: profile.id,
@@ -897,14 +773,13 @@
 		if (watchPollTimer) return;
 		watchPollTimer = setInterval(() => {
 			const next: Record<string, string> = {};
-			for (const paneId of ['left', 'right'] as PaneId[]) {
+			for (const paneId of Object.keys(windows)) {
 				const p = paneState(paneId);
 				if (p.activeKind !== 'monitor' || !p.remoteDriver) continue;
 				const d = p.remoteDriver as { getWatchStatus?: () => string };
 				next[paneId] = d.getWatchStatus?.() ?? 'off';
 			}
 			monitorWatchStatus = next;
-			// e2e probe
 			(window as unknown as { __MONITOR_WATCH__?: Record<string, string> }).__MONITOR_WATCH__ =
 				next;
 		}, 400);
@@ -929,6 +804,7 @@
 			}
 			void setActiveMonitorProfileId(profile.id);
 			setPane(id, {
+				role: `monitor:${profile.id}`,
 				remoteDriver: driver,
 				memoryDriver: null,
 				activeId: profile.id,
@@ -969,12 +845,12 @@
 			const handle = await pickDirectory();
 			const driver = createDiskExplorerDriver(handle);
 			await driver.ready();
-			// Only drop the previous remote after the new grant is usable.
 			if (p.activeKind === 'disk') p.remoteDriver?.dispose?.();
 			else if (p.activeId !== 'local' && p.activeId !== 'memory') {
 				releaseRemote(p.activeKind, p.activeId);
 			}
 			setPane(id, {
+				role: 'disk',
 				activeId: 'disk',
 				activeKind: 'disk',
 				remoteDriver: driver,
@@ -1006,6 +882,7 @@
 		const mem = getMemoryDriver();
 		installMemoryFilesHook(memoryVfs ?? getMemoryVfs());
 		setPane(id, {
+			role: 'memory',
 			activeId: 'memory',
 			activeKind: 'memory',
 			remoteDriver: null,
@@ -1020,7 +897,7 @@
 		});
 	}
 
-	async function onSelectConnection(id: PaneId, selection: 'local' | 'memory' | 'disk' | string) {
+	async function onSelectConnection(id: PaneId, selection: string) {
 		const p = paneState(id);
 		if (selection === 'local') {
 			dropDiskDriver(p);
@@ -1028,6 +905,7 @@
 				releaseRemote(p.activeKind, p.activeId);
 			}
 			setPane(id, {
+				role: 'local',
 				activeId: 'local',
 				activeKind: 'local',
 				remoteDriver: null,
@@ -1050,19 +928,27 @@
 			await connectDisk(id, { replace: p.activeKind === 'disk' });
 			return;
 		}
-		if (p.activeId === selection && p.remoteDriver) return;
+		const selId = selection.startsWith('b2:')
+			? selection.slice(3)
+			: selection.startsWith('rclone:')
+				? selection.slice(7)
+				: selection.startsWith('monitor:')
+					? selection.slice(8)
+					: selection;
 
-		const rclone = showRclone ? await getRcloneProfile(selection) : undefined;
+		if (p.activeId === selId && p.remoteDriver) return;
+
+		const rclone = showRclone ? await getRcloneProfile(selId) : undefined;
 		if (rclone) {
 			await connectRclone(id, rclone);
 			return;
 		}
-		const mon = showMonitor ? await getMonitorProfile(selection) : undefined;
+		const mon = showMonitor ? await getMonitorProfile(selId) : undefined;
 		if (mon) {
 			await connectMonitor(id, mon);
 			return;
 		}
-		const b2 = await getB2Profile(selection);
+		const b2 = await getB2Profile(selId);
 		if (b2) {
 			await connectB2(id, b2);
 			return;
@@ -1095,9 +981,6 @@
 				selectedIds,
 				entries: p.ctx.entries
 			});
-			// Register a cross-instance drag session so another
-			// DualPaneExplorer in a different workspace pane (same document)
-			// can accept this as a copy-across drop even in single-pane mode.
 			setCrossWindowDrag({
 				sourceDriver: activeDriver(p, id),
 				sourceEntries: p.ctx.entries,
@@ -1167,7 +1050,6 @@
 			osDropPane = id;
 			return;
 		}
-		// Same-instance cross-pane drag (dual-pane mode).
 		if (crossDragFrom && crossDragFrom !== id) {
 			e.preventDefault();
 			e.stopPropagation();
@@ -1175,8 +1057,6 @@
 			crossOver = id;
 			return;
 		}
-		// Cross-instance drag: another DualPaneExplorer in a different
-		// workspace pane started this drag. Accept even in single-pane mode.
 		if (
 			!crossDragFrom &&
 			dataTransferHasExplorerIds(e.dataTransfer) &&
@@ -1258,8 +1138,6 @@
 	}
 
 	async function onWinPointerUp(e: PointerEvent) {
-		// HTML5 mouse drags also fire pointerup; ignore unless FileExplorer is
-		// driving a touch/pen session (otherwise we steal the native drop).
 		if (!isPointerDragActive()) return;
 		const hit = hitFromPoint(e.clientX, e.clientY);
 		const paneEl = paneElFromHit(hit);
@@ -1318,7 +1196,6 @@
 			await importOsDropToPane(id, pending, destParentId);
 			return;
 		}
-		// Same-instance cross-pane copy (dual-pane mode).
 		if (crossDragFrom && crossDragFrom !== id) {
 			e.preventDefault();
 			e.stopPropagation();
@@ -1332,8 +1209,6 @@
 			await runCopyAcross(from, { selectedIds, destParentId });
 			return;
 		}
-		// Cross-instance copy: drag from another DualPaneExplorer in a
-		// different workspace pane. Works in single-pane mode too.
 		const crossDrag = !crossDragFrom ? getCrossWindowDrag() : null;
 		if (crossDrag && dataTransferHasExplorerIds(e.dataTransfer)) {
 			e.preventDefault();
@@ -1362,15 +1237,17 @@
 		copyOtherLabel: string;
 		copyIdleNote: string | null;
 	} {
-		if (!dualPane) {
+		const leaves = listLeaves(windowRoot);
+		if (leaves.length <= 1) {
 			return {
 				copyOut: null,
 				copyIn: null,
 				copyOtherLabel: '',
-				copyIdleNote: 'Turn on dual pane to copy between locations.'
+				copyIdleNote: 'Open another window to copy between locations.'
 			};
 		}
-		const otherId: PaneId = id === 'left' ? 'right' : 'left';
+		const otherLeaf = leaves.find((l) => l.id !== id) ?? leaves[0]!;
+		const otherId: PaneId = otherLeaf.id;
 		const mine = activeDriver(paneState(id), id);
 		const other = activeDriver(paneState(otherId), otherId);
 		const myLabel = paneConnectionLabel(id);
@@ -1394,14 +1271,14 @@
 		const kind =
 			id === 'right' && overrideRight ? overrideRight.driver.id : p.activeKind;
 		return {
-			side: id === 'left' ? 'Left' : 'Right',
+			side: id === 'left' ? 'Left' : id === 'right' ? 'Right' : id,
 			label: paneConnectionLabel(id),
 			kind,
 			capabilities: drv.capabilities
 		};
 	}
 
-	const pairCopy = $derived.by(() => copyHints('left'));
+	const pairCopy = $derived.by(() => copyHints(targetPaneId));
 
 	function paneConnectionLabel(id: PaneId): string {
 		const p = paneState(id);
@@ -1432,11 +1309,12 @@
 
 	async function runCopyAcross(
 		from: PaneId,
-		opts?: { selectedIds?: string[]; destParentId?: string | null }
+		opts?: { selectedIds?: string[]; destParentId?: string | null; destId?: PaneId }
 	) {
-		if (!dualPane) return;
+		const leaves = listLeaves(windowRoot);
+		if (leaves.length <= 1) return;
 		const src = paneState(from);
-		const destId: PaneId = from === 'left' ? 'right' : 'left';
+		let destId: PaneId = opts?.destId ?? (targetPaneId !== from ? targetPaneId : (leaves.find((l) => l.id !== from)?.id ?? 'left'));
 		const dst = paneState(destId);
 		const sourceDriver = activeDriver(src, from);
 		const destDriver = activeDriver(dst, destId);
@@ -1462,8 +1340,6 @@
 				confirmDualPhase: () => askDualPhase(sourceLabel, destLabel),
 				signal
 			});
-			// Live drivers refresh in place. Remotes without subscribeChanges
-			// remount but keep the dest open folder via initialParentId.
 			if (!destDriver.subscribeChanges) {
 				setPane(destId, {
 					explorerKey: dst.explorerKey + 1
@@ -1483,12 +1359,6 @@
 		}
 	}
 
-	/**
-	 * Copy files from a different `<DualPaneExplorer>` instance (another workspace
-	 * pane). The source driver / entries / selectedIds come from the shared
-	 * cross-window drag session; the destination is a pane in this instance.
-	 * Works in single-pane mode — `dualPane` need not be on.
-	 */
 	async function runCrossInstanceCopy(
 		sourceDriver: ExplorerDriver,
 		sourceEntries: ExplorerEntry[],
@@ -1539,6 +1409,69 @@
 		}
 	}
 
+	async function handleClipboardCopyAcross(
+		payload: {
+			mode: 'copy' | 'cut';
+			sourceDriverId?: string;
+			sourceConnectionId?: string;
+			sourceParentId?: string | null;
+			ids: string[];
+			entries?: ExplorerEntry[];
+		},
+		destPaneId: string,
+		destParentId: string | null
+	) {
+		const dst = paneState(destPaneId);
+		const destDriver = activeDriver(dst, destPaneId);
+
+		let srcDriver: ExplorerDriver | null = null;
+		for (const [id, w] of Object.entries(windows)) {
+			const drv = activeDriver(w, id);
+			if (drv.id === payload.sourceDriverId && (drv.connectionId ?? '') === (payload.sourceConnectionId ?? '')) {
+				srcDriver = drv;
+				break;
+			}
+		}
+		if (!srcDriver) {
+			if (payload.sourceDriverId === 'memory') srcDriver = getMemoryDriver();
+			else srcDriver = localDriver;
+		}
+
+		const entries: ExplorerEntry[] = payload.entries && payload.entries.length
+			? payload.entries
+			: payload.ids.map((id) => ({ id, name: id, kind: 'file' as const, parentId: null }));
+
+		copyBusy = true;
+		markCopyDest(destPaneId, destDriver, destParentId);
+		try {
+			await copyAcross({
+				sourceDriver: srcDriver,
+				destDriver,
+				selectedIds: payload.ids,
+				sourceEntries: entries,
+				destParentId,
+				confirmDualPhase: () => askDualPhase(srcDriver?.id ?? 'source', paneConnectionLabel(destPaneId))
+			});
+			if (payload.mode === 'cut' && srcDriver && srcDriver.delete) {
+				for (const id of payload.ids) {
+					try {
+						await srcDriver.delete(id);
+					} catch {
+						/* ignore */
+					}
+				}
+			}
+			if (!destDriver.subscribeChanges) {
+				setPane(destPaneId, { explorerKey: dst.explorerKey + 1 });
+			}
+			toast.success(`Pasted ${payload.ids.length} item${payload.ids.length === 1 ? '' : 's'}`);
+		} catch (e) {
+			toast.error(formatExplorerError(e));
+		} finally {
+			copyBusy = false;
+		}
+	}
+
 	async function runSend(id: PaneId, opts?: { selectedIds?: string[]; entries?: ExplorerEntry[] }) {
 		if (!onSend) return;
 		const p = paneState(id);
@@ -1553,7 +1486,6 @@
 				selectedIds,
 				entries
 			});
-			// Remount so selection clears and the pane re-lists.
 			setPane(id, { explorerKey: p.explorerKey + 1 });
 		} catch (e) {
 			toast.error(formatExplorerError(e));
@@ -1562,20 +1494,43 @@
 		}
 	}
 
-	/**
-	 * Imperative refresh: remount a pane's `FileExplorer` so it re-lists. Used by
-	 * host pages that mutate a backend VFS outside copy-across (e.g. CM
-	 * "copy to library" writes to the durable library VFS directly).
-	 */
 	export function refreshPane(id: PaneId) {
 		const p = paneState(id);
 		setPane(id, { explorerKey: p.explorerKey + 1 });
 	}
 
+	function inherit(source: PaneState | undefined, role: string): PaneState {
+		const kind = role.startsWith('b2:')
+			? 'b2'
+			: role.startsWith('rclone:')
+				? 'rclone'
+				: role.startsWith('monitor:')
+					? 'monitor'
+					: (role as ConnectionKind);
+		const next = emptyFileWindowState(kind, role);
+		if (role.startsWith('b2:') || role.startsWith('rclone:') || role.startsWith('monitor:')) {
+			next.activeId = role.split(':')[1] || 'local';
+		}
+		return next;
+	}
+
+	function onSelectRole(leafId: string, role: string): boolean | void {
+		void onSelectConnection(leafId, role);
+	}
+
+	function onAfterClose(leafId: string) {
+		const p = paneState(leafId);
+		dropDiskDriver(p);
+		if (p.activeId !== 'local' && p.activeId !== 'memory' && p.activeId !== 'disk') {
+			releaseRemote(p.activeKind, p.activeId);
+		}
+		targetPaneId = resolveTargetFilePaneId(windows, focusedId, targetPaneId);
+	}
+
 </script>
 
 {#snippet paneSwitcher(id: PaneId)}
-	{@const p = id === 'left' ? left : right}
+	{@const p = paneState(id)}
 	{@const drv = activeDriver(p, id)}
 	{@const hints = copyHints(id)}
 	<ConnectionSwitcher
@@ -1601,7 +1556,7 @@
 {/snippet}
 
 {#snippet copyAcrossAction(id: PaneId, variant: 'icon' | 'label')}
-	{@const p = id === 'left' ? left : right}
+	{@const p = paneState(id)}
 	{#if showCopyAcross}
 		{#if variant === 'label'}
 			<button
@@ -1626,17 +1581,18 @@
 {/snippet}
 
 {#snippet explorerPane(id: PaneId)}
-	<!-- Read $state panes directly so UI reacts (avoid stale {@const}). -->
-	{@const p = id === 'left' ? left : right}
+	{@const p = paneState(id)}
 	{@const drv = activeDriver(p, id)}
 	{@const hostTid = tids.explorerHost(id)}
 	{@const subTid = tids.paneSub(id)}
 	<!-- svelte-ignore a11y_no_static_element_interactions -->
 	<div
 		class="files-pane"
+		class:is-target={id === targetPaneId}
 		class:drop-target={crossOver === id || osDropPane === id}
 		data-testid={tids.pane(id)}
 		data-pane={id}
+		data-fe-target={id === targetPaneId ? 'true' : 'false'}
 		ondragstart={(e) => onPaneDragStart(id, e)}
 		ondragover={(e) => onPaneDragOver(id, e)}
 		ondragleave={(e) => onPaneDragLeave(id, e)}
@@ -1644,22 +1600,28 @@
 		ondragend={onPaneDragEnd}
 		onfeexplorerdragbegin={(e) => onPanePointerDragBegin(id, e)}
 		onfeexplorerdragend={onPaneDragEnd}
+		onclick={() => {
+			targetPaneId = id;
+		}}
+		onpointerdown={() => {
+			targetPaneId = id;
+		}}
 	>
 		{#if !hostSettings && (onSend || subTid)}
-		<div class="pane-chrome" data-testid={tids.paneChrome(id)}>
-			{#if onSend}
-			<FeTipIconBtn
-				testid={tids.send(id)}
-				tip={sendBusy ? 'Sending…' : 'Send'}
-				icon="send"
-				disabled={sendBusy || p.ctx.selectedIds.length === 0 || !drv.download}
-				onclick={() => runSend(id)}
-			/>
-		{/if}
-		{#if subTid}
-			<span class="pane-sub" data-testid={subTid.testid}>{subTid.text}</span>
-		{/if}
-	</div>
+			<div class="pane-chrome" data-testid={tids.paneChrome(id)}>
+				{#if onSend}
+					<FeTipIconBtn
+						testid={tids.send(id)}
+						tip={sendBusy ? 'Sending…' : 'Send'}
+						icon="send"
+						disabled={sendBusy || p.ctx.selectedIds.length === 0 || !drv.download}
+						onclick={() => runSend(id)}
+					/>
+				{/if}
+				{#if subTid}
+					<span class="pane-sub" data-testid={subTid.testid}>{subTid.text}</span>
+				{/if}
+			</div>
 		{/if}
 		{#if p.error}
 			<div
@@ -1682,7 +1644,7 @@
 						await connectB2(id, profile);
 					}}
 					onDisconnected={() => {
-						const cur = id === 'left' ? left : right;
+						const cur = paneState(id);
 						if (cur.activeKind === 'b2' && cur.activeId !== 'local') {
 							releaseB2Driver(cur.activeId);
 						}
@@ -1691,7 +1653,7 @@
 							activeId: 'local',
 							activeKind: 'local',
 							showB2Form: false,
-					explorerKey: cur.explorerKey + 1
+							explorerKey: cur.explorerKey + 1
 						});
 						void reloadProfiles();
 					}}
@@ -1707,16 +1669,16 @@
 						await connectRclone(id, profile);
 					}}
 					onDisconnected={() => {
-						const cur = id === 'left' ? left : right;
+						const cur = paneState(id);
 						if (cur.activeKind === 'rclone' && cur.activeId !== 'local') {
 							releaseRcloneDriver(cur.activeId);
 						}
 						setPane(id, {
 							remoteDriver: null,
 							activeId: 'local',
-					activeKind: 'local',
-					showRcloneForm: false,
-					explorerKey: cur.explorerKey + 1
+							activeKind: 'local',
+							showRcloneForm: false,
+							explorerKey: cur.explorerKey + 1
 						});
 						void reloadProfiles();
 					}}
@@ -1732,7 +1694,7 @@
 						await connectMonitor(id, profile);
 					}}
 					onDisconnected={() => {
-						const cur = id === 'left' ? left : right;
+						const cur = paneState(id);
 						if (cur.activeKind === 'monitor' && cur.activeId !== 'local') {
 							releaseMonitorDriver(cur.activeId);
 						}
@@ -1765,6 +1727,9 @@
 						onOpen={paneOnOpen('peer')}
 						onOpenProject={paneOpenProject(id)}
 						pending={panePending(id)}
+						isTarget={id === targetPaneId}
+						onCopyAcrossFromClipboard={(payload, destParent) =>
+							handleClipboardCopyAcross(payload, id, destParent)}
 						onContextChange={(ctx) => applyPaneCtx(id, ctx)}
 					>
 						{#snippet headerLeading()}
@@ -1775,7 +1740,6 @@
 						{/snippet}
 					</FileExplorer>
 				{:else if p.activeKind === 'local'}
-					<!-- Page header owns the persistence chip; keep FE toolbar uncluttered. -->
 					<FileExplorer
 						mode={explorerMode}
 						{accept}
@@ -1800,6 +1764,9 @@
 								: undefined
 						}
 						pending={panePending(id)}
+						isTarget={id === targetPaneId}
+						onCopyAcrossFromClipboard={(payload, destParent) =>
+							handleClipboardCopyAcross(payload, id, destParent)}
 						onContextChange={(ctx) => applyPaneCtx(id, ctx)}
 					>
 						{#snippet headerLeading()}
@@ -1832,6 +1799,9 @@
 								: undefined
 						}
 						pending={panePending(id)}
+						isTarget={id === targetPaneId}
+						onCopyAcrossFromClipboard={(payload, destParent) =>
+							handleClipboardCopyAcross(payload, id, destParent)}
 						onContextChange={(ctx) => applyPaneCtx(id, ctx)}
 					>
 						{#snippet headerLeading()}
@@ -1882,7 +1852,7 @@
 			class="dpe-pane-conn"
 			data-testid="conn-switcher-{id}"
 			data-pane={id}
-			aria-label={id === 'left' ? 'Left pane connection' : 'Right pane connection'}
+			aria-label="{id} pane connection"
 		>
 			{#if showSwitcher}
 				{@render paneSwitcher(id)}
@@ -1901,6 +1871,10 @@
 			class:portaled={Boolean(layoutPortal)}
 			use:portal={layoutPortal || undefined}
 		>
+			<AppWindowsButton
+				bind:editing={windowEditOpen}
+				testid="fe-windows-btn"
+			/>
 			<div
 				class="ds-seg dpe-layout"
 				class:portaled={Boolean(layoutPortal)}
@@ -1936,7 +1910,7 @@
 			{#if pairInfoInChrome}
 				<ConnectionPairInfo
 					left={pairSide('left')}
-					right={dualPane ? pairSide('right') : null}
+					right={dualPane ? pairSide(targetPaneId !== 'left' ? targetPaneId : 'right') : null}
 					copyOut={pairCopy.copyOut}
 					copyIn={pairCopy.copyIn}
 					idleNote={pairCopy.copyIdleNote}
@@ -1976,31 +1950,35 @@
 	/>
 {/if}
 
-<div class="dpe-shell" class:dual={dualPane}>
-
-	<div
-		class="files-body"
-		class:dual={dualPane}
-		bind:this={dualRootEl}
-		data-testid={tids.body}
-		style={dualPane
-			? `grid-template-columns: minmax(0, ${dualRatio}fr) auto minmax(0, ${1 - dualRatio}fr)`
-			: undefined}
-	>
-		<div class="files-pane-slot">
-			{@render explorerPane('left')}
-		</div>
-		{#if dualPane}
-			<SplitHandle
-				axis="x"
-				testid="fe-dual-split"
-				ariaLabel="Resize file panes"
-				onRatioDelta={onDualRatioDelta}
-			/>
-			<div class="files-pane-slot">
-				{@render explorerPane('right')}
-			</div>
-		{/if}
+<div class="dpe-shell" class:dual={dualPane} bind:this={dualRootEl}>
+	<div class="files-body" data-testid={tids.body}>
+		<AppWindows
+			bind:root={windowRoot}
+			bind:windows
+			bind:focusedId
+			bind:editing={windowEditOpen}
+			layoutId="files"
+			testid={tids.body}
+			testidPrefix="files-window"
+			hostClass="files-app-windows"
+			roles={availableRoleDefs}
+			fallbackRole="local"
+			{inherit}
+			{onSelectRole}
+			onFocus={(id) => {
+				targetPaneId = id;
+			}}
+			{onAfterClose}
+			leafClass={(id) => (id === targetPaneId ? 'files-pane-slot is-target' : 'files-pane-slot')}
+			leafProps={(id) => ({
+				'data-fe-target': id === targetPaneId ? 'true' : 'false',
+				'data-pane': id
+			})}
+		>
+			{#snippet pane({ id })}
+				{@render explorerPane(id)}
+			{/snippet}
+		</AppWindows>
 	</div>
 	{#if dualPhasePrompt}
 		<DualPhaseConfirm
@@ -2155,20 +2133,31 @@
 	.files-body {
 		flex: 1;
 		min-height: 0;
+		width: 100%;
+		height: 100%;
 		border: 0;
 		border-radius: 0;
 		overflow: hidden;
 		background: var(--surface-1);
-		display: grid;
-		grid-template-columns: minmax(0, 1fr);
-		grid-template-rows: minmax(0, 1fr);
+		display: flex;
+	}
+	.files-body :global(.files-app-windows) {
+		flex: 1 1 0;
+		width: 100%;
+		height: 100%;
+		min-width: 0;
+		min-height: 0;
 	}
 	.files-pane-slot {
 		min-width: 0;
 		min-height: 0;
+		width: 100%;
 		height: 100%;
 		display: flex;
 		flex-direction: column;
+	}
+	.files-pane-slot.is-target :global(.fe-root) {
+		border-color: var(--accent, #3b82f6);
 	}
 	.files-pane {
 		min-width: 0;
@@ -2207,14 +2196,5 @@
 		max-height: none;
 		border: none;
 		border-radius: 0;
-	}
-	@media (max-width: 800px) {
-		.files-body.dual {
-			grid-template-columns: minmax(0, 1fr) !important;
-			grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
-		}
-		.files-body.dual :global([data-testid='fe-dual-split']) {
-			display: none;
-		}
 	}
 </style>

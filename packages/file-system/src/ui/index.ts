@@ -20,6 +20,18 @@ export { default as DualPhaseConfirm } from './DualPhaseConfirm.svelte';
 export { default as RemoteConnectionsDialog } from './RemoteConnectionsDialog.svelte';
 export type { DualPaneTids, PaneId as DualPanePaneId } from './dualPaneTypes.js';
 export {
+	buildFileWindowRoles,
+	createFileWindowRoot,
+	defaultFileWindows,
+	emptyFileContext,
+	emptyFileWindowState,
+	resolveTargetFilePaneId,
+	DEFAULT_FILE_WINDOW_ID,
+	FILE_WINDOW_LEAF_PREFIX,
+	type FileWindowState,
+	type FileWindowRole
+} from './fileWindows.js';
+export {
 	canServerCopy,
 	classify,
 	isDualPhaseCopy,

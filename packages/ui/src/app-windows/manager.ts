@@ -140,3 +140,22 @@ export function clampUnavailableRoles<S extends AppWindowLeaf<R>, R extends stri
 	}
 	return changed ? next : windows;
 }
+
+/** Resolve the active target window leaf ID. */
+export function resolveTargetLeafId<S extends AppWindowLeaf<R>, R extends string>(
+	windows: Record<string, S>,
+	focusedId: string,
+	previousTarget?: string,
+	targetRole?: R
+): string {
+	if (targetRole) {
+		if (windows[focusedId]?.role === targetRole) return focusedId;
+		if (previousTarget && windows[previousTarget]?.role === targetRole) return previousTarget;
+		const match = Object.keys(windows).find((id) => windows[id]?.role === targetRole);
+		if (match) return match;
+	} else {
+		if (windows[focusedId]) return focusedId;
+		if (previousTarget && windows[previousTarget]) return previousTarget;
+	}
+	return Object.keys(windows)[0] ?? focusedId;
+}
