@@ -93,17 +93,30 @@ function statsFor(node: VfsNode | { id: string; kind: 'folder'; size?: number; u
 type Found = { node: VfsNode; parentId: string };
 type Missing = { node: null; parentId: string; name: string };
 
+/** The chroot folder, or ENOENT if it is gone. */
+async function requireRoot(vfs: VfsService, rootId: string): Promise<VfsNode> {
+	const root = await vfs.get(rootId);
+	if (!root || root.kind !== 'folder' || root.deletedAt != null) {
+		throw nodeErr('ENOENT', `git root missing: ${rootId}`);
+	}
+	return root;
+}
+
 async function walk(
 	vfs: VfsService,
 	rootId: string,
 	p: string
 ): Promise<Found | Missing | { node: VfsNode; parentId: null; root: true }> {
-	const root = await vfs.get(rootId);
-	if (!root || root.kind !== 'folder' || root.deletedAt != null) {
-		throw nodeErr('ENOENT', `git root missing: ${rootId}`);
-	}
+	// The root node itself is only NEEDED to answer a request for '/'. Fetching
+	// it up front cost one get per path resolution — measured at 17.5 per file
+	// committed, and every `get` the shim made was this same node. Deep paths
+	// get their error from the first segment lookup instead, and the explicit
+	// "root is gone" check is paid only when that lookup misses (rare, and
+	// already the slow path).
 	const segs = normalizeSegments(p);
-	if (segs.length === 0) return { node: root, parentId: null, root: true };
+	if (segs.length === 0) {
+		return { node: await requireRoot(vfs, rootId), parentId: null, root: true };
+	}
 
 	let parentId = rootId;
 	for (let i = 0; i < segs.length; i++) {
@@ -116,6 +129,10 @@ async function walk(
 		const hit = await vfs.childByName(parentId, name);
 		const last = i === segs.length - 1;
 		if (!hit) {
+			// A miss directly under the root is ambiguous: the child may be
+			// absent, or the whole repo folder may have been deleted. Only here
+			// is it worth a round trip to tell those apart.
+			if (i === 0) await requireRoot(vfs, rootId);
 			if (last) return { node: null, parentId, name };
 			throw nodeErr('ENOENT', p);
 		}
