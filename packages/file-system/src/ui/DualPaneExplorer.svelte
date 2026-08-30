@@ -187,6 +187,8 @@
 		onOpenProject?: (entry: ExplorerOpenTarget, ctx: OpenProjectContext) => void | Promise<void>;
 		/** Preview "Init project" — local pane only. Same context as `onOpenProject`. */
 		onInitProject?: (entry: ExplorerOpenTarget, ctx: OpenProjectContext) => void | Promise<void>;
+		/** Passed through to FileExplorer; see its `projectMarker`. */
+		projectMarker?: import('./detectProject.js').ProjectMarker;
 		/** Current explorer folder changed (enter/up/connection). parentId null is the connection root. */
 		onFolder?: (
 			parentId: ExplorerEntryId | null,
@@ -292,6 +294,7 @@
 		explorerMode = 'manage',
 		onOpenProject,
 		onInitProject,
+		projectMarker = 'any',
 		onFolder,
 		persistenceVfs,
 		dualPaneKey = 'fe:dualPane',
@@ -1786,6 +1789,7 @@
 						onOpen={paneFileOpen(id)}
 						onOpenProject={paneOpenProject(id)}
 						onInitProject={paneInitProject(id)}
+						{projectMarker}
 						onSendFile={
 							onSend
 								? (entry) =>

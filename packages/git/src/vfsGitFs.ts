@@ -72,7 +72,22 @@ function statsFor(node: VfsNode | { id: string; kind: 'folder'; size?: number; u
 		type: isDir ? 'dir' : 'file',
 		mode,
 		size: node.size ?? 0,
-		ino: inoOf(node.id),
+		// `ino` carries the node's write counter, not just its identity.
+		//
+		// isomorphic-git skips re-hashing a file when its cached stats look
+		// unchanged, and compareStats() checks mtimeSECONDS (never the
+		// nanoseconds field) plus size, mode, uid, gid and ino. So an edit that
+		// keeps the same length and lands in the same second is invisible:
+		// writing 'one' then 'two' reproduces it every time, and status reports
+		// the file as clean. Real git handles this "racily clean" case by
+		// re-hashing; isomorphic-git does not.
+		//
+		// There are no inodes here — inoOf is already a hash of the id — so
+		// folding in `generation` (which the VFS bumps on every write) costs
+		// nothing and makes a changed file always look stale. It can only ever
+		// cause an unnecessary re-hash, never a missed change, and an unchanged
+		// file keeps its value so the cache still works.
+		ino: inoOf(`${node.id}:${(node as VfsNode & { generation?: number }).generation ?? 0}`),
 		dev: 1,
 		uid: 0,
 		gid: 0,

@@ -1,9 +1,10 @@
 import './ensureBuffer.js';
 import git from 'isomorphic-git';
 import { deleteRepo, getRepo, listRepos, putRepo } from './repos.js';
-import { localReadBlobAt, localSnapshot, type GitFs } from './local.js';
+import { localCommit, localReadBlobAt, localSnapshot, type GitFs } from './local.js';
 import { monitorSnapshot, monitorSubscribe } from './monitor.js';
-import type { GitHost, GitRepoRef, GitSnapshot } from './types.js';
+import type { GitHost, GitRepoRef, GitSnapshot, CommitInput
+} from './types.js';
 
 export type CreateGitHostOptions = {
 	/** Node `fs` for tests. Browser local uses `fsForLocal` instead. */
@@ -81,6 +82,14 @@ export function createGitHost(opts: CreateGitHostOptions = {}): GitHost {
 		return monitorSubscribe(repo, onChange, { fetchImpl });
 	}
 
+	async function commitOn(repo: GitRepoRef, opts: CommitInput): Promise<string> {
+		if (repo.backend !== 'local') {
+			throw new Error('Committing is only supported for Browser files repos.');
+		}
+		const bound = bindLocal(repo.path);
+		return localCommit(bound.fs, bound.dir, opts);
+	}
+
 	return {
 		listRepos,
 		async addRepo(input) {
@@ -93,6 +102,10 @@ export function createGitHost(opts: CreateGitHostOptions = {}): GitHost {
 		async snapshot(repoId) {
 			return snapshotRepo(await requireRepo(repoId));
 		},
+		async commit(repoId, opts) {
+			return commitOn(await requireRepo(repoId), opts);
+		},
+		commitRepo: commitOn,
 		subscribe(repoId, onChange) {
 			let unsub = () => {};
 			let cancelled = false;

@@ -2,6 +2,18 @@ import type { ExplorerDriver, ExplorerEntry, ExplorerEntryId } from './explorerD
 
 export const PROJECT_PACK_META = 'projectPack';
 
+/**
+ * What counts as "already a project".
+ *
+ * `any` (default) — a `.git` child, a `.project` child, or project metadata.
+ * `git` — a `.git` child ONLY.
+ *
+ * The Git app needs `git`: a folder can be a project (packed, or carrying
+ * `.project`) and still have no repo, and under `any` its Init button would be
+ * hidden with no way to create one.
+ */
+export type ProjectMarker = 'any' | 'git';
+
 function isProjectMeta(meta?: Record<string, unknown>): boolean {
 	if (!meta) return false;
 	return Boolean(
@@ -15,15 +27,18 @@ function isProjectMeta(meta?: Record<string, unknown>): boolean {
 async function isProjectFolder(
 	driver: ExplorerDriver,
 	folderId: ExplorerEntryId | null,
-	chainEntries?: ExplorerEntry[]
+	chainEntries?: ExplorerEntry[],
+	marker: ProjectMarker = 'any'
 ): Promise<boolean> {
-	if (folderId != null && chainEntries) {
+	if (marker === 'any' && folderId != null && chainEntries) {
 		const matched = chainEntries.find((e) => e.id === folderId);
 		if (matched && isProjectMeta(matched.meta)) return true;
 	}
 	try {
 		const { entries } = await driver.list({ parentId: folderId });
-		return entries.some((e) => e.name === '.git' || e.name === '.project');
+		return entries.some(
+			(e) => e.name === '.git' || (marker === 'any' && e.name === '.project')
+		);
 	} catch {
 		return false;
 	}
@@ -84,12 +99,13 @@ export type ProjectRootHit = {
  */
 export async function findProjectRoot(
 	driver: ExplorerDriver,
-	folderId: ExplorerEntryId | null
+	folderId: ExplorerEntryId | null,
+	marker: ProjectMarker = 'any'
 ): Promise<ProjectRootHit> {
 	const { candidates, chain } = await projectCandidates(driver, folderId);
 	for (const id of candidates) {
 		try {
-			if (await isProjectFolder(driver, id, chain)) return { found: true, id };
+			if (await isProjectFolder(driver, id, chain, marker)) return { found: true, id };
 		} catch {
 			continue;
 		}
@@ -103,8 +119,9 @@ export async function findProjectRoot(
  */
 export async function detectProject(
 	driver: ExplorerDriver,
-	folderId: ExplorerEntryId | null
+	folderId: ExplorerEntryId | null,
+	marker: ProjectMarker = 'any'
 ): Promise<boolean> {
-	return (await findProjectRoot(driver, folderId)).found;
+	return (await findProjectRoot(driver, folderId, marker)).found;
 }
 

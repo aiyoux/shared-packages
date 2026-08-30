@@ -27,7 +27,8 @@ describe('GitHistory', () => {
 			props: {
 				snapshot: {
 					status: { branch: 'main', dirty: true },
-					log: [{ sha: 'abcdef123456', subject: 'hello' }]
+					log: [{ sha: 'abcdef123456', subject: 'hello' }],
+					changes: []
 				}
 			}
 		});

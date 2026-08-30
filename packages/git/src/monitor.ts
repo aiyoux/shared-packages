@@ -11,6 +11,10 @@ import type { GitRepoRef, GitSnapshot } from './types.js';
 export function mapMonitorGitSnapshot(snap: MonitorGitSnapshot): GitSnapshot {
 	return {
 		status: { branch: snap.branch, dirty: snap.dirty },
+		// The monitor transport reports branch and dirty only; it has no
+		// per-path change feed. Empty means "cannot enumerate", which the UI
+		// surfaces as read-only rather than as "no changes".
+		changes: [],
 		log: snap.log.map((c) => {
 			const row: GitSnapshot['log'][number] = { sha: c.sha, subject: c.subject };
 			if (c.author) row.author = c.author;

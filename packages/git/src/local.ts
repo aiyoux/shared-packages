@@ -1,5 +1,5 @@
 import git from 'isomorphic-git';
-import type { GitSnapshot } from './types.js';
+import type { CommitInput, GitChange, GitSnapshot } from './types.js';
 
 /** isomorphic-git's node/browser fs shape (`fs.promises` or LightningFS). */
 export type GitFs = Parameters<typeof git.init>[0]['fs'];
@@ -17,11 +17,22 @@ export async function localSnapshot(fs: GitFs, dir: string): Promise<GitSnapshot
 	}
 
 	let dirty = false;
+	let changes: GitChange[] = [];
 	try {
+		// statusMatrix is ~95% of a snapshot's cost (939ms of 965ms on a
+		// 500-file repo), so the change list is derived from the SAME call that
+		// already computed `dirty` rather than walking the tree twice.
 		const matrix = await git.statusMatrix({ fs, dir });
 		dirty = matrix.some(([, head, workdir, stage]) => head !== workdir || workdir !== stage);
+		changes = matrix.flatMap(([path, head, workdir, stage]) => {
+			if (head === workdir && workdir === stage) return [];
+			const status: GitChange['status'] =
+				head === 0 ? 'added' : workdir === 0 ? 'deleted' : 'modified';
+			return [{ path: String(path), status }];
+		});
 	} catch {
 		dirty = false;
+		changes = [];
 	}
 
 	let log: GitSnapshot['log'] = [];
@@ -45,7 +56,7 @@ export async function localSnapshot(fs: GitFs, dir: string): Promise<GitSnapshot
 		log = [];
 	}
 
-	return { status: { branch, dirty }, log };
+	return { status: { branch, dirty }, log, changes };
 }
 
 /** HEAD resolves to a commit — i.e. the repo has at least one commit. */
@@ -77,4 +88,32 @@ export async function localReadBlobAt(
 	}
 	const { blob } = await git.readBlob({ fs, dir, oid, filepath });
 	return blob;
+}
+
+/**
+ * Stage `paths` and commit them.
+ *
+ * A path that no longer exists is removed from the index rather than added —
+ * `git.add` on a missing file throws, so a delete would otherwise make the
+ * whole commit fail with a confusing ENOENT.
+ */
+export async function localCommit(fs: GitFs, dir: string, opts: CommitInput): Promise<string> {
+	const message = opts.message.trim();
+	if (!message) throw new Error('A commit needs a message.');
+	if (!opts.paths.length) throw new Error('Select at least one file to commit.');
+
+	for (const filepath of opts.paths) {
+		let exists = true;
+		try {
+			await (fs as unknown as { promises: { lstat(p: string): Promise<unknown> } }).promises.lstat(
+				`/${filepath}`
+			);
+		} catch {
+			exists = false;
+		}
+		if (exists) await git.add({ fs, dir, filepath });
+		else await git.remove({ fs, dir, filepath });
+	}
+
+	return git.commit({ fs, dir, message, author: opts.author });
 }

@@ -130,6 +130,9 @@
 		onOpenProject?: (entry: ExplorerOpenTarget) => void | Promise<void>;
 		/** Preview "Init project" for folders that are not already a git working tree. */
 		onInitProject?: (entry: ExplorerOpenTarget) => void | Promise<void>;
+		/** What counts as 'already a project'. The Git app passes 'git' so a
+		 * packed/.project folder without a repo still offers Init. */
+		projectMarker?: import('./detectProject.js').ProjectMarker;
 		/** Preview "Send this file" — Connections dual-pane send path. */
 		onSendFile?: (entry: ExplorerOpenTarget) => void | Promise<void>;
 		sendLabel?: string;
@@ -189,6 +192,7 @@
 		showPersistence = true,
 		onOpen,
 		onOpenProject,
+		projectMarker = 'any',
 		onInitProject,
 		onSendFile,
 		sendLabel = 'Send this file',
@@ -560,7 +564,7 @@
 		const curParentId = parentId;
 		const d = driver;
 		const gen = ++currentDetectGen;
-		void detectProject(d, curParentId).then(
+		void detectProject(d, curParentId, projectMarker).then(
 			(ok) => {
 				if (gen !== currentDetectGen) return;
 				isInsideProject = ok;
@@ -587,7 +591,7 @@
 		previewDetectId = folderId;
 		const gen = ++previewDetectGen;
 		previewIsProject = null;
-		void detectProject(d, folderId).then(
+		void detectProject(d, folderId, projectMarker).then(
 			(ok) => {
 				if (gen !== previewDetectGen) return;
 				previewIsProject = ok;
@@ -2188,7 +2192,7 @@
 		if (!n || n.kind !== 'folder' || !onOpenProject) return;
 		previewBusy = true;
 		try {
-			const ok = await detectProject(driver, n.id);
+			const ok = await detectProject(driver, n.id, projectMarker);
 			previewIsProject = ok;
 			if (!ok) {
 				reportMessage('Not a git project');
@@ -2208,7 +2212,7 @@
 		if (!n || n.kind !== 'folder' || !onInitProject) return;
 		previewBusy = true;
 		try {
-			const already = await detectProject(driver, n.id);
+			const already = await detectProject(driver, n.id, projectMarker);
 			if (already) {
 				previewIsProject = true;
 				if (onOpenProject) {

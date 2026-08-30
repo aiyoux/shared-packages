@@ -7,7 +7,26 @@ export type GitCommit = {
 
 export type GitStatus = { branch: string | null; dirty: boolean };
 
-export type GitSnapshot = { status: GitStatus; log: GitCommit[] };
+/**
+ * One changed path in the working tree, relative to HEAD.
+ *
+ * Deliberately NOT a model of git's index. The UI stages exactly what you tick
+ * and commits it in one step, so a separate "staged" state would be a second
+ * source of truth users could get stuck in without any way to inspect it.
+ */
+export type GitChange = {
+	path: string;
+	status: 'added' | 'modified' | 'deleted';
+};
+
+export type GitAuthor = { name: string; email: string };
+
+export type GitSnapshot = {
+	status: GitStatus;
+	log: GitCommit[];
+	/** Empty for backends that cannot enumerate changes (monitor). */
+	changes: GitChange[];
+};
 
 export type GitRepoRef = {
 	id: string;
@@ -37,4 +56,19 @@ export interface GitHost {
 	initLocal(repoPath: string): Promise<void>;
 	/** Committed blob at `rev` (ref, abbreviated oid, or SHA), not live worktree bytes. */
 	readBlobAt(repo: GitRepoRef, rev: string, filepath: string): Promise<Uint8Array>;
+	/**
+	 * Stage `paths` and commit them. Returns the new commit oid.
+	 *
+	 * Local backend only — monitor repos are read-only here, and this rejects
+	 * rather than silently doing nothing.
+	 */
+	commit(repoId: string, opts: CommitInput): Promise<string>;
+	commitRepo(repo: GitRepoRef, opts: CommitInput): Promise<string>;
 }
+
+export type CommitInput = {
+	message: string;
+	/** Paths to stage, relative to the working tree root. Must be non-empty. */
+	paths: string[];
+	author: GitAuthor;
+};
