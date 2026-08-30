@@ -209,6 +209,7 @@
 				data-aw-focused={focusedId === leaf.id ? 'true' : 'false'}
 				{...leafProps?.(leaf.id, roleOf(leaf.id)) ?? {}}
 				onclick={() => focusLeaf(leaf.id)}
+				onpointerdown={() => focusLeaf(leaf.id)}
 				use:home.homeLeaf={leaf.id}
 			>
 				<div class="aw-body" id={appWindowBodyId(layoutId, leaf.id)}>

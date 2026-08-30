@@ -201,3 +201,13 @@ export {
 	type Toast,
 	type ToastKind
 } from './toast-state.svelte.js';
+
+// Unified app clipboard
+export {
+	appClipboard,
+	ClipboardStore,
+	CLIPBOARD_SYNC_STORAGE_KEY,
+	type ClipboardItem,
+	ClipboardPopup
+} from './clipboard/index.js';
+

@@ -3,6 +3,9 @@
 	import type { SplitDirection } from './types.js';
 	import { paneChromeSlotId } from './chrome.js';
 	import { homeLeaf } from './leafHome.js';
+	import Popover from '../Popover.svelte';
+	import ClipboardPopup from '../clipboard/ClipboardPopup.svelte';
+	import { appClipboard } from '../clipboard/clipboardStore.svelte.js';
 
 	let {
 		id,
@@ -25,6 +28,8 @@
 		onClose: (leafId: string) => void;
 		onApps?: (leafId: string) => void;
 	} = $props();
+
+	let clipboardOpen = $state(false);
 </script>
 
 <!-- Focus-on-click only; every pane is also reachable by the layout's own
@@ -65,6 +70,31 @@
 						<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/></svg>
 					</button>
 				{/if}
+				<Popover bind:open={clipboardOpen} placement="bottom-end" offset={4}>
+					{#snippet trigger({ ref })}
+						<button
+							use:ref
+							type="button"
+							data-testid="pl-clipboard"
+							title="View clipboard"
+							aria-label="View clipboard"
+							data-tooltip="Clipboard"
+							data-tooltip-pos="bottom-left"
+							onclick={(e) => {
+								e.stopPropagation();
+								clipboardOpen = !clipboardOpen;
+								if (clipboardOpen && appClipboard.syncWithSystem) {
+									void appClipboard.readFromSystem();
+								}
+							}}
+						>
+							<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/></svg>
+						</button>
+					{/snippet}
+					{#snippet content()}
+						<ClipboardPopup onClose={() => (clipboardOpen = false)} />
+					{/snippet}
+				</Popover>
 				<button
 					type="button"
 					data-testid="pl-split-row"

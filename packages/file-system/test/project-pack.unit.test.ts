@@ -214,6 +214,36 @@ describe('filesystem integrity check', () => {
 		await vfs.db.delete();
 	});
 
+	it('does not call a trashed file\'s pack an orphan', async () => {
+		// A delete is not corruption. Trashed files keep their blobRefs so they
+		// can be restored, so their pack is still owned — and gc() agrees, which
+		// is why "delete the folder" could never clear the report it caused.
+		const { vfs, root, nodes } = await projectWithPack('fstrash');
+		assert.equal((await checkFilesystem(vfs)).ok, true);
+
+		await vfs.trash(root.id);
+		const trashed = await checkFilesystem(vfs);
+		assert.equal(
+			trashed.issues.filter((i) => i.kind === 'orphan-pack').length,
+			0,
+			'the pack is still held by the trashed files'
+		);
+
+		await vfs.restore(root.id);
+		assert.equal((await checkFilesystem(vfs)).ok, true, 'and the bytes were really still there');
+		assert.equal((await vfs.readBytes(nodes[0]!.id)).byteLength, 4096);
+
+		// A pack no ref names at all is still garbage, and still reported.
+		await vfs.opfs.writeFinal('packs/stray.bin', enc.encode('nobody owns me'));
+		const withStray = await checkFilesystem(vfs);
+		assert.equal(withStray.issues.filter((i) => i.kind === 'orphan-pack').length, 1);
+
+		// Exactly the set gc() reclaims — check and sweep must not disagree.
+		await vfs.gc();
+		assert.equal((await checkFilesystem(vfs)).ok, true);
+		await vfs.db.delete();
+	});
+
 	it('reports a file whose storage vanished', async () => {
 		resetSharedVfsForTests();
 		const vfs = createVfs({

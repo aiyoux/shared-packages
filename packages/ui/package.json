@@ -16,6 +16,12 @@
 			"svelte": "./src/date/index.ts",
 			"default": "./src/date/index.ts"
 		},
+		"./clipboard": {
+			"types": "./src/clipboard/index.ts",
+			"svelte": "./src/clipboard/index.ts",
+			"default": "./src/clipboard/index.ts"
+		},
+		"./clipboard/ClipboardPopup.svelte": "./src/clipboard/ClipboardPopup.svelte",
 		"./ShellFrame.svelte": "./src/ShellFrame.svelte",
 		"./FileDropZone.svelte": "./src/FileDropZone.svelte",
 		"./ObjectTransformFrame.svelte": "./src/ObjectTransformFrame.svelte",

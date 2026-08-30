@@ -386,6 +386,12 @@ export async function backupProject(
  * Verifies the same structural invariants as `checkProjectPacks` but over
  * every live file, plus the two things only a global pass can see: refs whose
  * storage has vanished, and pack files nothing points at any more.
+ *
+ * "Nothing points at" means no blobRef anywhere, which is a wider net than
+ * the live files this walks: a trashed file still holds its ref, and its pack
+ * is still doing its job. Reporting those as orphans told users their storage
+ * was corrupt after an ordinary delete, and no amount of deleting could clear
+ * it — the deleting was the cause.
  */
 export async function checkFilesystem(vfs: VfsService): Promise<PackIntegrityReport> {
 	const issues: PackIntegrityIssue[] = [];
@@ -396,7 +402,20 @@ export async function checkFilesystem(vfs: VfsService): Promise<PackIntegrityRep
 
 	const packPaths = new Set<string>();
 	const sizes = new Map<string, number>();
-	const referenced = new Set<string>();
+
+	// A path is spoken for if ANY blobRef names it — not just a ref reached
+	// from a live file. Trashed files keep their refs (that is what makes a
+	// restore possible), so their packs are still owned and must never be
+	// reported as garbage. This is deliberately the same rule `gc()` sweeps
+	// by: the check and the sweep disagreeing is what made emptying the
+	// trash look like the only way to silence the report.
+	const namedPaths = new Set<string>();
+	for (const ref of refs) {
+		namedPaths.add(ref.opfsPath);
+		// Promote may have moved bytes to blobs/<id>.bin while the row still
+		// names tmp/… — treat both as named, as gc() does.
+		if (ref.pendingPromote) namedPaths.add(`blobs/${ref.id}.bin`);
+	}
 
 	const sizeOf = async (path: string): Promise<number> => {
 		if (sizes.has(path)) return sizes.get(path)!;
@@ -417,7 +436,6 @@ export async function checkFilesystem(vfs: VfsService): Promise<PackIntegrityRep
 			issues.push({ kind: 'missing-ref', detail: `${node.name} has no blobRef`, nodeId: node.id });
 			continue;
 		}
-		referenced.add(ref.opfsPath);
 		const size = await sizeOf(ref.opfsPath);
 		if (size < 0) {
 			issues.push({
@@ -441,10 +459,11 @@ export async function checkFilesystem(vfs: VfsService): Promise<PackIntegrityRep
 		}
 	}
 
-	// Pack files nothing references: wasted space that gc() would reclaim.
+	// Pack files NO blobRef names: a crashed pack write, and the only pack
+	// state that is actually garbage. gc() reclaims exactly these.
 	try {
 		for (const path of await vfs.opfs.listOrphans('packs')) {
-			if (!referenced.has(path)) {
+			if (!namedPaths.has(path)) {
 				issues.push({
 					kind: 'orphan-pack',
 					detail: `${path} is not referenced by any file`,
