@@ -59,15 +59,26 @@ function dirEntries(
 }
 
 async function toUint8Array(data: BufferSource | Blob | Uint8Array): Promise<Uint8Array> {
-	if (data instanceof Blob) {
-		const ab = await data.arrayBuffer();
-		return new Uint8Array(ab);
-	}
+	if (data instanceof Uint8Array) return data;
 	if (data instanceof ArrayBuffer) return new Uint8Array(data);
 	if (ArrayBuffer.isView(data)) {
 		return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
 	}
-	return new Uint8Array(data as ArrayBuffer);
+	const blobish = data as {
+		arrayBuffer?: () => Promise<ArrayBuffer>;
+		bytes?: () => Promise<Uint8Array>;
+	};
+	if (typeof blobish.arrayBuffer === 'function') {
+		return new Uint8Array(await blobish.arrayBuffer());
+	}
+	if (typeof blobish.bytes === 'function') {
+		return await blobish.bytes();
+	}
+	if (typeof Response !== 'undefined') {
+		const ab = await new Response(data as Blob).arrayBuffer();
+		return new Uint8Array(ab);
+	}
+	throw new VfsError('OPFS_IO', 'Cannot coerce value to bytes');
 }
 
 /** In-memory OPFS stand-in for unit tests and non-browser. */
@@ -291,8 +302,29 @@ export function createOpfsBlobStore(rootDirName = 'shared-vfs'): OpfsBlobStore {
 			return { byteLength };
 		},
 		async writeFinal(opfsPath, data) {
-			const bytes = await toUint8Array(data);
 			const handle = await getFile(opfsPath, true);
+			const anyHandle = handle as FileSystemFileHandle & {
+				createWritable?: () => Promise<FileSystemWritableFileStream>;
+			};
+			// Packs are assembled as a multi-part Blob on purpose: createWritable
+			// can take the Blob without flattening it next to the still-held
+			// member arrays. Sync-handle stores still have to copy.
+			if (data instanceof Blob && typeof anyHandle.createWritable === 'function') {
+				const writable = await anyHandle.createWritable();
+				try {
+					await writable.write(data);
+					await writable.close();
+				} catch (e) {
+					try {
+						await writable.abort();
+					} catch {
+						/* already faulted */
+					}
+					throw asWriteError(e, 'write');
+				}
+				return { byteLength: data.size };
+			}
+			const bytes = await toUint8Array(data);
 			await writeFileHandle(handle, bytes);
 			return { byteLength: bytes.byteLength };
 		},
@@ -326,8 +358,16 @@ export function createOpfsBlobStore(rootDirName = 'shared-vfs'): OpfsBlobStore {
 				const file = await handle.getFile();
 				// File.slice is lazy: this reads nothing until the caller consumes
 				// it, so pulling one member out of a large pack costs a slice, not
-				// a full read.
-				return file.slice(offset, offset + length, contentType);
+				// a full read. Past-EOF slices are SHORTER than `length` — the
+				// caller must treat that as a short pack, not as zeroes.
+				const slice = file.slice(offset, offset + length, contentType);
+				if (slice.size !== length) {
+					throw new VfsError(
+						'OPFS_IO',
+						`Short pack read from ${opfsPath}: got ${slice.size} of ${length} bytes at ${offset}`
+					);
+				}
+				return slice;
 			} catch (e) {
 				if (e instanceof VfsError) throw e;
 				throw new VfsError('OPFS_IO', `Failed to read ${opfsPath}`, { cause: String(e) });

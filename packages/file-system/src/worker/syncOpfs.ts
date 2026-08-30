@@ -222,8 +222,23 @@ export function createSyncOpfsStore(rootDirName = 'shared-vfs'): OpfsBlobStore {
 		},
 		async readRange(opfsPath, offset, length, contentType) {
 			const bytes = await withHandle(opfsPath, false, (h) => {
+				const size = h.getSize();
+				if (offset < 0 || length < 0 || offset + length > size) {
+					throw new VfsError(
+						'OPFS_IO',
+						`Short pack read from ${opfsPath}: ${offset}+${length} past ${size}`
+					);
+				}
 				const buf = new Uint8Array(length);
-				h.read(buf, { at: offset });
+				const got = h.read(buf, { at: offset });
+				// Same rule as write() and full-file read(): a short transfer
+				// zero-fills the tail, and for a pack that tail is a neighbour.
+				if (got !== length) {
+					throw new VfsError(
+						'OPFS_IO',
+						`Short pack read from ${opfsPath}: got ${got} of ${length} bytes at ${offset}`
+					);
+				}
 				return buf;
 			});
 			return new Blob([bytes as BlobPart], {

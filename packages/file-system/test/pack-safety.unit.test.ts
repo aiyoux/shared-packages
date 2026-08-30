@@ -1,0 +1,224 @@
+import { describe, it } from 'node:test';
+import assert from 'node:assert/strict';
+import {
+	createVfs,
+	createMemoryOpfs,
+	resetSharedVfsForTests,
+	crc32,
+	packProject
+} from '../src/index.ts';
+import type { OpfsBlobStore } from '../src/opfs.ts';
+
+const enc = new TextEncoder();
+
+function rangeCapableStore(): OpfsBlobStore {
+	const base = createMemoryOpfs();
+	return {
+		...base,
+		writeFinal: (path, data) => base.writeFinal(path, data),
+		async readRange(path, offset, length, contentType) {
+			const all = await base.read(path);
+			if (offset < 0 || length < 0 || offset + length > all.byteLength) {
+				throw new Error(
+					`Short pack read from ${path}: ${offset}+${length} past ${all.byteLength}`
+				);
+			}
+			const view = all.subarray(offset, offset + length);
+			return new Blob([view as BlobPart], {
+				type: contentType ?? 'application/octet-stream'
+			});
+		}
+	};
+}
+
+async function mk(tag: string) {
+	resetSharedVfsForTests();
+	const vfs = createVfs({
+		dbName: `pack-safety-${tag}-${Date.now()}-${Math.random()}`,
+		opfs: rangeCapableStore(),
+		requestPersist: false,
+		graceMs: 1
+	});
+	await vfs.ready();
+	return vfs;
+}
+
+describe('pack safety', () => {
+	it('packed members round-trip with a checksum', async () => {
+		const vfs = await mk('crc');
+		const folder = await vfs.mkdir(null, 'p');
+		const nodes = await vfs.writeFiles(
+			[
+				{ parentId: folder.id, name: 'a.txt', body: enc.encode('alpha') },
+				{ parentId: folder.id, name: 'b.txt', body: enc.encode('bravo') }
+			],
+			{ pack: true }
+		);
+		const ref = await vfs.db.blobRefs.get(nodes[0]!.blobId!);
+		assert.equal(ref!.crc32, crc32(enc.encode('alpha')));
+		assert.equal(new TextDecoder().decode(await vfs.readBytes(nodes[0]!.id)), 'alpha');
+		assert.equal(new TextDecoder().decode(await vfs.readBytes(nodes[1]!.id)), 'bravo');
+		await vfs.db.delete();
+	});
+
+	it('a truncated pack fails loud instead of returning a neighbour', async () => {
+		const vfs = await mk('short');
+		const folder = await vfs.mkdir(null, 'p');
+		const nodes = await vfs.writeFiles(
+			Array.from({ length: 8 }, (_, i) => ({
+				parentId: folder.id,
+				name: `m-${i}.bin`,
+				body: new Uint8Array(64).fill(i)
+			})),
+			{ pack: true }
+		);
+		const ref = await vfs.db.blobRefs.get(nodes[0]!.blobId!);
+		const bytes = await vfs.opfs.read(ref!.opfsPath);
+		await vfs.opfs.writeFinal(ref!.opfsPath, bytes.subarray(0, 20));
+		await assert.rejects(() => vfs.readBytes(nodes[7]!.id), /Short pack|Checksum|past/);
+		await vfs.db.delete();
+	});
+
+	it('failed packed write unlinks the pack file', async () => {
+		resetSharedVfsForTests();
+		const base = rangeCapableStore();
+		let blows = 0;
+		const opfs: OpfsBlobStore = {
+			...base,
+			async writeFinal(path, data) {
+				if (path.startsWith('packs/') && blows++ === 0) {
+					await base.writeFinal(path, data);
+					throw new Error('quota');
+				}
+				return base.writeFinal(path, data);
+			}
+		};
+		const vfs = createVfs({
+			dbName: `pack-cleanup-${Date.now()}`,
+			opfs,
+			requestPersist: false
+		});
+		await vfs.ready();
+		const folder = await vfs.mkdir(null, 'p');
+		await assert.rejects(
+			() =>
+				vfs.writeFiles(
+					[
+						{ parentId: folder.id, name: 'a.bin', body: new Uint8Array(32).fill(1) },
+						{ parentId: folder.id, name: 'b.bin', body: new Uint8Array(32).fill(2) }
+					],
+					{ pack: true }
+				),
+			/quota/
+		);
+		const packs = await vfs.opfs.listOrphans('packs');
+		assert.deepEqual(packs, [], 'failed pack was unlinked');
+		await vfs.db.delete();
+	});
+
+	it('emptyTrash does not delete a file restored before the delete txn', async () => {
+		const vfs = await mk('trash-restore');
+		const folder = await vfs.mkdir(null, 'p');
+		const nodes = await vfs.writeFiles(
+			Array.from({ length: 6 }, (_, i) => ({
+				parentId: folder.id,
+				name: `m-${i}.bin`,
+				body: new Uint8Array(32).fill(i)
+			})),
+			{ pack: true }
+		);
+		await vfs.trash(nodes[0]!.id);
+		await vfs.restore(nodes[0]!.id);
+		const result = await vfs.emptyTrash();
+		assert.equal(result.deleted, 0);
+		assert.equal((await vfs.readBytes(nodes[0]!.id))[0], 0);
+		await vfs.db.delete();
+	});
+
+	it('unpack skip does not unlink a dest another tab already swapped onto', async () => {
+		const vfs = await mk('unpack-skip');
+		const folder = await vfs.mkdir(null, 'p');
+		const nodes = await vfs.writeFiles(
+			[
+				{ parentId: folder.id, name: 'a.bin', body: new Uint8Array(48).fill(9) },
+				{ parentId: folder.id, name: 'b.bin', body: new Uint8Array(48).fill(8) }
+			],
+			{ pack: true }
+		);
+		const first = await vfs.unpackNodes([nodes[0]!.id, nodes[1]!.id]);
+		assert.equal(first.movedFiles, 2);
+		const dest = `blobs/${(await vfs.db.blobRefs.get(nodes[0]!.blobId!))!.id}.bin`;
+		assert.equal(await vfs.opfs.exists(dest), true);
+		const again = await vfs.unpackNodes([nodes[0]!.id, nodes[1]!.id]);
+		assert.equal(again.movedFiles, 0);
+		assert.equal(await vfs.opfs.exists(dest), true);
+		assert.equal((await vfs.readBytes(nodes[0]!.id))[0], 9);
+		await vfs.db.delete();
+	});
+
+	it('gc leaves a dest pack that only a packwrite lease names', async () => {
+		const vfs = await mk('gc-dest');
+		const folder = await vfs.mkdir(null, 'p');
+		await vfs.writeFiles(
+			[
+				{ parentId: folder.id, name: 'a.bin', body: new Uint8Array(32).fill(1) },
+				{ parentId: folder.id, name: 'b.bin', body: new Uint8Array(32).fill(2) }
+			],
+			{ pack: true }
+		);
+		const dest = `packs/pack_${crypto.randomUUID()}.bin`;
+		await vfs.opfs.writeFinal(dest, new Uint8Array(64));
+		await vfs.db.leases.put({
+			key: `packwrite:${dest}`,
+			owner: 'test',
+			expiresAt: Date.now() + 60_000
+		});
+		await vfs.gc();
+		assert.equal(await vfs.opfs.exists(dest), true, 'lease held the dest');
+		await vfs.db.leases.delete(`packwrite:${dest}`);
+		await vfs.gc();
+		assert.equal(await vfs.opfs.exists(dest), false, 'expired dest is swept');
+		await vfs.db.delete();
+	});
+
+	it('packProject does not absorb .git objects', async () => {
+		const vfs = await mk('git-skip');
+		const folder = await vfs.mkdir(null, 'repo');
+		const git = await vfs.mkdir(folder.id, '.git');
+		const objects = await vfs.mkdir(git.id, 'objects');
+		await vfs.writeFile({
+			parentId: objects.id,
+			name: 'pack-me.bin',
+			body: new Uint8Array(40).fill(7)
+		});
+		await vfs.writeFiles(
+			[
+				{ parentId: folder.id, name: 'a.txt', body: enc.encode('one-file') },
+				{ parentId: folder.id, name: 'b.txt', body: enc.encode('two-file') }
+			],
+			{ pack: true }
+		);
+		await packProject(vfs, folder.id);
+		const obj = (await vfs.list({ parentId: objects.id }))[0]!;
+		const ref = await vfs.db.blobRefs.get(obj.blobId!);
+		assert.equal(ref!.packOffset, undefined, '.git members stay standalone');
+		await vfs.db.delete();
+	});
+
+	it('pending nodes past grace are swept as crash debris', async () => {
+		const vfs = await mk('pending-debris');
+		const folder = await vfs.mkdir(null, 'p');
+		const nodes = await vfs.writeFiles(
+			[
+				{ parentId: folder.id, name: 'a.bin', body: new Uint8Array(16).fill(1) },
+				{ parentId: folder.id, name: 'b.bin', body: new Uint8Array(16).fill(2) }
+			],
+			{ pack: true }
+		);
+		const ref = await vfs.db.blobRefs.get(nodes[0]!.blobId!);
+		await vfs.db.blobRefs.put({ ...ref!, pending: true, createdAt: Date.now() - 10_000 });
+		await vfs.gc();
+		assert.equal(await vfs.get(nodes[0]!.id), undefined);
+		await vfs.db.delete();
+	});
+});

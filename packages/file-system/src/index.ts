@@ -29,3 +29,4 @@ export {
 } from './readProgress.js';
 export * from './migrate/runAll.js';
 export { serializeBody, parseJsonBytes } from './serialize.js';
+export { crc32 } from './crc32.js';

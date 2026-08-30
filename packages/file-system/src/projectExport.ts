@@ -22,7 +22,7 @@
  */
 import { expandBytes, packFiles, type ArchiveEntry } from '@shared-packages/compress';
 import type { VfsService } from './vfs.js';
-import type { BlobRef, PackOpProgress, VfsNode } from './types.js';
+import { VfsError, type BlobRef, type PackOpProgress, type VfsNode } from './types.js';
 import { descendantFiles } from './projectPack.js';
 import {
 	PROJECT_META_FILE,
@@ -482,7 +482,12 @@ async function importBundle(
 
 	for (const [entryName, members] of packMembers) {
 		const bytes = byName.get(entryName);
-		if (!bytes) continue;
+		if (!bytes) {
+			throw new VfsError(
+				'OPFS_IO',
+				`Bundle is missing pack ${entryName}; refusing to import a tree with no bytes`
+			);
+		}
 		await vfs.migratePutPack(
 			`packs/pack_${crypto.randomUUID()}.bin`,
 			new Blob([bytes as BlobPart]),

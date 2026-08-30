@@ -82,6 +82,11 @@ export interface BlobRef {
 	 * Length is `byteLength` — deliberately not duplicated here.
 	 */
 	packOffset?: number;
+	/**
+	 * IEEE CRC-32 of the member bytes. Optional so existing rows keep working;
+	 * when present, a packed read that doesn't match is a neighbour-byte fail.
+	 */
+	crc32?: number;
 }
 
 export interface AppDraft {
@@ -229,7 +234,8 @@ export type VfsErrorCode =
 	| 'OPFS_IO'
 	| 'QUOTA_EXCEEDED'
 	| 'API_MISUSE'
-	| 'MIGRATION_IN_PROGRESS';
+	| 'MIGRATION_IN_PROGRESS'
+	| 'WRITE_IN_FLIGHT';
 
 export class VfsError extends Error {
 	readonly code: VfsErrorCode;

@@ -37,7 +37,9 @@ async function isProjectFolder(
 	try {
 		const { entries } = await driver.list({ parentId: folderId });
 		return entries.some(
-			(e) => e.name === '.git' || (marker === 'any' && e.name === '.project')
+			(e) =>
+				e.name === '.git' ||
+				(marker === 'any' && (e.name === '.project' || e.name === '.project.json'))
 		);
 	} catch {
 		return false;
