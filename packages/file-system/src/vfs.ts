@@ -1420,22 +1420,23 @@ export class VfsService {
 						`Pack write short: expected ${packBytes} bytes, wrote ${written.byteLength}`
 					);
 				}
-				const onDisk = await this.opfs.readBlob(packPath);
-				if (onDisk.size !== packBytes) {
+				const onDisk = await this.opfs.read(packPath);
+				if (onDisk.byteLength !== packBytes) {
 					throw new VfsError(
 						'OPFS_IO',
-						`Pack write short: expected ${packBytes} bytes, disk has ${onDisk.size}`
+						`Pack write short: expected ${packBytes} bytes, disk has ${onDisk.byteLength}`
 					);
 				}
 				for (const m of packMembers) {
 					if (!packedIndexes.has(m.index)) continue;
-					const expected = crc32(prepared[m.index]!.bytes);
-					await this.checksumSlice(
-						packPath,
-						m.offset,
-						prepared[m.index]!.bytes.byteLength,
-						expected
-					);
+					const len = prepared[m.index]!.bytes.byteLength;
+					const got = crc32(onDisk.subarray(m.offset, m.offset + len));
+					if (got !== crc32(prepared[m.index]!.bytes)) {
+						throw new VfsError(
+							'OPFS_IO',
+							`Checksum mismatch at ${packPath}:${m.offset}`
+						);
+					}
 				}
 			}
 			// Anything not packed (large members, or a chunk too small to be
@@ -1787,8 +1788,20 @@ export class VfsService {
 		length: number,
 		expected?: number
 	): Promise<number> {
-		const all = await this.opfs.read(opfsPath);
-		const bytes = all.subarray(offset, offset + length);
+		let bytes: Uint8Array;
+		if (this.opfs.readRange) {
+			const slice = await this.opfs.readRange(opfsPath, offset, length);
+			if (slice.size !== length) {
+				throw new VfsError(
+					'OPFS_IO',
+					`Short pack read from ${opfsPath}: got ${slice.size} of ${length} at ${offset}`
+				);
+			}
+			bytes = await blobToBytes(slice);
+		} else {
+			const all = await this.opfs.read(opfsPath);
+			bytes = all.subarray(offset, offset + length);
+		}
 		if (bytes.byteLength !== length) {
 			throw new VfsError(
 				'OPFS_IO',
@@ -2619,8 +2632,13 @@ export class VfsService {
 		}
 
 		for (const ref of ordered) {
-			if (ref.crc32 != null) {
-				await this.checksumSlice(packPath, ref.packOffset ?? 0, ref.byteLength, ref.crc32);
+			if (ref.crc32 == null) continue;
+			const from = ref.packOffset ?? 0;
+			if (crc32(sourceBytes.subarray(from, from + ref.byteLength)) !== ref.crc32) {
+				throw new VfsError(
+					'OPFS_IO',
+					`Checksum mismatch at ${packPath}:${from}`
+				);
 			}
 		}
 
@@ -2641,20 +2659,26 @@ export class VfsService {
 			}
 
 			report('verifying', 'Deleting — verifying blob integrity…');
-			const onDisk = await this.opfs.readBlob(newPath);
-			if (onDisk.size !== cursor) {
+			const onDisk = await this.opfs.read(newPath);
+			if (onDisk.byteLength !== cursor) {
 				try {
 					await this.opfs.remove(newPath);
 				} catch {
 					/* gc sweeps packs/ */
 				}
 				throw new Error(
-					`Pack compaction verification failed: expected ${cursor} bytes, wrote ${onDisk.size}`
+					`Pack compaction verification failed: expected ${cursor} bytes, wrote ${onDisk.byteLength}`
 				);
 			}
 			for (const item of layout) {
 				const src = ordered.find((r) => r.id === item.id);
-				await this.checksumSlice(newPath, item.offset, item.length, src?.crc32);
+				if (src?.crc32 == null) continue;
+				if (crc32(onDisk.subarray(item.offset, item.offset + item.length)) !== src.crc32) {
+					throw new VfsError(
+						'OPFS_IO',
+						`Checksum mismatch at ${newPath}:${item.offset}`
+					);
+				}
 			}
 			await this.runCompactCrash('after-write', newPath, packPath);
 
@@ -3068,9 +3092,6 @@ export class VfsService {
 			const layout: Array<{ id: string; from: string; offset: number; length: number }> = [];
 			let cursor = 0;
 			for (const ref of group) {
-				if (ref.packOffset != null && ref.crc32 != null) {
-					await this.checksumSlice(ref.opfsPath, ref.packOffset, ref.byteLength, ref.crc32);
-				}
 				const raw = await this.opfs.read(ref.opfsPath);
 				const bytes =
 					ref.packOffset != null
@@ -3080,6 +3101,12 @@ export class VfsService {
 					throw new VfsError(
 						'OPFS_IO',
 						`Short pack read from ${ref.opfsPath}: got ${bytes.byteLength} of ${ref.byteLength}`
+					);
+				}
+				if (ref.crc32 != null && crc32(bytes) !== ref.crc32) {
+					throw new VfsError(
+						'OPFS_IO',
+						`Checksum mismatch at ${ref.opfsPath}:${ref.packOffset ?? 0}`
 					);
 				}
 				parts.push(bytes);
@@ -3105,8 +3132,8 @@ export class VfsService {
 			}
 
 			report('verifying', 'Verifying pack integrity…');
-			const onDisk = await this.opfs.readBlob(newPath);
-			if (onDisk.size !== cursor) {
+			const onDisk = await this.opfs.read(newPath);
+			if (onDisk.byteLength !== cursor) {
 				try {
 					await this.opfs.remove(newPath);
 				} catch {
@@ -3114,12 +3141,18 @@ export class VfsService {
 				}
 				throw new VfsError(
 					'OPFS_IO',
-					`Repack verification failed: expected ${cursor} bytes, wrote ${onDisk.size}`
+					`Repack verification failed: expected ${cursor} bytes, wrote ${onDisk.byteLength}`
 				);
 			}
 			for (const item of layout) {
 				const src = group.find((r) => r.id === item.id);
-				await this.checksumSlice(newPath, item.offset, item.length, src?.crc32);
+				if (src?.crc32 == null) continue;
+				if (crc32(onDisk.subarray(item.offset, item.offset + item.length)) !== src.crc32) {
+					throw new VfsError(
+						'OPFS_IO',
+						`Checksum mismatch at ${newPath}:${item.offset}`
+					);
+				}
 			}
 			if (!(await this.leaseStillHeld(packWriteKey(newPath)))) {
 				try {
