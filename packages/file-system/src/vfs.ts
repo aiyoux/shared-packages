@@ -2047,8 +2047,15 @@ export class VfsService {
 		await this.ready();
 		const refs = await this.db.blobRefs.toArray();
 		const liveByPack = new Map<string, number>();
+		// A pending ref's byteLength is 0 because the bytes have not landed yet,
+		// NOT because the member is dead. A pack still being written therefore
+		// looks 100% dead to the arithmetic below — and a sweep that believed
+		// that would "reclaim" the whole live pack out from under the write.
+		// That is the one state compaction must never touch.
+		const inFlight = new Set<string>();
 		for (const r of refs) {
 			if (r.packOffset == null) continue;
+			if (r.pending) inFlight.add(r.opfsPath);
 			liveByPack.set(r.opfsPath, (liveByPack.get(r.opfsPath) ?? 0) + r.byteLength);
 		}
 		if (!liveByPack.size) return { compactedPacks: 0, reclaimedBytes: 0 };
@@ -2056,6 +2063,7 @@ export class VfsService {
 		const candidates: string[] = [];
 		for (const [path, live] of liveByPack) {
 			if (opts?.signal?.aborted) break;
+			if (inFlight.has(path)) continue;
 			let onDisk = 0;
 			try {
 				onDisk = (await this.opfs.readBlob(path)).size;
@@ -2118,6 +2126,11 @@ export class VfsService {
 			survivors: BlobRef[],
 			report: (stage: PackOpStage, label: string, bytes?: number) => void
 		): Promise<number> {
+		// Both callers screen for this; the check is repeated at the mutation
+		// point because getting it wrong destroys live bytes rather than merely
+		// wasting a rewrite.
+		if (survivors.some((r) => r.pending)) return 0;
+
 		const source = await this.opfs.readBlob(packPath);
 		const before = source.size;
 
@@ -2157,7 +2170,10 @@ export class VfsService {
 				// node to its own blob, in which case its ref must not be dragged
 				// into the new pack.
 				const current = await this.db.blobRefs.get(item.id);
-				if (!current || current.opfsPath !== packPath) continue;
+				// `pending` means a concurrent write is mid-flight on this ref and
+				// its byteLength is not yet true, so the slice this layout took is
+				// not its content. Skipping keeps the old pack authoritative for it.
+				if (!current || current.opfsPath !== packPath || current.pending) continue;
 				await this.db.blobRefs.put({
 					...current,
 					opfsPath: newPath,
@@ -2224,6 +2240,9 @@ export class VfsService {
 			// unlinked the file and there is nothing to compact.
 			const survivors = await this.db.blobRefs.where('opfsPath').equals(packPath).toArray();
 			if (!survivors.length) continue;
+			// Mid-write: byteLength is 0 until the confirm txn, so the dead-space
+			// sum below would read the whole pack as garbage. Leave it alone.
+			if (survivors.some((r) => r.pending)) continue;
 
 			let onDisk = 0;
 			try {
