@@ -61,6 +61,17 @@ const COMPACT_WHEN_DEAD_FRACTION = 0.5;
 /** Never rewrite a pack to reclaim a trivial amount. */
 const COMPACT_MIN_RECLAIM_BYTES = 1 << 20;
 
+/**
+ * Lease key for the exclusive right to rewrite one pack.
+ *
+ * Namespaced away from `write:<blobId>` because gc reads that prefix off to
+ * decide which blobs are still being written; a pack path must never be
+ * mistaken for a blob id.
+ */
+function packClaimKey(packPath: string): string {
+	return `compact:${packPath}`;
+}
+
 /** Byte sizes for pack progress lines. */
 function formatPackBytes(n: number): string {
 	if (n < 1024) return `${n} B`;
@@ -2208,6 +2219,36 @@ export class VfsService {
 	}
 
 	/**
+	 * Take the exclusive right to rewrite one pack, or report that someone else
+	 * holds it.
+	 *
+	 * Same mechanism `maybeGc` uses for `gc:run` — the lease table, claimed
+	 * inside a transaction so two tabs cannot both read "free" and both write.
+	 * Returns false when the pack is already being rewritten, which is not an
+	 * error: the work is being done, just not here.
+	 */
+	private async claimPack(packPath: string, owner: string): Promise<boolean> {
+		const key = packClaimKey(packPath);
+		try {
+			return await this.db.transaction('rw', this.db.leases, async () => {
+				const now = Date.now();
+				const held = await this.db.leases.get(key);
+				if (held && held.expiresAt > now) return false;
+				await this.db.leases.put({
+					key,
+					owner,
+					expiresAt: now + Math.max(this.graceMs, 60_000)
+				});
+				return true;
+			});
+		} catch {
+			// A claim we cannot take is a compaction we do not run. Deferring
+			// costs disk space; guessing costs live bytes.
+			return false;
+		}
+	}
+
+	/**
 	 * Reclaim dead space in the packs named by `packPaths`.
 	 *
 	 * Pack mutation lives here because this class also creates packs: one owner
@@ -2220,6 +2261,17 @@ export class VfsService {
 	 * returned — below that it costs more than it gives back, and the absolute
 	 * floor stops a favourable ratio on a tiny pack paying several OPFS round
 	 * trips for nothing.
+	 *
+	 * Each pack is claimed for the duration, per pack rather than globally.
+	 * `sweepOnLoad` runs this on every load, so two tabs opening together would
+	 * otherwise rewrite the same pack at once: the loser's swap finds every ref
+	 * already repointed at the winner's new pack, skips them all, and leaves the
+	 * pack it just wrote referenced by nothing — an orphan, with every live file
+	 * healthy, which is exactly the state that is hardest to explain from the
+	 * outside. Claiming per pack rather than taking one global lock keeps a
+	 * delete's compaction from being skipped just because an idle sweep is busy
+	 * elsewhere. The claim expires on its own if the tab holding it dies, and
+	 * `gc()` sweeps expired leases.
 	 */
 	async compactPacks(
 		packPaths: Iterable<string>,
@@ -2234,37 +2286,50 @@ export class VfsService {
 
 		let compactedPacks = 0;
 		let reclaimedBytes = 0;
+		const owner = generateId('compact');
 		for (const packPath of new Set(packPaths)) {
 			if (opts?.signal?.aborted) break;
-			// Survivors decide the outcome: none means releaseBlobRefs already
-			// unlinked the file and there is nothing to compact.
-			const survivors = await this.db.blobRefs.where('opfsPath').equals(packPath).toArray();
-			if (!survivors.length) continue;
-			// Mid-write: byteLength is 0 until the confirm txn, so the dead-space
-			// sum below would read the whole pack as garbage. Leave it alone.
-			if (survivors.some((r) => r.pending)) continue;
-
-			let onDisk = 0;
+			// Claimed BEFORE the survivors are read: a claim taken afterwards
+			// would still let two tabs plan the same rewrite from the same
+			// snapshot, which is the whole race.
+			if (!(await this.claimPack(packPath, owner))) continue;
 			try {
-				onDisk = (await this.opfs.readBlob(packPath)).size;
-			} catch {
-				continue;
-			}
-			const live = survivors.reduce((n, r) => n + r.byteLength, 0);
-			const dead = onDisk - live;
-			if (
-				dead < COMPACT_MIN_RECLAIM_BYTES ||
-				dead / Math.max(onDisk, 1) < COMPACT_WHEN_DEAD_FRACTION
-			) {
-				continue;
-			}
+				// Survivors decide the outcome: none means releaseBlobRefs already
+				// unlinked the file and there is nothing to compact.
+				const survivors = await this.db.blobRefs.where('opfsPath').equals(packPath).toArray();
+				if (!survivors.length) continue;
+				// Mid-write: byteLength is 0 until the confirm txn, so the dead-space
+				// sum below would read the whole pack as garbage. Leave it alone.
+				if (survivors.some((r) => r.pending)) continue;
 
-			report('compacting', `Compacting ${formatPackBytes(dead)}…`);
-			const freed = await this.compactOnePack(packPath, survivors, report);
-			reclaimedBytes += freed;
-			// compactOnePack returns 0 when it had to keep the old file because a
-			// live ref still names it; counting that would overstate the result.
-			if (freed > 0) compactedPacks += 1;
+				let onDisk = 0;
+				try {
+					onDisk = (await this.opfs.readBlob(packPath)).size;
+				} catch {
+					continue;
+				}
+				const live = survivors.reduce((n, r) => n + r.byteLength, 0);
+				const dead = onDisk - live;
+				if (
+					dead < COMPACT_MIN_RECLAIM_BYTES ||
+					dead / Math.max(onDisk, 1) < COMPACT_WHEN_DEAD_FRACTION
+				) {
+					continue;
+				}
+
+				report('compacting', `Compacting ${formatPackBytes(dead)}…`);
+				const freed = await this.compactOnePack(packPath, survivors, report);
+				reclaimedBytes += freed;
+				// compactOnePack returns 0 when it had to keep the old file because a
+				// live ref still names it; counting that would overstate the result.
+				if (freed > 0) compactedPacks += 1;
+			} finally {
+				try {
+					await this.db.leases.delete(packClaimKey(packPath));
+				} catch {
+					/* the claim expires on its own */
+				}
+			}
 		}
 		return { compactedPacks, reclaimedBytes };
 	}

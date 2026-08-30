@@ -228,3 +228,81 @@ describe('a trashed member is owned, not dead', () => {
 		await vfs.db.delete();
 	});
 });
+
+describe('two tabs sweeping at once', () => {
+	/**
+	 * sweepOnLoad runs compactStalePacks on EVERY page load, and it took no
+	 * lock while gc() next door claimed `gc:run`. Two tabs opening together
+	 * therefore rewrote the same pack at once: the loser's swap found every ref
+	 * already repointed at the winner's new pack, skipped them all, and left
+	 * the pack it had just written referenced by nothing.
+	 *
+	 * That is an orphan with every live file healthy — the state that is
+	 * hardest to explain from the outside, because deleting files cannot clear
+	 * it and nothing is actually damaged.
+	 *
+	 * The interleaving is forced rather than raced: the second tab is let in at
+	 * the moment the first has read its survivors and written its new pack but
+	 * has not yet swapped the refs. Left to chance the two runs serialise and
+	 * the window never opens, which is exactly why this needs a lock rather
+	 * than luck.
+	 */
+	it('the second tab stands down instead of orphaning its rewrite', async () => {
+		resetSharedVfsForTests();
+		let interleave: (() => Promise<void>) | null = null;
+		const opfs = rangeStore(async (path) => {
+			if (!path.startsWith('packs/') || !interleave) return;
+			const run = interleave;
+			interleave = null; // once, and never re-entrant
+			await run();
+		});
+		const dbName = `twotabs-${Date.now()}-${Math.random()}`;
+		const tabA = createVfs({ dbName, opfs, requestPersist: false });
+		const tabB = createVfs({ dbName, opfs, requestPersist: false });
+		await tabA.ready();
+		await tabB.ready();
+
+		const root = await tabA.mkdir(null, 'proj');
+		const N = 400;
+		const nodes = await tabA.writeFiles(
+			Array.from({ length: N }, (_, i) => ({
+				parentId: root.id,
+				name: `f-${i}.bin`,
+				body: new Uint8Array(SIZE).fill(i & 0xff)
+			})),
+			{ pack: true }
+		);
+		const packPath = (await tabA.db.blobRefs.get(nodes[0]!.blobId!))!.opfsPath;
+
+		// Half the members dropped WITHOUT compacting, so the pack is genuinely
+		// stale: past both the 1MB floor and the 50% dead fraction.
+		for (const n of nodes.slice(0, N / 2)) await tabA.trash(n.id);
+		await tabA.emptyTrash({ skipCompaction: true });
+		const survivors = nodes.slice(N / 2);
+
+		let b: { compactedPacks: number; reclaimedBytes: number } | null = null;
+		interleave = async () => {
+			b = await tabB.compactPacks([packPath]);
+		};
+		const a = await tabA.compactPacks([packPath]);
+
+		assert.notEqual(b, null, 'the second tab really did run inside the window');
+		assert.equal(
+			a.compactedPacks + b!.compactedPacks,
+			1,
+			'one tab compacts, the other finds the pack claimed and stands down'
+		);
+
+		const named = new Set((await tabA.db.blobRefs.toArray()).map((r) => r.opfsPath));
+		assert.deepEqual(
+			(await tabA.opfs.listOrphans('packs')).filter((path) => !named.has(path)),
+			[],
+			'and no pack is left that nothing points at'
+		);
+		assert.equal((await checkFilesystem(tabA)).ok, true);
+		for (const n of survivors) {
+			assert.equal((await tabA.readBytes(n.id)).byteLength, SIZE, `${n.name} survived`);
+		}
+		await tabA.db.delete();
+	});
+});
