@@ -4,7 +4,7 @@
  * limitation that plain `tsc` hits.
  */
 
-export type PaneId = 'left' | 'right';
+export type PaneId = 'left' | 'right' | string;
 
 export type DualPaneTids = {
 	/** Outer body grid. */

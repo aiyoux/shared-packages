@@ -6,13 +6,22 @@ import {
 	leafCount
 } from '@shared-packages/ui';
 import type { LayoutNode, SplitDirection, AppWindowRoleDef } from '@shared-packages/ui';
-import type { ExplorerContext, ExplorerDriver } from './explorerDriver.js';
-import type { ConnectionKind, B2ConnectionProfileV1 } from '../b2/types.js';
+import type { ExplorerDriver } from './explorerDriver.js';
+import type { ExplorerContext } from './componentTypes.js';
+import type { ConnectionKind } from './connectionInfo.js';
+import type { B2ConnectionProfileV1 } from '../b2/types.js';
 import type { RcloneConnectionProfileV1 } from '../rclone/types.js';
 import type { MonitorConnectionProfileV1 } from '../monitor/types.js';
 
 export const FILE_WINDOW_LEAF_PREFIX = 'fe-win';
 export const DEFAULT_FILE_WINDOW_ID = 'fe-left';
+
+export type FileWindowRole =
+	| 'local'
+	| 'memory'
+	| 'disk'
+	| 'peer'
+	| string;
 
 export interface FileWindowState {
 	role: string;

@@ -271,6 +271,28 @@
 	const pairInfoInChrome = $derived(!hideToggles);
 	let showRemoteManager = $state(false);
 
+	function onRemoteConnected(kind: RemoteKind, profile: object) {
+		showRemoteManager = false;
+		if (kind === 'b2') void connectB2(targetPaneId, profile as B2ConnectionProfileV1);
+		else if (kind === 'rclone') void connectRclone(targetPaneId, profile as RcloneConnectionProfileV1);
+		else void connectMonitor(targetPaneId, profile as MonitorConnectionProfileV1);
+	}
+
+	function onRemoteDisconnected(kind: RemoteKind) {
+		for (const paneId of Object.keys(windows)) {
+			const cur = paneState(paneId);
+			if (cur.activeKind !== kind) continue;
+			releaseRemote(cur.activeKind, cur.activeId);
+			setPane(paneId, {
+				remoteDriver: null,
+				activeId: 'local',
+				activeKind: 'local',
+				explorerKey: cur.explorerKey + 1
+			});
+		}
+		void reloadProfiles();
+	}
+
 	const tids: DualPaneTids = { ...defaultTids, ...tidsOverride };
 
 	type PaneState = FileWindowState;
