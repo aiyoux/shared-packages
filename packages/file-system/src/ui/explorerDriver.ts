@@ -228,10 +228,9 @@ export interface ExplorerDriver {
 	 * Bulk write where each file names its OWN destination folder.
 	 *
 	 * `writeFiles` takes a single parentId, which forces callers extracting a
-	 * tree to group by folder and issue one call per directory. That is fine
-	 * for plain writes, but a pack is formed per call — so a wide archive
-	 * produced one pack per directory (571 of them for one 117MB zip), which is
-	 * strictly worse than not packing at all.
+	 * tree to group by folder and issue one reserve+confirm per directory. A
+	 * 10-level zip is thousands of tiny transactions that way. Extract always
+	 * prefers this when present so mixed parents share one chunked bulk write.
 	 *
 	 * Optional: only a driver whose backend can place a batch across folders in
 	 * one operation implements it.

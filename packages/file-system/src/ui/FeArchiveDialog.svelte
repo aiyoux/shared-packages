@@ -106,12 +106,6 @@
 	let skipSystemFiles = $state(true);
 	/** Extract into a new folder named after the archive. Default on. */
 	let wrapInSubfolder = $state(true);
-	/**
-	 * Off by default. Packing trades shared storage — and everything that
-	 * follows from it — for speed, so it is a decision the user makes rather
-	 * than one made for them.
-	 */
-	let packMembers = $state(false);
 	let abortRequested = $state(false);
 
 	const compressEngine = $derived(
@@ -309,14 +303,6 @@
 	}
 
 	const showWrapSubfolder = $derived(isExtract && (dest === 'same' || dest === 'folder'));
-	/**
-	 * Packing only means anything when the destination is a local VFS folder:
-	 * it is the only driver with a bulk write, and packing needs range reads
-	 * that the in-memory store deliberately lacks.
-	 */
-	const showPackOption = $derived(
-		isExtract && !useHost && (dest === 'same' || dest === 'folder') && !!driver.writeFiles
-	);
 
 	const destParentId = $derived(
 		dest === 'folder' ? pickParent : (entries[0]?.parentId ?? null)
@@ -391,7 +377,6 @@
 			password,
 			skipSystemFiles,
 			wrapInSubfolder: showWrapSubfolder && wrapInSubfolder,
-			pack: showPackOption && packMembers,
 			useHost,
 			hostOp: useHost ? hostOp() : undefined,
 			hostDestPath: useHost ? hostDestPath() : undefined
@@ -681,19 +666,6 @@
 					? 'Create sub folder with same name as vault'
 					: 'Create sub folder with same name as zip'}
 			</label>
-		{/if}
-
-		{#if showPackOption}
-			<label class="check-row" data-testid="fe-archive-pack-row">
-				<input type="checkbox" bind:checked={packMembers} data-testid="fe-archive-pack" />
-				Store members in a shared pack (faster, uses one blob per batch)
-			</label>
-			{#if packMembers}
-				<p class="hint" data-testid="fe-archive-pack-hint">
-					Packed files share one stored blob, so deleting some of them frees space only once
-					enough of a pack is unused. Emptying the trash reclaims it.
-				</p>
-			{/if}
 		{/if}
 
 		{#if dest === 'folder'}

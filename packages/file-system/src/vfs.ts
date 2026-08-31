@@ -1069,9 +1069,10 @@ export class VfsService {
 		// operation regardless of payload, so a bigger chunk is strictly fewer
 		// round trips; the byte cap exists to bound how much sits in the heap
 		// at once (bodies are serialized up front, before any transaction).
-		// Measured on 3000 members: 2015ms at 24/chunk, 1391ms at 128,
-		// 1237ms at 512 — past ~512 the curve is flat.
-		const CHUNK_FILES = 512;
+		// OPFS round-trips flatten by ~512 files; IDB still wants fewer, bigger
+		// reserve/confirm txns. The byte cap is the heap bound (a quarter of
+		// free space, at most 64MB). A 50MB extract of 17KB members is one chunk.
+		const CHUNK_FILES = 4096;
 		const CHUNK_BYTES = await this.packBudgetBytes();
 		let chunk: Array<{ input: WriteFileInput; bytes: Uint8Array; contentType: string }> = [];
 		let chunkBytes = 0;

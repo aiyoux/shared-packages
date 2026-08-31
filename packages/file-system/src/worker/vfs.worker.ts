@@ -122,7 +122,6 @@ async function runExtract(req: ExtractJobRequest): Promise<void> {
 			skipSystemFiles: req.skipSystemFiles,
 			wrapInSubfolder: req.wrapInSubfolder,
 			useHost: false,
-			pack: req.pack,
 			signal: controller.signal,
 			onProgress: (ev) => ctx.postMessage({ type: 'progress', jobId: req.jobId, ev })
 		});

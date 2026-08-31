@@ -473,8 +473,6 @@ export function createStreamingWriter(opts: {
 	parentId: string | null;
 	onFile?: (ev: ArchiveWriteProgress) => void;
 	signal?: AbortSignal;
-	/** Opt into shared-pack storage for these writes (Projects only). */
-	pack?: boolean;
 	/** Members per flush. Matches the vfs bulk-write chunk. */
 	windowFiles?: number;
 	/** Bytes per flush; whichever cap trips first wins. */
@@ -489,7 +487,7 @@ export function createStreamingWriter(opts: {
 	// re-caps the write path from above: at 24 the extract path never saw the
 	// raised cap and paid ~60% more OPFS round trips than the bulk path.
 	// Bytes are the real governor; the file count is a backstop for tiny members.
-	const windowFiles = opts.windowFiles ?? 512;
+	const windowFiles = opts.windowFiles ?? 4096;
 	const windowBytes = opts.windowBytes ?? 64 << 20;
 	const put = driver.writeFile ?? driver.upload;
 	if (!put) throw new Error('This location cannot receive files');
@@ -509,7 +507,7 @@ export function createStreamingWriter(opts: {
 		window = [];
 		windowSize = 0;
 		throwIfAborted(signal);
-		await writeEntriesToDriver(driver, parentId, batch, onFile, signal, folders, opts.pack);
+		await writeEntriesToDriver(driver, parentId, batch, onFile, signal, folders);
 		written += batch.length;
 	};
 
@@ -601,9 +599,7 @@ export async function writeEntriesToDriver(
 	onFile?: (ev: ArchiveWriteProgress) => void,
 	signal?: AbortSignal,
 	/** Reused across flushes by a streaming writer; created per call otherwise. */
-	folders?: DestFolders,
-	/** Shared-pack storage for these members (Projects only). */
-	pack?: boolean
+	folders?: DestFolders
 ): Promise<void> {
 	const put = driver.writeFile ?? driver.upload;
 	if (!put) throw new Error('This location cannot receive files');
@@ -728,10 +724,10 @@ export async function writeEntriesToDriver(
 	}
 
 	// One batch across every destination folder, when the driver can do it.
-	// Grouping by folder below is only a limitation of `writeFiles`, which takes
-	// a single parentId — and a pack is formed per call, so a wide archive was
-	// producing one pack per directory instead of one per chunk.
-	if (pack && typeof driver.writeFilesAcross === 'function' && planned.length) {
+	// Grouping by folder would make one writeFiles call per directory — a
+	// 10-level zip is thousands of tiny reserves. Mixed parents still chunk
+	// inside writeFiles.
+	if (typeof driver.writeFilesAcross === 'function' && planned.length) {
 		throwIfAborted(signal);
 		for (const plan of planned) {
 			onFile?.({
@@ -744,6 +740,18 @@ export async function writeEntriesToDriver(
 			});
 		}
 		let settled = 0;
+		const settlePlan = (plan: Planned) => {
+			const size = plan.file.data.byteLength;
+			onFile?.({
+				name: plan.name,
+				parentId: plan.destParent,
+				transferred: size,
+				size,
+				done: true,
+				entryKind: 'file'
+			});
+			if (plan.dirs.length) bumpFolderAggs(plan.dirs, size);
+		};
 		await driver.writeFilesAcross(
 			planned.map((plan) => ({
 				parentId: plan.destParent,
@@ -751,22 +759,15 @@ export async function writeEntriesToDriver(
 			})),
 			{
 				signal,
-				pack,
 				onProgress: (written) => {
-					for (const entry of written) {
-						const plan = planned[settled++];
-						onFile?.({
-							name: entry.name,
-							parentId: entry.parentId ?? null,
-							transferred: plan?.file.data.byteLength ?? entry.size ?? 0,
-							size: plan?.file.data.byteLength ?? entry.size ?? 0,
-							done: true,
-							entryKind: 'file'
-						});
+					for (let i = 0; i < written.length && settled < planned.length; i++) {
+						settlePlan(planned[settled++]!);
 					}
 				}
 			}
 		);
+		// Drivers without onProgress support settle everything at the end.
+		while (settled < planned.length) settlePlan(planned[settled++]!);
 		return;
 	}
 
@@ -801,7 +802,6 @@ export async function writeEntriesToDriver(
 				group.map((plan) => new File([plan.file.data as BlobPart], plan.name)),
 				{
 					signal,
-					pack,
 					onProgress: (written) => {
 						// Written entries arrive in input order, so they line up
 						// with `group` and each chunk can be marked done as it lands.
@@ -1144,11 +1144,6 @@ export type ArchiveJobSpec = {
 	/** Extract into a new folder named after the archive. Dialog default is on. */
 	wrapInSubfolder?: boolean;
 	useHost: boolean;
-	/**
-	 * Store extracted members in shared packs. Projects only — the general
-	 * filesystem leaves this off (see VfsService.writeFiles for why).
-	 */
-	pack?: boolean;
 	hostOp?: 'zip' | 'tar' | 'tgz' | 'encrypt' | 'unzip' | 'untar' | 'decrypt';
 	hostDestPath?: string;
 	signal?: AbortSignal;
@@ -1409,7 +1404,6 @@ export async function runArchiveJob(spec: ArchiveJobSpec): Promise<ArchiveJobRes
 		const writer = createStreamingWriter({
 			driver,
 			parentId: streamParent,
-			pack: spec.pack,
 			onFile: (ev) => {
 				onProgress?.(ev);
 			},

@@ -1992,8 +1992,7 @@
 							password: spec.password,
 							skipSystemFiles: spec.skipSystemFiles,
 							wrapInSubfolder: spec.wrapInSubfolder !== false,
-							compressEngineId: spec.compressEngineId,
-							pack: spec.pack === true
+							compressEngineId: spec.compressEngineId
 						},
 						{ signal: ac.signal, onProgress: bumpArchiveProgress }
 					);
@@ -2003,7 +2002,7 @@
 					// A cancel is the user's decision, not a worker fault.
 					if (e instanceof Error && e.name === 'AbortError') throw e;
 					// Do not re-run the extract on this tab. The worker may
-					// already have packed members into OPFS; a second pass
+					// already have written members into OPFS; a second pass
 					// duplicates them. Unavailable worker (null client) still
 					// takes the main-thread path below.
 					throw e;

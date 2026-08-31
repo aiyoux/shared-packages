@@ -217,8 +217,8 @@ export function createLocalExplorerDriver(
 				}
 				return out;
 			}
-			// One call, mixed parents: the store chunks it, and a pack spans the
-			// whole chunk rather than one per folder.
+			// One call, mixed parents: the store chunks it (one reserve+confirm
+			// per chunk, not per folder). A pack, when opted in, spans the chunk.
 			const nodes = await vfs.writeFiles(
 				files.map(({ parentId, file }) => ({
 					parentId,
