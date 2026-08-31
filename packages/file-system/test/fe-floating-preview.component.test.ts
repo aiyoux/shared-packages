@@ -119,7 +119,7 @@ describe('FeFloatingPreview', () => {
 		expect(screen.queryByText(/not available/i)).toBeNull();
 	});
 
-	it('previews audio with a player from downloadUrl', async () => {
+	it('previews audio from a cross-origin downloadUrl via blob (CSP media-src self)', async () => {
 		const driver: ExplorerDriver = {
 			id: 'b2',
 			capabilities: caps,
@@ -127,7 +127,11 @@ describe('FeFloatingPreview', () => {
 			list: async () => ({ entries: [], truncated: false }),
 			getPath: async () => [],
 			delete: async () => {},
-			downloadUrl: async () => ({ url: 'https://f000.example/song.mp3?Authorization=t', filename: 'song.mp3' })
+			downloadUrl: async () => ({
+				url: 'https://f000.example/song.mp3?Authorization=t',
+				filename: 'song.mp3'
+			}),
+			download: async () => new Blob(['mp3-bytes'], { type: 'audio/mpeg' })
 		};
 		render(FeFloatingPreview, {
 			props: {
@@ -148,18 +152,22 @@ describe('FeFloatingPreview', () => {
 		});
 		const audio = document.querySelector('[data-testid="fe-float-audio"] audio') as HTMLAudioElement | null;
 		expect(audio).toBeTruthy();
-		expect(audio?.getAttribute('src')).toBe('https://f000.example/song.mp3?Authorization=t');
+		expect(audio?.getAttribute('src')?.startsWith('blob:')).toBe(true);
 	});
 
-	it('previews an image from downloadUrl without buffering bytes', async () => {
+	it('previews an image from a same-origin downloadUrl without buffering bytes', async () => {
 		const driver: ExplorerDriver = {
-			id: 'b2',
+			id: 'local',
 			capabilities: caps,
 			ready: async () => {},
 			list: async () => ({ entries: [], truncated: false }),
 			getPath: async () => [],
 			delete: async () => {},
-			downloadUrl: async () => ({ url: 'https://f000.example/pic.png?Authorization=t', filename: 'pic.png' })
+			downloadUrl: async () => ({
+				url: `${location.origin}/api/pic.png`,
+				filename: 'pic.png'
+			}),
+			download: async () => new Blob(['nope'])
 		};
 		render(FeFloatingPreview, {
 			props: { entry: { ...svgEntry, name: 'pic.png', id: 'pic.png' }, driver, onClose: () => {} }
@@ -168,7 +176,7 @@ describe('FeFloatingPreview', () => {
 			expect(document.querySelector('.fe-float-spinner')).toBeNull();
 		});
 		const img = document.querySelector('.fe-float-image') as HTMLImageElement | null;
-		expect(img?.src).toBe('https://f000.example/pic.png?Authorization=t');
+		expect(img?.src).toBe(`${location.origin}/api/pic.png`);
 	});
 
 	it('falls back to an iframe when PDF rendering throws', async () => {

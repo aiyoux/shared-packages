@@ -89,7 +89,7 @@ function ensureUnique(name: string, excludeId?: string): string {
 /**
  * Minimal flat-list VFS for the FileExplorer memory driver, Connections
  * received files, and `/tools/files` "In memory" pane. Intentionally not a
- * `SharedVfsDatabase` subclass and intentionally not folder-capable.
+ * SQLite SharedVFS catalog and intentionally not folder-capable.
  */
 function emitMemoryChange(): void {
 	getState().bus.notify();

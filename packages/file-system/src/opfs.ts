@@ -36,6 +36,12 @@ export interface OpfsBlobStore {
 	): Promise<Blob>;
 	remove(opfsPath: string): Promise<void>;
 	exists(opfsPath: string): Promise<boolean>;
+	/** Rename/move a stored file. Missing source is a no-op. */
+	move(from: string, to: string): Promise<void>;
+	/** Rewrite every path with prefix `from` to `to` (folder rename). */
+	movePrefix(fromPrefix: string, toPrefix: string): Promise<void>;
+	/** Create parent directories for an unpacked catalog path. */
+	ensureDir?(dirPath: string): Promise<void>;
 	listOrphans(prefix: string): Promise<string[]>;
 	listTmp(): Promise<Array<{ path: string; mtimeMs?: number }>>;
 	/** Test/debug: wipe entire store */
@@ -125,6 +131,29 @@ export function createMemoryOpfs(): OpfsBlobStore {
 		async exists(opfsPath) {
 			return files.has(opfsPath);
 		},
+		async move(from, to) {
+			if (from === to) return;
+			const entry = files.get(from);
+			if (!entry) return;
+			files.set(to, entry);
+			files.delete(from);
+		},
+		async movePrefix(fromPrefix, toPrefix) {
+			if (fromPrefix === toPrefix) return;
+			const hits: string[] = [];
+			for (const key of files.keys()) {
+				if (key === fromPrefix || key.startsWith(fromPrefix + '/')) hits.push(key);
+			}
+			for (const key of hits) {
+				const next =
+					key === fromPrefix ? toPrefix : toPrefix + key.slice(fromPrefix.length);
+				const entry = files.get(key);
+				if (!entry) continue;
+				files.set(next, entry);
+				files.delete(key);
+			}
+		},
+		async ensureDir(_dirPath) {},
 		async listOrphans(prefix) {
 			const out: string[] = [];
 			for (const key of files.keys()) {
@@ -252,6 +281,15 @@ export function createOpfsBlobStore(rootDirName = 'shared-vfs'): OpfsBlobStore {
 		void pending.catch(() => dirCache.delete(dirPath));
 		dirCache.set(dirPath, pending);
 		return pending;
+	}
+
+	function invalidateDirCache(path: string): void {
+		const dir = splitPath(path).dir;
+		for (const key of [...dirCache.keys()]) {
+			if (key === dir || key.startsWith(dir + '/') || (dir && dir.startsWith(key + '/'))) {
+				dirCache.delete(key);
+			}
+		}
 	}
 
 	async function getFile(opfsPath: string, create: boolean): Promise<FileSystemFileHandle> {
@@ -382,6 +420,7 @@ export function createOpfsBlobStore(rootDirName = 'shared-vfs'): OpfsBlobStore {
 			} catch {
 				// ignore missing
 			}
+			invalidateDirCache(opfsPath);
 		},
 		async exists(opfsPath) {
 			try {
@@ -389,6 +428,42 @@ export function createOpfsBlobStore(rootDirName = 'shared-vfs'): OpfsBlobStore {
 				return true;
 			} catch {
 				return false;
+			}
+		},
+		async move(from, to) {
+			if (from === to) return;
+			try {
+				const src = await getFile(from, false);
+				const movable = src as FileSystemFileHandle & {
+					move?: (destination: FileSystemDirectoryHandle, name: string) => Promise<void>;
+				};
+				const { dir, base } = splitPath(to);
+				if (typeof movable.move === 'function') {
+					await movable.move(await resolveDir(dir), base);
+					invalidateDirCache(from);
+					invalidateDirCache(to);
+					return;
+				}
+				const bytes = await this.read(from);
+				await this.writeFinal(to, bytes);
+				await this.remove(from);
+			} catch {
+				/* missing source */
+			}
+			invalidateDirCache(from);
+			invalidateDirCache(to);
+		},
+		async ensureDir(dirPath) {
+			await resolveDir(dirPath);
+		},
+		async movePrefix(fromPrefix, toPrefix) {
+			if (fromPrefix === toPrefix) return;
+			const paths = await this.listOrphans(fromPrefix);
+			if (await this.exists(fromPrefix)) paths.push(fromPrefix);
+			paths.sort((a, b) => b.length - a.length);
+			for (const p of paths) {
+				const next = p === fromPrefix ? toPrefix : toPrefix + p.slice(fromPrefix.length);
+				await this.move(p, next);
 			}
 		},
 		async listOrphans(prefix) {
@@ -432,6 +507,7 @@ export function createOpfsBlobStore(rootDirName = 'shared-vfs'): OpfsBlobStore {
 			} catch {
 				// ignore
 			}
+			dirCache.clear();
 			// resolveDir caches handles on the premise that these directories
 			// live as long as the store does — which is true of everything
 			// EXCEPT this method, which just deleted them. A cached handle to a

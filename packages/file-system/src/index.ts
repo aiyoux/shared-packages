@@ -3,6 +3,7 @@ export * from './registry.js';
 export {
 	notifyTabChannel,
 	subscribeTabChannel,
+	subscribeOwnTabChannel,
 	HUB_RCLONE_PROFILES_CHANNEL,
 	HUB_B2_PROFILES_CHANNEL,
 	HUB_MONITOR_PROFILES_CHANNEL,
@@ -12,6 +13,7 @@ export * from './names.js';
 export * from './id.js';
 export * from './opfs.js';
 export * from './db.js';
+export * from './catalog.js';
 export * from './persist.js';
 export * from './vfs.js';
 export * from './documentSession.js';

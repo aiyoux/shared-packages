@@ -1992,12 +1992,14 @@
 							password: spec.password,
 							skipSystemFiles: spec.skipSystemFiles,
 							wrapInSubfolder: spec.wrapInSubfolder !== false,
-							compressEngineId: spec.compressEngineId
+							compressEngineId: spec.compressEngineId,
+							pack: spec.pack === true
 						},
 						{ signal: ac.signal, onProgress: bumpArchiveProgress }
 					);
 					ranOnWorker = true;
 					result = { title: spec.title, engines: [] };
+					await localVfs.reloadCatalog();
 				} catch (e) {
 					// A cancel is the user's decision, not a worker fault.
 					if (e instanceof Error && e.name === 'AbortError') throw e;

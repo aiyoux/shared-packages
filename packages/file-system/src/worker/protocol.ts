@@ -27,6 +27,8 @@ export type ExtractJobRequest = {
 	skipSystemFiles: boolean;
 	wrapInSubfolder: boolean;
 	compressEngineId: string;
+	/** Store members in shared packs. Off by default. */
+	pack?: boolean;
 };
 
 export type WorkerRequest =

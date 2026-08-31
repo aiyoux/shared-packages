@@ -5,6 +5,7 @@
  * @see docs/design/dnd-inmem-copy.md
  */
 import type { FileTypeId } from '../types.js';
+import { mediaSrcIsEmbeddable } from './saveToDisk.js';
 
 /** Stable id within one driver instance (VFS node id or B2 key/prefix). */
 export type ExplorerEntryId = string;
@@ -457,17 +458,23 @@ export async function readExplorerBlob(
 }
 
 /**
- * Direct GET URL for `<img>` / `<video>` / iframe when the backend can mint one
- * (B2 download-auth, monitor `/v1/fs/read`). Falls back to a blob: URL.
+ * Direct GET URL for `<img>` / `<video>` / iframe when hub CSP allows it
+ * (`img-src`/`media-src` = `'self' data: blob:`). Same-origin `downloadUrl`
+ * (hub `/api/…`) can go in `src`. Monitor `:8300` and B2 HTTPS cannot — fetch
+ * bytes and use a `blob:` URL. `pageHref` is for tests; the page uses
+ * `location.href`.
  */
 export async function loadExplorerMediaSrc(
 	driver: ExplorerReadDriver,
-	id: ExplorerEntryId
+	id: ExplorerEntryId,
+	opts?: { pageHref?: string }
 ): Promise<{ url: string; blob?: Blob }> {
 	if (driver.downloadUrl) {
 		try {
 			const loc = await driver.downloadUrl(id);
-			if (loc?.url) return { url: loc.url };
+			if (loc?.url && mediaSrcIsEmbeddable(loc.url, opts?.pageHref)) {
+				return { url: loc.url };
+			}
 		} catch {
 			/* fall through to bytes */
 		}

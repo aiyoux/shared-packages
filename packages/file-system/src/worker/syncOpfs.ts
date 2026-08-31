@@ -113,6 +113,15 @@ export function createSyncOpfsStore(rootDirName = 'shared-vfs'): OpfsBlobStore {
 		return pending;
 	}
 
+	function invalidateDirCache(path: string): void {
+		const dir = splitPath(path).dir;
+		for (const key of [...dirCache.keys()]) {
+			if (key === dir || key.startsWith(dir + '/') || (dir && dir.startsWith(key + '/'))) {
+				dirCache.delete(key);
+			}
+		}
+	}
+
 	async function fileHandle(opfsPath: string, create: boolean): Promise<FileSystemFileHandle> {
 		const { dir, base } = splitPath(opfsPath);
 		const d = await resolveDir(dir);
@@ -181,12 +190,19 @@ export function createSyncOpfsStore(rootDirName = 'shared-vfs'): OpfsBlobStore {
 			// for a pack every member past the cut would read another member's
 			// bytes or run off the end. Fail loudly instead — a failed write is
 			// recoverable, a wrong length is not.
-			const written = h.write(bytes, { at: 0 });
-			if (written !== bytes.byteLength) {
-				throw new VfsError(
-					'OPFS_IO',
-					`Short write to ${opfsPath}: wrote ${written} of ${bytes.byteLength} bytes`
-				);
+			const copy = bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength
+				? bytes
+				: bytes.slice();
+			let off = 0;
+			while (off < copy.byteLength) {
+				const n = h.write(copy.subarray(off), { at: off });
+				if (!Number.isFinite(n) || n <= 0 || n > copy.byteLength - off) {
+					throw new VfsError(
+						'OPFS_IO',
+						`Short write to ${opfsPath}: wrote ${n} of ${copy.byteLength} bytes`
+					);
+				}
+				off += n;
 			}
 			// Only shrink when there is something to shrink: an unconditional
 			// truncate cost measurable time on fresh files.
@@ -301,6 +317,7 @@ export function createSyncOpfsStore(rootDirName = 'shared-vfs'): OpfsBlobStore {
 			} catch {
 				/* already gone */
 			}
+			invalidateDirCache(opfsPath);
 		},
 		async exists(opfsPath) {
 			try {
@@ -308,6 +325,31 @@ export function createSyncOpfsStore(rootDirName = 'shared-vfs'): OpfsBlobStore {
 				return true;
 			} catch {
 				return false;
+			}
+		},
+		async move(from, to) {
+			if (from === to) return;
+			try {
+				const bytes = await this.read(from);
+				await this.writeFinal(to, bytes);
+				await this.remove(from);
+			} catch {
+				/* missing */
+			}
+			invalidateDirCache(from);
+			invalidateDirCache(to);
+		},
+		async ensureDir(dirPath) {
+			await resolveDir(dirPath);
+		},
+		async movePrefix(fromPrefix, toPrefix) {
+			if (fromPrefix === toPrefix) return;
+			const paths = await this.listOrphans(fromPrefix);
+			if (await this.exists(fromPrefix)) paths.push(fromPrefix);
+			paths.sort((a, b) => b.length - a.length);
+			for (const p of paths) {
+				const next = p === fromPrefix ? toPrefix : toPrefix + p.slice(fromPrefix.length);
+				await this.move(p, next);
 			}
 		},
 		async listOrphans(prefix) {

@@ -164,7 +164,7 @@ describe('packed blobs', () => {
 		);
 		const bigRef = await vfs.db.blobRefs.get(nodes[0]!.blobId!);
 		assert.equal(bigRef!.packOffset, undefined, 'large member is not packed');
-		assert.ok(bigRef!.opfsPath.startsWith('blobs/'));
+		assert.ok(bigRef!.opfsPath.startsWith('root/'));
 		assert.equal(dec.decode(await vfs.readBytes(nodes[1]!.id)), 'small');
 		await vfs.db.delete();
 	});
@@ -190,7 +190,7 @@ describe('packed blobs', () => {
 			'no packOffset without pack: true'
 		);
 		assert.ok(
-			refs.every((r) => r!.opfsPath.startsWith('blobs/')),
+			refs.every((r) => r!.opfsPath.startsWith('root/')),
 			'every member owns its own file'
 		);
 		// And the bytes still round-trip on the unpacked path.

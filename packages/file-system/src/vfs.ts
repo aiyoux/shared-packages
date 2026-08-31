@@ -1,7 +1,9 @@
-import { liveQuery, type Observable } from 'dexie';
 import { createChangeBus } from './changeBus.js';
 import { notifyTabChannel, subscribeTabChannel } from './crossTab.js';
-import { ROOT_PARENT_KEY, SharedVfsDatabase } from './db.js';
+import { ROOT_PARENT_KEY } from './db.js';
+import { SqliteCatalog, MIGRATED_KEY } from './catalog.js';
+import { resetMemoryEngines } from './catalogEngine.js';
+import { migrateIdbToSqlite } from './migrateIdb.js';
 import { generateId } from './id.js';
 import { sanitizeName, withNumericSuffix } from './names.js';
 import { createMemoryOpfs, createOpfsBlobStore, type OpfsBlobStore } from './opfs.js';
@@ -50,6 +52,8 @@ export interface VfsServiceOptions {
 	/** Force memory OPFS (tests). */
 	memoryOpfs?: boolean;
 	opfs?: OpfsBlobStore;
+	/** MessagePort to the live catalog worker (extract worker). */
+	catalogPort?: MessagePort | null;
 	/** Write lease / tmp GC grace ms */
 	graceMs?: number;
 	/**
@@ -176,14 +180,22 @@ function yieldPaint(): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+export type LiveObservable<T> = {
+	subscribe: (
+		obs: ((value: T) => void) | { next: (value: T) => void; error?: (e: unknown) => void }
+	) => { unsubscribe: () => void };
+};
+
 export class VfsService {
-	readonly db: SharedVfsDatabase;
+	readonly db: SqliteCatalog;
 	readonly opfs: OpfsBlobStore;
 	readonly graceMs: number;
 	private readyPromise: Promise<void> | null = null;
 	private requestPersist: boolean;
+	private catalogPersist: boolean;
 	private lastPersistence: PersistenceResult | null = null;
 	private readonly changeBus = createChangeBus();
+	private readonly draftBus = createChangeBus();
 	/** `sweepOnLoad` is once per instance, however many mounts call it. */
 	private sweptThisLoad = false;
 	/**
@@ -194,15 +206,26 @@ export class VfsService {
 	/** Nested: suppress explorer/git notify until the outer dump/commit ends. */
 	private changeMute = 0;
 	private changeMutedDirty = false;
+	/** Nested: defer pack compact until the outermost bulk op ends. */
+	private compactDepth = 0;
+	private compactDeferred = new Set<string>();
 
 	constructor(opts: VfsServiceOptions = {}) {
-		this.db = new SharedVfsDatabase(opts.dbName ?? 'SharedVFS');
+		this.db = new SqliteCatalog(opts.dbName ?? 'SharedVFS', {
+			catalogPort: opts.catalogPort ?? null
+		});
 		this.graceMs = opts.graceMs ?? DEFAULT_GRACE;
 		const isMemory =
 			!!opts.memoryOpfs ||
 			!!opts.opfs ||
 			typeof navigator === 'undefined' ||
 			!navigator.storage?.getDirectory;
+		// Persist catalog.sqlite whenever this origin has OPFS — including the
+		// extract worker, which injects a sync store via `opts.opfs`.
+		this.catalogPersist =
+			!opts.memoryOpfs &&
+			typeof navigator !== 'undefined' &&
+			!!navigator.storage?.getDirectory;
 		this.requestPersist = opts.requestPersist ?? !isMemory;
 		if (opts.opfs) {
 			this.opfs = opts.opfs;
@@ -217,12 +240,42 @@ export class VfsService {
 		return `shared-vfs:${this.db.name}`;
 	}
 
+	private draftChannelName(): string {
+		return `shared-vfs-drafts:${this.db.name}`;
+	}
+
 	/** Live list refresh for FileExplorer (same contract as monitor subscribeChanges).
-	 * changeBus is same-tab; BroadcastChannel carries the signal to other tabs
-	 * because Dexie liveQuery on `.filter()` collections can miss storagemutated. */
+	 * changeBus is same-tab; BroadcastChannel wakes other tabs, which re-query
+	 * the live SAH catalog (followers RPC to the leader tab). */
 	subscribe(listener: () => void): () => void {
 		const unsubBus = this.changeBus.subscribe(listener);
-		const unsubTab = subscribeTabChannel(this.tabChannelName(), listener);
+		const unsubTab = subscribeTabChannel(this.tabChannelName(), () => {
+			void this.db.reloadFromOpfs().then(() => listener());
+		});
+		return () => {
+			unsubBus();
+			unsubTab();
+		};
+	}
+
+	/** Reload catalog.sqlite after another context (extract worker) wrote it. */
+	async reloadCatalog(): Promise<void> {
+		await this.db.reloadFromOpfs();
+		this.changeBus.notify();
+	}
+
+	subscribeDraft(
+		id: string,
+		listener: (draft: import('./types.js').AppDraft | undefined) => void
+	): () => void {
+		const push = () => {
+			void this.getDraft(id).then(listener);
+		};
+		const unsubBus = this.draftBus.subscribe(push);
+		const unsubTab = subscribeTabChannel(this.draftChannelName(), () => {
+			void this.db.reloadFromOpfs().then(push);
+		});
+		push();
 		return () => {
 			unsubBus();
 			unsubTab();
@@ -236,12 +289,20 @@ export class VfsService {
 			subscribe: (listener) => this.subscribe(listener),
 			updateFile: (id, body, opts) => this.updateFile(id, body, opts),
 			writeFile: (input) => this.writeFile(input),
-			liveSnapshot: (id) =>
-				liveQuery(async (): Promise<DocumentSnapshot> => {
-					const node = await this.db.nodes.get(id);
-					const path = node ? await this.getPath(id) : [];
-					return { node, path };
-				})
+			liveSnapshot: (id) => ({
+				subscribe: (obs: { next: (s: DocumentSnapshot) => void }) => {
+					const push = () => {
+						void (async () => {
+							const node = await this.get(id);
+							const path = node ? await this.getPath(id) : [];
+							obs.next({ node, path });
+						})();
+					};
+					const unsub = this.subscribe(push);
+					push();
+					return { unsubscribe: unsub };
+				}
+			})
 		};
 	}
 
@@ -260,7 +321,7 @@ export class VfsService {
 			return;
 		}
 		this.changeBus.notify();
-		notifyTabChannel(this.tabChannelName());
+		void this.db.persist().then(() => notifyTabChannel(this.tabChannelName()));
 	}
 
 	/**
@@ -276,7 +337,35 @@ export class VfsService {
 			if (this.changeMute === 0 && this.changeMutedDirty) {
 				this.changeMutedDirty = false;
 				this.changeBus.notify();
-				notifyTabChannel(this.tabChannelName());
+				void this.db.persist().then(() => notifyTabChannel(this.tabChannelName()));
+			}
+		}
+	}
+
+	/**
+	 * Run a bulk mutation without compacting packs per inner delete.
+	 * Touched packs are compacted once when the outermost scope exits.
+	 */
+	async deferCompact<T>(fn: () => Promise<T>): Promise<T> {
+		this.compactDepth += 1;
+		try {
+			return await fn();
+		} finally {
+			this.compactDepth -= 1;
+			if (this.compactDepth === 0 && this.compactDeferred.size) {
+				const packs = [...this.compactDeferred];
+				this.compactDeferred.clear();
+				const alive: string[] = [];
+				for (const p of packs) {
+					if (await this.opfs.exists(p)) alive.push(p);
+				}
+				if (alive.length) {
+					try {
+						await this.compactPacks(alive);
+					} catch {
+						/* load sweep / empty-trash will retry */
+					}
+				}
 			}
 		}
 	}
@@ -284,7 +373,8 @@ export class VfsService {
 	async ready(): Promise<void> {
 		if (!this.readyPromise) {
 			this.readyPromise = (async () => {
-				await this.db.open();
+				await this.db.openWithStore(this.opfs, this.catalogPersist);
+				await migrateIdbToSqlite(this.db, this.db.name);
 				const ver = await this.db.meta.get('schemaVersion');
 				if (!ver) {
 					await this.db.meta.put({ key: 'schemaVersion', value: 1 });
@@ -403,10 +493,25 @@ export class VfsService {
 		return this.hidePendingWrites(rows);
 	}
 
-	/** Reactive list (Dexie liveQuery). Querier must be async so awaits inside
-	 * `list()` stay in Dexie's observation zone. */
-	liveList(opts: VfsListOptions): Observable<VfsNode[]> {
-		return liveQuery(async () => this.list(opts));
+	/** Reactive list — re-query on the coarse change bus. */
+	liveList(opts: VfsListOptions): LiveObservable<VfsNode[]> {
+		return {
+			subscribe: (obs) => {
+				const next = typeof obs === 'function' ? obs : obs.next.bind(obs);
+				const push = () => {
+					void this.list(opts).then((rows) => {
+						try {
+							next(rows);
+						} catch {
+							/* ignore */
+						}
+					});
+				};
+				const unsub = this.subscribe(push);
+				push();
+				return { unsubscribe: unsub };
+			}
+		};
 	}
 
 	/**
@@ -478,6 +583,85 @@ export class VfsService {
 			cur = await this.get(cur.parentId);
 		}
 		return chain;
+	}
+
+	/** Display path from VFS root, e.g. `Sketches/demo.skch`. */
+	private async relPathOf(id: string | null): Promise<string> {
+		if (!id) return '';
+		const chain = await this.getPath(id);
+		return chain.map((n) => n.name).filter(Boolean).join('/');
+	}
+
+	private rootOpfsPath(rel: string, trashed = false): string {
+		return `${trashed ? 'trash' : 'root'}/${rel}`;
+	}
+
+	/** Keep an unpacked blob's OPFS path aligned with its catalog path. */
+	private async syncUnpackedBlob(nodeId: string, trashed = false): Promise<void> {
+		const node = await this.db.nodes.get(nodeId);
+		if (!node?.blobId) return;
+		const ref = await this.db.blobRefs.get(node.blobId);
+		if (!ref || ref.packOffset != null) return;
+		if (ref.opfsPath.startsWith('packs/')) return;
+		const rel = await this.relPathOf(nodeId);
+		if (!rel) return;
+		const dest = this.rootOpfsPath(rel, trashed);
+		if (ref.opfsPath === dest) return;
+		await this.holdPackWrite(dest);
+		try {
+			await this.opfs.move(ref.opfsPath, dest);
+			ref.opfsPath = dest;
+			await this.db.blobRefs.put(ref);
+		} finally {
+			await this.dropPackWrite(dest);
+		}
+	}
+
+	private async relocatePrefix(fromPrefix: string, toPrefix: string): Promise<void> {
+		if (fromPrefix === toPrefix) return;
+		await this.holdPackWrite(toPrefix);
+		try {
+			await this.opfs.movePrefix(fromPrefix, toPrefix);
+			const refs = await this.db.blobRefs.toArray();
+			for (const ref of refs) {
+				if (ref.packOffset != null) continue;
+				if (ref.opfsPath === fromPrefix || ref.opfsPath.startsWith(fromPrefix + '/')) {
+					ref.opfsPath =
+						ref.opfsPath === fromPrefix
+							? toPrefix
+							: toPrefix + ref.opfsPath.slice(fromPrefix.length);
+					await this.db.blobRefs.put(ref);
+				}
+			}
+		} finally {
+			await this.dropPackWrite(toPrefix);
+		}
+	}
+
+	private async syncTree(id: string, trashed = false, oldRel?: string): Promise<void> {
+		const node = await this.db.nodes.get(id);
+		if (!node) return;
+		const newRel = await this.relPathOf(id);
+		if (oldRel && newRel && oldRel !== newRel) {
+			const from = this.rootOpfsPath(oldRel, trashed);
+			const to = this.rootOpfsPath(newRel, trashed);
+			await this.relocatePrefix(from, to);
+			return;
+		}
+		if (node.kind === 'file') {
+			await this.syncUnpackedBlob(id, trashed);
+			return;
+		}
+		if (trashed && newRel) {
+			await this.relocatePrefix(this.rootOpfsPath(newRel, false), this.rootOpfsPath(newRel, true));
+			return;
+		}
+		if (!trashed && newRel) {
+			await this.relocatePrefix(this.rootOpfsPath(newRel, true), this.rootOpfsPath(newRel, false));
+			return;
+		}
+		const kids = await this.db.nodes.where('parentId').equals(id).toArray();
+		for (const k of kids) await this.syncTree(k.id, trashed);
 	}
 
 	// ── Uniqueness helpers ────────────────────────────────────────
@@ -677,7 +861,9 @@ export class VfsService {
 			};
 			await this.db.nodes.put(node);
 			return node;
-		}).then((node) => {
+		}).then(async (node) => {
+			const rel = await this.relPathOf(node.id);
+			if (rel) await this.opfs.ensureDir?.(this.rootOpfsPath(rel));
 			this.emitChange();
 			return node;
 		});
@@ -710,6 +896,8 @@ export class VfsService {
 			}
 		}
 		if (!byDepth.length) return map;
+		const destRel = await this.relPathOf(parentId);
+		const relByKey = new Map<string, string>([['', destRel]]);
 
 		// A 10-level zip of 3000 files is ~20k folders. IDB charges per
 		// request (browser-process IPC), so get+siblings+sortOrder per parent
@@ -786,12 +974,14 @@ export class VfsService {
 								sortOrder = n.sortOrder + 16384;
 							}
 						}
+						const parentRel = relByKey.get(parentKey) ?? destRel;
 						for (const segs of children) {
 							const name = segs[segs.length - 1]!;
 							const key = segs.join('/');
 							const hit = folderByName.get(name);
 							if (hit) {
 								map.set(key, hit.id);
+								relByKey.set(key, parentRel ? `${parentRel}/${hit.name}` : hit.name);
 								continue;
 							}
 							if (siblings.some((n) => n.name === name && n.kind === 'file')) {
@@ -820,23 +1010,28 @@ export class VfsService {
 							createdIds.add(node.id);
 							folderByName.set(unique, node);
 							map.set(key, node.id);
+							relByKey.set(key, parentRel ? `${parentRel}/${unique}` : unique);
 						}
 					}
 				}
 				if (created.length) await this.db.nodes.bulkPut(created);
 			});
+			if (this.opfs.ensureDir) {
+				for (const rel of relByKey.values()) {
+					if (rel) await this.opfs.ensureDir(this.rootOpfsPath(rel));
+				}
+			}
 			return map;
 		});
 	}
 
 	/**
-	 * Extract-shaped bulk write: OPFS tree first, one IDB catalog commit after.
+	 * Extract-shaped bulk write: unique staging files first, one catalog commit
+	 * after names are uniquified, then settle each member onto `root/<rel>`.
 	 *
-	 * Members are stored under `x/<destId>/<relative path>` so the 3000-file
-	 * nested zip is a POSIX directory tree (the ~20s SAH bench), not 3000
-	 * files in one `blobs/` folder. Explorer/trash/git still read IDB; rename
-	 * does not move the OPFS path. Crash before the catalog commit leaves
-	 * unreferenced `x/` files for gc.
+	 * Staging (`tmp/tree-<blobId>.bin`) never overwrites a live sibling. SQL
+	 * still owns identity; rename/move then OPFS-moves. Crash before the
+	 * catalog commit leaves unreferenced tmp/root files for gc.
 	 */
 	async writeTree(
 		parentId: string | null,
@@ -868,7 +1063,7 @@ export class VfsService {
 		};
 		const planned: PlannedFile[] = [];
 		const folderKeys = new Set<string>();
-		const treeRoot = `x/${parentId ?? 'root'}`;
+		const destRel = await this.relPathOf(parentId);
 
 		for (const input of files) {
 			throwIfAborted(opts?.signal);
@@ -903,7 +1098,7 @@ export class VfsService {
 				dirs,
 				name,
 				relPath,
-				opfsPath: `${treeRoot}/${relPath}`,
+				opfsPath: `tmp/tree-${blobId}.bin`,
 				bytes,
 				contentType,
 				fileType,
@@ -939,6 +1134,7 @@ export class VfsService {
 		const folderPaths = [...folderKeys].sort((a, b) => a.split('/').length - b.split('/').length);
 		const now = Date.now();
 		const fileNodes: VfsNode[] = [];
+		const uniqueRelByKey = new Map<string, string>([['', destRel]]);
 
 		await this.batch(async () => {
 			await this.db.transaction('rw', this.db.nodes, this.db.blobRefs, async () => {
@@ -1019,11 +1215,16 @@ export class VfsService {
 								sortOrder = n.sortOrder + 16384;
 							}
 						}
+						const parentRel = uniqueRelByKey.get(parentKey) ?? destRel;
 						for (const key of childKeys) {
 							const name = key.slice(key.lastIndexOf('/') + 1);
 							const hit = folderByName.get(name);
 							if (hit) {
 								idByKey.set(key, hit.id);
+								uniqueRelByKey.set(
+									key,
+									parentRel ? `${parentRel}/${hit.name}` : hit.name
+								);
 								continue;
 							}
 							if (siblings.some((n) => n.name === name && n.kind === 'file')) {
@@ -1052,6 +1253,7 @@ export class VfsService {
 							createdIds.add(node.id);
 							folderByName.set(unique, node);
 							idByKey.set(key, node.id);
+							uniqueRelByKey.set(key, parentRel ? `${parentRel}/${unique}` : unique);
 						}
 					}
 				}
@@ -1088,6 +1290,17 @@ export class VfsService {
 							unique = withNumericSuffix(p.name, i);
 						}
 						taken.add(unique.toLowerCase());
+						const parentRel = uniqueRelByKey.get(p.dirs.join('/')) ?? destRel;
+						const destPath = this.rootOpfsPath(
+							parentRel ? `${parentRel}/${unique}` : unique
+						);
+						if (destPath !== p.opfsPath) {
+							const destDir = destPath.slice(0, destPath.lastIndexOf('/'));
+							if (destDir) await this.opfs.ensureDir?.(destDir);
+							await this.opfs.move(p.opfsPath, destPath);
+							p.opfsPath = destPath;
+						}
+						p.name = unique;
 						const node: VfsNode = {
 							id: p.nodeId,
 							parentId: pid,
@@ -1121,6 +1334,11 @@ export class VfsService {
 				if (nodePuts.length) await this.db.nodes.bulkPut(nodePuts);
 				if (refPuts.length) await this.db.blobRefs.bulkPut(refPuts);
 			});
+			if (this.opfs.ensureDir) {
+				for (const rel of uniqueRelByKey.values()) {
+					if (rel) await this.opfs.ensureDir(this.rootOpfsPath(rel));
+				}
+			}
 		});
 
 		this.emitChange();
@@ -1174,7 +1392,7 @@ export class VfsService {
 		const blobId = generateId('blob');
 		const writeId = generateId('w');
 		const tmpPath = `tmp/${writeId}.partial`;
-		const finalPath = `blobs/${blobId}.bin`;
+		let finalPath = `root/${name}`;
 		const direct = input.direct === true;
 		const { bytes, contentType } = await serializeBody(input.body, input.contentType);
 		const leaseKey = `write:${blobId}`;
@@ -1206,6 +1424,8 @@ export class VfsService {
 				input.onConflict ?? 'rename'
 			);
 			name = unique;
+			const parentRel = await this.relPathOf(input.parentId);
+			finalPath = this.rootOpfsPath(parentRel ? `${parentRel}/${name}` : name);
 			const existing = await this.db.nodes.get(nodeId);
 			if (existing) {
 				throw new VfsError('NAME_CONFLICT', `Node id already exists: ${nodeId}`, {
@@ -1297,18 +1517,23 @@ export class VfsService {
 				node.updatedAt = Date.now();
 				await this.db.nodes.put(node);
 			});
-			await this.opfs.promote(partial.tmpPath, finalPath);
-			await this.db.transaction('rw', this.db.blobRefs, this.db.leases, async () => {
-				const ref = await this.db.blobRefs.get(blobId);
-				if (ref) {
-					ref.opfsPath = finalPath;
-					ref.pendingPromote = false;
-					ref.pending = false;
-					ref.crc32 = crc32(bytes);
-					await this.db.blobRefs.put(ref);
-				}
-				await this.db.leases.delete(leaseKey);
-			});
+			await this.holdPackWrite(finalPath);
+			try {
+				await this.opfs.promote(partial.tmpPath, finalPath);
+				await this.db.transaction('rw', this.db.blobRefs, this.db.leases, async () => {
+					const ref = await this.db.blobRefs.get(blobId);
+					if (ref) {
+						ref.opfsPath = finalPath;
+						ref.pendingPromote = false;
+						ref.pending = false;
+						ref.crc32 = crc32(bytes);
+						await this.db.blobRefs.put(ref);
+					}
+					await this.db.leases.delete(leaseKey);
+				});
+			} finally {
+				await this.dropPackWrite(finalPath);
+			}
 			}
 		} catch (e) {
 			await this.db.nodes.delete(nodeId);
@@ -1565,6 +1790,7 @@ export class VfsService {
 		type Reserved = {
 			p: (typeof prepared)[number];
 			name: string;
+			opfsPath: string;
 		};
 		const reserved: Reserved[] = [];
 		const leaseKeys = prepared.map((p) => `write:${p.blobId}`);
@@ -1578,8 +1804,8 @@ export class VfsService {
 		let heldPackPath: string | undefined;
 		const cleanup = async () => {
 			// Best-effort rollback, matching writeFile's catch. If the failure
-			// was inside the reserve txn, Dexie already rolled the puts back and
-			// these deletes are no-ops.
+			// was inside the reserve txn, the puts rolled back and these
+			// deletes are no-ops.
 			for (const p of prepared) {
 				try {
 					await this.db.nodes.delete(p.nodeId);
@@ -1599,9 +1825,10 @@ export class VfsService {
 					/* ignore */
 				}
 			}
-			for (const p of prepared) {
+			for (const r of reserved) {
+				if (r.opfsPath.startsWith('packs/')) continue;
 				try {
-					await this.opfs.remove(`blobs/${p.blobId}.bin`);
+					await this.opfs.remove(r.opfsPath);
 				} catch {
 					/* ignore */
 				}
@@ -1670,6 +1897,7 @@ export class VfsService {
 
 			const nextAppend = new Map<string, number>();
 			const siblingNames = new Map<string, Set<string>>();
+			const parentRelByKey = new Map<string, string>();
 			const refPuts: BlobRef[] = [];
 			const leasePuts: Array<{ key: string; owner: string; expiresAt: number }> = [];
 			const nodePuts: VfsNode[] = [];
@@ -1697,6 +1925,7 @@ export class VfsService {
 							nextSortOrder = await this.nextAppendSortOrder(pid);
 							siblingNames.set(stateKey, taken);
 							nextAppend.set(stateKey, nextSortOrder);
+							parentRelByKey.set(stateKey, await this.relPathOf(pid));
 						}
 						// Same 'rename' resolution ensureUniqueName performs.
 						let unique = p.name;
@@ -1709,9 +1938,14 @@ export class VfsService {
 						const sortOrder = nextSortOrder;
 						nextAppend.set(stateKey, nextSortOrder + 16384);
 						const packOffset = packOffsetByIndex.get(pIndex);
+						const parentRel = parentRelByKey.get(stateKey) ?? '';
+						const destPath =
+							packOffset != null
+								? packPath
+								: this.rootOpfsPath(parentRel ? `${parentRel}/${unique}` : unique);
 						refPuts.push({
 							id: p.blobId,
-							opfsPath: packOffset != null ? packPath : `blobs/${p.blobId}.bin`,
+							opfsPath: destPath,
 							byteLength: 0,
 							createdAt: p.now,
 							contentType: p.contentType,
@@ -1742,7 +1976,7 @@ export class VfsService {
 							deletedAt: null,
 							sortOrder
 						});
-						reserved.push({ p, name: unique });
+						reserved.push({ p, name: unique, opfsPath: destPath });
 					}
 					await this.db.blobRefs.bulkPut(refPuts);
 					await this.db.leases.bulkPut(leasePuts);
@@ -1811,7 +2045,7 @@ export class VfsService {
 					// write and is what the POSIX bench does not do. Packs still
 					// flush via writeAtomic. close() is enough for same-session
 					// reads; IDB stays pending until this returns.
-					await this.opfs.writeFinal(`blobs/${r.p.blobId}.bin`, r.p.bytes, {
+					await this.opfs.writeFinal(r.opfsPath, r.p.bytes, {
 						flush: false
 					});
 				}
@@ -1986,7 +2220,9 @@ export class VfsService {
 		const prevBlobId = node.blobId;
 		const blobId = generateId('blob');
 		const writeId = generateId('w');
-		const finalPath = `blobs/${blobId}.bin`;
+		const rel = await this.relPathOf(id);
+		const finalPath = this.rootOpfsPath(rel || node.name);
+		const stagingPath = `tmp/${blobId}.bin`;
 		const { bytes, contentType } = await serializeBody(body, opts.contentType ?? node.contentType);
 		const leaseKey = `write:${blobId}`;
 		const owner = generateId('lease');
@@ -1995,7 +2231,6 @@ export class VfsService {
 		let tmpPath: string | undefined;
 
 		try {
-			// First, validate the generation inside a read transaction
 			await this.db.transaction('r', this.db.nodes, async () => {
 				const cur = await this.db.nodes.get(id);
 				if (!cur) throw new VfsError('NOT_FOUND');
@@ -2008,13 +2243,9 @@ export class VfsService {
 				}
 			});
 
-			// Write to OPFS only after generation check passes
 			const partial = await this.opfs.writePartial(writeId, bytes);
 			tmpPath = partial.tmpPath;
 
-			// Stage the new blob. Keep node.blobId on the previous ref until
-			// promote + path swap succeed so a crash/failed promote cannot
-			// unreference the last-good bytes.
 			await this.db.transaction('rw', this.db.blobRefs, this.db.leases, async () => {
 				await this.db.blobRefs.put({
 					id: blobId,
@@ -2027,50 +2258,39 @@ export class VfsService {
 				await this.db.leases.put({ key: leaseKey, owner, expiresAt: now + this.graceMs });
 			});
 
-			await this.opfs.promote(tmpPath, finalPath);
+			await this.opfs.promote(tmpPath, stagingPath);
+			tmpPath = stagingPath;
 
-			try {
-				await this.db.transaction('rw', this.db.nodes, this.db.blobRefs, this.db.leases, async () => {
-					const cur = await this.db.nodes.get(id);
-					if (!cur) throw new VfsError('NOT_FOUND');
-					if (cur.deletedAt != null) throw new VfsError('TRASH_STATE');
-					if (!force && cur.generation !== expected) {
-						throw new VfsError('GENERATION_CONFLICT', 'File changed in another tab', {
-							expected,
-							actual: cur.generation
-						});
-					}
-					const ref = await this.db.blobRefs.get(blobId);
-					if (ref) {
-						ref.opfsPath = finalPath;
-						ref.pendingPromote = false;
-						ref.crc32 = crc32(bytes);
-						await this.db.blobRefs.put(ref);
-					}
-					cur.blobId = blobId;
-					cur.size = partial.byteLength;
-					cur.updatedAt = Date.now();
-					cur.generation = cur.generation + 1;
-					cur.contentType = contentType;
-					if (opts.meta !== undefined) cur.meta = opts.meta;
-					await this.db.nodes.put(cur);
-					await this.db.leases.delete(leaseKey);
-				});
-			} catch (e) {
-				// Promote already moved bytes to the final path. Put them back
-				// so IDB (still naming tmp) and OPFS agree, then the outer
-				// cleanup can drop both.
-				try {
-					await this.opfs.promote(finalPath, tmpPath!);
-				} catch {
-					/* read path still falls back blobs/<id>.bin */
+			await this.db.transaction('rw', this.db.nodes, this.db.blobRefs, this.db.leases, async () => {
+				const cur = await this.db.nodes.get(id);
+				if (!cur) throw new VfsError('NOT_FOUND');
+				if (cur.deletedAt != null) throw new VfsError('TRASH_STATE');
+				if (!force && cur.generation !== expected) {
+					throw new VfsError('GENERATION_CONFLICT', 'File changed in another tab', {
+						expected,
+						actual: cur.generation
+					});
 				}
-				throw e;
-			}
+				const ref = await this.db.blobRefs.get(blobId);
+				if (ref) {
+					ref.opfsPath = stagingPath;
+					ref.pendingPromote = false;
+					ref.crc32 = crc32(bytes);
+					await this.db.blobRefs.put(ref);
+				}
+				cur.blobId = blobId;
+				cur.size = partial.byteLength;
+				cur.updatedAt = Date.now();
+				cur.generation = cur.generation + 1;
+				cur.contentType = contentType;
+				if (opts.meta !== undefined) cur.meta = opts.meta;
+				await this.db.nodes.put(cur);
+				await this.db.leases.delete(leaseKey);
+			});
 		} catch (e) {
 			await this.db.blobRefs.delete(blobId);
 			await this.db.leases.delete(leaseKey);
-			for (const p of [tmpPath, finalPath]) {
+			for (const p of [tmpPath, stagingPath]) {
 				if (!p) continue;
 				try {
 					await this.opfs.remove(p);
@@ -2081,9 +2301,19 @@ export class VfsService {
 			throw e;
 		}
 
-		// best-effort previous blob cleanup (node now points at the new blob)
 		if (prevBlobId && prevBlobId !== blobId) {
 			await this.releaseBlobRefs([prevBlobId]);
+		}
+		await this.holdPackWrite(finalPath);
+		try {
+			await this.opfs.move(stagingPath, finalPath);
+			const ref = await this.db.blobRefs.get(blobId);
+			if (ref) {
+				ref.opfsPath = finalPath;
+				await this.db.blobRefs.put(ref);
+			}
+		} finally {
+			await this.dropPackWrite(finalPath);
 		}
 
 		const final = await this.db.nodes.get(id);
@@ -2111,9 +2341,11 @@ export class VfsService {
 			try {
 				return this.assertMemberChecksum(ref, await this.opfs.read(ref.opfsPath));
 			} catch (e) {
-				const alt = `blobs/${ref.id}.bin`;
-				if (alt !== ref.opfsPath && (await this.opfs.exists(alt))) {
-					return this.assertMemberChecksum(ref, await this.opfs.read(alt));
+				const alts = [`blobs/${ref.id}.bin`, `tmp/${ref.id}.partial`];
+				for (const alt of alts) {
+					if (alt !== ref.opfsPath && (await this.opfs.exists(alt))) {
+						return this.assertMemberChecksum(ref, await this.opfs.read(alt));
+					}
 				}
 				throw e;
 			}
@@ -2285,9 +2517,11 @@ export class VfsService {
 			try {
 				return this.opfs.readBlob(ref.opfsPath, contentType);
 			} catch (e) {
-				const alt = `blobs/${ref.id}.bin`;
-				if (alt !== ref.opfsPath && (await this.opfs.exists(alt))) {
-					return this.opfs.readBlob(alt, contentType);
+				const alts = [`blobs/${ref.id}.bin`, `tmp/${ref.id}.partial`];
+				for (const alt of alts) {
+					if (alt !== ref.opfsPath && (await this.opfs.exists(alt))) {
+						return this.opfs.readBlob(alt, contentType);
+					}
 				}
 				throw e;
 			}
@@ -2304,6 +2538,7 @@ export class VfsService {
 			const node = await this.db.nodes.get(id);
 			if (!node) throw new VfsError('NOT_FOUND');
 			if (node.deletedAt != null) throw new VfsError('TRASH_STATE');
+			const oldName = node.name;
 			let finalName = clean;
 			if (node.kind === 'file' && node.fileType && node.fileType !== 'unknown') {
 				finalName = forceExtension(clean, node.fileType);
@@ -2312,8 +2547,11 @@ export class VfsService {
 			node.name = finalName;
 			node.updatedAt = Date.now();
 			await this.db.nodes.put(node);
-			return node;
-		}).then((node) => {
+			return { node, oldName };
+		}).then(async ({ node, oldName }) => {
+			const parentRel = await this.relPathOf(node.parentId);
+			const oldRel = parentRel ? `${parentRel}/${oldName}` : oldName;
+			await this.syncTree(node.id, node.deletedAt != null, oldRel);
 			this.emitChange();
 			return node;
 		});
@@ -2341,6 +2579,8 @@ export class VfsService {
 					walk = p?.parentId ?? null;
 				}
 			}
+			const oldParentId = node.parentId;
+			const oldName = node.name;
 			const name = opts?.name ? sanitizeName(opts.name) : node.name;
 			const unique = await this.ensureUniqueName(newParentId, name, id, 'rename');
 			const sameParent = node.parentId === newParentId;
@@ -2357,8 +2597,11 @@ export class VfsService {
 				}
 			}
 			await this.db.nodes.put(node);
-			return node;
-		}).then(async (moved) => {
+			return { moved: node, oldParentId, oldName };
+		}).then(async ({ moved, oldParentId, oldName }) => {
+			const oldParentRel = await this.relPathOf(oldParentId);
+			const oldRel = oldParentRel ? `${oldParentRel}/${oldName}` : oldName;
+			await this.syncTree(moved.id, moved.deletedAt != null, oldRel);
 			if (opts?.beforeId != null || opts?.afterId != null) {
 				return this.reorder(id, { beforeId: opts.beforeId, afterId: opts.afterId });
 			}
@@ -2427,6 +2670,7 @@ export class VfsService {
 				await this.db.nodes.put(n);
 			}
 		});
+		await this.syncTree(id, true);
 		this.emitChange();
 	}
 
@@ -2479,7 +2723,8 @@ export class VfsService {
 				await this.db.nodes.put(n);
 			}
 			return (await this.db.nodes.get(id))!;
-		}).then((node) => {
+		}).then(async (node) => {
+			await this.syncTree(node.id, false);
 			this.emitChange();
 			return node;
 		});
@@ -2523,16 +2768,20 @@ export class VfsService {
 
 		const touchedPacks = await this.packPathsForBlobs(blobIds);
 		if (opts?.compact !== false && touchedPacks.length) {
-			const alive: string[] = [];
-			for (const p of touchedPacks) {
-				if (await this.opfs.exists(p)) alive.push(p);
-			}
-			const compacted = await this.compactPacks(alive, { excludeBlobIds: blobIds });
-			if (compacted.failedPacks.length) {
-				throw new VfsError(
-					'WRITE_IN_FLIGHT',
-					`Cannot delete: pack still being rewritten (${compacted.failedPacks.join(', ')})`
-				);
+			if (this.compactDepth > 0) {
+				for (const p of touchedPacks) this.compactDeferred.add(p);
+			} else {
+				const alive: string[] = [];
+				for (const p of touchedPacks) {
+					if (await this.opfs.exists(p)) alive.push(p);
+				}
+				const compacted = await this.compactPacks(alive, { excludeBlobIds: blobIds });
+				if (compacted.failedPacks.length) {
+					throw new VfsError(
+						'WRITE_IN_FLIGHT',
+						`Cannot delete: pack still being rewritten (${compacted.failedPacks.join(', ')})`
+					);
+				}
 			}
 		}
 
@@ -2676,7 +2925,8 @@ export class VfsService {
 	async putDraft(draft: import('./types.js').AppDraft): Promise<void> {
 		await this.ready();
 		await this.db.drafts.put(draft);
-		this.emitChange();
+		this.draftBus.notify();
+		void this.db.persist().then(() => notifyTabChannel(this.draftChannelName()));
 	}
 
 	async getDraft(id: string): Promise<import('./types.js').AppDraft | undefined> {
@@ -2687,7 +2937,8 @@ export class VfsService {
 	async deleteDraft(id: string): Promise<void> {
 		await this.ready();
 		await this.db.drafts.delete(id);
-		this.emitChange();
+		this.draftBus.notify();
+		void this.db.persist().then(() => notifyTabChannel(this.draftChannelName()));
 	}
 
 	// ── Migration helpers ─────────────────────────────────────────
@@ -2802,6 +3053,7 @@ export class VfsService {
 	 */
 	async maybeGc(opts?: { minIntervalMs?: number; force?: boolean }): Promise<GcReport | null> {
 		await this.ready();
+		if (!this.db.migrationOk) return null;
 		// Default 0: every load is eligible. A caller can still pass an interval
 		// to throttle a hot path, but nothing in the app does.
 		const minInterval = opts?.minIntervalMs ?? 0;
@@ -3304,7 +3556,7 @@ export class VfsService {
 		await this.ready();
 		const report = (stage: PackOpStage, label: string) => opts?.onProgress?.({ stage, label });
 
-		const packed: BlobRef[] = [];
+		const packed: Array<{ ref: BlobRef; nodeId: string }> = [];
 		for (const id of new Set(nodeIds)) {
 			const node = await this.db.nodes.get(id);
 			if (!node?.blobId) continue;
@@ -3312,12 +3564,12 @@ export class VfsService {
 			// Mid-write: byteLength is 0 until the confirm txn, so refAsBlob would
 			// hand back an empty slice and this would "move" nothing into the
 			// file's new home, destroying it. Same rule as compaction.
-			if (ref?.packOffset != null && !ref.pending) packed.push(ref);
+			if (ref?.packOffset != null && !ref.pending) packed.push({ ref, nodeId: id });
 		}
 		if (!packed.length) return { movedFiles: 0 };
 
 		report('compacting', `Unpacking ${packed.length} file${packed.length === 1 ? '' : 's'}…`);
-		const oldPaths = new Set(packed.map((r) => r.opfsPath));
+		const oldPaths = new Set(packed.map((r) => r.ref.opfsPath));
 		const owner = generateId('unpack');
 		for (const path of oldPaths) {
 			if (!(await this.claimPack(path, owner))) {
@@ -3327,41 +3579,56 @@ export class VfsService {
 		const stopClaims = this.startLeaseHeartbeat([...oldPaths].map((p) => packClaimKey(p)));
 		let moved = 0;
 		try {
-		for (const ref of packed) {
+		for (const item of packed) {
+			const ref = item.ref;
 			throwIfAborted(opts?.signal);
 			if (ref.crc32 != null) {
 				await this.checksumSlice(ref.opfsPath, ref.packOffset ?? 0, ref.byteLength, ref.crc32);
 			}
 			const blob = await this.refAsBlob(ref);
-			const destPath = `blobs/${ref.id}.bin`;
-			await this.holdPackWrite(destPath);
-			const stopDest = this.startLeaseHeartbeat([packWriteKey(destPath)]);
+			const rel = await this.relPathOf(item.nodeId);
+			const destPath = this.rootOpfsPath(rel || ref.id);
+			const staging = `tmp/unpack-${ref.id}.bin`;
+			await this.holdPackWrite(staging);
+			const stopDest = this.startLeaseHeartbeat([packWriteKey(staging)]);
 			try {
-				await this.opfs.writeAtomic(destPath, blob);
-				if (!(await this.leaseStillHeld(packWriteKey(destPath)))) {
-					throw new VfsError('WRITE_IN_FLIGHT', `Unpack dest ${destPath} lease expired`);
+				await this.opfs.writeAtomic(staging, blob);
+				if (!(await this.leaseStillHeld(packWriteKey(staging)))) {
+					throw new VfsError('WRITE_IN_FLIGHT', `Unpack dest ${staging} lease expired`);
 				}
 				const swapped = await this.db.transaction('rw', this.db.blobRefs, async () => {
 					const current = await this.db.blobRefs.get(ref.id);
 					if (!current || current.opfsPath !== ref.opfsPath || current.pending) return false;
 					const { packOffset: _drop, ...rest } = current;
-					await this.db.blobRefs.put({ ...rest, opfsPath: destPath });
+					await this.db.blobRefs.put({ ...rest, opfsPath: staging });
 					return true;
 				});
-				if (swapped) moved += 1;
-				else {
-					const named = await this.db.blobRefs.where('opfsPath').equals(destPath).first();
+				if (swapped) {
+					await this.holdPackWrite(destPath);
+					try {
+						await this.opfs.move(staging, destPath);
+						const cur = await this.db.blobRefs.get(ref.id);
+						if (cur) {
+							cur.opfsPath = destPath;
+							await this.db.blobRefs.put(cur);
+						}
+					} finally {
+						await this.dropPackWrite(destPath);
+					}
+					moved += 1;
+				} else {
+					const named = await this.db.blobRefs.where('opfsPath').equals(staging).first();
 					if (!named) {
 						try {
-							await this.opfs.remove(destPath);
+							await this.opfs.remove(staging);
 						} catch {
-							/* gc sweeps blobs/ */
+							/* gc */
 						}
 					}
 				}
 			} finally {
 				stopDest();
-				await this.dropPackWrite(destPath);
+				await this.dropPackWrite(staging);
 			}
 		}
 		} finally {
@@ -3576,6 +3843,15 @@ export class VfsService {
 
 	async gc(): Promise<GcReport> {
 		await this.ready();
+		if (!this.db.migrationOk) {
+			return {
+				orphanOpfsRemoved: 0,
+				orphanBlobRefsRemoved: 0,
+				unreferencedBlobsRemoved: 0,
+				tmpPartialsRemoved: 0,
+				expiredLeasesRemoved: 0
+			};
+		}
 		return withWebLock(`vfs-gc:${this.db.name}`, () => this.gcLocked());
 	}
 
@@ -3599,8 +3875,8 @@ export class VfsService {
 		const namedPaths = new Set<string>();
 		for (const ref of refs) {
 			namedPaths.add(ref.opfsPath);
-			// Promote may have already moved bytes to blobs/<id>.bin while
-			// the live row still names tmp/… — treat both as live.
+			// Promote may have already moved bytes to the dest while the live
+			// row still names tmp/… — treat the legacy blobs/ dest as live too.
 			if (ref.pendingPromote) namedPaths.add(`blobs/${ref.id}.bin`);
 		}
 		const packWriteLeases = new Set(
@@ -3663,7 +3939,7 @@ export class VfsService {
 			}
 		}
 
-		// OPFS orphans under blobs/ and packs/.
+		// OPFS orphans under blobs/ (legacy), packs/, extract x/, root/, trash/.
 		//
 		// A pack holds many members, so a crashed pack write leaks the whole
 		// file at once rather than a single blob — it has to be swept. Its
@@ -3671,7 +3947,7 @@ export class VfsService {
 		// below cannot protect it; a pack in flight is protected instead by the
 		// pending blobRefs its reserve txn wrote, which are already in
 		// `namedPaths`.
-		for (const prefix of ['blobs', 'packs', 'x']) {
+		for (const prefix of ['blobs', 'packs', 'x', 'root', 'trash']) {
 			try {
 				const found = await this.opfs.listOrphans(prefix);
 				for (const p of found) {
@@ -3714,6 +3990,11 @@ export class VfsService {
 			}
 		);
 		if (this.opfs.clearAll) await this.opfs.clearAll();
+		await this.db.meta.put({
+			key: MIGRATED_KEY,
+			value: { at: Date.now(), fresh: true, cleared: true, counts: { nodes: 0, blobRefs: 0, drafts: 0, leases: 0, meta: 0 } }
+		});
+		this.db.migrationOk = true;
 		this.emitChange();
 	}
 }
@@ -3731,6 +4012,7 @@ export function getSharedVfs(opts?: VfsServiceOptions): VfsService {
 
 export function resetSharedVfsForTests(): void {
 	singleton = null;
+	resetMemoryEngines();
 }
 
 export function isActionable(node: VfsNode, accept?: FileTypeId[]): boolean {

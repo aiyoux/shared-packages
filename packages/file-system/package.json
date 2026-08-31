@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": false,
   "type": "module",
-  "description": "Browser VFS (Dexie + OPFS), FileExplorer UI, optional Backblaze B2, rclone RC, and local monitor remote browsers.",
+  "description": "Browser VFS (SQLite catalog + OPFS bytes), FileExplorer UI, optional Backblaze B2, rclone RC, and local monitor remote browsers.",
   "exports": {
     ".": {
       "types": "./src/index.ts",
@@ -96,7 +96,7 @@
 
   "dependencies": {
     "@backblaze-labs/b2-sdk": "^0.2.0",
-    "dexie": "^4.4.4"
+    "@sqlite.org/sqlite-wasm": "3.53.0-build1"
   },
   "peerDependencies": {
     "svelte": "^5.0.0",

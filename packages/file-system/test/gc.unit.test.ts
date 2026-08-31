@@ -131,9 +131,11 @@ describe('blob release funnel', () => {
 		const drop = await vfs.writeFile({ parentId: null, name: 'drop.txt', body: enc.encode('drop') });
 
 		// Point both refs at the SAME stored path, as a pack would.
+		// packOffset marks shared storage so trash does not OPFS-move the
+		// unpacked tree (phase 2) out from under the surviving sibling.
 		const keepRef = await vfs.db.blobRefs.get(keep.blobId!);
 		const shared = keepRef!.opfsPath;
-		await vfs.db.blobRefs.update(drop.blobId!, { opfsPath: shared });
+		await vfs.db.blobRefs.update(drop.blobId!, { opfsPath: shared, packOffset: 0 });
 
 		// Permanently deleting one must not destroy the other's bytes.
 		await vfs.trash(drop.id);
