@@ -187,8 +187,17 @@ export function engineFromPort(port: MessagePort, dbName = 'SharedVFS'): SqlEngi
 		if (msg.ok) p.resolve(msg.rows);
 		else p.reject(new Error(msg.error ?? 'catalog worker error'));
 	};
+	const failPending = (e: Error) => {
+		for (const [, p] of pending) p.reject(e);
+		pending.clear();
+	};
+	workerFailHandlers.add(failPending);
 	const call = (msg: Omit<RpcMsg, 'id' | 'session' | 'db'>) =>
 		new Promise<unknown>((resolve, reject) => {
+			if (workerFatal) {
+				reject(workerFatal);
+				return;
+			}
 			const id = next++;
 			const t = setTimeout(() => {
 				pending.delete(id);
@@ -210,6 +219,7 @@ export function engineFromPort(port: MessagePort, dbName = 'SharedVFS'): SqlEngi
 	return {
 		...engine,
 		async close() {
+			workerFailHandlers.delete(failPending);
 			await engine.close();
 			try {
 				port.close();
@@ -296,6 +306,13 @@ let leaderBridge: BroadcastChannel | null = null;
 let followerPort: MessagePort | null = null;
 let followerNext = 1;
 const followerPending = new Map<number, { id: number; session?: string }>();
+let workerFatal: Error | null = null;
+const workerFailHandlers = new Set<(e: Error) => void>();
+
+function failCatalogWorker(err: Error): void {
+	workerFatal = err;
+	for (const h of workerFailHandlers) h(err);
+}
 
 export function getCatalogWorker(): Worker | null {
 	return catalogWorker;
@@ -308,6 +325,14 @@ function startLeaderWorker(): Worker | null {
 			catalogWorker = new Worker(new URL('./catalog.worker.ts', import.meta.url), {
 				type: 'module',
 				name: 'vfs-catalog'
+			});
+			catalogWorker.onerror = (ev) => {
+				failCatalogWorker(
+					new Error(`catalog worker failed: ${ev.message || 'load error'}`)
+				);
+			};
+			catalogWorker.addEventListener('messageerror', () => {
+				failCatalogWorker(new Error('catalog worker messageerror'));
 			});
 		} catch {
 			return null;

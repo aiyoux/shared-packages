@@ -1,8 +1,12 @@
 /**
  * Dedicated worker that owns the live OPFS SAH-pool SQLite catalog.
  * One SAH pool, one sqlite file per VFS dbName.
+ *
+ * sqlite-wasm is loaded lazily AFTER onmessage is wired. A static import
+ * (or a bundled wasm fetch during module eval) delays the handler; the
+ * main thread's SELECT 1 then sits on a port nobody is listening to until
+ * catalog RPC times out.
  */
-import sqlite3InitModule from '@sqlite.org/sqlite-wasm';
 import { CATALOG_SCHEMA } from './catalogSchema.js';
 
 type Oo1Db = {
@@ -22,13 +26,53 @@ function safeName(dbName: string): string {
 	return dbName.replace(/[^a-zA-Z0-9._-]+/g, '_').slice(0, 80) || 'SharedVFS';
 }
 
+function wasmHref(): string {
+	try {
+		return new URL('/vendor/sqlite3.wasm', self.location.href).href;
+	} catch {
+		return '/vendor/sqlite3.wasm';
+	}
+}
+
+function withTimeout<T>(p: Promise<T>, ms: number, msg: string): Promise<T> {
+	return new Promise<T>((resolve, reject) => {
+		const t = setTimeout(() => reject(new Error(msg)), ms);
+		p.then(
+			(v) => {
+				clearTimeout(t);
+				resolve(v);
+			},
+			(e) => {
+				clearTimeout(t);
+				reject(e);
+			}
+		);
+	});
+}
+
 async function getPool(): Promise<PoolUtil> {
 	if (pool) return pool;
-	const sqlite3 = await sqlite3InitModule();
-	pool = (await sqlite3.installOpfsSAHPoolVfs({
-		name: 'vfs-catalog',
-		directory: 'vfs-catalog-sah'
-	})) as PoolUtil;
+	const { default: sqlite3InitModule } = await import('@sqlite.org/sqlite-wasm');
+	const sqlite3 = await withTimeout(
+		sqlite3InitModule({
+			locateFile: (file: string) => (file.endsWith('.wasm') ? wasmHref() : file)
+		}) as Promise<{
+			installOpfsSAHPoolVfs: (opts: {
+				name: string;
+				directory: string;
+			}) => Promise<PoolUtil>;
+		}>,
+		15_000,
+		'catalog sqlite3.wasm load timed out'
+	);
+	pool = await withTimeout(
+		sqlite3.installOpfsSAHPoolVfs({
+			name: 'vfs-catalog',
+			directory: 'vfs-catalog-sah'
+		}),
+		15_000,
+		'catalog OPFS SAH pool timed out (another tab may hold the catalog lock)'
+	);
 	return pool;
 }
 
