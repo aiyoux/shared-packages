@@ -711,72 +711,79 @@ export class VfsService {
 		}
 		if (!byDepth.length) return map;
 
+		// One IDB transaction for the whole tree. A 10-level zip of 3000 files
+		// is ~20k folders (deep unique prefixes). Each parent used to be its
+		// own auto-commit, and chromeTransactionDurability:'strict' fsyncs every
+		// commit — that, not "having an index", is what made extract 10× POSIX
+		// mkdir. All work below is Dexie so the txn stays alive.
 		return this.batch(async () => {
-			for (const level of byDepth) {
-				throwIfAborted(opts?.signal);
-				const grouped = new Map<string, string[][]>();
-				for (const segs of level) {
-					const parentKey = segs.slice(0, -1).join('/');
-					const g = grouped.get(parentKey);
-					if (g) g.push(segs);
-					else grouped.set(parentKey, [segs]);
+			await this.db.transaction('rw', this.db.nodes, async () => {
+				for (const level of byDepth) {
+					throwIfAborted(opts?.signal);
+					const grouped = new Map<string, string[][]>();
+					for (const segs of level) {
+						const parentKey = segs.slice(0, -1).join('/');
+						const g = grouped.get(parentKey);
+						if (g) g.push(segs);
+						else grouped.set(parentKey, [segs]);
+					}
+					const levelCreate: VfsNode[] = [];
+					for (const [parentKey, children] of grouped) {
+						const pid = map.get(parentKey);
+						if (pid === undefined) {
+							throw new VfsError('NOT_FOUND', `Missing parent folder ${parentKey}`);
+						}
+						if (pid !== null) {
+							const parent = await this.db.nodes.get(pid);
+							if (!parent || parent.kind !== 'folder') throw new VfsError('NOT_A_FOLDER');
+							if (parent.deletedAt != null) throw new VfsError('TRASH_STATE');
+						}
+						const siblings = await this.activeSiblings(pid);
+						const folderByName = new Map(
+							siblings.filter((n) => n.kind === 'folder').map((n) => [n.name, n])
+						);
+						const taken = new Set(siblings.map((n) => n.name.toLowerCase()));
+						let sortOrder = await this.nextAppendSortOrder(pid);
+						const now = Date.now();
+						for (const segs of children) {
+							const name = segs[segs.length - 1]!;
+							const key = segs.join('/');
+							const hit = folderByName.get(name);
+							if (hit) {
+								map.set(key, hit.id);
+								continue;
+							}
+							const fileHit = siblings.find((n) => n.name === name && n.kind === 'file');
+							if (fileHit) {
+								throw new VfsError('NAME_CONFLICT', `A file named ${name} already exists`);
+							}
+							let unique = name;
+							if (taken.has(unique.toLowerCase())) {
+								let i = 1;
+								while (taken.has(withNumericSuffix(name, i).toLowerCase())) i++;
+								unique = withNumericSuffix(name, i);
+							}
+							taken.add(unique.toLowerCase());
+							const node: VfsNode = {
+								id: generateId('fld'),
+								parentId: pid,
+								name: unique,
+								kind: 'folder',
+								createdAt: now,
+								updatedAt: now,
+								generation: 1,
+								deletedAt: null,
+								sortOrder
+							};
+							sortOrder += 16384;
+							levelCreate.push(node);
+							folderByName.set(unique, node);
+							map.set(key, node.id);
+						}
+					}
+					if (levelCreate.length) await this.db.nodes.bulkPut(levelCreate);
 				}
-				for (const [parentKey, children] of grouped) {
-					const pid = map.get(parentKey);
-					if (pid === undefined) {
-						throw new VfsError('NOT_FOUND', `Missing parent folder ${parentKey}`);
-					}
-					if (pid !== null) {
-						const parent = await this.db.nodes.get(pid);
-						if (!parent || parent.kind !== 'folder') throw new VfsError('NOT_A_FOLDER');
-						if (parent.deletedAt != null) throw new VfsError('TRASH_STATE');
-					}
-					const siblings = await this.activeSiblings(pid);
-					const folderByName = new Map(
-						siblings.filter((n) => n.kind === 'folder').map((n) => [n.name, n])
-					);
-					const taken = new Set(siblings.map((n) => n.name.toLowerCase()));
-					const toCreate: VfsNode[] = [];
-					let sortOrder = await this.nextAppendSortOrder(pid);
-					const now = Date.now();
-					for (const segs of children) {
-						const name = segs[segs.length - 1]!;
-						const key = segs.join('/');
-						const hit = folderByName.get(name);
-						if (hit) {
-							map.set(key, hit.id);
-							continue;
-						}
-						const fileHit = siblings.find((n) => n.name === name && n.kind === 'file');
-						if (fileHit) {
-							throw new VfsError('NAME_CONFLICT', `A file named ${name} already exists`);
-						}
-						let unique = name;
-						if (taken.has(unique.toLowerCase())) {
-							let i = 1;
-							while (taken.has(withNumericSuffix(name, i).toLowerCase())) i++;
-							unique = withNumericSuffix(name, i);
-						}
-						taken.add(unique.toLowerCase());
-						const node: VfsNode = {
-							id: generateId('fld'),
-							parentId: pid,
-							name: unique,
-							kind: 'folder',
-							createdAt: now,
-							updatedAt: now,
-							generation: 1,
-							deletedAt: null,
-							sortOrder
-						};
-						sortOrder += 16384;
-						toCreate.push(node);
-						folderByName.set(unique, node);
-						map.set(key, node.id);
-					}
-					if (toCreate.length) await this.db.nodes.bulkPut(toCreate);
-				}
-			}
+			});
 			return map;
 		});
 	}

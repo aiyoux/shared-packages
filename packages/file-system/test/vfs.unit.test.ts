@@ -507,6 +507,30 @@ describe('VfsService', () => {
 		assert.ok(await vfs.childByName(root.id, 'docs'));
 	});
 
+	it('ensureFolders commits a deep tree in one IDB transaction', async () => {
+		const root = await vfs.mkdir(null, 'deep');
+		let txns = 0;
+		const orig = vfs.db.transaction.bind(vfs.db);
+		vfs.db.transaction = ((...args: Parameters<typeof orig>) => {
+			txns += 1;
+			return orig(...args);
+		}) as typeof orig;
+		const paths: string[][] = [];
+		for (let i = 0; i < 80; i++) {
+			paths.push([`d0_${i % 5}`, `d1_${i % 8}`, `leaf_${i}`]);
+		}
+		const map = await vfs.ensureFolders(root.id, paths);
+		assert.equal(txns, 1, 'one rw txn, not one commit per parent');
+		assert.equal(map.get('') , root.id);
+		assert.equal(
+			[...map.keys()].filter((k) => k !== '').length,
+			5 + 5 * 8 + 80,
+			'every prefix becomes a folder'
+		);
+		const d0 = await vfs.childByName(root.id, 'd0_0');
+		assert.equal(d0?.kind, 'folder');
+	});
+
 	it('writeFile direct skips tmp+promote', async () => {
 		const orig = vfs.opfs.writePartial.bind(vfs.opfs);
 		let partials = 0;
