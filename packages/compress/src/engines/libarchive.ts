@@ -11,6 +11,8 @@ type LibarchiveWasm = Awaited<ReturnType<LibarchiveMod['libarchiveWasm']>>;
 let api: LibarchiveMod | null = null;
 let wasm: LibarchiveWasm | null = null;
 
+const VENDOR_WASM = '/vendor/libarchive.wasm';
+
 function asU8(data: unknown): Uint8Array | null {
 	if (data instanceof Uint8Array) return data;
 	if (data instanceof ArrayBuffer) return new Uint8Array(data);
@@ -25,19 +27,75 @@ function asI8(bytes: Uint8Array): Int8Array {
 	return new Int8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength);
 }
 
-/** Browser: fetch the vendored wasm. Node tests: let emscripten read dist/. */
-async function wasmInitOpts(): Promise<object | undefined> {
-	if (typeof document === 'undefined') return undefined;
-	const res = await fetch('/vendor/libarchive.wasm');
+/** Node tests read dist/libarchive.wasm via emscripten. Browser/worker fetch /vendor. */
+function isNodeRuntime(): boolean {
+	return (
+		typeof process !== 'undefined' &&
+		typeof process.versions?.node === 'string' &&
+		typeof window === 'undefined' &&
+		typeof (globalThis as { WorkerGlobalScope?: unknown }).WorkerGlobalScope === 'undefined'
+	);
+}
+
+function isWasmBinary(bytes: Uint8Array): boolean {
+	return bytes.byteLength >= 8 && bytes[0] === 0x00 && bytes[1] === 0x61 && bytes[2] === 0x73 && bytes[3] === 0x6d;
+}
+
+async function loadVendorWasm(): Promise<Uint8Array> {
+	const res = await fetch(VENDOR_WASM);
 	if (!res.ok) {
-		throw new Error(`libarchive.wasm HTTP ${res.status} — copy it to /vendor (hub prepare)`);
+		throw new Error(`libarchive.wasm HTTP ${res.status} at ${VENDOR_WASM} — hub prepare copies it`);
 	}
-	return { wasmBinary: new Uint8Array(await res.arrayBuffer()) };
+	const bytes = new Uint8Array(await res.arrayBuffer());
+	if (!isWasmBinary(bytes)) {
+		throw new Error(
+			`libarchive.wasm is empty or not a wasm binary (${bytes.byteLength} bytes from ${VENDOR_WASM})`
+		);
+	}
+	return bytes;
+}
+
+type EmscriptenOpts = {
+	wasmBinary: Uint8Array;
+	locateFile: (file: string) => string;
+	instantiateWasm: (
+		imports: WebAssembly.Imports,
+		onSuccess: (instance: WebAssembly.Instance, module: WebAssembly.Module) => void
+	) => { then: Promise<WebAssembly.Exports>['then'] };
+};
+
+async function wasmInitOpts(): Promise<EmscriptenOpts | undefined> {
+	if (isNodeRuntime()) return undefined;
+	const wasmBinary = await loadVendorWasm();
+	return {
+		wasmBinary,
+		locateFile: (file) => (file.endsWith('.wasm') ? VENDOR_WASM : file),
+		// Bypass emscripten's locateFile/fs path. Vite workers have no
+		// `document`, and a Node process polyfill makes the glue read an
+		// empty buffer ("BufferSource argument is empty").
+		instantiateWasm(imports, onSuccess) {
+			const done = WebAssembly.compile(wasmBinary as BufferSource).then((module) =>
+				WebAssembly.instantiate(module, imports).then((instance) => {
+					onSuccess(instance, module);
+					return instance.exports;
+				})
+			);
+			return done;
+		}
+	};
+}
+
+async function boot(mod: LibarchiveMod, opts: EmscriptenOpts | undefined): Promise<LibarchiveWasm> {
+	const init = opts as Parameters<LibarchiveMod['libarchive']>[0];
+	if (opts && typeof mod.libarchive === 'function') {
+		return mod.wrapLibarchiveWasm(await mod.libarchive(init));
+	}
+	return mod.libarchiveWasm(init);
 }
 
 async function getWasm(): Promise<{ api: LibarchiveMod; wasm: LibarchiveWasm }> {
 	if (!api) api = await import('libarchive-wasm');
-	if (!wasm) wasm = await api.libarchiveWasm(await wasmInitOpts());
+	if (!wasm) wasm = await boot(api, await wasmInitOpts());
 	return { api, wasm };
 }
 
