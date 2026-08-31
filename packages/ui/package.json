@@ -24,6 +24,7 @@
 		"./clipboard/ClipboardPopup.svelte": "./src/clipboard/ClipboardPopup.svelte",
 		"./ShellFrame.svelte": "./src/ShellFrame.svelte",
 		"./FileDropZone.svelte": "./src/FileDropZone.svelte",
+		"./WorldMap.svelte": "./src/WorldMap.svelte",
 		"./ObjectTransformFrame.svelte": "./src/ObjectTransformFrame.svelte",
 		"./PathNodeEditor.svelte": "./src/PathNodeEditor.svelte",
 		"./objectTransform": {
