@@ -1101,9 +1101,12 @@ describe('archiveOps', () => {
 		assert.ok(seen >= 4);
 		const root = await driver.list({ parentId: null });
 		const tree = root.entries.find((e) => e.name === 'tree' && e.kind === 'folder');
-		assert.ok(tree);
-		const kids = await driver.list({ parentId: tree.id });
-		assert.ok(kids.entries.length < 24);
+		// Catalog commits after OPFS, so an abort mid-window leaves no IDB tree
+		// (or a partial one if some earlier window already committed).
+		if (tree) {
+			const kids = await driver.list({ parentId: tree.id });
+			assert.ok(kids.entries.length < 24);
+		}
 		await vfs.db.delete();
 	});
 });

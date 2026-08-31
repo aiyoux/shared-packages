@@ -248,6 +248,18 @@ export interface ExplorerDriver {
 		}
 	): Promise<ExplorerEntry[]>;
 	/**
+	 * Extract-shaped write: OPFS tree first, one catalog commit after.
+	 * `path` is zip-relative (`dir/file.txt`). Local VFS only.
+	 */
+	writeTree?(
+		parentId: ExplorerEntryId | null,
+		files: Array<{ path: string; body: File | Blob | Uint8Array }>,
+		opts?: {
+			signal?: AbortSignal;
+			onProgress?: (written: ExplorerEntry[]) => void;
+		}
+	): Promise<ExplorerEntry[]>;
+	/**
 	 * Host-absolute path for a monitor (or similar) entry. Used when two
 	 * panes share a daemon but not a connection root.
 	 */

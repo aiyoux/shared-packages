@@ -313,12 +313,17 @@ export function createSyncOpfsStore(rootDirName = 'shared-vfs'): OpfsBlobStore {
 		async listOrphans(prefix) {
 			const base = prefix.replace(/\/+$/, '');
 			const out: string[] = [];
-			try {
-				const d = (await resolveDir(base)) as IterableDirHandle;
-				if (!d.entries) return out;
+			const walk = async (dirPath: string) => {
+				const d = (await resolveDir(dirPath)) as IterableDirHandle;
+				if (!d.entries) return;
 				for await (const [name, handle] of d.entries()) {
-					if (handle.kind === 'file') out.push(`${base}/${name}`);
+					const p = `${dirPath}/${name}`;
+					if (handle.kind === 'file') out.push(p);
+					else await walk(p);
 				}
+			};
+			try {
+				await walk(base);
 			} catch {
 				/* directory does not exist yet */
 			}

@@ -55,7 +55,7 @@ export type LocalVfsLike = Pick<
 	| 'readBlob'
 	| 'subscribe'
 > &
-	Partial<Pick<VfsService, 'liveList' | 'writeFiles'>>;
+	Partial<Pick<VfsService, 'liveList' | 'writeFiles' | 'writeTree'>>;
 
 export type LocalExplorerDriverOptions = {
 	/** Driver id: `local` (default) or `memory`. */
@@ -230,6 +230,27 @@ export function createLocalExplorerDriver(
 				{
 					signal: opts?.signal,
 					pack: opts?.pack,
+					onProgress: opts?.onProgress
+						? (written) => opts.onProgress!(written.map(nodeToEntry))
+						: undefined
+				}
+			);
+			return nodes.map(nodeToEntry);
+		},
+
+		async writeTree(parentId, files, opts) {
+			if (typeof vfs.writeTree !== 'function') {
+				throw new Error('This location cannot write an extract tree');
+			}
+			const nodes = await vfs.writeTree(
+				parentId,
+				files.map(({ path, body }) => ({
+					path,
+					body,
+					contentType: body instanceof Blob ? body.type || undefined : undefined
+				})),
+				{
+					signal: opts?.signal,
 					onProgress: opts?.onProgress
 						? (written) => opts.onProgress!(written.map(nodeToEntry))
 						: undefined

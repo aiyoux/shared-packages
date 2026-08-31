@@ -614,7 +614,12 @@ export async function writeEntriesToDriver(
 	const dest = folders ?? createDestFolders(driver, parentId, signal);
 	const run = async () => {
 	const ensureDir = dest.ensureDir;
-	await dest.prefetch(files.map((f) => splitPackedPath(f.path).dirs).filter((d) => d.length > 0));
+	const useTree = typeof driver.writeTree === 'function';
+	if (!useTree) {
+		await dest.prefetch(
+			files.map((f) => splitPackedPath(f.path).dirs).filter((d) => d.length > 0)
+		);
+	}
 
 	type FolderAgg = {
 		name: string;
@@ -692,27 +697,37 @@ export async function writeEntriesToDriver(
 		file: PackedPath;
 	};
 	const planned: Planned[] = [];
-	for (const file of files) {
-		throwIfAborted(signal);
-		const { dirs, file: fileName } = splitPackedPath(file.path);
-		if (!fileName) {
-			if (dirs.length) await ensureDir(dirs);
-			continue;
+	if (useTree) {
+		for (const file of files) {
+			throwIfAborted(signal);
+			const { dirs, file: fileName } = splitPackedPath(file.path);
+			if (!fileName) continue;
+			planned.push({ dirs, destParent: parentId, name: fileName, file });
 		}
-		const destParent = await ensureDir(dirs);
-		throwIfAborted(signal);
-		// Folder rows need the dest id of each ancestor's PARENT; resolving the
-		// chain here reuses ensureDir's cache instead of listing again.
-		let parentKey = '';
-		for (let d = 0; d < dirs.length; d++) {
-			const key = dirs.slice(0, d + 1).join('/');
-			if (!folderParents.has(key)) {
-				folderParents.set(key, await ensureDir(dirs.slice(0, d)));
+		for (const [key, agg] of folderAgg) {
+			if (!folderParents.has(key)) folderParents.set(key, parentId);
+			void agg;
+		}
+	} else {
+		for (const file of files) {
+			throwIfAborted(signal);
+			const { dirs, file: fileName } = splitPackedPath(file.path);
+			if (!fileName) {
+				if (dirs.length) await ensureDir(dirs);
+				continue;
 			}
-			parentKey = key;
+			const destParent = await ensureDir(dirs);
+			throwIfAborted(signal);
+			// Folder rows need the dest id of each ancestor's PARENT; resolving the
+			// chain here reuses ensureDir's cache instead of listing again.
+			for (let d = 0; d < dirs.length; d++) {
+				const key = dirs.slice(0, d + 1).join('/');
+				if (!folderParents.has(key)) {
+					folderParents.set(key, await ensureDir(dirs.slice(0, d)));
+				}
+			}
+			planned.push({ dirs, destParent, name: fileName, file });
 		}
-		void parentKey;
-		planned.push({ dirs, destParent, name: fileName, file });
 	}
 
 	// Paint top-level folder rows once their dest parent is known.
@@ -721,6 +736,50 @@ export async function writeEntriesToDriver(
 			dest.painted.add(key);
 			emitFolder(key);
 		}
+	}
+
+	// POSIX tree in OPFS, then one IDB catalog. Skips ensureFolders+writeFiles
+	// (20k folder rows up front, 3000 files in one blobs/ directory).
+	if (useTree && files.length) {
+		throwIfAborted(signal);
+		for (const plan of planned) {
+			onFile?.({
+				name: plan.name,
+				parentId: plan.destParent,
+				transferred: 0,
+				size: plan.file.data.byteLength,
+				done: false,
+				entryKind: 'file'
+			});
+		}
+		let settled = 0;
+		const settlePlan = (plan: Planned, destParent = plan.destParent) => {
+			const size = plan.file.data.byteLength;
+			onFile?.({
+				name: plan.name,
+				parentId: destParent,
+				transferred: size,
+				size,
+				done: true,
+				entryKind: 'file'
+			});
+			if (plan.dirs.length) bumpFolderAggs(plan.dirs, size);
+		};
+		await driver.writeTree(
+			parentId,
+			files.map((f) => ({ path: f.path, body: f.data })),
+			{
+				signal,
+				onProgress: (written) => {
+					for (let i = 0; i < written.length && settled < planned.length; i++) {
+						const entry = written[i]!;
+						settlePlan(planned[settled++]!, entry.parentId ?? parentId);
+					}
+				}
+			}
+		);
+		while (settled < planned.length) settlePlan(planned[settled++]!);
+		return;
 	}
 
 	// One batch across every destination folder, when the driver can do it.

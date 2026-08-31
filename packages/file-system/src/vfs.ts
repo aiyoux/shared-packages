@@ -829,6 +829,309 @@ export class VfsService {
 		});
 	}
 
+	/**
+	 * Extract-shaped bulk write: OPFS tree first, one IDB catalog commit after.
+	 *
+	 * Members are stored under `x/<destId>/<relative path>` so the 3000-file
+	 * nested zip is a POSIX directory tree (the ~20s SAH bench), not 3000
+	 * files in one `blobs/` folder. Explorer/trash/git still read IDB; rename
+	 * does not move the OPFS path. Crash before the catalog commit leaves
+	 * unreferenced `x/` files for gc.
+	 */
+	async writeTree(
+		parentId: string | null,
+		files: Array<{ path: string; body: unknown; contentType?: string }>,
+		opts?: {
+			signal?: AbortSignal;
+			onProgress?: (written: VfsNode[]) => void;
+		}
+	): Promise<VfsNode[]> {
+		await this.ready();
+		if (parentId !== null) {
+			const parent = await this.db.nodes.get(parentId);
+			if (!parent || parent.kind !== 'folder') throw new VfsError('NOT_A_FOLDER');
+			if (parent.deletedAt != null) throw new VfsError('TRASH_STATE');
+		}
+
+		type PlannedFile = {
+			dirs: string[];
+			name: string;
+			relPath: string;
+			opfsPath: string;
+			bytes: Uint8Array;
+			contentType: string;
+			fileType: ReturnType<typeof inferFileTypeFromName>;
+			nodeId: string;
+			blobId: string;
+			size: number;
+			crc: number;
+		};
+		const planned: PlannedFile[] = [];
+		const folderKeys = new Set<string>();
+		const treeRoot = `x/${parentId ?? 'root'}`;
+
+		for (const input of files) {
+			throwIfAborted(opts?.signal);
+			const trimmed = String(input.path ?? '').replace(/\\/g, '/');
+			const isDir = trimmed.endsWith('/');
+			const rawParts = trimmed.split('/').filter((p) => p && p !== '.' && p !== '..');
+			const parts = rawParts.map((p) => sanitizeName(p));
+			if (isDir || !parts.length) {
+				let key = '';
+				for (const seg of parts) {
+					key = key ? `${key}/${seg}` : seg;
+					folderKeys.add(key);
+				}
+				continue;
+			}
+			const nameRaw = parts.pop()!;
+			let name = nameRaw;
+			const fileType = inferFileTypeFromName(name);
+			if (fileType !== 'unknown' && getFileType(fileType)) {
+				name = forceExtension(name, fileType);
+			}
+			const { bytes, contentType } = await serializeBody(input.body, input.contentType);
+			const dirs = parts;
+			let folderKey = '';
+			for (const seg of dirs) {
+				folderKey = folderKey ? `${folderKey}/${seg}` : seg;
+				folderKeys.add(folderKey);
+			}
+			const relPath = [...dirs, name].join('/');
+			const blobId = generateId('blob');
+			planned.push({
+				dirs,
+				name,
+				relPath,
+				opfsPath: `${treeRoot}/${relPath}`,
+				bytes,
+				contentType,
+				fileType,
+				nodeId: generateId('file'),
+				blobId,
+				size: bytes.byteLength,
+				crc: crc32(bytes)
+			});
+		}
+
+		const WRITE_CONCURRENCY = 12;
+		try {
+			let cursor = 0;
+			const workers = Array.from({ length: WRITE_CONCURRENCY }, async () => {
+				while (cursor < planned.length) {
+					throwIfAborted(opts?.signal);
+					const p = planned[cursor++]!;
+					await this.opfs.writeFinal(p.opfsPath, p.bytes, { flush: false });
+				}
+			});
+			await Promise.all(workers);
+		} catch (e) {
+			for (const p of planned) {
+				try {
+					await this.opfs.remove(p.opfsPath);
+				} catch {
+					/* gc */
+				}
+			}
+			throw e;
+		}
+
+		const folderPaths = [...folderKeys].sort((a, b) => a.split('/').length - b.split('/').length);
+		const now = Date.now();
+		const fileNodes: VfsNode[] = [];
+
+		await this.batch(async () => {
+			await this.db.transaction('rw', this.db.nodes, this.db.blobRefs, async () => {
+				if (parentId !== null) {
+					const parent = await this.db.nodes.get(parentId);
+					if (!parent || parent.kind !== 'folder' || parent.deletedAt != null) {
+						throw new VfsError('TRASH_STATE');
+					}
+				}
+				const idByKey = new Map<string, string | null>([['', parentId]]);
+				const createdIds = new Set<string>();
+				const nodePuts: VfsNode[] = [];
+
+				const foldersByDepth = new Map<number, string[]>();
+				for (const key of folderPaths) {
+					const depth = key.split('/').length;
+					const list = foldersByDepth.get(depth);
+					if (list) list.push(key);
+					else foldersByDepth.set(depth, [key]);
+				}
+				for (const depth of [...foldersByDepth.keys()].sort((a, b) => a - b)) {
+					const keys = foldersByDepth.get(depth)!;
+					const grouped = new Map<string, string[]>();
+					for (const key of keys) {
+						const i = key.lastIndexOf('/');
+						const parentKey = i < 0 ? '' : key.slice(0, i);
+						const g = grouped.get(parentKey);
+						if (g) g.push(key);
+						else grouped.set(parentKey, [key]);
+					}
+					const uniquePids = [
+						...new Set(
+							[...grouped.keys()]
+								.map((k) => idByKey.get(k))
+								.filter((id): id is string => id != null)
+						)
+					];
+					const existingPids = uniquePids.filter((id) => !createdIds.has(id));
+					if (existingPids.length) {
+						const parents = await this.db.nodes.bulkGet(existingPids);
+						for (const parent of parents) {
+							if (!parent || parent.kind !== 'folder') throw new VfsError('NOT_A_FOLDER');
+							if (parent.deletedAt != null) throw new VfsError('TRASH_STATE');
+						}
+					}
+					const siblingsByParent = new Map<string, VfsNode[]>();
+					if ([...grouped.keys()].some((k) => idByKey.get(k) === null)) {
+						siblingsByParent.set('', await this.activeSiblings(null));
+					}
+					if (existingPids.length) {
+						const rows: VfsNode[] = [];
+						for (let i = 0; i < existingPids.length; i += 100) {
+							rows.push(
+								...(await this.db.nodes
+									.where('parentId')
+									.anyOf(existingPids.slice(i, i + 100))
+									.toArray())
+							);
+						}
+						for (const n of rows) {
+							if (n.deletedAt != null || n.parentId == null) continue;
+							const list = siblingsByParent.get(n.parentId);
+							if (list) list.push(n);
+							else siblingsByParent.set(n.parentId, [n]);
+						}
+					}
+					for (const [parentKey, childKeys] of grouped) {
+						const pid = idByKey.get(parentKey);
+						if (pid === undefined) throw new VfsError('NOT_FOUND', `Missing parent ${parentKey}`);
+						const siblings = siblingsByParent.get(pid ?? '') ?? [];
+						const folderByName = new Map(
+							siblings.filter((n) => n.kind === 'folder').map((n) => [n.name, n])
+						);
+						const taken = new Set(siblings.map((n) => n.name.toLowerCase()));
+						let sortOrder = 0;
+						for (const n of siblings) {
+							if (typeof n.sortOrder === 'number' && n.sortOrder >= sortOrder) {
+								sortOrder = n.sortOrder + 16384;
+							}
+						}
+						for (const key of childKeys) {
+							const name = key.slice(key.lastIndexOf('/') + 1);
+							const hit = folderByName.get(name);
+							if (hit) {
+								idByKey.set(key, hit.id);
+								continue;
+							}
+							if (siblings.some((n) => n.name === name && n.kind === 'file')) {
+								throw new VfsError('NAME_CONFLICT', `A file named ${name} already exists`);
+							}
+							let unique = name;
+							if (taken.has(unique.toLowerCase())) {
+								let i = 1;
+								while (taken.has(withNumericSuffix(name, i).toLowerCase())) i++;
+								unique = withNumericSuffix(name, i);
+							}
+							taken.add(unique.toLowerCase());
+							const node: VfsNode = {
+								id: generateId('fld'),
+								parentId: pid,
+								name: unique,
+								kind: 'folder',
+								createdAt: now,
+								updatedAt: now,
+								generation: 1,
+								deletedAt: null,
+								sortOrder
+							};
+							sortOrder += 16384;
+							nodePuts.push(node);
+							createdIds.add(node.id);
+							folderByName.set(unique, node);
+							idByKey.set(key, node.id);
+						}
+					}
+				}
+
+				const filesByParent = new Map<string | null, PlannedFile[]>();
+				for (const p of planned) {
+					const parentKey = p.dirs.join('/');
+					const pid = idByKey.get(parentKey);
+					if (pid === undefined) {
+						throw new VfsError('NOT_FOUND', `Missing dest folder ${parentKey}`);
+					}
+					const list = filesByParent.get(pid);
+					if (list) list.push(p);
+					else filesByParent.set(pid, [p]);
+				}
+				const refPuts: BlobRef[] = [];
+				for (const [pid, group] of filesByParent) {
+					const siblings =
+						pid === null || !createdIds.has(pid)
+							? await this.activeSiblings(pid)
+							: [];
+					const taken = new Set(siblings.map((n) => n.name.toLowerCase()));
+					let sortOrder = 0;
+					for (const n of siblings) {
+						if (typeof n.sortOrder === 'number' && n.sortOrder >= sortOrder) {
+							sortOrder = n.sortOrder + 16384;
+						}
+					}
+					for (const p of group) {
+						let unique = p.name;
+						if (taken.has(unique.toLowerCase())) {
+							let i = 1;
+							while (taken.has(withNumericSuffix(p.name, i).toLowerCase())) i++;
+							unique = withNumericSuffix(p.name, i);
+						}
+						taken.add(unique.toLowerCase());
+						const node: VfsNode = {
+							id: p.nodeId,
+							parentId: pid,
+							name: unique,
+							kind: 'file',
+							fileType: p.fileType === 'unknown' ? undefined : p.fileType,
+							size: p.size,
+							createdAt: now,
+							updatedAt: now,
+							generation: 1,
+							blobId: p.blobId,
+							contentType: p.contentType,
+							deletedAt: null,
+							sortOrder
+						};
+						sortOrder += 16384;
+						nodePuts.push(node);
+						fileNodes.push(node);
+						refPuts.push({
+							id: p.blobId,
+							opfsPath: p.opfsPath,
+							byteLength: p.size,
+							createdAt: now,
+							contentType: p.contentType,
+							pending: false,
+							pendingPromote: false,
+							crc32: p.crc
+						});
+					}
+				}
+				if (nodePuts.length) await this.db.nodes.bulkPut(nodePuts);
+				if (refPuts.length) await this.db.blobRefs.bulkPut(refPuts);
+			});
+		});
+
+		this.emitChange();
+		const byId = new Map(fileNodes.map((n) => [n.id, n]));
+		const ordered = planned
+			.map((p) => byId.get(p.nodeId))
+			.filter((n): n is VfsNode => n != null);
+		if (ordered.length) opts?.onProgress?.(ordered);
+		return ordered;
+	}
+
 	// ── write / update ────────────────────────────────────────────
 
 	async writeFile(input: WriteFileInput): Promise<VfsNode> {
@@ -3368,7 +3671,7 @@ export class VfsService {
 		// below cannot protect it; a pack in flight is protected instead by the
 		// pending blobRefs its reserve txn wrote, which are already in
 		// `namedPaths`.
-		for (const prefix of ['blobs', 'packs']) {
+		for (const prefix of ['blobs', 'packs', 'x']) {
 			try {
 				const found = await this.opfs.listOrphans(prefix);
 				for (const p of found) {

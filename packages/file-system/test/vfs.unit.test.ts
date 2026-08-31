@@ -531,6 +531,33 @@ describe('VfsService', () => {
 		assert.equal(d0?.kind, 'folder');
 	});
 
+	it('writeTree stores a nested tree in OPFS then one catalog commit', async () => {
+		const root = await vfs.mkdir(null, 'inbox');
+		let txns = 0;
+		const orig = vfs.db.transaction.bind(vfs.db);
+		vfs.db.transaction = ((...args: Parameters<typeof orig>) => {
+			txns += 1;
+			return orig(...args);
+		}) as typeof orig;
+		const nodes = await vfs.writeTree(root.id, [
+			{ path: 'repo/a.txt', body: new Uint8Array([1, 2, 3]) },
+			{ path: 'repo/nested/b.txt', body: new Uint8Array([4, 5]) }
+		]);
+		assert.equal(txns, 1, 'catalog is one txn after OPFS writes');
+		assert.equal(nodes.length, 2);
+		const repo = await vfs.childByName(root.id, 'repo');
+		assert.equal(repo?.kind, 'folder');
+		const nested = await vfs.childByName(repo!.id, 'nested');
+		assert.equal(nested?.kind, 'folder');
+		const a = await vfs.childByName(repo!.id, 'a.txt');
+		const b = await vfs.childByName(nested!.id, 'b.txt');
+		assert.equal((await vfs.readBytes(a!.id))[0], 1);
+		assert.equal((await vfs.readBytes(b!.id))[0], 4);
+		const ref = await vfs.db.blobRefs.get(a!.blobId!);
+		assert.ok(ref?.opfsPath.startsWith(`x/${root.id}/`), 'bytes live in the extract tree');
+		assert.equal(ref?.pending, false);
+	});
+
 	it('writeFile direct skips tmp+promote', async () => {
 		const orig = vfs.opfs.writePartial.bind(vfs.opfs);
 		let partials = 0;

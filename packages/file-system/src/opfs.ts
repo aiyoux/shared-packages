@@ -393,21 +393,19 @@ export function createOpfsBlobStore(rootDirName = 'shared-vfs'): OpfsBlobStore {
 		},
 		async listOrphans(prefix) {
 			const out: string[] = [];
-			const { dir } = splitPath(prefix.endsWith('/') ? prefix + 'x' : prefix + '/x');
-			const baseDir = prefix.replace(/\/$/, '');
-			try {
-				const d = await resolveDir(baseDir.includes('/') ? baseDir.split('/')[0]! : baseDir);
-				// list top-level under blobs/ or tmp/
-				const target = await resolveDir(prefix.replace(/\/$/, ''));
+			const walk = async (dirPath: string) => {
+				const target = await resolveDir(dirPath);
 				for await (const [name, handle] of dirEntries(target)) {
-					if (handle.kind === 'file') {
-						out.push(`${prefix.replace(/\/$/, '')}/${name}`);
-					}
+					const p = `${dirPath}/${name}`;
+					if (handle.kind === 'file') out.push(p);
+					else await walk(p);
 				}
+			};
+			try {
+				await walk(prefix.replace(/\/$/, ''));
 			} catch {
 				// empty
 			}
-			void dir;
 			return out;
 		},
 		async listTmp() {
