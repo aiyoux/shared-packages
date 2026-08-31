@@ -36,11 +36,12 @@ describe('pressure-driven opacity (pencil & marker)', () => {
 		assert.ok(pressureStrokeOpacity(0.7, 'highlighter') > pressureStrokeOpacity(0.2, 'highlighter'));
 	});
 
-	it('honors a highlighterOpacity override for the nominal (and its pressure ramp)', () => {
+	it('honors an inkOpacity override for highlighter and wash pen', () => {
 		assert.equal(pressureStrokeOpacity(1, 'highlighter', 'HB', 0.8), 0.8);
 		assert.ok(pressureStrokeOpacity(0, 'highlighter', 'HB', 0.8) < 0.8);
-		// Other brush types ignore the override entirely.
-		assert.equal(pressureStrokeOpacity(1, 'pen', 'HB', 0.8), 1);
+		assert.equal(pressureStrokeOpacity(1, 'pen', 'HB', 0.6), 0.6);
+		assert.ok(pressureStrokeOpacity(0, 'pen', 'HB', 0.6) < 0.6);
+		assert.equal(pressureStrokeOpacity(1, 'pencil', 'HB', 0.8), 0.34, 'pencil grade still wins');
 	});
 
 	it('keeps a faint floor at zero pressure so light strokes still read', () => {
@@ -53,14 +54,14 @@ describe('pressure-driven opacity (pencil & marker)', () => {
 		assert.equal(pressureStrokeOpacity(2, 'pencil', 'HB'), pressureStrokeOpacity(1, 'pencil', 'HB'));
 	});
 
-	it('leaves pen opaque regardless of pressure (pen is not pressure-darkened)', () => {
+	it('leaves default pen opaque regardless of pressure', () => {
 		assert.equal(pressureStrokeOpacity(0, 'pen'), 1);
 		assert.equal(pressureStrokeOpacity(1, 'pen'), 1);
 	});
 });
 
 describe('brush SVG path contracts', () => {
-	it('keeps pen paths opaque and unblended by omitting default material props', () => {
+	it('keeps default pen paths opaque and unblended by omitting default material props', () => {
 		assert.deepEqual(brushParams('pen'), {
 			opacity: 1,
 			blendMode: 'normal',
@@ -71,6 +72,7 @@ describe('brush SVG path contracts', () => {
 		});
 		assert.deepEqual(brushMaterialProps('pen'), {});
 		assert.equal(effectiveStrokeWidth(6, 'pen'), 6);
+		assert.deepEqual(brushMaterialProps('pen', 'HB', 0.4), { opacity: 0.4 });
 	});
 
 	it('offers pencil graphite grades that build up through transparent multiply strokes', () => {

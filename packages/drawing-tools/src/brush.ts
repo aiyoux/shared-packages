@@ -33,27 +33,25 @@ export function pencilGradeParams(grade: PencilGrade): BrushParams {
 }
 
 /**
- * `highlighterOpacity` overrides the highlighter's nominal opacity (default
- * 0.5 — bumped up from the original 0.35, which read as too faint) with a
- * user-configured strength. Ignored for every other brush type.
+ * `inkOpacity` is the user-set strength for highlighter, and for pen when
+ * translucent ink is on. Pencil still uses the grade table. Omit it (or pass
+ * `undefined`) to keep each brush's default — pen stays fully opaque.
+ *
+ * Highlighter (and wash pen) are source-over, not multiply. Multiply against
+ * already-committed opaque ink (Cs*Cd) turns the stroke black wherever it
+ * crosses a pen, so it looks like it dropped under the ink the moment the
+ * pointer lifts. Source-over + opacity matches the live overlay: the stroke
+ * sits on top, ink still shows through. Overlapping passes still darken via
+ * stacked alpha.
  */
-export function brushParams(brushType: BrushType, pencilGrade: PencilGrade = 'HB', highlighterOpacity?: number): BrushParams {
+export function brushParams(brushType: BrushType, pencilGrade: PencilGrade = 'HB', inkOpacity?: number): BrushParams {
 	switch (brushType) {
 		case 'pencil':
 			return pencilGradeParams(normalizePencilGrade(pencilGrade));
 		case 'highlighter':
-			// Source-over, not multiply. Multiply against already-committed opaque
-			// ink (Cs*Cd) turns the marker black wherever it crosses a pen, so the
-			// stroke looks like it dropped under the ink the moment the pointer
-			// lifts. The live preview is an SVG overlay composited on top of the
-			// raster canvases, so mix-blend-mode never sees those pixels and the
-			// marker stays on top while drawing. Source-over + opacity matches
-			// that lift: highlighter sits on top, ink still shows through.
-			// Overlapping marker strokes still darken via stacked alpha (and
-			// markerBuildUp splits scribbles into separate paths).
-			return { opacity: highlighterOpacity ?? 0.5, blendMode: 'normal', widthMult: 4, thinning: 0, smoothing: 0.6, streamline: 0.5 };
+			return { opacity: inkOpacity ?? 0.5, blendMode: 'normal', widthMult: 4, thinning: 0, smoothing: 0.6, streamline: 0.5 };
 		default:
-			return { opacity: 1, blendMode: 'normal', widthMult: 1, thinning: 0.6, smoothing: 0.5, streamline: 0.5 };
+			return { opacity: inkOpacity ?? 1, blendMode: 'normal', widthMult: 1, thinning: 0.6, smoothing: 0.5, streamline: 0.5 };
 	}
 }
 
@@ -61,8 +59,8 @@ export function effectiveStrokeWidth(baseStrokeWidth: number, brushType: BrushTy
 	return baseStrokeWidth * brushParams(brushType, pencilGrade).widthMult;
 }
 
-export function brushMaterialProps(brushType: BrushType, pencilGrade: PencilGrade = 'HB', highlighterOpacity?: number): Partial<PathData> {
-	const { opacity, blendMode } = brushParams(brushType, pencilGrade, highlighterOpacity);
+export function brushMaterialProps(brushType: BrushType, pencilGrade: PencilGrade = 'HB', inkOpacity?: number): Partial<PathData> {
+	const { opacity, blendMode } = brushParams(brushType, pencilGrade, inkOpacity);
 	const props: Partial<PathData> = {};
 	if (opacity !== 1) props.opacity = opacity;
 	if (blendMode !== 'normal') props.blendMode = blendMode;
@@ -70,20 +68,17 @@ export function brushMaterialProps(brushType: BrushType, pencilGrade: PencilGrad
 }
 
 /**
- * Pressure-driven opacity for the translucent brushes (pencil & marker) in
- * pressure mode. Light press is intentionally lighter than the brush's nominal
- * opacity (a reduced baseline, so there's headroom to SEE the darkening as you
- * press harder); full press reaches the nominal opacity (the darkness you get
- * today without pressure). Pen is opaque (opacity 1) regardless of pressure, so
- * this is only meaningful for pencil/marker — callers gate on brush type.
+ * Pressure-driven opacity for brushes whose nominal opacity is below 1
+ * (pencil, marker, and wash pen). Light press is lighter than the nominal
+ * (a reduced baseline, so there's headroom to SEE the darkening as you press
+ * harder); full press reaches the nominal. Fully opaque ink (default pen)
+ * stays 1 regardless of pressure.
  *
  * `p` is clamped to 0..1. The baseline floor keeps very-light pressure from going
  * fully transparent (a faint ghost of the stroke should still read).
  */
-export function pressureStrokeOpacity(p: number, brushType: BrushType, pencilGrade: PencilGrade = 'HB', highlighterOpacity?: number): number {
-	const nominal = brushParams(brushType, pencilGrade, highlighterOpacity).opacity;
-	// Pen (and any fully-opaque brush) stays opaque regardless of pressure — only
-	// the multiply-blend brushes (pencil/marker) get the reduced-baseline ramp.
+export function pressureStrokeOpacity(p: number, brushType: BrushType, pencilGrade: PencilGrade = 'HB', inkOpacity?: number): number {
+	const nominal = brushParams(brushType, pencilGrade, inkOpacity).opacity;
 	if (nominal >= 1) return 1;
 	const min = Math.max(0.1, nominal * 0.35);
 	return min + (nominal - min) * Math.max(0, Math.min(1, p));
@@ -96,7 +91,7 @@ export function buildBasicStrokePath(
 	layerId: string,
 	brushType: BrushType,
 	pencilGrade: PencilGrade = 'HB',
-	highlighterOpacity?: number
+	inkOpacity?: number
 ): PathData {
 	return {
 		id: generateId(),
@@ -105,7 +100,7 @@ export function buildBasicStrokePath(
 		fill: 'none',
 		strokeWidth: effectiveStrokeWidth(baseStrokeWidth, brushType, pencilGrade),
 		layerId,
-		...brushMaterialProps(brushType, pencilGrade, highlighterOpacity)
+		...brushMaterialProps(brushType, pencilGrade, inkOpacity)
 	};
 }
 
@@ -119,7 +114,7 @@ export function buildStrokeSegmentPath(
 	layerId: string,
 	brushType: BrushType,
 	pencilGrade: PencilGrade = 'HB',
-	highlighterOpacity?: number
+	inkOpacity?: number
 ): PathData {
 	return {
 		id: generateId(),
@@ -128,7 +123,7 @@ export function buildStrokeSegmentPath(
 		fill: 'none',
 		strokeWidth: width,
 		layerId,
-		...brushMaterialProps(brushType, pencilGrade, highlighterOpacity)
+		...brushMaterialProps(brushType, pencilGrade, inkOpacity)
 	};
 }
 
@@ -140,7 +135,7 @@ export function buildFreehandStrokePath(
 	source?: PathData['freehandSource'],
 	pencilGrade: PencilGrade = 'HB',
 	opacity?: number,
-	highlighterOpacity?: number
+	inkOpacity?: number
 ): PathData {
 	return {
 		id: generateId(),
@@ -150,7 +145,7 @@ export function buildFreehandStrokePath(
 		strokeWidth: 0,
 		layerId,
 		...(source ? { freehandSource: source } : {}),
-		...brushMaterialProps(brushType, pencilGrade, highlighterOpacity),
+		...brushMaterialProps(brushType, pencilGrade, inkOpacity),
 		...(opacity !== undefined ? { opacity } : {})
 	};
 }
