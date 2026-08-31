@@ -22,7 +22,7 @@
  * SharedWorker, and a SharedWorker cannot spawn a nested Worker to reach it.
  * That is why the VFS worker is dedicated.
  */
-import type { OpfsBlobStore } from '../opfs.js';
+import { tryMoveDirectory, type OpfsBlobStore } from '../opfs.js';
 import { VfsError } from '../types.js';
 
 /** Not in lib.dom for this tsconfig; the shape we actually use. */
@@ -344,6 +344,11 @@ export function createSyncOpfsStore(rootDirName = 'shared-vfs'): OpfsBlobStore {
 		},
 		async movePrefix(fromPrefix, toPrefix) {
 			if (fromPrefix === toPrefix) return;
+			if (await tryMoveDirectory(resolveDir, fromPrefix, toPrefix)) {
+				invalidateDirCache(fromPrefix);
+				invalidateDirCache(toPrefix);
+				return;
+			}
 			const paths = await this.listOrphans(fromPrefix);
 			if (await this.exists(fromPrefix)) paths.push(fromPrefix);
 			paths.sort((a, b) => b.length - a.length);

@@ -190,13 +190,17 @@ describe('VfsService', () => {
 
 	it('folder trash subtree', async () => {
 		const dir = await vfs.mkdir(null, 'A');
-		await vfs.writeFile({ parentId: dir.id, name: 'f.skch', fileType: 'skch', body: {} });
+		const file = await vfs.writeFile({ parentId: dir.id, name: 'f.skch', fileType: 'skch', body: {} });
 		await vfs.trash(dir.id);
 		assert.equal((await vfs.list({ parentId: null })).length, 0);
 		const roots = await vfs.list({ parentId: null, trashOnly: true });
 		assert.equal(roots.length, 1);
+		const trashedRef = await vfs.db.blobRefs.get(file.blobId!);
+		assert.equal(trashedRef?.opfsPath, 'trash/A/f.skch');
 		await vfs.restore(dir.id);
 		assert.equal((await vfs.list({ parentId: dir.id })).length, 1);
+		const restoredRef = await vfs.db.blobRefs.get(file.blobId!);
+		assert.equal(restoredRef?.opfsPath, 'root/A/f.skch');
 	});
 
 	it('emptyTrash bulk-deletes a folder tree and reports progress without per-file notifies', async () => {

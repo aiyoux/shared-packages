@@ -242,6 +242,29 @@ async function readFileHandle(handle: FileSystemFileHandle): Promise<Uint8Array>
 	return new Uint8Array(ab);
 }
 
+export async function tryMoveDirectory(
+	resolveDir: (p: string) => Promise<FileSystemDirectoryHandle>,
+	fromPrefix: string,
+	toPrefix: string
+): Promise<boolean> {
+	const from = splitPath(fromPrefix);
+	const to = splitPath(toPrefix);
+	if (!from.base || !to.base) return false;
+	try {
+		const srcParent = await resolveDir(from.dir);
+		const destParent = await resolveDir(to.dir);
+		const src = await srcParent.getDirectoryHandle(from.base);
+		const movable = src as FileSystemDirectoryHandle & {
+			move?: (dest: FileSystemDirectoryHandle, name: string) => Promise<void>;
+		};
+		if (typeof movable.move !== 'function') return false;
+		await movable.move(destParent, to.base);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
 function splitPath(opfsPath: string): { dir: string; base: string } {
 	const normalized = opfsPath.replace(/^\/+/, '');
 	const i = normalized.lastIndexOf('/');
@@ -458,6 +481,11 @@ export function createOpfsBlobStore(rootDirName = 'shared-vfs'): OpfsBlobStore {
 		},
 		async movePrefix(fromPrefix, toPrefix) {
 			if (fromPrefix === toPrefix) return;
+			if (await tryMoveDirectory(resolveDir, fromPrefix, toPrefix)) {
+				invalidateDirCache(fromPrefix);
+				invalidateDirCache(toPrefix);
+				return;
+			}
 			const paths = await this.listOrphans(fromPrefix);
 			if (await this.exists(fromPrefix)) paths.push(fromPrefix);
 			paths.sort((a, b) => b.length - a.length);

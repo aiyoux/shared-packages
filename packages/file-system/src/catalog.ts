@@ -19,6 +19,27 @@ import {
 export const CATALOG_OPFS_PATH = 'meta/catalog.sqlite';
 export const MIGRATED_KEY = 'migrated_from_idb';
 
+const IN_CHUNK = 400;
+
+/** Live catalog rows joined to blob_refs for the storage map. */
+export type LiveStorageRow = {
+	id: string;
+	parentId: string | null;
+	name: string;
+	kind: 'file' | 'folder';
+	size: number;
+	meta: Record<string, unknown> | null;
+	blobId: string | null;
+	packOffset: number | null;
+	byteLength: number;
+};
+
+const DESCENDANTS_SQL = `WITH RECURSIVE d AS (
+  SELECT id FROM nodes WHERE id = ?
+  UNION ALL
+  SELECT n.id FROM nodes n INNER JOIN d ON n.parent_id = d.id
+)`;
+
 function jsonOrNull(v: unknown): string | null {
 	if (v === undefined) return null;
 	return JSON.stringify(v);
@@ -216,6 +237,102 @@ export class SqliteCatalog {
 		else this.engine = await openMemoryEngine(this.name);
 		this.migrationOk = true;
 	}
+
+	async markSubtreeDeleted(rootId: string, now: number): Promise<void> {
+		await this.run(
+			`${DESCENDANTS_SQL}
+			UPDATE nodes SET
+				deleted_at = ?,
+				updated_at = ?,
+				trash_parent_id = COALESCE(trash_parent_id, parent_id)
+			WHERE id IN (SELECT id FROM d) AND deleted_at IS NULL`,
+			[rootId, now, now]
+		);
+	}
+
+	async markSubtreeRestored(rootId: string, now: number): Promise<void> {
+		await this.run(
+			`${DESCENDANTS_SQL}
+			UPDATE nodes SET
+				deleted_at = NULL,
+				trash_parent_id = NULL,
+				updated_at = ?
+			WHERE id IN (SELECT id FROM d) AND deleted_at IS NOT NULL`,
+			[rootId, now]
+		);
+	}
+
+	async subtreeBlobIds(rootId: string): Promise<string[]> {
+		const rows = await this.exec(
+			`${DESCENDANTS_SQL}
+			SELECT blob_id FROM nodes WHERE id IN (SELECT id FROM d) AND blob_id IS NOT NULL`,
+			[rootId]
+		);
+		return rows.map((r) => String(r.blob_id));
+	}
+
+	async deleteSubtree(rootId: string): Promise<void> {
+		await this.run(
+			`${DESCENDANTS_SQL}
+			DELETE FROM nodes WHERE id IN (SELECT id FROM d)`,
+			[rootId]
+		);
+	}
+
+	async rewriteBlobPrefix(fromPrefix: string, toPrefix: string): Promise<void> {
+		if (fromPrefix === toPrefix) return;
+		await this.run(
+			`UPDATE blob_refs SET opfs_path = CASE
+				WHEN opfs_path = ? THEN ?
+				ELSE ? || substr(opfs_path, ?)
+			END
+			WHERE pack_offset IS NULL
+				AND (opfs_path = ? OR opfs_path LIKE ?)`,
+			[fromPrefix, toPrefix, toPrefix, fromPrefix.length + 1, fromPrefix, `${fromPrefix}/%`]
+		);
+	}
+
+	async liveStorageRows(rootId: string | null): Promise<LiveStorageRow[]> {
+		const sql = rootId
+			? `WITH RECURSIVE d AS (
+					SELECT id FROM nodes WHERE parent_id = ? AND deleted_at IS NULL
+					UNION ALL
+					SELECT n.id FROM nodes n INNER JOIN d ON n.parent_id = d.id
+					WHERE n.deleted_at IS NULL
+				)
+				SELECT n.id, n.parent_id, n.name, n.kind, n.size, n.meta, n.blob_id,
+					b.byte_length, b.pack_offset
+				FROM nodes n
+				LEFT JOIN blob_refs b ON b.id = n.blob_id
+				WHERE n.id IN (SELECT id FROM d)`
+			: `SELECT n.id, n.parent_id, n.name, n.kind, n.size, n.meta, n.blob_id,
+					b.byte_length, b.pack_offset
+				FROM nodes n
+				LEFT JOIN blob_refs b ON b.id = n.blob_id
+				WHERE n.deleted_at IS NULL`;
+		const rows = await this.exec(sql, rootId ? [rootId] : []);
+		return rows.map((r) => ({
+			id: String(r.id),
+			parentId: (r.parent_id as string | null) ?? null,
+			name: String(r.name),
+			kind: r.kind === 'folder' ? 'folder' : 'file',
+			size: Number(r.size) || 0,
+			meta: parseJson<Record<string, unknown> | null>(r.meta, null),
+			blobId: r.blob_id ? String(r.blob_id) : null,
+			packOffset: r.pack_offset == null ? null : Number(r.pack_offset),
+			byteLength: Number(r.byte_length) || 0
+		}));
+	}
+
+	async trashRoots(): Promise<VfsNode[]> {
+		const rows = await this.exec(
+			`SELECT n.* FROM nodes n
+			LEFT JOIN nodes p ON p.id = n.parent_id
+			WHERE n.deleted_at IS NOT NULL
+				AND (n.parent_id IS NULL OR p.deleted_at IS NULL)`
+		);
+		return rows.map(decodeNode);
+	}
 }
 
 class NodeTable {
@@ -274,7 +391,18 @@ class NodeTable {
 	}
 
 	async bulkGet(ids: string[]): Promise<Array<VfsNode | undefined>> {
-		return Promise.all(ids.map((id) => this.get(id)));
+		if (!ids.length) return [];
+		const found = new Map<string, VfsNode>();
+		for (let i = 0; i < ids.length; i += IN_CHUNK) {
+			const chunk = ids.slice(i, i + IN_CHUNK);
+			const ph = chunk.map(() => '?').join(',');
+			const rows = await this.c.exec(`SELECT * FROM nodes WHERE id IN (${ph})`, chunk);
+			for (const r of rows) {
+				const n = decodeNode(r);
+				found.set(n.id, n);
+			}
+		}
+		return ids.map((id) => found.get(id));
 	}
 
 	async bulkDelete(ids: string[]): Promise<void> {
@@ -443,7 +571,18 @@ class BlobTable {
 	}
 
 	async bulkGet(ids: string[]): Promise<Array<BlobRef | undefined>> {
-		return Promise.all(ids.map((id) => this.get(id)));
+		if (!ids.length) return [];
+		const found = new Map<string, BlobRef>();
+		for (let i = 0; i < ids.length; i += IN_CHUNK) {
+			const chunk = ids.slice(i, i + IN_CHUNK);
+			const ph = chunk.map(() => '?').join(',');
+			const rows = await this.c.exec(`SELECT * FROM blob_refs WHERE id IN (${ph})`, chunk);
+			for (const r of rows) {
+				const b = decodeBlob(r);
+				found.set(b.id, b);
+			}
+		}
+		return ids.map((id) => found.get(id));
 	}
 
 	async bulkDelete(ids: string[]): Promise<void> {

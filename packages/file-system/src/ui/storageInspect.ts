@@ -47,6 +47,9 @@ export async function packBadges(
  * genuinely represents what deleting it would free. Nodes are tagged
  * `project` or `pack` so the inspector can outline them differently — those
  * two behave differently on delete, and the picture should say so.
+ *
+ * One catalog join (nodes ⟕ blob_refs) plus an in-memory rollup. The SQLite
+ * catalog cannot afford a list()+blobRefs.get() per row the way Dexie did.
  */
 export async function buildStorageTree(
 	vfs: VfsService,
@@ -54,81 +57,71 @@ export async function buildStorageTree(
 	opts?: { maxDepth?: number }
 ): Promise<TreemapInput[]> {
 	const maxDepth = opts?.maxDepth ?? 3;
+	const rows = await vfs.db.liveStorageRows(parentId);
+	const byParent = new Map<string | null, typeof rows>();
+	for (const row of rows) {
+		const list = byParent.get(row.parentId);
+		if (list) list.push(row);
+		else byParent.set(row.parentId, [row]);
+	}
 
-	const walk = async (id: string | null, depth: number): Promise<TreemapInput[]> => {
-		const nodes = await vfs.list({ parentId: id });
-		const out: TreemapInput[] = [];
-		for (const node of nodes) {
-			if (node.kind === 'folder') {
-				const children = depth < maxDepth ? await walk(node.id, depth + 1) : [];
-				// Even when we stop descending, the folder's size must reflect
-				// everything under it or the map lies about what it holds.
-				const size = children.length
-					? children.reduce((n, c) => n + c.size, 0)
-					: await subtreeBytes(vfs, node.id);
-				const isProject = Boolean(node.meta?.[PROJECT_PACK_META]);
-				// Roll packed bytes up. A folder is what actually gets drawn once
-				// the map stops descending, so if it does not carry this, packed
-				// storage is invisible on exactly the deep trees that have most
-				// of it.
-				const packedBytes = children.length
-					? children.reduce((n, c) => n + (c.packedBytes ?? 0), 0)
-					: await subtreePackedBytes(vfs, node.id);
-				out.push({
-					id: node.id,
-					name: node.name,
-					size,
-					kind: 'folder',
-					group: isProject ? 'project' : 'plain',
-					packedBytes,
-					children
-				});
-				continue;
+	const sizeMemo = new Map<string, { size: number; packed: number }>();
+	const rollup = (id: string): { size: number; packed: number } => {
+		const hit = sizeMemo.get(id);
+		if (hit) return hit;
+		let size = 0;
+		let packed = 0;
+		for (const child of byParent.get(id) ?? []) {
+			if (child.kind === 'folder') {
+				const sub = rollup(child.id);
+				size += sub.size;
+				packed += sub.packed;
+			} else {
+				const bytes = child.size || child.byteLength;
+				size += bytes;
+				if (child.packOffset != null) packed += child.byteLength || bytes;
 			}
-			const ref = node.blobId ? await vfs.db.blobRefs.get(node.blobId) : undefined;
-			out.push({
-				id: node.id,
-				name: node.name,
-				size: node.size ?? ref?.byteLength ?? 0,
-				kind: 'file',
-				group: ref?.packOffset != null ? 'pack' : 'plain',
-				packedBytes: ref?.packOffset != null ? (ref.byteLength ?? 0) : 0
-			});
 		}
-		return out;
+		const next = { size, packed };
+		sizeMemo.set(id, next);
+		return next;
 	};
 
-	return walk(parentId, 1);
-}
-
-/** Packed bytes under a folder, for subtrees the map does not descend into. */
-async function subtreePackedBytes(vfs: VfsService, rootId: string): Promise<number> {
-	let total = 0;
-	const stack = [rootId];
-	while (stack.length) {
-		for (const n of await vfs.list({ parentId: stack.pop()! })) {
-			if (n.kind === 'folder') {
-				stack.push(n.id);
-				continue;
-			}
-			if (!n.blobId) continue;
-			const ref = await vfs.db.blobRefs.get(n.blobId);
-			if (ref?.packOffset != null) total += ref.byteLength;
+	const toInput = (row: (typeof rows)[number], depth: number): TreemapInput => {
+		if (row.kind === 'folder') {
+			const kids = byParent.get(row.id) ?? [];
+			const children = depth < maxDepth ? kids.map((c) => toInput(c, depth + 1)) : [];
+			const { size, packed } = rollup(row.id);
+			return {
+				id: row.id,
+				name: row.name,
+				size,
+				kind: 'folder',
+				group: Boolean(row.meta?.[PROJECT_PACK_META]) ? 'project' : 'plain',
+				packedBytes: packed,
+				children
+			};
 		}
-	}
-	return total;
+		const bytes = row.size || row.byteLength;
+		return {
+			id: row.id,
+			name: row.name,
+			size: bytes,
+			kind: 'file',
+			group: row.packOffset != null ? 'pack' : 'plain',
+			packedBytes: row.packOffset != null ? row.byteLength || bytes : 0
+		};
+	};
+
+	return (byParent.get(parentId) ?? []).map((row) => toInput(row, 1));
 }
 
 /** Total live bytes under a folder, without building the whole tree. */
 export async function subtreeBytes(vfs: VfsService, parentId: string | null): Promise<number> {
+	const rows = await vfs.db.liveStorageRows(parentId);
 	let total = 0;
-	const stack: Array<string | null> = [parentId];
-	while (stack.length) {
-		const id = stack.pop()!;
-		for (const node of await vfs.list({ parentId: id })) {
-			if (node.kind === 'folder') stack.push(node.id);
-			else total += node.size ?? 0;
-		}
+	for (const row of rows) {
+		if (row.kind === 'file') total += row.size || row.byteLength;
 	}
 	return total;
 }

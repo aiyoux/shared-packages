@@ -458,13 +458,7 @@ export class VfsService {
 		let rows: VfsNode[];
 
 		if (opts.trashOnly) {
-			const allDeleted = await this.db.nodes.filter((n) => n.deletedAt != null).toArray();
-			const deletedIds = new Set(allDeleted.map((n) => n.id));
-			// trash roots: deleted and parent not deleted (or parent null)
-			rows = allDeleted.filter((n) => {
-				if (n.parentId == null) return true;
-				return !deletedIds.has(n.parentId);
-			});
+			rows = await this.db.trashRoots();
 		} else {
 			// parentKey exists so the root is an index hit like any other folder:
 			// IndexedDB cannot index null, so this used to be a full table scan
@@ -622,17 +616,7 @@ export class VfsService {
 		await this.holdPackWrite(toPrefix);
 		try {
 			await this.opfs.movePrefix(fromPrefix, toPrefix);
-			const refs = await this.db.blobRefs.toArray();
-			for (const ref of refs) {
-				if (ref.packOffset != null) continue;
-				if (ref.opfsPath === fromPrefix || ref.opfsPath.startsWith(fromPrefix + '/')) {
-					ref.opfsPath =
-						ref.opfsPath === fromPrefix
-							? toPrefix
-							: toPrefix + ref.opfsPath.slice(fromPrefix.length);
-					await this.db.blobRefs.put(ref);
-				}
-			}
+			await this.db.rewriteBlobPrefix(fromPrefix, toPrefix);
 		} finally {
 			await this.dropPackWrite(toPrefix);
 		}
@@ -2638,37 +2622,11 @@ export class VfsService {
 
 	async trash(id: string): Promise<void> {
 		await this.ready();
-		const now = Date.now();
-		await this.db.transaction('rw', this.db.nodes, async () => {
-			const root = await this.db.nodes.get(id);
-			if (!root) throw new VfsError('NOT_FOUND');
-			if (root.deletedAt != null) return;
-
-			const toTrash: VfsNode[] = [root];
-			if (root.kind === 'folder') {
-				const all = await this.db.nodes.toArray();
-				const byParent = new Map<string | null, VfsNode[]>();
-				for (const n of all) {
-					const list = byParent.get(n.parentId) ?? [];
-					list.push(n);
-					byParent.set(n.parentId, list);
-				}
-				const stack = [root.id];
-				while (stack.length) {
-					const pid = stack.pop()!;
-					for (const c of byParent.get(pid) ?? []) {
-						toTrash.push(c);
-						if (c.kind === 'folder') stack.push(c.id);
-					}
-				}
-			}
-			for (const n of toTrash) {
-				if (n.deletedAt != null) continue;
-				n.trashParentId = n.trashParentId ?? n.parentId;
-				n.deletedAt = now;
-				n.updatedAt = now;
-				await this.db.nodes.put(n);
-			}
+		const root = await this.db.nodes.get(id);
+		if (!root) throw new VfsError('NOT_FOUND');
+		if (root.deletedAt != null) return;
+		await this.db.transaction('rw', async () => {
+			await this.db.markSubtreeDeleted(id, Date.now());
 		});
 		await this.syncTree(id, true);
 		this.emitChange();
@@ -2676,58 +2634,37 @@ export class VfsService {
 
 	async restore(id: string): Promise<VfsNode> {
 		await this.ready();
-		return this.db.transaction('rw', this.db.nodes, async () => {
-			const node = await this.db.nodes.get(id);
-			if (!node) throw new VfsError('NOT_FOUND');
-			if (node.deletedAt == null) return node;
+		const node = await this.db.nodes.get(id);
+		if (!node) throw new VfsError('NOT_FOUND');
+		if (node.deletedAt == null) return node;
 
-			// if parent still trashed, reparent
-			let parentId = node.parentId;
-			if (parentId) {
-				const parent = await this.db.nodes.get(parentId);
-				if (!parent || parent.deletedAt != null) {
-					const fallback = node.trashParentId ?? null;
-					if (fallback) {
-						const fb = await this.db.nodes.get(fallback);
-						parentId = fb && fb.deletedAt == null ? fallback : null;
-					} else {
-						parentId = null;
-					}
-					node.parentId = parentId;
+		let parentId = node.parentId;
+		if (parentId) {
+			const parent = await this.db.nodes.get(parentId);
+			if (!parent || parent.deletedAt != null) {
+				const fallback = node.trashParentId ?? null;
+				if (fallback) {
+					const fb = await this.db.nodes.get(fallback);
+					parentId = fb && fb.deletedAt == null ? fallback : null;
+				} else {
+					parentId = null;
 				}
 			}
-
-			const collect: VfsNode[] = [node];
-			if (node.kind === 'folder') {
-				const all = await this.db.nodes.toArray();
-				const stack = [node.id];
-				while (stack.length) {
-					const pid = stack.pop()!;
-					for (const c of all) {
-						if (c.parentId === pid && c.deletedAt != null) {
-							collect.push(c);
-							if (c.kind === 'folder') stack.push(c.id);
-						}
-					}
-				}
-			}
-
-			// unique name on root only
-			const unique = await this.ensureUniqueName(node.parentId, node.name, node.id, 'rename');
+		}
+		const unique = await this.ensureUniqueName(parentId, node.name, node.id, 'rename');
+		const now = Date.now();
+		await this.db.transaction('rw', async () => {
+			await this.db.markSubtreeRestored(id, now);
+			node.parentId = parentId;
 			node.name = unique;
-
-			for (const n of collect) {
-				n.deletedAt = null;
-				n.trashParentId = null;
-				n.updatedAt = Date.now();
-				await this.db.nodes.put(n);
-			}
-			return (await this.db.nodes.get(id))!;
-		}).then(async (node) => {
-			await this.syncTree(node.id, false);
-			this.emitChange();
-			return node;
+			node.deletedAt = null;
+			node.trashParentId = null;
+			node.updatedAt = now;
+			await this.db.nodes.put(node);
 		});
+		await this.syncTree(id, false);
+		this.emitChange();
+		return (await this.db.nodes.get(id))!;
 	}
 
 	async permanentDelete(
@@ -2737,33 +2674,17 @@ export class VfsService {
 		await this.ready();
 		const recursive = opts?.recursive ?? false;
 		const blobIds: string[] = [];
-		const nodeIds: string[] = [];
 
 		const node = await this.db.nodes.get(id);
 		if (!node) throw new VfsError('NOT_FOUND');
-		const toDelete: VfsNode[] = [node];
-		if (node.kind === 'folder') {
-			if (!recursive) {
-				const firstChild = await this.db.nodes.where('parentId').equals(id).first();
-				if (firstChild) throw new VfsError('HAS_CHILDREN', 'Folder has children');
-			}
-			if (recursive) {
-				const all = await this.db.nodes.toArray();
-				const stack = [id];
-				while (stack.length) {
-					const pid = stack.pop()!;
-					for (const c of all) {
-						if (c.parentId === pid) {
-							toDelete.push(c);
-							if (c.kind === 'folder') stack.push(c.id);
-						}
-					}
-				}
-			}
+		if (node.kind === 'folder' && !recursive) {
+			const firstChild = await this.db.nodes.where('parentId').equals(id).first();
+			if (firstChild) throw new VfsError('HAS_CHILDREN', 'Folder has children');
 		}
-		for (const n of toDelete) {
-			nodeIds.push(n.id);
-			if (n.blobId) blobIds.push(n.blobId);
+		if (node.kind === 'folder' && recursive) {
+			blobIds.push(...(await this.db.subtreeBlobIds(id)));
+		} else if (node.blobId) {
+			blobIds.push(node.blobId);
 		}
 
 		const touchedPacks = await this.packPathsForBlobs(blobIds);
@@ -2785,12 +2706,13 @@ export class VfsService {
 			}
 		}
 
-		await this.db.transaction('rw', this.db.nodes, async () => {
-			for (const nid of nodeIds) {
-				const cur = await this.db.nodes.get(nid);
-				if (cur) await this.db.nodes.delete(nid);
-			}
-		});
+		if (node.kind === 'folder' && recursive) {
+			await this.db.transaction('rw', async () => {
+				await this.db.deleteSubtree(id);
+			});
+		} else {
+			await this.db.nodes.delete(id);
+		}
 		await this.releaseBlobRefs(blobIds);
 		this.emitChange();
 	}
@@ -2798,7 +2720,13 @@ export class VfsService {
 	async emptyTrash(opts?: EmptyTrashOpts): Promise<EmptyTrashResult> {
 		await this.ready();
 		throwIfAborted(opts?.signal);
-		const trashed = await this.db.nodes.filter((n) => n.deletedAt != null).toArray();
+		const trashed = await this.db.exec(
+			'SELECT * FROM nodes WHERE deleted_at IS NOT NULL'
+		).then((rows) => rows.map((r) => ({
+			id: String(r.id),
+			blobId: r.blob_id ? String(r.blob_id) : undefined,
+			name: String(r.name)
+		})));
 		if (!trashed.length) {
 			opts?.onProgress?.({ done: 0, total: 0 });
 			return { deleted: 0, compactedPacks: 0, reclaimedBytes: 0, failedPacks: [] };
@@ -2817,8 +2745,10 @@ export class VfsService {
 		// that name them are dropped in the transaction below — after that there
 		// is nothing left to tell us which packs were touched.
 		const touchedPacks = new Set<string>();
-		for (const bid of uniqueBlobIds) {
-			const ref = await this.db.blobRefs.get(bid);
+		const refs = await this.db.blobRefs.bulkGet(uniqueBlobIds);
+		for (let i = 0; i < uniqueBlobIds.length; i++) {
+			const bid = uniqueBlobIds[i]!;
+			const ref = refs[i];
 			if (!ref?.opfsPath) continue;
 			opfsPaths.push({ path: ref.opfsPath, name: nameByBlob.get(bid) ?? 'file' });
 			if (ref.packOffset != null) touchedPacks.add(ref.opfsPath);
