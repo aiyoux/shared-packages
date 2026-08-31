@@ -486,7 +486,6 @@ export async function checkFilesystem(vfs: VfsService): Promise<PackIntegrityRep
 	const refById = new Map(refs.map((r) => [r.id, r]));
 
 	const packPaths = new Set<string>();
-	const sizes = new Map<string, number>();
 
 	// A path is spoken for if ANY blobRef names it — not just a ref reached
 	// from a live file. Trashed files keep their refs (that is what makes a
@@ -502,17 +501,36 @@ export async function checkFilesystem(vfs: VfsService): Promise<PackIntegrityRep
 		if (ref.pendingPromote) namedPaths.add(`blobs/${ref.id}.bin`);
 	}
 
-	const sizeOf = async (path: string): Promise<number> => {
-		if (sizes.has(path)) return sizes.get(path)!;
-		let size = -1;
+	// One directory walk per prefix instead of readBlob() per live file.
+	// Unpacked members only need to exist; pack files need a size for
+	// short-pack, and that is a handful of unique paths.
+	const onDisk = new Set<string>();
+	for (const prefix of ['packs', 'root', 'trash', 'blobs']) {
 		try {
-			size = (await vfs.opfs.readBlob(path)).size;
+			for (const path of await vfs.opfs.listOrphans(prefix)) onDisk.add(path);
 		} catch {
-			size = -1;
+			/* directory missing */
 		}
-		sizes.set(path, size);
-		return size;
-	};
+	}
+
+	const packSizeNeeded = new Set<string>();
+	for (const node of live) {
+		if (!node.blobId) continue;
+		const ref = refById.get(node.blobId);
+		if (ref?.packOffset != null) packSizeNeeded.add(ref.opfsPath);
+	}
+	const packSizes = new Map<string, number>();
+	for (const path of packSizeNeeded) {
+		if (!onDisk.has(path)) {
+			packSizes.set(path, -1);
+			continue;
+		}
+		try {
+			packSizes.set(path, (await vfs.opfs.readBlob(path)).size);
+		} catch {
+			packSizes.set(path, -1);
+		}
+	}
 
 	for (const node of live) {
 		if (!node.blobId) continue;
@@ -521,8 +539,7 @@ export async function checkFilesystem(vfs: VfsService): Promise<PackIntegrityRep
 			issues.push({ kind: 'missing-ref', detail: `${node.name} has no blobRef`, nodeId: node.id });
 			continue;
 		}
-		const size = await sizeOf(ref.opfsPath);
-		if (size < 0) {
+		if (!onDisk.has(ref.opfsPath)) {
 			issues.push({
 				kind: 'missing-pack',
 				detail: `${node.name} points at ${ref.opfsPath}, which is gone`,
@@ -542,7 +559,15 @@ export async function checkFilesystem(vfs: VfsService): Promise<PackIntegrityRep
 		}
 		if (ref.packOffset != null) {
 			packPaths.add(ref.opfsPath);
-			if (ref.packOffset + ref.byteLength > size) {
+			const size = packSizes.get(ref.opfsPath) ?? -1;
+			if (size < 0) {
+				issues.push({
+					kind: 'missing-pack',
+					detail: `${node.name} points at ${ref.opfsPath}, which is gone`,
+					packPath: ref.opfsPath,
+					nodeId: node.id
+				});
+			} else if (ref.packOffset + ref.byteLength > size) {
 				issues.push({
 					kind: 'short-pack',
 					detail: `${node.name} reads past the end of ${ref.opfsPath}`,
@@ -557,18 +582,13 @@ export async function checkFilesystem(vfs: VfsService): Promise<PackIntegrityRep
 
 	// Pack files NO blobRef names: a crashed pack write, and the only pack
 	// state that is actually garbage. gc() reclaims exactly these.
-	try {
-		for (const path of await vfs.opfs.listOrphans('packs')) {
-			if (!namedPaths.has(path)) {
-				issues.push({
-					kind: 'orphan-pack',
-					detail: `${path} is not referenced by any file`,
-					packPath: path
-				});
-			}
-		}
-	} catch {
-		/* no packs directory yet */
+	for (const path of onDisk) {
+		if (!path.startsWith('packs/') || namedPaths.has(path)) continue;
+		issues.push({
+			kind: 'orphan-pack',
+			detail: `${path} is not referenced by any file`,
+			packPath: path
+		});
 	}
 
 	return { checked: live.length, packPaths: [...packPaths], issues, ok: issues.length === 0 };
