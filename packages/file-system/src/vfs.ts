@@ -718,6 +718,7 @@ export class VfsService {
 		// per depth.
 		return this.batch(async () => {
 			await this.db.transaction('rw', this.db.nodes, async () => {
+				const createdIds = new Set<string>();
 				for (const level of byDepth) {
 					throwIfAborted(opts?.signal);
 					const grouped = new Map<string, string[][]>();
@@ -739,8 +740,13 @@ export class VfsService {
 					const uniquePids = [
 						...new Set(parentIds.filter((id): id is string => id != null))
 					];
-					if (uniquePids.length) {
-						const parents = await this.db.nodes.bulkGet(uniquePids);
+					// Parents created earlier in THIS call are empty — skip the
+					// sibling read. Extract-into-new-folder (the 50MB bench) is
+					// one query at the dest plus bulkPuts; anyOf(thousands)
+					// hung Chromium for minutes.
+					const existingPids = uniquePids.filter((id) => !createdIds.has(id));
+					if (existingPids.length) {
+						const parents = await this.db.nodes.bulkGet(existingPids);
 						for (const parent of parents) {
 							if (!parent || parent.kind !== 'folder') throw new VfsError('NOT_A_FOLDER');
 							if (parent.deletedAt != null) throw new VfsError('TRASH_STATE');
@@ -748,11 +754,15 @@ export class VfsService {
 					}
 
 					const siblingsByParent = new Map<string, VfsNode[]>();
-					if (parentIds.some((id) => id === null)) {
+					if (parentIds.some((id) => id === null) && !createdIds.has('')) {
 						siblingsByParent.set('', await this.activeSiblings(null));
 					}
-					if (uniquePids.length) {
-						const rows = await this.db.nodes.where('parentId').anyOf(uniquePids).toArray();
+					if (existingPids.length) {
+						const rows: VfsNode[] = [];
+						for (let i = 0; i < existingPids.length; i += 100) {
+							const chunk = existingPids.slice(i, i + 100);
+							rows.push(...(await this.db.nodes.where('parentId').anyOf(chunk).toArray()));
+						}
 						for (const n of rows) {
 							if (n.deletedAt != null || n.parentId == null) continue;
 							const list = siblingsByParent.get(n.parentId);
@@ -807,6 +817,7 @@ export class VfsService {
 							};
 							sortOrder += 16384;
 							levelCreate.push(node);
+							createdIds.add(node.id);
 							folderByName.set(unique, node);
 							map.set(key, node.id);
 						}
