@@ -211,8 +211,9 @@ export function createLocalExplorerDriver(
 		async writeFilesAcross(files, opts) {
 			if (!vfs.writeFiles) {
 				const out: ExplorerEntry[] = [];
-				for (const { parentId, file } of files) {
+				for (const { parentId, name, body } of files) {
 					if (opts?.signal?.aborted) break;
+					const file = body instanceof File ? body : new File([body as BlobPart], name);
 					out.push(await this.writeFile!(parentId, file));
 				}
 				return out;
@@ -220,11 +221,11 @@ export function createLocalExplorerDriver(
 			// One call, mixed parents: the store chunks it (one reserve+confirm
 			// per chunk, not per folder). A pack, when opted in, spans the chunk.
 			const nodes = await vfs.writeFiles(
-				files.map(({ parentId, file }) => ({
+				files.map(({ parentId, name, body }) => ({
 					parentId,
-					name: file.name,
-					body: file,
-					contentType: file.type || undefined
+					name,
+					body,
+					contentType: body instanceof Blob ? body.type || undefined : undefined
 				})),
 				{
 					signal: opts?.signal,

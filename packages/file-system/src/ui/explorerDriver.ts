@@ -236,7 +236,11 @@ export interface ExplorerDriver {
 	 * one operation implements it.
 	 */
 	writeFilesAcross?(
-		files: Array<{ parentId: ExplorerEntryId | null; file: File }>,
+		files: Array<{
+			parentId: ExplorerEntryId | null;
+			name: string;
+			body: File | Blob | Uint8Array;
+		}>,
 		opts?: {
 			signal?: AbortSignal;
 			onProgress?: (written: ExplorerEntry[]) => void;

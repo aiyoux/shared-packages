@@ -714,11 +714,12 @@ export class VfsService {
 		// A 10-level zip of 3000 files is ~20k folders. IDB charges per
 		// request (browser-process IPC), so get+siblings+sortOrder per parent
 		// is ~60k round trips — that, not "having an index", is the 10× vs
-		// POSIX mkdir. One txn per tree, one sibling read and one bulkPut
-		// per depth.
+		// POSIX mkdir. One txn per tree, sibling reads only for folders that
+		// already existed, one bulkPut for every new row.
 		return this.batch(async () => {
 			await this.db.transaction('rw', this.db.nodes, async () => {
 				const createdIds = new Set<string>();
+				const created: VfsNode[] = [];
 				for (const level of byDepth) {
 					throwIfAborted(opts?.signal);
 					const grouped = new Map<string, string[][]>();
@@ -771,7 +772,6 @@ export class VfsService {
 						}
 					}
 
-					const levelCreate: VfsNode[] = [];
 					const now = Date.now();
 					for (const [parentKey, children] of grouped) {
 						const pid = map.get(parentKey)!;
@@ -816,14 +816,14 @@ export class VfsService {
 								sortOrder
 							};
 							sortOrder += 16384;
-							levelCreate.push(node);
+							created.push(node);
 							createdIds.add(node.id);
 							folderByName.set(unique, node);
 							map.set(key, node.id);
 						}
 					}
-					if (levelCreate.length) await this.db.nodes.bulkPut(levelCreate);
 				}
+				if (created.length) await this.db.nodes.bulkPut(created);
 			});
 			return map;
 		});
@@ -1504,7 +1504,13 @@ export class VfsService {
 				while (cursor < standalone.length) {
 					if (signal?.aborted) throw abortError();
 					const r = standalone[cursor++]!;
-					await this.opfs.writeFinal(`blobs/${r.p.blobId}.bin`, r.p.bytes);
+					// Extract's 3000×17KB members: flush() is ~72% of a SAH
+					// write and is what the POSIX bench does not do. Packs still
+					// flush via writeAtomic. close() is enough for same-session
+					// reads; IDB stays pending until this returns.
+					await this.opfs.writeFinal(`blobs/${r.p.blobId}.bin`, r.p.bytes, {
+						flush: false
+					});
 				}
 			});
 			await Promise.all(workers);

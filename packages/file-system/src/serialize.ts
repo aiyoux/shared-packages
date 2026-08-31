@@ -5,6 +5,12 @@ export async function serializeBody(
 	body: unknown,
 	contentType?: string
 ): Promise<{ bytes: Uint8Array; contentType: string }> {
+	if (body instanceof Uint8Array) {
+		return {
+			bytes: body,
+			contentType: contentType ?? 'application/octet-stream'
+		};
+	}
 	if (body instanceof Blob) {
 		const ab = await body.arrayBuffer();
 		return {

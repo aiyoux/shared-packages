@@ -755,7 +755,8 @@ export async function writeEntriesToDriver(
 		await driver.writeFilesAcross(
 			planned.map((plan) => ({
 				parentId: plan.destParent,
-				file: new File([plan.file.data as BlobPart], plan.name)
+				name: plan.name,
+				body: plan.file.data
 			})),
 			{
 				signal,

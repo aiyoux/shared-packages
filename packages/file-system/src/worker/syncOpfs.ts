@@ -12,8 +12,10 @@
  * `flush()` is ~72% of the cost. Same-session reads see the bytes after
  * `close()`, but WHATWG FileSystemSyncAccessHandle.close() only releases the
  * exclusive lock and does not guarantee the device has the data — that is
- * `flush()`. Pack publish (writeAtomic / writeFinal that IDB will confirm)
- * always flushes. `truncate()` is only needed when overwriting a longer file.
+ * `flush()`. Pack publish (`writeAtomic`) always flushes. Standalone extract
+ * writes (`writeFinal({ flush: false })`) match the POSIX SAH bench and the
+ * main-thread `createWritable` path: close without an explicit flush.
+ * `truncate()` is only needed when overwriting a longer file.
  *
  * Availability is narrow and worth stating: `createSyncAccessHandle` exists in
  * DEDICATED workers only — it is undefined on the main thread and in a
@@ -167,7 +169,8 @@ export function createSyncOpfsStore(rootDirName = 'shared-vfs'): OpfsBlobStore {
 
 	async function writeBytes(
 		opfsPath: string,
-		data: BufferSource | Blob | Uint8Array
+		data: BufferSource | Blob | Uint8Array,
+		opts?: { flush?: boolean }
 	): Promise<{ byteLength: number }> {
 		const bytes = await toBytes(data);
 		return withHandle(opfsPath, true, (h) => {
@@ -188,7 +191,7 @@ export function createSyncOpfsStore(rootDirName = 'shared-vfs'): OpfsBlobStore {
 			// Only shrink when there is something to shrink: an unconditional
 			// truncate cost measurable time on fresh files.
 			if (h.getSize() > bytes.byteLength) h.truncate(bytes.byteLength);
-			h.flush();
+			if (opts?.flush !== false) h.flush();
 			return { byteLength: bytes.byteLength };
 		});
 	}
@@ -208,7 +211,7 @@ export function createSyncOpfsStore(rootDirName = 'shared-vfs'): OpfsBlobStore {
 	}
 
 	const store: OpfsBlobStore = {
-		writeFinal: (opfsPath, data) => writeBytes(opfsPath, data),
+		writeFinal: (opfsPath, data, opts) => writeBytes(opfsPath, data, opts),
 		async writeAtomic(opfsPath, data) {
 			const writeId = `w_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 			const tmpPath = `tmp/${writeId}.partial`;

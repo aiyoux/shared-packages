@@ -15,7 +15,8 @@ export interface OpfsBlobStore {
 	 */
 	writeFinal(
 		opfsPath: string,
-		data: BufferSource | Blob | Uint8Array
+		data: BufferSource | Blob | Uint8Array,
+		opts?: { flush?: boolean }
 	): Promise<{ byteLength: number }>;
 	read(opfsPath: string): Promise<Uint8Array>;
 	readBlob(opfsPath: string, contentType?: string): Promise<Blob>;
