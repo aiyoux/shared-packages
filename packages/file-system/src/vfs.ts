@@ -711,11 +711,11 @@ export class VfsService {
 		}
 		if (!byDepth.length) return map;
 
-		// One IDB transaction for the whole tree. A 10-level zip of 3000 files
-		// is ~20k folders (deep unique prefixes). Each parent used to be its
-		// own auto-commit, and chromeTransactionDurability:'strict' fsyncs every
-		// commit — that, not "having an index", is what made extract 10× POSIX
-		// mkdir. All work below is Dexie so the txn stays alive.
+		// A 10-level zip of 3000 files is ~20k folders. IDB charges per
+		// request (browser-process IPC), so get+siblings+sortOrder per parent
+		// is ~60k round trips — that, not "having an index", is the 10× vs
+		// POSIX mkdir. One txn per tree, one sibling read and one bulkPut
+		// per depth.
 		return this.batch(async () => {
 			await this.db.transaction('rw', this.db.nodes, async () => {
 				for (const level of byDepth) {
@@ -727,24 +727,55 @@ export class VfsService {
 						if (g) g.push(segs);
 						else grouped.set(parentKey, [segs]);
 					}
-					const levelCreate: VfsNode[] = [];
-					for (const [parentKey, children] of grouped) {
+
+					const parentIds: Array<string | null> = [];
+					for (const parentKey of grouped.keys()) {
 						const pid = map.get(parentKey);
 						if (pid === undefined) {
 							throw new VfsError('NOT_FOUND', `Missing parent folder ${parentKey}`);
 						}
-						if (pid !== null) {
-							const parent = await this.db.nodes.get(pid);
+						parentIds.push(pid);
+					}
+					const uniquePids = [
+						...new Set(parentIds.filter((id): id is string => id != null))
+					];
+					if (uniquePids.length) {
+						const parents = await this.db.nodes.bulkGet(uniquePids);
+						for (const parent of parents) {
 							if (!parent || parent.kind !== 'folder') throw new VfsError('NOT_A_FOLDER');
 							if (parent.deletedAt != null) throw new VfsError('TRASH_STATE');
 						}
-						const siblings = await this.activeSiblings(pid);
+					}
+
+					const siblingsByParent = new Map<string, VfsNode[]>();
+					if (parentIds.some((id) => id === null)) {
+						siblingsByParent.set('', await this.activeSiblings(null));
+					}
+					if (uniquePids.length) {
+						const rows = await this.db.nodes.where('parentId').anyOf(uniquePids).toArray();
+						for (const n of rows) {
+							if (n.deletedAt != null || n.parentId == null) continue;
+							const list = siblingsByParent.get(n.parentId);
+							if (list) list.push(n);
+							else siblingsByParent.set(n.parentId, [n]);
+						}
+					}
+
+					const levelCreate: VfsNode[] = [];
+					const now = Date.now();
+					for (const [parentKey, children] of grouped) {
+						const pid = map.get(parentKey)!;
+						const siblings = siblingsByParent.get(pid ?? '') ?? [];
 						const folderByName = new Map(
 							siblings.filter((n) => n.kind === 'folder').map((n) => [n.name, n])
 						);
 						const taken = new Set(siblings.map((n) => n.name.toLowerCase()));
-						let sortOrder = await this.nextAppendSortOrder(pid);
-						const now = Date.now();
+						let sortOrder = 0;
+						for (const n of siblings) {
+							if (typeof n.sortOrder === 'number' && n.sortOrder >= sortOrder) {
+								sortOrder = n.sortOrder + 16384;
+							}
+						}
 						for (const segs of children) {
 							const name = segs[segs.length - 1]!;
 							const key = segs.join('/');
@@ -753,8 +784,7 @@ export class VfsService {
 								map.set(key, hit.id);
 								continue;
 							}
-							const fileHit = siblings.find((n) => n.name === name && n.kind === 'file');
-							if (fileHit) {
+							if (siblings.some((n) => n.name === name && n.kind === 'file')) {
 								throw new VfsError('NAME_CONFLICT', `A file named ${name} already exists`);
 							}
 							let unique = name;
