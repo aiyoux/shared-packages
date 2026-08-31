@@ -13,6 +13,8 @@ export { CATALOG_SCHEMA };
 export type SqlEngine = {
 	exec(sql: string, params?: unknown[]): Promise<Record<string, unknown>[]>;
 	run(sql: string, params?: unknown[]): Promise<void>;
+	/** Many binds of one statement in a single RPC (extract bulkPut). */
+	runMany(sql: string, rows: unknown[][]): Promise<void>;
 	begin(): Promise<void>;
 	commit(): Promise<void>;
 	rollback(): Promise<void>;
@@ -20,11 +22,27 @@ export type SqlEngine = {
 	close(): Promise<void>;
 };
 
+type Oo1Stmt = {
+	bind(args: unknown[]): Oo1Stmt;
+	stepReset(): unknown;
+	finalize(): unknown;
+};
 type Oo1Db = {
 	exec(sql: string | { sql: string; bind?: unknown[] }): void;
 	selectObjects(sql: string, bind?: unknown[]): Array<Record<string, unknown>>;
+	prepare(sql: string): Oo1Stmt;
 	close(): void;
 };
+
+function runManyPrepared(d: Oo1Db, sql: string, rows: unknown[][]): void {
+	if (!rows.length) return;
+	const st = d.prepare(sql);
+	try {
+		for (const bind of rows) st.bind(bind).stepReset();
+	} finally {
+		st.finalize();
+	}
+}
 
 function applyLiveNameIndexes(db: Oo1Db): void {
 	try {
@@ -48,6 +66,9 @@ function wrapOo1(db: Oo1Db): SqlEngine {
 		async run(sql, params = []) {
 			if (params.length) db.exec({ sql, bind: params });
 			else db.exec(sql);
+		},
+		async runMany(sql, rows) {
+			runManyPrepared(db, sql, rows);
 		},
 		async begin() {
 			db.exec('BEGIN');
@@ -134,6 +155,14 @@ type RpcMsg =
 			sql: string;
 			params: unknown[];
 	  }
+	| {
+			id: number;
+			session: string;
+			db: string;
+			op: 'runMany';
+			sql: string;
+			rows: unknown[][];
+	  }
 	| { id: number; session: string; db: string; op: 'begin' | 'commit' | 'rollback' | 'wipe' | 'close' };
 
 type RpcRes = { id: number; session?: string; ok: boolean; rows?: unknown; error?: string };
@@ -150,12 +179,31 @@ function newSession(): string {
 function engineFromCall(
 	call: (msg: Omit<RpcMsg, 'id' | 'session' | 'db'>) => Promise<unknown>
 ): SqlEngine {
+	const { profileWrap } = {
+		profileWrap: async <T>(name: string, fn: () => Promise<T>): Promise<T> => {
+			const add = (globalThis as { __VFS_PROFILE_ADD__?: (n: string, ms: number) => void })
+				.__VFS_PROFILE_ADD__;
+			if (!add) return fn();
+			const t0 = performance.now();
+			try {
+				return await fn();
+			} finally {
+				add(name, performance.now() - t0);
+			}
+		}
+	};
 	return {
 		async exec(sql, params = []) {
-			return (await call({ op: 'exec', sql, params })) as Record<string, unknown>[];
+			return (await profileWrap('catalog.rpc', () =>
+				call({ op: 'exec', sql, params })
+			)) as Record<string, unknown>[];
 		},
 		async run(sql, params = []) {
-			await call({ op: 'run', sql, params });
+			await profileWrap('catalog.rpc', () => call({ op: 'run', sql, params }));
+		},
+		async runMany(sql, rows) {
+			if (!rows.length) return;
+			await profileWrap('catalog.rpc', () => call({ op: 'runMany', sql, rows }));
 		},
 		async begin() {
 			await call({ op: 'begin' });
@@ -374,6 +422,7 @@ async function startLeaderWorker(): Promise<Worker | null> {
 				op?: string;
 				sql?: string;
 				params?: unknown[];
+				rows?: unknown[][];
 			};
 			if (data?.type === 'who') {
 				announce();
@@ -388,7 +437,8 @@ async function startLeaderWorker(): Promise<Worker | null> {
 				db: data.db,
 				op: data.op,
 				sql: data.sql,
-				params: data.params
+				params: data.params,
+				rows: data.rows
 			});
 		};
 		announce();

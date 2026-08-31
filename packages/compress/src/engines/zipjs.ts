@@ -39,6 +39,105 @@ function asU8(data: unknown): Uint8Array | null {
 	return null;
 }
 
+function abortIf(signal?: AbortSignal): void {
+	if (!signal?.aborted) return;
+	const e = new Error('Cancelled');
+	e.name = 'AbortError';
+	throw e;
+}
+
+function profileAdd(name: string, ms: number): void {
+	(globalThis as { __VFS_PROFILE_ADD__?: (n: string, ms: number) => void }).__VFS_PROFILE_ADD__?.(
+		name,
+		ms
+	);
+}
+
+/**
+ * fflate's unzipSync is one tight loop (the 50MB nested stored zip was 47ms).
+ * zip.js `getData` per member is ~1ms of async overhead × thousands of files.
+ * Encrypted / Zip64 / odd method zips throw and we fall back to zip.js.
+ */
+async function unzipSyncAll(bytes: Uint8Array, opts?: UnzipProgressOpts): Promise<ArchiveEntry[]> {
+	const fflate = await import('fflate');
+	abortIf(opts?.signal);
+	const t0 = performance.now();
+	// Worker unzip beats unzipSync on many deflated members (2–5× in-process).
+	const tree = await new Promise<Record<string, Uint8Array>>((resolve, reject) => {
+		const term = fflate.unzip(bytes, (err, data) => (err ? reject(err) : resolve(data)));
+		const onAbort = () => {
+			term();
+			const e = new Error('Cancelled');
+			e.name = 'AbortError';
+			reject(e);
+		};
+		if (opts?.signal) {
+			if (opts.signal.aborted) onAbort();
+			else opts.signal.addEventListener('abort', onAbort, { once: true });
+		}
+	}).catch((err: unknown) => {
+		if ((err as Error)?.name === 'AbortError') throw err;
+		return fflate.unzipSync(bytes);
+	});
+	profileAdd('zipjs.inflate', performance.now() - t0);
+	const out: ArchiveEntry[] = [];
+	for (const [name, data] of Object.entries(tree)) {
+		abortIf(opts?.signal);
+		if (!name || name.endsWith('/')) continue;
+		out.push({ name, data });
+	}
+	return out;
+}
+
+async function unzipViaZipJs(bytes: Uint8Array, opts?: UnzipProgressOpts): Promise<ArchiveEntry[]> {
+	const z = await get();
+	const reader = new z.ZipReader(new z.Uint8ArrayReader(bytes), { signal: opts?.signal });
+	const out: ArchiveEntry[] = [];
+	try {
+		const tEntries = performance.now();
+		const members = await reader.getEntries();
+		profileAdd('zipjs.getEntries', performance.now() - tEntries);
+		const tInflate = performance.now();
+		for (const member of members) {
+			abortIf(opts?.signal);
+			const name = member.filename ?? '';
+			if (!name || name.endsWith('/') || member.directory) continue;
+			if (!('getData' in member) || typeof member.getData !== 'function') continue;
+			opts?.onMember?.({
+				name,
+				transferred: 0,
+				size: member.uncompressedSize,
+				done: false
+			});
+			const raw = await member.getData(new z.Uint8ArrayWriter(), { signal: opts?.signal });
+			const data = asU8(raw);
+			if (!data) continue;
+			out.push({ name, data });
+			opts?.onMember?.({
+				name,
+				transferred: data.byteLength,
+				size: member.uncompressedSize ?? data.byteLength,
+				done: true
+			});
+		}
+		profileAdd('zipjs.inflate', performance.now() - tInflate);
+	} finally {
+		await reader.close();
+	}
+	return out;
+}
+
+async function deliver(files: ArchiveEntry[], opts?: UnzipProgressOpts): Promise<ArchiveEntry[]> {
+	if (!opts?.onEntry) return files;
+	const tEntry = performance.now();
+	for (const entry of files) {
+		abortIf(opts.signal);
+		await opts.onEntry(entry);
+	}
+	profileAdd('zipjs.onEntry', performance.now() - tEntry);
+	return [];
+}
+
 export const zipjsEngine: CompressionEngine = {
 	info: engineInfo('zipjs'),
 
@@ -66,42 +165,12 @@ export const zipjsEngine: CompressionEngine = {
 	},
 
 	async unzip(bytes: Uint8Array, opts?: UnzipProgressOpts) {
-		const z = await get();
-		const reader = new z.ZipReader(new z.Uint8ArrayReader(bytes), { signal: opts?.signal });
-		const out: ArchiveEntry[] = [];
+		let files: ArchiveEntry[];
 		try {
-			const members = await reader.getEntries();
-			for (const member of members) {
-				if (opts?.signal?.aborted) {
-					const e = new Error('Cancelled');
-					e.name = 'AbortError';
-					throw e;
-				}
-				const name = member.filename ?? '';
-				if (!name || name.endsWith('/') || member.directory) continue;
-				if (!('getData' in member) || typeof member.getData !== 'function') continue;
-				opts?.onMember?.({
-					name,
-					transferred: 0,
-					size: member.uncompressedSize,
-					done: false
-				});
-				const raw = await member.getData(new z.Uint8ArrayWriter(), { signal: opts?.signal });
-				const data = asU8(raw);
-				if (!data) continue;
-				const entry = { name, data };
-				if (opts?.onEntry) await opts.onEntry(entry);
-				else out.push(entry);
-				opts?.onMember?.({
-					name,
-					transferred: data.byteLength,
-					size: member.uncompressedSize ?? data.byteLength,
-					done: true
-				});
-			}
-		} finally {
-			await reader.close();
+			files = await unzipSyncAll(bytes, opts);
+		} catch {
+			files = await unzipViaZipJs(bytes, opts);
 		}
-		return out;
+		return deliver(files, opts);
 	}
 };

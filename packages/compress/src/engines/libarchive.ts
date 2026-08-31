@@ -131,7 +131,6 @@ async function extract(bytes: Uint8Array, opts?: UnzipProgressOpts): Promise<Arc
 				size: size || data.byteLength,
 				done: true
 			});
-			await new Promise((r) => setTimeout(r, 0));
 		}
 	} finally {
 		reader.free();

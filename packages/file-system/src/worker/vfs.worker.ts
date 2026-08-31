@@ -20,6 +20,7 @@ import { createVfs, type VfsService } from '../vfs.js';
 import { createSyncOpfsStore, canUseSyncAccessHandles } from './syncOpfs.js';
 import { createLocalExplorerDriver } from '../ui/localExplorerDriver.js';
 import { runArchiveJob } from '../ui/archiveOps.js';
+import { profileAdd, profileDisable, profileDump, profileEnable } from '../profile.js';
 import type { ExtractJobRequest, WorkerRequest, WorkerResponse } from './protocol.js';
 import type { EngineId as CompressEngineId } from '@shared-packages/compress';
 
@@ -111,6 +112,8 @@ async function runExtract(req: ExtractJobRequest, catalogPort?: MessagePort | nu
 	}
 
 	try {
+		if (req.profile) profileEnable();
+		const tAll = performance.now();
 		await runArchiveJob({
 			kind: req.kind,
 			entries,
@@ -129,6 +132,11 @@ async function runExtract(req: ExtractJobRequest, catalogPort?: MessagePort | nu
 			signal: controller.signal,
 			onProgress: (ev) => ctx.postMessage({ type: 'progress', jobId: req.jobId, ev })
 		});
+		if (req.profile) {
+			profileAdd('extract.wall', performance.now() - tAll);
+			console.log('[vfs-profile]', JSON.stringify(profileDump()));
+			profileDisable();
+		}
 		ctx.postMessage({ type: 'done', jobId: req.jobId, written: 0 });
 	} finally {
 		cancels.delete(req.jobId);

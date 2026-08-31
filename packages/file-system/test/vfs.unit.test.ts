@@ -512,6 +512,36 @@ describe('VfsService', () => {
 		assert.ok(await vfs.childByName(root.id, 'docs'));
 	});
 
+	it('ensureFolders materializeOpfs:false still catalogs without mkdir', async () => {
+		const root = await vfs.mkdir(null, 'pk');
+		let mk = 0;
+		const orig = vfs.opfs.ensureDir?.bind(vfs.opfs);
+		vfs.opfs.ensureDir = async (p: string) => {
+			mk += 1;
+			await orig?.(p);
+		};
+		const map = await vfs.ensureFolders(root.id, [['a', 'b'], ['a', 'c']], {
+			materializeOpfs: false
+		});
+		assert.equal(mk, 0);
+		assert.ok(map.get('a'));
+		assert.ok(await vfs.childByName(root.id, 'a'));
+		assert.ok(await vfs.childByName(map.get('a')!, 'b'));
+	});
+
+	it('ensureFolders existing map skips already-known prefixes', async () => {
+		const root = await vfs.mkdir(null, 'seed');
+		const first = await vfs.ensureFolders(root.id, [['a', 'b']]);
+		const second = await vfs.ensureFolders(root.id, [['a', 'b'], ['a', 'c']], {
+			existing: first,
+			materializeOpfs: false
+		});
+		assert.equal(second.get('a'), first.get('a'));
+		assert.equal(second.get('a/b'), first.get('a/b'));
+		assert.ok(second.get('a/c'));
+		assert.notEqual(second.get('a/c'), first.get('a/b'));
+	});
+
 	it('ensureFolders commits a deep tree in one IDB transaction', async () => {
 		const root = await vfs.mkdir(null, 'deep');
 		let txns = 0;

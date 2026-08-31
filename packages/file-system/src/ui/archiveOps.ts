@@ -491,12 +491,21 @@ export function createStreamingWriter(opts: {
 	// Bytes are the real governor; the file count is a backstop for tiny members.
 	const windowFiles = opts.windowFiles ?? 4096;
 	const windowBytes = opts.windowBytes ?? 64 << 20;
+	// Packed extract already concatenates members into one pack file. Flushing
+	// at 64MB re-ran catalog work per chunk. Once inflate has the whole
+	// archive in RAM (zip.js unzipSync path), hold until finish and write once.
+	const flushFiles = opts.pack ? Number.POSITIVE_INFINITY : windowFiles;
+	const flushBytes = opts.pack ? Number.POSITIVE_INFINITY : windowBytes;
 	const put = driver.writeFile ?? driver.upload;
 	if (!put) throw new Error('This location cannot receive files');
 	// ONE folder context for the whole stream. Rebuilding it per flush cost a
 	// driver.list() per directory per batch — at 3000 files across ~125
 	// flushes that dominated the job.
-	const folders = createDestFolders(driver, parentId, signal);
+	const folders = createDestFolders(driver, parentId, signal, {
+		// Packed members live in packs/*.bin. Creating 20k empty OPFS dirs
+		// for the catalog tree was the 16s+ of a 20s extract.
+		materializeOpfs: opts.pack !== true
+	});
 
 	let window: PackedPath[] = [];
 	let windowSize = 0;
@@ -509,7 +518,11 @@ export function createStreamingWriter(opts: {
 		window = [];
 		windowSize = 0;
 		throwIfAborted(signal);
+		const add = (globalThis as { __VFS_PROFILE_ADD__?: (n: string, ms: number) => void })
+			.__VFS_PROFILE_ADD__;
+		const t0 = add ? performance.now() : 0;
 		await writeEntriesToDriver(driver, parentId, batch, onFile, signal, folders, opts.pack);
+		if (add) add('stream.flush', performance.now() - t0);
 		written += batch.length;
 	};
 
@@ -529,7 +542,7 @@ export function createStreamingWriter(opts: {
 			}
 			window.push(entry);
 			windowSize += entry.data.byteLength;
-			if (window.length >= windowFiles || windowSize >= windowBytes) await flush();
+			if (window.length >= flushFiles || windowSize >= flushBytes) await flush();
 		},
 		async finish() {
 			await flush();
@@ -557,7 +570,8 @@ export type DestFolders = {
 export function createDestFolders(
 	driver: ExplorerDriver,
 	parentId: string | null,
-	signal?: AbortSignal
+	signal?: AbortSignal,
+	opts?: { materializeOpfs?: boolean }
 ): DestFolders {
 	const folderIds = new Map<string, string | null>([['', parentId]]);
 	const painted = new Set<string>();
@@ -585,7 +599,13 @@ export function createDestFolders(
 
 	async function prefetch(paths: string[][]): Promise<void> {
 		if (typeof driver.ensureFolders !== 'function' || !paths.length) return;
-		const mapped = await driver.ensureFolders(parentId, paths);
+		const novel = paths.filter((segs) => !folderIds.has(segs.join('/')));
+		if (!novel.length) return;
+		const mapped = await driver.ensureFolders(parentId, novel, {
+			signal,
+			materializeOpfs: opts?.materializeOpfs,
+			existing: folderIds
+		});
 		for (const [key, id] of mapped) {
 			if (!folderIds.has(key)) folderIds.set(key, id);
 		}
@@ -615,7 +635,9 @@ export async function writeEntriesToDriver(
 			'This connection cannot create folders. Extract individual files instead, or pick another location.'
 		);
 	}
-	const dest = folders ?? createDestFolders(driver, parentId, signal);
+	const dest = folders ?? createDestFolders(driver, parentId, signal, {
+		materializeOpfs: pack !== true
+	});
 	const run = async () => {
 	const ensureDir = dest.ensureDir;
 	// Packed extract cannot use writeTree: that path is one POSIX file per

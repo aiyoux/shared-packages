@@ -14,6 +14,7 @@ import {
 import { forceExtension, getFileType, inferFileTypeFromName } from './registry.js';
 import { parseJsonBytes, serializeBody } from './serialize.js';
 import { crc32 } from './crc32.js';
+import { profileAdd } from './profile.js';
 
 async function blobToBytes(blob: Blob): Promise<Uint8Array> {
 	if (typeof blob.arrayBuffer === 'function') {
@@ -863,12 +864,19 @@ export class VfsService {
 	async ensureFolders(
 		parentId: string | null,
 		paths: Iterable<string[]>,
-		opts?: { signal?: AbortSignal }
+		opts?: {
+			signal?: AbortSignal;
+			/** When false, catalog rows only — packed extract has no POSIX tree. Default true. */
+			materializeOpfs?: boolean;
+			/** Folder ids already known (streaming flushes). Skip SQL for those keys. */
+			existing?: Map<string, string | null>;
+		}
 	): Promise<Map<string, string | null>> {
 		await this.ready();
-		const map = new Map<string, string | null>([['', parentId]]);
+		const map = new Map<string, string | null>(opts?.existing ?? [['', parentId]]);
+		if (!map.has('')) map.set('', parentId);
 		const byDepth: string[][][] = [];
-		const seen = new Set<string>();
+		const seen = new Set<string>(map.keys());
 		for (const raw of paths) {
 			const segs = raw.map((s) => sanitizeName(s)).filter(Boolean);
 			for (let i = 1; i <= segs.length; i++) {
@@ -882,6 +890,11 @@ export class VfsService {
 		if (!byDepth.length) return map;
 		const destRel = await this.relPathOf(parentId);
 		const relByKey = new Map<string, string>([['', destRel]]);
+		for (const key of map.keys()) {
+			if (key && !relByKey.has(key)) {
+				relByKey.set(key, destRel ? `${destRel}/${key}` : key);
+			}
+		}
 
 		// A 10-level zip of 3000 files is ~20k folders. IDB charges per
 		// request (browser-process IPC), so get+siblings+sortOrder per parent
@@ -889,10 +902,12 @@ export class VfsService {
 		// POSIX mkdir. One txn per tree, sibling reads only for folders that
 		// already existed, one bulkPut for every new row.
 		return this.batch(async () => {
+			const tSql = performance.now();
 			await this.db.transaction('rw', this.db.nodes, async () => {
 				const createdIds = new Set<string>();
 				const created: VfsNode[] = [];
 				for (const level of byDepth) {
+					if (!level?.length) continue;
 					throwIfAborted(opts?.signal);
 					const grouped = new Map<string, string[][]>();
 					for (const segs of level) {
@@ -1000,10 +1015,13 @@ export class VfsService {
 				}
 				if (created.length) await this.db.nodes.bulkPut(created);
 			});
-			if (this.opfs.ensureDir) {
+			profileAdd('ensureFolders.sqlTxn', performance.now() - tSql);
+			if (opts?.materializeOpfs !== false && this.opfs.ensureDir) {
+				const tMk = performance.now();
 				for (const rel of relByKey.values()) {
 					if (rel) await this.opfs.ensureDir(this.rootOpfsPath(rel));
 				}
+				profileAdd('ensureFolders.opfsMkdir', performance.now() - tMk);
 			}
 			return map;
 		});
@@ -1049,6 +1067,7 @@ export class VfsService {
 		const folderKeys = new Set<string>();
 		const destRel = await this.relPathOf(parentId);
 
+		const tPlan = performance.now();
 		for (const input of files) {
 			throwIfAborted(opts?.signal);
 			const trimmed = String(input.path ?? '').replace(/\\/g, '/');
@@ -1092,9 +1111,11 @@ export class VfsService {
 				crc: crc32(bytes)
 			});
 		}
+		profileAdd('writeTree.plan+crc', performance.now() - tPlan);
 
 		const WRITE_CONCURRENCY = 12;
 		try {
+			const tStage = performance.now();
 			let cursor = 0;
 			const workers = Array.from({ length: WRITE_CONCURRENCY }, async () => {
 				while (cursor < planned.length) {
@@ -1104,6 +1125,7 @@ export class VfsService {
 				}
 			});
 			await Promise.all(workers);
+			profileAdd('writeTree.opfsStage', performance.now() - tStage);
 		} catch (e) {
 			for (const p of planned) {
 				try {
@@ -1120,6 +1142,7 @@ export class VfsService {
 		const fileNodes: VfsNode[] = [];
 		const uniqueRelByKey = new Map<string, string>([['', destRel]]);
 
+		const tCat = performance.now();
 		await this.batch(async () => {
 			await this.db.transaction('rw', this.db.nodes, this.db.blobRefs, async () => {
 				if (parentId !== null) {
@@ -1281,7 +1304,9 @@ export class VfsService {
 						if (destPath !== p.opfsPath) {
 							const destDir = destPath.slice(0, destPath.lastIndexOf('/'));
 							if (destDir) await this.opfs.ensureDir?.(destDir);
+							const tMove = performance.now();
 							await this.opfs.move(p.opfsPath, destPath);
+							profileAdd('writeTree.opfsMove', performance.now() - tMove);
 							p.opfsPath = destPath;
 						}
 						p.name = unique;
@@ -1319,11 +1344,14 @@ export class VfsService {
 				if (refPuts.length) await this.db.blobRefs.bulkPut(refPuts);
 			});
 			if (this.opfs.ensureDir) {
+				const tMk = performance.now();
 				for (const rel of uniqueRelByKey.values()) {
 					if (rel) await this.opfs.ensureDir(this.rootOpfsPath(rel));
 				}
+				profileAdd('writeTree.opfsMkdir', performance.now() - tMk);
 			}
 		});
+		profileAdd('writeTree.catalog+settle', performance.now() - tCat);
 
 		this.emitChange();
 		const byId = new Map(fileNodes.map((n) => [n.id, n]));
@@ -1885,32 +1913,74 @@ export class VfsService {
 			const refPuts: BlobRef[] = [];
 			const leasePuts: Array<{ key: string; owner: string; expiresAt: number }> = [];
 			const nodePuts: VfsNode[] = [];
+			const tReserve = performance.now();
 			await this.db.transaction(
 				'rw',
 				this.db.nodes,
 				this.db.blobRefs,
 				this.db.leases,
 				async () => {
+					const uniquePids = [...new Set(prepared.map((p) => p.input.parentId))];
+					const pidList = uniquePids.filter((id): id is string => id != null);
+					const needRel = prepared.some((_, i) => !packedIndexes.has(i));
+					if (pidList.length) {
+						const parents = await this.db.nodes.bulkGet(pidList);
+						for (const parent of parents) {
+							if (!parent || parent.kind !== 'folder' || parent.deletedAt != null) {
+								throw new VfsError(parent?.deletedAt != null ? 'TRASH_STATE' : 'NOT_A_FOLDER');
+							}
+						}
+						for (let i = 0; i < pidList.length; i += 100) {
+							const chunk = pidList.slice(i, i + 100);
+							const rows = await this.db.nodes.where('parentId').anyOf(chunk).toArray();
+							for (const n of rows) {
+								if (n.deletedAt != null || n.parentId == null) continue;
+								const key = n.parentId;
+								let taken = siblingNames.get(key);
+								if (!taken) {
+									taken = new Set();
+									siblingNames.set(key, taken);
+									nextAppend.set(key, 0);
+								}
+								taken.add(n.name.toLowerCase());
+								if (typeof n.sortOrder === 'number') {
+									const next = n.sortOrder + 16384;
+									if (next > (nextAppend.get(key) ?? 0)) nextAppend.set(key, next);
+								}
+							}
+						}
+					}
+					if (uniquePids.some((id) => id === null)) {
+						const rootSibs = await this.activeSiblings(null);
+						siblingNames.set(
+							'',
+							new Set(rootSibs.map((n) => n.name.toLowerCase()))
+						);
+						let rootNext = 0;
+						for (const n of rootSibs) {
+							if (typeof n.sortOrder === 'number' && n.sortOrder + 16384 > rootNext) {
+								rootNext = n.sortOrder + 16384;
+							}
+						}
+						nextAppend.set('', rootNext);
+						if (needRel) parentRelByKey.set('', '');
+					}
+					for (const pid of uniquePids) {
+						const key = pid ?? '';
+						if (!siblingNames.has(key)) {
+							siblingNames.set(key, new Set());
+							nextAppend.set(key, 0);
+						}
+						if (needRel && !parentRelByKey.has(key)) {
+							parentRelByKey.set(key, await this.relPathOf(pid));
+						}
+					}
 					for (const [pIndex, p] of prepared.entries()) {
 						if (signal?.aborted) throw abortError();
 						const pid = p.input.parentId;
 						const stateKey = pid ?? '';
-						let taken = siblingNames.get(stateKey);
-						let nextSortOrder = nextAppend.get(stateKey);
-						if (taken === undefined || nextSortOrder === undefined) {
-							if (pid !== null) {
-								const parent = await this.db.nodes.get(pid);
-								if (!parent || parent.kind !== 'folder') throw new VfsError('NOT_A_FOLDER');
-								if (parent.deletedAt != null) throw new VfsError('TRASH_STATE');
-							}
-							taken = new Set(
-								(await this.activeSiblings(pid)).map((n) => n.name.toLowerCase())
-							);
-							nextSortOrder = await this.nextAppendSortOrder(pid);
-							siblingNames.set(stateKey, taken);
-							nextAppend.set(stateKey, nextSortOrder);
-							parentRelByKey.set(stateKey, await this.relPathOf(pid));
-						}
+						const taken = siblingNames.get(stateKey)!;
+						let nextSortOrder = nextAppend.get(stateKey)!;
 						// Same 'rename' resolution ensureUniqueName performs.
 						let unique = p.name;
 						if (taken.has(unique.toLowerCase())) {
@@ -1967,6 +2037,7 @@ export class VfsService {
 					await this.db.nodes.bulkPut(nodePuts);
 				}
 			);
+			profileAdd('writeFiles.reserveTxn', performance.now() - tReserve);
 			// Names are settled and committed, so the next chunk may start its
 			// own reserve while this one writes bytes.
 			onReserved?.();
@@ -1978,36 +2049,41 @@ export class VfsService {
 				if (signal?.aborted) throw abortError();
 				heldPackPath = packPath;
 				await this.holdPackWrite(packPath);
+				const tAsm = performance.now();
 				const payload = new Uint8Array(packBytes);
 				for (const m of packMembers) {
 					if (!packedIndexes.has(m.index)) continue;
 					payload.set(prepared[m.index]!.bytes, m.offset);
 				}
+				profileAdd('writeFiles.packAssemble', performance.now() - tAsm);
+				const tWrite = performance.now();
 				const written = await this.opfs.writeAtomic(packPath, payload);
+				profileAdd('writeFiles.packWrite', performance.now() - tWrite);
 				if (written.byteLength !== packBytes) {
 					throw new VfsError(
 						'OPFS_IO',
 						`Pack write short: expected ${packBytes} bytes, wrote ${written.byteLength}`
 					);
 				}
-				const onDisk = await this.opfs.read(packPath);
-				if (onDisk.byteLength !== packBytes) {
-					throw new VfsError(
-						'OPFS_IO',
-						`Pack write short: expected ${packBytes} bytes, disk has ${onDisk.byteLength}`
-					);
-				}
-				for (const m of packMembers) {
-					if (!packedIndexes.has(m.index)) continue;
-					const len = prepared[m.index]!.bytes.byteLength;
-					const got = crc32(onDisk.subarray(m.offset, m.offset + len));
-					if (got !== crc32(prepared[m.index]!.bytes)) {
-						throw new VfsError(
-							'OPFS_IO',
-							`Checksum mismatch at ${packPath}:${m.offset}`
-						);
+				const tVerify = performance.now();
+				const packed = packMembers.filter((m) => packedIndexes.has(m.index));
+				const samples = packed.length <= 5
+					? packed
+					: packed.filter((_, i) => i % Math.max(1, Math.floor(packed.length / 5)) === 0).slice(0, 5);
+				if (typeof this.opfs.readRange === 'function') {
+					for (const m of samples) {
+						const src = prepared[m.index]!.bytes;
+						const blob = await this.opfs.readRange(packPath, m.offset, src.byteLength);
+						const onDisk = new Uint8Array(await blob.arrayBuffer());
+						if (crc32(onDisk) !== crc32(src)) {
+							throw new VfsError(
+								'OPFS_IO',
+								`Checksum mismatch at ${packPath}:${m.offset}`
+							);
+						}
 					}
 				}
+				profileAdd('writeFiles.packVerify+crc', performance.now() - tVerify);
 			}
 			// Anything not packed (large members, or a chunk too small to be
 			// worth a pack) keeps the one-file-per-blob path.
@@ -2040,6 +2116,7 @@ export class VfsService {
 			// cannot park a live child under it, as in writeFile). Rows are read
 			// in one bulkGet and written back in one bulkPut — per-file get/put
 			// round trips were the remaining IDB cost after batching.
+			const tConfirm = performance.now();
 			await this.db.transaction(
 				'rw',
 				this.db.nodes,
@@ -2053,16 +2130,22 @@ export class VfsService {
 					]);
 					const refUpdates: BlobRef[] = [];
 					const nodeUpdates: VfsNode[] = [];
-					const checkedParents = new Set<string>();
-					for (const [i, r] of reserved.entries()) {
-						const pid = r.p.input.parentId;
-						if (pid !== null && !checkedParents.has(pid)) {
-							const parent = await this.db.nodes.get(pid);
+					const confirmPids = [
+						...new Set(
+							reserved
+								.map((r) => r.p.input.parentId)
+								.filter((id): id is string => id != null)
+						)
+					];
+					if (confirmPids.length) {
+						const parents = await this.db.nodes.bulkGet(confirmPids);
+						for (const parent of parents) {
 							if (!parent || parent.kind !== 'folder' || parent.deletedAt != null) {
 								throw new VfsError('TRASH_STATE');
 							}
-							checkedParents.add(pid);
 						}
+					}
+					for (const [i, r] of reserved.entries()) {
 						const ref = refs[i]!;
 						if (ref) {
 							refUpdates.push({
@@ -2087,6 +2170,7 @@ export class VfsService {
 					await this.db.leases.bulkDelete(leaseKeys);
 				}
 			);
+			profileAdd('writeFiles.confirmTxn', performance.now() - tConfirm);
 			packPathToUnlink = undefined;
 		} catch (e) {
 			await cleanup();

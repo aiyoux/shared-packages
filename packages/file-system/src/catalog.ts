@@ -59,6 +59,60 @@ function jsonOrNull(v: unknown): string | null {
 	return JSON.stringify(v);
 }
 
+const NODE_UPSERT_SQL = `INSERT INTO nodes (id, parent_id, name, kind, file_type, size, content_type, created_at, updated_at, generation, blob_id, meta, deleted_at, trash_parent_id, sort_order)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+       ON CONFLICT(id) DO UPDATE SET
+         parent_id=excluded.parent_id, name=excluded.name, kind=excluded.kind, file_type=excluded.file_type,
+         size=excluded.size, content_type=excluded.content_type, created_at=excluded.created_at,
+         updated_at=excluded.updated_at, generation=excluded.generation, blob_id=excluded.blob_id,
+         meta=excluded.meta, deleted_at=excluded.deleted_at, trash_parent_id=excluded.trash_parent_id,
+         sort_order=excluded.sort_order`;
+
+function bindNode(node: VfsNode): unknown[] {
+	return [
+		node.id,
+		node.parentId ?? null,
+		node.name,
+		node.kind,
+		node.fileType ?? null,
+		node.size ?? null,
+		node.contentType ?? null,
+		node.createdAt,
+		node.updatedAt,
+		node.generation,
+		node.blobId ?? null,
+		jsonOrNull(node.meta),
+		node.deletedAt ?? null,
+		node.trashParentId === undefined ? null : node.trashParentId,
+		node.sortOrder ?? null
+	];
+}
+
+const BLOB_UPSERT_SQL = `INSERT INTO blob_refs (id, opfs_path, byte_length, created_at, content_type, pending_promote, pending, pack_offset, crc32, pack_generation)
+       VALUES (?,?,?,?,?,?,?,?,?,?)
+       ON CONFLICT(id) DO UPDATE SET
+         opfs_path=excluded.opfs_path, byte_length=excluded.byte_length, created_at=excluded.created_at,
+         content_type=excluded.content_type, pending_promote=excluded.pending_promote, pending=excluded.pending,
+         pack_offset=excluded.pack_offset, crc32=excluded.crc32, pack_generation=excluded.pack_generation`;
+
+function bindBlob(ref: BlobRef): unknown[] {
+	return [
+		ref.id,
+		ref.opfsPath,
+		ref.byteLength,
+		ref.createdAt,
+		ref.contentType ?? null,
+		ref.pendingPromote ? 1 : 0,
+		ref.pending ? 1 : 0,
+		ref.packOffset ?? null,
+		ref.crc32 ?? null,
+		ref.packGeneration ?? null
+	];
+}
+
+const LEASE_UPSERT_SQL = `INSERT INTO leases (key, owner, expires_at) VALUES (?,?,?)
+       ON CONFLICT(key) DO UPDATE SET owner=excluded.owner, expires_at=excluded.expires_at`;
+
 function parseJson<T>(raw: unknown, fallback: T): T {
 	if (raw == null || raw === '') return fallback;
 	if (typeof raw !== 'string') return fallback;
@@ -218,6 +272,14 @@ export class SqliteCatalog {
 
 	async run(sql: string, params: unknown[] = []): Promise<void> {
 		await this.eng().run(sql, params);
+	}
+
+	async runMany(sql: string, rows: unknown[][]): Promise<void> {
+		if (!rows.length) return;
+		const chunk = Math.max(IN_CHUNK, 2000);
+		for (let i = 0; i < rows.length; i += chunk) {
+			await this.eng().runMany(sql, rows.slice(i, i + chunk));
+		}
 	}
 
 	async transaction<T>(_mode: string, ...rest: unknown[]): Promise<T> {
@@ -385,46 +447,20 @@ class NodeTable {
 	}
 
 	async put(node: VfsNode): Promise<string> {
-		const parentId = node.parentId ?? null;
-		await this.c.run(
-			`INSERT INTO nodes (id, parent_id, name, kind, file_type, size, content_type, created_at, updated_at, generation, blob_id, meta, deleted_at, trash_parent_id, sort_order)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-       ON CONFLICT(id) DO UPDATE SET
-         parent_id=excluded.parent_id, name=excluded.name, kind=excluded.kind, file_type=excluded.file_type,
-         size=excluded.size, content_type=excluded.content_type, created_at=excluded.created_at,
-         updated_at=excluded.updated_at, generation=excluded.generation, blob_id=excluded.blob_id,
-         meta=excluded.meta, deleted_at=excluded.deleted_at, trash_parent_id=excluded.trash_parent_id,
-         sort_order=excluded.sort_order`,
-			[
-				node.id,
-				parentId,
-				node.name,
-				node.kind,
-				node.fileType ?? null,
-				node.size ?? null,
-				node.contentType ?? null,
-				node.createdAt,
-				node.updatedAt,
-				node.generation,
-				node.blobId ?? null,
-				jsonOrNull(node.meta),
-				node.deletedAt ?? null,
-				node.trashParentId === undefined ? null : node.trashParentId,
-				node.sortOrder ?? null
-			]
-		);
+		await this.c.run(NODE_UPSERT_SQL, bindNode(node));
 		if (!this.c.inTx()) await this.c.persist();
 		return node.id;
 	}
 
 	async bulkPut(nodes: VfsNode[]): Promise<void> {
 		if (!nodes.length) return;
+		const rows = nodes.map(bindNode);
 		if (this.c.inTx()) {
-			for (const n of nodes) await this.put(n);
+			await this.c.runMany(NODE_UPSERT_SQL, rows);
 			return;
 		}
 		await this.c.transaction('rw', async () => {
-			for (const n of nodes) await this.put(n);
+			await this.c.runMany(NODE_UPSERT_SQL, rows);
 		});
 	}
 
@@ -571,38 +607,20 @@ class BlobTable {
 	}
 
 	async put(ref: BlobRef): Promise<string> {
-		await this.c.run(
-			`INSERT INTO blob_refs (id, opfs_path, byte_length, created_at, content_type, pending_promote, pending, pack_offset, crc32, pack_generation)
-       VALUES (?,?,?,?,?,?,?,?,?,?)
-       ON CONFLICT(id) DO UPDATE SET
-         opfs_path=excluded.opfs_path, byte_length=excluded.byte_length, created_at=excluded.created_at,
-         content_type=excluded.content_type, pending_promote=excluded.pending_promote, pending=excluded.pending,
-         pack_offset=excluded.pack_offset, crc32=excluded.crc32, pack_generation=excluded.pack_generation`,
-			[
-				ref.id,
-				ref.opfsPath,
-				ref.byteLength,
-				ref.createdAt,
-				ref.contentType ?? null,
-				ref.pendingPromote ? 1 : 0,
-				ref.pending ? 1 : 0,
-				ref.packOffset ?? null,
-				ref.crc32 ?? null,
-				ref.packGeneration ?? null
-			]
-		);
+		await this.c.run(BLOB_UPSERT_SQL, bindBlob(ref));
 		if (!this.c.inTx()) await this.c.persist();
 		return ref.id;
 	}
 
 	async bulkPut(refs: BlobRef[]): Promise<void> {
 		if (!refs.length) return;
+		const rows = refs.map(bindBlob);
 		if (this.c.inTx()) {
-			for (const r of refs) await this.put(r);
+			await this.c.runMany(BLOB_UPSERT_SQL, rows);
 			return;
 		}
 		await this.c.transaction('rw', async () => {
-			for (const r of refs) await this.put(r);
+			await this.c.runMany(BLOB_UPSERT_SQL, rows);
 		});
 	}
 
@@ -767,21 +785,30 @@ class LeaseTable {
 	}
 
 	async put(row: LeaseRow): Promise<string> {
-		await this.c.run(
-			`INSERT INTO leases (key, owner, expires_at) VALUES (?,?,?)
-       ON CONFLICT(key) DO UPDATE SET owner=excluded.owner, expires_at=excluded.expires_at`,
-			[row.key, row.owner, row.expiresAt]
-		);
+		await this.c.run(LEASE_UPSERT_SQL, [row.key, row.owner, row.expiresAt]);
 		if (!this.c.inTx()) await this.c.persist();
 		return row.key;
 	}
 
 	async bulkPut(rows: LeaseRow[]): Promise<void> {
-		for (const r of rows) await this.put(r);
+		if (!rows.length) return;
+		const binds = rows.map((r) => [r.key, r.owner, r.expiresAt]);
+		if (this.c.inTx()) {
+			await this.c.runMany(LEASE_UPSERT_SQL, binds);
+			return;
+		}
+		await this.c.transaction('rw', async () => {
+			await this.c.runMany(LEASE_UPSERT_SQL, binds);
+		});
 	}
 
 	async bulkDelete(keys: string[]): Promise<void> {
-		for (const k of keys) await this.c.run('DELETE FROM leases WHERE key = ?', [k]);
+		if (!keys.length) return;
+		for (let i = 0; i < keys.length; i += IN_CHUNK) {
+			const chunk = keys.slice(i, i + IN_CHUNK);
+			const ph = chunk.map(() => '?').join(',');
+			await this.c.run(`DELETE FROM leases WHERE key IN (${ph})`, chunk);
+		}
 		if (!this.c.inTx()) await this.c.persist();
 	}
 

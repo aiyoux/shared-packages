@@ -94,12 +94,19 @@ export const zipkitEngine: CompressionEngine = {
 		}
 	},
 
-	async zip(entries: ArchiveEntry[], _options?: CompressOptions) {
+	async zip(entries: ArchiveEntry[], options?: CompressOptions) {
 		const z = await get();
+		const method = options?.level === 'speed' ? 'store' : 'deflate';
+		const level = options?.level === 'ratio' ? 9 : options?.level === 'speed' ? 1 : 5;
 		return z.zip(
 			entries
 				.filter((e) => e.name && !e.name.endsWith('/'))
-				.map((e) => ({ name: e.name.replace(/^\/+/, ''), data: e.data }))
+				.map((e) => ({
+					name: e.name.replace(/^\/+/, ''),
+					data: e.data,
+					method,
+					level
+				}))
 		);
 	},
 
@@ -134,7 +141,6 @@ export const zipkitEngine: CompressionEngine = {
 				size: data.byteLength,
 				done: true
 			});
-			await new Promise((r) => setTimeout(r, 0));
 		}
 		return out;
 	}

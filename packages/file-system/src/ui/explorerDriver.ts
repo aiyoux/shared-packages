@@ -134,7 +134,12 @@ export interface ExplorerDriver {
 	 */
 	ensureFolders?(
 		parentId: ExplorerEntryId | null,
-		paths: string[][]
+		paths: string[][],
+		opts?: {
+			signal?: AbortSignal;
+			materializeOpfs?: boolean;
+			existing?: Map<string, string | null>;
+		}
 	): Promise<Map<string, string | null>>;
 	/** File-only on B2 v1; folders throw B2_FOLDER_OP_UNSUPPORTED. */
 	rename?(id: ExplorerEntryId, name: string): Promise<ExplorerEntry>;

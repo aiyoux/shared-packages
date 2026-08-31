@@ -103,12 +103,12 @@ export function createLocalExplorerDriver(
 
 		batch: typeof vfs.batch === 'function' ? (fn) => vfs.batch!(fn) : undefined,
 
-		async ensureFolders(parentId, paths) {
+		async ensureFolders(parentId, paths, opts) {
 			if (typeof vfs.ensureFolders !== 'function') {
 				const out = new Map<string, string | null>([['', parentId]]);
 				return out;
 			}
-			return vfs.ensureFolders(parentId, paths);
+			return vfs.ensureFolders(parentId, paths, opts);
 		},
 
 		async rename(entryId, name) {

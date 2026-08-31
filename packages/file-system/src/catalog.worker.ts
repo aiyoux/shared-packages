@@ -9,11 +9,27 @@
  */
 import { CATALOG_SCHEMA } from './catalogSchema.js';
 
+type Oo1Stmt = {
+	bind(args: unknown[]): Oo1Stmt;
+	stepReset(): unknown;
+	finalize(): unknown;
+};
 type Oo1Db = {
 	exec(sql: string | { sql: string; bind?: unknown[] }): void;
 	selectObjects(sql: string, bind?: unknown[]): Array<Record<string, unknown>>;
+	prepare(sql: string): Oo1Stmt;
 	close(): void;
 };
+
+function runManyPrepared(d: Oo1Db, sql: string, rows: unknown[][]): void {
+	if (!rows.length) return;
+	const st = d.prepare(sql);
+	try {
+		for (const bind of rows) st.bind(bind).stepReset();
+	} finally {
+		st.finalize();
+	}
+}
 
 type PoolUtil = {
 	OpfsSAHPoolDb: new (filename: string) => Oo1Db;
@@ -104,6 +120,7 @@ type Incoming = {
 	op: string;
 	sql?: string;
 	params?: unknown[];
+	rows?: unknown[][];
 };
 
 async function runOp(
@@ -123,6 +140,10 @@ async function runOp(
 			const params = msg.params ?? [];
 			if (params.length) d.exec({ sql: msg.sql!, bind: params });
 			else d.exec(msg.sql!);
+			return { ok: true };
+		}
+		if (msg.op === 'runMany') {
+			runManyPrepared(d, msg.sql!, msg.rows ?? []);
 			return { ok: true };
 		}
 		if (msg.op === 'begin') {

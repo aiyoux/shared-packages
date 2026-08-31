@@ -29,6 +29,8 @@ export type ExtractJobRequest = {
 	compressEngineId: string;
 	/** Store members in shared packs. Off by default. */
 	pack?: boolean;
+	/** Accumulate phase timers and log `[vfs-profile]` when the job ends. */
+	profile?: boolean;
 };
 
 export type WorkerRequest =

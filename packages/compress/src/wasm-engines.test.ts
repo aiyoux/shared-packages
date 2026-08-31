@@ -70,6 +70,23 @@ describe('zip.js', () => {
 		expect(files).toHaveLength(1);
 		expect(new TextDecoder().decode(files[0]!.data)).toBe(new TextDecoder().decode(SAMPLE));
 	});
+
+	it('inflates a stored many-member zip in one pass', async () => {
+		const fflate = await import('fflate');
+		const tree: Record<string, Uint8Array> = {};
+		for (let i = 0; i < 80; i++) tree[`d/f${i}.bin`] = new Uint8Array(64).fill(i);
+		const zip = fflate.zipSync(tree, { level: 0 });
+		const seen: string[] = [];
+		const files = await expandBytes('zipjs', zip, 'zip', 'stored.zip', {
+			onEntry: (entry) => {
+				seen.push(entry.name);
+			}
+		});
+		expect(files.length).toBe(0);
+		expect(seen).toHaveLength(80);
+		expect(seen[0]).toBe('d/f0.bin');
+		expect(seen[79]).toBe('d/f79.bin');
+	});
 });
 
 describe('libarchive wasm', () => {
