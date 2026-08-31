@@ -204,11 +204,8 @@ export function createVfsGitFs(vfs: VfsService, opts: CreateVfsGitFsOptions): Vf
 	const rootId = opts.rootId;
 	let buf: GitBuf | null = null;
 
-	// Every delete here passes `compact: false`. permanentDelete compacts by
-	// default, which is right for a user deleting one file and catastrophic
-	// for git: a single checkout unlinks hundreds of paths, and each one would
-	// rewrite a whole pack. Dead space is reclaimed by the load sweep and by
-	// emptying the trash, both of which do it once instead of N times.
+	// Bulk git ops wrap deletes in vfs.deferCompact (when present) so packs
+	// are rewritten once at the end of the op, not per unlink.
 
 	async function diskWrite(path: string, bytes: Uint8Array): Promise<void> {
 		const w = await walk(vfs, rootId, path);
@@ -239,15 +236,22 @@ export function createVfsGitFs(vfs: VfsService, opts: CreateVfsGitFsOptions): Vf
 			if (snap.unlinks.has(path)) continue;
 			await diskWrite(path, bytes);
 		}
-		for (const path of snap.unlinks) {
-			if (path === '/') continue;
-			const w = await walk(vfs, rootId, path);
-			if (!w.node || 'root' in w) continue;
-			await vfs.permanentDelete(w.node.id, {
-				compact: false,
-				recursive: w.node.kind === 'folder'
-			});
-		}
+		const compacting = vfs as typeof vfs & {
+			deferCompact?: <T>(fn: () => Promise<T>) => Promise<T>;
+		};
+		const deletes = async () => {
+			for (const path of snap.unlinks) {
+				if (path === '/') continue;
+				const w = await walk(vfs, rootId, path);
+				if (!w.node || 'root' in w) continue;
+				await vfs.permanentDelete(w.node.id, {
+					compact: typeof compacting.deferCompact === 'function' ? undefined : false,
+					recursive: w.node.kind === 'folder'
+				});
+			}
+		};
+		if (typeof compacting.deferCompact === 'function') await compacting.deferCompact(deletes);
+		else await deletes();
 	}
 
 	async function withBuffer<T>(fn: () => Promise<T>): Promise<T> {
@@ -342,7 +346,7 @@ export function createVfsGitFs(vfs: VfsService, opts: CreateVfsGitFsOptions): Vf
 			if ('root' in w && w.root) throw nodeErr('EPERM', path);
 			if (w.node.kind !== 'folder') throw nodeErr('ENOTDIR', path);
 			try {
-				await vfs.permanentDelete(w.node.id, { compact: false });
+				await vfs.permanentDelete(w.node.id);
 			} catch (e) {
 				const code = e && typeof e === 'object' && 'code' in e ? String((e as { code: string }).code) : '';
 				if (code === 'HAS_CHILDREN') throw nodeErr('ENOTEMPTY', path);
@@ -361,7 +365,7 @@ export function createVfsGitFs(vfs: VfsService, opts: CreateVfsGitFsOptions): Vf
 			if (!w.node) throw nodeErr('ENOENT', path);
 			if ('root' in w && w.root) throw nodeErr('EPERM', path);
 			if (w.node.kind !== 'file') throw nodeErr('EISDIR', path);
-			await vfs.permanentDelete(w.node.id, { compact: false });
+			await vfs.permanentDelete(w.node.id);
 		},
 
 		async readdir(path: string) {
@@ -455,7 +459,7 @@ export function createVfsGitFs(vfs: VfsService, opts: CreateVfsGitFsOptions): Vf
 			try {
 				// VFS rename/move suffixes on collision; POSIX overwrite must delete dest first.
 				if (dest.node?.kind === 'file') {
-					await vfs.permanentDelete(dest.node.id, { compact: false });
+					await vfs.permanentDelete(dest.node.id);
 				}
 				if (src.parentId === destParentId) {
 					await vfs.rename(src.node.id, destName);

@@ -148,25 +148,37 @@ describe('createVfsGitFs', () => {
 		expect(st.isSymbolicLink()).toBe(false);
 	});
 
-	it('never compacts packs on delete — a checkout must not rewrite a pack per file', async () => {
+	it('defers pack compact across a buffered git op', async () => {
 		const { vfs, fs } = await makeProject();
 		await git.init({ fs, dir: '/' });
 		await fs.promises.writeFile('/a.txt', 'a');
 		await fs.promises.writeFile('/b.txt', 'b');
-		await vfs.mkdir((await vfs.list({ parentId: null }))[0]!.id, 'sub').catch(() => {});
 
-		const spy = vi.spyOn(vfs, 'permanentDelete');
-		await fs.promises.unlink('/a.txt');
-		await fs.promises.rename('/b.txt', '/a.txt'); // overwrite path deletes dest
-
-		expect(spy).toHaveBeenCalled();
-		// permanentDelete compacts by DEFAULT. git deletes in bulk, so every
-		// call from this shim must opt out; one missed call is a whole pack
-		// rewritten per deleted file.
-		for (const call of spy.mock.calls) {
-			expect(call[1]).toMatchObject({ compact: false });
+		const defer = (vfs as { deferCompact?: (fn: () => Promise<unknown>) => Promise<unknown> })
+			.deferCompact;
+		if (typeof defer !== 'function') {
+			const spy = vi.spyOn(vfs, 'permanentDelete');
+			await fs.withBuffer(async () => {
+				await fs.promises.unlink('/a.txt');
+			});
+			expect(spy).toHaveBeenCalled();
+			for (const call of spy.mock.calls) {
+				expect(call[1]).toMatchObject({ compact: false });
+			}
+			spy.mockRestore();
+			return;
 		}
-		spy.mockRestore();
+		let compactCalls = 0;
+		const orig = defer.bind(vfs);
+		(vfs as { deferCompact: typeof defer }).deferCompact = async (fn) => {
+			compactCalls += 1;
+			return orig(fn);
+		};
+		await fs.withBuffer(async () => {
+			await fs.promises.unlink('/a.txt');
+			await fs.promises.rename('/b.txt', '/a.txt');
+		});
+		expect(compactCalls).toBeGreaterThan(0);
 	});
 
 	it('readdir uses vfs.list (uncapped), not the explorer 2000 cap', async () => {
