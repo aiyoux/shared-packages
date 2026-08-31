@@ -2455,7 +2455,37 @@ const splitClosedFilledPath = (
     return genuinelyErased ? [] : null;
 };
 
+/**
+ * A click/tap that never left the nib is the nib's round print, not getStroke's
+ * answer: perfect-freehand outlines a 1-point stroke by inventing a second
+ * point down-right of it, which comes back ~30% wider than the nib and centred
+ * off the point the pen touched — a tap grew and shifted into an egg the
+ * moment the pointer lifted. Clustered points do the same, lopsided. Apply the
+ * same stamp rule as the eraser geometry below ({@link freehandSourceGeometry})
+ * and the app's preview rule (svg-sketcher freehandPreview.ts `isNibStamp` /
+ * `startCapPath`): every point within the nib tolerance of the first is a
+ * circle at the LAST point, radius size/2 — preview, commit, stored d, and
+ * erase geometry then all agree.
+ */
+const sourceNibStamp = (source: NonNullable<PathData['freehandSource']>): Geometry | null => {
+    const points = source.points;
+    if (points.length === 0) return null;
+    const lim = Math.max(0.75, source.options.size * 0.35);
+    const lim2 = lim * lim;
+    const [x0, y0] = points[0]!;
+    for (let i = 1; i < points.length; i++) {
+        const dx = points[i]![0] - x0;
+        const dy = points[i]![1] - y0;
+        if (dx * dx + dy * dy >= lim2) return null;
+    }
+    const [lx, ly] = points[points.length - 1]!;
+    return circlePolygon({ x: lx, y: ly }, Math.max(0.5, source.options.size / 2));
+};
+
 export const sourceStrokeToD = (source: NonNullable<PathData['freehandSource']>) => {
+    const stamp = sourceNibStamp(source);
+    if (stamp) return stamp.map(polygonToD).filter(Boolean).join(' ');
+
     const outline = getStroke(source.points, { ...source.options, last: true });
     if (outline.length === 0) return '';
 
