@@ -110,6 +110,10 @@
 		reclaimed = '';
 		error = '';
 		try {
+			if (!vfs.db.migrationOk) {
+				reclaimed = 'Catalog migrate has not finished — reclaim is skipped so live files are not swept.';
+				return;
+			}
 			const swept = await vfs.gc();
 			const files =
 				swept.orphanOpfsRemoved + swept.unreferencedBlobsRemoved + swept.tmpPartialsRemoved;

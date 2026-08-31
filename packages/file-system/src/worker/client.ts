@@ -63,12 +63,13 @@ export class VfsWorkerClient {
 	}
 
 	/** Run an extract in the worker. Rejects with AbortError when cancelled. */
-	extract(
+	async extract(
 		req: Omit<ExtractJobRequest, 'type' | 'jobId'>,
 		opts?: ExtractOnWorkerOpts
 	): Promise<void> {
 		if (this.disposed) return Promise.reject(new Error('VFS worker disposed'));
 		const jobId = `wx-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+		const { connectCatalogPort } = await import('../catalogEngine.js');
 		return new Promise<void>((resolve, reject) => {
 			this.pending.set(jobId, { resolve, reject, onProgress: opts?.onProgress });
 			if (opts?.signal) {
@@ -85,7 +86,12 @@ export class VfsWorkerClient {
 					{ once: true }
 				);
 			}
-			this.send({ type: 'extract', jobId, ...req });
+			const catalogPort = connectCatalogPort(req.dbName);
+			if (catalogPort) {
+				this.worker.postMessage({ type: 'extract', jobId, ...req }, [catalogPort]);
+			} else {
+				this.send({ type: 'extract', jobId, ...req });
+			}
 		});
 	}
 

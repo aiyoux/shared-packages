@@ -473,6 +473,8 @@ export function createStreamingWriter(opts: {
 	parentId: string | null;
 	onFile?: (ev: ArchiveWriteProgress) => void;
 	signal?: AbortSignal;
+	/** Opt into shared-pack storage for these writes. */
+	pack?: boolean;
 	/** Members per flush. Matches the vfs bulk-write chunk. */
 	windowFiles?: number;
 	/** Bytes per flush; whichever cap trips first wins. */
@@ -507,7 +509,7 @@ export function createStreamingWriter(opts: {
 		window = [];
 		windowSize = 0;
 		throwIfAborted(signal);
-		await writeEntriesToDriver(driver, parentId, batch, onFile, signal, folders);
+		await writeEntriesToDriver(driver, parentId, batch, onFile, signal, folders, opts.pack);
 		written += batch.length;
 	};
 
@@ -599,7 +601,9 @@ export async function writeEntriesToDriver(
 	onFile?: (ev: ArchiveWriteProgress) => void,
 	signal?: AbortSignal,
 	/** Reused across flushes by a streaming writer; created per call otherwise. */
-	folders?: DestFolders
+	folders?: DestFolders,
+	/** Shared-pack storage for these members. */
+	pack = false
 ): Promise<void> {
 	const put = driver.writeFile ?? driver.upload;
 	if (!put) throw new Error('This location cannot receive files');
@@ -614,7 +618,9 @@ export async function writeEntriesToDriver(
 	const dest = folders ?? createDestFolders(driver, parentId, signal);
 	const run = async () => {
 	const ensureDir = dest.ensureDir;
-	const useTree = typeof driver.writeTree === 'function';
+	// Packed extract cannot use writeTree: that path is one POSIX file per
+	// member under root/. Packing needs writeFiles so members share packs/.
+	const useTree = typeof driver.writeTree === 'function' && !pack;
 	if (!useTree) {
 		await dest.prefetch(
 			files.map((f) => splitPackedPath(f.path).dirs).filter((d) => d.length > 0)
@@ -819,6 +825,7 @@ export async function writeEntriesToDriver(
 			})),
 			{
 				signal,
+				pack,
 				onProgress: (written) => {
 					for (let i = 0; i < written.length && settled < planned.length; i++) {
 						settlePlan(planned[settled++]!);
@@ -862,6 +869,7 @@ export async function writeEntriesToDriver(
 				group.map((plan) => new File([plan.file.data as BlobPart], plan.name)),
 				{
 					signal,
+					pack,
 					onProgress: (written) => {
 						// Written entries arrive in input order, so they line up
 						// with `group` and each chunk can be marked done as it lands.
@@ -1203,6 +1211,11 @@ export type ArchiveJobSpec = {
 	skipSystemFiles: boolean;
 	/** Extract into a new folder named after the archive. Dialog default is on. */
 	wrapInSubfolder?: boolean;
+	/**
+	 * Store extracted members in shared packs. Off by default — packing
+	 * trades delete granularity for fewer OPFS writes.
+	 */
+	pack?: boolean;
 	useHost: boolean;
 	hostOp?: 'zip' | 'tar' | 'tgz' | 'encrypt' | 'unzip' | 'untar' | 'decrypt';
 	hostDestPath?: string;
@@ -1312,7 +1325,7 @@ export async function runArchiveJob(spec: ArchiveJobSpec): Promise<ArchiveJobRes
 			await writeEntriesToDriver(mem, null, files, onFile, signal);
 			return;
 		}
-		await writeEntriesToDriver(driver, destParentId, files, onFile, signal);
+		await writeEntriesToDriver(driver, destParentId, files, onFile, signal, undefined, spec.pack);
 	};
 
 	/** Browser dest filename from the dialog (zip / tar / vault only). */
@@ -1464,6 +1477,7 @@ export async function runArchiveJob(spec: ArchiveJobSpec): Promise<ArchiveJobRes
 		const writer = createStreamingWriter({
 			driver,
 			parentId: streamParent,
+			pack: spec.pack,
 			onFile: (ev) => {
 				onProgress?.(ev);
 			},

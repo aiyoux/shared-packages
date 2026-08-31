@@ -554,7 +554,8 @@ describe('VfsService', () => {
 		assert.equal((await vfs.readBytes(a!.id))[0], 1);
 		assert.equal((await vfs.readBytes(b!.id))[0], 4);
 		const ref = await vfs.db.blobRefs.get(a!.blobId!);
-		assert.ok(ref?.opfsPath.startsWith(`x/${root.id}/`), 'bytes live in the extract tree');
+		assert.ok(ref?.opfsPath.startsWith('root/inbox/'), 'bytes live under root/<catalog path>');
+		assert.equal(ref?.opfsPath, 'root/inbox/repo/a.txt');
 		assert.equal(ref?.pending, false);
 	});
 
@@ -575,6 +576,142 @@ describe('VfsService', () => {
 		assert.equal(partials, 0);
 		assert.equal(node.size, 4);
 		assert.equal((await vfs.readBytes(node.id))[0], 1);
-		assert.equal(await vfs.opfs.exists(`blobs/${node.blobId}.bin`), true);
+		assert.equal(await vfs.opfs.exists('root/blob.bin'), true);
+	});
+
+	it('rename moves the unpacked OPFS file to the new catalog path', async () => {
+		const folder = await vfs.mkdir(null, 'docs');
+		const file = await vfs.writeFile({
+			parentId: folder.id,
+			name: 'a.txt',
+			body: new TextEncoder().encode('hi')
+		});
+		const before = await vfs.db.blobRefs.get(file.blobId!);
+		assert.equal(before?.opfsPath, 'root/docs/a.txt');
+		await vfs.rename(file.id, 'b.txt');
+		const after = await vfs.db.blobRefs.get(file.blobId!);
+		assert.equal(after?.opfsPath, 'root/docs/b.txt');
+		assert.equal(await vfs.opfs.exists('root/docs/a.txt'), false);
+		assert.equal(await vfs.opfs.exists('root/docs/b.txt'), true);
+		assert.equal(new TextDecoder().decode(await vfs.readBytes(file.id)), 'hi');
+	});
+
+	it('deferCompact compactPacks once after nested packed deletes', async () => {
+		const folder = await vfs.mkdir(null, 'bulk');
+		const bodies = [
+			new Uint8Array(48).fill(1),
+			new Uint8Array(48).fill(2),
+			new Uint8Array(48).fill(3)
+		];
+		const nodes = await vfs.writeFiles(
+			bodies.map((body, i) => ({
+				parentId: folder.id,
+				name: `${String.fromCharCode(97 + i)}.bin`,
+				body
+			}))
+		);
+		const packPath = 'packs/audit-bulk.bin';
+		const packed = new Uint8Array(144);
+		packed.set(bodies[0]!, 0);
+		packed.set(bodies[1]!, 48);
+		packed.set(bodies[2]!, 96);
+		await vfs.opfs.writeFinal(packPath, packed);
+		for (const [i, n] of nodes.entries()) {
+			const ref = await vfs.db.blobRefs.get(n.blobId!);
+			assert.ok(ref);
+			ref.opfsPath = packPath;
+			ref.packOffset = i * 48;
+			ref.byteLength = 48;
+			await vfs.db.blobRefs.put(ref);
+		}
+		let compactCalls = 0;
+		const orig = vfs.compactPacks.bind(vfs);
+		vfs.compactPacks = (async (...args: Parameters<typeof orig>) => {
+			compactCalls += 1;
+			return orig(...args);
+		}) as typeof orig;
+		await vfs.deferCompact(async () => {
+			await vfs.deferCompact(async () => {
+				for (const n of nodes.slice(0, 2)) {
+					await vfs.trash(n.id);
+					await vfs.permanentDelete(n.id);
+				}
+			});
+		});
+		assert.equal(compactCalls, 1, `expected one compact at outer exit, got ${compactCalls}`);
+		vfs.compactPacks = orig;
+		assert.equal((await vfs.readBytes(nodes[2]!.id))[0], 3);
+	});
+
+	it('updateFile dest is unique until catalog swap, then root/rel', async () => {
+		const f = await vfs.writeFile({
+			parentId: null,
+			name: 'edit-me.txt',
+			body: new TextEncoder().encode('one')
+		});
+		const updated = await vfs.updateFile(f.id, new TextEncoder().encode('two'), {
+			expectedGeneration: f.generation
+		});
+		assert.equal(updated.generation, f.generation + 1);
+		assert.notEqual(updated.blobId, f.blobId);
+		const ref = await vfs.db.blobRefs.get(updated.blobId!);
+		assert.equal(ref?.opfsPath, 'root/edit-me.txt');
+		assert.equal(new TextDecoder().decode(await vfs.readBytes(f.id)), 'two');
+	});
+
+	it('writeTree uniquifies without overwriting a live sibling OPFS path', async () => {
+		const root = await vfs.mkdir(null, 'inbox');
+		const live = await vfs.writeFile({
+			parentId: root.id,
+			name: 'a.txt',
+			body: new TextEncoder().encode('keep-me')
+		});
+		const nodes = await vfs.writeTree(root.id, [
+			{ path: 'a.txt', body: new TextEncoder().encode('extracted') }
+		]);
+		assert.equal(nodes.length, 1);
+		assert.equal(nodes[0]!.name, 'a (1).txt');
+		const liveRef = await vfs.db.blobRefs.get(live.blobId!);
+		assert.equal(liveRef?.opfsPath, 'root/inbox/a.txt');
+		assert.equal(new TextDecoder().decode(await vfs.readBytes(live.id)), 'keep-me');
+		const extractedRef = await vfs.db.blobRefs.get(nodes[0]!.blobId!);
+		assert.equal(extractedRef?.opfsPath, 'root/inbox/a (1).txt');
+		assert.equal(new TextDecoder().decode(await vfs.readBytes(nodes[0]!.id)), 'extracted');
+		assert.equal(await vfs.opfs.exists('tmp/tree-' + nodes[0]!.blobId + '.bin'), false);
+	});
+
+	it('unpackNodes settles onto root/rel from a unique staging dest', async () => {
+		const f = await vfs.writeFile({
+			parentId: null,
+			name: 'packed.txt',
+			body: new TextEncoder().encode('from-pack')
+		});
+		const packPath = 'packs/audit-unpack.bin';
+		const bytes = new TextEncoder().encode('from-pack');
+		await vfs.opfs.writeFinal(packPath, bytes);
+		const ref = await vfs.db.blobRefs.get(f.blobId!);
+		assert.ok(ref);
+		ref.opfsPath = packPath;
+		ref.packOffset = 0;
+		ref.byteLength = bytes.byteLength;
+		await vfs.db.blobRefs.put(ref);
+		const moved = await vfs.unpackNodes([f.id]);
+		assert.equal(moved.movedFiles, 1);
+		const after = await vfs.db.blobRefs.get(f.blobId!);
+		assert.equal(after?.opfsPath, 'root/packed.txt');
+		assert.equal(after?.packOffset, undefined);
+		assert.equal(new TextDecoder().decode(await vfs.readBytes(f.id)), 'from-pack');
+	});
+
+	it('gc skips when migrationOk is false', async () => {
+		await vfs.opfs.writeFinal('root/orphan-audit.bin', new Uint8Array([9]));
+		vfs.db.migrationOk = false;
+		const skipped = await vfs.gc();
+		assert.equal(skipped.orphanOpfsRemoved, 0);
+		assert.equal(await vfs.opfs.exists('root/orphan-audit.bin'), true);
+		vfs.db.migrationOk = true;
+		const swept = await vfs.gc();
+		assert.ok(swept.orphanOpfsRemoved >= 1);
+		assert.equal(await vfs.opfs.exists('root/orphan-audit.bin'), false);
 	});
 });

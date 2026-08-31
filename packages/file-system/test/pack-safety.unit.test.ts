@@ -158,7 +158,8 @@ describe('pack safety', () => {
 		);
 		const first = await vfs.unpackNodes([nodes[0]!.id, nodes[1]!.id]);
 		assert.equal(first.movedFiles, 2);
-		const dest = `blobs/${(await vfs.db.blobRefs.get(nodes[0]!.blobId!))!.id}.bin`;
+		const dest = (await vfs.db.blobRefs.get(nodes[0]!.blobId!))!.opfsPath;
+		assert.ok(dest.startsWith('root/'));
 		assert.equal(await vfs.opfs.exists(dest), true);
 		const again = await vfs.unpackNodes([nodes[0]!.id, nodes[1]!.id]);
 		assert.equal(again.movedFiles, 0);
@@ -270,7 +271,7 @@ describe('pack safety', () => {
 			...base,
 			async writeAtomic(path, data) {
 				const result = await base.writeAtomic!(path, data);
-				if (path.startsWith('blobs/') && interleave) {
+				if (path.startsWith('root/') && interleave) {
 					const run = interleave;
 					interleave = null;
 					await run();

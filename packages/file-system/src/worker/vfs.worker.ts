@@ -1,7 +1,7 @@
 /**
  * Dedicated worker that owns the heavy half of an extract.
  *
- * It opens its own VfsService against the same IndexedDB database and OPFS
+ * It opens its own VfsService against the same SQLite catalog and OPFS
  * root as the page, so a job names ids rather than shipping bytes: the
  * archive is read from OPFS here, inflated here, and members are written
  * here. Only progress goes back.
@@ -30,17 +30,20 @@ const ctx = self as unknown as {
 
 const services = new Map<string, VfsService>();
 const cancels = new Map<string, AbortController>();
+const vfsWithPort = new WeakSet<VfsService>();
 
-function vfsFor(dbName: string, opfsRoot: string): VfsService {
+function vfsFor(dbName: string, opfsRoot: string, catalogPort?: MessagePort | null): VfsService {
 	const key = `${dbName}::${opfsRoot}`;
 	let vfs = services.get(key);
+	if (vfs && catalogPort && !vfsWithPort.has(vfs)) vfs = undefined;
 	if (!vfs) {
 		vfs = createVfs({
 			dbName,
 			opfs: createSyncOpfsStore(opfsRoot),
-			// The page negotiates persistence; a second request here is noise.
+			catalogPort: catalogPort ?? null,
 			requestPersist: false
 		});
+		if (catalogPort) vfsWithPort.add(vfs);
 		services.set(key, vfs);
 	}
 	return vfs;
@@ -78,8 +81,8 @@ async function withJobLock<T>(jobId: string, fn: () => Promise<T>): Promise<T> {
 	}
 }
 
-async function runExtract(req: ExtractJobRequest): Promise<void> {
-	const vfs = vfsFor(req.dbName, req.opfsRoot);
+async function runExtract(req: ExtractJobRequest, catalogPort?: MessagePort | null): Promise<void> {
+	const vfs = vfsFor(req.dbName, req.opfsRoot, catalogPort);
 	await vfs.ready();
 	const driver = createLocalExplorerDriver(vfs);
 	await driver.ready();
@@ -121,6 +124,7 @@ async function runExtract(req: ExtractJobRequest): Promise<void> {
 			password: req.password,
 			skipSystemFiles: req.skipSystemFiles,
 			wrapInSubfolder: req.wrapInSubfolder,
+			pack: req.pack === true,
 			useHost: false,
 			signal: controller.signal,
 			onProgress: (ev) => ctx.postMessage({ type: 'progress', jobId: req.jobId, ev })
@@ -165,7 +169,8 @@ ctx.onmessage = (e: MessageEvent) => {
 			});
 			return;
 		}
-		void withJobLock(msg.jobId, () => runExtract(msg)).catch((err: unknown) => {
+		const catalogPort = e.ports?.[0] ?? null;
+		void withJobLock(msg.jobId, () => runExtract(msg, catalogPort)).catch((err: unknown) => {
 			ctx.postMessage({
 				type: 'failed',
 				jobId: msg.jobId,
