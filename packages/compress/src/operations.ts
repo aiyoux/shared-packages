@@ -44,6 +44,10 @@ export async function packFiles(
 		return [{ name, data, codec, sourceBytes }];
 	}
 
+	if (codec === '7z' || codec === 'rar') {
+		throw new Error(`${engine.info.label} cannot create ${codec} archives`);
+	}
+
 	return Promise.all(
 		files.map(async (file) => {
 			const data = await engine.compress(file.data, codec, options);
@@ -70,9 +74,16 @@ export async function expandBytes(
 	const engine = await loadEngine(engineId);
 	const skipSystemFiles = opts?.skipSystemFiles !== false;
 	const keep = (path: string) => !skipSystemFiles || !isJunkArchivePath(path);
-	if (codec === 'zip') {
-		if (!engine.unzip) throw new Error(`${engine.info.label} cannot expand ZIP archives`);
-		const files = await engine.unzip(bytes, {
+	if (codec === 'zip' || codec === '7z' || codec === 'rar') {
+		const extract = codec === 'zip' ? engine.unzip : engine.unarchive;
+		if (!extract) {
+			throw new Error(
+				codec === 'zip'
+					? `${engine.info.label} cannot expand ZIP archives`
+					: `${engine.info.label} cannot expand ${codec} archives`
+			);
+		}
+		const files = await extract.call(engine, bytes, {
 			signal: opts?.signal,
 			onMember: (ev) => {
 				if (opts?.signal?.aborted) {

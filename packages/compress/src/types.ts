@@ -1,8 +1,17 @@
-export type EngineId = 'fflate' | 'zipkit' | 'addmaple' | 'tarjs' | 'nanotar';
+export type EngineId =
+	| 'fflate'
+	| 'zipkit'
+	| 'addmaple'
+	| 'tarjs'
+	| 'nanotar'
+	| 'zipjs'
+	| 'libarchive';
 
 export type Codec =
 	| 'zip'
 	| 'tar'
+	| '7z'
+	| 'rar'
 	| 'gzip'
 	| 'deflate'
 	| 'zlib'
@@ -68,12 +77,18 @@ export type DetectedFormat = {
 export interface CompressionEngine {
 	readonly info: EngineInfo;
 	load(): Promise<void>;
-	compress(bytes: Uint8Array, codec: Exclude<Codec, 'zip' | 'tar'>, options?: CompressOptions): Promise<Uint8Array>;
-	decompress(bytes: Uint8Array, codec: Exclude<Codec, 'zip' | 'tar'>): Promise<Uint8Array>;
+	compress(
+		bytes: Uint8Array,
+		codec: Exclude<Codec, 'zip' | 'tar' | '7z' | 'rar'>,
+		options?: CompressOptions
+	): Promise<Uint8Array>;
+	decompress(bytes: Uint8Array, codec: Exclude<Codec, 'zip' | 'tar' | '7z' | 'rar'>): Promise<Uint8Array>;
 	zip?(entries: ArchiveEntry[], options?: CompressOptions): Promise<Uint8Array>;
 	unzip?(bytes: Uint8Array, opts?: UnzipProgressOpts): Promise<ArchiveEntry[]>;
 	tar?(entries: ArchiveEntry[], options?: CompressOptions): Promise<Uint8Array>;
 	untar?(bytes: Uint8Array): Promise<ArchiveEntry[]>;
+	/** Extract-only 7z / RAR (and other libarchive containers). */
+	unarchive?(bytes: Uint8Array, opts?: UnzipProgressOpts): Promise<ArchiveEntry[]>;
 }
 
 export const ENGINE_CATALOG: readonly EngineInfo[] = [
@@ -116,6 +131,22 @@ export const ENGINE_CATALOG: readonly EngineInfo[] = [
 		codecs: ['tar'],
 		supportsZip: false,
 		supportsTar: true
+	},
+	{
+		id: 'zipjs',
+		label: 'zip.js (WASM)',
+		description: 'ZIP with Zip64, encryption, and Deflate64. Native streams, WASM fallback.',
+		codecs: ['zip'],
+		supportsZip: true,
+		supportsTar: false
+	},
+	{
+		id: 'libarchive',
+		label: 'libarchive (WASM)',
+		description: 'Extract-only — ZIP, TAR, 7z, and RAR via a libarchive WASM port.',
+		codecs: ['zip', 'tar', '7z', 'rar'],
+		supportsZip: true,
+		supportsTar: true
 	}
 ] as const;
 
@@ -124,6 +155,8 @@ export const DEFAULT_ENGINE: EngineId = 'fflate';
 export const CODEC_LABEL: Record<Codec, string> = {
 	zip: 'ZIP archive',
 	tar: 'TAR archive',
+	'7z': '7z archive',
+	rar: 'RAR archive',
 	gzip: 'gzip',
 	deflate: 'raw deflate',
 	zlib: 'zlib',
@@ -139,6 +172,8 @@ export const CODEC_LABEL: Record<Codec, string> = {
 export const CODEC_EXTENSION: Record<Codec, string> = {
 	zip: '.zip',
 	tar: '.tar',
+	'7z': '.7z',
+	rar: '.rar',
 	gzip: '.gz',
 	deflate: '.deflate',
 	zlib: '.zz',

@@ -155,7 +155,7 @@ export async function uniqueChildFolderName(
 export function readStoredCompressEngine(): CompressEngineId {
 	try {
 		const v = localStorage.getItem(COMPRESS_STORAGE_KEY);
-		if (v === 'fflate' || v === 'zipkit' || v === 'addmaple') return v;
+		if (v && ENGINE_CATALOG.some((e) => e.id === v)) return v as CompressEngineId;
 	} catch {
 		/* ignore */
 	}

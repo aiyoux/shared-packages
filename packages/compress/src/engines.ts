@@ -27,6 +27,12 @@ export async function loadEngine(id: EngineId): Promise<CompressionEngine> {
 	} else if (id === 'nanotar') {
 		const { nanotarEngine } = await import('./engines/nanotar.js');
 		engine = nanotarEngine;
+	} else if (id === 'zipjs') {
+		const { zipjsEngine } = await import('./engines/zipjs.js');
+		engine = zipjsEngine;
+	} else if (id === 'libarchive') {
+		const { libarchiveEngine } = await import('./engines/libarchive.js');
+		engine = libarchiveEngine;
 	} else {
 		throw new Error(`Unknown compression engine: ${id}`);
 	}

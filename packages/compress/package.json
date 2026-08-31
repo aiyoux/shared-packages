@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": false,
   "type": "module",
-  "description": "Lazy-loaded browser compression engines (fflate, ZipKit WASM, AddMaple gzip/brotli/lz4) with a shared pack/expand API.",
+  "description": "Lazy-loaded browser compression engines (fflate, ZipKit, zip.js, AddMaple, libarchive) with a shared pack/expand API.",
   "exports": {
     ".": {
       "types": "./src/index.ts",
@@ -25,7 +25,9 @@
     "@addmaple/lz4": "^0.2.0",
     "@gera2ld/tarjs": "^0.3.1",
     "@myrialabs/zipkit": "^0.0.11",
+    "@zip.js/zip.js": "^2.9.0",
     "fflate": "^0.8.2",
+    "libarchive-wasm": "^1.2.0",
     "nanotar": "^0.3.0"
   },
   "devDependencies": {

@@ -3,6 +3,8 @@ import { CODEC_EXTENSION, type Codec, type DetectedFormat } from './types.js';
 const EXT_TO_CODEC: Record<string, Codec> = {
 	'.zip': 'zip',
 	'.tar': 'tar',
+	'.7z': '7z',
+	'.rar': 'rar',
 	'.gz': 'gzip',
 	'.gzip': 'gzip',
 	'.tgz': 'gzip',
@@ -34,6 +36,14 @@ function startsWith(bytes: Uint8Array, sig: number[]): boolean {
 export function detectFormatFromBytes(bytes: Uint8Array): DetectedFormat | null {
 	if (startsWith(bytes, [0x50, 0x4b, 0x03, 0x04]) || startsWith(bytes, [0x50, 0x4b, 0x05, 0x06]) || startsWith(bytes, [0x50, 0x4b, 0x07, 0x08])) {
 		return { codec: 'zip', confidence: 'high', label: 'ZIP archive', via: 'magic' };
+	}
+	// 7z: '7z' + 0xBC 0xAF 0x27 0x1C
+	if (startsWith(bytes, [0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c])) {
+		return { codec: '7z', confidence: 'high', label: '7z archive', via: 'magic' };
+	}
+	// RAR v4: Rar!\x1A\x07\x00 — RAR v5: Rar!\x1A\x07\x01\x00
+	if (startsWith(bytes, [0x52, 0x61, 0x72, 0x21, 0x1a, 0x07])) {
+		return { codec: 'rar', confidence: 'high', label: 'RAR archive', via: 'magic' };
 	}
 	// tar: "ustar" magic at offset 257 (POSIX/USTAR format)
 	if (bytes.length >= 263 && bytes[257] === 0x75 && bytes[258] === 0x73 && bytes[259] === 0x74 && bytes[260] === 0x61 && bytes[261] === 0x72) {

@@ -5,6 +5,8 @@ Lazy-loaded browser compression engines behind one pack / expand API:
 - **fflate** — pure JS gzip / deflate / zlib / ZIP
 - **ZipKit** (`@myrialabs/zipkit`) — one WASM engine, many codecs + ZIP
 - **AddMaple** — three SIMD WASM modules (`@addmaple/gzip`, `@addmaple/brotli`, `@addmaple/lz4`)
+- **zip.js** (`@zip.js/zip.js`) — ZIP with Zip64 / encryption / Deflate64 (BSD-3-Clause)
+- **libarchive** (`libarchive-wasm`) — extract-only ZIP, TAR, 7z, RAR (MIT)
 
 This is the library. Product UI (drop zone, engine picker) stays in the consumer.
 

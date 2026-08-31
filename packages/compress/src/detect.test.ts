@@ -37,6 +37,18 @@ describe('detectFormatFromBytes', () => {
 		expect(detectFormatFromBytes(new Uint8Array([0x04, 0x22, 0x4d, 0x18, 0x00]))?.codec).toBe('lz4');
 	});
 
+	it('sniffs 7z and RAR magic', () => {
+		expect(detectFormatFromBytes(new Uint8Array([0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c, 0x00]))?.codec).toBe(
+			'7z'
+		);
+		expect(detectFormatFromBytes(new Uint8Array([0x52, 0x61, 0x72, 0x21, 0x1a, 0x07, 0x00]))?.codec).toBe(
+			'rar'
+		);
+		expect(detectFormatFromBytes(new Uint8Array([0x52, 0x61, 0x72, 0x21, 0x1a, 0x07, 0x01, 0x00]))?.codec).toBe(
+			'rar'
+		);
+	});
+
 	it('returns null for headerless payloads', () => {
 		expect(detectFormatFromBytes(new TextEncoder().encode('not compressed'))).toBeNull();
 	});
@@ -48,6 +60,8 @@ describe('detectFormatFromName', () => {
 		expect(detectFormatFromName('bundle.tar.gz')?.codec).toBe('gzip');
 		expect(detectFormatFromName('pack.zip')?.codec).toBe('zip');
 		expect(detectFormatFromName('archive.tar')?.codec).toBe('tar');
+		expect(detectFormatFromName('payload.7z')?.codec).toBe('7z');
+		expect(detectFormatFromName('backup.rar')?.codec).toBe('rar');
 		expect(detectFormatFromName('x.zst')?.codec).toBe('zstd');
 		expect(detectFormatFromName('plain.txt')).toBeNull();
 	});

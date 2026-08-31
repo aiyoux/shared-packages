@@ -7,8 +7,16 @@ const SAMPLE = new TextEncoder().encode('scratch-pad compress fixture\n'.repeat(
 
 describe('catalog', () => {
 	it('lists all engines', () => {
-		expect(listEngines().map((e) => e.id)).toEqual(['fflate', 'zipkit', 'addmaple', 'tarjs', 'nanotar']);
-		expect(ENGINE_CATALOG).toHaveLength(5);
+		expect(listEngines().map((e) => e.id)).toEqual([
+			'fflate',
+			'zipkit',
+			'addmaple',
+			'tarjs',
+			'nanotar',
+			'zipjs',
+			'libarchive'
+		]);
+		expect(ENGINE_CATALOG).toHaveLength(7);
 	});
 
 	it('keeps ZIP off AddMaple and on the other two', () => {
@@ -25,6 +33,18 @@ describe('catalog', () => {
 		expect(engineSupports('fflate', 'tar')).toBe(false);
 		expect(defaultCodecFor('tarjs')).toBe('tar');
 		expect(defaultCodecFor('nanotar')).toBe('tar');
+	});
+
+	it('zip.js is ZIP-only and libarchive is extract-only 7z/rar', () => {
+		expect(engineSupports('zipjs', 'zip')).toBe(true);
+		expect(engineSupports('zipjs', 'gzip')).toBe(false);
+		expect(defaultCodecFor('zipjs')).toBe('zip');
+		expect(engineSupports('libarchive', 'zip')).toBe(true);
+		expect(engineSupports('libarchive', 'tar')).toBe(true);
+		expect(engineSupports('libarchive', '7z')).toBe(true);
+		expect(engineSupports('libarchive', 'rar')).toBe(true);
+		expect(engineSupports('fflate', '7z')).toBe(false);
+		expect(defaultCodecFor('libarchive')).toBe('zip');
 	});
 });
 

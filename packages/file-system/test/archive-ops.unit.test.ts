@@ -93,6 +93,8 @@ describe('archiveOps', () => {
 	it('picks an engine that supports the codec', () => {
 		assert.equal(pickEngineForCodec('addmaple', 'zip'), 'fflate');
 		assert.equal(pickEngineForCodec('fflate', 'gzip'), 'fflate');
+		assert.equal(pickEngineForCodec('fflate', '7z'), 'libarchive');
+		assert.equal(pickEngineForCodec('fflate', 'rar'), 'libarchive');
 		const zipFallback = describeCompressRole('addmaple', 'zip', 'create');
 		assert.equal(zipFallback.used, 'fflate');
 		assert.equal(zipFallback.fallback, true);
@@ -118,6 +120,8 @@ describe('archiveOps', () => {
 			'unrecognized names warm nothing');
 		assert.deepEqual(enginesToPrewarm(['a.zip', 'b.zip'], 'fflate'), ['fflate'],
 			'one entry per library, not per file');
+		assert.deepEqual(enginesToPrewarm(['payload.7z'], 'fflate'), ['libarchive'],
+			'7z falls back to libarchive');
 	});
 
 	it('streaming writer flushes by window and applies backpressure', async () => {
