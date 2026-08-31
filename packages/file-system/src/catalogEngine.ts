@@ -318,17 +318,19 @@ export function getCatalogWorker(): Worker | null {
 	return catalogWorker;
 }
 
-function startLeaderWorker(): Worker | null {
+async function startLeaderWorker(): Promise<Worker | null> {
 	if (typeof Worker === 'undefined') return null;
 	if (!catalogWorker) {
 		try {
-			catalogWorker = new Worker(new URL('./catalog.worker.ts', import.meta.url), {
-				type: 'module',
-				name: 'vfs-catalog'
-			});
+			// Vite `?worker` emits a hashed /_app/immutable worker. `new URL(...,
+			// import.meta.url)` is not rewritten when this file is compiled from a
+			// file: symlink, so production fetched HTML and died with "load error".
+			const { default: CatalogWorker } = await import('./catalog.worker.ts?worker');
+			catalogWorker = new CatalogWorker({ name: 'vfs-catalog' });
 			catalogWorker.onerror = (ev) => {
+				const where = ev.filename ? ` (${ev.filename}:${ev.lineno || 0})` : '';
 				failCatalogWorker(
-					new Error(`catalog worker failed: ${ev.message || 'load error'}`)
+					new Error(`catalog worker failed: ${ev.message || 'load error'}${where}`)
 				);
 			};
 			catalogWorker.addEventListener('messageerror', () => {
@@ -404,7 +406,7 @@ export function connectCatalogPort(dbName = 'SharedVFS'): MessagePort | null {
 async function tryBecomeLeader(): Promise<boolean> {
 	const locks = (globalThis as { navigator?: { locks?: LockManager } }).navigator?.locks;
 	if (!locks?.request) {
-		return !!startLeaderWorker();
+		return !!(await startLeaderWorker());
 	}
 	return await new Promise<boolean>((resolve) => {
 		let decided = false;
@@ -420,7 +422,7 @@ async function tryBecomeLeader(): Promise<boolean> {
 						decide(false);
 						return;
 					}
-					if (!startLeaderWorker()) {
+					if (!(await startLeaderWorker())) {
 						decide(false);
 						return;
 					}
