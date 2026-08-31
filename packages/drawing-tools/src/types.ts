@@ -191,6 +191,16 @@ export interface PathData {
     fillRule?: 'nonzero' | 'evenodd';
     freehandSource?: {
         points: [number, number, number][];
+        /** The raw capture, preserved from the first simplification pass so
+         *  later (even gentler) simplify runs re-derive from the original
+         *  instead of compounding RDP error on already-reduced points. Only
+         *  set on strokes that have been simplified; erase splits drop
+         *  `freehandSource` entirely, so pieces never inherit a whole-stroke
+         *  capture. Undefined means `points` is the raw capture itself. */
+        originalPoints?: [number, number, number][];
+        /** Tolerance, in px, the current `points` were simplified with —
+         *  diagnostic/reference only. Written by the layer simplifier. */
+        simplifiedTolerance?: number;
         options: {
             size: number;
             thinning: number;
