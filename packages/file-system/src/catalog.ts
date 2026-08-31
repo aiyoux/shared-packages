@@ -21,6 +21,20 @@ export const MIGRATED_KEY = 'migrated_from_idb';
 
 const IN_CHUNK = 400;
 
+async function deleteIdsIn(
+	c: SqliteCatalog,
+	table: 'nodes' | 'blob_refs',
+	ids: string[]
+): Promise<void> {
+	if (!ids.length) return;
+	for (let i = 0; i < ids.length; i += IN_CHUNK) {
+		const chunk = ids.slice(i, i + IN_CHUNK);
+		const ph = chunk.map(() => '?').join(',');
+		await c.run(`DELETE FROM ${table} WHERE id IN (${ph})`, chunk);
+	}
+	if (!c.inTx()) await c.persist();
+}
+
 /** Live catalog rows joined to blob_refs for the storage map. */
 export type LiveStorageRow = {
 	id: string;
@@ -324,6 +338,30 @@ export class SqliteCatalog {
 		}));
 	}
 
+	async trashedWithBlobRefs(): Promise<
+		Array<{
+			id: string;
+			name: string;
+			blobId: string | null;
+			opfsPath: string | null;
+			packOffset: number | null;
+		}>
+	> {
+		const rows = await this.exec(
+			`SELECT n.id, n.name, n.blob_id, b.opfs_path, b.pack_offset
+			FROM nodes n
+			LEFT JOIN blob_refs b ON b.id = n.blob_id
+			WHERE n.deleted_at IS NOT NULL`
+		);
+		return rows.map((r) => ({
+			id: String(r.id),
+			name: String(r.name),
+			blobId: r.blob_id ? String(r.blob_id) : null,
+			opfsPath: r.opfs_path ? String(r.opfs_path) : null,
+			packOffset: r.pack_offset == null ? null : Number(r.pack_offset)
+		}));
+	}
+
 	async trashRoots(): Promise<VfsNode[]> {
 		const rows = await this.exec(
 			`SELECT n.* FROM nodes n
@@ -406,9 +444,7 @@ class NodeTable {
 	}
 
 	async bulkDelete(ids: string[]): Promise<void> {
-		if (!ids.length) return;
-		for (const id of ids) await this.c.run('DELETE FROM nodes WHERE id = ?', [id]);
-		if (!this.c.inTx()) await this.c.persist();
+		await deleteIdsIn(this.c, 'nodes', ids);
 	}
 
 	async delete(id: string): Promise<void> {
@@ -586,8 +622,7 @@ class BlobTable {
 	}
 
 	async bulkDelete(ids: string[]): Promise<void> {
-		for (const id of ids) await this.c.run('DELETE FROM blob_refs WHERE id = ?', [id]);
-		if (!this.c.inTx()) await this.c.persist();
+		await deleteIdsIn(this.c, 'blob_refs', ids);
 	}
 
 	async delete(id: string): Promise<void> {

@@ -2720,39 +2720,29 @@ export class VfsService {
 	async emptyTrash(opts?: EmptyTrashOpts): Promise<EmptyTrashResult> {
 		await this.ready();
 		throwIfAborted(opts?.signal);
-		const trashed = await this.db.exec(
-			'SELECT * FROM nodes WHERE deleted_at IS NOT NULL'
-		).then((rows) => rows.map((r) => ({
-			id: String(r.id),
-			blobId: r.blob_id ? String(r.blob_id) : undefined,
-			name: String(r.name)
-		})));
-		if (!trashed.length) {
+		const tick = async (done: number, total: number, name: string) => {
+			opts?.onProgress?.({ done, total, name });
+			await yieldPaint();
+		};
+		// Paint before the first catalog round-trip so the bar is not stuck
+		// on the UI's initial 0% with no label change.
+		await tick(0, 1, 'Scanning trash…');
+
+		const rows = await this.db.trashedWithBlobRefs();
+		if (!rows.length) {
 			opts?.onProgress?.({ done: 0, total: 0 });
 			return { deleted: 0, compactedPacks: 0, reclaimedBytes: 0, failedPacks: [] };
 		}
 
-		const blobIds: string[] = [];
-		const nameByBlob = new Map<string, string>();
-		for (const n of trashed) {
-			if (!n.blobId) continue;
-			blobIds.push(n.blobId);
-			nameByBlob.set(n.blobId, n.name);
-		}
-		const uniqueBlobIds = [...new Set(blobIds)];
-		const opfsPaths: Array<{ path: string; name: string }> = [];
-		// Which packs are about to lose members. Collected NOW, because the refs
-		// that name them are dropped in the transaction below — after that there
-		// is nothing left to tell us which packs were touched.
+		const opfsByBlob = new Map<string, { path: string; name: string }>();
 		const touchedPacks = new Set<string>();
-		const refs = await this.db.blobRefs.bulkGet(uniqueBlobIds);
-		for (let i = 0; i < uniqueBlobIds.length; i++) {
-			const bid = uniqueBlobIds[i]!;
-			const ref = refs[i];
-			if (!ref?.opfsPath) continue;
-			opfsPaths.push({ path: ref.opfsPath, name: nameByBlob.get(bid) ?? 'file' });
-			if (ref.packOffset != null) touchedPacks.add(ref.opfsPath);
+		for (const n of rows) {
+			if (!n.blobId || !n.opfsPath) continue;
+			opfsByBlob.set(n.blobId, { path: n.opfsPath, name: n.name });
+			if (n.packOffset != null) touchedPacks.add(n.opfsPath);
 		}
+		const total = Math.max(rows.length + opfsByBlob.size, 1);
+		await tick(0, total, 'Preparing…');
 
 		let compactedPacks = 0;
 		let reclaimedBytes = 0;
@@ -2762,19 +2752,22 @@ export class VfsService {
 		let nodeCount = 0;
 
 		try {
-			const dropIds: string[] = [];
-			for (const n of trashed) {
-				const cur = await this.db.nodes.get(n.id);
-				if (cur?.deletedAt != null && cur.blobId) dropIds.push(cur.blobId);
-			}
 			if (!opts?.skipCompaction && touchedPacks.size) {
+				const dropRows = await this.db.exec(
+					'SELECT blob_id FROM nodes WHERE deleted_at IS NOT NULL AND blob_id IS NOT NULL'
+				);
+				const dropIds = dropRows.map((r) => String(r.blob_id));
 				const stillThere: string[] = [];
 				for (const p of touchedPacks) {
 					if (await this.opfs.exists(p)) stillThere.push(p);
 				}
+				await tick(0, total, 'Compacting packs…');
 				const res = await this.compactPacks(stillThere, {
 					excludeBlobIds: dropIds,
-					onProgress: opts?.onPackProgress,
+					onProgress: (ev) => {
+						opts?.onProgress?.({ done: 0, total, name: ev.label });
+						opts?.onPackProgress?.(ev);
+					},
 					signal: opts?.signal
 				});
 				compactedPacks = res.compactedPacks;
@@ -2783,36 +2776,26 @@ export class VfsService {
 			}
 
 			const blockedPacks = new Set(failedPacks);
+			await tick(0, total, 'Updating catalog…');
 			await this.db.transaction('rw', this.db.nodes, this.db.blobRefs, async () => {
-				const still: VfsNode[] = [];
-				for (const n of trashed) {
-					const cur = await this.db.nodes.get(n.id);
-					if (!cur || cur.deletedAt == null) continue;
-					if (cur.blobId) {
-						const ref = await this.db.blobRefs.get(cur.blobId);
-						if (ref?.opfsPath && blockedPacks.has(ref.opfsPath)) continue;
-					}
-					still.push(cur);
-				}
-				deletedIds = still.map((n) => n.id);
+				const still = await this.db.trashedWithBlobRefs();
+				const keep = still.filter((n) => !n.opfsPath || !blockedPacks.has(n.opfsPath));
+				deletedIds = keep.map((n) => n.id);
 				deletedBlobIds = [
-					...new Set(still.map((n) => n.blobId).filter((id): id is string => !!id))
+					...new Set(keep.map((n) => n.blobId).filter((id): id is string => !!id))
 				];
 				if (deletedIds.length) await this.db.nodes.bulkDelete(deletedIds);
 				if (deletedBlobIds.length) await this.db.blobRefs.bulkDelete(deletedBlobIds);
 			});
-		const deletedBlobSet = new Set(deletedBlobIds);
-		const releasedPaths = opfsPaths.filter((_, i) => {
-			const bid = uniqueBlobIds[i];
-			return bid != null && deletedBlobSet.has(bid);
-		});
-		nodeCount = deletedIds.length;
-		const blobCount = releasedPaths.length;
-		const total = Math.max(nodeCount + blobCount, 1);
-		opts?.onProgress?.({ done: 0, total, name: 'Emptying trash…' });
-		throwIfAborted(opts?.signal);
-			opts?.onProgress?.({ done: nodeCount, total, name: 'Emptying trash…' });
-			await yieldPaint();
+
+			const deletedBlobSet = new Set(deletedBlobIds);
+			const releasedPaths = [...deletedBlobSet]
+				.map((bid) => opfsByBlob.get(bid))
+				.filter((item): item is { path: string; name: string } => Boolean(item));
+			nodeCount = deletedIds.length;
+			const unlinkTotal = Math.max(nodeCount + releasedPaths.length, 1);
+			throwIfAborted(opts?.signal);
+			await tick(nodeCount, unlinkTotal, 'Removing files…');
 
 			// Unlink one distinct path at a time so progress stays per file and
 			// the op remains cancellable. Ref rows were already dropped in the
@@ -2838,7 +2821,11 @@ export class VfsService {
 						}
 					}
 				}
-				opts?.onProgress?.({ done: nodeCount + i + 1, total, name: item.name });
+				opts?.onProgress?.({
+					done: nodeCount + i + 1,
+					total: unlinkTotal,
+					name: `Deleting ${item.name}`
+				});
 				if ((i & 7) === 7) await yieldPaint();
 			}
 
@@ -3440,6 +3427,7 @@ export class VfsService {
 				}
 
 				report('compacting', `Compacting ${formatPackBytes(dead)}…`);
+				await yieldPaint();
 				const freed = await this.compactOnePack(packPath, survivors, report);
 				reclaimedBytes += freed;
 				// compactOnePack returns 0 when it had to keep the old file because a

@@ -1621,7 +1621,7 @@
 
 	function bumpEmptyTrashProgress(done: number, total: number, name?: string) {
 		emptyTrashPct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
-		emptyTrashLabel = name ? `Deleting ${name}` : 'Emptying trash…';
+		emptyTrashLabel = name || 'Emptying trash…';
 		if (!emptyTrashTransferId) return;
 		upsertProgress({
 			id: emptyTrashTransferId,

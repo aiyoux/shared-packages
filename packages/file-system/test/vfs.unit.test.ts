@@ -216,17 +216,18 @@ describe('VfsService', () => {
 		const unsub = vfs.subscribe(() => {
 			notifies++;
 		});
-		const ticks: Array<{ done: number; total: number }> = [];
+		const ticks: Array<{ done: number; total: number; name?: string }> = [];
 		await vfs.emptyTrash({
-			onProgress: (ev) => ticks.push({ done: ev.done, total: ev.total })
+			onProgress: (ev) => ticks.push({ done: ev.done, total: ev.total, name: ev.name })
 		});
 		unsub();
 
 		assert.ok(notifies >= 1 && notifies <= 2);
 		assert.ok(ticks.length >= 2);
 		assert.equal(ticks[0]!.done, 0);
-		assert.ok(ticks[0]!.total >= 21);
+		assert.equal(ticks[0]!.name, 'Scanning trash…');
 		assert.equal(ticks[ticks.length - 1]!.done, ticks[ticks.length - 1]!.total);
+		assert.ok(ticks[ticks.length - 1]!.total >= 21);
 		assert.equal((await vfs.list({ parentId: null, trashOnly: true })).length, 0);
 		const live = await vfs.list({ parentId: null });
 		assert.equal(live.length, 1);
