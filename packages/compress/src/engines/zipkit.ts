@@ -19,6 +19,17 @@ function modeOf(options?: CompressOptions): 'speed' | 'balanced' | 'ratio' {
 	return options?.level ?? 'balanced';
 }
 
+/** Same-realm copy. WASM views can fail `instanceof Uint8Array` across realms. */
+function asU8(data: unknown): Uint8Array | null {
+	if (data instanceof Uint8Array) return data;
+	if (data instanceof ArrayBuffer) return new Uint8Array(data);
+	if (ArrayBuffer.isView(data)) {
+		const v = data as ArrayBufferView;
+		return new Uint8Array(v.buffer, v.byteOffset, v.byteLength);
+	}
+	return null;
+}
+
 export const zipkitEngine: CompressionEngine = {
 	info: engineInfo('zipkit'),
 
@@ -104,15 +115,19 @@ export const zipkitEngine: CompressionEngine = {
 			}
 			const name = typeof file?.name === 'string' ? file.name : '';
 			if (!name || name.endsWith('/')) continue;
-			const data = file.data;
-			if (!(data instanceof Uint8Array)) continue;
-			out.push({ name, data });
+			const data = asU8(file.data);
+			if (!data) continue;
+			const entry = { name, data };
 			opts?.onMember?.({
 				name,
 				transferred: 0,
 				size: data.byteLength,
 				done: false
 			});
+			// VFS extract streams via onEntry. Returning members without calling
+			// it left the writer empty and threw "Nothing to extract".
+			if (opts?.onEntry) await opts.onEntry(entry);
+			else out.push(entry);
 			opts?.onMember?.({
 				name,
 				transferred: data.byteLength,

@@ -92,6 +92,16 @@ export async function expandBytes(
 					}
 				: undefined
 		});
+		if (opts?.onEntry) {
+			// Streaming engines (fflate) already handed members off and return [].
+			// All-at-once engines that forget onEntry still return the list —
+			// drain them so extract-to-VFS does not finish with "Nothing to extract".
+			for (const f of files) {
+				if (!keep(f.name)) continue;
+				await opts.onEntry(f);
+			}
+			return [];
+		}
 		return files.filter((f) => keep(f.name));
 	}
 	if (codec === 'tar') {

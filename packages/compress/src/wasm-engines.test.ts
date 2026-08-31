@@ -17,6 +17,29 @@ describe('zipkit wasm', () => {
 		expect(files[0]!.name).toBe('w.txt');
 		expect(new TextDecoder().decode(files[0]!.data)).toBe(new TextDecoder().decode(SAMPLE));
 	});
+
+	it('expandBytes onEntry delivers ZIP members (extract-to-VFS path)', async () => {
+		const packed = await packFiles('zipkit', [{ name: 'n.txt', data: SAMPLE }], 'zip');
+		const seen: string[] = [];
+		const files = await expandBytes('zipkit', packed[0]!.data, 'zip', packed[0]!.name, {
+			onEntry: (entry) => {
+				seen.push(entry.name);
+			}
+		});
+		expect(files.length, 'streaming consumer owns the bytes; nothing retained').toBe(0);
+		expect(seen).toEqual(['n.txt']);
+	});
+
+	it('unzip of an fflate ZIP still streams via onEntry', async () => {
+		const packed = await packFiles('fflate', [{ name: 'n.txt', data: SAMPLE }], 'zip');
+		const seen: string[] = [];
+		await expandBytes('zipkit', packed[0]!.data, 'zip', packed[0]!.name, {
+			onEntry: (entry) => {
+				seen.push(entry.name);
+			}
+		});
+		expect(seen).toEqual(['n.txt']);
+	});
 });
 
 describe('addmaple wasm', () => {
