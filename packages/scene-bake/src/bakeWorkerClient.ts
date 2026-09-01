@@ -122,18 +122,27 @@ export function getBakeWorker(): Worker | null {
             }
         };
         created.onerror = () => {
-            // A worker that failed to load must not strand the preview: drop
-            // back to inline encoding for the rest of the session.
-            worker = null;
+            // Drop the dead instance so the next encode can spawn again
+            // (same class of bug as the catalog / extract workers). Inline
+            // encoding covers in-flight jobs.
             resetUploadTracking();
             failAllPending(`bake worker failed to load (script: ${workerScript})`);
+            try {
+                created.terminate();
+            } catch {
+                /* already gone */
+            }
+            if (worker === created) worker = undefined;
         };
         created.onmessageerror = () => {
-            // A message that failed to deserialize must not strand pending jobs:
-            // drop back to inline encoding for the rest of the session.
-            worker = null;
             resetUploadTracking();
             failAllPending(`bake worker message failed to deserialize (script: ${workerScript})`);
+            try {
+                created.terminate();
+            } catch {
+                /* already gone */
+            }
+            if (worker === created) worker = undefined;
         };
 
         worker = created;
