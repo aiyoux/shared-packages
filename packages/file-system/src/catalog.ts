@@ -11,8 +11,10 @@ import type { MetaRow, LeaseRow } from './db.js';
 import type { OpfsBlobStore } from './opfs.js';
 import {
 	engineFromPort,
+	isCatalogDeadError,
 	openMemoryEngine,
 	openWorkerEngine,
+	resetCatalogLeader,
 	type SqlEngine
 } from './catalogEngine.js';
 
@@ -209,6 +211,9 @@ export class SqliteCatalog {
 	private engine: SqlEngine | null = null;
 	private txDepth = 0;
 	private catalogPort: MessagePort | null = null;
+	private catalogPersist = false;
+	private store: OpfsBlobStore | null = null;
+	private recovering = false;
 	/** False until migrate ran successfully (or a fresh catalog was stamped). GC must skip. */
 	migrationOk = false;
 	nodes!: NodeTable;
@@ -232,6 +237,29 @@ export class SqliteCatalog {
 		return this.engine;
 	}
 
+	private async recoverEngine(): Promise<void> {
+		if (this.recovering) return;
+		this.recovering = true;
+		try {
+			this.close();
+			resetCatalogLeader();
+			if (this.store) await this.openWithStore(this.store, this.catalogPersist);
+			else await this.open();
+		} finally {
+			this.recovering = false;
+		}
+	}
+
+	private async withEngine<T>(fn: (e: SqlEngine) => Promise<T>): Promise<T> {
+		try {
+			return await fn(this.eng());
+		} catch (e) {
+			if (this.txDepth > 0 || this.recovering || !isCatalogDeadError(e)) throw e;
+			await this.recoverEngine();
+			return fn(this.eng());
+		}
+	}
+
 	async open(): Promise<void> {
 		if (this.engine) return;
 		this.engine = await openMemoryEngine(this.name);
@@ -239,6 +267,8 @@ export class SqliteCatalog {
 
 	async openWithStore(_opfs: OpfsBlobStore, persist: boolean): Promise<void> {
 		if (this.engine) return;
+		this.store = _opfs;
+		this.catalogPersist = persist;
 		if (this.catalogPort) {
 			this.engine = engineFromPort(this.catalogPort, this.name);
 			await this.engine.exec('SELECT 1 AS ok');
@@ -267,39 +297,46 @@ export class SqliteCatalog {
 	async reloadFromOpfs(): Promise<void> {}
 
 	async exec(sql: string, params: unknown[] = []): Promise<Record<string, unknown>[]> {
-		return this.eng().exec(sql, params);
+		return this.withEngine((e) => e.exec(sql, params));
 	}
 
 	async run(sql: string, params: unknown[] = []): Promise<void> {
-		await this.eng().run(sql, params);
+		await this.withEngine((e) => e.run(sql, params));
 	}
 
 	async runMany(sql: string, rows: unknown[][]): Promise<void> {
 		if (!rows.length) return;
 		const chunk = Math.max(IN_CHUNK, 2000);
-		for (let i = 0; i < rows.length; i += chunk) {
-			await this.eng().runMany(sql, rows.slice(i, i + chunk));
-		}
+		await this.withEngine(async (e) => {
+			for (let i = 0; i < rows.length; i += chunk) {
+				await e.runMany(sql, rows.slice(i, i + chunk));
+			}
+		});
 	}
 
 	async transaction<T>(_mode: string, ...rest: unknown[]): Promise<T> {
 		const fn = rest[rest.length - 1] as () => Promise<T> | T;
-		this.txDepth += 1;
-		const started = this.txDepth === 1;
-		if (started) await this.eng().begin();
-		try {
-			const result = await fn();
-			if (started) {
-				await this.eng().commit();
+		const runOnce = async (): Promise<T> => {
+			this.txDepth += 1;
+			const started = this.txDepth === 1;
+			try {
+				if (started) await this.eng().begin();
+				const result = await fn();
+				if (started) await this.eng().commit();
 				this.txDepth -= 1;
-			} else {
+				return result;
+			} catch (e) {
+				if (started) await this.eng().rollback().catch(() => {});
 				this.txDepth -= 1;
+				throw e;
 			}
-			return result;
+		};
+		try {
+			return await runOnce();
 		} catch (e) {
-			if (started) await this.eng().rollback();
-			this.txDepth -= 1;
-			throw e;
+			if (this.recovering || !isCatalogDeadError(e)) throw e;
+			await this.recoverEngine();
+			return runOnce();
 		}
 	}
 

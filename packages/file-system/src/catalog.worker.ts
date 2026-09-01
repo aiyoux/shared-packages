@@ -33,10 +33,12 @@ function runManyPrepared(d: Oo1Db, sql: string, rows: unknown[][]): void {
 
 type PoolUtil = {
 	OpfsSAHPoolDb: new (filename: string) => Oo1Db;
+	pauseVfs?: () => unknown;
 };
 
 let pool: PoolUtil | null = null;
 const dbs = new Map<string, Oo1Db>();
+let aliveTimer: ReturnType<typeof setInterval> | null = null;
 
 function safeName(dbName: string): string {
 	return dbName.replace(/[^a-zA-Z0-9._-]+/g, '_').slice(0, 80) || 'SharedVFS';
@@ -181,6 +183,10 @@ async function runOp(
 			}
 			return { ok: true };
 		}
+		if (msg.op === 'shutdown') {
+			await shutdownPool();
+			return { ok: true };
+		}
 		return { ok: false, error: `unknown op ${msg.op}` };
 	} catch (e) {
 		return {
@@ -250,7 +256,54 @@ function enqueue(dbName: string, msg: Incoming, reply: (msg: unknown) => void): 
 
 const ctx = self as unknown as DedicatedWorkerGlobalScope;
 
+async function shutdownPool(): Promise<void> {
+	for (const d of dbs.values()) {
+		try {
+			d.exec('ROLLBACK');
+		} catch {
+			/* no open txn */
+		}
+		try {
+			d.close();
+		} catch {
+			/* ignore */
+		}
+	}
+	dbs.clear();
+	queues.clear();
+	if (pool && typeof pool.pauseVfs === 'function') {
+		try {
+			pool.pauseVfs();
+		} catch {
+			/* files still open — terminate will drop the SAHs */
+		}
+	}
+	pool = null;
+}
+
+function pingAlive(): void {
+	try {
+		ctx.postMessage({ type: 'alive' });
+	} catch {
+		/* closing */
+	}
+}
+
 ctx.onmessage = (ev: MessageEvent) => {
+	if (ev.data?.type === 'shutdown') {
+		void shutdownPool().then(() => {
+			try {
+				ctx.postMessage({ type: 'shutdown-ok' });
+			} catch {
+				/* ignore */
+			}
+			if (aliveTimer) {
+				clearInterval(aliveTimer);
+				aliveTimer = null;
+			}
+		});
+		return;
+	}
 	if (ev.data?.type === 'connect' && ev.ports[0]) {
 		const port = ev.ports[0];
 		const bound = typeof ev.data.dbName === 'string' ? ev.data.dbName : '';
@@ -267,3 +320,6 @@ ctx.onmessage = (ev: MessageEvent) => {
 	if (!msg || typeof msg.id !== 'number') return;
 	enqueue(msg.db || 'SharedVFS', msg, (out) => ctx.postMessage(out));
 };
+
+pingAlive();
+aliveTimer = setInterval(pingAlive, 1_000);

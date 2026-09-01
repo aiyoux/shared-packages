@@ -168,14 +168,20 @@ type RpcMsg =
 			sql: string;
 			rows: unknown[][];
 	  }
-	| { id: number; session: string; db: string; op: 'begin' | 'commit' | 'rollback' | 'wipe' | 'close' };
+	| { id: number; session: string; db: string; op: 'begin' | 'commit' | 'rollback' | 'wipe' | 'close' | 'shutdown' };
 
 type RpcRes = { id: number; session?: string; ok: boolean; rows?: unknown; error?: string };
 
 const CATALOG_LOCK = 'vfs-catalog-sah';
 const CATALOG_BC = 'vfs-catalog-sql';
 const RPC_TIMEOUT_MS = 20_000;
+const HEARTBEAT_STALE_MS = 4_000;
 let leaderAnnounced = false;
+/** True while this document's tryBecomeLeader callback still holds CATALOG_LOCK. */
+let leaderLockHeld = false;
+let lastAlive = 0;
+let workerControl: ((e: MessageEvent) => void) | null = null;
+let shutdownWait: (() => void) | null = null;
 
 function newSession(): string {
 	return `s-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -251,18 +257,44 @@ export function engineFromPort(port: MessagePort, dbName = 'SharedVFS'): SqlEngi
 				reject(workerFatal);
 				return;
 			}
+			if (catalogLeaderGone()) {
+				const err = new Error('catalog leader gone');
+				failCatalogWorker(err);
+				resetCatalogLeader();
+				reject(err);
+				return;
+			}
 			const id = next++;
+			let beat: ReturnType<typeof setInterval> | undefined;
 			const t = setTimeout(() => {
+				if (beat) clearInterval(beat);
 				pending.delete(id);
-				reject(new Error('catalog RPC timeout'));
+				const err = new Error('catalog RPC timeout');
+				failCatalogWorker(err);
+				resetCatalogLeader();
+				reject(err);
 			}, RPC_TIMEOUT_MS);
+			beat = setInterval(() => {
+				if (!workerFatal && !catalogLeaderGone()) return;
+				clearTimeout(t);
+				if (beat) clearInterval(beat);
+				pending.delete(id);
+				const err = workerFatal ?? new Error('catalog leader gone');
+				if (!workerFatal) {
+					failCatalogWorker(err);
+					resetCatalogLeader();
+				}
+				reject(err);
+			}, 250);
 			pending.set(id, {
 				resolve: (v) => {
 					clearTimeout(t);
+					if (beat) clearInterval(beat);
 					resolve(v);
 				},
 				reject: (e) => {
 					clearTimeout(t);
+					if (beat) clearInterval(beat);
 					reject(e);
 				}
 			});
@@ -273,7 +305,9 @@ export function engineFromPort(port: MessagePort, dbName = 'SharedVFS'): SqlEngi
 		...engine,
 		async close() {
 			workerFailHandlers.delete(failPending);
-			await engine.close();
+			if (!workerFatal && !catalogLeaderGone()) {
+				await engine.close().catch(() => {});
+			}
 			try {
 				port.close();
 			} catch {
@@ -367,10 +401,33 @@ function failCatalogWorker(err: Error): void {
 	for (const h of workerFailHandlers) h(err);
 }
 
-/** Drop the leader worker and ports so the next open can spawn again. */
+function catalogLeaderGone(): boolean {
+	if (workerFatal) return true;
+	if (!catalogWorker) return true;
+	return lastAlive > 0 && Date.now() - lastAlive > HEARTBEAT_STALE_MS;
+}
+
+export function isCatalogDeadError(e: unknown): boolean {
+	const m = e instanceof Error ? e.message : String(e);
+	return /catalog RPC timeout|catalog worker failed|catalog worker messageerror|catalog leader gone|Live OPFS catalog is unavailable/.test(
+		m
+	);
+}
+
+function onWorkerControl(e: MessageEvent): void {
+	const t = (e.data as { type?: string } | null)?.type;
+	if (t === 'alive') lastAlive = Date.now();
+	if (t === 'shutdown-ok') shutdownWait?.();
+}
+
+/** Drop the leader worker and ports so the next open can spawn again. Keeps the Web Lock. */
 export function resetCatalogLeader(): void {
+	const err = workerFatal ?? new Error('catalog leader gone');
+	for (const h of workerFailHandlers) h(err);
 	workerFatal = null;
 	leaderAnnounced = false;
+	lastAlive = 0;
+	shutdownWait = null;
 	followerPending.clear();
 	followerNext = 1;
 	try {
@@ -387,13 +444,42 @@ export function resetCatalogLeader(): void {
 	leaderBridge = null;
 	if (catalogWorker) {
 		catalogWorker.onerror = null;
+		if (workerControl) {
+			catalogWorker.removeEventListener('message', workerControl);
+		}
 		try {
 			catalogWorker.terminate();
 		} catch {
 			/* ignore */
 		}
 	}
+	workerControl = null;
 	catalogWorker = null;
+}
+
+/** Close DBs and pauseVfs, then terminate. Call while still holding CATALOG_LOCK. */
+export async function shutdownCatalogLeader(): Promise<void> {
+	const w = catalogWorker;
+	if (!w) {
+		resetCatalogLeader();
+		leaderLockHeld = false;
+		return;
+	}
+	await new Promise<void>((resolve) => {
+		const t = setTimeout(resolve, 800);
+		shutdownWait = () => {
+			clearTimeout(t);
+			resolve();
+		};
+		try {
+			w.postMessage({ type: 'shutdown' });
+		} catch {
+			clearTimeout(t);
+			resolve();
+		}
+	});
+	resetCatalogLeader();
+	leaderLockHeld = false;
 }
 
 export function getCatalogWorker(): Worker | null {
@@ -420,6 +506,8 @@ async function startLeaderWorker(): Promise<Worker | null> {
 				failCatalogWorker(new Error('catalog worker messageerror'));
 				resetCatalogLeader();
 			});
+			workerControl = onWorkerControl;
+			catalogWorker.addEventListener('message', workerControl);
 		} catch {
 			return null;
 		}
@@ -490,6 +578,7 @@ export function connectCatalogPort(dbName = 'SharedVFS'): MessagePort | null {
 }
 
 async function tryBecomeLeader(): Promise<boolean> {
+	if (leaderLockHeld) return !!(await startLeaderWorker());
 	const locks = (globalThis as { navigator?: { locks?: LockManager } }).navigator?.locks;
 	if (!locks?.request) {
 		return !!(await startLeaderWorker());
@@ -508,15 +597,20 @@ async function tryBecomeLeader(): Promise<boolean> {
 						decide(false);
 						return;
 					}
+					leaderLockHeld = true;
 					if (!(await startLeaderWorker())) {
+						leaderLockHeld = false;
 						decide(false);
 						return;
 					}
 					decide(true);
 					await new Promise<void>((release) => {
 						if (typeof addEventListener === 'function') {
+							const go = () => {
+								void shutdownCatalogLeader().finally(() => release());
+							};
 							for (const ev of ['pagehide', 'unload', 'freeze'] as const) {
-								addEventListener(ev, () => release(), { once: true });
+								addEventListener(ev, go, { once: true });
 							}
 						}
 					});
@@ -530,35 +624,49 @@ async function tryBecomeLeader(): Promise<boolean> {
 
 export async function openWorkerEngine(dbName = 'SharedVFS'): Promise<SqlEngine | null> {
 	if (inBrowserMain()) {
-		const leader = await tryBecomeLeader();
-		if (leader) {
-			const port = connectCatalogPort(dbName);
-			if (!port) return null;
-			const eng = engineFromPort(port, dbName);
-			await eng.exec('SELECT 1 AS ok');
-			leaderAnnounced = true;
-			leaderBridge?.postMessage({ type: 'ready' });
-			return eng;
+		for (let attempt = 0; attempt < 3; attempt++) {
+			const leader = await tryBecomeLeader();
+			if (leader) {
+				const port = connectCatalogPort(dbName);
+				if (!port) {
+					resetCatalogLeader();
+					continue;
+				}
+				const eng = engineFromPort(port, dbName);
+				try {
+					await eng.exec('SELECT 1 AS ok');
+				} catch {
+					await eng.close().catch(() => {});
+					resetCatalogLeader();
+					continue;
+				}
+				leaderAnnounced = true;
+				leaderBridge?.postMessage({ type: 'ready' });
+				return eng;
+			}
+			if (typeof BroadcastChannel === 'undefined') return null;
+			try {
+				await waitForLeader(3_000);
+				const follower = engineFromBroadcast(dbName);
+				await follower.exec('SELECT 1 AS ok');
+				return follower;
+			} catch {
+				/* previous leader shutting down — try to take the lock */
+			}
 		}
-		if (typeof BroadcastChannel === 'undefined') return null;
-		try {
-			await waitForLeader();
-		} catch {
-			return null;
-		}
-		const follower = engineFromBroadcast(dbName);
-		await follower.exec('SELECT 1 AS ok');
-		return follower;
+		return null;
 	}
 	// Dedicated worker (extract) cannot nest a Worker; speak to the leader.
 	if (typeof BroadcastChannel !== 'undefined') {
-		try {
-			await waitForLeader();
-			const follower = engineFromBroadcast(dbName);
-			await follower.exec('SELECT 1 AS ok');
-			return follower;
-		} catch {
-			return null;
+		for (let attempt = 0; attempt < 3; attempt++) {
+			try {
+				await waitForLeader(attempt === 0 ? RPC_TIMEOUT_MS : 3_000);
+				const follower = engineFromBroadcast(dbName);
+				await follower.exec('SELECT 1 AS ok');
+				return follower;
+			} catch {
+				/* leader rebooting */
+			}
 		}
 	}
 	return null;

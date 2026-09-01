@@ -1,6 +1,7 @@
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { createVfs, VfsError, isActionable, resetSharedVfsForTests } from '../src/index.ts';
+import { isCatalogDeadError } from '../src/catalogEngine.ts';
 
 describe('VfsService', () => {
 	let vfs: ReturnType<typeof createVfs>;
@@ -748,6 +749,12 @@ describe('VfsService', () => {
 		const swept = await vfs.gc();
 		assert.ok(swept.orphanOpfsRemoved >= 1);
 		assert.equal(await vfs.opfs.exists('root/orphan-audit.bin'), false);
+	});
+
+	it('isCatalogDeadError matches worker-death messages', () => {
+		assert.equal(isCatalogDeadError(new Error('catalog leader gone')), true);
+		assert.equal(isCatalogDeadError(new Error('catalog RPC timeout')), true);
+		assert.equal(isCatalogDeadError(new Error('no such table: nodes')), false);
 	});
 
 	it('ready retries after a failed catalog open', async () => {
