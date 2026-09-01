@@ -1,6 +1,6 @@
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { createVfs, VfsError, isActionable, resetSharedVfsForTests } from '../src/index.ts';
+import { createVfs, createMemoryOpfs, VfsError, isActionable, resetSharedVfsForTests } from '../src/index.ts';
 import { isCatalogDeadError } from '../src/catalogEngine.ts';
 
 describe('VfsService', () => {
@@ -65,6 +65,16 @@ describe('VfsService', () => {
 		});
 		assert.equal(n.name, 'fresh.skch');
 		assert.equal(n.generation, 1);
+	});
+
+	it('writeMany stores many paths in one call', async () => {
+		const store = createMemoryOpfs();
+		await store.writeMany!([
+			{ path: 'bulk/a.bin', data: new Uint8Array([1, 2]) },
+			{ path: 'bulk/b.bin', data: new Uint8Array([3, 4]) }
+		]);
+		assert.deepEqual([...(await store.read('bulk/a.bin'))], [1, 2]);
+		assert.deepEqual([...(await store.read('bulk/b.bin'))], [3, 4]);
 	});
 
 	it('writeFiles bulk-writes many members with unique names and readable bytes', async () => {

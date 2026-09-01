@@ -1117,18 +1117,26 @@ export class VfsService {
 		}
 		profileAdd('writeTree.plan+crc', performance.now() - tPlan);
 
-		const WRITE_CONCURRENCY = 12;
 		try {
 			const tStage = performance.now();
-			let cursor = 0;
-			const workers = Array.from({ length: WRITE_CONCURRENCY }, async () => {
-				while (cursor < planned.length) {
-					throwIfAborted(opts?.signal);
-					const p = planned[cursor++]!;
-					await this.opfs.writeFinal(p.opfsPath, p.bytes, { flush: false });
-				}
-			});
-			await Promise.all(workers);
+			throwIfAborted(opts?.signal);
+			if (typeof this.opfs.writeMany === 'function') {
+				await this.opfs.writeMany(
+					planned.map((p) => ({ path: p.opfsPath, data: p.bytes })),
+					{ flush: false }
+				);
+			} else {
+				const WRITE_CONCURRENCY = 12;
+				let cursor = 0;
+				const workers = Array.from({ length: WRITE_CONCURRENCY }, async () => {
+					while (cursor < planned.length) {
+						throwIfAborted(opts?.signal);
+						const p = planned[cursor++]!;
+						await this.opfs.writeFinal(p.opfsPath, p.bytes, { flush: false });
+					}
+				});
+				await Promise.all(workers);
+			}
 			profileAdd('writeTree.opfsStage', performance.now() - tStage);
 		} catch (e) {
 			for (const p of planned) {
@@ -2092,29 +2100,31 @@ export class VfsService {
 			// Anything not packed (large members, or a chunk too small to be
 			// worth a pack) keeps the one-file-per-blob path.
 			const standalone = reserved.filter((_, i) => !packedIndexes.has(i));
-			// Each standalone write is ~4 IPC round trips to the browser process,
-			// so overlapping them hides latency that no amount of batching can
-			// remove. Swept on the real path: 1-way 6.19 ms/file, 4-way 3.49,
-			// 8-way 2.83, 12-way 2.26, 16-way 2.59, 24-way 2.68, 32-way 4.87 —
-			// the curve turns once the browser's own IO queue saturates, so
-			// this sits at the measured floor rather than "as parallel as
-			// possible".
-			const WRITE_CONCURRENCY = 12;
-			let cursor = 0;
-			const workers = Array.from({ length: WRITE_CONCURRENCY }, async () => {
-				while (cursor < standalone.length) {
-					if (signal?.aborted) throw abortError();
-					const r = standalone[cursor++]!;
-					// Extract's 3000×17KB members: flush() is ~72% of a SAH
-					// write and is what the POSIX bench does not do. Packs still
-					// flush via writeAtomic. close() is enough for same-session
-					// reads; IDB stays pending until this returns.
-					await this.opfs.writeFinal(r.opfsPath, r.p.bytes, {
-						flush: false
+			if (standalone.length) {
+				if (signal?.aborted) throw abortError();
+				// OPFS has no multi-file write. writeMany still does N
+				// create/write/close, but creates parent dirs once and, in the
+				// worker, stays on sync handles without returning to the page.
+				if (typeof this.opfs.writeMany === 'function') {
+					await this.opfs.writeMany(
+						standalone.map((r) => ({ path: r.opfsPath, data: r.p.bytes })),
+						{ flush: false }
+					);
+				} else {
+					const WRITE_CONCURRENCY = 12;
+					let cursor = 0;
+					const workers = Array.from({ length: WRITE_CONCURRENCY }, async () => {
+						while (cursor < standalone.length) {
+							if (signal?.aborted) throw abortError();
+							const r = standalone[cursor++]!;
+							await this.opfs.writeFinal(r.opfsPath, r.p.bytes, {
+								flush: false
+							});
+						}
 					});
+					await Promise.all(workers);
 				}
-			});
-			await Promise.all(workers);
+			}
 			// Confirm sizes + clear pending + drop leases for the whole chunk in
 			// one txn (parent re-checked inside the txn so a concurrent trash
 			// cannot park a live child under it, as in writeFile). Rows are read

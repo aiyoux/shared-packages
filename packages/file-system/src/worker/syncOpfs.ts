@@ -231,6 +231,15 @@ export function createSyncOpfsStore(rootDirName = 'shared-vfs'): OpfsBlobStore {
 
 	const store: OpfsBlobStore = {
 		writeFinal: (opfsPath, data, opts) => writeBytes(opfsPath, data, opts),
+		async writeMany(entries, opts) {
+			if (!entries.length) return;
+			const dirs = new Set<string>();
+			for (const e of entries) dirs.add(splitPath(e.path).dir);
+			for (const d of dirs) await resolveDir(d);
+			for (const e of entries) {
+				await writeBytes(e.path, e.data, { flush: opts?.flush ?? false });
+			}
+		},
 		async writeAtomic(opfsPath, data) {
 			const writeId = `w_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 			const tmpPath = `tmp/${writeId}.partial`;

@@ -18,6 +18,16 @@ export interface OpfsBlobStore {
 		data: BufferSource | Blob | Uint8Array,
 		opts?: { flush?: boolean }
 	): Promise<{ byteLength: number }>;
+	/**
+	 * Many files in one call. OPFS has no multi-file write syscall — this is
+	 * still N create/write/close — but the store can create parent dirs once
+	 * and keep the loop off the main thread when the sync worker store is used.
+	 * Packing remains the only true one-write path.
+	 */
+	writeMany?(
+		entries: Array<{ path: string; data: BufferSource | Blob | Uint8Array }>,
+		opts?: { flush?: boolean }
+	): Promise<void>;
 	read(opfsPath: string): Promise<Uint8Array>;
 	readBlob(opfsPath: string, contentType?: string): Promise<Blob>;
 	/**
@@ -115,6 +125,12 @@ export function createMemoryOpfs(): OpfsBlobStore {
 			const bytes = await toUint8Array(data);
 			files.set(opfsPath, { bytes: new Uint8Array(bytes), mtimeMs: Date.now() });
 			return { byteLength: bytes.byteLength };
+		},
+		async writeMany(entries) {
+			for (const e of entries) {
+				const bytes = await toUint8Array(e.data);
+				files.set(e.path, { bytes: new Uint8Array(bytes), mtimeMs: Date.now() });
+			}
 		},
 		async read(opfsPath) {
 			const entry = files.get(opfsPath);
@@ -394,6 +410,24 @@ export function createOpfsBlobStore(rootDirName = 'shared-vfs'): OpfsBlobStore {
 			const bytes = await toUint8Array(data);
 			await writeFileHandle(handle, bytes);
 			return { byteLength: bytes.byteLength };
+		},
+		async writeMany(entries, opts) {
+			void opts;
+			if (!entries.length) return;
+			const dirs = new Set<string>();
+			for (const e of entries) dirs.add(splitPath(e.path).dir);
+			await Promise.all([...dirs].map((d) => resolveDir(d)));
+			const WRITE_CONCURRENCY = 12;
+			let cursor = 0;
+			const workers = Array.from({ length: Math.min(WRITE_CONCURRENCY, Math.max(1, entries.length)) }, async () => {
+				while (cursor < entries.length) {
+					const e = entries[cursor++]!;
+					const handle = await getFile(e.path, true);
+					const bytes = await toUint8Array(e.data);
+					await writeFileHandle(handle, bytes);
+				}
+			});
+			await Promise.all(workers);
 		},
 		async read(opfsPath) {
 			try {
