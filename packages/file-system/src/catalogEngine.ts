@@ -175,7 +175,6 @@ type RpcRes = { id: number; session?: string; ok: boolean; rows?: unknown; error
 const CATALOG_LOCK = 'vfs-catalog-sah';
 const CATALOG_BC = 'vfs-catalog-sql';
 const RPC_TIMEOUT_MS = 20_000;
-const HEARTBEAT_STALE_MS = 4_000;
 let leaderAnnounced = false;
 /** True while this document's tryBecomeLeader callback still holds CATALOG_LOCK. */
 let leaderLockHeld = false;
@@ -265,36 +264,23 @@ export function engineFromPort(port: MessagePort, dbName = 'SharedVFS'): SqlEngi
 				return;
 			}
 			const id = next++;
-			let beat: ReturnType<typeof setInterval> | undefined;
+			const timeoutMs = msg.op === 'runMany' ? 120_000 : RPC_TIMEOUT_MS;
 			const t = setTimeout(() => {
-				if (beat) clearInterval(beat);
 				pending.delete(id);
 				const err = new Error('catalog RPC timeout');
-				failCatalogWorker(err);
-				resetCatalogLeader();
-				reject(err);
-			}, RPC_TIMEOUT_MS);
-			beat = setInterval(() => {
-				if (!workerFatal && !catalogLeaderGone()) return;
-				clearTimeout(t);
-				if (beat) clearInterval(beat);
-				pending.delete(id);
-				const err = workerFatal ?? new Error('catalog leader gone');
-				if (!workerFatal) {
+				if (inBrowserMain()) {
 					failCatalogWorker(err);
 					resetCatalogLeader();
 				}
 				reject(err);
-			}, 250);
+			}, timeoutMs);
 			pending.set(id, {
 				resolve: (v) => {
 					clearTimeout(t);
-					if (beat) clearInterval(beat);
 					resolve(v);
 				},
 				reject: (e) => {
 					clearTimeout(t);
-					if (beat) clearInterval(beat);
 					reject(e);
 				}
 			});
@@ -403,8 +389,14 @@ function failCatalogWorker(err: Error): void {
 
 function catalogLeaderGone(): boolean {
 	if (workerFatal) return true;
+	// Extract/follower engines use a transferred port in a different JS realm
+	// where catalogWorker is always null. Silence is not death there.
+	if (!inBrowserMain()) return false;
 	if (!catalogWorker) return true;
-	return lastAlive > 0 && Date.now() - lastAlive > HEARTBEAT_STALE_MS;
+	// Do not treat a missed heartbeat as death. The catalog worker runs
+	// sqlite on the same thread as setInterval; a long runMany (extract)
+	// blocks alive pings and would kill a live leader.
+	return false;
 }
 
 export function isCatalogDeadError(e: unknown): boolean {
