@@ -1626,7 +1626,7 @@ const ringToD = (ring: Ring) => {
     return `${d} Z`;
 };
 
-const polygonToD = (polygon: Polygon) => {
+export const polygonToD = (polygon: Polygon) => {
     return polygon
         .map(ringToD)
         .filter(Boolean)
