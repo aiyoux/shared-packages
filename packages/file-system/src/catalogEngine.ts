@@ -114,10 +114,15 @@ let sqlite3Promise: Promise<{ oo1: { DB: new (filename: string, flags?: string) 
 
 async function loadSqlite3() {
 	if (!sqlite3Promise) {
-		sqlite3Promise = import('@sqlite.org/sqlite-wasm').then((mod) => {
-			const init = (mod as { default: (opts?: unknown) => Promise<unknown> }).default;
-			return init() as Promise<{ oo1: { DB: new (filename: string, flags?: string) => Oo1Db } }>;
-		});
+		sqlite3Promise = import('@sqlite.org/sqlite-wasm')
+			.then((mod) => {
+				const init = (mod as { default: (opts?: unknown) => Promise<unknown> }).default;
+				return init() as Promise<{ oo1: { DB: new (filename: string, flags?: string) => Oo1Db } }>;
+			})
+			.catch((e) => {
+				sqlite3Promise = null;
+				throw e;
+			});
 	}
 	return sqlite3Promise;
 }
@@ -362,6 +367,35 @@ function failCatalogWorker(err: Error): void {
 	for (const h of workerFailHandlers) h(err);
 }
 
+/** Drop the leader worker and ports so the next open can spawn again. */
+export function resetCatalogLeader(): void {
+	workerFatal = null;
+	leaderAnnounced = false;
+	followerPending.clear();
+	followerNext = 1;
+	try {
+		followerPort?.close();
+	} catch {
+		/* ignore */
+	}
+	followerPort = null;
+	try {
+		leaderBridge?.close();
+	} catch {
+		/* ignore */
+	}
+	leaderBridge = null;
+	if (catalogWorker) {
+		catalogWorker.onerror = null;
+		try {
+			catalogWorker.terminate();
+		} catch {
+			/* ignore */
+		}
+	}
+	catalogWorker = null;
+}
+
 export function getCatalogWorker(): Worker | null {
 	return catalogWorker;
 }
@@ -380,9 +414,11 @@ async function startLeaderWorker(): Promise<Worker | null> {
 				failCatalogWorker(
 					new Error(`catalog worker failed: ${ev.message || 'load error'}${where}`)
 				);
+				resetCatalogLeader();
 			};
 			catalogWorker.addEventListener('messageerror', () => {
 				failCatalogWorker(new Error('catalog worker messageerror'));
+				resetCatalogLeader();
 			});
 		} catch {
 			return null;

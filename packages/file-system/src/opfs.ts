@@ -276,7 +276,12 @@ export function createOpfsBlobStore(rootDirName = 'shared-vfs'): OpfsBlobStore {
 	let rootPromise: Promise<FileSystemDirectoryHandle> | null = null;
 
 	const root = () => {
-		if (!rootPromise) rootPromise = getRoot(rootDirName);
+		if (!rootPromise) {
+			rootPromise = getRoot(rootDirName);
+			void rootPromise.catch(() => {
+				rootPromise = null;
+			});
+		}
 		return rootPromise;
 	};
 
@@ -542,6 +547,7 @@ export function createOpfsBlobStore(rootDirName = 'shared-vfs'): OpfsBlobStore {
 			// removed directory throws NotFoundError on every later write, so
 			// the session would be unable to write anything until a reload.
 			dirCache.clear();
+			rootPromise = null;
 		}
 	};
 }

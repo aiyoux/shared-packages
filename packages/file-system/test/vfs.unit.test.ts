@@ -749,4 +749,20 @@ describe('VfsService', () => {
 		assert.ok(swept.orphanOpfsRemoved >= 1);
 		assert.equal(await vfs.opfs.exists('root/orphan-audit.bin'), false);
 	});
+
+	it('ready retries after a failed catalog open', async () => {
+		const retry = createVfs({ dbName: `retry-${Date.now()}`, memoryOpfs: true });
+		const orig = retry.db.openWithStore.bind(retry.db);
+		let n = 0;
+		retry.db.openWithStore = async (opfs, persist) => {
+			n += 1;
+			if (n === 1) throw new Error('first open fails');
+			return orig(opfs, persist);
+		};
+		await assert.rejects(() => retry.ready(), /first open fails/);
+		await retry.ready();
+		const folder = await retry.mkdir(null, 'after-retry');
+		assert.equal(folder.name, 'after-retry');
+		assert.equal(n, 2);
+	});
 });

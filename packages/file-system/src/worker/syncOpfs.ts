@@ -94,6 +94,9 @@ export function createSyncOpfsStore(rootDirName = 'shared-vfs'): OpfsBlobStore {
 			rootPromise = navigator.storage
 				.getDirectory()
 				.then((r) => r.getDirectoryHandle(rootDirName, { create: true }));
+			void rootPromise.catch(() => {
+				rootPromise = null;
+			});
 		}
 		return rootPromise;
 	};
@@ -409,6 +412,7 @@ export function createSyncOpfsStore(rootDirName = 'shared-vfs'): OpfsBlobStore {
 					/* best effort */
 				}
 			}
+			rootPromise = null;
 		}
 	};
 

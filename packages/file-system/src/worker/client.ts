@@ -32,8 +32,14 @@ export class VfsWorkerClient {
 	constructor(worker: Worker) {
 		this.worker = worker;
 		worker.onmessage = (e: MessageEvent) => this.receive(e.data as WorkerResponse);
-		// A worker that dies mid-job must not leave callers hanging.
-		worker.onerror = () => this.failAll(new Error('VFS worker crashed'));
+		// A worker that dies mid-job must not leave callers hanging, and must
+		// not pin getVfsWorkerClient() to a dead instance for the rest of the
+		// page (same class of bug as the catalog worker singleton).
+		worker.onerror = () => {
+			this.failAll(new Error('VFS worker crashed'));
+			this.disposed = true;
+			dropCachedClient(this);
+		};
 	}
 
 	private receive(msg: WorkerResponse): void {
@@ -109,6 +115,10 @@ export class VfsWorkerClient {
 let cached: VfsWorkerClient | null | undefined;
 /** Why the worker is unavailable, for a UI that must explain the slow path. */
 let unavailableReason: string | null = null;
+
+function dropCachedClient(client: VfsWorkerClient): void {
+	if (cached === client) cached = undefined;
+}
 
 /**
  * Why `getVfsWorkerClient()` returned null, or null if a worker is available.

@@ -2,7 +2,7 @@ import { createChangeBus } from './changeBus.js';
 import { notifyTabChannel, subscribeTabChannel } from './crossTab.js';
 import { ROOT_PARENT_KEY } from './db.js';
 import { SqliteCatalog, MIGRATED_KEY } from './catalog.js';
-import { resetMemoryEngines } from './catalogEngine.js';
+import { resetCatalogLeader, resetMemoryEngines } from './catalogEngine.js';
 import { migrateIdbToSqlite } from './migrateIdb.js';
 import { generateId } from './id.js';
 import { sanitizeName, withNumericSuffix } from './names.js';
@@ -373,7 +373,7 @@ export class VfsService {
 
 	async ready(): Promise<void> {
 		if (!this.readyPromise) {
-			this.readyPromise = (async () => {
+			const run = (async () => {
 				await this.db.openWithStore(this.opfs, this.catalogPersist);
 				await migrateIdbToSqlite(this.db, this.db.name);
 				const ver = await this.db.meta.get('schemaVersion');
@@ -404,6 +404,10 @@ export class VfsService {
 				// a later mount calling it is a no-op.
 				this.sweepOnLoad({ delayMs: 0 });
 			})();
+			this.readyPromise = run;
+			void run.catch(() => {
+				if (this.readyPromise === run) this.readyPromise = null;
+			});
 		}
 		return this.readyPromise;
 	}
@@ -4015,6 +4019,7 @@ export function getSharedVfs(opts?: VfsServiceOptions): VfsService {
 export function resetSharedVfsForTests(): void {
 	singleton = null;
 	resetMemoryEngines();
+	resetCatalogLeader();
 }
 
 export function isActionable(node: VfsNode, accept?: FileTypeId[]): boolean {
