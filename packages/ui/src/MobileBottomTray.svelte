@@ -192,10 +192,10 @@
     const target = event.target as HTMLElement | null;
     if (target?.closest('[data-mobile-bottom-tray-toggle]')) return false;
 
-    if (target?.closest('[data-mobile-bottom-tray-peek]')) {
-      return Boolean(target.closest('input, textarea, select, [contenteditable="true"], [data-mobile-bottom-tray-ignore-drag]'));
-    }
-
+    // Peek is a drag handle, but interactive controls inside it must keep
+    // their native click. Capturing the pointer and replaying `click()` on
+    // tap double-fires handlers (calendar "Add Event" opened two New Event
+    // tabs per press). Same ignore list as the rest of the tray.
     return Boolean(
       target?.closest(
         'button, a, input, textarea, select, [contenteditable="true"], [data-mobile-bottom-tray-ignore-drag]'
@@ -327,8 +327,22 @@
         suppressToggleClick = true;
         toggleTray();
         if (browser) window.setTimeout(() => (suppressToggleClick = false), 0);
-      } else {
-        clickTarget?.click();
+      } else if (clickTarget) {
+        // Replay the captured tap, then swallow the native `click` that
+        // still follows pointerup in some browsers even when pointerdown
+        // was canceled (same reason as suppressToggleClick).
+        clickTarget.click();
+        const swallowNativeClick = (e: Event) => {
+          e.stopImmediatePropagation();
+          e.preventDefault();
+          clickTarget.removeEventListener('click', swallowNativeClick, true);
+        };
+        clickTarget.addEventListener('click', swallowNativeClick, true);
+        if (browser) {
+          window.setTimeout(() => {
+            clickTarget.removeEventListener('click', swallowNativeClick, true);
+          }, 0);
+        }
       }
       return;
     }
