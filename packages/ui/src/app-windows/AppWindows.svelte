@@ -322,6 +322,10 @@
 		min-height: 0;
 		display: flex;
 		overflow: hidden;
+		/* FileExplorer header is z-index 9; without a stacking context here
+		   that value competes with .aw-edit (6) and the toolbar paints through
+		   the windows overlay. */
+		isolation: isolate;
 	}
 	.aw-body > :global(*),
 	.aw-live-host {

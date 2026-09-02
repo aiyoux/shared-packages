@@ -177,7 +177,37 @@ describe('DualPaneExplorer onOpenProject context', () => {
 		);
 		expect(left.querySelector('[data-testid="files-pane-chrome-left"]')).toBeNull();
 	});
+
+	it('windows overlay covers the file-manager header (connection / details / cut / copy)', async () => {
+		render(DualPaneExplorer, {
+			props: {
+				localDriver: createLocalExplorerDriver(vfs),
+				dualPaneKey: `dpe:windows-stack:${Math.random()}`
+			}
+		});
+		await viWaitFor(() => document.querySelector('[data-testid="fe-header"]') != null);
+		await fireEvent.click(screen.getByTestId('fe-windows-btn'));
+		const overlay = await viWaitForEl('[data-testid="files-window-edit"]');
+		const header = document.querySelector('[data-testid="fe-header"]') as HTMLElement;
+		const body = overlay.parentElement?.querySelector('.aw-body') as HTMLElement | null;
+		expect(header).toBeTruthy();
+		expect(body).toBeTruthy();
+		expect(getComputedStyle(body!).isolation).toBe('isolate');
+		expect(Number(getComputedStyle(overlay).zIndex)).toBeGreaterThan(0);
+		expect(header.contains(overlay)).toBe(false);
+		expect(overlay.contains(header)).toBe(false);
+	});
 });
+
+async function viWaitForEl(selector: string, ms = 4000): Promise<HTMLElement> {
+	const start = Date.now();
+	while (Date.now() - start < ms) {
+		const el = document.querySelector(selector) as HTMLElement | null;
+		if (el) return el;
+		await new Promise((r) => setTimeout(r, 20));
+	}
+	throw new Error(`viWaitForEl timeout: ${selector}`);
+}
 
 function explorerDt(ids: string[]) {
 	const data = new Map<string, string>();
