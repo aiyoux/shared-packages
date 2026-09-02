@@ -8,8 +8,8 @@ export const PROJECT_PACK_META = 'projectPack';
  * `any` (default) — a `.git` child, a `.project.json` child, or project metadata.
  * `git` — a `.git` child ONLY.
  *
- * The Git app needs `git`: a folder can be a project (packed, or carrying
- * `.project.json`) and still have no repo, and under `any` its Init button would be
+ * The Git app needs `git`: a folder can be a project (`.project.json` or
+ * project metadata) with no repo, and under `any` its Init button would be
  * hidden with no way to create one.
  */
 export type ProjectMarker = 'any' | 'git';

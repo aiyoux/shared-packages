@@ -1655,9 +1655,9 @@ export class VfsService {
 			 * general filesystem where arbitrary files are deleted in arbitrary
 			 * order.
 			 *
-			 * Currently opted in only by the Projects app. The general
-			 * extract/decrypt/drop paths leave it off and get their speed from
-			 * write concurrency instead.
+			 * Off unless the caller passes `pack: true`. Projects init does not
+			 * pack; "Pack all" and the extract checkbox are the opt-ins. Drop
+			 * and ordinary writes leave this off.
 			 */
 			pack?: boolean;
 		}

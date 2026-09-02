@@ -19,7 +19,7 @@ import type { VfsService } from './vfs.js';
 import type { BlobRef, PackOpProgress, PackOpStage, VfsNode } from './types.js';
 import { crc32 } from './crc32.js';
 
-/** Marks a folder as a project whose file bytes live in shared packs. */
+/** Marks a folder as a project. Does not mean its bytes are packed. */
 export const PROJECT_PACK_META = 'projectPack';
 
 export type ProjectPackManifest = {
