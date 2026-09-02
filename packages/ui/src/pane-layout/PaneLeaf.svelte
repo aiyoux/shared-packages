@@ -53,8 +53,10 @@
 				data-testid="pl-chrome-app"
 				data-pl-leaf={id}
 			></div>
-			<div class="pl-update-slot" data-app-update-slot></div>
 			<div class="pl-chrome-window" data-testid="pl-chrome-window">
+				<!-- Update banner docks inside the window group, right of its left
+				    edge, before the window buttons (Apps/Clipboard/Split/Close). -->
+				<div class="pl-update-slot" data-app-update-slot></div>
 				{#if onApps}
 					<button
 						type="button"
@@ -186,6 +188,16 @@
 		display: flex;
 		align-items: center;
 		flex-shrink: 0;
+		/* Separator between the docked update banner and the window buttons. */
+		margin-right: 2px;
+		padding-right: 4px;
+		border-right: 1px solid color-mix(in srgb, var(--border, #475569) 55%, transparent);
+	}
+
+	.pl-update-slot:empty {
+		margin-right: 0;
+		padding-right: 0;
+		border-right: none;
 	}
 	.pl-chrome-window {
 		display: flex;

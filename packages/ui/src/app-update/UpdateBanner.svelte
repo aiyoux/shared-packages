@@ -83,12 +83,13 @@
 	.app-update-banner {
 		display: inline-flex;
 		align-items: center;
-		gap: 8px;
+		gap: 6px;
 		flex-shrink: 0;
 		margin-inline: 8px;
-		padding: 2px 8px 2px 10px;
+		padding: 2px 6px 2px 10px;
 		border: 1px solid color-mix(in srgb, var(--accent, #38bdf8) 55%, transparent);
-		border-radius: 999px;
+		/* Match header control roundness (design radius-md), not a lozenge. */
+		border-radius: var(--radius-md, 6px);
 		background: color-mix(in srgb, var(--surface, #1e293b) 82%, var(--accent, #38bdf8));
 		color: var(--text-primary, #e2e8f0);
 		font-size: 12px;
@@ -101,19 +102,20 @@
 	.copy {
 		opacity: 0.92;
 	}
+	/* Flat action inside the banner — no second pill. */
 	.refresh {
 		appearance: none;
-		border: 1px solid color-mix(in srgb, var(--accent, #38bdf8) 70%, transparent);
-		border-radius: 999px;
-		background: color-mix(in srgb, var(--accent, #38bdf8) 22%, transparent);
-		color: inherit;
+		border: none;
+		border-radius: 4px;
+		background: transparent;
+		color: var(--accent, #38bdf8);
 		font: inherit;
 		font-weight: 600;
-		padding: 2px 8px;
+		padding: 2px 6px;
 		cursor: pointer;
 	}
 	.refresh:hover:not(:disabled) {
-		background: color-mix(in srgb, var(--accent, #38bdf8) 38%, transparent);
+		background: color-mix(in srgb, var(--accent, #38bdf8) 18%, transparent);
 	}
 	.refresh:disabled {
 		opacity: 0.7;
