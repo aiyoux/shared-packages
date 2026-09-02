@@ -45,6 +45,18 @@ export { default as ResizableSidePanel } from './ResizableSidePanel.svelte';
 export { default as PaneLayout } from './pane-layout/PaneLayout.svelte';
 export { default as SplitHandle } from './pane-layout/SplitHandle.svelte';
 export { default as FileChrome } from './file-chrome/FileChrome.svelte';
+export { default as UpdateBanner } from './app-update/UpdateBanner.svelte';
+export {
+	appUpdate,
+	startAppUpdateWatcher
+} from './app-update/appUpdate.svelte.js';
+export {
+	APPLYING_UPDATE_KEY,
+	applyUpdatePlan,
+	findUpdateBannerHost,
+	shouldOfferUpdate,
+	type AppUpdateStatus
+} from './app-update/appUpdate.ts';
 export {
 	confirmDiscardUnsaved,
 	installBeforeUnload,

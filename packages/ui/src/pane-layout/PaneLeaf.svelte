@@ -53,6 +53,7 @@
 				data-testid="pl-chrome-app"
 				data-pl-leaf={id}
 			></div>
+			<div class="pl-update-slot" data-app-update-slot></div>
 			<div class="pl-chrome-window" data-testid="pl-chrome-window">
 				{#if onApps}
 					<button
@@ -180,6 +181,11 @@
 		min-height: 0;
 		display: flex;
 		align-items: center;
+	}
+	.pl-update-slot {
+		display: flex;
+		align-items: center;
+		flex-shrink: 0;
 	}
 	.pl-chrome-window {
 		display: flex;
