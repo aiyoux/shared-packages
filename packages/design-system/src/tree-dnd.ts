@@ -85,12 +85,95 @@ export function insertIndex(from: number, target: number, zone: Zone): number {
 	return zone === 'before' ? finalTarget : finalTarget + 1;
 }
 
+/**
+ * Same-list sibling move using {@link insertIndex} + splice-from-then-to.
+ * The dragged item ends up immediately before/after the target *item*
+ * (not "one slot off" the indicated gap).
+ */
+export function applySiblingMove<T>(arr: T[], from: number, target: number, zone: Zone): T[] {
+	if (from < 0 || target < 0 || from >= arr.length || target >= arr.length) return arr;
+	const next = arr.slice();
+	const [item] = next.splice(from, 1);
+	next.splice(insertIndex(from, target, zone), 0, item);
+	return next;
+}
+
+export type RowFromPointOpts = {
+	/** Source row to ignore so the cursor can punch through the dragged item. */
+	skip?: Element | null;
+	barSelector?: string;
+	/** Max px from a bar to snap to it when the cursor is in a gap. */
+	maxGap?: number;
+};
+
+const DEFAULT_MAX_GAP = 20;
+
+function isSkippedRow(row: HTMLElement, skip: Element | null | undefined): boolean {
+	if (row.classList.contains('dnd-dragging')) return true;
+	if (!skip) return false;
+	return row === skip || skip.contains(row);
+}
+
+/**
+ * Hit-test a tree row at a point.
+ *
+ * Prefer the innermost row whose *bar* contains the cursor (expanded wrappers
+ * are taller than the header; using the wrapper made the after-line paint at
+ * the subtree bottom while pickZone used the header — drops looked one slot
+ * high). Fall back to the nearest other bar so gaps between rows still work.
+ */
 export function rowFromPoint(
 	x: number,
 	y: number,
-	selector: string = DEFAULT_ROW_SELECTOR
+	selector: string = DEFAULT_ROW_SELECTOR,
+	opts?: RowFromPointOpts
 ): HTMLElement | null {
-	return document.elementFromPoint(x, y)?.closest<HTMLElement>(selector) ?? null;
+	const skip = opts?.skip ?? null;
+	const barSelector = opts?.barSelector ?? DEFAULT_BAR_SELECTOR;
+	const stack =
+		typeof document.elementsFromPoint === 'function'
+			? document.elementsFromPoint(x, y)
+			: [document.elementFromPoint(x, y)];
+
+	let hitSource = false;
+	for (const node of stack) {
+		if (!(node instanceof Element)) continue;
+		const row = node.closest<HTMLElement>(selector);
+		if (!row) continue;
+		if (isSkippedRow(row, skip)) {
+			hitSource = true;
+			continue;
+		}
+		return row;
+	}
+	if (hitSource) return null;
+	return nearestRowByBar(x, y, selector, barSelector, skip, opts?.maxGap ?? DEFAULT_MAX_GAP);
+}
+
+function nearestRowByBar(
+	x: number,
+	y: number,
+	selector: string,
+	barSelector: string,
+	skip: Element | null,
+	maxGap: number
+): HTMLElement | null {
+	const root = (skip instanceof Element ? skip.closest('.tree') : null) ?? document;
+	const rows = root.querySelectorAll<HTMLElement>(selector);
+	let best: HTMLElement | null = null;
+	let bestDist = Infinity;
+	for (const row of rows) {
+		if (isSkippedRow(row, skip)) continue;
+		const bar = barRect(row, barSelector);
+		const dy = y < bar.top ? bar.top - y : y > bar.bottom ? y - bar.bottom : 0;
+		const dx = x < bar.left ? bar.left - x : x > bar.right ? x - bar.right : 0;
+		const dist = Math.hypot(dx, dy);
+		if (dist < bestDist) {
+			bestDist = dist;
+			best = row;
+		}
+	}
+	return bestDist <= maxGap ? best : null;
 }
 
 export function parentRow(
@@ -156,13 +239,26 @@ export function createPointerDrag<K extends string = string, M = unknown>(
 		liveZone = null;
 	}
 
+	function paintTarget(row: HTMLElement, zone: Zone): HTMLElement {
+		const bar = row.querySelector<HTMLElement>(barSelector);
+		if (!bar) return row;
+		if (zone === 'after') {
+			const extra = row.getBoundingClientRect().bottom - bar.getBoundingClientRect().bottom;
+			if (extra > 4) return row;
+		}
+		return bar;
+	}
+
 	function paint(el: HTMLElement | null, over: TreeDrag<K, M> | null, zone: Zone | null) {
-		if (liveDropEl && liveDropEl !== el) liveDropEl.classList.remove(...ZONE_CLASSES);
-		else if (liveDropEl && liveDropEl === el) liveDropEl.classList.remove(...ZONE_CLASSES);
-		liveDropEl = el;
+		if (liveDropEl) liveDropEl.classList.remove(...ZONE_CLASSES);
 		liveOver = over;
 		liveZone = zone;
-		if (el && zone) el.classList.add(`dnd-zone-${zone}`);
+		if (el && zone) {
+			liveDropEl = paintTarget(el, zone);
+			liveDropEl.classList.add(`dnd-zone-${zone}`);
+		} else {
+			liveDropEl = null;
+		}
 	}
 
 	function setActive(active: boolean) {
@@ -191,7 +287,10 @@ export function createPointerDrag<K extends string = string, M = unknown>(
 				setActive(true);
 			}
 
-			const hitEl = rowFromPoint(ev.clientX, ev.clientY, rowSelector);
+			const hitEl = rowFromPoint(ev.clientX, ev.clientY, rowSelector, {
+				skip: rowEl,
+				barSelector
+			});
 			let el: HTMLElement | null = hitEl;
 			let over = el ? opts.nodeFromEl(el) : null;
 			let walkedUp = false;

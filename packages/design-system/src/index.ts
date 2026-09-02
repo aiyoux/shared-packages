@@ -72,6 +72,7 @@ export {
 	GUARD_SELECTOR,
 	ROW_DRAG_THRESHOLD,
 	ZONE_CLASSES,
+	applySiblingMove,
 	barRect,
 	createPointerDrag,
 	insertIndex,

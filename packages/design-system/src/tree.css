@@ -150,36 +150,48 @@
 		display: flex;
 	}
 
-	.tree-row.dnd-dragging {
+	.tree-row.dnd-dragging,
+	[data-tree-row].dnd-dragging > .tree-row,
+	[data-tree-row].dnd-dragging {
 		opacity: 0.45;
 	}
 
 	[data-tree-row].dnd-zone-before::before,
 	[data-tree-row].dnd-zone-after::after,
+	[data-tree-bar].dnd-zone-before::before,
+	[data-tree-bar].dnd-zone-after::after,
 	[data-dnd-row].dnd-zone-before::before,
-	[data-dnd-row].dnd-zone-after::after {
+	[data-dnd-row].dnd-zone-after::after,
+	[data-dnd-bar].dnd-zone-before::before,
+	[data-dnd-bar].dnd-zone-after::after {
 		content: '';
 		position: absolute;
 		left: 0;
 		right: 0;
-		height: 1px;
+		height: 2px;
 		z-index: 10;
 		pointer-events: none;
 		background: var(--accent);
 	}
 
 	[data-tree-row].dnd-zone-before::before,
-	[data-dnd-row].dnd-zone-before::before {
+	[data-tree-bar].dnd-zone-before::before,
+	[data-dnd-row].dnd-zone-before::before,
+	[data-dnd-bar].dnd-zone-before::before {
 		top: 0;
 	}
 
 	[data-tree-row].dnd-zone-after::after,
-	[data-dnd-row].dnd-zone-after::after {
+	[data-tree-bar].dnd-zone-after::after,
+	[data-dnd-row].dnd-zone-after::after,
+	[data-dnd-bar].dnd-zone-after::after {
 		bottom: 0;
 	}
 
 	[data-tree-row].dnd-zone-into,
-	[data-dnd-row].dnd-zone-into {
+	[data-tree-bar].dnd-zone-into,
+	[data-dnd-row].dnd-zone-into,
+	[data-dnd-bar].dnd-zone-into {
 		background: var(--accent-glow);
 		box-shadow: inset 0 0 0 1px var(--accent);
 	}
