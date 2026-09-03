@@ -9,19 +9,27 @@
 		testidPrefix = 'file',
 		showWindows = false,
 		windowEditOpen = $bindable(false),
+		windowsFirst = false,
 		items = undefined,
 		labels = undefined,
 		onNew,
 		onOpen,
 		onSave,
 		onSaveAs,
-		onClose
+		onClose,
+		right
 	}: {
 		hasDocument: boolean;
 		isDirty?: boolean;
 		testidPrefix?: string;
 		showWindows?: boolean;
 		windowEditOpen?: boolean;
+		/**
+		 * Render the Windows toggle before the File menu (Windows, File,
+		 * Save — the sketcher order). Default false preserves the
+		 * File-first order used by the 3D app and Projects.
+		 */
+		windowsFirst?: boolean;
 		/**
 		 * Which menu entries this app has. Omitted entries stay visible, so an
 		 * app that saves documents needs no config; one that only opens things
@@ -36,6 +44,7 @@
 		onSave: () => void;
 		onSaveAs: () => void;
 		onClose: () => void;
+		right?: any;
 	} = $props();
 
 	const shows = (item: FileChromeItem) => items?.[item] !== false;
@@ -60,8 +69,14 @@
 	});
 </script>
 
-<div class="file-chrome" use:portalToPaneWindowHeader data-testid="{testidPrefix}-file-chrome">
+<div
+	class="file-chrome"
+	class:has-right={Boolean(right)}
+	use:portalToPaneWindowHeader
+	data-testid="{testidPrefix}-file-chrome"
+>
 	<div class="file-actions" data-testid="{testidPrefix}-file-actions">
+		{#if windowsFirst}{@render windowsButton()}{/if}
 		<div class="file-wrap" data-testid="{testidPrefix}-file-wrap" bind:this={wrapEl}>
 			<button
 				type="button"
@@ -128,22 +143,7 @@
 				</div>
 			{/if}
 		</div>
-		{#if showWindows}
-			<button
-				type="button"
-				class="file-btn"
-				class:active={windowEditOpen}
-				aria-label="Windows"
-				aria-pressed={windowEditOpen}
-				data-tooltip="Edit windows"
-				data-tooltip-pos="bottom-right"
-				data-testid="{testidPrefix}-windows-btn"
-				disabled={!hasDocument}
-				onclick={() => (windowEditOpen = !windowEditOpen)}
-			>
-				<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M12 3v18"/></svg>
-			</button>
-		{/if}
+		{#if !windowsFirst}{@render windowsButton()}{/if}
 		{#if shows('save')}
 		<button
 			type="button"
@@ -164,7 +164,31 @@
 		</button>
 		{/if}
 	</div>
+	{#if right}
+		<div class="file-right" data-testid="{testidPrefix}-file-right">
+			{@render right()}
+		</div>
+	{/if}
 </div>
+
+{#snippet windowsButton()}
+	{#if showWindows}
+		<button
+			type="button"
+			class="file-btn"
+			class:active={windowEditOpen}
+			aria-label="Windows"
+			aria-pressed={windowEditOpen}
+			data-tooltip="Edit windows"
+			data-tooltip-pos="bottom-right"
+			data-testid="{testidPrefix}-windows-btn"
+			disabled={!hasDocument}
+			onclick={() => (windowEditOpen = !windowEditOpen)}
+		>
+			<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M12 3v18"/></svg>
+		</button>
+	{/if}
+{/snippet}
 
 <style>
 	.file-chrome {
@@ -182,18 +206,42 @@
 		left: calc(12px + env(safe-area-inset-left, 0px));
 		z-index: var(--z-popover, 40);
 	}
+	.file-chrome:global(.in-overlay.has-right) {
+		right: calc(12px + env(safe-area-inset-right, 0px));
+		display: flex;
+		justify-content: space-between;
+		pointer-events: none;
+	}
+	.file-chrome:global(.in-overlay.has-right) .file-actions,
+	.file-chrome:global(.in-overlay.has-right) .file-right {
+		pointer-events: auto;
+	}
 	.file-chrome:global(.in-chrome) {
 		position: relative;
 		z-index: 3;
 		height: 100%;
+	}
+	.file-chrome:global(.in-chrome.has-right) {
+		flex: 1 1 0;
+		min-width: 0;
+		width: 100%;
+		display: flex;
+		justify-content: space-between;
 	}
 	.file-actions {
 		display: flex;
 		align-items: center;
 		gap: 0;
 	}
+	.file-right {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+	}
 	.file-wrap {
 		position: relative;
+		display: flex;
+		align-items: center;
 	}
 	.file-btn {
 		box-sizing: border-box;
