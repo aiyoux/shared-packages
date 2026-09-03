@@ -39,10 +39,16 @@ function wrapInlines(spans: Inline[]): string {
 	return spans.map(wrapSpan).join('');
 }
 
+/** Hard breaks render as GFM hard breaks (trailing double space) in flowing blocks. */
+function hardBreak(text: string): string {
+	return text.replace(/\n/g, '  \n');
+}
+
 function gfmCell(row: TableRowBlock, index: number): string {
 	const cell = row.children[index];
 	const text = cell ? wrapInlines(cell.content) : '';
-	return text.replace(/\|/g, '\\|');
+	// A GFM row cannot contain a raw newline; render cell hard breaks as inline HTML.
+	return text.replace(/\n/g, '<br>').replace(/\|/g, '\\|');
 }
 
 function renderTable(table: TableBlock): string {
@@ -87,11 +93,11 @@ function sameListRun(prev: Block | undefined, block: ListItemBlock): boolean {
 function renderBlock(block: Block, orderedIndex: number): string {
 	switch (block.type) {
 		case 'paragraph':
-			return wrapInlines(block.content);
+			return hardBreak(wrapInlines(block.content));
 		case 'heading':
-			return `${'#'.repeat(block.level)} ${wrapInlines(block.content)}`;
+			return `${'#'.repeat(block.level)} ${hardBreak(wrapInlines(block.content))}`;
 		case 'list_item':
-			return `${block.ordered ? `${orderedIndex}. ` : '- '}${wrapInlines(block.content)}`;
+			return `${block.ordered ? `${orderedIndex}. ` : '- '}${hardBreak(wrapInlines(block.content))}`;
 		case 'code': {
 			const body = block.text.endsWith('\n') ? block.text : `${block.text}\n`;
 			return `\`\`\`${block.language}\n${body}\`\`\``;

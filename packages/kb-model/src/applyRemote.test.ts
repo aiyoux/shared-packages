@@ -96,15 +96,15 @@ describe('applyRemote', () => {
 		expect(point).toEqual({ blockId: 'p', offset: 3, assoc: 1 });
 	});
 
-	it('applyRemoteBatch does not keep a map when the op is dropped', () => {
+	it('applyRemoteBatch maps the caret across a remote hard-break insert', () => {
 		const src = page([para('p', 'ab')]);
 		const { page: next, point } = applyRemoteBatch(
 			src,
 			[{ kind: 'insert-text', at: { blockId: 'p', offset: 1 }, text: '\n' }],
 			{ blockId: 'p', offset: 2 }
 		);
-		expect(next).toEqual(src);
-		expect(point).toEqual({ blockId: 'p', offset: 2 });
+		expect(next.blocks[0]).toMatchObject({ type: 'paragraph', content: [span('a\nb')] });
+		expect(point).toEqual({ blockId: 'p', offset: 3 });
 	});
 
 	it('applyRemoteBatch snaps surrogate-interior at before mapping (a👍b at 2)', () => {

@@ -121,6 +121,21 @@ function enterOps(state: EditorState, live: Range): { ops: Op[]; selection?: Ran
 	return { ops: [...prefix, ...enterAtCaret(next, at)] };
 }
 
+/**
+ * Shift+Enter: insert '\n' inside the block (hard break). null → caller falls
+ * back to Enter semantics (tables/atomic blocks cannot host a break).
+ */
+export function hardBreakOps(
+	state: EditorState,
+	live: Range
+): { ops: Op[]; selection?: Range } | null {
+	const { state: next, at, prefix } = withDeletedSelection(state, live);
+	const block = findBlock(next.page, at.blockId);
+	if (!block) return null;
+	if (isTableStructure(block) || isNonTextual(block)) return null;
+	return { ops: [...prefix, { kind: 'insert-text', at, text: '\n' }] };
+}
+
 function deleteOps(state: EditorState, live: Range, inputType: string): Op[] {
 	if (state.blockFocus && isCollapsed(live) && live.anchor.blockId === state.blockFocus) {
 		const focused = findBlock(state.page, state.blockFocus);
@@ -253,8 +268,12 @@ export function mapBeforeInput(
 		return { preventDefault: true, ops: insertTextOps(state, liveRange, event.data ?? ''), freeze: false };
 	}
 
-	if (type === 'insertParagraph' || type === 'insertLineBreak') {
+	if (type === 'insertParagraph') {
 		const entered = enterOps(state, liveRange);
+		return { preventDefault: true, ops: entered.ops, freeze: false, selection: entered.selection };
+	}
+	if (type === 'insertLineBreak') {
+		const entered = hardBreakOps(state, liveRange) ?? enterOps(state, liveRange);
 		return { preventDefault: true, ops: entered.ops, freeze: false, selection: entered.selection };
 	}
 

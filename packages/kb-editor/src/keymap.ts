@@ -1,4 +1,5 @@
 import type { Mark, Op, Range } from '@shared-packages/kb-model';
+import { hardBreakOps } from './beforeinput.js';
 import { isCollapsed } from './range.js';
 import type { EditorState } from './state.js';
 import { enterCellOps, tabOps } from './table.js';
@@ -41,6 +42,11 @@ export function mapKeydown(state: EditorState, event: KeyEvent, live: Range): Ke
 		return { preventDefault: true, ops: nav.ops, selection: nav.selection };
 	}
 	if (event.key === 'Enter' && !event.metaKey && !event.ctrlKey && !event.altKey) {
+		// Shift+Enter is a hard break, even inside a table cell (checked before cell nav).
+		if (event.shiftKey) {
+			const hard = hardBreakOps(state, live);
+			if (hard) return { preventDefault: true, ops: hard.ops, selection: hard.selection };
+		}
 		const nav = enterCellOps(state.page, live);
 		if (nav) return { preventDefault: true, ops: nav.ops, selection: nav.selection };
 	}

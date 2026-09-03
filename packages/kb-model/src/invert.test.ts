@@ -79,6 +79,33 @@ describe('invert golden applyMany(apply(page, op), invert(page, op)) === normali
 		});
 	});
 
+	it('round-trips hard-break inserts and \\n-bearing conversions', () => {
+		expectInvert(page([para('p', 'ab')]), {
+			kind: 'insert-text',
+			at: { blockId: 'p', offset: 1 },
+			text: '\n'
+		});
+		expectInvert(page([para('p', 'a\nb')]), {
+			kind: 'delete-range',
+			range: { anchor: { blockId: 'p', offset: 1 }, head: { blockId: 'p', offset: 2 } }
+		});
+		// text-like → code keeps \n; undo must restore it exactly.
+		expectInvert(page([para('p', 'a\nb')]), { kind: 'convert-block', id: 'p', to: 'code' });
+		expectInvert(page([code('c', 'a\nb', 'ts')]), { kind: 'convert-block', id: 'c', to: 'paragraph' });
+		// merge where the code end carries \n into a text-like keep block.
+		expectInvert(page([para('a', 'pre'), code('b', 'x\ny')]), {
+			kind: 'merge-block',
+			keepId: 'a',
+			dropId: 'b'
+		});
+		// split at a hard-break boundary.
+		expectInvert(page([para('p', 'a\nb')]), {
+			kind: 'split-block',
+			at: { blockId: 'p', offset: 2 },
+			newId: 'q'
+		});
+	});
+
 	it('throws on empty insert-text at an unresolved Point', () => {
 		const src = page([para('p', 'ab'), { id: 'd', type: 'divider' }]);
 		expect(() =>

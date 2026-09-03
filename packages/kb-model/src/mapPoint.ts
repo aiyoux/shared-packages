@@ -103,8 +103,6 @@ function mapInsertText(
 	if (point.blockId !== op.at.blockId || op.text.length === 0) return point;
 	const block = findBlock(page, point.blockId);
 	if (!block || !canTakeText(block)) return point;
-	// apply throws on newline in text-like — mapping is not called for a dropped op.
-	if (isTextLike(block) && op.text.includes('\n')) return point;
 	const text = payload(block);
 	const at = appliedOffset(text, op.at.offset);
 	if (at === null) return point;

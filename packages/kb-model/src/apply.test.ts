@@ -94,11 +94,17 @@ describe('apply insert-text', () => {
 		for (const next of [at0, at1, at2, at3, at4]) expectUnpairedFree(next);
 	});
 
-	it('throws on insert-text "\\n" into a paragraph and succeeds in code', () => {
+	it('inserts "\\n" as a hard break in a paragraph and as a newline in code', () => {
 		const paraPage = page([para('p', 'ab')]);
-		expect(() =>
-			apply(paraPage, { kind: 'insert-text', at: { blockId: 'p', offset: 1 }, text: '\n' })
-		).toThrow(/newline/i);
+		const paraNext = apply(paraPage, {
+			kind: 'insert-text',
+			at: { blockId: 'p', offset: 1 },
+			text: '\n'
+		});
+		expect(paraNext.blocks[0]).toMatchObject({
+			type: 'paragraph',
+			content: [span('a\nb')]
+		});
 
 		const codePage = page([code('c', 'ab')]);
 		const next = apply(codePage, { kind: 'insert-text', at: { blockId: 'c', offset: 1 }, text: '\n' });
@@ -210,7 +216,7 @@ describe('apply delete-range', () => {
 		).toEqual(src);
 	});
 
-	it('joins leftovers on cross-block delete and coerces code LF to space into text-like', () => {
+	it('joins leftovers on cross-block delete and keeps code LF when joining into text-like', () => {
 		const src = page([para('a', 'hello'), para('b', 'world')]);
 		const joined = apply(src, {
 			kind: 'delete-range',
@@ -227,7 +233,7 @@ describe('apply delete-range', () => {
 		});
 		expect(intoPara.blocks).toHaveLength(1);
 		expect(intoPara.blocks[0].type).toBe('paragraph');
-		expect(plaintextOf(intoPara.blocks[0])).toBe('a d');
+		expect(plaintextOf(intoPara.blocks[0])).toBe('a\nd');
 
 		const intoCode = page([code('c', 'ab\n'), para('p', 'cd')]);
 		const codeKeep = apply(intoCode, {
@@ -402,7 +408,7 @@ describe('apply merge-block', () => {
 			dropId: 'b'
 		});
 		expect(paraKeep.blocks[0].type).toBe('paragraph');
-		expect(plaintextOf(paraKeep.blocks[0])).toBe('prex y');
+		expect(plaintextOf(paraKeep.blocks[0])).toBe('prex\ny');
 
 		const dropAtomic = apply(page([para('a', 'x'), { id: 'd', type: 'divider' }]), {
 			kind: 'merge-block',
@@ -438,11 +444,11 @@ describe('apply convert-block', () => {
 		expect(toCode.blocks[0]).toMatchObject({ id: 'p', type: 'code', language: '', text: 'Hello' });
 	});
 
-	it('turns code LF into spaces when converting to a text-like block', () => {
+	it('keeps code LF as hard breaks when converting to a text-like block', () => {
 		const src = page([code('c', 'a\nb\nc', 'ts')]);
 		const next = apply(src, { kind: 'convert-block', id: 'c', to: 'paragraph' });
 		expect(next.blocks[0].id).toBe('c');
-		expect(plaintextOf(next.blocks[0])).toBe('a b c');
+		expect(plaintextOf(next.blocks[0])).toBe('a\nb\nc');
 	});
 
 	it('throws on convert-to-image', () => {

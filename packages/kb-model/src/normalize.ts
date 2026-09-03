@@ -86,7 +86,7 @@ export function marksEqual(a: Mark[], b: Mark[]): boolean {
 export function normalizeSpans(spans: TextSpan[]): TextSpan[] {
 	const out: TextSpan[] = [];
 	for (const span of spans) {
-		const text = span.text.replace(/\n/g, '');
+		const text = span.text;
 		if (!text) continue;
 		const marks = canonicalMarks(span.marks ?? []);
 		const prev = out[out.length - 1];

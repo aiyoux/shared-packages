@@ -205,9 +205,6 @@ function applyInsertText(page: KbPage, op: Extract<Op, { kind: 'insert-text' }>)
 		throw new Error('cannot insert text into atomic block');
 	}
 	if (isTextLike(at.block)) {
-		if (op.text.includes('\n')) {
-			throw new Error("newline not allowed in text-like block");
-		}
 		const next = { ...at.block, content: insertIntoSpans(at.block.content, at.offset, op.text) };
 		replaceBlock(page, at.parent, at.indexInParent, next);
 		return;
@@ -229,7 +226,7 @@ function concatEndOntoStart(start: Block, end: Block): Block {
 		return { ...start, text: start.text + add };
 	}
 	if (isTextLike(start) && end.type === 'code') {
-		const text = end.text.replace(/\n/g, ' ');
+		const text = end.text;
 		const extra: TextSpan[] = text ? [{ type: 'text', text, marks: [] }] : [];
 		return { ...start, content: normalizeSpans([...start.content, ...extra]) };
 	}
@@ -522,7 +519,7 @@ export function convertBlock(block: Block, op: Extract<Op, { kind: 'convert-bloc
 	}
 
 	if (block.type === 'code') {
-		const text = block.text.replace(/\n/g, ' ');
+		const text = block.text;
 		const spans: TextSpan[] = text ? [{ type: 'text', text, marks: [] }] : emptySpans();
 		if (op.to === 'paragraph') return { id, type: 'paragraph', content: spans };
 		if (op.to === 'heading') return { id, type: 'heading', level, content: spans };

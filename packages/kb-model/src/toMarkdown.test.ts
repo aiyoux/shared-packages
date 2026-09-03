@@ -90,6 +90,37 @@ describe('toMarkdown', () => {
 		expect(md([{ id: 'c', type: 'code', language: '', text: 'plain' }])).toBe('```\nplain\n```\n');
 	});
 
+	it('renders paragraph hard breaks as GFM trailing-space breaks', () => {
+		expect(md([{ id: 'p1', type: 'paragraph', content: [span('one\ntwo')] }])).toBe('one  \ntwo\n');
+	});
+
+	it('renders list_item hard breaks without splitting the list run', () => {
+		expect(
+			md([
+				{ id: 'a', type: 'list_item', ordered: false, content: [span('alpha\ncont')] },
+				{ id: 'b', type: 'list_item', ordered: false, content: [span('beta')] }
+			])
+		).toBe('- alpha  \ncont\n- beta\n');
+	});
+
+	it('renders table_cell hard breaks as <br>', () => {
+		expect(
+			md([
+				{
+					id: 't',
+					type: 'table',
+					children: [
+						{
+							id: 'r1',
+							type: 'table_row',
+							children: [{ id: 'c11', type: 'table_cell', content: [span('a\nb')] }]
+						}
+					]
+				}
+			])
+		).toBe('| a<br>b |\n| ------ |\n');
+	});
+
 	it('renders divider as ---', () => {
 		expect(md([{ id: 'd', type: 'divider' }])).toBe('---\n');
 	});

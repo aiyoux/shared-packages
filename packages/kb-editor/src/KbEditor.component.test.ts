@@ -49,4 +49,26 @@ describe('KbEditor mount', () => {
 		expect(mapped!.anchor.blockId !== mapped!.head.blockId).toBe(true);
 		unmount();
 	});
+
+	it('renders a hard break as \\n inside the block, with no <br> in the host', async () => {
+		let state = createEditorState(page([para('a', 'one\ntwo')]));
+		const { container, unmount } = render(KbEditor, {
+			props: {
+				state,
+				editable: true,
+				onDispatch: (op: Op | Op[]) => {
+					state = applyEditorOps(state, op);
+				}
+			}
+		});
+		await tick();
+		const host = container.querySelector('[data-testid="kb-host"]') as HTMLElement;
+		const block = host.querySelector('[data-block-id="a"]') as HTMLElement;
+		expect(block).toBeTruthy();
+		// One block, one text node carrying the break; pre-wrap renders it as a new line.
+		const text = [...block.childNodes].find((n) => n.nodeType === Node.TEXT_NODE) as Text;
+		expect(text?.data).toBe('one\ntwo');
+		expect(host.querySelector('br')).toBeNull();
+		unmount();
+	});
 });

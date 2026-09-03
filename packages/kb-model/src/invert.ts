@@ -95,7 +95,6 @@ function convertedSuffixLength(start: Block, end: Block, endOffset: number): num
 	if (endOffset >= endLen) return 0;
 	if (end.type === 'code') {
 		const suffix = end.text.slice(endOffset);
-		if (isTextLike(start)) return suffix.replace(/\n/g, ' ').length;
 		return suffix.length;
 	}
 	if (isTextLike(end)) {
@@ -293,7 +292,7 @@ function convertDropBack(drop: Block): Op[] {
 	if (drop.type === 'list_item') op.ordered = drop.ordered;
 	const ops: Op[] = [op];
 	if (drop.type === 'code') {
-		const coerced = drop.text.replace(/\n/g, ' ');
+		const coerced = drop.text;
 		if (coerced.length > 0) {
 			ops.push({
 				kind: 'delete-range',
@@ -459,9 +458,6 @@ function invertInsertText(page: KbPage, op: Extract<Op, { kind: 'insert-text' }>
 	if (op.text === '') return [];
 	if (isNonTextual(at.block)) {
 		throw new Error('cannot insert text into atomic block');
-	}
-	if (isTextLike(at.block) && op.text.includes('\n')) {
-		throw new Error("newline not allowed in text-like block");
 	}
 	const head: Point = { blockId: at.block.id, offset: at.offset + op.text.length };
 	return [

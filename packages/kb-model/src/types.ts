@@ -10,11 +10,11 @@ export type Mark =
 
 export type TextSpan = {
 	type: 'text';
-	text: string; // no '\n' in spans. `code.text` MAY contain `\n`.
+	text: string; // MAY contain '\n' (Shift+Enter hard break). `code.text` MAY contain `\n`.
 	marks: Mark[]; // canonical order: bold, italic, code, link
 };
 
-export type Inline = TextSpan; // v1: text only. hard_break is a later inline.
+export type Inline = TextSpan; // v1: text spans only. A hard break is '\n' inside a span, not an inline node.
 
 export type ParagraphBlock = { id: string; type: 'paragraph'; content: Inline[] };
 export type HeadingBlock = { id: string; type: 'heading'; level: 1 | 2 | 3; content: Inline[] };

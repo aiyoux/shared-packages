@@ -39,8 +39,8 @@ describe('normalizeSpans', () => {
 		]);
 	});
 
-	it('strips newlines from text spans', () => {
-		expect(normalizeSpans([span('a\nb')])).toEqual([span('ab')]);
+	it('keeps hard-break newlines in text spans', () => {
+		expect(normalizeSpans([span('a\nb')])).toEqual([span('a\nb')]);
 	});
 });
 

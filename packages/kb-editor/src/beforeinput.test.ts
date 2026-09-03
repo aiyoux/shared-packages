@@ -82,6 +82,40 @@ describe('beforeinput mapping', () => {
 		expect(plaintextOf(state.page.blocks[1])).toBe('llo');
 	});
 
+	it('insertLineBreak inserts a hard break (\\n) without splitting the block', () => {
+		const { result, state } = applyMapped([para('p', 'hello')], 'insertLineBreak', null, {
+			blockId: 'p',
+			offset: 2
+		});
+		expect(result.ops).toEqual([{ kind: 'insert-text', at: { blockId: 'p', offset: 2 }, text: '\n' }]);
+		expect(state.page.blocks).toHaveLength(1);
+		expect(plaintextOf(state.page.blocks[0])).toBe('he\nllo');
+	});
+
+	it('insertLineBreak with a non-collapsed selection deletes it first, then breaks', () => {
+		let state = createEditorState(page([para('p', 'hello')]));
+		state = {
+			...state,
+			selection: {
+				anchor: { blockId: 'p', offset: 1 },
+				head: { blockId: 'p', offset: 4 }
+			}
+		};
+		const result = mapBeforeInput(state, { inputType: 'insertLineBreak', data: null }, state.selection);
+		expect(result.ops[0]?.kind).toBe('delete-range');
+		expect(result.ops[result.ops.length - 1]).toMatchObject({ kind: 'insert-text', text: '\n' });
+		for (const op of result.ops) state = dispatch(state, op);
+		expect(plaintextOf(state.page.blocks[0])).toBe('h\no');
+	});
+
+	it('insertLineBreak on an atomic block falls back to Enter (insert after)', () => {
+		const { result } = applyMapped([para('p', 'x'), divider('d')], 'insertLineBreak', null, {
+			blockId: 'd',
+			offset: 0
+		});
+		expect(result.ops[0]).toMatchObject({ kind: 'insert-block', afterId: 'd' });
+	});
+
 	it('Enter in a list_item splits to another list_item', () => {
 		const { state } = applyMapped([item('i', 'ab', false)], 'insertParagraph', null, {
 			blockId: 'i',
