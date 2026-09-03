@@ -95,6 +95,7 @@ export {
 	nodeToEntry,
 	isLocalClass,
 	isRemoteClass,
+	explorerThumbsAreEager,
 	canReadExplorerBlob,
 	readExplorerBlob,
 	loadExplorerMediaSrc,

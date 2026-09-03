@@ -70,6 +70,19 @@
 
 		(async () => {
 			try {
+				if (k === 'image' && d.thumbUrl) {
+					try {
+						const loc = await d.thumbUrl(e.id, { maxDim: 1024 });
+						if (cancelled) return;
+						if (loc?.url) {
+							blobUrl = loc.url;
+							loading = false;
+							return;
+						}
+					} catch {
+						/* fall through to bytes */
+					}
+				}
 				if (k === 'image' || k === 'video' || k === 'audio') {
 					const src = await loadExplorerMediaSrc(d, e.id);
 					if (cancelled) {

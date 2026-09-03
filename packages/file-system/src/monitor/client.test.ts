@@ -383,7 +383,7 @@ describe('monitor client tolerant parse', () => {
 		});
 		const meta = await client.meta();
 		expect(meta.capabilities).toEqual({
-			fs: { ino: true, rename: false, archive: false, mkdir: false },
+			fs: { ino: true, rename: false, archive: false, mkdir: false, thumb: false },
 			git: { blob: false }
 		});
 		expect(meta).not.toHaveProperty('extra');

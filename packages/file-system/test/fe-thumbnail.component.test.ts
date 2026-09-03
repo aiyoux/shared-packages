@@ -3,7 +3,7 @@
  * cancels the in-flight fetch (list refresh).
  */
 import { describe, it, expect, vi } from 'vitest';
-import { render, waitFor } from '@testing-library/svelte';
+import { render, waitFor, fireEvent } from '@testing-library/svelte';
 import FeThumbnail from '../src/ui/FeThumbnail.svelte';
 import type { ExplorerDriver, ExplorerEntry } from '../src/ui/explorerDriver.ts';
 
@@ -109,7 +109,8 @@ describe('FeThumbnail', () => {
 		expect(box.style.getPropertyValue('--fe-thumb-max')).toBe('16px');
 	});
 
-	it('loads a remote image via download when readBlob is missing (B2)', async () => {
+	it('does not auto-download a B2 image; click loads it', async () => {
+		let downloads = 0;
 		const driver: ExplorerDriver = {
 			id: 'b2',
 			capabilities: caps,
@@ -117,7 +118,10 @@ describe('FeThumbnail', () => {
 			list: async () => ({ entries: [], truncated: false }),
 			getPath: async () => [],
 			delete: async () => {},
-			download: async () => pngBlob()
+			download: async () => {
+				downloads += 1;
+				return pngBlob();
+			}
 		};
 		const entry: ExplorerEntry = {
 			id: 'photos/shot.png',
@@ -128,8 +132,44 @@ describe('FeThumbnail', () => {
 		};
 		render(FeThumbnail, { props: { entry, driver, maxDim: 32, enabled: true } });
 		await waitFor(() => {
+			expect(document.querySelector('[data-testid="fe-thumb-load"]')).toBeTruthy();
+		});
+		expect(downloads).toBe(0);
+		expect(document.querySelector('.fe-thumb-img')).toBeNull();
+		await fireEvent.click(document.querySelector('[data-testid="fe-thumb-load"]')!);
+		await waitFor(() => {
 			expect(document.querySelector('.fe-thumb-img')).toBeTruthy();
 		});
-		expect(document.querySelector('.fe-thumb-spinner')).toBeNull();
+		expect(downloads).toBe(1);
+	});
+
+	it('auto-loads a monitor host thumb without downloading the original', async () => {
+		let downloads = 0;
+		const driver: ExplorerDriver = {
+			id: 'monitor',
+			capabilities: caps,
+			ready: async () => {},
+			list: async () => ({ entries: [], truncated: false }),
+			getPath: async () => [],
+			delete: async () => {},
+			download: async () => {
+				downloads += 1;
+				return pngBlob();
+			},
+			thumbUrl: async () => ({ url: 'http://127.0.0.1:9847/v1/fs/thumb?path=a.png&size=32' })
+		};
+		const entry: ExplorerEntry = {
+			id: 'a.png',
+			kind: 'file',
+			name: 'a.png',
+			parentId: null,
+			fileType: 'image'
+		};
+		render(FeThumbnail, { props: { entry, driver, maxDim: 32, enabled: true } });
+		await waitFor(() => {
+			const img = document.querySelector('.fe-thumb-img') as HTMLImageElement | null;
+			expect(img?.src).toContain('/v1/fs/thumb');
+		});
+		expect(downloads).toBe(0);
 	});
 });

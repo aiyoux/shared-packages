@@ -12,7 +12,7 @@ import { withLocalAddressSpace } from './localNetwork';
 import { openJsonSse } from './sse.js';
 
 export type MonitorCapabilities = {
-	fs?: { ino?: boolean; rename?: boolean; archive?: boolean; mkdir?: boolean };
+	fs?: { ino?: boolean; rename?: boolean; archive?: boolean; mkdir?: boolean; thumb?: boolean };
 	git?: { blob?: boolean };
 };
 
@@ -154,6 +154,8 @@ export type MonitorTransport = {
 	): Promise<Blob>;
 	/** Absolute GET URL for `/v1/fs/read` (no extra headers). */
 	readUrl(path: string): string;
+	/** Absolute GET URL for `/v1/fs/thumb` — JPEG generated on the host. */
+	thumbUrl?(path: string, size?: number): string;
 	/** Absolute GET URL for `/v1/fs/zip` — Chrome downloads on drop. */
 	zipUrl(path: string, filename: string): string;
 	/** Overwrite/create a file at `path` (parent must exist). */
@@ -316,7 +318,7 @@ export function coerceInoDev(v: unknown): string | undefined {
 }
 
 const FALSE_CAPS: MonitorCapabilities = {
-	fs: { ino: false, rename: false, archive: false, mkdir: false },
+	fs: { ino: false, rename: false, archive: false, mkdir: false, thumb: false },
 	git: { blob: false }
 };
 
@@ -330,7 +332,8 @@ export function coerceMonitorCapabilities(raw: unknown): MonitorCapabilities {
 			ino: fs.ino === true,
 			rename: fs.rename === true,
 			archive: fs.archive === true,
-			mkdir: fs.mkdir === true
+			mkdir: fs.mkdir === true,
+			thumb: fs.thumb === true
 		},
 		git: { blob: git.blob === true }
 	};
@@ -792,6 +795,13 @@ export function createMonitorClient(opts: {
 		},
 		readUrl(path: string) {
 			return joinUrl(base, `/v1/fs/read?path=${encodeURIComponent(path)}`);
+		},
+		thumbUrl(path: string, size = 96) {
+			const dim = Math.max(16, Math.min(1024, Math.round(size) || 96));
+			return joinUrl(
+				base,
+				`/v1/fs/thumb?path=${encodeURIComponent(path)}&size=${dim}`
+			);
 		},
 		zipUrl(path: string, filename: string) {
 			const name = filename.trim() || 'archive.zip';

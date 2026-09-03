@@ -4,6 +4,7 @@
 	import { getSharedVfs, isActionable, type FileTypeId, type VfsService } from '../index.js';
 	import {
 		readExplorerBlob,
+		explorerThumbsAreEager,
 		type ExplorerDriver,
 		type ExplorerEntry,
 		type ExplorerOpenTarget,
@@ -444,6 +445,8 @@
 	);
 	let viewSwitcherOpen = $state(false);
 	let floatingPreviewEntry = $state<ExplorerEntry | null>(null);
+	/** Remote (B2/rclone) preview-pane media is opt-in — keyed by entry id. */
+	let previewMediaId = $state<string | null>(null);
 
 	function persistViewMode(v: ViewMode) {
 		try {
@@ -478,6 +481,9 @@
 		if (previewEntry && previewEntry.kind === 'file' && getPreviewKind(previewEntry)) {
 			floatingPreviewEntry = previewEntry;
 		}
+	}
+	function requestPreviewMedia(id: string) {
+		previewMediaId = id;
 	}
 	/** True while a list/mutation refresh is in flight. */
 	let listBusy = $state(false);
@@ -4046,9 +4052,26 @@
 
 {#snippet singleDetails(entry: ExplorerEntry, maxDim: number, showClose: boolean)}
 	<h2 class="fe-preview-name" data-testid="fe-file-preview-name">{entry.name}</h2>
-	{#if showPreview && entry.kind === 'file' && getPreviewKind(entry)}
+	{#if entry.kind === 'file' && getPreviewKind(entry)}
 		<div class="fe-preview-thumb" data-testid="fe-preview-thumb">
-			<FeThumbnail {entry} {driver} {maxDim} enabled={true} />
+			{#if explorerThumbsAreEager(driver) || previewMediaId === entry.id}
+				<FeThumbnail
+					{entry}
+					{driver}
+					{maxDim}
+					enabled={true}
+					force={previewMediaId === entry.id}
+				/>
+			{:else}
+				<button
+					type="button"
+					class="ds-btn ds-btn--sm ds-btn--secondary"
+					data-testid="fe-show-preview"
+					onclick={() => requestPreviewMedia(entry.id)}
+				>
+					Show me preview
+				</button>
+			{/if}
 		</div>
 	{/if}
 	<dl class="fe-preview-meta">
@@ -5190,5 +5213,8 @@
 	}
 	.fe-preview-thumb :global(.fe-thumb-img) {
 		max-height: 240px;
+	}
+	.fe-preview-thumb [data-testid='fe-show-preview'] {
+		margin: 16px;
 	}
 </style>

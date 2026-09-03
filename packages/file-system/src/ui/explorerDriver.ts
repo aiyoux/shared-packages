@@ -198,6 +198,14 @@ export interface ExplorerDriver {
 	 * the browser download manager so the shelf shows real byte progress.
 	 */
 	downloadUrl?(id: ExplorerEntryId): Promise<{ url: string; filename: string } | null>;
+	/**
+	 * Host-generated thumbnail URL (monitor `/v1/fs/thumb`). When present,
+	 * list/preview icons load this instead of downloading the original file.
+	 */
+	thumbUrl?(
+		id: ExplorerEntryId,
+		opts?: { maxDim?: number }
+	): Promise<{ url: string } | null>;
 	/** Optional: bytes for copy-across bridge (local/memory). */
 	readBlob?(id: ExplorerEntryId): Promise<Blob>;
 	/**
@@ -440,6 +448,16 @@ export function isRemoteClass(driverId: string): boolean {
 		driverId === 'monitor' ||
 		driverId === 'peer-fs'
 	);
+}
+
+/**
+ * Auto-load list/preview thumbs without a user click.
+ * Local VFS generates in the browser. Monitor generates on the host
+ * (`thumbUrl`). B2/rclone would otherwise download every file.
+ */
+export function explorerThumbsAreEager(driver: Pick<ExplorerDriver, 'id' | 'thumbUrl'>): boolean {
+	if (isLocalClass(driver.id)) return true;
+	return typeof driver.thumbUrl === 'function';
 }
 
 export type ExplorerReadDriver = Pick<ExplorerDriver, 'readBlob' | 'download' | 'downloadUrl'>;

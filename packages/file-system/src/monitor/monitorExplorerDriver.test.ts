@@ -123,6 +123,34 @@ describe('monitor explorer driver capabilities', () => {
 		expect(rename).not.toHaveBeenCalled();
 	});
 
+	it('thumbUrl is omitted when the daemon has no fs.thumb capability', async () => {
+		const driver = await createMonitorExplorerDriver({
+			profile,
+			transport: transportStub({ list: listingAPng() }),
+			enableWatch: false
+		});
+		expect(driver.thumbUrl).toBeUndefined();
+	});
+
+	it('thumbUrl is a header-free GET to /v1/fs/thumb when advertised', async () => {
+		const driver = await createMonitorExplorerDriver({
+			profile,
+			transport: transportStub({
+				list: listingAPng(),
+				meta: vi.fn(async () => ({
+					capabilities: { fs: { ino: true, rename: true, thumb: true }, git: { blob: true } }
+				})),
+				thumbUrl: (path: string, size?: number) =>
+					`http://127.0.0.1:8300/v1/fs/thumb?path=${encodeURIComponent(path)}&size=${size ?? 96}`
+			}),
+			enableWatch: false
+		});
+		const loc = await driver.thumbUrl!('a.png', { maxDim: 32 });
+		expect(loc?.url).toContain('/v1/fs/thumb?path=');
+		expect(loc?.url).toContain('size=32');
+		expect(loc?.url).toContain(encodeURIComponent('/tmp/a.png'));
+	});
+
 	it('downloadUrl is a header-free GET Chrome can open', async () => {
 		const driver = await createMonitorExplorerDriver({
 			profile,

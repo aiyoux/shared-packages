@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount, onDestroy, untrack } from 'svelte';
+	import { onDestroy, untrack } from 'svelte';
 	import FeIcon from './FeIcon.svelte';
 	import type { FeIconName } from './feIcons.js';
 	import {
@@ -9,28 +9,43 @@
 		type PreviewKind
 	} from './feThumbnails.js';
 	import type { ExplorerDriver, ExplorerEntry } from './explorerDriver.js';
-	import { canReadExplorerBlob, readExplorerBlob } from './explorerDriver.js';
+	import {
+		canReadExplorerBlob,
+		explorerThumbsAreEager,
+		readExplorerBlob
+	} from './explorerDriver.js';
 	import { mediaSrcIsEmbeddable } from './saveToDisk.js';
 
 	let {
 		entry,
 		driver,
 		maxDim = 96,
-		enabled = true
+		enabled = true,
+		/** Skip the click-to-load gate (preview pane after "Show me preview"). */
+		force = false
 	}: {
 		entry: ExplorerEntry;
 		driver: ExplorerDriver;
 		maxDim?: number;
 		enabled?: boolean;
+		force?: boolean;
 	} = $props();
 
 	let url = $state<string | null>(null);
 	let loading = $state(false);
 	let failed = $state(false);
 	let kind = $derived(getPreviewKind(entry));
+	let eager = $derived(explorerThumbsAreEager(driver));
+	/** User clicked the mini icon (B2/rclone — no auto-download). */
+	let requestedId = $state<string | null>(null);
 	/** Last id we successfully rendered. Not set until the fetch finishes, so a
 	 * cancelled in-flight load can restart instead of sticking on the spinner. */
 	let loadedId = '';
+	let shouldLoad = $derived(
+		Boolean(
+			enabled && kind && kind !== 'audio' && (force || eager || requestedId === entry.id)
+		)
+	);
 
 	onDestroy(() => {
 		revoke();
@@ -48,7 +63,7 @@
 		// Re-read entry/driver/enabled so effect re-runs on change
 		const e = entry;
 		const d = driver;
-		const en = enabled;
+		const en = shouldLoad;
 		// `kind` is a $derived read here, not written — writing it from inside
 		// this effect and then reading it back in the same run used to make
 		// the effect depend on its own write, forcing exactly one redundant
@@ -58,7 +73,7 @@
 		// fetch — leaving the thumbnail stuck on "loading" forever.
 		const k = kind;
 
-		if (!en || !k || k === 'audio' || !canReadExplorerBlob(d)) {
+		if (!en || !k || k === 'audio' || !(canReadExplorerBlob(d) || typeof d.thumbUrl === 'function')) {
 			// untrack: revoke() reads `url`. Reading it inside this effect (even
 			// transitively) would make the effect depend on it — and the async
 			// block below writes `url` once generation resolves, which would
@@ -82,6 +97,20 @@
 
 		(async () => {
 			try {
+				if (d.thumbUrl) {
+					try {
+						const loc = await d.thumbUrl(e.id, { maxDim });
+						if (cancelled) return;
+						if (loc?.url) {
+							url = loc.url;
+							loadedId = e.id;
+							loading = false;
+							return;
+						}
+					} catch {
+						/* fall through */
+					}
+				}
 				if (k === 'image' && d.downloadUrl) {
 					try {
 						const loc = await d.downloadUrl(e.id);
@@ -124,6 +153,12 @@
 	let fallbackIcon = $derived(
 		kind ? previewKindIcon(kind) : ('file' as FeIconName)
 	);
+
+	function requestLoad(e: MouseEvent) {
+		e.stopPropagation();
+		e.preventDefault();
+		requestedId = entry.id;
+	}
 </script>
 
 <div class="fe-thumb" style:--fe-thumb-max="{maxDim}px" data-testid="fe-thumb">
@@ -137,6 +172,17 @@
 		<div class="fe-thumb-fallback">
 			<FeIcon name={fallbackIcon} size={Math.min(maxDim * 0.4, 32)} />
 		</div>
+	{:else if kind && enabled && !shouldLoad}
+		<button
+			type="button"
+			class="fe-thumb-load"
+			data-testid="fe-thumb-load"
+			aria-label="Load preview"
+			title="Load preview"
+			onclick={requestLoad}
+		>
+			<FeIcon name={fallbackIcon} size={Math.min(maxDim * 0.4, 32)} />
+		</button>
 	{:else if kind}
 		<div class="fe-thumb-fallback">
 			<FeIcon name={fallbackIcon} size={Math.min(maxDim * 0.4, 32)} />
@@ -168,13 +214,28 @@
 		display: block;
 	}
 	.fe-thumb-loading,
-	.fe-thumb-fallback {
+	.fe-thumb-fallback,
+	.fe-thumb-load {
 		width: 100%;
 		height: 100%;
 		display: flex;
 		align-items: center;
 		justify-content: center;
 		color: var(--text-muted, #888);
+	}
+	.fe-thumb-load {
+		margin: 0;
+		padding: 0;
+		border: 0;
+		background: transparent;
+		cursor: pointer;
+		border-radius: 4px;
+	}
+	.fe-thumb-load:hover,
+	.fe-thumb-load:focus-visible {
+		color: var(--text-primary, #eee);
+		outline: none;
+		background: rgb(var(--overlay-rgb, 255 255 255) / 0.08);
 	}
 	.fe-thumb-spinner {
 		width: 20px;

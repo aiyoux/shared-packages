@@ -89,13 +89,13 @@ export async function createMonitorExplorerDriver(
 	async function loadMeta() {
 		if (cachedMeta) return cachedMeta;
 		if (!transport.meta) {
-			cachedMeta = { capabilities: { fs: { ino: false, rename: false, archive: false }, git: { blob: false } } };
+			cachedMeta = { capabilities: { fs: { ino: false, rename: false, archive: false, mkdir: false, thumb: false }, git: { blob: false } } };
 			return cachedMeta;
 		}
 		try {
 			cachedMeta = await transport.meta();
 		} catch {
-			cachedMeta = { capabilities: { fs: { ino: false, rename: false, archive: false }, git: { blob: false } } };
+			cachedMeta = { capabilities: { fs: { ino: false, rename: false, archive: false, mkdir: false, thumb: false }, git: { blob: false } } };
 		}
 		return cachedMeta;
 	}
@@ -104,6 +104,7 @@ export async function createMonitorExplorerDriver(
 	const canRename = meta.capabilities?.fs?.rename === true;
 	const canArchive = meta.capabilities?.fs?.archive === true;
 	const canMkdir = meta.capabilities?.fs?.mkdir === true;
+	const canThumb = meta.capabilities?.fs?.thumb === true;
 
 	function ensureWatch(): MonitorWatchStream | null {
 		if (!enableWatch) return null;
@@ -408,6 +409,12 @@ export async function createMonitorExplorerDriver(
 			return { url: url.toString(), filename: baseName(id) };
 		},
 
+		async thumbUrl(id: ExplorerEntryId, opts) {
+			if (!canThumb || !transport.thumbUrl || isFolderId(id)) return null;
+			const abs = toAbsolutePath(rootPath, id);
+			return { url: transport.thumbUrl(abs, opts?.maxDim ?? 96) };
+		},
+
 		subscribeChanges(listener: () => void, scope?: { parentId: ExplorerEntryId | null }) {
 			const stream = ensureWatch();
 			if (!stream) return () => {};
@@ -424,6 +431,8 @@ export async function createMonitorExplorerDriver(
 			watchStatus = 'closed';
 		}
 	};
+
+	if (!canThumb || !transport.thumbUrl) delete driver.thumbUrl;
 
 	if (canRename && transport.rename) {
 		const renameFn = transport.rename.bind(transport);

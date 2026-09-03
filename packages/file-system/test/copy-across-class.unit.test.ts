@@ -1,6 +1,11 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { EXPLORER_DOWNLOAD_MAX_BYTES, isLocalClass, isRemoteClass } from '../src/ui/explorerDriver.ts';
+import {
+	EXPLORER_DOWNLOAD_MAX_BYTES,
+	explorerThumbsAreEager,
+	isLocalClass,
+	isRemoteClass
+} from '../src/ui/explorerDriver.ts';
 import {
 	canServerCopy,
 	classify,
@@ -47,6 +52,21 @@ describe('isLocalClass / isRemoteClass', () => {
 		assert.equal(isRemoteClass('b2') && isRemoteClass('monitor'), true);
 		assert.equal(isLocalClass('local') || isLocalClass('b2'), true);
 		assert.equal(isLocalClass('b2') || isLocalClass('rclone'), false);
+	});
+
+	it('eager thumbs: local VFS and monitor host thumbs, not B2/rclone', () => {
+		assert.equal(explorerThumbsAreEager({ id: 'local' }), true);
+		assert.equal(explorerThumbsAreEager({ id: 'memory' }), true);
+		assert.equal(explorerThumbsAreEager({ id: 'b2' }), false);
+		assert.equal(explorerThumbsAreEager({ id: 'rclone' }), false);
+		assert.equal(explorerThumbsAreEager({ id: 'monitor' }), false);
+		assert.equal(
+			explorerThumbsAreEager({
+				id: 'monitor',
+				thumbUrl: async () => ({ url: 'http://127.0.0.1/thumb' })
+			}),
+			true
+		);
 	});
 
 });
