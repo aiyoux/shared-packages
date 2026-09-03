@@ -207,6 +207,9 @@ function parseClip(raw: unknown, index: number): AnimClip {
 	const mediaKind = parseMediaKind(raw.mediaKind, `clips[${index}].mediaKind`);
 	const pairId =
 		raw.pairId === undefined ? undefined : nonEmptyString(raw.pairId, `clips[${index}].pairId`);
+	// `name` is a cosmetic, document-local label. A malformed value is ignored
+	// rather than rejecting the whole document.
+	const name = typeof raw.name === 'string' && raw.name.trim() ? raw.name.trim() : undefined;
 	const base = {
 		id: nonEmptyString(raw.id, `clips[${index}].id`),
 		startMs: finiteNumber(raw.startMs, `clips[${index}].startMs`),
@@ -215,7 +218,8 @@ function parseClip(raw: unknown, index: number): AnimClip {
 		...(keyframes && keyframes.length > 0 ? { keyframes } : {}),
 		...(raw.snapshot !== undefined ? { snapshot: parseSnapshot(raw.snapshot) } : {}),
 		...(mediaKind && mediaKind !== 'image' ? { mediaKind } : {}),
-		...(pairId ? { pairId } : {})
+		...(pairId ? { pairId } : {}),
+		...(name ? { name } : {})
 	};
 	if (bind === 'clone') {
 		if (raw.source !== undefined) {
@@ -372,7 +376,8 @@ function persistClip(clip: AnimClip): AnimClip {
 			: {}),
 		...(clip.snapshot ? { snapshot: persistSnapshot(clip.snapshot) } : {}),
 		...(clip.mediaKind && clip.mediaKind !== 'image' ? { mediaKind: clip.mediaKind } : {}),
-		...(clip.pairId ? { pairId: clip.pairId } : {})
+		...(clip.pairId ? { pairId: clip.pairId } : {}),
+		...(clip.name && clip.name.trim() ? { name: clip.name.trim() } : {})
 	};
 	if (clip.bind === 'clone') return { ...base, bind: 'clone' };
 	return { ...base, bind: clip.bind, source: persistSource(clip.source) };

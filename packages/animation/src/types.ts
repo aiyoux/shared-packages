@@ -73,6 +73,10 @@ type AnimClipBase = {
 	mediaKind?: ClipMediaKind;
 	/** Links a video clip to the audio clip created from the same file. */
 	pairId?: string;
+	/** User-given object name, local to this document. Renaming a clip here
+	 *  never touches a linked source file — it only labels the clip in the
+	 *  object tree and timeline. Omit / empty = fall back to a derived label. */
+	name?: string;
 };
 
 export type AnimClip =

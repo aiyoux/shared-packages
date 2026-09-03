@@ -27,6 +27,7 @@
 		onToggleExpand,
 		onActivate,
 		leading,
+		label,
 		actions,
 		after,
 		extra,
@@ -47,6 +48,8 @@
 		onToggleExpand?: (node: TreeNodeModel<K, M>) => void;
 		onActivate?: (node: TreeNodeModel<K, M>) => void;
 		leading?: Snippet<[TreeNodeModel<K, M>]>;
+		/** Replaces the default `node.label` text — e.g. an inline rename field. */
+		label?: Snippet<[TreeNodeModel<K, M>]>;
 		actions?: Snippet<[TreeNodeModel<K, M>]>;
 		/** Sibling of the row (settings menus). Always mounted. */
 		after?: Snippet<[TreeNodeModel<K, M>]>;
@@ -109,6 +112,7 @@
 			{onActivate}
 			onPointerDown={drag.onPointerDown}
 			{leading}
+			{label}
 			{actions}
 			{after}
 			{extra}

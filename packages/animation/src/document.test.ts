@@ -263,6 +263,38 @@ describe('parseAnimDocument / serializeAnimDocument', () => {
 		expect(parseAnimDocument(json)).toEqual(doc);
 	});
 
+	it('round-trips a document-local clip name and trims / drops blank ones', () => {
+		const doc: AnimDocument = {
+			schemaVersion: 1,
+			durationMs: 1000,
+			clips: [
+				{
+					id: 'a',
+					startMs: 0,
+					durationMs: 1000,
+					frame: { x: 0, y: 0, w: 10, h: 10 },
+					bind: 'clone',
+					name: 'Hero logo'
+				}
+			],
+			canvas: { w: 1920, h: 1080 }
+		};
+		expect(parseAnimDocument(serializeAnimDocument(doc))).toEqual(doc);
+
+		const parsed = parseAnimDocument({
+			schemaVersion: 1,
+			durationMs: 1000,
+			clips: [
+				{ id: 'a', startMs: 0, durationMs: 1000, frame: { x: 0, y: 0, w: 1, h: 1 }, bind: 'clone', name: '  Trimmed  ' },
+				{ id: 'b', startMs: 0, durationMs: 1000, frame: { x: 0, y: 0, w: 1, h: 1 }, bind: 'clone', name: '   ' },
+				{ id: 'c', startMs: 0, durationMs: 1000, frame: { x: 0, y: 0, w: 1, h: 1 }, bind: 'clone', name: 42 }
+			]
+		});
+		expect(parsed.clips[0]).toHaveProperty('name', 'Trimmed');
+		expect(parsed.clips[1]).not.toHaveProperty('name');
+		expect(parsed.clips[2]).not.toHaveProperty('name');
+	});
+
 	it('round-trips a layer fragment source', () => {
 		const doc: AnimDocument = {
 			schemaVersion: 1,

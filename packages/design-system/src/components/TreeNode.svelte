@@ -14,6 +14,7 @@
 		onActivate,
 		onPointerDown,
 		leading,
+		label,
 		actions,
 		after,
 		extra,
@@ -28,6 +29,8 @@
 		onActivate?: (node: TreeNodeModel<K, M>) => void;
 		onPointerDown?: (e: PointerEvent, drag: TreeDrag<K, M>) => void;
 		leading?: Snippet<[TreeNodeModel<K, M>]>;
+		/** Replaces the default `node.label` text — e.g. an inline rename field. */
+		label?: Snippet<[TreeNodeModel<K, M>]>;
 		actions?: Snippet<[TreeNodeModel<K, M>]>;
 		after?: Snippet<[TreeNodeModel<K, M>]>;
 		extra?: Snippet<[TreeNodeModel<K, M>]>;
@@ -101,7 +104,11 @@
 			{#if leading}
 				{@render leading(node)}
 			{/if}
-			<span class="tree-row-name">{node.label}</span>
+			{#if label}
+				{@render label(node)}
+			{:else}
+				<span class="tree-row-name">{node.label}</span>
+			{/if}
 			{#if node.detail}
 				<span class="tree-row-meta">{node.detail}</span>
 			{/if}
@@ -134,6 +141,7 @@
 					{onActivate}
 					{onPointerDown}
 					{leading}
+					{label}
 					{actions}
 					{after}
 					{extra}
