@@ -264,6 +264,7 @@ function parseView(raw: unknown): AnimDocView | undefined {
 	if (isRecord(raw.layout)) view.layout = raw.layout;
 	if (windows && Object.keys(windows).length > 0) view.windows = windows;
 	if (playheads && Object.keys(playheads).length > 0) view.playheads = playheads;
+	if (raw.autoKeyframe === true) view.autoKeyframe = true;
 	return Object.keys(view).length > 0 ? view : undefined;
 }
 
@@ -370,6 +371,45 @@ export function isAudioClip(clip: AnimClip): boolean {
 
 export function isVisualClip(clip: AnimClip): boolean {
 	return clip.mediaKind !== 'audio';
+}
+
+/** The keyframe span of a clip, absolute: `[startMs + firstKf, startMs +
+ *  lastKf]`. Null when the clip has no keyframes — under the keyframes-as-
+ *  presence model a keyframe-less clip never appears. */
+export function clipSpanMs(clip: AnimClip): { startMs: number; endMs: number } | null {
+	const keys = clip.keyframes;
+	if (!keys || keys.length === 0) return null;
+	let first = Infinity;
+	let last = -Infinity;
+	for (const k of keys) {
+		if (k.tMs < first) first = k.tMs;
+		if (k.tMs > last) last = k.tMs;
+	}
+	return { startMs: clip.startMs + Math.max(0, first), endMs: clip.startMs + Math.max(0, last) };
+}
+
+/** Whether the clip is on screen at `timeMs` — strictly keyframe-backed. */
+export function clipVisibleAt(clip: AnimClip, timeMs: number): boolean {
+	const span = clipSpanMs(clip);
+	if (!span) return false;
+	return timeMs >= span.startMs && timeMs <= span.endMs;
+}
+
+/** Seed a clip's presence keyframes: the dropped pose at tMs 0 (appear) and
+ *  the same pose at tMs = durationMs (disappear). With keyframes as the only
+ *  presence data, every created clip needs these two. */
+export function withDropKeyframes(clip: AnimClip, durationMs: number): AnimClip {
+	const pose = {
+		x: clip.frame.x,
+		y: clip.frame.y,
+		w: clip.frame.w,
+		h: clip.frame.h,
+		...(clip.frame.rotation ? { rotation: clip.frame.rotation } : {})
+	};
+	return {
+		...clip,
+		keyframes: [{ tMs: 0, ...pose }, { tMs: Math.max(1, Math.round(durationMs)), ...pose }]
+	};
 }
 
 export function serializeAnimDocument(doc: AnimDocument): string {

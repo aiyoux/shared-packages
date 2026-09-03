@@ -118,11 +118,13 @@ export type AnimPlayheadData = { timeMs: number };
 
 /** App/workspace state that travels with the document but is never
  *  authoring data: window layout (`layout` is a serialized pane-layout tree,
- *  validated by the host) and per-clock playhead positions. */
+ *  validated by the host), per-clock playhead positions, and the
+ *  auto-keyframe toggle (whether drags record keyframes). */
 export type AnimDocView = {
 	layout?: unknown;
 	windows?: Record<string, AnimWindowData>;
 	playheads?: Record<string, AnimPlayheadData>;
+	autoKeyframe?: boolean;
 };
 
 export type AnimDocument = {

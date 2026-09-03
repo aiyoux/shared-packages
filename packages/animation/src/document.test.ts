@@ -3,6 +3,8 @@ import { createCompositionClock } from '@shared-packages/composition';
 import {
 	AnimParseError,
 	assertClipMatchesDoc,
+	clipSpanMs,
+	clipVisibleAt,
 	createCompositionClock as reexportedClock,
 	createPlayheadRegistry as reexportedRegistry,
 	parseAnimDocument,
@@ -442,5 +444,41 @@ describe('composition re-exports', () => {
 		const clock = reg.acquire('primary', 1000);
 		expect(clock.get().durationMs).toBe(1000);
 		reg.disposeAll();
+	});
+});
+describe('clipSpanMs / clipVisibleAt', () => {
+	const spanned: AnimClip = {
+		id: 's',
+		startMs: 1000,
+		durationMs: 4000,
+		frame: { x: 0, y: 0, w: 10, h: 10 },
+		bind: 'clone',
+		keyframes: [{ tMs: 0, x: 1 }, { tMs: 2000, x: 2 }, { tMs: 3500, x: 3 }]
+	};
+
+	it('spans from first to last keyframe, absolute', () => {
+		expect(clipSpanMs(spanned)).toEqual({ startMs: 1000, endMs: 4500 });
+	});
+
+	it('is null for keyframe-less clips and never visible', () => {
+		expect(clipSpanMs(cloneDoc.clips[0]!)).toBeNull();
+		expect(clipVisibleAt(cloneDoc.clips[0]!, 0)).toBe(false);
+	});
+
+	it('is visible exactly inside the span', () => {
+		expect(clipVisibleAt(spanned, 999)).toBe(false);
+		expect(clipVisibleAt(spanned, 1000)).toBe(true);
+		expect(clipVisibleAt(spanned, 4500)).toBe(true);
+		expect(clipVisibleAt(spanned, 4501)).toBe(false);
+	});
+});
+
+describe('view.autoKeyframe', () => {
+	it('round-trips the toggle and drops non-true values', () => {
+		const on = parseAnimDocument({ ...cloneDoc, view: { autoKeyframe: true } });
+		expect(on.view).toEqual({ autoKeyframe: true });
+		expect(serializeAnimDocument(on)).toMatch(/autoKeyframe/);
+		const off = parseAnimDocument({ ...cloneDoc, view: { autoKeyframe: false } });
+		expect(off.view).toBeUndefined();
 	});
 });

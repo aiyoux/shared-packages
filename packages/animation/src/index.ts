@@ -28,11 +28,14 @@ export {
 export {
 	AnimParseError,
 	assertClipMatchesDoc,
+	clipSpanMs,
+	clipVisibleAt,
 	isAudioClip,
 	isVisualClip,
 	parseAnimDocument,
 	sameFsBackend,
-	serializeAnimDocument
+	serializeAnimDocument,
+	withDropKeyframes
 } from './document.js';
 
 export { sampleClipFrame } from './sample.js';
