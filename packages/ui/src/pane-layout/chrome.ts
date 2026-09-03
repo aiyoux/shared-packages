@@ -13,11 +13,21 @@ export function paneLeafSlotId(leafId: string): string {
 }
 
 /**
- * Move `node` into a pane's chrome slot, and keep it there as the leaf changes.
+ * The nearest element matching `selector` that belongs to `leaf` itself rather
+ * than to a leaf nested inside it.
  *
- * Svelte `use:` action. No-op when the slot is missing (the app is not hosted
- * in a pane leaf), so callers do not need to branch on layout.
+ * Pane layouts are trees, so a leaf routinely contains further leaves. A plain
+ * `leaf.querySelector` is a descendant search in document order and will
+ * happily return a nested leaf's chrome, portalling an app's header items into
+ * the wrong window.
  */
+function ownDescendant(leaf: Element, selector: string): HTMLElement | null {
+	for (const el of leaf.querySelectorAll(selector)) {
+		if (el.closest('[data-testid="pl-leaf"]') === leaf) return el as HTMLElement;
+	}
+	return null;
+}
+
 /**
  * Find the nearest pane window header for app-injected chrome (File menu).
  * No-op host when not in a pane leaf — callers still render overlay chrome.
@@ -28,9 +38,9 @@ export function findPaneWindowHeader(node: HTMLElement): {
 } | null {
 	const leaf = node.closest('[data-testid="pl-leaf"]');
 	if (!leaf) return null;
-	const chrome = leaf.querySelector('[data-testid="pl-chrome"]') as HTMLElement | null;
+	const chrome = ownDescendant(leaf, '[data-testid="pl-chrome"]');
 	if (!chrome) return null;
-	const slot = leaf.querySelector('[data-testid="pl-chrome-app"]') as HTMLElement | null;
+	const slot = ownDescendant(leaf, '[data-testid="pl-chrome-app"]');
 	return { host: slot ?? chrome, chrome };
 }
 
@@ -43,18 +53,29 @@ export function portalToPaneWindowHeader(node: HTMLElement) {
 		return;
 	}
 	const { host, chrome } = target;
+	// The chrome belongs to the pane, not to us, so any style we put on it is
+	// ours to take back off on destroy.
+	let restorePosition = false;
 	if (typeof getComputedStyle === 'function' && getComputedStyle(chrome).position === 'static') {
 		chrome.style.position = 'relative';
+		restorePosition = true;
 	}
 	host.appendChild(node);
 	node.classList.add('in-chrome');
 	return {
 		destroy() {
 			if (node.parentNode === host) host.removeChild(node);
+			if (restorePosition) chrome.style.removeProperty('position');
 		}
 	};
 }
 
+/**
+ * Move `node` into a pane's chrome slot, and keep it there as the leaf changes.
+ *
+ * Svelte `use:` action. No-op when the slot is missing (the app is not hosted
+ * in a pane leaf), so callers do not need to branch on layout.
+ */
 export function portalToPaneChrome(node: HTMLElement, leafId: string) {
 	if (!leafId || typeof document === 'undefined') return;
 	const target = document.getElementById(paneChromeSlotId(leafId));
