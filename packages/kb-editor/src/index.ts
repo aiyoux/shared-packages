@@ -43,6 +43,7 @@ export {
 	project,
 	renderBlock,
 	syncView,
+	type MediaResolver,
 	type ProjectOpts
 } from './project.js';
 export {

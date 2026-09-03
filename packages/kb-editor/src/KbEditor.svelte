@@ -24,7 +24,7 @@
 	import { stripCollabWidgets, type RemoteCaret } from './decorations.js';
 	import { dropTarget, dropWhere, gutterOrder, handleHeights, overlayBoxes, type OverlayBox } from './gutter.js';
 	import { mapKeydown } from './keymap.js';
-	import { BLOCK_ID_ATTR, project } from './project.js';
+	import { BLOCK_ID_ATTR, project, type MediaResolver } from './project.js';
 	import {
 		plaintextFromDom,
 		rangeFromInputEvent,
@@ -37,6 +37,7 @@
 		state: editor,
 		editable = true,
 		carets = [],
+		media = undefined,
 		onDispatch,
 		onState = undefined,
 		onComposing = undefined,
@@ -46,6 +47,13 @@
 		editable?: boolean;
 		/** Remote caret widgets. Ignored while composing (IME freeze). */
 		carets?: RemoteCaret[];
+		/**
+		 * Resolves image `src` (e.g. page-relative `assets/<file>` → object URL).
+		 * Identity is the repaint signal: keep it stable while resolutions are
+		 * unchanged, and hand over a new object once one lands, so an image that
+		 * resolves after the first paint actually appears.
+		 */
+		media?: MediaResolver;
 		/** Single op or a group. Parent should use `applyEditorOps` so groups stay one undo entry. */
 		onDispatch: (op: Op | Op[]) => void;
 		onState?: (next: EditorState) => void;
@@ -81,7 +89,7 @@
 			: setSelection(editor, selection);
 		emitState(next);
 		if (host) {
-			if (ops.length) project(host, next.page);
+			if (ops.length) project(host, next.page, { media });
 			restoreSelection(host, next.selection, next.page);
 		}
 	}
@@ -140,6 +148,7 @@
 	 */
 	let paintedPage: KbPage | undefined;
 	let paintedCaretKey = '';
+	let paintedMedia: MediaResolver | undefined;
 	let domDiverged = true;
 
 	/** Carets arrive as a fresh array each render, so compare by content. */
@@ -162,11 +171,12 @@
 			return;
 		}
 		const key = caretKey(remoteCarets);
-		if (domDiverged || page !== paintedPage || key !== paintedCaretKey) {
-			project(el, page, { carets: remoteCarets });
+		if (domDiverged || page !== paintedPage || key !== paintedCaretKey || media !== paintedMedia) {
+			project(el, page, { carets: remoteCarets, media });
 			syncTableHeights(el);
 			paintedPage = page;
 			paintedCaretKey = key;
+			paintedMedia = media;
 			domDiverged = false;
 		}
 		untrack(() => {
@@ -234,7 +244,7 @@
 		if (!data) {
 			emitState(cancelComposition(editor));
 			if (host) {
-				project(host, snapPage);
+				project(host, snapPage, { media });
 				restoreSelection(host, snapSel, snapPage);
 			}
 			return;

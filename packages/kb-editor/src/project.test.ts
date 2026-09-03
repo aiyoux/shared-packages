@@ -193,6 +193,33 @@ describe('project unknown blocks', () => {
 	});
 });
 
+describe('project media resolver', () => {
+	it('lets the host map a stored src to a loadable URL, falling back to the allowlist', () => {
+		const el = host();
+		project(el, page([image('i1', 'assets/diagram.png', 'Diagram')]), {
+			media: { resolveSrc: (src) => (src === 'assets/diagram.png' ? 'blob:fake-url' : null) }
+		});
+		expect(el.querySelector('img')?.getAttribute('src')).toBe('blob:fake-url');
+		el.remove();
+
+		const plain = host();
+		project(plain, page([image('i1', 'assets/diagram.png', 'Diagram')]), {
+			media: { resolveSrc: () => null }
+		});
+		expect(plain.querySelector('img')?.getAttribute('src')).toBe('assets/diagram.png');
+		plain.remove();
+	});
+
+	it('drops a disallowed src entirely when the resolver has nothing', () => {
+		const el = host();
+		project(el, page([image('i1', 'javascript:alert(1)', 'x')]));
+		const img = el.querySelector('img')!;
+		expect(img.hasAttribute('src')).toBe(false);
+		expect(img.getAttribute('alt')).toBe('x');
+		el.remove();
+	});
+});
+
 describe('allowlistedHref', () => {
 	it('allows http(s), slash, and relative; blocks javascript/data/vbscript', () => {
 		expect(allowlistedHref('https://a.com')).toBe('https://a.com');
@@ -209,15 +236,20 @@ describe('allowlistedHref', () => {
 });
 
 describe('allowlistedSrc', () => {
-	it('allows page-relative assets/<file> and blocks javascript/data like href', () => {
+	it('allows page-relative assets/<file> (clone) and https/http (link)', () => {
 		expect(allowlistedSrc('assets/diagram.png')).toBe('assets/diagram.png');
+		expect(allowlistedSrc('https://example.com/x.png')).toBe('https://example.com/x.png');
+		expect(allowlistedSrc('http://example.com/x.png')).toBe('http://example.com/x.png');
+	});
+
+	it('blocks script-bearing and path-escaping srcs', () => {
 		expect(allowlistedSrc('javascript:alert(1)')).toBeNull();
 		expect(allowlistedSrc('data:image/png;base64,aaaa')).toBeNull();
 		expect(allowlistedSrc('vbscript:msgbox(1)')).toBeNull();
 		expect(allowlistedSrc('\0javascript:alert(1)')).toBeNull();
-		expect(allowlistedSrc('https://evil.com/x.png')).toBeNull();
 		expect(allowlistedSrc('/assets/x.png')).toBeNull();
 		expect(allowlistedSrc('assets/../secret.png')).toBeNull();
+		expect(allowlistedSrc('https://evil.com/../x.png')).toBeNull();
 		expect(allowlistedSrc('diagram.png')).toBeNull();
 	});
 });

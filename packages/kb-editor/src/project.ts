@@ -15,10 +15,18 @@ import { paintCarets, stripCollabWidgets, type RemoteCaret } from './decorations
 import { allowlistedHref, allowlistedSrc } from './href.js';
 import type { EditorState } from './state.js';
 
+/**
+ * Resolves a stored image `src` to something the DOM can load. Cloned assets are
+ * page-relative (`assets/<file>`) and have no server behind them, so the host app
+ * maps them to object URLs; return null to fall back to the stored value.
+ */
+export type MediaResolver = { resolveSrc(src: string): string | null };
+
 export type ProjectOpts = {
 	carets?: RemoteCaret[];
 	/** IME freeze: project the page but insert no collab widgets. */
 	composing?: boolean;
+	media?: MediaResolver;
 };
 
 export const BLOCK_ID_ATTR = 'data-block-id';
@@ -159,12 +167,13 @@ function renderImage(
 	doc: Document,
 	block: Extract<Block, { type: 'image' }>,
 	parentId: string | null,
-	depth: number
+	depth: number,
+	media?: MediaResolver
 ): HTMLElement {
 	const wrap = doc.createElement('div');
 	setTreeAttrs(wrap, block, parentId, depth);
 	const img = doc.createElement('img');
-	const src = allowlistedSrc(block.src);
+	const src = media?.resolveSrc(block.src) ?? allowlistedSrc(block.src);
 	if (src) img.setAttribute('src', src);
 	img.setAttribute('alt', block.alt);
 	wrap.appendChild(img);
@@ -229,12 +238,13 @@ export function renderBlock(
 	depth = 0,
 	col?: number,
 	cols?: number,
-	rowIndex?: number
+	rowIndex?: number,
+	media?: MediaResolver
 ): HTMLElement {
 	if (isTextLike(block)) return renderTextLike(doc, block, parentId, depth, col, cols, rowIndex);
 	if (block.type === 'code') return renderCode(doc, block, parentId, depth);
 	if (block.type === 'divider') return renderDivider(doc, block, parentId, depth);
-	if (block.type === 'image') return renderImage(doc, block, parentId, depth);
+	if (block.type === 'image') return renderImage(doc, block, parentId, depth, media);
 	if (isContainer(block) || block.type === 'table') return renderContainer(doc, block, parentId, depth);
 	if (isUnknownBlock(block)) return renderUnknown(doc, block, parentId, depth);
 	const el = doc.createElement('div');
@@ -258,7 +268,7 @@ export function project(host: HTMLElement, page: KbPage, opts?: ProjectOpts): vo
 			cols = info?.cols;
 			rowIndex = info?.rowIndex;
 		}
-		nodes.push(renderBlock(doc, block, parentId, depth, col, cols, rowIndex));
+		nodes.push(renderBlock(doc, block, parentId, depth, col, cols, rowIndex, opts?.media));
 	}
 	host.replaceChildren(...nodes);
 	for (const child of host.children) stripMagicBr(child as HTMLElement);
@@ -276,11 +286,11 @@ export function project(host: HTMLElement, page: KbPage, opts?: ProjectOpts): vo
 export function syncView(
 	host: HTMLElement,
 	state: EditorState,
-	opts?: { carets?: RemoteCaret[] }
+	opts?: { carets?: RemoteCaret[]; media?: MediaResolver }
 ): void {
 	if (state.composing) {
 		stripCollabWidgets(host);
 		return;
 	}
-	project(host, state.page, { carets: opts?.carets });
+	project(host, state.page, { carets: opts?.carets, media: opts?.media });
 }

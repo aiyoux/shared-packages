@@ -38,14 +38,16 @@ export function allowlistedHref(href: string): string | null {
 }
 
 /**
- * Image `src` uses the same scheme block as href, then only page-relative
- * `assets/<file>`. Return null rather than throw so a bad stored value cannot
- * XSS the host.
+ * Image `src` uses the same scheme block as href, then either an https/http URL
+ * (linked image — the host CSP must allow `img-src https:`) or a page-relative
+ * `assets/<file>` (cloned image). Return null rather than throw so a bad stored
+ * value cannot XSS the host. `data:` stays blocked by `allowlistedHref`.
  */
 export function allowlistedSrc(src: string): string | null {
 	const value = allowlistedHref(src);
 	if (!value) return null;
 	if (value.includes('..') || value.includes('\\')) return null;
+	if (/^https?:\/\//i.test(value)) return value;
 	if (!/^assets\/[^/?#]+$/.test(value)) return null;
 	return value;
 }
