@@ -2,6 +2,7 @@ import {
 	canonicalMarks,
 	isContainer,
 	isTextLike,
+	isUnknownBlock,
 	parentIdOf,
 	parentOf,
 	visibleOrder,
@@ -202,6 +203,25 @@ function cellTableInfo(page: KbPage, id: string): { col: number; cols: number; r
 	};
 }
 
+/**
+ * A block type this build does not model. Rendered as an opaque, non-editable
+ * placeholder: the JSON is preserved untouched, and the single empty text node
+ * gives the caret a zero-length landing spot at the block edge.
+ */
+function renderUnknown(
+	doc: Document,
+	block: Block,
+	parentId: string | null,
+	depth: number
+): HTMLElement {
+	const el = doc.createElement('div');
+	setTreeAttrs(el, block, parentId, depth);
+	el.setAttribute('data-unknown-type', String((block as { type: string }).type));
+	el.setAttribute('contenteditable', 'false');
+	el.appendChild(doc.createTextNode(''));
+	return el;
+}
+
 export function renderBlock(
 	doc: Document,
 	block: Block,
@@ -216,6 +236,7 @@ export function renderBlock(
 	if (block.type === 'divider') return renderDivider(doc, block, parentId, depth);
 	if (block.type === 'image') return renderImage(doc, block, parentId, depth);
 	if (isContainer(block) || block.type === 'table') return renderContainer(doc, block, parentId, depth);
+	if (isUnknownBlock(block)) return renderUnknown(doc, block, parentId, depth);
 	const el = doc.createElement('div');
 	setTreeAttrs(el, block, parentId, depth);
 	return el;

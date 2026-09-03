@@ -13,6 +13,7 @@ import {
 	isNonTextual,
 	isTableStructure,
 	isTextLike,
+	isUnknownBlock,
 	plaintextOf
 } from './plaintext.js';
 import {
@@ -489,6 +490,9 @@ const CONVERT_FORBIDDEN = new Set<Block['type']>([
 ]);
 
 export function convertBlock(block: Block, op: Extract<Op, { kind: 'convert-block' }>): Block {
+	if (isUnknownBlock(block)) {
+		throw new Error(`cannot convert unknown block ${String((block as { type: string }).type)}`);
+	}
 	if (CONVERT_FORBIDDEN.has(op.to)) {
 		throw new Error(`cannot convert to ${op.to}`);
 	}

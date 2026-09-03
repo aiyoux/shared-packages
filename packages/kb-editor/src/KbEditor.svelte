@@ -570,6 +570,22 @@
 		border-top: 1px solid currentColor;
 		opacity: 0.3;
 	}
+	/* Block types this build does not model: shown as an opaque placeholder so the
+	   document stays legible and the foreign JSON survives an edit + save. */
+	.kb-host :global([data-unknown-type]) {
+		margin: 0.5rem 0;
+		min-height: 1.5rem;
+		padding: 0.4rem 0.6rem;
+		border: 1px dashed currentColor;
+		border-radius: 0.25rem;
+		opacity: 0.6;
+		user-select: none;
+	}
+	.kb-host :global([data-unknown-type])::before {
+		content: '\2b1a\a0' attr(data-unknown-type);
+		font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+		font-size: 0.85em;
+	}
 	.kb-host :global(code) {
 		font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 		font-size: 0.9em;

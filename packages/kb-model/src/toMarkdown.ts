@@ -1,4 +1,5 @@
 import { normalizePage } from './normalize.js';
+import { isUnknownBlock } from './plaintext.js';
 import type {
 	Block,
 	Inline,
@@ -117,6 +118,8 @@ function renderBlock(block: Block, orderedIndex: number): string {
 			// Rendered as part of the parent table (GFM grid).
 			return '';
 		default: {
+			// Unknown block types are preserved in the kb JSON but have no Markdown
+			// rendering — derived output silently omits them.
 			return '';
 		}
 	}
@@ -148,6 +151,9 @@ function renderSlice(blocks: Block[]): string {
 		) {
 			continue;
 		}
+		// Unknown block types have no Markdown rendering — omit them (and their
+		// separators) so derived output stays clean; the kb JSON preserves them.
+		if (isUnknownBlock(block)) continue;
 		if (prev) chunks.push(separator(prev, block));
 		chunks.push(rendered);
 		emitted.push(block);

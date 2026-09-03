@@ -1,3 +1,4 @@
+import { isUnknownBlock } from './plaintext.js';
 import type { Block, KbPage } from './types.js';
 
 export type ParentRef = Block | 'page';
@@ -38,6 +39,8 @@ function walk(blocks: Block[], out: Block[], visibleOnly: boolean): void {
 	for (const block of blocks) {
 		out.push(block);
 		if (visibleOnly && isClosedToggle(block)) continue;
+		// Unknown blocks are opaque: their children are preserved but never traversed.
+		if (isUnknownBlock(block)) continue;
 		const kids = blockChildren(block);
 		if (kids) walk(kids, out, visibleOnly);
 	}
@@ -65,6 +68,8 @@ function locate(
 	for (let i = 0; i < blocks.length; i++) {
 		const block = blocks[i];
 		if (block.id === id) return { block, parent, index: i };
+		// Unknown blocks are opaque: never locate inside them.
+		if (isUnknownBlock(block)) continue;
 		const kids = blockChildren(block);
 		if (kids) {
 			const found = locate(kids, block, id);
@@ -103,6 +108,7 @@ export function isDescendant(page: KbPage, ancestorId: string, maybeChildId: str
 
 function collectIds(block: Block, into: string[]): void {
 	into.push(block.id);
+	if (isUnknownBlock(block)) return;
 	const kids = blockChildren(block);
 	if (kids) for (const child of kids) collectIds(child, into);
 }
@@ -115,6 +121,7 @@ export function subtreeContains(block: Block, id: string): boolean {
 }
 
 export function lastDescendantId(block: Block): string {
+	if (isUnknownBlock(block)) return block.id;
 	const kids = blockChildren(block);
 	if (!kids || kids.length === 0) return block.id;
 	return lastDescendantId(kids[kids.length - 1]);

@@ -58,7 +58,8 @@ describe('parseKb', () => {
 			'list_item',
 			'code',
 			'divider',
-			'image'
+			'image',
+			'custom_widget'
 		]);
 	});
 
@@ -87,8 +88,8 @@ describe('parseKb', () => {
 		expect(resaved).not.toHaveProperty('schemaVersion');
 	});
 
-	it('strips unknown leaf types to a plaintext paragraph', () => {
-		const parsed = parseKb({
+	it('preserves unknown leaf types verbatim through parse(serialize)', () => {
+		const raw = {
 			format: 'kb',
 			id: 'p',
 			title: 't',
@@ -99,16 +100,20 @@ describe('parseKb', () => {
 				{
 					id: 'widget',
 					type: 'embed',
-					content: [{ type: 'text', text: 'inner', marks: [] }]
+					content: [{ type: 'text', text: 'inner', marks: [] }],
+					flag: true
 				}
 			]
-		});
+		};
+		const parsed = parseKb(raw);
 		expect(parsed.blocks).toHaveLength(1);
 		expect(parsed.blocks[0]).toEqual({
 			id: 'widget',
-			type: 'paragraph',
-			content: [{ type: 'text', text: 'inner', marks: [] }]
+			type: 'embed',
+			content: [{ type: 'text', text: 'inner', marks: [] }],
+			flag: true
 		});
+		expect(JSON.parse(serializeKb(parsed)).blocks[0]).toEqual(raw.blocks[0]);
 	});
 
 	it('does not HTML-parse markup strings', () => {

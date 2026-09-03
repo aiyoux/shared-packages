@@ -33,6 +33,7 @@ export {
 	isNonTextual,
 	isTableStructure,
 	isTextLike,
+	isUnknownBlock,
 	plaintext,
 	plaintextOf
 } from './plaintext.js';

@@ -478,6 +478,20 @@ describe('invert golden applyMany(apply(page, op), invert(page, op)) === normali
 		});
 	});
 
+	it('round-trips delete-block and move-block for an unknown (preserved) block', () => {
+		const unknown = {
+			id: 'u1',
+			type: 'custom_widget',
+			label: 'Legacy',
+			children: [para('u1c', 'inner')]
+		} as unknown as Block;
+		const src = page([para('a', 'a'), unknown, para('z', 'z')]);
+		// Delete then undo must restore the foreign block byte-for-byte.
+		const restored = expectInvert(src, { kind: 'delete-block', id: 'u1' });
+		expect(restored.blocks[1]).toEqual(unknown);
+		expectInvert(src, { kind: 'move-block', id: 'u1', afterId: 'z', parentId: null });
+	});
+
 	it('round-trips set-toggle', () => {
 		const src = page([
 			{

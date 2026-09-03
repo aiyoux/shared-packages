@@ -142,31 +142,6 @@ function coerceSpans(raw: unknown): TextSpan[] {
 	return normalizeSpans(spans);
 }
 
-function plaintextFromUnknown(raw: Record<string, unknown>): string {
-	if (typeof raw.text === 'string') return raw.text;
-	if (Array.isArray(raw.content)) {
-		return raw.content
-			.map((item) =>
-				item && typeof item === 'object' && typeof (item as { text?: unknown }).text === 'string'
-					? (item as { text: string }).text
-					: ''
-			)
-			.join('');
-	}
-	if (typeof raw.alt === 'string') return raw.alt;
-	return '';
-}
-
-function unknownToParagraph(raw: Record<string, unknown>): ParagraphBlock {
-	const id = typeof raw.id === 'string' && raw.id ? raw.id : newBlockId();
-	const text = plaintextFromUnknown(raw).replace(/\n/g, ' ');
-	return {
-		id,
-		type: 'paragraph',
-		content: text ? [{ type: 'text', text, marks: [] }] : emptySpans()
-	};
-}
-
 function orderedSpan(span: TextSpan): Inline {
 	return {
 		type: 'text',
@@ -314,7 +289,9 @@ function normalizeLeaf(rec: Record<string, unknown>, id: string): Block {
 			return next;
 		}
 		default:
-			return unknownToParagraph(rec);
+			// Unknown types are preserved as-is (lossless across load/save); the
+			// editor renders them as opaque placeholders.
+			return passthroughBlock(rec);
 	}
 }
 
@@ -439,10 +416,6 @@ function normalizeBlockList(raws: unknown[], depth: number): Block[] {
 			out.push(normalizeContainer(rec));
 			continue;
 		}
-		if (!isKnownLeafType(rec.type) && Array.isArray(rec.children)) {
-			out.push(...normalizeBlockList(rec.children, depth));
-			continue;
-		}
 		out.push(normalizeLeaf(rec, typeof rec.id === 'string' && rec.id ? rec.id : newBlockId()));
 	}
 	return out;
@@ -461,7 +434,7 @@ function normalizeContainer(rec: Record<string, unknown>): CalloutBlock | Toggle
 export function normalizeBlock(block: Block | Record<string, unknown>): Block {
 	const rec = block as Record<string, unknown>;
 	const list = normalizeBlockList([rec], 0);
-	return list[0] ?? unknownToParagraph(rec);
+	return list[0] ?? passthroughBlock(rec);
 }
 
 export function normalizePage(page: KbPage): KbPage {

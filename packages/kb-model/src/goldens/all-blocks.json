@@ -80,6 +80,24 @@
       "type": "image",
       "src": "assets/diagram.png",
       "alt": "Diagram"
+    },
+    {
+      "id": "u1",
+      "type": "custom_widget",
+      "label": "Legacy",
+      "children": [
+        {
+          "id": "u1c",
+          "type": "paragraph",
+          "content": [
+            {
+              "type": "text",
+              "text": "preserved verbatim",
+              "marks": []
+            }
+          ]
+        }
+      ]
     }
   ]
 }

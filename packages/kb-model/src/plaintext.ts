@@ -28,9 +28,28 @@ export function isTableStructure(block: Block): block is TableStructureBlock {
 	return block.type === 'table' || block.type === 'table_row';
 }
 
+const KNOWN_BLOCK_TYPES: ReadonlySet<string> = new Set([
+	'paragraph',
+	'heading',
+	'list_item',
+	'code',
+	'divider',
+	'image',
+	'callout',
+	'toggle',
+	'table',
+	'table_row',
+	'table_cell'
+]);
+
+/** A block type this build does not model — preserved opaquely, never edited in place. */
+export function isUnknownBlock(block: Block): boolean {
+	return !KNOWN_BLOCK_TYPES.has((block as { type: string }).type);
+}
+
 /** Caret targets that only allow offset 0 (blockFocus). */
 export function isNonTextual(block: Block): boolean {
-	return isAtomic(block) || isContainer(block) || isTableStructure(block);
+	return isAtomic(block) || isContainer(block) || isTableStructure(block) || isUnknownBlock(block);
 }
 
 export function plaintextOf(block: Block): string {

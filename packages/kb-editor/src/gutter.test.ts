@@ -1,8 +1,24 @@
 import { describe, expect, it } from 'vitest';
-import { dropAfterId, dropTarget, dropWhere, overlayBoxes } from './gutter.js';
+import { dropAfterId, dropTarget, dropWhere, gutterOrder, overlayBoxes } from './gutter.js';
 import { project } from './project.js';
 import { createEditorState, dispatch } from './state.js';
 import { callout, page, para } from './testFixtures.js';
+
+describe('gutter drag with unknown blocks', () => {
+	const widget = {
+		id: 'u1',
+		type: 'custom_widget',
+		children: [para('u1c', 'inner')]
+	} as unknown as Parameters<typeof page>[0][number];
+
+	it('gives an unknown block a handle and lets it be moved', () => {
+		const doc = page([para('a', '1'), widget, para('z', '2')]);
+		expect(gutterOrder(doc).map((b) => b.id)).toEqual(['a', 'u1', 'z']);
+		expect(dropTarget(doc, 'u1', 'z', 'after')).toEqual({ afterId: 'z', parentId: null });
+		// Its children are opaque: never a drop target.
+		expect(dropTarget(doc, 'a', 'u1c', 'after')).toBe('noop');
+	});
+});
 
 describe('gutter drag', () => {
 	it('computes move-block afterId from drop half', () => {

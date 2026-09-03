@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { createEmptyPage } from './createEmptyPage.js';
 import { normalizePage, normalizeSpans } from './normalize.js';
+import { documentOrder } from './tree.js';
+import { isNonTextual, isUnknownBlock } from './plaintext.js';
 import { KB_FORMAT, type KbPage, type Mark, type TextSpan } from './types.js';
 
 function span(text: string, marks: Mark[] = []): TextSpan {
@@ -56,7 +58,7 @@ describe('normalizePage', () => {
 		}
 	});
 
-	it('converts unknown leaf block types to a plaintext paragraph', () => {
+	it('preserves unknown leaf block types verbatim (lossless across load/save)', () => {
 		const page = {
 			format: KB_FORMAT,
 			id: 'p',
@@ -64,14 +66,45 @@ describe('normalizePage', () => {
 			createdAt: '',
 			updatedAt: '',
 			children: [],
-			blocks: [{ id: 'x', type: 'embed', text: 'Hidden' }]
+			blocks: [{ id: 'x', type: 'embed', text: 'Hidden', flag: true }]
 		} as unknown as KbPage;
 		const normalized = normalizePage(page);
 		expect(normalized.blocks[0]).toEqual({
 			id: 'x',
-			type: 'paragraph',
-			content: [span('Hidden')]
+			type: 'embed',
+			text: 'Hidden',
+			flag: true
 		});
+		expect(isUnknownBlock(normalized.blocks[0])).toBe(true);
+		expect(isNonTextual(normalized.blocks[0])).toBe(true);
+	});
+
+	it('preserves unknown container children without traversing them', () => {
+		const page = {
+			format: KB_FORMAT,
+			id: 'p',
+			title: 't',
+			createdAt: '',
+			updatedAt: '',
+			children: [],
+			blocks: [
+				{
+					id: 'acc',
+					type: 'accordion',
+					flag: true,
+					children: [{ id: 'n', type: 'paragraph', content: [span('keep')] }]
+				}
+			]
+		} as unknown as KbPage;
+		const normalized = normalizePage(page);
+		expect(normalized.blocks[0]).toEqual({
+			id: 'acc',
+			type: 'accordion',
+			flag: true,
+			children: [{ id: 'n', type: 'paragraph', content: [span('keep')] }]
+		});
+		// Opaque to traversal: the child is not in document order.
+		expect(documentOrder(normalized).map((b) => b.id)).toEqual(['acc']);
 	});
 
 	it('preserves callout children through orderedBlock', () => {

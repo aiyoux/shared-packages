@@ -168,6 +168,31 @@ describe('project', () => {
 	});
 });
 
+describe('project unknown blocks', () => {
+	const widget = {
+		id: 'u1',
+		type: 'custom_widget',
+		label: 'Legacy',
+		children: [para('u1c', 'inner')]
+	} as unknown as Parameters<typeof page>[0][number];
+
+	it('renders an opaque, non-editable placeholder tagged with the foreign type', () => {
+		const el = host();
+		project(el, page([para('a', 'a'), widget]));
+		const node = el.querySelector('[data-block-id="u1"]') as HTMLElement;
+		expect(node).toBeTruthy();
+		expect(node.getAttribute('data-unknown-type')).toBe('custom_widget');
+		expect(node.getAttribute('contenteditable')).toBe('false');
+		// One empty text node so the caret has a zero-length landing spot.
+		expect(node.childNodes).toHaveLength(1);
+		expect(node.childNodes[0].nodeType).toBe(Node.TEXT_NODE);
+		expect(node.textContent).toBe('');
+		// Children are preserved in the model but never projected.
+		expect(el.querySelector('[data-block-id="u1c"]')).toBeNull();
+		el.remove();
+	});
+});
+
 describe('allowlistedHref', () => {
 	it('allows http(s), slash, and relative; blocks javascript/data/vbscript', () => {
 		expect(allowlistedHref('https://a.com')).toBe('https://a.com');
