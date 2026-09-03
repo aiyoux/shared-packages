@@ -47,6 +47,7 @@
 
   const browser = typeof window !== 'undefined';
   let dragState = $state<{ startX: number; startY: number; startWidth: number; startTime: number; lastY: number; lastTime: number; velocityY: number } | null>(null);
+  let dragTarget: HTMLElement | null = null;
   let hydratedStorageKey = $state<string | null>(null);
 
   function clampWidth(value: number): number {
@@ -77,7 +78,13 @@
     if (resizeDisabled) return;
     event.preventDefault();
     const target = event.currentTarget as HTMLElement | null;
-    target?.setPointerCapture?.(event.pointerId);
+    try {
+      target?.setPointerCapture?.(event.pointerId);
+    } catch {
+      // Capture is an optimization here — the window listeners below keep
+      // the drag tracking (and ending) even without it.
+    }
+    dragTarget = target;
     const now = Date.now();
     dragState = {
       startX: event.clientX,
@@ -91,8 +98,33 @@
     isResizing = true;
   }
 
+  // Track the active drag on the window, not the element: if pointer capture
+  // silently failed (or was implicitly released), element-only listeners stop
+  // seeing moves and — worse — never see the pointerup, leaving the drag
+  // armed so that later mere hovers keep resizing the panel.
+  $effect(() => {
+    if (!isResizing) return;
+    const move = (event: PointerEvent) => handleResizeMove(event);
+    const end = (event: PointerEvent) => handleResizeEnd(event);
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', end);
+    window.addEventListener('pointercancel', end);
+    return () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', end);
+      window.removeEventListener('pointercancel', end);
+    };
+  });
+
   function handleResizeMove(event: PointerEvent) {
     if (!dragState || !isResizing) return;
+    // A drag only exists while the primary button is down. Without this
+    // guard, a pointerup missed elsewhere leaves the drag armed and every
+    // later hover keeps resizing the panel.
+    if (!(event.buttons & 1)) {
+      handleResizeEnd(event);
+      return;
+    }
     const now = Date.now();
     const elapsed = Math.max(1, now - dragState.lastTime);
     dragState.velocityY = (event.clientY - dragState.lastY) / elapsed;
@@ -104,8 +136,11 @@
       const nextWidth = dragState.startWidth + delta;
       if (nextWidth < minPx * 0.5 && onToggle) {
         // Snap closed mid-drag
-        const target = event.currentTarget as HTMLElement | null;
-        target?.releasePointerCapture?.(event.pointerId);
+        try {
+          dragTarget?.releasePointerCapture?.(event.pointerId);
+        } catch {
+          // Capture may already be gone; never abort the state reset.
+        }
         dragState = null;
         isResizing = false;
         onToggle();
@@ -120,8 +155,12 @@
 
   function handleResizeEnd(event: PointerEvent) {
     if (!dragState) return;
-    const target = event.currentTarget as HTMLElement | null;
-    target?.releasePointerCapture?.(event.pointerId);
+    try {
+      dragTarget?.releasePointerCapture?.(event.pointerId);
+    } catch {
+      // Capture may already be gone; never abort the state reset below.
+    }
+    dragTarget = null;
     if (orientation === 'vertical' && onToggle) {
       const now = Date.now();
       const elapsed = Math.max(1, now - dragState.startTime);
@@ -213,9 +252,6 @@
       handleClass
     )}
     onpointerdown={handleResizeStart}
-    onpointermove={handleResizeMove}
-    onpointerup={handleResizeEnd}
-    onpointercancel={handleResizeEnd}
     onkeydown={handleResizeKey}
     ondblclick={handleResizeDoubleClick}
   >

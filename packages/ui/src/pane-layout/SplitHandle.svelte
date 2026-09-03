@@ -21,9 +21,7 @@
 
 	let dragging = $state(false);
 	let host: HTMLElement | undefined = $state();
-	let drag:
-		| { pointerId: number; last: number; size: number }
-		| null = null;
+	let drag: { pointerId: number; grabOffset: number } | null = null;
 
 	function splitSize(): number {
 		const parent = host?.parentElement;
@@ -31,32 +29,79 @@
 		return Math.max(1, axis === 'x' ? parent.clientWidth : parent.clientHeight);
 	}
 
+	/** The handle's center along the drag axis, in client coordinates. */
+	function handleCenter(): number {
+		if (!host) return 0;
+		const r = host.getBoundingClientRect();
+		return axis === 'x' ? r.left + r.width / 2 : r.top + r.height / 2;
+	}
+
+	function endDrag(e: PointerEvent) {
+		if (!drag || e.pointerId !== drag.pointerId) return;
+		try {
+			host?.releasePointerCapture?.(e.pointerId);
+		} catch {
+			// Capture may already be gone (element re-rendered, pointer vanished);
+			// releasing must never abort the state reset below.
+		}
+		drag = null;
+		dragging = false;
+	}
+
+	// Track the active drag on the window, not the element: if pointer capture
+	// silently failed (or was implicitly released), element-only listeners stop
+	// seeing moves and — worse — never see the pointerup, leaving the drag
+	// armed so that later mere hovers keep resizing the split.
+	$effect(() => {
+		if (!dragging) return;
+		const move = (e: PointerEvent) => onPointerMove(e);
+		const end = (e: PointerEvent) => endDrag(e);
+		window.addEventListener('pointermove', move);
+		window.addEventListener('pointerup', end);
+		window.addEventListener('pointercancel', end);
+		return () => {
+			window.removeEventListener('pointermove', move);
+			window.removeEventListener('pointerup', end);
+			window.removeEventListener('pointercancel', end);
+		};
+	});
+
 	function onPointerDown(e: PointerEvent) {
 		if (disabled || e.button !== 0) return;
 		e.preventDefault();
-		(e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+		try {
+			(e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+		} catch {
+			// Some synthetic/inactive pointers refuse capture; the window
+			// listeners above keep the drag working without it.
+		}
 		drag = {
 			pointerId: e.pointerId,
-			last: axis === 'x' ? e.clientX : e.clientY,
-			size: splitSize()
+			grabOffset: (axis === 'x' ? e.clientX : e.clientY) - handleCenter()
 		};
 		dragging = true;
 	}
 
 	function onPointerMove(e: PointerEvent) {
 		if (!drag || e.pointerId !== drag.pointerId) return;
+		// A drag only exists while the primary button is down. Without this
+		// guard, a pointerup missed elsewhere leaves the drag armed and every
+		// later hover nudges the split away from the pointer.
+		if (!(e.buttons & 1)) {
+			endDrag(e);
+			return;
+		}
 		const now = axis === 'x' ? e.clientX : e.clientY;
-		const deltaPx = now - drag.last;
-		drag.last = now;
+		// Absolute anchor: each move drives the handle to (pointer − grab
+		// offset), measured from where the handle actually is right now. The
+		// DOM has settled by the time the next pointermove arrives, so the
+		// measurement is current; clamps, mid-drag re-layouts and
+		// coalesced/lost events can therefore never accumulate into a
+		// pointer/handle offset, and dragging back off a clamp re-attaches
+		// instantly instead of lagging behind.
+		const deltaPx = now - drag.grabOffset - handleCenter();
 		if (deltaPx === 0) return;
-		onRatioDelta(deltaPx / drag.size);
-	}
-
-	function onPointerUp(e: PointerEvent) {
-		if (!drag || e.pointerId !== drag.pointerId) return;
-		(e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId);
-		drag = null;
-		dragging = false;
+		onRatioDelta(deltaPx / splitSize());
 	}
 
 	function onKeyDown(e: KeyboardEvent) {
@@ -92,9 +137,6 @@
 	tabindex="0"
 	data-testid={testid}
 	onpointerdown={onPointerDown}
-	onpointermove={onPointerMove}
-	onpointerup={onPointerUp}
-	onpointercancel={onPointerUp}
 	onkeydown={onKeyDown}
 >
 	<span class="pl-hairline" aria-hidden="true"></span>
