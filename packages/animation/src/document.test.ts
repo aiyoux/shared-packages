@@ -25,7 +25,8 @@ const cloneDoc: AnimDocument = {
 			frame: { x: 10, y: 20, w: 100, h: 80 },
 			bind: 'clone'
 		}
-	]
+	],
+	canvas: { w: 1920, h: 1080 }
 };
 
 const liveVfsClip = {
@@ -65,7 +66,8 @@ describe('parseAnimDocument / serializeAnimDocument', () => {
 					keyframes: [{ tMs: 1000, x: 40, rotation: 1 }],
 					bind: 'clone'
 				}
-			]
+			],
+			canvas: { w: 1920, h: 1080 }
 		};
 		expect(parseAnimDocument(serializeAnimDocument(withMotion))).toEqual(withMotion);
 	});
@@ -164,7 +166,8 @@ describe('parseAnimDocument / serializeAnimDocument', () => {
 					bind: 'live',
 					source: { backend: 'shared-vfs', nodeId: 'n' }
 				}
-			]
+			],
+			canvas: { w: 1920, h: 1080 }
 		});
 	});
 
@@ -252,7 +255,8 @@ describe('parseAnimDocument / serializeAnimDocument', () => {
 					pairId: 'pair-1',
 					snapshot: { bytesRef: 'data:audio/webm;base64,xx' }
 				}
-			]
+			],
+			canvas: { w: 1920, h: 1080 }
 		};
 		const json = serializeAnimDocument(doc);
 		expect(JSON.parse(json).schemaVersion).toBe(1);
@@ -278,7 +282,8 @@ describe('parseAnimDocument / serializeAnimDocument', () => {
 						fragment: { kind: 'layer', pageId: 'page-1', layerId: 'default' }
 					}
 				}
-			]
+			],
+			canvas: { w: 1920, h: 1080 }
 		};
 		const json = serializeAnimDocument(doc);
 		expect(JSON.parse(json).schemaVersion).toBe(1);
@@ -480,5 +485,29 @@ describe('view.autoKeyframe', () => {
 		expect(serializeAnimDocument(on)).toMatch(/autoKeyframe/);
 		const off = parseAnimDocument({ ...cloneDoc, view: { autoKeyframe: false } });
 		expect(off.view).toBeUndefined();
+	});
+});
+
+describe('AnimDocument.canvas', () => {
+	it('defaults to 1920×1080 when absent', () => {
+		const parsed = parseAnimDocument({ schemaVersion: 1, durationMs: 100, clips: [] });
+		expect(parsed.canvas).toEqual({ w: 1920, h: 1080 });
+		const json = JSON.parse(serializeAnimDocument({ schemaVersion: 1, durationMs: 100, clips: [] }));
+		expect(json.canvas).toEqual({ w: 1920, h: 1080 });
+	});
+
+	it('round-trips a custom canvas', () => {
+		const parsed = parseAnimDocument({
+			...cloneDoc,
+			canvas: { w: 1080, h: 1920 }
+		});
+		expect(parsed.canvas).toEqual({ w: 1080, h: 1920 });
+		expect(parseAnimDocument(serializeAnimDocument(parsed)).canvas).toEqual({ w: 1080, h: 1920 });
+	});
+
+	it('rejects junk canvases', () => {
+		expect(() => parseAnimDocument({ ...cloneDoc, canvas: { w: 'wide' } })).toThrow(AnimParseError);
+		expect(() => parseAnimDocument({ ...cloneDoc, canvas: { w: 0, h: 10 } })).toThrow(/positive/);
+		expect(() => parseAnimDocument({ ...cloneDoc, canvas: 'square' })).toThrow(/object/);
 	});
 });

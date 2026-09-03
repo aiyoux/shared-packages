@@ -1,4 +1,5 @@
 export type {
+	AnimCanvas,
 	AnimClip,
 	AnimClipSnapshot,
 	AnimDocView,
@@ -21,6 +22,7 @@ export { isBoundClip, clipOnBackend } from './types.js';
 export {
 	BIND_MODES,
 	CLIP_MEDIA_KINDS,
+	DEFAULT_ANIM_CANVAS,
 	SKETCH_FRAGMENT_KINDS,
 	SKETCH_OBJECT_KINDS
 } from './types.js';

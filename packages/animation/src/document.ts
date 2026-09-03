@@ -1,7 +1,9 @@
 import {
 	BIND_MODES,
 	CLIP_MEDIA_KINDS,
+	DEFAULT_ANIM_CANVAS,
 	SKETCH_OBJECT_KINDS,
+	type AnimCanvas,
 	type AnimClip,
 	type AnimClipSnapshot,
 	type AnimDocView,
@@ -268,6 +270,15 @@ function parseView(raw: unknown): AnimDocView | undefined {
 	return Object.keys(view).length > 0 ? view : undefined;
 }
 
+function parseCanvas(raw: unknown): AnimCanvas | undefined {
+	if (raw === undefined) return undefined;
+	if (!isRecord(raw)) throw new AnimParseError('canvas must be an object');
+	const w = finiteNumber(raw.w, 'canvas.w');
+	const h = finiteNumber(raw.h, 'canvas.h');
+	if (w <= 0 || h <= 0) throw new AnimParseError('canvas dimensions must be positive');
+	return { w, h };
+}
+
 export function parseAnimDocument(input: Uint8Array | unknown): AnimDocument {
 	const raw = decodeInput(input);
 	if (!isRecord(raw)) throw new AnimParseError('document must be an object');
@@ -276,10 +287,12 @@ export function parseAnimDocument(input: Uint8Array | unknown): AnimDocument {
 	}
 	if (!Array.isArray(raw.clips)) throw new AnimParseError('clips must be an array');
 	const view = parseView(raw.view);
+	const canvas = parseCanvas(raw.canvas) ?? { ...DEFAULT_ANIM_CANVAS };
 	return {
 		schemaVersion: 1,
 		durationMs: finiteNumber(raw.durationMs, 'durationMs'),
 		clips: raw.clips.map((clip, i) => parseClip(clip, i)),
+		canvas,
 		...(view ? { view } : {})
 	};
 }
@@ -418,6 +431,7 @@ export function serializeAnimDocument(doc: AnimDocument): string {
 		schemaVersion: 1 as const,
 		durationMs: clean.durationMs,
 		clips: clean.clips.map(persistClip),
+		canvas: clean.canvas,
 		...(clean.view ? { view: clean.view } : {})
 	});
 }

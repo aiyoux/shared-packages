@@ -127,9 +127,17 @@ export type AnimDocView = {
 	autoKeyframe?: boolean;
 };
 
+/** The document's virtual canvas: the abstract coordinate space clip frames
+ *  and keyframes live in, and the aspect ratio of the rendered canvas. */
+export type AnimCanvas = { w: number; h: number };
+
+/** Default virtual canvas — 16:9. */
+export const DEFAULT_ANIM_CANVAS: AnimCanvas = { w: 1920, h: 1080 };
+
 export type AnimDocument = {
 	schemaVersion: 1;
 	durationMs: number;
 	clips: AnimClip[];
+	canvas?: AnimCanvas;
 	view?: AnimDocView;
 };
