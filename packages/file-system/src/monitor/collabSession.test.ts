@@ -2,7 +2,6 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
-	KB_SCHEMA_VERSION,
 	REPLICA_SEND_SNAPSHOT_ERROR,
 	createEmptyPage,
 	type CollabFrame,
@@ -199,7 +198,7 @@ function openSession(
 		kind: 'monitor',
 		role: 'replica',
 		pageId,
-		schemaVersion: KB_SCHEMA_VERSION,
+		schemaVersion: 1,
 		clientId: 'guest',
 		baseUrl: 'http://127.0.0.1:8300',
 		path,
@@ -442,7 +441,7 @@ describe('createMonitorCollabSession', () => {
 			kind: 'monitor',
 			role: 'replica',
 			pageId: 'page-1',
-			schemaVersion: KB_SCHEMA_VERSION,
+			schemaVersion: 1,
 			clientId: 'guest',
 			baseUrl: 'http://192.168.1.10:8300',
 			path: '/tmp/a/index.kb',
