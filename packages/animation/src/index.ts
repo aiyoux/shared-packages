@@ -1,9 +1,12 @@
 export type {
 	AnimClip,
 	AnimClipSnapshot,
+	AnimDocView,
 	AnimDocument,
 	AnimFrame,
 	AnimKeyframe,
+	AnimPlayheadData,
+	AnimWindowData,
 	BindMode,
 	ClipMediaKind,
 	ClipSource,
@@ -25,7 +28,6 @@ export {
 export {
 	AnimParseError,
 	assertClipMatchesDoc,
-	clipNeedsV2,
 	isAudioClip,
 	isVisualClip,
 	parseAnimDocument,
@@ -35,5 +37,5 @@ export {
 
 export { sampleClipFrame } from './sample.js';
 
-export { createCompositionClock } from '@shared-packages/composition';
-export type { ClockState, CompositionClock } from '@shared-packages/composition';
+export { createCompositionClock, createPlayheadRegistry } from '@shared-packages/composition';
+export type { ClockState, CompositionClock, PlayheadRegistry } from '@shared-packages/composition';

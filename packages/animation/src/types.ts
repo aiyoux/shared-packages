@@ -8,7 +8,7 @@ export type SketchObjectKind = (typeof SKETCH_OBJECT_KINDS)[number];
 export const SKETCH_FRAGMENT_KINDS = ['file', 'page', 'layer', 'object'] as const;
 export type SketchFragmentKind = (typeof SKETCH_FRAGMENT_KINDS)[number];
 
-/** Omit / `{ kind: 'file' }` = whole VFS/monitor file (v1 image clips). */
+/** Omit / `{ kind: 'file' }` = whole VFS/monitor file (image clips). */
 export type SketchFragment =
 	| { kind: 'file' }
 	| { kind: 'page'; pageId: string }
@@ -69,7 +69,7 @@ type AnimClipBase = {
 	frame: AnimFrame;
 	keyframes?: AnimKeyframe[];
 	snapshot?: AnimClipSnapshot;
-	/** Omit = `'image'`. Required `'sketch-fragment'` on v2 fragment clips. */
+	/** Omit = `'image'`. Required `'sketch-fragment'` on fragment clips. */
 	mediaKind?: ClipMediaKind;
 	/** Links a video clip to the audio clip created from the same file. */
 	pairId?: string;
@@ -107,8 +107,27 @@ export function clipOnBackend<B extends ClipSource['backend']>(
 	return clip.bind !== 'clone' && clip.source.backend === backend;
 }
 
+/** Window descriptor in the persisted `view` block. Roles are opaque strings:
+ *  the animation package stays app-agnostic; the host validates role ids
+ *  against its own window catalog on load. */
+export type AnimWindowData = { role: string; clockId?: string };
+
+/** One playhead ("clock") of the workspace — time is the only persisted part;
+ *  a reloaded document always resumes paused. */
+export type AnimPlayheadData = { timeMs: number };
+
+/** App/workspace state that travels with the document but is never
+ *  authoring data: window layout (`layout` is a serialized pane-layout tree,
+ *  validated by the host) and per-clock playhead positions. */
+export type AnimDocView = {
+	layout?: unknown;
+	windows?: Record<string, AnimWindowData>;
+	playheads?: Record<string, AnimPlayheadData>;
+};
+
 export type AnimDocument = {
-	schemaVersion: 1 | 2;
+	schemaVersion: 1;
 	durationMs: number;
 	clips: AnimClip[];
+	view?: AnimDocView;
 };

@@ -4,6 +4,7 @@ import {
 	AnimParseError,
 	assertClipMatchesDoc,
 	createCompositionClock as reexportedClock,
+	createPlayheadRegistry as reexportedRegistry,
 	parseAnimDocument,
 	sameFsBackend,
 	serializeAnimDocument,
@@ -215,66 +216,18 @@ describe('parseAnimDocument / serializeAnimDocument', () => {
 		).toThrow(/decimal string/);
 	});
 
-	it('rejects unsupported schemaVersion', () => {
+	it('rejects schemaVersion other than 1', () => {
 		expect(() => parseAnimDocument({ schemaVersion: 3, durationMs: 0, clips: [] })).toThrow(
+			/schemaVersion/
+		);
+		expect(() => parseAnimDocument({ schemaVersion: 2, durationMs: 0, clips: [] })).toThrow(
 			/schemaVersion/
 		);
 	});
 
-	it('accepts schemaVersion 2 with no clips', () => {
-		expect(parseAnimDocument({ schemaVersion: 2, durationMs: 0, clips: [] })).toEqual({
-			schemaVersion: 2,
-			durationMs: 0,
-			clips: []
-		});
-	});
-
-	it('rejects a sketch fragment on schemaVersion 1', () => {
-		expect(() =>
-			parseAnimDocument({
-				schemaVersion: 1,
-				durationMs: 1000,
-				clips: [
-					{
-						id: 'c',
-						startMs: 0,
-						durationMs: 10,
-						frame: { x: 0, y: 0, w: 1, h: 1 },
-						bind: 'live',
-						source: {
-							backend: 'shared-vfs',
-							nodeId: 'skch-1',
-							fragment: { kind: 'page', pageId: 'page-1' }
-						}
-					}
-				]
-			})
-		).toThrow(/schemaVersion 1 cannot carry a sketch fragment/);
-	});
-
-	it('rejects mediaKind video on schemaVersion 1', () => {
-		expect(() =>
-			parseAnimDocument({
-				schemaVersion: 1,
-				durationMs: 1000,
-				clips: [
-					{
-						id: 'c',
-						startMs: 0,
-						durationMs: 10,
-						frame: { x: 0, y: 0, w: 1, h: 1 },
-						bind: 'clone',
-						mediaKind: 'video',
-						snapshot: { bytesRef: 'data:video/webm;base64,xx' }
-					}
-				]
-			})
-		).toThrow(/mediaKind video/);
-	});
-
-	it('round-trips a paired video+audio clip as schemaVersion 2', () => {
+	it('round-trips a paired video+audio clip', () => {
 		const doc: AnimDocument = {
-			schemaVersion: 2,
+			schemaVersion: 1,
 			durationMs: 2500,
 			clips: [
 				{
@@ -300,33 +253,13 @@ describe('parseAnimDocument / serializeAnimDocument', () => {
 			]
 		};
 		const json = serializeAnimDocument(doc);
-		expect(JSON.parse(json).schemaVersion).toBe(2);
+		expect(JSON.parse(json).schemaVersion).toBe(1);
 		expect(parseAnimDocument(json)).toEqual(doc);
 	});
 
-	it('rejects mediaKind sketch-fragment on schemaVersion 1', () => {
-		expect(() =>
-			parseAnimDocument({
-				schemaVersion: 1,
-				durationMs: 1000,
-				clips: [
-					{
-						id: 'c',
-						startMs: 0,
-						durationMs: 10,
-						frame: { x: 0, y: 0, w: 1, h: 1 },
-						bind: 'clone',
-						mediaKind: 'sketch-fragment',
-						snapshot: { bytesRef: 'data:image/png;base64,xx' }
-					}
-				]
-			})
-		).toThrow(/sketch-fragment/);
-	});
-
-	it('round-trips a v2 page fragment and writes schemaVersion 2', () => {
+	it('round-trips a layer fragment source', () => {
 		const doc: AnimDocument = {
-			schemaVersion: 2,
+			schemaVersion: 1,
 			durationMs: 4000,
 			clips: [
 				{
@@ -346,92 +279,14 @@ describe('parseAnimDocument / serializeAnimDocument', () => {
 			]
 		};
 		const json = serializeAnimDocument(doc);
-		expect(JSON.parse(json).schemaVersion).toBe(2);
+		expect(JSON.parse(json).schemaVersion).toBe(1);
 		expect(parseAnimDocument(json)).toEqual(doc);
 	});
 
-	it('serializes image-only docs as schemaVersion 1 even if the input said 2', () => {
-		const json = serializeAnimDocument({
-			schemaVersion: 2,
-			durationMs: 4000,
-			clips: cloneDoc.clips
-		});
-		expect(JSON.parse(json).schemaVersion).toBe(1);
-		expect(parseAnimDocument(json).schemaVersion).toBe(1);
-	});
-
-	it('bumps serialize to 2 when a v1-labelled doc carries a non-file fragment', () => {
-		const json = serializeAnimDocument({
-			schemaVersion: 1,
-			durationMs: 1000,
-			clips: [
-				{
-					id: 'obj',
-					startMs: 0,
-					durationMs: 500,
-					frame: { x: 0, y: 0, w: 8, h: 8 },
-					bind: 'snapshot',
-					mediaKind: 'sketch-fragment',
-					source: {
-						backend: 'shared-vfs',
-						nodeId: 'skch-1',
-						fragment: {
-							kind: 'object',
-							pageId: 'page-1',
-							layerId: 'default',
-							objectKind: 'image',
-							objectId: 'img-1'
-						}
-					},
-					snapshot: { bytesRef: 'data:image/png;base64,xx', atGeneration: 2 }
-				}
-			]
-		});
-		expect(JSON.parse(json).schemaVersion).toBe(2);
-		const parsed = parseAnimDocument(json);
-		expect(parsed.clips[0]).toMatchObject({
-			bind: 'snapshot',
-			mediaKind: 'sketch-fragment',
-			source: {
-				backend: 'shared-vfs',
-				nodeId: 'skch-1',
-				fragment: {
-					kind: 'object',
-					pageId: 'page-1',
-					layerId: 'default',
-					objectKind: 'image',
-					objectId: 'img-1'
-				}
-			}
-		});
-	});
-
-	it('keeps a file fragment on v1 and drops unknown fragment kinds on v2', () => {
-		const withFile = parseAnimDocument({
-			schemaVersion: 1,
-			durationMs: 100,
-			clips: [
-				{
-					id: 'f',
-					startMs: 0,
-					durationMs: 100,
-					frame: { x: 0, y: 0, w: 1, h: 1 },
-					bind: 'live',
-					source: {
-						backend: 'shared-vfs',
-						nodeId: 'img-1',
-						fragment: { kind: 'file' }
-					}
-				}
-			]
-		});
-		expect(withFile.schemaVersion).toBe(1);
-		expect(withFile.clips[0]).toMatchObject({
-			source: { backend: 'shared-vfs', nodeId: 'img-1', fragment: { kind: 'file' } }
-		});
+	it('drops unknown fragment kinds', () => {
 		expect(() =>
 			parseAnimDocument({
-				schemaVersion: 2,
+				schemaVersion: 1,
 				durationMs: 100,
 				clips: [
 					{
@@ -453,7 +308,7 @@ describe('parseAnimDocument / serializeAnimDocument', () => {
 
 	it('round-trips a path object fragment', () => {
 		const json = serializeAnimDocument({
-			schemaVersion: 2,
+			schemaVersion: 1,
 			durationMs: 1000,
 			clips: [
 				{
@@ -477,7 +332,7 @@ describe('parseAnimDocument / serializeAnimDocument', () => {
 				}
 			]
 		});
-		expect(JSON.parse(json).schemaVersion).toBe(2);
+		expect(JSON.parse(json).schemaVersion).toBe(1);
 		expect(parseAnimDocument(json).clips[0]).toMatchObject({
 			source: { fragment: { objectKind: 'path', objectId: 'stroke-1' } }
 		});
@@ -486,7 +341,7 @@ describe('parseAnimDocument / serializeAnimDocument', () => {
 	it('clone still forbids source when mediaKind is sketch-fragment', () => {
 		expect(() =>
 			parseAnimDocument({
-				schemaVersion: 2,
+				schemaVersion: 1,
 				durationMs: 100,
 				clips: [
 					{
@@ -501,6 +356,47 @@ describe('parseAnimDocument / serializeAnimDocument', () => {
 				]
 			})
 		).toThrow(/omit source/);
+	});
+
+	it('round-trips the view block: layout, windows, playheads', () => {
+		const view = {
+			layout: { kind: 'split', id: 'anim-root-split', direction: 'col', ratio: 0.6 },
+			windows: {
+				'anim-canvas': { role: 'canvas', clockId: 'primary' },
+				'anim-timeline': { role: 'timeline', clockId: 'clock-2' }
+			},
+			playheads: { primary: { timeMs: 1200 }, 'clock-2': { timeMs: 3400 } }
+		};
+		const doc: AnimDocument = { ...cloneDoc, view };
+		const json = serializeAnimDocument(doc);
+		expect(parseAnimDocument(json).view).toEqual(view);
+	});
+
+	it('drops junk view fields and omits an empty view', () => {
+		const parsed = parseAnimDocument({
+			schemaVersion: 1,
+			durationMs: 100,
+			clips: [],
+			view: {
+				layout: 'not-a-layout-object',
+				windows: { leaf1: { role: 'canvas', clockId: 'primary' } },
+				playheads: { primary: { timeMs: 500 } },
+				mystery: true
+			}
+		});
+		expect(parsed.view).toEqual({
+			windows: { leaf1: { role: 'canvas', clockId: 'primary' } },
+			playheads: { primary: { timeMs: 500 } }
+		});
+		// Structural junk inside collections is rejected, not silently dropped.
+		expect(() =>
+			parseAnimDocument({ ...cloneDoc, view: { windows: { leaf2: 'junk' } } })
+		).toThrow(/must be an object/);
+		expect(() =>
+			parseAnimDocument({ ...cloneDoc, view: { playheads: { p: { timeMs: 'nope' } } } })
+		).toThrow(/finite number/);
+		const json = serializeAnimDocument({ ...cloneDoc, view: undefined });
+		expect(JSON.parse(json)).not.toHaveProperty('view');
 	});
 });
 
@@ -533,11 +429,18 @@ describe('sameFsBackend / assertClipMatchesDoc', () => {
 	});
 });
 
-describe('createCompositionClock re-export', () => {
-	it('is the composition clock', () => {
+describe('composition re-exports', () => {
+	it('re-exports the composition clock', () => {
 		expect(reexportedClock).toBe(createCompositionClock);
 		const clock = reexportedClock(1500);
 		expect(clock.get().durationMs).toBe(1500);
 		clock.dispose();
+	});
+
+	it('re-exports the playhead registry', () => {
+		const reg = reexportedRegistry();
+		const clock = reg.acquire('primary', 1000);
+		expect(clock.get().durationMs).toBe(1000);
+		reg.disposeAll();
 	});
 });

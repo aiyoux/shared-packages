@@ -4,9 +4,12 @@ import {
 	SKETCH_OBJECT_KINDS,
 	type AnimClip,
 	type AnimClipSnapshot,
+	type AnimDocView,
 	type AnimDocument,
 	type AnimFrame,
 	type AnimKeyframe,
+	type AnimPlayheadData,
+	type AnimWindowData,
 	type BindMode,
 	type ClipMediaKind,
 	type ClipSource,
@@ -128,10 +131,6 @@ function parseFragment(raw: unknown, field: string): SketchFragment {
 	throw new AnimParseError(`unknown fragment.kind: ${String(raw.kind)}`);
 }
 
-function fragmentNeedsV2(fragment: SketchFragment | undefined): boolean {
-	return fragment != null && fragment.kind !== 'file';
-}
-
 function parseMediaKind(raw: unknown, field: string): ClipMediaKind | undefined {
 	if (raw === undefined) return undefined;
 	if (typeof raw !== 'string' || !(CLIP_MEDIA_KINDS as readonly string[]).includes(raw)) {
@@ -140,13 +139,14 @@ function parseMediaKind(raw: unknown, field: string): ClipMediaKind | undefined 
 	return raw as ClipMediaKind;
 }
 
-function parseSource(raw: unknown, schemaVersion: 1 | 2): ClipSource {
+function fragmentHasLocation(fragment: SketchFragment | undefined): boolean {
+	return fragment != null && fragment.kind !== 'file';
+}
+
+function parseSource(raw: unknown): ClipSource {
 	if (!isRecord(raw)) throw new AnimParseError('clip.source must be an object');
 	const fragment =
 		raw.fragment === undefined ? undefined : parseFragment(raw.fragment, 'source.fragment');
-	if (schemaVersion === 1 && fragmentNeedsV2(fragment)) {
-		throw new AnimParseError('schemaVersion 1 cannot carry a sketch fragment');
-	}
 	if (raw.backend === 'shared-vfs') {
 		const source: ClipSource = {
 			backend: 'shared-vfs',
@@ -196,18 +196,13 @@ function parseBind(raw: unknown): BindMode {
 	return raw as BindMode;
 }
 
-function parseClip(raw: unknown, index: number, schemaVersion: 1 | 2): AnimClip {
+function parseClip(raw: unknown, index: number): AnimClip {
 	if (!isRecord(raw)) throw new AnimParseError(`clips[${index}] must be an object`);
 	const bind = parseBind(raw.bind);
 	const keyframes = Array.isArray(raw.keyframes)
 		? raw.keyframes.map((k, i) => parseKeyframe(k, i))
 		: undefined;
 	const mediaKind = parseMediaKind(raw.mediaKind, `clips[${index}].mediaKind`);
-	if (schemaVersion === 1 && mediaKind && mediaKind !== 'image') {
-		throw new AnimParseError(
-			`clips[${index}] schemaVersion 1 cannot carry mediaKind ${mediaKind}`
-		);
-	}
 	const pairId =
 		raw.pairId === undefined ? undefined : nonEmptyString(raw.pairId, `clips[${index}].pairId`);
 	const base = {
@@ -229,23 +224,62 @@ function parseClip(raw: unknown, index: number, schemaVersion: 1 | 2): AnimClip 
 	if (raw.source === undefined) {
 		throw new AnimParseError(`clips[${index}] ${bind} bind requires source`);
 	}
-	return { ...base, bind, source: parseSource(raw.source, schemaVersion) };
+	return { ...base, bind, source: parseSource(raw.source) };
 }
 
-function parseSchemaVersion(raw: unknown): 1 | 2 {
-	if (raw === 1 || raw === 2) return raw;
-	throw new AnimParseError(`unsupported schemaVersion: ${String(raw)}`);
+function parseWindowData(raw: unknown, leafId: string): AnimWindowData {
+	if (!isRecord(raw)) throw new AnimParseError(`view.windows["${leafId}"] must be an object`);
+	const entry: AnimWindowData = { role: nonEmptyString(raw.role, `view.windows["${leafId}"].role`) };
+	if (raw.clockId !== undefined) {
+		entry.clockId = nonEmptyString(raw.clockId, `view.windows["${leafId}"].clockId`);
+	}
+	return entry;
+}
+
+function parsePlayheadData(raw: unknown, clockId: string): AnimPlayheadData {
+	if (!isRecord(raw)) throw new AnimParseError(`view.playheads["${clockId}"] must be an object`);
+	return { timeMs: finiteNumber(raw.timeMs, `view.playheads["${clockId}"].timeMs`) };
+}
+
+function parseView(raw: unknown): AnimDocView | undefined {
+	if (raw === undefined) return undefined;
+	if (!isRecord(raw)) throw new AnimParseError('view must be an object');
+	let windows: Record<string, AnimWindowData> | undefined;
+	if (raw.windows !== undefined) {
+		if (!isRecord(raw.windows)) throw new AnimParseError('view.windows must be an object');
+		windows = {};
+		for (const [leafId, w] of Object.entries(raw.windows)) {
+			windows[leafId] = parseWindowData(w, leafId);
+		}
+	}
+	let playheads: Record<string, AnimPlayheadData> | undefined;
+	if (raw.playheads !== undefined) {
+		if (!isRecord(raw.playheads)) throw new AnimParseError('view.playheads must be an object');
+		playheads = {};
+		for (const [clockId, p] of Object.entries(raw.playheads)) {
+			playheads[clockId] = parsePlayheadData(p, clockId);
+		}
+	}
+	const view: AnimDocView = {};
+	if (isRecord(raw.layout)) view.layout = raw.layout;
+	if (windows && Object.keys(windows).length > 0) view.windows = windows;
+	if (playheads && Object.keys(playheads).length > 0) view.playheads = playheads;
+	return Object.keys(view).length > 0 ? view : undefined;
 }
 
 export function parseAnimDocument(input: Uint8Array | unknown): AnimDocument {
 	const raw = decodeInput(input);
 	if (!isRecord(raw)) throw new AnimParseError('document must be an object');
-	const schemaVersion = parseSchemaVersion(raw.schemaVersion);
+	if (raw.schemaVersion !== 1) {
+		throw new AnimParseError(`unsupported schemaVersion: ${String(raw.schemaVersion)}`);
+	}
 	if (!Array.isArray(raw.clips)) throw new AnimParseError('clips must be an array');
+	const view = parseView(raw.view);
 	return {
-		schemaVersion,
+		schemaVersion: 1,
 		durationMs: finiteNumber(raw.durationMs, 'durationMs'),
-		clips: raw.clips.map((clip, i) => parseClip(clip, i, schemaVersion))
+		clips: raw.clips.map((clip, i) => parseClip(clip, i)),
+		...(view ? { view } : {})
 	};
 }
 
@@ -330,12 +364,6 @@ function persistClip(clip: AnimClip): AnimClip {
 	return { ...base, bind: clip.bind, source: persistSource(clip.source) };
 }
 
-export function clipNeedsV2(clip: AnimClip): boolean {
-	if (clip.mediaKind && clip.mediaKind !== 'image') return true;
-	if (clip.bind === 'clone') return false;
-	return fragmentNeedsV2(clip.source.fragment);
-}
-
 export function isAudioClip(clip: AnimClip): boolean {
 	return clip.mediaKind === 'audio';
 }
@@ -345,12 +373,12 @@ export function isVisualClip(clip: AnimClip): boolean {
 }
 
 export function serializeAnimDocument(doc: AnimDocument): string {
-	const schemaVersion: 1 | 2 = doc.clips.some(clipNeedsV2) ? 2 : 1;
-	const clean = parseAnimDocument({ ...doc, schemaVersion });
+	const clean = parseAnimDocument(doc);
 	return JSON.stringify({
-		schemaVersion,
+		schemaVersion: 1 as const,
 		durationMs: clean.durationMs,
-		clips: clean.clips.map(persistClip)
+		clips: clean.clips.map(persistClip),
+		...(clean.view ? { view: clean.view } : {})
 	});
 }
 
