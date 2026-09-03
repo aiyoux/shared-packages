@@ -59,7 +59,6 @@ describe('normalizePage', () => {
 	it('converts unknown leaf block types to a plaintext paragraph', () => {
 		const page = {
 			format: KB_FORMAT,
-			schemaVersion: 1,
 			id: 'p',
 			title: 't',
 			createdAt: '',
@@ -78,7 +77,6 @@ describe('normalizePage', () => {
 	it('preserves callout children through orderedBlock', () => {
 		const page = {
 			format: KB_FORMAT,
-			schemaVersion: 1,
 			id: 'p',
 			title: 't',
 			createdAt: '',
@@ -106,19 +104,17 @@ describe('normalizePage', () => {
 				}
 			]
 		});
-		expect(normalized.schemaVersion).toBe(1);
 	});
 
-	it('does not stamp schemaVersion 2 onto a flat v1 page', () => {
+	it('carries no schemaVersion field (machinery stripped)', () => {
 		const page = createEmptyPage({ id: 'p', title: 't' });
-		expect(page.schemaVersion).toBe(1);
-		expect(normalizePage(page).schemaVersion).toBe(1);
+		expect(page).not.toHaveProperty('schemaVersion');
+		expect(normalizePage(page)).not.toHaveProperty('schemaVersion');
 	});
 
 	it('flattens nested callouts to depth 1', () => {
 		const page = {
 			format: KB_FORMAT,
-			schemaVersion: 2,
 			id: 'p',
 			title: 't',
 			createdAt: '',
@@ -159,7 +155,6 @@ describe('normalizePage', () => {
 	it('pads irregular tables rectangularly without dropping text or existing ids', () => {
 		const page = {
 			format: KB_FORMAT,
-			schemaVersion: 1,
 			id: 'p',
 			title: 't',
 			createdAt: '',
@@ -220,7 +215,6 @@ describe('normalizePage', () => {
 	it('turns an empty table into a 1x1 empty cell and flattens a table inside a callout', () => {
 		const empty = normalizePage({
 			format: KB_FORMAT,
-			schemaVersion: 1,
 			id: 'p',
 			title: 't',
 			createdAt: '',
@@ -236,7 +230,6 @@ describe('normalizePage', () => {
 
 		const nested = normalizePage({
 			format: KB_FORMAT,
-			schemaVersion: 2,
 			id: 'p',
 			title: 't',
 			createdAt: '',

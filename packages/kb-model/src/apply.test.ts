@@ -23,7 +23,6 @@ function span(text: string, marks: Mark[] = []): TextSpan {
 function page(blocks: Block[], extra: Partial<KbPage> = {}): KbPage {
 	return normalizePage({
 		format: KB_FORMAT,
-		schemaVersion: 1,
 		id: 'page-1',
 		title: 'Title',
 		createdAt: STAMP,
@@ -549,9 +548,8 @@ function toggle(id: string, kids: Block[], open = true): Block {
 }
 
 describe('N1 callout/toggle apply', () => {
-	it('inserts inside a callout via parentId and stamps schema 2 only on serialize', () => {
+	it('inserts inside a callout via parentId', () => {
 		const src = page([callout('c', [para('a', 'a')]), para('z', 'z')]);
-		expect(src.schemaVersion).toBe(1);
 		const inserted = apply(src, {
 			kind: 'insert-block',
 			afterId: 'a',
@@ -560,7 +558,6 @@ describe('N1 callout/toggle apply', () => {
 		});
 		expect(inserted.blocks.map((b) => b.id)).toEqual(['c', 'z']);
 		expect(findKids(inserted, 'c').map((b) => b.id)).toEqual(['a', 'n']);
-		expect(inserted.schemaVersion).toBe(1);
 	});
 
 	it('honors the insert-block parentId / afterId truth table', () => {

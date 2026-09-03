@@ -25,9 +25,8 @@ export {
 	type Assoc,
 	type StickyPoint
 } from './mapPoint.js';
-export { isSchemaUnderstood, migrateSchema, migrateV1, schemaWriteAllowed } from './migrate.js';
-export { canonicalMarks, hasNestedTypes, normalizePage, normalizeSpans, writeSchemaVersion } from './normalize.js';
-export { parseKb, parseKbDocument, type ParsedKb } from './parse.js';
+export { canonicalMarks, normalizePage, normalizeSpans } from './normalize.js';
+export { parseKb } from './parse.js';
 export {
 	isAtomic,
 	isContainer,
@@ -57,7 +56,6 @@ export {
 } from './tree.js';
 export {
 	KB_FORMAT,
-	KB_SCHEMA_VERSION,
 	type AtomicBlock,
 	type Block,
 	type CalloutBlock,

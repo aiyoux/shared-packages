@@ -4,17 +4,15 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { createEmptyPage } from './createEmptyPage.js';
 import { normalizePage } from './normalize.js';
-import { isSchemaUnderstood, schemaWriteAllowed } from './migrate.js';
-import { parseKb, parseKbDocument } from './parse.js';
+import { parseKb } from './parse.js';
 import { serializeKb } from './serialize.js';
-import { KB_FORMAT, KB_SCHEMA_VERSION, type KbPage } from './types.js';
+import { KB_FORMAT, type KbPage } from './types.js';
 
 const goldensDir = join(dirname(fileURLToPath(import.meta.url)), 'goldens');
 
 function page(partial: Partial<KbPage> & { blocks: KbPage['blocks'] }): KbPage {
 	return normalizePage({
 		format: KB_FORMAT,
-		schemaVersion: 1,
 		id: 'page-1',
 		title: 'Title',
 		createdAt: '2026-01-01T00:00:00.000Z',
@@ -35,7 +33,6 @@ describe('parseKb', () => {
 	it('rejects empty documents without Unexpected end of JSON', () => {
 		expect(() => parseKb('')).toThrow(/empty/i);
 		expect(() => parseKb('   \n')).toThrow(/empty/i);
-		expect(() => parseKbDocument('')).toThrow(/empty/i);
 	});
 
 	it('round-trips serialize identity including trailing newline and indent 2', () => {
@@ -65,18 +62,29 @@ describe('parseKb', () => {
 		]);
 	});
 
-	it('migrates missing schemaVersion as v1', () => {
-		const parsed = parseKb({
+	it('ignores a legacy schemaVersion key on read and drops it on resave', () => {
+		const raw = {
 			format: 'kb',
+			schemaVersion: 2,
 			id: 'p',
 			title: 't',
 			createdAt: '2026-01-01T00:00:00.000Z',
 			updatedAt: '2026-01-01T00:00:00.000Z',
 			children: [],
-			blocks: [{ id: 'b', type: 'paragraph', content: [{ type: 'text', text: 'hi', marks: [] }] }]
-		});
-		expect(parsed.schemaVersion).toBe(1);
-		expect(parsed.blocks[0]).toMatchObject({ type: 'paragraph' });
+			blocks: [
+				{
+					id: 'c',
+					type: 'callout',
+					variant: 'info',
+					children: [{ id: 'n', type: 'paragraph', content: [{ type: 'text', text: 'in', marks: [] }] }]
+				}
+			]
+		};
+		const parsed = parseKb(raw);
+		expect(parsed).not.toHaveProperty('schemaVersion');
+		expect(parsed.blocks[0]).toMatchObject({ type: 'callout', variant: 'info' });
+		const resaved = JSON.parse(serializeKb(parsed)) as Record<string, unknown>;
+		expect(resaved).not.toHaveProperty('schemaVersion');
 	});
 
 	it('strips unknown leaf types to a plaintext paragraph', () => {
@@ -115,162 +123,5 @@ describe('parseKb', () => {
 			children: ['slug']
 		});
 		expect(parseKb(serializeKb(src))).toEqual(src);
-	});
-
-	it('keeps a v1 file at schemaVersion 1 when it has no nested types', () => {
-		const raw = readFileSync(join(goldensDir, 'all-blocks.json'), 'utf8');
-		const parsed = parseKb(raw);
-		expect(parsed.schemaVersion).toBe(1);
-		expect(serializeKb(parsed)).toContain('"schemaVersion": 1');
-		expect(JSON.parse(serializeKb(parsed)).schemaVersion).toBe(1);
-	});
-
-	it('parses a v2 callout file as writable schema 2', () => {
-		const doc = parseKbDocument({
-			format: 'kb',
-			schemaVersion: 2,
-			id: 'p',
-			title: 't',
-			createdAt: '2026-01-01T00:00:00.000Z',
-			updatedAt: '2026-01-01T00:00:00.000Z',
-			children: [],
-			blocks: [
-				{
-					id: 'c',
-					type: 'callout',
-					variant: 'info',
-					children: [{ id: 'n', type: 'paragraph', content: [{ type: 'text', text: 'in', marks: [] }] }]
-				}
-			]
-		});
-		expect(doc.schemaVersion).toBe(2);
-		expect(doc.understood).toBe(true);
-		expect(doc.writable).toBe(true);
-		expect(doc.page.blocks[0]).toMatchObject({ type: 'callout', variant: 'info' });
-		expect(JSON.parse(serializeKb(doc.page)).schemaVersion).toBe(2);
-	});
-
-	it('stamps schemaVersion 2 only when serializing a nested type', () => {
-		const v1 = parseKb({
-			format: 'kb',
-			schemaVersion: 1,
-			id: 'p',
-			title: 't',
-			createdAt: '2026-01-01T00:00:00.000Z',
-			updatedAt: '2026-01-01T00:00:00.000Z',
-			children: [],
-			blocks: [{ id: 'a', type: 'paragraph', content: [{ type: 'text', text: 'hi', marks: [] }] }]
-		});
-		expect(v1.schemaVersion).toBe(1);
-		expect(JSON.parse(serializeKb(v1)).schemaVersion).toBe(1);
-
-		const nested = parseKb({
-			format: 'kb',
-			schemaVersion: 1,
-			id: 'p',
-			title: 't',
-			createdAt: '2026-01-01T00:00:00.000Z',
-			updatedAt: '2026-01-01T00:00:00.000Z',
-			children: [],
-			blocks: [
-				{
-					id: 'c',
-					type: 'callout',
-					variant: 'note',
-					children: [{ id: 'n', type: 'paragraph', content: [{ type: 'text', text: 'in', marks: [] }] }]
-				}
-			]
-		});
-		expect(nested.schemaVersion).toBe(1);
-		expect(JSON.parse(serializeKb(nested)).schemaVersion).toBe(2);
-		expect(KB_SCHEMA_VERSION).toBe(2);
-	});
-
-	it('does not clamp a future schemaVersion and does not smash unknown containers', () => {
-		const raw = {
-			format: 'kb',
-			schemaVersion: 99,
-			id: 'p',
-			title: 't',
-			createdAt: '2026-01-01T00:00:00.000Z',
-			updatedAt: '2026-01-01T00:00:00.000Z',
-			children: [],
-			blocks: [
-				{
-					id: 'future',
-					type: 'accordion',
-					flag: true,
-					children: [
-						{ id: 'n', type: 'paragraph', content: [{ type: 'text', text: 'keep', marks: [] }] }
-					]
-				}
-			]
-		};
-		const doc = parseKbDocument(raw);
-		expect(doc.schemaVersion).toBe(99);
-		expect(doc.understood).toBe(false);
-		expect(doc.writable).toBe(false);
-		expect(doc.flattenedUnknown).toBe(false);
-		expect(isSchemaUnderstood(99)).toBe(false);
-		expect(schemaWriteAllowed(99)).toBe(false);
-		expect(doc.page.schemaVersion).toBe(99);
-		expect(doc.page.blocks[0]).toMatchObject({
-			id: 'future',
-			type: 'accordion',
-			flag: true
-		});
-		expect((doc.page.blocks[0] as { children: { id: string }[] }).children[0].id).toBe('n');
-		expect(JSON.parse(serializeKb(doc.page)).schemaVersion).toBe(99);
-		expect(JSON.parse(serializeKb(doc.page)).blocks[0].type).toBe('accordion');
-	});
-
-	it('flattens a future unknown container locally and marks the parse unwritable', () => {
-		const doc = parseKbDocument({
-			format: 'kb',
-			schemaVersion: 2,
-			id: 'p',
-			title: 't',
-			createdAt: '2026-01-01T00:00:00.000Z',
-			updatedAt: '2026-01-01T00:00:00.000Z',
-			children: [],
-			blocks: [
-				{ id: 'a', type: 'paragraph', content: [{ type: 'text', text: 'before', marks: [] }] },
-				{
-					id: 'acc',
-					type: 'accordion',
-					children: [
-						{ id: 'n1', type: 'paragraph', content: [{ type: 'text', text: 'one', marks: [] }] },
-						{ id: 'n2', type: 'paragraph', content: [{ type: 'text', text: 'two', marks: [] }] }
-					]
-				},
-				{ id: 'z', type: 'paragraph', content: [{ type: 'text', text: 'after', marks: [] }] }
-			]
-		});
-		expect(doc.understood).toBe(true);
-		expect(doc.flattenedUnknown).toBe(true);
-		expect(doc.writable).toBe(false);
-		expect(schemaWriteAllowed(2, { flattenedUnknown: true })).toBe(false);
-		expect(doc.page.blocks.map((b) => b.id)).toEqual(['a', 'n1', 'n2', 'z']);
-		expect(doc.page.blocks.every((b) => b.type === 'paragraph')).toBe(true);
-	});
-
-	it('marks an empty unknown container unwritable even when children is empty', () => {
-		const doc = parseKbDocument({
-			format: 'kb',
-			schemaVersion: 2,
-			id: 'p',
-			title: 't',
-			createdAt: '2026-01-01T00:00:00.000Z',
-			updatedAt: '2026-01-01T00:00:00.000Z',
-			children: [],
-			blocks: [
-				{ id: 'a', type: 'paragraph', content: [{ type: 'text', text: 'keep', marks: [] }] },
-				{ id: 'acc', type: 'accordion', children: [] }
-			]
-		});
-		expect(doc.understood).toBe(true);
-		expect(doc.flattenedUnknown).toBe(true);
-		expect(doc.writable).toBe(false);
-		expect(doc.page.blocks.map((b) => b.id)).toEqual(['a']);
 	});
 });

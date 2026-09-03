@@ -69,7 +69,6 @@ export function nest(id: string, kids: Block[], _text = ''): Block {
 export function page(blocks: Block[], extra: Partial<KbPage> = {}): KbPage {
 	return normalizePage({
 		format: 'kb',
-		schemaVersion: 1,
 		id: 'page-1',
 		title: 'Title',
 		createdAt: STAMP,

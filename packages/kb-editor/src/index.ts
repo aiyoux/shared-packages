@@ -108,7 +108,6 @@ export {
 	isTableStructure,
 	isTextLike,
 	KB_FORMAT,
-	KB_SCHEMA_VERSION,
 	normalizePage,
 	parentOf,
 	plaintext,

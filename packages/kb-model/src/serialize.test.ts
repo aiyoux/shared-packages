@@ -12,7 +12,6 @@ const goldenPath = join(dirname(fileURLToPath(import.meta.url)), 'goldens/all-bl
 
 const PAGE_KEYS = [
 	'format',
-	'schemaVersion',
 	'id',
 	'title',
 	'createdAt',
@@ -56,7 +55,6 @@ function shuffledPage(): KbPage {
 		createdAt: '2026-01-01T00:00:00.000Z',
 		title: 'Golden',
 		id: 'page-gold',
-		schemaVersion: 1,
 		format: KB_FORMAT
 	};
 	return page;
@@ -70,7 +68,7 @@ describe('serializeKb', () => {
 		const raw = serializeKb(page);
 		expect(raw.endsWith('\n')).toBe(true);
 		expect(raw.slice(0, -1).endsWith('\n')).toBe(false);
-		expect(raw).toMatch(/^{\n  "format": "kb",\n  "schemaVersion": 1,/);
+		expect(raw).toMatch(/^{\n  "format": "kb",\n  "id": "/);
 		expect(raw).toContain('\n  "blocks": [');
 	});
 
@@ -87,8 +85,7 @@ describe('serializeKb', () => {
 		expect(Object.keys(blocks[5])).toEqual(['id', 'type', 'src', 'alt']);
 		const span = (blocks[0].content as Record<string, unknown>[])[0];
 		expect(Object.keys(span)).toEqual(['type', 'text', 'marks']);
-		expect(raw.indexOf('"format"')).toBeLessThan(raw.indexOf('"schemaVersion"'));
-		expect(raw.indexOf('"schemaVersion"')).toBeLessThan(raw.indexOf('"id"'));
+		expect(raw.indexOf('"format"')).toBeLessThan(raw.indexOf('"id"'));
 		expect(raw.indexOf('"children"')).toBeLessThan(raw.indexOf('"blocks"'));
 	});
 
@@ -101,7 +98,6 @@ describe('serializeKb', () => {
 	it('emits callout and toggle keys in locked order with children last', () => {
 		const raw = serializeKb({
 			format: KB_FORMAT,
-			schemaVersion: 1,
 			id: 'page-gold',
 			title: 'Nested',
 			createdAt: '2026-01-01T00:00:00.000Z',
@@ -123,7 +119,6 @@ describe('serializeKb', () => {
 			]
 		});
 		const parsed = JSON.parse(raw) as Record<string, unknown>;
-		expect(parsed.schemaVersion).toBe(2);
 		const blocks = parsed.blocks as Record<string, unknown>[];
 		expect(Object.keys(blocks[0])).toEqual(['id', 'type', 'variant', 'children']);
 		expect(Object.keys(blocks[1])).toEqual(['id', 'type', 'open', 'children']);
@@ -136,7 +131,6 @@ describe('serializeKb', () => {
 	it('emits table/row/cell keys in locked order with children last', () => {
 		const raw = serializeKb({
 			format: KB_FORMAT,
-			schemaVersion: 1,
 			id: 'page-gold',
 			title: 'Table',
 			createdAt: '2026-01-01T00:00:00.000Z',
@@ -169,7 +163,6 @@ describe('serializeKb', () => {
 			]
 		});
 		const parsed = JSON.parse(raw) as Record<string, unknown>;
-		expect(parsed.schemaVersion).toBe(2);
 		const table = (parsed.blocks as Record<string, unknown>[])[0];
 		expect(Object.keys(table)).toEqual(['id', 'type', 'children']);
 		const row = (table.children as Record<string, unknown>[])[0];

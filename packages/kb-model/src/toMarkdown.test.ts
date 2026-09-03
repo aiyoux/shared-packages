@@ -17,7 +17,6 @@ function span(text: string, marks: Mark[] = []): TextSpan {
 function page(blocks: Block[]): KbPage {
 	return normalizePage({
 		format: KB_FORMAT,
-		schemaVersion: 1,
 		id: 'page-1',
 		title: 'Title is not exported',
 		createdAt: STAMP,

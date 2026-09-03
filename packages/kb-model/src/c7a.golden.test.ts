@@ -4,11 +4,12 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { apply } from './apply.js';
 import { applyRemote } from './applyRemote.js';
-import { dropUndoGroupsTouchedByRemote, schemaCompatible } from './collab.js';
+import { dropUndoGroupsTouchedByRemote } from './collab.js';
 import { createEmptyPage } from './createEmptyPage.js';
 import { mapPointThroughOp, snapMappedPoint, type StickyPoint } from './mapPoint.js';
 import { normalizePage } from './normalize.js';
 import { plaintext, plaintextOf } from './plaintext.js';
+import { serializeKb } from './serialize.js';
 import { KB_FORMAT, type Block, type KbPage, type Op, type TextSpan } from './types.js';
 
 const STAMP = '2026-01-01T00:00:00.000Z';
@@ -32,10 +33,9 @@ function para(id: string, text: string): Block {
 	return { id, type: 'paragraph', content: [span(text)] };
 }
 
-function page(blocks: Block[], schemaVersion = 1): KbPage {
+function page(blocks: Block[]): KbPage {
 	return normalizePage({
 		format: KB_FORMAT,
-		schemaVersion,
 		id: 'page-1',
 		title: 'Title',
 		createdAt: STAMP,
@@ -99,10 +99,9 @@ describe('C7a model goldens', () => {
 		expect(remote.blocks[0]!.id).not.toBe(seed.blocks[0]!.id);
 	});
 
-	it('6. two v2 clients on a v1 file write; v1 client + v2 snapshot is read-only', () => {
-		expect(schemaCompatible(2, 2, 1)).toBe(true);
-		expect(schemaCompatible(1, 2, 2)).toBe(false);
-		expect(schemaCompatible(2, 1, 2)).toBe(false);
-		expect(page([para('p', 'x')], 1).schemaVersion).toBe(1);
+	it('6. stored pages carry no schemaVersion field (machinery stripped)', () => {
+		const doc = page([para('p', 'x')]);
+		expect(doc).not.toHaveProperty('schemaVersion');
+		expect(serializeKb(doc)).not.toContain('schemaVersion');
 	});
 });

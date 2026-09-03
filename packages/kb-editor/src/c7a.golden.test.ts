@@ -1,4 +1,4 @@
-import { createEmptyPage, plaintext, plaintextOf, schemaCompatible, type Op } from '@shared-packages/kb-model';
+import { createEmptyPage, plaintext, plaintextOf, type Op } from '@shared-packages/kb-model';
 import { describe, expect, it } from 'vitest';
 import { beginComposition, commitComposition, shouldProject, snapshotComposition } from './composition.js';
 import { project, syncView } from './project.js';
@@ -102,9 +102,8 @@ describe('C7a editor goldens', () => {
 		expect(state.undo).toEqual([]);
 	});
 
-	it('6. two v2 clients on a v1 file write; v1 client + v2 snapshot is read-only', () => {
-		expect(schemaCompatible(2, 2, 1)).toBe(true);
-		expect(schemaCompatible(1, 2, 2)).toBe(false);
+	it('6. stored pages carry no schemaVersion (machinery stripped)', () => {
+		expect(page([para('p', 'x')])).not.toHaveProperty('schemaVersion');
 	});
 
 	it('sibling insert-block while composing is queued; composing Text identity survives syncView', () => {

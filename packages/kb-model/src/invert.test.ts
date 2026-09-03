@@ -21,7 +21,6 @@ function span(text: string, marks: Mark[] = []): TextSpan {
 function page(blocks: Block[], extra: Partial<KbPage> = {}): KbPage {
 	return normalizePage({
 		format: KB_FORMAT,
-		schemaVersion: 1,
 		id: 'page-1',
 		title: 'Title',
 		createdAt: STAMP,

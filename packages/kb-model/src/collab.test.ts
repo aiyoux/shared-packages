@@ -12,7 +12,7 @@ import {
 } from './collab.js';
 import { createEmptyPage } from './createEmptyPage.js';
 import { normalizePage } from './normalize.js';
-import { KB_FORMAT, KB_SCHEMA_VERSION, type Block, type KbPage, type Op, type TextSpan } from './types.js';
+import { KB_FORMAT, type Block, type KbPage, type Op, type TextSpan } from './types.js';
 
 const STAMP = '2026-01-01T00:00:00.000Z';
 
@@ -27,7 +27,6 @@ function para(id: string, text: string): Block {
 function page(blocks: Block[]): KbPage {
 	return normalizePage({
 		format: KB_FORMAT,
-		schemaVersion: 1,
 		id: 'page-1',
 		title: 'Title',
 		createdAt: STAMP,
@@ -43,7 +42,7 @@ describe('CollabSession', () => {
 			kind: 'cm',
 			role: 'replica',
 			pageId: 'page-1',
-			schemaVersion: KB_SCHEMA_VERSION,
+			schemaVersion: 1,
 			clientId: 'guest'
 		});
 		await expect(replica.sendSnapshot(1, createEmptyPage({ id: 'page-1', title: 'T' }))).rejects.toThrow(
@@ -56,7 +55,7 @@ describe('CollabSession', () => {
 			kind: 'cm',
 			role: 'sequencer',
 			pageId: 'page-1',
-			schemaVersion: KB_SCHEMA_VERSION,
+			schemaVersion: 1,
 			clientId: 'host'
 		});
 		const seen: CollabFrame[] = [];

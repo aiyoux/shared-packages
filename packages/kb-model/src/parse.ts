@@ -1,26 +1,15 @@
-import { isSchemaUnderstood, migrateSchema, schemaWriteAllowed } from './migrate.js';
-import { normalizePage, type NormalizeMeta } from './normalize.js';
+import { normalizePage } from './normalize.js';
 import { KB_FORMAT, type KbPage } from './types.js';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
-export type ParsedKb = {
-	page: KbPage;
-	schemaVersion: number;
-	understood: boolean;
-	flattenedUnknown: boolean;
-	/** False when the caller must not smash-save (too-new schema or local unknown flatten). */
-	writable: boolean;
-};
-
 /**
- * Parse with schema/writable metadata. Save and collab broadcast must check
- * `writable` (too-new files and locally flattened unknown containers).
- * `serializeKb(parseKb(...))` has no such gate — do not smash-save from `parseKb` alone.
+ * Parse a stored kb document. Unknown top-level keys (e.g. a legacy
+ * `schemaVersion`) are ignored on read and dropped on resave.
  */
-export function parseKbDocument(raw: string | unknown): ParsedKb {
+export function parseKb(raw: string | unknown): KbPage {
 	if (typeof raw === 'string' && raw.trim() === '') {
 		throw new Error('kb document is empty');
 	}
@@ -31,33 +20,13 @@ export function parseKbDocument(raw: string | unknown): ParsedKb {
 	if (data.format !== KB_FORMAT) {
 		throw new Error(`unknown format: ${String(data.format)}`);
 	}
-	const migrated = migrateSchema(data);
-	const schemaVersion = typeof migrated.schemaVersion === 'number' ? migrated.schemaVersion : 1;
-	const meta: NormalizeMeta = { flattenedUnknown: false, tooNew: false };
-	const page = normalizePage(
-		{
-			format: KB_FORMAT,
-			schemaVersion,
-			id: typeof migrated.id === 'string' ? migrated.id : '',
-			title: typeof migrated.title === 'string' ? migrated.title : '',
-			createdAt: typeof migrated.createdAt === 'string' ? migrated.createdAt : '',
-			updatedAt: typeof migrated.updatedAt === 'string' ? migrated.updatedAt : '',
-			children: Array.isArray(migrated.children) ? (migrated.children as string[]) : [],
-			blocks: Array.isArray(migrated.blocks) ? (migrated.blocks as KbPage['blocks']) : []
-		},
-		meta
-	);
-	const understood = isSchemaUnderstood(page.schemaVersion);
-	return {
-		page,
-		schemaVersion: page.schemaVersion,
-		understood,
-		flattenedUnknown: meta.flattenedUnknown,
-		writable: schemaWriteAllowed(page.schemaVersion, { flattenedUnknown: meta.flattenedUnknown })
-	};
-}
-
-/** Page only. For save/broadcast use `parseKbDocument` and honor `writable`. */
-export function parseKb(raw: string | unknown): KbPage {
-	return parseKbDocument(raw).page;
+	return normalizePage({
+		format: KB_FORMAT,
+		id: typeof data.id === 'string' ? data.id : '',
+		title: typeof data.title === 'string' ? data.title : '',
+		createdAt: typeof data.createdAt === 'string' ? data.createdAt : '',
+		updatedAt: typeof data.updatedAt === 'string' ? data.updatedAt : '',
+		children: Array.isArray(data.children) ? (data.children as string[]) : [],
+		blocks: Array.isArray(data.blocks) ? (data.blocks as KbPage['blocks']) : []
+	});
 }

@@ -1,6 +1,4 @@
 export const KB_FORMAT = 'kb' as const;
-/** Max schemaVersion this client understands. Not a parse/write stamp. */
-export const KB_SCHEMA_VERSION = 2;
 
 export type Mark =
 	| { type: 'bold' }
@@ -78,7 +76,6 @@ export type TableStructureBlock = TableBlock | TableRowBlock;
 
 export type KbPage = {
 	format: typeof KB_FORMAT;
-	schemaVersion: number;
 	/** Logical page identity. Never VfsNode.id / session.id. */
 	id: string;
 	title: string;

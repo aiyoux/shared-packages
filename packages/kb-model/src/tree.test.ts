@@ -30,7 +30,6 @@ function callout(id: string, kids: Block[]): Block {
 function page(blocks: Block[]): KbPage {
 	return normalizePage({
 		format: KB_FORMAT,
-		schemaVersion: 1,
 		id: 'page-1',
 		title: 'Title',
 		createdAt: STAMP,

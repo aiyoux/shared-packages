@@ -76,7 +76,6 @@ function para(id: string, text: string): Block {
 function page(blocks: Block[]): KbPage {
 	return normalizePage({
 		format: KB_FORMAT,
-		schemaVersion: 1,
 		id: 'page-1',
 		title: 'Title',
 		createdAt: STAMP,
