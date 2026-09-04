@@ -102,6 +102,20 @@ export function createLiveSession<Doc, Op>(
 	let seq = 0;
 	let role: LiveRole = election.isLeader ? 'leader' : 'follower';
 	let destroyed = false;
+	/**
+	 * Whether the role has been reported to the host yet.
+	 *
+	 * A follower never gets an election callback — it never ACQUIRES the lock,
+	 * it just never wins it — so leadership alone cannot tell a tab that it is
+	 * following. The observable signal is hearing from a leader: adopting a
+	 * snapshot proves somebody else is authoritative.
+	 */
+	let roleReported = false;
+
+	function announceRole(): void {
+		roleReported = true;
+		options.onRole?.(role);
+	}
 
 	const bus: LiveBus<Frame<Doc, Op>> = createLiveBus<Frame<Doc, Op>>(channelName, senderId, {
 		// Transient previews must not be held behind a commit gap (M8).
@@ -178,6 +192,8 @@ export function createLiveSession<Doc, Op>(
 				doc = frame.doc;
 				seq = frame.seq;
 				emitDoc('snapshot');
+				// Hearing a leader is how a follower finds out it is one.
+				if (!roleReported) announceRole();
 				return;
 			}
 
@@ -267,7 +283,7 @@ export function createLiveSession<Doc, Op>(
 		// addressed to is no longer authoritative. Reject so the caller retries
 		// against the new leader (M2).
 		rejectAllPending('leadership changed');
-		options.onRole?.(role);
+		announceRole();
 		if (role === 'follower') {
 			// Someone else took over (a yield); pull their truth.
 			bus.broadcast({ t: 'hello', from: senderId });
