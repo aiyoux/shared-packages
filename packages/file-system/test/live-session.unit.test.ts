@@ -302,3 +302,35 @@ describe('createLiveSession', () => {
 		b.destroy();
 	});
 });
+
+describe('sessions within one tab', () => {
+	it('two sessions on one document hear each other (distinct sender ids)', async () => {
+		// Two panes of the same app in one tab. They share a tab id, so a
+		// tab-scoped sender would make the bus discard every frame between them.
+		const id = nextDocId();
+		const a = createLiveSession<Doc, Op>({
+			nodeId: id,
+			initial: { text: '', n: 0 },
+			reduce,
+			busOptions: { flushSync: true, gapTimeoutMs: 50 },
+			intentTimeoutMs: 300
+		});
+		await tick();
+		const b = createLiveSession<Doc, Op>({
+			nodeId: id,
+			initial: { text: '', n: 0 },
+			reduce,
+			busOptions: { flushSync: true, gapTimeoutMs: 50 },
+			intentTimeoutMs: 300
+		});
+		await tick();
+
+		assert.notEqual(a.senderId, b.senderId, 'each session needs its own sender id');
+		await a.commit({ t: 'append', s: 'pane-a' });
+		await until(() => b.doc.text === 'pane-a');
+
+		assert.equal(b.doc.text, 'pane-a');
+		a.destroy();
+		b.destroy();
+	});
+});

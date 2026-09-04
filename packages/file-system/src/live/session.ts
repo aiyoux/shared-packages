@@ -84,6 +84,17 @@ export type LiveSession<Doc, Op> = {
 
 const DEFAULT_INTENT_TIMEOUT_MS = 5000;
 
+/**
+ * Distinguishes sessions WITHIN one tab.
+ *
+ * The bus self-filters by sender so a session never processes its own
+ * broadcast, which makes the sender id per-session, not per-tab. Defaulting it
+ * to the tab id looks right and is not: two panes of the same app in one tab
+ * would then share an id and silently discard each other's frames — the exact
+ * case where sync appears to do nothing at all.
+ */
+let instanceSeq = 0;
+
 function newId(): string {
 	const c = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto;
 	return typeof c?.randomUUID === 'function' ? c.randomUUID() : `i-${Math.random().toString(36).slice(2)}`;
@@ -97,7 +108,7 @@ export function createLiveSession<Doc, Op>(
 	const intentTimeoutMs = options.intentTimeoutMs ?? DEFAULT_INTENT_TIMEOUT_MS;
 
 	const election: LeaderElection = createLeaderElection(nodeId);
-	const senderId = options.senderId ?? election.tabId;
+	const senderId = options.senderId ?? `${election.tabId}#${++instanceSeq}`;
 
 	let doc = options.initial;
 	let seq = 0;
