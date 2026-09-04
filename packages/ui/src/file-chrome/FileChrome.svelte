@@ -291,7 +291,6 @@
 		background: var(--bg-chrome, rgba(18, 18, 24, 0.94));
 		border: 1px solid var(--border, var(--line-strong));
 		border-radius: var(--radius-lg, 8px);
-		box-shadow: 0 10px 30px var(--shadow-hard, rgb(0 0 0 / 0.35));
 	}
 	.file-item {
 		display: flex;

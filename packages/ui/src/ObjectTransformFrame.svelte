@@ -113,7 +113,6 @@
 		border: 2px solid var(--accent);
 		border-radius: 50%;
 		pointer-events: all;
-		box-shadow: 0 2px 4px var(--shadow-medium);
 		z-index: var(--z-handle-control, 3);
 	}
 
@@ -125,7 +124,6 @@
 		border: 2px solid var(--accent);
 		border-radius: 50%;
 		pointer-events: all;
-		box-shadow: 0 2px 4px var(--shadow-medium);
 		z-index: var(--z-handle, 2);
 	}
 
