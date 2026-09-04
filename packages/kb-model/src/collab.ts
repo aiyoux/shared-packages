@@ -44,7 +44,8 @@ export type CollabFrame =
 export type KbCollabMessage = { type: 'kb-collab'; v: 1; frame: CollabFrame };
 
 export type CollabSessionOpts = {
-	kind: 'cm' | 'monitor';
+	/** 'cm' = WebRTC peer, 'monitor' = SSE, 'tab' = another tab of this browser. */
+	kind: 'cm' | 'monitor' | 'tab';
 	role: CollabRole;
 	pageId: string;
 	/** This client's max understood (`KB_SCHEMA_VERSION`), not the file version. */
@@ -53,7 +54,7 @@ export type CollabSessionOpts = {
 };
 
 export interface CollabSession {
-	readonly kind: 'cm' | 'monitor';
+	readonly kind: 'cm' | 'monitor' | 'tab';
 	readonly role: CollabRole;
 	readonly pageId: string;
 	readonly clientId: string;
