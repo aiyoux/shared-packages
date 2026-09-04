@@ -90,7 +90,19 @@
 		"./file-chrome/unsaved": {
 			"types": "./src/file-chrome/unsaved.ts",
 			"default": "./src/file-chrome/unsaved.ts"
-		}
+		},
+		"./timeline": {
+			"types": "./src/timeline/index.ts",
+			"svelte": "./src/timeline/index.ts",
+			"default": "./src/timeline/index.ts"
+		},
+		"./timeline/pan": {
+			"types": "./src/timeline/pan.ts",
+			"svelte": "./src/timeline/pan.ts",
+			"default": "./src/timeline/pan.ts"
+		},
+		"./timeline/TimelineZoomControls.svelte": "./src/timeline/TimelineZoomControls.svelte",
+		"./timeline/TimelineMinimap.svelte": "./src/timeline/TimelineMinimap.svelte"
 	},
 	"scripts": {
 		"test": "vitest run"
@@ -103,6 +115,7 @@
 	},
 	"peerDependencies": {
 		"svelte": "^5.0.0",
+		"@shared-packages/composition": "*",
 		"@shared-packages/design-system": "*"
 	},
 	"devDependencies": {
