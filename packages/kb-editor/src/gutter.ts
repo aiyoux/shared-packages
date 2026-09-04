@@ -139,6 +139,24 @@ export function handleHeights(host: HTMLElement, page?: KbPage): Record<string, 
 		if (id) next[id] = el.offsetHeight;
 	}
 	if (!page) return next;
+
+	// Gap-to-next-top, not offsetHeight: `.kb-gutter` is a flex column with no
+	// gap, so a handle sized to its own block's content box (no margin) drifts
+	// out of alignment with the block below the moment that block has any
+	// margin — paragraphs, headings, list items all do. Sizing to the space
+	// between one block's top and the next one's absorbs that margin, same as
+	// the visual gap in `.kb-host`. The last block keeps its own offsetHeight
+	// (nothing below it to measure to).
+	const order = gutterOrder(page);
+	const tops: { id: string; top: number }[] = [];
+	for (const block of order) {
+		const el = host.querySelector(`[data-block-id="${cssEscape(block.id)}"]`) as HTMLElement | null;
+		if (el) tops.push({ id: block.id, top: el.getBoundingClientRect().top });
+	}
+	for (let i = 0; i < tops.length - 1; i++) {
+		next[tops[i].id] = Math.max(0, tops[i + 1].top - tops[i].top);
+	}
+
 	for (const block of visibleOrder(page)) {
 		if (block.type === 'table') {
 			const rows = block.children;

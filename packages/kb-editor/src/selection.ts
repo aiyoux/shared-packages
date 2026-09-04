@@ -158,7 +158,22 @@ export function rangeFromSelection(host: HTMLElement, sel: Selection | null = nu
 	);
 }
 
+/**
+ * Live `Selection` first, `getTargetRanges()` only as a fallback when no
+ * selection resolves inside `host`.
+ *
+ * Chrome can keep a `getTargetRanges()` snapshot stale for one event after a
+ * programmatic `Selection.addRange()` — exactly what `restoreSelection` does
+ * after every op, e.g. Enter placing the caret in a freshly split block: the
+ * *next* `beforeinput` reports target ranges still pointing at the
+ * pre-split caret, while `document.getSelection()` already reflects the
+ * restored one correctly. Trusting target ranges there silently redirected
+ * typed text into the old block. `getTargetRanges()` stays as the fallback
+ * for the rare case host has focus but no resolvable live selection.
+ */
 export function rangeFromInputEvent(host: HTMLElement, event: InputEvent, fallback: Range): Range {
+	const live = rangeFromSelection(host);
+	if (live) return live;
 	try {
 		if (typeof event.getTargetRanges === 'function') {
 			const ranges = event.getTargetRanges();
@@ -177,7 +192,7 @@ export function rangeFromInputEvent(host: HTMLElement, event: InputEvent, fallba
 	} catch {
 		// jsdom may not implement getTargetRanges
 	}
-	return rangeFromSelection(host) ?? fallback;
+	return fallback;
 }
 
 export function nodeAtOffset(block: HTMLElement, offset: number): { node: Text; offset: number } | null {

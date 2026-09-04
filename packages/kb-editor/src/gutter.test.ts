@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { dropAfterId, dropTarget, dropWhere, gutterOrder, overlayBoxes } from './gutter.js';
+import { dropAfterId, dropTarget, dropWhere, gutterOrder, handleHeights, overlayBoxes } from './gutter.js';
 import { project } from './project.js';
 import { createEditorState, dispatch } from './state.js';
 import { callout, page, para } from './testFixtures.js';
@@ -69,6 +69,46 @@ describe('gutter drag', () => {
 		const boxes = overlayBoxes(host);
 		expect(boxes).toHaveLength(1);
 		expect(boxes[0].parentId).toBe('c');
+		host.remove();
+	});
+
+	it('handle height spans to the next block top, not just its own offsetHeight', () => {
+		// Regression: `.kb-gutter` is a flex column with no gap, but blocks in
+		// `.kb-host` (paragraphs, headings, ...) carry a margin-bottom. Sizing
+		// a handle to offsetHeight alone ignores that margin, so handles drift
+		// out of alignment with their block — worse with every block added.
+		function rect(top: number, height: number): DOMRect {
+			return {
+				x: 0,
+				y: top,
+				top,
+				left: 0,
+				bottom: top + height,
+				right: 40,
+				width: 40,
+				height,
+				toJSON() {
+					return this;
+				}
+			};
+		}
+		const doc = page([para('a', '1'), para('b', '2'), para('c', '3')]);
+		const host = document.createElement('div');
+		document.body.append(host);
+		project(host, doc);
+		const a = host.querySelector('[data-block-id="a"]') as HTMLElement;
+		const b = host.querySelector('[data-block-id="b"]') as HTMLElement;
+		const c = host.querySelector('[data-block-id="c"]') as HTMLElement;
+		// 20px content + an 8px margin-bottom gap before the next block's top.
+		a.getBoundingClientRect = () => rect(0, 20);
+		b.getBoundingClientRect = () => rect(28, 20);
+		c.getBoundingClientRect = () => rect(56, 20);
+		Object.defineProperty(c, 'offsetHeight', { configurable: true, value: 20 });
+		const heights = handleHeights(host, doc);
+		expect(heights.a).toBe(28);
+		expect(heights.b).toBe(28);
+		// Last block: nothing below it to measure to, keeps its own offsetHeight.
+		expect(heights.c).toBe(20);
 		host.remove();
 	});
 });

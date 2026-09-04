@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { project } from './project.js';
-import { pointFromDom, rangeFromEndpoints, restoreSelection } from './selection.js';
+import { pointFromDom, rangeFromEndpoints, rangeFromInputEvent, restoreSelection } from './selection.js';
 import { page, para } from './testFixtures.js';
 
 describe('selection mapping (cross-block gate)', () => {
@@ -55,6 +55,57 @@ describe('selection mapping (cross-block gate)', () => {
 		const sel = document.getSelection();
 		expect(sel?.anchorNode?.nodeType).toBe(Node.TEXT_NODE);
 		expect(sel?.anchorOffset).toBe(0);
+		host.remove();
+	});
+
+	it('prefers the live Selection over a stale getTargetRanges()', () => {
+		// Regression: after `restoreSelection` moves the caret via
+		// `Selection.addRange` (e.g. Enter placing it in a freshly split
+		// block), Chrome can report the *next* beforeinput's getTargetRanges()
+		// still pointing at the pre-move caret. Trusting that stale range
+		// silently redirected typed text into the old block.
+		const host = document.createElement('div');
+		host.contentEditable = 'true';
+		document.body.append(host);
+		const doc = page([para('a', 'hello'), para('b', '')]);
+		project(host, doc);
+		restoreSelection(host, { anchor: { blockId: 'b', offset: 0 }, head: { blockId: 'b', offset: 0 } }, doc);
+
+		const blockA = host.querySelector('[data-block-id="a"]') as HTMLElement;
+		const staleTextNode = [...blockA.childNodes].find((n) => n.nodeType === Node.TEXT_NODE) as Text;
+		const staleEvent = {
+			getTargetRanges: () => [
+				{ startContainer: staleTextNode, startOffset: 5, endContainer: staleTextNode, endOffset: 5 }
+			]
+		} as unknown as InputEvent;
+
+		const fallback = { anchor: { blockId: 'a', offset: 0 }, head: { blockId: 'a', offset: 0 } };
+		const live = rangeFromInputEvent(host, staleEvent, fallback);
+		expect(live.anchor.blockId).toBe('b');
+		expect(live.anchor.offset).toBe(0);
+		host.remove();
+	});
+
+	it('falls back to getTargetRanges() when no live selection resolves inside host', () => {
+		const host = document.createElement('div');
+		host.contentEditable = 'true';
+		document.body.append(host);
+		const doc = page([para('a', 'hello')]);
+		project(host, doc);
+		document.getSelection()?.removeAllRanges();
+
+		const blockA = host.querySelector('[data-block-id="a"]') as HTMLElement;
+		const textNode = [...blockA.childNodes].find((n) => n.nodeType === Node.TEXT_NODE) as Text;
+		const event = {
+			getTargetRanges: () => [
+				{ startContainer: textNode, startOffset: 3, endContainer: textNode, endOffset: 3 }
+			]
+		} as unknown as InputEvent;
+
+		const fallback = { anchor: { blockId: 'a', offset: 0 }, head: { blockId: 'a', offset: 0 } };
+		const result = rangeFromInputEvent(host, event, fallback);
+		expect(result.anchor.blockId).toBe('a');
+		expect(result.anchor.offset).toBe(3);
 		host.remove();
 	});
 });
