@@ -510,13 +510,25 @@ describe('clipSpanMs / clipVisibleAt', () => {
 	});
 });
 
-describe('view.autoKeyframe', () => {
-	it('round-trips the toggle and drops non-true values', () => {
-		const on = parseAnimDocument({ ...cloneDoc, view: { autoKeyframe: true } });
-		expect(on.view).toEqual({ autoKeyframe: true });
-		expect(serializeAnimDocument(on)).toMatch(/autoKeyframe/);
-		const off = parseAnimDocument({ ...cloneDoc, view: { autoKeyframe: false } });
-		expect(off.view).toBeUndefined();
+describe('view.autoKeyframeByClock', () => {
+	it('round-trips per-clock true and false', () => {
+		const doc = parseAnimDocument({
+			...cloneDoc,
+			view: { autoKeyframeByClock: { primary: true, 'clock-2': false } }
+		});
+		expect(doc.view).toEqual({ autoKeyframeByClock: { primary: true, 'clock-2': false } });
+		expect(serializeAnimDocument(doc)).toMatch(/autoKeyframeByClock/);
+	});
+
+	it('drops an empty map', () => {
+		const doc = parseAnimDocument({ ...cloneDoc, view: { autoKeyframeByClock: {} } });
+		expect(doc.view).toBeUndefined();
+	});
+
+	it('rejects a non-boolean entry', () => {
+		expect(() =>
+			parseAnimDocument({ ...cloneDoc, view: { autoKeyframeByClock: { primary: 'yes' } } })
+		).toThrow();
 	});
 });
 

@@ -123,12 +123,14 @@ export type AnimPlayheadData = { timeMs: number };
 /** App/workspace state that travels with the document but is never
  *  authoring data: window layout (`layout` is a serialized pane-layout tree,
  *  validated by the host), per-clock playhead positions, and the
- *  auto-keyframe toggle (whether drags record keyframes). */
+ *  auto-keyframe toggle (whether drags record keyframes) — per clock id, so
+ *  one playhead can auto-key while another previews without recording.
+ *  Absent for a given clock id defaults to on (see the host's `?? true`). */
 export type AnimDocView = {
 	layout?: unknown;
 	windows?: Record<string, AnimWindowData>;
 	playheads?: Record<string, AnimPlayheadData>;
-	autoKeyframe?: boolean;
+	autoKeyframeByClock?: Record<string, boolean>;
 };
 
 /** The document's virtual canvas: the abstract coordinate space clip frames

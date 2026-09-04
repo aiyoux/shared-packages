@@ -247,6 +247,18 @@ function parsePlayheadData(raw: unknown, clockId: string): AnimPlayheadData {
 	return { timeMs: finiteNumber(raw.timeMs, `view.playheads["${clockId}"].timeMs`) };
 }
 
+function parseAutoKeyframeByClock(raw: unknown): Record<string, boolean> {
+	if (!isRecord(raw)) throw new AnimParseError('view.autoKeyframeByClock must be an object');
+	const out: Record<string, boolean> = {};
+	for (const [clockId, v] of Object.entries(raw)) {
+		if (typeof v !== 'boolean') {
+			throw new AnimParseError(`view.autoKeyframeByClock["${clockId}"] must be a boolean`);
+		}
+		out[clockId] = v;
+	}
+	return out;
+}
+
 function parseView(raw: unknown): AnimDocView | undefined {
 	if (raw === undefined) return undefined;
 	if (!isRecord(raw)) throw new AnimParseError('view must be an object');
@@ -266,11 +278,17 @@ function parseView(raw: unknown): AnimDocView | undefined {
 			playheads[clockId] = parsePlayheadData(p, clockId);
 		}
 	}
+	let autoKeyframeByClock: Record<string, boolean> | undefined;
+	if (raw.autoKeyframeByClock !== undefined) {
+		autoKeyframeByClock = parseAutoKeyframeByClock(raw.autoKeyframeByClock);
+	}
 	const view: AnimDocView = {};
 	if (isRecord(raw.layout)) view.layout = raw.layout;
 	if (windows && Object.keys(windows).length > 0) view.windows = windows;
 	if (playheads && Object.keys(playheads).length > 0) view.playheads = playheads;
-	if (raw.autoKeyframe === true) view.autoKeyframe = true;
+	if (autoKeyframeByClock && Object.keys(autoKeyframeByClock).length > 0) {
+		view.autoKeyframeByClock = autoKeyframeByClock;
+	}
 	return Object.keys(view).length > 0 ? view : undefined;
 }
 
