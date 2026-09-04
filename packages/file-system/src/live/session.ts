@@ -14,9 +14,10 @@
  * is document-shape agnostic.
  *
  * Ordering note: `seq` is globally monotonic across leadership changes, because
- * a promoted tab continues from the last seq it applied. `leaderSessionId` is a
- * *local* epoch used only to fence this tab's own in-flight intents (M2); it is
- * never compared across tabs.
+ * a promoted tab continues from the last seq it applied. That, plus rejecting
+ * in-flight intents whenever the role changes, is the whole fencing story here —
+ * see the note in the election handler for why a per-intent epoch (M2) would be
+ * redundant in this design.
  */
 
 import { createLeaderElection, type LeaderElection } from './leader.js';
@@ -127,8 +128,6 @@ export function createLiveSession<Doc, Op>(
 		resolve: () => void;
 		reject: (err: Error) => void;
 		timer: ReturnType<typeof setTimeout>;
-		/** Local epoch this intent was issued under — see the header note (M2). */
-		epoch: number;
 	};
 	const pending = new Map<string, Pending>();
 
@@ -279,9 +278,12 @@ export function createLiveSession<Doc, Op>(
 		const nextRole: LiveRole = election.isLeader ? 'leader' : 'follower';
 		if (nextRole === role) return;
 		role = nextRole;
-		// Any intent issued under the previous epoch is void — the tab it was
-		// addressed to is no longer authoritative. Reject so the caller retries
-		// against the new leader (M2).
+		// Every in-flight intent was addressed to a tab that is no longer
+		// authoritative, so reject and let the caller retry against the new
+		// leader. This is what fences a leadership change here — an epoch tag
+		// per intent would add nothing, because an intent settles on the
+		// leader's COMMIT echo (ordered by seq), not on a reply that could
+		// arrive from a previous term the way modular-app's RPCs could (M2).
 		rejectAllPending('leadership changed');
 		announceRole();
 		if (role === 'follower') {
@@ -328,14 +330,13 @@ export function createLiveSession<Doc, Op>(
 			}
 
 			const id = newId();
-			const epoch = election.leaderSessionId;
 			return new Promise<void>((resolve, reject) => {
 				// Deliberately NOT unref'd: this deadline is what the caller is
 				// awaiting, so it must keep the loop alive to fire at all.
 				const timer = setTimeout(() => {
 					settle(id, new Error('intent timed out'));
 				}, intentTimeoutMs);
-				pending.set(id, { resolve, reject, timer, epoch });
+				pending.set(id, { resolve, reject, timer });
 				bus.broadcast({ t: 'intent', from: senderId, id, op });
 			});
 		},
