@@ -1570,7 +1570,7 @@ import X from '@lucide/svelte/icons/x';
             {#each currentPage?.items ?? [] as item}
               <a
                 href={item.href}
-                class="group block rounded-xl border border-[color-mix(in_srgb,var(--color-border),transparent_50%)] bg-[color-mix(in_srgb,var(--color-panel),transparent_30%)] p-6 shadow-sm transition hover:border-[var(--color-border)] hover:bg-[var(--color-panel)]"
+                class="group block rounded-xl border border-[color-mix(in_srgb,var(--color-border),transparent_50%)] bg-[color-mix(in_srgb,var(--color-panel),transparent_30%)] p-6 transition hover:border-[var(--color-border)] hover:bg-[var(--color-panel)]"
               >
                 <div class="flex items-start gap-3">
                   <FileText class="mt-0.5 size-4 shrink-0 text-[var(--color-muted-foreground)]" />
@@ -1744,7 +1744,6 @@ import X from '@lucide/svelte/icons/x';
       border-radius: var(--radius-lg);
       background: var(--color-background);
       padding: 1rem;
-      box-shadow: 0 18px 48px color-mix(in srgb, black 32%, transparent);
       transform: translateX(calc(-100% - 1rem));
       transition: transform 160ms ease;
     }

@@ -20,8 +20,6 @@
   --radius-md: 0.95rem;
   --radius-lg: 1.25rem;
   --radius-xl: 1.75rem;
-  --shadow-soft: 0 20px 45px -28px rgb(15 23 42 / 0.35);
-  --shadow-panel: 0 18px 32px -24px rgb(15 23 42 / 0.28);
   --nav-band: 65px;
   --text-3xl: 30px;
   --text-2xl: 24px;
@@ -338,7 +336,6 @@ a {
   background: color-mix(in srgb, var(--app-panel), transparent 3%);
   color: var(--app-panel-fg);
   border: 1px solid color-mix(in srgb, var(--app-border), transparent 8%);
-  box-shadow: var(--shadow-panel);
 }
 
 /* Neon theme glow effects */
@@ -346,8 +343,7 @@ a {
   border-color: color-mix(in srgb, var(--app-border), transparent 60%);
   box-shadow:
     0 0 40px -20px color-mix(in srgb, var(--app-primary), transparent 70%),
-    0 0 80px -40px color-mix(in srgb, var(--app-accent), transparent 80%),
-    var(--shadow-panel);
+    0 0 80px -40px color-mix(in srgb, var(--app-accent), transparent 80%);
 }
 
 :root[data-theme="neon"] button[data-variant="primary"],
