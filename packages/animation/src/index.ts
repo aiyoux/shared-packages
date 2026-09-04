@@ -41,6 +41,7 @@ export {
 } from './document.js';
 
 export { sampleClipFrame } from './sample.js';
+export { applyAnimOp, type AnimOp } from './ops.js';
 
 export { createCompositionClock, createPlayheadRegistry } from '@shared-packages/composition';
 export type { ClockState, CompositionClock, PlayheadRegistry } from '@shared-packages/composition';
