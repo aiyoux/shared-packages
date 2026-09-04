@@ -2,93 +2,15 @@ import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { createLeaderElection } from '../src/live/leader.ts';
 import { liveDocNames } from '../src/live/names.ts';
+import {
+	clearWindowListeners,
+	installLockPolyfill,
+	installWindow,
+	tick,
+	type LockHarness
+} from './live-locks-harness.ts';
 
-/**
- * A real FIFO Web Locks stand-in.
- *
- * modular-app's leader test polyfills a grant-immediately single-holder lock
- * and leaves contention to e2e. Queue behaviour is the whole point of our
- * design (M1: the queue IS the failover), so this models it properly —
- * promotion-on-release is then unit-testable instead of only observable in a
- * browser.
- */
-type Waiter = { signal?: AbortSignal; cb: (lock: unknown) => Promise<void> | void; done: () => void };
-
-function installLockPolyfill(): { held: Map<string, boolean>; reset: () => void } {
-	const queues = new Map<string, Waiter[]>();
-	const held = new Map<string, boolean>();
-
-	function pump(name: string): void {
-		if (held.get(name)) return;
-		const q = queues.get(name);
-		if (!q || q.length === 0) return;
-		const next = q.shift()!;
-		if (next.signal?.aborted) {
-			next.done();
-			pump(name);
-			return;
-		}
-		// Reserve synchronously so a re-entrant pump cannot double-grant, but
-		// invoke the callback asynchronously — the real Web Locks API never
-		// calls back inside `request()`, and granting synchronously would let
-		// a caller miss its own first leadership notification.
-		held.set(name, true);
-		queueMicrotask(() => {
-			// The callback's promise resolving is what releases the lock.
-			void Promise.resolve(next.cb(name)).then(() => {
-				held.set(name, false);
-				next.done();
-				pump(name);
-			});
-		});
-	}
-
-	const locks = {
-		request(name: string, options: { signal?: AbortSignal }, cb: (lock: unknown) => Promise<void> | void) {
-			return new Promise<void>((resolve) => {
-				const waiter: Waiter = { signal: options?.signal, cb, done: () => resolve() };
-				const q = queues.get(name) ?? [];
-				q.push(waiter);
-				queues.set(name, q);
-				// Leaving the queue while still waiting must not strand later waiters.
-				options?.signal?.addEventListener(
-					'abort',
-					() => {
-						const cur = queues.get(name);
-						if (cur) {
-							const i = cur.indexOf(waiter);
-							if (i >= 0) {
-								cur.splice(i, 1);
-								waiter.done();
-							}
-						}
-						pump(name);
-					},
-					{ once: true }
-				);
-				pump(name);
-			});
-		}
-	};
-
-	const nav = (globalThis as unknown as { navigator?: Record<string, unknown> }).navigator;
-	if (nav) Object.defineProperty(nav, 'locks', { value: locks, configurable: true, writable: true });
-	else (globalThis as unknown as { navigator: Record<string, unknown> }).navigator = { locks };
-
-	return { held, reset: () => { queues.clear(); held.clear(); } };
-}
-
-const listeners = new Set<() => void>();
-function installWindow(): void {
-	(globalThis as { window?: unknown }).window = {
-		addEventListener: (_t: string, fn: () => void) => listeners.add(fn),
-		removeEventListener: (_t: string, fn: () => void) => listeners.delete(fn)
-	};
-}
-
-const tick = () => new Promise((r) => setTimeout(r, 0));
-
-let lockEnv: ReturnType<typeof installLockPolyfill>;
+let lockEnv: LockHarness;
 
 beforeEach(() => {
 	installWindow();
@@ -97,7 +19,7 @@ beforeEach(() => {
 
 afterEach(() => {
 	lockEnv.reset();
-	listeners.clear();
+	clearWindowListeners();
 });
 
 describe('liveDocNames', () => {

@@ -17,6 +17,18 @@ export * from './catalog.js';
 export * from './persist.js';
 export * from './vfs.js';
 export * from './documentSession.js';
+// Live cross-tab document editing (docs/design/live-documents.md in scratch-pad).
+export { liveDocNames, type LiveDocNames } from './live/names.js';
+export { createLeaderElection, type LeaderElection } from './live/leader.js';
+export { createLiveBus, type LiveBus, type LiveBusOptions, type LiveEnvelope } from './live/bus.js';
+export {
+	createLiveSession,
+	type LiveSession,
+	type LiveSessionOptions,
+	type LiveRole,
+	type LiveDocMeta,
+	type LiveSavedInfo
+} from './live/session.js';
 export * from './liveLink.js';
 export * from './memoryVfs.js';
 export * from './projectPack.js';
