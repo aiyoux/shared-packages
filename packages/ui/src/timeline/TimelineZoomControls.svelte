@@ -26,7 +26,7 @@
     onReset,
     onToggleMinimap
   }: {
-    /** Current zoom multiplier over fit-to-width (1 = whole duration visible). */
+    /** Current zoom multiplier over the fixed reference scale (1 = default). */
     zoom: number;
     minZoom?: number;
     maxZoom?: number;
@@ -37,7 +37,7 @@
     testidPrefix?: string;
     onZoomIn: () => void;
     onZoomOut: () => void;
-    /** Reset to fit-to-width (zoom = 1). */
+    /** Reset to the default reference scale (zoom = 1). */
     onReset: () => void;
     /** Omit to hide the minimap toggle entirely. */
     onToggleMinimap?: () => void;
@@ -64,8 +64,8 @@
     type="button"
     class="tl-zoom-btn tl-zoom-pct"
     data-testid={`${testidPrefix}-pct`}
-    title="Reset zoom to fit"
-    aria-label="Reset zoom to fit"
+    title="Reset zoom to 100%"
+    aria-label="Reset zoom to 100%"
     onclick={onReset}
   >
     {pct}

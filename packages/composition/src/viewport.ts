@@ -8,12 +8,21 @@
  * CSS pixels of *content space* (before the `-scrollX` translate); screen x is
  * `timeToPx(ms) - scrollX`.
  *
- * `zoom` is a multiplier over the fit-to-width scale: `zoom === 1` lays the whole
- * duration out in exactly `viewportPx`, `zoom === 4` makes it four times wider.
+ * `zoom` is a multiplier over a fixed reference scale ({@link BASE_PX_PER_MS}),
+ * not over fit-to-width: `zoom === 1` always lays out the same amount of time
+ * per pixel, so a wider window simply shows more of the timeline rather than
+ * squeezing the same duration into less space. A shorter clip and a longer one
+ * look identically dense at the same zoom — only the content width (and thus
+ * how much you need to scroll) differs.
  */
 
-/** Multiplier bounds for {@link clampZoom}. 1 = fit the whole duration in view. */
-export const MIN_ZOOM = 1;
+/** Reference scale at `zoom === 1`: ~10s spans a typical widescreen timeline
+ *  pane. Independent of `viewportPx` and `durationMs` — halving the pane width
+ *  halves the visible duration instead of re-fitting the whole clip. */
+export const BASE_PX_PER_MS = 0.12;
+/** Multiplier bounds for {@link clampZoom}, symmetric around the 1x reference
+ *  scale (64x in, 64x out). */
+export const MIN_ZOOM = 1 / 64;
 export const MAX_ZOOM = 64;
 /** Factor a single zoom-in / zoom-out button press multiplies / divides by. */
 export const ZOOM_STEP = 1.5;
@@ -31,16 +40,17 @@ export interface TimelineViewportInput {
 	durationMs: number;
 	/** Measured width of the visible window, in CSS pixels. */
 	viewportPx: number;
-	/** Zoom multiplier over fit-to-width (see module docs). Clamped on the way in. */
+	/** Zoom multiplier over the fixed reference scale (see module docs). Clamped
+	 *  on the way in. */
 	zoom: number;
 	/** Horizontal scroll offset in content pixels. Clamped to `[0, maxScrollX]`. */
 	scrollX: number;
 }
 
 export interface TimelineViewport extends TimelineViewportInput {
-	/** Fit-to-width scale: `viewportPx / durationMs` (0 when duration is 0). */
-	fitPxPerMs: number;
-	/** Effective scale actually in use: `fitPxPerMs * zoom`. */
+	/** Reference scale at `zoom === 1` — always {@link BASE_PX_PER_MS}. */
+	basePxPerMs: number;
+	/** Effective scale actually in use: `basePxPerMs * zoom` (0 when duration is 0). */
 	pxPerMs: number;
 	/** Total laid-out width of the content, in pixels. */
 	contentPx: number;
@@ -68,8 +78,8 @@ export function createTimelineViewport(input: TimelineViewportInput): TimelineVi
 	const durationMs = Math.max(0, input.durationMs);
 	const viewportPx = Math.max(0, input.viewportPx);
 	const zoom = clampZoom(input.zoom);
-	const fitPxPerMs = durationMs > 0 ? viewportPx / durationMs : 0;
-	const pxPerMs = fitPxPerMs * zoom;
+	const basePxPerMs = BASE_PX_PER_MS;
+	const pxPerMs = durationMs > 0 ? basePxPerMs * zoom : 0;
 	const contentPx = durationMs * pxPerMs;
 	const maxScrollX = Math.max(0, contentPx - viewportPx);
 	const scrollX = clamp(input.scrollX, 0, maxScrollX);
@@ -80,7 +90,7 @@ export function createTimelineViewport(input: TimelineViewportInput): TimelineVi
 		viewportPx,
 		zoom,
 		scrollX,
-		fitPxPerMs,
+		basePxPerMs,
 		pxPerMs,
 		contentPx,
 		maxScrollX,
@@ -107,8 +117,7 @@ export function zoomAtAnchor(
 	anchorPx: number
 ): { zoom: number; scrollX: number } {
 	const zoom = clampZoom(nextZoom);
-	const nextFit = vp.fitPxPerMs;
-	const nextPxPerMs = nextFit * zoom;
+	const nextPxPerMs = vp.durationMs > 0 ? vp.basePxPerMs * zoom : 0;
 	const timeAtAnchor = vp.pxToTime(vp.scrollX + anchorPx);
 	const nextContentPx = vp.durationMs * nextPxPerMs;
 	const nextMaxScrollX = Math.max(0, nextContentPx - vp.viewportPx);

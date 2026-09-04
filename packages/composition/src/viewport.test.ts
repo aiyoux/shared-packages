@@ -12,35 +12,48 @@ import {
 	zoomAtAnchor
 } from './viewport.js';
 
-const base = { durationMs: 10_000, viewportPx: 500, zoom: 1, scrollX: 0 };
+// viewportPx is chosen to exactly match durationMs * BASE_PX_PER_MS, so the
+// base fixture happens to fit at zoom 1 — that's a property of this fixture,
+// not of the zoom model (unlike the old fit-to-width scheme, nothing here
+// guarantees a fit at zoom === 1 in general).
+const base = { durationMs: 10_000, viewportPx: 1200, zoom: 1, scrollX: 0 };
 
 describe('createTimelineViewport', () => {
-	it('at zoom 1 lays the whole duration out in exactly one viewport width', () => {
+	it('at zoom 1 lays out at the fixed reference scale', () => {
 		const vp = createTimelineViewport(base);
-		expect(vp.pxPerMs).toBe(0.05);
-		expect(vp.contentPx).toBe(500);
+		expect(vp.pxPerMs).toBe(0.12);
+		expect(vp.contentPx).toBe(1200);
 		expect(vp.maxScrollX).toBe(0);
-		expect(vp.timeToPx(10_000)).toBe(500);
-		expect(vp.pxToTime(250)).toBe(5000);
+		expect(vp.timeToPx(10_000)).toBe(1200);
+		expect(vp.pxToTime(120)).toBe(1000);
+	});
+
+	it('reference scale does not depend on viewport width or duration', () => {
+		const narrow = createTimelineViewport({ ...base, viewportPx: 600 });
+		const longer = createTimelineViewport({ ...base, durationMs: 20_000 });
+		expect(narrow.pxPerMs).toBe(0.12);
+		expect(longer.pxPerMs).toBe(0.12);
+		// Half the pane width shows half the duration, not a re-fitted whole clip.
+		expect(narrow.visibleEndMs).toBe(5000);
 	});
 
 	it('scales content width and scroll range with zoom', () => {
 		const vp = createTimelineViewport({ ...base, zoom: 4 });
-		expect(vp.contentPx).toBe(2000);
-		expect(vp.maxScrollX).toBe(1500);
+		expect(vp.contentPx).toBe(4800);
+		expect(vp.maxScrollX).toBe(3600);
 		expect(vp.visibleStartMs).toBe(0);
 		expect(vp.visibleEndMs).toBe(2500);
 	});
 
 	it('clamps scrollX into range and reflects it in the visible window', () => {
 		const vp = createTimelineViewport({ ...base, zoom: 4, scrollX: 99_999 });
-		expect(vp.scrollX).toBe(1500);
+		expect(vp.scrollX).toBe(3600);
 		expect(vp.visibleEndMs).toBe(10_000);
 		expect(vp.visibleStartMs).toBe(7500);
 	});
 
 	it('clamps zoom to the supported band', () => {
-		expect(createTimelineViewport({ ...base, zoom: 0.1 }).zoom).toBe(MIN_ZOOM);
+		expect(createTimelineViewport({ ...base, zoom: 0.0001 }).zoom).toBe(MIN_ZOOM);
 		expect(createTimelineViewport({ ...base, zoom: 9999 }).zoom).toBe(MAX_ZOOM);
 		expect(clampZoom(Number.NaN)).toBe(MIN_ZOOM);
 	});
@@ -71,7 +84,7 @@ describe('zoomAtAnchor', () => {
 		expect(next.zoom).toBe(8);
 	});
 
-	it('zooming back to fit returns scroll to zero', () => {
+	it('zooming back to the reference scale returns scroll to zero', () => {
 		const vp = createTimelineViewport({ ...base, zoom: 8, scrollX: 3000 });
 		const next = zoomAtAnchor(vp, 1, 250);
 		expect(next.zoom).toBe(1);
@@ -98,10 +111,10 @@ describe('followPlayhead', () => {
 
 	it('scrolls right to chase a playhead past the right edge', () => {
 		const vp = createTimelineViewport({ ...base, zoom: 4, scrollX: 0 });
-		const headMs = vp.pxToTime(560); // 60px past the 500px window
+		const headMs = vp.pxToTime(1260); // 60px past the 1200px window
 		const next = followPlayhead(vp, headMs, 24);
 		const after = createTimelineViewport({ ...base, zoom: 4, scrollX: next });
-		expect(headMs * after.pxPerMs - after.scrollX).toBeCloseTo(500 - 24, 6);
+		expect(headMs * after.pxPerMs - after.scrollX).toBeCloseTo(1200 - 24, 6);
 	});
 
 	it('never returns a scroll outside the valid range', () => {
@@ -121,7 +134,7 @@ describe('clampScrollX', () => {
 	it('bounds to [0, maxScrollX]', () => {
 		const vp = createTimelineViewport({ ...base, zoom: 4 });
 		expect(clampScrollX(vp, -50)).toBe(0);
-		expect(clampScrollX(vp, 5000)).toBe(1500);
+		expect(clampScrollX(vp, 5000)).toBe(3600);
 		expect(clampScrollX(vp, 700)).toBe(700);
 	});
 });
@@ -165,7 +178,7 @@ describe('viewportWindowFraction', () => {
 		const vp = createTimelineViewport({ ...base, zoom: 4, scrollX: 750 });
 		const { left, width } = viewportWindowFraction(vp);
 		expect(width).toBeCloseTo(0.25, 6);
-		expect(left).toBeCloseTo(0.375, 6);
+		expect(left).toBeCloseTo(0.15625, 6);
 		expect(left + width).toBeLessThanOrEqual(1);
 	});
 });

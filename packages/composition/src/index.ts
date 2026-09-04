@@ -17,6 +17,7 @@ export { getClipRenderer, registerClipRenderer } from './protocol.js';
 export { sample } from './sample.js';
 export { composite } from './composite.js';
 export {
+	BASE_PX_PER_MS,
 	MAX_ZOOM,
 	MIN_ZOOM,
 	TICK_STEPS_MS,
