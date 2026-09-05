@@ -74,15 +74,28 @@ export type AtomicBlock = DividerBlock | ImageBlock;
 export type ContainerBlock = CalloutBlock | ToggleBlock;
 export type TableStructureBlock = TableBlock | TableRowBlock;
 
-export type KbPage = {
+/**
+ * What both backends share: a title and a tree of blocks.
+ *
+ * Everything else about a document is envelope, and the envelope differs by
+ * backend — a file has a format tag, timestamps and a child-page slug list; a
+ * record has none of those because the graph carries them. The body functions
+ * in this package are generic over `DocBody` so neither backend has to
+ * fabricate the other's envelope to use them.
+ */
+export type DocBody = {
+	title: string;
+	blocks: Block[];
+};
+
+/** The file backend's envelope. `DocBody` plus what `index.kb` needs. */
+export type KbPage = DocBody & {
 	format: typeof KB_FORMAT;
 	/** Logical page identity. Never VfsNode.id / session.id. */
 	id: string;
-	title: string;
 	createdAt: string; // ISO-8601
 	updatedAt: string;
 	children: string[]; // child folder names in sidebar order (git SoT)
-	blocks: Block[];
 };
 
 export type Point = { blockId: string; offset: number }; // UTF-16 code units
@@ -106,3 +119,12 @@ export type Op =
 	| { kind: 'insert-table-column'; tableId: string; index: number; cells: TableCellBlock[] }
 	| { kind: 'delete-table-row'; tableId: string; rowId: string }
 	| { kind: 'delete-table-column'; tableId: string; index: number };
+
+/**
+ * Ops that act on the body alone — everything a backend without the KB
+ * envelope can emit.
+ */
+export type BodyOp = Exclude<Op, { kind: 'set-children' }>;
+
+/** Ops that act on the KB envelope. `set-children` is child-PAGE slug order. */
+export type EnvelopeOp = Extract<Op, { kind: 'set-children' }>;

@@ -1,3 +1,4 @@
+import type { DocBody } from './types.js';
 import { isContainer } from './plaintext.js';
 import { blockChildren } from './tree.js';
 import {
@@ -435,6 +436,25 @@ export function normalizeBlock(block: Block | Record<string, unknown>): Block {
 	const rec = block as Record<string, unknown>;
 	const list = normalizeBlockList([rec], 0);
 	return list[0] ?? passthroughBlock(rec);
+}
+
+/**
+ * Normalize a body: blocks only, envelope untouched.
+ *
+ * `normalizePage` rebuilds the KB envelope field by field, which is right for
+ * a file page and wrong for anything else — a record-backed document has no
+ * `format` or `createdAt` to rebuild, and blanking them is not a normalization.
+ * This keeps whatever envelope the caller has and normalizes the part both
+ * backends share.
+ */
+export function normalizeBody<T extends DocBody>(doc: T): T {
+	const blocks = normalizeBlockList(doc.blocks ?? [], 0);
+	if (blocks.length === 0) blocks.push(emptyParagraph(newBlockId()));
+	return {
+		...doc,
+		title: typeof doc.title === 'string' ? doc.title : '',
+		blocks
+	};
 }
 
 export function normalizePage(page: KbPage): KbPage {

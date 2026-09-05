@@ -1,5 +1,6 @@
 import { blockChildren } from './tree.js';
 import type {
+	DocBody,
 	Block,
 	ContainerBlock,
 	KbPage,
@@ -67,7 +68,7 @@ function plaintextTree(block: Block): string {
 }
 
 /** Concatenated plaintext of every block. Code keeps interior `\n`; blocks are joined with `\n`. */
-export function plaintext(page: KbPage): string {
+export function plaintext(page: DocBody): string {
 	return (page.blocks ?? []).map(plaintextTree).join('\n');
 }
 

@@ -11,7 +11,9 @@ import {
 	sameParent,
 	type ParentRef
 } from './tree.js';
-import type { Block, KbPage, Mark, Op, Point, TableCellBlock, TableRowBlock, TextSpan } from './types.js';
+import type {
+	BodyOp,
+	DocBody, Block, KbPage, Mark, Op, Point, TableCellBlock, TableRowBlock, TextSpan } from './types.js';
 
 function cloneBlock(block: Block): Block {
 	return JSON.parse(JSON.stringify(block)) as Block;
@@ -468,6 +470,8 @@ function invertInsertText(page: KbPage, op: Extract<Op, { kind: 'insert-text' }>
 	];
 }
 
+export function invert(page: KbPage, op: Op): Op[];
+export function invert<T extends DocBody>(doc: T, op: BodyOp): BodyOp[];
 export function invert(page: KbPage, op: Op): Op[] {
 	switch (op.kind) {
 		case 'set-title':

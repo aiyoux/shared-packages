@@ -25,7 +25,7 @@ export {
 	type Assoc,
 	type StickyPoint
 } from './mapPoint.js';
-export { canonicalMarks, normalizePage, normalizeSpans } from './normalize.js';
+export { canonicalMarks, normalizeBody, normalizePage, normalizeSpans } from './normalize.js';
 export { parseKb } from './parse.js';
 export {
 	remapBlockIds,

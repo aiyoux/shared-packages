@@ -1,5 +1,5 @@
 import { isUnknownBlock } from './plaintext.js';
-import type { Block, KbPage } from './types.js';
+import type { Block, DocBody, KbPage } from './types.js';
 
 export type ParentRef = Block | 'page';
 
@@ -19,7 +19,7 @@ export function blockChildren(block: Block): Block[] | undefined {
 	return Array.isArray(kids) ? kids : undefined;
 }
 
-export function childrenOf(page: KbPage, parent: ParentRef): Block[] {
+export function childrenOf(page: DocBody, parent: ParentRef): Block[] {
 	if (parent === 'page') return page.blocks;
 	const kids = blockChildren(parent);
 	if (!kids) throw new Error(`block ${parent.id} has no children list`);
@@ -47,14 +47,14 @@ function walk(blocks: Block[], out: Block[], visibleOnly: boolean): void {
 }
 
 /** DFS; includes hidden toggle children. */
-export function documentOrder(page: KbPage): Block[] {
+export function documentOrder(page: DocBody): Block[] {
 	const out: Block[] = [];
 	walk(page.blocks ?? [], out, false);
 	return out;
 }
 
 /** DFS, omits closed-toggle children. */
-export function visibleOrder(page: KbPage): Block[] {
+export function visibleOrder(page: DocBody): Block[] {
 	const out: Block[] = [];
 	walk(page.blocks ?? [], out, true);
 	return out;
@@ -79,15 +79,15 @@ function locate(
 	return undefined;
 }
 
-export function locateBlock(page: KbPage, id: string): BlockLocation | undefined {
+export function locateBlock(page: DocBody, id: string): BlockLocation | undefined {
 	return locate(page.blocks ?? [], 'page', id);
 }
 
-export function findBlock(page: KbPage, id: string): Block | undefined {
+export function findBlock(page: DocBody, id: string): Block | undefined {
 	return locateBlock(page, id)?.block;
 }
 
-export function parentOf(page: KbPage, id: string): BlockParent | undefined {
+export function parentOf(page: DocBody, id: string): BlockParent | undefined {
 	const found = locateBlock(page, id);
 	if (!found) return undefined;
 	return { parent: found.parent, index: found.index };
@@ -97,7 +97,7 @@ export function parentIdOf(parent: ParentRef): string | null {
 	return parent === 'page' ? null : parent.id;
 }
 
-export function isDescendant(page: KbPage, ancestorId: string, maybeChildId: string): boolean {
+export function isDescendant(page: DocBody, ancestorId: string, maybeChildId: string): boolean {
 	if (ancestorId === maybeChildId) return false;
 	const ancestor = findBlock(page, ancestorId);
 	if (!ancestor) return false;

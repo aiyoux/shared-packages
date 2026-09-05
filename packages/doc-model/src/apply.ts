@@ -2,7 +2,7 @@ import {
 	canonicalMarks,
 	emptyParagraph,
 	emptySpans,
-	normalizePage,
+	normalizeBody,
 	normalizeSpans,
 	orderedBlock,
 	splitSpans
@@ -29,6 +29,8 @@ import {
 	type ParentRef
 } from './tree.js';
 import type {
+	BodyOp,
+	DocBody,
 	Block,
 	CodeBlock,
 	KbPage,
@@ -789,6 +791,19 @@ function applySetChildren(page: KbPage, children: string[]): void {
 	page.children = [...children];
 }
 
+/**
+ * Apply one op.
+ *
+ * Overloaded rather than plain-generic so both backends get the right
+ * contract: a `KbPage` may take any op including the envelope's
+ * `set-children`; a bare `DocBody` may take body ops only, because it has no
+ * child-page slug list for `set-children` to write to.
+ *
+ * `clonePage` is a JSON round-trip, so envelope fields this function never
+ * reads are carried through untouched.
+ */
+export function apply(page: KbPage, op: Op): KbPage;
+export function apply<T extends DocBody>(doc: T, op: BodyOp): T;
 export function apply(page: KbPage, op: Op): KbPage {
 	const next = clonePage(page);
 	switch (op.kind) {
@@ -848,9 +863,11 @@ export function apply(page: KbPage, op: Op): KbPage {
 			throw new Error(`unknown op: ${(_never as Op).kind}`);
 		}
 	}
-	return normalizePage(next);
+	return normalizeBody(next);
 }
 
+export function applyMany(page: KbPage, ops: Op[]): KbPage;
+export function applyMany<T extends DocBody>(doc: T, ops: BodyOp[]): T;
 export function applyMany(page: KbPage, ops: Op[]): KbPage {
 	let current = page;
 	for (const op of ops) current = apply(current, op);
