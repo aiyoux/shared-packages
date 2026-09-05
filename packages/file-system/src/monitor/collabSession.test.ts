@@ -7,7 +7,7 @@ import {
 	type CollabFrame,
 	type KbPage,
 	type Op
-} from '@shared-packages/kb-model';
+} from '@shared-packages/doc-model';
 import {
 	clearMonitorCollabMuxForTests,
 	createMonitorCollabSession,

@@ -18,8 +18,8 @@ const root = path.dirname(fileURLToPath(import.meta.url));
 export default defineConfig({
 	resolve: {
 		alias: {
-			// Worktree node_modules is shared with development; pin kb-model to this tree.
-			'@shared-packages/kb-model': path.join(root, '../kb-model/src/index.ts'),
+			// Worktree node_modules is shared with development; pin doc-model to this tree.
+			'@shared-packages/doc-model': path.join(root, '../doc-model/src/index.ts'),
 			'@shared-packages/crypto': path.resolve(root, '../crypto/src/index.ts')
 		}
 	},

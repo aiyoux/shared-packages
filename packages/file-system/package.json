@@ -105,7 +105,7 @@
     "@shared-packages/compress": "*",
     "@shared-packages/crypto": "*",
     "@shared-packages/pdf": "*",
-    "@shared-packages/kb-model": "*"
+    "@shared-packages/doc-model": "*"
   },
   "peerDependenciesMeta": {
     "svelte": {
@@ -114,12 +114,12 @@
     "@shared-packages/pdf": {
       "optional": true
     },
-    "@shared-packages/kb-model": {
+    "@shared-packages/doc-model": {
       "optional": true
     }
   },
   "devDependencies": {
-    "@shared-packages/kb-model": "*",
+    "@shared-packages/doc-model": "*",
     "@sveltejs/vite-plugin-svelte": "^7.0.0",
     "@testing-library/svelte": "^5.2.8",
     "@types/node": "^26.1.1",

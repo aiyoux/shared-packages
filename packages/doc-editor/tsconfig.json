@@ -7,18 +7,14 @@
     "skipLibCheck": true,
     "declaration": true,
     "esModuleInterop": true,
-    "resolveJsonModule": true,
     "isolatedModules": true,
     "noEmit": true,
-    // Tests run under `node --test` with native type stripping, which resolves
-    // the literal path and cannot follow a `.js` specifier to a `.ts` file, so
-    // they import with explicit `.ts`. Legal here because noEmit is set.
-    "allowImportingTsExtensions": true,
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "types": ["node"],
+    // Worktree node_modules is a repo-root symlink and does not contain file: doc-model.
     "paths": {
       "@shared-packages/doc-model": ["../doc-model/src/index.ts"]
     }
   },
-  "include": ["src/**/*", "test/**/*"]
+  "include": ["src/**/*.ts"]
 }

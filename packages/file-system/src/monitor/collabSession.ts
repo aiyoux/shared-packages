@@ -12,7 +12,7 @@ import {
 	type KbPage,
 	type MonitorCollabAdapter,
 	type Op
-} from '@shared-packages/kb-model';
+} from '@shared-packages/doc-model';
 import {
 	CollabConflictError,
 	getSnapshot,
