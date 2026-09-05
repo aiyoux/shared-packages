@@ -9,6 +9,7 @@ import { ROOT_PARENT_KEY } from './db.js';
 import type { AppDraft, BlobRef, VfsNode } from './types.js';
 import type { MetaRow, LeaseRow } from './db.js';
 import type { OpfsBlobStore } from './opfs.js';
+import { decodeDraftPayload, encodeDraftPayload } from './draftPayload.js';
 import {
 	engineFromPort,
 	isCatalogDeadError,
@@ -171,7 +172,7 @@ function decodeDraft(r: Record<string, unknown>): AppDraft {
 		id: String(r.id),
 		appId: String(r.app_id ?? ''),
 		updatedAt: Number(r.updated_at) || 0,
-		payload: parseJson(r.payload, null)
+		payload: decodeDraftPayload(parseJson(r.payload, null))
 	};
 	if (r.open_file_id) d.openFileId = String(r.open_file_id);
 	if (r.open_file_generation != null) d.openFileGeneration = Number(r.open_file_generation);
@@ -746,7 +747,7 @@ class DraftTable {
 				draft.id,
 				draft.appId,
 				draft.updatedAt,
-				jsonOrNull(draft.payload),
+				jsonOrNull(await encodeDraftPayload(draft.payload)),
 				draft.openFileId ?? null,
 				draft.openFileGeneration ?? null
 			]
