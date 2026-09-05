@@ -1,4 +1,5 @@
-import { createCompositionClock, type CompositionClock } from './clock.js';
+import { createCompositionClock } from './clock.js';
+import type { CompositionClock } from './types.js';
 
 /**
  * A refcounted registry of independent playheads ("clocks") over one
