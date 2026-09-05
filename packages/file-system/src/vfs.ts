@@ -2491,14 +2491,17 @@ export class VfsService {
 	}
 
 	/** Flatten Blob parts; some test Blobs do not concatenate. */
-	private async materializePack(parts: BlobPart[], expected: number): Promise<Uint8Array> {
+	// `Uint8Array<ArrayBuffer>`, not bare `Uint8Array`: since TS 5.7 the bare
+	// name widens to `ArrayBufferLike`, which admits `SharedArrayBuffer` and so
+	// is not a `BufferSource`. The buffer here is always freshly allocated.
+	private async materializePack(
+		parts: (Uint8Array<ArrayBufferLike> | Blob)[],
+		expected: number
+	): Promise<Uint8Array<ArrayBuffer>> {
 		const out = new Uint8Array(expected);
 		let offset = 0;
 		for (const part of parts) {
-			const bytes =
-				part instanceof Uint8Array
-					? part
-					: await blobToBytes(part as Blob);
+			const bytes = part instanceof Uint8Array ? part : await blobToBytes(part);
 			if (offset + bytes.byteLength > expected) {
 				throw new VfsError(
 					'OPFS_IO',
@@ -3146,7 +3149,7 @@ export class VfsService {
 	async compactStalePacks(opts?: {
 		signal?: AbortSignal;
 		onProgress?: (ev: PackOpProgress) => void;
-	}): Promise<{ compactedPacks: number; reclaimedBytes: number }> {
+	}): Promise<CompactPacksResult> {
 		await this.ready();
 		const refs = await this.db.blobRefs.toArray();
 		const liveByPack = new Map<string, number>();

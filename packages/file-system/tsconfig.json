@@ -15,7 +15,9 @@
     // they import with explicit `.ts`. Legal here because noEmit is set.
     "allowImportingTsExtensions": true,
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
-    "types": ["node"],
+    // `vite/client` types `import.meta.env`, which reaches this project through
+    // the `../ui` sources it pulls in transitively.
+    "types": ["node", "vite/client"],
     "paths": {
       "@shared-packages/doc-model": ["../doc-model/src/index.ts"]
     }

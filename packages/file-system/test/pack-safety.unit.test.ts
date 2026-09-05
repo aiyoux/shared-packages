@@ -332,15 +332,19 @@ describe('pack safety', () => {
 	it('childByName hides pending reservations', async () => {
 		let v: ReturnType<typeof createVfs> | undefined;
 		let folderId: string | undefined;
-		let saw: { listed: number; child?: string } | null = null;
+		// A holder, not a bare `let`: the only assignment happens inside
+		// `writeAtomic` below, which control-flow analysis does not see, so a
+		// `let` still reads as `null` at the assert — and `assert.ok` then
+		// narrows it to `never`.
+		const saw: { value: { listed: number; child?: string } | null } = { value: null };
 		const base = rangeCapableStore();
 		const opfs: OpfsBlobStore = {
 			...base,
 			async writeAtomic(path, data) {
-				if (path.startsWith('packs/') && v && folderId && !saw) {
+				if (path.startsWith('packs/') && v && folderId && !saw.value) {
 					const listed = await v.list({ parentId: folderId });
 					const child = await v.childByName(folderId, 'a.bin');
-					saw = { listed: listed.length, child: child?.id };
+					saw.value = { listed: listed.length, child: child?.id };
 				}
 				return base.writeAtomic!(path, data);
 			}
@@ -361,9 +365,9 @@ describe('pack safety', () => {
 			],
 			{ pack: true }
 		);
-		assert.ok(saw);
-		assert.equal(saw!.listed, 0);
-		assert.equal(saw!.child, undefined);
+		assert.ok(saw.value);
+		assert.equal(saw.value.listed, 0);
+		assert.equal(saw.value.child, undefined);
 		await v.db.delete();
 	});
 

@@ -1649,6 +1649,17 @@
 		setPane(id, { explorerKey: p.explorerKey + 1 });
 	}
 
+	/** Open folder + driver of the focused (or only) pane. */
+	export function activePane(): {
+		id: PaneId;
+		driver: ExplorerDriver;
+		parentId: string | null;
+	} {
+		const id = targetPaneId || listLeaves(windowRoot)[0]?.id || 'left';
+		const p = paneState(id);
+		return { id, driver: activeDriver(p, id), parentId: p.ctx.parentId };
+	}
+
 	function inherit(source: PaneState | undefined, role: string): PaneState {
 		const kind = role.startsWith('b2:')
 			? 'b2'

@@ -34,7 +34,7 @@ type CatalogDump = {
 
 function getAllStore<T>(db: IDBDatabase, store: string): Promise<T[]> {
 	if (!db.objectStoreNames.contains(store)) return Promise.resolve([]);
-	return new Promise((resolve, reject) => {
+	return new Promise<T[]>((resolve, reject) => {
 		const tx = db.transaction(store, 'readonly');
 		const r = tx.objectStore(store).getAll();
 		r.onsuccess = () => resolve((r.result as T[]) ?? []);
@@ -47,7 +47,7 @@ async function readIdbCatalog(dbName: string): Promise<CatalogDump> {
 	if (typeof indexedDB === 'undefined') {
 		return { missing: true, nodes: [], blobRefs: [], drafts: [], leases: [], meta: [] };
 	}
-	return new Promise((resolve, reject) => {
+	return new Promise<CatalogDump>((resolve, reject) => {
 		let settled = false;
 		const fail = (e: unknown) => {
 			if (settled) return;

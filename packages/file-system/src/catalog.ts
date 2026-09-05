@@ -315,7 +315,15 @@ export class SqliteCatalog {
 		});
 	}
 
-	async transaction<T>(_mode: string, ...rest: unknown[]): Promise<T> {
+	/**
+	 * `T` used to appear only in the return type, so there was nothing to infer
+	 * it from and every caller that used the result got `unknown`. Naming the
+	 * trailing scope callback in the tuple gives inference something to bite on.
+	 */
+	async transaction<T>(
+		_mode: string,
+		...rest: [...tables: unknown[], scope: () => Promise<T> | T]
+	): Promise<T> {
 		const fn = rest[rest.length - 1] as () => Promise<T> | T;
 		const runOnce = async (): Promise<T> => {
 			this.txDepth += 1;

@@ -71,8 +71,13 @@ function withTimeout<T>(p: Promise<T>, ms: number, msg: string): Promise<T> {
 async function getPool(): Promise<PoolUtil> {
 	if (pool) return pool;
 	const { default: sqlite3InitModule } = await import('@sqlite.org/sqlite-wasm');
+	// The shipped types declare the initialiser as taking no arguments; it does
+	// accept a config object, and `locateFile` is how the .wasm is found here.
+	const init = sqlite3InitModule as unknown as (opts: {
+		locateFile: (file: string) => string;
+	}) => Promise<unknown>;
 	const sqlite3 = await withTimeout(
-		sqlite3InitModule({
+		init({
 			locateFile: (file: string) => (file.endsWith('.wasm') ? wasmHref() : file)
 		}) as Promise<{
 			installOpfsSAHPoolVfs: (opts: {
@@ -254,7 +259,17 @@ function enqueue(dbName: string, msg: Incoming, reply: (msg: unknown) => void): 
 	void pump(dbName);
 }
 
-const ctx = self as unknown as DedicatedWorkerGlobalScope;
+/**
+ * Only what this worker uses. The `WebWorker` lib cannot simply be added to
+ * this package's `lib` — it collides with `DOM`, which the rest of the package
+ * needs — so the global is described structurally instead.
+ */
+type WorkerCtx = {
+	postMessage: (message: unknown) => void;
+	onmessage: ((ev: MessageEvent) => void) | null;
+};
+
+const ctx = self as unknown as WorkerCtx;
 
 async function shutdownPool(): Promise<void> {
 	for (const d of dbs.values()) {

@@ -642,7 +642,11 @@ export async function writeEntriesToDriver(
 	const ensureDir = dest.ensureDir;
 	// Packed extract cannot use writeTree: that path is one POSIX file per
 	// member under root/. Packing needs writeFiles so members share packs/.
-	const useTree = typeof driver.writeTree === 'function' && !pack;
+	// Captured, not just tested: a `boolean` derived from `typeof driver.writeTree`
+	// does not narrow the optional method at the call site further down.
+	const writeTree =
+		!pack && typeof driver.writeTree === 'function' ? driver.writeTree.bind(driver) : null;
+	const useTree = writeTree !== null;
 	if (!useTree) {
 		await dest.prefetch(
 			files.map((f) => splitPackedPath(f.path).dirs).filter((d) => d.length > 0)
@@ -768,7 +772,7 @@ export async function writeEntriesToDriver(
 
 	// POSIX tree in OPFS, then one IDB catalog. Skips ensureFolders+writeFiles
 	// (20k folder rows up front, 3000 files in one blobs/ directory).
-	if (useTree && files.length) {
+	if (writeTree && files.length) {
 		throwIfAborted(signal);
 		for (const plan of planned) {
 			onFile?.({
@@ -793,7 +797,7 @@ export async function writeEntriesToDriver(
 			});
 			if (plan.dirs.length) bumpFolderAggs(plan.dirs, size);
 		};
-		await driver.writeTree(
+		await writeTree(
 			parentId,
 			files.map((f) => ({ path: f.path, body: f.data })),
 			{
