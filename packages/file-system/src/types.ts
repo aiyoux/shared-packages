@@ -4,6 +4,7 @@ export type FileTypeId =
 	| 'ob3d'
 	| 'cari'
 	| 'vrec'
+	| 'vcomp'
 	| 'igfx'
 	| 'kb'
 	| 'anim'

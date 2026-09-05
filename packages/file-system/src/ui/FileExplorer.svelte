@@ -2216,6 +2216,7 @@
 		if (entry.fileType === 'kb') return 'Open in Knowledge Base';
 		if (entry.fileType === 'anim') return 'Open in Animations';
 		if (entry.fileType === 'vrec') return 'Open in voice';
+		if (entry.fileType === 'vcomp') return 'Open in voice';
 		if (entry.fileType === 'image') return 'Open in Images';
 		if (entry.fileType === 'video') return 'Open in Video';
 		if (entry.fileType === 'audio') return 'Open in Audio';
