@@ -35,6 +35,10 @@
 	import { applyEditorOps, redo, setSelection, undo, type EditorState } from './state.js';
 
 	let {
+		// Renamed off `state` deliberately: a local binding called `state` makes
+		// the compiler read `$state(...)` in this file as a store subscription to
+		// it — no build error, `store_invalid_shape` at runtime, component renders
+		// nothing.
 		state: editor,
 		editable = true,
 		carets = [],
@@ -570,6 +574,18 @@
 		outline: none;
 		white-space: pre-wrap;
 		word-wrap: break-word;
+	}
+	/* An empty text block must still be clickable. With no content, `<p>` and
+	   friends collapse to zero height, so the caret cannot be placed in them —
+	   the first paragraph of a new page being the obvious case. Structural and
+	   atomic blocks (divider, image, table parts) are left alone: they have
+	   their own sizing. */
+	.kb-host :global([data-block-type='paragraph']),
+	.kb-host :global([data-block-type='heading']),
+	.kb-host :global([data-block-type='list_item']),
+	.kb-host :global([data-block-type='code']),
+	.kb-host :global([data-block-type='table_cell']) {
+		min-height: 1.25em;
 	}
 	.kb-host :global([data-block-type='paragraph']) {
 		margin: 0 0 0.5rem;
