@@ -30,7 +30,8 @@
 		plaintextFromDom,
 		rangeFromInputEvent,
 		rangeFromSelection,
-		restoreSelection
+		restoreSelection,
+		focusHeldOutside
 	} from './selection.js';
 	import { applyEditorOps, redo, setSelection, undo, type EditorState } from './state.js';
 
@@ -225,7 +226,9 @@
 			domDiverged = false;
 		}
 		untrack(() => {
-			restoreSelection(el, editor.selection, page);
+			// A repaint must not pull focus out of a text field elsewhere in the
+			// app; see `focusHeldOutside`.
+			if (!focusHeldOutside(el)) restoreSelection(el, editor.selection, page);
 			heightById = handleHeights(el, page);
 			overlays = overlayBoxes(el, gutterEl);
 		});

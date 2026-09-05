@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { project } from './project.js';
-import { pointFromDom, rangeFromEndpoints, rangeFromInputEvent, restoreSelection } from './selection.js';
+import {
+	focusHeldOutside,
+	pointFromDom,
+	rangeFromEndpoints,
+	rangeFromInputEvent,
+	restoreSelection
+} from './selection.js';
 import { page, para } from './testFixtures.js';
 
 describe('selection mapping (cross-block gate)', () => {
@@ -107,5 +113,74 @@ describe('selection mapping (cross-block gate)', () => {
 		expect(result.anchor.blockId).toBe('a');
 		expect(result.anchor.offset).toBe(3);
 		host.remove();
+	});
+});
+
+/**
+ * Repainting must not steal focus from a text field elsewhere in the app —
+ * `restoreSelection` focuses the host as a side effect of `addRange`, and the
+ * KB tree's inline rename input was losing every edit to it.
+ */
+describe('focusHeldOutside', () => {
+	function withHost(fn: (host: HTMLElement) => void): void {
+		const host = document.createElement('div');
+		host.contentEditable = 'true';
+		document.body.append(host);
+		try {
+			fn(host);
+		} finally {
+			host.remove();
+		}
+	}
+
+	it('is false when nothing outside holds focus', () => {
+		withHost((host) => {
+			expect(focusHeldOutside(host)).toBe(false);
+		});
+	});
+
+	it('is false when the focus is inside the host itself', () => {
+		withHost((host) => {
+			const inner = document.createElement('div');
+			inner.tabIndex = 0;
+			host.append(inner);
+			inner.focus();
+			expect(focusHeldOutside(host)).toBe(false);
+		});
+	});
+
+	it('is true when an input elsewhere holds focus', () => {
+		withHost((host) => {
+			const input = document.createElement('input');
+			document.body.append(input);
+			input.focus();
+			expect(focusHeldOutside(host)).toBe(true);
+			input.remove();
+		});
+	});
+
+	it('is true when a contenteditable elsewhere holds focus', () => {
+		withHost((host) => {
+			const other = document.createElement('div');
+			// Set through the attribute and make it focusable: jsdom implements
+			// neither the `contentEditable` IDL setter nor `isContentEditable`.
+			other.setAttribute('contenteditable', 'true');
+			other.tabIndex = 0;
+			document.body.append(other);
+			other.focus();
+			expect(document.activeElement).toBe(other);
+			expect(focusHeldOutside(host)).toBe(true);
+			other.remove();
+		});
+	});
+
+	it('is false for a button, which is safe to take focus from', () => {
+		withHost((host) => {
+			const button = document.createElement('button');
+			document.body.append(button);
+			button.focus();
+			expect(focusHeldOutside(host)).toBe(false);
+			button.remove();
+		});
 	});
 });

@@ -211,6 +211,33 @@ export function nodeAtOffset(block: HTMLElement, offset: number): { node: Text; 
 	return { node: last, offset: last.data.length };
 }
 
+/**
+ * Whether a text field outside `host` currently holds focus.
+ *
+ * `restoreSelection` ends in `Selection.addRange` inside the contenteditable,
+ * and that focuses the host as a side effect. While the user is editing the
+ * document that is exactly right. But a repaint can be driven by something the
+ * user is not looking at — a page loading in another pane, a collab frame
+ * arriving — and then re-asserting the caret yanks focus out of whatever they
+ * are actually typing in. The tree's inline rename input lost every keystroke
+ * this way: it opened, the page finished loading, the repaint stole focus, and
+ * the input's blur handler committed the edit away.
+ *
+ * Focus sitting on the body or on a button is fine to take; another text field
+ * is not.
+ */
+export function focusHeldOutside(host: HTMLElement): boolean {
+	const active = host.ownerDocument.activeElement as HTMLElement | null;
+	if (!active || active === host.ownerDocument.body) return false;
+	if (host.contains(active)) return false;
+	// `isContentEditable` covers descendants that inherit editability; the
+	// attribute is the fallback for environments that do not implement it.
+	if (active.isContentEditable) return true;
+	const editable = active.getAttribute('contenteditable');
+	if (editable === '' || editable === 'true') return true;
+	return active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.tagName === 'SELECT';
+}
+
 export function restoreSelection(host: HTMLElement, range: Range, page?: KbPage): void {
 	const doc = host.ownerDocument;
 	const sel = doc.getSelection();
