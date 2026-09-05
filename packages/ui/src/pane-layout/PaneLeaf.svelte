@@ -183,6 +183,7 @@
 		min-height: 0;
 		display: flex;
 		align-items: center;
+		overflow: hidden;
 	}
 	.pl-update-slot {
 		display: flex;
@@ -204,6 +205,8 @@
 		align-items: center;
 		gap: 2px;
 		flex-shrink: 0;
+		position: relative;
+		z-index: 1;
 		padding: 2px;
 		border: 1px solid color-mix(in srgb, var(--border, #475569) 70%, transparent);
 		border-radius: 6px;

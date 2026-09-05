@@ -16,6 +16,7 @@
 	html,
 	body {
 		height: 100%;
+		height: 100dvh;
 		margin: 0;
 		padding: 0;
 		/* Default: allow document scroll. Immersive tools toggle class-gated
