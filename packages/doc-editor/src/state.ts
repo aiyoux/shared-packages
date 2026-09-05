@@ -6,6 +6,9 @@ import {
 	isNonTextual,
 	normalizePage,
 	plaintextOf,
+	remapOps,
+	remapPageIds,
+	type IdMap,
 	type KbPage,
 	type Op,
 	type Range
@@ -283,4 +286,42 @@ export function setSelection(state: EditorState, selection: Range): EditorState 
 /** Parent onDispatch handler: one undo group even when the editor emits Op[]. */
 export function applyEditorOps(state: EditorState, op: Op | Op[]): EditorState {
 	return Array.isArray(op) ? dispatchMany(state, op) : dispatch(state, op);
+}
+
+/**
+ * Rewrite every block id this state holds.
+ *
+ * Only a record backend needs it. There, the server assigns ids but the editor
+ * needs one the moment a block exists, so it mints `temp:<uuid>` and rewrites
+ * when the real id lands. By then that id can be in five places at once —
+ * hence one function that covers all of them rather than five call sites that
+ * can drift apart.
+ *
+ * Take a **map**: one create batch returns many ids together (a table mints
+ * thirteen), and rewriting them one at a time exposes a half-remapped state.
+ *
+ * Route this through the same single mutation path as ops. Applied behind the
+ * editor's back it can race a dispatch and reintroduce a temp id.
+ */
+export function remapIds(state: EditorState, map: IdMap): EditorState {
+	if (map.size === 0) return state;
+	const page = remapPageIds(map, state.page);
+	const selection = {
+		anchor: remapPointId(map, state.selection.anchor),
+		head: remapPointId(map, state.selection.head)
+	};
+	return {
+		...state,
+		page,
+		selection,
+		undo: state.undo.map((group) => remapOps(map, group)),
+		redo: state.redo.map((group) => remapOps(map, group)),
+		blockFocus: state.blockFocus === undefined ? undefined : (map.get(state.blockFocus) ?? state.blockFocus),
+		pendingRemote: state.pendingRemote ? remapOps(map, state.pendingRemote) : state.pendingRemote
+	};
+}
+
+function remapPointId<T extends { blockId: string }>(map: IdMap, point: T): T {
+	const blockId = map.get(point.blockId);
+	return blockId === undefined ? point : { ...point, blockId };
 }

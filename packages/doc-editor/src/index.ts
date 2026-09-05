@@ -91,6 +91,7 @@ export {
 	setComposing,
 	setJustCommittedComposition,
 	setSelection,
+	remapIds,
 	undo,
 	UNDO_CAP,
 	type EditorState

@@ -28,6 +28,13 @@ export {
 export { canonicalMarks, normalizePage, normalizeSpans } from './normalize.js';
 export { parseKb } from './parse.js';
 export {
+	remapBlockIds,
+	remapOpIds,
+	remapOps,
+	remapPageIds,
+	type IdMap
+} from './remap.js';
+export {
 	isAtomic,
 	isContainer,
 	isNonTextual,
