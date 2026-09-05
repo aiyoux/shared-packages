@@ -65,7 +65,23 @@ function inoOf(id: string): number {
 	return (h >>> 0) || 1;
 }
 
-function statsFor(node: VfsNode | { id: string; kind: 'folder'; size?: number; updatedAt: number; createdAt: number }) {
+/**
+ * Everything `statsFor` actually reads. Buffered (uncommitted) entries are
+ * synthesised rather than being real `VfsNode`s — no `parentId`, `name` or
+ * `generation` — so the old `VfsNode | {folder…}` union covered the folder
+ * case and left the file one unassignable.
+ */
+type StatSource = {
+	id: string;
+	kind: VfsNode['kind'];
+	size?: number;
+	updatedAt: number;
+	createdAt: number;
+	/** VFS write counter, folded into `ino` so a changed file looks stale. */
+	generation?: number;
+};
+
+function statsFor(node: StatSource) {
 	const isDir = node.kind === 'folder';
 	const mode = isDir ? 0o040000 : 0o100644;
 	const mtimeMs = node.updatedAt ?? Date.now();
@@ -89,7 +105,7 @@ function statsFor(node: VfsNode | { id: string; kind: 'folder'; size?: number; u
 		// nothing and makes a changed file always look stale. It can only ever
 		// cause an unnecessary re-hash, never a missed change, and an unchanged
 		// file keeps its value so the cache still works.
-		ino: inoOf(`${node.id}:${(node as VfsNode & { generation?: number }).generation ?? 0}`),
+		ino: inoOf(`${node.id}:${node.generation ?? 0}`),
 		dev: 1,
 		uid: 0,
 		gid: 0,

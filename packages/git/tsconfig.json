@@ -17,7 +17,10 @@
     // scene-bake and component-library already make.
     "allowImportingTsExtensions": true,
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
-    "types": ["node"]
+    // Same reach as `allowImportingTsExtensions` above: type-checking pulls in
+    // file-system and ui sources, which use Vite's `?worker` imports and
+    // `import.meta.env`. `vite/client` declares both.
+    "types": ["node", "vite/client"]
   },
   "include": ["src/**/*.ts"]
 }
