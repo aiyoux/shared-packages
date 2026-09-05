@@ -31,7 +31,7 @@ export { loadScanEngine, peekScanEngine, setOpenCvUrl, type LoadScanOptions } fr
 export { commitScan, type CommitOptions } from './operations.js';
 export { applyH, destToSrcHomography, warpImageData } from './warp.js';
 export { pagesToPdf } from './pdf.js';
-export { recognizeText, terminateOcr } from './ocr.js';
+export { OCR_ASSET_PATHS, recognizeText, terminateOcr } from './ocr.js';
 export {
 	blobToImageData,
 	copyPixelBuffer,

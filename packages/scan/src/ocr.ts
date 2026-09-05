@@ -3,13 +3,21 @@ type OcrWorker = {
 	terminate: () => Promise<void>;
 };
 
+/** Same-origin copies from hub `scripts/copy-tesseract.mjs`. No jsdelivr. */
+export const OCR_ASSET_PATHS = {
+	workerPath: '/vendor/tesseract/worker.min.js',
+	corePath: '/vendor/tesseract',
+	langPath: '/vendor/tesseract',
+	gzip: true
+} as const;
+
 let workerPromise: Promise<OcrWorker> | null = null;
 
 async function getWorker(): Promise<OcrWorker> {
 	if (!workerPromise) {
 		workerPromise = (async () => {
 			const { createWorker } = await import('tesseract.js');
-			return (await createWorker('eng')) as unknown as OcrWorker;
+			return (await createWorker('eng', 1, { ...OCR_ASSET_PATHS })) as unknown as OcrWorker;
 		})().catch((err) => {
 			workerPromise = null;
 			throw err;
