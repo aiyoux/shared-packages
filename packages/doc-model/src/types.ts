@@ -69,6 +69,9 @@ export type Block =
 	| TableRowBlock
 	| TableCellBlock;
 
+/** Discriminant of every block. */
+export type BlockType = Block['type'];
+
 export type TextLikeBlock = ParagraphBlock | HeadingBlock | ListItemBlock | TableCellBlock;
 export type AtomicBlock = DividerBlock | ImageBlock;
 export type ContainerBlock = CalloutBlock | ToggleBlock;

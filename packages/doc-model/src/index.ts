@@ -35,7 +35,15 @@ export {
 	type Assoc,
 	type StickyPoint
 } from './mapPoint.js';
-export { canonicalMarks, normalizeBody, normalizePage, normalizeSpans } from './normalize.js';
+export {
+	canonicalMarks,
+	marksEqual,
+	normalizeBody,
+	normalizePage,
+	normalizeSpans,
+	sliceSpans,
+	splitSpans
+} from './normalize.js';
 export { parseKb } from './parse.js';
 export type {
 	DocChildEntry,
@@ -83,11 +91,15 @@ export {
 	KB_FORMAT,
 	type AtomicBlock,
 	type Block,
+	type BlockType,
+	type BodyOp,
 	type CalloutBlock,
 	type CalloutVariant,
 	type CodeBlock,
 	type ContainerBlock,
 	type DividerBlock,
+	type DocBody,
+	type EnvelopeOp,
 	type HeadingBlock,
 	type ImageBlock,
 	type Inline,
