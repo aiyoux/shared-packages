@@ -37,6 +37,13 @@ export {
 } from './mapPoint.js';
 export { canonicalMarks, normalizeBody, normalizePage, normalizeSpans } from './normalize.js';
 export { parseKb } from './parse.js';
+export type {
+	DocChildEntry,
+	DocumentAssetBackend,
+	DocumentBackend,
+	DocumentCapabilityBackend,
+	DocumentIdAssigningBackend
+} from './port.js';
 export {
 	remapBlockIds,
 	remapOpIds,
