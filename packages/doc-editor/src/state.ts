@@ -7,7 +7,7 @@ import {
 	normalizeBody,
 	plaintextOf,
 	remapOps,
-	remapPageIds,
+	remapDocIds,
 	type DocBody,
 	type IdMap,
 	type KbPage,
@@ -17,6 +17,18 @@ import {
 import { blockIndex, clampRange, collapsed, isCollapsed } from './range.js';
 
 export const UNDO_CAP = 200;
+
+/**
+ * `apply` / `invert` are overloaded: a `KbPage` takes any op, a bare `DocBody`
+ * takes body ops only. Inside the editor the document is generic but the op is
+ * the full union, which no overload matches — so these name the invariant once
+ * instead of casting at eight call sites.
+ *
+ * The invariant: the editor never dispatches `set-children`. It orders child
+ * pages, it is issued by the workspace store, and `dispatch` guards it anyway.
+ */
+const applyToDoc = apply as <T extends DocBody>(doc: T, op: Op) => T;
+const invertInDoc = invert as <T extends DocBody>(doc: T, op: Op) => Op[];
 
 /**
  * The editor's state, generic over the document it edits.
@@ -181,7 +193,7 @@ function selectionAfter(pre: DocBody, post: DocBody, op: Op, prev: Range): Range
 	}
 }
 
-function pushUndo(state: EditorState, group: Op[]): Pick<EditorState, 'undo' | 'redo'> {
+function pushUndo(state: { undo: Op[][]; redo: Op[][] }, group: Op[]): { undo: Op[][]; redo: Op[][] } {
 	if (group.length === 0) return { undo: state.undo, redo: state.redo };
 	return {
 		undo: [...state.undo, group].slice(-UNDO_CAP),
@@ -189,9 +201,9 @@ function pushUndo(state: EditorState, group: Op[]): Pick<EditorState, 'undo' | '
 	};
 }
 
-export function dispatch(state: EditorState, op: Op): EditorState {
-	const inverse = op.kind === 'set-children' ? [] : invert(state.page, op);
-	const page = apply(state.page, op);
+export function dispatch<T extends DocBody>(state: EditorState<T>, op: Op): EditorState<T> {
+	const inverse = op.kind === 'set-children' ? [] : invertInDoc(state.page, op);
+	const page = applyToDoc(state.page, op);
 	const selection = clampRange(page, selectionAfter(state.page, page, op, state.selection));
 	const stack = op.kind === 'set-children' ? { undo: state.undo, redo: state.redo } : pushUndo(state, inverse);
 	return {
@@ -204,7 +216,7 @@ export function dispatch(state: EditorState, op: Op): EditorState {
 	};
 }
 
-export function dispatchMany(state: EditorState, ops: Op[]): EditorState {
+export function dispatchMany<T extends DocBody>(state: EditorState<T>, ops: Op[]): EditorState<T> {
 	if (ops.length === 0) return state;
 	if (ops.length === 1) return dispatch(state, ops[0]);
 
@@ -214,10 +226,10 @@ export function dispatchMany(state: EditorState, ops: Op[]): EditorState {
 	let touchUndo = false;
 	for (const op of ops) {
 		if (op.kind !== 'set-children') {
-			inverseGroups.push(invert(page, op));
+			inverseGroups.push(invertInDoc(page, op));
 			touchUndo = true;
 		}
-		const next = apply(page, op);
+		const next = applyToDoc(page, op);
 		selection = selectionAfter(page, next, op, selection);
 		page = next;
 	}
@@ -234,7 +246,7 @@ export function dispatchMany(state: EditorState, ops: Op[]): EditorState {
 	};
 }
 
-export function undo(state: EditorState): EditorState {
+export function undo<T extends DocBody>(state: EditorState<T>): EditorState<T> {
 	if (state.composing) return state;
 	const group = state.undo[state.undo.length - 1];
 	if (!group) return state;
@@ -242,8 +254,8 @@ export function undo(state: EditorState): EditorState {
 	let selection = state.selection;
 	const redoGroup: Op[] = [];
 	for (const op of group) {
-		redoGroup.push(...invert(page, op));
-		const next = apply(page, op);
+		redoGroup.push(...invertInDoc(page, op));
+		const next = applyToDoc(page, op);
 		selection = selectionAfter(page, next, op, selection);
 		page = next;
 	}
@@ -258,7 +270,7 @@ export function undo(state: EditorState): EditorState {
 	};
 }
 
-export function redo(state: EditorState): EditorState {
+export function redo<T extends DocBody>(state: EditorState<T>): EditorState<T> {
 	if (state.composing) return state;
 	const group = state.redo[state.redo.length - 1];
 	if (!group) return state;
@@ -266,8 +278,8 @@ export function redo(state: EditorState): EditorState {
 	let selection = state.selection;
 	const undoGroup: Op[] = [];
 	for (const op of group) {
-		undoGroup.push(...invert(page, op));
-		const next = apply(page, op);
+		undoGroup.push(...invertInDoc(page, op));
+		const next = applyToDoc(page, op);
 		selection = selectionAfter(page, next, op, selection);
 		page = next;
 	}
@@ -282,21 +294,21 @@ export function redo(state: EditorState): EditorState {
 	};
 }
 
-export function setComposing(state: EditorState, composing: boolean): EditorState {
+export function setComposing<T extends DocBody>(state: EditorState<T>, composing: boolean): EditorState<T> {
 	return { ...state, composing };
 }
 
-export function setJustCommittedComposition(state: EditorState, value: boolean): EditorState {
+export function setJustCommittedComposition<T extends DocBody>(state: EditorState<T>, value: boolean): EditorState<T> {
 	return { ...state, justCommittedComposition: value };
 }
 
-export function setSelection(state: EditorState, selection: Range): EditorState {
+export function setSelection<T extends DocBody>(state: EditorState<T>, selection: Range): EditorState<T> {
 	const next = clampRange(state.page, selection);
 	return { ...state, selection: next, blockFocus: blockFocusOf(state.page, next) };
 }
 
 /** Parent onDispatch handler: one undo group even when the editor emits Op[]. */
-export function applyEditorOps(state: EditorState, op: Op | Op[]): EditorState {
+export function applyEditorOps<T extends DocBody>(state: EditorState<T>, op: Op | Op[]): EditorState<T> {
 	return Array.isArray(op) ? dispatchMany(state, op) : dispatch(state, op);
 }
 
@@ -315,9 +327,9 @@ export function applyEditorOps(state: EditorState, op: Op | Op[]): EditorState {
  * Route this through the same single mutation path as ops. Applied behind the
  * editor's back it can race a dispatch and reintroduce a temp id.
  */
-export function remapIds(state: EditorState, map: IdMap): EditorState {
+export function remapIds<T extends DocBody>(state: EditorState<T>, map: IdMap): EditorState<T> {
 	if (map.size === 0) return state;
-	const page = remapPageIds(map, state.page);
+	const page = remapDocIds(map, state.page);
 	const selection = {
 		anchor: remapPointId(map, state.selection.anchor),
 		head: remapPointId(map, state.selection.head)

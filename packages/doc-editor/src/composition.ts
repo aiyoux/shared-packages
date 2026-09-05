@@ -1,17 +1,20 @@
-import type { KbPage, Op, Range } from '@shared-packages/doc-model';
+import type { DocBody, KbPage, Op, Range } from '@shared-packages/doc-model';
 import { deleteRangeOps, isCollapsed, orderedRange, textInsertPoint } from './range.js';
 import type { EditorState } from './state.js';
 
-export type CompositionSnapshot = {
-	page: KbPage;
+export type CompositionSnapshot<TDoc extends DocBody = KbPage> = {
+	page: TDoc;
 	selection: Range;
 };
 
-export function snapshotComposition(state: EditorState, liveRange: Range): CompositionSnapshot {
+export function snapshotComposition<TDoc extends DocBody>(
+	state: EditorState<TDoc>,
+	liveRange: Range
+): CompositionSnapshot<TDoc> {
 	return { page: state.page, selection: liveRange };
 }
 
-export function beginComposition(state: EditorState): EditorState {
+export function beginComposition<TDoc extends DocBody>(state: EditorState<TDoc>): EditorState<TDoc> {
 	return { ...state, composing: true };
 }
 
@@ -19,15 +22,17 @@ export function beginComposition(state: EditorState): EditorState {
  * IME freeze: while composing, never preventDefault, never dispatch, never re-project.
  * compositionend with empty data (Esc/cancel) re-projects the snapshot and does not insert.
  */
-export function cancelComposition(state: EditorState): EditorState {
+export function cancelComposition<TDoc extends DocBody>(
+	state: EditorState<TDoc>
+): EditorState<TDoc> {
 	return { ...state, composing: false, justCommittedComposition: false };
 }
 
-export function commitComposition(
-	state: EditorState,
-	snapshot: CompositionSnapshot,
+export function commitComposition<TDoc extends DocBody>(
+	state: EditorState<TDoc>,
+	snapshot: CompositionSnapshot<TDoc>,
 	data: string
-): { state: EditorState; ops: Op[] } {
+): { state: EditorState<TDoc>; ops: Op[] } {
 	if (!data) {
 		return { state: cancelComposition(state), ops: [] };
 	}

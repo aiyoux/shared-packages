@@ -1,4 +1,4 @@
-<script lang="ts">
+<script lang="ts" generics="TDoc extends DocBody">
 	import { onMount, untrack } from 'svelte';
 	import {
 		findBlock,
@@ -6,6 +6,7 @@
 		parentIdOf,
 		parentOf,
 		plaintextOf,
+		type DocBody,
 		type KbPage,
 		type Op,
 		type Range
@@ -41,9 +42,12 @@
 		onDispatch,
 		onState = undefined,
 		onComposing = undefined,
-		onSelection = undefined
+		onSelection = undefined,
+		onKeyDownCapture = undefined,
+		onBeforeInputCapture = undefined,
+		testIdPrefix = 'kb'
 	}: {
-		state: EditorState;
+		state: EditorState<TDoc>;
 		editable?: boolean;
 		/** Remote caret widgets. Ignored while composing (IME freeze). */
 		carets?: RemoteCaret[];
@@ -56,16 +60,53 @@
 		media?: MediaResolver;
 		/** Single op or a group. Parent should use `applyEditorOps` so groups stay one undo entry. */
 		onDispatch: (op: Op | Op[]) => void;
-		onState?: (next: EditorState) => void;
+		onState?: (next: EditorState<TDoc>) => void;
 		onComposing?: (composing: boolean) => void;
 		onSelection?: (range: Range) => void;
+		/**
+		 * Let the host act on a key first. Return `true` to say "handled" and the
+		 * editor does nothing further with it.
+		 *
+		 * This exists for a host-owned overlay — a slash menu, say — whose
+		 * Enter/Escape/arrows have to win over the editor's. The alternative was
+		 * to move that UI into this component, which would make every consumer
+		 * carry one host's menu.
+		 */
+		onKeyDownCapture?: (event: KeyboardEvent, live: Range) => boolean;
+		/** Same seam for `beforeinput`. Return `true` to consume the event. */
+		onBeforeInputCapture?: (event: InputEvent, live: Range) => boolean;
+		/**
+		 * Prefix for this component's `data-testid`s. Two apps mount it and each
+		 * has its own e2e vocabulary; hard-coding one host's prefix into a shared
+		 * component makes the other's selectors read as someone else's.
+		 */
+		testIdPrefix?: string;
 	} = $props();
+
+	/**
+	 * The DOM layer below (`project`, `mapBeforeInput`, `mapKeydown`, the
+	 * clipboard and gutter helpers) is typed against `KbPage` because that was
+	 * the only envelope this package had. Every one of those functions reads
+	 * `blocks` and nothing else — but a record-backed document has no `format`
+	 * or `children`, so the two envelopes are structurally incompatible and
+	 * TypeScript rejects the call even though it is sound.
+	 *
+	 * Widening ~40 signatures to `DocBody` cascades through `table.ts` and
+	 * `units.ts` and would still leave every KB caller re-narrowing. So the
+	 * boundary is here, cast once and named, the same trade `apply`/`invert`
+	 * already make internally: public entry points are generic, the internals
+	 * keep one concrete envelope. The invariant that makes it safe — nothing
+	 * below reads or writes an envelope field — is enforced by
+	 * `docBodyState.test.ts`.
+	 */
+	const asPage = (doc: TDoc): KbPage => doc as unknown as KbPage;
+	const asPageState = (s: EditorState<TDoc>): EditorState => ({ ...s, page: asPage(s.page) });
 
 	let host = $state<HTMLDivElement | undefined>(undefined);
 	let gutterEl = $state<HTMLDivElement | undefined>(undefined);
 	let localComposing = $state(false);
 	let localJustCommitted = $state(false);
-	let snapshot = $state<CompositionSnapshot | null>(null);
+	let snapshot = $state<CompositionSnapshot<TDoc> | null>(null);
 	let heightById = $state<Record<string, number>>({});
 	let overlays = $state<OverlayBox[]>([]);
 	let draggingId = $state<string | null>(null);
@@ -89,8 +130,8 @@
 			: setSelection(editor, selection);
 		emitState(next);
 		if (host) {
-			if (ops.length) project(host, next.page, { media });
-			restoreSelection(host, next.selection, next.page);
+			if (ops.length) project(host, asPage(next.page), { media });
+			restoreSelection(host, next.selection, asPage(next.page));
 		}
 	}
 
@@ -161,7 +202,7 @@
 	}
 
 	$effect(() => {
-		const page = editor.page;
+		const page = asPage(editor.page);
 		const remoteCarets = carets;
 		const el = host;
 		if (!el) return;
@@ -187,13 +228,14 @@
 	});
 
 	function onBeforeInput(event: InputEvent) {
+		if (onBeforeInputCapture?.(event, liveRange())) return;
 		const frozen = composing || event.isComposing;
 		if (frozen) return;
 
 		const live = liveRange(event);
 		const mapped = mapBeforeInput(
 			{
-				...editor,
+				...asPageState(editor),
 				composing: false,
 				justCommittedComposition: localJustCommitted || editor.justCommittedComposition
 			},
@@ -231,7 +273,7 @@
 		onComposing?.(false);
 		const snap = snapshot;
 		snapshot = null;
-		const snapPage = snap?.page ?? editor.page;
+		const snapPage = asPage(snap?.page ?? editor.page);
 		const snapSel = snap?.selection ?? editor.selection;
 		const block = findBlock(snapPage, snapSel.anchor.blockId);
 		const original = block ? plaintextOf(block) : '';
@@ -249,7 +291,11 @@
 			}
 			return;
 		}
-		const { ops } = commitComposition(editor, { page: snapPage, selection: snapSel }, data);
+		const { ops } = commitComposition(
+			editor,
+			{ page: snap?.page ?? editor.page, selection: snapSel },
+			data
+		);
 		localJustCommitted = true;
 		clearJustCommittedLater(() => {
 			localJustCommitted = false;
@@ -258,9 +304,10 @@
 	}
 
 	function onKeyDown(event: KeyboardEvent) {
+		if (onKeyDownCapture?.(event, liveRange())) return;
 		const result = mapKeydown(
 			{
-				...editor,
+				...asPageState(editor),
 				composing,
 				justCommittedComposition: localJustCommitted || editor.justCommittedComposition
 			},
@@ -288,7 +335,7 @@
 	function onCopy(event: ClipboardEvent) {
 		if (composing) return;
 		const live = liveRange();
-		const payload = copyPayload(editor, live);
+		const payload = copyPayload(asPageState(editor), live);
 		if (!payload || !event.clipboardData) return;
 		event.preventDefault();
 		event.clipboardData.setData('text/plain', payload.plain);
@@ -298,12 +345,12 @@
 	function onCut(event: ClipboardEvent) {
 		if (composing) return;
 		const live = liveRange();
-		const payload = copyPayload(editor, live);
+		const payload = copyPayload(asPageState(editor), live);
 		if (!payload || !event.clipboardData) return;
 		event.preventDefault();
 		event.clipboardData.setData('text/plain', payload.plain);
 		event.clipboardData.setData(KB_CLIPBOARD_MIME, payload.json);
-		emitOps(cutOps(editor.page, live, editor.blockFocus));
+		emitOps(cutOps(asPage(editor.page), live, editor.blockFocus));
 	}
 
 	function onPaste(event: ClipboardEvent) {
@@ -312,7 +359,7 @@
 		const live = liveRange();
 		const data = event.clipboardData;
 		emitOps(
-			pasteOps(editor, live, {
+			pasteOps(asPageState(editor), live, {
 				json: data?.getData(KB_CLIPBOARD_MIME) || null,
 				html: data?.getData('text/html') || null,
 				plain: data?.getData('text/plain') || null
@@ -334,7 +381,7 @@
 		const live = liveRange();
 		const data = event.dataTransfer;
 		emitOps(
-			pasteOps(editor, live, {
+			pasteOps(asPageState(editor), live, {
 				json: data?.getData(KB_CLIPBOARD_MIME) || null,
 				html: data?.getData('text/html') || null,
 				plain: data?.getData('text/plain') || null
@@ -386,7 +433,7 @@
 		if (!id) return;
 		const target = event.currentTarget as HTMLElement;
 		const where = dropWhere(event.clientY, target.getBoundingClientRect());
-		const drop = dropTarget(editor.page, id, targetId, where);
+		const drop = dropTarget(asPage(editor.page), id, targetId, where);
 		if (drop === 'noop') return;
 		onDispatch({ kind: 'move-block', id, afterId: drop.afterId, parentId: drop.parentId });
 	}
@@ -414,19 +461,19 @@
 	}
 </script>
 
-<div class="kb-editor" data-testid="kb-editor">
-	<div class="kb-gutter" bind:this={gutterEl} contenteditable="false" data-testid="kb-gutter">
+<div class="kb-editor" data-testid={`${testIdPrefix}-editor`}>
+	<div class="kb-gutter" bind:this={gutterEl} contenteditable="false" data-testid={`${testIdPrefix}-gutter`}>
 		{#each overlays as box (box.parentId)}
 			<div
 				class="kb-overlay"
-				data-testid="kb-gutter-overlay"
+				data-testid={`${testIdPrefix}-gutter-overlay`}
 				data-parent-id={box.parentId}
 				style:top="{box.top}px"
 				style:height="{Math.max(box.height, 0)}px"
 				style:pointer-events="none"
 			></div>
 		{/each}
-		{#each gutterOrder(editor.page) as block (block.id)}
+		{#each gutterOrder(asPage(editor.page)) as block (block.id)}
 			<button
 				type="button"
 				class="kb-handle"
@@ -451,7 +498,7 @@
 		tabindex="0"
 		aria-multiline="true"
 		aria-readonly={editable ? undefined : 'true'}
-		data-testid="kb-host"
+		data-testid={`${testIdPrefix}-host`}
 		spellcheck="true"
 		onbeforeinput={onBeforeInput}
 		oncompositionstart={onCompositionStart}

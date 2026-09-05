@@ -23,7 +23,7 @@
     "check": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
-    "@shared-packages/doc-model": "file:../kb-model"
+    "@shared-packages/doc-model": "file:../doc-model"
   },
   "peerDependencies": {
     "svelte": "^5.0.0"

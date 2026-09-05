@@ -30,13 +30,23 @@ describe('remapIds', () => {
 		['temp:page', 'records:page']
 	]);
 
-	it('rewrites page, blocks and the caret together', () => {
+	it('rewrites blocks and the caret together', () => {
 		const state = createEditorState(page([para('temp:a'), para('temp:b')]));
 		const out = remapIds(state, map);
-		expect(out.page.id).toBe('records:page');
 		expect(out.page.blocks.map((b) => b.id)).toEqual(['records:1', 'records:2']);
 		expect(out.selection.anchor.blockId).toBe('records:1');
 		expect(out.selection.head.blockId).toBe('records:1');
+	});
+
+	/**
+	 * The page id belongs to the host's envelope, and the two hosts spell it
+	 * differently — KB uses `id`, a record backend uses `pageId`. Remapping one
+	 * blindly would silently miss the other, so the editor does the body and the
+	 * host does its own identity (`remapPageIds` for KB).
+	 */
+	it('leaves the envelope id to the host', () => {
+		const state = createEditorState(page([para('temp:a')]));
+		expect(remapIds(state, map).page.id).toBe('temp:page');
 	});
 
 	it('rewrites the undo stack, so undo after an accept still works', () => {
@@ -116,7 +126,7 @@ describe('remapIds', () => {
 		}
 		const out = remapIds(state, map);
 		const everything = JSON.stringify({
-			page: out.page,
+			blocks: out.page.blocks,
 			selection: out.selection,
 			undo: out.undo,
 			redo: out.redo

@@ -28,7 +28,16 @@
  * slugs in the KB envelope, not block ids. Rewriting them would corrupt the
  * page tree.
  */
-import type { Block, KbPage, Op, Point, Range, TableCellBlock, TableRowBlock } from './types.js';
+import type {
+	Block,
+	DocBody,
+	KbPage,
+	Op,
+	Point,
+	Range,
+	TableCellBlock,
+	TableRowBlock
+} from './types.js';
 
 export type IdMap = ReadonlyMap<string, string>;
 
@@ -130,7 +139,20 @@ export function remapOps(map: IdMap, ops: readonly Op[]): Op[] {
 }
 
 /**
- * Rewrite a whole page: its own id and every block id in the tree.
+ * Rewrite every block id in a document, leaving the envelope alone.
+ *
+ * The envelope is the host's: KB keeps its page identity in `id`, a record
+ * backend in `pageId`, and rewriting one blindly would silently miss the
+ * other. So the body is done here and each host remaps its own id — see
+ * `remapPageIds` for KB's.
+ */
+export function remapDocIds<T extends DocBody>(map: IdMap, doc: T): T {
+	if (map.size === 0) return doc;
+	return { ...doc, blocks: doc.blocks.map((block) => remapBlockIds(map, block)) };
+}
+
+/**
+ * Rewrite a KB page: its own id and every block id in the tree.
  *
  * The page id is included because a record backend assigns that too — a page
  * is created in the same batch as its first block, so both arrive as `temp:`
@@ -138,9 +160,5 @@ export function remapOps(map: IdMap, ops: readonly Op[]): Op[] {
  */
 export function remapPageIds(map: IdMap, page: KbPage): KbPage {
 	if (map.size === 0) return page;
-	return {
-		...page,
-		id: to(map, page.id),
-		blocks: page.blocks.map((block) => remapBlockIds(map, block))
-	};
+	return { ...remapDocIds(map, page), id: to(map, page.id) };
 }

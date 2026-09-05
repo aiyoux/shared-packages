@@ -55,6 +55,7 @@ export type {
 export {
 	remapBlockIds,
 	remapOpIds,
+	remapDocIds,
 	remapOps,
 	remapPageIds,
 	type IdMap
