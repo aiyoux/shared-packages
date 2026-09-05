@@ -1,10 +1,9 @@
 /**
  * Which block types a backend can actually store.
  *
- * The two backends do not agree. A file page holds one JSON tree, so it can
+ * The two backends need not agree. A file page holds one JSON tree, so it can
  * store anything the AST can express. A record backend needs a schema variant
- * per block type, and today it has paragraph, heading, list_item, code,
- * divider and image — no callout, toggle or table.
+ * per block type, and a nesting story for the types that hold children.
  *
  * Without a gate, mounting the shared toolbar on the record backend offers the
  * user a table it cannot persist. That is not a missing feature, it is silent
@@ -40,8 +39,13 @@ export const ALL_BLOCK_KINDS = [
 export type InsertableBlockKind = (typeof ALL_BLOCK_KINDS)[number];
 
 /**
- * What a record backend can store today. Grows as schema variants land; the
- * point of naming it is that the difference is visible rather than implied.
+ * What a record backend can store.
+ *
+ * This is the whole AST again, now that the record adapter nests blocks on
+ * `graph_child_of` block → block edges and has schema variants for callout,
+ * toggle and the table parts. It stays a separate name rather than an alias
+ * of `ALL_BLOCK_KINDS`: the seam is the point, and the next backend will not
+ * necessarily arrive complete.
  */
 export const RECORD_BACKEND_BLOCK_KINDS: readonly InsertableBlockKind[] = [
 	'paragraph',
@@ -49,7 +53,10 @@ export const RECORD_BACKEND_BLOCK_KINDS: readonly InsertableBlockKind[] = [
 	'list_item',
 	'code',
 	'divider',
-	'image'
+	'image',
+	'callout',
+	'toggle',
+	'table'
 ];
 
 export type DocCapabilities = {

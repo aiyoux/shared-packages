@@ -13,6 +13,13 @@ const para = (id: string): Block => ({ id, type: 'paragraph', content: span('x')
 
 const recordCaps = { blocks: RECORD_BACKEND_BLOCK_KINDS };
 
+/**
+ * A backend that has caught up — as the record one now has — cannot exercise
+ * the gate. So the mechanism is tested against a deliberately partial set, and
+ * the record backend's own coverage is asserted separately.
+ */
+const limitedCaps = { blocks: ['paragraph', 'heading', 'image'] } as const;
+
 describe('capabilities', () => {
 	it('lets the file backend insert everything the AST can express', () => {
 		for (const kind of ALL_BLOCK_KINDS) {
@@ -21,15 +28,25 @@ describe('capabilities', () => {
 	});
 
 	/**
-	 * The whole point: the record backend has no schema variant for these, so
-	 * offering them would let a user create a block the write silently drops.
+	 * The whole point: a backend with no schema variant for a type must not be
+	 * offered it, or a user creates a block the write silently drops.
 	 */
-	it('stops the record backend offering blocks it cannot store', () => {
-		expect(canInsert(recordCaps, 'callout')).toBe(false);
-		expect(canInsert(recordCaps, 'toggle')).toBe(false);
-		expect(canInsert(recordCaps, 'table')).toBe(false);
-		expect(canInsert(recordCaps, 'paragraph')).toBe(true);
-		expect(canInsert(recordCaps, 'image')).toBe(true);
+	it('stops a backend offering blocks it cannot store', () => {
+		expect(canInsert(limitedCaps, 'callout')).toBe(false);
+		expect(canInsert(limitedCaps, 'toggle')).toBe(false);
+		expect(canInsert(limitedCaps, 'table')).toBe(false);
+		expect(canInsert(limitedCaps, 'paragraph')).toBe(true);
+		expect(canInsert(limitedCaps, 'image')).toBe(true);
+	});
+
+	/**
+	 * The record backend nests blocks on `graph_child_of` block → block edges
+	 * now, and has a schema variant for every type, so it declares all of them.
+	 */
+	it('lets the record backend insert everything too', () => {
+		for (const kind of ALL_BLOCK_KINDS) {
+			expect(canInsert(recordCaps, kind), kind).toBe(true);
+		}
 	});
 
 	it('treats an absent capability set as unrestricted', () => {
@@ -49,7 +66,7 @@ describe('capabilities', () => {
 				]
 			}
 		];
-		expect(unsupportedKindsIn(blocks, recordCaps).sort()).toEqual(['callout', 'table']);
+		expect(unsupportedKindsIn(blocks, limitedCaps).sort()).toEqual(['callout', 'table']);
 	});
 
 	it('reports table once, not once per row and cell', () => {
@@ -66,7 +83,7 @@ describe('capabilities', () => {
 				]
 			}
 		];
-		expect(unsupportedKindsIn(blocks, recordCaps)).toEqual(['table']);
+		expect(unsupportedKindsIn(blocks, limitedCaps)).toEqual(['table']);
 	});
 
 	it('reports nothing when everything fits', () => {
@@ -79,6 +96,6 @@ describe('capabilities', () => {
 	 */
 	it('reports rather than throws, so a richer document can still be read', () => {
 		const blocks: Block[] = [{ id: 't1', type: 'table', children: [] }];
-		expect(() => unsupportedKindsIn(blocks, recordCaps)).not.toThrow();
+		expect(() => unsupportedKindsIn(blocks, limitedCaps)).not.toThrow();
 	});
 });
