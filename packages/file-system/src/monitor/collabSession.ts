@@ -5,7 +5,6 @@
 import {
 	REPLICA_SEND_SNAPSHOT_ERROR,
 	applyRemoteMany,
-	schemaCompatible,
 	type AwarenessState,
 	type CollabFrame,
 	type CollabSessionOpts,
@@ -348,13 +347,6 @@ function applySnapshot(doc: DocState, seq: number, page: KbPage, via: SnapshotVi
 	doc.appliedToAckedSeq = Math.max(doc.appliedToAckedSeq, seq);
 	doc.inFlight = doc.inFlight.filter((g) => g.baseSeq >= seq);
 	if (doc.wonSeq != null && doc.wonSeq <= seq) doc.wonSeq = null;
-	if (page.schemaVersion > doc.opts.schemaVersion) {
-		emit(doc, {
-			kind: 'schema-mismatch',
-			local: doc.opts.schemaVersion,
-			remote: page.schemaVersion
-		});
-	}
 	if (via === 'cas') return;
 	const frame: CollabFrame = {
 		kind: 'snapshot',
@@ -546,15 +538,6 @@ async function startDoc(mux: Mux, doc: DocState): Promise<void> {
 			const seed = remotePage ?? doc.opts.seedPage ?? doc.ackedPage;
 			if (seed && !doc.ackedPage) doc.ackedPage = clonePage(seed);
 			if (remotePage) {
-				if (
-					!schemaCompatible(doc.opts.schemaVersion, doc.opts.schemaVersion, remotePage.schemaVersion)
-				) {
-					emit(doc, {
-						kind: 'schema-mismatch',
-						local: doc.opts.schemaVersion,
-						remote: remotePage.schemaVersion
-					});
-				}
 				applySnapshot(doc, snap.seq, remotePage, 'join');
 			}
 		} catch {
