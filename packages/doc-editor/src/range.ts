@@ -11,6 +11,7 @@ import {
 	plaintextOf,
 	sameParent,
 	visibleOrder,
+	type DocBody,
 	type KbPage,
 	type Op,
 	type Point,
@@ -26,17 +27,17 @@ export function collapsed(point: Point): Range {
 }
 
 /** DFS document-order index, or -1 if missing. */
-export function blockIndex(page: KbPage, id: string): number {
+export function blockIndex(page: DocBody, id: string): number {
 	return documentOrder(page).findIndex((block) => block.id === id);
 }
 
-export function requireBlock(page: KbPage, id: string) {
+export function requireBlock(page: DocBody, id: string) {
 	const loc = locateBlock(page, id);
 	if (!loc) throw new Error(`unknown block ${id}`);
 	return loc;
 }
 
-export function rangeSharesParent(page: KbPage, range: Range): boolean {
+export function rangeSharesParent(page: DocBody, range: Range): boolean {
 	if (isCollapsed(range)) return true;
 	const a = parentOf(page, range.anchor.blockId);
 	const b = parentOf(page, range.head.blockId);
@@ -45,7 +46,7 @@ export function rangeSharesParent(page: KbPage, range: Range): boolean {
 }
 
 /** Document-order start/end. Does not throw on missing ids; missing sorts last. */
-export function orderedRange(page: KbPage, range: Range): { start: Point; end: Point } {
+export function orderedRange(page: DocBody, range: Range): { start: Point; end: Point } {
 	const ai = blockIndex(page, range.anchor.blockId);
 	const hi = blockIndex(page, range.head.blockId);
 	if (ai < 0 && hi < 0) return { start: range.anchor, end: range.head };
@@ -57,18 +58,18 @@ export function orderedRange(page: KbPage, range: Range): { start: Point; end: P
 	return { start: range.head, end: range.anchor };
 }
 
-export function payloadLength(page: KbPage, blockId: string): number {
+export function payloadLength(page: DocBody, blockId: string): number {
 	const block = findBlock(page, blockId);
 	return block ? plaintextOf(block).length : 0;
 }
 
-export function parentIdFor(page: KbPage, blockId: string): string | null {
+export function parentIdFor(page: DocBody, blockId: string): string | null {
 	const loc = parentOf(page, blockId);
 	if (!loc) return null;
 	return parentIdOf(loc.parent);
 }
 
-function closedToggleAncestor(page: KbPage, id: string): string | null {
+function closedToggleAncestor(page: DocBody, id: string): string | null {
 	let current = id;
 	for (;;) {
 		const loc = parentOf(page, current);
@@ -81,7 +82,7 @@ function closedToggleAncestor(page: KbPage, id: string): string | null {
 	}
 }
 
-export function clampPoint(page: KbPage, point: Point): Point {
+export function clampPoint(page: DocBody, point: Point): Point {
 	const visible = visibleOrder(page);
 	const block = findBlock(page, point.blockId);
 	if (!block) {
@@ -101,19 +102,19 @@ export function clampPoint(page: KbPage, point: Point): Point {
 	return { blockId: block.id, offset: Math.max(0, Math.min(point.offset, len)) };
 }
 
-export function clampRange(page: KbPage, range: Range): Range {
+export function clampRange(page: DocBody, range: Range): Range {
 	return { anchor: clampPoint(page, range.anchor), head: clampPoint(page, range.head) };
 }
 
 /** True when the document-order start is a container that contains the end (illegal for apply). */
-export function rangeStartsOnAncestor(page: KbPage, range: Range): boolean {
+export function rangeStartsOnAncestor(page: DocBody, range: Range): boolean {
 	if (isCollapsed(range)) return false;
 	const { start, end } = orderedRange(page, range);
 	return isDescendant(page, start.blockId, end.blockId);
 }
 
 /** Skip chrome→descendant ranges that apply would throw on. */
-export function deleteRangeOps(page: KbPage, range: Range): Op[] {
+export function deleteRangeOps(page: DocBody, range: Range): Op[] {
 	if (isCollapsed(range) || rangeStartsOnAncestor(page, range)) return [];
 	return [{ kind: 'delete-range', range }];
 }
@@ -122,7 +123,7 @@ export function deleteRangeOps(page: KbPage, range: Range): Op[] {
  * Caret for insert-text. Container/atomic chrome is not a text target:
  * first text-like/code child, else null (caller no-ops).
  */
-export function textInsertPoint(page: KbPage, point: Point): Point | null {
+export function textInsertPoint(page: DocBody, point: Point): Point | null {
 	const block = findBlock(page, point.blockId);
 	if (!block) return null;
 	if (isTextLike(block) || block.type === 'code') {

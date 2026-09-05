@@ -4,10 +4,11 @@ import {
 	findBlock,
 	invert,
 	isNonTextual,
-	normalizePage,
+	normalizeBody,
 	plaintextOf,
 	remapOps,
 	remapPageIds,
+	type DocBody,
 	type IdMap,
 	type KbPage,
 	type Op,
@@ -17,8 +18,19 @@ import { blockIndex, clampRange, collapsed, isCollapsed } from './range.js';
 
 export const UNDO_CAP = 200;
 
-export type EditorState = {
-	page: KbPage;
+/**
+ * The editor's state, generic over the document it edits.
+ *
+ * Defaults to `KbPage` so every existing call site is unchanged. A record
+ * backend passes its own envelope instead — the editor only ever touches the
+ * body, so the extra fields ride along untouched.
+ *
+ * The ops in `undo` / `redo` are always body ops. `set-children` orders child
+ * pages and is dispatched through the workspace store, never through the
+ * editor, so no history entry can carry one.
+ */
+export type EditorState<TDoc extends DocBody = KbPage> = {
+	page: TDoc;
 	selection: Range;
 	undo: Op[][];
 	redo: Op[][];
@@ -29,8 +41,8 @@ export type EditorState = {
 	pendingRemote?: Op[];
 };
 
-export function createEditorState(page: KbPage): EditorState {
-	const next = normalizePage(page);
+export function createEditorState<T extends DocBody>(page: T): EditorState<T> {
+	const next = normalizeBody(page);
 	const first = documentOrder(next)[0];
 	if (!first) throw new Error('empty page');
 	const selection = collapsed({ blockId: first.id, offset: 0 });
@@ -46,14 +58,14 @@ export function createEditorState(page: KbPage): EditorState {
 	};
 }
 
-export function blockFocusOf(page: KbPage, selection: Range): string | undefined {
+export function blockFocusOf(page: DocBody, selection: Range): string | undefined {
 	if (!isCollapsed(selection)) return undefined;
 	const block = findBlock(page, selection.anchor.blockId);
 	if (block && isNonTextual(block)) return block.id;
 	return undefined;
 }
 
-function selectionAfter(pre: KbPage, post: KbPage, op: Op, prev: Range): Range {
+function selectionAfter(pre: DocBody, post: DocBody, op: Op, prev: Range): Range {
 	switch (op.kind) {
 		case 'insert-text':
 			return collapsed({
