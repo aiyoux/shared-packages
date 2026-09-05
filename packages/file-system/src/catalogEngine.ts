@@ -151,6 +151,13 @@ export function resetMemoryEngines(): void {
 	memoryByName.clear();
 }
 
+/**
+ * `Omit` over a union collapses it to the keys every member shares, which for
+ * `RpcMsg` is just `op` — so `sql` and `rows` vanished from the call signature.
+ * Distributing keeps each arm's own fields.
+ */
+type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
+
 type RpcMsg =
 	| {
 			id: number;
@@ -187,7 +194,7 @@ function newSession(): string {
 }
 
 function engineFromCall(
-	call: (msg: Omit<RpcMsg, 'id' | 'session' | 'db'>) => Promise<unknown>
+	call: (msg: DistributiveOmit<RpcMsg, 'id' | 'session' | 'db'>) => Promise<unknown>
 ): SqlEngine {
 	const { profileWrap } = {
 		profileWrap: async <T>(name: string, fn: () => Promise<T>): Promise<T> => {
