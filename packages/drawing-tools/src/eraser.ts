@@ -2467,7 +2467,13 @@ const splitClosedFilledPath = (
  * circle at the LAST point, radius size/2 — preview, commit, stored d, and
  * erase geometry then all agree.
  */
-const sourceNibStamp = (source: NonNullable<PathData['freehandSource']>): Geometry | null => {
+/**
+ * The single-dot case: one `circlePolygon`, so a `Polygon` — not a `Geometry`.
+ * Widening it to the union made `stamp.map(polygonToD)` type-check against the
+ * MultiPolygon arm while actually mapping over the polygon's *rings*, handing
+ * `polygonToD` a `Ring` and rendering a dot as nonsense.
+ */
+const sourceNibStamp = (source: NonNullable<PathData['freehandSource']>): Polygon | null => {
     const points = source.points;
     if (points.length === 0) return null;
     const lim = Math.max(0.75, source.options.size * 0.35);
@@ -2484,7 +2490,7 @@ const sourceNibStamp = (source: NonNullable<PathData['freehandSource']>): Geomet
 
 export const sourceStrokeToD = (source: NonNullable<PathData['freehandSource']>) => {
     const stamp = sourceNibStamp(source);
-    if (stamp) return stamp.map(polygonToD).filter(Boolean).join(' ');
+    if (stamp) return polygonToD(stamp);
 
     const outline = getStroke(source.points, { ...source.options, last: true });
     if (outline.length === 0) return '';

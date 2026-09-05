@@ -1273,3 +1273,34 @@ test('buildEraserCtx populates shared geometry; closed-filled candidates clip ag
     assert.equal(far.length, 1);
     assert.equal(far[0], farRect, 'far path passes through as the same object');
 });
+
+/**
+ * A tap — every point inside the nib radius — takes the `sourceNibStamp` early
+ * return, which is a single `Polygon`, not a `MultiPolygon` like the smoothed
+ * path. It used to be mapped one level too deep: `stamp.map(polygonToD)` walked
+ * the polygon's rings and handed each `Ring` to `polygonToD`, which then walked
+ * the ring's *points* as if they were rings. The dot came out as nothing.
+ */
+test('a tap renders as one closed nib outline, not an empty path', () => {
+    const source = {
+        points: [
+            [10, 10, 0.5],
+            [10.2, 10.1, 0.5]
+        ],
+        options: {
+            size: 4,
+            thinning: 0.6,
+            smoothing: 0.5,
+            streamline: 0.5
+        }
+    };
+    const d = freehandSourceToPath(source);
+
+    assert.match(d, /^M /);
+    assert.equal(d.includes(' Z'), true);
+    // One ring, so exactly one subpath.
+    assert.equal(d.split('M').length - 1, 1);
+    // A circle, not a degenerate speck: it must span roughly the nib diameter.
+    const xs = pathNumbers(d).filter((_, i) => i % 2 === 0);
+    assert.ok(Math.max(...xs) - Math.min(...xs) > 1.5, `dot too small: ${d}`);
+});
