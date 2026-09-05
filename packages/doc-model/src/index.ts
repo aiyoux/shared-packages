@@ -16,6 +16,16 @@ export {
 	type KbCollabMessage,
 	type MonitorCollabAdapter
 } from './collab.js';
+export {
+	ALL_BLOCK_KINDS,
+	canInsert,
+	FULL_CAPABILITIES,
+	RECORD_BACKEND_BLOCK_KINDS,
+	unsupportedKindsIn,
+	type BlockKind,
+	type DocCapabilities,
+	type InsertableBlockKind
+} from './capabilities.js';
 export { createEmptyPage } from './createEmptyPage.js';
 export { invert } from './invert.js';
 export {
