@@ -22,6 +22,10 @@ import { crc32 } from './crc32.js';
 /** Marks a folder as a project. Does not mean its bytes are packed. */
 export const PROJECT_PACK_META = 'projectPack';
 
+/** Waiting out a pack another tab is rewriting: 100+200+400+800 = 1.5s total. */
+const COMPACT_CONTENTION_RETRIES = 4;
+const COMPACT_CONTENTION_BACKOFF_MS = 100;
+
 export type ProjectPackManifest = {
 	/** Folder id of the project root. */
 	rootId: string;
@@ -345,18 +349,32 @@ export async function deleteFromProject(
 	let reclaimedBytes = 0;
 	if (touched.size) {
 		report('compacting', 'Deleting — compacting packs before drop…');
-		const compacted = await vfs.compactPacks(touched.keys(), {
-			excludeBlobIds: dropBlobIds,
-			onProgress: opts?.onProgress,
-			signal: opts?.signal
-		});
-		if (compacted.failedPacks.length) {
-			throw new Error(
-				`Cannot delete: pack still being rewritten (${compacted.failedPacks.join(', ')})`
-			);
+		let pending: Iterable<string> = touched.keys();
+		let failed: string[] = [];
+		// A pack lands in `failedPacks` for exactly one reason: another tab holds
+		// its claim right now. That is contention, not a fault — the other tab's
+		// rewrite finishes in milliseconds — so refusing the user's delete over
+		// it made a routine race look like a broken app. Wait it out briefly and
+		// try the refused packs again; only give up if it stays held.
+		for (let attempt = 0; attempt <= COMPACT_CONTENTION_RETRIES; attempt++) {
+			if (opts?.signal?.aborted) break;
+			const compacted = await vfs.compactPacks(pending, {
+				excludeBlobIds: dropBlobIds,
+				onProgress: opts?.onProgress,
+				signal: opts?.signal
+			});
+			compactedPacks += compacted.compactedPacks;
+			reclaimedBytes += compacted.reclaimedBytes;
+			failed = compacted.failedPacks;
+			if (!failed.length) break;
+			if (attempt === COMPACT_CONTENTION_RETRIES) break;
+			report('compacting', 'Deleting — waiting for another tab to finish a pack…');
+			await new Promise((r) => setTimeout(r, COMPACT_CONTENTION_BACKOFF_MS << attempt));
+			pending = failed;
 		}
-		compactedPacks = compacted.compactedPacks;
-		reclaimedBytes = compacted.reclaimedBytes;
+		if (failed.length) {
+			throw new Error(`Cannot delete: pack still being rewritten (${failed.join(', ')})`);
+		}
 	}
 
 	report('wiping', `Deleting — wiping ${nodeIds.length} from blob…`);
