@@ -320,11 +320,43 @@ export class SqliteCatalog {
 	 * it from and every caller that used the result got `unknown`. Naming the
 	 * trailing scope callback in the tuple gives inference something to bite on.
 	 */
+	/**
+	 * Transactions run one at a time on this catalog.
+	 *
+	 * `txDepth` counts *callers*, not async nesting, and a transaction body is
+	 * full of awaits — so two overlapping calls used to collapse into one. The
+	 * second saw `txDepth === 1`, skipped its own BEGIN, and rode the first's
+	 * commit. That left the compare-and-swap in `updateFile` with no isolation:
+	 * two writers to one node both read generation 1, both passed the check, and
+	 * both published, so the catalog named one blob while the file on disk held
+	 * the other's bytes. Every later read of that file then failed its checksum
+	 * on bytes that were never corrupt.
+	 *
+	 * Only same-tab callers could do this: `txDepth` is per instance, so two
+	 * tabs each bracket their own BEGIN/COMMIT and the generation check does
+	 * bite between them. Serialising here closes the same-tab hole.
+	 */
+	private txChain: Promise<unknown> = Promise.resolve();
+
 	async transaction<T>(
 		_mode: string,
 		...rest: [...tables: unknown[], scope: () => Promise<T> | T]
 	): Promise<T> {
 		const fn = rest[rest.length - 1] as () => Promise<T> | T;
+		const prior = this.txChain;
+		let release!: () => void;
+		this.txChain = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		await prior.catch(() => {});
+		try {
+			return await this.runTransaction(fn);
+		} finally {
+			release();
+		}
+	}
+
+	private async runTransaction<T>(fn: () => Promise<T> | T): Promise<T> {
 		const runOnce = async (): Promise<T> => {
 			this.txDepth += 1;
 			const started = this.txDepth === 1;
