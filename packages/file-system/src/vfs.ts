@@ -200,6 +200,15 @@ export class VfsService {
 	/** `sweepOnLoad` is once per instance, however many mounts call it. */
 	private sweptThisLoad = false;
 	/**
+	 * One in-flight publish per OPFS path. See `publishToPath`.
+	 *
+	 * Cross-tab writers are already serialised by the generation check — a loser
+	 * throws GENERATION_CONFLICT before it can publish. Two writers inside one
+	 * tab are not: they take turns in the catalog transaction and then race to
+	 * `opfs.move`, which is what let the file and the node disagree.
+	 */
+	private readonly pathPublishes = new Map<string, Promise<unknown>>();
+	/**
 	 * Instance hook for e2e (Vite may load a second module copy of vfs.ts).
 	 * Unit tests can still assign `compactCrash.hook`.
 	 */
@@ -2388,12 +2397,7 @@ export class VfsService {
 		}
 		await this.holdPackWrite(finalPath);
 		try {
-			await this.opfs.move(stagingPath, finalPath);
-			const ref = await this.db.blobRefs.get(blobId);
-			if (ref) {
-				ref.opfsPath = finalPath;
-				await this.db.blobRefs.put(ref);
-			}
+			await this.publishToPath(id, blobId, stagingPath, finalPath);
 		} finally {
 			await this.dropPackWrite(finalPath);
 		}
@@ -2406,13 +2410,38 @@ export class VfsService {
 
 	// ── Read ──────────────────────────────────────────────────────
 
+	/**
+	 * A write that lands mid-read makes an honest file look corrupt.
+	 *
+	 * `updateFile` moves the new bytes onto the *same* `opfsPath` the previous
+	 * blob occupies and releases that previous ref. A reader that resolved the
+	 * old ref just before the move then reads the new blob's bytes and checks
+	 * them against the old blob's `crc32`: mismatch, on a file that is fine.
+	 * The KB workspace hit this on every boot-after-rename and left an empty
+	 * tree behind, because a load error is fatal there and nothing retried.
+	 *
+	 * A stale ref is the only thing that earns a second attempt: if the node
+	 * still points at the blob that failed, the mismatch is real corruption and
+	 * must keep throwing.
+	 */
 	async readBytes(nodeId: string): Promise<Uint8Array> {
 		await this.ready();
 		const node = await this.db.nodes.get(nodeId);
 		if (!node) throw new VfsError('NOT_FOUND');
 		if (node.kind !== 'file') throw new VfsError('NOT_A_FILE');
 		if (!node.blobId) throw new VfsError('OPFS_IO', 'Missing blobId', { nodeId });
-		const ref = await this.loadReadableRef(node.blobId, nodeId);
+		try {
+			return await this.readBlobBytes(node.blobId, nodeId);
+		} catch (e) {
+			if (!(e instanceof VfsError) || e.details?.checksumMismatch !== true) throw e;
+			const fresh = await this.db.nodes.get(nodeId);
+			if (!fresh?.blobId || fresh.blobId === e.details.blobId) throw e;
+			return this.readBlobBytes(fresh.blobId, nodeId);
+		}
+	}
+
+	private async readBlobBytes(blobId: string, nodeId: string): Promise<Uint8Array> {
+		const ref = await this.loadReadableRef(blobId, nodeId);
 		if (ref.packOffset != null) {
 			const slice = await this.readPacked(ref);
 			const bytes = await blobToBytes(slice);
@@ -2448,7 +2477,8 @@ export class VfsService {
 		if (ref.crc32 != null && crc32(bytes) !== ref.crc32) {
 			throw new VfsError(
 				'OPFS_IO',
-				`Checksum mismatch for blob ${ref.id} at ${ref.opfsPath}:${ref.packOffset ?? 0}`
+				`Checksum mismatch for blob ${ref.id} at ${ref.opfsPath}:${ref.packOffset ?? 0}`,
+				{ checksumMismatch: true, blobId: ref.id }
 			);
 		}
 		return bytes;
@@ -3373,6 +3403,50 @@ export class VfsService {
 			owner: generateId('packw'),
 			expiresAt: Date.now() + this.leaseTtlMs()
 		});
+	}
+
+	/**
+	 * Publish `blobId`'s staged bytes to `opfsPath`, but only while the node
+	 * still names that blob — and never concurrently with another publish to
+	 * the same path.
+	 *
+	 * `holdPackWrite` is a marker for the pack GC, not a mutex, so two writes to
+	 * one node used to reach `opfs.move` in either order. The catalog decided
+	 * one winner and the filesystem another: the node pointed at blob A while
+	 * the file held blob B's bytes, and every later read raised "Checksum
+	 * mismatch" on a file that was perfectly intact. A superseded write now
+	 * drops its staging copy instead of clobbering the path.
+	 */
+	private async publishToPath(
+		nodeId: string,
+		blobId: string,
+		stagingPath: string,
+		opfsPath: string
+	): Promise<void> {
+		const prior = this.pathPublishes.get(opfsPath) ?? Promise.resolve();
+		const run = prior.catch(() => {}).then(async () => {
+			const owner = await this.db.nodes.get(nodeId);
+			if (owner?.blobId !== blobId) {
+				try {
+					await this.opfs.remove(stagingPath);
+				} catch {
+					/* gc */
+				}
+				return;
+			}
+			await this.opfs.move(stagingPath, opfsPath);
+			const ref = await this.db.blobRefs.get(blobId);
+			if (ref) {
+				ref.opfsPath = opfsPath;
+				await this.db.blobRefs.put(ref);
+			}
+		});
+		this.pathPublishes.set(opfsPath, run);
+		try {
+			await run;
+		} finally {
+			if (this.pathPublishes.get(opfsPath) === run) this.pathPublishes.delete(opfsPath);
+		}
 	}
 
 	private async leaseStillHeld(key: string): Promise<boolean> {
