@@ -9,6 +9,12 @@
     "esModuleInterop": true,
     "isolatedModules": true,
     "noEmit": true,
+    // `ocr.test.ts` runs under `node --test` with native type stripping, which
+    // resolves the literal path and cannot follow a `.js` specifier to a `.ts`
+    // file, so it imports with an explicit `.ts`. Legal because noEmit is set,
+    // and the same allowance file-system, git, drawing-tools and scene-bake
+    // already make.
+    "allowImportingTsExtensions": true,
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "types": ["node"]
   },
