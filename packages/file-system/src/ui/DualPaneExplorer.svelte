@@ -308,6 +308,8 @@
 	}
 
 	const tids: DualPaneTids = { ...defaultTids, ...tidsOverride };
+	/** See `DualPaneTids.scoped`: identity unless the consumer namespaces. */
+	const scopedTid = (tid: string) => tids.scoped?.(tid) ?? tid;
 
 	type PaneState = FileWindowState;
 
@@ -1758,7 +1760,7 @@
 			<button
 				type="button"
 				class="ds-btn ds-btn--sm ds-btn--secondary"
-				data-testid="fe-file-preview-copy-across"
+				data-testid={scopedTid('fe-file-preview-copy-across')}
 				disabled={copyBusy || p.ctx.selectedIds.length === 0}
 				aria-pressed={picking}
 				onclick={() => runCopyAcross(id)}
@@ -1811,7 +1813,7 @@
 			<button
 				type="button"
 				class="files-copy-dest-overlay"
-				data-testid="fe-copy-dest-overlay-{id}"
+				data-testid={scopedTid(`fe-copy-dest-overlay-${id}`)}
 				onclick={(e) => {
 					e.stopPropagation();
 					confirmCopyPick(id);
@@ -1851,7 +1853,7 @@
 			</div>
 		{/if}
 		{#if p.showB2Form}
-			<div class="pane-form" data-testid="b2-form-wrap-{id}">
+			<div class="pane-form" data-testid={scopedTid(`b2-form-wrap-${id}`)}>
 				<B2ConnectionForm
 					onConnected={async (profile) => {
 						await reloadProfiles();
@@ -1876,7 +1878,7 @@
 			</div>
 		{/if}
 		{#if p.showRcloneForm && showRclone}
-			<div class="pane-form" data-testid="rclone-form-wrap-{id}">
+			<div class="pane-form" data-testid={scopedTid(`rclone-form-wrap-${id}`)}>
 				<RcloneConnectionForm
 					onConnected={async (profile) => {
 						await reloadProfiles();
@@ -1901,7 +1903,7 @@
 			</div>
 		{/if}
 		{#if p.showMonitorForm && showMonitor}
-			<div class="pane-form" data-testid="monitor-form-wrap-{id}">
+			<div class="pane-form" data-testid={scopedTid(`monitor-form-wrap-${id}`)}>
 				<MonitorConnectionForm
 					onConnected={async (profile) => {
 						await reloadProfiles();
@@ -2064,7 +2066,7 @@
 	{#if showSwitcher || showStatus}
 		<div
 			class="dpe-pane-conn"
-			data-testid="conn-switcher-{id}"
+			data-testid={tids.connSwitcher?.(id) ?? `conn-switcher-${id}`}
 			data-pane={id}
 			aria-label="{id} pane connection"
 		>
@@ -2131,6 +2133,13 @@
 {/if}
 
 <div class="dpe-shell" class:dual={dualPane} bind:this={dualRootEl}>
+	<!--
+		`tids.body` names ONE element. It used to be handed to AppWindows as well,
+		so every consumer rendered two nodes carrying it and any `getByTestId`
+		on it failed strict mode ("resolved to 2 elements") — six /cm specs died
+		that way. The windows host gets its own derived id; the layout rules
+		reach it by `.files-app-windows`, not by testid.
+	-->
 	<div class="files-body" data-testid={tids.body}>
 		<AppWindows
 			bind:root={windowRoot}
@@ -2138,8 +2147,8 @@
 			bind:focusedId
 			bind:editing={windowEditOpen}
 			layoutId="files"
-			testid={tids.body}
-			testidPrefix="files-window"
+			testid="{tids.body}-windows"
+			testidPrefix={scopedTid('files-window')}
 			hostClass="files-app-windows"
 			roles={availableRoleDefs}
 			fallbackRole="local"
@@ -2162,7 +2171,7 @@
 		>
 			{#snippet leafChrome({ id })}
 				{#if id === targetPaneId && !windowEditOpen && leafCount(windowRoot) > 1 && !hideTargetChrome}
-					<div class="fe-target-chip" data-testid="files-window-target">Target</div>
+					<div class="fe-target-chip" data-testid={scopedTid('files-window-target')}>Target</div>
 				{/if}
 			{/snippet}
 			{#snippet pane({ id })}
