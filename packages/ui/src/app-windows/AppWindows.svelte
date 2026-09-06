@@ -1,5 +1,6 @@
 <script lang="ts" generics="R extends string, S extends { role: R }">
 	import { tick, untrack, type Snippet } from 'svelte';
+	import { combineTargets, leafRects, type Rect } from '../pane-layout/combine.js';
 	import { findNode, listLeaves, setSplitRatio } from '../pane-layout/tree.js';
 	import type { LayoutNode, SplitDirection } from '../pane-layout/types.js';
 	import AppWindowTree from './AppWindowTree.svelte';
@@ -12,6 +13,7 @@
 		canCloseAppWindow,
 		clampUnavailableRoles,
 		closeAppWindow,
+		combineAppWindow,
 		isUnassignedWindow,
 		setAppWindowRole,
 		sliceAppWindow,
@@ -89,6 +91,15 @@
 		ratio: number;
 		pos: number;
 	} | null>(null);
+	let combinePreview = $state<Rect | null>(null);
+	const combineByLeaf = $derived.by(() => {
+		const rects = leafRects(root);
+		const map: Record<string, ReturnType<typeof combineTargets>> = {};
+		for (const leaf of leaves) {
+			map[leaf.id] = combineTargets(root, leaf.id, rects);
+		}
+		return map;
+	});
 
 	const TEXT_ENTRY_INPUT_TYPES = new Set([
 		'text',
@@ -304,6 +315,18 @@
 		return () => window.removeEventListener('keydown', onKey, true);
 	});
 
+	function combineAt(fromId: string, towardId: string) {
+		const next = combineAppWindow(root, windows, fromId, towardId, roles, inherit);
+		if (!next) return;
+		root = next.root;
+		windows = next.windows;
+		combinePreview = null;
+		if (!windows[focusedId]) {
+			focusedId = listLeaves(root)[0]?.id ?? focusedId;
+		}
+		for (const id of next.removed) onAfterClose?.(id);
+	}
+
 	function closeAt(leafId: string) {
 		const next = closeAppWindow(root, windows, leafId, roles);
 		if (!next) return;
@@ -343,6 +366,13 @@
 	<div class="aw-root">
 		<AppWindowTree node={root} {layoutId} {testidPrefix} {onResize} />
 	</div>
+	{#if editing && combinePreview}
+		<div
+			class="aw-combine-preview"
+			data-testid="{testidPrefix}-combine-preview"
+			style="left: {combinePreview.x * 100}%; top: {combinePreview.y * 100}%; width: {combinePreview.w * 100}%; height: {combinePreview.h * 100}%;"
+		></div>
+	{/if}
 	<div class="aw-park" bind:this={parkEl} hidden aria-hidden="true">
 		{#if hosted}
 			<!-- The single live well, parked here and relocated into whichever leaf
@@ -515,12 +545,45 @@
 								onclick={(e) => {
 									e.stopPropagation();
 									editing = false;
+									combinePreview = null;
 								}}
 							>
 								Use this layout
 							</button>
 						</div>
 					</div>
+					{#each combineByLeaf[leaf.id] ?? [] as target (target.side)}
+						<button
+							type="button"
+							class="aw-combine {target.side}"
+							data-testid="{testidPrefix}-combine-{target.side}"
+							data-aw-combine={target.side}
+							title="Combine with window to the {target.side}"
+							aria-label="Combine with window to the {target.side}"
+							disabled={target.removes && !canClose(target.towardId)}
+							onpointerenter={() => {
+								combinePreview = target.result;
+							}}
+							onpointerleave={() => {
+								combinePreview = null;
+							}}
+							onclick={(e) => {
+								e.stopPropagation();
+								combineAt(leaf.id, target.towardId);
+							}}
+							onpointerdown={(e) => e.stopPropagation()}
+						>
+							{#if target.side === 'left'}
+								<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
+							{:else if target.side === 'right'}
+								<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
+							{:else if target.side === 'top'}
+								<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m18 15-6-6-6 6"/></svg>
+							{:else}
+								<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+							{/if}
+						</button>
+					{/each}
 				{/if}
 			</div>
 		{/each}
@@ -674,6 +737,59 @@
 	.aw-done:hover,
 	.aw-done:focus-visible {
 		background: rgb(var(--accent-rgb, 110 168 254) / 0.3);
+	}
+	.aw-combine-preview {
+		position: absolute;
+		z-index: 9;
+		pointer-events: none;
+		background: rgb(var(--accent-rgb, 110 168 254) / 0.28);
+		border: 2px solid var(--accent, #6ea8fe);
+		box-sizing: border-box;
+	}
+	.aw-combine {
+		position: absolute;
+		z-index: 8;
+		width: 26px;
+		height: 26px;
+		padding: 0;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		border: 1px solid rgb(var(--border-rgb, 90 90 96) / 0.8);
+		border-radius: var(--radius-md, 8px);
+		background: rgb(var(--bg-rgb, 16 16 20) / 0.95);
+		color: var(--text-primary);
+		cursor: pointer;
+	}
+	.aw-combine.right {
+		top: 50%;
+		right: 0;
+		transform: translateY(-50%);
+	}
+	.aw-combine.left {
+		top: 50%;
+		left: 0;
+		transform: translateY(-50%);
+	}
+	.aw-combine.top {
+		left: 50%;
+		top: 0;
+		transform: translateX(-50%);
+	}
+	.aw-combine.bottom {
+		left: 50%;
+		bottom: 0;
+		transform: translateX(-50%);
+	}
+	.aw-combine:hover:not(:disabled),
+	.aw-combine:focus-visible:not(:disabled) {
+		border-color: var(--accent, #6ea8fe);
+		color: var(--accent, #6ea8fe);
+		background: rgb(var(--accent-rgb, 110 168 254) / 0.2);
+	}
+	.aw-combine:disabled {
+		opacity: 0.35;
+		cursor: not-allowed;
 	}
 	.aw-slice-layer {
 		position: absolute;

@@ -70,6 +70,7 @@ export {
 	canCloseAppWindow,
 	clampUnavailableRoles,
 	closeAppWindow,
+	combineAppWindow,
 	createAppWindowRoot,
 	defaultAppWindows,
 	isUnassignedWindow,
@@ -102,6 +103,12 @@ export {
 	MIN_SPLIT_RATIO,
 	MAX_SPLIT_RATIO
 } from './pane-layout/tree.ts';
+export {
+	combineLeaves,
+	combineTargets,
+	leafRects
+} from './pane-layout/combine.ts';
+export type { CombineSide, CombineTarget, Rect } from './pane-layout/combine.ts';
 export type {
 	LayoutNode,
 	LayoutLeaf,

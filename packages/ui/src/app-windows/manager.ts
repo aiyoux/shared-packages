@@ -1,3 +1,4 @@
+import { combineLeaves } from '../pane-layout/combine.js';
 import {
 	closeLeaf,
 	createLeaf,
@@ -143,6 +144,28 @@ export function sliceAppWindow<S extends AppWindowLeaf<R>, R extends string>(
 		},
 		newId: next.newLeaf.id
 	};
+}
+
+export function combineAppWindow<S extends AppWindowLeaf<R>, R extends string>(
+	root: LayoutNode,
+	windows: Record<string, S>,
+	fromId: string,
+	towardId: string,
+	catalog: readonly AppWindowRoleDef<R>[],
+	inherit: (source: S | undefined, role: R) => S
+): { root: LayoutNode; windows: Record<string, S>; removed: string[] } | null {
+	const planned = combineLeaves(root, fromId, towardId);
+	if (!planned) return null;
+	for (const id of planned.removed) {
+		if (!canCloseAppWindow(root, windows, id, catalog)) return null;
+	}
+	const source = windows[towardId];
+	const windowsNext: Record<string, S> = {};
+	for (const leaf of listLeaves(planned.root)) {
+		if (windows[leaf.id]) windowsNext[leaf.id] = windows[leaf.id];
+		else if (source) windowsNext[leaf.id] = inherit(source, source.role);
+	}
+	return { root: planned.root, windows: windowsNext, removed: planned.removed };
 }
 
 export function closeAppWindow<S extends AppWindowLeaf<R>, R extends string>(

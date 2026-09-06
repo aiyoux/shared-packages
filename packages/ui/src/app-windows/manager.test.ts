@@ -4,6 +4,7 @@ import {
 	canCloseAppWindow,
 	clampUnavailableRoles,
 	closeAppWindow,
+	combineAppWindow,
 	isUnassignedWindow,
 	pickNewRole,
 	setAppWindowRole,
@@ -104,5 +105,20 @@ describe('app-windows manager', () => {
 	it('picks a vertical cut when closer to the left/right edge', () => {
 		expect(sliceGuideFromPoint(10, 50, 200, 100)).toEqual({ direction: 'row', ratio: 0.05 });
 		expect(sliceGuideFromPoint(100, 8, 200, 100)).toEqual({ direction: 'col', ratio: 0.08 });
+	});
+
+	it('refuses to absorb the last required window', () => {
+		const split = splitAppWindow(
+			createLeaf('home'),
+			{ home: { role: 'canvas' } },
+			'home',
+			'row',
+			catalog,
+			inherit
+		)!;
+		const asScene = setAppWindowRole(split.windows, split.newId, 'scene', catalog, inherit)!;
+		expect(
+			combineAppWindow(split.root, asScene, split.newId, 'home', catalog, inherit)
+		).toBeNull();
 	});
 });
