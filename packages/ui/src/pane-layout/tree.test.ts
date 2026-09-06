@@ -6,7 +6,8 @@ import {
 	listLeaves,
 	resetLayoutIdsForTests,
 	setSplitRatio,
-	splitLeaf
+	splitLeaf,
+	swapLeafIds
 } from './tree.ts';
 import { layoutSlotKey } from './leafHome.ts';
 
@@ -74,6 +75,16 @@ describe('pane layout tree', () => {
 		const thin = setSplitRatio(split.root, split.root.id, 0.01);
 		expect(wide.kind === 'split' && wide.ratio).toBe(0.85);
 		expect(thin.kind === 'split' && thin.ratio).toBe(0.15);
+	});
+
+	it('swaps two leaf ids in the tree', () => {
+		const split = splitLeaf(createLeaf('a'), 'a', 'row')!;
+		const b = split.newLeaf.id;
+		const swapped = swapLeafIds(split.root, 'a', b);
+		expect(swapped.kind).toBe('split');
+		if (swapped.kind !== 'split') return;
+		expect(swapped.first).toEqual({ kind: 'leaf', id: b });
+		expect(swapped.second).toEqual({ kind: 'leaf', id: 'a' });
 	});
 
 	it('slot key ignores ratio so resize does not rehome leaves', () => {

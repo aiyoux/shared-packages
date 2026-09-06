@@ -100,6 +100,7 @@ export {
 	resetLayoutIdsForTests,
 	syncLayoutIdSeq,
 	findNode,
+	swapLeafIds,
 	MIN_SPLIT_RATIO,
 	MAX_SPLIT_RATIO
 } from './pane-layout/tree.ts';

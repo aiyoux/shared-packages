@@ -101,6 +101,20 @@ export function findNode(node: LayoutNode, id: string): LayoutNode | null {
 	return findNode(node.first, id) ?? findNode(node.second, id);
 }
 
+/** Exchange two leaves' places in the tree; window state stays keyed by id. */
+export function swapLeafIds(node: LayoutNode, a: string, b: string): LayoutNode {
+	if (a === b) return node;
+	if (node.kind === 'leaf') {
+		if (node.id === a) return { ...node, id: b };
+		if (node.id === b) return { ...node, id: a };
+		return node;
+	}
+	const first = swapLeafIds(node.first, a, b);
+	const second = swapLeafIds(node.second, a, b);
+	if (first === node.first && second === node.second) return node;
+	return { ...node, first, second };
+}
+
 /**
  * After restoring a tree from storage, bump the id counter so later splits
  * cannot reuse a `leaf-N` / `split-N` that already exists in the snapshot.

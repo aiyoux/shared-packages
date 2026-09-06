@@ -1,7 +1,7 @@
 <script lang="ts" generics="R extends string, S extends { role: R }">
 	import { tick, untrack, type Snippet } from 'svelte';
 	import { combineTargets, leafRects, type Rect } from '../pane-layout/combine.js';
-	import { findNode, listLeaves, setSplitRatio } from '../pane-layout/tree.js';
+	import { findNode, listLeaves, setSplitRatio, swapLeafIds } from '../pane-layout/tree.js';
 	import type { LayoutNode, SplitDirection } from '../pane-layout/types.js';
 	import AppWindowTree from './AppWindowTree.svelte';
 	import {
@@ -327,6 +327,12 @@
 		for (const id of next.removed) onAfterClose?.(id);
 	}
 
+	function swapAt(fromId: string, towardId: string) {
+		if (fromId === towardId) return;
+		root = swapLeafIds(root, fromId, towardId);
+		combinePreview = null;
+	}
+
 	function closeAt(leafId: string) {
 		const next = closeAppWindow(root, windows, leafId, roles);
 		if (!next) return;
@@ -583,6 +589,25 @@
 								<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
 							{/if}
 						</button>
+						<button
+							type="button"
+							class="aw-swap {target.side}"
+							data-testid="{testidPrefix}-swap-{target.side}"
+							data-aw-swap={target.side}
+							title="Swap with window to the {target.side}"
+							aria-label="Swap with window to the {target.side}"
+							onclick={(e) => {
+								e.stopPropagation();
+								swapAt(leaf.id, target.towardId);
+							}}
+							onpointerdown={(e) => e.stopPropagation()}
+						>
+							{#if target.side === 'left' || target.side === 'right'}
+								<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 7 4 12l4 5"/><path d="M4 12h16"/><path d="m16 7 4 5-4 5"/></svg>
+							{:else}
+								<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 8 12 4 7 8"/><path d="M12 4v16"/><path d="m7 16 5 4 5-4"/></svg>
+							{/if}
+						</button>
 					{/each}
 				{/if}
 			</div>
@@ -790,6 +815,47 @@
 	.aw-combine:disabled {
 		opacity: 0.35;
 		cursor: not-allowed;
+	}
+	.aw-swap {
+		position: absolute;
+		z-index: 8;
+		width: 26px;
+		height: 26px;
+		padding: 0;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		border: 1px solid rgb(var(--border-rgb, 90 90 96) / 0.8);
+		border-radius: var(--radius-md, 8px);
+		background: rgb(var(--bg-rgb, 16 16 20) / 0.95);
+		color: var(--text-primary);
+		cursor: pointer;
+	}
+	.aw-swap.right {
+		top: 50%;
+		right: 32px;
+		transform: translateY(-50%);
+	}
+	.aw-swap.left {
+		top: 50%;
+		left: 32px;
+		transform: translateY(-50%);
+	}
+	.aw-swap.top {
+		left: 50%;
+		top: 32px;
+		transform: translateX(-50%);
+	}
+	.aw-swap.bottom {
+		left: 50%;
+		bottom: 32px;
+		transform: translateX(-50%);
+	}
+	.aw-swap:hover,
+	.aw-swap:focus-visible {
+		border-color: var(--accent, #6ea8fe);
+		color: var(--accent, #6ea8fe);
+		background: rgb(var(--accent-rgb, 110 168 254) / 0.2);
 	}
 	.aw-slice-layer {
 		position: absolute;
