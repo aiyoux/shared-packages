@@ -193,7 +193,10 @@
 	</div>
 	<div class="aw-park" bind:this={parkEl} hidden aria-hidden="true">
 		{#if hosted}
-			<div class="aw-live-host" use:registerLive>
+			<!-- The single live well, parked here and relocated into whichever leaf
+			     is the host. Consumers assert on it to prove the live view follows
+			     the target pane, so it carries a testid like every other leaf. -->
+			<div class="aw-live-host" data-testid="{testidPrefix}-live" use:registerLive>
 				{@render hosted()}
 			</div>
 		{/if}
