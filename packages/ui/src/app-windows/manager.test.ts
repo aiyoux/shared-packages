@@ -4,8 +4,11 @@ import {
 	canCloseAppWindow,
 	clampUnavailableRoles,
 	closeAppWindow,
+	isUnassignedWindow,
 	pickNewRole,
 	setAppWindowRole,
+	sliceAppWindow,
+	sliceGuideFromPoint,
 	splitAppWindow
 } from './manager.js';
 import type { AppWindowRoleDef } from './types.js';
@@ -70,5 +73,36 @@ describe('app-windows manager', () => {
 		const next = clampUnavailableRoles(windows, new Set(['canvas', 'scene']), 'scene', inherit);
 		expect(next.b.role).toBe('scene');
 		expect(next.a.role).toBe('canvas');
+	});
+
+	it('slices at the pointer ratio and marks the new leaf unassigned', () => {
+		const root = createLeaf('home');
+		const sliced = sliceAppWindow(
+			root,
+			{ home: { role: 'canvas' } },
+			'home',
+			'row',
+			0.3,
+			catalog,
+			inherit
+		)!;
+		expect(sliced.root.kind).toBe('split');
+		if (sliced.root.kind !== 'split') return;
+		expect(sliced.root.ratio).toBe(0.3);
+		expect(isUnassignedWindow(sliced.windows[sliced.newId])).toBe(true);
+		expect(isUnassignedWindow(sliced.windows.home)).toBe(false);
+		const assigned = setAppWindowRole(
+			sliced.windows,
+			sliced.newId,
+			sliced.windows[sliced.newId].role,
+			catalog,
+			inherit
+		)!;
+		expect(isUnassignedWindow(assigned[sliced.newId])).toBe(false);
+	});
+
+	it('picks a vertical cut when closer to the left/right edge', () => {
+		expect(sliceGuideFromPoint(10, 50, 200, 100)).toEqual({ direction: 'row', ratio: 0.05 });
+		expect(sliceGuideFromPoint(100, 8, 200, 100)).toEqual({ direction: 'col', ratio: 0.08 });
 	});
 });

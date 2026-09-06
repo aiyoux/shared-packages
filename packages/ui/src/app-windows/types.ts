@@ -9,4 +9,6 @@ export type AppWindowRoleDef<R extends string = string> = {
 
 export type AppWindowLeaf<R extends string = string> = {
 	role: R;
+	/** Slice created this leaf; show the role picker until the user picks. */
+	unassigned?: boolean;
 };

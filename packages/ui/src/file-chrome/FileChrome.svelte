@@ -9,6 +9,7 @@
 		testidPrefix = 'file',
 		showWindows = false,
 		windowEditOpen = $bindable(false),
+		windowSliceOpen = $bindable(false),
 		windowsFirst = false,
 		items = undefined,
 		labels = undefined,
@@ -24,6 +25,7 @@
 		testidPrefix?: string;
 		showWindows?: boolean;
 		windowEditOpen?: boolean;
+		windowSliceOpen?: boolean;
 		/**
 		 * Render the Windows toggle before the File menu (Windows, File,
 		 * Save — the sketcher order). Default false preserves the
@@ -183,9 +185,29 @@
 			data-tooltip-pos="bottom-right"
 			data-testid="{testidPrefix}-windows-btn"
 			disabled={!hasDocument}
-			onclick={() => (windowEditOpen = !windowEditOpen)}
+			onclick={() => {
+				windowEditOpen = !windowEditOpen;
+				windowSliceOpen = false;
+			}}
 		>
 			<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M12 3v18"/></svg>
+		</button>
+		<button
+			type="button"
+			class="file-btn"
+			class:active={windowSliceOpen}
+			aria-label="Slice windows"
+			aria-pressed={windowSliceOpen}
+			data-tooltip="Slice windows"
+			data-tooltip-pos="bottom-right"
+			data-testid="{testidPrefix}-slice-btn"
+			disabled={!hasDocument}
+			onclick={() => {
+				windowSliceOpen = !windowSliceOpen;
+				windowEditOpen = false;
+			}}
+		>
+			<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><line x1="20" x2="8.12" y1="4" y2="15.88"/><line x1="14.47" x2="20" y1="14.48" y2="20"/><line x1="8.12" x2="12" y1="8.12" y2="12"/></svg>
 		</button>
 	{/if}
 {/snippet}

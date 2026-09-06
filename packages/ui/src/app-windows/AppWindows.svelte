@@ -12,7 +12,10 @@
 		canCloseAppWindow,
 		clampUnavailableRoles,
 		closeAppWindow,
+		isUnassignedWindow,
 		setAppWindowRole,
+		sliceAppWindow,
+		sliceGuideFromPoint,
 		splitAppWindow
 	} from './manager.js';
 	import type { AppWindowRoleDef } from './types.js';
@@ -22,6 +25,7 @@
 		windows = $bindable(),
 		focusedId = $bindable(),
 		editing = $bindable(false),
+		slicing = $bindable(false),
 		layoutId = 'app',
 		testid = 'app-windows',
 		testidPrefix = 'app-window',
@@ -47,6 +51,7 @@
 		windows: Record<string, S>;
 		focusedId: string;
 		editing?: boolean;
+		slicing?: boolean;
 		layoutId?: string;
 		testid?: string;
 		testidPrefix?: string;
@@ -78,6 +83,48 @@
 
 	let parkEl: HTMLElement | null = $state(null);
 	let liveHost: HTMLElement | null = $state(null);
+	let sliceGuide = $state<{
+		leafId: string;
+		direction: SplitDirection;
+		ratio: number;
+		pos: number;
+	} | null>(null);
+
+	const TEXT_ENTRY_INPUT_TYPES = new Set([
+		'text',
+		'search',
+		'url',
+		'tel',
+		'email',
+		'password',
+		'number',
+		'date',
+		'datetime-local',
+		'month',
+		'time',
+		'week'
+	]);
+
+	function targetConsumesKey(target: HTMLElement | null, e: KeyboardEvent): boolean {
+		if (!target) return false;
+		if (target.tagName === 'TEXTAREA' || target.isContentEditable) return true;
+		if (target.tagName !== 'INPUT') return false;
+		const type = (target as HTMLInputElement).type;
+		if (TEXT_ENTRY_INPUT_TYPES.has(type)) return true;
+		if (type === 'range') {
+			return (
+				e.key.startsWith('Arrow') ||
+				e.key === 'Home' ||
+				e.key === 'End' ||
+				e.key === 'PageUp' ||
+				e.key === 'PageDown'
+			);
+		}
+		if (type === 'checkbox' || type === 'radio') {
+			return e.key === ' ' || e.key === 'Spacebar' || e.key.startsWith('Arrow');
+		}
+		return false;
+	}
 
 	function bodyEl(id: string): HTMLElement | null {
 		return document.getElementById(appWindowBodyId(layoutId, id));
@@ -142,6 +189,27 @@
 		onFocus?.(id);
 	}
 
+	function exitSlice() {
+		slicing = false;
+		editing = false;
+		sliceGuide = null;
+	}
+
+	function toggleSlice() {
+		if (slicing) {
+			exitSlice();
+			return;
+		}
+		editing = false;
+		slicing = true;
+	}
+
+	function toggleEdit() {
+		slicing = false;
+		sliceGuide = null;
+		editing = !editing;
+	}
+
 	function splitAt(leafId: string, direction: SplitDirection) {
 		onBeforeSplit?.(leafId);
 		const next = splitAppWindow(
@@ -159,6 +227,83 @@
 		focusedId = next.newId;
 	}
 
+	function sliceAt(leafId: string, direction: SplitDirection, ratio: number) {
+		onBeforeSplit?.(leafId);
+		const next = sliceAppWindow(
+			root,
+			windows,
+			leafId,
+			direction,
+			ratio,
+			roles,
+			inherit,
+			available
+		);
+		if (!next) return;
+		root = next.root;
+		windows = next.windows;
+		focusedId = next.newId;
+		sliceGuide = null;
+	}
+
+	function onSliceMove(leafId: string, e: PointerEvent) {
+		const el = e.currentTarget as HTMLElement;
+		const rect = el.getBoundingClientRect();
+		const x = e.clientX - rect.left;
+		const y = e.clientY - rect.top;
+		const { direction, ratio } = sliceGuideFromPoint(x, y, rect.width, rect.height);
+		sliceGuide = {
+			leafId,
+			direction,
+			ratio,
+			pos: direction === 'row' ? x : y
+		};
+	}
+
+	function onSliceLeave(leafId: string) {
+		if (sliceGuide?.leafId === leafId) sliceGuide = null;
+	}
+
+	function onSlicePointer(leafId: string, e: PointerEvent) {
+		if (e.button !== 0) return;
+		e.preventDefault();
+		e.stopPropagation();
+		const el = e.currentTarget as HTMLElement;
+		const rect = el.getBoundingClientRect();
+		const x = e.clientX - rect.left;
+		const y = e.clientY - rect.top;
+		const { direction, ratio } = sliceGuideFromPoint(x, y, rect.width, rect.height);
+		sliceAt(leafId, direction, ratio);
+	}
+
+	$effect(() => {
+		const onKey = (e: KeyboardEvent) => {
+			const target = e.target as HTMLElement | null;
+			if (targetConsumesKey(target, e)) return;
+			if (e.ctrlKey || e.metaKey || e.altKey) return;
+			const key = e.key.toLowerCase();
+			if (key === 's' && e.shiftKey) {
+				e.preventDefault();
+				e.stopPropagation();
+				toggleSlice();
+				return;
+			}
+			if (key === 'w' && e.shiftKey) {
+				e.preventDefault();
+				e.stopPropagation();
+				toggleEdit();
+				return;
+			}
+			if (slicing && key === 'escape') {
+				e.preventDefault();
+				e.stopPropagation();
+				exitSlice();
+			}
+		};
+		window.addEventListener('keydown', onKey, true);
+		return () => window.removeEventListener('keydown', onKey, true);
+	});
+
 	function closeAt(leafId: string) {
 		const next = closeAppWindow(root, windows, leafId, roles);
 		if (!next) return;
@@ -171,7 +316,14 @@
 	}
 
 	function setRole(leafId: string, role: R) {
-		if (onSelectRole && onSelectRole(leafId, role) === false) return;
+		if (onSelectRole && onSelectRole(leafId, role) === false) {
+			const current = windows[leafId];
+			if (current?.unassigned && current.role === role) {
+				windows = { ...windows, [leafId]: { ...current, unassigned: false } };
+			}
+			focusLeaf(leafId);
+			return;
+		}
 		const next = setAppWindowRole(windows, leafId, role, roles, inherit);
 		if (!next) return;
 		windows = next;
@@ -187,7 +339,7 @@
 	}
 </script>
 
-<div class="aw-host {hostClass}" class:editing data-testid={testid}>
+<div class="aw-host {hostClass}" class:editing class:slicing data-testid={testid}>
 	<div class="aw-root">
 		<AppWindowTree node={root} {layoutId} {testidPrefix} {onResize} />
 	</div>
@@ -216,10 +368,72 @@
 				use:home.homeLeaf={leaf.id}
 			>
 				<div class="aw-body" id={appWindowBodyId(layoutId, leaf.id)}>
-					{@render pane({ id: leaf.id, role: roleOf(leaf.id), focused: focusedId === leaf.id })}
+					{#if !isUnassignedWindow(windows[leaf.id])}
+						{@render pane({ id: leaf.id, role: roleOf(leaf.id), focused: focusedId === leaf.id })}
+					{/if}
 				</div>
-				{#if leafChrome}
+				{#if leafChrome && !slicing}
 					{@render leafChrome({ id: leaf.id, role: roleOf(leaf.id), focused: focusedId === leaf.id })}
+				{/if}
+				{#if slicing}
+					<button
+						type="button"
+						class="aw-slice-bin"
+						data-testid="{testidPrefix}-slice-close"
+						title={canClose(leaf.id) ? 'Remove window' : 'Last required window stays open'}
+						aria-label="Close window"
+						disabled={!canClose(leaf.id)}
+						onclick={(e) => {
+							e.stopPropagation();
+							closeAt(leaf.id);
+						}}
+						onpointerdown={(e) => e.stopPropagation()}
+					>
+						<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg>
+					</button>
+					<!-- svelte-ignore a11y_no_static_element_interactions -->
+					<!-- svelte-ignore a11y_click_events_have_key_events -->
+					<div
+						class="aw-slice-layer"
+						class:row-cut={sliceGuide?.leafId === leaf.id && sliceGuide.direction === 'row'}
+						class:col-cut={sliceGuide?.leafId === leaf.id && sliceGuide.direction === 'col'}
+						data-testid="{testidPrefix}-slice-layer"
+						onpointermove={(e) => onSliceMove(leaf.id, e)}
+						onpointerdown={(e) => onSlicePointer(leaf.id, e)}
+						onpointerleave={() => onSliceLeave(leaf.id)}
+					>
+						{#if sliceGuide && sliceGuide.leafId === leaf.id}
+							<div
+								class="aw-slice-guide"
+								class:row={sliceGuide.direction === 'row'}
+								class:col={sliceGuide.direction === 'col'}
+								data-testid="{testidPrefix}-slice-guide"
+								data-aw-direction={sliceGuide.direction}
+								style={sliceGuide.direction === 'row'
+									? `left: ${sliceGuide.pos}px`
+									: `top: ${sliceGuide.pos}px`}
+							></div>
+						{/if}
+					</div>
+				{:else if !editing && isUnassignedWindow(windows[leaf.id])}
+					<div class="aw-picker" data-testid="{testidPrefix}-role-picker">
+						<p class="aw-picker-label">Window</p>
+						<div class="aw-picker-list">
+							{#each pickerRoles as role}
+								<button
+									type="button"
+									data-testid="{testidPrefix}-role-pick"
+									data-aw-role={role.id}
+									onclick={(e) => {
+										e.stopPropagation();
+										setRole(leaf.id, role.id);
+									}}
+								>
+									{role.label}
+								</button>
+							{/each}
+						</div>
+					</div>
 				{/if}
 				{#if editing}
 					<!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -460,5 +674,103 @@
 	.aw-done:hover,
 	.aw-done:focus-visible {
 		background: rgb(var(--accent-rgb, 110 168 254) / 0.3);
+	}
+	.aw-slice-layer {
+		position: absolute;
+		inset: 0;
+		z-index: 7;
+		cursor: crosshair;
+	}
+	.aw-slice-layer.row-cut {
+		cursor: col-resize;
+	}
+	.aw-slice-layer.col-cut {
+		cursor: row-resize;
+	}
+	.aw-slice-guide {
+		position: absolute;
+		background: #e11d2e;
+		pointer-events: none;
+		z-index: 1;
+	}
+	.aw-slice-guide.row {
+		top: 0;
+		width: 2px;
+		height: 100%;
+		transform: translateX(-1px);
+	}
+	.aw-slice-guide.col {
+		left: 0;
+		height: 2px;
+		width: 100%;
+		transform: translateY(-1px);
+	}
+	.aw-slice-bin {
+		position: absolute;
+		top: 8px;
+		right: 8px;
+		z-index: 8;
+		width: 28px;
+		height: 28px;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		border: 1px solid rgb(var(--border-rgb, 90 90 96) / 0.75);
+		border-radius: var(--radius-md, 8px);
+		background: rgb(var(--bg-rgb, 16 16 20) / 0.88);
+		color: var(--text-primary);
+		cursor: pointer;
+	}
+	.aw-slice-bin:hover:not(:disabled),
+	.aw-slice-bin:focus-visible:not(:disabled) {
+		border-color: var(--accent);
+		color: var(--accent);
+	}
+	.aw-slice-bin:disabled {
+		opacity: 0.35;
+		cursor: not-allowed;
+	}
+	.aw-picker {
+		position: absolute;
+		inset: 0;
+		z-index: 5;
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		justify-content: center;
+		gap: 10px;
+		padding: 16px;
+		background: var(--surface-ground, var(--bg-chrome));
+	}
+	.aw-picker-label {
+		margin: 0;
+		font-size: var(--text-xs, 12px);
+		letter-spacing: 0.08em;
+		text-transform: uppercase;
+		color: var(--text-muted);
+	}
+	.aw-picker-list {
+		display: flex;
+		flex-direction: column;
+		align-items: stretch;
+		gap: 6px;
+		min-width: 10rem;
+		max-width: min(18rem, 100%);
+	}
+	.aw-picker-list button {
+		height: 34px;
+		padding: 0 12px;
+		border: 1px solid var(--line-strong, rgb(var(--border-rgb, 90 90 96) / 0.75));
+		border-radius: var(--radius-md, 8px);
+		background: var(--surface-2, rgb(var(--bg-rgb, 16 16 20) / 0.88));
+		color: var(--text-primary);
+		cursor: pointer;
+		font-size: var(--text-sm, 13px);
+	}
+	.aw-picker-list button:hover,
+	.aw-picker-list button:focus-visible {
+		border-color: var(--accent);
+		background: var(--accent-glow, rgb(var(--accent-rgb, 110 168 254) / 0.18));
+		color: var(--accent);
 	}
 </style>

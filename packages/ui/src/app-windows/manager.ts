@@ -8,6 +8,35 @@ import {
 import type { LayoutNode, SplitDirection } from '../pane-layout/types.js';
 import type { AppWindowLeaf, AppWindowRoleDef } from './types.js';
 
+/** Closer to left/right → vertical cut (`row`); closer to top/bottom → `col`. */
+export function sliceGuideFromPoint(
+	localX: number,
+	localY: number,
+	width: number,
+	height: number
+): { direction: SplitDirection; ratio: number } {
+	const w = width > 0 ? width : 1;
+	const h = height > 0 ? height : 1;
+	const distX = Math.min(localX, w - localX);
+	const distY = Math.min(localY, h - localY);
+	const direction: SplitDirection = distX <= distY ? 'row' : 'col';
+	const ratio = direction === 'row' ? localX / w : localY / h;
+	return { direction, ratio };
+}
+
+export function isUnassignedWindow(window: AppWindowLeaf | undefined): boolean {
+	return window?.unassigned === true;
+}
+
+function withUnassigned<S extends AppWindowLeaf<R>, R extends string>(leaf: S): S {
+	return { ...leaf, unassigned: true };
+}
+
+function withoutUnassigned<S extends AppWindowLeaf<R>, R extends string>(leaf: S): S {
+	if (!leaf.unassigned) return leaf;
+	return { ...leaf, unassigned: false };
+}
+
 export function createAppWindowRoot(leafId: string): LayoutNode {
 	return createLeaf(leafId);
 }
@@ -87,6 +116,35 @@ export function splitAppWindow<S extends AppWindowLeaf<R>, R extends string>(
 	};
 }
 
+/** Split at a pointer ratio and leave the new leaf unassigned for the picker. */
+export function sliceAppWindow<S extends AppWindowLeaf<R>, R extends string>(
+	root: LayoutNode,
+	windows: Record<string, S>,
+	leafId: string,
+	direction: SplitDirection,
+	ratio: number,
+	catalog: readonly AppWindowRoleDef<R>[],
+	inherit: (source: S | undefined, role: R) => S,
+	available?: ReadonlySet<R>
+): { root: LayoutNode; windows: Record<string, S>; newId: string } | null {
+	const next = splitLeaf(root, leafId, direction, 'after', ratio);
+	if (!next) return null;
+	const role = pickNewRole(
+		windows,
+		windows[leafId]?.role ?? catalog[0]!.id,
+		catalog,
+		available
+	);
+	return {
+		root: next.root,
+		windows: {
+			...windows,
+			[next.newLeaf.id]: withUnassigned(inherit(windows[leafId], role))
+		},
+		newId: next.newLeaf.id
+	};
+}
+
 export function closeAppWindow<S extends AppWindowLeaf<R>, R extends string>(
 	root: LayoutNode,
 	windows: Record<string, S>,
@@ -113,12 +171,15 @@ export function setAppWindowRole<S extends AppWindowLeaf<R>, R extends string>(
 ): Record<string, S> | null {
 	const current = windows[leafId];
 	if (!current) return null;
-	if (current.role === role) return windows;
+	if (current.role === role) {
+		if (!current.unassigned) return windows;
+		return { ...windows, [leafId]: withoutUnassigned(current) };
+	}
 	const def = catalog.find((c) => c.id === current.role);
 	if (def?.required && role !== current.role && roleCount(windows, current.role) <= 1) {
 		return null;
 	}
-	return { ...windows, [leafId]: inherit(current, role) };
+	return { ...windows, [leafId]: withoutUnassigned(inherit(current, role)) };
 }
 
 /** Drop or reassign leaves whose role is no longer available. */

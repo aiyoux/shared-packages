@@ -326,6 +326,7 @@
 	let focusedId = $state<string>('left');
 	let targetPaneId = $state<string>('left');
 	let windowEditOpen = $state<boolean>(false);
+	let windowSliceOpen = $state<boolean>(false);
 
 	const dualPane = $derived(listLeaves(windowRoot).length > 1);
 
@@ -2088,6 +2089,7 @@
 	>
 		<AppWindowsButton
 			bind:editing={windowEditOpen}
+			bind:slicing={windowSliceOpen}
 			testid="fe-windows-btn"
 		/>
 		{#if pairInfoInChrome}
@@ -2146,6 +2148,7 @@
 			bind:windows
 			bind:focusedId
 			bind:editing={windowEditOpen}
+			bind:slicing={windowSliceOpen}
 			layoutId="files"
 			testid="{tids.body}-windows"
 			testidPrefix={scopedTid('files-window')}
@@ -2170,7 +2173,7 @@
 			})}
 		>
 			{#snippet leafChrome({ id })}
-				{#if id === targetPaneId && !windowEditOpen && leafCount(windowRoot) > 1 && !hideTargetChrome}
+				{#if id === targetPaneId && !windowEditOpen && !windowSliceOpen && leafCount(windowRoot) > 1 && !hideTargetChrome}
 					<div class="fe-target-chip" data-testid={scopedTid('files-window-target')}>Target</div>
 				{/if}
 			{/snippet}

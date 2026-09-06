@@ -72,10 +72,13 @@ export {
 	closeAppWindow,
 	createAppWindowRoot,
 	defaultAppWindows,
+	isUnassignedWindow,
 	pickNewRole,
 	resolveTargetLeafId,
 	roleCount,
 	setAppWindowRole,
+	sliceAppWindow,
+	sliceGuideFromPoint,
 	splitAppWindow
 } from './app-windows/manager.ts';
 export {

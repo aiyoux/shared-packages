@@ -4,15 +4,21 @@
 
 	let {
 		editing = $bindable(false),
+		slicing = $bindable(false),
 		portalTarget = '',
 		testid = 'app-windows-btn',
+		sliceTestid = '',
 		class: customClass = ''
 	}: {
 		editing?: boolean;
+		slicing?: boolean;
 		portalTarget?: string;
 		testid?: string;
+		sliceTestid?: string;
 		class?: string;
 	} = $props();
+
+	const sliceId = $derived(sliceTestid || testid.replace(/windows-btn$/, 'slice-btn'));
 
 	function portalAction(node: HTMLElement) {
 		if (portalTarget) {
@@ -40,6 +46,7 @@
 		data-tooltip-pos="bottom-right"
 		onclick={() => {
 			editing = !editing;
+			slicing = false;
 		}}
 	>
 		<svg
@@ -56,6 +63,40 @@
 		>
 			<rect width="18" height="18" x="3" y="3" rx="2" />
 			<path d="M12 3v18" />
+		</svg>
+	</button>
+	<button
+		type="button"
+		class="aw-windows-btn {customClass}"
+		class:active={slicing}
+		aria-pressed={slicing}
+		data-testid={sliceId}
+		title="Slice"
+		aria-label="Slice windows"
+		data-tooltip="Slice windows"
+		data-tooltip-pos="bottom-right"
+		onclick={() => {
+			slicing = !slicing;
+			editing = false;
+		}}
+	>
+		<svg
+			xmlns="http://www.w3.org/2000/svg"
+			width="16"
+			height="16"
+			viewBox="0 0 24 24"
+			fill="none"
+			stroke="currentColor"
+			stroke-width="2"
+			stroke-linecap="round"
+			stroke-linejoin="round"
+			aria-hidden="true"
+		>
+			<circle cx="6" cy="6" r="3" />
+			<circle cx="6" cy="18" r="3" />
+			<line x1="20" x2="8.12" y1="4" y2="15.88" />
+			<line x1="14.47" x2="20" y1="14.48" y2="20" />
+			<line x1="8.12" x2="12" y1="8.12" y2="12" />
 		</svg>
 	</button>
 </div>
