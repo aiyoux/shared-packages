@@ -230,63 +230,80 @@
 						onclick={(e) => e.stopPropagation()}
 						onpointerdown={(e) => e.stopPropagation()}
 					>
-						<label class="aw-role">
-							<span class="aw-role-label">Window</span>
-							<select
-								aria-label="Window type"
-								data-testid="{testidPrefix}-role"
-								value={roleOf(leaf.id)}
-								onchange={(e) =>
-									setRole(leaf.id, (e.currentTarget as HTMLSelectElement).value as R)}
-							>
-								{#each pickerRoles as role}
-									<option value={role.id}>{role.label}</option>
-								{/each}
-							</select>
-						</label>
-						{#if extraFields}
-							{@render extraFields({ id: leaf.id, role: roleOf(leaf.id) })}
-						{/if}
-						<div class="aw-actions">
+						<div class="aw-edit-card">
+							<div class="aw-actions aw-window-ops">
+								<button
+									type="button"
+									data-testid="{testidPrefix}-split-row"
+									title="Split right"
+									aria-label="Split right"
+									onclick={(e) => {
+										e.stopPropagation();
+										splitAt(leaf.id, 'row');
+									}}
+								>
+									<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M12 3v18"/></svg>
+								</button>
+								<button
+									type="button"
+									data-testid="{testidPrefix}-split-col"
+									title="Split down"
+									aria-label="Split down"
+									onclick={(e) => {
+										e.stopPropagation();
+										splitAt(leaf.id, 'col');
+									}}
+								>
+									<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 12h18"/></svg>
+								</button>
+								<button
+									type="button"
+									data-testid="{testidPrefix}-close"
+									title={canClose(leaf.id) ? 'Remove window' : 'Last required window stays open'}
+									aria-label="Close window"
+									disabled={!canClose(leaf.id)}
+									onclick={(e) => {
+										e.stopPropagation();
+										closeAt(leaf.id);
+									}}
+								>
+									<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg>
+								</button>
+							</div>
+							<label class="aw-role">
+								<span class="aw-role-label">Window</span>
+								<select
+									aria-label="Window type"
+									data-testid="{testidPrefix}-role"
+									value={roleOf(leaf.id)}
+									onchange={(e) =>
+										setRole(leaf.id, (e.currentTarget as HTMLSelectElement).value as R)}
+								>
+									{#each pickerRoles as role}
+										<option value={role.id}>{role.label}</option>
+									{/each}
+								</select>
+							</label>
+							{#if extraFields}
+								{@render extraFields({ id: leaf.id, role: roleOf(leaf.id) })}
+							{/if}
 							{#if extraEdit}
-								{@render extraEdit({ id: leaf.id, role: roleOf(leaf.id) })}
+								<div class="aw-actions aw-extra">
+									{@render extraEdit({ id: leaf.id, role: roleOf(leaf.id) })}
+								</div>
 							{/if}
 							<button
 								type="button"
-								data-testid="{testidPrefix}-split-row"
-								title="Split right"
-								aria-label="Split right"
+								class="aw-done"
+								data-testid="{testidPrefix}-done"
+								title="Keep this layout"
+								aria-label="Use this layout"
 								onclick={(e) => {
 									e.stopPropagation();
-									splitAt(leaf.id, 'row');
+									editing = false;
 								}}
 							>
-								<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M12 3v18"/></svg>
-							</button>
-							<button
-								type="button"
-								data-testid="{testidPrefix}-split-col"
-								title="Split down"
-								aria-label="Split down"
-								onclick={(e) => {
-									e.stopPropagation();
-									splitAt(leaf.id, 'col');
-								}}
-							>
-								<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 12h18"/></svg>
-							</button>
-							<button
-								type="button"
-								data-testid="{testidPrefix}-close"
-								title={canClose(leaf.id) ? 'Close window' : 'Last required window stays open'}
-								aria-label="Close window"
-								disabled={!canClose(leaf.id)}
-								onclick={(e) => {
-									e.stopPropagation();
-									closeAt(leaf.id);
-								}}
-							>
-								<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+								Use this layout
 							</button>
 						</div>
 					</div>
@@ -347,10 +364,24 @@
 		flex-direction: column;
 		align-items: center;
 		justify-content: center;
-		gap: 12px;
 		padding: 12px;
-		background: rgb(var(--scrim-rgb) / 0.45);
-		backdrop-filter: blur(2px);
+		background: color-mix(in srgb, rgb(var(--scrim-rgb, 0 0 0) / 0.55) 70%, #1a1a1e);
+		backdrop-filter: blur(8px);
+		-webkit-backdrop-filter: blur(8px);
+	}
+	.aw-edit-card {
+		display: flex;
+		flex-direction: column;
+		align-items: stretch;
+		gap: 10px;
+		min-width: 12rem;
+		max-width: min(22rem, 100%);
+		padding: 12px 14px;
+		background: rgb(var(--bg-rgb, 16 16 20) / 0.88);
+		border: 1px solid rgb(var(--border-rgb, 90 90 96) / 0.75);
+		border-radius: var(--radius-md, 8px);
+		box-shadow: 0 10px 28px rgb(var(--scrim-rgb, 0 0 0) / 0.4);
+		color: var(--text-primary);
 	}
 	.aw-role {
 		display: flex;
@@ -405,5 +436,29 @@
 	.aw-actions :global(button:disabled) {
 		opacity: 0.35;
 		cursor: not-allowed;
+	}
+	.aw-window-ops {
+		justify-content: center;
+	}
+	.aw-extra {
+		flex-direction: column;
+	}
+	.aw-done {
+		width: 100%;
+		height: 34px;
+		margin-top: 2px;
+		border: 1px solid var(--accent, #6ea8fe);
+		border-radius: var(--radius-md, 8px);
+		background: rgb(var(--accent-rgb, 110 168 254) / 0.18);
+		color: var(--accent, #6ea8fe);
+		cursor: pointer;
+		font-size: var(--text-xs, 12px);
+		font-weight: 700;
+		letter-spacing: 0.06em;
+		text-transform: uppercase;
+	}
+	.aw-done:hover,
+	.aw-done:focus-visible {
+		background: rgb(var(--accent-rgb, 110 168 254) / 0.3);
 	}
 </style>
