@@ -343,11 +343,22 @@
 		windows = next;
 	});
 
+	/**
+	 * Nothing is worth saving until `onMount` has read what was saved.
+	 *
+	 * This effect runs before that restore, so on every load it wrote the
+	 * *initial* single-leaf layout over the stored one, and the restore then
+	 * read back what it had just clobbered. A split pane never survived a
+	 * reload, which is the whole point of persisting the layout.
+	 */
+	let layoutRestored = $state(false);
+
 	$effect(() => {
 		void windowRoot;
 		void windows;
 		void focusedId;
 		void targetPaneId;
+		if (!layoutRestored) return;
 		saveFileWindows(dualPaneKey, {
 			root: windowRoot,
 			windows,
@@ -688,6 +699,7 @@
 			focusedId = saved.focusedId;
 			targetPaneId = saved.targetPaneId;
 		}
+		layoutRestored = true;
 		onDualChange?.(dualPane);
 		void reloadProfiles();
 		const reloadOnTab = () => {
