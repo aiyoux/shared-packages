@@ -1,7 +1,14 @@
 <script lang="ts">
 	import { onDestroy, onMount, tick, type Snippet } from 'svelte';
 	import FileExplorer from './FileExplorer.svelte';
-	import { getSharedVfs, isActionable, type FileTypeId, type VfsService } from '../index.js';
+	import {
+		getSharedVfs,
+		inferFileTypeFromName,
+		isActionable,
+		type FileTypeId,
+		type VfsService
+	} from '../index.js';
+	import { fileTypeMime } from '@shared-packages/ui';
 	import {
 		readExplorerBlob,
 		explorerThumbsAreEager,
@@ -895,6 +902,16 @@
 			return;
 		}
 		const ids = beginInternalDrag(n);
+		const dragged = ids
+			.map((id) => nodes.find((x) => x.id === id) ?? (id === n.id ? n : undefined))
+			.filter((row): row is ExplorerEntry => Boolean(row));
+		const fileTypes = [
+			...new Set(
+				dragged.map((row) =>
+					row.kind === 'folder' ? 'folder' : (row.fileType ?? inferFileTypeFromName(row.name))
+				)
+			)
+		];
 		try {
 			e.dataTransfer?.setData('text/plain', ids.join(','));
 			e.dataTransfer?.setData(
@@ -902,9 +919,13 @@
 				JSON.stringify({
 					driverId: driver.id,
 					ids,
+					fileTypes,
 					...(driver.connectionId ? { connectionId: driver.connectionId } : {})
 				})
 			);
+			for (const ft of fileTypes) {
+				e.dataTransfer?.setData(fileTypeMime(ft), ft);
+			}
 		} catch {
 			/* jsdom may lack full DataTransfer */
 		}

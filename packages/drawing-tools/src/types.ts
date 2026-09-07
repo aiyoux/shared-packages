@@ -177,6 +177,10 @@ export interface ImportedImage {
     layerId?: string;
     /** Radians. Optional so older saves still load. */
     rotation?: number;
+    /** VFS bind. Absent = a cloned/embedded copy (the historical default). */
+    bind?: 'clone' | 'live' | 'snapshot';
+    /** Shared-VFS node this image was bound from. Live re-reads this id. */
+    vfsNodeId?: string;
 }
 
 export interface PathData {

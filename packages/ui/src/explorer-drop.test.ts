@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest';
 import {
 	parseExplorerDropPayload,
 	routeFileDrop,
+	dropAccepts,
+	fileTypeMime,
+	fileTypesFromDragTypes,
 	type DropTransferLike,
 	type ExplorerDropPayload
 } from './explorer-drop.ts';
@@ -121,5 +124,24 @@ describe('routeFileDrop', () => {
 			}
 		);
 		expect(explorerCalls).toEqual([{ ids: ['id1', 'id2'], clientX: 8, clientY: 9 }]);
+	});
+});
+
+describe('dropAccepts', () => {
+	it('reads file types from dragover MIME types', () => {
+		expect(fileTypeMime('image')).toBe('application/x-fe-ft-image');
+		expect(fileTypesFromDragTypes(['application/x-fe-ft-image', 'text/plain'])).toEqual(['image']);
+	});
+
+	it('accepts when any dragged file matches', () => {
+		expect(dropAccepts(['application/x-fe-ft-image', 'application/x-fe-ft-pdf'], ['image'])).toBe(
+			'ok'
+		);
+		expect(dropAccepts(['application/x-fe-ft-kb'], ['image', 'pdf'])).toBe('unsupported');
+		expect(dropAccepts(['application/x-fe-ft-folder'], ['image'])).toBe('unsupported');
+	});
+
+	it('is unknown when explorer ids are present without type mimes', () => {
+		expect(dropAccepts(['application/x-fe-explorer-ids'], ['image'])).toBe('unknown');
 	});
 });

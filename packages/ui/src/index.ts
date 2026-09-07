@@ -25,7 +25,18 @@ export { default as DateRangeCalendar } from './DateRangeCalendar.svelte';
 export { default as DateRangePicker } from './DateRangePicker.svelte';
 export { default as DatePicker } from './DatePicker.svelte';
 export { default as FileDropZone } from './FileDropZone.svelte';
-export { parseExplorerDropPayload, type ExplorerDropPayload } from './explorer-drop.ts';
+export { default as BindPrompt } from './BindPrompt.svelte';
+export type { BindPromptIds, BindPromptPending, VfsBindMode } from './BindPrompt.svelte';
+export { default as DropRejectHint } from './DropRejectHint.svelte';
+export {
+	parseExplorerDropPayload,
+	dropAccepts,
+	fileTypeMime,
+	fileTypesFromDragTypes,
+	FE_FILE_TYPE_PREFIX,
+	type ExplorerDropPayload,
+	type DropAcceptVerdict
+} from './explorer-drop.ts';
 export { formatBytes, bytesToArrayBuffer, downloadBytes, fileFromBytes } from './files.ts';
 export { default as Separator } from './Separator.svelte';
 export { default as Tabs } from './Tabs.svelte';

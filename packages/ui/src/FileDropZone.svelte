@@ -1,15 +1,18 @@
 <script lang="ts">
 	import {
+		dropAccepts,
 		hasExplorerMime,
 		routeFileDrop,
 		type ExplorerDropPayload
 	} from './explorer-drop.ts';
+	import DropRejectHint from './DropRejectHint.svelte';
 
 	let {
 		hint = 'Click or drag files here',
 		dragHint = 'Drop files here',
 		multiple = true,
 		accept = '',
+		acceptFileTypes = [],
 		testId = 'file-drop-zone',
 		inputTestId = 'file-input',
 		onfiles,
@@ -20,6 +23,8 @@
 		dragHint?: string;
 		multiple?: boolean;
 		accept?: string;
+		/** VFS file-type ids this zone accepts (`image`, `pdf`, …). */
+		acceptFileTypes?: readonly string[];
 		testId?: string;
 		inputTestId?: string;
 		onfiles: (files: File[]) => void;
@@ -29,6 +34,7 @@
 	} = $props();
 
 	let dragOver = $state(false);
+	let rejectAt = $state<{ x: number; y: number } | null>(null);
 	let fileInput = $state<HTMLInputElement | null>(null);
 	let suppressClick = $state(false);
 
@@ -52,6 +58,12 @@
 		e.preventDefault();
 		if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
 		dragOver = true;
+		if (acceptFileTypes.length && hasExplorerIds(e.dataTransfer)) {
+			const verdict = dropAccepts(e.dataTransfer?.types, acceptFileTypes);
+			rejectAt = verdict === 'unsupported' ? { x: e.clientX, y: e.clientY } : null;
+		} else {
+			rejectAt = null;
+		}
 	}
 
 	function emit(list: FileList | File[] | null) {
@@ -63,6 +75,14 @@
 		e.preventDefault();
 		dragOver = false;
 		suppressClick = true;
+		if (acceptFileTypes.length && hasExplorerIds(e.dataTransfer)) {
+			const verdict = dropAccepts(e.dataTransfer?.types, acceptFileTypes);
+			if (verdict === 'unsupported') {
+				rejectAt = { x: e.clientX, y: e.clientY };
+				return;
+			}
+		}
+		rejectAt = null;
 		routeFileDrop(e, { onfiles, onExplorerIds });
 	}
 </script>
@@ -79,6 +99,7 @@
 		const next = e.relatedTarget;
 		if (next instanceof Node && e.currentTarget.contains(next)) return;
 		dragOver = false;
+		rejectAt = null;
 	}}
 	ondrop={onDrop}
 	onclick={() => {
@@ -141,6 +162,9 @@
 		{/if}
 	</div>
 </div>
+{#if rejectAt}
+	<DropRejectHint x={rejectAt.x} y={rejectAt.y} />
+{/if}
 
 <style>
 	.file-drop-zone {
