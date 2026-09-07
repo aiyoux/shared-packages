@@ -168,6 +168,28 @@ describe('document session', () => {
 		doc.close();
 	});
 
+	it('own save on a dirty session does not emit a content conflict', async () => {
+		const f = await vfs.writeFile({
+			parentId: null,
+			name: 'self.skch',
+			fileType: 'skch',
+			body: { v: 1 }
+		});
+		const doc = await vfs.openDocument(f.id);
+		const events: DocumentEvent[] = [];
+		doc.subscribe((e) => events.push(e));
+		doc.markDirty();
+		await doc.save({ v: 2 });
+		await wait(40);
+		assert.equal(
+			events.some((e) => e.type === 'content' && e.conflict),
+			false
+		);
+		assert.equal(doc.dirty, false);
+		assert.deepEqual(await vfs.readJson(f.id), { v: 2 });
+		doc.close();
+	});
+
 	it('save({ force: true }) overwrites after a content conflict', async () => {
 		const f = await vfs.writeFile({
 			parentId: null,

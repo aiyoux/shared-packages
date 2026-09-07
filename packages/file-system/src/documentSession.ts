@@ -117,18 +117,20 @@ export function watchNode(
 		void loadSnapshot(host, id).then(emitDiff);
 	};
 
-	const unsubBus = host.subscribe(poll);
+	let unsubBus: (() => void) | undefined;
 	let unsubLive: (() => void) | undefined;
 	if (host.liveSnapshot) {
 		const sub = host.liveSnapshot(id).subscribe({ next: emitDiff });
 		unsubLive = () => sub.unsubscribe();
+	} else {
+		unsubBus = host.subscribe(poll);
+		poll();
 	}
-	poll();
 
 	function close() {
 		if (closed) return;
 		closed = true;
-		unsubBus();
+		unsubBus?.();
 		unsubLive?.();
 	}
 	return close;
@@ -150,6 +152,10 @@ export async function createOpenDocument(
 	let dirty = false;
 	let bound = true;
 	let gone: 'trash' | 'permanent' | null = null;
+	/** True while `save()` is inside `updateFile`. Own-write echoes bump
+	 *  generation while we are still dirty; treating that as a foreign CAS
+	 *  conflict is what raised "edited in another tab" on a single-tab idle. */
+	let saveInFlight = false;
 	const listeners = new Set<(event: DocumentEvent) => void>();
 
 	const emit = (event: DocumentEvent) => {
@@ -178,6 +184,12 @@ export async function createOpenDocument(
 			return;
 		}
 		if (event.type === 'content') {
+			if (saveInFlight) {
+				void host.get(id).then((fresh) => {
+					if (fresh && bound) node = { ...fresh, generation: node.generation };
+				});
+				return;
+			}
 			if (event.generation === generation && !dirty) {
 				void host.get(id).then((fresh) => {
 					if (fresh && bound) node = fresh;
@@ -237,11 +249,16 @@ export async function createOpenDocument(
 				: meta !== undefined
 					? { expectedGeneration: generation, meta }
 					: { expectedGeneration: generation };
-			const result = await host.updateFile(id, body, cas);
-			generation = result.generation;
-			node = result;
-			dirty = false;
-			return result;
+			saveInFlight = true;
+			try {
+				const result = await host.updateFile(id, body, cas);
+				generation = result.generation;
+				node = result;
+				dirty = false;
+				return result;
+			} finally {
+				saveInFlight = false;
+			}
 		},
 		async saveAs(input) {
 			const { id: _ignored, ...rest } = input as WriteFileInput;

@@ -2311,6 +2311,7 @@ export class VfsService {
 		const now = Date.now();
 
 		let tmpPath: string | undefined;
+		let nodeCommitted = false;
 
 		try {
 			await this.db.transaction('r', this.db.nodes, async () => {
@@ -2356,7 +2357,10 @@ export class VfsService {
 				const ref = await this.db.blobRefs.get(blobId);
 				if (ref) {
 					ref.opfsPath = stagingPath;
-					ref.pendingPromote = false;
+					// Stay pending until the staging file has moved to its
+					// durable path — otherwise a concurrent read hits
+					// `tmp/blob_<id>.bin` after the move and throws OPFS_IO.
+					ref.pendingPromote = true;
 					ref.crc32 = crc32(bytes);
 					await this.db.blobRefs.put(ref);
 				}
@@ -2369,7 +2373,18 @@ export class VfsService {
 				await this.db.nodes.put(cur);
 				await this.db.leases.delete(leaseKey);
 			});
+			nodeCommitted = true;
 		} catch (e) {
+			if (nodeCommitted) {
+				await this.db.transaction('rw', this.db.nodes, async () => {
+					const cur = await this.db.nodes.get(id);
+					if (cur && cur.blobId === blobId) {
+						cur.blobId = prevBlobId;
+						if (cur.generation > 1) cur.generation -= 1;
+						await this.db.nodes.put(cur);
+					}
+				});
+			}
 			await this.db.blobRefs.delete(blobId);
 			await this.db.leases.delete(leaseKey);
 			for (const p of [tmpPath, stagingPath]) {
@@ -2392,6 +2407,7 @@ export class VfsService {
 			const ref = await this.db.blobRefs.get(blobId);
 			if (ref) {
 				ref.opfsPath = finalPath;
+				ref.pendingPromote = false;
 				await this.db.blobRefs.put(ref);
 			}
 		} finally {
@@ -2423,7 +2439,13 @@ export class VfsService {
 			try {
 				return this.assertMemberChecksum(ref, await this.opfs.read(ref.opfsPath));
 			} catch (e) {
-				const alts = [`blobs/${ref.id}.bin`, `tmp/${ref.id}.partial`];
+				const alts = [
+					`blobs/${ref.id}.bin`,
+					`tmp/${ref.id}.partial`,
+					`tmp/${ref.id}.bin`
+				];
+				const rel = await this.relPathOf(nodeId);
+				if (rel) alts.push(this.rootOpfsPath(rel));
 				for (const alt of alts) {
 					if (alt !== ref.opfsPath && (await this.opfs.exists(alt))) {
 						return this.assertMemberChecksum(ref, await this.opfs.read(alt));
@@ -2432,7 +2454,21 @@ export class VfsService {
 				throw e;
 			}
 		}
-		return this.assertMemberChecksum(ref, await this.opfs.read(ref.opfsPath));
+		try {
+			return this.assertMemberChecksum(ref, await this.opfs.read(ref.opfsPath));
+		} catch (e) {
+			if (ref.opfsPath.startsWith('tmp/')) {
+				const rel = await this.relPathOf(nodeId);
+				const finalPath = rel ? this.rootOpfsPath(rel) : '';
+				if (finalPath && (await this.opfs.exists(finalPath))) {
+					ref.opfsPath = finalPath;
+					ref.pendingPromote = false;
+					await this.db.blobRefs.put(ref);
+					return this.assertMemberChecksum(ref, await this.opfs.read(finalPath));
+				}
+			}
+			throw e;
+		}
 	}
 
 	private async loadReadableRef(blobId: string, nodeId?: string): Promise<BlobRef> {
