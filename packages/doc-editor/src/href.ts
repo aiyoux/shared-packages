@@ -39,15 +39,18 @@ export function allowlistedHref(href: string): string | null {
 
 /**
  * Image `src` uses the same scheme block as href, then either an https/http URL
- * (linked image — the host CSP must allow `img-src https:`) or a page-relative
- * `assets/<file>` (cloned image). Return null rather than throw so a bad stored
- * value cannot XSS the host. `data:` stays blocked by `allowlistedHref`.
+ * (linked image — the host CSP must allow `img-src https:`), a page-relative
+ * `assets/<file>` (cloned/snapshotted image), or a live `vfs:<nodeId>`
+ * workspace reference the host's media layer resolves against the shared VFS.
+ * Return null rather than throw so a bad stored value cannot XSS the host.
+ * `data:` stays blocked by `allowlistedHref`.
  */
 export function allowlistedSrc(src: string): string | null {
 	const value = allowlistedHref(src);
 	if (!value) return null;
 	if (value.includes('..') || value.includes('\\')) return null;
 	if (/^https?:\/\//i.test(value)) return value;
+	if (/^vfs:[A-Za-z0-9][A-Za-z0-9-]*$/.test(value)) return value;
 	if (!/^assets\/[^/?#]+$/.test(value)) return null;
 	return value;
 }
