@@ -102,9 +102,9 @@ describe('app-windows manager', () => {
 		expect(isUnassignedWindow(assigned[sliced.newId])).toBe(false);
 	});
 
-	it('picks a vertical cut when closer to the left/right edge', () => {
-		expect(sliceGuideFromPoint(10, 50, 200, 100)).toEqual({ direction: 'row', ratio: 0.05 });
-		expect(sliceGuideFromPoint(100, 8, 200, 100)).toEqual({ direction: 'col', ratio: 0.08 });
+	it('picks a vertical cut when closer to the top/bottom edge', () => {
+		expect(sliceGuideFromPoint(60, 8, 200, 100)).toEqual({ direction: 'row', ratio: 0.3 });
+		expect(sliceGuideFromPoint(10, 30, 200, 100)).toEqual({ direction: 'col', ratio: 0.3 });
 	});
 
 	it('refuses to absorb the last required window', () => {

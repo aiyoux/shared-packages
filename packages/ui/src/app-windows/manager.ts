@@ -9,7 +9,7 @@ import {
 import type { LayoutNode, SplitDirection } from '../pane-layout/types.js';
 import type { AppWindowLeaf, AppWindowRoleDef } from './types.js';
 
-/** Closer to left/right → vertical cut (`row`); closer to top/bottom → `col`. */
+/** Closer to top/bottom → vertical cut (`row`); closer to left/right → `col`. */
 export function sliceGuideFromPoint(
 	localX: number,
 	localY: number,
@@ -20,7 +20,7 @@ export function sliceGuideFromPoint(
 	const h = height > 0 ? height : 1;
 	const distX = Math.min(localX, w - localX);
 	const distY = Math.min(localY, h - localY);
-	const direction: SplitDirection = distX <= distY ? 'row' : 'col';
+	const direction: SplitDirection = distY <= distX ? 'row' : 'col';
 	const ratio = direction === 'row' ? localX / w : localY / h;
 	return { direction, ratio };
 }
