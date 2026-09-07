@@ -244,3 +244,44 @@ export function blockFromPoint(
 		where: clientY < bestRect.top + bestRect.height / 2 ? 'before' : 'after'
 	};
 }
+
+const DRAGGABLE = (b: Block): boolean => b.type !== 'table_cell' && b.type !== 'table_row';
+
+/**
+ * Viewport Y where the drop line paints for a hit. One line per boundary:
+ * `after X` anchors to the *next sibling's* top edge — the exact position
+ * `before` that sibling paints — so the same gap can never render two
+ * competing lines as the cursor crosses it. A block that is its parent's
+ * last child closes inside its parent (`hit.rect.bottom`), and `after` a
+ * container drops into it, so the line sits inside, under the last
+ * draggable child (or the container bar when it has none).
+ */
+export function dropLineY(
+	host: HTMLElement,
+	page: KbPage,
+	hit: BlockHit,
+	drop: DropTarget | 'noop'
+): number | null {
+	const rectOf = (id: string): DOMRect | null => {
+		const el = host.querySelector(`[data-block-id="${cssEscape(id)}"]`) as HTMLElement | null;
+		return el?.getBoundingClientRect() ?? null;
+	};
+
+	if (drop !== 'noop' && drop.parentId === hit.id) {
+		const container = findBlock(page, hit.id);
+		const kids = container ? childrenOf(page, container).filter(DRAGGABLE) : [];
+		const last = kids.length ? rectOf(kids[kids.length - 1].id) : null;
+		return (last ?? hit.rect).bottom;
+	}
+	if (hit.where === 'before') return hit.rect.top;
+	const loc = parentOf(page, hit.id);
+	if (loc) {
+		// Unfiltered: loc.index addresses childrenOf's raw order.
+		const siblings = childrenOf(page, loc.parent);
+		if (loc.index < siblings.length - 1) {
+			const next = rectOf(siblings[loc.index + 1].id);
+			if (next) return next.top;
+		}
+	}
+	return hit.rect.bottom;
+}

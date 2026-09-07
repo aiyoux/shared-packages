@@ -25,6 +25,7 @@
 	import { stripCollabWidgets, type RemoteCaret } from './decorations.js';
 	import {
 		blockFromPoint,
+		dropLineY,
 		dropTarget,
 		dropWhere,
 		gutterOrder,
@@ -414,8 +415,16 @@
 			return;
 		}
 		moveDrop = { id: hit.id, where: hit.where };
+		// One line per boundary: `dropLineY` anchors `after X` to the next
+		// sibling's top edge, the same position `before` that sibling paints.
+		const y = dropLineY(host, asPage(editor.page), hit, drop);
+		if (y == null) {
+			moveDrop = null;
+			dropLineEl.hidden = true;
+			return;
+		}
 		const editorTop = dropLineEl.parentElement?.getBoundingClientRect().top ?? 0;
-		dropLineEl.style.top = `${Math.max(0, (hit.where === 'before' ? hit.rect.top : hit.rect.bottom - 2) - editorTop)}px`;
+		dropLineEl.style.top = `${Math.max(0, y - editorTop)}px`;
 		dropLineEl.hidden = false;
 	}
 

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
 	blockFromPoint,
 	dropAfterId,
+	dropLineY,
 	dropTarget,
 	dropWhere,
 	gutterOrder,
@@ -166,6 +167,85 @@ describe('gutter drag', () => {
 		// position lands on the nearest other block instead.
 		expect(blockFromPoint(host, doc, 30, 'b')?.id).toBe('a');
 		expect(blockFromPoint(host, doc, 30, 'b')?.where).toBe('after');
+		host.remove();
+	});
+
+	it('dropLineY paints one line per gap: after X lands on the next sibling top', () => {
+		function rect(top: number, height: number): DOMRect {
+			return {
+				x: 0,
+				y: top,
+				top,
+				left: 0,
+				bottom: top + height,
+				right: 40,
+				width: 40,
+				height,
+				toJSON() {
+					return this;
+				}
+			};
+		}
+		const doc = page([para('a', '1'), para('b', '2'), para('c', '3')]);
+		const host = document.createElement('div');
+		document.body.append(host);
+		project(host, doc);
+		const a = host.querySelector('[data-block-id="a"]') as HTMLElement;
+		const b = host.querySelector('[data-block-id="b"]') as HTMLElement;
+		const c = host.querySelector('[data-block-id="c"]') as HTMLElement;
+		// 20px boxes with an 8px margin gap between them.
+		a.getBoundingClientRect = () => rect(0, 20);
+		b.getBoundingClientRect = () => rect(28, 20);
+		c.getBoundingClientRect = () => rect(56, 20);
+
+		// The shared boundary a|b: reading it as "after a" or "before b" must
+		// produce the identical line, whichever side the cursor ties on.
+		expect(dropLineY(host, doc, { id: 'a', where: 'after', rect: rect(0, 20) }, 'noop')).toBe(28);
+		expect(dropLineY(host, doc, { id: 'b', where: 'before', rect: rect(28, 20) }, 'noop')).toBe(28);
+		expect(dropLineY(host, doc, { id: 'b', where: 'after', rect: rect(28, 20) }, 'noop')).toBe(56);
+		expect(dropLineY(host, doc, { id: 'c', where: 'before', rect: rect(56, 20) }, 'noop')).toBe(56);
+		// A last block has no next sibling: the line closes at its own bottom.
+		expect(dropLineY(host, doc, { id: 'c', where: 'after', rect: rect(56, 20) }, 'noop')).toBe(76);
+		host.remove();
+	});
+
+	it('dropLineY for a container paints inside, under its last child', () => {
+		function rect(top: number, height: number): DOMRect {
+			return {
+				x: 0,
+				y: top,
+				top,
+				left: 0,
+				bottom: top + height,
+				right: 40,
+				width: 40,
+				height,
+				toJSON() {
+					return this;
+				}
+			};
+		}
+		const doc = page([callout('c', [para('n', 'in')]), para('z', 'Z')]);
+		const host = document.createElement('div');
+		document.body.append(host);
+		project(host, doc);
+		const calloutEl = host.querySelector('[data-block-id="c"]') as HTMLElement;
+		const child = host.querySelector('[data-block-id="n"]') as HTMLElement;
+		const z = host.querySelector('[data-block-id="z"]') as HTMLElement;
+		calloutEl.getBoundingClientRect = () => rect(0, 24);
+		child.getBoundingClientRect = () => rect(24, 18);
+		z.getBoundingClientRect = () => rect(48, 20);
+
+		// `after` the callout is an INTO drop ({ parentId: 'c' }): the line
+		// sits under its last child — not at the callout bar's bottom and not
+		// at the next outer block's top.
+		const drop = dropTarget(doc, 'z', 'c', 'after');
+		expect(drop).toEqual({ afterId: null, parentId: 'c' });
+		expect(
+			dropLineY(host, doc, { id: 'c', where: 'after', rect: rect(0, 24) }, drop)
+		).toBe(42);
+		// `before` the callout stays at the callout's top.
+		expect(dropLineY(host, doc, { id: 'c', where: 'before', rect: rect(0, 24) }, 'noop')).toBe(0);
 		host.remove();
 	});
 });
