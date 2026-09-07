@@ -1,4 +1,4 @@
-<script lang="ts" generics="R extends string, S extends { role: R }">
+<script lang="ts" generics="R extends string, S extends { role: R; unassigned?: boolean }">
 	import { tick, untrack, type Snippet } from 'svelte';
 	import { combineTargets, leafRects, type Rect } from '../pane-layout/combine.js';
 	import { findNode, listLeaves, setSplitRatio, swapLeafIds } from '../pane-layout/tree.js';
