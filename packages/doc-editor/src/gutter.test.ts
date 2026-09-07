@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { dropAfterId, dropTarget, dropWhere, gutterOrder, handleHeights, overlayBoxes } from './gutter.js';
+import {
+	blockFromPoint,
+	dropAfterId,
+	dropTarget,
+	dropWhere,
+	gutterOrder,
+	handleBoxes,
+	handleHeights,
+	overlayBoxes
+} from './gutter.js';
 import { project } from './project.js';
 import { createEditorState, dispatch } from './state.js';
 import { callout, page, para } from './testFixtures.js';
@@ -72,11 +81,55 @@ describe('gutter drag', () => {
 		host.remove();
 	});
 
-	it('handle height spans to the next block top, not just its own offsetHeight', () => {
-		// Regression: `.kb-gutter` is a flex column with no gap, but blocks in
-		// `.kb-host` (paragraphs, headings, ...) carry a margin-bottom. Sizing
-		// a handle to offsetHeight alone ignores that margin, so handles drift
-		// out of alignment with their block — worse with every block added.
+	it('handle boxes align to each block border box; margin gaps belong to no handle', () => {
+		// Handles are absolutely positioned from `handleBoxes`, so a handle
+		// spans exactly its block's own box and the ⋮⋮ dots centre on it. The
+		// old flex-column sizing (top-to-next-top, absorbing margin-bottom)
+		// made the dots hug the top of multi-line blocks; margins now belong
+		// to no handle at all.
+		function rect(top: number, height: number): DOMRect {
+			return {
+				x: 0,
+				y: top,
+				top,
+				left: 0,
+				bottom: top + height,
+				right: 40,
+				width: 40,
+				height,
+				toJSON() {
+					return this;
+				}
+			};
+		}
+		const doc = page([para('a', '1'), para('b', '2'), para('c', '3')]);
+		const host = document.createElement('div');
+		const gutter = document.createElement('div');
+		document.body.append(gutter, host);
+		project(host, doc);
+		const a = host.querySelector('[data-block-id="a"]') as HTMLElement;
+		const b = host.querySelector('[data-block-id="b"]') as HTMLElement;
+		const c = host.querySelector('[data-block-id="c"]') as HTMLElement;
+		// 20px content boxes with an 8px margin gap between them.
+		a.getBoundingClientRect = () => rect(100, 20);
+		b.getBoundingClientRect = () => rect(128, 20);
+		c.getBoundingClientRect = () => rect(156, 20);
+		gutter.getBoundingClientRect = () => rect(90, 200);
+		const boxes = handleBoxes(host, doc, gutter);
+		expect(boxes.map((b) => b.id)).toEqual(['a', 'b', 'c']);
+		// Tops are gutter-relative: block top minus the gutter's origin.
+		expect(boxes[0].top).toBe(10);
+		expect(boxes[1].top).toBe(38);
+		expect(boxes[2].top).toBe(66);
+		// Heights are the block's own box — the 8px gaps belong to no handle.
+		expect(boxes[0].height).toBe(20);
+		expect(boxes[1].height).toBe(20);
+		expect(boxes[2].height).toBe(20);
+		host.remove();
+		gutter.remove();
+	});
+
+	it('blockFromPoint hit-tests the whole content column, skipping the dragged block', () => {
 		function rect(top: number, height: number): DOMRect {
 			return {
 				x: 0,
@@ -99,16 +152,20 @@ describe('gutter drag', () => {
 		const a = host.querySelector('[data-block-id="a"]') as HTMLElement;
 		const b = host.querySelector('[data-block-id="b"]') as HTMLElement;
 		const c = host.querySelector('[data-block-id="c"]') as HTMLElement;
-		// 20px content + an 8px margin-bottom gap before the next block's top.
 		a.getBoundingClientRect = () => rect(0, 20);
 		b.getBoundingClientRect = () => rect(28, 20);
 		c.getBoundingClientRect = () => rect(56, 20);
-		Object.defineProperty(c, 'offsetHeight', { configurable: true, value: 20 });
-		const heights = handleHeights(host, doc);
-		expect(heights.a).toBe(28);
-		expect(heights.b).toBe(28);
-		// Last block: nothing below it to measure to, keeps its own offsetHeight.
-		expect(heights.c).toBe(20);
+
+		// Top half before, bottom half after.
+		expect(blockFromPoint(host, doc, 5)?.id).toBe('a');
+		expect(blockFromPoint(host, doc, 5)?.where).toBe('before');
+		expect(blockFromPoint(host, doc, 18)?.where).toBe('after');
+		// Cursor in the margin gap still hits the nearest block.
+		expect(blockFromPoint(host, doc, 24)?.id).toBe('a');
+		// The dragged block is skipped: a drag of `b` hovering its own old
+		// position lands on the nearest other block instead.
+		expect(blockFromPoint(host, doc, 30, 'b')?.id).toBe('a');
+		expect(blockFromPoint(host, doc, 30, 'b')?.where).toBe('after');
 		host.remove();
 	});
 });

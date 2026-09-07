@@ -3,7 +3,7 @@
  * do not each invent row, rail, selection, and drop-zone treatments.
  *
  * Layout of app-specific extras (settings menus, unread dots) stays in the
- * caller via Tree snippets. This sheet owns the row, indent rail, hover,
+ * caller via Tree snippets. This sheet owns the row, nesting indent, hover,
  * selection, hover-reveal actions, and pointer-drag zone paints.
  *
  * Import from the host layout next to menu.css:
@@ -77,7 +77,8 @@
 	}
 
 	.tree-group[data-tree-depth]:not([data-tree-depth='0']) {
-		box-shadow: inset 1px 0 var(--line-rail);
+		/* Indent only, no rail: an inset line here painted one vertical rule
+		   per generation, which read as clutter in every consumer. */
 		margin-left: var(--space-3);
 		padding-left: var(--space-1);
 	}

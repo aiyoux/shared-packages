@@ -133,53 +133,114 @@ export function gutterOrder(page: KbPage): Block[] {
 
 export function handleHeights(host: HTMLElement, page?: KbPage): Record<string, number> {
 	const next: Record<string, number> = {};
-	for (const child of host.children) {
-		const el = child as HTMLElement;
-		const id = el.getAttribute('data-block-id');
-		if (id) next[id] = el.offsetHeight;
-	}
-	if (!page) return next;
-
-	// Gap-to-next-top, not offsetHeight: `.kb-gutter` is a flex column with no
-	// gap, so a handle sized to its own block's content box (no margin) drifts
-	// out of alignment with the block below the moment that block has any
-	// margin — paragraphs, headings, list items all do. Sizing to the space
-	// between one block's top and the next one's absorbs that margin, same as
-	// the visual gap in `.kb-host`. The last block keeps its own offsetHeight
-	// (nothing below it to measure to).
-	const order = gutterOrder(page);
-	const tops: { id: string; top: number }[] = [];
-	for (const block of order) {
-		const el = host.querySelector(`[data-block-id="${cssEscape(block.id)}"]`) as HTMLElement | null;
-		if (el) tops.push({ id: block.id, top: el.getBoundingClientRect().top });
-	}
-	for (let i = 0; i < tops.length - 1; i++) {
-		next[tops[i].id] = Math.max(0, tops[i + 1].top - tops[i].top);
-	}
-
-	for (const block of visibleOrder(page)) {
-		if (block.type === 'table') {
-			const rows = block.children;
-			if (rows.length === 0) continue;
-			const firstRow = rows[0];
-			const lastRow = rows[rows.length - 1];
-			if (firstRow.children.length === 0 || lastRow.children.length === 0) continue;
-			const firstCell = firstRow.children[0];
-			const lastCell = lastRow.children[lastRow.children.length - 1];
-			const first = host.querySelector(`[data-block-id="${cssEscape(firstCell.id)}"]`) as HTMLElement | null;
-			const last = host.querySelector(`[data-block-id="${cssEscape(lastCell.id)}"]`) as HTMLElement | null;
-			if (!first || !last) continue;
-			next[block.id] = Math.max(0, last.getBoundingClientRect().bottom - first.getBoundingClientRect().top);
-		} else if (block.type === 'table_row') {
-			const cells = block.children;
-			if (cells.length === 0) continue;
-			const first = host.querySelector(`[data-block-id="${cssEscape(cells[0].id)}"]`) as HTMLElement | null;
-			const last = host.querySelector(
-				`[data-block-id="${cssEscape(cells[cells.length - 1].id)}"]`
-			) as HTMLElement | null;
-			if (!first || !last) continue;
-			next[block.id] = Math.max(0, last.getBoundingClientRect().bottom - first.getBoundingClientRect().top);
-		}
+	for (const box of handleBoxes(host, page)) {
+		next[box.id] = box.height;
 	}
 	return next;
+}
+
+export type HandleBox = { id: string; top: number; height: number };
+
+/**
+ * A draggable block's visual box: its own border box, except table blocks,
+ * whose wrapper element collapses to zero height — the table's span is its
+ * first cell's top to its last cell's bottom (same as `handleHeights` did).
+ */
+function blockRect(host: HTMLElement, block: Block): DOMRect | null {
+	if (block.type === 'table') {
+		const rows = block.children;
+		if (rows.length === 0 || rows[0].children.length === 0) return null;
+		const lastRow = rows[rows.length - 1];
+		if (lastRow.children.length === 0) return null;
+		const firstCell = rows[0].children[0];
+		const lastCell = lastRow.children[lastRow.children.length - 1];
+		const first = host.querySelector(`[data-block-id="${cssEscape(firstCell.id)}"]`) as HTMLElement | null;
+		const last = host.querySelector(`[data-block-id="${cssEscape(lastCell.id)}"]`) as HTMLElement | null;
+		if (!first || !last) return null;
+		const a = first.getBoundingClientRect();
+		const b = last.getBoundingClientRect();
+		return {
+			x: a.x,
+			y: a.y,
+			top: a.top,
+			left: a.left,
+			bottom: b.bottom,
+			right: b.right,
+			width: b.right - a.left,
+			height: b.bottom - a.top,
+			toJSON() {
+				return this;
+			}
+		} as DOMRect;
+	}
+	const el = host.querySelector(`[data-block-id="${cssEscape(block.id)}"]`) as HTMLElement | null;
+	if (!el) return null;
+	return el.getBoundingClientRect();
+}
+
+/**
+ * Absolute gutter positions, measured from the gutter's top so the handles
+ * can be absolutely positioned onto their blocks. A handle spans its block's
+ * own border box — margin gaps belong to no handle — so the ⋮⋮ dots sit
+ * vertically centred on the content they move, on every block, however tall.
+ */
+export function handleBoxes(host: HTMLElement, page?: KbPage, gutter?: HTMLElement | null): HandleBox[] {
+	const origin = gutter ?? host;
+	const originTop = origin.getBoundingClientRect().top;
+	const boxes: HandleBox[] = [];
+	if (!page) {
+		// No page envelope: measure straight off the host's rendered children.
+		for (const child of host.children) {
+			const el = child as HTMLElement;
+			const id = el.getAttribute('data-block-id');
+			if (!id || el.getAttribute('data-block-type') === 'table_cell') continue;
+			const rect = el.getBoundingClientRect();
+			boxes.push({ id, top: rect.top - originTop, height: Math.max(0, rect.height) });
+		}
+		return boxes;
+	}
+	for (const block of gutterOrder(page)) {
+		const rect = blockRect(host, block);
+		if (!rect) continue;
+		boxes.push({ id: block.id, top: rect.top - originTop, height: Math.max(0, rect.height) });
+	}
+	return boxes;
+}
+
+export type BlockHit = { id: string; where: 'before' | 'after'; rect: DOMRect };
+
+/**
+ * Hit-test the host's rendered blocks at a client Y. Nearest block wins, so
+ * the whole content column accepts a move-drop — the drag never has to land
+ * on the narrow gutter — and the dragged block itself is skipped so the
+ * cursor can rest on its own old position. Top half of the hit rect is
+ * `before`, bottom half `after` (after a container means into it; `dropTarget`
+ * owns that mapping).
+ */
+export function blockFromPoint(
+	host: HTMLElement,
+	page: KbPage,
+	clientY: number,
+	skipId?: string | null
+): BlockHit | null {
+	let best: Block | null = null;
+	let bestRect: DOMRect | null = null;
+	let bestDist = Infinity;
+	for (const block of gutterOrder(page)) {
+		if (block.id === skipId) continue;
+		const rect = blockRect(host, block);
+		if (!rect) continue;
+		const dy = clientY < rect.top ? rect.top - clientY : clientY > rect.bottom ? clientY - rect.bottom : 0;
+		if (dy < bestDist) {
+			bestDist = dy;
+			best = block;
+			bestRect = rect;
+		}
+	}
+	if (!best || !bestRect) return null;
+	return {
+		id: best.id,
+		rect: bestRect,
+		where: clientY < bestRect.top + bestRect.height / 2 ? 'before' : 'after'
+	};
 }

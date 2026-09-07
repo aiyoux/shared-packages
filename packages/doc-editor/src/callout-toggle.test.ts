@@ -250,6 +250,7 @@ describe('N2 callout/toggle editor', () => {
 			props: {
 				state,
 				editable: true,
+				showHandles: true,
 				onDispatch: (op: Op | Op[]) => {
 					state = applyEditorOps(state, op);
 				}
@@ -412,6 +413,7 @@ describe('N2 callout/toggle editor', () => {
 			props: {
 				state,
 				editable: true,
+				showHandles: true,
 				onDispatch: (op: Op | Op[]) => {
 					state = applyEditorOps(state, op);
 				}

@@ -23,7 +23,16 @@
 		type CompositionSnapshot
 	} from './composition.js';
 	import { stripCollabWidgets, type RemoteCaret } from './decorations.js';
-	import { dropTarget, dropWhere, gutterOrder, handleHeights, overlayBoxes, type OverlayBox } from './gutter.js';
+	import {
+		blockFromPoint,
+		dropTarget,
+		dropWhere,
+		gutterOrder,
+		handleBoxes,
+		overlayBoxes,
+		type HandleBox,
+		type OverlayBox
+	} from './gutter.js';
 	import { mapKeydown } from './keymap.js';
 	import { BLOCK_ID_ATTR, project, type MediaResolver } from './project.js';
 	import {
@@ -42,6 +51,7 @@
 		// nothing.
 		state: editor,
 		editable = true,
+		showHandles = false,
 		carets = [],
 		media = undefined,
 		onDispatch,
@@ -54,6 +64,13 @@
 	}: {
 		state: EditorState<TDoc>;
 		editable?: boolean;
+		/**
+		 * Whether the gutter's ⋮⋮ drag handles render. Off by default: they are
+		 * chrome for reordering, not content, so a host opts in (the KB toolbar
+		 * has a toggle for it). Hiding them also disables drag-reordering — the
+		 * handles are the drag sources.
+		 */
+		showHandles?: boolean;
 		/** Remote caret widgets. Ignored while composing (IME freeze). */
 		carets?: RemoteCaret[];
 		/**
@@ -112,9 +129,13 @@
 	let localComposing = $state(false);
 	let localJustCommitted = $state(false);
 	let snapshot = $state<CompositionSnapshot<TDoc> | null>(null);
-	let heightById = $state<Record<string, number>>({});
+	let handleBoxById = $state<Record<string, HandleBox>>({});
 	let overlays = $state<OverlayBox[]>([]);
 	let draggingId = $state<string | null>(null);
+	/** Live move-drop candidate. Plain fields, never `$state`: dragover paints
+	 *  on the DOM directly, same rule as the design-system tree drag. */
+	let moveDrop: { id: string; where: 'before' | 'after' } | null = null;
+	let dropLineEl = $state<HTMLDivElement | undefined>(undefined);
 
 	const composing = $derived(localComposing || editor.composing);
 
@@ -229,7 +250,9 @@
 			// A repaint must not pull focus out of a text field elsewhere in the
 			// app; see `focusHeldOutside`.
 			if (!focusHeldOutside(el)) restoreSelection(el, editor.selection, page);
-			heightById = handleHeights(el, page);
+			handleBoxById = Object.fromEntries(
+				handleBoxes(el, page, gutterEl).map((box) => [box.id, box])
+			);
 			overlays = overlayBoxes(el, gutterEl);
 		});
 	});
@@ -374,16 +397,63 @@
 		);
 	}
 
+	/**
+	 * While one of our handles drags, the whole host is the drop surface: the
+	 * hovered block becomes the target (nearest block wins, so gaps and
+	 * margins never dead-zone), and a 2px line paints where the block will
+	 * land. Painting is plain DOM — `blockFromPoint` + a classless line
+	 * element, no `$state` — so dragover never re-renders the editor.
+	 */
+	function paintMoveDrop(clientY: number) {
+		if (!host || !dropLineEl || !draggingId) return;
+		const hit = blockFromPoint(host, asPage(editor.page), clientY, draggingId);
+		const drop = hit ? dropTarget(asPage(editor.page), draggingId, hit.id, hit.where) : 'noop';
+		if (!hit || drop === 'noop') {
+			moveDrop = null;
+			dropLineEl.hidden = true;
+			return;
+		}
+		moveDrop = { id: hit.id, where: hit.where };
+		const editorTop = dropLineEl.parentElement?.getBoundingClientRect().top ?? 0;
+		dropLineEl.style.top = `${Math.max(0, (hit.where === 'before' ? hit.rect.top : hit.rect.bottom - 2) - editorTop)}px`;
+		dropLineEl.hidden = false;
+	}
+
+	function clearMoveDrop() {
+		moveDrop = null;
+		if (dropLineEl) dropLineEl.hidden = true;
+	}
+
+	function dispatchMove(id: string, hit: { id: string; where: 'before' | 'after' }) {
+		const drop = dropTarget(asPage(editor.page), id, hit.id, hit.where);
+		if (drop === 'noop') return;
+		onDispatch({ kind: 'move-block', id, afterId: drop.afterId, parentId: drop.parentId });
+	}
+
 	function onHostDragOver(event: DragEvent) {
 		if (composing) return;
-		if (draggingId) return;
+		if (draggingId) {
+			event.preventDefault();
+			if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+			paintMoveDrop(event.clientY);
+			return;
+		}
 		event.preventDefault();
 		if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
 	}
 
 	function onHostDrop(event: DragEvent) {
 		if (composing) return;
-		if (draggingId) return;
+		if (draggingId) {
+			event.preventDefault();
+			const id = draggingId;
+			const hit = moveDrop;
+			draggingId = null;
+			clearMoveDrop();
+			if (!id || !hit) return;
+			dispatchMove(id, hit);
+			return;
+		}
 		event.preventDefault();
 		const live = liveRange();
 		const data = event.dataTransfer;
@@ -431,18 +501,18 @@
 		if (!draggingId) return;
 		event.preventDefault();
 		if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+		paintMoveDrop(event.clientY);
 	}
 
 	function onHandleDrop(event: DragEvent, targetId: string) {
 		event.preventDefault();
 		const id = draggingId;
 		draggingId = null;
+		clearMoveDrop();
 		if (!id) return;
 		const target = event.currentTarget as HTMLElement;
 		const where = dropWhere(event.clientY, target.getBoundingClientRect());
-		const drop = dropTarget(asPage(editor.page), id, targetId, where);
-		if (drop === 'noop') return;
-		onDispatch({ kind: 'move-block', id, afterId: drop.afterId, parentId: drop.parentId });
+		dispatchMove(id, { id: targetId, where });
 	}
 
 	function onHostClick(event: MouseEvent) {
@@ -465,6 +535,7 @@
 
 	function onHandleDragEnd() {
 		draggingId = null;
+		clearMoveDrop();
 	}
 </script>
 
@@ -480,22 +551,26 @@
 				style:pointer-events="none"
 			></div>
 		{/each}
-		{#each gutterOrder(asPage(editor.page)) as block (block.id)}
-			<button
-				type="button"
-				class="kb-handle"
-				aria-label="Drag to reorder"
-				draggable={editable}
-				data-block-id={block.id}
-				data-parent-id={handleParentId(block.id)}
-				style:height="{heightById[block.id] ?? 24}px"
-				onpointerdown={() => onHandlePointerDown(block.id)}
-				ondragstart={(e) => onHandleDragStart(e, block.id)}
-				ondragover={onHandleDragOver}
-				ondrop={(e) => onHandleDrop(e, block.id)}
-				ondragend={onHandleDragEnd}
-			></button>
-		{/each}
+		{#if showHandles}
+			{#each gutterOrder(asPage(editor.page)) as block (block.id)}
+				<button
+					type="button"
+					class="kb-handle"
+					class:dnd-dragging={draggingId === block.id}
+					aria-label="Drag to reorder"
+					draggable={editable}
+					data-block-id={block.id}
+					data-parent-id={handleParentId(block.id)}
+					style:top="{handleBoxById[block.id]?.top ?? 0}px"
+					style:height="{handleBoxById[block.id]?.height ?? 24}px"
+					onpointerdown={() => onHandlePointerDown(block.id)}
+					ondragstart={(e) => onHandleDragStart(e, block.id)}
+					ondragover={onHandleDragOver}
+					ondrop={(e) => onHandleDrop(e, block.id)}
+					ondragend={onHandleDragEnd}
+				></button>
+			{/each}
+		{/if}
 	</div>
 	<div
 		class="kb-host"
@@ -518,10 +593,15 @@
 		ondrop={onHostDrop}
 		onclick={onHostClick}
 	></div>
+	<!-- Move-drop indicator: painted during a handle drag, positioned over the
+	     landing edge of the hovered block. Plain DOM, hidden between drags. -->
+	<div class="kb-drop-line" bind:this={dropLineEl} hidden></div>
 </div>
 
 <style>
 	.kb-editor {
+		/* Relative: the move-drop line positions against the editor box. */
+		position: relative;
 		display: flex;
 		flex-direction: row;
 		align-items: stretch;
@@ -546,6 +626,9 @@
 		border-left: 3px solid currentColor;
 		opacity: 0.4;
 	}
+	/* Handles are absolutely positioned onto their block's measured box
+	   (`handleBoxes`), so the dots sit vertically centred on the content they
+	   move — margin gaps belong to no handle. */
 	.kb-handle {
 		display: block;
 		width: 100%;
@@ -554,22 +637,47 @@
 		border: 0;
 		background: transparent;
 		cursor: grab;
-		position: relative;
+		position: absolute;
+		left: 0;
 		z-index: 1;
 		pointer-events: auto;
-		flex: 0 0 auto;
 	}
 	.kb-handle::before {
 		content: '⋮⋮';
 		position: absolute;
 		left: 0;
-		top: 0.15rem;
+		top: 50%;
+		transform: translateY(-50%);
 		font-size: 0.7rem;
 		line-height: 1;
-		opacity: 0.35;
+		opacity: 0.75;
+		color: var(--text-secondary, currentColor);
+	}
+	.kb-handle:hover::before,
+	.kb-handle:active::before {
+		opacity: 1;
+		color: var(--text-primary, currentColor);
 	}
 	.kb-handle:active {
 		cursor: grabbing;
+	}
+	/* The block being dragged dims, like the tree's .dnd-dragging row. */
+	.kb-handle.dnd-dragging {
+		opacity: 0.3;
+	}
+	.kb-drop-line {
+		position: absolute;
+		/* From the gutter's right edge across the content column. */
+		left: 1.5rem;
+		right: 0;
+		height: 2px;
+		border-radius: 1px;
+		background: var(--accent);
+		pointer-events: none;
+		z-index: 2;
+	}
+	.kb-drop-line[hidden] {
+		display: none;
 	}
 	.kb-host {
 		flex: 1 1 auto;

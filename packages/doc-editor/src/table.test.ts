@@ -468,6 +468,7 @@ describe('N4 table editor', () => {
 			props: {
 				state,
 				editable: true,
+				showHandles: true,
 				onDispatch: (op: Op | Op[]) => {
 					state = applyEditorOps(state, op);
 				}
@@ -509,6 +510,7 @@ describe('N4 table editor', () => {
 			props: {
 				state,
 				editable: true,
+				showHandles: true,
 				onDispatch: (op: Op | Op[]) => {
 					state = applyEditorOps(state, op);
 				}
@@ -530,6 +532,7 @@ describe('N4 table editor', () => {
 			props: {
 				state,
 				editable: true,
+				showHandles: true,
 				onDispatch: (op: Op | Op[]) => {
 					state = applyEditorOps(state, op);
 				}

@@ -14,6 +14,7 @@ describe('DocEditor mount', () => {
 			props: {
 				state,
 				editable: true,
+				showHandles: true,
 				onDispatch: (op: Op | Op[]) => {
 					state = applyEditorOps(state, op);
 				}
@@ -48,6 +49,43 @@ describe('DocEditor mount', () => {
 		expect(mapped!.head.blockId).toBe('b');
 		expect(mapped!.anchor.blockId !== mapped!.head.blockId).toBe(true);
 		unmount();
+	});
+
+	it('hides the drag handles by default and shows them on showHandles', async () => {
+		let state = createEditorState(page([para('a', 'hello')]));
+		const { container, unmount } = render(DocEditor, {
+			props: {
+				state,
+				editable: true,
+				onDispatch: (op: Op | Op[]) => {
+					state = applyEditorOps(state, op);
+				}
+			}
+		});
+		await tick();
+		// Default off: the gutter renders (it still carries the indent-guide
+		// overlays) but no handle buttons.
+		expect(container.querySelector('[data-testid="kb-gutter"]')).toBeTruthy();
+		expect(container.querySelector('[aria-label="Drag to reorder"]')).toBeNull();
+		// The move-drop line exists but is hidden.
+		const dropLine = container.querySelector('.kb-drop-line') as HTMLElement;
+		expect(dropLine).toBeTruthy();
+		expect(dropLine.hidden).toBe(true);
+		unmount();
+
+		const rerender = render(DocEditor, {
+			props: {
+				state,
+				editable: true,
+				showHandles: true,
+				onDispatch: (op: Op | Op[]) => {
+					state = applyEditorOps(state, op);
+				}
+			}
+		});
+		await tick();
+		expect(rerender.container.querySelector('[aria-label="Drag to reorder"]')).toBeTruthy();
+		rerender.unmount();
 	});
 
 	it('renders a hard break as \\n inside the block, with no <br> in the host', async () => {
