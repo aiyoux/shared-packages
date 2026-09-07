@@ -100,6 +100,12 @@ export {
 	portalToPaneChrome
 } from './pane-layout/chrome.ts';
 export {
+	escapePaneClip,
+	escapedMenuBox,
+	type EscapeAlign,
+	type EscapePaneClipOpts
+} from './escapePaneClip.ts';
+export {
 	createLeaf,
 	splitLeaf,
 	closeLeaf,
