@@ -707,13 +707,19 @@
 	   friends collapse to zero height, so the caret cannot be placed in them —
 	   the first paragraph of a new page being the obvious case. Structural and
 	   atomic blocks (divider, image, table parts) are left alone: they have
-	   their own sizing. */
+	   their own sizing.
+
+	   The floor is one rendered line (`1lh` — the element's own line-height,
+	   `1.6em` as the fallback for engines without the unit), not a fixed
+	   1.25em: a smaller floor made the first character grow the block, and
+	   everything below it shifted. */
 	.kb-host :global([data-block-type='paragraph']),
 	.kb-host :global([data-block-type='heading']),
 	.kb-host :global([data-block-type='list_item']),
 	.kb-host :global([data-block-type='code']),
 	.kb-host :global([data-block-type='table_cell']) {
-		min-height: 1.25em;
+		min-height: 1.6em;
+		min-height: 1lh;
 	}
 	.kb-host :global([data-block-type='paragraph']) {
 		margin: 0 0 0.5rem;
@@ -764,6 +770,10 @@
 		border-radius: 0.25rem;
 		font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 		white-space: pre-wrap;
+		/* Border-box: the floor must cover the line AND its padding, or an
+		   empty code block is shorter than its own caret line. */
+		min-height: calc(1.6em + 1rem);
+		min-height: calc(1lh + 1rem);
 	}
 	.kb-host :global([data-block-type='divider']) {
 		margin: 0.75rem 0;
