@@ -40,6 +40,56 @@ export {
 	withDropKeyframes
 } from './document.js';
 
+export {
+	documentRefs,
+	findCycle,
+	isProvenAcyclic,
+	liveRefs,
+	load,
+	refKey,
+	traverses,
+	vfsNodeIdFromKey,
+	vfsRefKey,
+	wouldCycle,
+	type CycleResult,
+	type DocRef,
+	type RefLoad,
+	type RefLoader,
+	type WalkBudget
+} from './refs.js';
+
+export {
+	DEFAULT_MAX_DEPTH,
+	emptyContext,
+	enter,
+	refusedLinkState,
+	rootContext,
+	type EnterResult,
+	type ResolveContext
+} from './resolveContext.js';
+
+export {
+	assertFrozen,
+	DEFAULT_MAX_BYTES_REF_CHARS,
+	freezeDocument,
+	frozenViolations,
+	isFrozen,
+	isFrozenSnapshot,
+	NotFrozenError,
+	type BytesResolver,
+	type DocResolver,
+	type FreezeBudget,
+	type FreezeResult,
+	type FrozenViolation
+} from './frozen.js';
+
+export {
+	decideWrite,
+	fingerprintBytes,
+	fingerprintText,
+	type WriteDecision
+} from './bytesGate.js';
+
 export { sampleClipFrame } from './sample.js';
 export { applyAnimOp, type AnimOp } from './ops.js';
 
