@@ -111,6 +111,50 @@ describe('project', () => {
 		el.remove();
 	});
 
+	it('numbers ordered runs 1..n per parent, restarting after any other block kind', () => {
+		const el = host();
+		project(
+			el,
+			page([
+				para('p', 'intro'),
+				item('a', 'one', true),
+				item('b', 'two', true),
+				item('c', 'three', true),
+				item('u', 'bullet'),
+				item('d', 'four', true),
+				item('e', 'five', true)
+			])
+		);
+		const num = (id: string) => el.querySelector(`[data-block-id="${id}"]`)?.getAttribute('data-ol-num');
+		expect(num('a')).toBe('1');
+		expect(num('b')).toBe('2');
+		expect(num('c')).toBe('3');
+		// The bullet breaks the run: the next ordered item restarts.
+		expect(num('u')).toBeNull();
+		expect(num('d')).toBe('1');
+		expect(num('e')).toBe('2');
+		el.remove();
+	});
+
+	it('numbers nested ordered lists in their own container scope', () => {
+		const el = host();
+		project(
+			el,
+			page([
+				item('a', 'one', true),
+				callout('c', [item('n1', 'inner', true), item('n2', 'inner', true)]),
+				item('b', 'two', true)
+			])
+		);
+		const num = (id: string) => el.querySelector(`[data-block-id="${id}"]`)?.getAttribute('data-ol-num');
+		// The callout between them breaks the outer run.
+		expect(num('a')).toBe('1');
+		expect(num('b')).toBe('1');
+		expect(num('n1')).toBe('1');
+		expect(num('n2')).toBe('2');
+		el.remove();
+	});
+
 	it('projects an image block as createElement img with alt and page-relative src', () => {
 		const el = host();
 		project(el, page([image('i', 'assets/diagram.png', 'Diagram')]));

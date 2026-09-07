@@ -747,21 +747,16 @@
 	}
 	.kb-host :global([data-block-type='list_item'][data-ordered='true']) {
 		list-style-type: none;
-		counter-increment: kb-ol;
 	}
+	/* The number is stamped by project() as data-ol-num per sibling run —
+	   CSS counters restarted per run mis-scoped in Chromium (a reset on the
+	   first item shadowed its following siblings: 1 1 2 3 4). */
 	.kb-host :global([data-block-type='list_item'][data-ordered='true'])::before {
-		content: counter(kb-ol) '. ';
+		content: attr(data-ol-num) '. ';
 		margin-left: -1.5rem;
 		width: 1.25rem;
 		display: inline-block;
 		text-align: right;
-	}
-	.kb-host {
-		counter-reset: kb-ol;
-	}
-	.kb-host :global(:not([data-ordered='true']) + [data-ordered='true']) {
-		counter-reset: kb-ol;
-		counter-increment: kb-ol;
 	}
 	.kb-host :global([data-block-type='code']) {
 		margin: 0.5rem 0;

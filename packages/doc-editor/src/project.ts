@@ -1,5 +1,6 @@
 import {
 	canonicalMarks,
+	childrenOf,
 	isContainer,
 	isTextLike,
 	isUnknownBlock,
@@ -9,7 +10,8 @@ import {
 	type Block,
 	type Inline,
 	type KbPage,
-	type Mark
+	type Mark,
+	type ParentRef
 } from '@shared-packages/doc-model';
 import { paintCarets, stripCollabWidgets, type RemoteCaret } from './decorations.js';
 import { allowlistedHref, allowlistedSrc } from './href.js';
@@ -253,9 +255,40 @@ export function renderBlock(
 }
 
 /** Imperative projection into the one contenteditable host. Never innerHTML. Rows omitted. */
+/**
+ * Numbers for ordered list items, per sibling run: each run of *adjacent*
+ * ordered items under one parent counts 1..n — a bullet item or any other
+ * block kind breaks the run and the next ordered item restarts at 1. Runs
+ * are computed per parent (page, callout, toggle), so nested lists number
+ * in their own scope.
+ *
+ * Computed here rather than with CSS counters: a counter-reset on the first
+ * item of a run — which any restart scheme needs — shadows the count for
+ * that element's following siblings in Chromium, and the measured result
+ * was a doubled first item (1 1 2 3 4). An attribute the projection stamps
+ * is deterministic and testable in jsdom.
+ */
+function orderedNumbers(page: KbPage): Map<string, number> {
+	const nums = new Map<string, number>();
+	const walk = (parent: ParentRef): void => {
+		let run = 0;
+		for (const child of childrenOf(page, parent)) {
+			if (child.type === 'list_item' && child.ordered) {
+				nums.set(child.id, ++run);
+				continue;
+			}
+			run = 0;
+			if (isContainer(child)) walk(child);
+		}
+	};
+	walk('page');
+	return nums;
+}
+
 export function project(host: HTMLElement, page: KbPage, opts?: ProjectOpts): void {
 	const doc = host.ownerDocument;
 	const nodes: HTMLElement[] = [];
+	const olNums = orderedNumbers(page);
 	for (const block of visibleOrder(page)) {
 		if (block.type === 'table_row') continue;
 		const { parentId, depth } = locAttrs(page, block.id);
@@ -268,7 +301,10 @@ export function project(host: HTMLElement, page: KbPage, opts?: ProjectOpts): vo
 			cols = info?.cols;
 			rowIndex = info?.rowIndex;
 		}
-		nodes.push(renderBlock(doc, block, parentId, depth, col, cols, rowIndex, opts?.media));
+		const el = renderBlock(doc, block, parentId, depth, col, cols, rowIndex, opts?.media);
+		const num = olNums.get(block.id);
+		if (num != null) el.setAttribute('data-ol-num', String(num));
+		nodes.push(el);
 	}
 	host.replaceChildren(...nodes);
 	for (const child of host.children) stripMagicBr(child as HTMLElement);
