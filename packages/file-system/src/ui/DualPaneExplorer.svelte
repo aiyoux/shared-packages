@@ -182,6 +182,12 @@
 		) => void | Promise<void>;
 		persistenceVfs?: VfsService;
 		dualPaneKey?: string;
+		/**
+		 * Stable id of this explorer mount (hub pane leaf id). Namespaces the
+		 * saved window layout and the AppWindows DOM id prefix so two Files
+		 * panes do not share inner windows or persistence.
+		 */
+		instanceKey?: string;
 		dualPaneDefault?: boolean;
 		memoryScope?: string;
 		leftDefault?: ConnectionKind;
@@ -249,6 +255,7 @@
 		onFolder,
 		persistenceVfs,
 		dualPaneKey = 'fe:dualPane',
+		instanceKey = '',
 		dualPaneDefault = false,
 		memoryScope = 'files',
 		leftDefault = 'local',
@@ -273,6 +280,8 @@
 		layoutPortal = ''
 	}: Props = $props();
 
+	const persistKey = $derived(instanceKey ? `${dualPaneKey}:${instanceKey}` : dualPaneKey);
+	const windowsLayoutId = $derived(instanceKey ? `files-${instanceKey}` : 'files');
 	const hostSettings = $derived(Boolean(settingsPortal) && !hideSettingsGear);
 	const pairInfoInChrome = $derived(!hideToggles);
 	let showRemoteManager = $state(false);
@@ -362,7 +371,7 @@
 		void focusedId;
 		void targetPaneId;
 		if (!layoutRestored) return;
-		saveFileWindows(dualPaneKey, {
+		saveFileWindows(persistKey, {
 			root: windowRoot,
 			windows,
 			focusedId,
@@ -693,7 +702,7 @@
 	}
 
 	onMount(() => {
-		const saved = loadFileWindows(dualPaneKey, leftDefault, rightDefault);
+		const saved = loadFileWindows(persistKey, leftDefault, rightDefault);
 		if (saved) {
 			windowRoot = saved.root;
 			if (Object.keys(saved.windows).length > 0) {
@@ -783,7 +792,7 @@
 	function setDualPane(on: boolean) {
 		onDualChange?.(on);
 		try {
-			localStorage.setItem(dualPaneKey, on ? '1' : '0');
+			localStorage.setItem(persistKey, on ? '1' : '0');
 		} catch {
 			/* ignore */
 		}
@@ -2149,7 +2158,7 @@
 			bind:focusedId
 			bind:editing={windowEditOpen}
 			bind:slicing={windowSliceOpen}
-			layoutId="files"
+			layoutId={windowsLayoutId}
 			testid="{tids.body}-windows"
 			testidPrefix={scopedTid('files-window')}
 			hostClass="files-app-windows"

@@ -411,6 +411,70 @@ describe('DualPaneExplorer copy-across destinations', () => {
 	});
 });
 
+describe('DualPaneExplorer instance isolation', () => {
+	let vfs: VfsService;
+
+	beforeEach(async () => {
+		resetSharedVfsForTests();
+		resetMemoryVfsForTests();
+		resetLayoutIdsForTests();
+		localStorage.removeItem('fe:previewDock');
+		vfs = createVfs({
+			dbName: `dpe-iso-${Date.now()}-${Math.random()}`,
+			memoryOpfs: true,
+			requestPersist: false
+		});
+		await vfs.ready();
+	});
+
+	it('keeps inner windows in their own host when two explorers are mounted', async () => {
+		const wrapA = document.createElement('div');
+		const wrapB = document.createElement('div');
+		document.body.append(wrapA, wrapB);
+		const a = render(DualPaneExplorer, {
+			target: wrapA,
+			props: {
+				localDriver: createLocalExplorerDriver(vfs),
+				dualPaneKey: `dpe:iso-a:${Math.random()}`
+			}
+		});
+		const b = render(DualPaneExplorer, {
+			target: wrapB,
+			props: {
+				localDriver: createLocalExplorerDriver(vfs),
+				dualPaneKey: `dpe:iso-b:${Math.random()}`
+			}
+		});
+		try {
+			await viWaitFor(
+				() =>
+					wrapA.querySelector('[data-testid="files-window-leaf"]') != null &&
+					wrapB.querySelector('[data-testid="files-window-leaf"]') != null
+			);
+			expect(wrapA.querySelectorAll('[data-testid="files-window-leaf"]').length).toBe(1);
+			expect(wrapB.querySelectorAll('[data-testid="files-window-leaf"]').length).toBe(1);
+
+			const btnB = wrapB.querySelector('[data-testid="fe-windows-btn"]') as HTMLElement;
+			await fireEvent.click(btnB);
+			const splitB = wrapB.querySelector(
+				'[data-testid="files-window-split-row"]'
+			) as HTMLElement;
+			expect(splitB).toBeTruthy();
+			await fireEvent.click(splitB);
+			await viWaitFor(
+				() => wrapB.querySelectorAll('[data-testid="files-window-leaf"]').length === 2
+			);
+			expect(wrapA.querySelectorAll('[data-testid="files-window-leaf"]').length).toBe(1);
+			expect(wrapA.querySelector('[data-testid="files-window-edit"]')).toBeNull();
+		} finally {
+			a.unmount();
+			b.unmount();
+			wrapA.remove();
+			wrapB.remove();
+		}
+	});
+});
+
 async function viWaitFor(pred: () => boolean | Promise<boolean>, ms = 4000) {
 	const start = Date.now();
 	while (Date.now() - start < ms) {
