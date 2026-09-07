@@ -548,7 +548,7 @@
 	}
 </script>
 
-<div class="kb-editor" data-testid={`${testIdPrefix}-editor`}>
+<div class="kb-editor" class:no-gutter={!showHandles} data-testid={`${testIdPrefix}-editor`}>
 	<div class="kb-gutter" bind:this={gutterEl} contenteditable="false" data-testid={`${testIdPrefix}-gutter`}>
 		{#each overlays as box (box.parentId)}
 			<div
@@ -617,6 +617,14 @@
 		gap: 0.25rem;
 		width: 100%;
 	}
+	/* With the handles off there is no grip column: the gutter collapses so
+	   the content takes the strip instead of leaving dead space. */
+	.kb-editor.no-gutter {
+		gap: 0;
+	}
+	.kb-editor.no-gutter .kb-gutter {
+		display: none;
+	}
 	.kb-gutter {
 		position: relative;
 		flex: 0 0 1.25rem;
@@ -657,7 +665,7 @@
 		left: 0;
 		top: 50%;
 		transform: translateY(-50%);
-		font-size: 0.7rem;
+		font-size: 0.8rem;
 		line-height: 1;
 		opacity: 0.75;
 		color: var(--text-secondary, currentColor);
