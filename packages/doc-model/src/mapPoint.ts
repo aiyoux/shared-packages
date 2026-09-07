@@ -68,6 +68,8 @@ export function mapPointThroughOp(pageBefore: KbPage, point: StickyPoint, op: Op
 		case 'insert-block':
 		case 'move-block':
 		case 'set-toggle':
+		case 'set-align':
+		case 'set-valign':
 		case 'insert-table-row':
 		case 'insert-table-column':
 		case 'delete-table-row':

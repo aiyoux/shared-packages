@@ -130,7 +130,14 @@ describe('remapOpIds', () => {
 	});
 
 	it('rewrites the single-id ops', () => {
-		for (const kind of ['delete-block', 'convert-block', 'set-code', 'set-toggle'] as const) {
+		for (const kind of [
+			'delete-block',
+			'convert-block',
+			'set-code',
+			'set-toggle',
+			'set-align',
+			'set-valign'
+		] as const) {
 			const op = { kind, id: 'temp:a', to: 'paragraph', language: 'ts', open: true } as unknown as Op;
 			expect((remapOpIds(map, op) as { id: string }).id).toBe('records:1');
 		}
@@ -233,6 +240,8 @@ describe('walker parity', () => {
 		'set-code',
 		'set-children',
 		'set-toggle',
+		'set-align',
+		'set-valign',
 		'insert-table-row',
 		'insert-table-column',
 		'delete-table-row',

@@ -184,6 +184,8 @@ function selectionAfter(pre: DocBody, post: DocBody, op: Op, prev: Range): Range
 		case 'set-title':
 		case 'set-children':
 		case 'set-toggle':
+		case 'set-align':
+		case 'set-valign':
 			return prev;
 		default: {
 			const _never: never = op;

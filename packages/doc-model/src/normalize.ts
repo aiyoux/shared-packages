@@ -18,7 +18,9 @@ import {
 	type TableCellBlock,
 	type TableRowBlock,
 	type TextSpan,
-	type ToggleBlock
+	type ToggleBlock,
+	type Align,
+	type VAlign
 } from './types.js';
 
 const MARK_RANK: Record<Mark['type'], number> = {
@@ -40,6 +42,28 @@ export function emptySpans(): TextSpan[] {
 
 export function emptyParagraph(id: string): ParagraphBlock {
 	return { id, type: 'paragraph', content: emptySpans() };
+}
+
+export function coerceAlign(value: unknown): Align | undefined {
+	return value === 'left' || value === 'center' || value === 'right' ? value : undefined;
+}
+
+export function coerceVAlign(value: unknown): VAlign | undefined {
+	return value === 'top' || value === 'middle' || value === 'bottom' ? value : undefined;
+}
+
+function pickAlign<T extends { align?: Align }>(block: T, align?: Align): T {
+	if (align) return { ...block, align };
+	const { align: _drop, ...rest } = block as T & { align?: Align };
+	void _drop;
+	return rest as T;
+}
+
+function pickVAlign(cell: TableCellBlock, valign?: VAlign): TableCellBlock {
+	if (valign) return { ...cell, valign };
+	const { valign: _drop, ...rest } = cell;
+	void _drop;
+	return rest;
 }
 
 export function emptyCell(id: string, header?: boolean): TableCellBlock {
@@ -178,21 +202,30 @@ function passthroughBlock(raw: Record<string, unknown>): Block {
 export function orderedBlock(block: Block): Block {
 	switch (block.type) {
 		case 'paragraph':
-			return { id: block.id, type: 'paragraph', content: block.content.map(orderedSpan) };
+			return pickAlign(
+				{ id: block.id, type: 'paragraph', content: block.content.map(orderedSpan) },
+				block.align
+			);
 		case 'heading':
-			return {
-				id: block.id,
-				type: 'heading',
-				level: block.level,
-				content: block.content.map(orderedSpan)
-			};
+			return pickAlign(
+				{
+					id: block.id,
+					type: 'heading',
+					level: block.level,
+					content: block.content.map(orderedSpan)
+				},
+				block.align
+			);
 		case 'list_item':
-			return {
-				id: block.id,
-				type: 'list_item',
-				ordered: block.ordered,
-				content: block.content.map(orderedSpan)
-			};
+			return pickAlign(
+				{
+					id: block.id,
+					type: 'list_item',
+					ordered: block.ordered,
+					content: block.content.map(orderedSpan)
+				},
+				block.align
+			);
 		case 'code':
 			return { id: block.id, type: 'code', language: block.language, text: block.text };
 		case 'divider':
@@ -225,8 +258,8 @@ export function orderedBlock(block: Block): Block {
 				type: 'table_row',
 				children: block.children.map((cell) => orderedBlock(cell) as TableCellBlock)
 			};
-		case 'table_cell':
-			return block.header
+		case 'table_cell': {
+			const cell: TableCellBlock = block.header
 				? {
 						id: block.id,
 						type: 'table_cell',
@@ -238,6 +271,8 @@ export function orderedBlock(block: Block): Block {
 						type: 'table_cell',
 						content: block.content.map(orderedSpan)
 					};
+			return pickVAlign(pickAlign(cell, block.align), block.valign);
+		}
 		default: {
 			const rec = block as Block & Record<string, unknown>;
 			return passthroughBlock(rec);
@@ -249,7 +284,7 @@ function normalizeLeaf(rec: Record<string, unknown>, id: string): Block {
 	switch (rec.type) {
 		case 'paragraph': {
 			const next: ParagraphBlock = { id, type: 'paragraph', content: coerceSpans(rec.content) };
-			return next;
+			return pickAlign(next, coerceAlign(rec.align));
 		}
 		case 'heading': {
 			const next: HeadingBlock = {
@@ -258,7 +293,7 @@ function normalizeLeaf(rec: Record<string, unknown>, id: string): Block {
 				level: headingLevel(rec.level),
 				content: coerceSpans(rec.content)
 			};
-			return next;
+			return pickAlign(next, coerceAlign(rec.align));
 		}
 		case 'list_item': {
 			const next: ListItemBlock = {
@@ -267,7 +302,7 @@ function normalizeLeaf(rec: Record<string, unknown>, id: string): Block {
 				ordered: rec.ordered === true,
 				content: coerceSpans(rec.content)
 			};
-			return next;
+			return pickAlign(next, coerceAlign(rec.align));
 		}
 		case 'code': {
 			const next: CodeBlock = {
@@ -297,9 +332,11 @@ function normalizeLeaf(rec: Record<string, unknown>, id: string): Block {
 }
 
 function normalizeCell(rec: Record<string, unknown>, id: string): TableCellBlock {
-	return rec.header === true
-		? { id, type: 'table_cell', header: true, content: coerceSpans(rec.content) }
-		: { id, type: 'table_cell', content: coerceSpans(rec.content) };
+	const cell: TableCellBlock =
+		rec.header === true
+			? { id, type: 'table_cell', header: true, content: coerceSpans(rec.content) }
+			: { id, type: 'table_cell', content: coerceSpans(rec.content) };
+	return pickVAlign(pickAlign(cell, coerceAlign(rec.align)), coerceVAlign(rec.valign));
 }
 
 function cellFromUnknown(raw: Record<string, unknown>): TableCellBlock {

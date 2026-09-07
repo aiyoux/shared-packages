@@ -506,4 +506,25 @@ describe('invert golden applyMany(apply(page, op), invert(page, op)) === normali
 		expectInvert(src, { kind: 'set-toggle', id: 't', open: true });
 		expect(() => invert(src, { kind: 'set-toggle', id: 'a', open: false })).toThrow(/not a toggle/i);
 	});
+
+	it('round-trips set-align and set-valign', () => {
+		const src = page([para('p', 'hello')]);
+		expectInvert(src, { kind: 'set-align', id: 'p', align: 'right' });
+		const centered = apply(src, { kind: 'set-align', id: 'p', align: 'center' });
+		expectInvert(centered, { kind: 'set-align', id: 'p', align: null });
+		const grid = page([
+			{
+				id: 't',
+				type: 'table',
+				children: [
+					{
+						id: 'r',
+						type: 'table_row',
+						children: [{ id: 'c', type: 'table_cell', content: [span('x')] }]
+					}
+				]
+			}
+		]);
+		expectInvert(grid, { kind: 'set-valign', id: 'c', valign: 'bottom' });
+	});
 });

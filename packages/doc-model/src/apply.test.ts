@@ -699,6 +699,35 @@ describe('N1 callout/toggle apply', () => {
 		const closed = apply(withToggle, { kind: 'set-toggle', id: 't', open: false });
 		expect(closed.blocks[0]).toMatchObject({ type: 'toggle', open: false });
 	});
+
+	it('set-align and set-valign write optional fields and clear them with null', () => {
+		const src = page([para('p', 'hello')]);
+		const centered = apply(src, { kind: 'set-align', id: 'p', align: 'center' });
+		expect(centered.blocks[0]).toMatchObject({ type: 'paragraph', align: 'center' });
+		const left = apply(centered, { kind: 'set-align', id: 'p', align: null });
+		expect(left.blocks[0]).not.toHaveProperty('align');
+		expect(() => apply(src, { kind: 'set-align', id: 'p', align: 'center' })).not.toThrow();
+		expect(() => apply(src, { kind: 'set-valign', id: 'p', valign: 'middle' })).toThrow(/table_cell/i);
+
+		const grid = page([
+			{
+				id: 't',
+				type: 'table',
+				children: [
+					{
+						id: 'r',
+						type: 'table_row',
+						children: [{ id: 'c', type: 'table_cell', content: [span('x')] }]
+					}
+				]
+			}
+		]);
+		const mid = apply(grid, { kind: 'set-valign', id: 'c', valign: 'middle' });
+		const cell = findBlock(mid, 'c');
+		expect(cell).toMatchObject({ type: 'table_cell', valign: 'middle' });
+		const top = apply(mid, { kind: 'set-valign', id: 'c', valign: null });
+		expect(findBlock(top, 'c')).not.toHaveProperty('valign');
+	});
 });
 
 function findKids(doc: KbPage, id: string): Block[] {

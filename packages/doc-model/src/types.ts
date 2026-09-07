@@ -14,9 +14,26 @@ export type TextSpan = {
 
 export type Inline = TextSpan; // v1: text spans only. A hard break is '\n' inside a span, not an inline node.
 
-export type ParagraphBlock = { id: string; type: 'paragraph'; content: Inline[] };
-export type HeadingBlock = { id: string; type: 'heading'; level: 1 | 2 | 3; content: Inline[] };
-export type ListItemBlock = { id: string; type: 'list_item'; ordered: boolean; content: Inline[] };
+/** Horizontal alignment of a text-like block. Omitted means left. */
+export type Align = 'left' | 'center' | 'right';
+/** Vertical alignment of a table cell. Omitted means top. */
+export type VAlign = 'top' | 'middle' | 'bottom';
+
+export type ParagraphBlock = { id: string; type: 'paragraph'; content: Inline[]; align?: Align };
+export type HeadingBlock = {
+	id: string;
+	type: 'heading';
+	level: 1 | 2 | 3;
+	content: Inline[];
+	align?: Align;
+};
+export type ListItemBlock = {
+	id: string;
+	type: 'list_item';
+	ordered: boolean;
+	content: Inline[];
+	align?: Align;
+};
 export type CodeBlock = { id: string; type: 'code'; language: string; text: string };
 export type DividerBlock = { id: string; type: 'divider' };
 export type ImageBlock = { id: string; type: 'image'; src: string; alt: string };
@@ -42,6 +59,8 @@ export type TableCellBlock = {
 	type: 'table_cell';
 	header?: boolean;
 	content: Inline[];
+	align?: Align;
+	valign?: VAlign;
 };
 
 export type TableRowBlock = {
@@ -118,6 +137,8 @@ export type Op =
 	| { kind: 'set-code'; id: string; language: string }
 	| { kind: 'set-children'; children: string[] }
 	| { kind: 'set-toggle'; id: string; open: boolean }
+	| { kind: 'set-align'; id: string; align: Align | null }
+	| { kind: 'set-valign'; id: string; valign: VAlign | null }
 	| { kind: 'insert-table-row'; tableId: string; afterId: string | null; row: TableRowBlock }
 	| { kind: 'insert-table-column'; tableId: string; index: number; cells: TableCellBlock[] }
 	| { kind: 'delete-table-row'; tableId: string; rowId: string }

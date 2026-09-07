@@ -27,7 +27,6 @@
 		blockFromPoint,
 		dropLineY,
 		dropTarget,
-		dropWhere,
 		gutterOrder,
 		handleBoxes,
 		overlayBoxes,
@@ -132,11 +131,16 @@
 	let snapshot = $state<CompositionSnapshot<TDoc> | null>(null);
 	let handleBoxById = $state<Record<string, HandleBox>>({});
 	let overlays = $state<OverlayBox[]>([]);
-	let draggingId = $state<string | null>(null);
-	/** Live move-drop candidate. Plain fields, never `$state`: dragover paints
-	 *  on the DOM directly, same rule as the design-system tree drag. */
+	/**
+	 * Live handle-drag. Plain fields, never `$state`: assigning a rune on
+	 * dragstart re-rendered the handle and cancelled HTML5 drags (the block
+	 * then never moved). Same rule as the design-system tree drag.
+	 */
+	let draggingId: string | null = null;
 	let moveDrop: { id: string; where: 'before' | 'after' } | null = null;
 	let dropLineEl = $state<HTMLDivElement | undefined>(undefined);
+	let handleLayoutFrame = 0;
+	const HANDLE_DRAG_THRESHOLD = 6;
 
 	const composing = $derived(localComposing || editor.composing);
 
@@ -251,11 +255,49 @@
 			// A repaint must not pull focus out of a text field elsewhere in the
 			// app; see `focusHeldOutside`.
 			if (!focusHeldOutside(el)) restoreSelection(el, editor.selection, page);
-			handleBoxById = Object.fromEntries(
-				handleBoxes(el, page, gutterEl).map((box) => [box.id, box])
-			);
-			overlays = overlayBoxes(el, gutterEl);
+			syncHandleLayout();
+			scheduleHandleLayout();
 		});
+	});
+
+	function syncHandleLayout(): void {
+		// Mid-drag a layout write would restyle the captured handle. Skip.
+		if (draggingId || !host) return;
+		const page = asPage(editor.page);
+		handleBoxById = Object.fromEntries(
+			handleBoxes(host, page, gutterEl).map((box) => [box.id, box])
+		);
+		overlays = overlayBoxes(host, gutterEl);
+	}
+
+	function scheduleHandleLayout(): void {
+		if (handleLayoutFrame) cancelAnimationFrame(handleLayoutFrame);
+		handleLayoutFrame = requestAnimationFrame(() => {
+			handleLayoutFrame = 0;
+			syncHandleLayout();
+		});
+	}
+
+	$effect(() => {
+		void showHandles;
+		void gutterEl;
+		void host;
+		syncHandleLayout();
+		scheduleHandleLayout();
+	});
+
+	$effect(() => {
+		const el = host;
+		const gutter = gutterEl;
+		if (!el) return;
+		const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(() => scheduleHandleLayout()) : null;
+		ro?.observe(el);
+		if (gutter) ro?.observe(gutter);
+		el.addEventListener('load', scheduleHandleLayout, true);
+		return () => {
+			ro?.disconnect();
+			el.removeEventListener('load', scheduleHandleLayout, true);
+		};
 	});
 
 	function onBeforeInput(event: InputEvent) {
@@ -439,31 +481,6 @@
 		onDispatch({ kind: 'move-block', id, afterId: drop.afterId, parentId: drop.parentId });
 	}
 
-	/**
-	 * Move-drops are accepted by the whole editor box, not just the content
-	 * host: the empty space above the first block and below the last one must
-	 * land too (nearest block wins in `blockFromPoint`). While no handle
-	 * drags, the root handler stays inert so the host's paste path owns
-	 * external file drags.
-	 */
-	function onEditorDragOver(event: DragEvent) {
-		if (!draggingId || composing) return;
-		event.preventDefault();
-		if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
-		paintMoveDrop(event.clientY);
-	}
-
-	function onEditorDrop(event: DragEvent) {
-		if (!draggingId || composing) return;
-		event.preventDefault();
-		const id = draggingId;
-		const hit = moveDrop;
-		draggingId = null;
-		clearMoveDrop();
-		if (!id || !hit) return;
-		dispatchMove(id, hit);
-	}
-
 	function onHostDragOver(event: DragEvent) {
 		if (composing || draggingId) return;
 		event.preventDefault();
@@ -498,39 +515,80 @@
 	onMount(() => {
 		const doc = host?.ownerDocument ?? document;
 		doc.addEventListener('selectionchange', onSelectionChange);
-		return () => doc.removeEventListener('selectionchange', onSelectionChange);
+		return () => {
+			doc.removeEventListener('selectionchange', onSelectionChange);
+			if (handleLayoutFrame) cancelAnimationFrame(handleLayoutFrame);
+		};
 	});
 
-	function onHandlePointerDown(id: string) {
-		if (composing || !editable) return;
+	function onHandlePointerDown(event: PointerEvent, id: string) {
+		if (composing || !editable || event.button !== 0) return;
 		const block = findBlock(editor.page, id);
 		if (block && isNonTextual(block)) {
 			emitState(setSelection(editor, { anchor: { blockId: id, offset: 0 }, head: { blockId: id, offset: 0 } }));
 		}
+		beginHandleDrag(event, id);
 	}
 
-	function onHandleDragStart(event: DragEvent, id: string) {
-		draggingId = id;
-		event.dataTransfer?.setData('text/plain', id);
-		if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move';
-	}
-
-	function onHandleDragOver(event: DragEvent) {
-		if (!draggingId) return;
+	/**
+	 * Pointer drag, not HTML5 `draggable`. Setting `$state` on dragstart used
+	 * to rebuild the handle and cancel the native drag; pointer capture plus
+	 * a movement threshold matches the tree and actually commits the move.
+	 */
+	function beginHandleDrag(event: PointerEvent, id: string) {
+		const handleEl = event.currentTarget instanceof HTMLElement ? event.currentTarget : null;
+		if (!handleEl) return;
 		event.preventDefault();
-		if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
-		paintMoveDrop(event.clientY);
-	}
+		event.stopPropagation();
 
-	function onHandleDrop(event: DragEvent, targetId: string) {
-		event.preventDefault();
-		const id = draggingId;
-		draggingId = null;
-		clearMoveDrop();
-		if (!id) return;
-		const target = event.currentTarget as HTMLElement;
-		const where = dropWhere(event.clientY, target.getBoundingClientRect());
-		dispatchMove(id, { id: targetId, where });
+		const startX = event.clientX;
+		const startY = event.clientY;
+		const pointerId = event.pointerId;
+		let activated = false;
+		const doc = handleEl.ownerDocument;
+
+		const move = (ev: PointerEvent) => {
+			if (ev.pointerId !== pointerId) return;
+			if (!activated) {
+				if (Math.hypot(ev.clientX - startX, ev.clientY - startY) <= HANDLE_DRAG_THRESHOLD) return;
+				activated = true;
+				draggingId = id;
+				handleEl.classList.add('dnd-dragging');
+				try {
+					handleEl.setPointerCapture(pointerId);
+				} catch {
+					// jsdom / lost handle — document listeners still finish the drag.
+				}
+			}
+			paintMoveDrop(ev.clientY);
+		};
+
+		const finish = (ev: PointerEvent) => {
+			if (ev.pointerId !== pointerId) return;
+			if (activated) paintMoveDrop(ev.clientY);
+			const hit = moveDrop;
+			const dragged = draggingId;
+			draggingId = null;
+			handleEl.classList.remove('dnd-dragging');
+			try {
+				if (handleEl.hasPointerCapture?.(pointerId)) handleEl.releasePointerCapture(pointerId);
+			} catch {
+				// already released
+			}
+			stop();
+			if (activated && dragged && hit) dispatchMove(dragged, hit);
+			else clearMoveDrop();
+		};
+
+		const stop = () => {
+			doc.removeEventListener('pointermove', move);
+			doc.removeEventListener('pointerup', finish);
+			doc.removeEventListener('pointercancel', finish);
+		};
+
+		doc.addEventListener('pointermove', move);
+		doc.addEventListener('pointerup', finish);
+		doc.addEventListener('pointercancel', finish);
 	}
 
 	function onHostClick(event: MouseEvent) {
@@ -550,18 +608,11 @@
 		if (!loc || loc.parent === 'page') return undefined;
 		return parentIdOf(loc.parent) ?? undefined;
 	}
-
-	function onHandleDragEnd() {
-		draggingId = null;
-		clearMoveDrop();
-	}
 </script>
 
 <div
 	class="kb-editor"
 	class:no-gutter={!showHandles}
-	ondragover={onEditorDragOver}
-	ondrop={onEditorDrop}
 	data-testid={`${testIdPrefix}-editor`}
 >
 	<div class="kb-gutter" bind:this={gutterEl} contenteditable="false" data-testid={`${testIdPrefix}-gutter`}>
@@ -577,21 +628,17 @@
 		{/each}
 		{#if showHandles}
 			{#each gutterOrder(asPage(editor.page)) as block (block.id)}
+				{@const box = handleBoxById[block.id]}
 				<button
 					type="button"
 					class="kb-handle"
-					class:dnd-dragging={draggingId === block.id}
 					aria-label="Drag to reorder"
-					draggable={editable}
 					data-block-id={block.id}
 					data-parent-id={handleParentId(block.id)}
-					style:top="{handleBoxById[block.id]?.top ?? 0}px"
-					style:height="{handleBoxById[block.id]?.height ?? 24}px"
-					onpointerdown={() => onHandlePointerDown(block.id)}
-					ondragstart={(e) => onHandleDragStart(e, block.id)}
-					ondragover={onHandleDragOver}
-					ondrop={(e) => onHandleDrop(e, block.id)}
-					ondragend={onHandleDragEnd}
+					style:top="{box?.top ?? 0}px"
+					style:height="{box?.height ?? 0}px"
+					style:visibility={box ? 'visible' : 'hidden'}
+					onpointerdown={(e) => onHandlePointerDown(e, block.id)}
 				></button>
 			{/each}
 		{/if}
@@ -673,6 +720,7 @@
 		left: 0;
 		z-index: 1;
 		pointer-events: auto;
+		touch-action: none;
 	}
 	.kb-handle::before {
 		content: '⋮⋮';
@@ -693,8 +741,10 @@
 	.kb-handle:active {
 		cursor: grabbing;
 	}
-	/* The block being dragged dims, like the tree's .dnd-dragging row. */
-	.kb-handle.dnd-dragging {
+	/* The block being dragged dims, like the tree's .dnd-dragging row.
+	   Class is applied via classList during pointer capture (not a template
+	   binding — a rune write here used to cancel the drag). */
+	.kb-handle:global(.dnd-dragging) {
 		opacity: 0.3;
 	}
 	.kb-drop-line {
@@ -829,8 +879,19 @@
 		min-height: 0;
 		clear: both;
 	}
+	.kb-host :global([data-align='center']) {
+		text-align: center;
+	}
+	.kb-host :global([data-align='right']) {
+		text-align: right;
+	}
+	.kb-host :global([data-align='left']) {
+		text-align: left;
+	}
 	.kb-host :global([data-block-type='table_cell']) {
-		display: inline-block;
+		display: inline-flex;
+		flex-direction: column;
+		justify-content: flex-start;
 		float: left;
 		margin: 0;
 		padding: 0.4rem 0.65rem;
@@ -839,6 +900,12 @@
 		border-bottom: 1px solid color-mix(in srgb, currentColor 28%, transparent);
 		box-sizing: border-box;
 		word-break: break-word;
+	}
+	.kb-host :global([data-block-type='table_cell'][data-valign='middle']) {
+		justify-content: center;
+	}
+	.kb-host :global([data-block-type='table_cell'][data-valign='bottom']) {
+		justify-content: flex-end;
 	}
 	.kb-host :global([data-block-type='table_cell'][data-col='0']) {
 		clear: left;

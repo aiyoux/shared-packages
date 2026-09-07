@@ -111,6 +111,39 @@ describe('project', () => {
 		el.remove();
 	});
 
+	it('projects data-align and data-valign on text-like blocks and cells', () => {
+		const el = host();
+		project(
+			el,
+			page([
+				{ id: 'p', type: 'paragraph', align: 'center', content: [{ type: 'text', text: 'c', marks: [] }] },
+				{
+					id: 't',
+					type: 'table',
+					children: [
+						{
+							id: 'r',
+							type: 'table_row',
+							children: [
+								{
+									id: 'c',
+									type: 'table_cell',
+									align: 'right',
+									valign: 'middle',
+									content: [{ type: 'text', text: 'x', marks: [] }]
+								}
+							]
+						}
+					]
+				}
+			])
+		);
+		expect(el.querySelector('[data-block-id="p"]')?.getAttribute('data-align')).toBe('center');
+		expect(el.querySelector('[data-block-id="c"]')?.getAttribute('data-align')).toBe('right');
+		expect(el.querySelector('[data-block-id="c"]')?.getAttribute('data-valign')).toBe('middle');
+		el.remove();
+	});
+
 	it('numbers ordered runs 1..n per parent, restarting after any other block kind', () => {
 		const el = host();
 		project(

@@ -82,6 +82,43 @@ describe('gutter drag', () => {
 		host.remove();
 	});
 
+	it('handleBoxes ignores a display:none gutter and measures from the host', () => {
+		function rect(top: number, height: number): DOMRect {
+			return {
+				x: 0,
+				y: top,
+				top,
+				left: 0,
+				bottom: top + height,
+				right: 40,
+				width: 40,
+				height,
+				toJSON() {
+					return this;
+				}
+			};
+		}
+		const doc = page([para('a', '1'), para('b', '2')]);
+		const host = document.createElement('div');
+		const gutter = document.createElement('div');
+		gutter.style.display = 'none';
+		document.body.append(gutter, host);
+		project(host, doc);
+		const a = host.querySelector('[data-block-id="a"]') as HTMLElement;
+		const b = host.querySelector('[data-block-id="b"]') as HTMLElement;
+		host.getBoundingClientRect = () => rect(50, 200);
+		gutter.getBoundingClientRect = () => rect(0, 0);
+		a.getBoundingClientRect = () => rect(100, 20);
+		b.getBoundingClientRect = () => rect(128, 20);
+		const boxes = handleBoxes(host, doc, gutter);
+		expect(boxes.map((box) => box.id)).toEqual(['a', 'b']);
+		// Origin is the host (50), not the hidden gutter's 0×0 rect.
+		expect(boxes[0].top).toBe(50);
+		expect(boxes[1].top).toBe(78);
+		host.remove();
+		gutter.remove();
+	});
+
 	it('handle boxes align to each block border box; margin gaps belong to no handle', () => {
 		// Handles are absolutely positioned from `handleBoxes`, so a handle
 		// spans exactly its block's own box and the ⋮⋮ dots centre on it. The

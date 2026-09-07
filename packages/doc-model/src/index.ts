@@ -90,6 +90,7 @@ export {
 } from './tree.js';
 export {
 	KB_FORMAT,
+	type Align,
 	type AtomicBlock,
 	type Block,
 	type BlockType,
@@ -117,6 +118,7 @@ export {
 	type TableStructureBlock,
 	type TextLikeBlock,
 	type TextSpan,
-	type ToggleBlock
+	type ToggleBlock,
+	type VAlign
 } from './types.js';
 export { isHighSurrogate, isLowSurrogate, snapOffset } from './utf16.js';

@@ -522,6 +522,16 @@ export function invert(page: KbPage, op: Op): Op[] {
 			if (block.type !== 'toggle') throw new Error('set-toggle: block is not a toggle');
 			return [{ kind: 'set-toggle', id: op.id, open: block.open }];
 		}
+		case 'set-align': {
+			const { block } = requireBlock(page, op.id, 'set-align');
+			if (!isTextLike(block)) throw new Error('set-align: block is not text-like');
+			return [{ kind: 'set-align', id: op.id, align: block.align ?? null }];
+		}
+		case 'set-valign': {
+			const { block } = requireBlock(page, op.id, 'set-valign');
+			if (block.type !== 'table_cell') throw new Error('set-valign: block is not a table_cell');
+			return [{ kind: 'set-valign', id: op.id, valign: block.valign ?? null }];
+		}
 		case 'insert-table-row':
 			return [{ kind: 'delete-table-row', tableId: op.tableId, rowId: op.row.id }];
 		case 'insert-table-column':

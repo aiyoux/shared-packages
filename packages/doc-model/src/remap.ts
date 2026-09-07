@@ -100,6 +100,8 @@ export function remapOpIds(map: IdMap, op: Op): Op {
 		case 'convert-block':
 		case 'set-code':
 		case 'set-toggle':
+		case 'set-align':
+		case 'set-valign':
 			return { ...op, id: to(map, op.id) };
 		case 'move-block':
 			return {

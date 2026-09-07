@@ -119,6 +119,8 @@ function renderTextLike(
 		el = doc.createElement('p');
 	}
 	setTreeAttrs(el, block, parentId, depth);
+	if (block.align) el.setAttribute('data-align', block.align);
+	if (block.type === 'table_cell' && block.valign) el.setAttribute('data-valign', block.valign);
 	appendSpans(doc, el, block.content);
 	stripMagicBr(el);
 	if (!hasTextNode(el)) el.appendChild(doc.createTextNode(''));

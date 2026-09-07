@@ -94,9 +94,27 @@ export function dropWhere(clientY: number, rect: { top: number; height: number }
 	return clientY < rect.top + rect.height / 2 ? 'before' : 'after';
 }
 
+/**
+ * Vertical origin for absolutely-positioned gutter chrome. A `display:none`
+ * gutter (handles toggled off) reports a 0×0 rect, which would stack every
+ * handle at the top the moment the gutter comes back — so fall back to the
+ * host, which shares the same flex-row top edge.
+ */
+export function layoutOrigin(host: HTMLElement, gutter?: HTMLElement | null): HTMLElement {
+	if (gutter && isDisplayed(gutter)) return gutter;
+	return host;
+}
+
+function isDisplayed(el: HTMLElement): boolean {
+	if (typeof getComputedStyle === 'function') {
+		return getComputedStyle(el).display !== 'none';
+	}
+	return el.getClientRects().length > 0;
+}
+
 /** Gutter-column overlay boxes for nested host-direct children that share data-parent-id. */
 export function overlayBoxes(host: HTMLElement, gutter?: HTMLElement | null): OverlayBox[] {
-	const origin = gutter ?? host;
+	const origin = layoutOrigin(host, gutter);
 	const originTop = origin.getBoundingClientRect().top;
 	const groups = new Map<string, HTMLElement[]>();
 	for (const child of host.children) {
@@ -185,7 +203,7 @@ function blockRect(host: HTMLElement, block: Block): DOMRect | null {
  * vertically centred on the content they move, on every block, however tall.
  */
 export function handleBoxes(host: HTMLElement, page?: KbPage, gutter?: HTMLElement | null): HandleBox[] {
-	const origin = gutter ?? host;
+	const origin = layoutOrigin(host, gutter);
 	const originTop = origin.getBoundingClientRect().top;
 	const boxes: HandleBox[] = [];
 	if (!page) {

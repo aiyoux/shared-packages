@@ -41,7 +41,8 @@ import type {
 	TableBlock,
 	TableCellBlock,
 	TableRowBlock,
-	TextSpan
+	TextSpan,
+	Align
 } from './types.js';
 import { snapOffset } from './utf16.js';
 
@@ -456,6 +457,7 @@ function applySplitBlock(page: KbPage, op: Extract<Op, { kind: 'split-block' }>)
 		} else {
 			created = { id: op.newId, type: 'paragraph', content: dropContent };
 		}
+		if (block.align) (created as { align?: Align }).align = block.align;
 		insertBlockAt(page, at.parent, at.indexInParent + 1, created);
 	}
 }
@@ -515,11 +517,14 @@ export function convertBlock(block: Block, op: Extract<Op, { kind: 'convert-bloc
 	const content = isTextLike(block) ? block.content : emptySpans();
 	const level = op.level ?? 1;
 	const ordered = op.ordered ?? false;
+	const align = isTextLike(block) ? block.align : undefined;
+	const aligned = <T extends { align?: Align }>(next: T): T =>
+		align ? { ...next, align } : next;
 
 	if (isTextLike(block)) {
-		if (op.to === 'paragraph') return { id, type: 'paragraph', content };
-		if (op.to === 'heading') return { id, type: 'heading', level, content };
-		if (op.to === 'list_item') return { id, type: 'list_item', ordered, content };
+		if (op.to === 'paragraph') return aligned({ id, type: 'paragraph', content });
+		if (op.to === 'heading') return aligned({ id, type: 'heading', level, content });
+		if (op.to === 'list_item') return aligned({ id, type: 'list_item', ordered, content });
 		if (op.to === 'code') return { id, type: 'code', language: '', text: plaintextOf(block) };
 		if (op.to === 'divider') return { id, type: 'divider' };
 	}
@@ -691,6 +696,28 @@ function applySetToggle(page: KbPage, op: Extract<Op, { kind: 'set-toggle' }>): 
 	replaceBlock(page, loc.parent, loc.index, { ...loc.block, open: op.open });
 }
 
+function applySetAlign(page: KbPage, op: Extract<Op, { kind: 'set-align' }>): void {
+	const loc = requireLocation(page, op.id, 'set-align');
+	if (!isTextLike(loc.block)) {
+		throw new Error('set-align: block is not text-like');
+	}
+	const next = { ...loc.block } as typeof loc.block & { align?: Align };
+	if (op.align) next.align = op.align;
+	else delete next.align;
+	replaceBlock(page, loc.parent, loc.index, next);
+}
+
+function applySetVAlign(page: KbPage, op: Extract<Op, { kind: 'set-valign' }>): void {
+	const loc = requireLocation(page, op.id, 'set-valign');
+	if (loc.block.type !== 'table_cell') {
+		throw new Error('set-valign: block is not a table_cell');
+	}
+	const next: TableCellBlock = { ...loc.block };
+	if (op.valign) next.valign = op.valign;
+	else delete next.valign;
+	replaceBlock(page, loc.parent, loc.index, next);
+}
+
 function requireTable(page: KbPage, tableId: string, what: string): TableBlock {
 	const loc = requireLocation(page, tableId, what);
 	if (loc.block.type !== 'table') {
@@ -845,6 +872,12 @@ export function apply(page: KbPage, op: Op): KbPage {
 			break;
 		case 'set-toggle':
 			applySetToggle(next, op);
+			break;
+		case 'set-align':
+			applySetAlign(next, op);
+			break;
+		case 'set-valign':
+			applySetVAlign(next, op);
 			break;
 		case 'insert-table-row':
 			applyInsertTableRow(next, op);
