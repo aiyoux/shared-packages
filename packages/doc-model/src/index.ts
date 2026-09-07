@@ -41,6 +41,7 @@ export {
 	normalizeBody,
 	normalizePage,
 	normalizeSpans,
+	sanitizeFontSize,
 	sliceSpans,
 	splitSpans
 } from './normalize.js';

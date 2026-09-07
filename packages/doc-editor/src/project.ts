@@ -6,6 +6,7 @@ import {
 	isUnknownBlock,
 	parentIdOf,
 	parentOf,
+	sanitizeFontSize,
 	visibleOrder,
 	type Block,
 	type Inline,
@@ -14,6 +15,7 @@ import {
 	type ParentRef
 } from '@shared-packages/doc-model';
 import { paintCarets, stripCollabWidgets, type RemoteCaret } from './decorations.js';
+import { fontFamilyCss } from './font.js';
 import { allowlistedHref, allowlistedSrc } from './href.js';
 import type { EditorState } from './state.js';
 
@@ -37,7 +39,12 @@ export const PARENT_ID_ATTR = 'data-parent-id';
 export const DEPTH_ATTR = 'data-depth';
 export const COL_ATTR = 'data-col';
 
-function markElement(doc: Document, mark: Mark): HTMLElement {
+/**
+ * The element a mark renders as, or undefined when the mark's payload fails
+ * validation (coerce should have dropped it, but a peer-authored doc may
+ * still carry it) — such marks simply render as nothing.
+ */
+function markElement(doc: Document, mark: Mark): HTMLElement | undefined {
 	switch (mark.type) {
 		case 'bold':
 			return doc.createElement('strong');
@@ -45,6 +52,20 @@ function markElement(doc: Document, mark: Mark): HTMLElement {
 			return doc.createElement('em');
 		case 'code':
 			return doc.createElement('code');
+		case 'font_family': {
+			const css = fontFamilyCss(mark.family);
+			if (!css) return undefined;
+			const span = doc.createElement('span');
+			span.style.fontFamily = css;
+			return span;
+		}
+		case 'font_size': {
+			const size = sanitizeFontSize(mark.size);
+			if (!size) return undefined;
+			const span = doc.createElement('span');
+			span.style.fontSize = size;
+			return span;
+		}
 		case 'link': {
 			const a = doc.createElement('a');
 			const href = allowlistedHref(mark.href);
@@ -59,6 +80,7 @@ function wrapMarks(doc: Document, text: Text, marks: Mark[]): Node {
 	const ordered = canonicalMarks(marks);
 	for (let i = ordered.length - 1; i >= 0; i--) {
 		const el = markElement(doc, ordered[i]);
+		if (!el) continue;
 		el.appendChild(node);
 		node = el;
 	}

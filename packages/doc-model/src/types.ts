@@ -1,15 +1,22 @@
 export const KB_FORMAT = 'kb' as const;
 
+/**
+ * Font family is a picker id, never a CSS string — rendering maps it through
+ * an allowlist. Font size is a canonical `"<n>px"` / `"<n>pt"` / `"<n>%"`
+ * string validated at every entry point (coerce, apply, render).
+ */
 export type Mark =
 	| { type: 'bold' }
 	| { type: 'italic' }
 	| { type: 'code' }
+	| { type: 'font_family'; family: 'sans' | 'serif' | 'mono' }
+	| { type: 'font_size'; size: string }
 	| { type: 'link'; href: string };
 
 export type TextSpan = {
 	type: 'text';
 	text: string; // MAY contain '\n' (Shift+Enter hard break). `code.text` MAY contain `\n`.
-	marks: Mark[]; // canonical order: bold, italic, code, link
+	marks: Mark[]; // canonical order: bold, italic, code, font_family, font_size, link
 };
 
 export type Inline = TextSpan; // v1: text spans only. A hard break is '\n' inside a span, not an inline node.
@@ -125,7 +132,7 @@ export type Range = { anchor: Point; head: Point };
 
 export type Op =
 	| { kind: 'set-title'; title: string }
-	| { kind: 'insert-text'; at: Point; text: string }
+	| { kind: 'insert-text'; at: Point; text: string; marks?: Mark[] }
 	| { kind: 'delete-range'; range: Range }
 	| { kind: 'format-range'; range: Range; mark: Mark; on: boolean }
 	| { kind: 'split-block'; at: Point; newId: string }

@@ -27,7 +27,9 @@ const MARK_RANK: Record<Mark['type'], number> = {
 	bold: 0,
 	italic: 1,
 	code: 2,
-	link: 3
+	font_family: 3,
+	font_size: 4,
+	link: 5
 };
 
 const CALLOUT_VARIANTS: ReadonlySet<string> = new Set(['info', 'warning', 'note']);
@@ -84,6 +86,27 @@ export function canonicalMarks(marks: Mark[]): Mark[] {
 	return [...byType.values()].sort((a, b) => MARK_RANK[a.type] - MARK_RANK[b.type]);
 }
 
+/**
+ * Canonicalize a user-supplied font size to `"14px"` / `"12pt"` / `"120%"`.
+ * Returns null for anything that would not survive serialization and rendering
+ * as a style value — callers treat null as "no override".
+ */
+export function sanitizeFontSize(raw: string): string | null {
+	const match = /^\s*(\d{1,4})(px|pt|%)?\s*$/.exec(raw);
+	if (!match) return null;
+	const n = Number(match[1]);
+	if (n < 1 || n > 999) return null;
+	return `${n}${match[2] ?? 'px'}`;
+}
+
+/** Payload fields that distinguish two marks of the same type, if any. */
+function markPayload(mark: Mark): string | undefined {
+	if (mark.type === 'link') return mark.href;
+	if (mark.type === 'font_family') return mark.family;
+	if (mark.type === 'font_size') return mark.size;
+	return undefined;
+}
+
 export function marksEqual(a: Mark[], b: Mark[]): boolean {
 	const left = canonicalMarks(a);
 	const right = canonicalMarks(b);
@@ -92,7 +115,7 @@ export function marksEqual(a: Mark[], b: Mark[]): boolean {
 		const x = left[i];
 		const y = right[i];
 		if (x.type !== y.type) return false;
-		if (x.type === 'link' && y.type === 'link' && x.href !== y.href) return false;
+		if (markPayload(x) !== markPayload(y)) return false;
 	}
 	return true;
 }
@@ -149,6 +172,16 @@ function coerceMark(raw: unknown): Mark | null {
 	const rec = raw as Record<string, unknown>;
 	if (rec.type === 'bold' || rec.type === 'italic' || rec.type === 'code') return { type: rec.type };
 	if (rec.type === 'link' && typeof rec.href === 'string') return { type: 'link', href: rec.href };
+	if (rec.type === 'font_family') {
+		if (rec.family === 'sans' || rec.family === 'serif' || rec.family === 'mono') {
+			return { type: 'font_family', family: rec.family };
+		}
+		return null;
+	}
+	if (rec.type === 'font_size' && typeof rec.size === 'string') {
+		const size = sanitizeFontSize(rec.size);
+		return size ? { type: 'font_size', size } : null;
+	}
 	return null;
 }
 
@@ -171,9 +204,18 @@ function orderedSpan(span: TextSpan): Inline {
 	return {
 		type: 'text',
 		text: span.text,
-		marks: canonicalMarks(span.marks).map((mark) =>
-			mark.type === 'link' ? { type: 'link', href: mark.href } : { type: mark.type }
-		)
+		marks: canonicalMarks(span.marks).map((mark) => {
+			switch (mark.type) {
+				case 'link':
+					return { type: 'link', href: mark.href };
+				case 'font_family':
+					return { type: 'font_family', family: mark.family };
+				case 'font_size':
+					return { type: 'font_size', size: mark.size };
+				default:
+					return { type: mark.type };
+			}
+		})
 	};
 }
 

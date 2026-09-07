@@ -1,5 +1,6 @@
 import {
 	apply,
+	canonicalMarks,
 	findBlock,
 	isNonTextual,
 	isTableStructure,
@@ -170,6 +171,9 @@ function insertAtCaret(state: EditorState, at: Point, text: string): Op[] {
 	if (!text) return [];
 	const block = findBlock(state.page, at.blockId);
 	if (!block) return [];
+	// The toolbar's collapsed-caret font pick land here: the marks ride the
+	// insert-text ops themselves (see `EditorState.storedMarks`).
+	const stored = state.storedMarks?.length ? canonicalMarks(state.storedMarks) : undefined;
 	if (isTableStructure(block)) {
 		const afterId = afterTableId(state.page, block.id);
 		if (!afterId) return [];
@@ -202,7 +206,7 @@ function insertAtCaret(state: EditorState, at: Point, text: string): Op[] {
 		}
 		const one = cellPlaintext(text);
 		if (!one) return [];
-		return [{ kind: 'insert-text', at, text: one }];
+		return [{ kind: 'insert-text', at, text: one, marks: stored }];
 	}
 	if (text === ' ' && block && isTextLike(block)) {
 		const slash = slashOps(block.id, plaintextOf(block), state.page);
@@ -216,7 +220,7 @@ function insertAtCaret(state: EditorState, at: Point, text: string): Op[] {
 		for (let i = 0; i < parts.length; i++) {
 			const part = parts[i];
 			if (part) {
-				ops.push({ kind: 'insert-text', at: { blockId, offset }, text: part });
+				ops.push({ kind: 'insert-text', at: { blockId, offset }, text: part, marks: stored });
 				offset += part.length;
 			}
 			if (i < parts.length - 1) {
@@ -228,7 +232,7 @@ function insertAtCaret(state: EditorState, at: Point, text: string): Op[] {
 		}
 		return ops;
 	}
-	return [{ kind: 'insert-text', at, text }];
+	return [{ kind: 'insert-text', at, text, marks: stored }];
 }
 
 function insertTextOps(state: EditorState, live: Range, text: string): Op[] {

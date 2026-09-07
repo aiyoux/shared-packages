@@ -49,6 +49,8 @@ const STRIP_MARKS: Mark[] = [
 	{ type: 'bold' },
 	{ type: 'italic' },
 	{ type: 'code' },
+	{ type: 'font_family', family: 'sans' },
+	{ type: 'font_size', size: '1px' },
 	{ type: 'link', href: '' }
 ];
 
@@ -234,7 +236,16 @@ function invertDeleteRange(page: KbPage, op: Extract<Op, { kind: 'delete-range' 
 	return ops;
 }
 
-function findLinkHref(page: KbPage, range: Extract<Op, { kind: 'format-range' }>['range']): string | null {
+/**
+ * First payload-carrying mark of `type` inside the range. Undo of a mark
+ * *removal* re-applies one representative value (link parity — the inverse of a
+ * clear over a heterogeneous range is inherently lossy).
+ */
+function findMarkPayload(
+	page: KbPage,
+	range: Extract<Op, { kind: 'format-range' }>['range'],
+	type: 'link' | 'font_family' | 'font_size'
+): Mark | null {
 	const { start, end } = normalizeRange(page, range);
 	const order = documentOrder(page);
 	const si = order.findIndex((block) => block.id === start.block.id);
@@ -245,8 +256,8 @@ function findLinkHref(page: KbPage, range: Extract<Op, { kind: 'format-range' }>
 		const from = i === si ? start.offset : 0;
 		const to = i === ei ? end.offset : plaintextOf(block).length;
 		for (const span of sliceSpans(block.content, from, to)) {
-			const link = span.marks.find((mark): mark is Extract<Mark, { type: 'link' }> => mark.type === 'link');
-			if (link) return link.href;
+			const mark = span.marks.find((m): m is Mark => m.type === type);
+			if (mark) return mark;
 		}
 	}
 	return null;
@@ -256,9 +267,9 @@ function invertFormatRange(page: KbPage, op: Extract<Op, { kind: 'format-range' 
 	const { start, end } = normalizeRange(page, op.range);
 	if (start.block.id === end.block.id && start.offset === end.offset) return [];
 	let mark = op.mark;
-	if (mark.type === 'link' && !op.on) {
-		const href = findLinkHref(page, op.range);
-		if (href != null) mark = { type: 'link', href };
+	if (!op.on && (mark.type === 'link' || mark.type === 'font_family' || mark.type === 'font_size')) {
+		const found = findMarkPayload(page, op.range, mark.type);
+		if (found) mark = found;
 	}
 	return [{ kind: 'format-range', range: op.range, mark, on: !op.on }];
 }

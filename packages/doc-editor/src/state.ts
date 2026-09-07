@@ -11,6 +11,7 @@ import {
 	type DocBody,
 	type IdMap,
 	type KbPage,
+	type Mark,
 	type Op,
 	type Range
 } from '@shared-packages/doc-model';
@@ -51,6 +52,13 @@ export type EditorState<TDoc extends DocBody = KbPage> = {
 	justCommittedComposition?: boolean;
 	/** Remote ops held during IME freeze; drained after compositionend. */
 	pendingRemote?: Op[];
+	/**
+	 * Marks for the next typed text at a collapsed caret (the toolbar's font
+	 * pickers with nothing selected). Absent/null means "derive from the
+	 * document" — typed text inherits the span it lands in. Cleared by anything
+	 * that moves or re-clamps the caret; never persisted or undo-tracked.
+	 */
+	storedMarks?: Mark[] | null;
 };
 
 export function createEditorState<T extends DocBody>(page: T): EditorState<T> {
@@ -203,6 +211,16 @@ function pushUndo(state: { undo: Op[][]; redo: Op[][] }, group: Op[]): { undo: O
 	};
 }
 
+/**
+ * Set (or clear) the marks the next typed text will carry at a collapsed
+ * caret. Pure UI state: no page change, no undo entry. Consumed by the insert
+ * path in `beforeinput.ts`; cleared by `dispatch`/`setSelection`/etc. because
+ * they all move or re-clamp the caret.
+ */
+export function withStoredMarks<T extends DocBody>(state: EditorState<T>, marks: Mark[] | null): EditorState<T> {
+	return { ...state, storedMarks: marks };
+}
+
 export function dispatch<T extends DocBody>(state: EditorState<T>, op: Op): EditorState<T> {
 	const inverse = op.kind === 'set-children' ? [] : invertInDoc(state.page, op);
 	const page = applyToDoc(state.page, op);
@@ -214,7 +232,8 @@ export function dispatch<T extends DocBody>(state: EditorState<T>, op: Op): Edit
 		selection,
 		...stack,
 		composing: false,
-		blockFocus: blockFocusOf(page, selection)
+		blockFocus: blockFocusOf(page, selection),
+		storedMarks: undefined
 	};
 }
 
@@ -244,7 +263,8 @@ export function dispatchMany<T extends DocBody>(state: EditorState<T>, ops: Op[]
 		selection,
 		...stack,
 		composing: false,
-		blockFocus: blockFocusOf(page, selection)
+		blockFocus: blockFocusOf(page, selection),
+		storedMarks: undefined
 	};
 }
 
@@ -268,7 +288,8 @@ export function undo<T extends DocBody>(state: EditorState<T>): EditorState<T> {
 		selection,
 		undo: state.undo.slice(0, -1),
 		redo: [...state.redo, redoGroup].slice(-UNDO_CAP),
-		blockFocus: blockFocusOf(page, selection)
+		blockFocus: blockFocusOf(page, selection),
+		storedMarks: undefined
 	};
 }
 
@@ -292,7 +313,8 @@ export function redo<T extends DocBody>(state: EditorState<T>): EditorState<T> {
 		selection,
 		undo: [...state.undo, undoGroup].slice(-UNDO_CAP),
 		redo: state.redo.slice(0, -1),
-		blockFocus: blockFocusOf(page, selection)
+		blockFocus: blockFocusOf(page, selection),
+		storedMarks: undefined
 	};
 }
 
@@ -306,7 +328,7 @@ export function setJustCommittedComposition<T extends DocBody>(state: EditorStat
 
 export function setSelection<T extends DocBody>(state: EditorState<T>, selection: Range): EditorState<T> {
 	const next = clampRange(state.page, selection);
-	return { ...state, selection: next, blockFocus: blockFocusOf(state.page, next) };
+	return { ...state, selection: next, blockFocus: blockFocusOf(state.page, next), storedMarks: undefined };
 }
 
 /** Parent onDispatch handler: one undo group even when the editor emits Op[]. */
@@ -343,7 +365,8 @@ export function remapIds<T extends DocBody>(state: EditorState<T>, map: IdMap): 
 		undo: state.undo.map((group) => remapOps(map, group)),
 		redo: state.redo.map((group) => remapOps(map, group)),
 		blockFocus: state.blockFocus === undefined ? undefined : (map.get(state.blockFocus) ?? state.blockFocus),
-		pendingRemote: state.pendingRemote ? remapOps(map, state.pendingRemote) : state.pendingRemote
+		pendingRemote: state.pendingRemote ? remapOps(map, state.pendingRemote) : state.pendingRemote,
+		storedMarks: undefined
 	};
 }
 

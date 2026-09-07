@@ -156,9 +156,14 @@ function marksAtInsert(content: TextSpan[], offset: number): Mark[] {
 	return canonicalMarks(spans[spans.length - 1].marks);
 }
 
-function insertIntoSpans(content: TextSpan[], offset: number, text: string): TextSpan[] {
+function insertIntoSpans(
+	content: TextSpan[],
+	offset: number,
+	text: string,
+	marksOverride?: Mark[]
+): TextSpan[] {
 	const spans = ensureSpans(content);
-	const marks = marksAtInsert(spans, offset);
+	const marks = marksOverride ? canonicalMarks(marksOverride) : marksAtInsert(spans, offset);
 	const [left, right] = splitSpans(spans, offset);
 	return normalizeSpans([...left, { type: 'text', text, marks }, ...right]);
 }
@@ -209,7 +214,10 @@ function applyInsertText(page: KbPage, op: Extract<Op, { kind: 'insert-text' }>)
 		throw new Error('cannot insert text into atomic block');
 	}
 	if (isTextLike(at.block)) {
-		const next = { ...at.block, content: insertIntoSpans(at.block.content, at.offset, op.text) };
+		const next = {
+			...at.block,
+			content: insertIntoSpans(at.block.content, at.offset, op.text, op.marks)
+		};
 		replaceBlock(page, at.parent, at.indexInParent, next);
 		return;
 	}

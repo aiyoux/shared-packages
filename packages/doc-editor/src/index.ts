@@ -32,6 +32,7 @@ export {
 } from './decorations.js';
 export { dropAfterId, dropTarget, dropWhere, gutterOrder, handleHeights, overlayBoxes } from './gutter.js';
 export { allowlistedHref, allowlistedSrc } from './href.js';
+export { fontFamilyCss } from './font.js';
 export { newBlockId } from './ids.js';
 export { mapKeydown, type KeyEvent, type KeymapResult } from './keymap.js';
 export {
@@ -93,6 +94,7 @@ export {
 	setSelection,
 	remapIds,
 	undo,
+	withStoredMarks,
 	UNDO_CAP,
 	type EditorState
 } from './state.js';
