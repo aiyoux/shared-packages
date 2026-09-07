@@ -7,7 +7,8 @@
 	import {
 		appWindowBodyId,
 		createAppWindowLeafHome,
-		layoutSlotKey
+		layoutSlotKey,
+		nextAppWindowLayoutId
 	} from './leafHome.js';
 	import {
 		canCloseAppWindow,
@@ -20,6 +21,7 @@
 		sliceGuideFromPoint,
 		splitAppWindow
 	} from './manager.js';
+	import { appWindowsOwnsShortcut } from './shortcutScope.js';
 	import type { AppWindowRoleDef } from './types.js';
 
 	let {
@@ -77,7 +79,12 @@
 		leafChrome?: Snippet<[{ id: string; role: R; focused: boolean }]>;
 	} = $props();
 
-	const home = createAppWindowLeafHome(layoutId);
+	// Slot/body ids are `aw-${layoutId}-slot-${leafId}`. Every DualPaneExplorer
+	// used to pass layoutId="files" and start with leaf id "left", so a second
+	// Files hub pane's getElementById rehomed its inner windows into the first.
+	// svelte-ignore state_referenced_locally
+	const instanceLayoutId = nextAppWindowLayoutId(layoutId);
+	const home = createAppWindowLeafHome(instanceLayoutId);
 	const leaves = $derived(listLeaves(root));
 	const slotKey = $derived(layoutSlotKey(root));
 	const available = $derived(new Set(availableRoles ?? roles.map((r) => r.id)));
@@ -85,6 +92,7 @@
 
 	let parkEl: HTMLElement | null = $state(null);
 	let liveHost: HTMLElement | null = $state(null);
+	let hostEl: HTMLElement | null = $state(null);
 	let sliceGuide = $state<{
 		leafId: string;
 		direction: SplitDirection;
@@ -138,7 +146,7 @@
 	}
 
 	function bodyEl(id: string): HTMLElement | null {
-		return document.getElementById(appWindowBodyId(layoutId, id));
+		return document.getElementById(appWindowBodyId(instanceLayoutId, id));
 	}
 
 	function parkAll() {
@@ -289,6 +297,7 @@
 
 	$effect(() => {
 		const onKey = (e: KeyboardEvent) => {
+			if (!appWindowsOwnsShortcut(hostEl, e.target)) return;
 			const target = e.target as HTMLElement | null;
 			if (targetConsumesKey(target, e)) return;
 			if (e.ctrlKey || e.metaKey || e.altKey) return;
@@ -368,9 +377,15 @@
 	}
 </script>
 
-<div class="aw-host {hostClass}" class:editing class:slicing data-testid={testid}>
+<div
+	class="aw-host {hostClass}"
+	class:editing
+	class:slicing
+	data-testid={testid}
+	bind:this={hostEl}
+>
 	<div class="aw-root">
-		<AppWindowTree node={root} {layoutId} {testidPrefix} {onResize} />
+		<AppWindowTree node={root} layoutId={instanceLayoutId} {testidPrefix} {onResize} />
 	</div>
 	{#if editing && combinePreview}
 		<div
@@ -403,7 +418,7 @@
 				onpointerdown={() => focusLeaf(leaf.id)}
 				use:home.homeLeaf={leaf.id}
 			>
-				<div class="aw-body" id={appWindowBodyId(layoutId, leaf.id)}>
+				<div class="aw-body" id={appWindowBodyId(instanceLayoutId, leaf.id)}>
 					{#if !isUnassignedWindow(windows[leaf.id])}
 						{@render pane({ id: leaf.id, role: roleOf(leaf.id), focused: focusedId === leaf.id })}
 					{/if}
