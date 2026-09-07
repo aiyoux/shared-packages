@@ -34,6 +34,8 @@ export {
 	fileTypeMime,
 	fileTypesFromDragTypes,
 	FE_FILE_TYPE_PREFIX,
+	hasExplorerMime,
+	routeFileDrop,
 	type ExplorerDropPayload,
 	type DropAcceptVerdict
 } from './explorer-drop.ts';
