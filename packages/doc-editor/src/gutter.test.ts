@@ -199,11 +199,11 @@ describe('gutter drag', () => {
 		c.getBoundingClientRect = () => rect(56, 20);
 
 		// The shared boundary a|b: reading it as "after a" or "before b" must
-		// produce the identical line, whichever side the cursor ties on.
-		expect(dropLineY(host, doc, { id: 'a', where: 'after', rect: rect(0, 20) }, 'noop')).toBe(28);
-		expect(dropLineY(host, doc, { id: 'b', where: 'before', rect: rect(28, 20) }, 'noop')).toBe(28);
-		expect(dropLineY(host, doc, { id: 'b', where: 'after', rect: rect(28, 20) }, 'noop')).toBe(56);
-		expect(dropLineY(host, doc, { id: 'c', where: 'before', rect: rect(56, 20) }, 'noop')).toBe(56);
+		// produce the identical line — the gap's midpoint (20, 28 → 24).
+		expect(dropLineY(host, doc, { id: 'a', where: 'after', rect: rect(0, 20) }, 'noop')).toBe(24);
+		expect(dropLineY(host, doc, { id: 'b', where: 'before', rect: rect(28, 20) }, 'noop')).toBe(24);
+		expect(dropLineY(host, doc, { id: 'b', where: 'after', rect: rect(28, 20) }, 'noop')).toBe(52);
+		expect(dropLineY(host, doc, { id: 'c', where: 'before', rect: rect(56, 20) }, 'noop')).toBe(52);
 		// A last block has no next sibling: the line closes at its own bottom.
 		expect(dropLineY(host, doc, { id: 'c', where: 'after', rect: rect(56, 20) }, 'noop')).toBe(76);
 		host.remove();

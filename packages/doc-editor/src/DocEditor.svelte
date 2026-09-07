@@ -439,30 +439,39 @@
 		onDispatch({ kind: 'move-block', id, afterId: drop.afterId, parentId: drop.parentId });
 	}
 
+	/**
+	 * Move-drops are accepted by the whole editor box, not just the content
+	 * host: the empty space above the first block and below the last one must
+	 * land too (nearest block wins in `blockFromPoint`). While no handle
+	 * drags, the root handler stays inert so the host's paste path owns
+	 * external file drags.
+	 */
+	function onEditorDragOver(event: DragEvent) {
+		if (!draggingId || composing) return;
+		event.preventDefault();
+		if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+		paintMoveDrop(event.clientY);
+	}
+
+	function onEditorDrop(event: DragEvent) {
+		if (!draggingId || composing) return;
+		event.preventDefault();
+		const id = draggingId;
+		const hit = moveDrop;
+		draggingId = null;
+		clearMoveDrop();
+		if (!id || !hit) return;
+		dispatchMove(id, hit);
+	}
+
 	function onHostDragOver(event: DragEvent) {
-		if (composing) return;
-		if (draggingId) {
-			event.preventDefault();
-			if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
-			paintMoveDrop(event.clientY);
-			return;
-		}
+		if (composing || draggingId) return;
 		event.preventDefault();
 		if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
 	}
 
 	function onHostDrop(event: DragEvent) {
-		if (composing) return;
-		if (draggingId) {
-			event.preventDefault();
-			const id = draggingId;
-			const hit = moveDrop;
-			draggingId = null;
-			clearMoveDrop();
-			if (!id || !hit) return;
-			dispatchMove(id, hit);
-			return;
-		}
+		if (composing || draggingId) return;
 		event.preventDefault();
 		const live = liveRange();
 		const data = event.dataTransfer;
@@ -548,7 +557,13 @@
 	}
 </script>
 
-<div class="kb-editor" class:no-gutter={!showHandles} data-testid={`${testIdPrefix}-editor`}>
+<div
+	class="kb-editor"
+	class:no-gutter={!showHandles}
+	ondragover={onEditorDragOver}
+	ondrop={onEditorDrop}
+	data-testid={`${testIdPrefix}-editor`}
+>
 	<div class="kb-gutter" bind:this={gutterEl} contenteditable="false" data-testid={`${testIdPrefix}-gutter`}>
 		{#each overlays as box (box.parentId)}
 			<div

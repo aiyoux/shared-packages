@@ -273,15 +273,20 @@ export function dropLineY(
 		const last = kids.length ? rectOf(kids[kids.length - 1].id) : null;
 		return (last ?? hit.rect).bottom;
 	}
-	if (hit.where === 'before') return hit.rect.top;
 	const loc = parentOf(page, hit.id);
-	if (loc) {
-		// Unfiltered: loc.index addresses childrenOf's raw order.
-		const siblings = childrenOf(page, loc.parent);
-		if (loc.index < siblings.length - 1) {
-			const next = rectOf(siblings[loc.index + 1].id);
-			if (next) return next.top;
-		}
+	const siblings = loc ? childrenOf(page, loc.parent) : null;
+	// The line sits at the visual midpoint of the gap between the two blocks
+	// sharing the boundary — blocks carry margins, so the gap is real space
+	// and an edge-anchored line hugged one of them. Both readings of the same
+	// gap ('after X' and 'before next') compute the identical midpoint.
+	if (hit.where === 'before') {
+		const prev =
+			loc && siblings && loc.index > 0 ? rectOf(siblings[loc.index - 1].id) : null;
+		return prev ? (prev.bottom + hit.rect.top) / 2 : hit.rect.top;
+	}
+	if (loc && siblings && loc.index < siblings.length - 1) {
+		const next = rectOf(siblings[loc.index + 1].id);
+		if (next) return (hit.rect.bottom + next.top) / 2;
 	}
 	return hit.rect.bottom;
 }
