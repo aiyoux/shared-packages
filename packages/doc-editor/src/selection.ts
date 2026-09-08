@@ -8,7 +8,7 @@ import {
 	type Point,
 	type Range
 } from '@shared-packages/doc-model';
-import { BLOCK_ID_ATTR } from './project.js';
+import { BLOCK_ID_ATTR, BLOCK_TYPE_ATTR } from './project.js';
 import { clampRange, collapsed } from './range.js';
 
 const COLLAB_WIDGET_SELECTOR = '[data-collab-widget]';
@@ -281,6 +281,153 @@ export function restoreSelection(host: HTMLElement, range: Range, page?: KbPage)
 function cssEscape(value: string): string {
 	if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') return CSS.escape(value);
 	return value.replace(/"/g, '\\"');
+}
+
+/** One visual line of a text-like block, in viewport coordinates. */
+export type LineBox = {
+	top: number;
+	bottom: number;
+	left: number;
+	right: number;
+	startOffset: number;
+	endOffset: number;
+};
+
+const TRAILING_CLICK_SLACK_PX = 1;
+
+function isTextCaretBlockType(type: string | null): boolean {
+	return (
+		type === 'paragraph' ||
+		type === 'heading' ||
+		type === 'list_item' ||
+		type === 'code' ||
+		type === 'table_cell'
+	);
+}
+
+/**
+ * Glyph boxes for a block, grouped into visual lines.
+ *
+ * Used to snap a click in the empty space to the right of a line to that
+ * line's end — native contenteditable only does this when the caret is
+ * already in the block.
+ */
+export function lineBoxesOf(block: HTMLElement): LineBox[] {
+	const texts = textNodes(block);
+	const doc = block.ownerDocument;
+	const lines: LineBox[] = [];
+	let offset = 0;
+	for (const text of texts) {
+		const len = text.data.length;
+		for (let i = 0; i < len; i++) {
+			const range = doc.createRange();
+			try {
+				range.setStart(text, i);
+				range.setEnd(text, i + 1);
+			} catch {
+				continue;
+			}
+			const rect = range.getClientRects()[0];
+			if (!rect || (rect.width === 0 && rect.height === 0)) continue;
+			const midY = rect.top + rect.height / 2;
+			let line = lines.find((l) => midY >= l.top && midY <= l.bottom);
+			if (!line) {
+				lines.push({
+					top: rect.top,
+					bottom: rect.bottom,
+					left: rect.left,
+					right: rect.right,
+					startOffset: offset + i,
+					endOffset: offset + i + 1
+				});
+			} else {
+				line.top = Math.min(line.top, rect.top);
+				line.bottom = Math.max(line.bottom, rect.bottom);
+				line.left = Math.min(line.left, rect.left);
+				line.right = Math.max(line.right, rect.right);
+				line.startOffset = Math.min(line.startOffset, offset + i);
+				line.endOffset = Math.max(line.endOffset, offset + i + 1);
+			}
+		}
+		offset += len;
+	}
+	return lines;
+}
+
+export function lineBoxAtY(lines: LineBox[], clientY: number): LineBox | null {
+	if (lines.length === 0) return null;
+	let best = lines[0]!;
+	let bestDist = Infinity;
+	for (const line of lines) {
+		const dist =
+			clientY < line.top ? line.top - clientY : clientY > line.bottom ? clientY - line.bottom : 0;
+		if (dist < bestDist) {
+			bestDist = dist;
+			best = line;
+		}
+	}
+	return best;
+}
+
+/**
+ * The innermost text-like block under a viewport point, including clicks
+ * that land to the right of shrink-wrapped content (target is the host).
+ */
+export function blockElementFromClient(host: HTMLElement, clientX: number, clientY: number): HTMLElement | null {
+	const doc = host.ownerDocument;
+	if (typeof doc.elementsFromPoint === 'function') {
+		for (const node of doc.elementsFromPoint(clientX, clientY)) {
+			if (!(node instanceof HTMLElement)) continue;
+			if (node !== host && !host.contains(node)) continue;
+			const block = node.closest(`[${BLOCK_ID_ATTR}]`);
+			if (block instanceof HTMLElement && host.contains(block) && isTextCaretBlockType(block.getAttribute(BLOCK_TYPE_ATTR))) {
+				return block;
+			}
+		}
+	}
+	let best: HTMLElement | null = null;
+	let bestArea = Infinity;
+	for (const node of host.querySelectorAll(`[${BLOCK_ID_ATTR}]`)) {
+		if (!(node instanceof HTMLElement)) continue;
+		if (!isTextCaretBlockType(node.getAttribute(BLOCK_TYPE_ATTR))) continue;
+		const rect = node.getBoundingClientRect();
+		if (clientY < rect.top || clientY > rect.bottom) continue;
+		if (clientX < rect.left) continue;
+		const area = Math.max(rect.width, 1) * Math.max(rect.height, 1);
+		if (area < bestArea) {
+			bestArea = area;
+			best = node;
+		}
+	}
+	return best;
+}
+
+/**
+ * When the click is in the empty space past the last glyph on a line, the
+ * caret belongs at that line's end. Returns null when native placement in
+ * the glyphs should stand (including mid-text clicks on an inactive block).
+ */
+export function trailingLineEndFromClient(
+	host: HTMLElement,
+	clientX: number,
+	clientY: number
+): Point | null {
+	const block = blockElementFromClient(host, clientX, clientY);
+	if (!block) return null;
+	const blockId = block.getAttribute(BLOCK_ID_ATTR);
+	if (!blockId) return null;
+	const lines = lineBoxesOf(block);
+	if (lines.length === 0) {
+		const rect = block.getBoundingClientRect();
+		if (clientY < rect.top || clientY > rect.bottom) return null;
+		return { blockId, offset: 0 };
+	}
+	const line = lineBoxAtY(lines, clientY);
+	if (!line) return null;
+	if (clientX > line.right + TRAILING_CLICK_SLACK_PX) {
+		return { blockId, offset: line.endOffset };
+	}
+	return null;
 }
 
 export function caretIn(page: KbPage, blockId: string, offset: number): Range {

@@ -2,10 +2,12 @@ import { describe, expect, it } from 'vitest';
 import { project } from './project.js';
 import {
 	focusHeldOutside,
+	lineBoxAtY,
 	pointFromDom,
 	rangeFromEndpoints,
 	rangeFromInputEvent,
-	restoreSelection
+	restoreSelection,
+	trailingLineEndFromClient
 } from './selection.js';
 import { page, para } from './testFixtures.js';
 
@@ -182,5 +184,90 @@ describe('focusHeldOutside', () => {
 			expect(focusHeldOutside(host)).toBe(false);
 			button.remove();
 		});
+	});
+});
+
+/**
+ * Clicking past the last glyph on a line must land at that line's end even
+ * when the caret is not already in the block. Native CE only does this for
+ * the active block; we hit-test line boxes ourselves.
+ */
+describe('trailingLineEndFromClient', () => {
+	function fakeRect(top: number, height: number, left: number, width: number): DOMRect {
+		return {
+			x: left,
+			y: top,
+			top,
+			bottom: top + height,
+			left,
+			right: left + width,
+			width,
+			height,
+			toJSON() {
+				return this;
+			}
+		} as DOMRect;
+	}
+
+	it('picks the nearest line by y', () => {
+		const a = { top: 10, bottom: 26, left: 8, right: 58, startOffset: 0, endOffset: 5 };
+		const b = { top: 30, bottom: 46, left: 8, right: 40, startOffset: 6, endOffset: 9 };
+		expect(lineBoxAtY([a, b], 18)?.endOffset).toBe(5);
+		expect(lineBoxAtY([a, b], 38)?.endOffset).toBe(9);
+	});
+
+	it('snaps a click to the right of an inactive block to that line\'s end', () => {
+		const host = document.createElement('div');
+		host.contentEditable = 'true';
+		document.body.append(host);
+		const doc = page([para('a', 'hello'), para('b', 'world')]);
+		project(host, doc);
+		const blockA = host.querySelector('[data-block-id="a"]') as HTMLElement;
+		const blockB = host.querySelector('[data-block-id="b"]') as HTMLElement;
+		blockA.getBoundingClientRect = () => fakeRect(10, 16, 8, 400);
+		blockB.getBoundingClientRect = () => fakeRect(40, 16, 8, 400);
+
+		const proto = Range.prototype.getClientRects;
+		Range.prototype.getClientRects = function () {
+			const node = this.startContainer;
+			const i = this.startOffset;
+			const block = (node as Text).parentElement;
+			const top = block === blockB ? 40 : 10;
+			const left = 8 + i * 10;
+			return [fakeRect(top, 16, left, 10)] as unknown as DOMRectList;
+		};
+		try {
+			expect(trailingLineEndFromClient(host, 200, 48)).toEqual({ blockId: 'b', offset: 5 });
+			expect(trailingLineEndFromClient(host, 200, 18)).toEqual({ blockId: 'a', offset: 5 });
+			expect(trailingLineEndFromClient(host, 22, 48)).toBeNull();
+		} finally {
+			Range.prototype.getClientRects = proto;
+			host.remove();
+		}
+	});
+
+	it('snaps to the end of the wrapped line under the pointer, not the whole block', () => {
+		const host = document.createElement('div');
+		host.contentEditable = 'true';
+		document.body.append(host);
+		const doc = page([para('p', 'abcdefghij')]);
+		project(host, doc);
+		const block = host.querySelector('[data-block-id="p"]') as HTMLElement;
+		block.getBoundingClientRect = () => fakeRect(10, 40, 8, 400);
+
+		const proto = Range.prototype.getClientRects;
+		Range.prototype.getClientRects = function () {
+			const i = this.startOffset;
+			const top = i < 5 ? 10 : 30;
+			const col = i < 5 ? i : i - 5;
+			return [fakeRect(top, 16, 8 + col * 10, 10)] as unknown as DOMRectList;
+		};
+		try {
+			expect(trailingLineEndFromClient(host, 200, 18)).toEqual({ blockId: 'p', offset: 5 });
+			expect(trailingLineEndFromClient(host, 200, 38)).toEqual({ blockId: 'p', offset: 10 });
+		} finally {
+			Range.prototype.getClientRects = proto;
+			host.remove();
+		}
 	});
 });

@@ -40,8 +40,10 @@
 		rangeFromInputEvent,
 		rangeFromSelection,
 		restoreSelection,
-		focusHeldOutside
+		focusHeldOutside,
+		trailingLineEndFromClient
 	} from './selection.js';
+	import { collapsed } from './range.js';
 	import { applyEditorOps, redo, setSelection, undo, type EditorState } from './state.js';
 
 	let {
@@ -606,6 +608,33 @@
 		onDispatch({ kind: 'set-toggle', id, open: !block.open });
 	}
 
+	/**
+	 * Clicking the empty space to the right of a line should put the caret at
+	 * that line's end. Native contenteditable only does this when the caret is
+	 * already in the block; a click on an inactive paragraph's trailing area
+	 * otherwise lands on the host / at offset 0, and `restoreSelection` puts
+	 * the old caret back because `rangeFromSelection` cannot map it.
+	 */
+	function onHostPointerDown(event: PointerEvent) {
+		if (composing || !editable || !host || event.button !== 0) return;
+		if (event.shiftKey || event.altKey || event.metaKey || event.ctrlKey) return;
+		const target = event.target;
+		if (!(target instanceof Element)) return;
+		if (target.closest('a, button, input, textarea, [data-collab-widget]')) return;
+		const snapped = trailingLineEndFromClient(host, event.clientX, event.clientY);
+		if (!snapped) return;
+		event.preventDefault();
+		try {
+			host.focus({ preventScroll: true });
+		} catch {
+			host.focus();
+		}
+		const range = collapsed(snapped);
+		emitState(setSelection(editor, range));
+		restoreSelection(host, range, asPage(editor.page));
+		onSelection?.(range);
+	}
+
 	function handleParentId(blockId: string): string | undefined {
 		const loc = parentOf(editor.page, blockId);
 		if (!loc || loc.parent === 'page') return undefined;
@@ -665,6 +694,7 @@
 		onpaste={onPaste}
 		ondragover={onHostDragOver}
 		ondrop={onHostDrop}
+		onpointerdown={onHostPointerDown}
 		onclick={onHostClick}
 	></div>
 	<!-- Move-drop indicator: painted during a handle drag, positioned over the
