@@ -28,11 +28,15 @@
 	let {
 		snapshot = null,
 		gitHost = undefined,
-		repoId = undefined
+		repoId = undefined,
+		onInit = undefined,
+		initBusy = false
 	}: {
 		snapshot?: GitSnapshot | null;
 		gitHost?: GitHost;
 		repoId?: string;
+		onInit?: () => void | Promise<void>;
+		initBusy?: boolean;
 	} = $props();
 
 	let live = $state<GitSnapshot | null>(null);
@@ -209,7 +213,20 @@
 	{:else if repoId}
 		<p class="empty" data-testid="git-history-empty">Loading…</p>
 	{:else}
-		<p class="empty" data-testid="git-history-empty">No repository selected</p>
+		<div class="empty-state" data-testid="git-history-empty">
+			<p class="empty">No repository selected</p>
+			{#if onInit}
+				<button
+					type="button"
+					class="ds-btn ds-btn--sm ds-btn--primary"
+					data-testid="git-init-repo"
+					disabled={initBusy}
+					onclick={() => void onInit()}
+				>
+					{initBusy ? 'Initializing…' : 'Initialize repository'}
+				</button>
+			{/if}
+		</div>
 	{/if}
 </section>
 
@@ -310,6 +327,12 @@
 	.log code {
 		font-variant-ligatures: none;
 		flex: 0 0 auto;
+	}
+	.empty-state {
+		display: flex;
+		flex-direction: column;
+		align-items: flex-start;
+		gap: 10px;
 	}
 	.empty {
 		margin: 0;

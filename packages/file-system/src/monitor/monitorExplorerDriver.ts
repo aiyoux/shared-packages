@@ -89,13 +89,13 @@ export async function createMonitorExplorerDriver(
 	async function loadMeta() {
 		if (cachedMeta) return cachedMeta;
 		if (!transport.meta) {
-			cachedMeta = { capabilities: { fs: { ino: false, rename: false, archive: false, mkdir: false, thumb: false }, git: { blob: false } } };
+			cachedMeta = { capabilities: { fs: { ino: false, rename: false, archive: false, mkdir: false, thumb: false }, git: { blob: false, init: false } } };
 			return cachedMeta;
 		}
 		try {
 			cachedMeta = await transport.meta();
 		} catch {
-			cachedMeta = { capabilities: { fs: { ino: false, rename: false, archive: false, mkdir: false, thumb: false }, git: { blob: false } } };
+			cachedMeta = { capabilities: { fs: { ino: false, rename: false, archive: false, mkdir: false, thumb: false }, git: { blob: false, init: false } } };
 		}
 		return cachedMeta;
 	}

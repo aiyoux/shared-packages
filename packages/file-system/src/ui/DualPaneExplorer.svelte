@@ -493,7 +493,8 @@
 
 	function paneInitProject(id: PaneId) {
 		if (!onInitProject) return undefined;
-		if (paneState(id).activeKind !== 'local') return undefined;
+		const kind = paneState(id).activeKind;
+		if (kind !== 'local' && kind !== 'monitor') return undefined;
 		return (entry: ExplorerOpenTarget) => onInitProject(entry, paneOpenProjectContext(id));
 	}
 

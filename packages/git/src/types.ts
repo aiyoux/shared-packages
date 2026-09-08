@@ -62,6 +62,11 @@ export interface GitHost {
 	): () => void;
 	/** `git.init` for a local working tree (`repo.path` = VFS id or Node dir). */
 	initLocal(repoPath: string): Promise<void>;
+	/**
+	 * Create a git repo at `input.path`. Local is isomorphic-git; monitor is
+	 * `POST /v1/git/init` on the daemon. Idempotent if the folder is already a repo.
+	 */
+	init(input: Pick<GitRepoRef, 'backend' | 'path'> & { baseUrl?: string }): Promise<void>;
 	/** Committed blob at `rev` (ref, abbreviated oid, or SHA), not live worktree bytes. */
 	readBlobAt(repo: GitRepoRef, rev: string, filepath: string): Promise<Uint8Array>;
 	/**

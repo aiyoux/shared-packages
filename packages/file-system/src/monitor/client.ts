@@ -13,7 +13,7 @@ import { openJsonSse } from './sse.js';
 
 export type MonitorCapabilities = {
 	fs?: { ino?: boolean; rename?: boolean; archive?: boolean; mkdir?: boolean; thumb?: boolean };
-	git?: { blob?: boolean };
+	git?: { blob?: boolean; init?: boolean };
 };
 
 export type MonitorListEntry = {
@@ -143,6 +143,8 @@ export type MonitorTransport = {
 	mkdir?(path: string): Promise<MonitorStatResult>;
 	/** GET /v1/git/blob?path=&rev=&file=. Callers gate on `capabilities.git.blob`. */
 	gitBlob?(repoPath: string, rev: string, file: string): Promise<Uint8Array>;
+	/** POST /v1/git/init `{path}`. Callers gate on `capabilities.git.init`. */
+	gitInit?(path: string): Promise<{ path: string; already: boolean }>;
 	download(
 		path: string,
 		opts?: {
@@ -319,7 +321,7 @@ export function coerceInoDev(v: unknown): string | undefined {
 
 const FALSE_CAPS: MonitorCapabilities = {
 	fs: { ino: false, rename: false, archive: false, mkdir: false, thumb: false },
-	git: { blob: false }
+	git: { blob: false, init: false }
 };
 
 export function coerceMonitorCapabilities(raw: unknown): MonitorCapabilities {
@@ -335,7 +337,7 @@ export function coerceMonitorCapabilities(raw: unknown): MonitorCapabilities {
 			mkdir: fs.mkdir === true,
 			thumb: fs.thumb === true
 		},
-		git: { blob: git.blob === true }
+		git: { blob: git.blob === true, init: git.init === true }
 	};
 }
 
@@ -1139,6 +1141,16 @@ export function createMonitorClient(opts: {
 		},
 		async mkdir(path: string) {
 			return (await postJson('/v1/fs/mkdir', { path })) as MonitorStatResult;
+		},
+		async gitInit(path: string) {
+			const parsed = (await postJson('/v1/git/init', { path })) as {
+				path?: unknown;
+				already?: unknown;
+			};
+			return {
+				path: typeof parsed.path === 'string' ? parsed.path : path,
+				already: parsed.already === true
+			};
 		},
 		async gitBlob(repoPath: string, rev: string, file: string) {
 			const ac = new AbortController();

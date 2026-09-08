@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { render, screen } from '@testing-library/svelte';
+import { describe, expect, it, vi } from 'vitest';
+import { fireEvent, render, screen } from '@testing-library/svelte';
 import GitHistory from './GitHistory.svelte';
 
 describe('GitHistory', () => {
@@ -7,6 +7,16 @@ describe('GitHistory', () => {
 		render(GitHistory, { props: { snapshot: null } });
 		expect(screen.getByTestId('git-history')).toBeTruthy();
 		expect(screen.getByTestId('git-history-empty').textContent).toMatch(/No repository selected/);
+		expect(screen.queryByTestId('git-init-repo')).toBeNull();
+	});
+
+	it('offers Initialize repository when onInit is provided', async () => {
+		const onInit = vi.fn();
+		render(GitHistory, { props: { snapshot: null, onInit } });
+		const btn = screen.getByTestId('git-init-repo');
+		expect(btn.textContent).toMatch(/Initialize repository/);
+		await fireEvent.click(btn);
+		expect(onInit).toHaveBeenCalledTimes(1);
 	});
 
 	it('says loading when a repo is selected but snapshot has not arrived', () => {

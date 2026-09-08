@@ -365,6 +365,7 @@ describe('monitor client tolerant parse', () => {
 		expect(meta.capabilities?.fs?.archive).toBe(true);
 		expect(meta.capabilities?.fs?.mkdir).toBe(true);
 		expect(meta.capabilities?.git?.blob).toBe(true);
+		expect(meta.capabilities?.git?.init).toBe(true);
 	});
 
 	it('ignores extra JSON fields on meta', async () => {
@@ -384,7 +385,7 @@ describe('monitor client tolerant parse', () => {
 		const meta = await client.meta();
 		expect(meta.capabilities).toEqual({
 			fs: { ino: true, rename: false, archive: false, mkdir: false, thumb: false },
-			git: { blob: false }
+			git: { blob: false, init: false }
 		});
 		expect(meta).not.toHaveProperty('extra');
 	});
@@ -500,6 +501,29 @@ describe('monitor client tolerant parse', () => {
 			'http://127.0.0.1:8300/v1/git/blob?path=%2Ftmp%2Frepo&rev=HEAD&file=a.png'
 		);
 		expect(calls[1]!.method).toBe('GET');
+	});
+
+	it('gitInit POSTs /v1/git/init {path}', async () => {
+		const calls: { url: string; method?: string; body?: unknown }[] = [];
+		const mockFetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+			const url = String(input);
+			const method = init?.method ?? 'GET';
+			const body = init?.body && typeof init.body === 'string' ? JSON.parse(init.body) : undefined;
+			calls.push({ url, method, body });
+			if (url.includes('/v1/git/init')) return jsonResponse({ path: '/tmp/plain', already: false });
+			return new Response('Not found', { status: 404 });
+		});
+		const client = createMonitorClient({
+			baseUrl: 'http://127.0.0.1:8300',
+			fetchImpl: mockFetch as unknown as typeof fetch
+		});
+		const got = await client.gitInit!('/tmp/plain');
+		expect(got).toEqual({ path: '/tmp/plain', already: false });
+		expect(calls[0]).toEqual({
+			url: 'http://127.0.0.1:8300/v1/git/init',
+			method: 'POST',
+			body: { path: '/tmp/plain' }
+		});
 	});
 
 	it('git-snapshot fixture extra fields are ignored', () => {

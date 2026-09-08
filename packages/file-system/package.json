@@ -60,6 +60,11 @@
       "import": "./src/monitor/index.ts",
       "default": "./src/monitor/index.ts"
     },
+    "./monitor/pathIds": {
+      "types": "./src/monitor/pathIds.ts",
+      "import": "./src/monitor/pathIds.ts",
+      "default": "./src/monitor/pathIds.ts"
+    },
     "./monitor/collab": {
       "types": "./src/monitor/collabSession.ts",
       "import": "./src/monitor/collabSession.ts",

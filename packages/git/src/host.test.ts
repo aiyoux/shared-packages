@@ -74,6 +74,16 @@ describe('createGitHost local backend', () => {
 		expect(await fs.promises.readFile(path.join(dir, 'README.md'), 'utf8')).toBe('hello world\n');
 	});
 
+	it('init and initLocal create a .git on an empty directory', async () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sp-git-init-'));
+		const host = createGitHost({ fs });
+		await host.init({ backend: 'local', path: dir });
+		expect(fs.existsSync(path.join(dir, '.git'))).toBe(true);
+		const other = fs.mkdtempSync(path.join(os.tmpdir(), 'sp-git-init-local-'));
+		await host.initLocal(other);
+		expect(fs.existsSync(path.join(other, '.git'))).toBe(true);
+	});
+
 	it('subscribeLocal re-snapshots after a working-tree change', async () => {
 		const dir = await makeRepo();
 		let notify: (() => void) | null = null;
@@ -131,8 +141,15 @@ const MONITOR_GIT_JSON = {
 
 function fakeMonitorFetch(): typeof fetch {
 	const encoder = new TextEncoder();
-	return vi.fn(async (input: RequestInfo | URL) => {
+	return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
 		const url = String(input);
+		if (url.includes('/v1/git/init') && (init?.method ?? 'GET') === 'POST') {
+			const body = init?.body && typeof init.body === 'string' ? JSON.parse(init.body) : {};
+			return new Response(JSON.stringify({ path: body.path, already: false }), {
+				status: 200,
+				headers: { 'content-type': 'application/json' }
+			});
+		}
 		if (url.includes('/v1/git/snapshot')) {
 			return new Response(JSON.stringify(MONITOR_GIT_JSON), {
 				status: 200,
@@ -170,6 +187,18 @@ describe('createGitHost monitor backend', () => {
 		await expect(host.readBlobAt(repo, 'abc123456789', 'README.md')).rejects.toThrow(
 			/Monitor git blob is not wired on this host yet/
 		);
+	});
+
+	it('init POSTs /v1/git/init without a live daemon', async () => {
+		const fetchImpl = fakeMonitorFetch();
+		const host = createGitHost({ fetchImpl });
+		await host.init({ backend: 'monitor', path: '/tmp/plain', baseUrl: 'http://127.0.0.1:8300' });
+		const calls = (fetchImpl as ReturnType<typeof vi.fn>).mock.calls;
+		const initCall = calls.find((c) => String(c[0]).includes('/v1/git/init'));
+		expect(initCall).toBeTruthy();
+		expect(String(initCall![0])).toBe('http://127.0.0.1:8300/v1/git/init');
+		expect((initCall![1] as RequestInit).method).toBe('POST');
+		expect(JSON.parse(String((initCall![1] as RequestInit).body))).toEqual({ path: '/tmp/plain' });
 	});
 
 	it('snapshotRepo maps a fake /v1/git/snapshot without a live daemon', async () => {

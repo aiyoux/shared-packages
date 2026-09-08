@@ -2,7 +2,7 @@ import './ensureBuffer.js';
 import git from 'isomorphic-git';
 import { deleteRepo, getRepo, listRepos, putRepo } from './repos.js';
 import { localCommit, localReadBlobAt, localSnapshot, type GitFs } from './local.js';
-import { monitorSnapshot, monitorSubscribe } from './monitor.js';
+import { monitorSnapshot, monitorSubscribe, monitorTransportFor } from './monitor.js';
 import type { GitHost, GitRepoRef, GitSnapshot, CommitInput
 } from './types.js';
 
@@ -94,6 +94,35 @@ export function createGitHost(opts: CreateGitHostOptions = {}): GitHost {
 		return localCommit(bound.fs, bound.dir, opts);
 	}
 
+	async function initAt(input: Pick<GitRepoRef, 'backend' | 'path'> & { baseUrl?: string }) {
+		if (input.backend === 'local') {
+			const bound = bindLocal(input.path);
+			const run = () => git.init({ fs: bound.fs, dir: bound.dir });
+			const buffered = bound.fs as { withBuffer?: <T>(fn: () => Promise<T>) => Promise<T> };
+			if (typeof buffered.withBuffer === 'function') await buffered.withBuffer(run);
+			else await run();
+			return;
+		}
+		if (input.backend === 'monitor') {
+			const transport = monitorTransportFor(
+				{
+					id: 'init',
+					label: '',
+					backend: 'monitor',
+					path: input.path,
+					...(input.baseUrl ? { baseUrl: input.baseUrl } : {})
+				},
+				fetchImpl
+			);
+			if (typeof transport.gitInit !== 'function') {
+				throw new Error('This monitor cannot initialize repositories.');
+			}
+			await transport.gitInit(input.path);
+			return;
+		}
+		throw new Error(`Cannot initialize a ${input.backend} repository`);
+	}
+
 	return {
 		listRepos,
 		async addRepo(input) {
@@ -126,11 +155,10 @@ export function createGitHost(opts: CreateGitHostOptions = {}): GitHost {
 		snapshotRepo,
 		subscribeRepo,
 		async initLocal(repoPath) {
-			const bound = bindLocal(repoPath);
-			const run = () => git.init({ fs: bound.fs, dir: bound.dir });
-			const buffered = bound.fs as { withBuffer?: <T>(fn: () => Promise<T>) => Promise<T> };
-			if (typeof buffered.withBuffer === 'function') await buffered.withBuffer(run);
-			else await run();
+			return initAt({ backend: 'local', path: repoPath });
+		},
+		async init(input) {
+			return initAt(input);
 		},
 		async readBlobAt(repo, rev, filepath) {
 			if (repo.backend === 'monitor') {
