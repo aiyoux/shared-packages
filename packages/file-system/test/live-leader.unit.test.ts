@@ -32,6 +32,17 @@ describe('liveDocNames', () => {
 		assert.notEqual(liveDocNames('node-2').lockName, a.lockName);
 	});
 
+	it('derives a persist lock distinct from sequencing lock and channel', () => {
+		const a = liveDocNames('node-1');
+		assert.match(a.persistLockName, /node-1/);
+		assert.match(a.persistLockName, /:persist/);
+		assert.notEqual(a.persistLockName, a.lockName);
+		assert.notEqual(a.persistLockName, a.channelName);
+		assert.notEqual(a.lockName, a.channelName);
+		assert.equal(liveDocNames('node-1').persistLockName, a.persistLockName);
+		assert.notEqual(liveDocNames('node-2').persistLockName, a.persistLockName);
+	});
+
 	it('throws on an empty id rather than pairing every caller together', () => {
 		assert.throws(() => liveDocNames(''), /nodeId is required/);
 		assert.throws(() => liveDocNames('   '), /nodeId is required/);
@@ -156,6 +167,17 @@ describe('createLeaderElection', () => {
 		assert.equal(b.isLeader, true, 'per-document locks, not one lock per tab');
 		a.destroy();
 		b.destroy();
+	});
+
+	it('persist-lock election does not contend with the default sequencing lock', async () => {
+		const id = 'doc-1';
+		const sequencing = createLeaderElection(id);
+		const persist = createLeaderElection(id, { lockName: liveDocNames(id).persistLockName });
+		await tick();
+		assert.equal(sequencing.isLeader, true);
+		assert.equal(persist.isLeader, true, 'persist and sequencing locks must not collide');
+		sequencing.destroy();
+		persist.destroy();
 	});
 
 	it('falls back to sole ownership when Web Locks are unavailable', async () => {

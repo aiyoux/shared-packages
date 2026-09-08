@@ -85,10 +85,16 @@ function inertElection(): LeaderElection {
 	};
 }
 
-export function createLeaderElection(nodeId: string): LeaderElection {
+export type LeaderElectionOpts = {
+	/** Defaults to liveDocNames(nodeId).lockName. Pass persistLockName for persist-only election. */
+	lockName?: string;
+};
+
+export function createLeaderElection(nodeId: string, opts?: LeaderElectionOpts): LeaderElection {
 	if (typeof window === 'undefined') return inertElection();
 
-	const { lockName } = liveDocNames(nodeId);
+	const names = liveDocNames(nodeId);
+	const lockName = opts?.lockName ?? names.lockName;
 	const myTabId = getTabId();
 	let isLeader = false;
 	let leaderSessionId = 0;
