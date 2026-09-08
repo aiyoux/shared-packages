@@ -184,15 +184,12 @@ export async function createOpenDocument(
 			return;
 		}
 		if (event.type === 'content') {
-			if (saveInFlight) {
+			if (saveInFlight || event.generation <= generation) {
+				// Own-write echo, a snapshot refresh at a gen we already hold,
+				// or a stale tick. A follow-up local edit can mark dirty again
+				// before the echo of the save arrives — that is not another tab.
 				void host.get(id).then((fresh) => {
 					if (fresh && bound) node = { ...fresh, generation: node.generation };
-				});
-				return;
-			}
-			if (event.generation === generation && !dirty) {
-				void host.get(id).then((fresh) => {
-					if (fresh && bound) node = fresh;
 				});
 				return;
 			}

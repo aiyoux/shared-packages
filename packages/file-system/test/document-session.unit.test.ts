@@ -190,6 +190,33 @@ describe('document session', () => {
 		doc.close();
 	});
 
+	it('own-save echo after a follow-up edit is not a generation conflict', async () => {
+		const folder = await vfs.mkdir(null, 'untitled-2');
+		const f = await vfs.writeFile({
+			parentId: folder.id,
+			name: 'index.kb',
+			fileType: 'kb',
+			body: { v: 1 }
+		});
+		const doc = await vfs.openDocument(f.id);
+		const events: DocumentEvent[] = [];
+		doc.subscribe((e) => events.push(e));
+		doc.markDirty();
+		await doc.save({ v: 2 });
+		// Title rename: save lands, then a follow-up local edit (or slug sync
+		// marking dirty) happens before the live snapshot of that save arrives.
+		doc.markDirty();
+		await vfs.rename(folder.id, 'renamed');
+		await wait(40);
+		assert.equal(
+			events.some((e) => e.type === 'content' && e.conflict),
+			false
+		);
+		assert.equal(doc.dirty, true);
+		assert.equal(doc.generation, f.generation + 1);
+		doc.close();
+	});
+
 	it('save({ force: true }) overwrites after a content conflict', async () => {
 		const f = await vfs.writeFile({
 			parentId: null,
