@@ -182,6 +182,8 @@ describe('DocEditor mount', () => {
 			await flushLayout();
 			const handle = container.querySelector('[data-block-id="c"][aria-label="Drag to reorder"]') as HTMLElement;
 			expect(handle).toBeTruthy();
+			const dropLine = container.querySelector('.kb-drop-line') as HTMLElement;
+			expect(dropLine.hidden).toBe(true);
 			handle.dispatchEvent(
 				new PointerEvent('pointerdown', {
 					button: 0,
@@ -200,6 +202,8 @@ describe('DocEditor mount', () => {
 					bubbles: true
 				})
 			);
+			// Mid-drag the landing line paints where the block will go.
+			expect(dropLine.hidden).toBe(false);
 			document.dispatchEvent(
 				new PointerEvent('pointerup', {
 					clientX: 8,
@@ -211,6 +215,8 @@ describe('DocEditor mount', () => {
 			await tick();
 			expect(dispatched).toHaveLength(1);
 			expect(dispatched[0]).toMatchObject({ kind: 'move-block', id: 'c', afterId: null });
+			// The op committed — the indicator must die with the drag, not stay painted.
+			expect(dropLine.hidden).toBe(true);
 			unmount();
 		} finally {
 			HTMLElement.prototype.getBoundingClientRect = proto;

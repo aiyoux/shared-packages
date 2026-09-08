@@ -575,9 +575,12 @@
 			} catch {
 				// already released
 			}
+			// The indicator dies with the drag whether or not a move commits —
+			// hiding it only on the no-drop path left the line painted after a
+			// successful drop.
+			clearMoveDrop();
 			stop();
 			if (activated && dragged && hit) dispatchMove(dragged, hit);
-			else clearMoveDrop();
 		};
 
 		const stop = () => {
