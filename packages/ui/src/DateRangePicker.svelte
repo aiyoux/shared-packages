@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from 'svelte';
   import Popover from './Popover.svelte';
   import DateRangeCalendar from './DateRangeCalendar.svelte';
   import Pencil from '@lucide/svelte/icons/pencil';
@@ -112,13 +113,16 @@ import Plus from '@lucide/svelte/icons/plus';
   const hasValue = $derived(value.start !== null || isVagueActive || exactWeek !== null || exactDay !== null);
 
   $effect(() => {
-    if (open) {
-      viewing_date = {
-        year: value.start?.getFullYear() ?? new Date().getFullYear(),
-        month: (value.start?.getMonth() ?? new Date().getMonth()) + 1,
-        day: value.start?.getDate() ?? new Date().getDate()
-      };
-    }
+    if (!open) return;
+    // Only sync the viewed month when the picker opens. Tracking value.start
+    // while open recenters the infinite grid on every click, so a same-row
+    // range click (e.g. Sep 30 → Oct 1) jumps the dates out from under the pointer.
+    const start = untrack(() => value.start);
+    viewing_date = {
+      year: start?.getFullYear() ?? new Date().getFullYear(),
+      month: (start?.getMonth() ?? new Date().getMonth()) + 1,
+      day: start?.getDate() ?? new Date().getDate()
+    };
   });
 
   const triggerText = $derived.by(() => {
@@ -135,35 +139,18 @@ import Plus from '@lucide/svelte/icons/plus';
 
 <Popover bind:open placement="bottom-start" contentClass={dualMonth ? "w-[min(56rem,calc(100vw-2rem)] max-w-[calc(100vw-2rem)]" : "w-[min(28rem,calc(100vw-2rem))] max-w-[calc(100vw-2rem)]"}>
   {#snippet trigger({ ref })}
-    {#if showValue}
-      <div
-        use:ref
-        class="inline-flex min-w-[17rem] items-center gap-2"
-      >
+    <div
+      use:ref
+      class={showValue ? 'inline-flex min-w-[17rem] items-center gap-2' : 'inline-flex'}
+    >
+      {#if showValue}
         <div class="min-w-0 flex-1 text-left">
           <p class="truncate text-[var(--text-sm)] font-semibold text-[var(--color-foreground)]">{triggerText}</p>
         </div>
-        <button
-          type="button"
-          class="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-muted-foreground)] transition-colors hover:bg-[var(--color-muted)] hover:text-[var(--color-foreground)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-primary)] {open ? 'bg-[var(--color-muted)] text-[var(--color-foreground)]' : ''}"
-          onclick={() => {
-            open = !open;
-          }}
-          aria-expanded={open}
-          aria-label={open ? 'Close date picker' : 'Edit date'}
-        >
-          {#if hasValue}
-            <Pencil class="size-4" />
-          {:else}
-            <Plus class="size-4" />
-          {/if}
-        </button>
-      </div>
-    {:else}
+      {/if}
       <button
-        use:ref
         type="button"
-        class="inline-flex h-7 w-7 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-muted-foreground)] transition-colors hover:bg-[var(--color-muted)] hover:text-[var(--color-foreground)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-primary)] {open ? 'bg-[var(--color-muted)] text-[var(--color-foreground)]' : ''}"
+        class="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-muted-foreground)] transition-colors hover:bg-[var(--color-muted)] hover:text-[var(--color-foreground)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-primary)] {open ? 'bg-[var(--color-muted)] text-[var(--color-foreground)]' : ''}"
         onclick={() => {
           open = !open;
         }}
@@ -176,7 +163,7 @@ import Plus from '@lucide/svelte/icons/plus';
           <Plus class="size-4" />
         {/if}
       </button>
-    {/if}
+    </div>
   {/snippet}
 
   {#snippet content()}

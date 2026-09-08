@@ -301,10 +301,17 @@
     lastFocusedElement = document.activeElement instanceof HTMLElement ? document.activeElement : null;
 
     const onReposition = () => updatePosition();
+    const onScroll = (event: Event) => {
+      const target = event.target;
+      // Scroll inside the panel (date-grid recenter, month list, etc.) must
+      // not re-anchor the popup — that jumps the whole calendar under the pointer.
+      if (target instanceof Node && panelElement?.contains(target)) return;
+      updatePosition();
+    };
     document.addEventListener('pointerdown', handleDocumentPointerDown);
     document.addEventListener('keydown', handleDocumentKeyDown);
     window.addEventListener('resize', onReposition);
-    window.addEventListener('scroll', onReposition, true);
+    window.addEventListener('scroll', onScroll, true);
 
     tick().then(() => {
       updatePosition();
@@ -318,7 +325,7 @@
       document.removeEventListener('pointerdown', handleDocumentPointerDown);
       document.removeEventListener('keydown', handleDocumentKeyDown);
       window.removeEventListener('resize', onReposition);
-      window.removeEventListener('scroll', onReposition, true);
+      window.removeEventListener('scroll', onScroll, true);
       if (restoreFocus) {
         lastFocusedElement?.focus();
       }

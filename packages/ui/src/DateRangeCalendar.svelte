@@ -1350,6 +1350,12 @@
       return;
     }
 
+    // A date click must not rebuild the infinite window. Doing so recenters
+    // the grid and the second click of a same-row range lands on a different day.
+    if (untrack(() => pending_second_click || is_pointer_down)) {
+      return;
+    }
+
     infinite_grid_origin = monthBufferedGridOrigin(viewing_date);
     right_infinite_grid_origin = monthBufferedGridOrigin(addMonths(viewing_date, 1));
     left_grid_anchor_row = 0;
