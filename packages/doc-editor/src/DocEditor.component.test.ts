@@ -1,10 +1,10 @@
 import { render } from '@testing-library/svelte';
 import { tick } from 'svelte';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import DocEditor from './DocEditor.svelte';
 import { rangeFromSelection } from './selection.js';
 import type { Op } from '@shared-packages/doc-model';
-import { applyEditorOps, createEditorState } from './state.js';
+import { applyEditorOps, createEditorState, type EditorState } from './state.js';
 import { page, para } from './testFixtures.js';
 
 if (typeof PointerEvent === 'undefined') {
@@ -223,6 +223,84 @@ describe('DocEditor mount', () => {
 		}
 	});
 
+	it('drag-selects from empty space past a line through another block', async () => {
+		let state = createEditorState(page([para('a', 'hello'), para('b', 'world')]));
+		const box = (top: number, left: number, width: number, height: number): DOMRect =>
+			({
+				x: left,
+				y: top,
+				top,
+				left,
+				bottom: top + height,
+				right: left + width,
+				width,
+				height,
+				toJSON() {
+					return this;
+				}
+			}) as DOMRect;
+		const protoRect = HTMLElement.prototype.getBoundingClientRect;
+		const protoGlyphs = Range.prototype.getClientRects;
+		HTMLElement.prototype.getBoundingClientRect = function () {
+			const id = this.getAttribute('data-block-id');
+			if (id === 'a') return box(10, 8, 400, 16);
+			if (id === 'b') return box(40, 8, 400, 16);
+			return protoRect.call(this);
+		};
+		Range.prototype.getClientRects = function () {
+			const node = this.startContainer;
+			const i = this.startOffset;
+			const block = (node as Text).parentElement;
+			const top = block?.getAttribute('data-block-id') === 'b' ? 40 : 10;
+			return [box(top, 8 + i * 10, 10, 16)] as unknown as DOMRectList;
+		};
+		try {
+			const { container, unmount } = render(DocEditor, {
+				props: {
+					state,
+					editable: true,
+					onDispatch: (op: Op | Op[]) => {
+						state = applyEditorOps(state, op);
+					},
+					onState: (next: EditorState) => {
+						state = next;
+					}
+				}
+			});
+			await tick();
+			const host = container.querySelector('[data-testid="kb-host"]') as HTMLElement;
+			host.dispatchEvent(
+				new PointerEvent('pointerdown', {
+					button: 0,
+					clientX: 200,
+					clientY: 18,
+					pointerId: 7,
+					bubbles: true,
+					cancelable: true
+				})
+			);
+			expect(state.selection).toEqual({
+				anchor: { blockId: 'a', offset: 5 },
+				head: { blockId: 'a', offset: 5 }
+			});
+			document.dispatchEvent(
+				new PointerEvent('pointermove', {
+					clientX: 200,
+					clientY: 48,
+					pointerId: 7,
+					buttons: 1,
+					bubbles: true
+				})
+			);
+			expect(state.selection.anchor).toEqual({ blockId: 'a', offset: 5 });
+			expect(state.selection.head).toEqual({ blockId: 'b', offset: 5 });
+			unmount();
+		} finally {
+			HTMLElement.prototype.getBoundingClientRect = protoRect;
+			Range.prototype.getClientRects = protoGlyphs;
+		}
+	});
+
 	it('renders a hard break as \\n inside the block, with no <br> in the host', async () => {
 		let state = createEditorState(page([para('a', 'one\ntwo')]));
 		const { container, unmount } = render(DocEditor, {
@@ -242,6 +320,37 @@ describe('DocEditor mount', () => {
 		const text = [...block.childNodes].find((n) => n.nodeType === Node.TEXT_NODE) as Text;
 		expect(text?.data).toBe('one\ntwo');
 		expect(host.querySelector('br')).toBeNull();
+		unmount();
+	});
+
+	it('opens an allowlisted link in a new tab on click', async () => {
+		const open = vi.spyOn(window, 'open').mockReturnValue(null);
+		let state = createEditorState(
+			page([
+				{
+					id: 'p',
+					type: 'paragraph',
+					content: [{ type: 'text', text: 'go', marks: [{ type: 'link', href: 'https://example.com' }] }]
+				}
+			])
+		);
+		const { container, unmount } = render(DocEditor, {
+			props: {
+				state,
+				editable: true,
+				onDispatch: (op: Op | Op[]) => {
+					state = applyEditorOps(state, op);
+				}
+			}
+		});
+		await tick();
+		const host = container.querySelector('[data-testid="kb-host"]') as HTMLElement;
+		const a = host.querySelector('a[href]') as HTMLAnchorElement;
+		expect(a).toBeTruthy();
+		expect(a.getAttribute('href')).toBe('https://example.com');
+		a.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, button: 0, detail: 1 }));
+		expect(open).toHaveBeenCalledWith('https://example.com', '_blank', 'noopener,noreferrer');
+		open.mockRestore();
 		unmount();
 	});
 });

@@ -2,6 +2,7 @@ import type { Mark, Op, Range } from '@shared-packages/doc-model';
 import { hardBreakOps } from './beforeinput.js';
 import { isCollapsed } from './range.js';
 import type { EditorState } from './state.js';
+import { codeTabOps, indentOps } from './indent.js';
 import { enterCellOps, tabOps } from './table.js';
 
 export type KeyEvent = {
@@ -38,8 +39,11 @@ export function mapKeydown(state: EditorState, event: KeyEvent, live: Range): Ke
 	}
 	if (event.key === 'Tab' && !event.metaKey && !event.ctrlKey && !event.altKey) {
 		const nav = tabOps(state.page, live, event.shiftKey);
-		if (!nav) return { preventDefault: false, ops: [] };
-		return { preventDefault: true, ops: nav.ops, selection: nav.selection };
+		if (nav) return { preventDefault: true, ops: nav.ops, selection: nav.selection };
+		const code = codeTabOps(state.page, live, event.shiftKey);
+		if (code) return { preventDefault: true, ops: code.ops, selection: code.selection };
+		const indent = indentOps(state.page, live, event.shiftKey ? -1 : 1);
+		return { preventDefault: true, ops: indent.ops };
 	}
 	if (event.key === 'Enter' && !event.metaKey && !event.ctrlKey && !event.altKey) {
 		// Shift+Enter is a hard break, even inside a table cell (checked before cell nav).

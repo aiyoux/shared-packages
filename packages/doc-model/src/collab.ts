@@ -156,6 +156,8 @@ export function blockIdsTouchedByOp(page: KbPage, op: Op): Set<string> {
 		case 'set-toggle':
 		case 'set-align':
 		case 'set-valign':
+		case 'set-line-height':
+		case 'set-indent':
 			return new Set([op.id]);
 		case 'insert-table-row':
 			return new Set([op.tableId, ...subtreeIds(op.row)]);
@@ -198,6 +200,8 @@ export function opNamesBlockIds(op: Op): string[] {
 		case 'set-toggle':
 		case 'set-align':
 		case 'set-valign':
+		case 'set-line-height':
+		case 'set-indent':
 			return [op.id];
 		case 'insert-table-row':
 			return [op.tableId, ...subtreeIds(op.row)];

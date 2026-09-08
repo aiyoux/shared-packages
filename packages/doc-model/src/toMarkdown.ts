@@ -87,8 +87,8 @@ function renderToggle(block: ToggleBlock): string {
 	return `<details>\n\n${inner.endsWith('\n') ? inner : `${inner}\n`}</details>`;
 }
 
-function sameListRun(prev: Block | undefined, block: ListItemBlock): boolean {
-	return prev?.type === 'list_item' && prev.ordered === block.ordered;
+function listIndent(block: ListItemBlock): number {
+	return block.indent ?? 0;
 }
 
 function renderBlock(block: Block, orderedIndex: number): string {
@@ -97,8 +97,10 @@ function renderBlock(block: Block, orderedIndex: number): string {
 			return hardBreak(wrapInlines(block.content));
 		case 'heading':
 			return `${'#'.repeat(block.level)} ${hardBreak(wrapInlines(block.content))}`;
-		case 'list_item':
-			return `${block.ordered ? `${orderedIndex}. ` : '- '}${hardBreak(wrapInlines(block.content))}`;
+		case 'list_item': {
+			const pad = '  '.repeat(listIndent(block));
+			return `${pad}${block.ordered ? `${orderedIndex}. ` : '- '}${hardBreak(wrapInlines(block.content))}`;
+		}
 		case 'code': {
 			const body = block.text.endsWith('\n') ? block.text : `${block.text}\n`;
 			return `\`\`\`${block.language}\n${body}\`\`\``;
@@ -126,8 +128,13 @@ function renderBlock(block: Block, orderedIndex: number): string {
 }
 
 function separator(prev: Block, next: Block): string {
-	// Same-ordered adjacent list_items are one list; a blank line would split them.
-	if (next.type === 'list_item' && sameListRun(prev, next)) return '\n';
+	// Adjacent list items stay one list. A blank line would split them.
+	// Same-indent mixed ordered/bullet still gets a blank (existing run-break).
+	if (next.type === 'list_item' && prev.type === 'list_item') {
+		if (listIndent(prev) !== listIndent(next)) return '\n';
+		if (prev.ordered === next.ordered) return '\n';
+		return '\n\n';
+	}
 	return '\n\n';
 }
 
@@ -135,14 +142,20 @@ function separator(prev: Block, next: Block): string {
 function renderSlice(blocks: Block[]): string {
 	const chunks: string[] = [];
 	const emitted: Block[] = [];
-	let orderedIndex = 0;
+	const runAt: number[] = [];
 	for (const block of blocks) {
 		if (block.type === 'table_row' || block.type === 'table_cell') continue;
 		const prev = emitted[emitted.length - 1];
+		let orderedIndex = 0;
 		if (block.type === 'list_item' && block.ordered) {
-			orderedIndex = sameListRun(prev, block) ? orderedIndex + 1 : 1;
+			const ind = listIndent(block);
+			runAt.length = ind + 1;
+			runAt[ind] = (runAt[ind] ?? 0) + 1;
+			orderedIndex = runAt[ind]!;
+		} else if (block.type === 'list_item') {
+			runAt.length = listIndent(block);
 		} else {
-			orderedIndex = 0;
+			runAt.length = 0;
 		}
 		const rendered = renderBlock(block, orderedIndex);
 		if (

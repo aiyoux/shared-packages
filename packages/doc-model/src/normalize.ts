@@ -68,6 +68,20 @@ function pickVAlign(cell: TableCellBlock, valign?: VAlign): TableCellBlock {
 	return rest;
 }
 
+function pickLineHeight<T extends { lineHeight?: string }>(block: T, lineHeight?: string): T {
+	if (lineHeight) return { ...block, lineHeight };
+	const { lineHeight: _drop, ...rest } = block as T & { lineHeight?: string };
+	void _drop;
+	return rest as T;
+}
+
+function pickIndent<T extends { indent?: number }>(block: T, indent?: number): T {
+	if (indent) return { ...block, indent };
+	const { indent: _drop, ...rest } = block as T & { indent?: number };
+	void _drop;
+	return rest as T;
+}
+
 export function emptyCell(id: string, header?: boolean): TableCellBlock {
 	return header
 		? { id, type: 'table_cell', header: true, content: emptySpans() }
@@ -97,6 +111,31 @@ export function sanitizeFontSize(raw: string): string | null {
 	const n = Number(match[1]);
 	if (n < 1 || n > 999) return null;
 	return `${n}${match[2] ?? 'px'}`;
+}
+
+/**
+ * Canonical unitless line-height (`"1.5"`). Returns null when the value
+ * would not be a usable CSS line-height override.
+ */
+export function sanitizeLineHeight(raw: string): string | null {
+	const match = /^\s*(\d(?:\.\d{1,2})?)\s*$/.exec(raw);
+	if (!match) return null;
+	const n = Number(match[1]);
+	if (!Number.isFinite(n) || n < 0.8 || n > 4) return null;
+	return String(n);
+}
+
+export function coerceLineHeight(value: unknown): string | undefined {
+	return typeof value === 'string' ? sanitizeLineHeight(value) ?? undefined : undefined;
+}
+
+export const MAX_INDENT = 8;
+
+/** Indent level 1–8. 0 / invalid → undefined (no extra indent). */
+export function sanitizeIndent(value: unknown): number | undefined {
+	const n = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN;
+	if (!Number.isInteger(n) || n < 1 || n > MAX_INDENT) return undefined;
+	return n;
 }
 
 /** Payload fields that distinguish two marks of the same type, if any. */
@@ -243,33 +282,54 @@ function passthroughBlock(raw: Record<string, unknown>): Block {
 
 export function orderedBlock(block: Block): Block {
 	switch (block.type) {
-		case 'paragraph':
-			return pickAlign(
-				{ id: block.id, type: 'paragraph', content: block.content.map(orderedSpan) },
-				block.align
+		case 'paragraph': {
+			const next: ParagraphBlock = {
+				id: block.id,
+				type: 'paragraph',
+				content: block.content.map(orderedSpan)
+			};
+			const styled: ParagraphBlock = pickIndent(
+				pickLineHeight(pickAlign(next, block.align), block.lineHeight),
+				block.indent
 			);
-		case 'heading':
-			return pickAlign(
-				{
-					id: block.id,
-					type: 'heading',
-					level: block.level,
-					content: block.content.map(orderedSpan)
-				},
-				block.align
+			return styled;
+		}
+		case 'heading': {
+			const next: HeadingBlock = {
+				id: block.id,
+				type: 'heading',
+				level: block.level,
+				content: block.content.map(orderedSpan)
+			};
+			const styled: HeadingBlock = pickIndent(
+				pickLineHeight(pickAlign(next, block.align), block.lineHeight),
+				block.indent
 			);
-		case 'list_item':
-			return pickAlign(
-				{
-					id: block.id,
-					type: 'list_item',
-					ordered: block.ordered,
-					content: block.content.map(orderedSpan)
-				},
-				block.align
+			return styled;
+		}
+		case 'list_item': {
+			const next: ListItemBlock = {
+				id: block.id,
+				type: 'list_item',
+				ordered: block.ordered,
+				content: block.content.map(orderedSpan)
+			};
+			const styled: ListItemBlock = pickIndent(
+				pickLineHeight(pickAlign(next, block.align), block.lineHeight),
+				block.indent
 			);
-		case 'code':
-			return { id: block.id, type: 'code', language: block.language, text: block.text };
+			return styled;
+		}
+		case 'code': {
+			const next: CodeBlock = {
+				id: block.id,
+				type: 'code',
+				language: block.language,
+				text: block.text
+			};
+			const styled: CodeBlock = pickIndent(next, block.indent);
+			return styled;
+		}
 		case 'divider':
 			return { id: block.id, type: 'divider' };
 		case 'image':
@@ -313,7 +373,7 @@ export function orderedBlock(block: Block): Block {
 						type: 'table_cell',
 						content: block.content.map(orderedSpan)
 					};
-			return pickVAlign(pickAlign(cell, block.align), block.valign);
+			return pickLineHeight(pickVAlign(pickAlign(cell, block.align), block.valign), block.lineHeight);
 		}
 		default: {
 			const rec = block as Block & Record<string, unknown>;
@@ -326,7 +386,10 @@ function normalizeLeaf(rec: Record<string, unknown>, id: string): Block {
 	switch (rec.type) {
 		case 'paragraph': {
 			const next: ParagraphBlock = { id, type: 'paragraph', content: coerceSpans(rec.content) };
-			return pickAlign(next, coerceAlign(rec.align));
+			return pickIndent(
+				pickLineHeight(pickAlign(next, coerceAlign(rec.align)), coerceLineHeight(rec.lineHeight)),
+				sanitizeIndent(rec.indent)
+			);
 		}
 		case 'heading': {
 			const next: HeadingBlock = {
@@ -335,7 +398,10 @@ function normalizeLeaf(rec: Record<string, unknown>, id: string): Block {
 				level: headingLevel(rec.level),
 				content: coerceSpans(rec.content)
 			};
-			return pickAlign(next, coerceAlign(rec.align));
+			return pickIndent(
+				pickLineHeight(pickAlign(next, coerceAlign(rec.align)), coerceLineHeight(rec.lineHeight)),
+				sanitizeIndent(rec.indent)
+			);
 		}
 		case 'list_item': {
 			const next: ListItemBlock = {
@@ -344,7 +410,10 @@ function normalizeLeaf(rec: Record<string, unknown>, id: string): Block {
 				ordered: rec.ordered === true,
 				content: coerceSpans(rec.content)
 			};
-			return pickAlign(next, coerceAlign(rec.align));
+			return pickIndent(
+				pickLineHeight(pickAlign(next, coerceAlign(rec.align)), coerceLineHeight(rec.lineHeight)),
+				sanitizeIndent(rec.indent)
+			);
 		}
 		case 'code': {
 			const next: CodeBlock = {
@@ -353,7 +422,7 @@ function normalizeLeaf(rec: Record<string, unknown>, id: string): Block {
 				language: typeof rec.language === 'string' ? rec.language : '',
 				text: typeof rec.text === 'string' ? rec.text : ''
 			};
-			return next;
+			return pickIndent(next, sanitizeIndent(rec.indent));
 		}
 		case 'divider':
 			return { id, type: 'divider' };
@@ -378,7 +447,10 @@ function normalizeCell(rec: Record<string, unknown>, id: string): TableCellBlock
 		rec.header === true
 			? { id, type: 'table_cell', header: true, content: coerceSpans(rec.content) }
 			: { id, type: 'table_cell', content: coerceSpans(rec.content) };
-	return pickVAlign(pickAlign(cell, coerceAlign(rec.align)), coerceVAlign(rec.valign));
+	return pickLineHeight(
+		pickVAlign(pickAlign(cell, coerceAlign(rec.align)), coerceVAlign(rec.valign)),
+		coerceLineHeight(rec.lineHeight)
+	);
 }
 
 function cellFromUnknown(raw: Record<string, unknown>): TableCellBlock {

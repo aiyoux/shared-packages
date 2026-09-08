@@ -136,7 +136,9 @@ describe('remapOpIds', () => {
 			'set-code',
 			'set-toggle',
 			'set-align',
-			'set-valign'
+			'set-valign',
+			'set-line-height',
+			'set-indent'
 		] as const) {
 			const op = { kind, id: 'temp:a', to: 'paragraph', language: 'ts', open: true } as unknown as Op;
 			expect((remapOpIds(map, op) as { id: string }).id).toBe('records:1');
@@ -242,6 +244,8 @@ describe('walker parity', () => {
 		'set-toggle',
 		'set-align',
 		'set-valign',
+		'set-line-height',
+		'set-indent',
 		'insert-table-row',
 		'insert-table-column',
 		'delete-table-row',

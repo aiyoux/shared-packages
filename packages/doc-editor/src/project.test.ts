@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { allowlistedHref, allowlistedSrc } from './href.js';
+import { describe, expect, it, vi } from 'vitest';
+import { allowlistedHref, allowlistedSrc, followEditorLink } from './href.js';
 import { project } from './project.js';
 import { callout, code, divider, heading, image, item, page, para } from './testFixtures.js';
 
@@ -95,6 +95,10 @@ describe('project', () => {
 		expect(anchors.some((a) => a.getAttribute('href')?.startsWith('javascript:'))).toBe(false);
 		expect(anchors.some((a) => a.getAttribute('href')?.startsWith('data:'))).toBe(false);
 		expect(anchors.some((a) => a.getAttribute('href') === 'https://example.com')).toBe(true);
+		const live = anchors.find((a) => a.getAttribute('href') === 'https://example.com');
+		expect(live?.getAttribute('target')).toBe('_blank');
+		expect(live?.getAttribute('rel')).toBe('noopener noreferrer');
+		expect(live?.getAttribute('title')).toBe('https://example.com');
 		el.remove();
 	});
 
@@ -185,6 +189,33 @@ describe('project', () => {
 		expect(num('b')).toBe('1');
 		expect(num('n1')).toBe('1');
 		expect(num('n2')).toBe('2');
+		el.remove();
+	});
+
+	it('stamps data-indent and keeps nested ordered numbers independent', () => {
+		const el = host();
+		const nested = { ...item('n', 'inner', true), indent: 1 };
+		project(
+			el,
+			page([
+				item('a', 'one', true),
+				nested,
+				item('b', 'two', true),
+				{ id: 'p', type: 'paragraph', content: [{ type: 'text', text: 'pad', marks: [] }], indent: 2 }
+			])
+		);
+		const a = el.querySelector('[data-block-id="a"]') as HTMLElement;
+		const n = el.querySelector('[data-block-id="n"]') as HTMLElement;
+		const b = el.querySelector('[data-block-id="b"]') as HTMLElement;
+		const p = el.querySelector('[data-block-id="p"]') as HTMLElement;
+		expect(a.getAttribute('data-indent')).toBeNull();
+		expect(n.getAttribute('data-indent')).toBe('1');
+		expect(n.style.marginLeft).toBe('3rem');
+		expect(p.getAttribute('data-indent')).toBe('2');
+		expect(p.style.paddingLeft).toBe('3rem');
+		expect(n.getAttribute('data-ol-num')).toBe('1');
+		expect(a.getAttribute('data-ol-num')).toBe('1');
+		expect(b.getAttribute('data-ol-num')).toBe('2');
 		el.remove();
 	});
 
@@ -309,6 +340,52 @@ describe('allowlistedHref', () => {
 		expect(allowlistedHref('\0javascript:alert(1)')).toBeNull();
 		expect(allowlistedHref(' javascript:alert(1)')).toBeNull();
 		expect(allowlistedHref('java\nscript:alert(1)')).toBeNull();
+	});
+});
+
+describe('followEditorLink', () => {
+	function click(
+		target: EventTarget,
+		init: Partial<MouseEvent> & { preventDefault?: () => void; stopPropagation?: () => void } = {}
+	) {
+		const preventDefault = init.preventDefault ?? (() => {});
+		const stopPropagation = init.stopPropagation ?? (() => {});
+		return {
+			target,
+			shiftKey: init.shiftKey ?? false,
+			detail: init.detail ?? 1,
+			button: init.button ?? 0,
+			preventDefault,
+			stopPropagation
+		};
+	}
+
+	it('opens an allowlisted href in a new tab', () => {
+		const open = vi.spyOn(window, 'open').mockReturnValue(null);
+		const root = document.createElement('div');
+		const a = document.createElement('a');
+		a.href = 'https://example.com/x';
+		a.textContent = 'x';
+		root.append(a);
+		const preventDefault = vi.fn();
+		expect(followEditorLink(click(a, { preventDefault }), root)).toBe(true);
+		expect(open).toHaveBeenCalledWith('https://example.com/x', '_blank', 'noopener,noreferrer');
+		expect(preventDefault).toHaveBeenCalled();
+		open.mockRestore();
+	});
+
+	it('ignores shift-click, double-click, and javascript hrefs', () => {
+		const open = vi.spyOn(window, 'open').mockReturnValue(null);
+		const root = document.createElement('div');
+		const a = document.createElement('a');
+		a.href = 'https://example.com';
+		root.append(a);
+		expect(followEditorLink(click(a, { shiftKey: true }), root)).toBe(false);
+		expect(followEditorLink(click(a, { detail: 2 }), root)).toBe(false);
+		a.setAttribute('href', 'javascript:alert(1)');
+		expect(followEditorLink(click(a), root)).toBe(false);
+		expect(open).not.toHaveBeenCalled();
+		open.mockRestore();
 	});
 });
 

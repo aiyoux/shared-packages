@@ -1,6 +1,6 @@
 import { convertBlock, normalizeRange, resolvePoint } from './apply.js';
 import { sliceSpans } from './normalize.js';
-import { isNonTextual, isTextLike, payloadLength, plaintextOf } from './plaintext.js';
+import { canTakeIndent, isNonTextual, isTextLike, payloadLength, plaintextOf } from './plaintext.js';
 import {
 	childrenOf,
 	documentOrder,
@@ -542,6 +542,18 @@ export function invert(page: KbPage, op: Op): Op[] {
 			const { block } = requireBlock(page, op.id, 'set-valign');
 			if (block.type !== 'table_cell') throw new Error('set-valign: block is not a table_cell');
 			return [{ kind: 'set-valign', id: op.id, valign: block.valign ?? null }];
+		}
+		case 'set-line-height': {
+			const { block } = requireBlock(page, op.id, 'set-line-height');
+			if (!isTextLike(block)) throw new Error('set-line-height: block is not text-like');
+			return [{ kind: 'set-line-height', id: op.id, lineHeight: block.lineHeight ?? null }];
+		}
+		case 'set-indent': {
+			const { block } = requireBlock(page, op.id, 'set-indent');
+			if (!canTakeIndent(block)) {
+				throw new Error('set-indent: block cannot take indent');
+			}
+			return [{ kind: 'set-indent', id: op.id, indent: block.indent ?? null }];
 		}
 		case 'insert-table-row':
 			return [{ kind: 'delete-table-row', tableId: op.tableId, rowId: op.row.id }];

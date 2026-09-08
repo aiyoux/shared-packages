@@ -12,6 +12,7 @@ export {
 	stripHtml,
 	type KbSlice
 } from './clipboard.js';
+export { htmlToBlocks } from './htmlPaste.js';
 export {
 	beginComposition,
 	cancelComposition,
@@ -31,9 +32,10 @@ export {
 	type RemoteCaret
 } from './decorations.js';
 export { dropAfterId, dropTarget, dropWhere, gutterOrder, handleHeights, overlayBoxes } from './gutter.js';
-export { allowlistedHref, allowlistedSrc } from './href.js';
+export { allowlistedHref, allowlistedSrc, followEditorLink } from './href.js';
 export { fontFamilyCss } from './font.js';
 export { newBlockId } from './ids.js';
+export { indentOps, codeTabOps } from './indent.js';
 export { mapKeydown, type KeyEvent, type KeymapResult } from './keymap.js';
 export {
 	BLOCK_ID_ATTR,
@@ -57,14 +59,17 @@ export {
 	textInsertPoint
 } from './range.js';
 export {
+	caretFromClient,
 	caretIn,
+	emptySpaceCaretFromClient,
 	pointFromDom,
 	plaintextFromDom,
 	rangeFromEndpoints,
 	rangeFromInputEvent,
 	rangeFromSelection,
 	restoreSelection,
-	textNodes
+	textNodes,
+	trailingLineEndFromClient
 } from './selection.js';
 export { matchSlash, slashOps } from './slash.js';
 export {

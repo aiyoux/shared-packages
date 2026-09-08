@@ -430,6 +430,69 @@ export function trailingLineEndFromClient(
 	return null;
 }
 
+/**
+ * Click in the empty space to the left of a line (padding / indent) belongs
+ * at that line's start.
+ */
+export function lineStartFromClient(
+	host: HTMLElement,
+	clientX: number,
+	clientY: number
+): Point | null {
+	const block = blockElementFromClient(host, clientX, clientY);
+	if (!block) return null;
+	const blockId = block.getAttribute(BLOCK_ID_ATTR);
+	if (!blockId) return null;
+	const lines = lineBoxesOf(block);
+	if (lines.length === 0) return null;
+	const line = lineBoxAtY(lines, clientY);
+	if (!line) return null;
+	if (clientX < line.left - TRAILING_CLICK_SLACK_PX) {
+		return { blockId, offset: line.startOffset };
+	}
+	return null;
+}
+
+function caretRangeFromPoint(doc: Document, clientX: number, clientY: number): { node: Node; offset: number } | null {
+	const anyDoc = doc as Document & {
+		caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null;
+		caretRangeFromPoint?: (x: number, y: number) => globalThis.Range | null;
+	};
+	if (typeof anyDoc.caretPositionFromPoint === 'function') {
+		const pos = anyDoc.caretPositionFromPoint(clientX, clientY);
+		if (pos?.offsetNode) return { node: pos.offsetNode, offset: pos.offset };
+	}
+	if (typeof anyDoc.caretRangeFromPoint === 'function') {
+		const range = anyDoc.caretRangeFromPoint(clientX, clientY);
+		if (range?.startContainer) return { node: range.startContainer, offset: range.startOffset };
+	}
+	return null;
+}
+
+/**
+ * Map a viewport point to a document caret. Prefers trailing/leading empty
+ * space on a line (native CE misses those on inactive blocks), then
+ * `caretPositionFromPoint`.
+ */
+export function caretFromClient(host: HTMLElement, clientX: number, clientY: number): Point | null {
+	const edge = trailingLineEndFromClient(host, clientX, clientY) ?? lineStartFromClient(host, clientX, clientY);
+	if (edge) return edge;
+	const hit = caretRangeFromPoint(host.ownerDocument, clientX, clientY);
+	if (!hit) return null;
+	const root = hit.node.nodeType === Node.ELEMENT_NODE ? hit.node : hit.node.parentNode;
+	if (!root || !host.contains(root)) return null;
+	return pointFromDom(host, hit.node, hit.offset);
+}
+
+/** Empty-space click that native CE would not place correctly. */
+export function emptySpaceCaretFromClient(
+	host: HTMLElement,
+	clientX: number,
+	clientY: number
+): Point | null {
+	return trailingLineEndFromClient(host, clientX, clientY) ?? lineStartFromClient(host, clientX, clientY);
+}
+
 export function caretIn(page: KbPage, blockId: string, offset: number): Range {
 	const block = findBlock(page, blockId);
 	if (!block) {

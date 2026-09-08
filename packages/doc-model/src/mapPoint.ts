@@ -70,6 +70,8 @@ export function mapPointThroughOp(pageBefore: KbPage, point: StickyPoint, op: Op
 		case 'set-toggle':
 		case 'set-align':
 		case 'set-valign':
+		case 'set-line-height':
+		case 'set-indent':
 		case 'insert-table-row':
 		case 'insert-table-column':
 		case 'delete-table-row':

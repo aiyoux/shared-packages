@@ -5,9 +5,11 @@ import {
 	normalizeBody,
 	normalizeSpans,
 	orderedBlock,
+	sanitizeIndent,
 	splitSpans
 } from './normalize.js';
 import {
+	canTakeIndent,
 	isAtomic,
 	isContainer,
 	isNonTextual,
@@ -33,7 +35,10 @@ import type {
 	DocBody,
 	Block,
 	CodeBlock,
+	HeadingBlock,
 	KbPage,
+	ListItemBlock,
+	ParagraphBlock,
 	Mark,
 	Op,
 	Point,
@@ -466,6 +471,8 @@ function applySplitBlock(page: KbPage, op: Extract<Op, { kind: 'split-block' }>)
 			created = { id: op.newId, type: 'paragraph', content: dropContent };
 		}
 		if (block.align) (created as { align?: Align }).align = block.align;
+		if (block.lineHeight) (created as { lineHeight?: string }).lineHeight = block.lineHeight;
+		if (canTakeIndent(block) && block.indent) (created as { indent?: number }).indent = block.indent;
 		insertBlockAt(page, at.parent, at.indexInParent + 1, created);
 	}
 }
@@ -526,23 +533,54 @@ export function convertBlock(block: Block, op: Extract<Op, { kind: 'convert-bloc
 	const level = op.level ?? 1;
 	const ordered = op.ordered ?? false;
 	const align = isTextLike(block) ? block.align : undefined;
-	const aligned = <T extends { align?: Align }>(next: T): T =>
-		align ? { ...next, align } : next;
+	const lineHeight = isTextLike(block) ? block.lineHeight : undefined;
+	const indent = canTakeIndent(block) ? block.indent : undefined;
+	const stamp = <T extends { align?: Align; lineHeight?: string; indent?: number }>(next: T): T => {
+		if (align) next.align = align;
+		if (lineHeight) next.lineHeight = lineHeight;
+		if (indent) next.indent = indent;
+		return next;
+	};
 
 	if (isTextLike(block)) {
-		if (op.to === 'paragraph') return aligned({ id, type: 'paragraph', content });
-		if (op.to === 'heading') return aligned({ id, type: 'heading', level, content });
-		if (op.to === 'list_item') return aligned({ id, type: 'list_item', ordered, content });
-		if (op.to === 'code') return { id, type: 'code', language: '', text: plaintextOf(block) };
+		if (op.to === 'paragraph') {
+			const next: ParagraphBlock = { id, type: 'paragraph', content };
+			return stamp(next);
+		}
+		if (op.to === 'heading') {
+			const next: HeadingBlock = { id, type: 'heading', level, content };
+			return stamp(next);
+		}
+		if (op.to === 'list_item') {
+			const next: ListItemBlock = { id, type: 'list_item', ordered, content };
+			return stamp(next);
+		}
+		if (op.to === 'code') {
+			const next: CodeBlock = { id, type: 'code', language: '', text: plaintextOf(block) };
+			if (indent) next.indent = indent;
+			return next;
+		}
 		if (op.to === 'divider') return { id, type: 'divider' };
 	}
 
 	if (block.type === 'code') {
 		const text = block.text;
 		const spans: TextSpan[] = text ? [{ type: 'text', text, marks: [] }] : emptySpans();
-		if (op.to === 'paragraph') return { id, type: 'paragraph', content: spans };
-		if (op.to === 'heading') return { id, type: 'heading', level, content: spans };
-		if (op.to === 'list_item') return { id, type: 'list_item', ordered, content: spans };
+		if (op.to === 'paragraph') {
+			const next: ParagraphBlock = { id, type: 'paragraph', content: spans };
+			if (indent) next.indent = indent;
+			return next;
+		}
+		if (op.to === 'heading') {
+			const next: HeadingBlock = { id, type: 'heading', level, content: spans };
+			if (indent) next.indent = indent;
+			return next;
+		}
+		if (op.to === 'list_item') {
+			const next: ListItemBlock = { id, type: 'list_item', ordered, content: spans };
+			if (indent) next.indent = indent;
+			return next;
+		}
 		if (op.to === 'divider') return { id, type: 'divider' };
 	}
 
@@ -726,6 +764,29 @@ function applySetVAlign(page: KbPage, op: Extract<Op, { kind: 'set-valign' }>): 
 	replaceBlock(page, loc.parent, loc.index, next);
 }
 
+function applySetLineHeight(page: KbPage, op: Extract<Op, { kind: 'set-line-height' }>): void {
+	const loc = requireLocation(page, op.id, 'set-line-height');
+	if (!isTextLike(loc.block)) {
+		throw new Error('set-line-height: block is not text-like');
+	}
+	const next = { ...loc.block } as typeof loc.block & { lineHeight?: string };
+	if (op.lineHeight) next.lineHeight = op.lineHeight;
+	else delete next.lineHeight;
+	replaceBlock(page, loc.parent, loc.index, next);
+}
+
+function applySetIndent(page: KbPage, op: Extract<Op, { kind: 'set-indent' }>): void {
+	const loc = requireLocation(page, op.id, 'set-indent');
+	if (!canTakeIndent(loc.block)) {
+		throw new Error('set-indent: block cannot take indent');
+	}
+	const next = { ...loc.block } as typeof loc.block & { indent?: number };
+	const level = op.indent != null ? sanitizeIndent(op.indent) : undefined;
+	if (level) next.indent = level;
+	else delete next.indent;
+	replaceBlock(page, loc.parent, loc.index, next);
+}
+
 function requireTable(page: KbPage, tableId: string, what: string): TableBlock {
 	const loc = requireLocation(page, tableId, what);
 	if (loc.block.type !== 'table') {
@@ -886,6 +947,12 @@ export function apply(page: KbPage, op: Op): KbPage {
 			break;
 		case 'set-valign':
 			applySetVAlign(next, op);
+			break;
+		case 'set-line-height':
+			applySetLineHeight(next, op);
+			break;
+		case 'set-indent':
+			applySetIndent(next, op);
 			break;
 		case 'insert-table-row':
 			applyInsertTableRow(next, op);

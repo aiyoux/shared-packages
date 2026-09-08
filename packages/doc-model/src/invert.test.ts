@@ -510,6 +510,8 @@ describe('invert golden applyMany(apply(page, op), invert(page, op)) === normali
 	it('round-trips set-align and set-valign', () => {
 		const src = page([para('p', 'hello')]);
 		expectInvert(src, { kind: 'set-align', id: 'p', align: 'right' });
+		expectInvert(src, { kind: 'set-line-height', id: 'p', lineHeight: '1.5' });
+		expectInvert(src, { kind: 'set-indent', id: 'p', indent: 2 });
 		const centered = apply(src, { kind: 'set-align', id: 'p', align: 'center' });
 		expectInvert(centered, { kind: 'set-align', id: 'p', align: null });
 		const grid = page([

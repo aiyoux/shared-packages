@@ -19,6 +19,7 @@ import {
 	type TextSpan
 } from '@shared-packages/doc-model';
 import { stripCollabWidgetsHtml } from './decorations.js';
+import { htmlToBlocks } from './htmlPaste.js';
 import { newBlockId } from './ids.js';
 import { clampPoint, deleteRangeOps, isCollapsed, orderedRange, parentIdFor, textInsertPoint } from './range.js';
 import type { EditorState } from './state.js';
@@ -193,6 +194,62 @@ function pushRemapped(
 	}
 }
 
+function inlineSpanOps(at: { blockId: string; offset: number }, spans: TextSpan[]): Op[] {
+	const ops: Op[] = [];
+	let offset = at.offset;
+	for (const span of spans) {
+		if (!span.text) continue;
+		ops.push({
+			kind: 'insert-text',
+			at: { blockId: at.blockId, offset },
+			text: span.text,
+			marks: span.marks.length > 0 ? span.marks : undefined
+		});
+		offset += span.text.length;
+	}
+	return ops;
+}
+
+function isInlineParagraphPaste(blocks: Block[]): TextSpan[] | null {
+	if (blocks.length !== 1) return null;
+	const block = blocks[0]!;
+	if (block.type !== 'paragraph') return null;
+	if (!block.content.some((s) => s.text.length > 0)) return null;
+	return block.content;
+}
+
+function htmlInsertOps(
+	state: EditorState,
+	at: { blockId: string; offset: number },
+	htmlBlocks: Block[]
+): Op[] {
+	const block = findBlock(state.page, at.blockId);
+	if (block?.type === 'code') {
+		const text = htmlBlocks.map((item) => plaintextOf(item)).join('\n');
+		return text ? [{ kind: 'insert-text', at, text }] : [];
+	}
+	if (block?.type === 'table_cell') {
+		if (htmlBlocks.length === 1 && htmlBlocks[0]!.type === 'table') {
+			return pasteTableAtCell(state.page, at, htmlBlocks[0] as TableBlock);
+		}
+		const inlines = isInlineParagraphPaste(htmlBlocks);
+		if (inlines) return inlineSpanOps(at, inlines);
+		const text = cellPlaintext(htmlBlocks.map((item) => plaintextOf(item)).join(' '));
+		return text ? [{ kind: 'insert-text', at, text }] : [];
+	}
+	if (block && isTextLike(block)) {
+		const inlines = isInlineParagraphPaste(htmlBlocks);
+		if (inlines) return inlineSpanOps(at, inlines);
+		if (plaintextOf(block) === '') {
+			const ops: Op[] = [];
+			pushRemapped(ops, htmlBlocks, at.blockId, parentIdFor(state.page, at.blockId));
+			ops.push({ kind: 'delete-block', id: at.blockId });
+			return ops;
+		}
+	}
+	return jsonInsertOps(state, at, htmlBlocks);
+}
+
 function jsonInsertOps(state: EditorState, at: { blockId: string; offset: number }, jsonBlocks: Block[]): Op[] {
 	const ops: Op[] = [];
 	const block = findBlock(state.page, at.blockId);
@@ -252,6 +309,11 @@ export function pasteOps(
 	const jsonBlocks = input.json ? parseSlice(input.json) : null;
 	if (jsonBlocks && jsonBlocks.length > 0) {
 		ops.push(...jsonInsertOps(working, at, jsonBlocks));
+		return ops;
+	}
+	const htmlBlocks = input.html ? htmlToBlocks(input.html) : [];
+	if (htmlBlocks.length > 0) {
+		ops.push(...htmlInsertOps(working, at, htmlBlocks));
 		return ops;
 	}
 	let text = input.plain ?? '';

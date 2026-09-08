@@ -69,6 +69,16 @@ describe('toMarkdown', () => {
 		).toBe('1. one\n2. two\n3. three\n');
 	});
 
+	it('indents nested list_items and keeps outer ordered numbering', () => {
+		expect(
+			md([
+				{ id: 'a', type: 'list_item', ordered: true, content: [span('one')] },
+				{ id: 'n', type: 'list_item', ordered: false, content: [span('inner')], indent: 1 },
+				{ id: 'b', type: 'list_item', ordered: true, content: [span('two')] }
+			])
+		).toBe('1. one\n  - inner\n2. two\n');
+	});
+
 	it('resets ordered numbering when the run is broken', () => {
 		expect(
 			md([

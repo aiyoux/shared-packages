@@ -707,6 +707,42 @@ describe('N1 callout/toggle apply', () => {
 		const left = apply(centered, { kind: 'set-align', id: 'p', align: null });
 		expect(left.blocks[0]).not.toHaveProperty('align');
 		expect(() => apply(src, { kind: 'set-align', id: 'p', align: 'center' })).not.toThrow();
+		const indented = apply(src, { kind: 'set-indent', id: 'p', indent: 2 });
+		expect((indented.blocks[0] as { indent?: number }).indent).toBe(2);
+		const unindented = apply(indented, { kind: 'set-indent', id: 'p', indent: null });
+		expect((unindented.blocks[0] as { indent?: number }).indent).toBeUndefined();
+		const fenced = apply(page([code('c', 'x')]), { kind: 'set-indent', id: 'c', indent: 1 });
+		expect((fenced.blocks[0] as { indent?: number }).indent).toBe(1);
+		expect(() => apply(src, { kind: 'set-indent', id: 'p', indent: 2 })).not.toThrow();
+		expect(() =>
+			apply(
+				page([
+					{
+						id: 't',
+						type: 'table',
+						children: [
+							{
+								id: 'r',
+								type: 'table_row',
+								children: [{ id: 'cell', type: 'table_cell', content: [span('x')] }]
+							}
+						]
+					}
+				]),
+				{ kind: 'set-indent', id: 'cell', indent: 1 }
+			)
+		).toThrow(/cannot take indent/i);
+		const kept = apply(
+			page([{ id: 'p', type: 'paragraph', content: [span('hi')], indent: 2 }]),
+			{ kind: 'convert-block', id: 'p', to: 'list_item' }
+		);
+		expect((kept.blocks[0] as { indent?: number }).indent).toBe(2);
+		expect((kept.blocks[0] as { type: string }).type).toBe('list_item');
+		const tall = apply(src, { kind: 'set-line-height', id: 'p', lineHeight: '1.5' });
+		expect((tall.blocks[0] as { lineHeight?: string }).lineHeight).toBe('1.5');
+		const unset = apply(tall, { kind: 'set-line-height', id: 'p', lineHeight: null });
+		expect((unset.blocks[0] as { lineHeight?: string }).lineHeight).toBeUndefined();
+		expect(() => apply(src, { kind: 'set-line-height', id: 'p', lineHeight: '1.5' })).not.toThrow();
 		expect(() => apply(src, { kind: 'set-valign', id: 'p', valign: 'middle' })).toThrow(/table_cell/i);
 
 		const grid = page([

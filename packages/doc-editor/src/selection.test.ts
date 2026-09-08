@@ -7,6 +7,9 @@ import {
 	rangeFromEndpoints,
 	rangeFromInputEvent,
 	restoreSelection,
+	caretFromClient,
+	emptySpaceCaretFromClient,
+	lineStartFromClient,
 	trailingLineEndFromClient
 } from './selection.js';
 import { page, para } from './testFixtures.js';
@@ -265,6 +268,31 @@ describe('trailingLineEndFromClient', () => {
 		try {
 			expect(trailingLineEndFromClient(host, 200, 18)).toEqual({ blockId: 'p', offset: 5 });
 			expect(trailingLineEndFromClient(host, 200, 38)).toEqual({ blockId: 'p', offset: 10 });
+		} finally {
+			Range.prototype.getClientRects = proto;
+			host.remove();
+		}
+	});
+
+	it('snaps a click to the left of a line to that line\'s start', () => {
+		const host = document.createElement('div');
+		host.contentEditable = 'true';
+		document.body.append(host);
+		const doc = page([para('a', 'hello')]);
+		project(host, doc);
+		const block = host.querySelector('[data-block-id="a"]') as HTMLElement;
+		block.getBoundingClientRect = () => fakeRect(10, 16, 0, 400);
+
+		const proto = Range.prototype.getClientRects;
+		Range.prototype.getClientRects = function () {
+			const i = this.startOffset;
+			return [fakeRect(10, 16, 40 + i * 10, 10)] as unknown as DOMRectList;
+		};
+		try {
+			expect(lineStartFromClient(host, 8, 18)).toEqual({ blockId: 'a', offset: 0 });
+			expect(emptySpaceCaretFromClient(host, 8, 18)).toEqual({ blockId: 'a', offset: 0 });
+			expect(emptySpaceCaretFromClient(host, 200, 18)).toEqual({ blockId: 'a', offset: 5 });
+			expect(caretFromClient(host, 200, 18)).toEqual({ blockId: 'a', offset: 5 });
 		} finally {
 			Range.prototype.getClientRects = proto;
 			host.remove();

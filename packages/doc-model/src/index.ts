@@ -42,6 +42,9 @@ export {
 	normalizePage,
 	normalizeSpans,
 	sanitizeFontSize,
+	sanitizeLineHeight,
+	sanitizeIndent,
+	MAX_INDENT,
 	sliceSpans,
 	splitSpans
 } from './normalize.js';
@@ -67,10 +70,12 @@ export {
 	isNonTextual,
 	isTableStructure,
 	isTextLike,
+	canTakeIndent,
 	isUnknownBlock,
 	plaintext,
 	plaintextOf
 } from './plaintext.js';
+export type { IndentableBlock } from './plaintext.js';
 export { serializeKb } from './serialize.js';
 export { toMarkdown } from './toMarkdown.js';
 export {

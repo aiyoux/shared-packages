@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { mapKeydown } from './keymap.js';
 import { createEditorState } from './state.js';
-import { cell, divider, page, para, row, table } from './testFixtures.js';
+import { cell, code, divider, page, para, row, table } from './testFixtures.js';
 
 describe('keymap', () => {
 	it('is a no-op while composing (does not preventDefault)', () => {
@@ -94,5 +94,39 @@ describe('keymap', () => {
 		);
 		expect(result.preventDefault).toBe(false);
 		expect(result.ops).toEqual([]);
+	});
+
+	it('Tab indents a paragraph; Shift+Tab outdents; always preventDefault', () => {
+		const state = createEditorState(page([para('p', 'ab')]));
+		const live = { anchor: { blockId: 'p', offset: 1 }, head: { blockId: 'p', offset: 1 } };
+		const tab = mapKeydown(
+			state,
+			{ key: 'Tab', metaKey: false, ctrlKey: false, shiftKey: false, altKey: false },
+			live
+		);
+		expect(tab.preventDefault).toBe(true);
+		expect(tab.ops).toEqual([{ kind: 'set-indent', id: 'p', indent: 1 }]);
+		const indented = createEditorState(
+			page([{ id: 'p', type: 'paragraph', content: [{ type: 'text', text: 'ab', marks: [] }], indent: 1 }])
+		);
+		const out = mapKeydown(
+			indented,
+			{ key: 'Tab', metaKey: false, ctrlKey: false, shiftKey: true, altKey: false },
+			live
+		);
+		expect(out.preventDefault).toBe(true);
+		expect(out.ops).toEqual([{ kind: 'set-indent', id: 'p', indent: null }]);
+	});
+
+	it('Tab in a code fence inserts a tab character instead of block indent', () => {
+		const state = createEditorState(page([code('c', 'ab')]));
+		const live = { anchor: { blockId: 'c', offset: 1 }, head: { blockId: 'c', offset: 1 } };
+		const result = mapKeydown(
+			state,
+			{ key: 'Tab', metaKey: false, ctrlKey: false, shiftKey: false, altKey: false },
+			live
+		);
+		expect(result.preventDefault).toBe(true);
+		expect(result.ops).toEqual([{ kind: 'insert-text', at: { blockId: 'c', offset: 1 }, text: '\t' }]);
 	});
 });

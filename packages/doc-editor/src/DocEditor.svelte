@@ -9,6 +9,7 @@
 		type DocBody,
 		type KbPage,
 		type Op,
+		type Point,
 		type Range
 	} from '@shared-packages/doc-model';
 	import { mapBeforeInput } from './beforeinput.js';
@@ -34,6 +35,7 @@
 		type OverlayBox
 	} from './gutter.js';
 	import { mapKeydown } from './keymap.js';
+	import { followEditorLink } from './href.js';
 	import { BLOCK_ID_ATTR, project, type MediaResolver } from './project.js';
 	import {
 		plaintextFromDom,
@@ -41,7 +43,8 @@
 		rangeFromSelection,
 		restoreSelection,
 		focusHeldOutside,
-		trailingLineEndFromClient
+		caretFromClient,
+		emptySpaceCaretFromClient
 	} from './selection.js';
 	import { collapsed } from './range.js';
 	import { applyEditorOps, redo, setSelection, undo, type EditorState } from './state.js';
@@ -139,6 +142,7 @@
 	 * then never moved). Same rule as the design-system tree drag.
 	 */
 	let draggingId: string | null = null;
+	let selectDrag: { anchor: Point; pointerId: number } | null = null;
 	let moveDrop: { id: string; where: 'before' | 'after' } | null = null;
 	let dropLineEl = $state<HTMLDivElement | undefined>(undefined);
 	let handleLayoutFrame = 0;
@@ -597,7 +601,9 @@
 	}
 
 	function onHostClick(event: MouseEvent) {
-		if (composing || !editable || !host) return;
+		if (composing || !host) return;
+		if (followEditorLink(event, host)) return;
+		if (!editable) return;
 		const target = event.target as HTMLElement | null;
 		const el = target?.closest?.('[data-block-id]') as HTMLElement | null;
 		if (!el || !host.contains(el) || el.getAttribute('data-block-type') !== 'toggle') return;
@@ -608,12 +614,50 @@
 		onDispatch({ kind: 'set-toggle', id, open: !block.open });
 	}
 
+	function applySelectRange(range: Range) {
+		if (!host) return;
+		emitState(setSelection(editor, range));
+		restoreSelection(host, range, asPage(editor.page));
+		onSelection?.(range);
+	}
+
+	function beginSelectDrag(event: PointerEvent, anchor: Point) {
+		if (!host) return;
+		selectDrag = { anchor, pointerId: event.pointerId };
+		applySelectRange(collapsed(anchor));
+		const doc = host.ownerDocument;
+		const move = (e: PointerEvent) => {
+			if (!selectDrag || e.pointerId !== selectDrag.pointerId || !host) return;
+			if (e.buttons === 0) {
+				finish(e);
+				return;
+			}
+			const head = caretFromClient(host, e.clientX, e.clientY) ?? selectDrag.anchor;
+			applySelectRange({ anchor: selectDrag.anchor, head });
+		};
+		const finish = (e: PointerEvent) => {
+			if (selectDrag && e.pointerId === selectDrag.pointerId && host) {
+				const head = caretFromClient(host, e.clientX, e.clientY) ?? selectDrag.anchor;
+				applySelectRange({ anchor: selectDrag.anchor, head });
+			}
+			selectDrag = null;
+			stop();
+		};
+		const stop = () => {
+			doc.removeEventListener('pointermove', move);
+			doc.removeEventListener('pointerup', finish);
+			doc.removeEventListener('pointercancel', finish);
+		};
+		doc.addEventListener('pointermove', move);
+		doc.addEventListener('pointerup', finish);
+		doc.addEventListener('pointercancel', finish);
+	}
+
 	/**
-	 * Clicking the empty space to the right of a line should put the caret at
-	 * that line's end. Native contenteditable only does this when the caret is
-	 * already in the block; a click on an inactive paragraph's trailing area
-	 * otherwise lands on the host / at offset 0, and `restoreSelection` puts
-	 * the old caret back because `rangeFromSelection` cannot map it.
+	 * Empty space to the left or right of a line: native CE only places the
+	 * caret there when the block is already active. Intercept those hits so a
+	 * click still lands on that line, and a drag from that point can select.
+	 * Clicks on glyphs stay native (double-click word select, etc.).
 	 */
 	function onHostPointerDown(event: PointerEvent) {
 		if (composing || !editable || !host || event.button !== 0) return;
@@ -621,7 +665,7 @@
 		const target = event.target;
 		if (!(target instanceof Element)) return;
 		if (target.closest('a, button, input, textarea, [data-collab-widget]')) return;
-		const snapped = trailingLineEndFromClient(host, event.clientX, event.clientY);
+		const snapped = emptySpaceCaretFromClient(host, event.clientX, event.clientY);
 		if (!snapped) return;
 		event.preventDefault();
 		try {
@@ -629,10 +673,7 @@
 		} catch {
 			host.focus();
 		}
-		const range = collapsed(snapped);
-		emitState(setSelection(editor, range));
-		restoreSelection(host, range, asPage(editor.page));
-		onSelection?.(range);
+		beginSelectDrag(event, snapped);
 	}
 
 	function handleParentId(blockId: string): string | undefined {
@@ -843,6 +884,18 @@
 	.kb-host :global([data-block-type='list_item'][data-ordered='false']) {
 		list-style-type: disc;
 	}
+	.kb-host :global([data-block-type='list_item'][data-ordered='false'][data-indent='1']) {
+		list-style-type: circle;
+	}
+	.kb-host :global([data-block-type='list_item'][data-ordered='false'][data-indent='2']),
+	.kb-host :global([data-block-type='list_item'][data-ordered='false'][data-indent='3']),
+	.kb-host :global([data-block-type='list_item'][data-ordered='false'][data-indent='4']),
+	.kb-host :global([data-block-type='list_item'][data-ordered='false'][data-indent='5']),
+	.kb-host :global([data-block-type='list_item'][data-ordered='false'][data-indent='6']),
+	.kb-host :global([data-block-type='list_item'][data-ordered='false'][data-indent='7']),
+	.kb-host :global([data-block-type='list_item'][data-ordered='false'][data-indent='8']) {
+		list-style-type: square;
+	}
 	.kb-host :global([data-block-type='list_item'][data-ordered='true']) {
 		list-style-type: none;
 	}
@@ -893,6 +946,18 @@
 	.kb-host :global(code) {
 		font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 		font-size: 0.9em;
+	}
+	/* Host CSS resets (`a { color: inherit; text-decoration: inherit }`) would
+	   otherwise make pasted/authored links look like body text. contenteditable
+	   also swallows native navigation — click handling lives in onHostClick. */
+	.kb-host :global(a[href]) {
+		color: var(--accent, #2563eb);
+		text-decoration: underline;
+		text-underline-offset: 0.15em;
+		cursor: pointer;
+	}
+	.kb-host :global(a[href]:hover) {
+		color: var(--accent-light, var(--accent, #1d4ed8));
 	}
 	.kb-host::after {
 		content: '';

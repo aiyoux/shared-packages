@@ -582,7 +582,11 @@ describe('N4 table editor', () => {
 			const text = readFileSync(file, 'utf8');
 			expect(text, file).not.toMatch(/createElement\(\s*['"]table['"]\s*\)/);
 			expect(text, file).not.toMatch(/<table[\s>]/i);
-			expect(text, file).not.toMatch(/['"]td['"]|['"]tr['"]|['"]th['"]/);
+			// htmlPaste maps clipboard HTML tables onto AST tables; it must
+			// not construct a DOM <table> for editing.
+			if (!file.endsWith('htmlPaste.ts')) {
+				expect(text, file).not.toMatch(/['"]td['"]|['"]tr['"]|['"]th['"]/);
+			}
 			if (file.endsWith('DocEditor.svelte')) {
 				expect(text).not.toMatch(/\.kb-host\s*\{[^}]*display:\s*grid/s);
 			}

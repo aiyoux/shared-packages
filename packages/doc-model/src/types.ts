@@ -26,13 +26,24 @@ export type Align = 'left' | 'center' | 'right';
 /** Vertical alignment of a table cell. Omitted means top. */
 export type VAlign = 'top' | 'middle' | 'bottom';
 
-export type ParagraphBlock = { id: string; type: 'paragraph'; content: Inline[]; align?: Align };
+export type ParagraphBlock = {
+	id: string;
+	type: 'paragraph';
+	content: Inline[];
+	align?: Align;
+	/** CSS line-height override (unitless multiplier, e.g. `"1.5"`). */
+	lineHeight?: string;
+	/** Extra indent levels (1–8). Omitted means 0. */
+	indent?: number;
+};
 export type HeadingBlock = {
 	id: string;
 	type: 'heading';
 	level: 1 | 2 | 3;
 	content: Inline[];
 	align?: Align;
+	lineHeight?: string;
+	indent?: number;
 };
 export type ListItemBlock = {
 	id: string;
@@ -40,8 +51,10 @@ export type ListItemBlock = {
 	ordered: boolean;
 	content: Inline[];
 	align?: Align;
+	lineHeight?: string;
+	indent?: number;
 };
-export type CodeBlock = { id: string; type: 'code'; language: string; text: string };
+export type CodeBlock = { id: string; type: 'code'; language: string; text: string; indent?: number };
 export type DividerBlock = { id: string; type: 'divider' };
 export type ImageBlock = { id: string; type: 'image'; src: string; alt: string };
 
@@ -68,6 +81,7 @@ export type TableCellBlock = {
 	content: Inline[];
 	align?: Align;
 	valign?: VAlign;
+	lineHeight?: string;
 };
 
 export type TableRowBlock = {
@@ -146,6 +160,8 @@ export type Op =
 	| { kind: 'set-toggle'; id: string; open: boolean }
 	| { kind: 'set-align'; id: string; align: Align | null }
 	| { kind: 'set-valign'; id: string; valign: VAlign | null }
+	| { kind: 'set-line-height'; id: string; lineHeight: string | null }
+	| { kind: 'set-indent'; id: string; indent: number | null }
 	| { kind: 'insert-table-row'; tableId: string; afterId: string | null; row: TableRowBlock }
 	| { kind: 'insert-table-column'; tableId: string; index: number; cells: TableCellBlock[] }
 	| { kind: 'delete-table-row'; tableId: string; rowId: string }

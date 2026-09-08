@@ -37,6 +37,33 @@ export function allowlistedHref(href: string): string | null {
 	return value;
 }
 
+type LinkClickEvent = Pick<MouseEvent, 'target' | 'shiftKey' | 'detail' | 'button'> & {
+	preventDefault(): void;
+	stopPropagation(): void;
+};
+
+/**
+ * contenteditable swallows native `<a>` navigation. Open allowlisted hrefs in
+ * a new tab on a simple left-click (or middle-click). Shift+click keeps
+ * selection; double-click does not navigate so word-select still works.
+ */
+export function followEditorLink(event: LinkClickEvent, root: ParentNode): boolean {
+	const button = event.button ?? 0;
+	if (button !== 0 && button !== 1) return false;
+	if (event.shiftKey) return false;
+	if (button === 0 && event.detail !== 1) return false;
+	const target = event.target;
+	if (!(target instanceof Element)) return false;
+	const a = target.closest('a[href]');
+	if (!a || !root.contains(a)) return false;
+	const href = allowlistedHref(a.getAttribute('href') || '');
+	if (!href) return false;
+	event.preventDefault();
+	event.stopPropagation();
+	window.open(href, '_blank', 'noopener,noreferrer');
+	return true;
+}
+
 /**
  * Image `src` uses the same scheme block as href, then either an https/http URL
  * (linked image — the host CSP must allow `img-src https:`), a page-relative

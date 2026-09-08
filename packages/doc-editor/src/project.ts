@@ -69,7 +69,12 @@ function markElement(doc: Document, mark: Mark): HTMLElement | undefined {
 		case 'link': {
 			const a = doc.createElement('a');
 			const href = allowlistedHref(mark.href);
-			if (href) a.setAttribute('href', href);
+			if (href) {
+				a.setAttribute('href', href);
+				a.setAttribute('target', '_blank');
+				a.setAttribute('rel', 'noopener noreferrer');
+				a.setAttribute('title', href);
+			}
 			return a;
 		}
 	}
@@ -142,6 +147,17 @@ function renderTextLike(
 	}
 	setTreeAttrs(el, block, parentId, depth);
 	if (block.align) el.setAttribute('data-align', block.align);
+	if (block.lineHeight) el.style.lineHeight = block.lineHeight;
+	const indent = block.type === 'table_cell' ? undefined : block.indent;
+	if (indent) {
+		el.setAttribute('data-indent', String(indent));
+		const step = 1.5;
+		if (block.type === 'list_item') {
+			el.style.marginLeft = `${step * (1 + indent)}rem`;
+		} else {
+			el.style.paddingLeft = `${step * indent}rem`;
+		}
+	}
 	if (block.type === 'table_cell' && block.valign) el.setAttribute('data-valign', block.valign);
 	appendSpans(doc, el, block.content);
 	stripMagicBr(el);
@@ -171,6 +187,10 @@ function renderCode(
 	const pre = doc.createElement('pre');
 	setTreeAttrs(pre, block, parentId, depth);
 	if (block.language) pre.setAttribute('data-language', block.language);
+	if (block.indent) {
+		pre.setAttribute('data-indent', String(block.indent));
+		pre.style.marginLeft = `${1.5 * block.indent}rem`;
+	}
 	const code = doc.createElement('code');
 	code.appendChild(doc.createTextNode(block.text));
 	pre.appendChild(code);
@@ -281,10 +301,9 @@ export function renderBlock(
 /** Imperative projection into the one contenteditable host. Never innerHTML. Rows omitted. */
 /**
  * Numbers for ordered list items, per sibling run: each run of *adjacent*
- * ordered items under one parent counts 1..n — a bullet item or any other
- * block kind breaks the run and the next ordered item restarts at 1. Runs
- * are computed per parent (page, callout, toggle), so nested lists number
- * in their own scope.
+ * ordered items at the same indent under one parent counts 1..n. A bullet
+ * at the same indent (or shallower) breaks that run; nested indent levels
+ * keep their own counters so outdenting continues the outer sequence.
  *
  * Computed here rather than with CSS counters: a counter-reset on the first
  * item of a run — which any restart scheme needs — shadows the count for
@@ -295,13 +314,21 @@ export function renderBlock(
 function orderedNumbers(page: KbPage): Map<string, number> {
 	const nums = new Map<string, number>();
 	const walk = (parent: ParentRef): void => {
-		let run = 0;
+		const runAt: number[] = [];
 		for (const child of childrenOf(page, parent)) {
 			if (child.type === 'list_item' && child.ordered) {
-				nums.set(child.id, ++run);
+				const ind = child.indent ?? 0;
+				runAt.length = ind + 1;
+				runAt[ind] = (runAt[ind] ?? 0) + 1;
+				nums.set(child.id, runAt[ind]!);
 				continue;
 			}
-			run = 0;
+			if (child.type === 'list_item') {
+				// A bullet breaks this indent and deeper; outer numbered runs continue.
+				runAt.length = child.indent ?? 0;
+				continue;
+			}
+			runAt.length = 0;
 			if (isContainer(child)) walk(child);
 		}
 	};

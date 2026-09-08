@@ -28,13 +28,31 @@ describe('clipboard', () => {
 		expect(blocks?.length).toBe(2);
 	});
 
-	it('HTML paste is a plaintext strip (no DOMParser soup)', () => {
+	it('HTML paste keeps italics (and still strips scripts)', () => {
 		expect(stripHtml('<b>hi</b><script>alert(1)</script>')).toBe('hialert(1)');
 		const state = createEditorState(page([para('p', '')]));
 		const ops = pasteOps(state, state.selection, { html: '<p>Hello <em>there</em></p>', plain: '' });
 		const next = dispatchMany(state, ops);
-		expect(plaintextOf(next.page.blocks[0])).toMatch(/Hello/);
-		expect(plaintextOf(next.page.blocks[0])).not.toMatch(/em/);
+		const block = next.page.blocks[0];
+		expect(block.type).toBe('paragraph');
+		if (block.type === 'paragraph') {
+			expect(block.content.map((s) => s.text).join('')).toBe('Hello there');
+			const italic = block.content.find((s) => s.marks.some((m) => m.type === 'italic'));
+			expect(italic?.text).toBe('there');
+		}
+	});
+
+	it('prefers HTML structure over text/plain (Word sends both)', () => {
+		const state = createEditorState(page([para('p', '')]));
+		const next = dispatchMany(
+			state,
+			pasteOps(state, state.selection, {
+				html: '<ul><li>one</li><li>two</li></ul>',
+				plain: 'one\ntwo'
+			})
+		);
+		expect(next.page.blocks.map((b) => b.type)).toEqual(['list_item', 'list_item']);
+		expect(next.page.blocks.every((b) => b.type === 'list_item' && b.ordered === false)).toBe(true);
 	});
 
 	it('internal JSON flavor inserts remapped blocks', () => {

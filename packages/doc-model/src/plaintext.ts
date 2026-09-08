@@ -2,8 +2,12 @@ import { blockChildren } from './tree.js';
 import type {
 	DocBody,
 	Block,
+	CodeBlock,
 	ContainerBlock,
+	HeadingBlock,
 	KbPage,
+	ListItemBlock,
+	ParagraphBlock,
 	TableStructureBlock,
 	TextLikeBlock
 } from './types.js';
@@ -14,6 +18,18 @@ export function isTextLike(block: Block): block is TextLikeBlock {
 		block.type === 'heading' ||
 		block.type === 'list_item' ||
 		block.type === 'table_cell'
+	);
+}
+
+export type IndentableBlock = ParagraphBlock | HeadingBlock | ListItemBlock | CodeBlock;
+
+/** Paragraphs, headings, list items, and code fences can carry `indent`. Cells cannot. */
+export function canTakeIndent(block: Block): block is IndentableBlock {
+	return (
+		block.type === 'paragraph' ||
+		block.type === 'heading' ||
+		block.type === 'list_item' ||
+		block.type === 'code'
 	);
 }
 

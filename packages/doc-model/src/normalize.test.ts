@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createEmptyPage } from './createEmptyPage.js';
-import { normalizePage, normalizeSpans } from './normalize.js';
+import { normalizePage, normalizeSpans, sanitizeIndent, sanitizeLineHeight } from './normalize.js';
 import { documentOrder } from './tree.js';
 import { isNonTextual, isUnknownBlock } from './plaintext.js';
 import { KB_FORMAT, type KbPage, type Mark, type TextSpan } from './types.js';
@@ -8,6 +8,30 @@ import { KB_FORMAT, type KbPage, type Mark, type TextSpan } from './types.js';
 function span(text: string, marks: Mark[] = []): TextSpan {
 	return { type: 'text', text, marks };
 }
+
+describe('sanitizeLineHeight', () => {
+	it('accepts unitless multipliers in range and rejects junk', () => {
+		expect(sanitizeLineHeight('1.5')).toBe('1.5');
+		expect(sanitizeLineHeight('1.50')).toBe('1.5');
+		expect(sanitizeLineHeight(' 2 ')).toBe('2');
+		expect(sanitizeLineHeight('0.7')).toBeNull();
+		expect(sanitizeLineHeight('5')).toBeNull();
+		expect(sanitizeLineHeight('1.5px')).toBeNull();
+		expect(sanitizeLineHeight('')).toBeNull();
+	});
+});
+
+describe('sanitizeIndent', () => {
+	it('keeps 1–8 and drops 0 / junk', () => {
+		expect(sanitizeIndent(1)).toBe(1);
+		expect(sanitizeIndent(8)).toBe(8);
+		expect(sanitizeIndent(0)).toBeUndefined();
+		expect(sanitizeIndent(9)).toBeUndefined();
+		expect(sanitizeIndent(1.5)).toBeUndefined();
+		expect(sanitizeIndent('2')).toBe(2);
+		expect(sanitizeIndent('nope')).toBeUndefined();
+	});
+});
 
 describe('normalizeSpans', () => {
 	it('drops empty spans except a single empty span', () => {
