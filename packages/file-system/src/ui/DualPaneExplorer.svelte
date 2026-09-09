@@ -30,7 +30,8 @@
 		type ExplorerOpenTarget,
 		type OpenProjectContext,
 		type QuickEditVideoContext,
-		type QuickEditImageContext
+		type QuickEditImageContext,
+		type QuickConvertSvgContext
 	} from './explorerDriver.js';
 	import { createMemoryExplorerDriver } from './memoryExplorerDriver.js';
 	import { type PaneId, type DualPaneTids } from './dualPaneTypes.js';
@@ -237,6 +238,7 @@
 		}) => void | Promise<void>;
 		onQuickEditVideo?: (entry: ExplorerEntry, ctx: QuickEditVideoContext) => void;
 		onQuickEditImage?: (entry: ExplorerEntry, ctx: QuickEditImageContext) => void;
+		onQuickConvertSvg?: (entry: ExplorerEntry, ctx: QuickConvertSvgContext) => void;
 		tids?: Partial<DualPaneTids>;
 		settingsPortal?: string;
 		hideSettingsGear?: boolean;
@@ -279,6 +281,7 @@
 		onSend,
 		onQuickEditVideo,
 		onQuickEditImage,
+		onQuickConvertSvg,
 		tids: tidsOverride = {},
 		settingsPortal = '',
 		hideSettingsGear = false,
@@ -1966,6 +1969,7 @@
 						onContextChange={(ctx) => applyPaneCtx(id, ctx)}
 						{onQuickEditVideo}
 						{onQuickEditImage}
+						{onQuickConvertSvg}
 					>
 						{#snippet headerLeading()}
 							{@render paneConn(id)}
@@ -2005,6 +2009,7 @@
 						onContextChange={(ctx) => applyPaneCtx(id, ctx)}
 						{onQuickEditVideo}
 						{onQuickEditImage}
+						{onQuickConvertSvg}
 					>
 						{#snippet headerLeading()}
 							{@render paneConn(id)}
@@ -2042,6 +2047,7 @@
 						onContextChange={(ctx) => applyPaneCtx(id, ctx)}
 						{onQuickEditVideo}
 						{onQuickEditImage}
+						{onQuickConvertSvg}
 					>
 						{#snippet headerLeading()}
 							{@render paneConn(id)}

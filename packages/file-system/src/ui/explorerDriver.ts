@@ -40,6 +40,9 @@ export type QuickEditVideoContext = QuickEditFileContext;
 /** Read the previewed raster and write a sibling file on the same backend. */
 export type QuickEditImageContext = QuickEditFileContext;
 
+/** Read the previewed raster and write a sibling SVG on the same backend. */
+export type QuickConvertSvgContext = QuickEditFileContext;
+
 /**
  * DualPaneExplorer attaches this to `onOpenProject` so Files can tell Projects
  * whether the folder is local VFS, a monitor path, or another backend.

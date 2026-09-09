@@ -14,6 +14,7 @@ if (typeof URL.createObjectURL !== 'function') {
 	}) as typeof URL.revokeObjectURL;
 }
 import {
+	canQuickConvertSvg,
 	canQuickEditRaster,
 	coerceMediaBlob,
 	getPreviewKind,
@@ -54,6 +55,15 @@ describe('canQuickEditRaster', () => {
 		assert.equal(canQuickEditRaster(file({ name: 'icon.SVG' })), false);
 		assert.equal(canQuickEditRaster(file({ name: 'clip.webm' })), false);
 		assert.equal(canQuickEditRaster({ id: 'f', kind: 'folder', name: 'dir', parentId: null }), false);
+	});
+});
+
+describe('canQuickConvertSvg', () => {
+	it('allows bitmaps including gif and rejects svg', () => {
+		assert.equal(canQuickConvertSvg(file({ name: 'photo.png' })), true);
+		assert.equal(canQuickConvertSvg(file({ name: 'anim.gif' })), true);
+		assert.equal(canQuickConvertSvg(file({ name: 'icon.SVG' })), false);
+		assert.equal(canQuickConvertSvg(file({ name: 'clip.webm' })), false);
 	});
 });
 

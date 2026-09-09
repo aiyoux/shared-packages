@@ -77,6 +77,12 @@ export function canQuickEditRaster(entry: ExplorerEntry): boolean {
 	return e !== '.gif' && e !== '.svg';
 }
 
+/** Bitmaps VTracer can trace. SVG is already vector. */
+export function canQuickConvertSvg(entry: ExplorerEntry): boolean {
+	if (getPreviewKind(entry) !== 'image') return false;
+	return ext(entry.name) !== '.svg';
+}
+
 /** Icon name for a preview kind (used as fallback when no thumbnail). */
 export function previewKindIcon(kind: PreviewKind): 'image' | 'film' | 'music' | 'file-text' {
 	if (kind === 'image') return 'image';

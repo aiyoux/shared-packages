@@ -17,7 +17,8 @@
 		type ExplorerOpenTarget,
 		type ExplorerOpenContext,
 		type QuickEditVideoContext,
-		type QuickEditImageContext
+		type QuickEditImageContext,
+		type QuickConvertSvgContext
 	} from './explorerDriver.js';
 	import { createLocalExplorerDriver } from './localExplorerDriver.js';
 	import StoragePersistenceStatus from './StoragePersistenceStatus.svelte';
@@ -111,7 +112,7 @@
 	import FeThumbnail from './FeThumbnail.svelte';
 	import FeTreeView from './FeTreeView.svelte';
 	import FeFloatingPreview from './FeFloatingPreview.svelte';
-	import { canQuickEditRaster, getPreviewKind } from './feThumbnails.js';
+	import { canQuickConvertSvg, canQuickEditRaster, getPreviewKind } from './feThumbnails.js';
 	import { detectProject } from './detectProject.js';
 	import FeConfirmDialog from './FeConfirmDialog.svelte';
 	import {
@@ -154,6 +155,8 @@
 		onQuickEditVideo?: (entry: ExplorerEntry, ctx: QuickEditVideoContext) => void;
 		/** Preview "Quick edit" for raster images — host opens Image Edit. */
 		onQuickEditImage?: (entry: ExplorerEntry, ctx: QuickEditImageContext) => void;
+		/** Preview "Convert to SVG" for bitmaps — host opens Images to SVG. */
+		onQuickConvertSvg?: (entry: ExplorerEntry, ctx: QuickConvertSvgContext) => void;
 		/** Override the preview Open label (string or per-entry). */
 		openLabel?: string | ((entry: ExplorerOpenTarget) => string);
 		onSave?: (args: {
@@ -226,6 +229,7 @@
 		sendLabel = 'Send this file',
 		onQuickEditVideo,
 		onQuickEditImage,
+		onQuickConvertSvg,
 		openLabel,
 		onSave,
 		onClose,
@@ -4043,6 +4047,22 @@
 			}}
 		>
 			Quick edit
+		</button>
+	{/if}
+	{#if driver.writeFile && onQuickConvertSvg && canQuickConvertSvg(entry)}
+		<button
+			type="button"
+			class="ds-btn ds-btn--sm ds-btn--secondary"
+			data-testid="fe-file-preview-convert-svg"
+			onclick={() => {
+				const target = entry;
+				onQuickConvertSvg(target, {
+					read: () => readOpenTarget(target),
+					save: (file: File) => driver.writeFile!(target.parentId, file)
+				});
+			}}
+		>
+			Convert to SVG
 		</button>
 	{/if}
 	<button

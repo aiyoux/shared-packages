@@ -451,6 +451,53 @@ describe('FileExplorer component', () => {
 		expect(names).toContain('photo (edit).png');
 	});
 
+	it('details Convert to SVG is offered for bitmaps, not text', async () => {
+		await vfs.writeFile({
+			parentId: null,
+			name: 'photo.png',
+			fileType: 'image',
+			body: new Blob([new Uint8Array([1, 2, 3])], { type: 'image/png' }),
+			contentType: 'image/png'
+		});
+		await vfs.writeFile({
+			parentId: null,
+			name: 'note.txt',
+			fileType: 'unknown',
+			body: new Blob(['hello'], { type: 'text/plain' }),
+			contentType: 'text/plain'
+		});
+		const hits: string[] = [];
+		render(FileExplorer, {
+			props: {
+				mode: 'manage',
+				vfs,
+				variant: 'panel',
+				onQuickConvertSvg: (entry) => {
+					hits.push(entry.name);
+				}
+			}
+		});
+		await viWaitForRows(2);
+
+		const txt = document.querySelector(
+			'[data-testid="fe-file-row"][data-name="note.txt"]'
+		) as HTMLElement;
+		await fireEvent.click(txt);
+		await fireEvent.click(screen.getByTestId('fe-item-details'));
+		await screen.findByTestId('fe-file-preview');
+		expect(screen.queryByTestId('fe-file-preview-convert-svg')).toBeNull();
+		await fireEvent.click(screen.getByTestId('fe-file-preview-close'));
+
+		const png = document.querySelector(
+			'[data-testid="fe-file-row"][data-name="photo.png"]'
+		) as HTMLElement;
+		await fireEvent.click(png);
+		await fireEvent.click(screen.getByTestId('fe-item-details'));
+		await screen.findByTestId('fe-file-preview');
+		await fireEvent.click(screen.getByTestId('fe-file-preview-convert-svg'));
+		expect(hits).toEqual(['photo.png']);
+	});
+
 	it('details Quick edit is hidden when the host does not pass a callback', async () => {
 		await vfs.writeFile({
 			parentId: null,
@@ -1013,6 +1060,31 @@ describe('FileExplorer component', () => {
 			document.querySelector('[data-testid="fe-file-row"]')?.getAttribute('data-name') ===
 			'ClickedOut.txt'
 		);
+	});
+
+	it('onContextChange picks up a rename so copy-across gets the new name', async () => {
+		await vfs.writeFile({ parentId: null, name: 'Before.txt', body: 'hi' });
+		const seen: string[] = [];
+		render(FileExplorer, {
+			props: {
+				mode: 'manage',
+				vfs,
+				variant: 'panel',
+				onContextChange: (ctx) => {
+					const n = ctx.entries.find((e) => e.kind === 'file');
+					if (n) seen.push(n.name);
+				}
+			}
+		});
+		await viWaitForRows(1);
+		const row = document.querySelector('[data-testid="fe-file-row"]') as HTMLElement;
+		await fireEvent.click(row);
+		await fireEvent.click(screen.getByTestId('fe-rename-btn'));
+		const input = await screen.findByTestId('fe-rename-input');
+		await fireEvent.input(input, { target: { value: 'After.txt' } });
+		await fireEvent.click(screen.getByTestId('fe-rename-ok'));
+		await viWaitFor(() => seen.includes('After.txt'));
+		expect(seen[seen.length - 1]).toBe('After.txt');
 	});
 
 	it('turning Select multiple off deselects every selected row', async () => {
