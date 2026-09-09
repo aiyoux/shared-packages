@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { untrack } from 'svelte';
+	import { untrack, type Snippet } from 'svelte';
 	import {
 		FeStorageDialog,
 		FeTreeView,
@@ -26,7 +26,8 @@
 		opened = undefined,
 		connection = undefined,
 		connectionLabel = 'Files',
-		localVfs = undefined
+		localVfs = undefined,
+		map = undefined
 	}: {
 		driver?: ExplorerDriver;
 		folderId?: ExplorerEntryId | null;
@@ -46,6 +47,8 @@
 		 * stay hidden.
 		 */
 		localVfs?: VfsService;
+		/** Host-provided dependency map. When set, History shares this pane. */
+		map?: Snippet;
 	} = $props();
 
 	// Fallback for parents that do not own the handoff. Consumed once, at init.
@@ -66,6 +69,7 @@
 	let storageDialogOpen = $state(false);
 	let projectLabel = $state('');
 	let selectedId = $state<ExplorerEntryId | null>(null);
+	let detailPane = $state<'history' | 'map'>('history');
 	/** Newest resolve wins; late replies from a previous folder are dropped. */
 	let resolveReq = 0;
 
@@ -197,24 +201,52 @@
 		/>
 	{/if}
 	<div class="hist">
-		{#if activeRepo?.backend === 'local'}
-			<button type="button" data-testid="projects-init-repo" onclick={() => void initLocalRepo()}>
-				Init
-			</button>
+		{#if map}
+			<div class="ds-seg pane-switch" data-testid="projects-pane-switch">
+				<button
+					type="button"
+					class:selected={detailPane === 'history'}
+					data-testid="projects-pane-history"
+					onclick={() => (detailPane = 'history')}
+				>
+					History
+				</button>
+				<button
+					type="button"
+					class:selected={detailPane === 'map'}
+					data-testid="projects-pane-map"
+					onclick={() => (detailPane = 'map')}
+				>
+					Dependency map
+				</button>
+			</div>
 		{/if}
-		{#if localVfs && projectRootId}
-			<button
-				type="button"
-				data-testid="projects-check-integrity"
-				onclick={() => (storageDialogOpen = true)}
-			>
-				Check project integrity
-			</button>
-		{/if}
-		{#if activeRepo}
-			<GitHistory {gitHost} repoId={activeRepo.id} />
+		{#if map && detailPane === 'map'}
+			<div class="map" data-testid="projects-map-pane">
+				{@render map()}
+			</div>
 		{:else}
-			<GitHistory snapshot={null} />
+			<div class="hist-body">
+				{#if activeRepo?.backend === 'local'}
+					<button type="button" data-testid="projects-init-repo" onclick={() => void initLocalRepo()}>
+						Init
+					</button>
+				{/if}
+				{#if localVfs && projectRootId}
+					<button
+						type="button"
+						data-testid="projects-check-integrity"
+						onclick={() => (storageDialogOpen = true)}
+					>
+						Check project integrity
+					</button>
+				{/if}
+				{#if activeRepo}
+					<GitHistory {gitHost} repoId={activeRepo.id} />
+				{:else}
+					<GitHistory snapshot={null} />
+				{/if}
+			</div>
 		{/if}
 	</div>
 </div>
@@ -232,6 +264,26 @@
 		min-width: 0;
 		min-height: 0;
 		overflow: auto;
+	}
+	.hist {
+		display: flex;
+		flex-direction: column;
+		gap: 8px;
+	}
+	.pane-switch {
+		flex: 0 0 auto;
+		align-self: flex-start;
+	}
+	.hist-body,
+	.map {
+		flex: 1;
+		min-height: 0;
+		min-width: 0;
+		overflow: auto;
+	}
+	.map {
+		display: flex;
+		flex-direction: column;
 	}
 	.empty {
 		margin: 0;
