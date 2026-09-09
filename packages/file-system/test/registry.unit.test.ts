@@ -23,6 +23,7 @@ describe('registry multi-ext image + forceExtension', () => {
 		assert.deepEqual(acceptedExtensionsFor('cari'), ['.cari']);
 		assert.deepEqual(acceptedExtensionsFor('kb'), ['.kb']);
 		assert.deepEqual(acceptedExtensionsFor('anim'), ['.anim']);
+		assert.deepEqual(acceptedExtensionsFor('vide'), ['.vide']);
 		assert.deepEqual(acceptedExtensionsFor('json'), ['.json']);
 		assert.deepEqual(acceptedExtensionsFor('pdf'), ['.pdf']);
 		assert.deepEqual(acceptedExtensionsFor('svg'), ['.svg']);
@@ -70,6 +71,8 @@ describe('registry multi-ext image + forceExtension', () => {
 		assert.equal(forceExtension('index.kb', 'kb'), 'index.kb');
 		assert.equal(forceExtension('clip', 'anim'), 'clip.anim');
 		assert.equal(forceExtension('clip.anim', 'anim'), 'clip.anim');
+		assert.equal(forceExtension('edit', 'vide'), 'edit.vide');
+		assert.equal(forceExtension('edit.vide', 'vide'), 'edit.vide');
 		assert.equal(forceExtension('note.json', 'json'), 'note.json');
 		assert.equal(forceExtension('note', 'json'), 'note.json');
 		// wrong product ext stripped then primary applied
@@ -79,6 +82,8 @@ describe('registry multi-ext image + forceExtension', () => {
 		assert.equal(forceExtension('x.cari', 'igfx'), 'x.igfx');
 		assert.equal(forceExtension('x.anim', 'skch'), 'x.skch');
 		assert.equal(forceExtension('x.skch', 'anim'), 'x.anim');
+		assert.equal(forceExtension('x.vide', 'skch'), 'x.skch');
+		assert.equal(forceExtension('x.skch', 'vide'), 'x.vide');
 	});
 
 	it('inferFileTypeFromName maps image multi-ext and product types', () => {
@@ -98,6 +103,7 @@ describe('registry multi-ext image + forceExtension', () => {
 		assert.equal(inferFileTypeFromName('a.cari'), 'cari');
 		assert.equal(inferFileTypeFromName('index.kb'), 'kb');
 		assert.equal(inferFileTypeFromName('loop.anim'), 'anim');
+		assert.equal(inferFileTypeFromName('cut.vide'), 'vide');
 		assert.equal(inferFileTypeFromName('report.pdf'), 'pdf');
 		assert.equal(inferFileTypeFromName('vector.svg'), 'svg');
 		assert.equal(inferFileTypeFromName('icon.SVG'), 'svg');
@@ -116,6 +122,7 @@ describe('registry multi-ext image + forceExtension', () => {
 		assert.equal(getFileTypeByExtension('.cari')?.id, 'cari');
 		assert.equal(getFileTypeByExtension('.kb')?.id, 'kb');
 		assert.equal(getFileTypeByExtension('.anim')?.id, 'anim');
+		assert.equal(getFileTypeByExtension('.vide')?.id, 'vide');
 		assert.equal(getFileTypeByExtension('.pdf')?.id, 'pdf');
 		assert.equal(getFileTypeByExtension('.svg')?.id, 'svg');
 	});

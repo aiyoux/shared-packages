@@ -2236,6 +2236,7 @@
 		if (entry.fileType === 'igfx') return 'Open in Infographic';
 		if (entry.fileType === 'kb') return 'Open in Knowledge Base';
 		if (entry.fileType === 'anim') return 'Open in Animations';
+		if (entry.fileType === 'vide') return 'Open in Video';
 		if (entry.fileType === 'vrec') return 'Open in voice';
 		if (entry.fileType === 'vcomp') return 'Open in voice';
 		if (entry.fileType === 'image') return 'Open in Images';

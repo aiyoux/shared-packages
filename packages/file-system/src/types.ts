@@ -8,6 +8,7 @@ export type FileTypeId =
 	| 'igfx'
 	| 'kb'
 	| 'anim'
+	| 'vide'
 	| 'image'
 	| 'svg'
 	| 'video'
