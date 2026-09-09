@@ -20,12 +20,13 @@
  * Wrapped in `@layer primitives` (host declares the layer order).
  */
 @layer primitives {
-	[data-tooltip] {
+	[data-tooltip]:not(select):not(input) {
 		position: relative;
 		/* Contain the tooltip's layout so its absolutely-positioned ::after
 		   (width: max-content) doesn't inflate the element's scrollWidth.
 		   Without this, tooltips inside a scroll container force a horizontal
-		   scrollbar. */
+		   scrollbar. `contain: layout` on a <select> also clips/suppresses
+		   the native option menu in Chromium. */
 		contain: layout;
 	}
 

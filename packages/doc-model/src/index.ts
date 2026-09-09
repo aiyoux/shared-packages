@@ -37,6 +37,7 @@ export {
 } from './mapPoint.js';
 export {
 	canonicalMarks,
+	marksAtCaret,
 	marksEqual,
 	normalizeBody,
 	normalizePage,

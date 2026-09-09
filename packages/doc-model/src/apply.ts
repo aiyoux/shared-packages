@@ -2,6 +2,7 @@ import {
 	canonicalMarks,
 	emptyParagraph,
 	emptySpans,
+	marksAtCaret,
 	normalizeBody,
 	normalizeSpans,
 	orderedBlock,
@@ -139,26 +140,7 @@ function ensureSpans(content: TextSpan[] | undefined): TextSpan[] {
 }
 
 function marksAtInsert(content: TextSpan[], offset: number): Mark[] {
-	const spans = ensureSpans(content);
-	const total = spans.reduce((sum, span) => sum + span.text.length, 0);
-	const empty = total === 0 || (spans.length === 1 && spans[0].text === '');
-	if (empty) return [];
-	let pos = 0;
-	for (let i = 0; i < spans.length; i++) {
-		const next = pos + spans[i].text.length;
-		if (offset === pos || offset === next) {
-			if (offset > 0) {
-				const leftIndex = offset === next ? i : i - 1;
-				return canonicalMarks(spans[leftIndex].marks);
-			}
-			return canonicalMarks(spans[0].marks);
-		}
-		if (offset > pos && offset < next) {
-			return canonicalMarks(spans[i].marks);
-		}
-		pos = next;
-	}
-	return canonicalMarks(spans[spans.length - 1].marks);
+	return marksAtCaret(ensureSpans(content), offset);
 }
 
 function insertIntoSpans(

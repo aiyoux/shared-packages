@@ -115,4 +115,21 @@ describe('appWindowsOwnsShortcut', () => {
 			true
 		);
 	});
+
+	it('focused pane owns shortcut when target is outside the leaf (e.g. body)', () => {
+		const body = el();
+		const a = el({ 'data-testid': 'pl-leaf', 'data-pl-focused': 'true' });
+		const b = el({ 'data-testid': 'pl-leaf', 'data-pl-focused': 'false' });
+		const hostA = el({ class: 'aw-host' });
+		const hostB = el({ class: 'aw-host' });
+		a.append(hostA);
+		b.append(hostB);
+		// body is not inside any pl-leaf — the focused pane should own it
+		expect(appWindowsOwnsShortcut(hostA as unknown as HTMLElement, body as unknown as EventTarget)).toBe(
+			true
+		);
+		expect(appWindowsOwnsShortcut(hostB as unknown as HTMLElement, body as unknown as EventTarget)).toBe(
+			false
+		);
+	});
 });

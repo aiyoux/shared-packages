@@ -146,6 +146,56 @@ function markPayload(mark: Mark): string | undefined {
 	return undefined;
 }
 
+function linkHrefOf(marks: Mark[]): string | null {
+	for (const mark of marks) {
+		if (mark.type === 'link') return mark.href;
+	}
+	return null;
+}
+
+/**
+ * Marks for a caret or insert at `offset`. Link is exclusive at the trailing
+ * edge: typing after a hyperlink is plain text; typing inside it stays linked.
+ */
+export function marksAtCaret(content: TextSpan[], offset: number): Mark[] {
+	const spans = content && content.length > 0 ? content : emptySpans();
+	const total = spans.reduce((sum, span) => sum + span.text.length, 0);
+	if (total === 0 || (spans.length === 1 && spans[0]!.text === '')) return [];
+	let pos = 0;
+	for (let i = 0; i < spans.length; i++) {
+		const span = spans[i]!;
+		const next = pos + span.text.length;
+		if (offset < pos || offset > next) {
+			pos = next;
+			continue;
+		}
+		if (offset > pos && offset < next) return canonicalMarks(span.marks);
+		if (offset === next) {
+			const right = spans[i + 1];
+			const leftHref = linkHrefOf(span.marks);
+			const rightHref = right ? linkHrefOf(right.marks) : null;
+			if (leftHref && leftHref !== rightHref) {
+				return canonicalMarks(span.marks.filter((m) => m.type !== 'link'));
+			}
+			return canonicalMarks(span.marks);
+		}
+		if (offset === 0) return canonicalMarks(span.marks);
+		const prev = spans[i - 1];
+		if (prev) {
+			const leftHref = linkHrefOf(prev.marks);
+			const rightHref = linkHrefOf(span.marks);
+			if (leftHref && leftHref !== rightHref) {
+				return canonicalMarks(prev.marks.filter((m) => m.type !== 'link'));
+			}
+			return canonicalMarks(prev.marks);
+		}
+		return canonicalMarks(span.marks);
+	}
+	const last = spans[spans.length - 1]!;
+	const href = linkHrefOf(last.marks);
+	return canonicalMarks(href ? last.marks.filter((m) => m.type !== 'link') : last.marks);
+}
+
 export function marksEqual(a: Mark[], b: Mark[]): boolean {
 	const left = canonicalMarks(a);
 	const right = canonicalMarks(b);

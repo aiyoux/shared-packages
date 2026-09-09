@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createEmptyPage } from './createEmptyPage.js';
-import { normalizePage, normalizeSpans, sanitizeIndent, sanitizeLineHeight } from './normalize.js';
+import { marksAtCaret, normalizePage, normalizeSpans, sanitizeIndent, sanitizeLineHeight } from './normalize.js';
 import { documentOrder } from './tree.js';
 import { isNonTextual, isUnknownBlock } from './plaintext.js';
 import { KB_FORMAT, type KbPage, type Mark, type TextSpan } from './types.js';
@@ -8,6 +8,17 @@ import { KB_FORMAT, type KbPage, type Mark, type TextSpan } from './types.js';
 function span(text: string, marks: Mark[] = []): TextSpan {
 	return { type: 'text', text, marks };
 }
+
+describe('marksAtCaret', () => {
+	it('drops link at the trailing edge and keeps it inside', () => {
+		const link = { type: 'link' as const, href: 'https://example.com' };
+		const spans = [span('ab', [link]), span('cd')];
+		expect(marksAtCaret(spans, 1)).toEqual([link]);
+		expect(marksAtCaret(spans, 2)).toEqual([]);
+		expect(marksAtCaret(spans, 0)).toEqual([link]);
+		expect(marksAtCaret(spans, 4)).toEqual([]);
+	});
+});
 
 describe('sanitizeLineHeight', () => {
 	it('accepts unitless multipliers in range and rejects junk', () => {

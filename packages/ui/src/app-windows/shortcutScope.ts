@@ -16,8 +16,10 @@ export function appWindowsOwnsShortcut(
 		if (inner) return inner === host;
 		const leaf = host.closest('[data-testid="pl-leaf"]');
 		if (!leaf) return !nested;
-		if (!leaf.contains(el)) return false;
-		return !nested;
+		if (leaf.contains(el)) return !nested;
+		// Target is outside the host's leaf — fall through to the
+		// focused-pane check so the shortcut still fires when this
+		// pane is focused but the user hasn't clicked inside it yet.
 	}
 	if (nested) return false;
 	const leaf = host.closest('[data-testid="pl-leaf"]');

@@ -171,6 +171,25 @@ describe('apply insert-text', () => {
 			span('cdX', [{ type: 'italic' }])
 		);
 	});
+
+	it('does not continue a hyperlink when inserting after it', () => {
+		const src = page([
+			{
+				id: 'p',
+				type: 'paragraph',
+				content: [span('link', [{ type: 'link', href: 'https://example.com' }]), span('!', [])]
+			}
+		]);
+		const after = apply(src, { kind: 'insert-text', at: { blockId: 'p', offset: 4 }, text: 'X' });
+		expect((after.blocks[0] as { content: TextSpan[] }).content).toEqual([
+			span('link', [{ type: 'link', href: 'https://example.com' }]),
+			span('X!', [])
+		]);
+		const inside = apply(src, { kind: 'insert-text', at: { blockId: 'p', offset: 2 }, text: 'X' });
+		expect((inside.blocks[0] as { content: TextSpan[] }).content[0]).toEqual(
+			span('liXnk', [{ type: 'link', href: 'https://example.com' }])
+		);
+	});
 });
 
 describe('apply delete-range', () => {
@@ -310,6 +329,26 @@ describe('apply format-range', () => {
 		});
 		expect((twice.blocks[0] as { content: TextSpan[] }).content[0].marks).toEqual([
 			{ type: 'link', href: 'https://b.example' }
+		]);
+	});
+
+	it('unlinks only the selected slice of a hyperlink', () => {
+		const src = page([
+			{
+				id: 'p',
+				type: 'paragraph',
+				content: [span('abcdef', [{ type: 'link', href: 'https://example.com' }])]
+			}
+		]);
+		const next = apply(src, {
+			kind: 'format-range',
+			range: { anchor: { blockId: 'p', offset: 3 }, head: { blockId: 'p', offset: 6 } },
+			mark: { type: 'link', href: 'https://example.com' },
+			on: false
+		});
+		expect((next.blocks[0] as { content: TextSpan[] }).content).toEqual([
+			span('abc', [{ type: 'link', href: 'https://example.com' }]),
+			span('def')
 		]);
 	});
 });
