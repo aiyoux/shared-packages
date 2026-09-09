@@ -205,6 +205,33 @@ describe('DualPaneExplorer onOpenProject context', () => {
 		expect(hits).toEqual(['clip.webm']);
 	});
 
+	it('forwards Quick edit from an image preview', async () => {
+		await vfs.writeFile({
+			parentId: null,
+			name: 'photo.png',
+			fileType: 'image',
+			body: new Blob([new Uint8Array([1, 2, 3])], { type: 'image/png' }),
+			contentType: 'image/png'
+		});
+		const hits: string[] = [];
+		render(DualPaneExplorer, {
+			props: {
+				localDriver: createLocalExplorerDriver(vfs),
+				hideToggles: true,
+				dualPaneKey: `dpe:dual:${Math.random()}`,
+				onQuickEditImage: (entry) => {
+					hits.push(entry.name);
+				}
+			}
+		});
+		await viWaitFor(() => document.querySelectorAll('[data-testid="fe-file-row"]').length >= 1);
+		const row = document.querySelector('[data-testid="fe-file-row"]') as HTMLElement;
+		await fireEvent.click(row);
+		await fireEvent.click(screen.getByTestId('fe-item-details'));
+		await fireEvent.click(await screen.findByTestId('fe-file-preview-quick-edit'));
+		expect(hits).toEqual(['photo.png']);
+	});
+
 	it('windows overlay covers the file-manager header (connection / details / cut / copy)', async () => {
 		render(DualPaneExplorer, {
 			props: {

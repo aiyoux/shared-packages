@@ -109,7 +109,9 @@ export {
 	type ExplorerOpenTarget,
 	type ExplorerOpenContext,
 	type OpenProjectContext,
-	type QuickEditVideoContext
+	type QuickEditFileContext,
+	type QuickEditVideoContext,
+	type QuickEditImageContext
 } from './explorerDriver.js';
 export { createLocalExplorerDriver, type LocalExplorerDriverOptions } from './localExplorerDriver.js';
 export { portal } from './portal.js';

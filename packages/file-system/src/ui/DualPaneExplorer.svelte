@@ -29,7 +29,8 @@
 		type ExplorerOpenContext,
 		type ExplorerOpenTarget,
 		type OpenProjectContext,
-		type QuickEditVideoContext
+		type QuickEditVideoContext,
+		type QuickEditImageContext
 	} from './explorerDriver.js';
 	import { createMemoryExplorerDriver } from './memoryExplorerDriver.js';
 	import { type PaneId, type DualPaneTids } from './dualPaneTypes.js';
@@ -235,6 +236,7 @@
 			entries: ExplorerEntry[];
 		}) => void | Promise<void>;
 		onQuickEditVideo?: (entry: ExplorerEntry, ctx: QuickEditVideoContext) => void;
+		onQuickEditImage?: (entry: ExplorerEntry, ctx: QuickEditImageContext) => void;
 		tids?: Partial<DualPaneTids>;
 		settingsPortal?: string;
 		hideSettingsGear?: boolean;
@@ -276,6 +278,7 @@
 		onDualChange,
 		onSend,
 		onQuickEditVideo,
+		onQuickEditImage,
 		tids: tidsOverride = {},
 		settingsPortal = '',
 		hideSettingsGear = false,
@@ -1962,6 +1965,7 @@
 							handleClipboardCopyAcross(payload, id, destParent)}
 						onContextChange={(ctx) => applyPaneCtx(id, ctx)}
 						{onQuickEditVideo}
+						{onQuickEditImage}
 					>
 						{#snippet headerLeading()}
 							{@render paneConn(id)}
@@ -2000,6 +2004,7 @@
 							handleClipboardCopyAcross(payload, id, destParent)}
 						onContextChange={(ctx) => applyPaneCtx(id, ctx)}
 						{onQuickEditVideo}
+						{onQuickEditImage}
 					>
 						{#snippet headerLeading()}
 							{@render paneConn(id)}
@@ -2036,6 +2041,7 @@
 							handleClipboardCopyAcross(payload, id, destParent)}
 						onContextChange={(ctx) => applyPaneCtx(id, ctx)}
 						{onQuickEditVideo}
+						{onQuickEditImage}
 					>
 						{#snippet headerLeading()}
 							{@render paneConn(id)}

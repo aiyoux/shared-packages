@@ -388,6 +388,69 @@ describe('FileExplorer component', () => {
 		expect(names).toContain('clip (trim).mp4');
 	});
 
+	it('details Quick edit is raster-only when the host passes onQuickEditImage', async () => {
+		await vfs.writeFile({
+			parentId: null,
+			name: 'photo.png',
+			fileType: 'image',
+			body: new Blob([new Uint8Array([1, 2, 3])], { type: 'image/png' }),
+			contentType: 'image/png'
+		});
+		await vfs.writeFile({
+			parentId: null,
+			name: 'anim.gif',
+			fileType: 'image',
+			body: new Blob([new Uint8Array([1])], { type: 'image/gif' }),
+			contentType: 'image/gif'
+		});
+		const hits: Array<{ name: string; saved?: string }> = [];
+		render(FileExplorer, {
+			props: {
+				mode: 'manage',
+				vfs,
+				variant: 'panel',
+				onQuickEditImage: (entry, ctx) => {
+					hits.push({ name: entry.name });
+					void ctx
+						.save(new File([new Uint8Array([9])], 'photo (edit).png', { type: 'image/png' }))
+						.then((n) => {
+							hits[hits.length - 1]!.saved = n.name;
+						});
+				}
+			}
+		});
+		await viWaitForRows(2);
+
+		const gif = document.querySelector(
+			'[data-testid="fe-file-row"][data-name="anim.gif"]'
+		) as HTMLElement;
+		await fireEvent.click(gif);
+		await fireEvent.click(screen.getByTestId('fe-item-details'));
+		await screen.findByTestId('fe-file-preview');
+		expect(screen.queryByTestId('fe-file-preview-quick-edit')).toBeNull();
+		expect(screen.getByTestId('fe-file-preview-compress')).toBeTruthy();
+		await fireEvent.click(screen.getByTestId('fe-file-preview-close'));
+
+		const png = document.querySelector(
+			'[data-testid="fe-file-row"][data-name="photo.png"]'
+		) as HTMLElement;
+		await fireEvent.click(png);
+		await fireEvent.click(screen.getByTestId('fe-item-details'));
+		const preview = await screen.findByTestId('fe-file-preview');
+		const previewIds = [...preview.querySelectorAll('[data-testid]')].map((el) =>
+			el.getAttribute('data-testid')
+		);
+		expect(previewIds.indexOf('fe-file-preview-quick-edit')).toBeGreaterThan(-1);
+		expect(previewIds.indexOf('fe-file-preview-quick-edit')).toBeLessThan(
+			previewIds.indexOf('fe-file-preview-compress')
+		);
+		await fireEvent.click(screen.getByTestId('fe-file-preview-quick-edit'));
+		await viWaitFor(() => hits.length === 1 && hits[0]!.saved === 'photo (edit).png');
+		expect(hits[0]!.name).toBe('photo.png');
+		const names = (await vfs.list({ parentId: null })).map((n) => n.name);
+		expect(names).toContain('photo (edit).png');
+	});
+
 	it('details Quick edit is hidden when the host does not pass a callback', async () => {
 		await vfs.writeFile({
 			parentId: null,

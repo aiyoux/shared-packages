@@ -28,11 +28,17 @@ export type ExplorerOpenContext = {
 	read: () => Promise<Blob>;
 };
 
-/** Read the previewed video and write a sibling file on the same backend. */
-export type QuickEditVideoContext = {
+/** Read the previewed file and write a sibling on the same backend. */
+export type QuickEditFileContext = {
 	read: () => Promise<Blob>;
 	save: (file: File) => Promise<ExplorerEntry>;
 };
+
+/** Read the previewed video and write a sibling file on the same backend. */
+export type QuickEditVideoContext = QuickEditFileContext;
+
+/** Read the previewed raster and write a sibling file on the same backend. */
+export type QuickEditImageContext = QuickEditFileContext;
 
 /**
  * DualPaneExplorer attaches this to `onOpenProject` so Files can tell Projects

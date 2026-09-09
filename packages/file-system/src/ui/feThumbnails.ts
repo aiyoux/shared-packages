@@ -67,6 +67,16 @@ export function getPreviewKind(entry: ExplorerEntry): PreviewKind | null {
 	return null;
 }
 
+/**
+ * Simple-raster Image Edit can round-trip PNG/JPEG/WebP (and other decodeable
+ * stills). GIF/SVG are previewable images but not in-place raster docs.
+ */
+export function canQuickEditRaster(entry: ExplorerEntry): boolean {
+	if (getPreviewKind(entry) !== 'image') return false;
+	const e = ext(entry.name);
+	return e !== '.gif' && e !== '.svg';
+}
+
 /** Icon name for a preview kind (used as fallback when no thumbnail). */
 export function previewKindIcon(kind: PreviewKind): 'image' | 'film' | 'music' | 'file-text' {
 	if (kind === 'image') return 'image';

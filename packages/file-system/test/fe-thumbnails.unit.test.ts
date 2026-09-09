@@ -14,6 +14,7 @@ if (typeof URL.createObjectURL !== 'function') {
 	}) as typeof URL.revokeObjectURL;
 }
 import {
+	canQuickEditRaster,
 	coerceMediaBlob,
 	getPreviewKind,
 	generateImageThumbnail
@@ -41,6 +42,18 @@ describe('getPreviewKind', () => {
 		assert.equal(getPreviewKind(file({ name: 'x', contentType: 'application/pdf' })), 'pdf');
 		assert.equal(getPreviewKind(file({ name: 'notes.txt' })), null);
 		assert.equal(getPreviewKind({ id: 'f', kind: 'folder', name: 'dir', parentId: null }), null);
+	});
+});
+
+describe('canQuickEditRaster', () => {
+	it('allows still rasters and rejects gif/svg/non-images', () => {
+		assert.equal(canQuickEditRaster(file({ name: 'photo.png' })), true);
+		assert.equal(canQuickEditRaster(file({ name: 'shot.JPEG' })), true);
+		assert.equal(canQuickEditRaster(file({ name: 'x', fileType: 'image' })), true);
+		assert.equal(canQuickEditRaster(file({ name: 'anim.gif' })), false);
+		assert.equal(canQuickEditRaster(file({ name: 'icon.SVG' })), false);
+		assert.equal(canQuickEditRaster(file({ name: 'clip.webm' })), false);
+		assert.equal(canQuickEditRaster({ id: 'f', kind: 'folder', name: 'dir', parentId: null }), false);
 	});
 });
 

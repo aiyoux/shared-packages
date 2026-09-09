@@ -16,7 +16,8 @@
 		type ExplorerEntry,
 		type ExplorerOpenTarget,
 		type ExplorerOpenContext,
-		type QuickEditVideoContext
+		type QuickEditVideoContext,
+		type QuickEditImageContext
 	} from './explorerDriver.js';
 	import { createLocalExplorerDriver } from './localExplorerDriver.js';
 	import StoragePersistenceStatus from './StoragePersistenceStatus.svelte';
@@ -110,7 +111,7 @@
 	import FeThumbnail from './FeThumbnail.svelte';
 	import FeTreeView from './FeTreeView.svelte';
 	import FeFloatingPreview from './FeFloatingPreview.svelte';
-	import { getPreviewKind } from './feThumbnails.js';
+	import { canQuickEditRaster, getPreviewKind } from './feThumbnails.js';
 	import { detectProject } from './detectProject.js';
 	import FeConfirmDialog from './FeConfirmDialog.svelte';
 	import {
@@ -151,6 +152,8 @@
 		sendLabel?: string;
 		/** Preview "Quick edit" for video files — host opens the trimmer. */
 		onQuickEditVideo?: (entry: ExplorerEntry, ctx: QuickEditVideoContext) => void;
+		/** Preview "Quick edit" for raster images — host opens Image Edit. */
+		onQuickEditImage?: (entry: ExplorerEntry, ctx: QuickEditImageContext) => void;
 		/** Override the preview Open label (string or per-entry). */
 		openLabel?: string | ((entry: ExplorerOpenTarget) => string);
 		onSave?: (args: {
@@ -222,6 +225,7 @@
 		onSendFile,
 		sendLabel = 'Send this file',
 		onQuickEditVideo,
+		onQuickEditImage,
 		openLabel,
 		onSave,
 		onClose,
@@ -4023,17 +4027,19 @@
 {/snippet}
 
 {#snippet archiveButtons(entry: ExplorerEntry)}
-	{#if onQuickEditVideo && getPreviewKind(entry) === 'video' && driver.writeFile}
+	{#if driver.writeFile && ((onQuickEditVideo && getPreviewKind(entry) === 'video') || (onQuickEditImage && canQuickEditRaster(entry)))}
 		<button
 			type="button"
 			class="ds-btn ds-btn--sm ds-btn--secondary"
 			data-testid="fe-file-preview-quick-edit"
 			onclick={() => {
 				const target = entry;
-				onQuickEditVideo(target, {
+				const ctx = {
 					read: () => readOpenTarget(target),
-					save: (file) => driver.writeFile!(target.parentId, file)
-				});
+					save: (file: File) => driver.writeFile!(target.parentId, file)
+				};
+				if (getPreviewKind(target) === 'video') onQuickEditVideo?.(target, ctx);
+				else onQuickEditImage?.(target, ctx);
 			}}
 		>
 			Quick edit
