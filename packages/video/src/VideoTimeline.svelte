@@ -183,11 +183,15 @@
 				class="trim-region"
 				style="left: {(trimStart / duration) * 100}%; width: {((trimEnd - trimStart) / duration) * 100}%"
 			></div>
-			<div class="marker start-marker" style="left: {(trimStart / duration) * 100}%"></div>
+			<div class="marker start-marker" style="left: {(trimStart / duration) * 100}%">
+				<span class="marker-bar" aria-hidden="true"></span>
+			</div>
 			<div class="marker-label start-label" style="left: {(trimStart / duration) * 100}%">
 				{formatTime(trimStart)}
 			</div>
-			<div class="marker end-marker" style="left: {(trimEnd / duration) * 100}%"></div>
+			<div class="marker end-marker" style="left: {(trimEnd / duration) * 100}%">
+				<span class="marker-bar" aria-hidden="true"></span>
+			</div>
 			<div class="marker-label end-label" style="left: {(trimEnd / duration) * 100}%">
 				{formatTime(trimEnd)}
 			</div>
@@ -307,45 +311,82 @@
 		left: 0;
 		right: 0;
 		height: 8px;
-		background: rgba(255, 255, 255, 0.1);
-		border-radius: var(--radius-full);
+		background: var(--surface-3, rgb(255 255 255 / 0.08));
+		border: 1px solid var(--line-hairline, var(--border));
+		border-radius: var(--radius-sm, 2px);
+		box-sizing: border-box;
 	}
 
 	.trim-region {
 		position: absolute;
 		top: 22px;
 		height: 8px;
-		background: var(--accent);
-		border-radius: var(--radius-full);
-		opacity: 0.6;
+		background: color-mix(in srgb, var(--accent, #38bdf8) 35%, transparent);
+		border-radius: var(--radius-sm, 2px);
 		pointer-events: none;
 	}
 
 	.marker {
 		position: absolute;
-		top: 10px;
-		width: 12px;
-		height: 32px;
-		background: var(--accent);
-		border-radius: var(--radius-sm);
+		top: 8px;
+		width: 16px;
+		height: 36px;
+		background: transparent;
+		border: none;
+		border-radius: 0;
+		box-shadow: none;
 		transform: translateX(-50%);
-		cursor: grab;
+		cursor: ew-resize;
 		z-index: 2;
-		box-shadow: 0 2px 8px rgba(var(--accent-rgb), 0.4);
-		transition: transform 0.1s ease;
+		display: flex;
+		align-items: stretch;
+		justify-content: center;
 	}
 
 	.marker:active {
 		cursor: grabbing;
-		transform: translateX(-50%) scale(1.2);
+	}
+
+	.marker-bar {
+		position: relative;
+		width: 4px;
+		background: currentColor;
+		box-shadow: 0 0 0 1px rgb(0 0 0 / 0.45);
+	}
+
+	.marker-bar::before,
+	.marker-bar::after {
+		content: '';
+		position: absolute;
+		width: 10px;
+		height: 3px;
+		background: currentColor;
 	}
 
 	.start-marker {
-		background: #10b981;
+		color: var(--accent-emerald, #34d399);
+	}
+
+	.start-marker .marker-bar::before,
+	.start-marker .marker-bar::after {
+		left: 0;
 	}
 
 	.end-marker {
-		background: #ef4444;
+		color: var(--danger, #ef4444);
+	}
+
+	.end-marker .marker-bar::before,
+	.end-marker .marker-bar::after {
+		right: 0;
+	}
+
+	.marker-bar::before {
+		top: 0;
+	}
+
+	.marker-bar::after {
+		bottom: 0;
 	}
 
 	.playhead {
@@ -377,13 +418,13 @@
 	}
 
 	.start-label {
-		color: #10b981;
-		border-color: rgba(16, 185, 129, 0.4);
+		color: var(--accent-emerald, #34d399);
+		border-color: color-mix(in srgb, var(--accent-emerald, #34d399) 40%, transparent);
 	}
 
 	.end-label {
-		color: #ef4444;
-		border-color: rgba(239, 68, 68, 0.4);
+		color: var(--danger, #ef4444);
+		border-color: color-mix(in srgb, var(--danger, #ef4444) 40%, transparent);
 	}
 
 	.playhead-label {
