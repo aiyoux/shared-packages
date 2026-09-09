@@ -6,14 +6,25 @@ export const APPLYING_UPDATE_KEY = 'scratch-pad-applying-update';
 
 export function shouldOfferUpdate(opts: {
 	hasWaitingWorker: boolean;
-	versionChanged: boolean;
+	/** New SW is still precaching. Refresh must skipWaiting it, not reload. */
+	hasInstallingWorker?: boolean;
+	/**
+	 * Ignored for the banner. `version.json` moving while the old SW still
+	 * controls only proves a deploy exists — a reload is still served from the
+	 * previous cache. Offer once a worker is installing/waiting so Refresh
+	 * can skipWaiting.
+	 */
+	versionChanged?: boolean;
 }): boolean {
-	return opts.hasWaitingWorker || opts.versionChanged;
+	return opts.hasWaitingWorker || !!opts.hasInstallingWorker;
 }
 
-/** After the user confirms: activate a waiting worker, otherwise just reload. */
-export function applyUpdatePlan(opts: { hasWaitingWorker: boolean }): 'skip-waiting' | 'reload' {
-	return opts.hasWaitingWorker ? 'skip-waiting' : 'reload';
+/** After the user confirms: activate the new worker (waiting or still installing). */
+export function applyUpdatePlan(opts: {
+	hasWaitingWorker: boolean;
+	hasInstallingWorker?: boolean;
+}): 'skip-waiting' | 'reload' {
+	return opts.hasWaitingWorker || !!opts.hasInstallingWorker ? 'skip-waiting' : 'reload';
 }
 
 type QueryRoot = {

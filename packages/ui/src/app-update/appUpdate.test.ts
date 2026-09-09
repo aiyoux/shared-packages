@@ -11,15 +11,22 @@ describe('shouldOfferUpdate', () => {
 		expect(shouldOfferUpdate({ hasWaitingWorker: false, versionChanged: false })).toBe(false);
 	});
 
-	it('offers when a worker is waiting or version.json moved', () => {
-		expect(shouldOfferUpdate({ hasWaitingWorker: true, versionChanged: false })).toBe(true);
-		expect(shouldOfferUpdate({ hasWaitingWorker: false, versionChanged: true })).toBe(true);
+	it('offers when a worker is waiting or still installing', () => {
+		expect(shouldOfferUpdate({ hasWaitingWorker: true })).toBe(true);
+		expect(shouldOfferUpdate({ hasWaitingWorker: false, hasInstallingWorker: true })).toBe(true);
+	});
+
+	it('does not offer on version.json alone — a reload would still hit the old cache', () => {
+		expect(shouldOfferUpdate({ hasWaitingWorker: false, versionChanged: true })).toBe(false);
 	});
 });
 
 describe('applyUpdatePlan', () => {
-	it('activates a waiting worker instead of reloading blindly', () => {
+	it('activates a waiting or installing worker instead of reloading blindly', () => {
 		expect(applyUpdatePlan({ hasWaitingWorker: true })).toBe('skip-waiting');
+		expect(applyUpdatePlan({ hasWaitingWorker: false, hasInstallingWorker: true })).toBe(
+			'skip-waiting'
+		);
 		expect(applyUpdatePlan({ hasWaitingWorker: false })).toBe('reload');
 	});
 });

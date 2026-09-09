@@ -1,11 +1,9 @@
 /**
- * Origin-wide app update watcher. Detects a new build (waiting service worker
- * or `/_app/version.json`) but never reloads until the user confirms.
+ * Origin-wide app update watcher. Detects a new service worker (installing or
+ * waiting) but never reloads until the user confirms — Refresh skipWaiting's.
  */
 import {
 	APPLYING_UPDATE_KEY,
-	applyUpdatePlan,
-	parseVersionPayload,
 	shouldOfferUpdate,
 	type AppUpdateStatus
 } from './appUpdate.ts';
@@ -16,7 +14,6 @@ const isDev = typeof import.meta !== 'undefined' && !!import.meta.env?.DEV;
 export class AppUpdateStore {
 	status = $state<AppUpdateStatus>('current');
 	private started = false;
-	private baseline: string | null = null;
 	private timer: ReturnType<typeof setInterval> | null = null;
 	private unsub: Array<() => void> = [];
 
@@ -47,7 +44,7 @@ export class AppUpdateStore {
 		this.unsub.push(() => document.removeEventListener('visibilitychange', onVisible));
 		this.unsub.push(() => window.removeEventListener('focus', onVisible));
 
-		void this.check({ recordBaseline: true });
+		void this.check();
 		this.timer = setInterval(() => void this.check(), CHECK_MS);
 
 		this.installTestHook();
@@ -73,10 +70,9 @@ export class AppUpdateStore {
 		if (this.status === 'current') return;
 		this.status = 'applying';
 		this.markApplying();
-		const waiting = await this.waitingWorker();
-		const plan = applyUpdatePlan({ hasWaitingWorker: !!waiting });
-		if (plan === 'skip-waiting' && waiting) {
-			waiting.postMessage({ type: 'SKIP_WAITING' });
+		const worker = await this.targetWorker();
+		if (worker) {
+			worker.postMessage({ type: 'SKIP_WAITING' });
 			return;
 		}
 		location.reload();
@@ -99,26 +95,17 @@ export class AppUpdateStore {
 		}
 	}
 
-	private async check(opts?: { recordBaseline?: boolean }): Promise<void> {
+	private async check(): Promise<void> {
 		if (this.status === 'applying') return;
-		const version = await this.readVersion();
-		if (opts?.recordBaseline) this.baseline = version;
 		const registration = await this.registration();
 		await registration?.update().catch(() => {});
-		const waiting = !!registration?.waiting;
-		const versionChanged = !!this.baseline && !!version && version !== this.baseline;
-		if (shouldOfferUpdate({ hasWaitingWorker: waiting, versionChanged })) {
+		if (
+			shouldOfferUpdate({
+				hasWaitingWorker: !!registration?.waiting,
+				hasInstallingWorker: !!registration?.installing
+			})
+		) {
 			this.status = 'available';
-		}
-	}
-
-	private async readVersion(): Promise<string | null> {
-		try {
-			const res = await fetch('/_app/version.json', { cache: 'no-store' });
-			if (!res.ok) return null;
-			return parseVersionPayload(await res.json());
-		} catch {
-			return null;
 		}
 	}
 
@@ -127,9 +114,14 @@ export class AppUpdateStore {
 		return navigator.serviceWorker.getRegistration();
 	}
 
-	private async waitingWorker(): Promise<ServiceWorker | null> {
+	/** Waiting first; installing is enough — skipWaiting during install activates on finish. */
+	private async targetWorker(): Promise<ServiceWorker | null> {
 		const registration = await this.registration();
-		return registration?.waiting ?? null;
+		if (!registration) return null;
+		if (registration.waiting) return registration.waiting;
+		if (registration.installing) return registration.installing;
+		await registration.update().catch(() => {});
+		return registration.waiting ?? registration.installing ?? null;
 	}
 
 	private installTestHook(): void {
