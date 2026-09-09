@@ -27,6 +27,7 @@
 	import { deleteFromProject } from '../projectPack.js';
 	import { getVfsWorkerClient, vfsWorkerUnavailableReason } from '../worker/client.js';
 	import FeIcon from './FeIcon.svelte';
+	import type { FeIconName } from './feIcons.js';
 	import FeTipIconBtn from './FeTipIconBtn.svelte';
 	import FeArchiveDialog from './FeArchiveDialog.svelte';
 	import CopyProgressHeader from './CopyProgressHeader.svelte';
@@ -192,7 +193,7 @@
 		/** Hide the toolbar Trash button (popup listing). Default shows it when supportsTrash. */
 		hideToolbarTrash?: boolean;
 		/** Extra manage-toolbar / details actions (e.g. DualPane Copy across). */
-		toolbarExtra?: Snippet<[{ variant: 'icon' | 'label' }]>;
+		toolbarExtra?: Snippet<[{ variant: 'icon' | 'label' | 'menu' }]>;
 		/** Leading header slot (connection dropdown for DualPaneExplorer). */
 		headerLeading?: Snippet;
 		/** Whether this explorer instance is the active TARGET window. */
@@ -323,10 +324,22 @@
 			copyHoverActive = false;
 			if (!dnd.getState().active) clearDndHover();
 		});
+		const el = rootEl;
+		let ro: ResizeObserver | undefined;
+		if (el && typeof ResizeObserver !== 'undefined') {
+			ro = new ResizeObserver((entries) => {
+				const w = entries[0]?.contentRect.width ?? 0;
+				const next = w > 0 && w < COMPACT_TOOLBAR_PX;
+				if (next !== compactToolbar) compactToolbar = next;
+				if (!next) toolbarMoreOpen = false;
+			});
+			ro.observe(el);
+		}
 		return () => {
 			archiveProgressUnsub?.();
 			archiveProgressUnsub = null;
 			unsubDrag();
+			ro?.disconnect();
 		};
 	});
 	onDestroy(() => {
@@ -463,6 +476,20 @@
 				})()
 	);
 	let viewSwitcherOpen = $state(false);
+	/**
+	 * Collapse the icon toolbar into one overflow button. Seed from viewport
+	 * so phones don't flash a wrapping row; ResizeObserver then follows the
+	 * explorer's own width (split panes, session-end column).
+	 */
+	const COMPACT_TOOLBAR_PX = 720;
+	let compactToolbar = $state(
+		typeof window !== 'undefined' &&
+			typeof window.innerWidth === 'number' &&
+			window.innerWidth > 0 &&
+			window.innerWidth < COMPACT_TOOLBAR_PX
+	);
+	let toolbarMoreOpen = $state(false);
+	let rootEl = $state<HTMLDivElement | undefined>();
 	let floatingPreviewEntry = $state<ExplorerEntry | null>(null);
 	/** Remote (B2/rclone) preview-pane media is opt-in — keyed by entry id. */
 	let previewMediaId = $state<string | null>(null);
@@ -491,9 +518,17 @@
 	}
 	function toggleViewSwitcher() {
 		viewSwitcherOpen = !viewSwitcherOpen;
+		if (viewSwitcherOpen) toolbarMoreOpen = false;
 	}
 	function closeViewSwitcher() {
 		viewSwitcherOpen = false;
+	}
+	function closeToolbarMore() {
+		toolbarMoreOpen = false;
+	}
+	function toggleToolbarMore() {
+		toolbarMoreOpen = !toolbarMoreOpen;
+		if (toolbarMoreOpen) viewSwitcherOpen = false;
 	}
 
 	function openFloatingPreview() {
@@ -3127,6 +3162,7 @@
 	class:preview-bottom={previewDock === 'bottom'}
 	class:preview-right={previewDock === 'right'}
 	class:is-target={isTarget}
+	bind:this={rootEl}
 	data-testid={rootTestId}
 	data-fe-target={isTarget ? 'true' : 'false'}
 	data-fe-backend={driver.id}
@@ -3136,12 +3172,16 @@
 	data-fe-tree-dock={treeDock}
 	data-fe-view-mode={viewMode}
 	data-fe-show-preview={showPreview ? 'on' : 'off'}
+	data-fe-compact={compactToolbar ? 'on' : 'off'}
 	style="--preview-ratio: {previewRatio * 100}%"
 	role={variant === 'dialog' ? 'dialog' : 'group'}
 	aria-label="File explorer"
 	tabindex="0"
 	onkeydown={onListKeydown}
-	onclick={() => { if (viewSwitcherOpen) closeViewSwitcher(); }}
+	onclick={() => {
+		if (viewSwitcherOpen) closeViewSwitcher();
+		if (toolbarMoreOpen) closeToolbarMore();
+	}}
 >
 	<header class="fe-header" data-testid="fe-header">
 		<div class="fe-header-left">
@@ -3215,6 +3255,160 @@
 				}}
 			/>
 		{/if}
+		{#snippet actionBtn(
+			kind: 'icon' | 'menu',
+			testid: string,
+			tip: string,
+			icon: FeIconName,
+			onclick: () => void,
+			opts: {
+				disabled?: boolean;
+				active?: boolean;
+				pressed?: boolean;
+				haspopup?: boolean;
+				label?: string;
+			} = {}
+		)}
+			{#if kind === 'icon'}
+				<FeTipIconBtn
+					{testid}
+					{tip}
+					{icon}
+					disabled={opts.disabled ?? false}
+					active={opts.active ?? false}
+					pressed={opts.pressed}
+					haspopup={opts.haspopup ?? false}
+					{onclick}
+				/>
+			{:else}
+				<button
+					type="button"
+					class="fe-view-option"
+					class:active={opts.active}
+					data-testid={testid}
+					disabled={opts.disabled ?? false}
+					aria-pressed={opts.pressed}
+					onclick={() => {
+						closeToolbarMore();
+						onclick();
+					}}
+				>
+					<FeIcon name={icon} size={16} />
+					<span>{opts.label ?? tip}</span>
+					{#if opts.active}
+						<span class="fe-view-check">✓</span>
+					{/if}
+				</button>
+			{/if}
+		{/snippet}
+
+		{#snippet toolbarActions(kind: 'icon' | 'menu')}
+			{#if showPersistChip && localVfs && kind === 'icon'}
+				<StoragePersistenceStatus vfs={localVfs} compact class="fe-persist-slot" />
+			{/if}
+			{#if showStorageBtn}
+				{@render actionBtn(kind, 'fe-storage-open', 'Storage map and integrity check', 'storage-map', () => (storageDialogOpen = true), { label: 'Storage' })}
+			{/if}
+			{#if mode === 'manage' && canImportFromDevice}
+				{@render actionBtn(kind, 'fe-system-paste', systemPasteTip, 'clipboard-paste', () => void pasteSystemClipboard(), {
+					disabled: !systemClip?.files.length || uploadBusy,
+					active: Boolean(systemClip?.files.length),
+					label: 'Paste from clipboard'
+				})}
+			{/if}
+			{#if mode === 'manage' || mode === 'open'}
+				{@render actionBtn(kind, 'fe-select-multi', 'Select multiple items', 'check-square', () => setSelectMulti(!selectMulti), {
+					active: selectMulti,
+					pressed: selectMulti,
+					label: 'Select multiple'
+				})}
+				{@render actionBtn(kind, 'fe-item-details', detailsTip, 'info', () => openSelectedDetails(), {
+					disabled: selected.size === 0,
+					label: 'Details'
+				})}
+				{#if driver.id !== 'memory'}
+					{@render actionBtn(kind, 'fe-tree-dock', treeTip, 'panel-left', cycleTreeDock, {
+						active: treeDock !== 'off',
+						pressed: treeDock !== 'off',
+						label: 'Folder tree'
+					})}
+				{/if}
+				{@render actionBtn(kind, 'fe-preview-layout', previewTip, 'layout', cyclePreviewDock, {
+					active: previewDock !== 'off',
+					pressed: previewDock !== 'off',
+					label: 'Preview'
+				})}
+			{/if}
+			{#if canOpenSelection}
+				{@render actionBtn(kind, 'fe-open-selected', 'Open', 'folder-open', () => void openSelected())}
+			{/if}
+			{#if mode === 'manage'}
+				{#if caps.supportsMkdir}
+					{@render actionBtn(kind, 'fe-new-folder', 'New folder', 'folder-plus', () => (newFolderOpen = true))}
+				{/if}
+				{#if showDeviceFilePicker}
+					{@render actionBtn(kind, 'fe-upload', uploadTip, 'upload', () => fileInputEl?.click(), {
+						disabled: uploadBusy,
+						label: 'Upload file'
+					})}
+					{@render actionBtn(kind, 'fe-folder-upload', folderUploadTip, 'folder-up', () => folderInputEl?.click(), {
+						disabled: uploadBusy,
+						label: 'Upload folder'
+					})}
+				{/if}
+				{#if caps.supportsTrash && !hideToolbarTrash}
+					{@render actionBtn(kind, 'fe-trash-view', 'Open trash', 'archive', () => void toggleTrashPopup(), {
+						active: trashOpen,
+						pressed: trashOpen,
+						haspopup: true
+					})}
+				{/if}
+				{#if supportsDownload}
+					{@render actionBtn(kind, 'fe-download-selected', 'Download selected to PC', 'download', () => void downloadSelected(), {
+						disabled: downloadBusy || !canDownloadSelection,
+						label: 'Download'
+					})}
+				{/if}
+				{#if toolbarExtra}
+					{@render toolbarExtra({ variant: kind === 'menu' ? 'menu' : 'icon' })}
+				{/if}
+				{#if clipboard?.ids.length && (caps.supportsMove || caps.supportsCopy)}
+					{@render actionBtn(kind, 'fe-paste', pasteTip, 'clipboard', () => pasteClipboard(), { label: 'Paste' })}
+				{/if}
+			{/if}
+		{/snippet}
+
+		{#snippet selectionActions(kind: 'icon' | 'menu')}
+			{@render actionBtn(kind, 'fe-rename-btn', renameTip, 'pencil', renameSelectedItem, {
+				disabled: listBusy || selected.size !== 1 || !caps.supportsRename,
+				label: 'Rename'
+			})}
+			{@render actionBtn(kind, 'fe-trash-selected', deleteTip, 'trash', trashSelected, {
+				disabled: selected.size === 0,
+				label: 'Delete'
+			})}
+			{@render actionBtn(kind, 'fe-cut', cutTip, 'scissors', cutSelection, {
+				disabled: selected.size === 0 || !caps.supportsMove,
+				label: 'Cut'
+			})}
+			{@render actionBtn(kind, 'fe-copy', copyTip, 'copy', copySelection, {
+				disabled: selected.size === 0 || !caps.supportsCopy,
+				label: 'Copy'
+			})}
+			{@render actionBtn(kind, 'fe-compress-selected', 'Compress', 'file-archive', () => startArchive('compress', selectedEntries), {
+				disabled: selected.size === 0
+			})}
+			{@render actionBtn(kind, 'fe-encrypt-selected', 'Encrypt', 'lock', () => startArchive('encrypt', selectedEntries), {
+				disabled: selected.size === 0
+			})}
+			{@render actionBtn(kind, 'fe-decompress-selected', 'Decompress', 'package-open', () => startArchive('decompress', selectedEntries), {
+				disabled: !canDecompressSelection
+			})}
+			{@render actionBtn(kind, 'fe-decrypt-selected', 'Decrypt', 'unlock', () => startArchive('decrypt', selectedEntries), {
+				disabled: !canDecryptSelection
+			})}
+		{/snippet}
+
 		<div class="fe-toolbar" data-testid="fe-toolbar">
 			<div class="fe-toolbar-row">
 				{#if mode === 'manage' || mode === 'open'}
@@ -3260,227 +3454,92 @@
 						{/if}
 					</span>
 				{/if}
-				{#if showPersistChip && localVfs}
-					<StoragePersistenceStatus vfs={localVfs} compact class="fe-persist-slot" />
-				{/if}
-				{#if showStorageBtn}
-					<FeTipIconBtn
-						testid="fe-storage-open"
-						tip="Storage map and integrity check"
-						icon="storage-map"
-						onclick={() => (storageDialogOpen = true)}
-					/>
-				{/if}
-				{#if mode === 'manage' && canImportFromDevice}
-					<FeTipIconBtn
-						testid="fe-system-paste"
-						tip={systemPasteTip}
-						icon="clipboard-paste"
-						disabled={!systemClip?.files.length || uploadBusy}
-						active={Boolean(systemClip?.files.length)}
-						onclick={() => void pasteSystemClipboard()}
-					/>
-				{/if}
-				{#if mode === 'manage' || mode === 'open'}
-					<FeTipIconBtn
-						testid="fe-select-multi"
-						tip="Select multiple items"
-						icon="check-square"
-						active={selectMulti}
-						pressed={selectMulti}
-						onclick={() => setSelectMulti(!selectMulti)}
-					/>
-					<FeTipIconBtn
-						testid="fe-item-details"
-						tip={detailsTip}
-						icon="info"
-						disabled={selected.size === 0}
-						onclick={() => openSelectedDetails()}
-					/>
-					{#if driver.id !== 'memory'}
+				{#if compactToolbar}
+					<!-- svelte-ignore a11y_click_events_have_key_events -->
+					<!-- svelte-ignore a11y_no_static_element_interactions -->
+					<span
+						class="fe-toolbar-more-wrap"
+						data-testid="fe-toolbar-more-wrap"
+						onclick={(e) => e.stopPropagation()}
+					>
 						<FeTipIconBtn
-							testid="fe-tree-dock"
-							tip={treeTip}
-							icon="panel-left"
-							active={treeDock !== 'off'}
-							pressed={treeDock !== 'off'}
-							onclick={cycleTreeDock}
-						/>
-					{/if}
-					<FeTipIconBtn
-						testid="fe-preview-layout"
-						tip={previewTip}
-						icon="layout"
-						active={previewDock !== 'off'}
-						pressed={previewDock !== 'off'}
-						onclick={cyclePreviewDock}
-					/>
-				{/if}
-				{#if canOpenSelection}
-					<FeTipIconBtn
-						testid="fe-open-selected"
-						tip="Open"
-						icon="folder-open"
-						onclick={() => void openSelected()}
-					/>
-				{/if}
-				{#if mode === 'manage'}
-					{#if caps.supportsMkdir}
-						<FeTipIconBtn
-							testid="fe-new-folder"
-							tip="New folder"
-							icon="folder-plus"
-							onclick={() => (newFolderOpen = true)}
-						/>
-					{/if}
-					{#if showDeviceFilePicker}
-						<FeTipIconBtn
-							testid="fe-upload"
-							tip={uploadTip}
-							icon="upload"
-							disabled={uploadBusy}
-							onclick={() => fileInputEl?.click()}
-						/>
-						<input
-							bind:this={fileInputEl}
-							type="file"
-							multiple
-							hidden
-							data-testid="fe-upload-input"
-							onchange={(e) => {
-								const list = (e.currentTarget as HTMLInputElement).files;
-								if (!list?.length) return;
-								const el = e.currentTarget;
-								void importDeviceFiles(Array.from(list), parentId).finally(() => {
-									el.value = '';
-								});
-							}}
-						/>
-						<FeTipIconBtn
-							testid="fe-folder-upload"
-							tip={folderUploadTip}
-							icon="folder-up"
-							disabled={uploadBusy}
-							onclick={() => folderInputEl?.click()}
-						/>
-						<input
-							bind:this={folderInputEl}
-							type="file"
-							multiple
-							hidden
-							data-testid="fe-folder-upload-input"
-							// Folder picker: each File carries webkitRelativePath, so the
-							// import recreates the tree exactly like a dragged-in folder.
-							{...({ webkitdirectory: '' } as Record<string, string>)}
-							onchange={(e) => {
-								const list = (e.currentTarget as HTMLInputElement).files;
-								if (!list?.length) return;
-								const el = e.currentTarget;
-								void importDeviceFiles(Array.from(list), parentId).finally(() => {
-									el.value = '';
-								});
-							}}
-						/>
-					{/if}
-					{#if caps.supportsTrash && !hideToolbarTrash}
-						<FeTipIconBtn
-							testid="fe-trash-view"
-							tip="Open trash"
-							icon="archive"
-							active={trashOpen}
-							pressed={trashOpen}
+							testid="fe-toolbar-more"
+							tip="File actions"
+							icon="ellipsis"
+							active={toolbarMoreOpen}
+							pressed={toolbarMoreOpen}
 							haspopup
-							onclick={() => void toggleTrashPopup()}
+							onclick={toggleToolbarMore}
 						/>
-					{/if}
-					{#if supportsDownload}
-						<FeTipIconBtn
-							testid="fe-download-selected"
-							tip="Download selected to PC"
-							icon="download"
-							disabled={downloadBusy || !canDownloadSelection}
-							onclick={() => void downloadSelected()}
-						/>
-					{/if}
-					{#if toolbarExtra}
-						{@render toolbarExtra({ variant: 'icon' })}
-					{/if}
-					{#if clipboard?.ids.length && (caps.supportsMove || caps.supportsCopy)}
-						<FeTipIconBtn
-							testid="fe-paste"
-							tip={pasteTip}
-							icon="clipboard"
-							onclick={() => pasteClipboard()}
-						/>
-					{/if}
+						{#if toolbarMoreOpen}
+							<!-- svelte-ignore a11y_click_events_have_key_events -->
+							<!-- svelte-ignore a11y_no_static_element_interactions -->
+							<div
+								class="fe-toolbar-more-popup"
+								data-testid="fe-toolbar-more-popup"
+								role="menu"
+								tabindex="-1"
+								aria-label="File actions"
+								onclick={(e) => e.stopPropagation()}
+							>
+								{@render toolbarActions('menu')}
+								{#if mode === 'manage'}
+									<div class="fe-view-divider"></div>
+									{@render selectionActions('menu')}
+								{/if}
+							</div>
+						{/if}
+					</span>
+				{:else}
+					{@render toolbarActions('icon')}
 				{/if}
 				{#if onClose}
 					<FeTipIconBtn testid="fe-close" tip="Close" icon="x" onclick={onClose} />
 				{/if}
 			</div>
-			{#if mode === 'manage'}
+			{#if mode === 'manage' && !compactToolbar}
 				<div
 					class="fe-toolbar-row fe-selection-actions"
 					data-testid="fe-selection-actions"
 					aria-label="Selection actions"
 				>
-					<FeTipIconBtn
-						testid="fe-rename-btn"
-						tip={renameTip}
-						icon="pencil"
-						disabled={listBusy || selected.size !== 1 || !caps.supportsRename}
-						onclick={renameSelectedItem}
-					/>
-					<FeTipIconBtn
-						testid="fe-trash-selected"
-						tip={deleteTip}
-						icon="trash"
-						disabled={selected.size === 0}
-						onclick={trashSelected}
-					/>
-					<FeTipIconBtn
-						testid="fe-cut"
-						tip={cutTip}
-						icon="scissors"
-						disabled={selected.size === 0 || !caps.supportsMove}
-						onclick={cutSelection}
-					/>
-					<FeTipIconBtn
-						testid="fe-copy"
-						tip={copyTip}
-						icon="copy"
-						disabled={selected.size === 0 || !caps.supportsCopy}
-						onclick={copySelection}
-					/>
-					<FeTipIconBtn
-						testid="fe-compress-selected"
-						tip="Compress"
-						icon="file-archive"
-						disabled={selected.size === 0}
-						onclick={() => startArchive('compress', selectedEntries)}
-					/>
-					<FeTipIconBtn
-						testid="fe-encrypt-selected"
-						tip="Encrypt"
-						icon="lock"
-						disabled={selected.size === 0}
-						onclick={() => startArchive('encrypt', selectedEntries)}
-					/>
-					<FeTipIconBtn
-						testid="fe-decompress-selected"
-						tip="Decompress"
-						icon="package-open"
-						disabled={!canDecompressSelection}
-						onclick={() => startArchive('decompress', selectedEntries)}
-					/>
-					<FeTipIconBtn
-						testid="fe-decrypt-selected"
-						tip="Decrypt"
-						icon="unlock"
-						disabled={!canDecryptSelection}
-						onclick={() => startArchive('decrypt', selectedEntries)}
-					/>
+					{@render selectionActions('icon')}
 				</div>
+			{/if}
+			{#if mode === 'manage' && showDeviceFilePicker}
+				<input
+					bind:this={fileInputEl}
+					type="file"
+					multiple
+					hidden
+					data-testid="fe-upload-input"
+					onchange={(e) => {
+						const list = (e.currentTarget as HTMLInputElement).files;
+						if (!list?.length) return;
+						const el = e.currentTarget;
+						void importDeviceFiles(Array.from(list), parentId).finally(() => {
+							el.value = '';
+						});
+					}}
+				/>
+				<input
+					bind:this={folderInputEl}
+					type="file"
+					multiple
+					hidden
+					data-testid="fe-folder-upload-input"
+					// Folder picker: each File carries webkitRelativePath, so the
+					// import recreates the tree exactly like a dragged-in folder.
+					{...({ webkitdirectory: '' } as Record<string, string>)}
+					onchange={(e) => {
+						const list = (e.currentTarget as HTMLInputElement).files;
+						if (!list?.length) return;
+						const el = e.currentTarget;
+						void importDeviceFiles(Array.from(list), parentId).finally(() => {
+							el.value = '';
+						});
+					}}
+				/>
 			{/if}
 		</div>
 	</header>
@@ -4435,6 +4494,9 @@
 		display: flex;
 		flex-direction: column;
 		min-height: 0;
+		min-width: 0;
+		width: 100%;
+		max-width: 100%;
 		height: 100%;
 		max-height: none;
 		background: var(--surface-1);
@@ -4460,6 +4522,8 @@
 		padding: var(--space-2) var(--space-3);
 		border-bottom: 1px solid var(--line-hairline);
 		flex-wrap: nowrap;
+		min-width: 0;
+		max-width: 100%;
 	}
 	.fe-move-banner {
 		position: absolute;
@@ -4548,7 +4612,9 @@
 		flex-direction: column;
 		align-items: flex-end;
 		gap: 4px;
-		flex-shrink: 0;
+		flex: 0 1 auto;
+		min-width: 0;
+		max-width: 100%;
 	}
 	.fe-toolbar-row {
 		display: flex;
@@ -4556,6 +4622,8 @@
 		align-items: center;
 		flex-wrap: nowrap;
 		justify-content: flex-end;
+		min-width: 0;
+		max-width: 100%;
 	}
 	.fe-toolbar :global(.ds-btn--icon) {
 		width: var(--control-h-sm);
@@ -5193,6 +5261,45 @@
 		height: 1px;
 		margin: 4px 0;
 		background: var(--line-hairline);
+	}
+	.fe-toolbar-more-wrap {
+		position: relative;
+		display: inline-flex;
+	}
+	.fe-toolbar-more-popup {
+		position: absolute;
+		top: calc(100% + 4px);
+		right: 0;
+		z-index: 20;
+		min-width: 200px;
+		max-width: min(280px, calc(100vw - 16px));
+		max-height: min(70vh, 420px);
+		overflow: auto;
+		padding: 4px;
+		background: var(--surface-2);
+		border: 1px solid var(--line-hairline);
+		border-radius: var(--radius-md, 4px);
+		box-shadow: 0 8px 24px rgb(var(--scrim-rgb, 0 0 0) / 0.3);
+	}
+	.fe-toolbar-more-popup :global(button.ds-btn.ds-btn--sm) {
+		display: flex;
+		width: 100%;
+		justify-content: flex-start;
+		align-items: center;
+		gap: 8px;
+		height: auto;
+		min-height: 0;
+		padding: 6px 8px;
+		background: none;
+		border: none;
+		box-shadow: none;
+		color: inherit;
+		font: inherit;
+		font-size: 0.85rem;
+		border-radius: 3px;
+	}
+	.fe-toolbar-more-popup :global(button.ds-btn.ds-btn--sm:hover:not(:disabled)) {
+		background: var(--surface-3);
 	}
 
 	/* ── Icon view ────────────────────────────────────────────── */

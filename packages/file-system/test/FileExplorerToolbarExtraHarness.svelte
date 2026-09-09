@@ -6,7 +6,7 @@
 </script>
 
 <FileExplorer mode="manage" {vfs} variant="panel">
-	{#snippet toolbarExtra({ variant }: { variant: 'icon' | 'label' })}
+	{#snippet toolbarExtra({ variant }: { variant: 'icon' | 'label' | 'menu' })}
 		{#if variant === 'label'}
 			<button type="button" data-testid="fe-file-preview-copy-across">Copy across</button>
 		{:else}

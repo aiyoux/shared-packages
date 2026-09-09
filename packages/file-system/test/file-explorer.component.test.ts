@@ -2,7 +2,7 @@
  * Component-level FileExplorer tests (jsdom).
  * Run: npm run test:component -w @shared-packages/file-system
  */
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/svelte';
 import { packFiles } from '@shared-packages/compress';
 import { sealVault } from '@shared-packages/crypto';
@@ -23,6 +23,7 @@ describe('FileExplorer component', () => {
 		resetSharedVfsForTests();
 		resetTransferRegistryForTests();
 		localStorage.removeItem('fe:previewDock');
+		Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1280 });
 		vfs = createVfs({
 			dbName: `fe-comp-${Date.now()}-${Math.random()}`,
 			memoryOpfs: true,
@@ -1160,6 +1161,63 @@ describe('FileExplorer component', () => {
 		const compressDlg = await screen.findByTestId('fe-archive-dialog');
 		expect(compressDlg.getAttribute('data-kind')).toBe('compress');
 		expect(compressDlg.textContent).toMatch(/3 items/);
+	});
+
+	it('collapses toolbar actions into a more menu when the explorer is narrow', async () => {
+		class NarrowResizeObserver {
+			cb: ResizeObserverCallback;
+			constructor(cb: ResizeObserverCallback) {
+				this.cb = cb;
+			}
+			observe(target: Element) {
+				this.cb(
+					[
+						{
+							target,
+							contentRect: {
+								width: 360,
+								height: 480,
+								top: 0,
+								left: 0,
+								bottom: 480,
+								right: 360,
+								x: 0,
+								y: 0,
+								toJSON() {
+									return {};
+								}
+							},
+							borderBoxSize: [],
+							contentBoxSize: [],
+							devicePixelContentBoxSize: []
+						} as ResizeObserverEntry
+					],
+					this as unknown as ResizeObserver
+				);
+			}
+			unobserve() {}
+			disconnect() {}
+		}
+		vi.stubGlobal('ResizeObserver', NarrowResizeObserver);
+		try {
+			render(FileExplorer, { props: { mode: 'manage', vfs, variant: 'panel' } });
+			expect(await screen.findByTestId('file-explorer')).toBeTruthy();
+			expect(screen.getByTestId('file-explorer').getAttribute('data-fe-compact')).toBe('on');
+			expect(screen.getByTestId('fe-toolbar-more')).toBeTruthy();
+			expect(screen.queryByTestId('fe-upload')).toBeNull();
+			expect(screen.queryByTestId('fe-selection-actions')).toBeNull();
+			await fireEvent.click(screen.getByTestId('fe-toolbar-more'));
+			const popup = await screen.findByTestId('fe-toolbar-more-popup');
+			expect(popup.textContent).toMatch(/Upload file/);
+			expect(popup.textContent).toMatch(/Download/);
+			expect(popup.textContent).toMatch(/New folder/);
+			expect(screen.getByTestId('fe-upload')).toBeTruthy();
+			expect(screen.getByTestId('fe-download-selected')).toBeTruthy();
+			expect(screen.getByTestId('fe-new-folder')).toBeTruthy();
+			expect(screen.getByTestId('fe-rename-btn')).toBeTruthy();
+		} finally {
+			vi.unstubAllGlobals();
+		}
 	});
 
 	it('Copy across sits after Download and appears in the details popup', async () => {

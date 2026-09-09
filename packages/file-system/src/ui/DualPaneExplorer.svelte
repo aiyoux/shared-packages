@@ -37,6 +37,7 @@
 	import { type PaneId, type DualPaneTids } from './dualPaneTypes.js';
 	import { portal } from './portal.js';
 	import FeTipIconBtn from './FeTipIconBtn.svelte';
+	import FeIcon from './FeIcon.svelte';
 	import ConnectionPairInfo from './ConnectionPairInfo.svelte';
 	import {
 		AppWindows,
@@ -1764,6 +1765,33 @@
 	/>
 {/snippet}
 
+{#snippet sendAction(id: PaneId, variant: 'icon' | 'label' = 'icon')}
+	{@const p = paneState(id)}
+	{@const drv = activeDriver(p, id)}
+	{#if onSend}
+		{#if variant === 'label'}
+			<button
+				type="button"
+				class="ds-btn ds-btn--sm ds-btn--ghost"
+				data-testid={tids.send(id)}
+				disabled={sendBusy || p.ctx.selectedIds.length === 0 || !drv.download}
+				onclick={() => runSend(id)}
+			>
+				<FeIcon name="send" size={16} />
+				<span>{sendBusy ? 'Sending…' : 'Send'}</span>
+			</button>
+		{:else}
+			<FeTipIconBtn
+				testid={tids.send(id)}
+				tip={sendBusy ? 'Sending…' : 'Send'}
+				icon="send"
+				disabled={sendBusy || p.ctx.selectedIds.length === 0 || !drv.download}
+				onclick={() => runSend(id)}
+			/>
+		{/if}
+	{/if}
+{/snippet}
+
 {#snippet copyAcrossAction(id: PaneId, variant: 'icon' | 'label')}
 	{@const p = paneState(id)}
 	{@const picking = copyPickFrom === id}
@@ -1843,20 +1871,9 @@
 				<span class="files-copy-dest-overlay-label">{paneConnectionLabel(id)}</span>
 			</button>
 		{/if}
-		{#if !hostSettings && (onSend || subTid)}
+		{#if !hostSettings && subTid}
 			<div class="pane-chrome" data-testid={tids.paneChrome(id)}>
-				{#if onSend}
-					<FeTipIconBtn
-						testid={tids.send(id)}
-						tip={sendBusy ? 'Sending…' : 'Send'}
-						icon="send"
-						disabled={sendBusy || p.ctx.selectedIds.length === 0 || !drv.download}
-						onclick={() => runSend(id)}
-					/>
-				{/if}
-				{#if subTid}
-					<span class="pane-sub" data-testid={subTid.testid}>{subTid.text}</span>
-				{/if}
+				<span class="pane-sub" data-testid={subTid.testid}>{subTid.text}</span>
 			</div>
 		{/if}
 		{#if p.error}
@@ -1974,8 +1991,16 @@
 						{#snippet headerLeading()}
 							{@render paneConn(id)}
 						{/snippet}
-						{#snippet toolbarExtra({ variant }: { variant: 'icon' | 'label' })}
-							{@render copyAcrossAction(id, variant)}
+						{#snippet toolbarExtra({ variant }: { variant: 'icon' | 'label' | 'menu' })}
+							{#if variant === 'icon'}
+								{@render sendAction(id)}
+								{@render copyAcrossAction(id, 'icon')}
+							{:else if variant === 'menu'}
+								{@render sendAction(id, 'label')}
+								{@render copyAcrossAction(id, 'label')}
+							{:else}
+								{@render copyAcrossAction(id, 'label')}
+							{/if}
 						{/snippet}
 					</FileExplorer>
 				{:else if p.activeKind === 'local'}
@@ -2014,8 +2039,16 @@
 						{#snippet headerLeading()}
 							{@render paneConn(id)}
 						{/snippet}
-						{#snippet toolbarExtra({ variant }: { variant: 'icon' | 'label' })}
-							{@render copyAcrossAction(id, variant)}
+						{#snippet toolbarExtra({ variant }: { variant: 'icon' | 'label' | 'menu' })}
+							{#if variant === 'icon'}
+								{@render sendAction(id)}
+								{@render copyAcrossAction(id, 'icon')}
+							{:else if variant === 'menu'}
+								{@render sendAction(id, 'label')}
+								{@render copyAcrossAction(id, 'label')}
+							{:else}
+								{@render copyAcrossAction(id, 'label')}
+							{/if}
 						{/snippet}
 					</FileExplorer>
 				{:else}
@@ -2052,8 +2085,16 @@
 						{#snippet headerLeading()}
 							{@render paneConn(id)}
 						{/snippet}
-						{#snippet toolbarExtra({ variant }: { variant: 'icon' | 'label' })}
-							{@render copyAcrossAction(id, variant)}
+						{#snippet toolbarExtra({ variant }: { variant: 'icon' | 'label' | 'menu' })}
+							{#if variant === 'icon'}
+								{@render sendAction(id)}
+								{@render copyAcrossAction(id, 'icon')}
+							{:else if variant === 'menu'}
+								{@render sendAction(id, 'label')}
+								{@render copyAcrossAction(id, 'label')}
+							{:else}
+								{@render copyAcrossAction(id, 'label')}
+							{/if}
 						{/snippet}
 					</FileExplorer>
 				{/if}
@@ -2320,6 +2361,8 @@
 		flex-direction: column;
 		flex: 1;
 		min-height: 0;
+		min-width: 0;
+		max-width: 100%;
 		gap: 0;
 		width: 100%;
 		height: 100%;
@@ -2367,7 +2410,9 @@
 	.files-body {
 		flex: 1;
 		min-height: 0;
+		min-width: 0;
 		width: 100%;
+		max-width: 100%;
 		height: 100%;
 		border: 0;
 		border-radius: 0;
@@ -2460,6 +2505,8 @@
 	.pane-explorer {
 		flex: 1;
 		min-height: 0;
+		min-width: 0;
+		max-width: 100%;
 		display: flex;
 		flex-direction: column;
 	}

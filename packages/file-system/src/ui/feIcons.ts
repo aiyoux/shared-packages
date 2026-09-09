@@ -40,7 +40,8 @@ export type FeIconName =
 	| 'package-open'
 	| 'lock'
 	| 'unlock'
-	| 'panel-left';
+	| 'panel-left'
+	| 'ellipsis';
 
 const paths: Record<FeIconName, string> = {
 	folder: `<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>`,
@@ -84,7 +85,8 @@ const paths: Record<FeIconName, string> = {
 	'file-text': `<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M16 13H8"/><path d="M16 17H8"/><path d="M10 9H8"/>`,
 	'maximize-2': `<path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/>`,
 	play: `<polygon points="6 3 20 12 6 21 6 3"/>`,
-	'panel-left': `<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/>`
+	'panel-left': `<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/>`,
+	ellipsis: `<circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/>`
 };
 
 export function feIconSvg(name: FeIconName, size = 16): string {
