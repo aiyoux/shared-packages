@@ -28,6 +28,12 @@ export type ExplorerOpenContext = {
 	read: () => Promise<Blob>;
 };
 
+/** Read the previewed video and write a sibling file on the same backend. */
+export type QuickEditVideoContext = {
+	read: () => Promise<Blob>;
+	save: (file: File) => Promise<ExplorerEntry>;
+};
+
 /**
  * DualPaneExplorer attaches this to `onOpenProject` so Files can tell Projects
  * whether the folder is local VFS, a monitor path, or another backend.

@@ -325,6 +325,87 @@ describe('FileExplorer component', () => {
 		expect(opened).toEqual(['Sketch.skch']);
 	});
 
+	it('details Quick edit is video-only and saves a sibling through the host callback', async () => {
+		await vfs.writeFile({
+			parentId: null,
+			name: 'clip.webm',
+			fileType: 'video',
+			body: new Blob([new Uint8Array([1, 2, 3])], { type: 'video/webm' }),
+			contentType: 'video/webm'
+		});
+		await vfs.writeFile({
+			parentId: null,
+			name: 'note.txt',
+			fileType: 'unknown',
+			body: new Blob(['hello'], { type: 'text/plain' }),
+			contentType: 'text/plain'
+		});
+		const hits: Array<{ name: string; saved?: string }> = [];
+		render(FileExplorer, {
+			props: {
+				mode: 'manage',
+				vfs,
+				variant: 'panel',
+				onQuickEditVideo: (entry, ctx) => {
+					hits.push({ name: entry.name });
+					void ctx
+						.save(new File([new Uint8Array([9])], 'clip (trim).mp4', { type: 'video/mp4' }))
+						.then((n) => {
+							hits[hits.length - 1]!.saved = n.name;
+						});
+				}
+			}
+		});
+		await viWaitForRows(2);
+
+		const txt = document.querySelector(
+			'[data-testid="fe-file-row"][data-name="note.txt"]'
+		) as HTMLElement;
+		await fireEvent.click(txt);
+		await fireEvent.click(screen.getByTestId('fe-item-details'));
+		await screen.findByTestId('fe-file-preview');
+		expect(screen.queryByTestId('fe-file-preview-quick-edit')).toBeNull();
+		expect(screen.getByTestId('fe-file-preview-compress')).toBeTruthy();
+		await fireEvent.click(screen.getByTestId('fe-file-preview-close'));
+
+		const video = document.querySelector(
+			'[data-testid="fe-file-row"][data-name="clip.webm"]'
+		) as HTMLElement;
+		await fireEvent.click(video);
+		await fireEvent.click(screen.getByTestId('fe-item-details'));
+		const preview = await screen.findByTestId('fe-file-preview');
+		const previewIds = [...preview.querySelectorAll('[data-testid]')].map((el) =>
+			el.getAttribute('data-testid')
+		);
+		expect(previewIds.indexOf('fe-file-preview-quick-edit')).toBeGreaterThan(-1);
+		expect(previewIds.indexOf('fe-file-preview-quick-edit')).toBeLessThan(
+			previewIds.indexOf('fe-file-preview-compress')
+		);
+		await fireEvent.click(screen.getByTestId('fe-file-preview-quick-edit'));
+		await viWaitFor(() => hits.length === 1 && hits[0]!.saved === 'clip (trim).mp4');
+		expect(hits[0]!.name).toBe('clip.webm');
+		const names = (await vfs.list({ parentId: null })).map((n) => n.name);
+		expect(names).toContain('clip (trim).mp4');
+	});
+
+	it('details Quick edit is hidden when the host does not pass a callback', async () => {
+		await vfs.writeFile({
+			parentId: null,
+			name: 'clip.webm',
+			fileType: 'video',
+			body: new Blob([new Uint8Array([1])], { type: 'video/webm' }),
+			contentType: 'video/webm'
+		});
+		render(FileExplorer, { props: { mode: 'manage', vfs, variant: 'panel' } });
+		await viWaitForRows(1);
+		const row = document.querySelector('[data-testid="fe-file-row"]') as HTMLElement;
+		await fireEvent.click(row);
+		await fireEvent.click(screen.getByTestId('fe-item-details'));
+		await screen.findByTestId('fe-file-preview');
+		expect(screen.queryByTestId('fe-file-preview-quick-edit')).toBeNull();
+		expect(screen.getByTestId('fe-file-preview-compress')).toBeTruthy();
+	});
+
 	it('details Compress and Encrypt open destination dialogs', async () => {
 		await vfs.writeFile({
 			parentId: null,

@@ -178,6 +178,33 @@ describe('DualPaneExplorer onOpenProject context', () => {
 		expect(left.querySelector('[data-testid="files-pane-chrome-left"]')).toBeNull();
 	});
 
+	it('forwards Quick edit from a video preview', async () => {
+		await vfs.writeFile({
+			parentId: null,
+			name: 'clip.webm',
+			fileType: 'video',
+			body: new Blob([new Uint8Array([1, 2, 3])], { type: 'video/webm' }),
+			contentType: 'video/webm'
+		});
+		const hits: string[] = [];
+		render(DualPaneExplorer, {
+			props: {
+				localDriver: createLocalExplorerDriver(vfs),
+				hideToggles: true,
+				dualPaneKey: `dpe:dual:${Math.random()}`,
+				onQuickEditVideo: (entry) => {
+					hits.push(entry.name);
+				}
+			}
+		});
+		await viWaitFor(() => document.querySelectorAll('[data-testid="fe-file-row"]').length >= 1);
+		const row = document.querySelector('[data-testid="fe-file-row"]') as HTMLElement;
+		await fireEvent.click(row);
+		await fireEvent.click(screen.getByTestId('fe-item-details'));
+		await fireEvent.click(await screen.findByTestId('fe-file-preview-quick-edit'));
+		expect(hits).toEqual(['clip.webm']);
+	});
+
 	it('windows overlay covers the file-manager header (connection / details / cut / copy)', async () => {
 		render(DualPaneExplorer, {
 			props: {

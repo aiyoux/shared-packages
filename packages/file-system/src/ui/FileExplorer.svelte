@@ -15,7 +15,8 @@
 		type ExplorerDriver,
 		type ExplorerEntry,
 		type ExplorerOpenTarget,
-		type ExplorerOpenContext
+		type ExplorerOpenContext,
+		type QuickEditVideoContext
 	} from './explorerDriver.js';
 	import { createLocalExplorerDriver } from './localExplorerDriver.js';
 	import StoragePersistenceStatus from './StoragePersistenceStatus.svelte';
@@ -148,6 +149,8 @@
 		/** Preview "Send this file" — Connections dual-pane send path. */
 		onSendFile?: (entry: ExplorerOpenTarget) => void | Promise<void>;
 		sendLabel?: string;
+		/** Preview "Quick edit" for video files — host opens the trimmer. */
+		onQuickEditVideo?: (entry: ExplorerEntry, ctx: QuickEditVideoContext) => void;
 		/** Override the preview Open label (string or per-entry). */
 		openLabel?: string | ((entry: ExplorerOpenTarget) => string);
 		onSave?: (args: {
@@ -218,6 +221,7 @@
 		onInitProject,
 		onSendFile,
 		sendLabel = 'Send this file',
+		onQuickEditVideo,
 		openLabel,
 		onSave,
 		onClose,
@@ -2240,7 +2244,7 @@
 		if (entry.fileType === 'vrec') return 'Open in voice';
 		if (entry.fileType === 'vcomp') return 'Open in voice';
 		if (entry.fileType === 'image') return 'Open in Images';
-		if (entry.fileType === 'video') return 'Open in Video';
+		if (entry.fileType === 'video') return 'Open in Simple Video';
 		if (entry.fileType === 'audio') return 'Open in Audio';
 		if (entry.fileType === 'pdf') return 'Open PDF';
 		return 'Open';
@@ -4019,6 +4023,22 @@
 {/snippet}
 
 {#snippet archiveButtons(entry: ExplorerEntry)}
+	{#if onQuickEditVideo && getPreviewKind(entry) === 'video' && driver.writeFile}
+		<button
+			type="button"
+			class="ds-btn ds-btn--sm ds-btn--secondary"
+			data-testid="fe-file-preview-quick-edit"
+			onclick={() => {
+				const target = entry;
+				onQuickEditVideo(target, {
+					read: () => readOpenTarget(target),
+					save: (file) => driver.writeFile!(target.parentId, file)
+				});
+			}}
+		>
+			Quick edit
+		</button>
+	{/if}
 	<button
 		type="button"
 		class="ds-btn ds-btn--sm ds-btn--secondary"
