@@ -165,6 +165,21 @@ function isConvex(cv, approx) {
 	}
 }
 
+function orthoScore(pts) {
+	var acc = 0;
+	for (var i = 0; i < 4; i++) {
+		var b = pts[i];
+		var a = pts[(i + 3) % 4];
+		var c = pts[(i + 1) % 4];
+		var v1x = a.x - b.x, v1y = a.y - b.y;
+		var v2x = c.x - b.x, v2y = c.y - b.y;
+		var n1 = Math.hypot(v1x, v1y) || 1;
+		var n2 = Math.hypot(v2x, v2y) || 1;
+		acc += 1 - Math.min(1, Math.abs((v1x * v2x + v1y * v2y) / (n1 * n2)));
+	}
+	return acc / 4;
+}
+
 function contourToQuad(cv, cnt) {
 	var peri = cv.arcLength(cnt, true);
 	var approx = new cv.Mat();
@@ -187,11 +202,19 @@ function contourToQuad(cv, cnt) {
 				if (pts) return orderCorners(pts);
 			}
 		}
-		// Rounded / noisy pages often fail 4-point approx; min-area rect is close enough.
+		// minAreaRect of a C-shaped floor blob is a huge diamond that is not a page.
+		// Only keep it when the contour already fills that rectangle.
 		try {
 			var rect = cv.minAreaRect(cnt);
 			var boxPts = pointsFromBox(cv, rect);
-			if (boxPts && boxPts.length === 4) return orderCorners(boxPts);
+			if (boxPts && boxPts.length === 4) {
+				var ordered = orderCorners(boxPts);
+				var rw = rect.size && rect.size.width ? rect.size.width : 0;
+				var rh = rect.size && rect.size.height ? rect.size.height : 0;
+				var rectArea = Math.abs(rw * rh);
+				var filled = rectArea > 1 ? cv.contourArea(cnt) / rectArea : 0;
+				if (filled >= 0.82 && orthoScore(ordered) >= 0.62) return ordered;
+			}
 		} catch (err) {
 			/* minAreaRect optional */
 		}
@@ -205,34 +228,40 @@ function contourToQuad(cv, cnt) {
 function scoreQuad(pts, width, height) {
 	var area = quadArea(pts);
 	var fill = area / (width * height || 1);
-	// Prefer a page that fills a useful chunk of the frame, not a tiny card
-	// or the entire sensor.
 	var fillScore = 1;
-	if (fill < 0.12) fillScore = fill / 0.12;
-	else if (fill > 0.94) fillScore = Math.max(0.2, (1 - fill) / 0.06);
+	if (fill < 0.08) fillScore = fill / 0.08;
+	else if (fill > 0.82) fillScore = Math.max(0.05, (0.95 - fill) / 0.13);
 	var w = Math.max(dist(pts[0], pts[1]), dist(pts[3], pts[2]));
 	var h = Math.max(dist(pts[0], pts[3]), dist(pts[1], pts[2]));
 	var ar = w / (h || 1);
-	var arScore = ar > 0.32 && ar < 3.2 ? 1 : 0.35;
-	return area * fillScore * arScore;
+	if (ar < 1) ar = 1 / ar;
+	var arScore = ar < 2.4 ? 1 : ar < 3.2 ? 0.45 : 0.12;
+	var ortho = orthoScore(pts);
+	var right = 0.05 + 0.95 * ortho;
+	return area * fillScore * arScore * right * right;
 }
 
 function detectFromEdges(cv, edges, minArea, width, height) {
 	var modes = [cv.RETR_EXTERNAL, cv.RETR_LIST];
 	var best = null;
-	var maxContours = 80;
+	var maxKeep = 40;
 	for (var m = 0; m < modes.length; m++) {
 		var src = edges.clone();
 		var contours = new cv.MatVector();
 		var hierarchy = new cv.Mat();
 		try {
 			cv.findContours(src, contours, hierarchy, modes[m], cv.CHAIN_APPROX_SIMPLE);
-			var n = Math.min(contours.size(), maxContours);
-			for (var i = 0; i < n; i++) {
+			var ranked = [];
+			var total = contours.size();
+			for (var i = 0; i < total; i++) {
 				var cnt = contours.get(i);
 				var area = cv.contourArea(cnt);
-				if (area < minArea) continue;
-				var quad = contourToQuad(cv, cnt);
+				if (area >= minArea) ranked.push({ i: i, area: area });
+			}
+			ranked.sort(function (a, b) { return b.area - a.area; });
+			var n = Math.min(ranked.length, maxKeep);
+			for (var r = 0; r < n; r++) {
+				var quad = contourToQuad(cv, contours.get(ranked[r].i));
 				if (!quad || !usableQuad(quad, width, height, minArea)) continue;
 				var score = scoreQuad(quad, width, height);
 				if (!best || score > best.score) best = { score: score, quad: quad };
@@ -242,9 +271,8 @@ function detectFromEdges(cv, edges, minArea, width, height) {
 			contours.delete();
 			hierarchy.delete();
 		}
-		if (best) return best.quad;
 	}
-	return best ? best.quad : null;
+	return best;
 }
 
 function matFromRgba(cv, buffer, width, height) {
@@ -277,21 +305,41 @@ function detectOnGray(cv, gray, minArea, width, height) {
 	var edges = new cv.Mat();
 	var closeK = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(7, 7));
 	var dilateK = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(3, 3));
+	var openK = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(9, 9));
+	var best = null;
+	function consider(found) {
+		if (!found) return;
+		if (!best || found.score > best.score) best = found;
+	}
 	try {
 		function fromBinary() {
 			return detectFromEdges(cv, edges, minArea, width, height);
 		}
+		// White page on a textured floor: Otsu on brightness finds the sheet
+		// without lighting up wood grain the way a low Canny threshold does.
+		try {
+			cv.GaussianBlur(gray, work, new cv.Size(7, 7), 0);
+			cv.threshold(work, edges, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU);
+			cv.morphologyEx(edges, edges, cv.MORPH_OPEN, openK);
+			cv.morphologyEx(edges, edges, cv.MORPH_CLOSE, closeK);
+			consider(fromBinary());
+			cv.threshold(work, edges, 0, 255, cv.THRESH_BINARY_INV + cv.THRESH_OTSU);
+			cv.morphologyEx(edges, edges, cv.MORPH_OPEN, openK);
+			cv.morphologyEx(edges, edges, cv.MORPH_CLOSE, closeK);
+			consider(fromBinary());
+		} catch (e) {
+			/* Otsu optional */
+		}
 		// Text at native resolution drowns the page outline. Blur first so
 		// Canny sees the sheet, then dilate/close so the border reconnects.
 		cv.GaussianBlur(gray, work, new cv.Size(5, 5), 0);
-		var cannyPairs = [[20, 70], [40, 120], [75, 200]];
+		var cannyPairs = [[40, 120], [75, 200], [20, 70]];
 		for (var c = 0; c < cannyPairs.length; c++) {
 			try {
 				cv.Canny(work, edges, cannyPairs[c][0], cannyPairs[c][1]);
 				cv.dilate(edges, edges, dilateK);
 				cv.morphologyEx(edges, edges, cv.MORPH_CLOSE, closeK);
-				var fromCanny = fromBinary();
-				if (fromCanny) return fromCanny;
+				consider(fromBinary());
 			} catch (e) {
 				/* next Canny pair */
 			}
@@ -313,29 +361,18 @@ function detectOnGray(cv, gray, minArea, width, height) {
 					threshModes[t][3]
 				);
 				cv.morphologyEx(edges, edges, cv.MORPH_CLOSE, closeK);
-				var fromBin = fromBinary();
-				if (fromBin) return fromBin;
+				consider(fromBinary());
 			} catch (e) {
 				/* next threshold */
 			}
 		}
-		try {
-			cv.GaussianBlur(gray, work, new cv.Size(11, 11), 0);
-			cv.threshold(work, edges, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU);
-			cv.morphologyEx(edges, edges, cv.MORPH_CLOSE, closeK);
-			var fromOtsu = fromBinary();
-			if (fromOtsu) return fromOtsu;
-			cv.threshold(work, edges, 0, 255, cv.THRESH_BINARY_INV + cv.THRESH_OTSU);
-			cv.morphologyEx(edges, edges, cv.MORPH_CLOSE, closeK);
-			return fromBinary();
-		} catch (e) {
-			return null;
-		}
+		return best ? best.quad : null;
 	} finally {
 		work.delete();
 		edges.delete();
 		closeK.delete();
 		dilateK.delete();
+		openK.delete();
 	}
 }
 

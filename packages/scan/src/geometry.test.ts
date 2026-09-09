@@ -7,6 +7,7 @@ import {
 	orderCorners,
 	outputSize,
 	quadArea,
+	quadOrthogonality,
 	quadsClose
 } from './geometry.js';
 import { QuadLock } from './lock.js';
@@ -78,8 +79,8 @@ describe('QuadLock', () => {
 		expect(lock.observe(cloneShift(q, 1), 100, 100).locked).toBe(true);
 	});
 
-	it('resets when the quad jumps or disappears', () => {
-		const lock = new QuadLock({ needed: 3, maxMoveRatio: 0.02, maxMisses: 0 });
+	it('holds the previous overlay when the quad jumps, then switches after agreement', () => {
+		const lock = new QuadLock({ needed: 3, maxMoveRatio: 0.02, maxMisses: 0, switchNeeded: 3 });
 		const q = orderCorners([
 			{ x: 10, y: 10 },
 			{ x: 90, y: 10 },
@@ -95,7 +96,30 @@ describe('QuadLock', () => {
 			{ x: 40, y: 40 },
 			{ x: 0, y: 40 }
 		]);
-		expect(lock.observe(jumped, 100, 100).progress).toBeCloseTo(1 / 3);
+		const held = lock.observe(jumped, 100, 100);
+		expect(held.quad).toEqual(q);
+		expect(held.progress).toBe(0);
+		lock.observe(jumped, 100, 100);
+		const switched = lock.observe(jumped, 100, 100);
+		expect(switched.quad?.[0]?.x).toBeCloseTo(0, 5);
+		expect(switched.progress).toBeCloseTo(1, 5);
+	});
+
+	it('scores a rectangle as more orthogonal than a diamond', () => {
+		const rect = orderCorners([
+			{ x: 10, y: 10 },
+			{ x: 90, y: 10 },
+			{ x: 90, y: 90 },
+			{ x: 10, y: 90 }
+		]);
+		const spike = orderCorners([
+			{ x: 50, y: 0 },
+			{ x: 60, y: 50 },
+			{ x: 50, y: 100 },
+			{ x: 40, y: 50 }
+		]);
+		expect(quadOrthogonality(rect)).toBeGreaterThan(0.95);
+		expect(quadOrthogonality(spike)).toBeLessThan(0.25);
 	});
 
 	it('keeps the lock through a brief miss', () => {

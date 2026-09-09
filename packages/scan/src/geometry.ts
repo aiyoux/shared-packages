@@ -39,6 +39,27 @@ export function quadsClose(a: Quad, b: Quad, maxPx: number): boolean {
 	return true;
 }
 
+/**
+ * 1 = every corner is a right angle; 0 = collapsed / wildly skewed.
+ * Used to prefer a page rectangle over a diamond min-area-rect of floor grain.
+ */
+export function quadOrthogonality(q: Quad): number {
+	let acc = 0;
+	for (let i = 0; i < 4; i++) {
+		const b = q[i]!;
+		const a = q[(i + 3) % 4]!;
+		const c = q[(i + 1) % 4]!;
+		const v1x = a.x - b.x;
+		const v1y = a.y - b.y;
+		const v2x = c.x - b.x;
+		const v2y = c.y - b.y;
+		const n1 = Math.hypot(v1x, v1y) || 1;
+		const n2 = Math.hypot(v2x, v2y) || 1;
+		acc += 1 - Math.min(1, Math.abs((v1x * v2x + v1y * v2y) / (n1 * n2)));
+	}
+	return acc / 4;
+}
+
 export function outputSize(quad: Quad, maxEdge = 1600): { width: number; height: number } {
 	const [tl, tr, br, bl] = quad;
 	const w = Math.max(dist(tl, tr), dist(bl, br));

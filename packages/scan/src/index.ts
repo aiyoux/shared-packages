@@ -23,6 +23,7 @@ export {
 	orderCorners,
 	outputSize,
 	quadArea,
+	quadOrthogonality,
 	quadsClose
 } from './geometry.js';
 
