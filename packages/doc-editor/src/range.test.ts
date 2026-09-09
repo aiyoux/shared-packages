@@ -6,6 +6,7 @@ import {
 	isCollapsed,
 	orderedRange,
 	payloadLength,
+	rangesEqual,
 	rangeStartsOnAncestor,
 	requireBlock,
 	textInsertPoint
@@ -13,6 +14,12 @@ import {
 import { callout, nest, page, para, toggle } from './testFixtures.js';
 
 describe('range helpers', () => {
+	it('rangesEqual compares both endpoints', () => {
+		const a = { anchor: { blockId: 'p', offset: 1 }, head: { blockId: 'p', offset: 2 } };
+		expect(rangesEqual(a, { ...a, head: { ...a.head } })).toBe(true);
+		expect(rangesEqual(a, { ...a, head: { blockId: 'p', offset: 3 } })).toBe(false);
+	});
+
 	it('orderedRange treats missing ids as last and does not throw', () => {
 		const doc = page([para('a', 'aa'), para('b', 'bb')]);
 		expect(orderedRange(doc, { anchor: { blockId: 'a', offset: 1 }, head: { blockId: 'b', offset: 0 } })).toEqual({

@@ -7,6 +7,7 @@ import {
 	dispatch,
 	dispatchMany,
 	redo,
+	setSelection,
 	undo,
 	UNDO_CAP,
 	type EditorState
@@ -15,6 +16,20 @@ import {
 function ed(blocks: Parameters<typeof page>[0]): EditorState {
 	return createEditorState(page(blocks));
 }
+
+describe('setSelection', () => {
+	it('returns the same state object when the clamped range is unchanged', () => {
+		const state = ed([para('p', 'hi')]);
+		const same = setSelection(state, state.selection);
+		expect(same).toBe(state);
+		const moved = setSelection(state, {
+			anchor: { blockId: 'p', offset: 2 },
+			head: { blockId: 'p', offset: 2 }
+		});
+		expect(moved).not.toBe(state);
+		expect(moved.selection.anchor.offset).toBe(2);
+	});
+});
 
 describe('dispatch insert/delete', () => {
 	it('inserts text and places the caret after it', () => {

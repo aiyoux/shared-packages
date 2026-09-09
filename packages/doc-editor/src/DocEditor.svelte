@@ -46,7 +46,7 @@
 		caretFromClient,
 		emptySpaceCaretFromClient
 	} from './selection.js';
-	import { collapsed } from './range.js';
+	import { collapsed, rangesEqual } from './range.js';
 	import { applyEditorOps, redo, setSelection, undo, type EditorState } from './state.js';
 
 	let {
@@ -249,7 +249,9 @@
 			return;
 		}
 		const key = caretKey(remoteCarets);
-		if (domDiverged || page !== paintedPage || key !== paintedCaretKey || media !== paintedMedia) {
+		const shouldPaint =
+			domDiverged || page !== paintedPage || key !== paintedCaretKey || media !== paintedMedia;
+		if (shouldPaint) {
 			project(el, page, { carets: remoteCarets, media });
 			syncTableHeights(el);
 			paintedPage = page;
@@ -258,9 +260,11 @@
 			domDiverged = false;
 		}
 		untrack(() => {
-			// A repaint must not pull focus out of a text field elsewhere in the
-			// app; see `focusHeldOutside`.
-			if (!focusHeldOutside(el)) restoreSelection(el, editor.selection, page);
+			// Re-assert the caret only after a real paint: `restoreSelection`
+			// always `removeAllRanges`/`addRange`, which fires `selectionchange`,
+			// which used to rewrite editor state and re-enter this effect — a
+			// tight loop that could freeze or crash the tab.
+			if (shouldPaint && !focusHeldOutside(el)) restoreSelection(el, editor.selection, page);
 			syncHandleLayout();
 			scheduleHandleLayout();
 		});
@@ -512,10 +516,9 @@
 		const sel = host.ownerDocument.getSelection();
 		if (!sel?.anchorNode || !host.contains(sel.anchorNode)) return;
 		const live = rangeFromSelection(host, sel);
-		if (live) {
-			emitState(setSelection(editor, live));
-			onSelection?.(live);
-		}
+		if (!live || rangesEqual(live, editor.selection)) return;
+		emitState(setSelection(editor, live));
+		onSelection?.(live);
 	}
 
 	onMount(() => {

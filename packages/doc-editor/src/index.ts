@@ -56,6 +56,7 @@ export {
 	deleteRangeOps,
 	isCollapsed,
 	orderedRange,
+	rangesEqual,
 	textInsertPoint
 } from './range.js';
 export {

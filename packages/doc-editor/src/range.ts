@@ -22,6 +22,15 @@ export function isCollapsed(range: Range): boolean {
 	return range.anchor.blockId === range.head.blockId && range.anchor.offset === range.head.offset;
 }
 
+export function rangesEqual(a: Range, b: Range): boolean {
+	return (
+		a.anchor.blockId === b.anchor.blockId &&
+		a.anchor.offset === b.anchor.offset &&
+		a.head.blockId === b.head.blockId &&
+		a.head.offset === b.head.offset
+	);
+}
+
 export function collapsed(point: Point): Range {
 	return { anchor: { ...point }, head: { ...point } };
 }

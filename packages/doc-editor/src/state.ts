@@ -15,7 +15,7 @@ import {
 	type Op,
 	type Range
 } from '@shared-packages/doc-model';
-import { blockIndex, clampRange, collapsed, isCollapsed } from './range.js';
+import { blockIndex, clampRange, collapsed, isCollapsed, rangesEqual } from './range.js';
 
 export const UNDO_CAP = 200;
 
@@ -330,6 +330,7 @@ export function setJustCommittedComposition<T extends DocBody>(state: EditorStat
 
 export function setSelection<T extends DocBody>(state: EditorState<T>, selection: Range): EditorState<T> {
 	const next = clampRange(state.page, selection);
+	if (rangesEqual(state.selection, next)) return state;
 	return { ...state, selection: next, blockFocus: blockFocusOf(state.page, next), storedMarks: undefined };
 }
 

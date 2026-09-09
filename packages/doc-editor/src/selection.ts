@@ -244,6 +244,16 @@ export function restoreSelection(host: HTMLElement, range: Range, page?: KbPage)
 	if (!sel) return;
 
 	const clamp = page ? clampRange(page, range) : range;
+	const current = rangeFromSelection(host);
+	if (
+		current &&
+		current.anchor.blockId === clamp.anchor.blockId &&
+		current.anchor.offset === clamp.anchor.offset &&
+		current.head.blockId === clamp.head.blockId &&
+		current.head.offset === clamp.head.offset
+	) {
+		return;
+	}
 	const anchorBlock = host.querySelector(`[${BLOCK_ID_ATTR}="${cssEscape(clamp.anchor.blockId)}"]`) as HTMLElement | null;
 	const headBlock = host.querySelector(`[${BLOCK_ID_ATTR}="${cssEscape(clamp.head.blockId)}"]`) as HTMLElement | null;
 	if (!anchorBlock || !headBlock) return;

@@ -56,6 +56,26 @@ describe('selection mapping (cross-block gate)', () => {
 		host.remove();
 	});
 
+	it('is a no-op when the live selection already matches', () => {
+		const host = document.createElement('div');
+		host.contentEditable = 'true';
+		document.body.append(host);
+		const doc = page([para('p', 'ab')]);
+		project(host, doc);
+		const range = { anchor: { blockId: 'p', offset: 1 }, head: { blockId: 'p', offset: 1 } };
+		restoreSelection(host, range, doc);
+		const text = [...host.querySelector('[data-block-id="p"]')!.childNodes].find(
+			(n) => n.nodeType === Node.TEXT_NODE
+		) as Text;
+		const sel = document.getSelection()!;
+		expect(sel.anchorNode).toBe(text);
+		expect(sel.anchorOffset).toBe(1);
+		restoreSelection(host, range, doc);
+		expect(sel.anchorNode).toBe(text);
+		expect(sel.anchorOffset).toBe(1);
+		host.remove();
+	});
+
 	it('restores a caret into the empty text node', () => {
 		const host = document.createElement('div');
 		host.contentEditable = 'true';
