@@ -2234,7 +2234,7 @@
 		if (entry.fileType === 'ob3d') return 'Open in 3D';
 		if (entry.fileType === 'cari') return 'Open in Caricature';
 		if (entry.fileType === 'igfx') return 'Open in Infographic';
-		if (entry.fileType === 'kb') return 'Open in Knowledge Base';
+		if (entry.fileType === 'kb') return 'Open in Documents';
 		if (entry.fileType === 'anim') return 'Open in Animations';
 		if (entry.fileType === 'vide') return 'Open in Video';
 		if (entry.fileType === 'vrec') return 'Open in voice';

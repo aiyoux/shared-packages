@@ -47,7 +47,7 @@ const DEFAULT_TYPES: FileTypeDef[] = [
 		id: 'kb',
 		extension: '.kb',
 		mime: 'application/x-scratch-kb+json',
-		label: 'Knowledge Base',
+		label: 'Documents',
 		schemaVersion: 1
 	},
 	{
