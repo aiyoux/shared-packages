@@ -90,6 +90,18 @@ describe('dragOutCache', () => {
 		assert.equal(asFile(cached).name, 'test.txt');
 	});
 
+	it('prefetch after rename does not keep the old filename', async () => {
+		const blob = new Blob(['hello'], { type: 'text/plain' });
+		const driver = makeDriver(blob);
+		await prefetchForDragOut(driver, makeEntry({ name: 'old.txt' }));
+		assert.equal(asFile(getDragOutFile('f1')).name, 'old.txt');
+		assert.equal(getDragOutFile('f1', 'new.txt'), null);
+
+		const again = await prefetchForDragOut(driver, makeEntry({ name: 'new.txt' }));
+		assert.equal(asFile(again).name, 'new.txt');
+		assert.equal(asFile(getDragOutFile('f1', 'new.txt')).name, 'new.txt');
+	});
+
 	it('prefetchForDragOut uses download() when readBlob is absent', async () => {
 		const blob = new Blob(['world'], { type: 'application/octet-stream' });
 		const driver = makeDriver(blob, { readBlob: undefined, download: async () => blob });

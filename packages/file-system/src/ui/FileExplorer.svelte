@@ -580,11 +580,14 @@
 		mode === 'manage' && Boolean(caps.supportsMove || caps.supportsDragOut)
 	);
 
-	// Notify parent of selection/folder without tracking unstable callback identity
+	// Notify parent of selection/folder without tracking unstable callback identity.
+	// Names/sizes belong in the key: DualPane copy-across reads `ctx.entries`
+	// for dest filenames, and a rename does not change parent, selection, or count.
 	let lastCtxKey = '';
 	$effect(() => {
 		const ids = [...selected].sort().join(',');
-		const key = `${driver.id}|${parentId ?? ''}|${ids}|${nodes.length}`;
+		const stamp = nodes.map((n) => `${n.id}:${n.name}:${n.kind}:${n.size ?? ''}`).join('\n');
+		const key = `${driver.id}|${parentId ?? ''}|${ids}|${stamp}`;
 		if (key === lastCtxKey) return;
 		lastCtxKey = key;
 		onContextChange?.({
@@ -947,12 +950,18 @@
 		// to a cached File for local VFS (no HTTP URL).
 		if (caps.supportsDragOut && e.dataTransfer) {
 			try {
-				const urls = ids.map((id) => getDragOutUrl(id)).filter((u): u is NonNullable<typeof u> => u != null);
+				const urls = ids
+					.map((id) => {
+						const row = nodes.find((x) => x.id === id);
+						return getDragOutUrl(id, row?.name);
+					})
+					.filter((u): u is NonNullable<typeof u> => u != null);
 				if (urls.length === 1) {
 					e.dataTransfer.setData('DownloadURL', formatDownloadURL(urls[0]!));
 				} else {
 					for (const id of ids) {
-						const file = getDragOutFile(id);
+						const row = nodes.find((x) => x.id === id);
+						const file = getDragOutFile(id, row?.name);
 						if (file) e.dataTransfer.items.add(file);
 					}
 				}
@@ -1315,6 +1324,14 @@
 			nodes = nextNodes;
 			listTruncated = nextTruncated;
 			breadcrumbs = nextCrumbs;
+			if (previewEntry) {
+				const live = nextNodes.find((row) => row.id === previewEntry!.id);
+				if (live) previewEntry = live;
+			}
+			if (floatingPreviewEntry) {
+				const live = nextNodes.find((row) => row.id === floatingPreviewEntry!.id);
+				if (live) floatingPreviewEntry = live;
+			}
 			// Pack membership for the rows now on screen. Best-effort and
 			// non-blocking: a listing must never fail to render because a badge
 			// could not be resolved.
@@ -1764,6 +1781,7 @@
 		renameBusy = true;
 		try {
 			await driver.rename(n.id, next);
+			evictDragOutFile(n.id);
 			renamingId = null;
 			error = '';
 			await refresh();

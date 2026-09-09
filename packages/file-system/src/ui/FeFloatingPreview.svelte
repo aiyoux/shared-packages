@@ -7,7 +7,12 @@
 		renderPdfPageToCanvas
 	} from './feThumbnails.js';
 	import type { ExplorerDriver, ExplorerEntry } from './explorerDriver.js';
-	import { canReadExplorerBlob, loadExplorerMediaSrc, readExplorerBlob } from './explorerDriver.js';
+	import {
+		canReadExplorerBlob,
+		embedMediaUrl,
+		loadExplorerMediaSrc,
+		readExplorerBlob
+	} from './explorerDriver.js';
 
 	let {
 		entry,
@@ -75,7 +80,12 @@
 						const loc = await d.thumbUrl(e.id, { maxDim: 1024 });
 						if (cancelled) return;
 						if (loc?.url) {
-							blobUrl = loc.url;
+							const src = await embedMediaUrl(loc.url);
+							if (cancelled) {
+								if (src.startsWith('blob:')) URL.revokeObjectURL(src);
+								return;
+							}
+							blobUrl = src;
 							loading = false;
 							return;
 						}

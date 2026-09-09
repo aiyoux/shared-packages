@@ -99,6 +99,7 @@ export {
 	canReadExplorerBlob,
 	readExplorerBlob,
 	loadExplorerMediaSrc,
+	embedMediaUrl,
 	type ExplorerCapabilities,
 	type ExplorerDriver,
 	type ExplorerEntry,

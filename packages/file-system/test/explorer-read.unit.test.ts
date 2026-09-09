@@ -2,6 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
 	canReadExplorerBlob,
+	embedMediaUrl,
 	loadExplorerMediaSrc,
 	readExplorerBlob
 } from '../src/ui/explorerDriver.ts';
@@ -59,5 +60,29 @@ describe('readExplorerBlob', () => {
 		assert.equal(src.url.startsWith('blob:'), true);
 		assert.ok(src.blob);
 		assert.equal(await src.blob!.text(), 'png-bytes');
+	});
+
+	it('embedMediaUrl keeps same-origin URLs and blobs monitor thumbs', async () => {
+		const same = await embedMediaUrl(
+			'http://127.0.0.1:7990/api/thumb.jpg',
+			{ pageHref: 'http://127.0.0.1:7990/tools/files' }
+		);
+		assert.equal(same, 'http://127.0.0.1:7990/api/thumb.jpg');
+
+		const orig = globalThis.fetch;
+		globalThis.fetch = (async () =>
+			new Response(new Uint8Array([0xff, 0xd8]), {
+				status: 200,
+				headers: { 'content-type': 'image/jpeg' }
+			})) as typeof fetch;
+		try {
+			const url = await embedMediaUrl(
+				'http://127.0.0.1:8300/v1/fs/thumb?path=a.png',
+				{ pageHref: 'http://127.0.0.1:7990/tools/files' }
+			);
+			assert.equal(url.startsWith('blob:'), true);
+		} finally {
+			globalThis.fetch = orig;
+		}
 	});
 });

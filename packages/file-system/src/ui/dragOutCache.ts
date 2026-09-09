@@ -39,6 +39,22 @@ function evictExpired(): void {
 	}
 }
 
+function wantName(entry: ExplorerEntry): string {
+	return entry.kind === 'folder' ? folderZipName(entry) : entry.name;
+}
+
+function cachedName(hit: Cached): string {
+	return hit.kind === 'url' ? hit.payload.filename : hit.file.name;
+}
+
+function nameMatches(hit: Cached, expected?: string): boolean {
+	if (!expected) return true;
+	const have = cachedName(hit);
+	if (have === expected) return true;
+	const base = expected.replace(/\/+$/, '');
+	return have === `${base}.zip`;
+}
+
 /** Chromium DownloadURL payload: `mimeType:filename:url`. */
 export function formatDownloadURL(payload: DragOutUrl): string {
 	const filename = payload.filename.replace(/[:\r\n]/g, '_');
@@ -76,12 +92,16 @@ export async function prefetchForDragOut(
 		return null;
 	}
 
+	evictExpired();
+	const want = wantName(entry);
 	const hit = cache.get(entry.id);
-	if (hit && hit.expiresAt > now()) {
+	if (hit && hit.expiresAt > now() && cachedName(hit) === want) {
 		return hit.kind === 'url' ? hit.payload : hit.file;
 	}
+	if (hit) cache.delete(entry.id);
 
-	const inflight = fetching.get(entry.id);
+	const fetchKey = `${entry.id}:${want}`;
+	const inflight = fetching.get(fetchKey);
 	if (inflight) return inflight;
 
 	const promise = (async (): Promise<File | DragOutUrl | null> => {
@@ -131,11 +151,11 @@ export async function prefetchForDragOut(
 		} catch {
 			return null;
 		} finally {
-			fetching.delete(entry.id);
+			fetching.delete(fetchKey);
 		}
 	})();
 
-	fetching.set(entry.id, promise);
+	fetching.set(fetchKey, promise);
 	return promise;
 }
 
@@ -155,38 +175,32 @@ async function zipFolderForDragOut(
 /**
  * In-memory `File` for OS drag-out, or `null`. Synchronous — `dragstart`.
  */
-export function getDragOutFile(entryId: string): File | null {
+function liveHit(entryId: string, expectedName?: string): Cached | null {
 	const hit = cache.get(entryId);
 	if (!hit) return null;
-	if (hit.expiresAt <= now()) {
+	if (hit.expiresAt <= now() || !nameMatches(hit, expectedName)) {
 		cache.delete(entryId);
 		return null;
 	}
-	return hit.kind === 'file' ? hit.file : null;
+	return hit;
+}
+
+export function getDragOutFile(entryId: string, expectedName?: string): File | null {
+	const hit = liveHit(entryId, expectedName);
+	return hit?.kind === 'file' ? hit.file : null;
 }
 
 /**
  * Header-free HTTP URL for Chromium `DownloadURL`. Chrome GETs this on drop.
  */
-export function getDragOutUrl(entryId: string): DragOutUrl | null {
-	const hit = cache.get(entryId);
-	if (!hit) return null;
-	if (hit.expiresAt <= now()) {
-		cache.delete(entryId);
-		return null;
-	}
-	return hit.kind === 'url' ? hit.payload : null;
+export function getDragOutUrl(entryId: string, expectedName?: string): DragOutUrl | null {
+	const hit = liveHit(entryId, expectedName);
+	return hit?.kind === 'url' ? hit.payload : null;
 }
 
 /** True when a File or URL is ready for OS drag-out. */
-export function hasDragOutFile(entryId: string): boolean {
-	const hit = cache.get(entryId);
-	if (!hit) return false;
-	if (hit.expiresAt <= now()) {
-		cache.delete(entryId);
-		return false;
-	}
-	return true;
+export function hasDragOutFile(entryId: string, expectedName?: string): boolean {
+	return liveHit(entryId, expectedName) != null;
 }
 
 /** Remove a specific entry from the cache. */

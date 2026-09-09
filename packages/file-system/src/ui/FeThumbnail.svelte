@@ -11,6 +11,7 @@
 	import type { ExplorerDriver, ExplorerEntry } from './explorerDriver.js';
 	import {
 		canReadExplorerBlob,
+		embedMediaUrl,
 		explorerThumbsAreEager,
 		readExplorerBlob
 	} from './explorerDriver.js';
@@ -102,7 +103,12 @@
 						const loc = await d.thumbUrl(e.id, { maxDim });
 						if (cancelled) return;
 						if (loc?.url) {
-							url = loc.url;
+							const src = await embedMediaUrl(loc.url);
+							if (cancelled) {
+								if (src.startsWith('blob:')) URL.revokeObjectURL(src);
+								return;
+							}
+							url = src;
 							loadedId = e.id;
 							loading = false;
 							return;

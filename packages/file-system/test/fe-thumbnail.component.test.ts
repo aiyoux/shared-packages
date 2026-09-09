@@ -145,6 +145,11 @@ describe('FeThumbnail', () => {
 
 	it('auto-loads a monitor host thumb without downloading the original', async () => {
 		let downloads = 0;
+		const fetchMock = vi.fn(
+			async () =>
+				new Response(pngBlob(), { status: 200, headers: { 'content-type': 'image/jpeg' } })
+		);
+		vi.stubGlobal('fetch', fetchMock);
 		const driver: ExplorerDriver = {
 			id: 'monitor',
 			capabilities: caps,
@@ -168,8 +173,10 @@ describe('FeThumbnail', () => {
 		render(FeThumbnail, { props: { entry, driver, maxDim: 32, enabled: true } });
 		await waitFor(() => {
 			const img = document.querySelector('.fe-thumb-img') as HTMLImageElement | null;
-			expect(img?.src).toContain('/v1/fs/thumb');
+			expect(img?.src).toMatch(/^blob:/);
 		});
 		expect(downloads).toBe(0);
+		expect(fetchMock).toHaveBeenCalled();
+		vi.unstubAllGlobals();
 	});
 });

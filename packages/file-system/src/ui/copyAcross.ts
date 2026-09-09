@@ -195,6 +195,29 @@ function entryById(entries: ExplorerEntry[], id: string): ExplorerEntry | undefi
 	return entries.find((e) => e.id === id);
 }
 
+/**
+ * DualPane's `sourceEntries` can lag a rename (same folder, same selection,
+ * same count). Re-list each parent and overlay live names before write.
+ */
+async function resolveLiveEntries(
+	source: ExplorerDriver,
+	snapshots: ExplorerEntry[]
+): Promise<ExplorerEntry[]> {
+	if (!snapshots.length) return snapshots;
+	const live = new Map<string, ExplorerEntry>();
+	const parents = new Set<string | null>();
+	for (const e of snapshots) parents.add(e.parentId);
+	for (const parentId of parents) {
+		try {
+			const listed = await source.list({ parentId });
+			for (const e of listed.entries) live.set(e.id, e);
+		} catch {
+			/* keep snapshot names */
+		}
+	}
+	return snapshots.map((e) => live.get(e.id) ?? e);
+}
+
 function nonEmptyKey(d: ExplorerDriver): string | null {
 	const k = d.endpointKey;
 	return typeof k === 'string' && k !== '' ? k : null;
@@ -382,9 +405,10 @@ export async function copyAcross(args: CopyAcrossArgs): Promise<number> {
 		throw new CopyAcrossError('COPY_ACROSS_NO_SELECTION', 'Select file(s) to copy');
 	}
 
-	const selected = selectedIds
-		.map((id) => entryById(sourceEntries, id))
-		.filter((e): e is ExplorerEntry => !!e);
+	const selected = await resolveLiveEntries(
+		sourceDriver,
+		selectedIds.map((id) => entryById(sourceEntries, id)).filter((e): e is ExplorerEntry => !!e)
+	);
 
 	const hasFolder = selected.some((e) => e.kind === 'folder');
 	// memory is a flat list (no folders) — block even though it is local-class.

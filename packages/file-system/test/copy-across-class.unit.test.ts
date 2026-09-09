@@ -298,6 +298,46 @@ describe('copyAcross truncated folder', () => {
 		assert.equal(copies[0]!.transferred, 4);
 	});
 
+	it('copyAcross uses the live list name, not a stale sourceEntries snapshot', async () => {
+		const stale: ExplorerEntry = {
+			id: 'note',
+			parentId: null,
+			name: 'old.txt',
+			kind: 'file',
+			size: 1
+		};
+		const source = {
+			id: 'local',
+			capabilities: {},
+			async list() {
+				return {
+					entries: [{ ...stale, name: 'renamed.txt' }],
+					truncated: false
+				};
+			},
+			async readBlob() {
+				return new Blob([new Uint8Array([1])]);
+			}
+		} as unknown as ExplorerDriver;
+		const written: string[] = [];
+		const dest = {
+			id: 'monitor',
+			capabilities: { supportsMkdir: true },
+			async writeFile(_parent: string | null, f: File) {
+				written.push(f.name);
+				return { id: f.name, parentId: null, name: f.name, kind: 'file' };
+			}
+		} as unknown as ExplorerDriver;
+		await copyAcross({
+			sourceDriver: source,
+			destDriver: dest,
+			selectedIds: [stale.id],
+			sourceEntries: [stale],
+			destParentId: null
+		});
+		assert.deepEqual(written, ['renamed.txt']);
+	});
+
 	it('resets progress to 0 before dest.upload so VFS→B2 is not 100% during the PUT', async () => {
 		resetTransferRegistryForTests();
 		const file: ExplorerEntry = {

@@ -520,3 +520,19 @@ export async function loadExplorerMediaSrc(
 	const blob = await readExplorerBlob(driver, id);
 	return { url: URL.createObjectURL(blob), blob };
 }
+
+/**
+ * Put `url` in `<img>`/`<video>` only when hub CSP allows it. Monitor
+ * `http://127.0.0.1:8300/v1/fs/thumb` is another origin and is not in
+ * `img-src`, so fetch the bytes (connect-src allows loopback HTTP) and
+ * return a `blob:` URL.
+ */
+export async function embedMediaUrl(
+	url: string,
+	opts?: { pageHref?: string }
+): Promise<string> {
+	if (mediaSrcIsEmbeddable(url, opts?.pageHref)) return url;
+	const res = await fetch(url);
+	if (!res.ok) throw new Error(`Could not load media (${res.status})`);
+	return URL.createObjectURL(await res.blob());
+}
