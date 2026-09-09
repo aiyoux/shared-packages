@@ -5,6 +5,7 @@ import {
 	isNonTextual,
 	isTableStructure,
 	isTextLike,
+	paintMarkFromCss,
 	plaintextOf,
 	type Mark,
 	type Op,
@@ -303,6 +304,14 @@ export function mapBeforeInput(
 	}
 	if (type === 'formatUnderline') {
 		return { preventDefault: true, ops: formatOps(state, liveRange, { type: 'underline' }), freeze: false };
+	}
+	if ((type === 'formatForeColor' || type === 'formatFontColor') && event.data) {
+		const mark = paintMarkFromCss('color', event.data);
+		if (mark) return { preventDefault: true, ops: formatOps(state, liveRange, mark), freeze: false };
+	}
+	if ((type === 'formatBackColor' || type === 'formatHighlight') && event.data) {
+		const mark = paintMarkFromCss('highlight', event.data);
+		if (mark) return { preventDefault: true, ops: formatOps(state, liveRange, mark), freeze: false };
 	}
 
 	if (type === 'historyUndo') {

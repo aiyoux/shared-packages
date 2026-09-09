@@ -4,6 +4,8 @@ import {
 	isContainer,
 	isTextLike,
 	isUnknownBlock,
+	paintHex,
+	paintPalette,
 	parentIdOf,
 	parentOf,
 	sanitizeFontSize,
@@ -52,6 +54,28 @@ function markElement(doc: Document, mark: Mark): HTMLElement | undefined {
 			return doc.createElement('em');
 		case 'underline':
 			return doc.createElement('u');
+		case 'color': {
+			const span = doc.createElement('span');
+			const id = paintPalette(mark);
+			const hex = paintHex(mark);
+			if (id) span.setAttribute('data-kb-color', id);
+			else if (hex) {
+				span.setAttribute('data-kb-color', 'custom');
+				span.style.color = hex;
+			}
+			return span;
+		}
+		case 'highlight': {
+			const el = doc.createElement('mark');
+			const id = paintPalette(mark);
+			const hex = paintHex(mark);
+			if (id) el.setAttribute('data-kb-highlight', id);
+			else if (hex) {
+				el.setAttribute('data-kb-highlight', 'custom');
+				el.style.backgroundColor = hex;
+			}
+			return el;
+		}
 		case 'code':
 			return doc.createElement('code');
 		case 'font_family': {

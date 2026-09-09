@@ -23,6 +23,21 @@ describe('htmlToBlocks', () => {
 		]);
 	});
 
+	it('maps CSS color and background, snapping near-preset hex', () => {
+		const colored = htmlToBlocks('<p><span style="color:#ef4444">r</span></p>');
+		expect(colored[0]!.type).toBe('paragraph');
+		if (colored[0]!.type !== 'paragraph') return;
+		expect(colored[0].content.find((s) => s.text === 'r')?.marks).toEqual([{ type: 'color', color: 'red' }]);
+
+		const custom = htmlToBlocks('<p><span style="color:#123456">c</span></p>');
+		if (custom[0]!.type !== 'paragraph') return;
+		expect(custom[0].content.find((s) => s.text === 'c')?.marks).toEqual([{ type: 'color', hex: '#123456' }]);
+
+		const hi = htmlToBlocks('<p><mark>y</mark></p>');
+		if (hi[0]!.type !== 'paragraph') return;
+		expect(hi[0].content.find((s) => s.text === 'y')?.marks).toEqual([{ type: 'highlight', color: 'yellow' }]);
+	});
+
 	it('maps CSS text-decoration:underline, but not a link’s own underline', () => {
 		const styled = htmlToBlocks('<p><span style="text-decoration:underline">x</span></p>');
 		expect(styled[0]!.type).toBe('paragraph');

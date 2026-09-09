@@ -22,15 +22,18 @@ import {
 	type Align,
 	type VAlign
 } from './types.js';
+import { coerceColorMark, coerceHighlightMark, paintHex, paintPalette } from './palette.js';
 
 const MARK_RANK: Record<Mark['type'], number> = {
 	bold: 0,
 	italic: 1,
 	underline: 2,
-	code: 3,
-	font_family: 4,
-	font_size: 5,
-	link: 6
+	color: 3,
+	highlight: 4,
+	code: 5,
+	font_family: 6,
+	font_size: 7,
+	link: 8
 };
 
 const CALLOUT_VARIANTS: ReadonlySet<string> = new Set(['info', 'warning', 'note']);
@@ -97,7 +100,19 @@ export function emptyRow(id: string, width: number): TableRowBlock {
 
 export function canonicalMarks(marks: Mark[]): Mark[] {
 	const byType = new Map<Mark['type'], Mark>();
-	for (const mark of marks) byType.set(mark.type, mark);
+	for (const mark of marks) {
+		if (mark.type === 'color') {
+			const next = coerceColorMark(mark);
+			if (next) byType.set('color', next);
+			continue;
+		}
+		if (mark.type === 'highlight') {
+			const next = coerceHighlightMark(mark);
+			if (next) byType.set('highlight', next);
+			continue;
+		}
+		byType.set(mark.type, mark);
+	}
 	return [...byType.values()].sort((a, b) => MARK_RANK[a.type] - MARK_RANK[b.type]);
 }
 
@@ -144,6 +159,9 @@ function markPayload(mark: Mark): string | undefined {
 	if (mark.type === 'link') return mark.href;
 	if (mark.type === 'font_family') return mark.family;
 	if (mark.type === 'font_size') return mark.size;
+	if (mark.type === 'color' || mark.type === 'highlight') {
+		return paintPalette(mark) ?? paintHex(mark) ?? undefined;
+	}
 	return undefined;
 }
 
@@ -274,6 +292,8 @@ function coerceMark(raw: unknown): Mark | null {
 		const size = sanitizeFontSize(rec.size);
 		return size ? { type: 'font_size', size } : null;
 	}
+	if (rec.type === 'color') return coerceColorMark(rec);
+	if (rec.type === 'highlight') return coerceHighlightMark(rec);
 	return null;
 }
 
@@ -304,6 +324,16 @@ function orderedSpan(span: TextSpan): Inline {
 					return { type: 'font_family', family: mark.family };
 				case 'font_size':
 					return { type: 'font_size', size: mark.size };
+				case 'color': {
+					const id = paintPalette(mark);
+					const hex = paintHex(mark);
+					return id ? { type: 'color', color: id } : { type: 'color', hex: hex! };
+				}
+				case 'highlight': {
+					const id = paintPalette(mark);
+					const hex = paintHex(mark);
+					return id ? { type: 'highlight', color: id } : { type: 'highlight', hex: hex! };
+				}
 				default:
 					return { type: mark.type };
 			}

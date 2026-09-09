@@ -93,6 +93,30 @@ describe('project', () => {
 		el.remove();
 	});
 
+	it('wraps color and highlight as data-kb attributes, custom as inline style', () => {
+		const el = host();
+		project(
+			el,
+			page([
+				{
+					id: 'p',
+					type: 'paragraph',
+					content: [
+						{ type: 'text', text: 'r', marks: [{ type: 'color', color: 'red' }] },
+						{ type: 'text', text: 'h', marks: [{ type: 'highlight', color: 'yellow' }] },
+						{ type: 'text', text: 'c', marks: [{ type: 'color', hex: '#123456' }] }
+					]
+				}
+			])
+		);
+		const block = el.querySelector('[data-block-id="p"]')!;
+		expect(block.querySelector('[data-kb-color="red"]')).toBeTruthy();
+		expect(block.querySelector('mark[data-kb-highlight="yellow"]')).toBeTruthy();
+		const custom = block.querySelector('[data-kb-color="custom"]') as HTMLElement;
+		expect(custom.style.color).toBe('rgb(18, 52, 86)');
+		el.remove();
+	});
+
 	it('allowlists link href and blocks javascript/data/vbscript', () => {
 		const el = host();
 		project(

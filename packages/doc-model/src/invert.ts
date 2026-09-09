@@ -49,6 +49,8 @@ const STRIP_MARKS: Mark[] = [
 	{ type: 'bold' },
 	{ type: 'italic' },
 	{ type: 'underline' },
+	{ type: 'color', color: 'red' },
+	{ type: 'highlight', color: 'yellow' },
 	{ type: 'code' },
 	{ type: 'font_family', family: 'sans' },
 	{ type: 'font_size', size: '1px' },
@@ -245,7 +247,7 @@ function invertDeleteRange(page: KbPage, op: Extract<Op, { kind: 'delete-range' 
 function findMarkPayload(
 	page: KbPage,
 	range: Extract<Op, { kind: 'format-range' }>['range'],
-	type: 'link' | 'font_family' | 'font_size'
+	type: 'link' | 'font_family' | 'font_size' | 'color' | 'highlight'
 ): Mark | null {
 	const { start, end } = normalizeRange(page, range);
 	const order = documentOrder(page);
@@ -268,7 +270,14 @@ function invertFormatRange(page: KbPage, op: Extract<Op, { kind: 'format-range' 
 	const { start, end } = normalizeRange(page, op.range);
 	if (start.block.id === end.block.id && start.offset === end.offset) return [];
 	let mark = op.mark;
-	if (!op.on && (mark.type === 'link' || mark.type === 'font_family' || mark.type === 'font_size')) {
+	if (
+		!op.on &&
+		(mark.type === 'link' ||
+			mark.type === 'font_family' ||
+			mark.type === 'font_size' ||
+			mark.type === 'color' ||
+			mark.type === 'highlight')
+	) {
 		const found = findMarkPayload(page, op.range, mark.type);
 		if (found) mark = found;
 	}

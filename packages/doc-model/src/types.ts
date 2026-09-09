@@ -4,11 +4,33 @@ export const KB_FORMAT = 'kb' as const;
  * Font family is a picker id, never a CSS string — rendering maps it through
  * an allowlist. Font size is a canonical `"<n>px"` / `"<n>pt"` / `"<n>%"`
  * string validated at every entry point (coerce, apply, render).
+ *
+ * Color / highlight presets are palette ids (theme-aware at render). A `hex`
+ * payload is an explicit custom override and is painted as-is.
  */
+export type PaletteId =
+	| 'red'
+	| 'rose'
+	| 'pink'
+	| 'orange'
+	| 'amber'
+	| 'yellow'
+	| 'green'
+	| 'emerald'
+	| 'sky'
+	| 'blue'
+	| 'violet'
+	| 'purple'
+	| 'gray';
+
 export type Mark =
 	| { type: 'bold' }
 	| { type: 'italic' }
 	| { type: 'underline' }
+	| { type: 'color'; color: PaletteId }
+	| { type: 'color'; hex: string }
+	| { type: 'highlight'; color: PaletteId }
+	| { type: 'highlight'; hex: string }
 	| { type: 'code' }
 	| { type: 'font_family'; family: 'sans' | 'serif' | 'mono' }
 	| { type: 'font_size'; size: string }
@@ -17,7 +39,7 @@ export type Mark =
 export type TextSpan = {
 	type: 'text';
 	text: string; // MAY contain '\n' (Shift+Enter hard break). `code.text` MAY contain `\n`.
-	marks: Mark[]; // canonical order: bold, italic, underline, code, font_family, font_size, link
+	marks: Mark[]; // canonical order: bold, italic, underline, color, highlight, code, font_family, font_size, link
 };
 
 export type Inline = TextSpan; // v1: text spans only. A hard break is '\n' inside a span, not an inline node.

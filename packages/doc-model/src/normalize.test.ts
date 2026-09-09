@@ -60,10 +60,12 @@ describe('normalizeSpans', () => {
 		).toHaveLength(2);
 	});
 
-	it('sorts marks bold, italic, underline, code, link and last link href wins', () => {
+	it('sorts marks bold, italic, underline, color, highlight, code, link and last link href wins', () => {
 		const marks: Mark[] = [
 			{ type: 'link', href: 'https://a.example' },
 			{ type: 'code' },
+			{ type: 'highlight', color: 'yellow' },
+			{ type: 'color', color: 'red' },
 			{ type: 'underline' },
 			{ type: 'bold' },
 			{ type: 'italic' },
@@ -73,6 +75,8 @@ describe('normalizeSpans', () => {
 			{ type: 'bold' },
 			{ type: 'italic' },
 			{ type: 'underline' },
+			{ type: 'color', color: 'red' },
+			{ type: 'highlight', color: 'yellow' },
 			{ type: 'code' },
 			{ type: 'link', href: 'https://b.example' }
 		]);

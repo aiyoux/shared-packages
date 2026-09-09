@@ -49,6 +49,21 @@ export {
 	sliceSpans,
 	splitSpans
 } from './normalize.js';
+export {
+	PALETTE_IDS,
+	PALETTE_PAPER_HEX,
+	coerceColorMark,
+	coerceHighlightMark,
+	isPaletteId,
+	nearestPaletteId,
+	paintHex,
+	paintMarkFromCss,
+	paintPalette,
+	paperHexOf,
+	parseCssColor,
+	sanitizeHex,
+	type PaintMark
+} from './palette.js';
 export { parseKb } from './parse.js';
 export type {
 	DocChildEntry,
@@ -116,6 +131,7 @@ export {
 	type ListItemBlock,
 	type Mark,
 	type Op,
+	type PaletteId,
 	type ParagraphBlock,
 	type Point,
 	type Range,

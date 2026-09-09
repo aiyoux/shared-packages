@@ -65,7 +65,8 @@
 		onSelection = undefined,
 		onKeyDownCapture = undefined,
 		onBeforeInputCapture = undefined,
-		testIdPrefix = 'kb'
+		testIdPrefix = 'kb',
+		ink = 'studio'
 	}: {
 		state: EditorState<TDoc>;
 		editable?: boolean;
@@ -108,6 +109,12 @@
 		 * component makes the other's selectors read as someone else's.
 		 */
 		testIdPrefix?: string;
+		/**
+		 * Ink mapping for preset color/highlight. `studio` is the dark document
+		 * surface; `paper` is Pages (always a light sheet, even when the hub is
+		 * dark). Light `data-color-scheme` also selects paper mapping via CSS.
+		 */
+		ink?: 'studio' | 'paper';
 	} = $props();
 
 	/**
@@ -721,6 +728,7 @@
 	</div>
 	<div
 		class="kb-host"
+		data-ink={ink}
 		bind:this={host}
 		contenteditable={editable ? 'true' : 'false'}
 		role="textbox"
@@ -844,7 +852,94 @@
 		outline: none;
 		white-space: pre-wrap;
 		word-wrap: break-word;
+		--kb-color-red: var(--cat-red-soft, #f87171);
+		--kb-color-rose: var(--cat-rose-soft, #fb7185);
+		--kb-color-pink: var(--cat-pink-soft, #f472b6);
+		--kb-color-orange: var(--cat-orange-soft, #fb923c);
+		--kb-color-amber: var(--cat-amber-soft, #fbbf24);
+		--kb-color-yellow: var(--cat-yellow-soft, #facc15);
+		--kb-color-green: var(--cat-green-soft, #4ade80);
+		--kb-color-emerald: var(--cat-emerald-soft, #34d399);
+		--kb-color-sky: var(--cat-sky-soft, #38bdf8);
+		--kb-color-blue: var(--cat-blue-soft, #60a5fa);
+		--kb-color-violet: var(--cat-violet-soft, #a78bfa);
+		--kb-color-purple: var(--cat-purple-soft, #c084fc);
+		--kb-color-gray: var(--text-secondary, #9aa8b6);
+		--kb-highlight-red: rgba(var(--cat-red-rgb, 239, 68, 68), 0.32);
+		--kb-highlight-rose: rgba(var(--cat-rose-rgb, 244, 63, 94), 0.32);
+		--kb-highlight-pink: rgba(var(--cat-pink-rgb, 236, 72, 153), 0.32);
+		--kb-highlight-orange: rgba(var(--cat-orange-rgb, 249, 115, 22), 0.32);
+		--kb-highlight-amber: rgba(var(--cat-amber-rgb, 245, 158, 11), 0.32);
+		--kb-highlight-yellow: rgba(var(--cat-yellow-rgb, 234, 179, 8), 0.32);
+		--kb-highlight-green: rgba(var(--cat-green-rgb, 34, 197, 94), 0.32);
+		--kb-highlight-emerald: rgba(var(--cat-emerald-rgb, 16, 185, 129), 0.32);
+		--kb-highlight-sky: rgba(var(--cat-sky-rgb, 14, 165, 233), 0.32);
+		--kb-highlight-blue: rgba(var(--cat-blue-rgb, 59, 130, 246), 0.32);
+		--kb-highlight-violet: rgba(var(--cat-violet-rgb, 139, 92, 246), 0.32);
+		--kb-highlight-purple: rgba(var(--cat-purple-rgb, 168, 85, 247), 0.32);
+		--kb-highlight-gray: rgba(148, 163, 184, 0.32);
 	}
+	:global(:root[data-color-scheme='light']) .kb-host,
+	.kb-host[data-ink='paper'] {
+		--kb-color-red: var(--cat-red, #ef4444);
+		--kb-color-rose: var(--cat-rose, #f43f5e);
+		--kb-color-pink: var(--cat-pink, #ec4899);
+		--kb-color-orange: var(--cat-orange, #f97316);
+		--kb-color-amber: var(--cat-amber, #f59e0b);
+		--kb-color-yellow: var(--cat-yellow, #eab308);
+		--kb-color-green: var(--cat-green, #22c55e);
+		--kb-color-emerald: var(--cat-emerald, #10b981);
+		--kb-color-sky: var(--cat-sky, #0ea5e9);
+		--kb-color-blue: var(--cat-blue, #3b82f6);
+		--kb-color-violet: var(--cat-violet, #8b5cf6);
+		--kb-color-purple: var(--cat-purple, #a855f7);
+		--kb-color-gray: var(--text-secondary, #5c6b7a);
+		--kb-highlight-red: rgba(var(--cat-red-rgb, 239, 68, 68), 0.38);
+		--kb-highlight-rose: rgba(var(--cat-rose-rgb, 244, 63, 94), 0.38);
+		--kb-highlight-pink: rgba(var(--cat-pink-rgb, 236, 72, 153), 0.38);
+		--kb-highlight-orange: rgba(var(--cat-orange-rgb, 249, 115, 22), 0.38);
+		--kb-highlight-amber: rgba(var(--cat-amber-rgb, 245, 158, 11), 0.38);
+		--kb-highlight-yellow: rgba(var(--cat-yellow-rgb, 234, 179, 8), 0.38);
+		--kb-highlight-green: rgba(var(--cat-green-rgb, 34, 197, 94), 0.38);
+		--kb-highlight-emerald: rgba(var(--cat-emerald-rgb, 16, 185, 129), 0.38);
+		--kb-highlight-sky: rgba(var(--cat-sky-rgb, 14, 165, 233), 0.38);
+		--kb-highlight-blue: rgba(var(--cat-blue-rgb, 59, 130, 246), 0.38);
+		--kb-highlight-violet: rgba(var(--cat-violet-rgb, 139, 92, 246), 0.38);
+		--kb-highlight-purple: rgba(var(--cat-purple-rgb, 168, 85, 247), 0.38);
+		--kb-highlight-gray: rgba(92, 107, 122, 0.28);
+	}
+	.kb-host :global([data-kb-color='red']) { color: var(--kb-color-red); }
+	.kb-host :global([data-kb-color='rose']) { color: var(--kb-color-rose); }
+	.kb-host :global([data-kb-color='pink']) { color: var(--kb-color-pink); }
+	.kb-host :global([data-kb-color='orange']) { color: var(--kb-color-orange); }
+	.kb-host :global([data-kb-color='amber']) { color: var(--kb-color-amber); }
+	.kb-host :global([data-kb-color='yellow']) { color: var(--kb-color-yellow); }
+	.kb-host :global([data-kb-color='green']) { color: var(--kb-color-green); }
+	.kb-host :global([data-kb-color='emerald']) { color: var(--kb-color-emerald); }
+	.kb-host :global([data-kb-color='sky']) { color: var(--kb-color-sky); }
+	.kb-host :global([data-kb-color='blue']) { color: var(--kb-color-blue); }
+	.kb-host :global([data-kb-color='violet']) { color: var(--kb-color-violet); }
+	.kb-host :global([data-kb-color='purple']) { color: var(--kb-color-purple); }
+	.kb-host :global([data-kb-color='gray']) { color: var(--kb-color-gray); }
+	.kb-host :global(mark) {
+		color: inherit;
+		background-color: transparent;
+		padding: 0.05em 0.14em;
+		border-radius: 0.12em;
+	}
+	.kb-host :global(mark[data-kb-highlight='red']) { background-color: var(--kb-highlight-red); }
+	.kb-host :global(mark[data-kb-highlight='rose']) { background-color: var(--kb-highlight-rose); }
+	.kb-host :global(mark[data-kb-highlight='pink']) { background-color: var(--kb-highlight-pink); }
+	.kb-host :global(mark[data-kb-highlight='orange']) { background-color: var(--kb-highlight-orange); }
+	.kb-host :global(mark[data-kb-highlight='amber']) { background-color: var(--kb-highlight-amber); }
+	.kb-host :global(mark[data-kb-highlight='yellow']) { background-color: var(--kb-highlight-yellow); }
+	.kb-host :global(mark[data-kb-highlight='green']) { background-color: var(--kb-highlight-green); }
+	.kb-host :global(mark[data-kb-highlight='emerald']) { background-color: var(--kb-highlight-emerald); }
+	.kb-host :global(mark[data-kb-highlight='sky']) { background-color: var(--kb-highlight-sky); }
+	.kb-host :global(mark[data-kb-highlight='blue']) { background-color: var(--kb-highlight-blue); }
+	.kb-host :global(mark[data-kb-highlight='violet']) { background-color: var(--kb-highlight-violet); }
+	.kb-host :global(mark[data-kb-highlight='purple']) { background-color: var(--kb-highlight-purple); }
+	.kb-host :global(mark[data-kb-highlight='gray']) { background-color: var(--kb-highlight-gray); }
 	/* An empty text block must still be clickable. With no content, `<p>` and
 	   friends collapse to zero height, so the caret cannot be placed in them —
 	   the first paragraph of a new page being the obvious case. Structural and
