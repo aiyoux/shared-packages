@@ -4,6 +4,13 @@
 
 	type FileChromeItem = 'new' | 'open' | 'save' | 'saveAs' | 'close';
 
+	type FileChromeExtraItem = {
+		id: string;
+		label: string;
+		disabled?: boolean;
+		onPick: () => void;
+	};
+
 	let {
 		hasDocument,
 		isDirty = false,
@@ -14,6 +21,7 @@
 		windowsFirst = false,
 		items = undefined,
 		labels = undefined,
+		extraItems = undefined,
 		onNew,
 		onOpen,
 		onSave,
@@ -42,6 +50,8 @@
 		items?: Partial<Record<FileChromeItem, boolean>>;
 		/** Per-entry label overrides, e.g. `{ open: 'Open project…' }`. */
 		labels?: Partial<Record<FileChromeItem, string>>;
+		/** App-specific entries after Close (Import / Export, …). */
+		extraItems?: FileChromeExtraItem[];
 		onNew: () => void;
 		onOpen: () => void;
 		onSave: () => void;
@@ -142,6 +152,21 @@
 						>
 							{labelOf('close', 'Close')}
 						</button>
+					{/if}
+					{#if extraItems && extraItems.length > 0}
+						<div class="file-sep" role="separator"></div>
+						{#each extraItems as item (item.id)}
+							<button
+								type="button"
+								class="file-item"
+								role="menuitem"
+								data-testid="{testidPrefix}-file-{item.id}"
+								disabled={item.disabled}
+								onclick={() => pick(item.onPick)}
+							>
+								{item.label}
+							</button>
+						{/each}
 					{/if}
 				</div>
 			{/if}
@@ -333,6 +358,11 @@
 	.file-item:disabled {
 		opacity: 0.4;
 		cursor: not-allowed;
+	}
+	.file-sep {
+		height: 1px;
+		margin: 4px 6px;
+		background: var(--border, var(--line-strong));
 	}
 	.save-wrap {
 		position: relative;
