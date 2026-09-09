@@ -9,6 +9,7 @@ export type FileTypeId =
 	| 'kb'
 	| 'anim'
 	| 'image'
+	| 'svg'
 	| 'video'
 	| 'audio'
 	| 'pdf'

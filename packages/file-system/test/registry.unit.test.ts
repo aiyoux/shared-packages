@@ -10,9 +10,10 @@ import {
 describe('registry multi-ext image + forceExtension', () => {
 	it('acceptedExtensionsFor image lists common image formats', () => {
 		const exts = acceptedExtensionsFor('image');
-		for (const e of ['.png', '.jpg', '.jpeg', '.webp', '.gif', '.svg']) {
+		for (const e of ['.png', '.jpg', '.jpeg', '.webp', '.gif']) {
 			assert.ok(exts.includes(e), `expected ${e}`);
 		}
+		assert.ok(!exts.includes('.svg'), 'svg is its own file type');
 	});
 
 	it('acceptedExtensionsFor product types is primary only', () => {
@@ -24,6 +25,7 @@ describe('registry multi-ext image + forceExtension', () => {
 		assert.deepEqual(acceptedExtensionsFor('anim'), ['.anim']);
 		assert.deepEqual(acceptedExtensionsFor('json'), ['.json']);
 		assert.deepEqual(acceptedExtensionsFor('pdf'), ['.pdf']);
+		assert.deepEqual(acceptedExtensionsFor('svg'), ['.svg']);
 		assert.deepEqual(acceptedExtensionsFor('unknown'), []);
 	});
 
@@ -33,7 +35,7 @@ describe('registry multi-ext image + forceExtension', () => {
 		assert.equal(forceExtension('shot.PNG', 'image'), 'shot.PNG');
 		assert.equal(forceExtension('icon.webp', 'image'), 'icon.webp');
 		assert.equal(forceExtension('anim.gif', 'image'), 'anim.gif');
-		assert.equal(forceExtension('vector.svg', 'image'), 'vector.svg');
+		assert.equal(forceExtension('vector.svg', 'svg'), 'vector.svg');
 		assert.equal(forceExtension('Photo.JPG', 'image'), 'Photo.JPG');
 	});
 
@@ -97,6 +99,8 @@ describe('registry multi-ext image + forceExtension', () => {
 		assert.equal(inferFileTypeFromName('index.kb'), 'kb');
 		assert.equal(inferFileTypeFromName('loop.anim'), 'anim');
 		assert.equal(inferFileTypeFromName('report.pdf'), 'pdf');
+		assert.equal(inferFileTypeFromName('vector.svg'), 'svg');
+		assert.equal(inferFileTypeFromName('icon.SVG'), 'svg');
 		assert.deepEqual(acceptedExtensionsFor('pdf'), ['.pdf']);
 		assert.equal(inferFileTypeFromName('noext'), 'unknown');
 	});
@@ -113,5 +117,6 @@ describe('registry multi-ext image + forceExtension', () => {
 		assert.equal(getFileTypeByExtension('.kb')?.id, 'kb');
 		assert.equal(getFileTypeByExtension('.anim')?.id, 'anim');
 		assert.equal(getFileTypeByExtension('.pdf')?.id, 'pdf');
+		assert.equal(getFileTypeByExtension('.svg')?.id, 'svg');
 	});
 });

@@ -20,3 +20,4 @@ export * from './combine.ts';
 export * from './parseTransform.ts';
 export * from './svgCoords.ts';
 export * from './svgToPaths.ts';
+export * from './svgTree.ts';

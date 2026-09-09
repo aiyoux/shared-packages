@@ -69,7 +69,19 @@ export type SvgTextElement = {
     opacity?: number;
 };
 
-export type SvgElement = SvgLineElement | SvgPathElement | SvgTextElement;
+/** Shared with PDF groups: translate / rotate / scale about the origin. */
+export type SvgTransform = { x: number; y: number; rotation?: number; sx?: number; sy?: number };
+
+export type SvgGroupElement = {
+    type: 'group';
+    id: string;
+    children: SvgElement[];
+    transform?: SvgTransform;
+    opacity?: number;
+    hidden?: boolean;
+};
+
+export type SvgElement = SvgLineElement | SvgPathElement | SvgTextElement | SvgGroupElement;
 
 export type PdfTransform = { x: number; y: number; rotation?: number; sx?: number; sy?: number };
 
@@ -175,6 +187,8 @@ export interface ImportedImage {
     height: number;
     opacity: number;
     layerId?: string;
+    /** User group on this page-array object. Distinct from layer membership. */
+    groupId?: string;
     /** Radians. Optional so older saves still load. */
     rotation?: number;
     /** VFS bind. Absent = a cloned/embedded copy (the historical default). */
@@ -258,6 +272,11 @@ export interface PathData {
     fadeOrigin?: string;
     transform?: string;
     bakeGroupId?: string;
+    /**
+     * User group membership on page-array ink. Distinct from `bakeGroupId`
+     * (bake provenance). Omitted = ungrouped. Groups cannot cross layers.
+     */
+    groupId?: string;
     layerId?: string;
     /** 0..1, omitted when fully opaque. */
     opacity?: number;
