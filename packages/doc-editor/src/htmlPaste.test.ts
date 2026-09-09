@@ -6,9 +6,9 @@ import { createEditorState, dispatchMany } from './state.js';
 import { page, para } from './testFixtures.js';
 
 describe('htmlToBlocks', () => {
-	it('maps bold, italic, and allowlisted links', () => {
+	it('maps bold, italic, underline, and allowlisted links', () => {
 		const blocks = htmlToBlocks(
-			'<p>Hello <strong>big</strong> and <em>slant</em> and <a href="https://example.com">link</a></p>'
+			'<p>Hello <strong>big</strong> and <em>slant</em> and <u>under</u> and <a href="https://example.com">link</a></p>'
 		);
 		expect(blocks).toHaveLength(1);
 		expect(blocks[0]).toMatchObject({ type: 'paragraph' });
@@ -17,7 +17,24 @@ describe('htmlToBlocks', () => {
 		expect(byText.Hello?.length ?? 0).toBe(0);
 		expect(byText.big).toEqual(['bold']);
 		expect(byText.slant).toEqual(['italic']);
+		expect(byText.under).toEqual(['underline']);
 		expect(blocks[0].content.find((s) => s.text === 'link')?.marks).toEqual([
+			{ type: 'link', href: 'https://example.com' }
+		]);
+	});
+
+	it('maps CSS text-decoration:underline, but not a link’s own underline', () => {
+		const styled = htmlToBlocks('<p><span style="text-decoration:underline">x</span></p>');
+		expect(styled[0]!.type).toBe('paragraph');
+		if (styled[0]!.type !== 'paragraph') return;
+		expect(styled[0].content.find((s) => s.text === 'x')?.marks).toEqual([{ type: 'underline' }]);
+
+		const linked = htmlToBlocks(
+			'<p><a href="https://example.com" style="text-decoration:underline">x</a></p>'
+		);
+		expect(linked[0]!.type).toBe('paragraph');
+		if (linked[0]!.type !== 'paragraph') return;
+		expect(linked[0].content.find((s) => s.text === 'x')?.marks).toEqual([
 			{ type: 'link', href: 'https://example.com' }
 		]);
 	});

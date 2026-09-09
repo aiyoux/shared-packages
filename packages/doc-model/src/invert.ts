@@ -48,6 +48,7 @@ function insertBlockOp(page: KbPage, block: Block): Extract<Op, { kind: 'insert-
 const STRIP_MARKS: Mark[] = [
 	{ type: 'bold' },
 	{ type: 'italic' },
+	{ type: 'underline' },
 	{ type: 'code' },
 	{ type: 'font_family', family: 'sans' },
 	{ type: 'font_size', size: '1px' },

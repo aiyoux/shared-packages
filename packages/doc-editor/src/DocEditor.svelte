@@ -953,6 +953,10 @@
 	/* Host CSS resets (`a { color: inherit; text-decoration: inherit }`) would
 	   otherwise make pasted/authored links look like body text. contenteditable
 	   also swallows native navigation — click handling lives in onHostClick. */
+	.kb-host :global(u) {
+		text-decoration: underline;
+		text-underline-offset: 0.15em;
+	}
 	.kb-host :global(a[href]) {
 		color: var(--accent, #2563eb);
 		text-decoration: underline;

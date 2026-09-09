@@ -75,6 +75,24 @@ describe('project', () => {
 		el.remove();
 	});
 
+	it('wraps underline as a u element', () => {
+		const el = host();
+		project(
+			el,
+			page([
+				{
+					id: 'p',
+					type: 'paragraph',
+					content: [{ type: 'text', text: 'u', marks: [{ type: 'underline' }] }]
+				}
+			])
+		);
+		const block = el.querySelector('[data-block-id="p"]')!;
+		expect(block.querySelector('u')).toBeTruthy();
+		expect(block.textContent).toBe('u');
+		el.remove();
+	});
+
 	it('allowlists link href and blocks javascript/data/vbscript', () => {
 		const el = host();
 		project(

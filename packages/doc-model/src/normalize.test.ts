@@ -60,10 +60,11 @@ describe('normalizeSpans', () => {
 		).toHaveLength(2);
 	});
 
-	it('sorts marks bold, italic, code, link and last link href wins', () => {
+	it('sorts marks bold, italic, underline, code, link and last link href wins', () => {
 		const marks: Mark[] = [
 			{ type: 'link', href: 'https://a.example' },
 			{ type: 'code' },
+			{ type: 'underline' },
 			{ type: 'bold' },
 			{ type: 'italic' },
 			{ type: 'link', href: 'https://b.example' }
@@ -71,6 +72,7 @@ describe('normalizeSpans', () => {
 		expect(normalizeSpans([span('x', marks)])[0].marks).toEqual([
 			{ type: 'bold' },
 			{ type: 'italic' },
+			{ type: 'underline' },
 			{ type: 'code' },
 			{ type: 'link', href: 'https://b.example' }
 		]);

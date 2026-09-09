@@ -27,10 +27,12 @@ function hasMark(marks: Mark[], type: Exclude<Mark['type'], 'link'>): boolean {
 function wrapSpan(span: TextSpan): string {
 	let text = span.text;
 	const marks = span.marks;
-	// Innermost code then italic then bold; link outermost so [**x**](href) reads naturally.
+	// Innermost code then italic then bold; underline is inline HTML (no GFM
+	// equivalent); link outermost so [**x**](href) reads naturally.
 	if (hasMark(marks, 'code')) text = `\`${text}\``;
 	if (hasMark(marks, 'italic')) text = `*${text}*`;
 	if (hasMark(marks, 'bold')) text = `**${text}**`;
+	if (hasMark(marks, 'underline')) text = `<u>${text}</u>`;
 	const href = linkHref(marks);
 	if (href != null) text = `[${text}](${href})`;
 	return text;

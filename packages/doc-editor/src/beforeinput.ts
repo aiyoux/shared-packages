@@ -301,6 +301,9 @@ export function mapBeforeInput(
 	if (type === 'formatItalic') {
 		return { preventDefault: true, ops: formatOps(state, liveRange, { type: 'italic' }), freeze: false };
 	}
+	if (type === 'formatUnderline') {
+		return { preventDefault: true, ops: formatOps(state, liveRange, { type: 'underline' }), freeze: false };
+	}
 
 	if (type === 'historyUndo') {
 		return { preventDefault: true, ops: [], freeze: false, history: 'undo' };

@@ -140,13 +140,25 @@ describe('toMarkdown', () => {
 		);
 	});
 
-	it('wraps marks as **bold** *italic* `code` [text](href)', () => {
+	it('wraps marks as **bold** *italic* <u>underline</u> `code` [text](href)', () => {
 		expect(md([{ id: 'p', type: 'paragraph', content: [span('bold', [{ type: 'bold' }])] }])).toBe(
 			'**bold**\n'
 		);
 		expect(md([{ id: 'p', type: 'paragraph', content: [span('em', [{ type: 'italic' }])] }])).toBe(
 			'*em*\n'
 		);
+		expect(md([{ id: 'p', type: 'paragraph', content: [span('under', [{ type: 'underline' }])] }])).toBe(
+			'<u>under</u>\n'
+		);
+		expect(
+			md([
+				{
+					id: 'p',
+					type: 'paragraph',
+					content: [span('both', [{ type: 'bold' }, { type: 'underline' }])]
+				}
+			])
+		).toBe('<u>**both**</u>\n');
 		expect(md([{ id: 'p', type: 'paragraph', content: [span('id', [{ type: 'code' }])] }])).toBe(
 			'`id`\n'
 		);

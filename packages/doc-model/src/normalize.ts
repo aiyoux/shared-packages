@@ -26,10 +26,11 @@ import {
 const MARK_RANK: Record<Mark['type'], number> = {
 	bold: 0,
 	italic: 1,
-	code: 2,
-	font_family: 3,
-	font_size: 4,
-	link: 5
+	underline: 2,
+	code: 3,
+	font_family: 4,
+	font_size: 5,
+	link: 6
 };
 
 const CALLOUT_VARIANTS: ReadonlySet<string> = new Set(['info', 'warning', 'note']);
@@ -259,7 +260,9 @@ function headingLevel(value: unknown, fallback: 1 | 2 | 3 = 1): 1 | 2 | 3 {
 function coerceMark(raw: unknown): Mark | null {
 	if (!raw || typeof raw !== 'object') return null;
 	const rec = raw as Record<string, unknown>;
-	if (rec.type === 'bold' || rec.type === 'italic' || rec.type === 'code') return { type: rec.type };
+	if (rec.type === 'bold' || rec.type === 'italic' || rec.type === 'underline' || rec.type === 'code') {
+		return { type: rec.type };
+	}
 	if (rec.type === 'link' && typeof rec.href === 'string') return { type: 'link', href: rec.href };
 	if (rec.type === 'font_family') {
 		if (rec.family === 'sans' || rec.family === 'serif' || rec.family === 'mono') {

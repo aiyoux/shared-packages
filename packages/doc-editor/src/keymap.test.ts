@@ -15,7 +15,7 @@ describe('keymap', () => {
 		expect(result.ops).toEqual([]);
 	});
 
-	it('Cmd/Ctrl-B and Cmd/Ctrl-I format the live range', () => {
+	it('Cmd/Ctrl-B, Cmd/Ctrl-I, and Cmd/Ctrl-U format the live range', () => {
 		const state = createEditorState(page([para('p', 'ab')]));
 		const live = { anchor: { blockId: 'p', offset: 0 }, head: { blockId: 'p', offset: 2 } };
 		const bold = mapKeydown(
@@ -31,6 +31,13 @@ describe('keymap', () => {
 			live
 		);
 		expect(italic.ops[0]).toMatchObject({ kind: 'format-range', mark: { type: 'italic' } });
+		const underline = mapKeydown(
+			state,
+			{ key: 'u', metaKey: false, ctrlKey: true, shiftKey: false, altKey: false },
+			live
+		);
+		expect(underline.preventDefault).toBe(true);
+		expect(underline.ops[0]).toMatchObject({ kind: 'format-range', mark: { type: 'underline' }, on: true });
 	});
 
 	it('Cmd-Z / Shift-Z are undo/redo', () => {

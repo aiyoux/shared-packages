@@ -63,5 +63,6 @@ export function mapKeydown(state: EditorState, event: KeyEvent, live: Range): Ke
 	if (key === 'y') return { preventDefault: true, ops: [], history: 'redo' };
 	if (key === 'b') return { preventDefault: true, ops: formatOp(live, { type: 'bold' }) };
 	if (key === 'i') return { preventDefault: true, ops: formatOp(live, { type: 'italic' }) };
+	if (key === 'u') return { preventDefault: true, ops: formatOp(live, { type: 'underline' }) };
 	return { preventDefault: false, ops: [] };
 }

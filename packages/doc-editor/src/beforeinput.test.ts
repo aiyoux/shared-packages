@@ -172,8 +172,21 @@ describe('beforeinput mapping', () => {
 		if (block.type === 'paragraph') expect(block.content[0].marks).toEqual([{ type: 'bold' }]);
 	});
 
+	it('formatUnderline applies format-range', () => {
+		let state = createEditorState(page([para('p', 'hi')]));
+		state = {
+			...state,
+			selection: { anchor: { blockId: 'p', offset: 0 }, head: { blockId: 'p', offset: 2 } }
+		};
+		const result = mapBeforeInput(state, { inputType: 'formatUnderline', data: null }, state.selection);
+		expect(result.ops[0]).toMatchObject({ kind: 'format-range', mark: { type: 'underline' }, on: true });
+		state = dispatch(state, result.ops[0]);
+		const block = state.page.blocks[0];
+		if (block.type === 'paragraph') expect(block.content[0].marks).toEqual([{ type: 'underline' }]);
+	});
+
 	it('unlisted non-composition types preventDefault and ignore', () => {
-		const { result, state } = applyMapped([para('p', 'x')], 'formatUnderline', null);
+		const { result, state } = applyMapped([para('p', 'x')], 'formatStrikeThrough', null);
 		expect(result.preventDefault).toBe(true);
 		expect(result.ops).toEqual([]);
 		expect(plaintextOf(state.page.blocks[0])).toBe('x');

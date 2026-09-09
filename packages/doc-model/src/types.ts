@@ -8,6 +8,7 @@ export const KB_FORMAT = 'kb' as const;
 export type Mark =
 	| { type: 'bold' }
 	| { type: 'italic' }
+	| { type: 'underline' }
 	| { type: 'code' }
 	| { type: 'font_family'; family: 'sans' | 'serif' | 'mono' }
 	| { type: 'font_size'; size: string }
@@ -16,7 +17,7 @@ export type Mark =
 export type TextSpan = {
 	type: 'text';
 	text: string; // MAY contain '\n' (Shift+Enter hard break). `code.text` MAY contain `\n`.
-	marks: Mark[]; // canonical order: bold, italic, code, font_family, font_size, link
+	marks: Mark[]; // canonical order: bold, italic, underline, code, font_family, font_size, link
 };
 
 export type Inline = TextSpan; // v1: text spans only. A hard break is '\n' inside a span, not an inline node.

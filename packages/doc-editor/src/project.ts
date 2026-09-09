@@ -50,6 +50,8 @@ function markElement(doc: Document, mark: Mark): HTMLElement | undefined {
 			return doc.createElement('strong');
 		case 'italic':
 			return doc.createElement('em');
+		case 'underline':
+			return doc.createElement('u');
 		case 'code':
 			return doc.createElement('code');
 		case 'font_family': {

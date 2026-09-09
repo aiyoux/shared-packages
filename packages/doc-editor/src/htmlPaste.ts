@@ -17,6 +17,7 @@ import { newBlockId } from './ids.js';
 type MarkState = {
 	bold: boolean;
 	italic: boolean;
+	underline: boolean;
 	code: boolean;
 	href: string | null;
 };
@@ -75,7 +76,7 @@ function styleValue(style: string, prop: string): string | null {
 function nextMarks(el: Element, parent: MarkState): MarkState {
 	const style = styleOf(el);
 	const name = tag(el);
-	let { bold, italic, code, href } = parent;
+	let { bold, italic, underline, code, href } = parent;
 	const weight = styleValue(style, 'font-weight');
 	if (weight === 'normal' || weight === '400') bold = false;
 	else if (weight === 'bold' || (weight != null && parseInt(weight, 10) >= 600)) bold = true;
@@ -84,19 +85,24 @@ function nextMarks(el: Element, parent: MarkState): MarkState {
 	if (fontStyle === 'normal') italic = false;
 	else if (fontStyle === 'italic' || fontStyle === 'oblique') italic = true;
 	else if (name === 'i' || name === 'em') italic = true;
+	const decoration = styleValue(style, 'text-decoration') ?? styleValue(style, 'text-decoration-line');
+	if (decoration === 'none') underline = false;
+	else if (decoration != null && /\bunderline\b/.test(decoration) && name !== 'a') underline = true;
+	else if (name === 'u' || name === 'ins') underline = true;
 	if (name === 'code' || name === 'kbd' || name === 'samp' || name === 'tt') code = true;
 	if (name === 'a') {
 		const raw = el.getAttribute('href');
 		const ok = raw ? allowlistedHref(raw) : null;
 		if (ok) href = ok;
 	}
-	return { bold, italic, code, href };
+	return { bold, italic, underline, code, href };
 }
 
 function marksFrom(state: MarkState): Mark[] {
 	const marks: Mark[] = [];
 	if (state.bold) marks.push({ type: 'bold' });
 	if (state.italic) marks.push({ type: 'italic' });
+	if (state.underline) marks.push({ type: 'underline' });
 	if (state.code) marks.push({ type: 'code' });
 	if (state.href) marks.push({ type: 'link', href: state.href });
 	return canonicalMarks(marks);
@@ -284,7 +290,7 @@ function hasBlockChild(el: Element): boolean {
 }
 
 function cellFromElement(el: Element): TableCellBlock {
-	const { spans } = collectInlines(el, { bold: false, italic: false, code: false, href: null });
+	const { spans } = collectInlines(el, { bold: false, italic: false, underline: false, code: false, href: null });
 	const header = tag(el) === 'th';
 	const content = spansHaveText(spans) ? spans : emptySpans();
 	return header
@@ -439,7 +445,7 @@ export function htmlToBlocks(html: string): Block[] {
 	const body = parseBody(html);
 	if (!body) return [];
 	const out: Block[] = [];
-	emitBlocks(body, out, { bold: false, italic: false, code: false, href: null });
+	emitBlocks(body, out, { bold: false, italic: false, underline: false, code: false, href: null });
 	return out.filter((b) => {
 		if (b.type === 'divider' || b.type === 'table' || b.type === 'code') return true;
 		if ('content' in b) return spansHaveText(b.content);
