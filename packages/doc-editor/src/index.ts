@@ -43,8 +43,11 @@ export {
 	COL_ATTR,
 	DEPTH_ATTR,
 	PARENT_ID_ATTR,
+	EMPTY_CARET_ATTR,
+	paintLocalSelection,
 	project,
 	renderBlock,
+	SELECTED_ATTR,
 	syncView,
 	type MediaResolver,
 	type ProjectOpts

@@ -1,6 +1,9 @@
 import {
 	canonicalMarks,
 	childrenOf,
+	documentOrder,
+	findBlock,
+	isAtomic,
 	isContainer,
 	isTextLike,
 	isUnknownBlock,
@@ -8,17 +11,20 @@ import {
 	paintPalette,
 	parentIdOf,
 	parentOf,
+	plaintextOf,
 	sanitizeFontSize,
 	visibleOrder,
 	type Block,
 	type Inline,
 	type KbPage,
 	type Mark,
-	type ParentRef
+	type ParentRef,
+	type Range
 } from '@shared-packages/doc-model';
 import { paintCarets, stripCollabWidgets, type RemoteCaret } from './decorations.js';
 import { fontFamilyCss } from './font.js';
 import { allowlistedHref, allowlistedSrc } from './href.js';
+import { isCollapsed, orderedRange } from './range.js';
 import type { EditorState } from './state.js';
 
 /**
@@ -33,6 +39,8 @@ export type ProjectOpts = {
 	/** IME freeze: project the page but insert no collab widgets. */
 	composing?: boolean;
 	media?: MediaResolver;
+	/** Local caret / block-focus chrome. Applied after the tree is built. */
+	selection?: Range;
 };
 
 export const BLOCK_ID_ATTR = 'data-block-id';
@@ -40,6 +48,10 @@ export const BLOCK_TYPE_ATTR = 'data-block-type';
 export const PARENT_ID_ATTR = 'data-parent-id';
 export const DEPTH_ATTR = 'data-depth';
 export const COL_ATTR = 'data-col';
+/** Collapsed caret on an empty text block, or a selected atomic (divider / page break / image). */
+export const SELECTED_ATTR = 'data-kb-selected';
+/** Empty paragraph/heading/list item that currently holds the caret — drives the placeholder. */
+export const EMPTY_CARET_ATTR = 'data-kb-empty-caret';
 
 /**
  * The element a mark renders as, or undefined when the mark's payload fails
@@ -405,6 +417,58 @@ export function project(host: HTMLElement, page: KbPage, opts?: ProjectOpts): vo
 		return;
 	}
 	if (opts?.carets?.length) paintCarets(host, page, opts.carets);
+	if (opts?.selection) paintLocalSelection(host, page, opts.selection);
+}
+
+function cssEscape(value: string): string {
+	if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') return CSS.escape(value);
+	return value.replace(/"/g, '\\"');
+}
+
+function wantsAtomicChrome(block: Block): boolean {
+	return isAtomic(block) || isUnknownBlock(block);
+}
+
+function isEmptyCaretTarget(block: Block): boolean {
+	if (block.type === 'table_cell') return false;
+	if (isTextLike(block)) return plaintextOf(block).length === 0;
+	if (block.type === 'code') return block.text.length === 0;
+	return false;
+}
+
+function wantsPlaceholder(block: Block): boolean {
+	return block.type === 'paragraph' || block.type === 'heading' || block.type === 'list_item';
+}
+
+/** Mark the focused empty block / selected atomics. Safe to call without re-projecting. */
+export function paintLocalSelection(host: HTMLElement, page: KbPage, selection: Range): void {
+	for (const el of host.querySelectorAll(`[${SELECTED_ATTR}], [${EMPTY_CARET_ATTR}]`)) {
+		el.removeAttribute(SELECTED_ATTR);
+		el.removeAttribute(EMPTY_CARET_ATTR);
+	}
+	const selected = new Set<string>();
+	const placeholders = new Set<string>();
+	if (isCollapsed(selection)) {
+		const block = findBlock(page, selection.anchor.blockId);
+		if (!block) return;
+		if (wantsAtomicChrome(block) || isEmptyCaretTarget(block)) selected.add(block.id);
+		if (isEmptyCaretTarget(block) && wantsPlaceholder(block)) placeholders.add(block.id);
+	} else {
+		const { start, end } = orderedRange(page, selection);
+		const order = documentOrder(page);
+		const si = order.findIndex((b) => b.id === start.blockId);
+		const ei = order.findIndex((b) => b.id === end.blockId);
+		if (si < 0) return;
+		for (const block of order.slice(si, (ei < 0 ? si : ei) + 1)) {
+			if (wantsAtomicChrome(block)) selected.add(block.id);
+		}
+	}
+	for (const id of selected) {
+		host.querySelector(`[${BLOCK_ID_ATTR}="${cssEscape(id)}"]`)?.setAttribute(SELECTED_ATTR, '');
+	}
+	for (const id of placeholders) {
+		host.querySelector(`[${BLOCK_ID_ATTR}="${cssEscape(id)}"]`)?.setAttribute(EMPTY_CARET_ATTR, '');
+	}
 }
 
 /**

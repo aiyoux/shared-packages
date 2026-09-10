@@ -301,6 +301,24 @@ describe('DocEditor mount', () => {
 		}
 	});
 
+	it('paints selected chrome on an empty caret paragraph', async () => {
+		let state = createEditorState(page([para('a', '')]));
+		const { container, unmount } = render(DocEditor, {
+			props: {
+				state,
+				editable: true,
+				onDispatch: (op: Op | Op[]) => {
+					state = applyEditorOps(state, op);
+				}
+			}
+		});
+		await tick();
+		const block = container.querySelector('[data-block-id="a"]') as HTMLElement;
+		expect(block.getAttribute('data-kb-selected')).toBe('');
+		expect(block.getAttribute('data-kb-empty-caret')).toBe('');
+		unmount();
+	});
+
 	it('renders a hard break as \\n inside the block, with no <br> in the host', async () => {
 		let state = createEditorState(page([para('a', 'one\ntwo')]));
 		const { container, unmount } = render(DocEditor, {

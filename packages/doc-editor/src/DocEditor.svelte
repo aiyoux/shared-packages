@@ -36,7 +36,7 @@
 	} from './gutter.js';
 	import { mapKeydown } from './keymap.js';
 	import { followEditorLink } from './href.js';
-	import { BLOCK_ID_ATTR, project, type MediaResolver } from './project.js';
+	import { BLOCK_ID_ATTR, paintLocalSelection, project, type MediaResolver } from './project.js';
 	import {
 		plaintextFromDom,
 		rangeFromInputEvent,
@@ -275,6 +275,14 @@
 			syncHandleLayout();
 			scheduleHandleLayout();
 		});
+	});
+
+	$effect(() => {
+		const el = host;
+		const page = asPage(editor.page);
+		const selection = editor.selection;
+		if (!el) return;
+		paintLocalSelection(el, page, selection);
 	});
 
 	function syncHandleLayout(): void {
@@ -1025,6 +1033,11 @@
 		border-top: 1px solid currentColor;
 		opacity: 0.3;
 	}
+	.kb-host :global([data-block-type='divider'][data-kb-selected]) {
+		opacity: 1;
+		border-top-width: 2px;
+		border-top-color: var(--accent, #38bdf8);
+	}
 	.kb-host :global([data-block-type='page_break']) {
 		position: relative;
 		margin: 0.85rem 0;
@@ -1046,6 +1059,42 @@
 		text-transform: uppercase;
 		background: var(--surface-1, #fff);
 		color: inherit;
+	}
+	.kb-host :global([data-block-type='page_break'][data-kb-selected]) {
+		opacity: 1;
+		border-top-width: 2px;
+		border-top-color: var(--accent, #38bdf8);
+	}
+	.kb-host :global([data-block-type='page_break'][data-kb-selected])::after {
+		color: var(--accent, #38bdf8);
+		font-weight: 650;
+	}
+	.kb-host :global([data-block-type='image'][data-kb-selected]) {
+		outline: 2px solid var(--accent, #38bdf8);
+		outline-offset: 2px;
+		border-radius: 2px;
+	}
+	.kb-host :global([data-block-type='paragraph'][data-kb-selected]),
+	.kb-host :global([data-block-type='heading'][data-kb-selected]),
+	.kb-host :global([data-block-type='list_item'][data-kb-selected]),
+	.kb-host :global([data-block-type='code'][data-kb-selected]) {
+		border-radius: 0.15rem;
+		box-shadow: inset 3px 0 0 var(--accent, #38bdf8);
+		background: color-mix(in srgb, var(--accent, #38bdf8) 10%, transparent);
+	}
+	.kb-host :global([data-kb-empty-caret]) {
+		position: relative;
+	}
+	.kb-host :global([data-kb-empty-caret])::after {
+		content: 'Type here';
+		position: absolute;
+		left: 0.55rem;
+		top: 0;
+		color: var(--text-faint, #8a96a3);
+		pointer-events: none;
+		user-select: none;
+		font-weight: 400;
+		font-style: italic;
 	}
 	/* Block types this build does not model: shown as an opaque placeholder so the
 	   document stays legible and the foreign JSON survives an edit + save. */
