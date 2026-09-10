@@ -14,7 +14,7 @@
 	class="sticker-glyph"
 	viewBox="0 0 {sticker.viewBoxWidth} {sticker.viewBoxHeight}"
 	role="img"
-	aria-label={label ?? sticker.name}
+	aria-label={label ?? sticker.mojiId}
 >
 	{#each sticker.paths as path, i (i)}
 		<path

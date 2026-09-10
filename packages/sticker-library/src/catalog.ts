@@ -24,16 +24,14 @@ export interface StickerTemplate {
 	id: string;
 	mojiId: StickerMojiId;
 	styleId: StickerStyleId;
-	name: string;
-	description: string;
 	viewBoxWidth: number;
 	viewBoxHeight: number;
 	paths: StickerPath[];
 }
 
 export const STICKER_STYLES: readonly StickerStyle[] = [
-	{ id: 'style-1', label: 'Style 1' },
-	{ id: 'style-2', label: 'Style 2' }
+	{ id: 'style-1', label: 'Classic' },
+	{ id: 'style-2', label: 'Neon' }
 ];
 
 export const STICKER_MOJIS: readonly StickerMoji[] = [
@@ -89,59 +87,43 @@ const CHEEKS_S1: StickerPath[] = [
 	}
 ];
 
-const VINYL_BACKING: StickerPath[] = [
+const NEON_FACE: StickerPath[] = [
 	{
-		d: 'M 22 70 A 50 46 0 1 0 118 70 A 50 46 0 1 0 22 70 Z',
-		fill: '#000000',
-		stroke: 'none',
-		strokeWidth: 0,
-		opacity: 0.12
-	},
-	{
-		d: 'M 8 58 A 52 52 0 1 0 112 58 A 52 52 0 1 0 8 58 Z',
-		fill: '#FFFDF7',
-		stroke: '#1F1A14',
-		strokeWidth: 4
-	},
-	{
-		d: 'M 18 58 A 42 42 0 1 0 102 58 A 42 42 0 1 0 18 58 Z',
-		fill: '#FFC93C',
-		stroke: '#1F1A14',
+		d: 'M 14 60 A 46 46 0 1 0 106 60 A 46 46 0 1 0 14 60 Z',
+		fill: '#070B14',
+		stroke: '#38BDF8',
 		strokeWidth: 3.5
-	}
-];
-
-const EYES_S2: StickerPath[] = [
-	{
-		d: 'M 38 48 A 7 8.5 0 1 0 52 48 A 7 8.5 0 1 0 38 48 Z',
-		fill: '#1F1A14',
-		stroke: 'none',
-		strokeWidth: 0
 	},
 	{
-		d: 'M 68 48 A 7 8.5 0 1 0 82 48 A 7 8.5 0 1 0 68 48 Z',
-		fill: '#1F1A14',
-		stroke: 'none',
-		strokeWidth: 0
-	},
-	{
-		d: 'M 42 45 A 2.2 2.2 0 1 0 46.4 45 A 2.2 2.2 0 1 0 42 45 Z',
-		fill: '#FFFFFF',
-		stroke: 'none',
-		strokeWidth: 0
-	},
-	{
-		d: 'M 72 45 A 2.2 2.2 0 1 0 76.4 45 A 2.2 2.2 0 1 0 72 45 Z',
-		fill: '#FFFFFF',
-		stroke: 'none',
-		strokeWidth: 0
-	},
-	{
-		d: 'M 32 36 Q 28 56 36 72',
+		d: 'M 24 60 A 36 36 0 1 0 96 60 A 36 36 0 1 0 24 60 Z',
 		fill: 'none',
-		stroke: '#FFF8E1',
-		strokeWidth: 4,
-		opacity: 0.7
+		stroke: '#38BDF8',
+		strokeWidth: 1.25,
+		opacity: 0.32
+	},
+	{
+		d: 'M 32 22 L 22 22 L 22 32',
+		fill: 'none',
+		stroke: '#7DD3FC',
+		strokeWidth: 2.2
+	},
+	{
+		d: 'M 88 22 L 98 22 L 98 32',
+		fill: 'none',
+		stroke: '#7DD3FC',
+		strokeWidth: 2.2
+	},
+	{
+		d: 'M 32 98 L 22 98 L 22 88',
+		fill: 'none',
+		stroke: '#7DD3FC',
+		strokeWidth: 2.2
+	},
+	{
+		d: 'M 88 98 L 98 98 L 98 88',
+		fill: 'none',
+		stroke: '#7DD3FC',
+		strokeWidth: 2.2
 	}
 ];
 
@@ -150,8 +132,6 @@ export const STICKER_LIBRARY: StickerTemplate[] = [
 		id: 'happy:style-1',
 		mojiId: 'happy',
 		styleId: 'style-1',
-		name: 'Happy',
-		description: 'Classic yellow smiley',
 		viewBoxWidth: 120,
 		viewBoxHeight: 120,
 		paths: [
@@ -170,8 +150,6 @@ export const STICKER_LIBRARY: StickerTemplate[] = [
 		id: 'sad:style-1',
 		mojiId: 'sad',
 		styleId: 'style-1',
-		name: 'Sad',
-		description: 'Classic yellow frown',
 		viewBoxWidth: 120,
 		viewBoxHeight: 120,
 		paths: [
@@ -183,12 +161,6 @@ export const STICKER_LIBRARY: StickerTemplate[] = [
 				fill: 'none',
 				stroke: '#2C2416',
 				strokeWidth: 5.5
-			},
-			{
-				d: 'M 28 64 C 28 76 38 84 42 74 C 36 74 28 70 28 64 Z',
-				fill: '#6EC4E8',
-				stroke: '#2C2416',
-				strokeWidth: 2
 			}
 		]
 	},
@@ -196,18 +168,27 @@ export const STICKER_LIBRARY: StickerTemplate[] = [
 		id: 'happy:style-2',
 		mojiId: 'happy',
 		styleId: 'style-2',
-		name: 'Happy',
-		description: 'Die-cut vinyl smiley',
 		viewBoxWidth: 120,
 		viewBoxHeight: 120,
 		paths: [
-			...VINYL_BACKING,
-			...EYES_S2,
+			...NEON_FACE,
 			{
-				d: 'M 40 70 Q 60 90 80 70',
+				d: 'M 42 50 A 5.5 5.5 0 1 0 53 50 A 5.5 5.5 0 1 0 42 50 Z',
+				fill: '#7DD3FC',
+				stroke: 'none',
+				strokeWidth: 0
+			},
+			{
+				d: 'M 67 50 A 5.5 5.5 0 1 0 78 50 A 5.5 5.5 0 1 0 67 50 Z',
+				fill: '#7DD3FC',
+				stroke: 'none',
+				strokeWidth: 0
+			},
+			{
+				d: 'M 40 70 Q 60 86 80 70',
 				fill: 'none',
-				stroke: '#1F1A14',
-				strokeWidth: 5
+				stroke: '#38BDF8',
+				strokeWidth: 3.2
 			}
 		]
 	},
@@ -215,24 +196,27 @@ export const STICKER_LIBRARY: StickerTemplate[] = [
 		id: 'sad:style-2',
 		mojiId: 'sad',
 		styleId: 'style-2',
-		name: 'Sad',
-		description: 'Die-cut vinyl frown',
 		viewBoxWidth: 120,
 		viewBoxHeight: 120,
 		paths: [
-			...VINYL_BACKING,
-			...EYES_S2,
+			...NEON_FACE,
 			{
-				d: 'M 40 84 Q 60 66 80 84',
+				d: 'M 40 48 Q 47.5 56 55 48',
 				fill: 'none',
-				stroke: '#1F1A14',
-				strokeWidth: 5
+				stroke: '#7DD3FC',
+				strokeWidth: 3
 			},
 			{
-				d: 'M 30 62 C 30 76 42 86 46 74 C 38 74 30 68 30 62 Z',
-				fill: '#5BB8E0',
-				stroke: '#1F1A14',
-				strokeWidth: 2.2
+				d: 'M 65 48 Q 72.5 56 80 48',
+				fill: 'none',
+				stroke: '#7DD3FC',
+				strokeWidth: 3
+			},
+			{
+				d: 'M 40 82 Q 60 66 80 82',
+				fill: 'none',
+				stroke: '#38BDF8',
+				strokeWidth: 3.2
 			}
 		]
 	}
@@ -248,9 +232,22 @@ export function getStickerById(id: string): StickerTemplate | undefined {
 }
 
 export function stickersForStyle(styleId: StickerStyleId): StickerTemplate[] {
-	return STICKER_MOJIS.map((moji) =>
-		STICKER_LIBRARY.find((sticker) => sticker.mojiId === moji.id && sticker.styleId === styleId)
-	).filter((sticker): sticker is StickerTemplate => !!sticker);
+	return stickersMatching({ styleId, mojiId: 'all' });
+}
+
+export type StickerStyleFilter = StickerStyleId | 'all';
+export type StickerMojiFilter = StickerMojiId | 'all';
+
+export function stickersMatching(opts: {
+	styleId?: StickerStyleFilter;
+	mojiId?: StickerMojiFilter;
+}): StickerTemplate[] {
+	const style = opts.styleId ?? 'all';
+	const moji = opts.mojiId ?? 'all';
+	return STICKER_LIBRARY.filter(
+		(sticker) =>
+			(style === 'all' || sticker.styleId === style) && (moji === 'all' || sticker.mojiId === moji)
+	);
 }
 
 export function getStickerVariant(
