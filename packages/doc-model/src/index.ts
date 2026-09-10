@@ -122,6 +122,7 @@ export {
 	type CodeBlock,
 	type ContainerBlock,
 	type DividerBlock,
+	type PageBreakBlock,
 	type DocBody,
 	type EnvelopeOp,
 	type HeadingBlock,

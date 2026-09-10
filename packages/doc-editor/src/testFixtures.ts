@@ -35,6 +35,10 @@ export function divider(id: string): Block {
 	return { id, type: 'divider' };
 }
 
+export function pageBreak(id: string): Block {
+	return { id, type: 'page_break' };
+}
+
 export function image(id: string, src = 'assets/diagram.png', alt = 'Diagram'): Block {
 	return { id, type: 'image', src, alt };
 }

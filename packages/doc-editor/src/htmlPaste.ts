@@ -367,6 +367,10 @@ function emitBlocks(root: Node, out: Block[], inherited: MarkState, listDepth = 
 		out.push({ id: newBlockId(), type: 'divider' });
 		return;
 	}
+	if (el.getAttribute('data-block-type') === 'page_break') {
+		out.push({ id: newBlockId(), type: 'page_break' });
+		return;
+	}
 	if (name === 'pre') {
 		const { spans } = collectInlines(el, inherited, true);
 		out.push({

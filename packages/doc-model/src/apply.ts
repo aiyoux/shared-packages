@@ -543,6 +543,7 @@ export function convertBlock(block: Block, op: Extract<Op, { kind: 'convert-bloc
 			return next;
 		}
 		if (op.to === 'divider') return { id, type: 'divider' };
+		if (op.to === 'page_break') return { id, type: 'page_break' };
 	}
 
 	if (block.type === 'code') {
@@ -564,6 +565,7 @@ export function convertBlock(block: Block, op: Extract<Op, { kind: 'convert-bloc
 			return next;
 		}
 		if (op.to === 'divider') return { id, type: 'divider' };
+		if (op.to === 'page_break') return { id, type: 'page_break' };
 	}
 
 	if (isAtomic(block)) {
@@ -572,6 +574,7 @@ export function convertBlock(block: Block, op: Extract<Op, { kind: 'convert-bloc
 		if (op.to === 'list_item') return { id, type: 'list_item', ordered, content: emptySpans() };
 		if (op.to === 'code') return { id, type: 'code', language: '', text: '' };
 		if (op.to === 'divider') return { id, type: 'divider' };
+		if (op.to === 'page_break') return { id, type: 'page_break' };
 	}
 
 	throw new Error(`cannot convert ${block.type} to ${op.to}`);

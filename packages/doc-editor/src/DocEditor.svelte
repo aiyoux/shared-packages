@@ -1025,6 +1025,28 @@
 		border-top: 1px solid currentColor;
 		opacity: 0.3;
 	}
+	.kb-host :global([data-block-type='page_break']) {
+		position: relative;
+		margin: 0.85rem 0;
+		height: 1.1rem;
+		border: 0;
+		border-top: 1px dashed currentColor;
+		opacity: 0.45;
+		user-select: none;
+	}
+	.kb-host :global([data-block-type='page_break'])::after {
+		content: 'Page break';
+		position: absolute;
+		top: 0;
+		left: 50%;
+		transform: translate(-50%, -60%);
+		padding: 0 0.4rem;
+		font-size: 0.65rem;
+		letter-spacing: 0.04em;
+		text-transform: uppercase;
+		background: var(--surface-1, #fff);
+		color: inherit;
+	}
 	/* Block types this build does not model: shown as an opaque placeholder so the
 	   document stays legible and the foreign JSON survives an edit + save. */
 	.kb-host :global([data-unknown-type]) {

@@ -134,6 +134,10 @@ describe('toMarkdown', () => {
 		expect(md([{ id: 'd', type: 'divider' }])).toBe('---\n');
 	});
 
+	it('renders page_break as an HTML comment', () => {
+		expect(md([{ id: 'pb', type: 'page_break' }])).toBe('<!-- pagebreak -->\n');
+	});
+
 	it('renders image as ![alt](src)', () => {
 		expect(md([{ id: 'i', type: 'image', src: 'assets/diagram.png', alt: 'Diagram' }])).toBe(
 			'![Diagram](assets/diagram.png)\n'

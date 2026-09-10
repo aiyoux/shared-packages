@@ -235,6 +235,20 @@ function renderDivider(
 	return hr;
 }
 
+function renderPageBreak(
+	doc: Document,
+	block: Extract<Block, { type: 'page_break' }>,
+	parentId: string | null,
+	depth: number
+): HTMLElement {
+	const el = doc.createElement('div');
+	setTreeAttrs(el, block, parentId, depth);
+	el.setAttribute('contenteditable', 'false');
+	el.setAttribute('role', 'separator');
+	el.setAttribute('aria-label', 'Page break');
+	return el;
+}
+
 function renderImage(
 	doc: Document,
 	block: Extract<Block, { type: 'image' }>,
@@ -316,6 +330,7 @@ export function renderBlock(
 	if (isTextLike(block)) return renderTextLike(doc, block, parentId, depth, col, cols, rowIndex);
 	if (block.type === 'code') return renderCode(doc, block, parentId, depth);
 	if (block.type === 'divider') return renderDivider(doc, block, parentId, depth);
+	if (block.type === 'page_break') return renderPageBreak(doc, block, parentId, depth);
 	if (block.type === 'image') return renderImage(doc, block, parentId, depth, media);
 	if (isContainer(block) || block.type === 'table') return renderContainer(doc, block, parentId, depth);
 	if (isUnknownBlock(block)) return renderUnknown(doc, block, parentId, depth);

@@ -109,6 +109,8 @@ function renderBlock(block: Block, orderedIndex: number): string {
 		}
 		case 'divider':
 			return '---';
+		case 'page_break':
+			return '<!-- pagebreak -->';
 		case 'image':
 			return `![${block.alt}](${block.src})`;
 		case 'callout':

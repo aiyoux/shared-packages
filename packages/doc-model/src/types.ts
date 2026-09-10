@@ -79,6 +79,8 @@ export type ListItemBlock = {
 };
 export type CodeBlock = { id: string; type: 'code'; language: string; text: string; indent?: number };
 export type DividerBlock = { id: string; type: 'divider' };
+/** Forces following content onto the next printed/page-layout sheet. */
+export type PageBreakBlock = { id: string; type: 'page_break' };
 export type ImageBlock = { id: string; type: 'image'; src: string; alt: string };
 
 export type CalloutVariant = 'info' | 'warning' | 'note';
@@ -125,6 +127,7 @@ export type Block =
 	| ListItemBlock
 	| CodeBlock
 	| DividerBlock
+	| PageBreakBlock
 	| ImageBlock
 	| CalloutBlock
 	| ToggleBlock
@@ -136,7 +139,7 @@ export type Block =
 export type BlockType = Block['type'];
 
 export type TextLikeBlock = ParagraphBlock | HeadingBlock | ListItemBlock | TableCellBlock;
-export type AtomicBlock = DividerBlock | ImageBlock;
+export type AtomicBlock = DividerBlock | PageBreakBlock | ImageBlock;
 export type ContainerBlock = CalloutBlock | ToggleBlock;
 export type TableStructureBlock = TableBlock | TableRowBlock;
 

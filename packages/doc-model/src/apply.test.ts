@@ -497,7 +497,7 @@ describe('apply convert-block', () => {
 
 	it('does not change Block.id when converting the sole block', () => {
 		const src = page([para('only', 'Hi')]);
-		for (const to of ['heading', 'list_item', 'code', 'divider'] as const) {
+		for (const to of ['heading', 'list_item', 'code', 'divider', 'page_break'] as const) {
 			const next = apply(src, { kind: 'convert-block', id: 'only', to });
 			expect(next.blocks).toHaveLength(1);
 			expect(next.blocks[0].id).toBe('only');

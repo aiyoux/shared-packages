@@ -33,8 +33,8 @@ export function canTakeIndent(block: Block): block is IndentableBlock {
 	);
 }
 
-export function isAtomic(block: Block): block is Extract<Block, { type: 'divider' | 'image' }> {
-	return block.type === 'divider' || block.type === 'image';
+export function isAtomic(block: Block): block is Extract<Block, { type: 'divider' | 'page_break' | 'image' }> {
+	return block.type === 'divider' || block.type === 'page_break' || block.type === 'image';
 }
 
 export function isContainer(block: Block): block is ContainerBlock {
@@ -51,6 +51,7 @@ const KNOWN_BLOCK_TYPES: ReadonlySet<string> = new Set([
 	'list_item',
 	'code',
 	'divider',
+	'page_break',
 	'image',
 	'callout',
 	'toggle',

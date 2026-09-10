@@ -99,6 +99,22 @@ describe('normalizePage', () => {
 		}
 	});
 
+	it('keeps page_break as a known atomic leaf', () => {
+		const page = {
+			format: KB_FORMAT,
+			id: 'p',
+			title: 't',
+			createdAt: '',
+			updatedAt: '',
+			children: [],
+			blocks: [{ id: 'pb', type: 'page_break', extra: true }]
+		} as unknown as KbPage;
+		const normalized = normalizePage(page);
+		expect(normalized.blocks[0]).toEqual({ id: 'pb', type: 'page_break' });
+		expect(isUnknownBlock(normalized.blocks[0])).toBe(false);
+		expect(isNonTextual(normalized.blocks[0])).toBe(true);
+	});
+
 	it('preserves unknown leaf block types verbatim (lossless across load/save)', () => {
 		const page = {
 			format: KB_FORMAT,

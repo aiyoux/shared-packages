@@ -43,10 +43,11 @@ describe('capabilities', () => {
 	 * The record backend nests blocks on `graph_child_of` block → block edges
 	 * now, and has a schema variant for every type, so it declares all of them.
 	 */
-	it('lets the record backend insert everything too', () => {
-		for (const kind of ALL_BLOCK_KINDS) {
+	it('lets the record backend insert everything it declares', () => {
+		for (const kind of RECORD_BACKEND_BLOCK_KINDS) {
 			expect(canInsert(recordCaps, kind), kind).toBe(true);
 		}
+		expect(canInsert(recordCaps, 'page_break')).toBe(false);
 	});
 
 	it('treats an absent capability set as unrestricted', () => {

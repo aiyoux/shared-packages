@@ -30,6 +30,7 @@ export const ALL_BLOCK_KINDS = [
 	'list_item',
 	'code',
 	'divider',
+	'page_break',
 	'image',
 	'callout',
 	'toggle',

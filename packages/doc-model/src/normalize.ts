@@ -415,6 +415,8 @@ export function orderedBlock(block: Block): Block {
 		}
 		case 'divider':
 			return { id: block.id, type: 'divider' };
+		case 'page_break':
+			return { id: block.id, type: 'page_break' };
 		case 'image':
 			return { id: block.id, type: 'image', src: block.src, alt: block.alt };
 		case 'callout':
@@ -509,6 +511,8 @@ function normalizeLeaf(rec: Record<string, unknown>, id: string): Block {
 		}
 		case 'divider':
 			return { id, type: 'divider' };
+		case 'page_break':
+			return { id, type: 'page_break' };
 		case 'image': {
 			const next: ImageBlock = {
 				id,
@@ -610,6 +614,7 @@ function isKnownLeafType(type: unknown): boolean {
 		type === 'list_item' ||
 		type === 'code' ||
 		type === 'divider' ||
+		type === 'page_break' ||
 		type === 'image'
 	);
 }

@@ -57,7 +57,12 @@ export function stripHtml(html: string): string {
 /** Walk the subtree and mint a new id for every node. */
 export function remapBlock(block: Block): Block {
 	const id = newBlockId();
-	const next: Block = block.type === 'divider' ? { id, type: 'divider' } : { ...block, id };
+	const next: Block =
+		block.type === 'divider'
+			? { id, type: 'divider' }
+			: block.type === 'page_break'
+				? { id, type: 'page_break' }
+				: { ...block, id };
 	const kids = blockChildren(block);
 	if (kids) (next as Block & { children: Block[] }).children = kids.map(remapBlock);
 	return next;
