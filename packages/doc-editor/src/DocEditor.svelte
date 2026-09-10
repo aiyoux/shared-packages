@@ -36,7 +36,7 @@
 	} from './gutter.js';
 	import { mapKeydown } from './keymap.js';
 	import { followEditorLink } from './href.js';
-	import { BLOCK_ID_ATTR, paintLocalSelection, project, type MediaResolver } from './project.js';
+	import { BLOCK_ID_ATTR, BLOCK_TYPE_ATTR, paintLocalSelection, project, type MediaResolver } from './project.js';
 	import {
 		plaintextFromDom,
 		rangeFromInputEvent,
@@ -44,7 +44,8 @@
 		restoreSelection,
 		focusHeldOutside,
 		caretFromClient,
-		emptySpaceCaretFromClient
+		isPointOnGlyph,
+		isTextCaretBlockType
 	} from './selection.js';
 	import { collapsed, rangesEqual } from './range.js';
 	import { applyEditorOps, redo, setSelection, undo, type EditorState } from './state.js';
@@ -643,22 +644,36 @@
 		if (!host) return;
 		selectDrag = { anchor, pointerId: event.pointerId };
 		applySelectRange(collapsed(anchor));
-		const doc = host.ownerDocument;
+		let head = anchor;
+		const capturedHost = host;
+		try {
+			capturedHost.setPointerCapture(event.pointerId);
+		} catch {
+			// jsdom / lost host — document listeners still finish the drag.
+		}
+		const doc = capturedHost.ownerDocument;
 		const move = (e: PointerEvent) => {
 			if (!selectDrag || e.pointerId !== selectDrag.pointerId || !host) return;
 			if (e.buttons === 0) {
 				finish(e);
 				return;
 			}
-			const head = caretFromClient(host, e.clientX, e.clientY) ?? selectDrag.anchor;
+			head = caretFromClient(host, e.clientX, e.clientY) ?? head;
 			applySelectRange({ anchor: selectDrag.anchor, head });
 		};
 		const finish = (e: PointerEvent) => {
 			if (selectDrag && e.pointerId === selectDrag.pointerId && host) {
-				const head = caretFromClient(host, e.clientX, e.clientY) ?? selectDrag.anchor;
+				head = caretFromClient(host, e.clientX, e.clientY) ?? head;
 				applySelectRange({ anchor: selectDrag.anchor, head });
 			}
 			selectDrag = null;
+			try {
+				if (capturedHost.hasPointerCapture?.(e.pointerId)) {
+					capturedHost.releasePointerCapture(e.pointerId);
+				}
+			} catch {
+				// already released
+			}
 			stop();
 		};
 		const stop = () => {
@@ -672,10 +687,10 @@
 	}
 
 	/**
-	 * Empty space to the left or right of a line: native CE only places the
-	 * caret there when the block is already active. Intercept those hits so a
-	 * click still lands on that line, and a drag from that point can select.
-	 * Clicks on glyphs stay native (double-click word select, etc.).
+	 * Native CE only starts a drag-select when mousedown hits a glyph. Empty
+	 * space after a line, empty paragraphs, and the gaps between blocks must
+	 * still begin a selection. Glyph hits stay native (double-click word
+	 * select). Atomics / chrome keep their own pointer handling.
 	 */
 	function onHostPointerDown(event: PointerEvent) {
 		if (composing || !editable || !host || event.button !== 0) return;
@@ -683,7 +698,16 @@
 		const target = event.target;
 		if (!(target instanceof Element)) return;
 		if (target.closest('a, button, input, textarea, [data-collab-widget]')) return;
-		const snapped = emptySpaceCaretFromClient(host, event.clientX, event.clientY);
+		const hitBlock = target.closest(`[${BLOCK_ID_ATTR}]`);
+		if (
+			hitBlock instanceof HTMLElement &&
+			host.contains(hitBlock) &&
+			!isTextCaretBlockType(hitBlock.getAttribute(BLOCK_TYPE_ATTR))
+		) {
+			return;
+		}
+		if (isPointOnGlyph(host, event.clientX, event.clientY)) return;
+		const snapped = caretFromClient(host, event.clientX, event.clientY);
 		if (!snapped) return;
 		event.preventDefault();
 		try {
@@ -1081,20 +1105,6 @@
 		border-radius: 0.15rem;
 		box-shadow: inset 3px 0 0 var(--accent, #38bdf8);
 		background: color-mix(in srgb, var(--accent, #38bdf8) 10%, transparent);
-	}
-	.kb-host :global([data-kb-empty-caret]) {
-		position: relative;
-	}
-	.kb-host :global([data-kb-empty-caret])::after {
-		content: 'Type here';
-		position: absolute;
-		left: 0.55rem;
-		top: 0;
-		color: var(--text-faint, #8a96a3);
-		pointer-events: none;
-		user-select: none;
-		font-weight: 400;
-		font-style: italic;
 	}
 	/* Block types this build does not model: shown as an opaque placeholder so the
 	   document stays legible and the foreign JSON survives an edit + save. */

@@ -318,4 +318,80 @@ describe('trailingLineEndFromClient', () => {
 			host.remove();
 		}
 	});
+
+	it('snaps a click on an empty paragraph to offset 0', () => {
+		const host = document.createElement('div');
+		host.contentEditable = 'true';
+		document.body.append(host);
+		const doc = page([para('empty', ''), para('b', 'world')]);
+		project(host, doc);
+		const empty = host.querySelector('[data-block-id="empty"]') as HTMLElement;
+		const b = host.querySelector('[data-block-id="b"]') as HTMLElement;
+		empty.getBoundingClientRect = () => fakeRect(10, 16, 8, 400);
+		b.getBoundingClientRect = () => fakeRect(40, 16, 8, 400);
+		try {
+			expect(emptySpaceCaretFromClient(host, 200, 18)).toEqual({ blockId: 'empty', offset: 0 });
+			expect(caretFromClient(host, 40, 18)).toEqual({ blockId: 'empty', offset: 0 });
+		} finally {
+			host.remove();
+		}
+	});
+
+	it('snaps a click on an empty visual line below glyphs to that block\'s end', () => {
+		const host = document.createElement('div');
+		host.contentEditable = 'true';
+		document.body.append(host);
+		const doc = page([para('p', 'hello')]);
+		project(host, doc);
+		const block = host.querySelector('[data-block-id="p"]') as HTMLElement;
+		// Block is two lines tall; only the first line has glyphs (hard-break empty line).
+		block.getBoundingClientRect = () => fakeRect(10, 40, 8, 400);
+
+		const proto = Range.prototype.getClientRects;
+		Range.prototype.getClientRects = function () {
+			const i = this.startOffset;
+			return [fakeRect(10, 16, 8 + i * 10, 10)] as unknown as DOMRectList;
+		};
+		try {
+			// Same x as the text, but on the empty second line.
+			expect(emptySpaceCaretFromClient(host, 22, 38)).toEqual({ blockId: 'p', offset: 5 });
+			expect(caretFromClient(host, 22, 38)).toEqual({ blockId: 'p', offset: 5 });
+			// Glyphs themselves still belong to native CE.
+			expect(emptySpaceCaretFromClient(host, 22, 18)).toBeNull();
+		} finally {
+			Range.prototype.getClientRects = proto;
+			host.remove();
+		}
+	});
+
+	it('snaps a click in the gap between blocks to the nearer edge', () => {
+		const host = document.createElement('div');
+		host.contentEditable = 'true';
+		document.body.append(host);
+		const doc = page([para('a', 'hello'), para('b', 'world')]);
+		project(host, doc);
+		const blockA = host.querySelector('[data-block-id="a"]') as HTMLElement;
+		const blockB = host.querySelector('[data-block-id="b"]') as HTMLElement;
+		blockA.getBoundingClientRect = () => fakeRect(10, 16, 8, 400);
+		blockB.getBoundingClientRect = () => fakeRect(40, 16, 8, 400);
+
+		const proto = Range.prototype.getClientRects;
+		Range.prototype.getClientRects = function () {
+			const node = this.startContainer;
+			const i = this.startOffset;
+			const block = (node as Text).parentElement;
+			const top = block === blockB ? 40 : 10;
+			return [fakeRect(top, 16, 8 + i * 10, 10)] as unknown as DOMRectList;
+		};
+		try {
+			// y=30 is 4px below A and 10px above B.
+			expect(emptySpaceCaretFromClient(host, 22, 30)).toEqual({ blockId: 'a', offset: 5 });
+			// y=36 is 10px below A and 4px above B.
+			expect(emptySpaceCaretFromClient(host, 22, 36)).toEqual({ blockId: 'b', offset: 0 });
+			expect(emptySpaceCaretFromClient(host, 200, 70)).toEqual({ blockId: 'b', offset: 5 });
+		} finally {
+			Range.prototype.getClientRects = proto;
+			host.remove();
+		}
+	});
 });

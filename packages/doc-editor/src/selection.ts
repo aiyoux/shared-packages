@@ -305,7 +305,7 @@ export type LineBox = {
 
 const TRAILING_CLICK_SLACK_PX = 1;
 
-function isTextCaretBlockType(type: string | null): boolean {
+export function isTextCaretBlockType(type: string | null): boolean {
 	return (
 		type === 'paragraph' ||
 		type === 'heading' ||
@@ -313,6 +313,18 @@ function isTextCaretBlockType(type: string | null): boolean {
 		type === 'code' ||
 		type === 'table_cell'
 	);
+}
+
+function verticalDist(top: number, bottom: number, clientY: number): number {
+	if (clientY < top) return top - clientY;
+	if (clientY > bottom) return clientY - bottom;
+	return 0;
+}
+
+function blockPlainLength(block: HTMLElement): number {
+	let n = 0;
+	for (const text of textNodes(block)) n += text.data.length;
+	return n;
 }
 
 /**
@@ -413,6 +425,126 @@ export function blockElementFromClient(host: HTMLElement, clientX: number, clien
 }
 
 /**
+ * Text-like block under the point, or the nearest one when the point sits in
+ * a margin gap / the empty space below the last block. Native CE and
+ * `elementsFromPoint` both miss those.
+ */
+export function textBlockNearestToClient(
+	host: HTMLElement,
+	clientX: number,
+	clientY: number
+): HTMLElement | null {
+	const exact = blockElementFromClient(host, clientX, clientY);
+	if (exact) return exact;
+	let best: HTMLElement | null = null;
+	let bestDist = Infinity;
+	let bestArea = Infinity;
+	let bestInColumn = false;
+	for (const node of host.querySelectorAll(`[${BLOCK_ID_ATTR}]`)) {
+		if (!(node instanceof HTMLElement)) continue;
+		if (!isTextCaretBlockType(node.getAttribute(BLOCK_TYPE_ATTR))) continue;
+		const rect = node.getBoundingClientRect();
+		if (clientX < rect.left) continue;
+		const inColumn = clientX <= rect.right;
+		const dist = verticalDist(rect.top, rect.bottom, clientY);
+		const area = Math.max(rect.width, 1) * Math.max(rect.height, 1);
+		if (inColumn !== bestInColumn) {
+			if (!inColumn && bestInColumn) continue;
+			best = node;
+			bestDist = dist;
+			bestArea = area;
+			bestInColumn = inColumn;
+			continue;
+		}
+		if (dist < bestDist || (dist === bestDist && area < bestArea)) {
+			bestDist = dist;
+			bestArea = area;
+			best = node;
+		}
+	}
+	return best;
+}
+
+/**
+ * True when the point sits on a rendered glyph. Native contenteditable starts
+ * a drag-select from those hits (and owns double-click word select); empty
+ * space, empty lines, and inter-block gaps do not.
+ */
+export function isPointOnGlyph(host: HTMLElement, clientX: number, clientY: number): boolean {
+	const hit = caretRangeFromPoint(host.ownerDocument, clientX, clientY);
+	if (
+		hit &&
+		hit.node.nodeType === Node.TEXT_NODE &&
+		host.contains(hit.node) &&
+		!inCollabWidget(hit.node)
+	) {
+		const text = hit.node as Text;
+		const doc = host.ownerDocument;
+		for (const i of [hit.offset, hit.offset - 1]) {
+			if (i < 0 || i >= text.data.length) continue;
+			const range = doc.createRange();
+			try {
+				range.setStart(text, i);
+				range.setEnd(text, i + 1);
+			} catch {
+				continue;
+			}
+			for (const rect of Array.from(range.getClientRects())) {
+				if (
+					clientX >= rect.left &&
+					clientX <= rect.right &&
+					clientY >= rect.top &&
+					clientY <= rect.bottom
+				) {
+					return true;
+				}
+			}
+		}
+	}
+	const block = blockElementFromClient(host, clientX, clientY);
+	if (!block) return false;
+	const line = lineBoxesOf(block).find((l) => clientY >= l.top && clientY <= l.bottom);
+	if (!line) return false;
+	return clientX >= line.left && clientX <= line.right;
+}
+
+/**
+ * Caret for a hit that is not on a glyph: trailing/leading empty space on a
+ * line, an empty block, an empty visual line (hard break / extra block
+ * height), or a gap between blocks.
+ */
+export function nearestEmptyCaretFromClient(
+	host: HTMLElement,
+	clientX: number,
+	clientY: number
+): Point | null {
+	const block = textBlockNearestToClient(host, clientX, clientY);
+	if (!block) return null;
+	const blockId = block.getAttribute(BLOCK_ID_ATTR);
+	if (!blockId) return null;
+	const lines = lineBoxesOf(block);
+	if (lines.length === 0) return { blockId, offset: 0 };
+	const line = lineBoxAtY(lines, clientY);
+	if (!line) return { blockId, offset: 0 };
+	const onLine = clientY >= line.top && clientY <= line.bottom;
+	if (onLine) {
+		if (clientX > line.right + TRAILING_CLICK_SLACK_PX) {
+			return { blockId, offset: line.endOffset };
+		}
+		if (clientX < line.left - TRAILING_CLICK_SLACK_PX) {
+			return { blockId, offset: line.startOffset };
+		}
+		return null;
+	}
+	if (clientY > line.bottom) {
+		const last = lines[lines.length - 1]!;
+		const offset = clientY > last.bottom ? Math.max(last.endOffset, blockPlainLength(block)) : line.endOffset;
+		return { blockId, offset };
+	}
+	return { blockId, offset: line.startOffset };
+}
+
+/**
  * When the click is in the empty space past the last glyph on a line, the
  * caret belongs at that line's end. Returns null when native placement in
  * the glyphs should stand (including mid-text clicks on an inactive block).
@@ -480,18 +612,23 @@ function caretRangeFromPoint(doc: Document, clientX: number, clientY: number): {
 }
 
 /**
- * Map a viewport point to a document caret. Prefers trailing/leading empty
- * space on a line (native CE misses those on inactive blocks), then
- * `caretPositionFromPoint`.
+ * Map a viewport point to a document caret. Empty space (after text, empty
+ * lines, gaps) snaps via line boxes; glyph hits use `caretPositionFromPoint`.
  */
 export function caretFromClient(host: HTMLElement, clientX: number, clientY: number): Point | null {
-	const edge = trailingLineEndFromClient(host, clientX, clientY) ?? lineStartFromClient(host, clientX, clientY);
-	if (edge) return edge;
+	if (!isPointOnGlyph(host, clientX, clientY)) {
+		const empty = nearestEmptyCaretFromClient(host, clientX, clientY);
+		if (empty) return empty;
+	}
 	const hit = caretRangeFromPoint(host.ownerDocument, clientX, clientY);
-	if (!hit) return null;
-	const root = hit.node.nodeType === Node.ELEMENT_NODE ? hit.node : hit.node.parentNode;
-	if (!root || !host.contains(root)) return null;
-	return pointFromDom(host, hit.node, hit.offset);
+	if (hit) {
+		const root = hit.node.nodeType === Node.ELEMENT_NODE ? hit.node : hit.node.parentNode;
+		if (root && host.contains(root)) {
+			const mapped = pointFromDom(host, hit.node, hit.offset);
+			if (mapped) return mapped;
+		}
+	}
+	return nearestEmptyCaretFromClient(host, clientX, clientY);
 }
 
 /** Empty-space click that native CE would not place correctly. */
@@ -500,7 +637,8 @@ export function emptySpaceCaretFromClient(
 	clientX: number,
 	clientY: number
 ): Point | null {
-	return trailingLineEndFromClient(host, clientX, clientY) ?? lineStartFromClient(host, clientX, clientY);
+	if (isPointOnGlyph(host, clientX, clientY)) return null;
+	return nearestEmptyCaretFromClient(host, clientX, clientY);
 }
 
 export function caretIn(page: KbPage, blockId: string, offset: number): Range {

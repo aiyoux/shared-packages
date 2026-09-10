@@ -301,7 +301,85 @@ describe('DocEditor mount', () => {
 		}
 	});
 
-	it('paints selected chrome on an empty caret paragraph', async () => {
+	it('drag-selects from an empty paragraph through the next block', async () => {
+		let state = createEditorState(page([para('empty', ''), para('b', 'world')]));
+		const box = (top: number, left: number, width: number, height: number): DOMRect =>
+			({
+				x: left,
+				y: top,
+				top,
+				left,
+				bottom: top + height,
+				right: left + width,
+				width,
+				height,
+				toJSON() {
+					return this;
+				}
+			}) as DOMRect;
+		const protoRect = HTMLElement.prototype.getBoundingClientRect;
+		const protoGlyphs = Range.prototype.getClientRects;
+		HTMLElement.prototype.getBoundingClientRect = function () {
+			const id = this.getAttribute('data-block-id');
+			if (id === 'empty') return box(10, 8, 400, 16);
+			if (id === 'b') return box(40, 8, 400, 16);
+			return protoRect.call(this);
+		};
+		Range.prototype.getClientRects = function () {
+			const node = this.startContainer;
+			if (node.nodeType !== Node.TEXT_NODE) return protoGlyphs.call(this);
+			const i = this.startOffset;
+			const top = (node as Text).parentElement?.getAttribute('data-block-id') === 'b' ? 40 : 10;
+			return [box(top, 8 + i * 10, 10, 16)] as unknown as DOMRectList;
+		};
+		try {
+			const { container, unmount } = render(DocEditor, {
+				props: {
+					state,
+					editable: true,
+					onDispatch: (op: Op | Op[]) => {
+						state = applyEditorOps(state, op);
+					},
+					onState: (next: EditorState) => {
+						state = next;
+					}
+				}
+			});
+			await tick();
+			const host = container.querySelector('[data-testid="kb-host"]') as HTMLElement;
+			host.dispatchEvent(
+				new PointerEvent('pointerdown', {
+					button: 0,
+					clientX: 40,
+					clientY: 18,
+					pointerId: 8,
+					bubbles: true,
+					cancelable: true
+				})
+			);
+			expect(state.selection).toEqual({
+				anchor: { blockId: 'empty', offset: 0 },
+				head: { blockId: 'empty', offset: 0 }
+			});
+			document.dispatchEvent(
+				new PointerEvent('pointermove', {
+					clientX: 200,
+					clientY: 48,
+					pointerId: 8,
+					buttons: 1,
+					bubbles: true
+				})
+			);
+			expect(state.selection.anchor).toEqual({ blockId: 'empty', offset: 0 });
+			expect(state.selection.head).toEqual({ blockId: 'b', offset: 5 });
+			unmount();
+		} finally {
+			HTMLElement.prototype.getBoundingClientRect = protoRect;
+			Range.prototype.getClientRects = protoGlyphs;
+		}
+	});
+
+	it('does not paint selected chrome on a collapsed empty paragraph', async () => {
 		let state = createEditorState(page([para('a', '')]));
 		const { container, unmount } = render(DocEditor, {
 			props: {
@@ -314,8 +392,8 @@ describe('DocEditor mount', () => {
 		});
 		await tick();
 		const block = container.querySelector('[data-block-id="a"]') as HTMLElement;
-		expect(block.getAttribute('data-kb-selected')).toBe('');
-		expect(block.getAttribute('data-kb-empty-caret')).toBe('');
+		expect(block.hasAttribute('data-kb-selected')).toBe(false);
+		expect(block.hasAttribute('data-kb-empty-caret')).toBe(false);
 		unmount();
 	});
 

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { allowlistedHref, allowlistedSrc, followEditorLink } from './href.js';
-import { EMPTY_CARET_ATTR, paintLocalSelection, project, SELECTED_ATTR } from './project.js';
+import { paintLocalSelection, project, SELECTED_ATTR } from './project.js';
 import { callout, code, divider, heading, image, item, page, pageBreak, para } from './testFixtures.js';
 
 function host(): HTMLDivElement {
@@ -319,7 +319,7 @@ describe('project', () => {
 });
 
 describe('paintLocalSelection', () => {
-	it('marks an empty paragraph as selected with a placeholder, not a filled one', () => {
+	it('does not mark a collapsed caret on an empty paragraph', () => {
 		const el = host();
 		const doc = page([para('empty', ''), para('full', 'hello'), divider('d')]);
 		project(el, doc);
@@ -327,16 +327,22 @@ describe('paintLocalSelection', () => {
 			anchor: { blockId: 'empty', offset: 0 },
 			head: { blockId: 'empty', offset: 0 }
 		});
-		expect(el.querySelector('[data-block-id="empty"]')?.hasAttribute(SELECTED_ATTR)).toBe(true);
-		expect(el.querySelector('[data-block-id="empty"]')?.hasAttribute(EMPTY_CARET_ATTR)).toBe(true);
-		expect(el.querySelector('[data-block-id="full"]')?.hasAttribute(SELECTED_ATTR)).toBe(false);
-		paintLocalSelection(el, doc, {
-			anchor: { blockId: 'full', offset: 1 },
-			head: { blockId: 'full', offset: 1 }
-		});
 		expect(el.querySelector('[data-block-id="empty"]')?.hasAttribute(SELECTED_ATTR)).toBe(false);
-		expect(el.querySelector('[data-block-id="empty"]')?.hasAttribute(EMPTY_CARET_ATTR)).toBe(false);
 		expect(el.querySelector('[data-block-id="full"]')?.hasAttribute(SELECTED_ATTR)).toBe(false);
+		el.remove();
+	});
+
+	it('marks empty text blocks covered by a range, not filled ones', () => {
+		const el = host();
+		const doc = page([para('a', 'hi'), para('empty', ''), para('b', 'bye')]);
+		project(el, doc);
+		paintLocalSelection(el, doc, {
+			anchor: { blockId: 'a', offset: 0 },
+			head: { blockId: 'b', offset: 3 }
+		});
+		expect(el.querySelector('[data-block-id="empty"]')?.hasAttribute(SELECTED_ATTR)).toBe(true);
+		expect(el.querySelector('[data-block-id="a"]')?.hasAttribute(SELECTED_ATTR)).toBe(false);
+		expect(el.querySelector('[data-block-id="b"]')?.hasAttribute(SELECTED_ATTR)).toBe(false);
 		el.remove();
 	});
 
