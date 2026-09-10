@@ -33,11 +33,15 @@ function ownDescendant(leaf: Element, selector: string): HTMLElement | null {
 /**
  * Find the nearest pane window header for app-injected chrome (File menu).
  * No-op host when not in a pane leaf — callers still render overlay chrome.
+ *
+ * Hosts marked `data-no-header-portal` (popups over a pane) also return null
+ * so nested apps cannot steal the pane's File/Save chrome.
  */
 export function findPaneWindowHeader(node: HTMLElement): {
 	host: HTMLElement;
 	chrome: HTMLElement;
 } | null {
+	if (node.closest('[data-no-header-portal]')) return null;
 	const leaf = node.closest('[data-testid="pl-leaf"]');
 	if (!leaf) return null;
 	const chrome = ownDescendant(leaf, '[data-testid="pl-chrome"]');
