@@ -94,6 +94,8 @@ describe('brush SVG path contracts', () => {
 		});
 		assert.equal(effectiveStrokeWidth(10, 'pencil'), 8.4);
 		assert.equal(effectiveStrokeWidth(10, 'pencil', '4B'), 10.4);
+		assert.ok(brushParams('pencil', 'HB').thinning < 0.2);
+		assert.ok(brushParams('pencil', 'HB').thinning < brushParams('pen').thinning / 3);
 
 		assert.deepEqual(withoutId(buildBasicStrokePath('M 0 0 L 10 0', '#333333', 10, 'ink', 'pencil', 'B')), {
 			d: 'M 0 0 L 10 0',

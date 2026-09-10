@@ -15,13 +15,17 @@ export interface BrushParams {
 
 export const PENCIL_GRADES: readonly PencilGrade[] = ['2H', 'H', 'HB', 'B', '2B', '4B'];
 
+// Thinning is modest: a graphite core barely flares with pressure or speed.
+// Ink (pen thinning 0.6) uses perfect-freehand's velocity simulation and
+// looks like a brush — slow fat, fast hairline. Pencil darkness carries
+// most of the pressure signal instead (see pressureStrokeOpacity).
 const PENCIL_GRADE_PARAMS: Record<PencilGrade, BrushParams> = {
-	'2H': { opacity: 0.2, blendMode: 'multiply', widthMult: 0.72, thinning: 0.2, smoothing: 0.32, streamline: 0.26 },
-	H: { opacity: 0.26, blendMode: 'multiply', widthMult: 0.78, thinning: 0.25, smoothing: 0.34, streamline: 0.3 },
-	HB: { opacity: 0.34, blendMode: 'multiply', widthMult: 0.84, thinning: 0.3, smoothing: 0.35, streamline: 0.33 },
-	B: { opacity: 0.44, blendMode: 'multiply', widthMult: 0.9, thinning: 0.34, smoothing: 0.36, streamline: 0.34 },
-	'2B': { opacity: 0.55, blendMode: 'multiply', widthMult: 0.96, thinning: 0.38, smoothing: 0.38, streamline: 0.36 },
-	'4B': { opacity: 0.68, blendMode: 'multiply', widthMult: 1.04, thinning: 0.42, smoothing: 0.4, streamline: 0.38 }
+	'2H': { opacity: 0.2, blendMode: 'multiply', widthMult: 0.72, thinning: 0.08, smoothing: 0.32, streamline: 0.26 },
+	H: { opacity: 0.26, blendMode: 'multiply', widthMult: 0.78, thinning: 0.1, smoothing: 0.34, streamline: 0.3 },
+	HB: { opacity: 0.34, blendMode: 'multiply', widthMult: 0.84, thinning: 0.12, smoothing: 0.35, streamline: 0.33 },
+	B: { opacity: 0.44, blendMode: 'multiply', widthMult: 0.9, thinning: 0.13, smoothing: 0.36, streamline: 0.34 },
+	'2B': { opacity: 0.55, blendMode: 'multiply', widthMult: 0.96, thinning: 0.14, smoothing: 0.38, streamline: 0.36 },
+	'4B': { opacity: 0.68, blendMode: 'multiply', widthMult: 1.04, thinning: 0.16, smoothing: 0.4, streamline: 0.38 }
 };
 
 export function normalizePencilGrade(grade: unknown): PencilGrade {
