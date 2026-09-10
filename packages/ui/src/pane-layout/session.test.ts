@@ -1,5 +1,12 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { createLeaf, resetLayoutIdsForTests, splitLeaf, syncLayoutIdSeq, newLayoutId } from './tree.ts';
+import {
+	createLeaf,
+	listLeaves,
+	resetLayoutIdsForTests,
+	splitLeaf,
+	syncLayoutIdSeq,
+	newLayoutId
+} from './tree.ts';
 import {
 	applySessionId,
 	createPaneSessionStore,
@@ -156,5 +163,25 @@ describe('syncLayoutIdSeq', () => {
 		expect(root).not.toBeNull();
 		syncLayoutIdSeq(root!);
 		expect(newLayoutId('leaf')).toBe('leaf-5');
+	});
+
+	it('splitLeaf skips restored leaf ids even when the counter was not synced', () => {
+		resetLayoutIdsForTests();
+		const restored = parseLayoutNode({
+			kind: 'split',
+			id: 'split-1',
+			direction: 'row',
+			ratio: 0.5,
+			first: { kind: 'leaf', id: 'left' },
+			second: { kind: 'leaf', id: 'leaf-1' }
+		});
+		expect(restored).not.toBeNull();
+		const next = splitLeaf(restored!, 'left', 'col');
+		expect(next).not.toBeNull();
+		const ids = listLeaves(next!.root).map((l) => l.id);
+		expect(ids).toContain('left');
+		expect(ids).toContain('leaf-1');
+		expect(new Set(ids).size).toBe(ids.length);
+		expect(next!.newLeaf.id).not.toBe('leaf-1');
 	});
 });

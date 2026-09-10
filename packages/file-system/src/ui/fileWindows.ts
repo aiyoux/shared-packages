@@ -3,7 +3,8 @@ import {
 	splitLeaf,
 	closeLeaf,
 	listLeaves,
-	leafCount
+	leafCount,
+	syncLayoutIdSeq
 } from '@shared-packages/ui';
 import type { LayoutNode, SplitDirection, AppWindowRoleDef } from '@shared-packages/ui';
 import type { ExplorerDriver } from './explorerDriver.js';
@@ -187,6 +188,7 @@ export function loadFileWindows(
 		}
 		const parsed = JSON.parse(raw);
 		if (!parsed || typeof parsed !== 'object' || !parsed.root) return null;
+		syncLayoutIdSeq(parsed.root);
 		const windows: Record<string, FileWindowState> = {};
 		if (parsed.windows && typeof parsed.windows === 'object') {
 			for (const [id, w] of Object.entries(

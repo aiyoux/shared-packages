@@ -38,6 +38,27 @@ export function leafCount(node: LayoutNode): number {
 	return listLeaves(node).length;
 }
 
+function collectIds(node: LayoutNode, into: Set<string>): void {
+	into.add(node.id);
+	if (node.kind === 'split') {
+		collectIds(node.first, into);
+		collectIds(node.second, into);
+	}
+}
+
+/** Next `leaf-N` / `split-N` that is not already in `tree`.
+ *
+ *  Restored layouts keep their old ids, but the module counter starts at 0
+ *  again — without this, the first split after a reload reuses `leaf-1` and
+ *  Svelte's keyed each throws `each_key_duplicate`. */
+function unusedLayoutId(tree: LayoutNode, prefix: 'leaf' | 'split'): string {
+	const used = new Set<string>();
+	collectIds(tree, used);
+	let id = newLayoutId(prefix);
+	while (used.has(id)) id = newLayoutId(prefix);
+	return id;
+}
+
 export function splitLeaf(
 	node: LayoutNode,
 	leafId: string,
@@ -45,14 +66,27 @@ export function splitLeaf(
 	place: SplitPlacement = 'after',
 	ratio = 0.5
 ): { root: LayoutNode; newLeaf: LayoutLeaf } | null {
+	const neu: LayoutLeaf = { kind: 'leaf', id: unusedLayoutId(node, 'leaf') };
+	const splitId = unusedLayoutId(node, 'split');
+	return splitLeafWith(node, leafId, direction, place, ratio, neu, splitId);
+}
+
+function splitLeafWith(
+	node: LayoutNode,
+	leafId: string,
+	direction: SplitDirection,
+	place: SplitPlacement,
+	ratio: number,
+	neu: LayoutLeaf,
+	splitId: string
+): { root: LayoutNode; newLeaf: LayoutLeaf } | null {
 	if (node.kind === 'leaf') {
 		if (node.id !== leafId) return null;
-		const neu = createLeaf();
 		const first = place === 'before' ? neu : node;
 		const second = place === 'before' ? node : neu;
 		const root: LayoutSplit = {
 			kind: 'split',
-			id: newLayoutId('split'),
+			id: splitId,
 			direction,
 			ratio: clampRatio(ratio),
 			first,
@@ -60,9 +94,9 @@ export function splitLeaf(
 		};
 		return { root, newLeaf: neu };
 	}
-	const inFirst = splitLeaf(node.first, leafId, direction, place, ratio);
+	const inFirst = splitLeafWith(node.first, leafId, direction, place, ratio, neu, splitId);
 	if (inFirst) return { root: { ...node, first: inFirst.root }, newLeaf: inFirst.newLeaf };
-	const inSecond = splitLeaf(node.second, leafId, direction, place, ratio);
+	const inSecond = splitLeafWith(node.second, leafId, direction, place, ratio, neu, splitId);
 	if (inSecond) return { root: { ...node, second: inSecond.root }, newLeaf: inSecond.newLeaf };
 	return null;
 }
