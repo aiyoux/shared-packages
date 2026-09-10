@@ -9,7 +9,12 @@
 	 */
 	import { onMount, onDestroy } from 'svelte';
 	import { default as FileExplorer } from './FileExplorer.svelte';
-	import type { ExplorerContext, ExplorerMode, RemoteKind } from './componentTypes.js';
+	import type {
+		ExplorerContext,
+		ExplorerMode,
+		ExplorerNewMenuItem,
+		RemoteKind
+	} from './componentTypes.js';
 	import type { FileTypeId } from '../types.js';
 	import CopyProgressHeader from './CopyProgressHeader.svelte';
 	import DualPhaseConfirm from './DualPhaseConfirm.svelte';
@@ -192,6 +197,12 @@
 			driver: ExplorerDriver;
 		}) => void;
 		onNewProject?: (parentId: ExplorerEntryId | null, ctx: OpenProjectContext) => void;
+		newMenuItems?: ExplorerNewMenuItem[];
+		onNewMenuItem?: (
+			id: string,
+			parentId: ExplorerEntryId | null,
+			ctx: OpenProjectContext
+		) => void;
 		onFolder?: (
 			parentId: ExplorerEntryId | null,
 			ctx: OpenProjectContext
@@ -274,6 +285,8 @@
 		onProjectMap,
 		onGitEnabled,
 		onNewProject,
+		newMenuItems = [],
+		onNewMenuItem,
 		onFolder,
 		persistenceVfs,
 		dualPaneKey = 'fe:dualPane',
@@ -551,12 +564,26 @@
 		return paneFolderAction(id, onGitEnabled);
 	}
 
+	function paneAllowsLocalNew(id: PaneId): boolean {
+		if (id === 'right' && overrideRight) return false;
+		return paneState(id).activeKind === 'local';
+	}
+
 	function paneNewProject(id: PaneId) {
-		if (!onNewProject) return undefined;
-		if (id === 'right' && overrideRight) return undefined;
-		if (paneState(id).activeKind !== 'local') return undefined;
+		if (!onNewProject || !paneAllowsLocalNew(id)) return undefined;
 		return (parentId: ExplorerEntryId | null) =>
 			onNewProject(parentId, paneOpenProjectContext(id));
+	}
+
+	function paneNewMenuItems(id: PaneId) {
+		if (!newMenuItems.length || !paneAllowsLocalNew(id)) return undefined;
+		return newMenuItems;
+	}
+
+	function paneNewMenuItem(id: PaneId) {
+		if (!onNewMenuItem || !paneAllowsLocalNew(id)) return undefined;
+		return (itemId: string, parentId: ExplorerEntryId | null) =>
+			onNewMenuItem(itemId, parentId, paneOpenProjectContext(id));
 	}
 
 	function applyPaneCtx(id: PaneId, ctx: ExplorerContext) {
@@ -2034,6 +2061,8 @@
 						onProjectMap={paneProjectMap(id)}
 						onGitEnabled={paneGitEnabled(id)}
 						onNewProject={paneNewProject(id)}
+						newMenuItems={paneNewMenuItems(id)}
+						onNewMenuItem={paneNewMenuItem(id)}
 						pending={panePending(id)}
 						isTarget={id === targetPaneId && !hideTargetChrome}
 						onCopyAcrossFromClipboard={(payload, destParent) =>
@@ -2076,6 +2105,8 @@
 						onProjectMap={paneProjectMap(id)}
 						onGitEnabled={paneGitEnabled(id)}
 						onNewProject={paneNewProject(id)}
+						newMenuItems={paneNewMenuItems(id)}
+						onNewMenuItem={paneNewMenuItem(id)}
 						onSendFile={
 							onSend
 								? (entry) =>
@@ -2125,6 +2156,8 @@
 						onProjectMap={paneProjectMap(id)}
 						onGitEnabled={paneGitEnabled(id)}
 						onNewProject={paneNewProject(id)}
+						newMenuItems={paneNewMenuItems(id)}
+						onNewMenuItem={paneNewMenuItem(id)}
 						onSendFile={
 							onSend
 								? (entry) =>

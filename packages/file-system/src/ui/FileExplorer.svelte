@@ -125,7 +125,7 @@
 		permanentDeleteCopy,
 		type FeConfirmCopy
 	} from './feConfirm.js';
-	import type { ExplorerMode, ExplorerContext } from './componentTypes.js';
+	import type { ExplorerMode, ExplorerContext, ExplorerNewMenuItem } from './componentTypes.js';
 
 	interface Props {
 		mode?: ExplorerMode;
@@ -157,6 +157,9 @@
 		onGitEnabled?: (rootId: ExplorerEntryId | null) => void;
 		/** Toolbar New menu — create a project under the open folder (Files). */
 		onNewProject?: (parentId: ExplorerEntryId | null) => void;
+		/** Extra New-menu actions (sketch, animation, recording, …). */
+		newMenuItems?: ExplorerNewMenuItem[];
+		onNewMenuItem?: (id: string, parentId: ExplorerEntryId | null) => void;
 		/** Preview "Send this file" — Connections dual-pane send path. */
 		onSendFile?: (entry: ExplorerOpenTarget) => void | Promise<void>;
 		sendLabel?: string;
@@ -237,6 +240,8 @@
 		onProjectMap,
 		onGitEnabled,
 		onNewProject,
+		newMenuItems = [],
+		onNewMenuItem,
 		onSendFile,
 		sendLabel = 'Send this file',
 		onQuickEditVideo,
@@ -576,6 +581,16 @@
 		closeToolbarMore();
 		onNewProject?.(parentId);
 	}
+
+	function chooseNewMenuItem(id: string) {
+		closeNewMenu();
+		closeToolbarMore();
+		onNewMenuItem?.(id, parentId);
+	}
+
+	const showNewMenu = $derived(
+		mode === 'manage' && Boolean(onNewProject || newMenuItems.length)
+	);
 
 	function openFloatingPreview() {
 		if (previewEntry && previewEntry.kind === 'file' && getPreviewKind(previewEntry)) {
@@ -3441,7 +3456,7 @@
 					label: 'Paste from clipboard'
 				})}
 			{/if}
-			{#if mode === 'manage' && onNewProject}
+			{#if showNewMenu}
 				{#if kind === 'icon'}
 					<!-- svelte-ignore a11y_click_events_have_key_events -->
 					<!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -3463,29 +3478,55 @@
 							<!-- svelte-ignore a11y_click_events_have_key_events -->
 							<!-- svelte-ignore a11y_no_static_element_interactions -->
 							<div
-								class="fe-view-popup"
+								class="fe-view-popup fe-new-menu-popup"
 								data-testid="fe-new-menu-popup"
 								role="menu"
 								tabindex="-1"
 								onclick={(e) => e.stopPropagation()}
 							>
-								<button
-									type="button"
-									class="fe-view-option"
-									data-testid="fe-new-project"
-									role="menuitem"
-									onclick={chooseNewProject}
-								>
-									<FeIcon name="folder-plus" size={16} />
-									<span>New project</span>
-								</button>
+								{#if onNewProject}
+									<button
+										type="button"
+										class="fe-view-option"
+										data-testid="fe-new-project"
+										role="menuitem"
+										onclick={chooseNewProject}
+									>
+										<FeIcon name="folder-plus" size={16} />
+										<span>New project</span>
+									</button>
+								{/if}
+								{#each newMenuItems as item (item.id)}
+									<button
+										type="button"
+										class="fe-view-option"
+										data-testid={item.testId ?? `fe-new-${item.id}`}
+										role="menuitem"
+										onclick={() => chooseNewMenuItem(item.id)}
+									>
+										<FeIcon name={item.icon} size={16} />
+										<span>{item.label}</span>
+									</button>
+								{/each}
 							</div>
 						{/if}
 					</span>
 				{:else}
-					{@render actionBtn(kind, 'fe-new-project', 'New project', 'folder-plus', chooseNewProject, {
-						label: 'New project'
-					})}
+					{#if onNewProject}
+						{@render actionBtn(kind, 'fe-new-project', 'New project', 'folder-plus', chooseNewProject, {
+							label: 'New project'
+						})}
+					{/if}
+					{#each newMenuItems as item (item.id)}
+						{@render actionBtn(
+							kind,
+							item.testId ?? `fe-new-${item.id}`,
+							item.label,
+							item.icon,
+							() => chooseNewMenuItem(item.id),
+							{ label: item.label }
+						)}
+					{/each}
 				{/if}
 			{/if}
 			{#if mode === 'manage' || mode === 'open'}
@@ -5445,6 +5486,10 @@
 		border: 1px solid var(--line-hairline);
 		border-radius: var(--radius-md, 4px);
 		box-shadow: 0 8px 24px rgb(var(--scrim-rgb, 0 0 0) / 0.3);
+	}
+	.fe-new-menu-popup {
+		max-height: min(70vh, 22rem);
+		overflow-y: auto;
 	}
 	.fe-view-option {
 		display: flex;

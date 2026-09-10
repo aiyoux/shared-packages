@@ -1374,6 +1374,28 @@ describe('FileExplorer component', () => {
 		await fireEvent.click(await screen.findByTestId('fe-new-project'));
 		expect(parents).toEqual([null]);
 	});
+
+	it('New menu lists extra create actions and reports the open folder', async () => {
+		const hits: Array<{ id: string; parent: string | null }> = [];
+		render(FileExplorer, {
+			props: {
+				mode: 'manage',
+				vfs,
+				variant: 'panel',
+				onNewProject: () => {},
+				newMenuItems: [
+					{ id: 'skch', label: 'New sketch', icon: 'pencil', testId: 'fe-new-skch' },
+					{ id: 'anim', label: 'New animation', icon: 'film', testId: 'fe-new-anim' }
+				],
+				onNewMenuItem: (id, parent) => hits.push({ id, parent })
+			}
+		});
+		await screen.findByTestId('fe-list');
+		await fireEvent.click(screen.getByTestId('fe-new-menu-btn'));
+		expect(await screen.findByTestId('fe-new-project')).toBeTruthy();
+		await fireEvent.click(await screen.findByTestId('fe-new-skch'));
+		expect(hits).toEqual([{ id: 'skch', parent: null }]);
+	});
 });
 
 async function viWaitForRows(min: number, ms = 4000) {

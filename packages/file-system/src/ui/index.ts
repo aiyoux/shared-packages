@@ -10,7 +10,12 @@ export {
 	type FolderMark,
 	type ProjectRootHit
 } from './detectProject.js';
-export type { ExplorerMode, ExplorerContext, RemoteKind } from './componentTypes.js';
+export type {
+	ExplorerMode,
+	ExplorerContext,
+	ExplorerNewMenuItem,
+	RemoteKind
+} from './componentTypes.js';
 export {
 	saveWithConflictConfirm,
 	openFileWithGuard,
