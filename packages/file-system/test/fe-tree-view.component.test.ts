@@ -72,6 +72,24 @@ describe('FeTreeView', () => {
 		expect(screen.getByTestId('fe-tree-row-root').textContent).toContain('project');
 	});
 
+	it('empty folder keeps a collapse chevron and an indented Empty hint', async () => {
+		await vfs.mkdir(null, 'blank');
+		const driver = createLocalExplorerDriver(vfs);
+		render(FeTreeView, {
+			props: { driver, activeId: null, onNavigate: () => {} }
+		});
+		const row = await screen.findByTestId('fe-tree-row');
+		expect(row.getAttribute('data-name')).toBe('blank');
+		const toggle = row.querySelector('[data-testid="fe-tree-toggle"]') as HTMLButtonElement;
+		expect(toggle.classList.contains('invisible')).toBe(false);
+		await fireEvent.click(toggle);
+		const hint = await screen.findByTestId('fe-tree-empty');
+		expect(hint.textContent).toMatch(/Empty/);
+		expect(toggle.classList.contains('invisible')).toBe(false);
+		await fireEvent.click(toggle);
+		expect(screen.queryByTestId('fe-tree-empty')).toBeNull();
+	});
+
 	it('file click calls onSelect, not onNavigate', async () => {
 		await vfs.writeFile({ parentId: null, name: 'a.txt', body: 'x' });
 		const driver = createLocalExplorerDriver(vfs);

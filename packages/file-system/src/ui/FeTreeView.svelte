@@ -254,7 +254,7 @@
 			<button
 				type="button"
 				class="fe-tree-toggle"
-				class:invisible={!isFolder || kids?.length === 0}
+				class:invisible={!isFolder}
 				data-testid="fe-tree-toggle"
 				aria-label={isOpen ? 'Collapse folder' : 'Expand folder'}
 				onclick={(e) => {
@@ -273,13 +273,23 @@
 		{#if isOpen}
 			<div class="fe-tree-children" role="group">
 				{#if isLoading && !kids}
-					<div class="fe-tree-hint" style="padding-left: {(depth + 1) * 14 + 4}px">Loading…</div>
+					<div class="fe-tree-hint" style="padding-left: {(depth + 1) * 14 + 4}px">
+						<span class="fe-tree-toggle invisible" aria-hidden="true"></span>
+						Loading…
+					</div>
 				{:else if kids && kids.length > 0}
 					{#each kids as child (child.id)}
 						{@render node(child, depth + 1)}
 					{/each}
 				{:else}
-					<div class="fe-tree-hint" style="padding-left: {(depth + 1) * 14 + 4}px">Empty</div>
+					<div
+						class="fe-tree-hint"
+						style="padding-left: {(depth + 1) * 14 + 4}px"
+						data-testid="fe-tree-empty"
+					>
+						<span class="fe-tree-toggle invisible" aria-hidden="true"></span>
+						Empty
+					</div>
 				{/if}
 			</div>
 		{/if}
@@ -310,7 +320,10 @@
 	</div>
 	<div class="fe-tree-children" role="group">
 		{#if loading.has(keyFor(rootId)) && !children.has(keyFor(rootId))}
-			<div class="fe-tree-hint" style="padding-left: 18px">Loading…</div>
+			<div class="fe-tree-hint" style="padding-left: 18px">
+				<span class="fe-tree-toggle invisible" aria-hidden="true"></span>
+				Loading…
+			</div>
 		{:else}
 			{#each children.get(keyFor(rootId)) ?? [] as child (child.id)}
 				{@render node(child, 1)}
@@ -376,10 +389,16 @@
 		text-overflow: ellipsis;
 	}
 	.fe-tree-hint {
+		display: flex;
+		align-items: center;
+		gap: 4px;
 		padding-top: 2px;
 		padding-bottom: 2px;
-		color: var(--text-muted, #888);
+		color: var(--text-muted, var(--text-secondary, #888));
 		font-size: 0.78rem;
+		font-style: italic;
+		opacity: 0.65;
+		pointer-events: none;
 	}
 	.fe-tree-root.hidden {
 		display: none;
