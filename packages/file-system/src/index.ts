@@ -1,4 +1,12 @@
 export * from './types.js';
+export {
+	isLiveVfsNode,
+	isLiveFileNode,
+	isLiveFolderNode,
+	getLiveVfsNode,
+	getLiveFile,
+	getLiveFolder
+} from './liveNode.js';
 export * from './registry.js';
 export {
 	notifyTabChannel,
