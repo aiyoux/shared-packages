@@ -156,6 +156,7 @@ describe('FileExplorer component', () => {
 		expect(screen.getByTestId('fe-header').querySelector('[data-testid="fe-breadcrumbs"]')).toBeTruthy();
 		expect(screen.getByTestId('fe-system-paste')).toBeTruthy();
 		expect((screen.getByTestId('fe-system-paste') as HTMLButtonElement).disabled).toBe(true);
+		expect(document.querySelector('[data-testid="fe-new-menu"]')).toBeNull();
 		expect(screen.getByTestId('fe-select-multi').parentElement?.getAttribute('data-tooltip')).toBe(
 			'Select multiple items'
 		);
@@ -1243,6 +1244,135 @@ describe('FileExplorer component', () => {
 		expect(previewIds.indexOf('fe-file-preview-copy-across')).toBeGreaterThan(
 			previewIds.indexOf('fe-file-preview-encrypt')
 		);
+	});
+
+	it('shows Inside Project with map/storage/integrity, and Git enabled independently', async () => {
+		const proj = await vfs.mkdir(null, 'studio');
+		await vfs.writeFile({
+			parentId: proj.id,
+			name: '.project.json',
+			body: JSON.stringify({ schemaVersion: 1, name: 'studio' }),
+			contentType: 'application/json'
+		});
+		await vfs.mkdir(proj.id, '.git');
+		const gitOnly = await vfs.mkdir(null, 'just-git');
+		await vfs.mkdir(gitOnly.id, '.git');
+
+		const maps: Array<string | null> = [];
+		const gits: Array<string | null> = [];
+		render(FileExplorer, {
+			props: {
+				mode: 'manage',
+				vfs,
+				variant: 'panel',
+				onProjectMap: (id) => maps.push(id),
+				onGitEnabled: (id) => gits.push(id)
+			}
+		});
+		await viWaitFor(() => document.querySelectorAll('[data-testid="fe-folder-row"]').length >= 2);
+
+		expect(document.querySelector('[data-testid="fe-inside-project-badge"]')).toBeNull();
+		expect(document.querySelector('[data-testid="fe-git-enabled-badge"]')).toBeNull();
+
+		const gitRow = document.querySelector(
+			'[data-testid="fe-folder-row"][data-name="just-git"]'
+		) as HTMLElement;
+		await fireEvent.dblClick(gitRow);
+		await viWaitFor(() => !!document.querySelector('[data-testid="fe-git-enabled-badge"]'));
+		expect(document.querySelector('[data-testid="fe-inside-project-badge"]')).toBeNull();
+		await fireEvent.click(screen.getByTestId('fe-git-enabled-badge'));
+		expect(gits).toEqual([gitOnly.id]);
+
+		await fireEvent.click(screen.getByTestId('fe-crumb-root'));
+		await viWaitFor(() => document.querySelectorAll('[data-testid="fe-folder-row"]').length >= 2);
+
+		const projRow = document.querySelector(
+			'[data-testid="fe-folder-row"][data-name="studio"]'
+		) as HTMLElement;
+		await fireEvent.dblClick(projRow);
+		await viWaitFor(() => !!document.querySelector('[data-testid="fe-inside-project-badge"]'));
+		expect(screen.getByTestId('fe-git-enabled-badge')).toBeTruthy();
+		expect(screen.getByTestId('fe-project-map')).toBeTruthy();
+		expect(screen.getByTestId('fe-project-storage')).toBeTruthy();
+		expect(screen.getByTestId('fe-project-integrity')).toBeTruthy();
+
+		await fireEvent.click(screen.getByTestId('fe-project-map'));
+		expect(maps).toEqual([proj.id]);
+
+		await fireEvent.click(screen.getByTestId('fe-project-storage'));
+		await screen.findByTestId('fe-project-storage-dialog');
+		await fireEvent.click(screen.getByTestId('fe-project-storage-close'));
+
+		await fireEvent.click(screen.getByTestId('fe-project-integrity'));
+		const integrity = await screen.findByTestId('fe-storage-dialog');
+		expect(integrity.getAttribute('aria-label')).toMatch(/Check project integrity|Project storage/);
+	});
+
+	it('marks git, project, and combined folders in the listing', async () => {
+		const git = await vfs.mkdir(null, 'repo');
+		await vfs.mkdir(git.id, '.git');
+		const proj = await vfs.mkdir(null, 'studio');
+		await vfs.writeFile({
+			parentId: proj.id,
+			name: '.project.json',
+			body: JSON.stringify({ schemaVersion: 1, name: 'studio' }),
+			contentType: 'application/json'
+		});
+		const both = await vfs.mkdir(null, 'full');
+		await vfs.mkdir(both.id, '.git');
+		await vfs.writeFile({
+			parentId: both.id,
+			name: '.project.json',
+			body: JSON.stringify({ schemaVersion: 1, name: 'full' }),
+			contentType: 'application/json'
+		});
+		await vfs.mkdir(null, 'plain');
+		render(FileExplorer, { props: { mode: 'manage', vfs, variant: 'panel' } });
+		await viWaitFor(() => document.querySelectorAll('[data-testid="fe-folder-row"]').length >= 4);
+		await viWaitFor(
+			() =>
+				document.querySelector('[data-testid="fe-folder-row"][data-name="repo"]')?.getAttribute(
+					'data-fe-folder-mark'
+				) === 'git'
+		);
+		expect(
+			document.querySelector('[data-testid="fe-folder-row"][data-name="studio"]')?.getAttribute(
+				'data-fe-folder-mark'
+			)
+		).toBe('project');
+		expect(
+			document.querySelector('[data-testid="fe-folder-row"][data-name="full"]')?.getAttribute(
+				'data-fe-folder-mark'
+			)
+		).toBe('project-git');
+		expect(
+			document.querySelector('[data-testid="fe-folder-row"][data-name="plain"]')?.getAttribute(
+				'data-fe-folder-mark'
+			)
+		).toBe('plain');
+	});
+
+	it('New menu sits left of Select multiple and offers New project', async () => {
+		const parents: Array<string | null> = [];
+		render(FileExplorer, {
+			props: {
+				mode: 'manage',
+				vfs,
+				variant: 'panel',
+				onNewProject: (id) => parents.push(id)
+			}
+		});
+		await screen.findByTestId('fe-list');
+		const toolbar = screen.getByTestId('fe-toolbar');
+		const toolbarIds = [
+			...toolbar.querySelectorAll(':scope > .fe-toolbar-row:first-child [data-testid]')
+		].map((el) => el.getAttribute('data-testid'));
+		expect(toolbarIds.indexOf('fe-new-menu-btn')).toBe(toolbarIds.indexOf('fe-select-multi') - 1);
+		expect(document.querySelector('[data-testid="fe-new-project"]')).toBeNull();
+
+		await fireEvent.click(screen.getByTestId('fe-new-menu-btn'));
+		await fireEvent.click(await screen.findByTestId('fe-new-project'));
+		expect(parents).toEqual([null]);
 	});
 });
 

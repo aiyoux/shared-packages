@@ -27,4 +27,13 @@
 	.fe-ico :global(svg) {
 		display: block;
 	}
+	.fe-ico.fe-mark-git {
+		color: #3fae7a;
+	}
+	.fe-ico.fe-mark-project {
+		color: var(--accent, #38bdf8);
+	}
+	.fe-ico.fe-mark-project-git {
+		color: #d4a017;
+	}
 </style>

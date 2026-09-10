@@ -1,4 +1,6 @@
 /** Lucide-style stroke paths — same language as hub `$lib/components/icons.ts`. */
+import type { FolderMark } from './detectProject.js';
+
 export type FeIconName =
 	| 'folder'
 	| 'folder-plus'
@@ -41,7 +43,14 @@ export type FeIconName =
 	| 'lock'
 	| 'unlock'
 	| 'panel-left'
-	| 'ellipsis';
+	| 'ellipsis'
+	| 'plus'
+	| 'folder-git'
+	| 'folder-git-open'
+	| 'folder-project'
+	| 'folder-project-open'
+	| 'folder-project-git'
+	| 'folder-project-git-open';
 
 const paths: Record<FeIconName, string> = {
 	folder: `<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>`,
@@ -86,8 +95,27 @@ const paths: Record<FeIconName, string> = {
 	'maximize-2': `<path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/>`,
 	play: `<polygon points="6 3 20 12 6 21 6 3"/>`,
 	'panel-left': `<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/>`,
-	ellipsis: `<circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/>`
+	ellipsis: `<circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/>`,
+	plus: `<path d="M5 12h14"/><path d="M12 5v14"/>`,
+	'folder-git': `<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/><circle cx="9.5" cy="13.5" r="1.35"/><circle cx="14.5" cy="13.5" r="1.35"/><path d="M9.5 13.5h5"/><path d="M12 13.5v3.6"/><circle cx="12" cy="18.3" r="1.35"/>`,
+	'folder-git-open': `<path d="m6 14 1.45-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2"/><circle cx="10" cy="16.2" r="1.3"/><circle cx="16" cy="16.2" r="1.3"/><path d="M10 16.2h6"/><path d="M13 16.2v2.6"/><circle cx="13" cy="20" r="1.3"/>`,
+	'folder-project': `<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/><rect x="8" y="12" width="8" height="6" rx="1"/><path d="M10.5 12v-1.3h3V12"/>`,
+	'folder-project-open': `<path d="m6 14 1.45-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2"/><rect x="9" y="15" width="8" height="5.2" rx="1"/><path d="M11.5 15v-1.2h3V15"/>`,
+	'folder-project-git': `<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/><rect x="6.2" y="12.2" width="6.2" height="5.4" rx="0.8"/><circle cx="16.3" cy="13.2" r="1.2"/><path d="M16.3 14.4v2.3"/><circle cx="16.3" cy="18" r="1.2"/>`,
+	'folder-project-git-open': `<path d="m6 14 1.45-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2"/><rect x="7.2" y="15.2" width="6" height="4.6" rx="0.8"/><circle cx="17" cy="16.2" r="1.15"/><path d="M17 17.35v1.7"/><circle cx="17" cy="20.2" r="1.15"/>`
 };
+
+export function folderIconName(mark: FolderMark = 'plain', open = false): FeIconName {
+	if (mark === 'git') return open ? 'folder-git-open' : 'folder-git';
+	if (mark === 'project') return open ? 'folder-project-open' : 'folder-project';
+	if (mark === 'project-git') return open ? 'folder-project-git-open' : 'folder-project-git';
+	return open ? 'folder-open' : 'folder';
+}
+
+export function folderMarkClass(mark: FolderMark | undefined): string {
+	if (!mark || mark === 'plain') return '';
+	return `fe-mark-${mark}`;
+}
 
 export function feIconSvg(name: FeIconName, size = 16): string {
 	return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${paths[name]}</svg>`;

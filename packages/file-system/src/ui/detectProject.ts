@@ -7,12 +7,16 @@ export const PROJECT_PACK_META = 'projectPack';
  *
  * `any` (default) — a `.git` child, a `.project.json` child, or project metadata.
  * `git` — a `.git` child ONLY.
+ * `project` — `.project.json` or project metadata, NOT `.git`.
  *
  * The Git app needs `git`: a folder can be a project (`.project.json` or
  * project metadata) with no repo, and under `any` its Init button would be
  * hidden with no way to create one.
+ *
+ * Files splits the two: "Inside Project" uses `project`, "Git enabled" uses
+ * `git`, so a plain git folder is not labelled a project.
  */
-export type ProjectMarker = 'any' | 'git';
+export type ProjectMarker = 'any' | 'git' | 'project';
 
 function isProjectMeta(meta?: Record<string, unknown>): boolean {
 	if (!meta) return false;
@@ -24,20 +28,30 @@ function isProjectMeta(meta?: Record<string, unknown>): boolean {
 	);
 }
 
+function wantsMeta(marker: ProjectMarker): boolean {
+	return marker === 'any' || marker === 'project';
+}
+
+function wantsGit(marker: ProjectMarker): boolean {
+	return marker === 'any' || marker === 'git';
+}
+
 async function isProjectFolder(
 	driver: ExplorerDriver,
 	folderId: ExplorerEntryId | null,
 	chainEntries?: ExplorerEntry[],
 	marker: ProjectMarker = 'any'
 ): Promise<boolean> {
-	if (marker === 'any' && folderId != null && chainEntries) {
+	if (wantsMeta(marker) && folderId != null && chainEntries) {
 		const matched = chainEntries.find((e) => e.id === folderId);
 		if (matched && isProjectMeta(matched.meta)) return true;
 	}
 	try {
 		const { entries } = await driver.list({ parentId: folderId });
 		return entries.some(
-			(e) => e.name === '.git' || (marker === 'any' && e.name === '.project.json')
+			(e) =>
+				(wantsGit(marker) && e.name === '.git') ||
+				(wantsMeta(marker) && e.name === '.project.json')
 		);
 	} catch {
 		return false;
@@ -77,7 +91,7 @@ async function projectCandidates(
 }
 
 /**
- * Result of walking for a project marker (.git child or projectPack metadata).
+ * Result of walking for a project marker (.git child, .project.json, or projectPack metadata).
  *
  * `found: false` — no project.
  * `found: true, id: null` — the explorer root (`parentId` null) is the project.
@@ -123,5 +137,41 @@ export async function detectProject(
 	marker: ProjectMarker = 'any'
 ): Promise<boolean> {
 	return (await findProjectRoot(driver, folderId, marker)).found;
+}
+
+/**
+ * What THIS folder is — not an ancestor. Used for folder icons in the listing
+ * and tree, so a nested plain folder inside a project stays a plain folder.
+ *
+ * `project` — `.project.json` child or project metadata.
+ * `git` — `.git` child.
+ * `project-git` — both.
+ */
+export type FolderMark = 'plain' | 'project' | 'git' | 'project-git';
+
+export function folderMarkFromKids(
+	meta: Record<string, unknown> | undefined,
+	kids: Array<Pick<ExplorerEntry, 'name'>>
+): FolderMark {
+	const project = isProjectMeta(meta) || kids.some((e) => e.name === '.project.json');
+	const git = kids.some((e) => e.name === '.git');
+	if (project && git) return 'project-git';
+	if (project) return 'project';
+	if (git) return 'git';
+	return 'plain';
+}
+
+/** Classify a folder by listing its immediate children once. */
+export async function classifyFolder(
+	driver: ExplorerDriver,
+	folder: Pick<ExplorerEntry, 'id' | 'kind' | 'meta'>
+): Promise<FolderMark> {
+	if (folder.kind === 'file') return 'plain';
+	try {
+		const { entries } = await driver.list({ parentId: folder.id });
+		return folderMarkFromKids(folder.meta, entries);
+	} catch {
+		return isProjectMeta(folder.meta) ? 'project' : 'plain';
+	}
 }
 

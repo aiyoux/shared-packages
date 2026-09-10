@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { detectProject, findProjectRoot } from '../src/ui/detectProject.ts';
+import { detectProject, findProjectRoot, folderMarkFromKids } from '../src/ui/detectProject.ts';
 import type { ExplorerDriver, ExplorerEntry, ExplorerEntryId } from '../src/ui/explorerDriver.ts';
 
 function driverWith(entries: Array<Pick<ExplorerEntry, 'name' | 'kind'>>): ExplorerDriver {
@@ -267,5 +267,28 @@ describe('detectProject', () => {
 	it('is true when folder contains .project.json file', async () => {
 		const ok = await detectProject(driverWith([{ name: '.project.json', kind: 'file' }]), 'folder');
 		assert.equal(ok, true);
+	});
+
+	it('folderMarkFromKids splits project, git, and both', () => {
+		assert.equal(folderMarkFromKids(undefined, []), 'plain');
+		assert.equal(folderMarkFromKids(undefined, [{ name: '.git' }]), 'git');
+		assert.equal(folderMarkFromKids(undefined, [{ name: '.project.json' }]), 'project');
+		assert.equal(
+			folderMarkFromKids(undefined, [{ name: '.git' }, { name: '.project.json' }]),
+			'project-git'
+		);
+		assert.equal(folderMarkFromKids({ projectPack: true }, []), 'project');
+		assert.equal(folderMarkFromKids({ projectPack: true }, [{ name: '.git' }]), 'project-git');
+	});
+
+	it('project marker ignores a git-only folder; git marker ignores .project.json', async () => {
+		const gitOnly = driverWith([{ name: '.git', kind: 'folder' }]);
+		const projectOnly = driverWith([{ name: '.project.json', kind: 'file' }]);
+		assert.equal(await detectProject(gitOnly, 'folder', 'project'), false);
+		assert.equal(await detectProject(gitOnly, 'folder', 'git'), true);
+		assert.equal(await detectProject(projectOnly, 'folder', 'project'), true);
+		assert.equal(await detectProject(projectOnly, 'folder', 'git'), false);
+		assert.equal(await detectProject(gitOnly, 'folder', 'any'), true);
+		assert.equal(await detectProject(projectOnly, 'folder', 'any'), true);
 	});
 });

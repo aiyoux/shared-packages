@@ -20,6 +20,12 @@
 	import FeIcon from './FeIcon.svelte';
 	import type { ExplorerDriver, ExplorerEntry, ExplorerEntryId } from './explorerDriver.js';
 	import { dataTransferHasExplorerIds } from './copyAcross.js';
+	import {
+		classifyFolder,
+		folderMarkFromKids,
+		type FolderMark
+	} from './detectProject.js';
+	import { folderIconName, folderMarkClass } from './feIcons.js';
 
 	let {
 		driver,
@@ -81,8 +87,24 @@
 	const ROOT_KEY = '__root__';
 
 	let children = $state<Map<string, ExplorerEntry[]>>(new Map());
+	/** Unfiltered list results so folder marks can see `.git` / `.project.json`. */
+	let listed = $state<Map<string, ExplorerEntry[]>>(new Map());
+	let marks = $state<Map<string, FolderMark>>(new Map());
 	let expanded = $state<Set<string>>(new Set());
 	let loading = $state<Set<string>>(new Set());
+
+	function markFor(entry: ExplorerEntry): FolderMark {
+		const kids = listed.get(entry.id);
+		if (kids) return folderMarkFromKids(entry.meta, kids);
+		return marks.get(entry.id) ?? folderMarkFromKids(entry.meta, []);
+	}
+
+	function markForId(id: ExplorerEntryId | null): FolderMark {
+		const key = keyFor(id);
+		const kids = listed.get(key);
+		if (kids) return folderMarkFromKids(undefined, kids);
+		return marks.get(key) ?? 'plain';
+	}
 
 	function keyFor(parentId: ExplorerEntryId | null): string {
 		return parentId ?? ROOT_KEY;
@@ -98,6 +120,25 @@
 		loading = new Set(loading).add(key);
 		try {
 			const { entries } = await d.list({ parentId });
+			listed = new Map(listed).set(key, entries);
+			const nextMarks = new Map(marks);
+			nextMarks.set(key, folderMarkFromKids(undefined, entries));
+			const folders = entries.filter((e) => e.kind === 'folder');
+			for (const f of folders) {
+				const inner = listed.get(f.id);
+				if (inner) nextMarks.set(f.id, folderMarkFromKids(f.meta, inner));
+			}
+			marks = nextMarks;
+			const toProbe = folders.filter((f) => !listed.has(f.id));
+			if (toProbe.length) {
+				void Promise.all(toProbe.map(async (f) => [f.id, await classifyFolder(d, f)] as const)).then(
+					(pairs) => {
+						const later = new Map(marks);
+						for (const [id, mark] of pairs) later.set(id, mark);
+						marks = later;
+					}
+				);
+			}
 			const rows = entries
 				.filter((e) => includeFiles || e.kind === 'folder')
 				.sort((a, b) => {
@@ -163,6 +204,8 @@
 		const root = rootId;
 		untrack(() => {
 			children = new Map();
+			listed = new Map();
+			marks = new Map();
 			expanded = new Set();
 			loading = new Set();
 			void loadChildren(d, root);
@@ -222,6 +265,7 @@
 	{@const isActive = activeId === entry.id}
 	{@const kids = children.get(entry.id)}
 	{@const isLoading = loading.has(entry.id)}
+	{@const folderMark = isFolder ? markFor(entry) : 'plain'}
 	<div class="fe-tree-row-wrap">
 		<!-- svelte-ignore a11y_click_events_have_key_events -->
 		<!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -235,6 +279,7 @@
 			data-id={entry.id}
 			data-kind={entry.kind}
 			data-name={entry.name}
+			data-fe-folder-mark={isFolder ? folderMark : undefined}
 			data-fe-drop-parent={isFolder ? entry.id : undefined}
 			role="treeitem"
 			aria-selected={isActive}
@@ -265,7 +310,8 @@
 				<FeIcon name={isOpen ? 'chevron-down' : 'chevron-right'} size={12} />
 			</button>
 			<FeIcon
-				name={isFolder ? (isOpen ? 'folder-open' : 'folder') : 'file'}
+				name={isFolder ? folderIconName(folderMark, isOpen) : 'file'}
+				class={isFolder ? folderMarkClass(folderMark) : ''}
 				size={14}
 			/>
 			<span class="fe-tree-name" title={entry.name}>{entry.name}</span>
@@ -306,6 +352,7 @@
 		class:drop-ready={dropActive}
 		class:drop-target={dropActive && dropTargetId === rootId}
 		data-testid="fe-tree-row-root"
+		data-fe-folder-mark={markForId(rootId)}
 		data-fe-drop-parent=""
 		role="treeitem"
 		aria-selected={activeId === rootId}
@@ -315,7 +362,11 @@
 		ondrop={(e) => onFolderDrop(e, rootId)}
 	>
 		<span class="fe-tree-toggle invisible" aria-hidden="true"></span>
-		<FeIcon name="folder" size={14} />
+		<FeIcon
+			name={folderIconName(markForId(rootId), true)}
+			class={folderMarkClass(markForId(rootId))}
+			size={14}
+		/>
 		<span class="fe-tree-name">{rootLabel}</span>
 	</div>
 	<div class="fe-tree-children" role="group">

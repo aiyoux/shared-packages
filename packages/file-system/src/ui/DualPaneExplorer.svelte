@@ -48,6 +48,7 @@
 		listLeaves,
 		portalToPaneWindowHeader,
 		splitLeaf,
+		syncLayoutIdSeq,
 		type LayoutNode,
 		toast
 	} from '@shared-packages/ui';
@@ -180,6 +181,17 @@
 		onOpenProject?: (entry: ExplorerOpenTarget, ctx: OpenProjectContext) => void | Promise<void>;
 		onInitProject?: (entry: ExplorerOpenTarget, ctx: OpenProjectContext) => void | Promise<void>;
 		projectMarker?: import('./detectProject.js').ProjectMarker;
+		onProjectMap?: (args: {
+			rootId: ExplorerEntryId | null;
+			ctx: OpenProjectContext;
+			driver: ExplorerDriver;
+		}) => void;
+		onGitEnabled?: (args: {
+			rootId: ExplorerEntryId | null;
+			ctx: OpenProjectContext;
+			driver: ExplorerDriver;
+		}) => void;
+		onNewProject?: (parentId: ExplorerEntryId | null, ctx: OpenProjectContext) => void;
 		onFolder?: (
 			parentId: ExplorerEntryId | null,
 			ctx: OpenProjectContext
@@ -259,6 +271,9 @@
 		onOpenProject,
 		onInitProject,
 		projectMarker = 'any',
+		onProjectMap,
+		onGitEnabled,
+		onNewProject,
 		onFolder,
 		persistenceVfs,
 		dualPaneKey = 'fe:dualPane',
@@ -508,6 +523,42 @@
 		return (entry: ExplorerOpenTarget) => onInitProject(entry, paneOpenProjectContext(id));
 	}
 
+	function paneFolderAction(
+		id: PaneId,
+		fn:
+			| ((args: {
+					rootId: ExplorerEntryId | null;
+					ctx: OpenProjectContext;
+					driver: ExplorerDriver;
+			  }) => void)
+			| undefined
+	) {
+		if (!fn) return undefined;
+		if (id === 'right' && overrideRight) return undefined;
+		return (rootId: ExplorerEntryId | null) =>
+			fn({
+				rootId,
+				ctx: paneOpenProjectContext(id),
+				driver: activeDriver(paneState(id), id)
+			});
+	}
+
+	function paneProjectMap(id: PaneId) {
+		return paneFolderAction(id, onProjectMap);
+	}
+
+	function paneGitEnabled(id: PaneId) {
+		return paneFolderAction(id, onGitEnabled);
+	}
+
+	function paneNewProject(id: PaneId) {
+		if (!onNewProject) return undefined;
+		if (id === 'right' && overrideRight) return undefined;
+		if (paneState(id).activeKind !== 'local') return undefined;
+		return (parentId: ExplorerEntryId | null) =>
+			onNewProject(parentId, paneOpenProjectContext(id));
+	}
+
 	function applyPaneCtx(id: PaneId, ctx: ExplorerContext) {
 		const p = paneState(id);
 		const folderChanged = p.ctx.parentId !== ctx.parentId || p.ctx.backend !== ctx.backend;
@@ -715,6 +766,7 @@
 	onMount(() => {
 		const saved = loadFileWindows(persistKey, leftDefault, rightDefault);
 		if (saved) {
+			syncLayoutIdSeq(saved.root);
 			windowRoot = saved.root;
 			if (Object.keys(saved.windows).length > 0) {
 				windows = saved.windows;
@@ -1979,6 +2031,9 @@
 						initialParentId={p.ctx.parentId}
 						onOpen={paneOnOpen('peer')}
 						onOpenProject={paneOpenProject(id)}
+						onProjectMap={paneProjectMap(id)}
+						onGitEnabled={paneGitEnabled(id)}
+						onNewProject={paneNewProject(id)}
 						pending={panePending(id)}
 						isTarget={id === targetPaneId && !hideTargetChrome}
 						onCopyAcrossFromClipboard={(payload, destParent) =>
@@ -2018,6 +2073,9 @@
 						onOpenProject={paneOpenProject(id)}
 						onInitProject={paneInitProject(id)}
 						{projectMarker}
+						onProjectMap={paneProjectMap(id)}
+						onGitEnabled={paneGitEnabled(id)}
+						onNewProject={paneNewProject(id)}
 						onSendFile={
 							onSend
 								? (entry) =>
@@ -2064,6 +2122,9 @@
 						initialParentId={p.ctx.parentId}
 						onOpen={paneFileOpen(id) ?? paneOnOpen(p.activeKind)}
 						onOpenProject={paneOpenProject(id)}
+						onProjectMap={paneProjectMap(id)}
+						onGitEnabled={paneGitEnabled(id)}
+						onNewProject={paneNewProject(id)}
 						onSendFile={
 							onSend
 								? (entry) =>

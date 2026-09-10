@@ -2,7 +2,14 @@ export { default as FileExplorer } from './FileExplorer.svelte';
 export { default as FileExplorerDialog } from './FileExplorerDialog.svelte';
 export { default as FeTreeView } from './FeTreeView.svelte';
 export { default as UnsavedChangesDialog } from './UnsavedChangesDialog.svelte';
-export { detectProject, findProjectRoot, type ProjectRootHit } from './detectProject.js';
+export {
+	classifyFolder,
+	detectProject,
+	findProjectRoot,
+	folderMarkFromKids,
+	type FolderMark,
+	type ProjectRootHit
+} from './detectProject.js';
 export type { ExplorerMode, ExplorerContext, RemoteKind } from './componentTypes.js';
 export {
 	saveWithConflictConfirm,
@@ -157,4 +164,5 @@ export * from './sizeTreemap.js';
 export * from './storageInspect.js';
 export { default as FeStorageInspector } from './FeStorageInspector.svelte';
 export { default as FeStorageDialog } from './FeStorageDialog.svelte';
+export { default as FeProjectStorageDialog } from './FeProjectStorageDialog.svelte';
 export { default as ProjectStoragePanel } from './ProjectStoragePanel.svelte';

@@ -92,6 +92,31 @@ describe('DualPaneExplorer onOpenProject context', () => {
 		expect(opened).toEqual([{ name: 'myproj', ctx: { kind: 'local' } }]);
 	});
 
+	it('forwards Git enabled with pane context and the local driver', async () => {
+		const proj = await vfs.mkdir(null, 'repo');
+		await vfs.mkdir(proj.id, '.git');
+		const hits: Array<{ rootId: string | null; kind: string; driverId: string }> = [];
+		render(DualPaneExplorer, {
+			props: {
+				localDriver: createLocalExplorerDriver(vfs),
+				hideToggles: true,
+				dualPaneKey: `dpe:git:${Math.random()}`,
+				onGitEnabled: ({ rootId, ctx, driver }) => {
+					hits.push({ rootId, kind: ctx.kind, driverId: driver.id });
+				}
+			}
+		});
+		await viWaitFor(() => document.querySelectorAll('[data-testid="fe-folder-row"]').length >= 1);
+		const row = document.querySelector(
+			'[data-testid="fe-folder-row"][data-name="repo"]'
+		) as HTMLElement;
+		await fireEvent.dblClick(row);
+		await viWaitFor(() => !!document.querySelector('[data-testid="fe-git-enabled-badge"]'));
+		await fireEvent.click(screen.getByTestId('fe-git-enabled-badge'));
+		await viWaitFor(() => hits.length === 1);
+		expect(hits[0]).toEqual({ rootId: proj.id, kind: 'local', driverId: 'local' });
+	});
+
 	it('forwards InitProjectContext.kind from the local pane', async () => {
 		await vfs.mkdir(null, 'plain');
 		const inited: Array<{ name: string; ctx: OpenProjectContext }> = [];

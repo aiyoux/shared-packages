@@ -14,6 +14,7 @@
 		explorerThumbsAreEager,
 		type ExplorerDriver,
 		type ExplorerEntry,
+		type ExplorerEntryId,
 		type ExplorerOpenTarget,
 		type ExplorerOpenContext,
 		type QuickEditVideoContext,
@@ -23,11 +24,12 @@
 	import { createLocalExplorerDriver } from './localExplorerDriver.js';
 	import StoragePersistenceStatus from './StoragePersistenceStatus.svelte';
 	import FeStorageDialog from './FeStorageDialog.svelte';
+	import FeProjectStorageDialog from './FeProjectStorageDialog.svelte';
 	import { packBadges } from './storageInspect.js';
 	import { deleteFromProject } from '../projectPack.js';
 	import { getVfsWorkerClient, vfsWorkerUnavailableReason } from '../worker/client.js';
 	import FeIcon from './FeIcon.svelte';
-	import type { FeIconName } from './feIcons.js';
+	import { folderIconName, folderMarkClass, type FeIconName } from './feIcons.js';
 	import FeTipIconBtn from './FeTipIconBtn.svelte';
 	import FeArchiveDialog from './FeArchiveDialog.svelte';
 	import CopyProgressHeader from './CopyProgressHeader.svelte';
@@ -114,7 +116,7 @@
 	import FeTreeView from './FeTreeView.svelte';
 	import FeFloatingPreview from './FeFloatingPreview.svelte';
 	import { canQuickConvertSvg, canQuickEditRaster, getPreviewKind } from './feThumbnails.js';
-	import { detectProject } from './detectProject.js';
+	import { classifyFolder, detectProject, findProjectRoot, type FolderMark } from './detectProject.js';
 	import FeConfirmDialog from './FeConfirmDialog.svelte';
 	import {
 		emptyTrashCopy,
@@ -149,6 +151,12 @@
 		/** What counts as 'already a project'. The Git app passes 'git' so a
 		 * packed/.project folder without a repo still offers Init. */
 		projectMarker?: import('./detectProject.js').ProjectMarker;
+		/** Header "Dependency map" — current project root (Files). */
+		onProjectMap?: (rootId: ExplorerEntryId | null) => void;
+		/** Header "Git enabled" — nearest git working tree (Files). */
+		onGitEnabled?: (rootId: ExplorerEntryId | null) => void;
+		/** Toolbar New menu — create a project under the open folder (Files). */
+		onNewProject?: (parentId: ExplorerEntryId | null) => void;
 		/** Preview "Send this file" — Connections dual-pane send path. */
 		onSendFile?: (entry: ExplorerOpenTarget) => void | Promise<void>;
 		sendLabel?: string;
@@ -226,6 +234,9 @@
 		onOpenProject,
 		projectMarker = 'any',
 		onInitProject,
+		onProjectMap,
+		onGitEnabled,
+		onNewProject,
 		onSendFile,
 		sendLabel = 'Send this file',
 		onQuickEditVideo,
@@ -272,6 +283,19 @@
 	 * every member of its pack is gone.
 	 */
 	let packedRows = $state<Map<string, { packed: boolean; packPath?: string }>>(new Map());
+	/** Per-row folder icon: project / git / both. This folder only, not ancestors. */
+	let folderMarks = $state<Map<string, FolderMark>>(new Map());
+
+	function entryIcon(n: ExplorerEntry, open = false): FeIconName {
+		if (n.kind !== 'folder') return 'file';
+		return folderIconName(folderMarks.get(n.id) ?? 'plain', open);
+	}
+	function entryMarkClass(n: ExplorerEntry): string {
+		return n.kind === 'folder' ? folderMarkClass(folderMarks.get(n.id)) : '';
+	}
+	function entryMark(n: ExplorerEntry): FolderMark | undefined {
+		return n.kind === 'folder' ? (folderMarks.get(n.id) ?? 'plain') : undefined;
+	}
 
 	$effect(() => {
 		if (driverProp) {
@@ -489,6 +513,7 @@
 			window.innerWidth < COMPACT_TOOLBAR_PX
 	);
 	let toolbarMoreOpen = $state(false);
+	let newMenuOpen = $state(false);
 	let rootEl = $state<HTMLDivElement | undefined>();
 	let floatingPreviewEntry = $state<ExplorerEntry | null>(null);
 	/** Remote (B2/rclone) preview-pane media is opt-in — keyed by entry id. */
@@ -518,7 +543,10 @@
 	}
 	function toggleViewSwitcher() {
 		viewSwitcherOpen = !viewSwitcherOpen;
-		if (viewSwitcherOpen) toolbarMoreOpen = false;
+		if (viewSwitcherOpen) {
+			toolbarMoreOpen = false;
+			newMenuOpen = false;
+		}
 	}
 	function closeViewSwitcher() {
 		viewSwitcherOpen = false;
@@ -526,9 +554,27 @@
 	function closeToolbarMore() {
 		toolbarMoreOpen = false;
 	}
+	function closeNewMenu() {
+		newMenuOpen = false;
+	}
 	function toggleToolbarMore() {
 		toolbarMoreOpen = !toolbarMoreOpen;
-		if (toolbarMoreOpen) viewSwitcherOpen = false;
+		if (toolbarMoreOpen) {
+			viewSwitcherOpen = false;
+			newMenuOpen = false;
+		}
+	}
+	function toggleNewMenu() {
+		newMenuOpen = !newMenuOpen;
+		if (newMenuOpen) {
+			viewSwitcherOpen = false;
+			toolbarMoreOpen = false;
+		}
+	}
+	function chooseNewProject() {
+		closeNewMenu();
+		closeToolbarMore();
+		onNewProject?.(parentId);
 	}
 
 	function openFloatingPreview() {
@@ -646,20 +692,35 @@
 	});
 
 	let isInsideProject = $state(false);
+	let projectRootId = $state<ExplorerEntryId | null>(null);
+	let isGitEnabled = $state(false);
+	let gitRootId = $state<ExplorerEntryId | null>(null);
 	let currentDetectGen = 0;
+	let projectStorageOpen = $state(false);
+	let projectIntegrityOpen = $state(false);
+	const canProjectStorage = $derived(Boolean(localVfs && isInsideProject && projectRootId));
 
 	$effect(() => {
 		const curParentId = parentId;
 		const d = driver;
 		const gen = ++currentDetectGen;
-		void detectProject(d, curParentId, projectMarker).then(
-			(ok) => {
+		void Promise.all([
+			findProjectRoot(d, curParentId, 'project'),
+			findProjectRoot(d, curParentId, 'git')
+		]).then(
+			([project, git]) => {
 				if (gen !== currentDetectGen) return;
-				isInsideProject = ok;
+				isInsideProject = project.found;
+				projectRootId = project.found ? project.id : null;
+				isGitEnabled = git.found;
+				gitRootId = git.found ? git.id : null;
 			},
 			() => {
 				if (gen !== currentDetectGen) return;
 				isInsideProject = false;
+				projectRootId = null;
+				isGitEnabled = false;
+				gitRootId = null;
 			}
 		);
 	});
@@ -1381,6 +1442,21 @@
 					});
 			} else if (packedRows.size) {
 				packedRows = new Map();
+			}
+			const folders = nextNodes.filter((n) => n.kind === 'folder');
+			const markGen = gen;
+			if (folders.length) {
+				void Promise.all(folders.map(async (f) => [f.id, await classifyFolder(driver, f)] as const))
+					.then((pairs) => {
+						if (markGen !== refreshGen) return;
+						folderMarks = new Map(pairs);
+					})
+					.catch(() => {
+						if (markGen !== refreshGen) return;
+						folderMarks = new Map();
+					});
+			} else if (folderMarks.size) {
+				folderMarks = new Map();
 			}
 			if (focusIndex >= nodes.length) focusIndex = nodes.length ? nodes.length - 1 : -1;
 			silentRetries = 0;
@@ -3181,6 +3257,7 @@
 	onclick={() => {
 		if (viewSwitcherOpen) closeViewSwitcher();
 		if (toolbarMoreOpen) closeToolbarMore();
+		if (newMenuOpen) closeNewMenu();
 	}}
 >
 	<header class="fe-header" data-testid="fe-header">
@@ -3227,10 +3304,58 @@
 					{/each}
 				</nav>
 			{/if}
-			{#if isInsideProject}
-				<span class="fe-inside-project-badge" data-testid="fe-inside-project-badge">
-					Inside Project
-				</span>
+			{#if isInsideProject || isGitEnabled}
+				<div class="fe-folder-badges" data-testid="fe-folder-badges">
+					{#if isInsideProject}
+						<span class="fe-inside-project-badge" data-testid="fe-inside-project-badge">
+							Inside Project
+						</span>
+						{#if onProjectMap && projectRootId}
+							<button
+								type="button"
+								class="fe-folder-action"
+								data-testid="fe-project-map"
+								onclick={() => onProjectMap?.(projectRootId)}
+							>
+								Dependency map
+							</button>
+						{/if}
+						{#if canProjectStorage}
+							<button
+								type="button"
+								class="fe-folder-action"
+								data-testid="fe-project-storage"
+								onclick={() => (projectStorageOpen = true)}
+							>
+								Project storage
+							</button>
+							<button
+								type="button"
+								class="fe-folder-action"
+								data-testid="fe-project-integrity"
+								onclick={() => (projectIntegrityOpen = true)}
+							>
+								Check project integrity
+							</button>
+						{/if}
+					{/if}
+					{#if isGitEnabled}
+						{#if onGitEnabled}
+							<button
+								type="button"
+								class="fe-git-enabled-badge"
+								data-testid="fe-git-enabled-badge"
+								onclick={() => onGitEnabled?.(gitRootId)}
+							>
+								Git enabled
+							</button>
+						{:else}
+							<span class="fe-git-enabled-badge" data-testid="fe-git-enabled-badge">
+								Git enabled
+							</span>
+						{/if}
+					{/if}
+				</div>
 			{/if}
 		</div>
 		{#if moveDragActive}
@@ -3315,6 +3440,53 @@
 					active: Boolean(systemClip?.files.length),
 					label: 'Paste from clipboard'
 				})}
+			{/if}
+			{#if mode === 'manage' && onNewProject}
+				{#if kind === 'icon'}
+					<!-- svelte-ignore a11y_click_events_have_key_events -->
+					<!-- svelte-ignore a11y_no_static_element_interactions -->
+					<span
+						class="fe-view-switcher-wrap"
+						data-testid="fe-new-menu"
+						onclick={(e) => e.stopPropagation()}
+					>
+						<FeTipIconBtn
+							testid="fe-new-menu-btn"
+							tip="New"
+							icon="plus"
+							active={newMenuOpen}
+							pressed={newMenuOpen}
+							haspopup
+							onclick={toggleNewMenu}
+						/>
+						{#if newMenuOpen}
+							<!-- svelte-ignore a11y_click_events_have_key_events -->
+							<!-- svelte-ignore a11y_no_static_element_interactions -->
+							<div
+								class="fe-view-popup"
+								data-testid="fe-new-menu-popup"
+								role="menu"
+								tabindex="-1"
+								onclick={(e) => e.stopPropagation()}
+							>
+								<button
+									type="button"
+									class="fe-view-option"
+									data-testid="fe-new-project"
+									role="menuitem"
+									onclick={chooseNewProject}
+								>
+									<FeIcon name="folder-plus" size={16} />
+									<span>New project</span>
+								</button>
+							</div>
+						{/if}
+					</span>
+				{:else}
+					{@render actionBtn(kind, 'fe-new-project', 'New project', 'folder-plus', chooseNewProject, {
+						label: 'New project'
+					})}
+				{/if}
 			{/if}
 			{#if mode === 'manage' || mode === 'open'}
 				{@render actionBtn(kind, 'fe-select-multi', 'Select multiple items', 'check-square', () => setSelectMulti(!selectMulti), {
@@ -3688,6 +3860,7 @@
 					data-file-type={n.fileType ?? ''}
 					data-id={row.placeholder ? undefined : n.id}
 					data-name={n.name}
+					data-fe-folder-mark={entryMark(n)}
 					draggable={!row.placeholder && dragOutEnabled}
 					aria-disabled={row.placeholder || (!actionable && n.kind === 'file') ? 'true' : undefined}
 					aria-selected={!row.placeholder && selected.has(n.id)}
@@ -3718,7 +3891,7 @@
 								<FeThumbnail entry={n} {driver} maxDim={120} enabled={showPreview} />
 							{:else}
 								<span class="fe-row-icon-fallback">
-									<FeIcon name={n.kind === 'folder' ? 'folder' : 'file'} size={48} />
+									<FeIcon name={entryIcon(n)} class={entryMarkClass(n)} size={48} />
 								</span>
 							{/if}
 							{#if p}
@@ -3732,7 +3905,7 @@
 								{#if previewKind}
 									<FeThumbnail entry={n} {driver} maxDim={32} enabled={showPreview} />
 								{:else}
-									<FeIcon name={n.kind === 'folder' ? 'folder' : 'file'} size={16} />
+									<FeIcon name={entryIcon(n)} class={entryMarkClass(n)} size={16} />
 								{/if}
 							</span>
 							{#if renamingId === n.id}
@@ -3752,7 +3925,7 @@
 								{#if previewKind}
 									<FeThumbnail entry={n} {driver} maxDim={32} enabled={showPreview} />
 								{:else}
-									<FeIcon name={n.kind === 'folder' ? 'folder' : 'file'} size={16} />
+									<FeIcon name={entryIcon(n)} class={entryMarkClass(n)} size={16} />
 								{/if}
 							</span>
 							{#if renamingId === n.id}
@@ -3985,6 +4158,24 @@
 			scope="filesystem"
 			rootId={parentId}
 			onClose={() => (storageDialogOpen = false)}
+		/>
+	{/if}
+
+	{#if projectStorageOpen && localVfs && projectRootId}
+		<FeProjectStorageDialog
+			vfs={localVfs}
+			rootId={projectRootId}
+			onClose={() => (projectStorageOpen = false)}
+		/>
+	{/if}
+
+	{#if projectIntegrityOpen && localVfs && projectRootId}
+		<FeStorageDialog
+			vfs={localVfs}
+			scope="project"
+			rootId={projectRootId}
+			title="Check project integrity"
+			onClose={() => (projectIntegrityOpen = false)}
 		/>
 	{/if}
 
@@ -4375,7 +4566,7 @@
 	<ul class="fe-preview-items" data-testid="fe-file-preview-items">
 		{#each selectedEntries as n (n.id)}
 			<li data-testid="fe-file-preview-item" data-name={n.name} data-kind={n.kind}>
-				<FeIcon name={n.kind === 'folder' ? 'folder' : 'file'} size={14} />
+				<FeIcon name={entryIcon(n)} class={entryMarkClass(n)} size={14} />
 				<span class="fe-preview-item-name">{n.name}</span>
 				{#if n.size != null}
 					<span class="fe-preview-item-size">{formatBytes(n.size)}</span>
@@ -4592,7 +4783,14 @@
 		color: var(--text-primary);
 		cursor: default;
 	}
-	.fe-inside-project-badge {
+	.fe-folder-badges {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 6px;
+	}
+	.fe-inside-project-badge,
+	.fe-git-enabled-badge {
 		display: inline-flex;
 		align-items: center;
 		padding: 2px 8px;
@@ -4605,7 +4803,29 @@
 		border-radius: 9999px;
 		user-select: none;
 		white-space: nowrap;
-		margin-left: 6px;
+	}
+	button.fe-git-enabled-badge,
+	.fe-folder-action {
+		cursor: pointer;
+		font: inherit;
+	}
+	.fe-folder-action {
+		display: inline-flex;
+		align-items: center;
+		padding: 2px 8px;
+		font-size: 0.72rem;
+		font-weight: 500;
+		letter-spacing: 0.02em;
+		color: var(--text-primary);
+		background: transparent;
+		border: 1px solid var(--line-hairline, rgba(255, 255, 255, 0.14));
+		border-radius: 9999px;
+		white-space: nowrap;
+	}
+	.fe-folder-action:hover,
+	button.fe-git-enabled-badge:hover {
+		border-color: var(--accent, #38bdf8);
+		color: var(--text-primary);
 	}
 	.fe-toolbar {
 		display: flex;

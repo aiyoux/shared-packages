@@ -90,6 +90,50 @@ describe('FeTreeView', () => {
 		expect(screen.queryByTestId('fe-tree-empty')).toBeNull();
 	});
 
+	it('marks git, project, and combined folders in the tree', async () => {
+		const git = await vfs.mkdir(null, 'repo');
+		await vfs.mkdir(git.id, '.git');
+		const proj = await vfs.mkdir(null, 'studio');
+		await vfs.writeFile({
+			parentId: proj.id,
+			name: '.project.json',
+			body: JSON.stringify({ schemaVersion: 1, name: 'studio' }),
+			contentType: 'application/json'
+		});
+		const both = await vfs.mkdir(null, 'full');
+		await vfs.mkdir(both.id, '.git');
+		await vfs.writeFile({
+			parentId: both.id,
+			name: '.project.json',
+			body: JSON.stringify({ schemaVersion: 1, name: 'full' }),
+			contentType: 'application/json'
+		});
+		await vfs.mkdir(null, 'plain');
+		const driver = createLocalExplorerDriver(vfs);
+		render(FeTreeView, { props: { driver, activeId: null, onNavigate: () => {} } });
+		await viWaitFor(
+			() =>
+				document.querySelector('[data-testid="fe-tree-row"][data-name="repo"]')?.getAttribute(
+					'data-fe-folder-mark'
+				) === 'git'
+		);
+		expect(
+			document.querySelector('[data-testid="fe-tree-row"][data-name="studio"]')?.getAttribute(
+				'data-fe-folder-mark'
+			)
+		).toBe('project');
+		expect(
+			document.querySelector('[data-testid="fe-tree-row"][data-name="full"]')?.getAttribute(
+				'data-fe-folder-mark'
+			)
+		).toBe('project-git');
+		expect(
+			document.querySelector('[data-testid="fe-tree-row"][data-name="plain"]')?.getAttribute(
+				'data-fe-folder-mark'
+			)
+		).toBe('plain');
+	});
+
 	it('file click calls onSelect, not onNavigate', async () => {
 		await vfs.writeFile({ parentId: null, name: 'a.txt', body: 'x' });
 		const driver = createLocalExplorerDriver(vfs);
@@ -112,3 +156,12 @@ describe('FeTreeView', () => {
 		expect(navigated).toEqual([]);
 	});
 });
+
+async function viWaitFor(pred: () => boolean | Promise<boolean>, ms = 4000) {
+	const start = Date.now();
+	while (Date.now() - start < ms) {
+		if (await pred()) return;
+		await new Promise((r) => setTimeout(r, 40));
+	}
+	throw new Error('viWaitFor timeout');
+}
