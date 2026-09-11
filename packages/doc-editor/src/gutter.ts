@@ -6,11 +6,14 @@ import {
 	isTableStructure,
 	parentIdOf,
 	parentOf,
+	plaintextOf,
 	visibleOrder,
 	type Block,
-	type KbPage
+	type KbPage,
+	type Range
 } from '@shared-packages/doc-model';
 import { PARENT_ID_ATTR } from './project.js';
+import { collapsed } from './range.js';
 
 export type DropPosition = {
 	id: string;
@@ -147,6 +150,45 @@ function cssEscape(value: string): string {
 /** Gutter handles: visibleOrder minus cells and rows (table has a single handle; cells/rows are not draggable). */
 export function gutterOrder(page: KbPage): Block[] {
 	return visibleOrder(page).filter((block) => block.type !== 'table_cell' && block.type !== 'table_row');
+}
+
+/**
+ * The selection a gutter-handle *click* (not drag) produces.
+ *
+ * Plain click toggles: clicking a handle selects its whole block; clicking the
+ * same handle again collapses the selection (deselect). `anchorId` is the block
+ * whose handle is currently "armed" — pass back what a previous call returned.
+ * Shift-click (`extend`) stretches a contiguous range from the armed block to
+ * the clicked one and leaves the armed block unchanged.
+ *
+ * Returns the next range plus the next `anchorId` (null once deselected), or
+ * `null` when the clicked block is gone.
+ */
+export function gutterClickRange(
+	page: KbPage,
+	anchorId: string | null,
+	clickedId: string,
+	extend: boolean
+): { range: Range; anchorId: string | null } | null {
+	const block = findBlock(page, clickedId);
+	if (!block) return null;
+	const len = plaintextOf(block).length;
+
+	if (extend && anchorId && anchorId !== clickedId && findBlock(page, anchorId)) {
+		return {
+			range: { anchor: { blockId: anchorId, offset: 0 }, head: { blockId: clickedId, offset: len } },
+			anchorId
+		};
+	}
+
+	if (anchorId === clickedId) {
+		return { range: collapsed({ blockId: clickedId, offset: 0 }), anchorId: null };
+	}
+
+	return {
+		range: { anchor: { blockId: clickedId, offset: 0 }, head: { blockId: clickedId, offset: len } },
+		anchorId: clickedId
+	};
 }
 
 export function handleHeights(host: HTMLElement, page?: KbPage): Record<string, number> {

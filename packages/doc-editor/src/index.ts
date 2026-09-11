@@ -31,7 +31,15 @@ export {
 	stripCollabWidgetsHtml,
 	type RemoteCaret
 } from './decorations.js';
-export { dropAfterId, dropTarget, dropWhere, gutterOrder, handleHeights, overlayBoxes } from './gutter.js';
+export {
+	dropAfterId,
+	dropTarget,
+	dropWhere,
+	gutterClickRange,
+	gutterOrder,
+	handleHeights,
+	overlayBoxes
+} from './gutter.js';
 export { allowlistedHref, allowlistedSrc, followEditorLink } from './href.js';
 export { fontFamilyCss } from './font.js';
 export { newBlockId } from './ids.js';

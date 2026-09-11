@@ -5,6 +5,7 @@ import {
 	dropLineY,
 	dropTarget,
 	dropWhere,
+	gutterClickRange,
 	gutterOrder,
 	handleBoxes,
 	handleHeights,
@@ -12,7 +13,7 @@ import {
 } from './gutter.js';
 import { project } from './project.js';
 import { createEditorState, dispatch } from './state.js';
-import { callout, page, para } from './testFixtures.js';
+import { callout, divider, page, para } from './testFixtures.js';
 
 describe('gutter drag with unknown blocks', () => {
 	const widget = {
@@ -284,5 +285,55 @@ describe('gutter drag', () => {
 		// `before` the callout stays at the callout's top.
 		expect(dropLineY(host, doc, { id: 'c', where: 'before', rect: rect(0, 24) }, 'noop')).toBe(0);
 		host.remove();
+	});
+});
+
+describe('gutterClickRange', () => {
+	const doc = page([para('a', 'first'), para('b', 'second line'), divider('d')]);
+
+	it('selects the whole clicked block and arms it', () => {
+		expect(gutterClickRange(doc, null, 'b', false)).toEqual({
+			range: { anchor: { blockId: 'b', offset: 0 }, head: { blockId: 'b', offset: 11 } },
+			anchorId: 'b'
+		});
+	});
+
+	it('clicking the armed block again collapses the selection and disarms', () => {
+		expect(gutterClickRange(doc, 'b', 'b', false)).toEqual({
+			range: { anchor: { blockId: 'b', offset: 0 }, head: { blockId: 'b', offset: 0 } },
+			anchorId: null
+		});
+	});
+
+	it('clicking a different block moves the whole-block selection', () => {
+		expect(gutterClickRange(doc, 'a', 'b', false)).toEqual({
+			range: { anchor: { blockId: 'b', offset: 0 }, head: { blockId: 'b', offset: 11 } },
+			anchorId: 'b'
+		});
+	});
+
+	it('shift-click extends a contiguous range from the armed block, keeping it armed', () => {
+		expect(gutterClickRange(doc, 'a', 'b', true)).toEqual({
+			range: { anchor: { blockId: 'a', offset: 0 }, head: { blockId: 'b', offset: 11 } },
+			anchorId: 'a'
+		});
+	});
+
+	it('shift-click with nothing armed just selects the clicked block', () => {
+		expect(gutterClickRange(doc, null, 'b', true)).toEqual({
+			range: { anchor: { blockId: 'b', offset: 0 }, head: { blockId: 'b', offset: 11 } },
+			anchorId: 'b'
+		});
+	});
+
+	it('treats an atomic block as a zero-length whole-block range', () => {
+		expect(gutterClickRange(doc, null, 'd', false)).toEqual({
+			range: { anchor: { blockId: 'd', offset: 0 }, head: { blockId: 'd', offset: 0 } },
+			anchorId: 'd'
+		});
+	});
+
+	it('returns null when the clicked block is gone', () => {
+		expect(gutterClickRange(doc, null, 'nope', false)).toBeNull();
 	});
 });

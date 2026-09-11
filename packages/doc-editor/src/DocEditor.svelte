@@ -28,6 +28,7 @@
 		blockFromPoint,
 		dropLineY,
 		dropTarget,
+		gutterClickRange,
 		gutterOrder,
 		handleBoxes,
 		overlayBoxes,
@@ -150,6 +151,13 @@
 	 * then never moved). Same rule as the design-system tree drag.
 	 */
 	let draggingId: string | null = null;
+	/**
+	 * Block whose gutter handle is currently "armed" for the click-to-toggle
+	 * selection: clicking that same handle again clears the selection, and
+	 * shift-clicking another handle extends a range from it. Plain field — it is
+	 * only written on pointerup, never mid-drag.
+	 */
+	let gutterArmedId: string | null = null;
 	let selectDrag: { anchor: Point; pointerId: number } | null = null;
 	let moveDrop: { id: string; where: 'before' | 'after' } | null = null;
 	let dropLineEl = $state<HTMLDivElement | undefined>(undefined);
@@ -577,6 +585,7 @@
 			if (!activated) {
 				if (Math.hypot(ev.clientX - startX, ev.clientY - startY) <= HANDLE_DRAG_THRESHOLD) return;
 				activated = true;
+				gutterArmedId = null;
 				draggingId = id;
 				handleEl.classList.add('dnd-dragging');
 				try {
@@ -606,6 +615,7 @@
 			clearMoveDrop();
 			stop();
 			if (activated && dragged && hit) dispatchMove(dragged, hit);
+			else if (!activated && ev.type === 'pointerup') applyGutterClick(id, ev.shiftKey);
 		};
 
 		const stop = () => {
@@ -617,6 +627,20 @@
 		doc.addEventListener('pointermove', move);
 		doc.addEventListener('pointerup', finish);
 		doc.addEventListener('pointercancel', finish);
+	}
+
+	/**
+	 * A gutter handle clicked without dragging past the threshold: toggle the
+	 * whole-block selection for that block (shift-click extends a range from the
+	 * armed block). Mirrors how a click in the text places a caret — it is a
+	 * selection change, not an edit.
+	 */
+	function applyGutterClick(id: string, extend: boolean) {
+		if (composing || !editable) return;
+		const result = gutterClickRange(asPage(editor.page), gutterArmedId, id, extend);
+		if (!result) return;
+		gutterArmedId = result.anchorId;
+		applySelectRange(result.range);
 	}
 
 	function onHostClick(event: MouseEvent) {
@@ -694,6 +718,8 @@
 	 */
 	function onHostPointerDown(event: PointerEvent) {
 		if (composing || !editable || !host || event.button !== 0) return;
+		// Any click in the text body disarms the gutter click-to-toggle anchor.
+		gutterArmedId = null;
 		if (event.shiftKey || event.altKey || event.metaKey || event.ctrlKey) return;
 		const target = event.target;
 		if (!(target instanceof Element)) return;
@@ -748,6 +774,7 @@
 					type="button"
 					class="kb-handle"
 					aria-label="Drag to reorder"
+					title="Drag to reorder · click to select this block"
 					data-block-id={block.id}
 					data-parent-id={handleParentId(block.id)}
 					style:top="{box?.top ?? 0}px"
@@ -845,7 +872,8 @@
 		left: 0;
 		top: 50%;
 		transform: translateY(-50%);
-		font-size: 0.8rem;
+		font-size: 1.1rem;
+		letter-spacing: -0.06em;
 		line-height: 1;
 		opacity: 0.75;
 		color: var(--text-secondary, currentColor);
@@ -1102,8 +1130,8 @@
 	.kb-host :global([data-block-type='heading'][data-kb-selected]),
 	.kb-host :global([data-block-type='list_item'][data-kb-selected]),
 	.kb-host :global([data-block-type='code'][data-kb-selected]) {
-		border-radius: 0.15rem;
-		box-shadow: inset 3px 0 0 var(--accent, #38bdf8);
+		/* Selected lines (incl. empty ones) get a flat accent tint only — no
+		   left bar, square corners so a multi-line run reads as one band. */
 		background: color-mix(in srgb, var(--accent, #38bdf8) 10%, transparent);
 	}
 	/* Block types this build does not model: shown as an opaque placeholder so the
