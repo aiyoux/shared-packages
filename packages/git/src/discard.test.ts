@@ -2,7 +2,14 @@
 import { describe, expect, it } from 'vitest';
 import git from 'isomorphic-git';
 import { createVfs, type VfsService } from '@shared-packages/file-system';
-import { localCommit, localDiffFile, localDiscardAllFile, localWriteWorkingFile } from './local.js';
+import {
+	localCommit,
+	localDiffFile,
+	localDiscardAllFile,
+	localDiscardRename,
+	localSnapshot,
+	localWriteWorkingFile
+} from './local.js';
 import { applySelection } from './diffLines.js';
 import { createVfsGitFs } from './vfsGitFs.js';
 
@@ -44,6 +51,30 @@ describe('localDiscardAllFile', () => {
 		const d = await localDiffFile(fs, '/', 'new.txt');
 		expect(d.oldText).toBe('');
 		expect(d.newText).toBe('');
+		await expect(
+			(fs as unknown as { promises: { lstat(p: string): Promise<unknown> } }).promises.lstat(
+				'/new.txt'
+			)
+		).rejects.toThrow();
+	});
+});
+
+describe('localDiscardRename', () => {
+	it('restores the old path and removes the new one', async () => {
+		const { fs } = await repo();
+		await fs.promises.writeFile('/old.txt', 'hello\n');
+		await localCommit(fs, '/', { message: 'first', paths: ['old.txt'], author: AUTHOR });
+
+		await fs.promises.unlink('/old.txt');
+		await fs.promises.writeFile('/new.txt', 'hello\n');
+		const before = await localSnapshot(fs, '/');
+		expect(before.changes).toEqual([{ path: 'new.txt', status: 'renamed', renamedFrom: 'old.txt' }]);
+
+		await localDiscardRename(fs, '/', 'new.txt', 'old.txt');
+
+		const after = await localSnapshot(fs, '/');
+		expect(after.changes).toEqual([]);
+		expect(after.status.dirty).toBe(false);
 		await expect(
 			(fs as unknown as { promises: { lstat(p: string): Promise<unknown> } }).promises.lstat(
 				'/new.txt'

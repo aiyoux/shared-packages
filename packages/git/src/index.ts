@@ -23,6 +23,7 @@ export {
 	localDeleteWorkingFile,
 	localDiffFile,
 	localDiscardAllFile,
+	localDiscardRename,
 	localReadBlobAt,
 	localReadWorkingFile,
 	localSnapshot,

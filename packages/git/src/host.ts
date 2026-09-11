@@ -5,6 +5,7 @@ import {
 	localCommit,
 	localDiffFile,
 	localDiscardAllFile,
+	localDiscardRename,
 	localReadBlobAt,
 	localSnapshot,
 	localWriteWorkingFile,
@@ -119,6 +120,11 @@ export function createGitHost(opts: CreateGitHostOptions = {}): GitHost {
 		return localDiscardAllFile(bound.fs, bound.dir, filepath);
 	}
 
+	async function discardRenameOn(repo: GitRepoRef, filepath: string, renamedFrom: string): Promise<void> {
+		const bound = requireLocal(repo, 'Discarding changes');
+		return localDiscardRename(bound.fs, bound.dir, filepath, renamedFrom);
+	}
+
 	async function commitOn(repo: GitRepoRef, opts: CommitInput): Promise<string> {
 		if (repo.backend !== 'local') {
 			throw new Error('Committing is only supported for Browser files repos.');
@@ -208,6 +214,9 @@ export function createGitHost(opts: CreateGitHostOptions = {}): GitHost {
 		},
 		async discardAllFile(repoId, filepath) {
 			return discardAllFileOn(await requireRepo(repoId), filepath);
+		},
+		async discardRename(repoId, filepath, renamedFrom) {
+			return discardRenameOn(await requireRepo(repoId), filepath, renamedFrom);
 		}
 	};
 }

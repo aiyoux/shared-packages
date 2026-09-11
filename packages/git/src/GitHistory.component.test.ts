@@ -134,8 +134,50 @@ describe('GitHistory', () => {
 				}),
 				commit: opts.commit ?? vi.fn().mockResolvedValue('deadbeef'),
 				discardFile: vi.fn().mockResolvedValue(undefined),
-				discardAllFile: vi.fn().mockResolvedValue(undefined)
+				discardAllFile: vi.fn().mockResolvedValue(undefined),
+				discardRename: vi.fn().mockResolvedValue(undefined)
 			};
+		}
+
+		/** A second changed file with two far-apart hunks, for bulk
+		 *  select/deselect-all coverage (a single-hunk file's hunk checkbox
+		 *  already covers that case, so it's excluded there). */
+		function multiHunkHost() {
+			const host = commitHost();
+			host.diffFile = vi.fn().mockResolvedValue({
+				oldText: 'l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nl9\nl10\n',
+				newText: 'l1\nL2\nl3\nl4\nl5\nl6\nl7\nL8\nl9\nl10\n',
+				diff: {
+					kind: 'text',
+					hunks: [
+						{
+							oldStart: 1,
+							oldLines: 3,
+							newStart: 1,
+							newLines: 3,
+							lines: [
+								{ kind: 'ctx', text: 'l1', oldNo: 1, newNo: 1, opIndex: 0 },
+								{ kind: 'del', text: 'l2', oldNo: 2, newNo: null, opIndex: 1 },
+								{ kind: 'add', text: 'L2', oldNo: null, newNo: 2, opIndex: 2 },
+								{ kind: 'ctx', text: 'l3', oldNo: 3, newNo: 3, opIndex: 3 }
+							]
+						},
+						{
+							oldStart: 7,
+							oldLines: 3,
+							newStart: 7,
+							newLines: 3,
+							lines: [
+								{ kind: 'ctx', text: 'l7', oldNo: 7, newNo: 7, opIndex: 4 },
+								{ kind: 'del', text: 'l8', oldNo: 8, newNo: null, opIndex: 5 },
+								{ kind: 'add', text: 'L8', oldNo: null, newNo: 8, opIndex: 6 },
+								{ kind: 'ctx', text: 'l9', oldNo: 9, newNo: 9, opIndex: 7 }
+							]
+						}
+					]
+				}
+			});
+			return host;
 		}
 
 		it('clicking the file name expands and fetches the diff', async () => {
@@ -214,6 +256,35 @@ describe('GitHistory', () => {
 			// Discarding the whole (only) hunk reverts the file to oldText.
 			expect(new TextDecoder().decode(content as Uint8Array)).toBe('a\nb\nc\n');
 		});
+
+		it('has no bulk select/deselect controls for a single-hunk file', async () => {
+			const host = commitHost();
+			render(GitHistory, { props: { repoId: 'r', gitHost: host as never } });
+			await fireEvent.click(await screen.findByTestId('git-change-expand-m.txt'));
+			await screen.findByTestId('git-diff-view');
+			// The one hunk's own checkbox already is "select/deselect all" here.
+			expect(screen.queryByTestId('git-change-select-all-m.txt')).toBeNull();
+			expect(screen.queryByTestId('git-change-deselect-all-m.txt')).toBeNull();
+		});
+
+		it('deselect all / select all bulk-toggle every changed line in a multi-hunk file', async () => {
+			const host = multiHunkHost();
+			render(GitHistory, { props: { repoId: 'r', gitHost: host as never } });
+			await fireEvent.click(await screen.findByTestId('git-change-expand-m.txt'));
+			await screen.findByTestId('git-diff-view');
+
+			await fireEvent.click(await screen.findByTestId('git-change-deselect-all-m.txt'));
+			expect((await screen.findByTestId('git-change-partial-m.txt')).textContent).toContain('4');
+			for (const check of screen.getAllByTestId('git-diff-line-check')) {
+				expect((check as HTMLInputElement).checked).toBe(false);
+			}
+
+			await fireEvent.click(screen.getByTestId('git-change-select-all-m.txt'));
+			expect(screen.queryByTestId('git-change-partial-m.txt')).toBeNull();
+			for (const check of screen.getAllByTestId('git-diff-line-check')) {
+				expect((check as HTMLInputElement).checked).toBe(true);
+			}
+		});
 	});
 
 	describe('renamed rows', () => {
@@ -231,17 +302,27 @@ describe('GitHistory', () => {
 				diffFile: vi.fn(),
 				discardFile: vi.fn(),
 				discardAllFile: vi.fn(),
+				discardRename: vi.fn().mockResolvedValue(undefined),
 				commit
 			};
 		}
 
-		it('shows old -> new with no expand or discard affordance', async () => {
+		it('shows old -> new with no expand affordance', async () => {
 			render(GitHistory, { props: { repoId: 'r', gitHost: renameHost() as never } });
 			const row = await screen.findByTestId('git-change-rename-new.txt');
 			expect(row.textContent).toContain('old.txt');
 			expect(row.textContent).toContain('new.txt');
 			expect(screen.queryByTestId('git-change-expand-new.txt')).toBeNull();
-			expect(screen.queryByTestId('git-change-discard-new.txt')).toBeNull();
+		});
+
+		it('discards (undoes) a rename after confirming', async () => {
+			const host = renameHost();
+			vi.spyOn(window, 'confirm').mockReturnValue(true);
+			render(GitHistory, { props: { repoId: 'r', gitHost: host as never } });
+			await fireEvent.click(await screen.findByTestId('git-change-discard-new.txt'));
+			await vi.waitFor(() =>
+				expect(host.discardRename).toHaveBeenCalledWith('r', 'new.txt', 'old.txt')
+			);
 		});
 
 		it('stages both paths of a rename in one commit', async () => {

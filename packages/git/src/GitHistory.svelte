@@ -198,6 +198,49 @@
 		}
 	}
 
+	/** Undo a folded rename: restore `renamedFrom` on disk and remove `path`.
+	 *  Irreversible — confirmed first. */
+	async function discardRenameRow(path: string, renamedFrom: string) {
+		if (!gitHost || !repoId || discarding.has(path)) return;
+		if (
+			!confirm(
+				`Undo the rename of ${renamedFrom} to ${path}?\n\nThis restores ${renamedFrom} and removes ${path}. This cannot be undone.`
+			)
+		) {
+			return;
+		}
+		discarding = new Set(discarding).add(path);
+		try {
+			await gitHost.discardRename(repoId, path, renamedFrom);
+			invalidateDiff(path);
+			if (expandedPath === path) expandedPath = null;
+		} catch (e) {
+			commitError = e instanceof Error ? e.message : 'Could not discard changes';
+		} finally {
+			const next = new Set(discarding);
+			next.delete(path);
+			discarding = next;
+		}
+	}
+
+	/** Select (stage) every line in a customized file — clears its
+	 *  hand-edited selection so the whole working file is staged again. */
+	function selectAllLines(path: string) {
+		setExcludedLines(path, new Set());
+	}
+
+	/** Deselect every changed line in a file — nothing from it is staged
+	 *  until individual lines/hunks are picked back. */
+	function deselectAllLines(path: string) {
+		const entry = diffs.get(path);
+		if (!entry || entry.status !== 'ready' || entry.result.diff.kind !== 'text') return;
+		const all = new Set<number>();
+		for (const hunk of entry.result.diff.hunks) {
+			for (const line of hunk.lines) if (line.kind !== 'ctx') all.add(line.opIndex);
+		}
+		setExcludedLines(path, all);
+	}
+
 	/** Discard just one hunk's lines, leaving the rest of the file's
 	 *  uncommitted edit alone. Irreversible — confirmed first. */
 	async function discardHunk(path: string, hunk: DiffHunk) {
@@ -354,12 +397,22 @@
 								<span class="st st-{c.status}">{c.status[0]!.toUpperCase()}</span>
 								{#if c.status === 'renamed'}
 									<!-- A folded rename has no content diff to expand (see
-									     detectRenames — only an exact byte match is paired),
-									     and "undo" would need to write back two paths, which
-									     discard doesn't support — so neither control applies. -->
+									     detectRenames — only an exact byte match is paired), so
+									     there's no expand affordance here; Discard undoes the
+									     rename itself (restores renamedFrom, removes path). -->
 									<span class="path rename-path" data-testid="git-change-rename-{c.path}">
 										{c.renamedFrom} → {c.path}
 									</span>
+									<button
+										type="button"
+										class="discard-btn"
+										disabled={discarding.has(c.path)}
+										title="Undo this rename"
+										data-testid="git-change-discard-{c.path}"
+										onclick={() => void discardRenameRow(c.path, c.renamedFrom!)}
+									>
+										{discarding.has(c.path) ? '…' : 'Discard'}
+									</button>
 								{:else}
 									<button
 										type="button"
@@ -399,6 +452,27 @@
 									{:else if entry.status === 'error'}
 										<p class="error">{entry.error}</p>
 									{:else}
+										{#if entry.result.diff.kind === 'text' && entry.result.diff.hunks.length > 1}
+											<div class="diff-bulk">
+												<button
+													type="button"
+													class="link-btn"
+													disabled={linesExcluded === 0}
+													data-testid="git-change-select-all-{c.path}"
+													onclick={() => selectAllLines(c.path)}
+												>
+													Select all
+												</button>
+												<button
+													type="button"
+													class="link-btn"
+													data-testid="git-change-deselect-all-{c.path}"
+													onclick={() => deselectAllLines(c.path)}
+												>
+													Deselect all
+												</button>
+											</div>
+										{/if}
 										<DiffView
 											diff={entry.result.diff}
 											excluded={lineExclusions.get(c.path) ?? EMPTY_EXCLUDED}
@@ -586,6 +660,25 @@
 	}
 	.diff-slot {
 		padding: 2px 0 4px;
+	}
+	.diff-bulk {
+		display: flex;
+		gap: 10px;
+		padding: 0 0 4px 20px;
+	}
+	.link-btn {
+		padding: 0;
+		border: none;
+		background: transparent;
+		color: var(--accent, #6366f1);
+		font-size: 0.7rem;
+		text-decoration: underline;
+		cursor: pointer;
+	}
+	.link-btn:disabled {
+		color: var(--text-secondary, #666);
+		text-decoration: none;
+		cursor: default;
 	}
 	.st {
 		font-family: var(--font-mono, monospace);

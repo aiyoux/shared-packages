@@ -110,6 +110,13 @@ export interface GitHost {
 	 */
 	discardAllFile(repoId: string, filepath: string): Promise<void>;
 	/**
+	 * Undo a folded rename (a `GitChange` with `status: 'renamed'`): restore
+	 * `renamedFrom`'s HEAD bytes on disk and remove `filepath`. Local backend
+	 * only. Irreversible, same as `discardAllFile` — confirm with the user
+	 * first.
+	 */
+	discardRename(repoId: string, filepath: string, renamedFrom: string): Promise<void>;
+	/**
 	 * Stage `paths` and commit them. Returns the new commit oid.
 	 *
 	 * Local backend only — monitor repos are read-only here, and this rejects

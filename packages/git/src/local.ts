@@ -222,6 +222,28 @@ export async function localDiscardAllFile(fs: GitFs, dir: string, filepath: stri
 	}
 }
 
+/**
+ * Undo a folded rename: restore `renamedFrom`'s HEAD bytes on disk and
+ * remove `filepath` — the inverse of what committing that pair records as a
+ * rename. Irreversible; the caller confirms with the user.
+ *
+ * `renamedFrom` always has HEAD bytes by construction (`detectRenames` only
+ * pairs against a path git already tracks), but a missing one is handled the
+ * same as `localDiscardAllFile` would rather than left half-done.
+ */
+export async function localDiscardRename(
+	fs: GitFs,
+	dir: string,
+	filepath: string,
+	renamedFrom: string
+): Promise<void> {
+	const headBytes = await localReadHeadOrNull(fs, dir, renamedFrom);
+	if (headBytes !== null) {
+		await localWriteWorkingFile(fs, dir, renamedFrom, headBytes);
+	}
+	await localDeleteWorkingFile(fs, dir, filepath);
+}
+
 /** First 8000 bytes hold a NUL — the same heuristic git itself uses to call
  *  a blob binary and skip line diffing. */
 function looksBinary(bytes: Uint8Array): boolean {
