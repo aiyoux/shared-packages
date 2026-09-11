@@ -20,10 +20,13 @@ export {
 export { createGitHost, type CreateGitHostOptions } from './host.js';
 export {
 	localCommit,
+	localDeleteWorkingFile,
 	localDiffFile,
+	localDiscardAllFile,
 	localReadBlobAt,
 	localReadWorkingFile,
 	localSnapshot,
+	localWriteWorkingFile,
 	type GitFs
 } from './local.js';
 export { createVfsGitFs, type CreateVfsGitFsOptions } from './vfsGitFs.js';

@@ -131,14 +131,41 @@ function computeOps(a: string[], b: string[]): Op[] | null {
 	return [...prefix, ...inner, ...suffix];
 }
 
+/** Strip a trailing CR for display. `splitLines` only splits on `\n`, so a
+ *  CRLF file's lines keep their `\r` — harmless for diffing/reconstruction
+ *  (it round-trips byte-for-byte either way) but an invisible-ish stray
+ *  character is a bad thing to render or let someone copy. Display-only:
+ *  `applySelection` re-splits the raw texts itself and never reads this. */
+function displayText(raw: string): string {
+	return raw.endsWith('\r') ? raw.slice(0, -1) : raw;
+}
+
 function lineFor(a: string[], b: string[], op: Op, opIndex: number): DiffLine {
 	if (op.kind === 'ctx') {
-		return { kind: 'ctx', text: a[op.aIdx!]!, oldNo: op.aIdx! + 1, newNo: op.bIdx! + 1, opIndex };
+		return {
+			kind: 'ctx',
+			text: displayText(a[op.aIdx!]!),
+			oldNo: op.aIdx! + 1,
+			newNo: op.bIdx! + 1,
+			opIndex
+		};
 	}
 	if (op.kind === 'del') {
-		return { kind: 'del', text: a[op.aIdx!]!, oldNo: op.aIdx! + 1, newNo: null, opIndex };
+		return {
+			kind: 'del',
+			text: displayText(a[op.aIdx!]!),
+			oldNo: op.aIdx! + 1,
+			newNo: null,
+			opIndex
+		};
 	}
-	return { kind: 'add', text: b[op.bIdx!]!, oldNo: null, newNo: op.bIdx! + 1, opIndex };
+	return {
+		kind: 'add',
+		text: displayText(b[op.bIdx!]!),
+		oldNo: null,
+		newNo: op.bIdx! + 1,
+		opIndex
+	};
 }
 
 /** Group ops into hunks: every op within `context` lines (by op position) of

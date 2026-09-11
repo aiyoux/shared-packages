@@ -101,7 +101,7 @@ describe('GitHistory', () => {
 		// fields the next test expects to fill in.
 		beforeEach(() => localStorage.clear());
 
-		function commitHost(commit = vi.fn().mockResolvedValue('deadbeef')) {
+		function commitHost(opts: { commit?: ReturnType<typeof vi.fn> } = {}) {
 			return {
 				snapshot: () =>
 					Promise.resolve({
@@ -132,7 +132,9 @@ describe('GitHistory', () => {
 						]
 					}
 				}),
-				commit
+				commit: opts.commit ?? vi.fn().mockResolvedValue('deadbeef'),
+				discardFile: vi.fn().mockResolvedValue(undefined),
+				discardAllFile: vi.fn().mockResolvedValue(undefined)
 			};
 		}
 
@@ -149,7 +151,7 @@ describe('GitHistory', () => {
 
 		it('deselecting an added line shows a partial badge and leaves it out of the commit', async () => {
 			const commit = vi.fn().mockResolvedValue('deadbeef');
-			const host = commitHost(commit);
+			const host = commitHost({ commit });
 			render(GitHistory, { props: { repoId: 'r', gitHost: host as never } });
 			await fireEvent.click(await screen.findByTestId('git-change-expand-m.txt'));
 			const lineChecks = await screen.findAllByTestId('git-diff-line-check');
@@ -172,7 +174,7 @@ describe('GitHistory', () => {
 
 		it('commits with no partial payload when nothing was hand-edited', async () => {
 			const commit = vi.fn().mockResolvedValue('deadbeef');
-			const host = commitHost(commit);
+			const host = commitHost({ commit });
 			render(GitHistory, { props: { repoId: 'r', gitHost: host as never } });
 
 			await fireEvent.input(await screen.findByTestId('git-commit-message'), { target: { value: 'msg' } });
@@ -183,6 +185,80 @@ describe('GitHistory', () => {
 			await vi.waitFor(() => expect(commit).toHaveBeenCalled());
 			const opts = commit.mock.calls[0]![1] as { partial?: Record<string, Uint8Array> };
 			expect(opts.partial).toBeUndefined();
+		});
+
+		it('discards a whole file after confirming, and does nothing when the user cancels', async () => {
+			const host = commitHost();
+			const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+			render(GitHistory, { props: { repoId: 'r', gitHost: host as never } });
+			await fireEvent.click(await screen.findByTestId('git-change-discard-m.txt'));
+			expect(confirmSpy).toHaveBeenCalled();
+			expect(host.discardAllFile).not.toHaveBeenCalled();
+
+			confirmSpy.mockReturnValue(true);
+			await fireEvent.click(screen.getByTestId('git-change-discard-m.txt'));
+			await vi.waitFor(() => expect(host.discardAllFile).toHaveBeenCalledWith('r', 'm.txt'));
+		});
+
+		it('discards one hunk, staging the kept lines to disk', async () => {
+			const host = commitHost();
+			vi.spyOn(window, 'confirm').mockReturnValue(true);
+			render(GitHistory, { props: { repoId: 'r', gitHost: host as never } });
+			await fireEvent.click(await screen.findByTestId('git-change-expand-m.txt'));
+			await fireEvent.click(await screen.findByTestId('git-diff-hunk-discard'));
+
+			await vi.waitFor(() => expect(host.discardFile).toHaveBeenCalled());
+			const [repoId, path, content] = host.discardFile.mock.calls[0]!;
+			expect(repoId).toBe('r');
+			expect(path).toBe('m.txt');
+			// Discarding the whole (only) hunk reverts the file to oldText.
+			expect(new TextDecoder().decode(content as Uint8Array)).toBe('a\nb\nc\n');
+		});
+	});
+
+	describe('renamed rows', () => {
+		beforeEach(() => localStorage.clear());
+
+		function renameHost(commit = vi.fn().mockResolvedValue('deadbeef')) {
+			return {
+				snapshot: () =>
+					Promise.resolve({
+						status: { branch: 'main', dirty: true },
+						log: [],
+						changes: [{ path: 'new.txt', status: 'renamed' as const, renamedFrom: 'old.txt' }]
+					}),
+				subscribe: () => () => {},
+				diffFile: vi.fn(),
+				discardFile: vi.fn(),
+				discardAllFile: vi.fn(),
+				commit
+			};
+		}
+
+		it('shows old -> new with no expand or discard affordance', async () => {
+			render(GitHistory, { props: { repoId: 'r', gitHost: renameHost() as never } });
+			const row = await screen.findByTestId('git-change-rename-new.txt');
+			expect(row.textContent).toContain('old.txt');
+			expect(row.textContent).toContain('new.txt');
+			expect(screen.queryByTestId('git-change-expand-new.txt')).toBeNull();
+			expect(screen.queryByTestId('git-change-discard-new.txt')).toBeNull();
+		});
+
+		it('stages both paths of a rename in one commit', async () => {
+			const commit = vi.fn().mockResolvedValue('deadbeef');
+			render(GitHistory, { props: { repoId: 'r', gitHost: renameHost(commit) as never } });
+			await screen.findByTestId('git-change-rename-new.txt');
+
+			await fireEvent.input(screen.getByTestId('git-commit-message'), { target: { value: 'rename' } });
+			await fireEvent.input(screen.getByTestId('git-author-name'), { target: { value: 'T' } });
+			await fireEvent.input(screen.getByTestId('git-author-email'), { target: { value: 't@t.test' } });
+			// One row, but "Commit 1 file" — the label counts rows, not paths.
+			expect(screen.getByTestId('git-commit-btn').textContent).toMatch(/Commit 1 file\b/);
+			await fireEvent.click(screen.getByTestId('git-commit-btn'));
+
+			await vi.waitFor(() => expect(commit).toHaveBeenCalled());
+			const opts = commit.mock.calls[0]![1] as { paths: string[] };
+			expect(opts.paths).toEqual(['old.txt', 'new.txt']);
 		});
 	});
 });

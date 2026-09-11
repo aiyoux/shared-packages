@@ -18,7 +18,13 @@ export type GitStatus = { branch: string | null; dirty: boolean };
  */
 export type GitChange = {
 	path: string;
-	status: 'added' | 'modified' | 'deleted';
+	status: 'added' | 'modified' | 'deleted' | 'renamed';
+	/** Set only for `status: 'renamed'` — the path this one moved from.
+	 *  Detected as an exact byte-for-byte match against a deleted path;
+	 *  see `detectRenames`. A moved-and-edited file is reported as a plain
+	 *  add + delete pair instead (there's no cheap "similar enough" call to
+	 *  make), so this is never partial. */
+	renamedFrom?: string;
 };
 
 export type GitAuthor = { name: string; email: string };
@@ -87,6 +93,22 @@ export interface GitHost {
 	 * panel's expand-to-diff. Local backend only, like `commit`.
 	 */
 	diffFile(repoId: string, filepath: string): Promise<GitFileDiff>;
+	/**
+	 * Overwrite the working-tree file at `filepath` with `content` — discards
+	 * a hand-picked subset of its uncommitted changes (built via
+	 * `applySelection`, the same reconstruction `partial` staging uses, just
+	 * written to disk instead of the index). Local backend only.
+	 *
+	 * Irreversible: the bytes not in `content` are gone with no undo. Callers
+	 * must confirm with the user before calling this.
+	 */
+	discardFile(repoId: string, filepath: string, content: Uint8Array): Promise<void>;
+	/**
+	 * Discard ALL uncommitted changes to `filepath`: restore its HEAD bytes,
+	 * or remove it from disk if HEAD has none (an added/untracked file).
+	 * Local backend only. Irreversible, same as `discardFile`.
+	 */
+	discardAllFile(repoId: string, filepath: string): Promise<void>;
 	/**
 	 * Stage `paths` and commit them. Returns the new commit oid.
 	 *

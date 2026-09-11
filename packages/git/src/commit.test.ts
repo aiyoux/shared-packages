@@ -144,4 +144,45 @@ describe('localCommit', () => {
 		const after = await localSnapshot(fs, '/');
 		expect(after.changes).toEqual([{ path: 'm.txt', status: 'modified' }]);
 	});
+
+	it('diffs a deleted file against empty working text', async () => {
+		const { fs } = await repo();
+		await fs.promises.writeFile('/gone.txt', 'one\ntwo\n');
+		await localCommit(fs, '/', { message: 'first', paths: ['gone.txt'], author: AUTHOR });
+		await fs.promises.unlink('/gone.txt');
+
+		const d = await localDiffFile(fs, '/', 'gone.txt');
+		expect(d.oldText).toBe('one\ntwo\n');
+		expect(d.newText).toBe('');
+	});
+
+	it('partially stages a deletion: keeping a deselected line commits a modify, not a remove', async () => {
+		const { fs } = await repo();
+		await fs.promises.writeFile('/gone.txt', 'keep\ndrop\n');
+		await localCommit(fs, '/', { message: 'first', paths: ['gone.txt'], author: AUTHOR });
+		await fs.promises.unlink('/gone.txt');
+
+		const d = await localDiffFile(fs, '/', 'gone.txt');
+		if (d.diff.kind !== 'text') throw new Error('expected text');
+		const keepLine = d.diff.hunks.flatMap((h) => h.lines).find((l) => l.text === 'keep')!;
+		// Deselect "keep"'s removal — the file should end up with just "keep".
+		const partialContent = applySelection(d.oldText, d.newText, new Set([keepLine.opIndex]));
+		expect(partialContent).toBe('keep\n');
+
+		await localCommit(fs, '/', {
+			message: 'drop only "drop"',
+			paths: ['gone.txt'],
+			author: AUTHOR,
+			partial: { 'gone.txt': new TextEncoder().encode(partialContent) }
+		});
+
+		// The path is still tracked (a modify, via updateIndex), not removed —
+		// git.remove was never called for this path.
+		const head = await localDiffFile(fs, '/', 'gone.txt');
+		expect(head.oldText).toBe('keep\n');
+		// The working file is still absent from disk (never touched)...
+		const clean = await localSnapshot(fs, '/');
+		// ...so it shows as deleted relative to the newly-committed "keep\n" too.
+		expect(clean.changes).toEqual([{ path: 'gone.txt', status: 'deleted' }]);
+	});
 });

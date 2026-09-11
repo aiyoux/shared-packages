@@ -1,7 +1,15 @@
 import './ensureBuffer.js';
 import git from 'isomorphic-git';
 import { deleteRepo, getRepo, listRepos, putRepo } from './repos.js';
-import { localCommit, localDiffFile, localReadBlobAt, localSnapshot, type GitFs } from './local.js';
+import {
+	localCommit,
+	localDiffFile,
+	localDiscardAllFile,
+	localReadBlobAt,
+	localSnapshot,
+	localWriteWorkingFile,
+	type GitFs
+} from './local.js';
 import { monitorSnapshot, monitorSubscribe, monitorTransportFor } from './monitor.js';
 import type { GitFileDiff, GitHost, GitRepoRef, GitSnapshot, CommitInput
 } from './types.js';
@@ -94,6 +102,23 @@ export function createGitHost(opts: CreateGitHostOptions = {}): GitHost {
 		return localDiffFile(bound.fs, bound.dir, filepath);
 	}
 
+	function requireLocal(repo: GitRepoRef, action: string): { fs: GitFs; dir: string } {
+		if (repo.backend !== 'local') {
+			throw new Error(`${action} is only supported for Browser files repos.`);
+		}
+		return bindLocal(repo.path);
+	}
+
+	async function discardFileOn(repo: GitRepoRef, filepath: string, content: Uint8Array): Promise<void> {
+		const bound = requireLocal(repo, 'Discarding changes');
+		return localWriteWorkingFile(bound.fs, bound.dir, filepath, content);
+	}
+
+	async function discardAllFileOn(repo: GitRepoRef, filepath: string): Promise<void> {
+		const bound = requireLocal(repo, 'Discarding changes');
+		return localDiscardAllFile(bound.fs, bound.dir, filepath);
+	}
+
 	async function commitOn(repo: GitRepoRef, opts: CommitInput): Promise<string> {
 		if (repo.backend !== 'local') {
 			throw new Error('Committing is only supported for Browser files repos.');
@@ -177,6 +202,12 @@ export function createGitHost(opts: CreateGitHostOptions = {}): GitHost {
 		},
 		async diffFile(repoId, filepath) {
 			return diffFileOn(await requireRepo(repoId), filepath);
+		},
+		async discardFile(repoId, filepath, content) {
+			return discardFileOn(await requireRepo(repoId), filepath, content);
+		},
+		async discardAllFile(repoId, filepath) {
+			return discardAllFileOn(await requireRepo(repoId), filepath);
 		}
 	};
 }

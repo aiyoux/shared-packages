@@ -12,7 +12,11 @@ export type ScanPage = {
 };
 
 export type DetectOptions = {
-	/** Reject quads smaller than this fraction of the frame. Default 0.05. */
+	/**
+	 * Reject quads smaller than this fraction of the frame. Default 0.02.
+	 * Kept low on purpose: size is no longer what separates a document from the
+	 * surface under it, so this only discards specks.
+	 */
 	minAreaRatio?: number;
 	/** Longest edge (px) to run detection at. Larger frames are downscaled first. Default 480. */
 	maxDetectEdge?: number;

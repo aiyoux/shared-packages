@@ -1,5 +1,5 @@
 import { workerPayload } from '../cloneable.js';
-import { OPENCV_WORKER_SOURCE } from './opencv.worker-source.js';
+import { buildWorkerSource } from './opencv.worker-source.js';
 import { copyPixelBuffer } from '../pixels.js';
 import type { DetectOptions, EnhanceOptions, Quad, ScanEngine, WarpOptions } from '../types.js';
 
@@ -59,7 +59,7 @@ function resetWorker() {
 }
 
 function spawnWorker(): Worker {
-	const blob = new Blob([OPENCV_WORKER_SOURCE], { type: 'text/javascript' });
+	const blob = new Blob([buildWorkerSource()], { type: 'text/javascript' });
 	const url = URL.createObjectURL(blob);
 	const next = new Worker(url);
 	URL.revokeObjectURL(url);

@@ -69,7 +69,19 @@
 	const EMPTY_EXCLUDED: ReadonlySet<number> = new Set();
 
 	const changes = $derived(shown?.changes ?? []);
-	const selected = $derived(changes.filter((c) => !excluded.has(c.path)).map((c) => c.path));
+	/** A `renamed` row stages as two ordinary paths: remove `renamedFrom`, add
+	 *  `path` — that IS a git rename (git detects it from content similarity
+	 *  at log time, never stores it explicitly), so `localCommit` needs no
+	 *  rename-specific handling at all. */
+	const selected = $derived(
+		changes
+			.filter((c) => !excluded.has(c.path))
+			.flatMap((c) => (c.status === 'renamed' && c.renamedFrom ? [c.renamedFrom, c.path] : [c.path]))
+	);
+	/** File count for the commit button label — `selected` is the flat path
+	 *  list `localCommit` stages (a rename is two paths there), not what a
+	 *  human would call "how many files". */
+	const selectedFileCount = $derived(changes.filter((c) => !excluded.has(c.path)).length);
 	const canCommit = $derived(
 		Boolean(gitHost && repoId) &&
 			selected.length > 0 &&
@@ -151,6 +163,64 @@
 		return partial;
 	}
 
+	/** Paths currently mid-discard — disables their button so a slow write
+	 *  can't be double-clicked into two overlapping writes. */
+	let discarding = $state(new Set<string>());
+
+	/** After a discard, the cached diff for this path (if any) no longer
+	 *  describes the file. The live subscription will refresh it too, but
+	 *  clearing it here immediately avoids a stale flash before that tick. */
+	function invalidateDiff(path: string) {
+		if (diffs.has(path)) {
+			const next = new Map(diffs);
+			next.delete(path);
+			diffs = next;
+		}
+		setExcludedLines(path, new Set());
+	}
+
+	/** Discard EVERY uncommitted change to `path`: restore HEAD, or remove
+	 *  the file if it was never committed. Irreversible — confirmed first. */
+	async function discardAll(path: string) {
+		if (!gitHost || !repoId || discarding.has(path)) return;
+		if (!confirm(`Discard all changes to ${path}?\n\nThis cannot be undone.`)) return;
+		discarding = new Set(discarding).add(path);
+		try {
+			await gitHost.discardAllFile(repoId, path);
+			invalidateDiff(path);
+			if (expandedPath === path) expandedPath = null;
+		} catch (e) {
+			commitError = e instanceof Error ? e.message : 'Could not discard changes';
+		} finally {
+			const next = new Set(discarding);
+			next.delete(path);
+			discarding = next;
+		}
+	}
+
+	/** Discard just one hunk's lines, leaving the rest of the file's
+	 *  uncommitted edit alone. Irreversible — confirmed first. */
+	async function discardHunk(path: string, hunk: DiffHunk) {
+		if (!gitHost || !repoId || discarding.has(path)) return;
+		const entry = diffs.get(path);
+		if (!entry || entry.status !== 'ready') return;
+		const changeable = hunk.lines.filter((l) => l.kind !== 'ctx').map((l) => l.opIndex);
+		if (!changeable.length) return;
+		if (!confirm(`Discard this hunk in ${path}?\n\nThis cannot be undone.`)) return;
+		discarding = new Set(discarding).add(path);
+		try {
+			const kept = applySelection(entry.result.oldText, entry.result.newText, new Set(changeable));
+			await gitHost.discardFile(repoId, path, new TextEncoder().encode(kept));
+			invalidateDiff(path);
+		} catch (e) {
+			commitError = e instanceof Error ? e.message : 'Could not discard changes';
+		} finally {
+			const next = new Set(discarding);
+			next.delete(path);
+			discarding = next;
+		}
+	}
+
 	async function doCommit() {
 		if (!gitHost || !repoId || !canCommit) return;
 		committing = true;
@@ -181,6 +251,34 @@
 		}
 	}
 
+	/**
+	 * Re-check every diff the user currently has cached (open now, or opened
+	 * earlier in this session) against the live file. A path whose text still
+	 * matches is left alone — selections stay put. A path that changed gets
+	 * its cache replaced and its line selection cleared: the old `opIndex`es
+	 * described positions in text that no longer exists, so keeping them
+	 * would silently apply the user's picks to the wrong lines.
+	 */
+	function refreshOpenDiffs(host: GitHost, id: string) {
+		for (const [path, entry] of diffs) {
+			if (entry.status !== 'ready') continue;
+			void host.diffFile(id, path).then(
+				(result) => {
+					const prev = diffs.get(path);
+					if (!prev || prev.status !== 'ready') return; // reset since (e.g. a commit)
+					if (prev.result.oldText === result.oldText && prev.result.newText === result.newText) {
+						return; // unchanged — opIndexes (and any selection) are still valid
+					}
+					diffs = new Map(diffs).set(path, { status: 'ready', result });
+					setExcludedLines(path, new Set());
+				},
+				() => {
+					/* transient read error — keep showing the last good diff */
+				}
+			);
+		}
+	}
+
 	$effect(() => {
 		const host = gitHost;
 		const id = repoId;
@@ -188,6 +286,11 @@
 		untrack(() => {
 			live = null;
 			loadError = '';
+			// A different repoId is a different working tree — nothing cached
+			// under the old one (diffs, line picks, the expanded row) applies.
+			expandedPath = null;
+			diffs = new Map();
+			lineExclusions = new Map();
 		});
 		void host
 			.snapshot(id)
@@ -205,6 +308,11 @@
 			(s) => {
 				live = s;
 				loadError = '';
+				// Deferred: a host may call back synchronously (real ones never
+				// do, but a test double can), and reading `diffs` here — this
+				// effect also resets `diffs` on entry — would make the effect
+				// depend on the very state it writes, looping forever.
+				queueMicrotask(() => refreshOpenDiffs(host, id));
 			},
 			(e) => {
 				loadError = e instanceof Error ? e.message : 'Could not read git history';
@@ -244,24 +352,44 @@
 									onchange={() => toggle(c.path)}
 								/>
 								<span class="st st-{c.status}">{c.status[0]!.toUpperCase()}</span>
-								<button
-									type="button"
-									class="path-btn"
-									aria-expanded={expandedPath === c.path}
-									data-testid="git-change-expand-{c.path}"
-									onclick={() => toggleExpand(c.path)}
-								>
-									<span class="chevron" class:open={expandedPath === c.path} aria-hidden="true">▸</span>
-									<span class="path">{c.path}</span>
-								</button>
-								{#if linesExcluded}
-									<span
-										class="partial-badge"
-										title="{linesExcluded} line{linesExcluded === 1 ? '' : 's'} left out of this commit"
-										data-testid="git-change-partial-{c.path}"
-									>
-										±{linesExcluded}
+								{#if c.status === 'renamed'}
+									<!-- A folded rename has no content diff to expand (see
+									     detectRenames — only an exact byte match is paired),
+									     and "undo" would need to write back two paths, which
+									     discard doesn't support — so neither control applies. -->
+									<span class="path rename-path" data-testid="git-change-rename-{c.path}">
+										{c.renamedFrom} → {c.path}
 									</span>
+								{:else}
+									<button
+										type="button"
+										class="path-btn"
+										aria-expanded={expandedPath === c.path}
+										data-testid="git-change-expand-{c.path}"
+										onclick={() => toggleExpand(c.path)}
+									>
+										<span class="chevron" class:open={expandedPath === c.path} aria-hidden="true">▸</span>
+										<span class="path">{c.path}</span>
+									</button>
+									{#if linesExcluded}
+										<span
+											class="partial-badge"
+											title="{linesExcluded} line{linesExcluded === 1 ? '' : 's'} left out of this commit"
+											data-testid="git-change-partial-{c.path}"
+										>
+											±{linesExcluded}
+										</span>
+									{/if}
+									<button
+										type="button"
+										class="discard-btn"
+										disabled={discarding.has(c.path)}
+										title="Discard all changes to {c.path}"
+										data-testid="git-change-discard-{c.path}"
+										onclick={() => void discardAll(c.path)}
+									>
+										{discarding.has(c.path) ? '…' : 'Discard'}
+									</button>
 								{/if}
 							</div>
 							{#if expandedPath === c.path}
@@ -274,8 +402,10 @@
 										<DiffView
 											diff={entry.result.diff}
 											excluded={lineExclusions.get(c.path) ?? EMPTY_EXCLUDED}
+											discardBusy={discarding.has(c.path)}
 											onToggleLine={(idx) => toggleLine(c.path, idx)}
 											onToggleHunk={(hunk) => toggleHunk(c.path, hunk)}
+											onDiscardHunk={(hunk) => void discardHunk(c.path, hunk)}
 										/>
 									{/if}
 								</div>
@@ -314,7 +444,9 @@
 					data-testid="git-commit-btn"
 					onclick={() => void doCommit()}
 				>
-					{committing ? 'Committing…' : `Commit ${selected.length} file${selected.length === 1 ? '' : 's'}`}
+					{committing
+						? 'Committing…'
+						: `Commit ${selectedFileCount} file${selectedFileCount === 1 ? '' : 's'}`}
 				</button>
 				{#if commitError}
 					<p class="error" data-testid="git-commit-error">{commitError}</p>
@@ -408,10 +540,15 @@
 		text-align: left;
 		cursor: pointer;
 	}
-	.path-btn .path {
+	.path-btn .path,
+	.rename-path {
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
+	}
+	.rename-path {
+		min-width: 0;
+		font-size: 0.8rem;
 	}
 	.chevron {
 		display: inline-block;
@@ -428,6 +565,25 @@
 		font-family: var(--font-mono, monospace);
 		color: var(--accent, #6366f1);
 	}
+	.discard-btn {
+		flex: 0 0 auto;
+		margin-left: auto;
+		padding: 1px 6px;
+		border: 1px solid var(--line-hairline, #ccc);
+		border-radius: var(--radius-sm, 4px);
+		background: transparent;
+		color: var(--text-secondary, #666);
+		font-size: 0.68rem;
+		cursor: pointer;
+	}
+	.discard-btn:hover:not(:disabled) {
+		border-color: var(--danger, #c33);
+		color: var(--danger, #c33);
+	}
+	.discard-btn:disabled {
+		opacity: 0.5;
+		cursor: default;
+	}
 	.diff-slot {
 		padding: 2px 0 4px;
 	}
@@ -443,6 +599,9 @@
 	}
 	.st-deleted {
 		color: var(--danger, #c33);
+	}
+	.st-renamed {
+		color: var(--accent, #6366f1);
 	}
 	.msg,
 	.who input {

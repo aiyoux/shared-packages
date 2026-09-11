@@ -55,6 +55,18 @@ describe('diffLines', () => {
 		expect(d.hunks[1]!.lines.length).toBeLessThan(10);
 	});
 
+	it('strips a trailing CR from displayed text but keeps it byte-exact on reconstruction', () => {
+		const oldText = 'a\r\nb\r\nc\r\n';
+		const newText = 'a\r\nB\r\nc\r\n';
+		const d = diffLines(oldText, newText);
+		if (d.kind !== 'text') throw new Error('expected text');
+		const lines = d.hunks.flatMap((h) => h.lines);
+		// Displayed text never carries a stray \r...
+		for (const l of lines) expect(l.text.endsWith('\r')).toBe(false);
+		// ...but a no-op selection still reconstructs the CRLF file exactly.
+		expect(applySelection(oldText, newText, new Set())).toBe(newText);
+	});
+
 	it('assigns stable, increasing opIndex across hunks', () => {
 		const d = diffLines('a\nb\nc\nd\ne\n', 'a\nB\nc\nD\ne\n', 0);
 		if (d.kind !== 'text') throw new Error('expected text');

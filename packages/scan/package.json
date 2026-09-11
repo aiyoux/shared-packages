@@ -15,6 +15,7 @@
   "files": ["src"],
   "scripts": {
     "test": "vitest run",
+    "bench": "node --experimental-strip-types --import ./tools/detect-bench/register.mjs ./tools/detect-bench/scenes.cjs && node --experimental-strip-types --import ./tools/detect-bench/register.mjs ./tools/detect-bench/bench.mjs",
     "check": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {

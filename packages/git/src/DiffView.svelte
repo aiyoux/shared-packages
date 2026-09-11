@@ -1,17 +1,25 @@
 <script lang="ts">
-	import type { DiffHunk, FileDiff } from './diffLines.js';
+	import type { DiffHunk, DiffLine, FileDiff } from './diffLines.js';
+	import HunkBody from './HunkBody.svelte';
 
 	let {
 		diff,
 		excluded,
+		discardBusy = false,
 		onToggleLine,
-		onToggleHunk
+		onToggleHunk,
+		onDiscardHunk
 	}: {
 		diff: FileDiff;
 		/** opIndex values left OUT of the commit for this file. */
 		excluded: ReadonlySet<number>;
+		/** A discard is in flight for this file — disables Discard-hunk buttons
+		 *  so a slow write can't be double-clicked into two overlapping ones. */
+		discardBusy?: boolean;
 		onToggleLine: (opIndex: number) => void;
 		onToggleHunk: (hunk: DiffHunk) => void;
+		/** Absent hides the per-hunk Discard button (e.g. read-only viewers). */
+		onDiscardHunk?: (hunk: DiffHunk) => void;
 	} = $props();
 
 	/** `checked`/`indeterminate` for a hunk's own checkbox, from its add/del
@@ -59,27 +67,46 @@
 						onchange={() => onToggleHunk(hunk)}
 					/>
 					<code>@@ -{hunk.oldStart},{hunk.oldLines} +{hunk.newStart},{hunk.newLines} @@</code>
+					{#if onDiscardHunk}
+						<button
+							type="button"
+							class="hunk-discard"
+							disabled={discardBusy}
+							title="Discard this hunk"
+							data-testid="git-diff-hunk-discard"
+							onclick={() => onDiscardHunk(hunk)}
+						>
+							{discardBusy ? '…' : 'Discard'}
+						</button>
+					{/if}
 				</div>
-				{#each hunk.lines as line (line.opIndex)}
-					<div class="dline kind-{line.kind}" class:excluded={line.kind !== 'ctx' && excluded.has(line.opIndex)}>
-						<span class="gutter">{line.oldNo ?? ''}</span>
-						<span class="gutter">{line.newNo ?? ''}</span>
-						{#if line.kind === 'ctx'}
-							<span class="line-check-spacer" aria-hidden="true"></span>
-						{:else}
-							<input
-								type="checkbox"
-								class="line-check"
-								checked={!excluded.has(line.opIndex)}
-								aria-label={line.kind === 'add' ? 'Include this added line' : 'Include this removed line'}
-								data-testid="git-diff-line-check"
-								onchange={() => onToggleLine(line.opIndex)}
-							/>
-						{/if}
-						<span class="marker" aria-hidden="true">{line.kind === 'add' ? '+' : line.kind === 'del' ? '−' : ''}</span>
-						<span class="text">{line.text}</span>
-					</div>
-				{/each}
+				<HunkBody lines={hunk.lines}>
+					{#snippet row(line: DiffLine)}
+						<div
+							class="dline kind-{line.kind}"
+							class:excluded={line.kind !== 'ctx' && excluded.has(line.opIndex)}
+						>
+							<span class="gutter">{line.oldNo ?? ''}</span>
+							<span class="gutter">{line.newNo ?? ''}</span>
+							{#if line.kind === 'ctx'}
+								<span class="line-check-spacer" aria-hidden="true"></span>
+							{:else}
+								<input
+									type="checkbox"
+									class="line-check"
+									checked={!excluded.has(line.opIndex)}
+									aria-label={line.kind === 'add' ? 'Include this added line' : 'Include this removed line'}
+									data-testid="git-diff-line-check"
+									onchange={() => onToggleLine(line.opIndex)}
+								/>
+							{/if}
+							<span class="marker" aria-hidden="true"
+								>{line.kind === 'add' ? '+' : line.kind === 'del' ? '−' : ''}</span
+							>
+							<span class="text">{line.text}</span>
+						</div>
+					{/snippet}
+				</HunkBody>
 			</div>
 		{/each}
 	{/if}
@@ -113,6 +140,25 @@
 	}
 	.hunk-head code {
 		color: var(--text-secondary, #666);
+	}
+	.hunk-discard {
+		margin-left: auto;
+		padding: 1px 6px;
+		border: 1px solid var(--line-hairline, #ccc);
+		border-radius: var(--radius-sm, 4px);
+		background: transparent;
+		color: var(--text-secondary, #666);
+		font-size: 0.68rem;
+		font-family: inherit;
+		cursor: pointer;
+	}
+	.hunk-discard:hover:not(:disabled) {
+		border-color: var(--danger, #c33);
+		color: var(--danger, #c33);
+	}
+	.hunk-discard:disabled {
+		opacity: 0.5;
+		cursor: default;
 	}
 	.dline {
 		display: grid;

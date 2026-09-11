@@ -5,6 +5,69 @@ import type { CommitInput, GitChange, GitFileDiff, GitSnapshot } from './types.j
 /** isomorphic-git's node/browser fs shape (`fs.promises` or LightningFS). */
 export type GitFs = Parameters<typeof git.init>[0]['fs'];
 
+function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
+	if (a.length !== b.length) return false;
+	for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+	return true;
+}
+
+/**
+ * Fold exact-content added/deleted pairs into single `renamed` entries.
+ *
+ * Only a byte-for-byte match counts — a plain `mv` is unambiguous, a
+ * `mv` + edit is not (there's no good, cheap threshold for "similar enough"),
+ * so a moved-and-edited file is left as its more honest add+delete pair
+ * rather than guessed at. A candidate is only paired when it matches
+ * exactly one file on the other side — a duplicate-content ambiguity is
+ * left alone rather than picked arbitrarily.
+ *
+ * Bounded by `added.length * deleted.length`: this reads bytes for every
+ * candidate on both sides, which is real cost on top of the `statusMatrix`
+ * call `localSnapshot` already does — worth it for a rename-shaped commit,
+ * skipped outright once it stops being cheap.
+ */
+async function detectRenames(fs: GitFs, dir: string, changes: GitChange[]): Promise<GitChange[]> {
+	const added = changes.filter((c) => c.status === 'added');
+	const deleted = changes.filter((c) => c.status === 'deleted');
+	if (!added.length || !deleted.length || added.length * deleted.length > 400) return changes;
+
+	const addedBytes = new Map<string, Uint8Array | null>();
+	for (const c of added) addedBytes.set(c.path, await localReadWorkingFile(fs, dir, c.path));
+	const deletedBytes = new Map<string, Uint8Array | null>();
+	for (const c of deleted) deletedBytes.set(c.path, await localReadHeadOrNull(fs, dir, c.path));
+
+	// Deleted path -> every added path with identical bytes.
+	const candidates = new Map<string, string[]>();
+	for (const [dPath, dBytes] of deletedBytes) {
+		if (!dBytes) continue;
+		const hits = [...addedBytes].filter(([, aBytes]) => aBytes && bytesEqual(dBytes, aBytes)).map(([p]) => p);
+		if (hits.length) candidates.set(dPath, hits);
+	}
+
+	const renamedTo = new Map<string, string>(); // deleted path -> added path
+	const claimedAdded = new Set<string>();
+	for (const [dPath, hits] of candidates) {
+		if (hits.length !== 1) continue; // this deleted file's content isn't unique
+		const aPath = hits[0]!;
+		const otherClaimants = [...candidates].some(([otherD, otherHits]) => otherD !== dPath && otherHits.includes(aPath));
+		if (otherClaimants || claimedAdded.has(aPath)) continue; // this added file's content isn't unique
+		renamedTo.set(dPath, aPath);
+		claimedAdded.add(aPath);
+	}
+	if (!renamedTo.size) return changes;
+
+	const fromFor = new Map<string, string>(); // added path -> deleted path
+	for (const [dPath, aPath] of renamedTo) fromFor.set(aPath, dPath);
+
+	return changes.flatMap((c) => {
+		if (c.status === 'deleted' && renamedTo.has(c.path)) return [];
+		if (c.status === 'added' && fromFor.has(c.path)) {
+			return [{ path: c.path, status: 'renamed' as const, renamedFrom: fromFor.get(c.path)! }];
+		}
+		return [c];
+	});
+}
+
 export async function localSnapshot(fs: GitFs, dir: string): Promise<GitSnapshot> {
 	let branch: string | null = null;
 	/** `.git` was readable at all — false means this is not a usable repo here. */
@@ -31,6 +94,7 @@ export async function localSnapshot(fs: GitFs, dir: string): Promise<GitSnapshot
 				head === 0 ? 'added' : workdir === 0 ? 'deleted' : 'modified';
 			return [{ path: String(path), status }];
 		});
+		changes = await detectRenames(fs, dir, changes);
 	} catch (e) {
 		// A packed-object OPFS error (short pack, write in flight) must not
 		// render as a clean tree. Empty repos still have a readable statusMatrix.
@@ -110,6 +174,54 @@ export async function localReadWorkingFile(
 	}
 }
 
+/** Overwrite the working-tree file at `filepath` — used to discard a
+ *  hand-picked subset of its uncommitted changes (`content` built via
+ *  `applySelection`). Irreversible; the caller confirms with the user. */
+export async function localWriteWorkingFile(
+	fs: GitFs,
+	dir: string,
+	filepath: string,
+	content: Uint8Array
+): Promise<void> {
+	const full = dir === '/' ? `/${filepath}` : `${dir}/${filepath}`;
+	await (
+		fs as unknown as { promises: { writeFile(p: string, d: Uint8Array): Promise<void> } }
+	).promises.writeFile(full, content);
+}
+
+/** Remove `filepath` from the working tree, if it's there. A no-op (not an
+ *  error) if it's already gone. */
+export async function localDeleteWorkingFile(fs: GitFs, dir: string, filepath: string): Promise<void> {
+	const full = dir === '/' ? `/${filepath}` : `${dir}/${filepath}`;
+	try {
+		await (fs as unknown as { promises: { unlink(p: string): Promise<void> } }).promises.unlink(full);
+	} catch {
+		/* already gone */
+	}
+}
+
+/** HEAD bytes for `filepath`, or null if HEAD has none (an added/untracked
+ *  path, or no HEAD yet — the first commit hasn't happened). */
+async function localReadHeadOrNull(fs: GitFs, dir: string, filepath: string): Promise<Uint8Array | null> {
+	try {
+		return await localReadBlobAt(fs, dir, 'HEAD', filepath);
+	} catch {
+		return null;
+	}
+}
+
+/** Discard ALL uncommitted changes to `filepath`: restore its HEAD bytes, or
+ *  remove it from disk if HEAD has none. Irreversible; the caller confirms
+ *  with the user. */
+export async function localDiscardAllFile(fs: GitFs, dir: string, filepath: string): Promise<void> {
+	const headBytes = await localReadHeadOrNull(fs, dir, filepath);
+	if (headBytes === null) {
+		await localDeleteWorkingFile(fs, dir, filepath);
+	} else {
+		await localWriteWorkingFile(fs, dir, filepath, headBytes);
+	}
+}
+
 /** First 8000 bytes hold a NUL — the same heuristic git itself uses to call
  *  a blob binary and skip line diffing. */
 function looksBinary(bytes: Uint8Array): boolean {
@@ -123,13 +235,7 @@ const decoder = new TextDecoder('utf-8', { fatal: false });
 /** HEAD text vs working-tree text for one changed path, plus the grouped
  *  line diff between them — see `GitFileDiff`. */
 export async function localDiffFile(fs: GitFs, dir: string, filepath: string): Promise<GitFileDiff> {
-	let oldBytes: Uint8Array | null;
-	try {
-		oldBytes = await localReadBlobAt(fs, dir, 'HEAD', filepath);
-	} catch {
-		// Not in HEAD (added file) or no HEAD yet (first commit pending).
-		oldBytes = null;
-	}
+	const oldBytes = await localReadHeadOrNull(fs, dir, filepath);
 	const newBytes = await localReadWorkingFile(fs, dir, filepath);
 	if ((oldBytes && looksBinary(oldBytes)) || (newBytes && looksBinary(newBytes))) {
 		return { oldText: '', newText: '', diff: { kind: 'binary' } };

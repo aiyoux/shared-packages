@@ -1,35 +1,31 @@
 import { plainQuad } from './cloneable.js';
+import {
+	dist,
+	orderCorners as orderCornersUnchecked,
+	orthoScore,
+	outputSize,
+	quadArea
+} from './detect/algorithm.js';
 import type { ContainRect, Point, Quad } from './types.js';
+
+// Single source of truth: these also have to run inside the OpenCV worker, so
+// they live in ./detect/algorithm.ts, which is emitted into it as source text.
+export { dist, outputSize, quadArea };
+
+/**
+ * 1 = every corner is a right angle; 0 = collapsed / wildly skewed.
+ * Used to prefer a page rectangle over a diamond min-area-rect of floor grain.
+ */
+export const quadOrthogonality = orthoScore;
 
 export function newScanId(): string {
 	return `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
-export function dist(a: Point, b: Point): number {
-	return Math.hypot(a.x - b.x, a.y - b.y);
-}
-
-export function quadArea(q: Quad): number {
-	// Shoelace
-	let acc = 0;
-	for (let i = 0; i < 4; i++) {
-		const a = q[i]!;
-		const b = q[(i + 1) % 4]!;
-		acc += a.x * b.y - b.x * a.y;
-	}
-	return Math.abs(acc) / 2;
-}
-
 /** Sort four points into TL, TR, BR, BL. */
 export function orderCorners(pts: Point[]): Quad {
 	if (pts.length !== 4) throw new Error('orderCorners expects 4 points');
-	const bySum = [...pts].sort((a, b) => a.x + a.y - (b.x + b.y));
-	const tl = bySum[0]!;
-	const br = bySum[3]!;
-	const rest = [bySum[1]!, bySum[2]!];
-	const tr = rest[0]!.x >= rest[1]!.x ? rest[0]! : rest[1]!;
-	const bl = rest[0]!.x >= rest[1]!.x ? rest[1]! : rest[0]!;
-	return [tl, tr, br, bl];
+	return orderCornersUnchecked(pts);
 }
 
 export function quadsClose(a: Quad, b: Quad, maxPx: number): boolean {
@@ -37,39 +33,6 @@ export function quadsClose(a: Quad, b: Quad, maxPx: number): boolean {
 		if (dist(a[i]!, b[i]!) > maxPx) return false;
 	}
 	return true;
-}
-
-/**
- * 1 = every corner is a right angle; 0 = collapsed / wildly skewed.
- * Used to prefer a page rectangle over a diamond min-area-rect of floor grain.
- */
-export function quadOrthogonality(q: Quad): number {
-	let acc = 0;
-	for (let i = 0; i < 4; i++) {
-		const b = q[i]!;
-		const a = q[(i + 3) % 4]!;
-		const c = q[(i + 1) % 4]!;
-		const v1x = a.x - b.x;
-		const v1y = a.y - b.y;
-		const v2x = c.x - b.x;
-		const v2y = c.y - b.y;
-		const n1 = Math.hypot(v1x, v1y) || 1;
-		const n2 = Math.hypot(v2x, v2y) || 1;
-		acc += 1 - Math.min(1, Math.abs((v1x * v2x + v1y * v2y) / (n1 * n2)));
-	}
-	return acc / 4;
-}
-
-export function outputSize(quad: Quad, maxEdge = 1600): { width: number; height: number } {
-	const [tl, tr, br, bl] = quad;
-	const w = Math.max(dist(tl, tr), dist(bl, br));
-	const h = Math.max(dist(tl, bl), dist(tr, br));
-	if (!(w > 1) || !(h > 1)) return { width: 800, height: 1100 };
-	const scale = Math.min(1, maxEdge / Math.max(w, h));
-	return {
-		width: Math.max(2, Math.round(w * scale / 2) * 2),
-		height: Math.max(2, Math.round(h * scale / 2) * 2)
-	};
 }
 
 /** Fit src into box (object-fit: contain). */
