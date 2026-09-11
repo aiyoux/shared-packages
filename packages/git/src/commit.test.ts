@@ -2,7 +2,8 @@
 import { describe, expect, it } from 'vitest';
 import git from 'isomorphic-git';
 import { createVfs, type VfsService } from '@shared-packages/file-system';
-import { localCommit, localSnapshot } from './local.js';
+import { localCommit, localDiffFile, localSnapshot } from './local.js';
+import { applySelection } from './diffLines.js';
 import { createVfsGitFs } from './vfsGitFs.js';
 
 const AUTHOR = { name: 'Tester', email: 't@t.test' };
@@ -89,5 +90,58 @@ describe('localCommit', () => {
 		await expect(
 			localCommit(fs, '/', { message: 'ok', paths: [], author: AUTHOR })
 		).rejects.toThrow(/at least one/i);
+	});
+
+	it('diffs a modified file: HEAD text vs the working file', async () => {
+		const { fs } = await repo();
+		await fs.promises.writeFile('/m.txt', 'one\ntwo\nthree\n');
+		await localCommit(fs, '/', { message: 'first', paths: ['m.txt'], author: AUTHOR });
+		await fs.promises.writeFile('/m.txt', 'one\nTWO\nthree\nfour\n');
+
+		const d = await localDiffFile(fs, '/', 'm.txt');
+		expect(d.oldText).toBe('one\ntwo\nthree\n');
+		expect(d.newText).toBe('one\nTWO\nthree\nfour\n');
+		expect(d.diff.kind).toBe('text');
+	});
+
+	it('diffs an added file against empty HEAD text', async () => {
+		const { fs } = await repo();
+		await fs.promises.writeFile('/a.txt', 'hello\n');
+		const d = await localDiffFile(fs, '/', 'a.txt');
+		expect(d.oldText).toBe('');
+		expect(d.newText).toBe('hello\n');
+	});
+
+	it('commits a partial-stage override in place of the working file, leaving the rest pending', async () => {
+		const { fs } = await repo();
+		await fs.promises.writeFile('/m.txt', 'keep1\ngone\nkeep2\n');
+		await localCommit(fs, '/', { message: 'first', paths: ['m.txt'], author: AUTHOR });
+		await fs.promises.writeFile('/m.txt', 'keep1\nkeep2\nadded\n');
+
+		const d = await localDiffFile(fs, '/', 'm.txt');
+		if (d.diff.kind !== 'text') throw new Error('expected text');
+		const addedLine = d.diff.hunks
+			.flatMap((h) => h.lines)
+			.find((l) => l.kind === 'add' && l.text === 'added')!;
+		// Stage only the deletion of "gone" — leave "added" out of this commit.
+		const partialContent = applySelection(d.oldText, d.newText, new Set([addedLine.opIndex]));
+		expect(partialContent).toBe('keep1\nkeep2\n');
+
+		const sha = await localCommit(fs, '/', {
+			message: 'drop gone only',
+			paths: ['m.txt'],
+			author: AUTHOR,
+			partial: { 'm.txt': new TextEncoder().encode(partialContent) }
+		});
+		expect(sha).toMatch(/^[0-9a-f]{40}$/);
+
+		// The committed blob is the partial content...
+		const head = await localDiffFile(fs, '/', 'm.txt');
+		expect(head.oldText).toBe('keep1\nkeep2\n');
+		// ...but the working file still has "added" — a partial commit is not a
+		// silent full commit, and the file correctly still shows as changed.
+		expect(head.newText).toBe('keep1\nkeep2\nadded\n');
+		const after = await localSnapshot(fs, '/');
+		expect(after.changes).toEqual([{ path: 'm.txt', status: 'modified' }]);
 	});
 });

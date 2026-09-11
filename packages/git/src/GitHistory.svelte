@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { untrack } from 'svelte';
-	import type { GitAuthor, GitHost, GitSnapshot } from './types.js';
+	import type { GitAuthor, GitFileDiff, GitHost, GitSnapshot } from './types.js';
+	import { applySelection, type DiffHunk } from './diffLines.js';
+	import DiffView from './DiffView.svelte';
 
 	const AUTHOR_KEY = 'git.author';
 
@@ -50,6 +52,22 @@
 	/** Paths explicitly UNticked. Everything changed is included by default. */
 	let excluded = $state(new Set<string>());
 
+	/** The one path currently expanded to its diff, if any. */
+	let expandedPath = $state<string | null>(null);
+	type DiffFetch =
+		| { status: 'loading' }
+		| { status: 'error'; error: string }
+		| { status: 'ready'; result: GitFileDiff };
+	/** Diff fetch state per path, cached for as long as the row stays
+	 *  mounted — re-expanding doesn't re-fetch. */
+	let diffs = $state(new Map<string, DiffFetch>());
+	/** Per-path opIndex values left OUT of the commit — only present for a
+	 *  path whose diff was hand-edited (GitHub-Desktop-style hunk/line
+	 *  selection). A path absent here commits the whole working file, same
+	 *  as before this existed. */
+	let lineExclusions = $state(new Map<string, Set<number>>());
+	const EMPTY_EXCLUDED: ReadonlySet<number> = new Set();
+
 	const changes = $derived(shown?.changes ?? []);
 	const selected = $derived(changes.filter((c) => !excluded.has(c.path)).map((c) => c.path));
 	const canCommit = $derived(
@@ -68,6 +86,71 @@
 		excluded = next;
 	}
 
+	function toggleExpand(path: string) {
+		if (expandedPath === path) {
+			expandedPath = null;
+			return;
+		}
+		expandedPath = path;
+		if (diffs.has(path) || !gitHost || !repoId) return;
+		const host = gitHost;
+		const id = repoId;
+		diffs = new Map(diffs).set(path, { status: 'loading' });
+		void host.diffFile(id, path).then(
+			(result) => {
+				diffs = new Map(diffs).set(path, { status: 'ready', result });
+			},
+			(e) => {
+				diffs = new Map(diffs).set(path, {
+					status: 'error',
+					error: e instanceof Error ? e.message : 'Could not load diff'
+				});
+			}
+		);
+	}
+
+	function setExcludedLines(path: string, next: Set<number>) {
+		const nextMap = new Map(lineExclusions);
+		if (next.size === 0) nextMap.delete(path);
+		else nextMap.set(path, next);
+		lineExclusions = nextMap;
+	}
+
+	function toggleLine(path: string, opIndex: number) {
+		const next = new Set(lineExclusions.get(path) ?? []);
+		if (next.has(opIndex)) next.delete(opIndex);
+		else next.add(opIndex);
+		setExcludedLines(path, next);
+	}
+
+	function toggleHunk(path: string, hunk: DiffHunk) {
+		const changeable = hunk.lines.filter((l) => l.kind !== 'ctx').map((l) => l.opIndex);
+		if (!changeable.length) return;
+		const next = new Set(lineExclusions.get(path) ?? []);
+		const allExcluded = changeable.every((idx) => next.has(idx));
+		for (const idx of changeable) {
+			if (allExcluded) next.delete(idx);
+			else next.add(idx);
+		}
+		setExcludedLines(path, next);
+	}
+
+	/** Bytes to stage for each path with a hand-edited selection — built from
+	 *  the SAME oldText/newText the visible diff came from, so `opIndex`
+	 *  still lines up. Paths with no customization are left out entirely:
+	 *  `gitHost.commit` stages their whole working file, as before. */
+	function buildPartialOverrides(): Record<string, Uint8Array> {
+		const partial: Record<string, Uint8Array> = {};
+		for (const [path, excludedSet] of lineExclusions) {
+			if (!excludedSet.size || excluded.has(path)) continue;
+			const entry = diffs.get(path);
+			if (!entry || entry.status !== 'ready') continue;
+			const content = applySelection(entry.result.oldText, entry.result.newText, excludedSet);
+			partial[path] = new TextEncoder().encode(content);
+		}
+		return partial;
+	}
+
 	async function doCommit() {
 		if (!gitHost || !repoId || !canCommit) return;
 		committing = true;
@@ -78,13 +161,18 @@
 			} catch {
 				/* not fatal — the commit still carries the identity */
 			}
+			const partial = buildPartialOverrides();
 			await gitHost.commit(repoId, {
 				message: message.trim(),
 				paths: selected,
-				author: { name: author.name.trim(), email: author.email.trim() }
+				author: { name: author.name.trim(), email: author.email.trim() },
+				...(Object.keys(partial).length ? { partial } : {})
 			});
 			message = '';
 			excluded = new Set();
+			lineExclusions = new Map();
+			diffs = new Map();
+			expandedPath = null;
 			// The subscription repaints the log; nothing to do here.
 		} catch (e) {
 			commitError = e instanceof Error ? e.message : 'Commit failed';
@@ -144,17 +232,54 @@
 			<div class="commit" data-testid="git-commit-panel">
 				<ul class="changes" data-testid="git-changes">
 					{#each changes as c (c.path)}
+						{@const linesExcluded = lineExclusions.get(c.path)?.size ?? 0}
+						{@const entry = diffs.get(c.path)}
 						<li>
-							<label>
+							<div class="change-row">
 								<input
 									type="checkbox"
 									checked={!excluded.has(c.path)}
+									aria-label="Include {c.path}"
 									data-testid="git-change-{c.path}"
 									onchange={() => toggle(c.path)}
 								/>
 								<span class="st st-{c.status}">{c.status[0]!.toUpperCase()}</span>
-								<span class="path">{c.path}</span>
-							</label>
+								<button
+									type="button"
+									class="path-btn"
+									aria-expanded={expandedPath === c.path}
+									data-testid="git-change-expand-{c.path}"
+									onclick={() => toggleExpand(c.path)}
+								>
+									<span class="chevron" class:open={expandedPath === c.path} aria-hidden="true">▸</span>
+									<span class="path">{c.path}</span>
+								</button>
+								{#if linesExcluded}
+									<span
+										class="partial-badge"
+										title="{linesExcluded} line{linesExcluded === 1 ? '' : 's'} left out of this commit"
+										data-testid="git-change-partial-{c.path}"
+									>
+										±{linesExcluded}
+									</span>
+								{/if}
+							</div>
+							{#if expandedPath === c.path}
+								<div class="diff-slot">
+									{#if !entry || entry.status === 'loading'}
+										<p class="diff-note">Loading diff…</p>
+									{:else if entry.status === 'error'}
+										<p class="error">{entry.error}</p>
+									{:else}
+										<DiffView
+											diff={entry.result.diff}
+											excluded={lineExclusions.get(c.path) ?? EMPTY_EXCLUDED}
+											onToggleLine={(idx) => toggleLine(c.path, idx)}
+											onToggleHunk={(hunk) => toggleHunk(c.path, hunk)}
+										/>
+									{/if}
+								</div>
+							{/if}
 						</li>
 					{/each}
 				</ul>
@@ -257,23 +382,54 @@
 		list-style: none;
 		margin: 0;
 		padding: 0;
-		max-height: 30vh;
+		max-height: 40vh;
 		overflow: auto;
 		display: flex;
 		flex-direction: column;
 		gap: 2px;
 	}
-	.changes label {
+	.change-row {
 		display: flex;
 		align-items: center;
 		gap: 6px;
 		font-size: 0.8rem;
 		min-width: 0;
 	}
-	.changes .path {
+	.path-btn {
+		display: flex;
+		align-items: center;
+		gap: 4px;
+		min-width: 0;
+		padding: 0;
+		border: none;
+		background: transparent;
+		color: inherit;
+		font: inherit;
+		text-align: left;
+		cursor: pointer;
+	}
+	.path-btn .path {
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
+	}
+	.chevron {
+		display: inline-block;
+		flex: 0 0 auto;
+		transition: transform 0.1s ease;
+		color: var(--text-secondary, #666);
+	}
+	.chevron.open {
+		transform: rotate(90deg);
+	}
+	.partial-badge {
+		flex: 0 0 auto;
+		font-size: 0.68rem;
+		font-family: var(--font-mono, monospace);
+		color: var(--accent, #6366f1);
+	}
+	.diff-slot {
+		padding: 2px 0 4px;
 	}
 	.st {
 		font-family: var(--font-mono, monospace);

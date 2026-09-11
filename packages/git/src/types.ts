@@ -1,3 +1,5 @@
+import type { FileDiff } from './diffLines.js';
+
 export type GitCommit = {
 	sha: string;
 	subject: string;
@@ -20,6 +22,17 @@ export type GitChange = {
 };
 
 export type GitAuthor = { name: string; email: string };
+
+/** HEAD vs working-tree text for one changed path, for the commit panel's
+ *  per-file expand. `oldText`/`newText` are the exact texts `diffLines` (and
+ *  `applySelection`, at commit time) were run against — the UI must keep
+ *  them alongside any line selection it builds, since `DiffLine.opIndex` is
+ *  only meaningful for that same pair. */
+export type GitFileDiff = {
+	oldText: string;
+	newText: string;
+	diff: FileDiff;
+};
 
 export type GitSnapshot = {
 	status: GitStatus;
@@ -70,6 +83,11 @@ export interface GitHost {
 	/** Committed blob at `rev` (ref, abbreviated oid, or SHA), not live worktree bytes. */
 	readBlobAt(repo: GitRepoRef, rev: string, filepath: string): Promise<Uint8Array>;
 	/**
+	 * HEAD text vs working-tree text for one changed path, for the commit
+	 * panel's expand-to-diff. Local backend only, like `commit`.
+	 */
+	diffFile(repoId: string, filepath: string): Promise<GitFileDiff>;
+	/**
 	 * Stage `paths` and commit them. Returns the new commit oid.
 	 *
 	 * Local backend only — monitor repos are read-only here, and this rejects
@@ -84,4 +102,15 @@ export type CommitInput = {
 	/** Paths to stage, relative to the working tree root. Must be non-empty. */
 	paths: string[];
 	author: GitAuthor;
+	/**
+	 * Per-path partial-stage override: exact bytes to commit for that path,
+	 * in place of its working-tree file — built by `applySelection` from a
+	 * hand-edited diff (some hunks/lines deselected). A path in `paths` with
+	 * no entry here stages the whole working-tree file, same as today.
+	 *
+	 * After a commit with an override, the path can still show as changed
+	 * (its deselected lines are real, uncommitted edits) — that is the point,
+	 * not a bug; it mirrors `git add -p` leaving the rest in the working tree.
+	 */
+	partial?: Record<string, Uint8Array>;
 };

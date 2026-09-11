@@ -1,9 +1,9 @@
 import './ensureBuffer.js';
 import git from 'isomorphic-git';
 import { deleteRepo, getRepo, listRepos, putRepo } from './repos.js';
-import { localCommit, localReadBlobAt, localSnapshot, type GitFs } from './local.js';
+import { localCommit, localDiffFile, localReadBlobAt, localSnapshot, type GitFs } from './local.js';
 import { monitorSnapshot, monitorSubscribe, monitorTransportFor } from './monitor.js';
-import type { GitHost, GitRepoRef, GitSnapshot, CommitInput
+import type { GitFileDiff, GitHost, GitRepoRef, GitSnapshot, CommitInput
 } from './types.js';
 
 export type CreateGitHostOptions = {
@@ -86,6 +86,14 @@ export function createGitHost(opts: CreateGitHostOptions = {}): GitHost {
 		return monitorSubscribe(repo, onChange, { fetchImpl });
 	}
 
+	async function diffFileOn(repo: GitRepoRef, filepath: string): Promise<GitFileDiff> {
+		if (repo.backend !== 'local') {
+			throw new Error('Diffing is only supported for Browser files repos.');
+		}
+		const bound = bindLocal(repo.path);
+		return localDiffFile(bound.fs, bound.dir, filepath);
+	}
+
 	async function commitOn(repo: GitRepoRef, opts: CommitInput): Promise<string> {
 		if (repo.backend !== 'local') {
 			throw new Error('Committing is only supported for Browser files repos.');
@@ -166,6 +174,9 @@ export function createGitHost(opts: CreateGitHostOptions = {}): GitHost {
 			}
 			const bound = bindLocal(repo.path);
 			return localReadBlobAt(bound.fs, bound.dir, rev, filepath);
+		},
+		async diffFile(repoId, filepath) {
+			return diffFileOn(await requireRepo(repoId), filepath);
 		}
 	};
 }

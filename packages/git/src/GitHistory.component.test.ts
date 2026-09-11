@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/svelte';
 import GitHistory from './GitHistory.svelte';
 
@@ -93,5 +93,96 @@ describe('GitHistory', () => {
 		const err = await screen.findByTestId('git-history-error');
 		expect(err.textContent).toMatch(/WRITE_IN_FLIGHT/);
 		expect(screen.getByTestId('git-history-commit').textContent).toMatch(/hello/);
+	});
+
+	describe('per-file diff and line selection', () => {
+		// A successful commit persists the author identity to localStorage
+		// (by design — see loadAuthor), which would otherwise hide the "who"
+		// fields the next test expects to fill in.
+		beforeEach(() => localStorage.clear());
+
+		function commitHost(commit = vi.fn().mockResolvedValue('deadbeef')) {
+			return {
+				snapshot: () =>
+					Promise.resolve({
+						status: { branch: 'main', dirty: true },
+						log: [],
+						changes: [{ path: 'm.txt', status: 'modified' as const }]
+					}),
+				subscribe: () => () => {},
+				diffFile: vi.fn().mockResolvedValue({
+					oldText: 'a\nb\nc\n',
+					newText: 'a\nB\nc\nd\n',
+					diff: {
+						kind: 'text',
+						hunks: [
+							{
+								oldStart: 1,
+								oldLines: 3,
+								newStart: 1,
+								newLines: 4,
+								lines: [
+									{ kind: 'ctx', text: 'a', oldNo: 1, newNo: 1, opIndex: 0 },
+									{ kind: 'del', text: 'b', oldNo: 2, newNo: null, opIndex: 1 },
+									{ kind: 'add', text: 'B', oldNo: null, newNo: 2, opIndex: 2 },
+									{ kind: 'ctx', text: 'c', oldNo: 3, newNo: 3, opIndex: 3 },
+									{ kind: 'add', text: 'd', oldNo: null, newNo: 4, opIndex: 4 }
+								]
+							}
+						]
+					}
+				}),
+				commit
+			};
+		}
+
+		it('clicking the file name expands and fetches the diff', async () => {
+			const host = commitHost();
+			render(GitHistory, { props: { repoId: 'r', gitHost: host as never } });
+			const nameBtn = await screen.findByTestId('git-change-expand-m.txt');
+			await fireEvent.click(nameBtn);
+			expect(host.diffFile).toHaveBeenCalledWith('r', 'm.txt');
+			const view = await screen.findByTestId('git-diff-view');
+			expect(view.textContent).toContain('B');
+			expect(view.textContent).toContain('d');
+		});
+
+		it('deselecting an added line shows a partial badge and leaves it out of the commit', async () => {
+			const commit = vi.fn().mockResolvedValue('deadbeef');
+			const host = commitHost(commit);
+			render(GitHistory, { props: { repoId: 'r', gitHost: host as never } });
+			await fireEvent.click(await screen.findByTestId('git-change-expand-m.txt'));
+			const lineChecks = await screen.findAllByTestId('git-diff-line-check');
+			// lines, in order: del "b" (2 -> null), add "B", add "d" — deselect "d".
+			await fireEvent.click(lineChecks[2]!);
+			expect(await screen.findByTestId('git-change-partial-m.txt')).toBeTruthy();
+
+			await fireEvent.input(screen.getByTestId('git-commit-message'), { target: { value: 'msg' } });
+			await fireEvent.input(screen.getByTestId('git-author-name'), { target: { value: 'T' } });
+			await fireEvent.input(screen.getByTestId('git-author-email'), { target: { value: 't@t.test' } });
+			await fireEvent.click(screen.getByTestId('git-commit-btn'));
+
+			await vi.waitFor(() => expect(commit).toHaveBeenCalled());
+			const opts = commit.mock.calls[0]![1] as { partial?: Record<string, Uint8Array> };
+			expect(opts.partial).toBeTruthy();
+			const staged = new TextDecoder().decode(opts.partial!['m.txt']);
+			// "b" removed (kept applied), "B" added, "d" left out.
+			expect(staged).toBe('a\nB\nc\n');
+		});
+
+		it('commits with no partial payload when nothing was hand-edited', async () => {
+			const commit = vi.fn().mockResolvedValue('deadbeef');
+			const host = commitHost(commit);
+			render(GitHistory, { props: { repoId: 'r', gitHost: host as never } });
+
+			await fireEvent.input(await screen.findByTestId('git-commit-message'), { target: { value: 'msg' } });
+			await fireEvent.input(screen.getByTestId('git-author-name'), { target: { value: 'T' } });
+			await fireEvent.input(screen.getByTestId('git-author-email'), { target: { value: 't@t.test' } });
+			await fireEvent.click(screen.getByTestId('git-commit-btn'));
+
+			await vi.waitFor(() => expect(commit).toHaveBeenCalled());
+			const opts = commit.mock.calls[0]![1] as { partial?: Record<string, Uint8Array> };
+			expect(opts.partial).toBeUndefined();
+		});
 	});
 });

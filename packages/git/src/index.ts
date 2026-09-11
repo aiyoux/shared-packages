@@ -1,12 +1,31 @@
 export type {
+	CommitInput,
+	GitAuthor,
+	GitChange,
 	GitCommit,
+	GitFileDiff,
 	GitHost,
 	GitRepoRef,
 	GitSnapshot,
 	GitStatus
 } from './types.js';
+export {
+	applySelection,
+	diffLines,
+	type DiffHunk,
+	type DiffLine,
+	type DiffLineKind,
+	type FileDiff
+} from './diffLines.js';
 export { createGitHost, type CreateGitHostOptions } from './host.js';
-export { localReadBlobAt, localSnapshot, type GitFs } from './local.js';
+export {
+	localCommit,
+	localDiffFile,
+	localReadBlobAt,
+	localReadWorkingFile,
+	localSnapshot,
+	type GitFs
+} from './local.js';
 export { createVfsGitFs, type CreateVfsGitFsOptions } from './vfsGitFs.js';
 export { ensureBuffer } from './ensureBuffer.js';
 export {

@@ -1,5 +1,6 @@
 import git from 'isomorphic-git';
-import type { CommitInput, GitChange, GitSnapshot } from './types.js';
+import { diffLines } from './diffLines.js';
+import type { CommitInput, GitChange, GitFileDiff, GitSnapshot } from './types.js';
 
 /** isomorphic-git's node/browser fs shape (`fs.promises` or LightningFS). */
 export type GitFs = Parameters<typeof git.init>[0]['fs'];
@@ -91,12 +92,63 @@ export async function localReadBlobAt(
 	return blob;
 }
 
+/** Working-tree bytes for `filepath` under `dir`, or null if it doesn't
+ *  exist there (deleted, or never existed). */
+export async function localReadWorkingFile(
+	fs: GitFs,
+	dir: string,
+	filepath: string
+): Promise<Uint8Array | null> {
+	const full = dir === '/' ? `/${filepath}` : `${dir}/${filepath}`;
+	try {
+		const data = await (
+			fs as unknown as { promises: { readFile(p: string): Promise<Uint8Array> } }
+		).promises.readFile(full);
+		return data instanceof Uint8Array ? data : new Uint8Array(data as ArrayBufferLike);
+	} catch {
+		return null;
+	}
+}
+
+/** First 8000 bytes hold a NUL — the same heuristic git itself uses to call
+ *  a blob binary and skip line diffing. */
+function looksBinary(bytes: Uint8Array): boolean {
+	const n = Math.min(bytes.length, 8000);
+	for (let i = 0; i < n; i++) if (bytes[i] === 0) return true;
+	return false;
+}
+
+const decoder = new TextDecoder('utf-8', { fatal: false });
+
+/** HEAD text vs working-tree text for one changed path, plus the grouped
+ *  line diff between them — see `GitFileDiff`. */
+export async function localDiffFile(fs: GitFs, dir: string, filepath: string): Promise<GitFileDiff> {
+	let oldBytes: Uint8Array | null;
+	try {
+		oldBytes = await localReadBlobAt(fs, dir, 'HEAD', filepath);
+	} catch {
+		// Not in HEAD (added file) or no HEAD yet (first commit pending).
+		oldBytes = null;
+	}
+	const newBytes = await localReadWorkingFile(fs, dir, filepath);
+	if ((oldBytes && looksBinary(oldBytes)) || (newBytes && looksBinary(newBytes))) {
+		return { oldText: '', newText: '', diff: { kind: 'binary' } };
+	}
+	const oldText = oldBytes ? decoder.decode(oldBytes) : '';
+	const newText = newBytes ? decoder.decode(newBytes) : '';
+	return { oldText, newText, diff: diffLines(oldText, newText) };
+}
+
 /**
  * Stage `paths` and commit them.
  *
- * A path that no longer exists is removed from the index rather than added —
- * `git.add` on a missing file throws, so a delete would otherwise make the
- * whole commit fail with a confusing ENOENT.
+ * A path with a `partial` override is staged as an exact blob via
+ * `writeBlob` + `updateIndex` — the working-tree file is never touched or
+ * even required to exist, so this also covers "partially undelete" (keep
+ * some of a removed file's lines). Every other path follows the whole-file
+ * path: a path that no longer exists is removed from the index rather than
+ * added — `git.add` on a missing file throws, so a delete would otherwise
+ * make the whole commit fail with a confusing ENOENT.
  */
 export async function localCommit(fs: GitFs, dir: string, opts: CommitInput): Promise<string> {
 	const message = opts.message.trim();
@@ -105,6 +157,12 @@ export async function localCommit(fs: GitFs, dir: string, opts: CommitInput): Pr
 
 	const run = async () => {
 		for (const filepath of opts.paths) {
+			const override = opts.partial?.[filepath];
+			if (override) {
+				const oid = await git.writeBlob({ fs, dir, blob: override });
+				await git.updateIndex({ fs, dir, filepath, oid, mode: 0o100644, add: true });
+				continue;
+			}
 			let exists = true;
 			try {
 				await (fs as unknown as { promises: { lstat(p: string): Promise<unknown> } }).promises.lstat(
