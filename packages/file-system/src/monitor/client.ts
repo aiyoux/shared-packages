@@ -129,6 +129,12 @@ export type MonitorNetCheck = {
 	udpPortMin: number;
 	udpPortMax: number;
 	mapping: 'endpoint-independent' | 'endpoint-dependent' | 'unknown';
+	/**
+	 * Whether the daemon also listens on TCP — the only answer for a network
+	 * that blocks UDP outright. Absent on a daemon too old to have the option,
+	 * which is the same thing as off.
+	 */
+	tcp?: boolean;
 };
 
 /**
