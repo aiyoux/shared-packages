@@ -14,6 +14,7 @@ import {
 	engineFromPort,
 	isCatalogDeadError,
 	openMemoryEngine,
+	catalogFailureReason,
 	openWorkerEngine,
 	resetCatalogLeader,
 	type SqlEngine
@@ -278,7 +279,12 @@ export class SqliteCatalog {
 		if (persist) {
 			const worker = await openWorkerEngine(this.name);
 			if (!worker) {
-				throw new Error('Live OPFS catalog is unavailable (SAH worker / COOP)');
+				// Carry the reason: this message is often read on a phone, where
+				// the console line that explains it cannot be.
+				const why = catalogFailureReason();
+				throw new Error(
+					`Live OPFS catalog is unavailable (SAH worker / COOP)${why ? ` — ${why}` : ''}`
+				);
 			}
 			await worker.exec('SELECT 1 AS ok');
 			this.engine = worker;

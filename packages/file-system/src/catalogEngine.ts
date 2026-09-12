@@ -389,7 +389,28 @@ const followerPending = new Map<number, { id: number; session?: string }>();
 let workerFatal: Error | null = null;
 const workerFailHandlers = new Set<(e: Error) => void>();
 
+/**
+ * Why the live catalog last refused to open.
+ *
+ * `workerFatal` is cleared by `resetCatalogLeader` between retries, so by the
+ * time `openWorkerEngine` gives up the reason is gone — and the message the
+ * user sees names none of the three or four things it could have been. This
+ * survives the retries so the failure can say what actually happened, which
+ * matters most on a phone, where there is no console to read.
+ */
+let lastCatalogFailure: string | null = null;
+
+function noteCatalogFailure(reason: string): void {
+	lastCatalogFailure = reason;
+}
+
+/** Reason the live catalog is unavailable, if one was recorded. */
+export function catalogFailureReason(): string | null {
+	return lastCatalogFailure;
+}
+
 function failCatalogWorker(err: Error): void {
+	noteCatalogFailure(err.message);
 	workerFatal = err;
 	for (const h of workerFailHandlers) h(err);
 }
@@ -486,7 +507,10 @@ export function getCatalogWorker(): Worker | null {
 }
 
 async function startLeaderWorker(): Promise<Worker | null> {
-	if (typeof Worker === 'undefined') return null;
+	if (typeof Worker === 'undefined') {
+		noteCatalogFailure('no Worker constructor in this context');
+		return null;
+	}
 	if (!catalogWorker) {
 		try {
 			// Vite `?worker` emits a hashed /_app/immutable worker. `new URL(...,
@@ -507,7 +531,10 @@ async function startLeaderWorker(): Promise<Worker | null> {
 			});
 			workerControl = onWorkerControl;
 			catalogWorker.addEventListener('message', workerControl);
-		} catch {
+		} catch (e) {
+			// The `?worker` chunk failed to import — a 404 on a stale hashed
+			// asset, a CSP refusal, or storage the browser will not hand over.
+			noteCatalogFailure(`catalog worker did not start: ${(e as Error)?.message ?? e}`);
 			return null;
 		}
 	}
@@ -628,6 +655,7 @@ export async function openWorkerEngine(dbName = 'SharedVFS'): Promise<SqlEngine 
 			if (leader) {
 				const port = connectCatalogPort(dbName);
 				if (!port) {
+					noteCatalogFailure('leader worker started but would not open a port');
 					resetCatalogLeader();
 					continue;
 				}
@@ -643,7 +671,10 @@ export async function openWorkerEngine(dbName = 'SharedVFS'): Promise<SqlEngine 
 				leaderBridge?.postMessage({ type: 'ready' });
 				return eng;
 			}
-			if (typeof BroadcastChannel === 'undefined') return null;
+			if (typeof BroadcastChannel === 'undefined') {
+				noteCatalogFailure('not the catalog leader, and no BroadcastChannel to reach one');
+				return null;
+			}
 			try {
 				await waitForLeader(3_000);
 				const follower = engineFromBroadcast(dbName);
@@ -652,6 +683,9 @@ export async function openWorkerEngine(dbName = 'SharedVFS'): Promise<SqlEngine 
 			} catch {
 				/* previous leader shutting down — try to take the lock */
 			}
+		}
+		if (!lastCatalogFailure) {
+			noteCatalogFailure('three attempts to become or reach the catalog leader failed');
 		}
 		return null;
 	}
