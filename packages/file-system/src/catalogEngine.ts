@@ -7,6 +7,7 @@
  * over BroadcastChannel to that leader.
  */
 import { CATALOG_SCHEMA } from './catalogSchema.js';
+import { createCatalogLock, type CatalogLock, type LockAttempt } from './catalogLock.js';
 
 export { CATALOG_SCHEMA };
 
@@ -180,11 +181,30 @@ type RpcMsg =
 type RpcRes = { id: number; session?: string; ok: boolean; rows?: unknown; error?: string };
 
 const CATALOG_LOCK = 'vfs-catalog-sah';
+/**
+ * How the three attempts at leadership escalate, with a `who` ping between
+ * each: probe, then QUEUE for the lock (a holder that closes or freezes is
+ * succeeded the instant it lets go, which no amount of polling can match),
+ * then steal.
+ *
+ * Stealing is safe only here, at the end: reaching it means the lock was taken
+ * and its holder ignored two `who` pings across nine seconds, so it is wedged
+ * rather than merely busy. It is still a backstop, not the cure — see H4 in
+ * `catalogLock.ts` for why a frozen holder makes it a hollow victory.
+ *
+ * A leader whose main thread is blocked for that whole window (a big extract
+ * on a phone) is indistinguishable from a wedged one, and stealing from it
+ * terminates its worker. That costs it an uncommitted transaction — SQLite
+ * rolls back rather than corrupting, and the tab recovers through
+ * `isCatalogDeadError` — which is why the bar is two unanswered pings and not
+ * one, and why raising it further is cheap if this is ever seen in the wild.
+ */
+const LEADER_ATTEMPTS: LockAttempt[] = [{}, { waitMs: 3_000 }, { steal: true }];
 const CATALOG_BC = 'vfs-catalog-sql';
 const RPC_TIMEOUT_MS = 20_000;
 let leaderAnnounced = false;
-/** True while this document's tryBecomeLeader callback still holds CATALOG_LOCK. */
-let leaderLockHeld = false;
+/** Election for CATALOG_LOCK, built on first use — its deps are defined below. */
+let catalogLock: CatalogLock | null = null;
 let lastAlive = 0;
 let workerControl: ((e: MessageEvent) => void) | null = null;
 let shutdownWait: (() => void) | null = null;
@@ -482,7 +502,6 @@ export async function shutdownCatalogLeader(): Promise<void> {
 	const w = catalogWorker;
 	if (!w) {
 		resetCatalogLeader();
-		leaderLockHeld = false;
 		return;
 	}
 	await new Promise<void>((resolve) => {
@@ -499,7 +518,6 @@ export async function shutdownCatalogLeader(): Promise<void> {
 		}
 	});
 	resetCatalogLeader();
-	leaderLockHeld = false;
 }
 
 export function getCatalogWorker(): Worker | null {
@@ -603,55 +621,36 @@ export function connectCatalogPort(dbName = 'SharedVFS'): MessagePort | null {
 	return ch.port2;
 }
 
-async function tryBecomeLeader(): Promise<boolean> {
-	if (leaderLockHeld) return !!(await startLeaderWorker());
-	const locks = (globalThis as { navigator?: { locks?: LockManager } }).navigator?.locks;
-	if (!locks?.request) {
-		return !!(await startLeaderWorker());
-	}
-	return await new Promise<boolean>((resolve) => {
-		let decided = false;
-		const decide = (v: boolean) => {
-			if (decided) return;
-			decided = true;
-			resolve(v);
-		};
-		try {
-			void locks
-				.request(CATALOG_LOCK, { ifAvailable: true }, async (lock) => {
-					if (!lock) {
-						decide(false);
-						return;
+function leaderLock(): CatalogLock {
+	if (catalogLock) return catalogLock;
+	const nav = (globalThis as { navigator?: { locks?: LockManager } }).navigator;
+	catalogLock = createCatalogLock({
+		name: CATALOG_LOCK,
+		locks: (nav?.locks as Parameters<typeof createCatalogLock>[0]['locks']) ?? null,
+		lifecycle:
+			typeof addEventListener === 'function'
+				? {
+						addEventListener: (t, fn) => addEventListener(t, fn),
+						removeEventListener: (t, fn) => removeEventListener(t, fn)
 					}
-					leaderLockHeld = true;
-					if (!(await startLeaderWorker())) {
-						leaderLockHeld = false;
-						decide(false);
-						return;
-					}
-					decide(true);
-					await new Promise<void>((release) => {
-						if (typeof addEventListener === 'function') {
-							const go = () => {
-								void shutdownCatalogLeader().finally(() => release());
-							};
-							for (const ev of ['pagehide', 'unload', 'freeze'] as const) {
-								addEventListener(ev, go, { once: true });
-							}
-						}
-					});
-				})
-				.catch(() => decide(false));
-		} catch {
-			decide(false);
-		}
+				: null,
+		start: async () => !!(await startLeaderWorker()),
+		stop: shutdownCatalogLeader,
+		abandon: resetCatalogLeader,
+		onStolen: () =>
+			noteCatalogFailure('another tab took catalog leadership from this one')
 	});
+	return catalogLock;
+}
+
+async function tryBecomeLeader(attempt?: LockAttempt): Promise<boolean> {
+	return await leaderLock().acquire(attempt);
 }
 
 export async function openWorkerEngine(dbName = 'SharedVFS'): Promise<SqlEngine | null> {
 	if (inBrowserMain()) {
 		for (let attempt = 0; attempt < 3; attempt++) {
-			const leader = await tryBecomeLeader();
+			const leader = await tryBecomeLeader(LEADER_ATTEMPTS[attempt]);
 			if (leader) {
 				const port = connectCatalogPort(dbName);
 				if (!port) {
@@ -676,7 +675,10 @@ export async function openWorkerEngine(dbName = 'SharedVFS'): Promise<SqlEngine 
 				return null;
 			}
 			try {
-				await waitForLeader(3_000);
+				// The last pass has already stolen the lock; if that did not
+				// produce a working leader, a long wait here only delays the
+				// error the caller is going to show.
+				await waitForLeader(attempt === 2 ? 1_000 : 3_000);
 				const follower = engineFromBroadcast(dbName);
 				await follower.exec('SELECT 1 AS ok');
 				return follower;
@@ -684,6 +686,10 @@ export async function openWorkerEngine(dbName = 'SharedVFS'): Promise<SqlEngine 
 				/* previous leader shutting down — try to take the lock */
 			}
 		}
+		// H6 — giving up must give the lock back. A tab that keeps it with no
+		// worker behind it is precisely the wedge this election exists to
+		// break, and it would outlive the error the user is about to see.
+		leaderLock().release();
 		if (!lastCatalogFailure) {
 			noteCatalogFailure('three attempts to become or reach the catalog leader failed');
 		}
