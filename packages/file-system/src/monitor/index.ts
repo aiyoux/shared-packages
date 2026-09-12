@@ -61,6 +61,7 @@ export {
 	type MonitorGitSnapshot,
 	type MonitorNetCheck,
 	type MonitorNetCheckCandidate,
+	type MonitorRelayStatus,
 	type MonitorWebrtcJob,
 	type MonitorWebrtcRole,
 	type MonitorArchiveOp,

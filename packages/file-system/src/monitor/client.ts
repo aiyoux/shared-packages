@@ -131,6 +131,24 @@ export type MonitorNetCheck = {
 	mapping: 'endpoint-independent' | 'endpoint-dependent' | 'unknown';
 };
 
+/**
+ * The state of a relay, as the daemon sees both its legs.
+ *
+ * `outcome` is the part that survives the session: once a leg goes the daemon
+ * closes the other one too, so the peer that is still there learns something
+ * happened only when its own connection dies — and this is what it can ask
+ * afterwards to find out which end went.
+ */
+export type MonitorRelayStatus = {
+	/** Both legs connected right now. */
+	carrying: boolean;
+	/** The tab that owns the session. */
+	near: 'waiting' | 'connected' | 'gone';
+	/** The device it was reaching. */
+	far: 'waiting' | 'connected' | 'gone';
+	outcome: 'far-left' | 'near-left' | null;
+};
+
 export type MonitorArchiveOp =
 	| 'zip'
 	| 'tar'
@@ -274,6 +292,21 @@ export type MonitorTransport = {
 		sdp: string,
 		opts?: { signal?: AbortSignal }
 	): Promise<{ sdp: string }>;
+	/**
+	 * What happened to the relay carrying this session.
+	 *
+	 * Asked after the caller's own connection has died, which is the only
+	 * moment it means anything: the daemon closes the surviving leg when the
+	 * other one goes, so from a peer's side a far-end departure looks like any
+	 * other disconnect. This is what separates "your server lost the other
+	 * device" from "this device lost your server", and it answers after the
+	 * relay is torn down for exactly that reason.
+	 */
+	webrtcRelayStatus(
+		jobId: string,
+		token: string,
+		opts?: { signal?: AbortSignal }
+	): Promise<MonitorRelayStatus>;
 	/** POST /offer with no body — start gathering. */
 	webrtcCreateOffer(
 		jobId: string,
@@ -442,6 +475,26 @@ export function coerceWebrtcJob(data: unknown, headerToken?: string | null): Mon
 export function coerceSdp(data: unknown): { sdp: string } {
 	const o = data && typeof data === 'object' ? (data as Record<string, unknown>) : {};
 	return { sdp: typeof o.sdp === 'string' ? o.sdp : '' };
+}
+
+/**
+ * Read a relay status, treating anything unrecognised as "nothing to say".
+ *
+ * A daemon older than the relay-status route answers 404, and one that has
+ * forgotten the job answers nulls. Neither is an error worth showing a user
+ * whose connection has just dropped for some other reason entirely, so an
+ * unreadable reply degrades to "no outcome" rather than throwing.
+ */
+export function coerceRelayStatus(data: unknown): MonitorRelayStatus {
+	const o = data && typeof data === 'object' ? (data as Record<string, unknown>) : {};
+	const leg = (v: unknown): 'waiting' | 'connected' | 'gone' =>
+		v === 'connected' || v === 'gone' ? v : 'waiting';
+	return {
+		carrying: o.carrying === true,
+		near: leg(o.near),
+		far: leg(o.far),
+		outcome: o.outcome === 'far-left' || o.outcome === 'near-left' ? o.outcome : null
+	};
 }
 
 function errorMessageFromBody(parsed: unknown, fallback: string): string {
@@ -758,14 +811,28 @@ export function createMonitorClient(opts: {
 		}
 	}
 
-	async function webrtcJson(
+	/**
+	 * One job-scoped WebRTC call, before anything is made of the reply.
+	 *
+	 * Split from `webrtcJson` because not every one of these answers with an
+	 * SDP: `relay/status` describes two legs. The transport, the bearer, the
+	 * timeout and the error mapping are the same for all of them, and that is
+	 * the part worth having once.
+	 */
+	async function webrtcRequest(
 		method: 'GET' | 'POST',
 		jobId: string,
 		token: string,
-		suffix: 'offer' | 'answer' | 'relay/local' | 'relay/offer' | 'relay/answer',
+		suffix:
+			| 'offer'
+			| 'answer'
+			| 'relay/local'
+			| 'relay/offer'
+			| 'relay/answer'
+			| 'relay/status',
 		body: unknown,
 		signal?: AbortSignal
-	): Promise<{ sdp: string }> {
+	): Promise<unknown> {
 		const ac = new AbortController();
 		const t = setTimeout(() => ac.abort(), 30_000);
 		const onAbort = () => ac.abort();
@@ -791,13 +858,24 @@ export function createMonitorClient(opts: {
 			if (!res.ok) {
 				throw new Error(errorMessageFromBody(parsed, `Webrtc ${suffix} failed (${res.status})`));
 			}
-			return coerceSdp(parsed);
+			return parsed;
 		} catch (e) {
 			throw mapMonitorFetchError(e, base, `webrtc ${suffix}`, signal);
 		} finally {
 			signal?.removeEventListener('abort', onAbort);
 			clearTimeout(t);
 		}
+	}
+
+	async function webrtcJson(
+		method: 'GET' | 'POST',
+		jobId: string,
+		token: string,
+		suffix: 'offer' | 'answer' | 'relay/local' | 'relay/offer' | 'relay/answer',
+		body: unknown,
+		signal?: AbortSignal
+	): Promise<{ sdp: string }> {
+		return coerceSdp(await webrtcRequest(method, jobId, token, suffix, body, signal));
 	}
 
 	return {
@@ -1052,6 +1130,11 @@ export function createMonitorClient(opts: {
 		},
 		async webrtcRelayAnswer(jobId, token, sdp, opts) {
 			return webrtcJson('POST', jobId, token, 'relay/answer', { sdp }, opts?.signal);
+		},
+		async webrtcRelayStatus(jobId, token, opts) {
+			return coerceRelayStatus(
+				await webrtcRequest('GET', jobId, token, 'relay/status', undefined, opts?.signal)
+			);
 		},
 		async webrtcCreateOffer(jobId, token, opts) {
 			return webrtcJson('POST', jobId, token, 'offer', undefined, opts?.signal);
