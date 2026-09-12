@@ -110,6 +110,26 @@ export type MonitorWebrtcRole = 'offerer' | 'answerer';
 
 export type MonitorWebrtcJob = { jobId: string; token: string };
 
+/** One address the daemon gathered. */
+export type MonitorNetCheckCandidate = {
+	/** `host` or `srflx`; this daemon uses no TURN, so never `relay`. */
+	typ: string;
+	address: string;
+	port: number;
+	family: 'ipv4' | 'ipv6';
+};
+
+/** What the daemon is reachable at, as the daemon sees it. */
+export type MonitorNetCheck = {
+	candidates: MonitorNetCheckCandidate[];
+	/** `host:port` a peer would dial, per family, when there is one. */
+	publicIpv4: string | null;
+	publicIpv6: string | null;
+	udpPortMin: number;
+	udpPortMax: number;
+	mapping: 'endpoint-independent' | 'endpoint-dependent' | 'unknown';
+};
+
 export type MonitorArchiveOp =
 	| 'zip'
 	| 'tar'
@@ -211,6 +231,14 @@ export type MonitorTransport = {
 		to?: string;
 		size?: number;
 	}): Promise<MonitorWebrtcJob>;
+	/**
+	 * POST /netcheck — what this daemon is reachable at, as the daemon sees it.
+	 *
+	 * A browser cannot answer this about the daemon: it is a different host on
+	 * a different socket, and the tab's own reading describes the tab's
+	 * network. No job and no token — the call creates nothing that outlives it.
+	 */
+	webrtcNetcheck(opts?: { signal?: AbortSignal }): Promise<MonitorNetCheck>;
 	/** POST /offer with no body — start gathering. */
 	webrtcCreateOffer(
 		jobId: string,
@@ -950,6 +978,32 @@ export function createMonitorClient(opts: {
 				throw mapMonitorFetchError(e, base, 'webrtc job');
 			} finally {
 				clearTimeout(t);
+			}
+		},
+		async webrtcNetcheck(opts) {
+			const ac = new AbortController();
+			// Gathering waits on STUN, so this is slower than a plain request
+			// but still bounded — a daemon that cannot gather should say so
+			// rather than leaving the UI spinning.
+			const t = setTimeout(() => ac.abort(), 15_000);
+			const onAbort = () => ac.abort();
+			opts?.signal?.addEventListener('abort', onAbort);
+			const url = joinUrl(base, '/v1/fs/webrtc/netcheck');
+			try {
+				const res = await fetchFn(
+					url,
+					withLocalAddressSpace(url, { method: 'POST', signal: ac.signal })
+				);
+				const parsed = await res.json().catch(() => ({}));
+				if (!res.ok) {
+					throw new Error(errorMessageFromBody(parsed, `Netcheck failed (${res.status})`));
+				}
+				return parsed as MonitorNetCheck;
+			} catch (e) {
+				throw mapMonitorFetchError(e, base, 'netcheck');
+			} finally {
+				clearTimeout(t);
+				opts?.signal?.removeEventListener('abort', onAbort);
 			}
 		},
 		async webrtcCreateOffer(jobId, token, opts) {

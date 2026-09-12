@@ -59,6 +59,8 @@ export {
 	type MonitorHostSnapshot,
 	type MonitorGitLogEntry,
 	type MonitorGitSnapshot,
+	type MonitorNetCheck,
+	type MonitorNetCheckCandidate,
 	type MonitorWebrtcJob,
 	type MonitorWebrtcRole,
 	type MonitorArchiveOp,
