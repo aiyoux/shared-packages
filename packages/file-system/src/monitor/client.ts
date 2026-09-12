@@ -149,6 +149,26 @@ export type MonitorRelayStatus = {
 	outcome: 'far-left' | 'near-left' | null;
 };
 
+/**
+ * Whether a peer's network accepts UDP from an address it never sent to.
+ *
+ * RFC 5780's filtering question, answered by the daemon rather than by a
+ * public STUN server — none of which honour `CHANGE-REQUEST` any more. `open`
+ * means a packet from an unfamiliar source got through, so a direct connection
+ * would not have been blocked here; `filtered` is the measurement that used to
+ * be an inference.
+ */
+export type MonitorFilteringProbe = {
+	verdict: 'open' | 'filtered' | 'unknown';
+	/** The peer address probed. */
+	target: string | null;
+	/** The source port used — by construction one the peer has never seen. */
+	fromPort: number | null;
+	ms: number | null;
+	/** Why the verdict is `unknown`, when it is. */
+	detail: string | null;
+};
+
 export type MonitorArchiveOp =
 	| 'zip'
 	| 'tar'
@@ -307,6 +327,17 @@ export type MonitorTransport = {
 		token: string,
 		opts?: { signal?: AbortSignal }
 	): Promise<MonitorRelayStatus>;
+	/**
+	 * Ask the daemon whether this device's network takes UDP from a stranger.
+	 *
+	 * Only answerable while the leg is up, and that is the moment it is worth
+	 * asking: someone on a relay wants to know whether they needed it.
+	 */
+	webrtcRelayFiltering(
+		jobId: string,
+		token: string,
+		opts?: { signal?: AbortSignal }
+	): Promise<MonitorFilteringProbe>;
 	/** POST /offer with no body — start gathering. */
 	webrtcCreateOffer(
 		jobId: string,
@@ -494,6 +525,18 @@ export function coerceRelayStatus(data: unknown): MonitorRelayStatus {
 		near: leg(o.near),
 		far: leg(o.far),
 		outcome: o.outcome === 'far-left' || o.outcome === 'near-left' ? o.outcome : null
+	};
+}
+
+/** As `coerceRelayStatus`: an unreadable answer is "unknown", never a throw. */
+export function coerceFilteringProbe(data: unknown): MonitorFilteringProbe {
+	const o = data && typeof data === 'object' ? (data as Record<string, unknown>) : {};
+	return {
+		verdict: o.verdict === 'open' || o.verdict === 'filtered' ? o.verdict : 'unknown',
+		target: typeof o.target === 'string' ? o.target : null,
+		fromPort: typeof o.fromPort === 'number' ? o.fromPort : null,
+		ms: typeof o.ms === 'number' ? o.ms : null,
+		detail: typeof o.detail === 'string' ? o.detail : null
 	};
 }
 
@@ -829,7 +872,8 @@ export function createMonitorClient(opts: {
 			| 'relay/local'
 			| 'relay/offer'
 			| 'relay/answer'
-			| 'relay/status',
+			| 'relay/status'
+			| 'relay/filtering',
 		body: unknown,
 		signal?: AbortSignal
 	): Promise<unknown> {
@@ -1130,6 +1174,11 @@ export function createMonitorClient(opts: {
 		},
 		async webrtcRelayAnswer(jobId, token, sdp, opts) {
 			return webrtcJson('POST', jobId, token, 'relay/answer', { sdp }, opts?.signal);
+		},
+		async webrtcRelayFiltering(jobId, token, opts) {
+			return coerceFilteringProbe(
+				await webrtcRequest('POST', jobId, token, 'relay/filtering', undefined, opts?.signal)
+			);
 		},
 		async webrtcRelayStatus(jobId, token, opts) {
 			return coerceRelayStatus(

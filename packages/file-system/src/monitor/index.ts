@@ -62,6 +62,7 @@ export {
 	type MonitorNetCheck,
 	type MonitorNetCheckCandidate,
 	type MonitorRelayStatus,
+	type MonitorFilteringProbe,
 	type MonitorWebrtcJob,
 	type MonitorWebrtcRole,
 	type MonitorArchiveOp,
