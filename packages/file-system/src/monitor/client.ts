@@ -106,7 +106,8 @@ export type MonitorNdjsonEvent = {
 	phase?: 'hash' | 'upload' | string;
 };
 
-export type MonitorWebrtcRole = 'offerer' | 'answerer';
+/** `relay` carries two peers' bytes; it moves no file and takes no path. */
+export type MonitorWebrtcRole = 'offerer' | 'answerer' | 'relay';
 
 export type MonitorWebrtcJob = { jobId: string; token: string };
 
@@ -239,6 +240,40 @@ export type MonitorTransport = {
 	 * network. No job and no token — the call creates nothing that outlives it.
 	 */
 	webrtcNetcheck(opts?: { signal?: AbortSignal }): Promise<MonitorNetCheck>;
+	/**
+	 * Relay leg one: this tab's offer in, the daemon's answer out.
+	 *
+	 * The daemon answers as an ordinary peer and collects whatever data
+	 * channels the tab opens, so that it can mirror them outward.
+	 */
+	webrtcRelayLocal(
+		jobId: string,
+		token: string,
+		sdp: string,
+		opts?: { signal?: AbortSignal }
+	): Promise<{ sdp: string }>;
+	/**
+	 * Relay leg two: an offer for the far device, mirroring this tab's
+	 * channels. Call only once leg one's channels are open — the daemon
+	 * learns the label set from them.
+	 */
+	webrtcRelayOffer(
+		jobId: string,
+		token: string,
+		opts?: { signal?: AbortSignal }
+	): Promise<{ sdp: string }>;
+	/**
+	 * Relay leg two, part two: the far device's answer.
+	 *
+	 * Shares the SDP-shaped return of the other calls for one transport
+	 * helper; this one carries no SDP back, so the resolved value is empty.
+	 */
+	webrtcRelayAnswer(
+		jobId: string,
+		token: string,
+		sdp: string,
+		opts?: { signal?: AbortSignal }
+	): Promise<{ sdp: string }>;
 	/** POST /offer with no body — start gathering. */
 	webrtcCreateOffer(
 		jobId: string,
@@ -727,7 +762,7 @@ export function createMonitorClient(opts: {
 		method: 'GET' | 'POST',
 		jobId: string,
 		token: string,
-		suffix: 'offer' | 'answer',
+		suffix: 'offer' | 'answer' | 'relay/local' | 'relay/offer' | 'relay/answer',
 		body: unknown,
 		signal?: AbortSignal
 	): Promise<{ sdp: string }> {
@@ -735,6 +770,9 @@ export function createMonitorClient(opts: {
 		const t = setTimeout(() => ac.abort(), 30_000);
 		const onAbort = () => ac.abort();
 		signal?.addEventListener('abort', onAbort);
+		// `suffix` is one of a closed set, including the two-segment relay
+		// forms, so it is interpolated rather than encoded — encoding would
+		// turn `relay/offer` into `relay%2Foffer` and 404.
 		const url = joinUrl(base, `/v1/fs/webrtc/jobs/${encodeURIComponent(jobId)}/${suffix}`);
 		try {
 			const res = await fetchFn(
@@ -1005,6 +1043,15 @@ export function createMonitorClient(opts: {
 				clearTimeout(t);
 				opts?.signal?.removeEventListener('abort', onAbort);
 			}
+		},
+		async webrtcRelayLocal(jobId, token, sdp, opts) {
+			return webrtcJson('POST', jobId, token, 'relay/local', { sdp }, opts?.signal);
+		},
+		async webrtcRelayOffer(jobId, token, opts) {
+			return webrtcJson('POST', jobId, token, 'relay/offer', undefined, opts?.signal);
+		},
+		async webrtcRelayAnswer(jobId, token, sdp, opts) {
+			return webrtcJson('POST', jobId, token, 'relay/answer', { sdp }, opts?.signal);
 		},
 		async webrtcCreateOffer(jobId, token, opts) {
 			return webrtcJson('POST', jobId, token, 'offer', undefined, opts?.signal);
