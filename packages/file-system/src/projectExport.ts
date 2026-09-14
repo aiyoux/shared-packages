@@ -181,6 +181,13 @@ export async function exportProjectAsBundle(
 		offset?: number;
 		blob?: string;
 		contentType?: string;
+		/**
+		 * The node id this file had when exported, so an import can rebuild the
+		 * `vfs:<nodeId>` references documents carry in their bodies. Without it
+		 * every internal link in the archive is dead on arrival, because import
+		 * mints fresh ids and nothing rewrites the bodies.
+		 */
+		id?: string;
 	}> = [];
 
 	report({ stage: 'wiping', label: 'Collecting packs…' });
@@ -205,7 +212,8 @@ export async function exportProjectAsBundle(
 				size: ref.byteLength,
 				pack: name,
 				offset: ref.packOffset,
-				contentType: ref.contentType
+				contentType: ref.contentType,
+				id: f.id
 			});
 		} else {
 			const name = `blobs/${manifestFiles.length}.bin`;
@@ -214,7 +222,8 @@ export async function exportProjectAsBundle(
 				path,
 				size: ref.byteLength,
 				blob: name,
-				contentType: ref.contentType
+				contentType: ref.contentType,
+				id: f.id
 			});
 		}
 	}
@@ -250,6 +259,20 @@ export type ImportResult = {
 	mode: ProjectExportMode;
 	/** True when packs were rebuilt to match the layout recorded at export. */
 	rebuiltAsBefore: boolean;
+	/**
+	 * The id each file had at export → the id it was written under here.
+	 *
+	 * Import mints fresh ids, so the `vfs:<nodeId>` references documents carry
+	 * in their bodies name ids that do not exist in this filesystem — possibly
+	 * never did. This is the map that repoints them; the caller owns the
+	 * rewrite, because only it knows the document formats.
+	 *
+	 * Empty when the archive carried no ids: a files-mode zip, or a bundle
+	 * written before this existed. `refsRebuildable` says which.
+	 */
+	idMap: Map<string, string>;
+	/** False when the archive has no ids, so internal links cannot be rebuilt. */
+	refsRebuildable: boolean;
 };
 
 /**
@@ -380,7 +403,11 @@ async function importFiles(
 		files: written.length,
 		meta: await readProjectMeta(vfs, root.id),
 		mode: 'files',
-		rebuiltAsBefore
+		rebuiltAsBefore,
+		// A plain zip is the tree and nothing else, so there is nowhere to have
+		// recorded the ids. Internal document links cannot be rebuilt from it.
+		idMap: new Map(),
+		refsRebuildable: false
 	};
 }
 
@@ -404,6 +431,8 @@ async function importBundle(
 			offset?: number;
 			blob?: string;
 			contentType?: string;
+			/** Absent in archives written before reference rebuilding existed. */
+			id?: string;
 		}>;
 	};
 
@@ -445,7 +474,10 @@ async function importBundle(
 			files: written.length,
 			meta: await readProjectMeta(vfs, root.id),
 			mode: 'bundle',
-			rebuiltAsBefore: false
+			rebuiltAsBefore: false,
+			// `writeFiles` answers in input order, which is manifest order.
+			idMap: pairIds(manifest.files, written),
+			refsRebuildable: manifest.files.every((f) => typeof f.id === 'string')
 		};
 	}
 
@@ -520,6 +552,28 @@ async function importBundle(
 		files: nodesToPut.length,
 		meta: await readProjectMeta(vfs, root.id),
 		mode: 'bundle',
-		rebuiltAsBefore: true
+		rebuiltAsBefore: true,
+		idMap: pairIds(manifest.files, nodesToPut),
+		refsRebuildable: manifest.files.every((f) => typeof f.id === 'string')
 	};
+}
+
+/**
+ * Pair each manifest entry with the node written for it.
+ *
+ * Both import paths write in manifest order, which is what makes this a zip
+ * rather than a lookup. An entry with no `id` predates reference rebuilding and
+ * is skipped — `refsRebuildable` is how the caller learns that happened.
+ */
+function pairIds(
+	entries: ReadonlyArray<{ id?: string }>,
+	written: ReadonlyArray<{ id: string }>
+): Map<string, string> {
+	const map = new Map<string, string>();
+	for (let i = 0; i < entries.length; i++) {
+		const oldId = entries[i]?.id;
+		const node = written[i];
+		if (oldId && node) map.set(oldId, node.id);
+	}
+	return map;
 }

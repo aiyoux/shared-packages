@@ -4206,6 +4206,7 @@
 		<FeProjectStorageDialog
 			vfs={localVfs}
 			rootId={projectRootId}
+			onImported={driver.rebuildImportedRefs}
 			onClose={() => (projectStorageOpen = false)}
 		/>
 	{/if}

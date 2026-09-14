@@ -168,6 +168,19 @@ export interface ExplorerDriver {
 		}
 	): Promise<void | ExplorerEntry>;
 	/**
+	 * Repoint an imported project's document references at their new ids.
+	 *
+	 * Supplied by the host, because doing it needs to know `.anim` from
+	 * `.skch` and this package deliberately does not. Import mints fresh ids
+	 * while the document bodies still name the old ones, so without this every
+	 * link inside an imported archive is dead. Returns how many files could not
+	 * be rebuilt, for the toast to report.
+	 */
+	rebuildImportedRefs?(result: {
+		rootId: string;
+		idMap: Map<string, string>;
+	}): Promise<{ refused: number } | void>;
+	/**
 	 * MANDATORY when supportsSiblingOrder === true.
 	 * Same-parent rank write from full sibling set.
 	 */

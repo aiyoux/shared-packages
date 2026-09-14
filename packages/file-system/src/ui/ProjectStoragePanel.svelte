@@ -22,17 +22,28 @@
 	import {
 		exportProjectAsBundle,
 		exportProjectAsFiles,
-		importProject
+		importProject,
+		type ImportResult
 	} from '../projectExport.js';
 
 	let {
 		vfs,
 		rootId,
-		onChanged
+		onChanged,
+		onImported
 	}: {
 		vfs: VfsService;
 		rootId: string;
 		onChanged?: () => void;
+		/**
+		 * Repoint the imported documents' references at their new ids.
+		 *
+		 * A callback rather than something this component does, because it needs
+		 * to know `.anim` from `.skch` and this package deliberately does not.
+		 * The host supplies it; returning a count of what could not be rebuilt
+		 * lets the toast say so. See `document-ref-remapping.md` §5.
+		 */
+		onImported?: (result: ImportResult) => Promise<{ refused: number } | void>;
 	} = $props();
 
 	type Stats = Awaited<ReturnType<typeof projectStorageStats>>;
@@ -307,7 +318,18 @@
 						rebuildPacks,
 						onProgress: report
 					});
-					toast.success(`Imported ${res.files} files`);
+					const rebuild = await onImported?.(res);
+					if (!res.refsRebuildable) {
+						toast.success(
+							`Imported ${res.files} files. This archive predates link tracking, so links between its documents may be broken.`
+						);
+					} else if (rebuild && rebuild.refused > 0) {
+						toast.success(
+							`Imported ${res.files} files. Links in ${rebuild.refused} could not be rebuilt.`
+						);
+					} else {
+						toast.success(`Imported ${res.files} files`);
+					}
 					if (fileInput) fileInput.value = '';
 				});
 			}}

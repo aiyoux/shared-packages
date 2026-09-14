@@ -10,12 +10,17 @@
 		vfs,
 		rootId,
 		onClose,
-		onChanged
+		onChanged,
+		onImported
 	}: {
 		vfs: VfsService;
 		rootId: string;
 		onClose: () => void;
 		onChanged?: () => void;
+		onImported?: (result: {
+			rootId: string;
+			idMap: Map<string, string>;
+		}) => Promise<{ refused: number } | void>;
 	} = $props();
 </script>
 
@@ -29,7 +34,7 @@
 	<button type="button" class="scrim" aria-label="Close" onclick={onClose}></button>
 	<div class="card">
 		<h2>Project storage</h2>
-		<ProjectStoragePanel {vfs} {rootId} {onChanged} />
+		<ProjectStoragePanel {vfs} {rootId} {onChanged} {onImported} />
 		<div class="actions">
 			<button
 				type="button"
