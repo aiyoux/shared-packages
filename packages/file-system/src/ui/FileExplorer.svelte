@@ -4207,6 +4207,7 @@
 			vfs={localVfs}
 			rootId={projectRootId}
 			onImported={driver.rebuildImportedRefs}
+			onScanExportRefs={driver.scanExportRefs}
 			onClose={() => (projectStorageOpen = false)}
 		/>
 	{/if}

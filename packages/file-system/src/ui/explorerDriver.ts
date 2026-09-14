@@ -181,6 +181,17 @@ export interface ExplorerDriver {
 		idMap: Map<string, string>;
 	}): Promise<{ refused: number } | void>;
 	/**
+	 * Live references in a project that point *outside* it, which an export
+	 * would leave dangling on the far side.
+	 *
+	 * Host-supplied for the same reason as `rebuildImportedRefs`. Only `live`
+	 * is reported: a snapshot renders from its own frozen bytes and a clone
+	 * holds no reference, so neither breaks by being left pointing outward.
+	 */
+	scanExportRefs?(rootId: string): Promise<
+		Array<{ key: string; name: string; fromNames: string[] }>
+	>;
+	/**
 	 * MANDATORY when supportsSiblingOrder === true.
 	 * Same-parent rank write from full sibling set.
 	 */

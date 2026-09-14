@@ -30,7 +30,8 @@
 		vfs,
 		rootId,
 		onChanged,
-		onImported
+		onImported,
+		onScanExportRefs
 	}: {
 		vfs: VfsService;
 		rootId: string;
@@ -44,6 +45,10 @@
 		 * lets the toast say so. See `document-ref-remapping.md` §5.
 		 */
 		onImported?: (result: ImportResult) => Promise<{ refused: number } | void>;
+		/** Live links leaving the project, so export can say so before writing. */
+		onScanExportRefs?: (
+			rootId: string
+		) => Promise<Array<{ key: string; name: string; fromNames: string[] }>>;
 	} = $props();
 
 	type Stats = Awaited<ReturnType<typeof projectStorageStats>>;
@@ -94,6 +99,40 @@
 			busy = '';
 			note = '';
 		}
+	}
+
+	/**
+	 * Warn before exporting a project whose documents link out of it.
+	 *
+	 * `descendantFiles` walks the project subtree only, so a reference to a
+	 * file outside it is never included and never noticed — the archive ships
+	 * with invisible holes, and the user finds out on whatever machine they
+	 * moved it to. Naming the targets before writing is the least this can do.
+	 *
+	 * Converting those links to snapshots, so the export is self-contained, is
+	 * the follow-up: it means freezing bytes into each referencing document,
+	 * which is format-specific work beyond warning about it.
+	 */
+	async function confirmExternalLinks(): Promise<boolean> {
+		if (!onScanExportRefs) return true;
+		let external: Array<{ key: string; name: string; fromNames: string[] }> = [];
+		try {
+			external = await onScanExportRefs(rootId);
+		} catch {
+			// A scan that cannot run must not block an export.
+			return true;
+		}
+		if (external.length === 0) return true;
+		const lines = external
+			.slice(0, 5)
+			.map((t) => `  • ${t.name} — used by ${t.fromNames.join(', ')}`)
+			.join('\n');
+		const more = external.length > 5 ? `\n  …and ${external.length - 5} more` : '';
+		return confirm(
+			`${external.length} file${external.length === 1 ? '' : 's'} linked by this project ` +
+				`are not part of it:\n\n${lines}${more}\n\n` +
+				`Those links will be broken wherever this archive is opened. Export anyway?`
+		);
 	}
 
 	function download(name: string, bytes: Uint8Array) {
@@ -269,6 +308,7 @@
 				data-testid="project-export-btn"
 				onclick={() =>
 					run('export', async () => {
+						if (!(await confirmExternalLinks())) return;
 						const out =
 							exportMode === 'bundle'
 								? await exportProjectAsBundle(vfs, rootId, { onProgress: report })
