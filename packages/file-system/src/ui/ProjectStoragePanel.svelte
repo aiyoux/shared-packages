@@ -31,7 +31,8 @@
 		rootId,
 		onChanged,
 		onImported,
-		onScanExportRefs
+		onScanExportRefs,
+		onFreezeExportRefs
 	}: {
 		vfs: VfsService;
 		rootId: string;
@@ -49,6 +50,11 @@
 		onScanExportRefs?: (
 			rootId: string
 		) => Promise<Array<{ key: string; name: string; fromNames: string[] }>>;
+		/** Snapshot those links so the archive needs nothing outside itself. */
+		onFreezeExportRefs?: (
+			rootId: string,
+			keys: string[]
+		) => Promise<{ refused: Array<{ name: string; why: string }> } | void>;
 	} = $props();
 
 	type Stats = Awaited<ReturnType<typeof projectStorageStats>>;
@@ -101,38 +107,58 @@
 		}
 	}
 
+	type ExternalLink = { key: string; name: string; fromNames: string[] };
+
 	/**
-	 * Warn before exporting a project whose documents link out of it.
+	 * Links leaving the project, parked until the user says what to do.
 	 *
-	 * `descendantFiles` walks the project subtree only, so a reference to a
-	 * file outside it is never included and never noticed — the archive ships
-	 * with invisible holes, and the user finds out on whatever machine they
-	 * moved it to. Naming the targets before writing is the least this can do.
-	 *
-	 * Converting those links to snapshots, so the export is self-contained, is
-	 * the follow-up: it means freezing bytes into each referencing document,
-	 * which is format-specific work beyond warning about it.
+	 * `descendantFiles` walks the project subtree only, so a reference to a file
+	 * outside it is never included — the archive used to ship with invisible
+	 * holes and the user found out on whatever machine they opened it on.
 	 */
-	async function confirmExternalLinks(): Promise<boolean> {
-		if (!onScanExportRefs) return true;
-		let external: Array<{ key: string; name: string; fromNames: string[] }> = [];
+	let pendingExport = $state<{ external: ExternalLink[]; go: () => Promise<void> } | null>(null);
+
+	async function startExport(go: () => Promise<void>) {
+		let external: ExternalLink[] = [];
 		try {
-			external = await onScanExportRefs(rootId);
+			external = (await onScanExportRefs?.(rootId)) ?? [];
 		} catch {
 			// A scan that cannot run must not block an export.
-			return true;
+			external = [];
 		}
-		if (external.length === 0) return true;
-		const lines = external
-			.slice(0, 5)
-			.map((t) => `  • ${t.name} — used by ${t.fromNames.join(', ')}`)
-			.join('\n');
-		const more = external.length > 5 ? `\n  …and ${external.length - 5} more` : '';
-		return confirm(
-			`${external.length} file${external.length === 1 ? '' : 's'} linked by this project ` +
-				`are not part of it:\n\n${lines}${more}\n\n` +
-				`Those links will be broken wherever this archive is opened. Export anyway?`
-		);
+		if (external.length === 0) {
+			await run('export', go);
+			return;
+		}
+		pendingExport = { external, go };
+	}
+
+	/**
+	 * Embed the outside files, then export.
+	 *
+	 * A snapshot renders from its own bytes, so this makes the archive stand up
+	 * anywhere — without copying foreign files into the tree, which would change
+	 * the project's shape on the far side.
+	 */
+	async function exportSelfContained() {
+		const pending = pendingExport;
+		if (!pending) return;
+		pendingExport = null;
+		await run('export', async () => {
+			const keys = pending.external.map((t) => t.key);
+			const result = await onFreezeExportRefs?.(rootId, keys);
+			for (const refusal of result?.refused ?? []) {
+				toast.error(`${refusal.name} stays a live link — ${refusal.why}.`);
+			}
+			await pending.go();
+		});
+	}
+
+	async function exportAsIs() {
+		const pending = pendingExport;
+		if (!pending) return;
+		pendingExport = null;
+		await run('export', pending.go);
 	}
 
 	function download(name: string, bytes: Uint8Array) {
@@ -307,8 +333,7 @@
 				disabled={!!busy}
 				data-testid="project-export-btn"
 				onclick={() =>
-					run('export', async () => {
-						if (!(await confirmExternalLinks())) return;
+					startExport(async () => {
 						const out =
 							exportMode === 'bundle'
 								? await exportProjectAsBundle(vfs, rootId, { onProgress: report })
@@ -322,6 +347,54 @@
 			>
 				{busy === 'export' ? 'Exporting…' : 'Export project'}
 			</button>
+
+			{#if pendingExport}
+				<div class="links-out" data-testid="project-export-links-out">
+					<p>
+						{pendingExport.external.length}
+						{pendingExport.external.length === 1 ? 'file' : 'files'} this project links to
+						{pendingExport.external.length === 1 ? 'is' : 'are'} not part of it:
+					</p>
+					<ul>
+						{#each pendingExport.external as target (target.key)}
+							<li>
+								<strong>{target.name}</strong>
+								<span>used by {target.fromNames.join(', ')}</span>
+							</li>
+						{/each}
+					</ul>
+					<div class="links-out-actions">
+						<button
+							type="button"
+							class="ds-btn ds-btn--sm ds-btn--primary"
+							data-testid="project-export-embed"
+							onclick={exportSelfContained}
+						>
+							Embed them
+						</button>
+						<button
+							type="button"
+							class="ds-btn ds-btn--sm"
+							data-testid="project-export-as-is"
+							onclick={exportAsIs}
+						>
+							Export with broken links
+						</button>
+						<button
+							type="button"
+							class="ds-btn ds-btn--sm ds-btn--ghost"
+							data-testid="project-export-cancel"
+							onclick={() => (pendingExport = null)}
+						>
+							Cancel
+						</button>
+					</div>
+					<p class="hint">
+						Embedding freezes a copy of each file into the documents that use it, so the
+						archive opens anywhere. The originals stay linked here.
+					</p>
+				</div>
+			{/if}
 		</div>
 	{/if}
 
@@ -469,5 +542,28 @@
 		margin: 0;
 		font-size: var(--text-xs);
 		color: var(--text-secondary);
+	}
+	.links-out {
+		margin-top: var(--space-3, 0.75rem);
+		padding: var(--space-3, 0.75rem);
+		border: 1px solid var(--color-border, #ccc);
+		border-radius: var(--radius-md, 6px);
+	}
+	.links-out ul {
+		margin: var(--space-2, 0.5rem) 0;
+		padding-left: var(--space-4, 1rem);
+	}
+	.links-out li span {
+		opacity: 0.75;
+		margin-left: var(--space-2, 0.5rem);
+	}
+	.links-out-actions {
+		display: flex;
+		flex-wrap: wrap;
+		gap: var(--space-2, 0.5rem);
+	}
+	.links-out .hint {
+		margin-top: var(--space-2, 0.5rem);
+		opacity: 0.75;
 	}
 </style>

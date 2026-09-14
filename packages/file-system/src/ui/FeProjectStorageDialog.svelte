@@ -12,7 +12,8 @@
 		onClose,
 		onChanged,
 		onImported,
-		onScanExportRefs
+		onScanExportRefs,
+		onFreezeExportRefs
 	}: {
 		vfs: VfsService;
 		rootId: string;
@@ -25,6 +26,10 @@
 		onScanExportRefs?: (
 			rootId: string
 		) => Promise<Array<{ key: string; name: string; fromNames: string[] }>>;
+		onFreezeExportRefs?: (
+			rootId: string,
+			keys: string[]
+		) => Promise<{ refused: Array<{ name: string; why: string }> } | void>;
 	} = $props();
 </script>
 
@@ -38,7 +43,7 @@
 	<button type="button" class="scrim" aria-label="Close" onclick={onClose}></button>
 	<div class="card">
 		<h2>Project storage</h2>
-		<ProjectStoragePanel {vfs} {rootId} {onChanged} {onImported} {onScanExportRefs} />
+		<ProjectStoragePanel {vfs} {rootId} {onChanged} {onImported} {onScanExportRefs} {onFreezeExportRefs} />
 		<div class="actions">
 			<button
 				type="button"

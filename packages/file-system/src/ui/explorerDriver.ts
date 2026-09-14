@@ -192,6 +192,16 @@ export interface ExplorerDriver {
 		Array<{ key: string; name: string; fromNames: string[] }>
 	>;
 	/**
+	 * Snapshot those outward links, so the archive needs nothing outside itself.
+	 *
+	 * Freezing rather than including the foreign files keeps the project's shape
+	 * intact: an included file would need a home in the tree it never had.
+	 */
+	freezeExportRefs?(
+		rootId: string,
+		keys: string[]
+	): Promise<{ refused: Array<{ name: string; why: string }> } | void>;
+	/**
 	 * MANDATORY when supportsSiblingOrder === true.
 	 * Same-parent rank write from full sibling set.
 	 */
