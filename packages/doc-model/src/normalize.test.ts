@@ -99,6 +99,49 @@ describe('normalizePage', () => {
 		}
 	});
 
+	it('re-mints duplicate block ids so an each key cannot collide', () => {
+		const page = {
+			format: KB_FORMAT,
+			id: 'p',
+			title: 't',
+			createdAt: '',
+			updatedAt: '',
+			children: [],
+			blocks: [
+				{ id: 'dup', type: 'paragraph', content: [span('first')] },
+				{ id: 'dup', type: 'paragraph', content: [span('second')] }
+			]
+		} as unknown as KbPage;
+		const normalized = normalizePage(page);
+		expect(normalized.blocks).toHaveLength(2);
+		expect(normalized.blocks[0].id).toBe('dup');
+		expect(normalized.blocks[1].id).not.toBe('dup');
+		const ids = documentOrder(normalized).map((b) => b.id);
+		expect(new Set(ids).size).toBe(ids.length);
+	});
+
+	it('re-mints a nested duplicate that collides with a top-level block', () => {
+		const page = {
+			format: KB_FORMAT,
+			id: 'p',
+			title: 't',
+			createdAt: '',
+			updatedAt: '',
+			children: [],
+			blocks: [
+				{ id: 'clash', type: 'paragraph', content: [span('top')] },
+				{
+					id: 'call',
+					type: 'callout',
+					variant: 'info',
+					children: [{ id: 'clash', type: 'paragraph', content: [span('inner')] }]
+				}
+			]
+		} as unknown as KbPage;
+		const ids = documentOrder(normalizePage(page)).map((b) => b.id);
+		expect(new Set(ids).size).toBe(ids.length);
+	});
+
 	it('keeps page_break as a known atomic leaf', () => {
 		const page = {
 			format: KB_FORMAT,

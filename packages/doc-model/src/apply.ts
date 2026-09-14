@@ -868,8 +868,20 @@ function applyDeleteTableColumn(page: KbPage, op: Extract<Op, { kind: 'delete-ta
 	}
 }
 
+/**
+ * Slugs are the sidebar's `each` key, so a duplicate crashes the tree. Dedupe
+ * here rather than at each call site — a peer's `set-children` arrives via
+ * `applyRemoteMany`, which passes through no host-side guard.
+ */
 function applySetChildren(page: KbPage, children: string[]): void {
-	page.children = [...children];
+	const seen = new Set<string>();
+	const next: string[] = [];
+	for (const slug of children) {
+		if (seen.has(slug)) continue;
+		seen.add(slug);
+		next.push(slug);
+	}
+	page.children = next;
 }
 
 /**

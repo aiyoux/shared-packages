@@ -686,8 +686,34 @@ export function normalizeBlock(block: Block | Record<string, unknown>): Block {
  * This keeps whatever envelope the caller has and normalizes the part both
  * backends share.
  */
+/**
+ * Re-mint any block id already seen, nested ids included.
+ *
+ * Load is the only way a duplicate gets in — `apply` refuses a duplicate
+ * `insert-block` and a `split-block` onto an existing `newId` — but a git merge
+ * of `index.kb`, a hand-edited file, or a malformed collab snapshot all arrive
+ * through here, and a duplicate id is an `each_key_duplicate` that takes the
+ * whole editor down. Re-mint rather than drop: the content is not at fault.
+ */
+function dedupeBlockIds(blocks: Block[], seen: Set<string>): Block[] {
+	const out: Block[] = [];
+	for (const block of blocks) {
+		const id = seen.has(block.id) ? newBlockId() : block.id;
+		seen.add(id);
+		const kids = (block as { children?: Block[] }).children;
+		if (Array.isArray(kids)) {
+			out.push({ ...block, id, children: dedupeBlockIds(kids, seen) } as Block);
+		} else if (id !== block.id) {
+			out.push({ ...block, id });
+		} else {
+			out.push(block);
+		}
+	}
+	return out;
+}
+
 export function normalizeBody<T extends DocBody>(doc: T): T {
-	const blocks = normalizeBlockList(doc.blocks ?? [], 0);
+	const blocks = dedupeBlockIds(normalizeBlockList(doc.blocks ?? [], 0), new Set());
 	if (blocks.length === 0) blocks.push(emptyParagraph(newBlockId()));
 	return {
 		...doc,
@@ -697,7 +723,7 @@ export function normalizeBody<T extends DocBody>(doc: T): T {
 }
 
 export function normalizePage(page: KbPage): KbPage {
-	const blocks = normalizeBlockList(page.blocks ?? [], 0);
+	const blocks = dedupeBlockIds(normalizeBlockList(page.blocks ?? [], 0), new Set());
 	if (blocks.length === 0) blocks.push(emptyParagraph(newBlockId()));
 	return {
 		format: KB_FORMAT,

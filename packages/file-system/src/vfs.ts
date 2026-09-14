@@ -2746,8 +2746,11 @@ export class VfsService {
 				meta: src.meta ? { ...src.meta } : undefined
 			});
 		}
-		// folder: recursive
-		const folder = await this.mkdir(newParentId, src.name);
+		// folder: recursive. `meta` travels like it does on the file arm above —
+		// dropping it lost a project folder's `projectPack` on copy.
+		const folder = await this.mkdir(newParentId, src.name, {
+			meta: src.meta ? { ...src.meta } : undefined
+		});
 		const children = await this.list({ parentId: id });
 		for (const child of children) {
 			await this.copy(child.id, folder.id);
