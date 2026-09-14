@@ -2703,10 +2703,23 @@ export class VfsService {
 		});
 	}
 
+	/**
+	 * `onConflict` defaults to `'rename'`, matching `writeFile` and `mkdir`.
+	 *
+	 * It was previously hard-coded, so a caller could not choose to be told:
+	 * dragging `report.pdf` into a folder that already had one silently
+	 * produced `report 2.pdf`. The returned node carries the real name, so a
+	 * caller that keeps it can compare; one that wants a refusal can now ask.
+	 */
 	async move(
 		id: string,
 		newParentId: string | null,
-		opts?: { name?: string; beforeId?: string | null; afterId?: string | null }
+		opts?: {
+			name?: string;
+			beforeId?: string | null;
+			afterId?: string | null;
+			onConflict?: 'rename' | 'error';
+		}
 	): Promise<VfsNode> {
 		await this.ready();
 		return this.db.transaction('rw', this.db.nodes, async () => {
@@ -2728,7 +2741,12 @@ export class VfsService {
 			const oldParentId = node.parentId;
 			const oldName = node.name;
 			const name = opts?.name ? sanitizeName(opts.name) : node.name;
-			const unique = await this.ensureUniqueName(newParentId, name, id, 'rename');
+			const unique = await this.ensureUniqueName(
+				newParentId,
+				name,
+				id,
+				opts?.onConflict ?? 'rename'
+			);
 			const sameParent = node.parentId === newParentId;
 			node.parentId = newParentId;
 			node.name = unique;

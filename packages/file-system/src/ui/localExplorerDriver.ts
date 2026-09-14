@@ -117,7 +117,7 @@ export function createLocalExplorerDriver(
 		},
 
 		async move(entryId, newParentId) {
-			await vfs.move(entryId, newParentId);
+			return nodeToEntry(await vfs.move(entryId, newParentId));
 		},
 
 		// Returns the copy, which the interface has always allowed. A decorator

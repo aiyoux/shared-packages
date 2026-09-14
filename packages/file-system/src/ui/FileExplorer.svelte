@@ -1171,13 +1171,27 @@
 					supportsSiblingOrder: caps.supportsSiblingOrder
 				});
 				if (!resolved.ok) {
-					// silent no-op for unsupported remote before/after
+					// The reason was computed and then discarded, so a drop the UI
+					// had offered simply did nothing. Two of these are worth
+					// saying out loud; a null zone or a self-drop is not.
+					if (resolved.reason === 'unsupported-zone') {
+						toast.info('This location cannot reorder items.');
+					} else if (resolved.reason === 'invalid-target') {
+						toast.info('Drop onto a folder, not a file.');
+					}
 					return;
 				}
 				for (const id of dragIds) {
 					if (resolved.mode === 'move-into') {
 						if (id === resolved.newParentId) continue;
-						await driver.move?.(id, resolved.newParentId);
+						const before = nodes.find((e: ExplorerEntry) => e.id === id);
+						const moved = await driver.move?.(id, resolved.newParentId);
+						// A name already taken in the destination is silently
+						// deduped. The user dragged `report.pdf` and now has
+						// `report 2.pdf` — worth one line.
+						if (moved && before && moved.name !== before.name) {
+							toast.info(`Renamed to "${moved.name}" — that name was taken there.`);
+						}
 					} else if (caps.supportsSiblingOrder && driver.reorder) {
 						if (
 							dragIds.length === 1 &&

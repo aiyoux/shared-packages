@@ -158,7 +158,12 @@ export interface ExplorerDriver {
 	): Promise<Map<string, string | null>>;
 	/** File-only on B2 v1; folders throw B2_FOLDER_OP_UNSUPPORTED. */
 	rename?(id: ExplorerEntryId, name: string): Promise<ExplorerEntry>;
-	move?(id: ExplorerEntryId, newParentId: ExplorerEntryId | null): Promise<void>;
+	/**
+	 * Returns the moved entry where it can. A destination that already holds
+	 * that name deduplicates silently, so the caller needs the real name back
+	 * to notice and say so.
+	 */
+	move?(id: ExplorerEntryId, newParentId: ExplorerEntryId | null): Promise<void | ExplorerEntry>;
 	copy?(
 		id: ExplorerEntryId,
 		newParentId: ExplorerEntryId | null,
