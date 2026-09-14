@@ -199,5 +199,11 @@ export function reparentSvgElements(
 	if (!ids.length) return elements;
 	const { tree, taken } = extractSvgElements(elements, ids);
 	if (!taken.length) return elements;
+	// The destination must still exist once the dragged nodes are out. Drop a
+	// group onto a group nested inside it and the target leaves with it, so
+	// `insertSvgElements` finds nothing, inserts nothing, and the extracted
+	// subtree is silently discarded — the drag deletes the thing it moved.
+	// Refusing is the only safe answer: the caller keeps the tree it had.
+	if (target.groupId && !findSvgElement(tree, target.groupId)) return elements;
 	return insertSvgElements(tree, taken, target);
 }

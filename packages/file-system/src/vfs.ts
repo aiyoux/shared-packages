@@ -735,14 +735,39 @@ export class VfsService {
 				const a = siblings.find((s) => s.id === afterId) ?? (await this.db.nodes.get(afterId));
 				if (a && a.parentId === node.parentId) afterOrder = a.sortOrder ?? 0;
 			}
+			// Close the open side from the sibling list. With only one anchor the
+			// midpoint was `anchor ± STEP`, which in an evenly-spaced list is
+			// *exactly* where the neighbour already sits — two siblings on one
+			// sortOrder, and `sortSiblingsForOrder`'s name tie-break then decides
+			// the order instead of where the row was dropped.
+			if (beforeId && beforeOrder !== null && !afterId) {
+				const i = siblings.findIndex((sib) => sib.id === beforeId);
+				if (i >= 0 && i + 1 < siblings.length) {
+					afterOrder = siblings[i + 1]!.sortOrder ?? null;
+				}
+			}
+			if (afterId && afterOrder !== null && !beforeId) {
+				const i = siblings.findIndex((sib) => sib.id === afterId);
+				if (i > 0) beforeOrder = siblings[i - 1]!.sortOrder ?? null;
+			}
 			// If only afterId: insert before that id → before=null, after=afterOrder
 			// If only beforeId: insert after that id → before=beforeOrder, after=null
 			// If both: between them
 			// If neither: append
-			if (!beforeId && !afterId && siblings.length) {
-				const last = siblings[siblings.length - 1]!;
-				beforeOrder = last.sortOrder ?? (siblings.length - 1) * 16384;
-				afterOrder = null;
+			// An anchor that was asked for but could not be resolved — the row was
+			// deleted or moved between render and drop — must fall through to
+			// append. Otherwise `beforeId` stays truthy, both orders stay null,
+			// and `calculateMidOrder(null, null)` returns 0: the item jumps to
+			// the *top*, and 0 collides with the first slot a rebalance hands
+			// out, after which siblings sort by name instead of by intent.
+			const anchorUnresolved =
+				(beforeId || afterId) && beforeOrder === null && afterOrder === null;
+			if ((!beforeId && !afterId) || anchorUnresolved) {
+				if (siblings.length) {
+					const last = siblings[siblings.length - 1]!;
+					beforeOrder = last.sortOrder ?? (siblings.length - 1) * 16384;
+					afterOrder = null;
+				}
 			}
 
 			let mid = calculateMidOrder(beforeOrder, afterOrder);

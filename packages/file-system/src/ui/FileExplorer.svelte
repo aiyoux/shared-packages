@@ -2827,7 +2827,13 @@
 				} else if (onCopyAcrossFromClipboard) {
 					await onCopyAcrossFromClipboard(payload, parentId);
 					if (payload.mode === 'cut') {
-						appClipboard.clear();
+						// A cut across backends cannot be a move: copy-across does
+						// not delete the source, and deleting it here — after a
+						// cross-network copy this code cannot verify — would be us
+						// destroying the only remaining original on a hunch. Say
+						// what actually happened and leave the clipboard loaded,
+						// rather than clearing it so the cut looks finished.
+						toast.info('Copied. Moving between locations is not supported, so the original is still there.');
 					}
 					await refresh();
 					return;
