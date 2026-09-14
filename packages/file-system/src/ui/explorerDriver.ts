@@ -192,14 +192,16 @@ export interface ExplorerDriver {
 		Array<{ key: string; name: string; fromNames: string[] }>
 	>;
 	/**
-	 * Snapshot those outward links, so the archive needs nothing outside itself.
+	 * Resolve those outward links before the archive is written.
 	 *
-	 * Freezing rather than including the foreign files keeps the project's shape
-	 * intact: an included file would need a home in the tree it never had.
+	 * `embed` freezes a copy into each document that uses the file, changing
+	 * nothing structurally. `include` copies the file into the project, which
+	 * gives it a place in the tree it did not have — which is why it is offered
+	 * second. Both change the project, not only the archive.
 	 */
-	freezeExportRefs?(
+	resolveExportRefs?(
 		rootId: string,
-		keys: string[]
+		choices: Array<{ key: string; choice: 'embed' | 'include' }>
 	): Promise<{ refused: Array<{ name: string; why: string }> } | void>;
 	/**
 	 * MANDATORY when supportsSiblingOrder === true.

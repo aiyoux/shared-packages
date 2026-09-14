@@ -32,7 +32,7 @@
 		onChanged,
 		onImported,
 		onScanExportRefs,
-		onFreezeExportRefs
+		onResolveExportRefs
 	}: {
 		vfs: VfsService;
 		rootId: string;
@@ -50,10 +50,14 @@
 		onScanExportRefs?: (
 			rootId: string
 		) => Promise<Array<{ key: string; name: string; fromNames: string[] }>>;
-		/** Snapshot those links so the archive needs nothing outside itself. */
-		onFreezeExportRefs?: (
+		/**
+		 * Resolve those links before the archive is written: `embed` freezes a
+		 * copy into each document that uses it, `include` copies the file into
+		 * the project. Both change the project — see the note in the panel.
+		 */
+		onResolveExportRefs?: (
 			rootId: string,
-			keys: string[]
+			choices: Array<{ key: string; choice: 'embed' | 'include' }>
 		) => Promise<{ refused: Array<{ name: string; why: string }> } | void>;
 	} = $props();
 
@@ -130,25 +134,26 @@
 			await run('export', go);
 			return;
 		}
+		choices = Object.fromEntries(external.map((t) => [t.key, 'embed' as const]));
 		pendingExport = { external, go };
 	}
 
-	/**
-	 * Embed the outside files, then export.
-	 *
-	 * A snapshot renders from its own bytes, so this makes the archive stand up
-	 * anywhere — without copying foreign files into the tree, which would change
-	 * the project's shape on the far side.
-	 */
-	async function exportSelfContained() {
+	/** Per-target decision, defaulting to the one that changes nothing structurally. */
+	let choices = $state<Record<string, 'embed' | 'include' | 'leave'>>({});
+
+	async function exportResolved() {
 		const pending = pendingExport;
 		if (!pending) return;
 		pendingExport = null;
 		await run('export', async () => {
-			const keys = pending.external.map((t) => t.key);
-			const result = await onFreezeExportRefs?.(rootId, keys);
-			for (const refusal of result?.refused ?? []) {
-				toast.error(`${refusal.name} stays a live link — ${refusal.why}.`);
+			const decided = pending.external
+				.map((t) => ({ key: t.key, choice: choices[t.key] ?? 'embed' }))
+				.filter((c): c is { key: string; choice: 'embed' | 'include' } => c.choice !== 'leave');
+			if (decided.length) {
+				const result = await onResolveExportRefs?.(rootId, decided);
+				for (const refusal of result?.refused ?? []) {
+					toast.error(`${refusal.name} stays a live link — ${refusal.why}.`);
+				}
 			}
 			await pending.go();
 		});
@@ -353,13 +358,29 @@
 					<p>
 						{pendingExport.external.length}
 						{pendingExport.external.length === 1 ? 'file' : 'files'} this project links to
-						{pendingExport.external.length === 1 ? 'is' : 'are'} not part of it:
+						{pendingExport.external.length === 1 ? 'is' : 'are'} not part of it. Choose what
+						the archive should carry:
 					</p>
 					<ul>
 						{#each pendingExport.external as target (target.key)}
 							<li>
-								<strong>{target.name}</strong>
-								<span>used by {target.fromNames.join(', ')}</span>
+								<div class="links-out-name">
+									<strong>{target.name}</strong>
+									<span>used by {target.fromNames.join(', ')}</span>
+								</div>
+								<div class="links-out-choice">
+									{#each [['embed', 'Embed'], ['include', 'Include file'], ['leave', 'Leave']] as [value, label] (value)}
+										<label>
+											<input
+												type="radio"
+												value={value}
+												checked={(choices[target.key] ?? 'embed') === value}
+												onchange={() => (choices[target.key] = value as 'embed' | 'include' | 'leave')}
+											/>
+											{label}
+										</label>
+									{/each}
+								</div>
 							</li>
 						{/each}
 					</ul>
@@ -367,18 +388,10 @@
 						<button
 							type="button"
 							class="ds-btn ds-btn--sm ds-btn--primary"
-							data-testid="project-export-embed"
-							onclick={exportSelfContained}
+							data-testid="project-export-resolve"
+							onclick={exportResolved}
 						>
-							Embed them
-						</button>
-						<button
-							type="button"
-							class="ds-btn ds-btn--sm"
-							data-testid="project-export-as-is"
-							onclick={exportAsIs}
-						>
-							Export with broken links
+							Export
 						</button>
 						<button
 							type="button"
@@ -390,8 +403,12 @@
 						</button>
 					</div>
 					<p class="hint">
-						Embedding freezes a copy of each file into the documents that use it, so the
-						archive opens anywhere. The originals stay linked here.
+						<strong>Embed</strong> freezes a copy into each document that uses the file, so the
+						archive opens anywhere. <strong>Include file</strong> copies the file into the
+						project instead, which gives it a place in the tree it did not have before.
+						<strong>Leave</strong> exports as-is, and the link will be broken wherever the
+						archive is opened. Embed and Include both change this project, not just the
+						archive.
 					</p>
 				</div>
 			{/if}
@@ -556,6 +573,19 @@
 	.links-out li span {
 		opacity: 0.75;
 		margin-left: var(--space-2, 0.5rem);
+	}
+	.links-out li {
+		margin-bottom: var(--space-2, 0.5rem);
+	}
+	.links-out-choice {
+		display: flex;
+		flex-wrap: wrap;
+		gap: var(--space-3, 0.75rem);
+	}
+	.links-out-choice label {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.25rem;
 	}
 	.links-out-actions {
 		display: flex;

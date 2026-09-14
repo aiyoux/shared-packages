@@ -4208,7 +4208,7 @@
 			rootId={projectRootId}
 			onImported={driver.rebuildImportedRefs}
 			onScanExportRefs={driver.scanExportRefs}
-			onFreezeExportRefs={driver.freezeExportRefs}
+			onResolveExportRefs={driver.resolveExportRefs}
 			onClose={() => (projectStorageOpen = false)}
 		/>
 	{/if}
