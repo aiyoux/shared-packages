@@ -188,6 +188,15 @@ export interface ExplorerDriver {
 	 * is reported: a snapshot renders from its own frozen bytes and a clone
 	 * holds no reference, so neither breaks by being left pointing outward.
 	 */
+	/**
+	 * What one file links to, for the preview to disclose.
+	 *
+	 * Showing it is most of the value: a document's outward links are otherwise
+	 * invisible until something breaks, which was the original complaint.
+	 */
+	scanFileRefs?(entryId: ExplorerEntryId): Promise<
+		Array<{ name: string; missing: boolean }>
+	>;
 	scanExportRefs?(rootId: string): Promise<
 		Array<{ key: string; name: string; fromNames: string[] }>
 	>;

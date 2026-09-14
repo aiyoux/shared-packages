@@ -36,6 +36,32 @@
 	let pdfCurrentPage = $state(0);
 	let pdfCanvas = $state<HTMLCanvasElement | null>(null);
 
+	/**
+	 * What this document links to.
+	 *
+	 * Outward links are invisible until one breaks — which is how a copied
+	 * project could point back at its original for weeks without anyone
+	 * noticing. Saying so here costs nothing and is most of the fix.
+	 */
+	let links = $state<Array<{ name: string; missing: boolean }>>([]);
+
+	$effect(() => {
+		const id = entry.id;
+		let cancelled = false;
+		links = [];
+		void driver
+			.scanFileRefs?.(id)
+			.then((found) => {
+				if (!cancelled) links = found;
+			})
+			.catch(() => {
+				// A scan that cannot run says nothing, rather than guessing.
+			});
+		return () => {
+			cancelled = true;
+		};
+	});
+
 	onDestroy(() => {
 		revokeUrl();
 	});
@@ -191,6 +217,16 @@
 				<FeIcon name="x" size={20} />
 			</button>
 		</div>
+		{#if links.length}
+			<p class="fe-float-links" data-testid="fe-float-links">
+				Links to
+				{#each links as link, i (link.name)}<span
+						class:missing={link.missing}
+						title={link.missing ? 'This file is no longer here' : undefined}
+						>{link.name}{link.missing ? ' (missing)' : ''}</span
+					>{i < links.length - 1 ? ', ' : ''}{/each}
+			</p>
+		{/if}
 		<div class="fe-float-body">
 			{#if loading}
 				<div class="fe-float-loading">
@@ -380,5 +416,15 @@
 		font-variant-numeric: tabular-nums;
 		min-width: 60px;
 		text-align: center;
+	}
+	.fe-float-links {
+		margin: 0;
+		padding: 0.25rem 0.75rem 0.5rem;
+		font-size: 0.85em;
+		opacity: 0.8;
+	}
+	.fe-float-links .missing {
+		color: var(--color-danger, #c00);
+		font-weight: 600;
 	}
 </style>
