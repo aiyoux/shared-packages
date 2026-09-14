@@ -176,11 +176,13 @@ describe('catalog leadership lock', () => {
 	it('unhooks its lifecycle listeners when it stands down', async () => {
 		const a = makeTab();
 		assert.equal(await a.lock.acquire(), true);
+		assert.equal(a.life.count('unload'), 0, 'Chrome forbids unload; pagehide/freeze stand down');
 		a.life.fire('freeze');
 		await tick();
 
 		assert.equal(a.life.count('freeze'), 0);
 		assert.equal(a.life.count('pagehide'), 0);
+		assert.equal(a.life.count('unload'), 0);
 
 		// Re-electing the same tab must not leave two sets of handlers behind.
 		assert.equal(await a.lock.acquire(), true);

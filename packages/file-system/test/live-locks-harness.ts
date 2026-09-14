@@ -165,7 +165,7 @@ export async function until(fn: () => boolean, ms = 1000): Promise<void> {
 }
 
 /**
- * Page lifecycle events (`freeze`, `pagehide`, `unload`) as an injectable
+ * Page lifecycle events (`freeze`, `pagehide`) as an injectable
  * target, so a stand-down can be driven deterministically instead of waiting
  * for a real browser to background a tab.
  */

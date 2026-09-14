@@ -124,15 +124,12 @@ export function createCatalogLock(deps: CatalogLockDeps): CatalogLock {
 		 * and every other tab gave up.
 		 */
 		const onFreeze = () => standDownNow();
-		const onUnload = () => leaveCleanly();
 
 		target.addEventListener('pagehide', onPageHide);
 		target.addEventListener('freeze', onFreeze);
-		target.addEventListener('unload', onUnload);
 		detachLifecycle = () => {
 			target.removeEventListener('pagehide', onPageHide);
 			target.removeEventListener('freeze', onFreeze);
-			target.removeEventListener('unload', onUnload);
 		};
 	}
 
