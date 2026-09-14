@@ -120,8 +120,11 @@ export function createLocalExplorerDriver(
 			await vfs.move(entryId, newParentId);
 		},
 
+		// Returns the copy, which the interface has always allowed. A decorator
+		// that needs to find what was just created — to repoint references at
+		// the new ids, say — would otherwise have to diff the destination.
 		async copy(entryId, newParentId) {
-			await vfs.copy(entryId, newParentId);
+			return nodeToEntry(await vfs.copy(entryId, newParentId));
 		},
 
 		async reorder(entryId, reorderOpts) {
