@@ -51,6 +51,7 @@ export {
 	load,
 	refKey,
 	traverses,
+	normalizeRelPath,
 	vfsNodeIdFromKey,
 	vfsRefKey,
 	wouldCycle,

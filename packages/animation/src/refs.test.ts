@@ -215,3 +215,32 @@ describe('wouldCycle', () => {
 		expect((await wouldCycle('a', 'b', load)).kind).toBe('cycle');
 	});
 });
+
+describe('refKey path aliasing', () => {
+	const mon = (relPath: string) =>
+		refKey({ backend: 'monitor', profileId: 'p1', relPath });
+
+	it('gives one file one key however its path is spelled', () => {
+		// Three spellings used to make three keys, so a cycle through any alias
+		// was invisible to findCycle — nothing matched.
+		const canonical = mon('a/b.png');
+		expect(mon('./a/b.png')).toBe(canonical);
+		expect(mon('a//b.png')).toBe(canonical);
+		expect(mon('a/x/../b.png')).toBe(canonical);
+		expect(mon('a/./b.png')).toBe(canonical);
+	});
+
+	it('still tells two different files apart', () => {
+		expect(mon('a/b.png')).not.toBe(mon('a/c.png'));
+		expect(mon('a/b.png')).not.toBe(refKey({ backend: 'monitor', profileId: 'p2', relPath: 'a/b.png' }));
+	});
+
+	it('keeps a leading .. rather than silently meaning somewhere else', () => {
+		expect(mon('../up.png')).toBe('mon:p1:../up.png');
+		expect(mon('../../up.png')).toBe('mon:p1:../../up.png');
+	});
+
+	it('keeps an absolute path absolute', () => {
+		expect(mon('/abs/./b.png')).toBe('mon:p1:/abs/b.png');
+	});
+});

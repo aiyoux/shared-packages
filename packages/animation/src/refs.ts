@@ -25,6 +25,33 @@ export type DocRef = {
 };
 
 /**
+ * Collapse the spellings of one path so two of them cannot become two keys.
+ *
+ * A monitor source is identified by its path, so `a/b.png`, `./a/b.png` and
+ * `a//x/../b.png` used to produce three different keys for one file — and a
+ * cycle through any of those aliases was invisible to `findCycle`, because
+ * nothing matched. Purely syntactic: resolving symlinks or case-insensitive
+ * filesystems needs the daemon, and this runs nowhere near it.
+ */
+export function normalizeRelPath(relPath: string): string {
+	const segments = relPath.split('/');
+	const out: string[] = [];
+	for (const segment of segments) {
+		if (segment === '' || segment === '.') continue;
+		if (segment === '..') {
+			// A leading `..` has nothing to pop and must be kept, or the path
+			// would silently come to mean somewhere else.
+			if (out.length && out[out.length - 1] !== '..') out.pop();
+			else out.push(segment);
+			continue;
+		}
+		out.push(segment);
+	}
+	const joined = out.join('/');
+	return relPath.startsWith('/') ? `/${joined}` : joined;
+}
+
+/**
  * Identity for a clip source, stable across documents and backends.
  *
  * Monitor sources have no node id, so the profile and path together stand in.
@@ -37,7 +64,7 @@ export function refKey(source: DocSource): string {
 		case 'shared-vfs':
 			return `vfs:${source.nodeId}`;
 		case 'monitor':
-			return `mon:${source.profileId}:${source.relPath}`;
+			return `mon:${source.profileId}:${normalizeRelPath(source.relPath)}`;
 		default: {
 			// Exhaustiveness, on purpose: a new backend must be given an identity
 			// here or the build breaks. Falling through to one of the arms above
