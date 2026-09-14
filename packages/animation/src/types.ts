@@ -21,24 +21,40 @@ export type SketchFragment =
 			objectId: string;
 	  };
 
-export type ClipSource =
-	| {
-			backend: 'shared-vfs';
-			nodeId: string;
-			generation?: number;
-			blobId?: string;
-			fragment?: SketchFragment;
-	  }
-	| {
-			backend: 'monitor';
-			profileId: string;
-			ino?: string;
-			dev?: string;
-			relPath: string;
-			fragment?: SketchFragment;
-	  };
+/**
+ * One document pointing at another, in the one shape every document type uses.
+ *
+ * `backend` is the discriminant: read it and you know whether to expect a VFS
+ * node id or a monitor profile + path. That is what lets a reference keep
+ * resolving wherever its document ends up, and what lets one reader and one
+ * writer serve every format.
+ *
+ * It is deliberately not per-app. `.skch` used to store `vfsNodeId` as a bare
+ * string, which could not name a monitor file at all and needed its own
+ * extractor and its own rewriter; `docs/design/live-reference-cycles.md`
+ * catalogued four such shapes rather than collapsing them. This is the collapse.
+ */
+export type VfsDocSource = {
+	backend: 'shared-vfs';
+	nodeId: string;
+	generation?: number;
+	blobId?: string;
+};
 
-export type FsBackend = ClipSource['backend'];
+export type MonitorDocSource = {
+	backend: 'monitor';
+	profileId: string;
+	ino?: string;
+	dev?: string;
+	relPath: string;
+};
+
+export type DocSource = VfsDocSource | MonitorDocSource;
+
+/** A `DocSource` that may also name part of a sketch. Anim clips only. */
+export type ClipSource = DocSource & { fragment?: SketchFragment };
+
+export type FsBackend = DocSource['backend'];
 
 export const CLIP_MEDIA_KINDS = ['image', 'sketch-fragment', 'video', 'audio'] as const;
 export type ClipMediaKind = (typeof CLIP_MEDIA_KINDS)[number];

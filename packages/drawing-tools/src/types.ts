@@ -4,6 +4,12 @@
 // types (SceneObject, CameraState, TempBakeItem, PrimitiveType, …) stay in
 // svg-sketcher; only the 2D drawing model and the polygon structural types
 // used by the clip/erase pipeline live here.
+//
+// The one import: `DocSource`, the single shape a reference to another
+// document takes anywhere in the codebase. `animation` owns that vocabulary
+// and is itself pure (no VFS, no DOM), so the edge costs nothing at runtime.
+
+import type { DocSource } from '@shared-packages/animation';
 
 /** A single eraser stroke's vector outline. */
 export interface EraserPath {
@@ -191,10 +197,16 @@ export interface ImportedImage {
     groupId?: string;
     /** Radians. Optional so older saves still load. */
     rotation?: number;
-    /** VFS bind. Absent = a cloned/embedded copy (the historical default). */
+    /** Bind mode. Absent = a cloned/embedded copy (the historical default). */
     bind?: 'clone' | 'live' | 'snapshot';
-    /** Shared-VFS node this image was bound from. Live re-reads this id. */
-    vfsNodeId?: string;
+    /**
+     * The document this image was bound from. Live re-reads it.
+     *
+     * One shape for every reference in the codebase — see `DocSource`. It
+     * replaced a bare `vfsNodeId`, which could only ever name a browser-VFS
+     * node and so needed its own reader and its own writer.
+     */
+    source?: DocSource;
 }
 
 export interface PathData {

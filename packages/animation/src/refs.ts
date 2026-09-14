@@ -2,7 +2,7 @@
  * The document reference graph — who points at whom.
  *
  * An `.anim` document is a document made of pointers: its clips carry a
- * `ClipSource` naming another file. When something the graph reaches points
+ * `DocSource` naming another file. When something the graph reaches points
  * back, resolving it can recurse forever. See scratch-pad
  * `docs/design/live-reference-cycles.md` for the failure modes; this module is
  * W1 and W3 of that plan and is the single place the graph is derived, so the
@@ -11,7 +11,7 @@
  * Pure: no VFS, no DOM. Callers supply the loader.
  */
 
-import type { AnimDocument, BindMode, ClipSource, FsBackend } from './types.js';
+import type { AnimDocument, BindMode, DocSource, FsBackend } from './types.js';
 import { isBoundClip } from './types.js';
 
 /** One outbound edge: a clip in some document referencing another file. */
@@ -32,7 +32,7 @@ export type DocRef = {
  * inverse, and it exists because a loader has to turn a key back into
  * something it can read. Do not add more.
  */
-export function refKey(source: ClipSource): string {
+export function refKey(source: DocSource): string {
 	switch (source.backend) {
 		case 'shared-vfs':
 			return `vfs:${source.nodeId}`;
@@ -52,7 +52,7 @@ export function refKey(source: ClipSource): string {
 /** Prefix for `shared-vfs` keys. */
 const VFS_PREFIX = 'vfs:';
 
-/** Build a walk key for a VFS node without constructing a `ClipSource`. */
+/** Build a walk key for a VFS node without constructing a `DocSource`. */
 export function vfsRefKey(nodeId: string): string {
 	return `${VFS_PREFIX}${nodeId}`;
 }
