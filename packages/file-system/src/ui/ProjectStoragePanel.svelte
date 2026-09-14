@@ -58,7 +58,11 @@
 		onResolveExportRefs?: (
 			rootId: string,
 			choices: Array<{ key: string; choice: 'embed' | 'include' }>
-		) => Promise<{ refused: Array<{ name: string; why: string }> } | void>;
+		) => Promise<{
+			exportRootId?: string;
+			refused: Array<{ name: string; why: string }>;
+			cleanup: () => Promise<void>;
+		}>;
 	} = $props();
 
 	type Stats = Awaited<ReturnType<typeof projectStorageStats>>;
@@ -120,9 +124,12 @@
 	 * outside it is never included — the archive used to ship with invisible
 	 * holes and the user found out on whatever machine they opened it on.
 	 */
-	let pendingExport = $state<{ external: ExternalLink[]; go: () => Promise<void> } | null>(null);
+	let pendingExport = $state<{
+		external: ExternalLink[];
+		go: (exportRootId: string) => Promise<void>;
+	} | null>(null);
 
-	async function startExport(go: () => Promise<void>) {
+	async function startExport(go: (exportRootId: string) => Promise<void>) {
 		let external: ExternalLink[] = [];
 		try {
 			external = (await onScanExportRefs?.(rootId)) ?? [];
@@ -131,7 +138,7 @@
 			external = [];
 		}
 		if (external.length === 0) {
-			await run('export', go);
+			await run('export', () => go(rootId));
 			return;
 		}
 		choices = Object.fromEntries(external.map((t) => [t.key, 'embed' as const]));
@@ -149,13 +156,22 @@
 			const decided = pending.external
 				.map((t) => ({ key: t.key, choice: choices[t.key] ?? 'embed' }))
 				.filter((c): c is { key: string; choice: 'embed' | 'include' } => c.choice !== 'leave');
-			if (decided.length) {
-				const result = await onResolveExportRefs?.(rootId, decided);
-				for (const refusal of result?.refused ?? []) {
-					toast.error(`${refusal.name} stays a live link — ${refusal.why}.`);
-				}
+			if (!decided.length) {
+				await pending.go(rootId);
+				return;
 			}
-			await pending.go();
+			// Embedding and including rewrite documents, so the driver does that
+			// to a throwaway copy and tells us where to export from. The project
+			// is not edited by pressing Export.
+			const prepared = await onResolveExportRefs?.(rootId, decided);
+			for (const refusal of prepared?.refused ?? []) {
+				toast.error(`${refusal.name} stays a live link — ${refusal.why}.`);
+			}
+			try {
+				await pending.go(prepared?.exportRootId ?? rootId);
+			} finally {
+				await prepared?.cleanup?.();
+			}
 		});
 	}
 
@@ -338,11 +354,11 @@
 				disabled={!!busy}
 				data-testid="project-export-btn"
 				onclick={() =>
-					startExport(async () => {
+					startExport(async (exportRootId) => {
 						const out =
 							exportMode === 'bundle'
-								? await exportProjectAsBundle(vfs, rootId, { onProgress: report })
-								: await exportProjectAsFiles(vfs, rootId, {
+								? await exportProjectAsBundle(vfs, exportRootId, { onProgress: report })
+								: await exportProjectAsFiles(vfs, exportRootId, {
 										preserveMetadata,
 										onProgress: report
 									});
@@ -407,8 +423,8 @@
 						archive opens anywhere. <strong>Include file</strong> copies the file into the
 						project instead, which gives it a place in the tree it did not have before.
 						<strong>Leave</strong> exports as-is, and the link will be broken wherever the
-						archive is opened. Embed and Include both change this project, not just the
-						archive.
+						archive is opened. Embed and Include are applied to a temporary copy — your
+						project is not changed.
 					</p>
 				</div>
 			{/if}

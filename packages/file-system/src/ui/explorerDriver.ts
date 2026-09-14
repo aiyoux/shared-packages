@@ -195,14 +195,22 @@ export interface ExplorerDriver {
 	 * Resolve those outward links before the archive is written.
 	 *
 	 * `embed` freezes a copy into each document that uses the file, changing
-	 * nothing structurally. `include` copies the file into the project, which
-	 * gives it a place in the tree it did not have — which is why it is offered
-	 * second. Both change the project, not only the archive.
+	 * nothing structurally. `include` copies the file in, which gives it a place
+	 * in the tree it did not have — which is why it is offered second.
+	 *
+	 * Both rewrite documents, so the implementation works on a throwaway copy
+	 * and hands back the root to export from. Pressing Export must not edit the
+	 * project.
 	 */
 	resolveExportRefs?(
 		rootId: string,
 		choices: Array<{ key: string; choice: 'embed' | 'include' }>
-	): Promise<{ refused: Array<{ name: string; why: string }> } | void>;
+	): Promise<{
+		/** Export from here instead: a throwaway copy, so the project is untouched. */
+		exportRootId?: string;
+		refused: Array<{ name: string; why: string }>;
+		cleanup: () => Promise<void>;
+	}>;
 	/**
 	 * MANDATORY when supportsSiblingOrder === true.
 	 * Same-parent rank write from full sibling set.
