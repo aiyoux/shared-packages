@@ -230,7 +230,13 @@ export interface ExplorerDriver {
 	): Promise<void>;
 	/** Soft-trash when supportsSoftDelete; else hard delete (B2: all versions). */
 	delete(id: ExplorerEntryId): Promise<void>;
-	restore?(id: ExplorerEntryId): Promise<void>;
+	/**
+	 * Returns the restored entry where it can, so the caller can see whether it
+	 * actually came back where it went in. Restore is the one operation a user
+	 * performs specifically to undo a change, so a silent relocation or rename
+	 * is the last thing it should do.
+	 */
+	restore?(id: ExplorerEntryId): Promise<void | ExplorerEntry>;
 	permanentDelete?(id: ExplorerEntryId): Promise<void>;
 	emptyTrash?(opts?: {
 		onProgress?: (ev: { done: number; total: number; name?: string }) => void;

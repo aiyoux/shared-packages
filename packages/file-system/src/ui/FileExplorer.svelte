@@ -1743,7 +1743,18 @@
 
 	async function restoreNode(n: ExplorerEntry) {
 		if (!driver.restore) return;
-		await driver.restore(n.id);
+		const restored = await driver.restore(n.id);
+		// Restore falls back to the drive root when the original folder is gone,
+		// and renames on top of that if the name is taken there. Both are
+		// reasonable last resorts and neither should happen in silence — this is
+		// the one action performed specifically to put something back.
+		if (restored && typeof restored === 'object') {
+			if (restored.name !== n.name) {
+				toast.info(`Restored as "${restored.name}" — that name was taken.`);
+			} else if (n.parentId != null && restored.parentId !== n.parentId) {
+				toast.info(`Restored to the top level — the folder it came from is gone.`);
+			}
+		}
 		await Promise.all([refreshTrash(), refresh()]);
 	}
 

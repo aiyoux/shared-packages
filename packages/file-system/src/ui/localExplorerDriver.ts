@@ -136,7 +136,7 @@ export function createLocalExplorerDriver(
 		},
 
 		async restore(entryId) {
-			await vfs.restore(entryId);
+			return nodeToEntry(await vfs.restore(entryId));
 		},
 
 		async permanentDelete(entryId) {
