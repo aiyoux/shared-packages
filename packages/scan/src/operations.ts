@@ -9,6 +9,8 @@ export type CommitOptions = {
 	enhance?: boolean;
 	ocr?: boolean;
 	maxEdge?: number;
+	/** JPEG quality 0–1. Default 0.92. */
+	quality?: number;
 };
 
 /** Warp a still (and optionally enhance + OCR) into a session page. */
@@ -27,7 +29,7 @@ export async function commitScan(
 		const engine = await loadScanEngine();
 		warped = await engine.enhance(warped);
 	}
-	const blob = await imageDataToBlob(warped, 'image/jpeg', 0.92);
+	const blob = await imageDataToBlob(warped, 'image/jpeg', opts.quality ?? 0.92);
 	let text: string | undefined;
 	if (opts.ocr) {
 		const { recognizeText } = await import('./ocr.js');
