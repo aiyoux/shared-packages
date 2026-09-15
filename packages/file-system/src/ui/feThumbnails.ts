@@ -10,12 +10,14 @@
  */
 import type { ExplorerEntry } from './explorerDriver.js';
 
-export type PreviewKind = 'image' | 'video' | 'audio' | 'pdf';
+export type PreviewKind = 'image' | 'video' | 'audio' | 'pdf' | 'text';
 
 const IMAGE_EXTS = ['.png', '.jpg', '.jpeg', '.webp', '.gif', '.svg', '.avif', '.bmp', '.ico'];
 const VIDEO_EXTS = ['.mp4', '.webm', '.mov', '.m4v', '.mkv', '.ogv'];
 const AUDIO_EXTS = ['.mp3', '.wav', '.ogg', '.oga', '.m4a', '.aac', '.flac', '.opus', '.weba', '.aiff', '.aif'];
 const PDF_EXTS = ['.pdf'];
+const TEXT_EXTS = ['.txt', '.md', '.markdown'];
+const TEXT_MIME = new Set(['text/plain', 'text/markdown', 'text/x-markdown']);
 const AUDIO_MIME: Record<string, string> = {
 	'.mp3': 'audio/mpeg',
 	'.wav': 'audio/wav',
@@ -53,17 +55,20 @@ export function getPreviewKind(entry: ExplorerEntry): PreviewKind | null {
 	if (entry.fileType === 'video') return 'video';
 	if (entry.fileType === 'audio') return 'audio';
 	if (entry.fileType === 'pdf') return 'pdf';
+	if (entry.fileType === 'text') return 'text';
 	const e = ext(entry.name);
 	if (IMAGE_EXTS.includes(e)) return 'image';
 	if (VIDEO_EXTS.includes(e)) return 'video';
 	if (AUDIO_EXTS.includes(e)) return 'audio';
 	if (PDF_EXTS.includes(e)) return 'pdf';
+	if (TEXT_EXTS.includes(e)) return 'text';
 	// Also check contentType for robustness
 	const ct = entry.contentType ?? '';
 	if (ct.startsWith('image/')) return 'image';
 	if (ct.startsWith('video/')) return 'video';
 	if (ct.startsWith('audio/')) return 'audio';
 	if (ct === 'application/pdf') return 'pdf';
+	if (TEXT_MIME.has(ct)) return 'text';
 	return null;
 }
 
@@ -91,6 +96,29 @@ export function previewKindIcon(kind: PreviewKind): 'image' | 'film' | 'music' |
 	return 'file-text';
 }
 
+export function textMimeForName(name: string): string {
+	const e = ext(name);
+	return e === '.md' || e === '.markdown' ? 'text/markdown' : 'text/plain';
+}
+
+export type TextPreviewDecode = {
+	text: string;
+	truncated: boolean;
+	binary: boolean;
+};
+
+const NUL = 0;
+
+/** Decode UTF-8 preview bytes. Null bytes in the first 8 KiB mean "not text". */
+export async function decodeTextPreview(blob: Blob, maxChars: number): Promise<TextPreviewDecode> {
+	const buf = new Uint8Array(await blob.arrayBuffer());
+	const sample = buf.subarray(0, Math.min(buf.length, 8192));
+	if (sample.includes(NUL)) return { text: '', truncated: false, binary: true };
+	const decoded = new TextDecoder('utf-8').decode(buf);
+	if (decoded.length <= maxChars) return { text: decoded, truncated: false, binary: false };
+	return { text: decoded.slice(0, maxChars), truncated: true, binary: false };
+}
+
 /** Give the blob a usable MIME so <img>/<iframe>/Image() will actually load it. */
 export function coerceMediaBlob(blob: Blob, name: string, kind: PreviewKind): Blob {
 	const e = ext(name);
@@ -109,6 +137,10 @@ export function coerceMediaBlob(blob: Blob, name: string, kind: PreviewKind): Bl
 	if (kind === 'audio') {
 		const want = AUDIO_MIME[e];
 		if (want && blob.type !== want) return new Blob([blob], { type: want });
+	}
+	if (kind === 'text') {
+		const want = textMimeForName(name);
+		if (blob.type !== want) return new Blob([blob], { type: want });
 	}
 	return blob;
 }
@@ -328,5 +360,7 @@ export async function generateThumbnail(
 			return generatePdfThumbnail(coerceMediaBlob(blob, name, 'pdf'), maxDim);
 		case 'audio':
 			throw new Error('Audio has no raster thumbnail');
+		case 'text':
+			throw new Error('Text has no raster thumbnail');
 	}
 }

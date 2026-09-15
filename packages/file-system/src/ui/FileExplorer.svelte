@@ -113,6 +113,7 @@
 	import '@shared-packages/design-system/tooltip.css';
 	import { SplitHandle, toast, appClipboard } from '@shared-packages/ui';
 	import FeThumbnail from './FeThumbnail.svelte';
+	import FeTextPreview from './FeTextPreview.svelte';
 	import FeTreeView from './FeTreeView.svelte';
 	import FeFloatingPreview from './FeFloatingPreview.svelte';
 	import { canQuickConvertSvg, canQuickEditRaster, getPreviewKind } from './feThumbnails.js';
@@ -2424,6 +2425,7 @@
 		if (entry.fileType === 'video') return 'Open in Simple Video';
 		if (entry.fileType === 'audio') return 'Open in Audio';
 		if (entry.fileType === 'pdf') return 'Open PDF';
+		if (entry.fileType === 'text') return 'Open in Text Editor';
 		return 'Open';
 	}
 
@@ -4464,7 +4466,22 @@
 
 {#snippet singleDetails(entry: ExplorerEntry, maxDim: number, showClose: boolean)}
 	<h2 class="fe-preview-name" data-testid="fe-file-preview-name">{entry.name}</h2>
-	{#if entry.kind === 'file' && getPreviewKind(entry)}
+	{#if entry.kind === 'file' && getPreviewKind(entry) === 'text'}
+		<div class="fe-preview-text-wrap" data-testid="fe-preview-thumb">
+			{#if explorerThumbsAreEager(driver) || previewMediaId === entry.id}
+				<FeTextPreview {entry} {driver} maxChars={4_000} />
+			{:else}
+				<button
+					type="button"
+					class="ds-btn ds-btn--sm ds-btn--secondary"
+					data-testid="fe-show-preview"
+					onclick={() => requestPreviewMedia(entry.id)}
+				>
+					Show me preview
+				</button>
+			{/if}
+		</div>
+	{:else if entry.kind === 'file' && getPreviewKind(entry)}
 		<div class="fe-preview-thumb" data-testid="fe-preview-thumb">
 			{#if explorerThumbsAreEager(driver) || previewMediaId === entry.id}
 				<FeThumbnail
@@ -5708,6 +5725,17 @@
 		max-height: 240px;
 	}
 	.fe-preview-thumb [data-testid='fe-show-preview'] {
+		margin: 16px;
+	}
+	.fe-preview-text-wrap {
+		width: 100%;
+		margin-bottom: 12px;
+		background: var(--surface-3);
+		border: 1px solid var(--line-hairline);
+		border-radius: 4px;
+		overflow: hidden;
+	}
+	.fe-preview-text-wrap [data-testid='fe-show-preview'] {
 		margin: 16px;
 	}
 </style>

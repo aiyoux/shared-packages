@@ -6,6 +6,7 @@
 		getPreviewKind,
 		renderPdfPageToCanvas
 	} from './feThumbnails.js';
+	import FeTextPreview from './FeTextPreview.svelte';
 	import type { ExplorerDriver, ExplorerEntry } from './explorerDriver.js';
 	import {
 		canReadExplorerBlob,
@@ -77,6 +78,12 @@
 		const e = entry;
 		const d = driver;
 		const k = kind;
+		if (k === 'text') {
+			untrack(revokeUrl);
+			loading = false;
+			error = '';
+			return;
+		}
 		if (!k || !canReadExplorerBlob(d)) {
 			// untrack: revokeUrl() reads `blobUrl`. Reading it inside this effect
 			// (even transitively) makes the effect depend on it — and the async
@@ -227,7 +234,7 @@
 					>{i < links.length - 1 ? ', ' : ''}{/each}
 			</p>
 		{/if}
-		<div class="fe-float-body">
+		<div class="fe-float-body" class:text={kind === 'text'}>
 			{#if loading}
 				<div class="fe-float-loading">
 					<div class="fe-float-spinner"></div>
@@ -251,6 +258,8 @@
 				</div>
 			{:else if kind === 'pdf' && pdfFallbackUrl}
 				<iframe class="fe-float-pdf-frame" title={entry.name} src={pdfFallbackUrl}></iframe>
+			{:else if kind === 'text'}
+				<FeTextPreview {entry} {driver} maxChars={200_000} variant="full" />
 			{:else if kind === 'pdf'}
 				<div class="fe-float-pdf">
 					<canvas bind:this={pdfCanvas} class="fe-float-pdf-canvas"></canvas>
@@ -333,6 +342,10 @@
 		display: flex;
 		align-items: center;
 		justify-content: center;
+	}
+	.fe-float-body.text {
+		align-items: stretch;
+		justify-content: stretch;
 	}
 	.fe-float-loading {
 		display: flex;

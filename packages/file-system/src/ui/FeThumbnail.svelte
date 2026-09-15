@@ -44,7 +44,11 @@
 	let loadedId = '';
 	let shouldLoad = $derived(
 		Boolean(
-			enabled && kind && kind !== 'audio' && (force || eager || requestedId === entry.id)
+			enabled &&
+				kind &&
+				kind !== 'audio' &&
+				kind !== 'text' &&
+				(force || eager || requestedId === entry.id)
 		)
 	);
 
@@ -74,7 +78,7 @@
 		// fetch — leaving the thumbnail stuck on "loading" forever.
 		const k = kind;
 
-		if (!en || !k || k === 'audio' || !(canReadExplorerBlob(d) || typeof d.thumbUrl === 'function')) {
+		if (!en || !k || k === 'audio' || k === 'text' || !(canReadExplorerBlob(d) || typeof d.thumbUrl === 'function')) {
 			// untrack: revoke() reads `url`. Reading it inside this effect (even
 			// transitively) would make the effect depend on it — and the async
 			// block below writes `url` once generation resolves, which would

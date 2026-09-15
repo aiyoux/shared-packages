@@ -105,6 +105,13 @@ const DEFAULT_TYPES: FileTypeDef[] = [
 		mime: 'application/json',
 		label: 'JSON',
 		schemaVersion: 1
+	},
+	{
+		id: 'text',
+		extension: '.txt',
+		mime: 'text/plain',
+		label: 'Text',
+		schemaVersion: 1
 	}
 ];
 
@@ -116,7 +123,8 @@ const DEFAULT_TYPES: FileTypeDef[] = [
 const MULTI_EXT: Partial<Record<FileTypeId, readonly string[]>> = {
 	image: ['.png', '.jpg', '.jpeg', '.webp', '.gif'],
 	video: ['.mp4', '.webm', '.mov', '.m4v', '.mkv', '.ogv'],
-	audio: ['.mp3', '.wav', '.ogg', '.oga', '.m4a', '.aac', '.flac', '.opus', '.weba', '.aiff', '.aif']
+	audio: ['.mp3', '.wav', '.ogg', '.oga', '.m4a', '.aac', '.flac', '.opus', '.weba', '.aiff', '.aif'],
+	text: ['.txt', '.md', '.markdown']
 };
 
 /** Product extensions stripped before re-applying a forced primary extension. */

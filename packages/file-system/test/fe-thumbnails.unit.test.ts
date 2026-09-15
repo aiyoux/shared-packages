@@ -18,7 +18,8 @@ import {
 	canQuickEditRaster,
 	coerceMediaBlob,
 	getPreviewKind,
-	generateImageThumbnail
+	generateImageThumbnail,
+	decodeTextPreview
 } from '../src/ui/feThumbnails.ts';
 import type { ExplorerEntry } from '../src/ui/explorerDriver.ts';
 
@@ -41,7 +42,11 @@ describe('getPreviewKind', () => {
 		assert.equal(getPreviewKind(file({ name: 'x', fileType: 'audio' })), 'audio');
 		assert.equal(getPreviewKind(file({ name: 'x', contentType: 'audio/mpeg' })), 'audio');
 		assert.equal(getPreviewKind(file({ name: 'x', contentType: 'application/pdf' })), 'pdf');
-		assert.equal(getPreviewKind(file({ name: 'notes.txt' })), null);
+		assert.equal(getPreviewKind(file({ name: 'notes.txt' })), 'text');
+		assert.equal(getPreviewKind(file({ name: 'readme.MD' })), 'text');
+		assert.equal(getPreviewKind(file({ name: 'doc.markdown' })), 'text');
+		assert.equal(getPreviewKind(file({ name: 'x', fileType: 'text' })), 'text');
+		assert.equal(getPreviewKind(file({ name: 'x', contentType: 'text/markdown' })), 'text');
 		assert.equal(getPreviewKind({ id: 'f', kind: 'folder', name: 'dir', parentId: null }), null);
 	});
 });
@@ -86,5 +91,25 @@ describe('generateImageThumbnail', () => {
 		const url = await generateImageThumbnail(svg, 64, 'mark.svg');
 		assert.match(url, /^blob:/);
 		URL.revokeObjectURL(url);
+	});
+});
+
+describe('decodeTextPreview', () => {
+	it('returns UTF-8 text and truncates at maxChars', async () => {
+		const blob = new Blob(['hello markdown'], { type: 'text/plain' });
+		const full = await decodeTextPreview(blob, 100);
+		assert.equal(full.text, 'hello markdown');
+		assert.equal(full.truncated, false);
+		assert.equal(full.binary, false);
+		const cut = await decodeTextPreview(blob, 5);
+		assert.equal(cut.text, 'hello');
+		assert.equal(cut.truncated, true);
+	});
+
+	it('flags a blob with a NUL as binary', async () => {
+		const blob = new Blob([new Uint8Array([0x68, 0x00, 0x69])]);
+		const decoded = await decodeTextPreview(blob, 100);
+		assert.equal(decoded.binary, true);
+		assert.equal(decoded.text, '');
 	});
 });

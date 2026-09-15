@@ -25,6 +25,7 @@ describe('registry multi-ext image + forceExtension', () => {
 		assert.deepEqual(acceptedExtensionsFor('anim'), ['.anim']);
 		assert.deepEqual(acceptedExtensionsFor('vide'), ['.vide']);
 		assert.deepEqual(acceptedExtensionsFor('json'), ['.json']);
+		assert.deepEqual(acceptedExtensionsFor('text'), ['.txt', '.md', '.markdown']);
 		assert.deepEqual(acceptedExtensionsFor('pdf'), ['.pdf']);
 		assert.deepEqual(acceptedExtensionsFor('svg'), ['.svg']);
 		assert.deepEqual(acceptedExtensionsFor('unknown'), []);
@@ -57,6 +58,14 @@ describe('registry multi-ext image + forceExtension', () => {
 		assert.equal(forceExtension('take.wav', 'audio'), 'take.wav');
 		assert.equal(forceExtension('loop.FLAC', 'audio'), 'loop.FLAC');
 		assert.equal(forceExtension('track', 'audio'), 'track.mp3');
+	});
+
+	it('forceExtension preserves .txt and .md for text', () => {
+		assert.equal(forceExtension('notes.txt', 'text'), 'notes.txt');
+		assert.equal(forceExtension('readme.md', 'text'), 'readme.md');
+		assert.equal(forceExtension('Guide.MD', 'text'), 'Guide.MD');
+		assert.equal(forceExtension('doc.markdown', 'text'), 'doc.markdown');
+		assert.equal(forceExtension('note', 'text'), 'note.txt');
 	});
 
 	it('forceExtension still enforces product single extensions', () => {
@@ -107,6 +116,9 @@ describe('registry multi-ext image + forceExtension', () => {
 		assert.equal(inferFileTypeFromName('report.pdf'), 'pdf');
 		assert.equal(inferFileTypeFromName('vector.svg'), 'svg');
 		assert.equal(inferFileTypeFromName('icon.SVG'), 'svg');
+		assert.equal(inferFileTypeFromName('notes.txt'), 'text');
+		assert.equal(inferFileTypeFromName('README.md'), 'text');
+		assert.equal(inferFileTypeFromName('doc.markdown'), 'text');
 		assert.deepEqual(acceptedExtensionsFor('pdf'), ['.pdf']);
 		assert.equal(inferFileTypeFromName('noext'), 'unknown');
 	});
@@ -125,5 +137,8 @@ describe('registry multi-ext image + forceExtension', () => {
 		assert.equal(getFileTypeByExtension('.vide')?.id, 'vide');
 		assert.equal(getFileTypeByExtension('.pdf')?.id, 'pdf');
 		assert.equal(getFileTypeByExtension('.svg')?.id, 'svg');
+		assert.equal(getFileTypeByExtension('.txt')?.id, 'text');
+		assert.equal(getFileTypeByExtension('.md')?.id, 'text');
+		assert.equal(getFileTypeByExtension('markdown')?.id, 'text');
 	});
 });

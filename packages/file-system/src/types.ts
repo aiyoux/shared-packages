@@ -15,6 +15,7 @@ export type FileTypeId =
 	| 'audio'
 	| 'pdf'
 	| 'json'
+	| 'text'
 	| 'unknown';
 
 export type VfsNodeKind = 'folder' | 'file';
