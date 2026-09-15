@@ -235,6 +235,22 @@ export {
 	RESIZE_HANDLE_LABELS
 } from './objectTransform.ts';
 export type { FrameRect, ResizeHandle, TransformMode } from './objectTransform.ts';
+export {
+	canvasView,
+	clampScale,
+	fitScale,
+	pointerDistance,
+	wheelZoomFactor,
+	widthScale,
+	PZ_ZOOM_MAX,
+	PZ_ZOOM_MIN,
+	type CanvasView,
+	type Pan,
+	type ZoomMode
+} from './pan-zoom/panZoom.ts';
+export { default as PanZoomViewport } from './pan-zoom/PanZoomViewport.svelte';
+export { default as PanZoomControls } from './pan-zoom/PanZoomControls.svelte';
+export { default as ImagePreviewDialog } from './pan-zoom/ImagePreviewDialog.svelte';
 
 // Unified toast system
 export { default as ToastHost } from './ToastHost.svelte';

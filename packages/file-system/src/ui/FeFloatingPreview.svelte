@@ -14,6 +14,7 @@
 		loadExplorerMediaSrc,
 		readExplorerBlob
 	} from './explorerDriver.js';
+	import { PanZoomViewport } from '@shared-packages/ui';
 
 	let {
 		entry,
@@ -36,6 +37,7 @@
 	let pdfPageCount = $state(0);
 	let pdfCurrentPage = $state(0);
 	let pdfCanvas = $state<HTMLCanvasElement | null>(null);
+	let imageSize = $state({ w: 1, h: 1 });
 
 	/**
 	 * What this document links to.
@@ -105,6 +107,7 @@
 		pdfPageCount = 0;
 		pdfCurrentPage = 0;
 		pdfBlob = null;
+		imageSize = { w: 1, h: 1 };
 
 		(async () => {
 			try {
@@ -234,7 +237,7 @@
 					>{i < links.length - 1 ? ', ' : ''}{/each}
 			</p>
 		{/if}
-		<div class="fe-float-body" class:text={kind === 'text'}>
+		<div class="fe-float-body" class:text={kind === 'text'} class:image={kind === 'image'}>
 			{#if loading}
 				<div class="fe-float-loading">
 					<div class="fe-float-spinner"></div>
@@ -242,12 +245,25 @@
 			{:else if error}
 				<div class="fe-float-error">{error}</div>
 			{:else if kind === 'image' && blobUrl}
-				<img
-					class="fe-float-image"
-					src={blobUrl}
-					alt={entry.name}
-					onerror={() => (error = 'Image failed to display')}
-				/>
+				<PanZoomViewport
+					contentWidth={imageSize.w}
+					contentHeight={imageSize.h}
+					testidPrefix="fe-float"
+				>
+					<img
+						class="fe-float-image"
+						src={blobUrl}
+						alt={entry.name}
+						onload={(e) => {
+							const img = e.currentTarget as HTMLImageElement;
+							imageSize = {
+								w: img.naturalWidth || 1,
+								h: img.naturalHeight || 1
+							};
+						}}
+						onerror={() => (error = 'Image failed to display')}
+					/>
+				</PanZoomViewport>
 			{:else if kind === 'video' && blobUrl}
 				<!-- svelte-ignore a11y_media_has_caption -->
 				<video class="fe-float-video" src={blobUrl} controls autoplay playsinline></video>
@@ -343,9 +359,17 @@
 		align-items: center;
 		justify-content: center;
 	}
-	.fe-float-body.text {
+	.fe-float-body.text,
+	.fe-float-body.image {
 		align-items: stretch;
 		justify-content: stretch;
+	}
+	.fe-float-body.image {
+		overflow: hidden;
+	}
+	.fe-float-body :global(.pz-root) {
+		width: 100%;
+		height: 100%;
 	}
 	.fe-float-loading {
 		display: flex;
@@ -373,9 +397,9 @@
 		text-align: center;
 	}
 	.fe-float-image {
-		max-width: 100%;
-		max-height: 100%;
-		object-fit: contain;
+		width: 100%;
+		height: 100%;
+		object-fit: fill;
 		display: block;
 	}
 	.fe-float-video {
