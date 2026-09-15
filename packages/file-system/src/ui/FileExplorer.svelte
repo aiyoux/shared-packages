@@ -3302,7 +3302,16 @@
 	aria-label="File explorer"
 	tabindex="0"
 	onkeydown={onListKeydown}
-	onclick={() => {
+	onclick={(e) => {
+		const t = e.target;
+		if (
+			t instanceof Element &&
+			t.closest(
+				'[data-testid="fe-toolbar-more-wrap"], [data-testid="fe-view-switcher"], [data-testid="fe-new-menu"]'
+			)
+		) {
+			return;
+		}
 		if (viewSwitcherOpen) closeViewSwitcher();
 		if (toolbarMoreOpen) closeToolbarMore();
 		if (newMenuOpen) closeNewMenu();
@@ -3707,6 +3716,7 @@
 						class="fe-toolbar-more-wrap"
 						data-testid="fe-toolbar-more-wrap"
 						onclick={(e) => e.stopPropagation()}
+						onpointerdown={(e) => e.stopPropagation()}
 					>
 						<FeTipIconBtn
 							testid="fe-toolbar-more"

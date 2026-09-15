@@ -1871,7 +1871,7 @@
 	{/if}
 {/snippet}
 
-{#snippet copyAcrossAction(id: PaneId, variant: 'icon' | 'label')}
+{#snippet copyAcrossAction(id: PaneId, variant: 'icon' | 'label' | 'menu')}
 	{@const p = paneState(id)}
 	{@const picking = copyPickFrom === id}
 	{@const manyDests = otherLeaves(id).length > 1}
@@ -1883,18 +1883,7 @@
 				? 'Copy across — then click a destination window'
 				: 'Copy across'}
 	{#if showCopyAcross}
-		{#if variant === 'label'}
-			<button
-				type="button"
-				class="ds-btn ds-btn--sm ds-btn--secondary"
-				data-testid={scopedTid('fe-file-preview-copy-across')}
-				disabled={copyBusy || p.ctx.selectedIds.length === 0}
-				aria-pressed={picking}
-				onclick={() => runCopyAcross(id)}
-			>
-				{copyBusy ? 'Copying…' : picking ? 'Choose a window…' : 'Copy across'}
-			</button>
-		{:else}
+		{#if variant === 'icon'}
 			<FeTipIconBtn
 				testid={tids.copyAcross(id)}
 				tip={copyTip}
@@ -1903,6 +1892,17 @@
 				disabled={copyBusy || p.ctx.selectedIds.length === 0}
 				onclick={() => runCopyAcross(id)}
 			/>
+		{:else}
+			<button
+				type="button"
+				class="ds-btn ds-btn--sm ds-btn--secondary"
+				data-testid={variant === 'menu' ? tids.copyAcross(id) : scopedTid('fe-file-preview-copy-across')}
+				disabled={copyBusy || p.ctx.selectedIds.length === 0}
+				aria-pressed={picking}
+				onclick={() => runCopyAcross(id)}
+			>
+				{copyBusy ? 'Copying…' : picking ? 'Choose a window…' : 'Copy across'}
+			</button>
 		{/if}
 	{/if}
 {/snippet}
@@ -2081,7 +2081,7 @@
 								{@render copyAcrossAction(id, 'icon')}
 							{:else if variant === 'menu'}
 								{@render sendAction(id, 'label')}
-								{@render copyAcrossAction(id, 'label')}
+								{@render copyAcrossAction(id, 'menu')}
 							{:else}
 								{@render copyAcrossAction(id, 'label')}
 							{/if}
@@ -2134,7 +2134,7 @@
 								{@render copyAcrossAction(id, 'icon')}
 							{:else if variant === 'menu'}
 								{@render sendAction(id, 'label')}
-								{@render copyAcrossAction(id, 'label')}
+								{@render copyAcrossAction(id, 'menu')}
 							{:else}
 								{@render copyAcrossAction(id, 'label')}
 							{/if}
@@ -2185,7 +2185,7 @@
 								{@render copyAcrossAction(id, 'icon')}
 							{:else if variant === 'menu'}
 								{@render sendAction(id, 'label')}
-								{@render copyAcrossAction(id, 'label')}
+								{@render copyAcrossAction(id, 'menu')}
 							{:else}
 								{@render copyAcrossAction(id, 'label')}
 							{/if}
