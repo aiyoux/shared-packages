@@ -10,6 +10,7 @@ import {
 	caretFromClient,
 	emptySpaceCaretFromClient,
 	lineStartFromClient,
+	offsetAlongLine,
 	trailingLineEndFromClient
 } from './selection.js';
 import { page, para } from './testFixtures.js';
@@ -292,6 +293,50 @@ describe('trailingLineEndFromClient', () => {
 			Range.prototype.getClientRects = proto;
 			host.remove();
 		}
+	});
+
+	it('places a click in the line-height padding at that x, not the line start', () => {
+		const host = document.createElement('div');
+		host.contentEditable = 'true';
+		document.body.append(host);
+		const doc = page([para('a', 'hello')]);
+		project(host, doc);
+		const block = host.querySelector('[data-block-id="a"]') as HTMLElement;
+		block.getBoundingClientRect = () => fakeRect(0, 40, 0, 400);
+
+		const proto = Range.prototype.getClientRects;
+		Range.prototype.getClientRects = function () {
+			const i = this.startOffset;
+			return [fakeRect(10, 16, 40 + i * 10, 10)] as unknown as DOMRectList;
+		};
+		try {
+			// Glyphs occupy y=10..26; click at y=4 (above) and x of the 4th letter (offset 3).
+			expect(emptySpaceCaretFromClient(host, 72, 4)).toEqual({ blockId: 'a', offset: 3 });
+			expect(caretFromClient(host, 72, 4)).toEqual({ blockId: 'a', offset: 3 });
+			expect(emptySpaceCaretFromClient(host, 72, 28)).toEqual({ blockId: 'a', offset: 3 });
+		} finally {
+			Range.prototype.getClientRects = proto;
+			host.remove();
+		}
+	});
+
+	it('offsetAlongLine splits a glyph at its midpoint', () => {
+		const line = {
+			top: 0,
+			bottom: 16,
+			left: 10,
+			right: 50,
+			startOffset: 0,
+			endOffset: 2,
+			glyphs: [
+				{ offset: 0, left: 10, right: 30 },
+				{ offset: 1, left: 30, right: 50 }
+			]
+		};
+		expect(offsetAlongLine(line, 10)).toBe(0);
+		expect(offsetAlongLine(line, 19)).toBe(0);
+		expect(offsetAlongLine(line, 21)).toBe(1);
+		expect(offsetAlongLine(line, 50)).toBe(2);
 	});
 
 	it('snaps a click to the left of a line to that line\'s start', () => {

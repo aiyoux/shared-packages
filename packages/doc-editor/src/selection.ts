@@ -301,6 +301,7 @@ export type LineBox = {
 	right: number;
 	startOffset: number;
 	endOffset: number;
+	glyphs?: { offset: number; left: number; right: number }[];
 };
 
 const TRAILING_CLICK_SLACK_PX = 1;
@@ -352,6 +353,7 @@ export function lineBoxesOf(block: HTMLElement): LineBox[] {
 			const rect = range.getClientRects()[0];
 			if (!rect || (rect.width === 0 && rect.height === 0)) continue;
 			const midY = rect.top + rect.height / 2;
+			const glyph = { offset: offset + i, left: rect.left, right: rect.right };
 			let line = lines.find((l) => midY >= l.top && midY <= l.bottom);
 			if (!line) {
 				lines.push({
@@ -360,7 +362,8 @@ export function lineBoxesOf(block: HTMLElement): LineBox[] {
 					left: rect.left,
 					right: rect.right,
 					startOffset: offset + i,
-					endOffset: offset + i + 1
+					endOffset: offset + i + 1,
+					glyphs: [glyph]
 				});
 			} else {
 				line.top = Math.min(line.top, rect.top);
@@ -369,6 +372,7 @@ export function lineBoxesOf(block: HTMLElement): LineBox[] {
 				line.right = Math.max(line.right, rect.right);
 				line.startOffset = Math.min(line.startOffset, offset + i);
 				line.endOffset = Math.max(line.endOffset, offset + i + 1);
+				line.glyphs.push(glyph);
 			}
 		}
 		offset += len;
@@ -389,6 +393,25 @@ export function lineBoxAtY(lines: LineBox[], clientY: number): LineBox | null {
 		}
 	}
 	return best;
+}
+
+/**
+ * Caret offset on a visual line for a viewport x. Clicks in the line-height
+ * padding above/below glyphs used to snap to `startOffset` because they
+ * missed the glyph boxes; this keeps the x the user actually pointed at.
+ */
+export function offsetAlongLine(line: LineBox, clientX: number): number {
+	if (clientX <= line.left) return line.startOffset;
+	if (clientX >= line.right) return line.endOffset;
+	const glyphs = line.glyphs ?? [];
+	if (!glyphs.length) return line.startOffset;
+	for (const g of glyphs) {
+		if (clientX < g.right) {
+			const mid = (g.left + g.right) / 2;
+			return clientX < mid ? g.offset : g.offset + 1;
+		}
+	}
+	return line.endOffset;
 }
 
 /**
@@ -526,19 +549,29 @@ export function nearestEmptyCaretFromClient(
 	if (lines.length === 0) return { blockId, offset: 0 };
 	const line = lineBoxAtY(lines, clientY);
 	if (!line) return { blockId, offset: 0 };
+	if (clientX > line.right + TRAILING_CLICK_SLACK_PX) {
+		const last = lines[lines.length - 1]!;
+		const offset =
+			clientY > last.bottom ? Math.max(last.endOffset, blockPlainLength(block)) : line.endOffset;
+		return { blockId, offset };
+	}
+	if (clientX < line.left - TRAILING_CLICK_SLACK_PX) {
+		return { blockId, offset: line.startOffset };
+	}
 	const onLine = clientY >= line.top && clientY <= line.bottom;
-	if (onLine) {
-		if (clientX > line.right + TRAILING_CLICK_SLACK_PX) {
-			return { blockId, offset: line.endOffset };
-		}
-		if (clientX < line.left - TRAILING_CLICK_SLACK_PX) {
-			return { blockId, offset: line.startOffset };
-		}
-		return null;
+	if (onLine) return null;
+	const glyphH = Math.max(1, line.bottom - line.top);
+	const nearLine =
+		clientY >= line.top - glyphH * 0.45 && clientY <= line.bottom + glyphH * 0.45;
+	const blockRect = block.getBoundingClientRect();
+	const insideBlock = clientY >= blockRect.top && clientY <= blockRect.bottom;
+	if (nearLine && insideBlock) {
+		return { blockId, offset: offsetAlongLine(line, clientX) };
 	}
 	if (clientY > line.bottom) {
 		const last = lines[lines.length - 1]!;
-		const offset = clientY > last.bottom ? Math.max(last.endOffset, blockPlainLength(block)) : line.endOffset;
+		const offset =
+			clientY > last.bottom ? Math.max(last.endOffset, blockPlainLength(block)) : line.endOffset;
 		return { blockId, offset };
 	}
 	return { blockId, offset: line.startOffset };
@@ -615,6 +648,22 @@ function caretRangeFromPoint(doc: Document, clientX: number, clientY: number): {
  * Map a viewport point to a document caret. Empty space (after text, empty
  * lines, gaps) snaps via line boxes; glyph hits use `caretPositionFromPoint`.
  */
+/**
+ * Native CE already places the caret when the hit is a real text glyph.
+ * Element hits (a mark wrapper at offset 0) and line-height padding do not —
+ * those used to land at the start of the span or line.
+ */
+export function isNativeTextGlyphHit(host: HTMLElement, clientX: number, clientY: number): boolean {
+	if (!isPointOnGlyph(host, clientX, clientY)) return false;
+	const hit = caretRangeFromPoint(host.ownerDocument, clientX, clientY);
+	return Boolean(
+		hit &&
+			hit.node.nodeType === Node.TEXT_NODE &&
+			host.contains(hit.node) &&
+			!inCollabWidget(hit.node)
+	);
+}
+
 export function caretFromClient(host: HTMLElement, clientX: number, clientY: number): Point | null {
 	if (!isPointOnGlyph(host, clientX, clientY)) {
 		const empty = nearestEmptyCaretFromClient(host, clientX, clientY);
@@ -622,6 +671,10 @@ export function caretFromClient(host: HTMLElement, clientX: number, clientY: num
 	}
 	const hit = caretRangeFromPoint(host.ownerDocument, clientX, clientY);
 	if (hit) {
+		if (hit.node.nodeType === Node.ELEMENT_NODE) {
+			const empty = nearestEmptyCaretFromClient(host, clientX, clientY);
+			if (empty) return empty;
+		}
 		const root = hit.node.nodeType === Node.ELEMENT_NODE ? hit.node : hit.node.parentNode;
 		if (root && host.contains(root)) {
 			const mapped = pointFromDom(host, hit.node, hit.offset);

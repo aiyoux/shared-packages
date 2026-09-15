@@ -45,7 +45,7 @@
 		restoreSelection,
 		focusHeldOutside,
 		caretFromClient,
-		isPointOnGlyph,
+		isNativeTextGlyphHit,
 		isTextCaretBlockType
 	} from './selection.js';
 	import { collapsed, rangesEqual } from './range.js';
@@ -732,7 +732,7 @@
 		) {
 			return;
 		}
-		if (isPointOnGlyph(host, event.clientX, event.clientY)) return;
+		if (isNativeTextGlyphHit(host, event.clientX, event.clientY)) return;
 		const snapped = caretFromClient(host, event.clientX, event.clientY);
 		if (!snapped) return;
 		event.preventDefault();
