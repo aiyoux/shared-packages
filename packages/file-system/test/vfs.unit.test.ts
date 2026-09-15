@@ -260,12 +260,29 @@ describe('VfsService', () => {
 	it('isActionable grey-out helper', () => {
 		assert.equal(isActionable({ kind: 'folder' } as any, ['skch']), true);
 		assert.equal(
-			isActionable({ kind: 'file', fileType: 'vrec' } as any, ['skch']),
+			isActionable({ kind: 'file', name: 'take.vrec', fileType: 'vrec' } as any, ['skch']),
 			false
 		);
 		assert.equal(
-			isActionable({ kind: 'file', fileType: 'skch' } as any, ['skch']),
+			isActionable({ kind: 'file', name: 'a.skch', fileType: 'skch' } as any, ['skch']),
 			true
+		);
+		assert.equal(
+			isActionable({ kind: 'file', name: 'readme.md' } as any, ['text']),
+			true,
+			'.md with no stored type still opens as text'
+		);
+		assert.equal(
+			isActionable({ kind: 'file', name: 'notes.txt', fileType: 'unknown' } as any, ['text']),
+			true
+		);
+		assert.equal(
+			isActionable({ kind: 'file', name: 'Guide.MD', fileType: 'text' } as any, ['text']),
+			true
+		);
+		assert.equal(
+			isActionable({ kind: 'file', name: 'clip.mp4' } as any, ['text']),
+			false
 		);
 	});
 

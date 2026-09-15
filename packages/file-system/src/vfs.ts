@@ -4117,8 +4117,16 @@ export function resetSharedVfsForTests(): void {
 	resetCatalogLeader();
 }
 
-export function isActionable(node: VfsNode, accept?: FileTypeId[]): boolean {
+export function isActionable(
+	node: Pick<VfsNode, 'kind' | 'fileType' | 'name'>,
+	accept?: FileTypeId[]
+): boolean {
 	if (node.kind === 'folder') return true;
 	if (!accept || accept.length === 0) return true;
-	return !!node.fileType && accept.includes(node.fileType);
+	const stored = node.fileType && node.fileType !== 'unknown' ? node.fileType : undefined;
+	if (stored && accept.includes(stored)) return true;
+	// Files written before a type existed (e.g. .md before `text`) have no
+	// stored fileType. Fall back to the name so Open pickers do not grey them.
+	const inferred = inferFileTypeFromName(node.name);
+	return inferred !== 'unknown' && accept.includes(inferred);
 }
