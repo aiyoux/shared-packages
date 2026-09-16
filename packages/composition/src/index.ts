@@ -29,7 +29,9 @@ export {
 	pickTickStepMs,
 	rulerTicks,
 	viewportWindowFraction,
-	zoomAtAnchor
+	zoomAtAnchor,
+	zoomToFitDuration,
+	zoomToTimeRange
 } from './viewport.js';
 export type {
 	RulerTick,

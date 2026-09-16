@@ -9,7 +9,9 @@ import {
 	pickTickStepMs,
 	rulerTicks,
 	viewportWindowFraction,
-	zoomAtAnchor
+	zoomAtAnchor,
+	zoomToFitDuration,
+	zoomToTimeRange
 } from './viewport.js';
 
 // viewportPx is chosen to exactly match durationMs * BASE_PX_PER_MS, so the
@@ -166,6 +168,27 @@ describe('ruler ticks', () => {
 
 	it('returns nothing for an empty timeline', () => {
 		expect(rulerTicks(createTimelineViewport({ ...base, durationMs: 0 }))).toEqual([]);
+	});
+});
+
+describe('zoomToFitDuration / zoomToTimeRange', () => {
+	it('fits the fixture duration into the fixture pane at zoom 1', () => {
+		expect(zoomToFitDuration(base.durationMs, base.viewportPx)).toBe(1);
+	});
+
+	it('zooms a shorter range so it fills most of the window', () => {
+		const { zoom, scrollX } = zoomToTimeRange(10_000, 1200, 2000, 4000);
+		expect(zoom).toBeGreaterThan(1);
+		expect(scrollX).toBeGreaterThan(0);
+		const vp = createTimelineViewport({ durationMs: 10_000, viewportPx: 1200, zoom, scrollX });
+		expect(vp.visibleStartMs).toBeLessThanOrEqual(2000);
+		expect(vp.visibleEndMs).toBeGreaterThanOrEqual(4000);
+	});
+
+	it('falls back to a full-duration fit when the range is empty', () => {
+		const { zoom, scrollX } = zoomToTimeRange(10_000, 1200, 3, 3);
+		expect(zoom).toBe(1);
+		expect(scrollX).toBe(0);
 	});
 });
 

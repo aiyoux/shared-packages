@@ -1,6 +1,7 @@
 /**
  * Timeline viewport algebra — the maths behind a horizontally scrollable,
  * zoomable timeline whose content is wider than the window it shows through.
+ * Includes fit-to-duration and zoom-to-range helpers used by the video trimmer.
  *
  * Framework-agnostic and stateless: callers hold `zoom` + `scrollX`, feed them
  * in with the measured `viewportPx` and the `durationMs` being laid out, and get
@@ -104,6 +105,33 @@ export function createTimelineViewport(input: TimelineViewportInput): TimelineVi
 /** Clamp an arbitrary scroll offset to this viewport's valid range. */
 export function clampScrollX(vp: TimelineViewport, scrollX: number): number {
 	return clamp(scrollX, 0, vp.maxScrollX);
+}
+
+/** Zoom that lays the whole duration into `viewportPx` (`contentPx === viewportPx`). */
+export function zoomToFitDuration(durationMs: number, viewportPx: number): number {
+	if (!(durationMs > 0) || !(viewportPx > 0)) return clampZoom(1);
+	return clampZoom(viewportPx / (durationMs * BASE_PX_PER_MS));
+}
+
+/**
+ * Zoom + scroll so `[startMs, endMs]` fills the window, with `padding` extra
+ * space (0.15 = 15% of the window) around the range.
+ */
+export function zoomToTimeRange(
+	durationMs: number,
+	viewportPx: number,
+	startMs: number,
+	endMs: number,
+	padding = 0.15
+): { zoom: number; scrollX: number } {
+	const span = Math.max(0, Math.min(durationMs, endMs) - Math.max(0, startMs));
+	if (!(durationMs > 0) || !(viewportPx > 0) || span <= 0) {
+		return { zoom: zoomToFitDuration(durationMs, viewportPx), scrollX: 0 };
+	}
+	const zoom = clampZoom(viewportPx / (span * BASE_PX_PER_MS * (1 + padding)));
+	const vp = createTimelineViewport({ durationMs, viewportPx, zoom, scrollX: 0 });
+	const padPx = vp.viewportPx * (padding / (1 + padding));
+	return { zoom, scrollX: clampScrollX(vp, vp.timeToPx(Math.max(0, startMs)) - padPx) };
 }
 
 /**
