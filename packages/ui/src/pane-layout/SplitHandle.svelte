@@ -44,6 +44,7 @@
 			// Capture may already be gone (element re-rendered, pointer vanished);
 			// releasing must never abort the state reset below.
 		}
+		if (host) host.style.removeProperty('pointer-events');
 		drag = null;
 		dragging = false;
 	}
@@ -68,9 +69,30 @@
 
 	function onPointerDown(e: PointerEvent) {
 		if (disabled || e.button !== 0) return;
+		const hostEl = e.currentTarget as HTMLElement;
+		// Peek under the pill: on a narrow pane the centered grab can still
+		// overlap overlay chrome (zoom cluster). Hide the handle so
+		// elementFromPoint sees what's beneath — children have pointer-events
+		// auto, so toggling the parent's pointer-events is not enough.
+		const prevVis = hostEl.style.visibility;
+		hostEl.style.visibility = 'hidden';
+		const under = document.elementFromPoint(e.clientX, e.clientY);
+		hostEl.style.visibility = prevVis;
+		if (under && !hostEl.contains(under)) {
+			const chrome = under.closest(
+				'button, a, input, textarea, select, [role="button"], [role="slider"]'
+			);
+			if (chrome instanceof HTMLElement) {
+				chrome.click();
+				return;
+			}
+		}
 		e.preventDefault();
+		// Re-enable the full strip for the duration of the drag so capture
+		// keeps working as the pointer moves off the pill.
+		hostEl.style.setProperty('pointer-events', 'auto', 'important');
 		try {
-			(e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+			hostEl.setPointerCapture?.(e.pointerId);
 		} catch {
 			// Some synthetic/inactive pointers refuse capture; the window
 			// listeners above keep the drag working without it.
@@ -152,20 +174,25 @@
 		justify-content: center;
 		touch-action: none;
 		z-index: 2;
+		/* The strip still *paints* the hairline across the whole split, but
+		   pointer events stay on the centered pill. A full-width 11px hit
+		   (worse on touch, where the OS inflates it toward ~44px) covered the
+		   bottom-right zoom cluster — only a thin top strip of Width/Fit
+		   stayed clickable. */
+		pointer-events: none;
 	}
 	.pl-handle.x {
 		width: 11px;
 		margin: 0 -5px;
-		cursor: col-resize;
 	}
 	.pl-handle.y {
 		height: 11px;
 		margin: -5px 0;
-		cursor: row-resize;
 	}
 	.pl-hairline {
 		position: absolute;
 		background: color-mix(in srgb, var(--border, #334155) 80%, transparent);
+		pointer-events: none;
 	}
 	.pl-handle.x .pl-hairline {
 		inset: 0 auto 0 5px;
@@ -180,14 +207,34 @@
 		border-radius: 999px;
 		background: color-mix(in srgb, var(--border, #64748b) 90%, transparent);
 		transition: background 0.12s ease;
+		pointer-events: auto;
 	}
 	.pl-handle.x .pl-pill {
 		width: 3px;
 		height: 28px;
+		cursor: col-resize;
 	}
 	.pl-handle.y .pl-pill {
 		width: 28px;
 		height: 3px;
+		cursor: row-resize;
+	}
+	/* Fat grab around the visible pill only — not the corners, where overlay
+	   chrome (zoom, tool rail) lives. */
+	.pl-pill::before {
+		content: '';
+		position: absolute;
+		top: 50%;
+		left: 50%;
+		transform: translate(-50%, -50%);
+	}
+	.pl-handle.x .pl-pill::before {
+		width: 16px;
+		height: 96px;
+	}
+	.pl-handle.y .pl-pill::before {
+		width: 96px;
+		height: 16px;
 	}
 	.pl-handle:hover .pl-pill,
 	.pl-handle:focus-visible .pl-pill,

@@ -22,11 +22,16 @@
 @layer primitives {
 	[data-tooltip]:not(select):not(input) {
 		position: relative;
-		/* Contain the tooltip's layout so its absolutely-positioned ::after
-		   (width: max-content) doesn't inflate the element's scrollWidth.
-		   Without this, tooltips inside a scroll container force a horizontal
-		   scrollbar. `contain: layout` on a <select> also clips/suppresses
-		   the native option menu in Chromium. */
+	}
+
+	/* Contain the tooltip's layout so its absolutely-positioned ::after
+	   (width: max-content) doesn't inflate the element's scrollWidth.
+	   Without this, tooltips inside a scroll container force a horizontal
+	   scrollbar. Skip form controls and buttons: `contain: layout` on a
+	   <select> clips the native option menu in Chromium, and on a <button>
+	   at an overflow:hidden edge (zoom cluster, pane chrome) it shrinks
+	   the hit box so only a thin strip stays clickable. */
+	[data-tooltip]:not(select):not(input):not(button) {
 		contain: layout;
 	}
 
