@@ -1,20 +1,28 @@
 <script lang="ts">
+	import {
+		MAX_ZOOM,
+		MIN_ZOOM,
+		ZOOM_STEP,
+		clampScrollX,
+		createTimelineViewport,
+		rulerTicks,
+		zoomAtAnchor,
+		zoomToFitDuration,
+		zoomToTimeRange
+	} from '@shared-packages/composition';
+	import TimelineMinimap from '@shared-packages/ui/timeline/TimelineMinimap.svelte';
+	import { createTimelinePan } from '@shared-packages/ui/timeline/pan';
 	import { formatTimecode } from './time.js';
 	import {
 		BAR_HEIGHT,
-		MAX_ZOOM,
 		MIN_TRIM_SPAN,
-		MIN_ZOOM,
 		TICK_ROW_HEIGHT,
 		clampTrimEnd,
 		clampTrimStart,
 		filmstripLayout,
 		filmstripThumbWidth,
 		frameCacheKey,
-		pxPerSecond,
-		slipRange,
-		timelineTicks,
-		zoomToRange
+		slipRange
 	} from './timelineScale.js';
 
 	let {
@@ -35,9 +43,12 @@
 
 	let isDragging = $state<'start' | 'end' | 'slip' | null>(null);
 	let timelineScrollRef = $state<HTMLDivElement | null>(null);
-	let timelineTrackRef = $state<HTMLDivElement | null>(null);
 	let stripVideo = $state<HTMLVideoElement | null>(null);
-	let zoom = $state(MIN_ZOOM);
+	let zoom = $state(1);
+	let scrollX = $state(0);
+	let viewportPx = $state(0);
+	let minimapOpen = $state(true);
+	let fittedDurationMs = $state(-1);
 	let isPanning = $state(false);
 	let panStartX = $state(0);
 	let panStartScroll = $state(0);
@@ -45,26 +56,25 @@
 	let clickStartY = $state(0);
 	let hasMoved = $state(false);
 	let slipOrigin = $state({ t: 0, start: 0, end: 0 });
-	let viewWidth = $state(0);
-	let trackWidthPx = $state(0);
-	let scrollLeft = $state(0);
 	let aspect = $state(16 / 9);
 	let frameUrls = $state<Record<string, string>>({});
 
+	const durationMs = $derived(Math.max(0, duration * 1000));
+	const vp = $derived(createTimelineViewport({ durationMs, viewportPx, zoom, scrollX }));
+	const ticks = $derived(rulerTicks(vp));
 	const sourceSrc = $derived(sourceUrl || videoRef?.currentSrc || videoRef?.src || '');
 	const keepSpan = $derived(Math.max(0, trimEnd - trimStart));
-	const startPct = $derived(duration > 0 ? (trimStart / duration) * 100 : 0);
-	const endPct = $derived(duration > 0 ? (trimEnd / duration) * 100 : 0);
-	const keepPct = $derived(Math.max(0, endPct - startPct));
-	const playPct = $derived(duration > 0 ? (currentTime / duration) * 100 : 0);
+	const keepLeftPx = $derived(vp.timeToPx(trimStart * 1000));
+	const keepRightPx = $derived(vp.timeToPx(trimEnd * 1000));
+	const keepWidthPx = $derived(Math.max(0, keepRightPx - keepLeftPx));
+	const playPx = $derived(vp.timeToPx(currentTime * 1000));
 	const thumbW = $derived(Math.round(filmstripThumbWidth(BAR_HEIGHT, aspect)));
-	const ticks = $derived(timelineTicks(duration, pxPerSecond(duration, trackWidthPx)));
 	const filmCells = $derived(
 		filmstripLayout({
 			duration,
-			trackWidth: trackWidthPx,
-			viewLeft: scrollLeft,
-			viewWidth,
+			trackWidth: vp.contentPx,
+			viewLeft: vp.scrollX,
+			viewWidth: vp.viewportPx,
 			thumbHeight: BAR_HEIGHT,
 			aspect
 		})
@@ -73,6 +83,30 @@
 	const frameCache = new Map<string, string>();
 	const cacheOrder: string[] = [];
 	let lastStripSrc = '';
+	let seekRaf = 0;
+	let pendingSeek = -1;
+
+	const viewportPan = createTimelinePan({
+		getSurface: () => timelineScrollRef,
+		getViewport: () => vp,
+		onScroll: (s) => (scrollX = s),
+		onZoom: (z, s) => {
+			zoom = z;
+			scrollX = s;
+		},
+		zoomOnPlainWheel: () => true,
+		shouldDragPan: () => false
+	});
+
+	function bindPan(node: HTMLElement) {
+		node.addEventListener('wheel', viewportPan.onwheel, { passive: false });
+		return {
+			destroy() {
+				node.removeEventListener('wheel', viewportPan.onwheel);
+				viewportPan.destroy();
+			}
+		};
+	}
 
 	function rememberFrame(key: string, url: string) {
 		if (frameCache.has(key)) return;
@@ -85,78 +119,75 @@
 		frameUrls = { ...frameUrls, [key]: url };
 	}
 
+	function scrubPreview(t: number) {
+		pendingSeek = t;
+		if (seekRaf) return;
+		seekRaf = requestAnimationFrame(() => {
+			seekRaf = 0;
+			if (videoRef && pendingSeek >= 0) videoRef.currentTime = pendingSeek;
+		});
+	}
+
+	function flushScrub() {
+		if (seekRaf) {
+			cancelAnimationFrame(seekRaf);
+			seekRaf = 0;
+		}
+		if (videoRef && pendingSeek >= 0) videoRef.currentTime = pendingSeek;
+		pendingSeek = -1;
+	}
+
 	function getTimelineTimeFromEvent(e: PointerEvent | MouseEvent | TouchEvent): number {
-		if (!timelineScrollRef || !timelineTrackRef || duration <= 0) return 0;
+		if (!timelineScrollRef || durationMs <= 0) return 0;
 		const rect = timelineScrollRef.getBoundingClientRect();
 		const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
 		const x = clientX - rect.left;
-		const sl = timelineScrollRef.scrollLeft;
-		const trackWidth = timelineTrackRef.offsetWidth;
-		return Math.max(0, Math.min(duration, ((sl + x) / trackWidth) * duration));
+		return Math.max(0, Math.min(duration, vp.pxToTime(vp.scrollX + x) / 1000));
 	}
 
-	function applyZoom(newZoom: number, anchorX: number) {
-		const next = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, newZoom));
-		if (!timelineScrollRef || !timelineTrackRef || duration <= 0) {
-			zoom = next;
-			return;
-		}
-		if (next === zoom) return;
-		const sl = timelineScrollRef.scrollLeft;
-		const trackWidth = timelineTrackRef.offsetWidth;
-		const timeUnderCursor = ((sl + anchorX) / trackWidth) * duration;
-		zoom = next;
-		requestAnimationFrame(() => {
-			if (!timelineScrollRef || !timelineTrackRef) return;
-			const newTrackWidth = timelineTrackRef.offsetWidth;
-			trackWidthPx = newTrackWidth;
-			timelineScrollRef.scrollLeft = Math.max(0, (timeUnderCursor / duration) * newTrackWidth - anchorX);
-			scrollLeft = timelineScrollRef.scrollLeft;
-		});
+	function applyZoom(nextZoom: number, anchorX: number) {
+		const next = zoomAtAnchor(vp, nextZoom, anchorX);
+		zoom = next.zoom;
+		scrollX = next.scrollX;
 	}
 
 	function zoomIn() {
-		applyZoom(zoom + 1, viewWidth / 2);
+		applyZoom(vp.zoom * ZOOM_STEP, viewportPx / 2);
 	}
 
 	function zoomOut() {
-		applyZoom(zoom - 1, viewWidth / 2);
+		applyZoom(vp.zoom / ZOOM_STEP, viewportPx / 2);
 	}
 
 	function zoomFit() {
-		zoom = MIN_ZOOM;
-		if (timelineScrollRef) timelineScrollRef.scrollLeft = 0;
-		scrollLeft = 0;
+		zoom = zoomToFitDuration(durationMs, viewportPx);
+		scrollX = 0;
 	}
 
 	function zoomSelection() {
-		const next = zoomToRange({ duration, start: trimStart, end: trimEnd });
+		const next = zoomToTimeRange(durationMs, viewportPx, trimStart * 1000, trimEnd * 1000);
 		zoom = next.zoom;
-		requestAnimationFrame(() => {
-			if (!timelineScrollRef || !timelineTrackRef) return;
-			trackWidthPx = timelineTrackRef.offsetWidth;
-			timelineScrollRef.scrollLeft = next.startFrac * timelineTrackRef.offsetWidth;
-			scrollLeft = timelineScrollRef.scrollLeft;
-		});
+		scrollX = next.scrollX;
 	}
 
 	function handlePointerDown(e: PointerEvent) {
-		if (!timelineScrollRef || !timelineTrackRef || duration <= 0) return;
+		if (!timelineScrollRef || durationMs <= 0) return;
 		if (e.button !== 0 && e.pointerType === 'mouse') return;
+		e.preventDefault();
 		const kind = (e.target as HTMLElement | null)
 			?.closest?.('[data-trim-handle]')
 			?.getAttribute('data-trim-handle') as 'start' | 'end' | 'slip' | null;
 		const t = getTimelineTimeFromEvent(e);
 		if (kind === 'start' || kind === 'end') {
 			isDragging = kind;
-			if (videoRef) videoRef.currentTime = kind === 'start' ? trimStart : trimEnd;
+			scrubPreview(kind === 'start' ? trimStart : trimEnd);
 		} else if (kind === 'slip') {
 			isDragging = 'slip';
 			slipOrigin = { t, start: trimStart, end: trimEnd };
 		} else {
 			isPanning = true;
 			panStartX = e.clientX;
-			panStartScroll = timelineScrollRef.scrollLeft;
+			panStartScroll = vp.scrollX;
 			clickStartX = e.clientX;
 			clickStartY = e.clientY;
 			hasMoved = false;
@@ -169,27 +200,26 @@
 	}
 
 	function handlePointerMove(e: PointerEvent) {
-		if (isDragging && timelineScrollRef) {
+		if (isDragging) {
 			const t = getTimelineTimeFromEvent(e);
 			if (isDragging === 'start') {
 				trimStart = clampTrimStart(t, trimEnd, duration, MIN_TRIM_SPAN);
-				if (videoRef) videoRef.currentTime = trimStart;
+				scrubPreview(trimStart);
 			} else if (isDragging === 'end') {
 				trimEnd = clampTrimEnd(t, trimStart, duration, MIN_TRIM_SPAN);
-				if (videoRef) videoRef.currentTime = trimEnd;
+				scrubPreview(trimEnd);
 			} else {
 				const next = slipRange(slipOrigin.start, slipOrigin.end, t - slipOrigin.t, duration);
 				trimStart = next.start;
 				trimEnd = next.end;
 			}
 		}
-		if (isPanning && timelineScrollRef) {
+		if (isPanning) {
 			const dx = Math.abs(e.clientX - clickStartX);
 			const dy = Math.abs(e.clientY - clickStartY);
 			if (dx > 3 || dy > 3) hasMoved = true;
 			if (hasMoved) {
-				timelineScrollRef.scrollLeft = panStartScroll + (panStartX - e.clientX);
-				scrollLeft = timelineScrollRef.scrollLeft;
+				scrollX = clampScrollX(vp, panStartScroll + (panStartX - e.clientX));
 			}
 		}
 	}
@@ -197,24 +227,14 @@
 	function handlePointerUp(e: PointerEvent) {
 		if (isPanning && !hasMoved && videoRef) {
 			const t = getTimelineTimeFromEvent(e);
-			videoRef.currentTime = Math.max(trimStart, Math.min(trimEnd, t));
+			pendingSeek = Math.max(trimStart, Math.min(trimEnd, t));
 		}
+		if (isDragging === 'start') pendingSeek = trimStart;
+		if (isDragging === 'end') pendingSeek = trimEnd;
+		flushScrub();
 		isDragging = null;
 		isPanning = false;
 		hasMoved = false;
-	}
-
-	function handleWheel(e: WheelEvent) {
-		if (!timelineScrollRef || !timelineTrackRef) return;
-		e.preventDefault();
-		const rect = timelineScrollRef.getBoundingClientRect();
-		const x = e.clientX - rect.left;
-		const delta = e.deltaY > 0 ? -0.5 : 0.5;
-		applyZoom(zoom + delta, x);
-	}
-
-	function onScroll() {
-		if (timelineScrollRef) scrollLeft = timelineScrollRef.scrollLeft;
 	}
 
 	function seekHidden(video: HTMLVideoElement, t: number): Promise<void> {
@@ -236,6 +256,21 @@
 	}
 
 	$effect(() => {
+		if (vp.scrollX !== scrollX) scrollX = vp.scrollX;
+		if (vp.zoom !== zoom) zoom = vp.zoom;
+	});
+
+	$effect(() => {
+		const d = durationMs;
+		const w = viewportPx;
+		if (d > 0 && w > 0 && d !== fittedDurationMs) {
+			fittedDurationMs = d;
+			zoom = zoomToFitDuration(d, w);
+			scrollX = 0;
+		}
+	});
+
+	$effect(() => {
 		const v = videoRef;
 		if (!v) return;
 		const apply = () => {
@@ -249,22 +284,11 @@
 	$effect(() => {
 		const el = timelineScrollRef;
 		if (!el) return;
-		const measure = () => {
-			viewWidth = el.clientWidth;
-			if (timelineTrackRef) trackWidthPx = timelineTrackRef.offsetWidth;
-			scrollLeft = el.scrollLeft;
-		};
+		const measure = () => (viewportPx = el.clientWidth);
+		measure();
 		const ro = new ResizeObserver(measure);
 		ro.observe(el);
-		measure();
 		return () => ro.disconnect();
-	});
-
-	$effect(() => {
-		zoom;
-		requestAnimationFrame(() => {
-			if (timelineTrackRef) trackWidthPx = timelineTrackRef.offsetWidth;
-		});
 	});
 
 	$effect(() => {
@@ -273,53 +297,63 @@
 		const cells = filmCells;
 		const w = thumbW;
 		const h = BAR_HEIGHT;
+		const busy = isDragging !== null || isPanning;
 		if (src !== lastStripSrc) {
 			frameCache.clear();
 			cacheOrder.length = 0;
 			frameUrls = {};
 			lastStripSrc = src;
 		}
-		if (!src || !video || !cells.length) return;
+		if (busy || !src || !video || !cells.length) return;
 		let cancelled = false;
 		const missing = cells.filter((c) => !frameCache.has(frameCacheKey(c.t, w, h)));
 		if (!missing.length) return;
-		void (async () => {
-			if (video.getAttribute('src') !== src) {
-				video.src = src;
-				await new Promise<void>((resolve) => {
-					if (video.readyState >= 1) {
-						resolve();
-						return;
-					}
-					const onMeta = () => {
-						video.removeEventListener('loadedmetadata', onMeta);
-						resolve();
-					};
-					video.addEventListener('loadedmetadata', onMeta);
-				});
-			}
-			if (cancelled) return;
-			const canvas = document.createElement('canvas');
-			canvas.width = w;
-			canvas.height = h;
-			const ctx = canvas.getContext('2d');
-			if (!ctx) return;
-			for (const cell of missing) {
+		const timer = setTimeout(() => {
+			void (async () => {
 				if (cancelled) return;
-				const key = frameCacheKey(cell.t, w, h);
-				if (frameCache.has(key)) continue;
-				try {
-					await seekHidden(video, cell.t);
-					if (cancelled) return;
-					ctx.drawImage(video, 0, 0, w, h);
-					rememberFrame(key, canvas.toDataURL('image/jpeg', 0.55));
-				} catch {
-					/* skip a cell if the decoder refuses the seek */
+				if (video.getAttribute('src') !== src) {
+					video.src = src;
+					await new Promise<void>((resolve) => {
+						if (video.readyState >= 1) {
+							resolve();
+							return;
+						}
+						const onMeta = () => {
+							video.removeEventListener('loadedmetadata', onMeta);
+							resolve();
+						};
+						video.addEventListener('loadedmetadata', onMeta);
+					});
 				}
-			}
-		})();
+				if (cancelled) return;
+				const canvas = document.createElement('canvas');
+				canvas.width = w;
+				canvas.height = h;
+				const ctx = canvas.getContext('2d');
+				if (!ctx) return;
+				for (const cell of missing) {
+					if (cancelled) return;
+					const key = frameCacheKey(cell.t, w, h);
+					if (frameCache.has(key)) continue;
+					try {
+						await seekHidden(video, cell.t);
+						if (cancelled) return;
+						ctx.drawImage(video, 0, 0, w, h);
+						rememberFrame(key, canvas.toDataURL('image/jpeg', 0.55));
+					} catch {
+						/* skip a cell if the decoder refuses the seek */
+					}
+				}
+			})();
+		}, frameCache.size === 0 ? 0 : 120);
 		return () => {
 			cancelled = true;
+			clearTimeout(timer);
+			try {
+				video.pause();
+			} catch {
+				/* ignore */
+			}
 		};
 	});
 </script>
@@ -331,18 +365,18 @@
 				type="button"
 				class="zoom-btn"
 				onclick={zoomOut}
-				disabled={zoom <= MIN_ZOOM}
+				disabled={vp.zoom <= MIN_ZOOM}
 				title="Zoom out"
 				data-testid="video-trim-zoom-out"
 			>
 				-
 			</button>
-			<span class="zoom-level" data-testid="video-trim-zoom-level">{zoom.toFixed(1)}x</span>
+			<span class="zoom-level" data-testid="video-trim-zoom-level">{vp.zoom.toFixed(1)}x</span>
 			<button
 				type="button"
 				class="zoom-btn"
 				onclick={zoomIn}
-				disabled={zoom >= MAX_ZOOM}
+				disabled={vp.zoom >= MAX_ZOOM}
 				title="Zoom in"
 				data-testid="video-trim-zoom-in"
 			>
@@ -360,6 +394,17 @@
 			>
 				Selection
 			</button>
+			<button
+				type="button"
+				class="zoom-btn"
+				class:active={minimapOpen}
+				onclick={() => (minimapOpen = !minimapOpen)}
+				title={minimapOpen ? 'Hide minimap' : 'Show minimap'}
+				aria-pressed={minimapOpen}
+				data-testid="video-trim-zoom-minimap"
+			>
+				Map
+			</button>
 		</div>
 		<span class="keep-length" data-testid="video-trim-keep-length">Keep {formatTimecode(keepSpan, true)}</span>
 	</div>
@@ -374,33 +419,20 @@
 		class:dragging={isDragging !== null}
 		class:slipping={isDragging === 'slip'}
 		bind:this={timelineScrollRef}
+		use:bindPan
 		style="height: {TICK_ROW_HEIGHT + BAR_HEIGHT}px"
-		onwheel={handleWheel}
 		onpointerdown={handlePointerDown}
 		onpointermove={handlePointerMove}
 		onpointerup={handlePointerUp}
 		onpointercancel={handlePointerUp}
-		onscroll={onScroll}
 	>
 		<div
 			class="timeline-track"
-			bind:this={timelineTrackRef}
-			style="width: {Math.max(zoom, 1) * 100}%"
+			style="width: {Math.max(vp.contentPx, viewportPx)}px; transform: translateX({-vp.scrollX}px)"
 		>
 			<div class="tick-ruler" data-testid="video-trim-ticks" style="height: {TICK_ROW_HEIGHT}px">
-				{#each ticks as tick (tick.t)}
-					<div
-						class="tick"
-						class:major={tick.major}
-						class:align-start={tick.align === 'start'}
-						class:align-end={tick.align === 'end'}
-						data-tick={tick.major ? 'major' : 'minor'}
-						style="left: {duration > 0 ? (tick.t / duration) * 100 : 0}%"
-					>
-						{#if tick.label}
-							<span class="tick-label">{tick.label}</span>
-						{/if}
-					</div>
+				{#each ticks as tick (tick.ms)}
+					<div class="tick major" data-tick="major" style="left: {tick.x}px"></div>
 				{/each}
 			</div>
 			<div class="film-bar" data-testid="video-trim-filmstrip" style="height: {BAR_HEIGHT}px">
@@ -416,44 +448,72 @@
 						/>
 					{/if}
 				{/each}
-				<div class="veil left" style="width: {startPct}%"></div>
-				<div class="veil right" style="left: {endPct}%; width: {Math.max(0, 100 - endPct)}%"></div>
+				<div class="veil left" style="width: {keepLeftPx}px"></div>
+				<div
+					class="veil right"
+					style="left: {keepRightPx}px; width: {Math.max(0, vp.contentPx - keepRightPx)}px"
+				></div>
 				<div
 					class="keep"
 					data-testid="video-trim-keep"
 					data-trim-handle="slip"
-					style="left: {startPct}%; width: {keepPct}%"
+					style="left: {keepLeftPx}px; width: {keepWidthPx}px"
 					title="Drag to slide the kept range"
-				>
-					<div
-						class="handle start"
-						data-testid="video-trim-handle-start"
-						data-trim-handle="start"
-						role="slider"
-						aria-label="Trim start"
-						aria-valuemin={0}
-						aria-valuemax={trimEnd}
-						aria-valuenow={trimStart}
-						tabindex="0"
-					></div>
-					<div
-						class="handle end"
-						data-testid="video-trim-handle-end"
-						data-trim-handle="end"
-						role="slider"
-						aria-label="Trim end"
-						aria-valuemin={trimStart}
-						aria-valuemax={duration}
-						aria-valuenow={trimEnd}
-						tabindex="0"
-					></div>
-				</div>
+				></div>
 			</div>
-			{#if duration > 0}
-				<div class="playhead" style="left: {playPct}%"></div>
+			<div
+				class="handle start"
+				data-testid="video-trim-handle-start"
+				data-trim-handle="start"
+				role="slider"
+				aria-label="Trim start"
+				aria-valuemin={0}
+				aria-valuemax={trimEnd}
+				aria-valuenow={trimStart}
+				tabindex="0"
+				style="left: {keepLeftPx}px"
+			></div>
+			<div
+				class="handle end"
+				data-testid="video-trim-handle-end"
+				data-trim-handle="end"
+				role="slider"
+				aria-label="Trim end"
+				aria-valuemin={trimStart}
+				aria-valuemax={duration}
+				aria-valuenow={trimEnd}
+				tabindex="0"
+				style="left: {keepRightPx}px"
+			></div>
+			{#if durationMs > 0}
+				<div class="playhead" style="left: {playPx}px"></div>
 			{/if}
 		</div>
 	</div>
+	{#if minimapOpen && durationMs > 0 && viewportPx > 0}
+		<div class="minimap-slot">
+			<TimelineMinimap
+				{durationMs}
+				{viewportPx}
+				zoom={vp.zoom}
+				scrollX={vp.scrollX}
+				playheadMs={currentTime * 1000}
+				height={32}
+				testid="video-trim-minimap"
+				onScroll={(s) => (scrollX = s)}
+			>
+				{#snippet content({ toX })}
+					<span
+						class="mm-keep"
+						style="left:{toX(trimStart * 1000)}px;width:{Math.max(
+							2,
+							toX(trimEnd * 1000) - toX(trimStart * 1000)
+						)}px"
+					></span>
+				{/snippet}
+			</TimelineMinimap>
+		</div>
+	{/if}
 	<p class="timeline-hint">Drag the box to slide · handles to trim · click to seek · scroll to zoom</p>
 	<video
 		bind:this={stripVideo}
@@ -503,19 +563,17 @@
 		user-select: none;
 		-webkit-user-select: none;
 		touch-action: none;
+		will-change: transform;
 	}
 
 	.timeline-scroll {
 		position: relative;
 		border-radius: var(--radius-md);
-		overflow-x: auto;
-		overflow-y: hidden;
+		overflow: hidden;
 		cursor: pointer;
 		user-select: none;
 		-webkit-user-select: none;
 		touch-action: none;
-		scrollbar-width: none;
-		-ms-overflow-style: none;
 		background: var(--surface-2, rgb(0 0 0 / 0.35));
 		border: 1px solid var(--line-hairline, var(--border));
 	}
@@ -526,10 +584,6 @@
 
 	.timeline-scroll.slipping {
 		cursor: grabbing;
-	}
-
-	.timeline-scroll::-webkit-scrollbar {
-		display: none;
 	}
 
 	.timeline-toolbar {
@@ -576,6 +630,11 @@
 		cursor: not-allowed;
 	}
 
+	.zoom-btn.active {
+		border-color: var(--accent);
+		color: var(--text-primary);
+	}
+
 	.zoom-level {
 		font-size: 0.75rem;
 		color: var(--text-muted);
@@ -596,36 +655,17 @@
 
 	.tick {
 		position: absolute;
-		top: 0;
+		top: 8px;
 		bottom: 0;
 		width: 1px;
-		background: rgb(255 255 255 / 0.18);
+		background: rgb(255 255 255 / 0.22);
 		transform: translateX(-50%);
 		pointer-events: none;
 	}
 
 	.tick.major {
-		background: rgb(255 255 255 / 0.45);
-	}
-
-	.tick-label {
-		position: absolute;
-		top: 1px;
-		left: 3px;
-		font-size: 0.62rem;
-		font-family: monospace;
-		color: var(--text-muted);
-		white-space: nowrap;
-		line-height: 1;
-	}
-
-	.tick.align-start .tick-label {
-		left: 3px;
-	}
-
-	.tick.align-end .tick-label {
-		left: auto;
-		right: 3px;
+		top: 4px;
+		background: rgb(255 255 255 / 0.55);
 	}
 
 	.film-bar {
@@ -663,11 +703,12 @@
 		top: 0;
 		height: 100%;
 		box-sizing: border-box;
-		border: 2px solid rgb(255 255 255 / 0.92);
-		background: rgb(255 255 255 / 0.08);
+		border: 2px solid rgb(255 255 255 / 0.88);
+		background: rgb(255 255 255 / 0.06);
 		box-shadow: 0 0 0 1px rgb(0 0 0 / 0.45);
 		cursor: grab;
 		z-index: 2;
+		pointer-events: auto;
 	}
 
 	.keep:active {
@@ -678,29 +719,55 @@
 		position: absolute;
 		top: 0;
 		bottom: 0;
-		width: 14px;
-		background: rgb(255 255 255 / 0.95);
+		width: 22px;
 		cursor: ew-resize;
-		z-index: 3;
+		z-index: 6;
+		touch-action: none;
+	}
+
+	.handle.start {
+		transform: none;
+	}
+
+	.handle.end {
+		transform: translateX(-100%);
+	}
+
+	.handle::before {
+		content: '';
+		position: absolute;
+		top: 0;
+		bottom: 0;
+		width: 5px;
+		background: rgb(255 255 255 / 0.96);
+		border-radius: 1px;
+		box-shadow: 0 0 0 1px rgb(0 0 0 / 0.55);
+	}
+
+	.handle.start::before {
+		left: 0;
+	}
+
+	.handle.end::before {
+		right: 0;
 	}
 
 	.handle::after {
 		content: '';
 		position: absolute;
-		top: 50%;
-		left: 50%;
-		width: 2px;
-		height: 16px;
-		transform: translate(-70%, -50%);
-		background: rgb(15 23 42 / 0.45);
-		box-shadow: 4px 0 0 rgb(15 23 42 / 0.45);
+		top: 1px;
+		width: 14px;
+		height: 14px;
+		background: rgb(255 255 255 / 0.96);
+		border-radius: 2px;
+		box-shadow: 0 0 0 1px rgb(0 0 0 / 0.55);
 	}
 
-	.handle.start {
+	.handle.start::after {
 		left: 0;
 	}
 
-	.handle.end {
+	.handle.end::after {
 		right: 0;
 	}
 
@@ -712,7 +779,7 @@
 		background: var(--accent-light);
 		transform: translateX(-50%);
 		pointer-events: none;
-		z-index: 5;
+		z-index: 4;
 		box-shadow: 0 0 6px var(--accent-glow);
 	}
 
@@ -725,6 +792,24 @@
 		border-left: 5px solid transparent;
 		border-right: 5px solid transparent;
 		border-top: 6px solid var(--accent-light);
+	}
+
+	.minimap-slot {
+		border-radius: var(--radius-md);
+		overflow: hidden;
+		border: 1px solid var(--line-hairline, var(--border));
+		--tl-minimap-bg: rgb(0 0 0 / 0.35);
+		--tl-minimap-window-fill: var(--accent, #38bdf8);
+		--tl-minimap-window-border: var(--accent, #38bdf8);
+		--tl-playhead-color: var(--accent-light, #7dd3fc);
+	}
+
+	.mm-keep {
+		position: absolute;
+		top: 22%;
+		height: 56%;
+		border-radius: 1px;
+		background: rgb(255 255 255 / 0.35);
 	}
 
 	.timeline-hint {

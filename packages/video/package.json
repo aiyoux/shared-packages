@@ -29,6 +29,8 @@
   },
   "peerDependencies": {
     "@lucide/svelte": "^0.554.0",
+    "@shared-packages/composition": "*",
+    "@shared-packages/ui": "*",
     "svelte": "^5.0.0"
   },
   "devDependencies": {

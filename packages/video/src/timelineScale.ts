@@ -1,70 +1,6 @@
-import { formatTimecode } from './time.js';
-
-export const MIN_ZOOM = 1;
-export const MAX_ZOOM = 50;
 export const BAR_HEIGHT = 44;
-export const TICK_ROW_HEIGHT = 18;
+export const TICK_ROW_HEIGHT = 12;
 export const MIN_TRIM_SPAN = 0.1;
-export const TICK_MIN_MAJOR_PX = 48;
-
-const NICE_SECONDS = [
-	0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600
-];
-
-export function pxPerSecond(duration: number, trackWidth: number): number {
-	if (!(duration > 0) || !(trackWidth > 0)) return 0;
-	return trackWidth / duration;
-}
-
-export function pickTickInterval(pxPerSec: number, minPx = TICK_MIN_MAJOR_PX): number {
-	if (!(pxPerSec > 0)) return 60;
-	for (const s of NICE_SECONDS) {
-		if (s * pxPerSec >= minPx) return s;
-	}
-	return NICE_SECONDS[NICE_SECONDS.length - 1]!;
-}
-
-export type TimelineTick = {
-	t: number;
-	major: boolean;
-	label: string | null;
-	align: 'start' | 'center' | 'end';
-};
-
-function nearlyMultipleUs(tUs: number, stepUs: number): boolean {
-	if (stepUs <= 0) return false;
-	const q = Math.round(tUs / stepUs);
-	return Math.abs(tUs - q * stepUs) < 2;
-}
-
-function formatTickLabel(t: number, major: number): string {
-	return formatTimecode(t, major < 1);
-}
-
-export function timelineTicks(duration: number, pxPerSec: number): TimelineTick[] {
-	if (!(duration > 0) || !(pxPerSec > 0)) return [];
-	const major = pickTickInterval(pxPerSec);
-	const majorIdx = NICE_SECONDS.indexOf(major);
-	const minor = majorIdx > 0 ? NICE_SECONDS[majorIdx - 1]! : major;
-	const showMinor = minor < major && minor * pxPerSec >= 8;
-	const step = showMinor ? minor : major;
-	const stepUs = Math.max(1, Math.round(step * 1e6));
-	const majorUs = Math.max(stepUs, Math.round(major * 1e6));
-	const durationUs = Math.round(duration * 1e6);
-	const ticks: TimelineTick[] = [];
-	for (let u = 0; u <= durationUs; u += stepUs) {
-		const t = u / 1e6;
-		const isMajor = nearlyMultipleUs(u, majorUs);
-		const frac = t / duration;
-		ticks.push({
-			t,
-			major: isMajor,
-			label: isMajor ? formatTickLabel(t, major) : null,
-			align: frac < 0.04 ? 'start' : frac > 0.96 ? 'end' : 'center'
-		});
-	}
-	return ticks;
-}
 
 export function filmstripThumbWidth(thumbHeight: number, aspect: number): number {
 	const a = aspect > 0 ? aspect : 16 / 9;
@@ -107,26 +43,6 @@ export function filmstripLayout(opts: {
 
 export function frameCacheKey(t: number, width: number, height: number): string {
 	return `${(Math.round(t * 20) / 20).toFixed(2)}@${width}x${height}`;
-}
-
-export function zoomToRange(opts: {
-	duration: number;
-	start: number;
-	end: number;
-	padding?: number;
-	maxZoom?: number;
-}): { zoom: number; startFrac: number } {
-	const duration = opts.duration;
-	const span = Math.max(0, opts.end - opts.start);
-	if (!(duration > 0) || span <= 0) return { zoom: MIN_ZOOM, startFrac: 0 };
-	const padding = opts.padding ?? 0.15;
-	const frac = span / duration;
-	const zoom = Math.min(opts.maxZoom ?? MAX_ZOOM, Math.max(MIN_ZOOM, 1 / (frac * (1 + padding))));
-	const viewFrac = 1 / zoom;
-	const padFrac = viewFrac * (padding / (1 + padding));
-	const maxStart = Math.max(0, 1 - viewFrac);
-	const startFrac = Math.min(maxStart, Math.max(0, opts.start / duration - padFrac));
-	return { zoom, startFrac };
 }
 
 export function slipRange(
