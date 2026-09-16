@@ -22,6 +22,8 @@
 		filmstripLayout,
 		filmstripThumbWidth,
 		frameCacheKey,
+		playheadNear,
+		setTrimFromPlayhead,
 		slipRange
 	} from './timelineScale.js';
 
@@ -64,6 +66,11 @@
 	const ticks = $derived(rulerTicks(vp));
 	const sourceSrc = $derived(sourceUrl || videoRef?.currentSrc || videoRef?.src || '');
 	const keepSpan = $derived(Math.max(0, trimEnd - trimStart));
+	const playheadOffHandles = $derived(
+		!playheadNear(currentTime, trimStart) && !playheadNear(currentTime, trimEnd)
+	);
+	const atClipStart = $derived(playheadNear(currentTime, 0));
+	const atClipEnd = $derived(duration > 0 && playheadNear(currentTime, duration));
 	const keepLeftPx = $derived(vp.timeToPx(trimStart * 1000));
 	const keepRightPx = $derived(vp.timeToPx(trimEnd * 1000));
 	const keepWidthPx = $derived(Math.max(0, keepRightPx - keepLeftPx));
@@ -168,6 +175,18 @@
 		const next = zoomToTimeRange(durationMs, viewportPx, trimStart * 1000, trimEnd * 1000);
 		zoom = next.zoom;
 		scrollX = next.scrollX;
+	}
+
+	function setPlayheadAsStart() {
+		const next = setTrimFromPlayhead('start', currentTime, trimStart, trimEnd, duration);
+		trimStart = next.start;
+		trimEnd = next.end;
+	}
+
+	function setPlayheadAsEnd() {
+		const next = setTrimFromPlayhead('end', currentTime, trimStart, trimEnd, duration);
+		trimStart = next.start;
+		trimEnd = next.end;
 	}
 
 	function handlePointerDown(e: PointerEvent) {
@@ -420,7 +439,33 @@
 	</div>
 	<div class="time-display">
 		<span class="time-tag" data-testid="video-trim-in">{formatTimecode(trimStart, true)}</span>
-		<span class="current-time" data-testid="video-trim-now">{formatTimecode(currentTime, true)}</span>
+		<div class="time-mid">
+			<span class="current-time" data-testid="video-trim-now">{formatTimecode(currentTime, true)}</span>
+			{#if playheadOffHandles}
+				<div class="set-trim" data-testid="video-trim-set-from-playhead">
+					<button
+						type="button"
+						class="zoom-btn"
+						onclick={setPlayheadAsStart}
+						disabled={atClipStart || atClipEnd}
+						title="Set trim start to the playhead"
+						data-testid="video-trim-set-start"
+					>
+						Set as start
+					</button>
+					<button
+						type="button"
+						class="zoom-btn"
+						onclick={setPlayheadAsEnd}
+						disabled={atClipStart || atClipEnd}
+						title="Set trim end to the playhead"
+						data-testid="video-trim-set-end"
+					>
+						Set as end
+					</button>
+				</div>
+			{/if}
+		</div>
 		<span class="time-tag" data-testid="video-trim-out">{formatTimecode(trimEnd, true)}</span>
 	</div>
 	<!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -567,6 +612,20 @@
 
 	.current-time {
 		color: var(--accent-light);
+	}
+
+	.time-mid {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		gap: 4px;
+	}
+
+	.set-trim {
+		display: flex;
+		flex-wrap: wrap;
+		justify-content: center;
+		gap: 4px;
 	}
 
 	.timeline-track {

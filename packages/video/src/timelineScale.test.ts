@@ -4,6 +4,8 @@ import {
 	clampTrimEnd,
 	clampTrimStart,
 	filmstripLayout,
+	playheadNear,
+	setTrimFromPlayhead,
 	filmstripThumbWidth,
 	frameCacheKey,
 	slipRange
@@ -61,5 +63,30 @@ describe('slipRange / clamp', () => {
 		expect(clampTrimStart(-1, 5, 10)).toBe(0);
 		expect(clampTrimEnd(0, 5, 10)).toBe(5.1);
 		expect(clampTrimEnd(99, 5, 10)).toBe(10);
+	});
+});
+
+describe('setTrimFromPlayhead', () => {
+	it('sets end and pulls start back a second if the playhead is before start', () => {
+		expect(setTrimFromPlayhead('end', 3, 5, 9, 20)).toEqual({ start: 2, end: 3 });
+	});
+
+	it('sets start and pushes end forward a second if the playhead is after end', () => {
+		expect(setTrimFromPlayhead('start', 8, 1, 4, 20)).toEqual({ start: 8, end: 9 });
+	});
+
+	it('keeps the other edge when the playhead is inside the keep range', () => {
+		expect(setTrimFromPlayhead('end', 6, 2, 9, 20)).toEqual({ start: 2, end: 6 });
+		expect(setTrimFromPlayhead('start', 6, 2, 9, 20)).toEqual({ start: 6, end: 9 });
+	});
+
+	it('clamps a 1s gap to the clip bounds', () => {
+		expect(setTrimFromPlayhead('end', 0.4, 5, 9, 20)).toEqual({ start: 0, end: 0.4 });
+		expect(setTrimFromPlayhead('start', 19.7, 1, 4, 20)).toEqual({ start: 19.7, end: 20 });
+	});
+
+	it('treats the playhead as near a handle within a frame', () => {
+		expect(playheadNear(1, 1.02)).toBe(true);
+		expect(playheadNear(1, 1.2)).toBe(false);
 	});
 });

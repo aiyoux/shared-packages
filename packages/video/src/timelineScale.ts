@@ -1,6 +1,9 @@
 export const BAR_HEIGHT = 44;
 export const TICK_ROW_HEIGHT = 12;
 export const MIN_TRIM_SPAN = 0.1;
+/** Gap used when Set as end lands before start (or Set as start after end). */
+export const PLAYHEAD_TRIM_GAP = 1;
+export const PLAYHEAD_NEAR_S = 0.05;
 
 export function filmstripThumbWidth(thumbHeight: number, aspect: number): number {
 	const a = aspect > 0 ? aspect : 16 / 9;
@@ -73,4 +76,31 @@ export function clampTrimEnd(
 	minSpan = MIN_TRIM_SPAN
 ): number {
 	return Math.max(trimStart + minSpan, Math.min(duration, t));
+}
+
+export function playheadNear(t: number, at: number, eps = PLAYHEAD_NEAR_S): boolean {
+	return Math.abs(t - at) <= eps;
+}
+
+export function setTrimFromPlayhead(
+	which: 'start' | 'end',
+	playhead: number,
+	trimStart: number,
+	trimEnd: number,
+	duration: number,
+	gap = PLAYHEAD_TRIM_GAP
+): { start: number; end: number } {
+	const t = Math.max(0, Math.min(duration, playhead));
+	if (which === 'end') {
+		let end = t;
+		let start = trimStart;
+		if (end <= start) start = Math.max(0, end - gap);
+		if (end - start < MIN_TRIM_SPAN) start = Math.max(0, end - MIN_TRIM_SPAN);
+		return { start, end };
+	}
+	let start = t;
+	let end = trimEnd;
+	if (start >= end) end = Math.min(duration, start + gap);
+	if (end - start < MIN_TRIM_SPAN) end = Math.min(duration, start + MIN_TRIM_SPAN);
+	return { start, end };
 }
