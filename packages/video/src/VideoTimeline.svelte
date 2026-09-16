@@ -41,7 +41,7 @@
 		sourceUrl?: string | null;
 	} = $props();
 
-	let isDragging = $state<'start' | 'end' | 'slip' | null>(null);
+	let isDragging = $state<'start' | 'end' | 'slip' | 'playhead' | null>(null);
 	let timelineScrollRef = $state<HTMLDivElement | null>(null);
 	let stripVideo = $state<HTMLVideoElement | null>(null);
 	let zoom = $state(1);
@@ -176,11 +176,14 @@
 		e.preventDefault();
 		const kind = (e.target as HTMLElement | null)
 			?.closest?.('[data-trim-handle]')
-			?.getAttribute('data-trim-handle') as 'start' | 'end' | 'slip' | null;
+			?.getAttribute('data-trim-handle') as 'start' | 'end' | 'slip' | 'playhead' | null;
 		const t = getTimelineTimeFromEvent(e);
 		if (kind === 'start' || kind === 'end') {
 			isDragging = kind;
 			scrubPreview(kind === 'start' ? trimStart : trimEnd);
+		} else if (kind === 'playhead') {
+			isDragging = 'playhead';
+			scrubPreview(Math.max(0, Math.min(duration, t)));
 		} else if (kind === 'slip') {
 			isDragging = 'slip';
 			slipOrigin = { t, start: trimStart, end: trimEnd };
@@ -208,6 +211,8 @@
 			} else if (isDragging === 'end') {
 				trimEnd = clampTrimEnd(t, trimStart, duration, MIN_TRIM_SPAN);
 				scrubPreview(trimEnd);
+			} else if (isDragging === 'playhead') {
+				scrubPreview(Math.max(0, Math.min(duration, t)));
 			} else {
 				const next = slipRange(slipOrigin.start, slipOrigin.end, t - slipOrigin.t, duration);
 				trimStart = next.start;
@@ -226,11 +231,13 @@
 
 	function handlePointerUp(e: PointerEvent) {
 		if (isPanning && !hasMoved && videoRef) {
-			const t = getTimelineTimeFromEvent(e);
-			pendingSeek = Math.max(trimStart, Math.min(trimEnd, t));
+			pendingSeek = Math.max(0, Math.min(duration, getTimelineTimeFromEvent(e)));
 		}
 		if (isDragging === 'start') pendingSeek = trimStart;
 		if (isDragging === 'end') pendingSeek = trimEnd;
+		if (isDragging === 'playhead') {
+			pendingSeek = Math.max(0, Math.min(duration, getTimelineTimeFromEvent(e)));
+		}
 		flushScrub();
 		isDragging = null;
 		isPanning = false;
@@ -486,7 +493,13 @@
 				style="left: {keepRightPx}px"
 			></div>
 			{#if durationMs > 0}
-				<div class="playhead" style="left: {playPx}px"></div>
+				<div
+					class="playhead"
+					data-testid="video-trim-playhead"
+					data-trim-handle="playhead"
+					style="left: {playPx}px"
+					title="Drag to seek"
+				></div>
 			{/if}
 		</div>
 	</div>
@@ -514,7 +527,7 @@
 			</TimelineMinimap>
 		</div>
 	{/if}
-	<p class="timeline-hint">Drag the box to slide · handles to trim · click to seek · scroll to zoom</p>
+	<p class="timeline-hint">Drag the playhead to seek · handles to trim · scroll to zoom</p>
 	<video
 		bind:this={stripVideo}
 		class="strip-video"
@@ -703,9 +716,8 @@
 		top: 0;
 		height: 100%;
 		box-sizing: border-box;
-		border: 2px solid rgb(255 255 255 / 0.88);
-		background: rgb(255 255 255 / 0.06);
-		box-shadow: 0 0 0 1px rgb(0 0 0 / 0.45);
+		border: 1px solid rgb(255 255 255 / 0.72);
+		background: rgb(255 255 255 / 0.05);
 		cursor: grab;
 		z-index: 2;
 		pointer-events: auto;
@@ -736,31 +748,28 @@
 	.handle::before {
 		content: '';
 		position: absolute;
-		top: 0;
+		top: 8px;
 		bottom: 0;
-		width: 5px;
-		background: rgb(255 255 255 / 0.96);
-		border-radius: 1px;
-		box-shadow: 0 0 0 1px rgb(0 0 0 / 0.55);
+		width: 2px;
+		background: rgb(255 255 255 / 0.92);
 	}
 
 	.handle.start::before {
-		left: 0;
+		left: 4px;
 	}
 
 	.handle.end::before {
-		right: 0;
+		right: 4px;
 	}
 
 	.handle::after {
 		content: '';
 		position: absolute;
 		top: 1px;
-		width: 14px;
-		height: 14px;
-		background: rgb(255 255 255 / 0.96);
-		border-radius: 2px;
-		box-shadow: 0 0 0 1px rgb(0 0 0 / 0.55);
+		width: 10px;
+		height: 10px;
+		background: rgb(255 255 255 / 0.92);
+		border-radius: 1px;
 	}
 
 	.handle.start::after {
@@ -775,12 +784,24 @@
 		position: absolute;
 		top: 0;
 		bottom: 0;
-		width: 2px;
-		background: var(--accent-light);
+		width: 16px;
 		transform: translateX(-50%);
-		pointer-events: none;
-		z-index: 4;
+		cursor: ew-resize;
+		z-index: 5;
+		touch-action: none;
+	}
+
+	.playhead::after {
+		content: '';
+		position: absolute;
+		top: 6px;
+		bottom: 0;
+		left: 50%;
+		width: 2px;
+		transform: translateX(-50%);
+		background: var(--accent-light);
 		box-shadow: 0 0 6px var(--accent-glow);
+		pointer-events: none;
 	}
 
 	.playhead::before {
@@ -792,6 +813,7 @@
 		border-left: 5px solid transparent;
 		border-right: 5px solid transparent;
 		border-top: 6px solid var(--accent-light);
+		pointer-events: none;
 	}
 
 	.minimap-slot {

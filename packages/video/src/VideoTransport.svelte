@@ -38,7 +38,7 @@ import Pause from '@lucide/svelte/icons/pause';
 	}
 
 	function handleTimeUpdate() {
-		if (!videoRef) return;
+		if (!videoRef || paused) return;
 		if (videoRef.currentTime >= trimEnd) {
 			paused = true;
 			videoRef.currentTime = trimStart;
