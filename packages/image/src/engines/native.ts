@@ -1,4 +1,5 @@
 import { blobToBytes, createDrawCanvas, rasterFromImageData, toImageData } from '../canvas.js';
+import { FROM_IMAGE_ORIENTATION } from '../exif.js';
 import {
 	FORMAT_MIME,
 	clampQuality,
@@ -21,7 +22,9 @@ async function decodeViaBitmap(bytes: Uint8Array): Promise<RasterImage> {
 		throw new Error('createImageBitmap is not available');
 	}
 	const blob = new Blob([bytesToArrayBuffer(bytes)]);
-	const bitmap = await createImageBitmap(blob);
+	// Default was 'none' for years — phone-portrait JPEGs (EXIF 6) arrived
+	// sideways on canvas while <img> looked fine. Honour the tag.
+	const bitmap = await createImageBitmap(blob, FROM_IMAGE_ORIENTATION);
 	try {
 		const { canvas, ctx } = createDrawCanvas(bitmap.width, bitmap.height);
 		ctx.drawImage(bitmap, 0, 0);

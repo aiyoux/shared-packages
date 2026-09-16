@@ -57,7 +57,9 @@ export async function imageDataToBlob(
 }
 
 export async function blobToImageData(blob: Blob): Promise<ImageData> {
-	const bitmap = await createImageBitmap(blob);
+	const bitmap = await createImageBitmap(blob, {
+		imageOrientation: 'from-image'
+	} as ImageBitmapOptions);
 	try {
 		const canvas = document.createElement('canvas');
 		canvas.width = bitmap.width;

@@ -271,6 +271,16 @@ describe('streaming expand (onEntry)', () => {
 
 	it('streams single-stream codecs and skips junk members', async () => {
 		const enc = new TextEncoder();
+		const pair = await packFiles(
+			'fflate',
+			[
+				{ name: 'a.txt', data: enc.encode('aa') },
+				{ name: 'b.txt', data: enc.encode('bb') }
+			],
+			'gzip'
+		);
+		expect(pair.map((p) => p.name).sort()).toEqual(['a.txt.gz', 'b.txt.gz']);
+
 		const gz = await packFiles('fflate', [{ name: 'solo.txt', data: enc.encode('solo') }], 'gzip');
 		const streamed: string[] = [];
 		const out = await expandBytes('fflate', gz[0]!.data, 'gzip', gz[0]!.name, {

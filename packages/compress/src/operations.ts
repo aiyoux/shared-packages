@@ -48,8 +48,8 @@ export async function packFiles(
 		throw new Error(`${engine.info.label} cannot create ${codec} archives`);
 	}
 
-	return Promise.all(
-		files.map(async (file) => {
+	const settled = await Promise.allSettled(
+		files.map(async (file): Promise<PackedFile> => {
 			const data = await engine.compress(file.data, codec, options);
 			return {
 				name: `${file.name}${extensionForCodec(codec)}`,
@@ -59,6 +59,11 @@ export async function packFiles(
 			};
 		})
 	);
+	// allSettled consumes every rejection. Promise.all threw on the first and
+	// left later compress failures as unhandledrejections (Workbox doneWaiting).
+	const failed = settled.find((r): r is PromiseRejectedResult => r.status === 'rejected');
+	if (failed) throw failed.reason;
+	return settled.map((r) => (r as PromiseFulfilledResult<PackedFile>).value);
 }
 
 export async function expandBytes(

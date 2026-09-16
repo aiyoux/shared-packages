@@ -5,6 +5,7 @@ import {
 	isNonTextual,
 	isTableStructure,
 	isTextLike,
+	marksAtCaret,
 	paintMarkFromCss,
 	plaintextOf,
 	type Mark,
@@ -168,13 +169,25 @@ function deleteOps(state: EditorState, live: Range, inputType: string): Op[] {
 	return [];
 }
 
-function insertAtCaret(state: EditorState, at: Point, text: string): Op[] {
+/** Marks covering the first selected character — captured *before* a delete. */
+function marksAtSelectionStart(page: EditorState['page'], live: Range): Mark[] | undefined {
+	if (isCollapsed(live)) return undefined;
+	const { start } = orderedRange(page, live);
+	const block = findBlock(page, start.blockId);
+	if (!block || !isTextLike(block)) return undefined;
+	const marks = marksAtCaret(block.content, start.offset);
+	return marks.length ? marks : undefined;
+}
+
+function insertAtCaret(state: EditorState, at: Point, text: string, replacementMarks?: Mark[]): Op[] {
 	if (!text) return [];
 	const block = findBlock(state.page, at.blockId);
 	if (!block) return [];
 	// The toolbar's collapsed-caret font pick land here: the marks ride the
 	// insert-text ops themselves (see `EditorState.storedMarks`).
-	const stored = state.storedMarks?.length ? canonicalMarks(state.storedMarks) : undefined;
+	const stored = state.storedMarks?.length
+		? canonicalMarks(state.storedMarks)
+		: replacementMarks;
 	if (isTableStructure(block)) {
 		const afterId = afterTableId(state.page, block.id);
 		if (!afterId) return [];
@@ -238,8 +251,9 @@ function insertAtCaret(state: EditorState, at: Point, text: string): Op[] {
 
 function insertTextOps(state: EditorState, live: Range, text: string): Op[] {
 	if (!text) return [];
+	const replacementMarks = marksAtSelectionStart(state.page, live);
 	const { state: next, at, prefix } = withDeletedSelection(state, live);
-	return [...prefix, ...insertAtCaret(next, at, text)];
+	return [...prefix, ...insertAtCaret(next, at, text, replacementMarks)];
 }
 
 /**
@@ -283,8 +297,9 @@ export function mapBeforeInput(
 	}
 
 	if (type === 'insertReplacementText') {
+		const replacementMarks = marksAtSelectionStart(state.page, liveRange);
 		const { state: next, at, prefix } = withDeletedSelection(state, liveRange);
-		const insert = event.data ? insertAtCaret(next, at, event.data) : [];
+		const insert = event.data ? insertAtCaret(next, at, event.data, replacementMarks) : [];
 		return { preventDefault: true, ops: [...prefix, ...insert], freeze: false };
 	}
 

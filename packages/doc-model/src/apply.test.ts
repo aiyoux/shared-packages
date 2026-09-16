@@ -172,6 +172,37 @@ describe('apply insert-text', () => {
 		);
 	});
 
+	it('insert-then-delete keeps bold on a replaced word; delete-then-insert without marks does not', () => {
+		const src = page([
+			{
+				id: 'p',
+				type: 'paragraph',
+				content: [span('hello', [{ type: 'bold' }]), span(' world')]
+			}
+		]);
+		const lost = applyMany(src, [
+			{
+				kind: 'delete-range',
+				range: { anchor: { blockId: 'p', offset: 0 }, head: { blockId: 'p', offset: 5 } }
+			},
+			{ kind: 'insert-text', at: { blockId: 'p', offset: 0 }, text: 'hi' }
+		]);
+		expect(plaintextOf(lost.blocks[0])).toBe('hi world');
+		expect((lost.blocks[0] as { content: TextSpan[] }).content).toEqual([span('hi world')]);
+
+		const kept = applyMany(src, [
+			{ kind: 'insert-text', at: { blockId: 'p', offset: 0 }, text: 'hi' },
+			{
+				kind: 'delete-range',
+				range: { anchor: { blockId: 'p', offset: 2 }, head: { blockId: 'p', offset: 7 } }
+			}
+		]);
+		expect(plaintextOf(kept.blocks[0])).toBe('hi world');
+		expect((kept.blocks[0] as { content: TextSpan[] }).content[0]).toEqual(
+			span('hi', [{ type: 'bold' }])
+		);
+	});
+
 	it('does not continue a hyperlink when inserting after it', () => {
 		const src = page([
 			{

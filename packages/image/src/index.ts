@@ -30,6 +30,13 @@ export {
 export { listEngines, loadEngine, peekEngine } from './engines.js';
 
 export {
+	applyExifOrientation,
+	jpegExifOrientation,
+	FROM_IMAGE_ORIENTATION,
+	type JpegOrientation
+} from './exif.js';
+
+export {
 	convertImage,
 	decodeImage,
 	estimateEncodedSize,

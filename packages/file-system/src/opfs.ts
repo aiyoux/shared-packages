@@ -173,12 +173,9 @@ export function createMemoryOpfs(): OpfsBlobStore {
 		async listOrphans(prefix) {
 			const out: string[] = [];
 			for (const key of files.keys()) {
-				if (key.startsWith(prefix) || key.startsWith(prefix.replace(/\/$/, '') + '/')) {
-					out.push(key);
-				}
+				if (pathUnderPrefix(key, prefix)) out.push(key);
 			}
-			// also match without trailing slash issues
-			return out.filter((p) => p.startsWith(prefix) || (prefix.endsWith('/') && p.startsWith(prefix)));
+			return out;
 		},
 		async listTmp() {
 			const out: Array<{ path: string; mtimeMs?: number }> = [];
@@ -223,6 +220,23 @@ function asWriteError(e: unknown, what: string): VfsError {
 	return new VfsError('OPFS_IO', `Failed to ${what}`, { cause: String(e) });
 }
 
+/**
+ * WebKit's FileSystemWritableFileStream.write ignores a view's byteOffset and
+ * byteLength and writes the whole ArrayBuffer (wa-sqlite 28a090d). A pack-member
+ * subarray would persist the entire pack as one file. slice() copies just this
+ * view. Same rule as the SAH path in syncOpfs.ts.
+ */
+export function copyViewForWrite(bytes: Uint8Array): Uint8Array {
+	if (bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength) return bytes;
+	return bytes.slice();
+}
+
+/** Directory prefix, never a string prefix: `x` must not match `xtra`. */
+export function pathUnderPrefix(path: string, prefix: string): boolean {
+	const p = prefix.replace(/\/$/, '');
+	return path === p || path.startsWith(p + '/');
+}
+
 async function writeFileHandle(handle: FileSystemFileHandle, bytes: Uint8Array): Promise<void> {
 	// Prefer createWritable when available
 	const anyHandle = handle as FileSystemFileHandle & {
@@ -231,7 +245,7 @@ async function writeFileHandle(handle: FileSystemFileHandle, bytes: Uint8Array):
 	if (typeof anyHandle.createWritable === 'function') {
 		const writable = await anyHandle.createWritable();
 		try {
-			await writable.write(bytes as BufferSource);
+			await writable.write(copyViewForWrite(bytes) as BufferSource);
 			await writable.close();
 		} catch (e) {
 			// Abandoning a failed stream leaks it. Chrome backs createWritable

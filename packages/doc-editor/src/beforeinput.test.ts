@@ -1,8 +1,8 @@
-import { plaintextOf } from '@shared-packages/doc-model';
+import { plaintextOf, type TextSpan } from '@shared-packages/doc-model';
 import { describe, expect, it } from 'vitest';
 import { mapBeforeInput } from './beforeinput.js';
 import { createEditorState, dispatch, dispatchMany } from './state.js';
-import { code, divider, heading, item, nest, page, para } from './testFixtures.js';
+import { code, divider, heading, item, nest, page, para, span } from './testFixtures.js';
 
 function applyMapped(
 	blocks: Parameters<typeof page>[0],
@@ -232,6 +232,31 @@ describe('beforeinput mapping', () => {
 		const result = mapBeforeInput(state, { inputType: 'insertFromDrop', data: 'x' }, state.selection);
 		expect(result.preventDefault).toBe(true);
 		expect(result.ops).toEqual([]);
+	});
+
+	it('replacing a bold word keeps bold on the insert (marks captured before delete)', () => {
+		let state = createEditorState(
+			page([
+				{
+					id: 'p',
+					type: 'paragraph',
+					content: [span('hello', [{ type: 'bold' }]), span(' world')]
+				}
+			])
+		);
+		const live = { anchor: { blockId: 'p', offset: 0 }, head: { blockId: 'p', offset: 5 } };
+		const result = mapBeforeInput(state, { inputType: 'insertText', data: 'hi' }, live);
+		expect(result.ops[0]?.kind).toBe('delete-range');
+		expect(result.ops[1]).toMatchObject({
+			kind: 'insert-text',
+			text: 'hi',
+			marks: [{ type: 'bold' }]
+		});
+		state = dispatchMany(state, result.ops);
+		expect(plaintextOf(state.page.blocks[0])).toBe('hi world');
+		expect((state.page.blocks[0] as { content: TextSpan[] }).content[0]).toEqual(
+			span('hi', [{ type: 'bold' }])
+		);
 	});
 
 	it('backwards selection + insertText deletes then inserts at document-order start', () => {

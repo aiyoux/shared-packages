@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { copyPixelBuffer, scaleQuadFromDetect } from './pixels.js';
+import { blobToImageData, copyPixelBuffer, scaleQuadFromDetect } from './pixels.js';
 
 describe('copyPixelBuffer', () => {
 	it('copies a typed array into a standalone buffer', () => {
@@ -14,6 +14,29 @@ describe('copyPixelBuffer', () => {
 	it('copies an array-like object', () => {
 		const buffer = copyPixelBuffer({ 0: 1, 1: 2, 2: 3, 3: 4, length: 4 });
 		expect([...new Uint8ClampedArray(buffer)]).toEqual([1, 2, 3, 4]);
+	});
+});
+
+describe('blobToImageData orientation', () => {
+	it('asks createImageBitmap to honour EXIF (phone-portrait JPEGs)', async () => {
+		const calls: unknown[] = [];
+		const orig = globalThis.createImageBitmap;
+		globalThis.createImageBitmap = (async (blob: Blob, opts?: unknown) => {
+			calls.push(opts);
+			return {
+				width: 1,
+				height: 1,
+				close() {}
+			} as ImageBitmap;
+		}) as typeof createImageBitmap;
+		try {
+			await blobToImageData(new Blob([new Uint8Array([0xff, 0xd8])], { type: 'image/jpeg' }));
+		} catch {
+			/* jsdom may still fail at canvas — the option is what we pin */
+		} finally {
+			globalThis.createImageBitmap = orig;
+		}
+		expect(calls[0]).toMatchObject({ imageOrientation: 'from-image' });
 	});
 });
 

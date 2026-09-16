@@ -1,4 +1,5 @@
 import { rasterFromImageData, toImageData } from '../canvas.js';
+import { applyExifOrientation, jpegExifOrientation } from '../exif.js';
 import {
 	clampQuality,
 	engineInfo,
@@ -67,7 +68,9 @@ export const jsquashEngine: ImageEngine = {
 			throw new Error('jSquash could not tell the image format — use JPEG, PNG, or WebP');
 		}
 		const image = await decodeWith(format, toArrayBuffer(bytes));
-		return rasterFromImageData(image);
+		const raster = rasterFromImageData(image);
+		// MozJPEG decode ignores EXIF 5–8 (jSquash #85e154d). Bake them here.
+		return format === 'jpeg' ? applyExifOrientation(raster, jpegExifOrientation(bytes)) : raster;
 	},
 
 	async encode(image: RasterImage, format: ImageFormat, options?: EncodeOptions) {

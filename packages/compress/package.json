@@ -26,7 +26,7 @@
     "@gera2ld/tarjs": "^0.3.1",
     "@myrialabs/zipkit": "^0.0.11",
     "@zip.js/zip.js": "^2.9.0",
-    "fflate": "^0.8.2",
+    "fflate": "^0.8.3",
     "libarchive-wasm": "^1.2.0",
     "nanotar": "^0.3.0"
   },
