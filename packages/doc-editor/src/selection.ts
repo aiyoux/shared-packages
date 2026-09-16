@@ -3,7 +3,9 @@ import {
 	findBlock,
 	isHighSurrogate,
 	isLowSurrogate,
+	isTextLike,
 	plaintextOf,
+	type Block,
 	type KbPage,
 	type Point,
 	type Range
@@ -703,4 +705,68 @@ export function caretIn(page: KbPage, blockId: string, offset: number): Range {
 	}
 	const len = plaintextOf(block).length;
 	return collapsed({ blockId, offset: Math.max(0, Math.min(offset, len)) });
+}
+
+/** Blocks a caret may rest in only when they hold content — an empty one of
+ *  these projects to a block with a single empty text node, which has no
+ *  inline box, so the browser's caret traversal jumps straight over it. */
+function isEmptyCaretBlock(block: Block | undefined): boolean {
+	if (!block) return false;
+	if (isTextLike(block)) return plaintextOf(block).length === 0;
+	if (block.type === 'code') return block.text.length === 0;
+	return false;
+}
+
+/**
+ * ArrowUp/ArrowDown must stop in empty blocks.
+ *
+ * Native caret traversal skips a block whose only content is an empty text
+ * node (there is no inline box for the caret to rest on), so pressing Down
+ * over a run of empty lines jumps the whole run. When the selection's focus
+ * sits on its block's boundary line and the adjacent block is empty, steer
+ * into it ourselves; every other case native movement already gets right
+ * (mid-block line steps, non-empty neighbours, document edges).
+ *
+ * Returns the selection to apply, or null to let the browser move.
+ */
+export function verticalArrowSelection(
+	host: HTMLElement,
+	page: KbPage,
+	key: 'ArrowUp' | 'ArrowDown',
+	live: Range,
+	extend: boolean
+): Range | null {
+	const down = key === 'ArrowDown';
+	const el = host.querySelector(`[${BLOCK_ID_ATTR}="${cssEscape(live.head.blockId)}"]`);
+	if (!(el instanceof HTMLElement)) return null;
+	if (!onBoundaryLine(el, down)) return null;
+	const adjacent = down ? el.nextElementSibling : el.previousElementSibling;
+	if (!(adjacent instanceof HTMLElement) || !adjacent.hasAttribute(BLOCK_ID_ATTR)) return null;
+	const adjId = adjacent.getAttribute(BLOCK_ID_ATTR) as string;
+	if (!isEmptyCaretBlock(findBlock(page, adjId))) return null;
+	const head: Point = { blockId: adjId, offset: 0 };
+	return extend ? { anchor: { ...live.anchor }, head } : collapsed(head);
+}
+
+/** Is the focus on the block's first (up) or last (down) visual line? The
+ *  native arrows only misbehave at a block boundary, where they would leave
+ *  the block; inside it Chromium steps line by line and must be left alone. */
+function onBoundaryLine(blockEl: HTMLElement, down: boolean): boolean {
+	const sel = blockEl.ownerDocument.getSelection();
+	if (!sel || sel.rangeCount === 0) return true;
+	const range = sel.getRangeAt(0);
+	// Non-layout environments (jsdom) have no client rects: nothing says the
+	// caret is mid-block, so treat it as a boundary line.
+	if (typeof range.getClientRects !== 'function') return true;
+	const rects = range.getClientRects();
+	const line = down ? rects[rects.length - 1] : rects[0];
+	// No rect (e.g. the focus is an empty block, or an unrendered selection):
+	// treat as a single boundary line.
+	if (!line || line.height === 0) return true;
+	const blockRect = blockEl.getBoundingClientRect();
+	// Half a line of slack: code blocks pad their content by 0.5rem, so the
+	// first/last line never touches the border box.
+	return down
+		? blockRect.bottom - line.bottom <= line.height / 2
+		: line.top - blockRect.top <= line.height / 2;
 }

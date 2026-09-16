@@ -11,9 +11,11 @@ import {
 	emptySpaceCaretFromClient,
 	lineStartFromClient,
 	offsetAlongLine,
-	trailingLineEndFromClient
+	trailingLineEndFromClient,
+	verticalArrowSelection
 } from './selection.js';
-import { page, para } from './testFixtures.js';
+import { divider, page, para } from './testFixtures.js';
+import type { KbPage, Range } from '@shared-packages/doc-model';
 
 describe('selection mapping (cross-block gate)', () => {
 	it('maps live endpoints via closest("[data-block-id]") so drag across two paragraphs differs in blockId', () => {
@@ -436,6 +438,82 @@ describe('trailingLineEndFromClient', () => {
 			expect(emptySpaceCaretFromClient(host, 200, 70)).toEqual({ blockId: 'b', offset: 5 });
 		} finally {
 			Range.prototype.getClientRects = proto;
+			host.remove();
+		}
+	});
+});
+
+describe('verticalArrowSelection (empty-block steering)', () => {
+	function hostWith(blocks: ReturnType<typeof para>[]): { host: HTMLElement; doc: KbPage } {
+		const host = document.createElement('div');
+		document.body.append(host);
+		const doc = page(blocks);
+		project(host, doc);
+		return { host, doc };
+	}
+
+	function caret(blockId: string, offset: number): Range {
+		return { anchor: { blockId, offset }, head: { blockId, offset } };
+	}
+
+	it('steers ArrowDown into an adjacent empty block instead of skipping it', () => {
+		const { host, doc } = hostWith([para('a', 'hello'), para('e1', ''), para('b', 'world')]);
+		const got = verticalArrowSelection(host, doc, 'ArrowDown', caret('a', 2), false);
+		expect(got).toEqual({
+			anchor: { blockId: 'e1', offset: 0 },
+			head: { blockId: 'e1', offset: 0 }
+		});
+		host.remove();
+	});
+
+	it('steers ArrowUp into the previous empty block', () => {
+		const { host, doc } = hostWith([para('a', 'hello'), para('e1', ''), para('b', 'world')]);
+		const got = verticalArrowSelection(host, doc, 'ArrowUp', caret('b', 1), false);
+		expect(got?.head.blockId).toBe('e1');
+		expect(got?.head.offset).toBe(0);
+		host.remove();
+	});
+
+	it('leaves native movement alone when the adjacent block has content', () => {
+		const { host, doc } = hostWith([para('a', 'hello'), para('b', 'world')]);
+		expect(verticalArrowSelection(host, doc, 'ArrowDown', caret('a', 2), false)).toBeNull();
+		expect(verticalArrowSelection(host, doc, 'ArrowUp', caret('b', 2), false)).toBeNull();
+		host.remove();
+	});
+
+	it('does not steer across an atomic block', () => {
+		const { host, doc } = hostWith([para('a', 'hello'), divider('d'), para('e1', '')]);
+		expect(verticalArrowSelection(host, doc, 'ArrowDown', caret('a', 0), false)).toBeNull();
+		host.remove();
+	});
+
+	it('shift keeps the anchor and moves the head', () => {
+		const { host, doc } = hostWith([para('a', 'hello'), para('e1', ''), para('b', 'world')]);
+		const live: Range = { anchor: { blockId: 'a', offset: 3 }, head: { blockId: 'a', offset: 5 } };
+		const got = verticalArrowSelection(host, doc, 'ArrowDown', live, true);
+		expect(got?.anchor).toEqual({ blockId: 'a', offset: 3 });
+		expect(got?.head).toEqual({ blockId: 'e1', offset: 0 });
+		host.remove();
+	});
+
+	it('leaves mid-block line steps to native movement', () => {
+		const { host, doc } = hostWith([para('a', 'hello'), para('e1', '')]);
+		const blockA = host.querySelector('[data-block-id="a"]') as HTMLElement;
+		// Caret line sits well above the block's bottom edge: not the last line.
+		const protoRects = Range.prototype.getClientRects;
+		const protoBlockRect = blockA.getBoundingClientRect;
+		Range.prototype.getClientRects = function () {
+			return [
+				{ top: 10, bottom: 26, height: 16, left: 0, right: 100, width: 100, x: 0, y: 10 }
+			] as unknown as DOMRectList;
+		};
+		blockA.getBoundingClientRect = () =>
+			({ top: 0, bottom: 100, height: 100 }) as DOMRect;
+		try {
+			expect(verticalArrowSelection(host, doc, 'ArrowDown', caret('a', 2), false)).toBeNull();
+		} finally {
+			Range.prototype.getClientRects = protoRects;
+			blockA.getBoundingClientRect = protoBlockRect;
 			host.remove();
 		}
 	});

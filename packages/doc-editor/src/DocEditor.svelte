@@ -46,7 +46,8 @@
 		focusHeldOutside,
 		caretFromClient,
 		isNativeTextGlyphHit,
-		isTextCaretBlockType
+		isTextCaretBlockType,
+		verticalArrowSelection
 	} from './selection.js';
 	import { collapsed, rangesEqual } from './range.js';
 	import { applyEditorOps, redo, setSelection, undo, type EditorState } from './state.js';
@@ -412,6 +413,29 @@
 
 	function onKeyDown(event: KeyboardEvent) {
 		if (onKeyDownCapture?.(event, liveRange())) return;
+		if (
+			host &&
+			!composing &&
+			(event.key === 'ArrowUp' || event.key === 'ArrowDown') &&
+			!event.metaKey &&
+			!event.ctrlKey &&
+			!event.altKey
+		) {
+			// Native traversal skips empty blocks; steer into them at block
+			// boundaries. Null → fall through to native (and the keymap).
+			const steer = verticalArrowSelection(
+				host,
+				asPage(editor.page),
+				event.key,
+				liveRange(),
+				event.shiftKey
+			);
+			if (steer) {
+				event.preventDefault();
+				emitMapped([], steer);
+				return;
+			}
+		}
 		const result = mapKeydown(
 			{
 				...asPageState(editor),
@@ -1133,6 +1157,26 @@
 		/* Selected lines (incl. empty ones) get a flat accent tint only — no
 		   left bar, square corners so a multi-line run reads as one band. */
 		background: color-mix(in srgb, var(--accent, #38bdf8) 10%, transparent);
+		position: relative;
+	}
+	/* A selected run must read as one block, so each selected block also paints
+	   the collapsed margin down to the next selected block (size stamped by
+	   paintLocalSelection as --kb-sel-gap). `background: inherit` reuses the
+	   band colour above. */
+	.kb-host :global([data-block-type][data-kb-selected])::after {
+		content: '';
+		position: absolute;
+		top: 100%;
+		left: 0;
+		right: 0;
+		height: var(--kb-sel-gap, 0px);
+		background: inherit;
+		pointer-events: none;
+	}
+	/* The band replaces the native text highlight: without this, text blocks
+	   would show the inline native blue on top of their full-width band. */
+	.kb-host :global(::selection) {
+		background: transparent;
 	}
 	/* Block types this build does not model: shown as an opaque placeholder so the
 	   document stays legible and the foreign JSON survives an edit + save. */

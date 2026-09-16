@@ -332,7 +332,7 @@ describe('paintLocalSelection', () => {
 		el.remove();
 	});
 
-	it('marks empty text blocks covered by a range, not filled ones', () => {
+	it('marks every band block covered by a range, filled or empty', () => {
 		const el = host();
 		const doc = page([para('a', 'hi'), para('empty', ''), para('b', 'bye')]);
 		project(el, doc);
@@ -341,8 +341,42 @@ describe('paintLocalSelection', () => {
 			head: { blockId: 'b', offset: 3 }
 		});
 		expect(el.querySelector('[data-block-id="empty"]')?.hasAttribute(SELECTED_ATTR)).toBe(true);
-		expect(el.querySelector('[data-block-id="a"]')?.hasAttribute(SELECTED_ATTR)).toBe(false);
-		expect(el.querySelector('[data-block-id="b"]')?.hasAttribute(SELECTED_ATTR)).toBe(false);
+		expect(el.querySelector('[data-block-id="a"]')?.hasAttribute(SELECTED_ATTR)).toBe(true);
+		expect(el.querySelector('[data-block-id="b"]')?.hasAttribute(SELECTED_ATTR)).toBe(true);
+		el.remove();
+	});
+
+	it('stamps the collapsed margin gap between consecutive band blocks', () => {
+		const el = host();
+		const doc = page([para('a', 'hi'), para('empty', ''), para('b', 'bye')]);
+		project(el, doc);
+		paintLocalSelection(el, doc, {
+			anchor: { blockId: 'a', offset: 0 },
+			head: { blockId: 'b', offset: 3 }
+		});
+		// jsdom has no layout, so the computed margins are empty → 0px; the
+		// contract is that the property is stamped at all, sized per pair.
+		expect(
+			(el.querySelector('[data-block-id="a"]') as HTMLElement).style.getPropertyValue(
+				'--kb-sel-gap'
+			)
+		).toBe('0px');
+		el.remove();
+	});
+
+	it('does not stamp a gap across an atomic block', () => {
+		const el = host();
+		const doc = page([para('a', 'hi'), divider('d'), para('b', 'bye')]);
+		project(el, doc);
+		paintLocalSelection(el, doc, {
+			anchor: { blockId: 'a', offset: 0 },
+			head: { blockId: 'b', offset: 3 }
+		});
+		expect(
+			(el.querySelector('[data-block-id="a"]') as HTMLElement).style.getPropertyValue(
+				'--kb-sel-gap'
+			)
+		).toBe('');
 		el.remove();
 	});
 
@@ -362,7 +396,7 @@ describe('paintLocalSelection', () => {
 		});
 		expect(el.querySelector('[data-block-id="d"]')?.hasAttribute(SELECTED_ATTR)).toBe(true);
 		expect(el.querySelector('[data-block-id="pb"]')?.hasAttribute(SELECTED_ATTR)).toBe(true);
-		expect(el.querySelector('[data-block-id="a"]')?.hasAttribute(SELECTED_ATTR)).toBe(false);
+		expect(el.querySelector('[data-block-id="a"]')?.hasAttribute(SELECTED_ATTR)).toBe(true);
 		el.remove();
 	});
 });

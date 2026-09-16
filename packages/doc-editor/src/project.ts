@@ -427,19 +427,28 @@ function wantsAtomicChrome(block: Block): boolean {
 	return isAtomic(block) || isUnknownBlock(block);
 }
 
-function isEmptyTextBlock(block: Block): boolean {
+/** Text-like blocks (minus table cells) and code paint the flat selection
+ *  band — see DocEditor's `[data-kb-selected]` background rule. */
+function paintsSelectionBand(block: Block): boolean {
 	if (block.type === 'table_cell') return false;
-	if (isTextLike(block)) return plaintextOf(block).length === 0;
-	if (block.type === 'code') return block.text.length === 0;
-	return false;
+	return isTextLike(block) || block.type === 'code';
 }
 
-/** Mark selected atomics, and empty text blocks inside a range (native highlight skips them). */
+/**
+ * Mark selected blocks so they paint as one continuous band.
+ *
+ * Every band-painting block inside a range is marked (not just empty ones —
+ * the native text highlight would leave margin gaps between lines), and each
+ * band block stamps the collapsed margin gap down to the next band block so
+ * CSS can paint it (`--kb-sel-gap`, consumed by DocEditor's ::after rule).
+ */
 export function paintLocalSelection(host: HTMLElement, page: KbPage, selection: Range): void {
 	for (const el of host.querySelectorAll(`[${SELECTED_ATTR}]`)) {
 		el.removeAttribute(SELECTED_ATTR);
+		(el as HTMLElement).style.removeProperty('--kb-sel-gap');
 	}
 	const selected = new Set<string>();
+	let gapRange: Block[] | null = null;
 	if (isCollapsed(selection)) {
 		const block = findBlock(page, selection.anchor.blockId);
 		if (!block) return;
@@ -450,12 +459,38 @@ export function paintLocalSelection(host: HTMLElement, page: KbPage, selection: 
 		const si = order.findIndex((b) => b.id === start.blockId);
 		const ei = order.findIndex((b) => b.id === end.blockId);
 		if (si < 0) return;
-		for (const block of order.slice(si, (ei < 0 ? si : ei) + 1)) {
-			if (wantsAtomicChrome(block) || isEmptyTextBlock(block)) selected.add(block.id);
+		gapRange = order.slice(si, (ei < 0 ? si : ei) + 1);
+		for (const block of gapRange) {
+			if (wantsAtomicChrome(block) || paintsSelectionBand(block)) selected.add(block.id);
 		}
 	}
 	for (const id of selected) {
 		host.querySelector(`[${BLOCK_ID_ATTR}="${cssEscape(id)}"]`)?.setAttribute(SELECTED_ATTR, '');
+	}
+	if (gapRange) stampSelectionGaps(host, gapRange, selected);
+}
+
+/** Stamp the collapsed margin between consecutive selected band blocks so the
+ *  band reads as one continuous block (consumed by DocEditor's ::after rule).
+ *  Skips pairs split by an atomic block — those have their own chrome. */
+function stampSelectionGaps(host: HTMLElement, range: Block[], selected: Set<string>): void {
+	let prev: HTMLElement | null = null;
+	for (const block of range) {
+		if (!selected.has(block.id)) continue;
+		const el = host.querySelector(`[${BLOCK_ID_ATTR}="${cssEscape(block.id)}"]`);
+		if (!(el instanceof HTMLElement)) continue;
+		if (!paintsSelectionBand(block)) {
+			prev = null;
+			continue;
+		}
+		if (prev) {
+			const gap = Math.max(
+				parseFloat(getComputedStyle(prev).marginBottom) || 0,
+				parseFloat(getComputedStyle(el).marginTop) || 0
+			);
+			prev.style.setProperty('--kb-sel-gap', `${gap}px`);
+		}
+		prev = el;
 	}
 }
 
