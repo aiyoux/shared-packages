@@ -187,13 +187,16 @@
 		} else if (kind === 'slip') {
 			isDragging = 'slip';
 			slipOrigin = { t, start: trimStart, end: trimEnd };
-		} else {
+		} else if (e.altKey) {
 			isPanning = true;
 			panStartX = e.clientX;
 			panStartScroll = vp.scrollX;
 			clickStartX = e.clientX;
 			clickStartY = e.clientY;
 			hasMoved = false;
+		} else {
+			isDragging = 'playhead';
+			scrubPreview(Math.max(0, Math.min(duration, t)));
 		}
 		try {
 			timelineScrollRef.setPointerCapture(e.pointerId);
@@ -527,7 +530,7 @@
 			</TimelineMinimap>
 		</div>
 	{/if}
-	<p class="timeline-hint">Drag the playhead to seek · handles to trim · scroll to zoom</p>
+	<p class="timeline-hint">Drag on the bar to seek · handles to trim · Alt-drag to pan · scroll to zoom</p>
 	<video
 		bind:this={stripVideo}
 		class="strip-video"
@@ -732,17 +735,10 @@
 		top: 0;
 		bottom: 0;
 		width: 22px;
+		transform: translateX(-50%);
 		cursor: ew-resize;
 		z-index: 6;
 		touch-action: none;
-	}
-
-	.handle.start {
-		transform: none;
-	}
-
-	.handle.end {
-		transform: translateX(-100%);
 	}
 
 	.handle::before {
@@ -750,34 +746,22 @@
 		position: absolute;
 		top: 8px;
 		bottom: 0;
+		left: 50%;
 		width: 2px;
+		transform: translateX(-50%);
 		background: rgb(255 255 255 / 0.92);
-	}
-
-	.handle.start::before {
-		left: 4px;
-	}
-
-	.handle.end::before {
-		right: 4px;
 	}
 
 	.handle::after {
 		content: '';
 		position: absolute;
 		top: 1px;
+		left: 50%;
 		width: 10px;
 		height: 10px;
+		transform: translateX(-50%);
 		background: rgb(255 255 255 / 0.92);
 		border-radius: 1px;
-	}
-
-	.handle.start::after {
-		left: 0;
-	}
-
-	.handle.end::after {
-		right: 0;
 	}
 
 	.playhead {
