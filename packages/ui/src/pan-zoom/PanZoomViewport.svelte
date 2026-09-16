@@ -146,7 +146,12 @@
 			{@render children()}
 		</div>
 	</div>
-	<div class="pz-chrome">
+	<!-- svelte-ignore a11y_no_static_element_interactions -->
+	<div
+		class="pz-chrome"
+		onpointerdown={(e) => e.stopPropagation()}
+		onpointerup={(e) => e.stopPropagation()}
+	>
 		<PanZoomControls
 			scale={view.scale}
 			mode={zoomMode}
@@ -214,5 +219,8 @@
 		padding: 4px 8px;
 		background: var(--surface-2, #1c1c24);
 		border-top: 1px solid var(--line-hairline, #333);
+		pointer-events: auto;
+		isolation: isolate;
+		z-index: var(--z-zoom, 50);
 	}
 </style>
