@@ -181,8 +181,9 @@ describe('zoomToFitDuration / zoomToTimeRange', () => {
 		expect(zoom).toBeGreaterThan(1);
 		expect(scrollX).toBeGreaterThan(0);
 		const vp = createTimelineViewport({ durationMs: 10_000, viewportPx: 1200, zoom, scrollX });
-		expect(vp.visibleStartMs).toBeLessThanOrEqual(2000);
-		expect(vp.visibleEndMs).toBeGreaterThanOrEqual(4000);
+		expect(vp.visibleStartMs).toBeLessThan(2000);
+		expect(vp.visibleEndMs).toBeGreaterThan(4000);
+		expect(2000 - vp.visibleStartMs).toBeCloseTo(vp.visibleEndMs - 4000, 5);
 	});
 
 	it('falls back to a full-duration fit when the range is empty', () => {

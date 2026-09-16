@@ -115,7 +115,9 @@ export function zoomToFitDuration(durationMs: number, viewportPx: number): numbe
 
 /**
  * Zoom + scroll so `[startMs, endMs]` fills the window, with `padding` extra
- * space (0.15 = 15% of the window) around the range.
+ * space (0.15 = 15% of the range) split equally on both sides. Clip edges
+ * still clamp: a range that includes t=0 or t=duration cannot show pad past
+ * the content.
  */
 export function zoomToTimeRange(
 	durationMs: number,
@@ -130,8 +132,9 @@ export function zoomToTimeRange(
 	}
 	const zoom = clampZoom(viewportPx / (span * BASE_PX_PER_MS * (1 + padding)));
 	const vp = createTimelineViewport({ durationMs, viewportPx, zoom, scrollX: 0 });
-	const padPx = vp.viewportPx * (padding / (1 + padding));
-	return { zoom, scrollX: clampScrollX(vp, vp.timeToPx(Math.max(0, startMs)) - padPx) };
+	const spanPx = span * vp.pxPerMs;
+	const leftPad = Math.max(0, vp.viewportPx - spanPx) / 2;
+	return { zoom, scrollX: clampScrollX(vp, vp.timeToPx(Math.max(0, startMs)) - leftPad) };
 }
 
 /**
