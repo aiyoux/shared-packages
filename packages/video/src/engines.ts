@@ -1,3 +1,4 @@
+import { nativeEngine } from './engines/native.js';
 import { ENGINE_CATALOG, type EngineId, type EngineInfo, type VideoEngine } from './types.js';
 
 const cache = new Map<EngineId, VideoEngine>();
@@ -11,7 +12,6 @@ export async function loadEngine(id: EngineId): Promise<VideoEngine> {
 	const hit = cache.get(id);
 	if (hit) return hit;
 
-	const { nativeEngine } = await import('./engines/native.js');
 	await nativeEngine.load();
 	cache.set(id, nativeEngine);
 	return nativeEngine;
