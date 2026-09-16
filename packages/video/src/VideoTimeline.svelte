@@ -60,21 +60,25 @@
 	let slipOrigin = $state({ t: 0, start: 0, end: 0 });
 	let aspect = $state(16 / 9);
 	let frameUrls = $state<Record<string, string>>({});
+	let headTime = $state<number | null>(null);
+	let dragOrigin = { left: 0, scrollX: 0 };
+	let lastPreviewAt = 0;
 
 	const durationMs = $derived(Math.max(0, duration * 1000));
 	const vp = $derived(createTimelineViewport({ durationMs, viewportPx, zoom, scrollX }));
 	const ticks = $derived(rulerTicks(vp));
 	const sourceSrc = $derived(sourceUrl || videoRef?.currentSrc || videoRef?.src || '');
 	const keepSpan = $derived(Math.max(0, trimEnd - trimStart));
+	const displayTime = $derived(headTime ?? currentTime);
 	const playheadOffHandles = $derived(
-		!playheadNear(currentTime, trimStart) && !playheadNear(currentTime, trimEnd)
+		!playheadNear(displayTime, trimStart) && !playheadNear(displayTime, trimEnd)
 	);
-	const atClipStart = $derived(playheadNear(currentTime, 0));
-	const atClipEnd = $derived(duration > 0 && playheadNear(currentTime, duration));
+	const atClipStart = $derived(playheadNear(displayTime, 0));
+	const atClipEnd = $derived(duration > 0 && playheadNear(displayTime, duration));
 	const keepLeftPx = $derived(vp.timeToPx(trimStart * 1000));
 	const keepRightPx = $derived(vp.timeToPx(trimEnd * 1000));
 	const keepWidthPx = $derived(Math.max(0, keepRightPx - keepLeftPx));
-	const playPx = $derived(vp.timeToPx(currentTime * 1000));
+	const playPx = $derived(vp.timeToPx(displayTime * 1000));
 	const thumbW = $derived(Math.round(filmstripThumbWidth(BAR_HEIGHT, aspect)));
 	const filmCells = $derived(
 		filmstripLayout({
@@ -90,8 +94,8 @@
 	const frameCache = new Map<string, string>();
 	const cacheOrder: string[] = [];
 	let lastStripSrc = '';
-	let seekRaf = 0;
 	let pendingSeek = -1;
+	const PREVIEW_MS = 80;
 
 	const viewportPan = createTimelinePan({
 		getSurface: () => timelineScrollRef,
@@ -126,30 +130,28 @@
 		frameUrls = { ...frameUrls, [key]: url };
 	}
 
-	function scrubPreview(t: number) {
-		pendingSeek = t;
-		if (seekRaf) return;
-		seekRaf = requestAnimationFrame(() => {
-			seekRaf = 0;
-			if (videoRef && pendingSeek >= 0) videoRef.currentTime = pendingSeek;
-		});
+	function scrubPreview(t: number, previewVideo: boolean) {
+		const next = Math.max(0, Math.min(duration, t));
+		headTime = next;
+		pendingSeek = next;
+		if (!previewVideo || !videoRef) return;
+		const now = performance.now();
+		if (now - lastPreviewAt < PREVIEW_MS) return;
+		lastPreviewAt = now;
+		videoRef.currentTime = next;
 	}
 
 	function flushScrub() {
-		if (seekRaf) {
-			cancelAnimationFrame(seekRaf);
-			seekRaf = 0;
-		}
 		if (videoRef && pendingSeek >= 0) videoRef.currentTime = pendingSeek;
+		lastPreviewAt = 0;
 		pendingSeek = -1;
 	}
 
 	function getTimelineTimeFromEvent(e: PointerEvent | MouseEvent | TouchEvent): number {
-		if (!timelineScrollRef || durationMs <= 0) return 0;
-		const rect = timelineScrollRef.getBoundingClientRect();
+		if (durationMs <= 0) return 0;
 		const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
-		const x = clientX - rect.left;
-		return Math.max(0, Math.min(duration, vp.pxToTime(vp.scrollX + x) / 1000));
+		const x = clientX - dragOrigin.left;
+		return Math.max(0, Math.min(duration, vp.pxToTime(dragOrigin.scrollX + x) / 1000));
 	}
 
 	function applyZoom(nextZoom: number, anchorX: number) {
@@ -178,13 +180,13 @@
 	}
 
 	function setPlayheadAsStart() {
-		const next = setTrimFromPlayhead('start', currentTime, trimStart, trimEnd, duration);
+		const next = setTrimFromPlayhead('start', displayTime, trimStart, trimEnd, duration);
 		trimStart = next.start;
 		trimEnd = next.end;
 	}
 
 	function setPlayheadAsEnd() {
-		const next = setTrimFromPlayhead('end', currentTime, trimStart, trimEnd, duration);
+		const next = setTrimFromPlayhead('end', displayTime, trimStart, trimEnd, duration);
 		trimStart = next.start;
 		trimEnd = next.end;
 	}
@@ -193,16 +195,18 @@
 		if (!timelineScrollRef || durationMs <= 0) return;
 		if (e.button !== 0 && e.pointerType === 'mouse') return;
 		e.preventDefault();
+		const rect = timelineScrollRef.getBoundingClientRect();
+		dragOrigin = { left: rect.left, scrollX: vp.scrollX };
 		const kind = (e.target as HTMLElement | null)
 			?.closest?.('[data-trim-handle]')
 			?.getAttribute('data-trim-handle') as 'start' | 'end' | 'slip' | 'playhead' | null;
 		const t = getTimelineTimeFromEvent(e);
 		if (kind === 'start' || kind === 'end') {
 			isDragging = kind;
-			scrubPreview(kind === 'start' ? trimStart : trimEnd);
+			scrubPreview(kind === 'start' ? trimStart : trimEnd, true);
 		} else if (kind === 'playhead') {
 			isDragging = 'playhead';
-			scrubPreview(Math.max(0, Math.min(duration, t)));
+			scrubPreview(t, true);
 		} else if (kind === 'slip') {
 			isDragging = 'slip';
 			slipOrigin = { t, start: trimStart, end: trimEnd };
@@ -215,7 +219,7 @@
 			hasMoved = false;
 		} else {
 			isDragging = 'playhead';
-			scrubPreview(Math.max(0, Math.min(duration, t)));
+			scrubPreview(t, true);
 		}
 		try {
 			timelineScrollRef.setPointerCapture(e.pointerId);
@@ -229,12 +233,12 @@
 			const t = getTimelineTimeFromEvent(e);
 			if (isDragging === 'start') {
 				trimStart = clampTrimStart(t, trimEnd, duration, MIN_TRIM_SPAN);
-				scrubPreview(trimStart);
+				scrubPreview(trimStart, true);
 			} else if (isDragging === 'end') {
 				trimEnd = clampTrimEnd(t, trimStart, duration, MIN_TRIM_SPAN);
-				scrubPreview(trimEnd);
+				scrubPreview(trimEnd, true);
 			} else if (isDragging === 'playhead') {
-				scrubPreview(Math.max(0, Math.min(duration, t)));
+				scrubPreview(t, true);
 			} else {
 				const next = slipRange(slipOrigin.start, slipOrigin.end, t - slipOrigin.t, duration);
 				trimStart = next.start;
@@ -265,6 +269,13 @@
 		isPanning = false;
 		hasMoved = false;
 	}
+
+	$effect(() => {
+		if (headTime == null || isDragging === 'playhead' || isDragging === 'start' || isDragging === 'end') {
+			return;
+		}
+		if (Math.abs(currentTime - headTime) < 0.05) headTime = null;
+	});
 
 	function seekHidden(video: HTMLVideoElement, t: number): Promise<void> {
 		const target = Math.max(0, Math.min(Math.max(0, duration - 0.001), t));
@@ -440,7 +451,7 @@
 	<div class="time-display">
 		<span class="time-tag" data-testid="video-trim-in">{formatTimecode(trimStart, true)}</span>
 		<div class="time-mid">
-			<span class="current-time" data-testid="video-trim-now">{formatTimecode(currentTime, true)}</span>
+			<span class="current-time" data-testid="video-trim-now">{formatTimecode(displayTime, true)}</span>
 			{#if playheadOffHandles}
 				<div class="set-trim" data-testid="video-trim-set-from-playhead">
 					<button
@@ -832,6 +843,7 @@
 		cursor: ew-resize;
 		z-index: 5;
 		touch-action: none;
+		will-change: left;
 	}
 
 	.playhead::after {
