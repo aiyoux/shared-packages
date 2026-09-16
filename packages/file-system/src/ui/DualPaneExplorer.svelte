@@ -1019,6 +1019,10 @@
 				ctx: emptyCtx('monitor')
 			});
 			startWatchStatusPoll();
+			// setPane bypasses applyPaneCtx, so Git (and anyone else listening
+			// for the current folder) never saw monitor root. Fire onFolder
+			// now that activeKind/profileId are on the pane.
+			void onFolder?.(paneState(id).ctx.parentId, paneOpenProjectContext(id));
 		} catch (e) {
 			const mapped = mapMonitorError(e);
 			showPaneError(id, formatMonitorErrorMessage(mapped), {
