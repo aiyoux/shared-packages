@@ -1174,9 +1174,13 @@
 		background: inherit;
 		pointer-events: none;
 	}
-	/* The band replaces the native text highlight: without this, text blocks
-	   would show the inline native blue on top of their full-width band. */
+	/* Partial first/last blocks keep native ::selection. Fully covered blocks
+	   use the band instead, so hide the native highlight on those only. */
 	.kb-host :global(::selection) {
+		background: color-mix(in srgb, var(--accent, #38bdf8) 22%, transparent);
+	}
+	.kb-host :global([data-kb-selected]::selection),
+	.kb-host :global([data-kb-selected] *::selection) {
 		background: transparent;
 	}
 	/* Block types this build does not model: shown as an opaque placeholder so the

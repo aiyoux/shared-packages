@@ -352,7 +352,7 @@ describe('paintLocalSelection', () => {
 		el.remove();
 	});
 
-	it('marks every band block covered by a range, filled or empty', () => {
+	it('marks every fully covered band block in a range, filled or empty', () => {
 		const el = host();
 		const doc = page([para('a', 'hi'), para('empty', ''), para('b', 'bye')]);
 		project(el, doc);
@@ -363,6 +363,32 @@ describe('paintLocalSelection', () => {
 		expect(el.querySelector('[data-block-id="empty"]')?.hasAttribute(SELECTED_ATTR)).toBe(true);
 		expect(el.querySelector('[data-block-id="a"]')?.hasAttribute(SELECTED_ATTR)).toBe(true);
 		expect(el.querySelector('[data-block-id="b"]')?.hasAttribute(SELECTED_ATTR)).toBe(true);
+		el.remove();
+	});
+
+	it('does not mark a partial selection inside one text block', () => {
+		const el = host();
+		const doc = page([para('a', 'hello')]);
+		project(el, doc);
+		paintLocalSelection(el, doc, {
+			anchor: { blockId: 'a', offset: 1 },
+			head: { blockId: 'a', offset: 4 }
+		});
+		expect(el.querySelector('[data-block-id="a"]')?.hasAttribute(SELECTED_ATTR)).toBe(false);
+		el.remove();
+	});
+
+	it('leaves partial first and last blocks to native selection', () => {
+		const el = host();
+		const doc = page([para('a', 'hello'), para('mid', 'x'), para('b', 'bye')]);
+		project(el, doc);
+		paintLocalSelection(el, doc, {
+			anchor: { blockId: 'a', offset: 2 },
+			head: { blockId: 'b', offset: 1 }
+		});
+		expect(el.querySelector('[data-block-id="a"]')?.hasAttribute(SELECTED_ATTR)).toBe(false);
+		expect(el.querySelector('[data-block-id="mid"]')?.hasAttribute(SELECTED_ATTR)).toBe(true);
+		expect(el.querySelector('[data-block-id="b"]')?.hasAttribute(SELECTED_ATTR)).toBe(false);
 		el.remove();
 	});
 

@@ -19,6 +19,7 @@ import {
 	type KbPage,
 	type Mark,
 	type ParentRef,
+	type Point,
 	type Range
 } from '@shared-packages/doc-model';
 import { paintCarets, stripCollabWidgets, type RemoteCaret } from './decorations.js';
@@ -48,7 +49,7 @@ export const BLOCK_TYPE_ATTR = 'data-block-type';
 export const PARENT_ID_ATTR = 'data-parent-id';
 export const DEPTH_ATTR = 'data-depth';
 export const COL_ATTR = 'data-col';
-/** Selected atomic, or an empty text block covered by a non-collapsed range. */
+/** Selected atomic, or a text/code block the range covers from start to end. */
 export const SELECTED_ATTR = 'data-kb-selected';
 
 /**
@@ -436,12 +437,26 @@ function paintsSelectionBand(block: Block): boolean {
 }
 
 /**
- * Mark selected blocks so they paint as one continuous band.
+ * Whole-block coverage: middle blocks of a spanning range, or a block whose
+ * offsets run 0…len. Partial first/last blocks keep native ::selection so a
+ * drag can highlight a few characters, including across a block boundary.
+ */
+function selectionCoversBlockFully(block: Block, start: Point, end: Point): boolean {
+	if (wantsAtomicChrome(block)) return true;
+	if (!paintsSelectionBand(block)) return false;
+	const len = plaintextOf(block).length;
+	const fromStart = block.id !== start.blockId || start.offset === 0;
+	const toEnd = block.id !== end.blockId || end.offset === len;
+	return fromStart && toEnd;
+}
+
+/**
+ * Mark fully covered selected blocks so they paint as one continuous band.
  *
- * Every band-painting block inside a range is marked (not just empty ones —
- * the native text highlight would leave margin gaps between lines), and each
- * band block stamps the collapsed margin gap down to the next band block so
- * CSS can paint it (`--kb-sel-gap`, consumed by DocEditor's ::after rule).
+ * Partial coverage of the first or last text block is left to native
+ * ::selection. Empty fully-covered blocks still get the band (no glyphs).
+ * Each band block stamps the collapsed margin gap down to the next band
+ * block (`--kb-sel-gap`, consumed by DocEditor's ::after rule).
  */
 export function paintLocalSelection(host: HTMLElement, page: KbPage, selection: Range): void {
 	for (const el of host.querySelectorAll(`[${SELECTED_ATTR}]`)) {
@@ -462,7 +477,7 @@ export function paintLocalSelection(host: HTMLElement, page: KbPage, selection: 
 		if (si < 0) return;
 		gapRange = order.slice(si, (ei < 0 ? si : ei) + 1);
 		for (const block of gapRange) {
-			if (wantsAtomicChrome(block) || paintsSelectionBand(block)) selected.add(block.id);
+			if (selectionCoversBlockFully(block, start, end)) selected.add(block.id);
 		}
 	}
 	for (const id of selected) {
