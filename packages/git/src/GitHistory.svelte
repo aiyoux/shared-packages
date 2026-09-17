@@ -2,6 +2,7 @@
 	import { untrack } from 'svelte';
 	import type { GitAuthor, GitFileDiff, GitHost, GitSnapshot } from './types.js';
 	import { applySelection, type DiffHunk } from './diffLines.js';
+	import { persistKv } from '@shared-packages/ui/persistKv';
 	import DiffView from './DiffView.svelte';
 
 	const AUTHOR_KEY = 'git.author';
@@ -14,7 +15,7 @@
 	 */
 	function loadAuthor(): GitAuthor {
 		try {
-			const raw = localStorage.getItem(AUTHOR_KEY);
+			const raw = persistKv.getItem(AUTHOR_KEY);
 			if (raw) {
 				const p = JSON.parse(raw) as Partial<GitAuthor>;
 				if (p && typeof p.name === 'string' && typeof p.email === 'string') {
@@ -270,7 +271,7 @@
 		commitError = '';
 		try {
 			try {
-				localStorage.setItem(AUTHOR_KEY, JSON.stringify(author));
+				persistKv.setItem(AUTHOR_KEY, JSON.stringify(author));
 			} catch {
 				/* not fatal — the commit still carries the identity */
 			}

@@ -55,7 +55,8 @@
 		splitLeaf,
 		syncLayoutIdSeq,
 		type LayoutNode,
-		toast
+		toast,
+		persistKv
 	} from '@shared-packages/ui';
 	import {
 		buildFileWindowRoles,
@@ -881,11 +882,7 @@
 
 	function setDualPane(on: boolean) {
 		onDualChange?.(on);
-		try {
-			localStorage.setItem(persistKey, on ? '1' : '0');
-		} catch {
-			/* ignore */
-		}
+		persistKv.setItem(persistKey, on ? '1' : '0');
 		if (on) {
 			if (!windows['right']) {
 				windows['right'] = emptyPane(rightDefault);

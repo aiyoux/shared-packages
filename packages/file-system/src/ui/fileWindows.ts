@@ -6,6 +6,7 @@ import {
 	leafCount,
 	syncLayoutIdSeq
 } from '@shared-packages/ui';
+import { persistKv } from '@shared-packages/ui/persistKv';
 import type { LayoutNode, SplitDirection, AppWindowRoleDef } from '@shared-packages/ui';
 import type { ExplorerDriver } from './explorerDriver.js';
 import type { ExplorerContext } from './componentTypes.js';
@@ -139,7 +140,6 @@ export function saveFileWindows(
 		targetPaneId: string;
 	}
 ) {
-	if (typeof localStorage === 'undefined') return;
 	try {
 		const serializedWindows: Record<string, { role: string; activeId: string; activeKind: ConnectionKind }> = {};
 		for (const [id, w] of Object.entries(data.windows)) {
@@ -149,7 +149,7 @@ export function saveFileWindows(
 				activeKind: w.activeKind
 			};
 		}
-		localStorage.setItem(
+		persistKv.setItem(
 			key,
 			JSON.stringify({
 				root: data.root,
@@ -173,9 +173,8 @@ export function loadFileWindows(
 	focusedId: string;
 	targetPaneId: string;
 } | null {
-	if (typeof localStorage === 'undefined') return null;
 	try {
-		const raw = localStorage.getItem(key);
+		const raw = persistKv.getItem(key);
 		if (!raw) return null;
 		if (raw === '0' || raw === '1') {
 			const isDual = raw === '1';

@@ -8,7 +8,7 @@
 		type FileTypeId,
 		type VfsService
 	} from '../index.js';
-	import { fileTypeMime } from '@shared-packages/ui';
+	import { fileTypeMime, persistKv } from '@shared-packages/ui';
 	import {
 		readExplorerBlob,
 		explorerThumbsAreEager,
@@ -383,33 +383,21 @@
 	type PreviewDock = 'off' | 'bottom' | 'right';
 	const PREVIEW_DOCK_KEY = 'fe:previewDock';
 	let previewDock = $state<PreviewDock>(
-		typeof localStorage === 'undefined'
-			? 'off'
-			: (() => {
-					try {
-						const v = localStorage.getItem(PREVIEW_DOCK_KEY);
-						if (v === 'bottom' || v === 'right') return v;
-					} catch {
-						/* ignore */
-					}
-					return 'off';
-				})()
+		(() => {
+			const v = persistKv.getItem(PREVIEW_DOCK_KEY);
+			if (v === 'bottom' || v === 'right') return v;
+			return 'off';
+		})()
 	);
 	/** off → left sidebar → top strip → off, like a file manager's folder tree. */
 	type TreeDock = 'off' | 'left' | 'top';
 	const TREE_DOCK_KEY = 'fe:treeDock';
 	let treeDock = $state<TreeDock>(
-		typeof localStorage === 'undefined'
-			? 'off'
-			: (() => {
-					try {
-						const v = localStorage.getItem(TREE_DOCK_KEY);
-						if (v === 'left' || v === 'top') return v;
-					} catch {
-						/* ignore */
-					}
-					return 'off';
-				})()
+		(() => {
+			const v = persistKv.getItem(TREE_DOCK_KEY);
+			if (v === 'left' || v === 'top') return v;
+			return 'off';
+		})()
 	);
 	/**
 	 * Bumped whenever a mutation could change folder structure (mkdir,
@@ -425,25 +413,17 @@
 	const TREE_RATIO_DEFAULT = 0.22;
 	const PREVIEW_RATIO_DEFAULT = 0.34;
 	function loadRatio(key: string, fallback: number): number {
-		try {
-			const v = localStorage.getItem(key);
-			if (v) {
-				const n = Number(v);
-				if (Number.isFinite(n) && n > 0.05 && n < 0.8) return n;
-			}
-		} catch {
-			/* ignore */
+		const v = persistKv.getItem(key);
+		if (v) {
+			const n = Number(v);
+			if (Number.isFinite(n) && n > 0.05 && n < 0.8) return n;
 		}
 		return fallback;
 	}
 	let treeRatio = $state(loadRatio(TREE_RATIO_KEY, TREE_RATIO_DEFAULT));
 	let previewRatio = $state(loadRatio(PREVIEW_RATIO_KEY, PREVIEW_RATIO_DEFAULT));
 	function persistRatio(key: string, v: number) {
-		try {
-			localStorage.setItem(key, String(v));
-		} catch {
-			/* ignore */
-		}
+		persistKv.setItem(key, String(v));
 	}
 	function onTreeRatioDelta(delta: number) {
 		treeRatio = Math.min(0.6, Math.max(0.08, treeRatio + delta));
@@ -482,29 +462,13 @@
 	const VIEW_MODE_KEY = 'fe:viewMode';
 	const SHOW_PREVIEW_KEY = 'fe:showPreview';
 	let viewMode = $state<ViewMode>(
-		typeof localStorage === 'undefined'
-			? 'list'
-			: (() => {
-					try {
-						const v = localStorage.getItem(VIEW_MODE_KEY);
-						if (v === 'icons' || v === 'detailed') return v;
-					} catch {
-						/* ignore */
-					}
-					return 'list';
-				})()
+		(() => {
+			const v = persistKv.getItem(VIEW_MODE_KEY);
+			if (v === 'icons' || v === 'detailed') return v;
+			return 'list';
+		})()
 	);
-	let showPreview = $state(
-		typeof localStorage === 'undefined'
-			? false
-			: (() => {
-					try {
-						return localStorage.getItem(SHOW_PREVIEW_KEY) === 'true';
-					} catch {
-						return false;
-					}
-				})()
-	);
+	let showPreview = $state(persistKv.getItem(SHOW_PREVIEW_KEY) === 'true');
 	let viewSwitcherOpen = $state(false);
 	/**
 	 * Collapse the icon toolbar into one overflow button. Seed from viewport
@@ -526,18 +490,10 @@
 	let previewMediaId = $state<string | null>(null);
 
 	function persistViewMode(v: ViewMode) {
-		try {
-			localStorage.setItem(VIEW_MODE_KEY, v);
-		} catch {
-			/* ignore */
-		}
+		persistKv.setItem(VIEW_MODE_KEY, v);
 	}
 	function persistShowPreview(v: boolean) {
-		try {
-			localStorage.setItem(SHOW_PREVIEW_KEY, v ? 'true' : 'false');
-		} catch {
-			/* ignore */
-		}
+		persistKv.setItem(SHOW_PREVIEW_KEY, v ? 'true' : 'false');
 	}
 	function setViewMode(v: ViewMode) {
 		viewMode = v;
@@ -2327,12 +2283,8 @@
 	}
 
 	function persistPreviewDock(next: PreviewDock) {
-		try {
-			if (next === 'off') localStorage.removeItem(PREVIEW_DOCK_KEY);
-			else localStorage.setItem(PREVIEW_DOCK_KEY, next);
-		} catch {
-			/* ignore */
-		}
+		if (next === 'off') persistKv.removeItem(PREVIEW_DOCK_KEY);
+		else persistKv.setItem(PREVIEW_DOCK_KEY, next);
 	}
 
 	function cyclePreviewDock() {
@@ -2344,12 +2296,8 @@
 	}
 
 	function persistTreeDock(next: TreeDock) {
-		try {
-			if (next === 'off') localStorage.removeItem(TREE_DOCK_KEY);
-			else localStorage.setItem(TREE_DOCK_KEY, next);
-		} catch {
-			/* ignore */
-		}
+		if (next === 'off') persistKv.removeItem(TREE_DOCK_KEY);
+		else persistKv.setItem(TREE_DOCK_KEY, next);
 	}
 
 	function cycleTreeDock() {

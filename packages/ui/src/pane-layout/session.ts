@@ -1,3 +1,4 @@
+import { persistStorage } from '../persistKv.ts';
 import { clampRatio } from './tree.js';
 import type { LayoutLeaf, LayoutNode, LayoutSplit } from './types.js';
 
@@ -136,14 +137,14 @@ export function parsePaneSessionSnapshot<TView>(
 
 function defaultStorages(): StorageLike[] {
 	const out: StorageLike[] = [];
-	for (const key of ['sessionStorage', 'localStorage'] as const) {
-		try {
-			const storage = (globalThis as unknown as Record<string, StorageLike | undefined>)[key];
-			if (storage && typeof storage.getItem === 'function') out.push(storage);
-		} catch {
-			/* private mode / blocked storage */
+	try {
+		if (typeof sessionStorage !== 'undefined' && typeof sessionStorage.getItem === 'function') {
+			out.push(sessionStorage);
 		}
+	} catch {
+		/* private mode / blocked storage */
 	}
+	out.push(persistStorage);
 	return out;
 }
 

@@ -1,3 +1,4 @@
+import { persistKv } from '../persistKv.ts';
 import type { ClipboardItem } from './types.js';
 
 export const CLIPBOARD_SYNC_STORAGE_KEY = 'sp_clipboard_sync_system';
@@ -12,7 +13,7 @@ export class ClipboardStore {
 	constructor() {
 		if (typeof window !== 'undefined') {
 			try {
-				const saved = localStorage.getItem(CLIPBOARD_SYNC_STORAGE_KEY);
+				const saved = persistKv.getItem(CLIPBOARD_SYNC_STORAGE_KEY);
 				if (saved !== null) {
 					this.syncWithSystem = saved === 'true';
 				}
@@ -30,7 +31,7 @@ export class ClipboardStore {
 		this.syncWithSystem = enabled;
 		if (typeof window !== 'undefined') {
 			try {
-				localStorage.setItem(CLIPBOARD_SYNC_STORAGE_KEY, String(enabled));
+				persistKv.setItem(CLIPBOARD_SYNC_STORAGE_KEY, String(enabled));
 			} catch {
 				/* storage access best-effort */
 			}

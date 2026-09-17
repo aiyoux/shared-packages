@@ -44,6 +44,11 @@
 			"svelte": "./src/subscribeStorageKey.ts",
 			"default": "./src/subscribeStorageKey.ts"
 		},
+		"./persistKv": {
+			"types": "./src/persistKv.ts",
+			"svelte": "./src/persistKv.ts",
+			"default": "./src/persistKv.ts"
+		},
 		"./tabChannel": {
 			"types": "./src/tabChannel.ts",
 			"svelte": "./src/tabChannel.ts",

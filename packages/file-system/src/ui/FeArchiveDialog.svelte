@@ -4,7 +4,7 @@
 	 * same engines as the hub Compress / Hash & Vault tools.
 	 */
 	import '@shared-packages/design-system/button.css';
-	import { toast } from '@shared-packages/ui';
+	import { toast, persistKv } from '@shared-packages/ui';
 	import { formatExplorerError } from './explorerError.js';
 	import {
 		CODEC_LABEL,
@@ -237,7 +237,7 @@
 			}
 		}
 		try {
-			localStorage.setItem(
+			persistKv.setItem(
 				isCrypto ? CRYPTO_STORAGE_KEY : COMPRESS_STORAGE_KEY,
 				requested
 			);

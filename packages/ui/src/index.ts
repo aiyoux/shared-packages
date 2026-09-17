@@ -176,6 +176,20 @@ export {
   type QuickAddDateTimePresetContext,
   type QuickAddDateTimePresetKind
 } from './quick-add-date-time.js';
+export {
+	persistKv,
+	persistStorage,
+	persistReady,
+	persistGet,
+	persistSet,
+	persistRemove,
+	persistGetItem,
+	persistSetItem,
+	persistRemoveItem,
+	persistFlush,
+	__resetPersistKvForTests,
+	type PersistKv
+} from './persistKv.ts';
 export { sanitizeSvg } from './sanitize.ts';
 export { cn } from './utils.js';
 export { getConnectionColor } from './connection-color.ts';

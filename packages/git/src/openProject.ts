@@ -1,3 +1,5 @@
+import { persistStorage } from '@shared-packages/ui/persistKv';
+
 export const OPEN_PROJECT_KEY = 'scratch:open-project';
 export const OPEN_PROJECT_TTL_MS = 60_000;
 /** Last project Projects had open, so a reload reopens it instead of nothing. */
@@ -54,7 +56,7 @@ export function consumeOpenProject(
 }
 
 function lastProjectStore(): Pick<Storage, 'getItem' | 'setItem' | 'removeItem'> | null {
-	return typeof localStorage === 'undefined' ? null : localStorage;
+	return persistStorage;
 }
 
 /** Remember the open project so reopening Projects restores it. No TTL. */

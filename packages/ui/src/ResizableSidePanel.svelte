@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { Snippet } from 'svelte';
+  import { persistKv } from './persistKv.ts';
   import { cn } from './utils.ts';
 
   type HandleVariant = 'overlay' | 'divider';
@@ -62,7 +63,7 @@
 
   function persistWidth() {
     if (!browser || !storageKey) return;
-    window.localStorage.setItem(storageKey, String(widthPx));
+    persistKv.setItem(storageKey, String(widthPx));
   }
 
   function setWidth(nextWidth: number) {
@@ -218,7 +219,7 @@
     if (hydratedStorageKey === nextKey) return;
 
     if (storageKey) {
-      const stored = Number.parseInt(window.localStorage.getItem(storageKey) ?? '', 10);
+      const stored = Number.parseInt(persistKv.getItem(storageKey) ?? '', 10);
       widthPx = Number.isFinite(stored) ? clampWidth(stored) : clampWidth(widthPx);
     } else {
       widthPx = clampWidth(widthPx);

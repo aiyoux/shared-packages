@@ -28,6 +28,7 @@ import {
 	sealVault,
 	type EngineId as CryptoEngineId
 } from '@shared-packages/crypto';
+import { persistKv } from '@shared-packages/ui/persistKv';
 import { getMemoryVfs } from '../memoryVfs.js';
 import { createMemoryExplorerDriver } from './memoryExplorerDriver.js';
 import { createVfs, type VfsService } from '../vfs.js';
@@ -154,7 +155,7 @@ export async function uniqueChildFolderName(
 
 export function readStoredCompressEngine(): CompressEngineId {
 	try {
-		const v = localStorage.getItem(COMPRESS_STORAGE_KEY);
+		const v = persistKv.getItem(COMPRESS_STORAGE_KEY);
 		if (v && ENGINE_CATALOG.some((e) => e.id === v)) return v as CompressEngineId;
 	} catch {
 		/* ignore */
@@ -164,7 +165,7 @@ export function readStoredCompressEngine(): CompressEngineId {
 
 export function readStoredCryptoEngine(): CryptoEngineId {
 	try {
-		const v = localStorage.getItem(CRYPTO_STORAGE_KEY);
+		const v = persistKv.getItem(CRYPTO_STORAGE_KEY);
 		if (v === 'webcrypto' || v === 'libsodium') return v;
 	} catch {
 		/* ignore */
