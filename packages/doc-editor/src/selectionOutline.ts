@@ -9,13 +9,12 @@ import {
 	findBlock,
 	isAtomic,
 	isUnknownBlock,
-	orderedRange,
 	plaintextOf,
 	type Block,
 	type KbPage,
 	type Range
 } from '@shared-packages/doc-model';
-import { isCollapsed } from './range.js';
+import { isCollapsed, orderedRange } from './range.js';
 import { BLOCK_ID_ATTR } from './project.js';
 import { lineBoxesOf, type LineBox } from './selection.js';
 
