@@ -56,6 +56,12 @@ export type ParagraphBlock = {
 	align?: Align;
 	/** CSS line-height override (unitless multiplier, e.g. `"1.5"`). */
 	lineHeight?: string;
+	/**
+	 * Gap after this block (`"0.5"` → `0.5rem` margin-bottom). Independent of
+	 * `lineHeight`, which only spaces wrapped lines inside the block. Omitted
+	 * means the stylesheet default.
+	 */
+	spaceAfter?: string;
 	/** Extra indent levels (1–8). Omitted means 0. */
 	indent?: number;
 };
@@ -66,6 +72,7 @@ export type HeadingBlock = {
 	content: Inline[];
 	align?: Align;
 	lineHeight?: string;
+	spaceAfter?: string;
 	indent?: number;
 };
 export type ListItemBlock = {
@@ -75,6 +82,7 @@ export type ListItemBlock = {
 	content: Inline[];
 	align?: Align;
 	lineHeight?: string;
+	spaceAfter?: string;
 	indent?: number;
 };
 export type CodeBlock = { id: string; type: 'code'; language: string; text: string; indent?: number };
@@ -107,6 +115,7 @@ export type TableCellBlock = {
 	align?: Align;
 	valign?: VAlign;
 	lineHeight?: string;
+	spaceAfter?: string;
 };
 
 export type TableRowBlock = {
@@ -187,6 +196,7 @@ export type Op =
 	| { kind: 'set-align'; id: string; align: Align | null }
 	| { kind: 'set-valign'; id: string; valign: VAlign | null }
 	| { kind: 'set-line-height'; id: string; lineHeight: string | null }
+	| { kind: 'set-space-after'; id: string; spaceAfter: string | null }
 	| { kind: 'set-indent'; id: string; indent: number | null }
 	| { kind: 'insert-table-row'; tableId: string; afterId: string | null; row: TableRowBlock }
 	| { kind: 'insert-table-column'; tableId: string; index: number; cells: TableCellBlock[] }

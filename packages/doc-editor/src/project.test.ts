@@ -234,6 +234,26 @@ describe('project', () => {
 		el.remove();
 	});
 
+	it('stamps lineHeight and spaceAfter independently on a paragraph', () => {
+		const el = host();
+		project(
+			el,
+			page([
+				{
+					id: 'p',
+					type: 'paragraph',
+					content: [{ type: 'text', text: 'wrap', marks: [] }],
+					lineHeight: '1.5',
+					spaceAfter: '1'
+				}
+			])
+		);
+		const p = el.querySelector('[data-block-id="p"]') as HTMLElement;
+		expect(p.style.lineHeight).toBe('1.5');
+		expect(p.style.marginBottom).toBe('1rem');
+		el.remove();
+	});
+
 	it('stamps data-indent and keeps nested ordered numbers independent', () => {
 		const el = host();
 		const nested = { ...item('n', 'inner', true), indent: 1 };

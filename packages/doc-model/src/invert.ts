@@ -558,6 +558,11 @@ export function invert(page: KbPage, op: Op): Op[] {
 			if (!isTextLike(block)) throw new Error('set-line-height: block is not text-like');
 			return [{ kind: 'set-line-height', id: op.id, lineHeight: block.lineHeight ?? null }];
 		}
+		case 'set-space-after': {
+			const { block } = requireBlock(page, op.id, 'set-space-after');
+			if (!isTextLike(block)) throw new Error('set-space-after: block is not text-like');
+			return [{ kind: 'set-space-after', id: op.id, spaceAfter: block.spaceAfter ?? null }];
+		}
 		case 'set-indent': {
 			const { block } = requireBlock(page, op.id, 'set-indent');
 			if (!canTakeIndent(block)) {

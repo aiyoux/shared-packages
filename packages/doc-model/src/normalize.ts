@@ -79,6 +79,13 @@ function pickLineHeight<T extends { lineHeight?: string }>(block: T, lineHeight?
 	return rest as T;
 }
 
+function pickSpaceAfter<T extends { spaceAfter?: string }>(block: T, spaceAfter?: string): T {
+	if (spaceAfter) return { ...block, spaceAfter };
+	const { spaceAfter: _drop, ...rest } = block as T & { spaceAfter?: string };
+	void _drop;
+	return rest as T;
+}
+
 function pickIndent<T extends { indent?: number }>(block: T, indent?: number): T {
 	if (indent) return { ...block, indent };
 	const { indent: _drop, ...rest } = block as T & { indent?: number };
@@ -143,6 +150,22 @@ export function sanitizeLineHeight(raw: string): string | null {
 
 export function coerceLineHeight(value: unknown): string | undefined {
 	return typeof value === 'string' ? sanitizeLineHeight(value) ?? undefined : undefined;
+}
+
+/**
+ * Canonical gap after a block (`"0.5"` → `0.5rem` margin-bottom). `"0"` is a
+ * real override (flush next block), not "use the stylesheet default".
+ */
+export function sanitizeSpaceAfter(raw: string): string | null {
+	const match = /^\s*(\d(?:\.\d{1,2})?)\s*(rem)?\s*$/.exec(raw);
+	if (!match) return null;
+	const n = Number(match[1]);
+	if (!Number.isFinite(n) || n < 0 || n > 4) return null;
+	return String(n);
+}
+
+export function coerceSpaceAfter(value: unknown): string | undefined {
+	return typeof value === 'string' ? sanitizeSpaceAfter(value) ?? undefined : undefined;
 }
 
 export const MAX_INDENT = 8;
@@ -372,7 +395,10 @@ export function orderedBlock(block: Block): Block {
 				content: block.content.map(orderedSpan)
 			};
 			const styled: ParagraphBlock = pickIndent(
-				pickLineHeight(pickAlign(next, block.align), block.lineHeight),
+				pickSpaceAfter(
+					pickLineHeight(pickAlign(next, block.align), block.lineHeight),
+					block.spaceAfter
+				),
 				block.indent
 			);
 			return styled;
@@ -385,7 +411,10 @@ export function orderedBlock(block: Block): Block {
 				content: block.content.map(orderedSpan)
 			};
 			const styled: HeadingBlock = pickIndent(
-				pickLineHeight(pickAlign(next, block.align), block.lineHeight),
+				pickSpaceAfter(
+					pickLineHeight(pickAlign(next, block.align), block.lineHeight),
+					block.spaceAfter
+				),
 				block.indent
 			);
 			return styled;
@@ -398,7 +427,10 @@ export function orderedBlock(block: Block): Block {
 				content: block.content.map(orderedSpan)
 			};
 			const styled: ListItemBlock = pickIndent(
-				pickLineHeight(pickAlign(next, block.align), block.lineHeight),
+				pickSpaceAfter(
+					pickLineHeight(pickAlign(next, block.align), block.lineHeight),
+					block.spaceAfter
+				),
 				block.indent
 			);
 			return styled;
@@ -458,7 +490,10 @@ export function orderedBlock(block: Block): Block {
 						type: 'table_cell',
 						content: block.content.map(orderedSpan)
 					};
-			return pickLineHeight(pickVAlign(pickAlign(cell, block.align), block.valign), block.lineHeight);
+			return pickSpaceAfter(
+				pickLineHeight(pickVAlign(pickAlign(cell, block.align), block.valign), block.lineHeight),
+				block.spaceAfter
+			);
 		}
 		default: {
 			const rec = block as Block & Record<string, unknown>;
@@ -472,7 +507,10 @@ function normalizeLeaf(rec: Record<string, unknown>, id: string): Block {
 		case 'paragraph': {
 			const next: ParagraphBlock = { id, type: 'paragraph', content: coerceSpans(rec.content) };
 			return pickIndent(
-				pickLineHeight(pickAlign(next, coerceAlign(rec.align)), coerceLineHeight(rec.lineHeight)),
+				pickSpaceAfter(
+					pickLineHeight(pickAlign(next, coerceAlign(rec.align)), coerceLineHeight(rec.lineHeight)),
+					coerceSpaceAfter(rec.spaceAfter)
+				),
 				sanitizeIndent(rec.indent)
 			);
 		}
@@ -484,7 +522,10 @@ function normalizeLeaf(rec: Record<string, unknown>, id: string): Block {
 				content: coerceSpans(rec.content)
 			};
 			return pickIndent(
-				pickLineHeight(pickAlign(next, coerceAlign(rec.align)), coerceLineHeight(rec.lineHeight)),
+				pickSpaceAfter(
+					pickLineHeight(pickAlign(next, coerceAlign(rec.align)), coerceLineHeight(rec.lineHeight)),
+					coerceSpaceAfter(rec.spaceAfter)
+				),
 				sanitizeIndent(rec.indent)
 			);
 		}
@@ -496,7 +537,10 @@ function normalizeLeaf(rec: Record<string, unknown>, id: string): Block {
 				content: coerceSpans(rec.content)
 			};
 			return pickIndent(
-				pickLineHeight(pickAlign(next, coerceAlign(rec.align)), coerceLineHeight(rec.lineHeight)),
+				pickSpaceAfter(
+					pickLineHeight(pickAlign(next, coerceAlign(rec.align)), coerceLineHeight(rec.lineHeight)),
+					coerceSpaceAfter(rec.spaceAfter)
+				),
 				sanitizeIndent(rec.indent)
 			);
 		}
@@ -534,9 +578,12 @@ function normalizeCell(rec: Record<string, unknown>, id: string): TableCellBlock
 		rec.header === true
 			? { id, type: 'table_cell', header: true, content: coerceSpans(rec.content) }
 			: { id, type: 'table_cell', content: coerceSpans(rec.content) };
-	return pickLineHeight(
-		pickVAlign(pickAlign(cell, coerceAlign(rec.align)), coerceVAlign(rec.valign)),
-		coerceLineHeight(rec.lineHeight)
+	return pickSpaceAfter(
+		pickLineHeight(
+			pickVAlign(pickAlign(cell, coerceAlign(rec.align)), coerceVAlign(rec.valign)),
+			coerceLineHeight(rec.lineHeight)
+		),
+		coerceSpaceAfter(rec.spaceAfter)
 	);
 }
 

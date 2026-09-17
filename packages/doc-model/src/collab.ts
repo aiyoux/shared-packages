@@ -157,6 +157,7 @@ export function blockIdsTouchedByOp(page: KbPage, op: Op): Set<string> {
 		case 'set-align':
 		case 'set-valign':
 		case 'set-line-height':
+		case 'set-space-after':
 		case 'set-indent':
 			return new Set([op.id]);
 		case 'insert-table-row':
@@ -201,6 +202,7 @@ export function opNamesBlockIds(op: Op): string[] {
 		case 'set-align':
 		case 'set-valign':
 		case 'set-line-height':
+		case 'set-space-after':
 		case 'set-indent':
 			return [op.id];
 		case 'insert-table-row':

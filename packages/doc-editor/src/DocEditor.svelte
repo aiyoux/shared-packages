@@ -1031,7 +1031,7 @@
 	   their own sizing.
 
 	   The floor is one rendered line (`1lh` — the element's own line-height,
-	   `1.6em` as the fallback for engines without the unit), not a fixed
+	   `1.2em` as the fallback for engines without the unit), not a fixed
 	   1.25em: a smaller floor made the first character grow the block, and
 	   everything below it shifted. */
 	.kb-host :global([data-block-type='paragraph']),
@@ -1039,14 +1039,15 @@
 	.kb-host :global([data-block-type='list_item']),
 	.kb-host :global([data-block-type='code']),
 	.kb-host :global([data-block-type='table_cell']) {
-		min-height: 1.6em;
+		line-height: 1.2;
+		min-height: 1.2em;
 		min-height: 1lh;
 	}
 	.kb-host :global([data-block-type='paragraph']) {
-		margin: 0 0 0.5rem;
+		margin: 0 0 0.25rem;
 	}
 	.kb-host :global([data-block-type='heading']) {
-		margin: 0.75rem 0 0.4rem;
+		margin: 0.75rem 0 0.25rem;
 		font-weight: 650;
 	}
 	.kb-host :global(h1) {
@@ -1061,7 +1062,7 @@
 	.kb-host :global([data-block-type='list_item']) {
 		display: list-item;
 		list-style-position: outside;
-		margin: 0 0 0.15rem 1.5rem;
+		margin: 0 0 0.25rem 1.5rem;
 	}
 	.kb-host :global([data-block-type='list_item'][data-ordered='false']) {
 		list-style-type: disc;
@@ -1100,7 +1101,7 @@
 		white-space: pre-wrap;
 		/* Border-box: the floor must cover the line AND its padding, or an
 		   empty code block is shorter than its own caret line. */
-		min-height: calc(1.6em + 1rem);
+		min-height: calc(1.2em + 1rem);
 		min-height: calc(1lh + 1rem);
 	}
 	.kb-host :global([data-block-type='divider']) {

@@ -184,6 +184,7 @@ function renderTextLike(
 	setTreeAttrs(el, block, parentId, depth);
 	if (block.align) el.setAttribute('data-align', block.align);
 	if (block.lineHeight) el.style.lineHeight = block.lineHeight;
+	if (block.spaceAfter) el.style.marginBottom = `${block.spaceAfter}rem`;
 	const indent = block.type === 'table_cell' ? undefined : block.indent;
 	if (indent) {
 		el.setAttribute('data-indent', String(indent));

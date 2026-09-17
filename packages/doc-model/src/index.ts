@@ -44,6 +44,7 @@ export {
 	normalizeSpans,
 	sanitizeFontSize,
 	sanitizeLineHeight,
+	sanitizeSpaceAfter,
 	sanitizeIndent,
 	MAX_INDENT,
 	sliceSpans,

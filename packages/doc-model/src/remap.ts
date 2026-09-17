@@ -103,6 +103,7 @@ export function remapOpIds(map: IdMap, op: Op): Op {
 		case 'set-align':
 		case 'set-valign':
 		case 'set-line-height':
+		case 'set-space-after':
 		case 'set-indent':
 			return { ...op, id: to(map, op.id) };
 		case 'move-block':

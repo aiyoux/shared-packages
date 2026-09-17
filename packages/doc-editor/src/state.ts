@@ -195,6 +195,7 @@ function selectionAfter(pre: DocBody, post: DocBody, op: Op, prev: Range): Range
 		case 'set-align':
 		case 'set-valign':
 		case 'set-line-height':
+		case 'set-space-after':
 		case 'set-indent':
 			return prev;
 		default: {

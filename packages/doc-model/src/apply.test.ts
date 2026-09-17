@@ -813,6 +813,12 @@ describe('N1 callout/toggle apply', () => {
 		const unset = apply(tall, { kind: 'set-line-height', id: 'p', lineHeight: null });
 		expect((unset.blocks[0] as { lineHeight?: string }).lineHeight).toBeUndefined();
 		expect(() => apply(src, { kind: 'set-line-height', id: 'p', lineHeight: '1.5' })).not.toThrow();
+		const gapped = apply(src, { kind: 'set-space-after', id: 'p', spaceAfter: '1' });
+		expect((gapped.blocks[0] as { spaceAfter?: string }).spaceAfter).toBe('1');
+		const flush = apply(gapped, { kind: 'set-space-after', id: 'p', spaceAfter: '0' });
+		expect((flush.blocks[0] as { spaceAfter?: string }).spaceAfter).toBe('0');
+		const defaultGap = apply(flush, { kind: 'set-space-after', id: 'p', spaceAfter: null });
+		expect((defaultGap.blocks[0] as { spaceAfter?: string }).spaceAfter).toBeUndefined();
 		expect(() => apply(src, { kind: 'set-valign', id: 'p', valign: 'middle' })).toThrow(/table_cell/i);
 
 		const grid = page([

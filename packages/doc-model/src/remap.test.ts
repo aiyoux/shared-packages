@@ -138,6 +138,7 @@ describe('remapOpIds', () => {
 			'set-align',
 			'set-valign',
 			'set-line-height',
+			'set-space-after',
 			'set-indent'
 		] as const) {
 			const op = { kind, id: 'temp:a', to: 'paragraph', language: 'ts', open: true } as unknown as Op;
@@ -245,6 +246,7 @@ describe('walker parity', () => {
 		'set-align',
 		'set-valign',
 		'set-line-height',
+		'set-space-after',
 		'set-indent',
 		'insert-table-row',
 		'insert-table-column',

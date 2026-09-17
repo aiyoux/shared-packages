@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { createEmptyPage } from './createEmptyPage.js';
-import { marksAtCaret, normalizePage, normalizeSpans, sanitizeIndent, sanitizeLineHeight } from './normalize.js';
+import {
+	marksAtCaret,
+	normalizePage,
+	normalizeSpans,
+	sanitizeIndent,
+	sanitizeLineHeight,
+	sanitizeSpaceAfter
+} from './normalize.js';
 import { documentOrder } from './tree.js';
 import { isNonTextual, isUnknownBlock } from './plaintext.js';
 import { KB_FORMAT, type KbPage, type Mark, type TextSpan } from './types.js';
@@ -29,6 +36,19 @@ describe('sanitizeLineHeight', () => {
 		expect(sanitizeLineHeight('5')).toBeNull();
 		expect(sanitizeLineHeight('1.5px')).toBeNull();
 		expect(sanitizeLineHeight('')).toBeNull();
+	});
+});
+
+describe('sanitizeSpaceAfter', () => {
+	it('accepts rem gaps including 0 and rejects junk', () => {
+		expect(sanitizeSpaceAfter('0')).toBe('0');
+		expect(sanitizeSpaceAfter('0.5')).toBe('0.5');
+		expect(sanitizeSpaceAfter('0.50rem')).toBe('0.5');
+		expect(sanitizeSpaceAfter(' 1 ')).toBe('1');
+		expect(sanitizeSpaceAfter('-1')).toBeNull();
+		expect(sanitizeSpaceAfter('5')).toBeNull();
+		expect(sanitizeSpaceAfter('0.5px')).toBeNull();
+		expect(sanitizeSpaceAfter('')).toBeNull();
 	});
 });
 
@@ -236,6 +256,31 @@ describe('normalizePage', () => {
 					content: [span('in')]
 				}
 			]
+		});
+	});
+
+	it('keeps lineHeight and spaceAfter, including a flush 0 gap', () => {
+		const page = {
+			format: KB_FORMAT,
+			id: 'p',
+			title: 't',
+			createdAt: '',
+			updatedAt: '',
+			children: [],
+			blocks: [
+				{
+					id: 'n',
+					type: 'paragraph',
+					content: [span('in')],
+					lineHeight: '1.5',
+					spaceAfter: '0'
+				}
+			]
+		} as unknown as KbPage;
+		expect(normalizePage(page).blocks[0]).toMatchObject({
+			id: 'n',
+			lineHeight: '1.5',
+			spaceAfter: '0'
 		});
 	});
 

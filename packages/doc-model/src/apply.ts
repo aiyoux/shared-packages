@@ -454,6 +454,7 @@ function applySplitBlock(page: KbPage, op: Extract<Op, { kind: 'split-block' }>)
 		}
 		if (block.align) (created as { align?: Align }).align = block.align;
 		if (block.lineHeight) (created as { lineHeight?: string }).lineHeight = block.lineHeight;
+		if (block.spaceAfter) (created as { spaceAfter?: string }).spaceAfter = block.spaceAfter;
 		if (canTakeIndent(block) && block.indent) (created as { indent?: number }).indent = block.indent;
 		insertBlockAt(page, at.parent, at.indexInParent + 1, created);
 	}
@@ -516,10 +517,14 @@ export function convertBlock(block: Block, op: Extract<Op, { kind: 'convert-bloc
 	const ordered = op.ordered ?? false;
 	const align = isTextLike(block) ? block.align : undefined;
 	const lineHeight = isTextLike(block) ? block.lineHeight : undefined;
+	const spaceAfter = isTextLike(block) ? block.spaceAfter : undefined;
 	const indent = canTakeIndent(block) ? block.indent : undefined;
-	const stamp = <T extends { align?: Align; lineHeight?: string; indent?: number }>(next: T): T => {
+	const stamp = <T extends { align?: Align; lineHeight?: string; spaceAfter?: string; indent?: number }>(
+		next: T
+	): T => {
 		if (align) next.align = align;
 		if (lineHeight) next.lineHeight = lineHeight;
+		if (spaceAfter) next.spaceAfter = spaceAfter;
 		if (indent) next.indent = indent;
 		return next;
 	};
@@ -760,6 +765,17 @@ function applySetLineHeight(page: KbPage, op: Extract<Op, { kind: 'set-line-heig
 	replaceBlock(page, loc.parent, loc.index, next);
 }
 
+function applySetSpaceAfter(page: KbPage, op: Extract<Op, { kind: 'set-space-after' }>): void {
+	const loc = requireLocation(page, op.id, 'set-space-after');
+	if (!isTextLike(loc.block)) {
+		throw new Error('set-space-after: block is not text-like');
+	}
+	const next = { ...loc.block } as typeof loc.block & { spaceAfter?: string };
+	if (op.spaceAfter) next.spaceAfter = op.spaceAfter;
+	else delete next.spaceAfter;
+	replaceBlock(page, loc.parent, loc.index, next);
+}
+
 function applySetIndent(page: KbPage, op: Extract<Op, { kind: 'set-indent' }>): void {
 	const loc = requireLocation(page, op.id, 'set-indent');
 	if (!canTakeIndent(loc.block)) {
@@ -947,6 +963,9 @@ export function apply(page: KbPage, op: Op): KbPage {
 			break;
 		case 'set-line-height':
 			applySetLineHeight(next, op);
+			break;
+		case 'set-space-after':
+			applySetSpaceAfter(next, op);
 			break;
 		case 'set-indent':
 			applySetIndent(next, op);
