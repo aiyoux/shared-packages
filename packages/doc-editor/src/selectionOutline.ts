@@ -1,8 +1,9 @@
 /**
- * Selection highlight as one SVG outline: line boxes clipped to the selected
- * offsets (so the last line stops after the last character), bridged across
- * paragraph gaps, then rounded with the same concave-aware arc walk as the
- * calendar month outline (`round_polygon_svg`).
+ * Selection highlight as one SVG outline: only the first and last lines of the
+ * whole selection clip to the selected glyphs (last line stops after the last
+ * character). Mid-selection short/wrapped lines stay full block width so the
+ * right edge does not punch in. Bridged across paragraph gaps, then rounded
+ * with the calendar month-outline walk (`round_polygon_svg`).
  */
 import {
 	documentOrder,
@@ -20,38 +21,61 @@ import { lineBoxesOf, type LineBox } from './selection.js';
 
 export type Slab = { top: number; bottom: number; left: number; right: number };
 
-export const SELECTION_ROUND_PX = 5;
+export const SELECTION_ROUND_PX = 3;
 
 const EPS = 0.001;
 
-export function clipLineToOffsets(line: LineBox, from: number, to: number): Slab | null {
-	const a = Math.max(from, line.startOffset);
-	const b = Math.min(to, line.endOffset);
-	if (a > b) return null;
-	if (a === b) {
-		if (line.startOffset === line.endOffset && from <= line.startOffset && to >= line.endOffset) {
-			return { top: line.top, bottom: line.bottom, left: line.left, right: line.right };
-		}
-		return null;
-	}
-	const glyphs = (line.glyphs ?? []).filter((g) => g.offset >= a && g.offset < b);
+export type ClipLineOpts = {
+	/** Block content box; unclipped edges use this so mid-lines stay full width. */
+	full?: { left: number; right: number };
+	/** Clip left to the first selected glyph (first line of the whole selection). */
+	clipLeft?: boolean;
+	/** Clip right to the last selected glyph (last line of the whole selection only). */
+	clipRight?: boolean;
+};
+
+function glyphEdge(line: LineBox, from: number, to: number): { left: number; right: number } | null {
+	const glyphs = (line.glyphs ?? []).filter((g) => g.offset >= from && g.offset < to);
 	if (glyphs.length > 0) {
 		return {
-			top: line.top,
-			bottom: line.bottom,
 			left: Math.min(...glyphs.map((g) => g.left)),
 			right: Math.max(...glyphs.map((g) => g.right))
 		};
 	}
 	const span = Math.max(1, line.endOffset - line.startOffset);
-	const t0 = (a - line.startOffset) / span;
-	const t1 = (b - line.startOffset) / span;
+	const t0 = (from - line.startOffset) / span;
+	const t1 = (to - line.startOffset) / span;
 	const w = line.right - line.left;
+	return { left: line.left + w * t0, right: line.left + w * t1 };
+}
+
+export function clipLineToOffsets(
+	line: LineBox,
+	from: number,
+	to: number,
+	opts: ClipLineOpts = {}
+): Slab | null {
+	const a = Math.max(from, line.startOffset);
+	const b = Math.min(to, line.endOffset);
+	if (a > b) return null;
+	if (a === b) {
+		if (line.startOffset === line.endOffset && from <= line.startOffset && to >= line.endOffset) {
+			const fullLeft = opts.full?.left ?? line.left;
+			const fullRight = opts.full?.right ?? line.right;
+			return { top: line.top, bottom: line.bottom, left: fullLeft, right: fullRight };
+		}
+		return null;
+	}
+	const fullLeft = opts.full?.left ?? line.left;
+	const fullRight = opts.full?.right ?? line.right;
+	const clipLeft = opts.clipLeft ?? true;
+	const clipRight = opts.clipRight ?? true;
+	const edges = glyphEdge(line, a, b);
 	return {
 		top: line.top,
 		bottom: line.bottom,
-		left: line.left + w * t0,
-		right: line.left + w * t1
+		left: clipLeft && edges ? edges.left : fullLeft,
+		right: clipRight && edges ? edges.right : fullRight
 	};
 }
 
@@ -267,21 +291,36 @@ function blockSlabs(
 	el: HTMLElement,
 	block: Block,
 	from: number,
-	to: number
+	to: number,
+	isStartBlock: boolean,
+	isEndBlock: boolean
 ): Slab[] {
+	const box = el.getBoundingClientRect();
+	const full = { left: box.left, right: box.right };
 	const lines = lineBoxesOf(el);
 	if (lines.length === 0) {
 		if (from === 0 && to === plaintextOf(block).length) {
-			const r = el.getBoundingClientRect();
-			if (r.width > 0 && r.height > 0) {
-				return [{ top: r.top, bottom: r.bottom, left: r.left, right: r.right }];
+			if (box.width > 0 && box.height > 0) {
+				return [{ top: box.top, bottom: box.bottom, left: box.left, right: box.right }];
 			}
 		}
 		return [];
 	}
+	const hit = lines.filter((line) => {
+		const a = Math.max(from, line.startOffset);
+		const b = Math.min(to, line.endOffset);
+		return a < b || (a === b && line.startOffset === line.endOffset);
+	});
+	if (hit.length === 0) return [];
+	const first = hit[0]!;
+	const last = hit[hit.length - 1]!;
 	const out: Slab[] = [];
-	for (const line of lines) {
-		const clipped = clipLineToOffsets(line, from, to);
+	for (const line of hit) {
+		const clipped = clipLineToOffsets(line, from, to, {
+			full,
+			clipLeft: isStartBlock && line === first,
+			clipRight: isEndBlock && line === last
+		});
 		if (clipped) out.push(clipped);
 	}
 	return out;
@@ -308,7 +347,9 @@ export function selectionSlabs(host: HTMLElement, page: KbPage, selection: Range
 		}
 		const from = block.id === start.blockId ? start.offset : 0;
 		const to = block.id === end.blockId ? end.offset : plaintextOf(block).length;
-		raw.push(...blockSlabs(el, block, from, to));
+		raw.push(
+			...blockSlabs(el, block, from, to, block.id === start.blockId, block.id === end.blockId)
+		);
 	}
 	return bridgeGaps(mergeLineRects(raw.map((s) => toLocal(s, origin))));
 }

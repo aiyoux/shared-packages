@@ -38,6 +38,30 @@ describe('clipLineToOffsets', () => {
 		expect(slab).toEqual({ top: 0, bottom: 16, left: 0, right: 30 });
 	});
 
+	it('keeps a mid-selection short line full block width', () => {
+		const box = line({
+			top: 0,
+			bottom: 16,
+			left: 0,
+			right: 40,
+			startOffset: 0,
+			endOffset: 4,
+			glyphs: [
+				{ offset: 0, left: 0, right: 10 },
+				{ offset: 1, left: 10, right: 20 },
+				{ offset: 2, left: 20, right: 30 },
+				{ offset: 3, left: 30, right: 40 }
+			]
+		});
+		expect(
+			clipLineToOffsets(box, 0, 4, {
+				full: { left: 0, right: 200 },
+				clipLeft: false,
+				clipRight: false
+			})
+		).toEqual({ top: 0, bottom: 16, left: 0, right: 200 });
+	});
+
 	it('starts the first line at the first selected character', () => {
 		const box = line({
 			top: 0,
@@ -87,7 +111,7 @@ describe('polygonFromSlabs', () => {
 		expect(pts).toContainEqual([200, 20]);
 		expect(pts).toContainEqual([0, 20]);
 		expect(pts).toContainEqual([50, 20]);
-		const d = roundPolygonSvg(pts, 5);
+		const d = roundPolygonSvg(pts, 3);
 		expect(d).toContain('A ');
 		expect(d.endsWith('Z')).toBe(true);
 	});
@@ -100,7 +124,7 @@ describe('selectionOutlinePath', () => {
 			{ top: 16, bottom: 24, left: 0, right: 200 },
 			{ top: 24, bottom: 40, left: 0, right: 200 }
 		];
-		const d = selectionOutlinePath(slabs, 5);
+		const d = selectionOutlinePath(slabs);
 		expect(d.startsWith('M ')).toBe(true);
 		expect(d.endsWith('Z')).toBe(true);
 		expect(d).toContain('A ');
