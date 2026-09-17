@@ -38,6 +38,7 @@
 	import { mapKeydown } from './keymap.js';
 	import { followEditorLink } from './href.js';
 	import { BLOCK_ID_ATTR, BLOCK_TYPE_ATTR, paintLocalSelection, project, type MediaResolver } from './project.js';
+	import { paintSelectionOutline } from './selectionOutline.js';
 	import {
 		plaintextFromDom,
 		rangeFromInputEvent,
@@ -140,6 +141,7 @@
 	const asPageState = (s: EditorState<TDoc>): EditorState => ({ ...s, page: asPage(s.page) });
 
 	let host = $state<HTMLDivElement | undefined>(undefined);
+	let selSvg = $state<SVGSVGElement | undefined>(undefined);
 	let gutterEl = $state<HTMLDivElement | undefined>(undefined);
 	let localComposing = $state(false);
 	let localJustCommitted = $state(false);
@@ -289,10 +291,12 @@
 
 	$effect(() => {
 		const el = host;
+		const svg = selSvg;
 		const page = asPage(editor.page);
 		const selection = editor.selection;
 		if (!el) return;
 		paintLocalSelection(el, page, selection);
+		if (svg) paintSelectionOutline(el, svg, page, selection);
 	});
 
 	function syncHandleLayout(): void {
@@ -809,29 +813,37 @@
 			{/each}
 		{/if}
 	</div>
-	<div
-		class="kb-host"
-		data-ink={ink}
-		bind:this={host}
-		contenteditable={editable ? 'true' : 'false'}
-		role="textbox"
-		tabindex="0"
-		aria-multiline="true"
-		aria-readonly={editable ? undefined : 'true'}
-		data-testid={`${testIdPrefix}-host`}
-		spellcheck="true"
-		onbeforeinput={onBeforeInput}
-		oncompositionstart={onCompositionStart}
-		oncompositionend={onCompositionEnd}
-		onkeydown={onKeyDown}
-		oncopy={onCopy}
-		oncut={onCut}
-		onpaste={onPaste}
-		ondragover={onHostDragOver}
-		ondrop={onHostDrop}
-		onpointerdown={onHostPointerDown}
-		onclick={onHostClick}
-	></div>
+	<div class="kb-stage">
+		<svg
+			class="kb-sel-outline"
+			bind:this={selSvg}
+			aria-hidden="true"
+			data-testid={`${testIdPrefix}-sel-outline`}
+		></svg>
+		<div
+			class="kb-host"
+			data-ink={ink}
+			bind:this={host}
+			contenteditable={editable ? 'true' : 'false'}
+			role="textbox"
+			tabindex="0"
+			aria-multiline="true"
+			aria-readonly={editable ? undefined : 'true'}
+			data-testid={`${testIdPrefix}-host`}
+			spellcheck="true"
+			onbeforeinput={onBeforeInput}
+			oncompositionstart={onCompositionStart}
+			oncompositionend={onCompositionEnd}
+			onkeydown={onKeyDown}
+			oncopy={onCopy}
+			oncut={onCut}
+			onpaste={onPaste}
+			ondragover={onHostDragOver}
+			ondrop={onHostDrop}
+			onpointerdown={onHostPointerDown}
+			onclick={onHostClick}
+		></div>
+	</div>
 	<!-- Move-drop indicator: painted during a handle drag, positioned over the
 	     landing edge of the hovered block. Plain DOM, hidden between drags. -->
 	<div class="kb-drop-line" bind:this={dropLineEl} hidden></div>
@@ -930,7 +942,32 @@
 	.kb-drop-line[hidden] {
 		display: none;
 	}
+	.kb-stage {
+		position: relative;
+		flex: 1 1 auto;
+		min-width: 0;
+		display: flex;
+		flex-direction: column;
+	}
+	.kb-sel-outline {
+		position: absolute;
+		inset: 0;
+		width: 100%;
+		height: 100%;
+		pointer-events: none;
+		overflow: visible;
+		z-index: 0;
+	}
+	.kb-sel-outline :global(path) {
+		fill: color-mix(in srgb, var(--accent, #38bdf8) 14%, transparent);
+		stroke: color-mix(in srgb, var(--accent, #38bdf8) 55%, transparent);
+		stroke-width: 1;
+		stroke-linejoin: round;
+		vector-effect: non-scaling-stroke;
+	}
 	.kb-host {
+		position: relative;
+		z-index: 1;
 		flex: 1 1 auto;
 		min-width: 0;
 		outline: none;
@@ -1151,36 +1188,9 @@
 		outline-offset: 2px;
 		border-radius: 2px;
 	}
-	.kb-host :global([data-block-type='paragraph'][data-kb-selected]),
-	.kb-host :global([data-block-type='heading'][data-kb-selected]),
-	.kb-host :global([data-block-type='list_item'][data-kb-selected]),
-	.kb-host :global([data-block-type='code'][data-kb-selected]) {
-		/* Selected lines (incl. empty ones) get a flat accent tint only — no
-		   left bar, square corners so a multi-line run reads as one band. */
-		background: color-mix(in srgb, var(--accent, #38bdf8) 10%, transparent);
-		position: relative;
-	}
-	/* A selected run must read as one block, so each selected block also paints
-	   the collapsed margin down to the next selected block (size stamped by
-	   paintLocalSelection as --kb-sel-gap). `background: inherit` reuses the
-	   band colour above. */
-	.kb-host :global([data-block-type][data-kb-selected])::after {
-		content: '';
-		position: absolute;
-		top: 100%;
-		left: 0;
-		right: 0;
-		height: var(--kb-sel-gap, 0px);
-		background: inherit;
-		pointer-events: none;
-	}
-	/* Partial first/last blocks keep native ::selection. Fully covered blocks
-	   use the band instead, so hide the native highlight on those only. */
+	/* SVG outline is the highlight (partial first/last + concave joins). Native
+	   ::selection would double-paint and stretch the last line to the block edge. */
 	.kb-host :global(::selection) {
-		background: color-mix(in srgb, var(--accent, #38bdf8) 22%, transparent);
-	}
-	.kb-host :global([data-kb-selected]::selection),
-	.kb-host :global([data-kb-selected] *::selection) {
 		background: transparent;
 	}
 	/* Block types this build does not model: shown as an opaque placeholder so the
