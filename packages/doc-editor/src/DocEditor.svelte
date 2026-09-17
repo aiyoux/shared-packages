@@ -50,7 +50,7 @@
 		isTextCaretBlockType,
 		verticalArrowSelection
 	} from './selection.js';
-	import { collapsed, rangesEqual } from './range.js';
+	import { collapsed, isCollapsed, rangesEqual } from './range.js';
 	import { applyEditorOps, redo, setSelection, undo, type EditorState } from './state.js';
 
 	let {
@@ -161,7 +161,8 @@
 	 * only written on pointerup, never mid-drag.
 	 */
 	let gutterArmedId: string | null = null;
-	let selectDrag: { anchor: Point; pointerId: number } | null = null;
+	let selectDrag: { anchor: Point; pointerId: number; gen: number } | null = null;
+	let selectDragGen = 0;
 	let moveDrop: { id: string; where: 'before' | 'after' } | null = null;
 	let dropLineEl = $state<HTMLDivElement | undefined>(undefined);
 	let handleLayoutFrame = 0;
@@ -564,7 +565,7 @@
 	}
 
 	function onSelectionChange() {
-		if (composing || !host) return;
+		if (composing || selectDrag || !host) return;
 		const sel = host.ownerDocument.getSelection();
 		if (!sel?.anchorNode || !host.contains(sel.anchorNode)) return;
 		const live = rangeFromSelection(host, sel);
@@ -694,18 +695,15 @@
 
 	function beginSelectDrag(event: PointerEvent, anchor: Point) {
 		if (!host) return;
-		selectDrag = { anchor, pointerId: event.pointerId };
+		const gen = ++selectDragGen;
+		selectDrag = { anchor, pointerId: event.pointerId, gen };
 		applySelectRange(collapsed(anchor));
 		let head = anchor;
-		const capturedHost = host;
-		try {
-			capturedHost.setPointerCapture(event.pointerId);
-		} catch {
-			// jsdom / lost host — document listeners still finish the drag.
-		}
-		const doc = capturedHost.ownerDocument;
+		const doc = host.ownerDocument;
 		const move = (e: PointerEvent) => {
-			if (!selectDrag || e.pointerId !== selectDrag.pointerId || !host) return;
+			if (!selectDrag || selectDrag.gen !== gen || e.pointerId !== selectDrag.pointerId || !host) {
+				return;
+			}
 			if (e.buttons === 0) {
 				finish(e);
 				return;
@@ -714,18 +712,15 @@
 			applySelectRange({ anchor: selectDrag.anchor, head });
 		};
 		const finish = (e: PointerEvent) => {
-			if (selectDrag && e.pointerId === selectDrag.pointerId && host) {
+			if (selectDrag?.gen !== gen) {
+				stop();
+				return;
+			}
+			if (host) {
 				head = caretFromClient(host, e.clientX, e.clientY) ?? head;
 				applySelectRange({ anchor: selectDrag.anchor, head });
 			}
 			selectDrag = null;
-			try {
-				if (capturedHost.hasPointerCapture?.(e.pointerId)) {
-					capturedHost.releasePointerCapture(e.pointerId);
-				}
-			} catch {
-				// already released
-			}
 			stop();
 		};
 		const stop = () => {
@@ -741,13 +736,17 @@
 	/**
 	 * Native CE only starts a drag-select when mousedown hits a glyph. Empty
 	 * space after a line, empty paragraphs, and the gaps between blocks must
-	 * still begin a selection. Glyph hits stay native (double-click word
-	 * select). Atomics / chrome keep their own pointer handling.
+	 * still begin a selection. Glyph hits stay native when the caret is
+	 * collapsed (double-click word select). After a range is already selected,
+	 * Chromium often treats the next drag as caret-move / text-drag instead of
+	 * a new range — take over those ourselves.
 	 */
 	function onHostPointerDown(event: PointerEvent) {
 		if (composing || !editable || !host || event.button !== 0) return;
 		// Any click in the text body disarms the gutter click-to-toggle anchor.
 		gutterArmedId = null;
+		selectDragGen += 1;
+		selectDrag = null;
 		if (event.shiftKey || event.altKey || event.metaKey || event.ctrlKey) return;
 		const target = event.target;
 		if (!(target instanceof Element)) return;
@@ -760,7 +759,10 @@
 		) {
 			return;
 		}
-		if (isNativeTextGlyphHit(host, event.clientX, event.clientY)) return;
+		const nativeGlyph = isNativeTextGlyphHit(host, event.clientX, event.clientY);
+		const letNative =
+			nativeGlyph && (event.detail >= 2 || isCollapsed(editor.selection));
+		if (letNative) return;
 		const snapped = caretFromClient(host, event.clientX, event.clientY);
 		if (!snapped) return;
 		event.preventDefault();
