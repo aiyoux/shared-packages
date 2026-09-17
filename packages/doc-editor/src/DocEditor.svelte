@@ -960,8 +960,8 @@
 	}
 	.kb-sel-outline :global(path) {
 		fill: color-mix(in srgb, var(--accent, #38bdf8) 14%, transparent);
-		stroke: color-mix(in srgb, var(--accent, #38bdf8) 55%, transparent);
-		stroke-width: 1;
+		stroke: color-mix(in srgb, var(--accent, #38bdf8) 22%, transparent);
+		stroke-width: 0.5;
 		stroke-linejoin: round;
 		vector-effect: non-scaling-stroke;
 	}
