@@ -52,6 +52,17 @@ async function makeTextPdf(heading = 'Heading'): Promise<Uint8Array> {
 	return new Uint8Array(await doc.save());
 }
 
+async function makeImagePdf(): Promise<Uint8Array> {
+	const { encodePngRgba } = await import('./png.js');
+	const rgba = new Uint8Array([200, 30, 30, 255, 30, 200, 30, 255, 30, 30, 200, 255, 200, 200, 30, 255]);
+	const png = encodePngRgba(2, 2, rgba);
+	const doc = await PDFDocument.create();
+	const page = doc.addPage([200, 120]);
+	const img = await doc.embedPng(png);
+	page.drawImage(img, { x: 20, y: 20, width: 80, height: 80 });
+	return new Uint8Array(await doc.save());
+}
+
 async function makeRectPdf(): Promise<Uint8Array> {
 	const doc = await PDFDocument.create();
 	const page = doc.addPage([200, 120]);
@@ -131,6 +142,20 @@ describe('interpretPage', () => {
 		const paths = result.elements.filter((e) => e.type === 'path');
 		expect(paths.length).toBeGreaterThanOrEqual(1);
 		expect(paths[0]!.fill.toLowerCase()).toMatch(/#e61a1a|#e41a1a|#c81a1a|#ff0000/);
+	});
+
+	it('extracts an embedded image as an image element', async () => {
+		const handle = await track(await makeImagePdf());
+		const result = await interpretPage(handle, 0, { targetWidth: 200, targetHeight: 120 });
+		const images = result.elements.filter((e) => e.type === 'image' || e.type === 'chip');
+		expect(images.length).toBeGreaterThanOrEqual(1);
+		expect(result.stats.images).toBeGreaterThanOrEqual(1);
+		const img = images[0]!;
+		if (img.type === 'image' || img.type === 'chip') {
+			expect(img.src.startsWith('data:image/')).toBe(true);
+			expect(img.width).toBeGreaterThan(0);
+			expect(img.height).toBeGreaterThan(0);
+		}
 	});
 
 	it('extracts at least one path from a rectangle page', async () => {

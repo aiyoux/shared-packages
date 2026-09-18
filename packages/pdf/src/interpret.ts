@@ -429,8 +429,36 @@ async function getObj(objs: { has?: (id: string) => boolean; get: (id: string, c
 	});
 }
 
+function canvasToPngDataUrl(source: CanvasImageSource, width: number, height: number): string | null {
+	if (typeof document === 'undefined' || width < 1 || height < 1) return null;
+	try {
+		const canvas = document.createElement('canvas');
+		canvas.width = width;
+		canvas.height = height;
+		const ctx = canvas.getContext('2d');
+		if (!ctx) return null;
+		ctx.drawImage(source, 0, 0, width, height);
+		return canvas.toDataURL('image/png');
+	} catch {
+		return null;
+	}
+}
+
 function imgToSrc(img: unknown): string | null {
 	if (!img || typeof img !== 'object') return null;
+	if (typeof HTMLCanvasElement !== 'undefined' && img instanceof HTMLCanvasElement) {
+		try {
+			return img.toDataURL('image/png');
+		} catch {
+			return null;
+		}
+	}
+	if (typeof ImageBitmap !== 'undefined' && img instanceof ImageBitmap) {
+		return canvasToPngDataUrl(img, img.width, img.height);
+	}
+	if (typeof OffscreenCanvas !== 'undefined' && img instanceof OffscreenCanvas) {
+		return canvasToPngDataUrl(img, img.width, img.height);
+	}
 	const rec = img as {
 		width?: number;
 		height?: number;
@@ -445,6 +473,9 @@ function imgToSrc(img: unknown): string | null {
 			kind: rec.kind,
 			data: rec.data
 		});
+	}
+	if (rec.bitmap && rec.bitmap.width) {
+		return canvasToPngDataUrl(rec.bitmap, rec.bitmap.width, rec.bitmap.height);
 	}
 	return null;
 }
@@ -727,6 +758,12 @@ export async function interpretPage(
 				const buf = Array.isArray(data) ? data[0] : data;
 				if (buf && (buf as ArrayLike<number>).length) {
 					emitPath(drawOpsToPath(buf as ArrayLike<number>, mapper, gs.ctm), op);
+				}
+			} else if (fn === OPS.rawFillPath) {
+				const data = args[0];
+				const buf = Array.isArray(data) ? data[0] : data;
+				if (buf && (buf as ArrayLike<number>).length) {
+					emitPath(drawOpsToPath(buf as ArrayLike<number>, mapper, gs.ctm), OPS.fill);
 				}
 			} else if (fn === OPS.paintFormXObjectBegin) {
 				const matrix = (args[0] as Mat | undefined) ?? IDENTITY;

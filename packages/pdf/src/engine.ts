@@ -105,7 +105,12 @@ export async function openPdf(bytes: Uint8Array): Promise<PdfHandle> {
 		useSystemFonts: false,
 		disableFontFace: true,
 		fontExtraProperties: true,
-		isOffscreenCanvasSupported: typeof OffscreenCanvas !== 'undefined',
+		// pdf.js 6 turns page images into ImageBitmap when this is true. The
+		// interpreter reads `{ width, height, kind, data }` pixel buffers, so a
+		// bitmap-only object dropped every image and imported pages came out
+		// blank. Rasterization still uses a real canvas via page.render().
+		isOffscreenCanvasSupported: false,
+		isImageDecoderSupported: false,
 		canvasFactory: needsStubCanvas ? new StubCanvasFactory() : undefined,
 		standardFontDataUrl,
 		StandardFontDataFactory:
