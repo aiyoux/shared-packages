@@ -96,14 +96,18 @@ export function createEncodeSession(opts: {
 
 	// H.264 Baseline (42E0…), with the level chosen to fit the output size.
 	const codec = `avc1.42E0${avcLevelByte(width, height)}`;
-	encoder.configure({
+	const config: VideoEncoderConfig = {
 		codec,
 		width,
 		height,
 		bitrate: parseBitrate(opts.bitrate),
 		framerate: fpsHint,
 		avc: { format: 'avc' }
-	});
+	};
+	if (typeof navigator !== 'undefined' && 'webdriver' in navigator && navigator.webdriver) {
+		config.hardwareAcceleration = 'prefer-software';
+	}
+	encoder.configure(config);
 
 	let lastKeyframeUs = -Infinity;
 	let encoded = 0;
