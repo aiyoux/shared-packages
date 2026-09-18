@@ -78,6 +78,15 @@
 		align-items: center;
 		justify-content: center;
 		background: rgb(0 0 0 / 0.7);
+		/* Mobile browsers size 100vh/100vw to the *layout* viewport, which
+		   includes the area behind the browser chrome (URL bar, toolbars).
+		   Centering a 90vh card in that taller box pushes the header — and
+		   its close button — above the visible window, so the dialog cannot
+		   be dismissed. dvh/dvw track the *visible* viewport instead.
+		   Progressive enhancement: the fallback keeps the old behaviour on
+		   browsers without dynamic viewport units. */
+		padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px)
+			env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
 	}
 	.ipd-card {
 		position: relative;
@@ -89,6 +98,12 @@
 		border: 1px solid var(--line-hairline, #333);
 		box-shadow: 0 16px 48px rgb(0 0 0 / 0.5);
 		overflow: hidden;
+	}
+	@supports (height: 100dvh) {
+		.ipd-card {
+			width: min(900px, calc(100dvw - 2rem));
+			height: min(90dvh, 800px);
+		}
 	}
 	.ipd-header {
 		display: flex;

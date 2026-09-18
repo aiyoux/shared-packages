@@ -9,6 +9,7 @@
 	 *   project    — maps one project subtree, checks just its packs
 	 */
 	import '@shared-packages/design-system/button.css';
+	import { toast } from '@shared-packages/ui';
 	import FeStorageInspector from './FeStorageInspector.svelte';
 	import { buildStorageTree } from './storageInspect.js';
 	import { formatSize, type TreemapInput, type TreemapRect } from './sizeTreemap.js';
@@ -65,7 +66,10 @@
 					manifest = await readProjectManifest(vfs, rootId);
 				}
 			} catch (e) {
-				if (!cancelled) error = e instanceof Error ? e.message : 'Could not read storage';
+				if (!cancelled) {
+					error = e instanceof Error ? e.message : 'Could not read storage';
+					toast.error(error);
+				}
 			} finally {
 				if (!cancelled) loading = false;
 			}
@@ -86,6 +90,7 @@
 					: await checkFilesystem(vfs);
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Integrity check failed';
+			toast.error(error);
 		} finally {
 			checking = false;
 		}
@@ -125,6 +130,7 @@
 			if (report) await runCheck();
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Could not reclaim storage';
+			toast.error(error);
 		} finally {
 			reclaiming = false;
 		}

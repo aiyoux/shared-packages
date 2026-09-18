@@ -732,8 +732,12 @@
 		reportMessage(errMsg(e));
 	}
 
+	/**
+	 * Operation errors surface as toasts only — the persistent inline banner is
+	 * reserved for input validation (rename checks below), which is the one
+	 * place an inline message is attached to the thing being edited.
+	 */
 	function reportMessage(msg: string): void {
-		error = msg;
 		if (msg) toast.error(msg);
 	}
 
