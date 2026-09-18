@@ -8,6 +8,8 @@
  */
 import type { ExplorerDriver, ExplorerEntryId } from './explorerDriver.js';
 import { formatExplorerError } from './explorerError.js';
+import { attachTransferAbort, upsertProgress } from '../transferRegistry.js';
+import { generateId } from '../id.js';
 
 export type OsDropNode = {
 	/** POSIX relative path from the drop root. Folders have no trailing slash. */
@@ -340,6 +342,73 @@ export type OsDropFileProgress = {
 };
 
 /**
+ * One PC → destination import registered in the transfer registry, so it
+ * shows in the explorer's top header bar like any other transfer — an import
+ * from the user's computer is a transfer into the open destination, whether
+ * that destination is a remote backend (monitor / b2 / rclone) or a local
+ * folder. The listing keeps its pending rows; the header carries the
+ * transfer-shaped view with a dismiss/cancel affordance, and a failed or
+ * cancelled import marks its rows instead of leaving them spinning.
+ */
+export function createDeviceImportReporter(driver: { id: string }): {
+	onFile: (ev: OsDropFileProgress) => void;
+	fail: (err: unknown) => void;
+	signal: AbortSignal;
+} {
+	const ac = new AbortController();
+	const ids = new Map<string, string>();
+	const idOf = (ev: OsDropFileProgress): string => {
+		const key = `${ev.name}:${ev.size}`;
+		let id = ids.get(key);
+		if (!id) {
+			id = generateId('import');
+			ids.set(key, id);
+			attachTransferAbort(id, ac);
+		}
+		return id;
+	};
+	const report = (
+		ev: OsDropFileProgress,
+		patch?: { status?: 'cancelled' | 'failed'; error?: string }
+	) => {
+		upsertProgress({
+			id: idOf(ev),
+			name: ev.name,
+			size: ev.size,
+			transferred: ev.transferred,
+			direction: 'copying',
+			done: patch ? true : ev.done,
+			status: patch?.status ?? (ev.done ? 'done' : 'active'),
+			error: patch?.error
+		});
+	};
+	return {
+		onFile: report,
+		fail(err) {
+			const aborted = err instanceof Error && err.name === 'AbortError';
+			const msg = err instanceof Error ? err.message : String(err);
+			const status = aborted ? 'cancelled' : 'failed';
+			for (const [key, id] of ids) {
+				const cut = key.lastIndexOf(':');
+				upsertProgress({
+					id,
+					name: key.slice(0, cut),
+					size: Number(key.slice(cut + 1)) || 0,
+					transferred: 0,
+					direction: 'copying',
+					done: true,
+					status,
+					error: aborted ? undefined : msg
+				});
+			}
+		},
+		get signal() {
+			return ac.signal;
+		}
+	};
+}
+
+/**
  * Recreate a dropped file/folder tree on any explorer backend.
  * Requires `mkdir` when the drop contains nested paths.
  */
@@ -347,7 +416,7 @@ export async function importOsDropToDriver(
 	driver: ExplorerDriver,
 	destParentId: ExplorerEntryId | null,
 	nodes: OsDropNode[],
-	opts?: { onFile?: (ev: OsDropFileProgress) => void }
+	opts?: { onFile?: (ev: OsDropFileProgress) => void; signal?: AbortSignal }
 ): Promise<{ files: number; folders: number }> {
 	const put = driver.upload ?? driver.writeFile;
 	if (!put) {
@@ -435,6 +504,7 @@ export async function importOsDropToDriver(
 			opts?.onFile?.({ name, size, transferred: 0, done: false });
 			if (typeof driver.upload === 'function') {
 				await driver.upload(parentId, file, {
+					signal: opts?.signal,
 					onProgress: (pct) => {
 						const transferred = Math.round(size * Math.min(1, Math.max(0, pct)));
 						opts?.onFile?.({ name, size, transferred, done: false });

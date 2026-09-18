@@ -85,6 +85,7 @@
 	} from './copyAcross.js';
 	import {
 		collectOsDrop,
+		createDeviceImportReporter,
 		importOsDropToDriver,
 		type OsDropFileProgress,
 		type OsDropNode
@@ -1214,31 +1215,25 @@
 		copyBusy = true;
 		const parent = destParentId !== undefined ? destParentId : p.ctx.parentId;
 		markCopyDest(id, drv, parent);
-		const idByName = new Map<string, string>();
+		// The registry reporter adds what the inline bump lacked: abort wiring
+		// per row, and a failed/cancelled import marking its rows instead of
+		// leaving them spinning forever.
+		const reporter = createDeviceImportReporter(drv);
 		const bump = (ev: OsDropFileProgress) => {
-			let opId = idByName.get(ev.name);
-			if (!opId) {
-				opId = generateId('osdrop');
-				idByName.set(ev.name, opId);
-			}
-			upsertProgress({
-				id: opId,
-				name: ev.name,
-				size: ev.size,
-				transferred: ev.transferred,
-				direction: 'copying',
-				done: ev.done,
-				status: ev.done ? 'done' : 'active'
-			});
+			reporter.onFile(ev);
 		};
 		try {
 			const nodes = await pending;
 			if (!nodes.length) return;
-			await importOsDropToDriver(drv, parent, nodes, { onFile: bump });
+			await importOsDropToDriver(drv, parent, nodes, {
+				onFile: bump,
+				signal: reporter.signal
+			});
 			if (!drv.subscribeChanges) {
 				setPane(id, { explorerKey: p.explorerKey + 1 });
 			}
 		} catch (e) {
+			reporter.fail(e);
 			toast.error(formatExplorerError(e));
 		} finally {
 			copyBusy = false;

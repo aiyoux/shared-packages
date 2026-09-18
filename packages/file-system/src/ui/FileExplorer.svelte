@@ -78,6 +78,7 @@
 	} from './crossWindowDnd.js';
 	import {
 		collectOsDrop,
+		createDeviceImportReporter,
 		importOsDropToDriver,
 		snapshotFiles,
 		type OsDropFileProgress,
@@ -2981,6 +2982,10 @@
 		error = '';
 		const ids: string[] = [];
 		const idByName = new Map<string, string>();
+		// The header bar carries the transfer-shaped view (same as the dual
+		// pane): every import from this device is a transfer into the open
+		// destination, remote or local. The listing keeps its pending rows.
+		const reporter = createDeviceImportReporter(driver);
 		const bump = (ev: OsDropFileProgress) => {
 			let id = idByName.get(ev.name);
 			if (!id) {
@@ -2999,13 +3004,18 @@
 			inboundOps = inboundOps.some((o) => o.id === id)
 				? inboundOps.map((o) => (o.id === id ? row : o))
 				: [...inboundOps, row];
+			reporter?.onFile(ev);
 		};
 		try {
 			const incoming = await dropNodes;
 			if (!incoming.length) return;
-			await importOsDropToDriver(driver, destParentId, incoming, { onFile: bump });
+			await importOsDropToDriver(driver, destParentId, incoming, {
+				onFile: bump,
+				signal: reporter?.signal
+			});
 			await refresh();
 		} catch (e) {
+			reporter?.fail(e);
 			reportError(e);
 		} finally {
 			inboundOps = inboundOps.filter((o) => !ids.includes(o.id));
