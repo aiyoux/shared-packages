@@ -101,6 +101,7 @@
 
   "dependencies": {
     "@backblaze-labs/b2-sdk": "^0.2.0",
+    "@shared-packages/bytes-gate": "file:../bytes-gate",
     "@sqlite.org/sqlite-wasm": "3.53.0-build1"
   },
   "peerDependencies": {

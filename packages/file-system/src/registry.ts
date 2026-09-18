@@ -58,6 +58,13 @@ const DEFAULT_TYPES: FileTypeDef[] = [
 		schemaVersion: 1
 	},
 	{
+		id: 'digr',
+		extension: '.digr',
+		mime: 'application/x-scratch-digr+json',
+		label: 'Diagram',
+		schemaVersion: 1
+	},
+	{
 		id: 'vide',
 		extension: '.vide',
 		mime: 'application/x-scratch-vide+json',
@@ -128,7 +135,7 @@ const MULTI_EXT: Partial<Record<FileTypeId, readonly string[]>> = {
 };
 
 /** Product extensions stripped before re-applying a forced primary extension. */
-const STRIPPABLE_PRODUCT_EXT = /\.(skch|ob3d|cari|vrec|vcomp|igfx|kb|anim|vide|json)$/i;
+const STRIPPABLE_PRODUCT_EXT = /\.(skch|ob3d|cari|vrec|vcomp|igfx|kb|anim|digr|vide|json)$/i;
 
 const registry = new Map<FileTypeId, FileTypeDef>(DEFAULT_TYPES.map((t) => [t.id, t]));
 
