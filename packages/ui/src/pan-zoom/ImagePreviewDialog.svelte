@@ -105,6 +105,14 @@
 			height: min(90dvh, 800px);
 		}
 	}
+	/* The safe-area padding above eats into the backdrop's content box, so on
+	   a notched phone 90dvh can still be taller than the room left for it —
+	   and a centred overflow loses the header off the top. Cap against the
+	   box the card is actually centred in. */
+	.ipd-card {
+		max-width: 100%;
+		max-height: 100%;
+	}
 	.ipd-header {
 		display: flex;
 		align-items: center;

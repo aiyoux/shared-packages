@@ -78,6 +78,21 @@
 		width: min(720px, 100%);
 		height: min(70vh, 640px);
 		min-height: 280px;
+		max-height: 100%;
+	}
+	/* Mobile browsers size the layout viewport — which `inset: 0` and `vh`
+	   both resolve against — to include the area behind the browser chrome.
+	   Centring a 70vh panel in that taller box can push its footer, and so
+	   the Save button, below the visible window. Clamping the scrim and the
+	   panel to dynamic viewport units keeps the whole dialog reachable.
+	   Same fix as ImagePreviewDialog in @shared-packages/ui. */
+	@supports (height: 100dvh) {
+		.vfs-scrim {
+			max-height: 100dvh;
+		}
+		.vfs-panel {
+			height: min(70dvh, 640px);
+		}
 	}
 	.vfs-panel :global(.fe-root) {
 		height: 100%;
