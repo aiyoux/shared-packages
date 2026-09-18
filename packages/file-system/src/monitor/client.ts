@@ -8,8 +8,29 @@
  */
 import { blobFromResponse } from '../readProgress.js';
 import { fetchPutBlob } from '../uploadProgress.js';
+import { createStallTimer } from '../stallTimer.js';
 import { withLocalAddressSpace } from './localNetwork';
 import { openJsonSse } from './sse.js';
+
+/**
+ * A transfer that is making progress is never aborted: the stall window
+ * restarts on every progress tick, and aborts only when bytes stop moving.
+ * Handshake/metadata calls keep their plain fixed timeouts.
+ */
+export const MONITOR_STALL_MS = 120_000;
+/**
+ * One chunk PUT of a large upload. Small enough that a chunk acknowledgement
+ * arrives often enough to be a meaningful progress tick on a slow link
+ * (8 MiB ≈ 13 s at 5 Mbit/s), well under the daemon's per-request cap.
+ */
+export const MONITOR_CHUNK_BYTES = 8 * 1024 * 1024;
+/**
+ * The single-request write cap the daemon enforces (`READ_MAX_BYTES`). Only
+ * reached on the single-shot fallback path, which exists for daemons that
+ * predate chunked uploads — oversized files fail fast there instead of
+ * streaming 100 MiB to learn the same thing.
+ */
+export const MONITOR_SINGLE_SHOT_MAX_BYTES = 100 * 1024 * 1024;
 
 export type MonitorCapabilities = {
 	fs?: { ino?: boolean; rename?: boolean; archive?: boolean; mkdir?: boolean; thumb?: boolean };
@@ -217,6 +238,9 @@ export type MonitorTransport = {
 			onChunk?: (chunk: Uint8Array) => void | Promise<void>;
 			assemble?: boolean;
 			signal?: AbortSignal;
+			/** Mid-stream cap: the reader cancels once the body exceeds it,
+			 *  instead of the caller discovering the size after the fact. */
+			maxBytes?: number;
 		}
 	): Promise<Blob>;
 	/** Absolute GET URL for `/v1/fs/read` (no extra headers). */
@@ -580,6 +604,11 @@ function mapMonitorFetchError(
 			`Cannot reach monitor at ${base} (network/CORS). Is it running and allowing this origin?`
 		);
 	}
+	// A stall abort surfaces with its own message — "timed out" would read as
+	// a fixed budget that expired while the transfer was making progress.
+	if (e instanceof Error && e.name === 'StallError') {
+		return new Error(`Monitor ${label} ${e.message.replace(/^transfer /, '')}`);
+	}
 	return e instanceof Error ? e : new Error(String(e));
 }
 
@@ -590,6 +619,190 @@ export function parseNdjsonEvent(line: string): MonitorNdjsonEvent | null {
 		return JSON.parse(trimmed) as MonitorNdjsonEvent;
 	} catch {
 		return null;
+	}
+}
+
+/**
+ * The daemon predates `/v1/fs/upload` — the begin request answered 404/405.
+ * The caller falls back to the single-shot write (with its size guard).
+ */
+class MonitorNoChunkRouteError extends Error {
+	constructor() {
+		super('monitor daemon has no chunked upload endpoint');
+		this.name = 'MonitorNoChunkRouteError';
+	}
+}
+
+function serverMessage(parsed: unknown, fallback: string): string {
+	const err = (parsed as { error?: { message?: string } | string }).error;
+	if (typeof err === 'string') return err;
+	if (err && typeof err === 'object' && 'message' in err) return String(err.message);
+	return fallback;
+}
+
+/**
+ * Chunked browser -> daemon upload (POST /v1/fs/upload job).
+ *
+ * Every step gets a stall timer, not a total budget: a chunk acknowledgement
+ * is proof of life, and a transfer that stops moving for MONITOR_STALL_MS is
+ * the only thing that aborts it. Any failure best-effort-aborts the job so
+ * the daemon deletes the partial instead of waiting for its reaper.
+ */
+async function chunkedUpload(
+	base: string,
+	path: string,
+	body: Blob,
+	opts:
+		| {
+				signal?: AbortSignal;
+				onProgress?: (sent: number, total: number) => void;
+		  }
+		| undefined,
+	fetchImpl: typeof fetch
+): Promise<MonitorStatResult> {
+	const abortJob = (jobId: string, token: string) => {
+		// Fire-and-forget, own controller: the outer abort is already in
+		// flight, and the daemon reaper is the backstop if this misses.
+		const url = joinUrl(base, `/v1/fs/upload/${jobId}/abort`);
+		const ac = new AbortController();
+		const t = setTimeout(() => ac.abort(), 10_000);
+		void fetchImpl(
+			url,
+			withLocalAddressSpace(url, {
+				method: 'POST',
+				headers: { authorization: `Bearer ${token}` },
+				signal: ac.signal
+			})
+		)
+			.catch(() => {})
+			.finally(() => clearTimeout(t));
+	};
+
+	// --- begin: validate + mint the job, get jobId + token -------------------
+	const beginStall = createStallTimer(MONITOR_STALL_MS, opts?.signal, 'Monitor upload begin');
+	let jobId = '';
+	let token = '';
+	try {
+		const url = joinUrl(base, '/v1/fs/upload');
+		const res = await fetchImpl(
+			url,
+			withLocalAddressSpace(url, {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ path, size: body.size }),
+				signal: beginStall.signal
+			})
+		);
+		if (res.status === 404 || res.status === 405) {
+			throw new MonitorNoChunkRouteError();
+		}
+		const parsed = await res.json().catch(() => ({}));
+		if (!res.ok) {
+			throw new Error(serverMessage(parsed, `Upload begin failed (${res.status})`));
+		}
+		jobId = (parsed as { jobId?: string }).jobId ?? '';
+		token = (parsed as { token?: string }).token ?? '';
+		if (!jobId || !token) throw new Error('Upload begin response missing jobId/token');
+
+		// --- chunk PUTs ---------------------------------------------------------
+		let sent = 0;
+		for (let offset = 0; offset < body.size; offset += MONITOR_CHUNK_BYTES) {
+			if (opts?.signal?.aborted) {
+				abortJob(jobId, token);
+				throw new Error('Monitor write cancelled');
+			}
+			const chunkStall = createStallTimer(
+				MONITOR_STALL_MS,
+				opts?.signal,
+				'Monitor chunk upload'
+			);
+			try {
+				const slice = body.slice(offset, offset + MONITOR_CHUNK_BYTES);
+				const url = joinUrl(base, `/v1/fs/upload/${jobId}/chunk?offset=${offset}`);
+				const res = await fetchImpl(
+					url,
+					withLocalAddressSpace(url, {
+						method: 'PUT',
+						headers: {
+							'content-type': 'application/octet-stream',
+							authorization: `Bearer ${token}`
+						},
+						body: slice,
+						signal: chunkStall.signal
+					})
+				);
+				if (!res.ok) {
+					const errJson = await res.json().catch(() => ({}));
+					throw new Error(serverMessage(errJson, `Upload chunk failed (${res.status})`));
+				}
+				sent = Math.min(offset + slice.size, body.size);
+				opts?.onProgress?.(sent, body.size);
+			} catch (e) {
+				if (e instanceof TypeError) {
+					throw new Error(
+						`Monitor upload failed at ${base} (connection dropped). The file may not have arrived — check the dest folder and retry.`
+					);
+				}
+				if (e instanceof Error && e.name === 'AbortError') {
+					abortJob(jobId, token);
+					throw new Error(
+						opts?.signal?.aborted ? 'Monitor write cancelled' : 'Monitor write timed out'
+					);
+				}
+				if (e instanceof Error && e.name === 'StallError') {
+					abortJob(jobId, token);
+					throw new Error(`Monitor write ${e.message.replace(/^transfer /, '')}`);
+				}
+				throw e;
+			} finally {
+				chunkStall.dispose();
+			}
+		}
+		void sent;
+
+		// --- finish: fsync + rename on the daemon -------------------------------
+		const finishStall = createStallTimer(MONITOR_STALL_MS, opts?.signal, 'Monitor upload finish');
+		try {
+			const url = joinUrl(base, `/v1/fs/upload/${jobId}/finish`);
+			const res = await fetchImpl(
+				url,
+				withLocalAddressSpace(url, {
+					method: 'POST',
+					headers: {
+						'content-type': 'application/json',
+						authorization: `Bearer ${token}`
+					},
+					body: JSON.stringify({ size: body.size }),
+					signal: finishStall.signal
+				})
+			);
+			const parsed = await res.json().catch(() => ({}));
+			if (!res.ok) {
+				// Leave the partial for a retry — a size mismatch is fixable by
+				// re-sending the tail chunk, so do not abort the job here.
+				throw new Error(serverMessage(parsed, `Upload finish failed (${res.status})`));
+			}
+			opts?.onProgress?.(body.size, body.size);
+			return parsed as MonitorStatResult;
+		} catch (e) {
+			// A stalled or cancelled finish cannot be completed by this tab.
+			if (e instanceof Error && (e.name === 'AbortError' || e.name === 'StallError')) {
+				abortJob(jobId, token);
+			}
+			throw e;
+		} finally {
+			finishStall.dispose();
+		}
+	} catch (e) {
+		if (e instanceof MonitorNoChunkRouteError) throw e;
+		if (e instanceof TypeError) {
+			throw new Error(
+				`Monitor upload failed at ${base} (connection dropped). The file may not have arrived — check the dest folder and retry.`
+			);
+		}
+		throw e;
+	} finally {
+		beginStall.dispose();
 	}
 }
 
@@ -816,7 +1029,9 @@ export function createMonitorClient(opts: {
 		path: string,
 		body: unknown,
 		opts: {
-			timeoutMs: number;
+			/** Stall window, not a total budget: restarted on every NDJSON
+			 *  event; 0 disables (caller signal only). */
+			stallMs: number;
 			signal?: AbortSignal;
 			onProgress?: (transferred: number, total?: number) => void;
 			onEvent?: (ev: MonitorNdjsonEvent) => void;
@@ -826,7 +1041,7 @@ export function createMonitorClient(opts: {
 		}
 	): Promise<void> {
 		const ac = new AbortController();
-		const t = opts.timeoutMs > 0 ? setTimeout(() => ac.abort(), opts.timeoutMs) : null;
+		const stall = createStallTimer(opts.stallMs, opts.signal, `${opts.timeoutLabel} transfer`);
 		const onAbort = () => ac.abort();
 		opts.signal?.addEventListener('abort', onAbort);
 		const url = joinUrl(base, path);
@@ -841,7 +1056,7 @@ export function createMonitorClient(opts: {
 						...opts.headers
 					},
 					body: JSON.stringify(body),
-					signal: ac.signal
+					signal: stall.signal
 				})
 			);
 			if (!res.ok) {
@@ -849,6 +1064,8 @@ export function createMonitorClient(opts: {
 				throw new Error(errorMessageFromBody(parsed, `${opts.failLabel} failed (${res.status})`));
 			}
 			await consumeNdjsonProgress(res, (ev) => {
+				// Each progress line is proof the transfer is alive.
+				stall.bump();
 				opts.onEvent?.(ev);
 				opts.onProgress?.(ev.transferred ?? 0, ev.size);
 			});
@@ -856,7 +1073,7 @@ export function createMonitorClient(opts: {
 			throw mapMonitorFetchError(e, base, opts.timeoutLabel, opts.signal);
 		} finally {
 			opts.signal?.removeEventListener('abort', onAbort);
-			if (t) clearTimeout(t);
+			stall.dispose();
 		}
 	}
 
@@ -1007,27 +1224,35 @@ export function createMonitorClient(opts: {
 			);
 		},
 		async download(path: string, opts) {
-			const ac = new AbortController();
-			const onAbort = () => ac.abort();
-			opts?.signal?.addEventListener('abort', onAbort);
+			// Downloads get the stall treatment too — the read loop bumps per
+			// chunk, so a transfer that keeps moving is never cut, and one that
+			// stops moving aborts instead of hanging forever.
+			const stall = createStallTimer(MONITOR_STALL_MS, opts?.signal, 'Monitor download');
 			const url = joinUrl(base, `/v1/fs/read?path=${encodeURIComponent(path)}`);
 			try {
 				const res = await fetchFn(
 					url,
-					withLocalAddressSpace(url, { method: 'GET', signal: ac.signal })
+					withLocalAddressSpace(url, { method: 'GET', signal: stall.signal })
 				);
 				if (!res.ok) {
 					const text = await res.text().catch(() => '');
 					throw new Error(text || `Download failed (${res.status})`);
 				}
-				return blobFromResponse(res, {
-					onProgress: opts?.onProgress,
+				return await blobFromResponse(res, {
+					onProgress: (n, total) => {
+						stall.bump();
+						opts?.onProgress?.(n, total);
+					},
 					onChunk: opts?.onChunk,
-					assemble: opts?.assemble
+					assemble: opts?.assemble,
+					maxBytes: opts?.maxBytes
 				});
 			} catch (e) {
 				if (e instanceof Error && e.name === 'AbortError') {
 					throw opts?.signal?.aborted ? e : new Error('Monitor download aborted');
+				}
+				if (e instanceof Error && e.name === 'StallError') {
+					throw new Error(`Monitor download ${e.message.replace(/^transfer /, '')}`);
 				}
 				if (e instanceof TypeError) {
 					throw new Error(
@@ -1036,10 +1261,38 @@ export function createMonitorClient(opts: {
 				}
 				throw e;
 			} finally {
-				opts?.signal?.removeEventListener('abort', onAbort);
+				stall.dispose();
 			}
 		},
 		async write(path, body, opts) {
+			// Large uploads go through the daemon's chunked-upload job: unbounded
+			// size, real progress per chunk, and a stall-based abort — no fixed
+			// total timeout that would kill an active transfer.
+			if (body.size > MONITOR_CHUNK_BYTES) {
+				try {
+					return await chunkedUpload(base, path, body, opts, fetchFn);
+				} catch (e) {
+					if (e instanceof MonitorNoChunkRouteError) {
+						// Older daemon without `/v1/fs/upload`: the single-shot PUT
+						// is capped at 100 MiB, so fail fast instead of streaming
+						// the whole file to learn the same thing.
+						if (body.size > MONITOR_SINGLE_SHOT_MAX_BYTES) {
+							throw new Error(
+								`File is ${Math.ceil(body.size / (1024 * 1024))} MB but this monitor daemon only accepts single-shot writes up to ` +
+									`${Math.floor(MONITOR_SINGLE_SHOT_MAX_BYTES / (1024 * 1024))} MB. Update the daemon for larger uploads.`
+							);
+						}
+						// Small enough for the single-shot path — fall through.
+					} else {
+						throw e;
+					}
+				}
+			}
+			// Small file, single request: a fixed timeout is a stall proxy only
+			// because the body is bounded — at MONITOR_CHUNK_BYTES it finishes
+			// quickly on any link where progress is meaningful at all. There is
+			// no per-byte progress signal on cleartext HTTP to bump a stall
+			// timer against (see fetchPutBlob), so the budget stays.
 			const ac = new AbortController();
 			const t = setTimeout(() => ac.abort(), 120_000);
 			const onAbort = () => ac.abort();
@@ -1074,6 +1327,9 @@ export function createMonitorClient(opts: {
 						opts?.signal?.aborted ? 'Monitor write cancelled' : 'Monitor write timed out'
 					);
 				}
+				if (e instanceof Error && e.name === 'StallError') {
+					throw new Error(`Monitor write ${e.message.replace(/^transfer /, '')}`);
+				}
 				if (e instanceof TypeError) {
 					throw new Error(
 						`Monitor upload failed at ${base} (connection dropped). The file may not have arrived — check the dest folder and retry.`
@@ -1087,7 +1343,7 @@ export function createMonitorClient(opts: {
 		},
 		async copy(from, to, opts) {
 			await postNdjson('/v1/fs/copy', { from, to }, {
-				timeoutMs: 120_000,
+				stallMs: MONITOR_STALL_MS,
 				signal: opts?.signal,
 				onProgress: opts?.onProgress,
 				failLabel: 'Copy',
@@ -1102,7 +1358,7 @@ export function createMonitorClient(opts: {
 				'/v1/fs/pull',
 				{ url: pullUrl, to },
 				{
-					timeoutMs: 0,
+					stallMs: MONITOR_STALL_MS,
 					signal: opts?.signal,
 					onProgress: opts?.onProgress,
 					failLabel: 'Pull',
@@ -1113,7 +1369,7 @@ export function createMonitorClient(opts: {
 		},
 		async push(body, opts) {
 			await postNdjson('/v1/fs/push', body, {
-				timeoutMs: 0,
+				stallMs: MONITOR_STALL_MS,
 				signal: opts?.signal,
 				onProgress: opts?.onProgress,
 				onEvent: opts?.onEvent,
@@ -1298,13 +1554,9 @@ export function createMonitorClient(opts: {
 			}
 		},
 		async archive(req, opts) {
-			const ac = new AbortController();
-			const t = setTimeout(() => ac.abort(), 300_000);
-			const onAbort = () => ac.abort();
-			opts?.signal?.addEventListener('abort', onAbort);
-			// `progress=1` streams NDJSON CopyProgress ticks plus a final
-			// {done:true, path, size, kind} line. Older daemons (and validation
-			// errors) answer with plain JSON — both are handled.
+			// Zips + encrypts are long; the window is longer than for point
+			// transfers but still stall-based — an active archive is never cut.
+			const stall = createStallTimer(300_000, opts?.signal, 'Monitor archive transfer');
 			const url = joinUrl(base, '/v1/fs/archive?progress=1');
 			try {
 				const res = await fetchFn(
@@ -1318,13 +1570,14 @@ export function createMonitorClient(opts: {
 							to: req.to,
 							...(req.password ? { password: req.password } : {})
 						}),
-						signal: ac.signal
+						signal: stall.signal
 					})
 				);
 				const contentType = res.headers.get('content-type') ?? '';
 				if (contentType.includes('ndjson') && res.ok && res.body) {
 					let result: MonitorArchiveResult | null = null;
 					await consumeNdjsonProgress(res, (ev) => {
+						stall.bump();
 						if (ev.done && typeof (ev as { path?: unknown }).path === 'string') {
 							const o = ev as { path: string; size?: number; kind?: string };
 							result = {
@@ -1341,6 +1594,8 @@ export function createMonitorClient(opts: {
 					if (result) return result;
 					throw new Error('Archive stream ended without a result');
 				}
+				// A plain-JSON answer is one shot: response arrival is the bump.
+				stall.bump();
 				const parsed = await res.json().catch(() => ({}));
 				if (!res.ok) {
 					const err = (parsed as { error?: { message?: string; code?: string } | string }).error;
@@ -1364,6 +1619,9 @@ export function createMonitorClient(opts: {
 						opts?.signal?.aborted ? 'Monitor archive cancelled' : 'Monitor archive timed out'
 					);
 				}
+				if (e instanceof Error && e.name === 'StallError') {
+					throw new Error(`Monitor archive ${e.message.replace(/^transfer /, '')}`);
+				}
 				if (e instanceof TypeError) {
 					throw new Error(
 						`Cannot reach monitor at ${base} (network/CORS). Is it running and allowing this origin?`
@@ -1371,8 +1629,7 @@ export function createMonitorClient(opts: {
 				}
 				throw e;
 			} finally {
-				opts?.signal?.removeEventListener('abort', onAbort);
-				clearTimeout(t);
+				stall.dispose();
 			}
 		},
 		async rename(from: string, to: string) {

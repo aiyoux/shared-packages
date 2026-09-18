@@ -29,6 +29,10 @@ export type RcloneTransport = {
 		fs: string;
 		remote: string;
 		signal?: AbortSignal;
+		/** Mid-stream cap: the reader cancels once the body exceeds it. */
+		maxBytes?: number;
+		/** Byte ticks for the caller's progress row (fraction 0..1). */
+		onProgress?: (n: number, total?: number) => void;
 	}): Promise<Blob>;
 };
 

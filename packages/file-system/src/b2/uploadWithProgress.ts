@@ -8,11 +8,16 @@
  */
 import { encodeFileName } from '@backblaze-labs/b2-sdk/raw';
 import { fetchPutBlob, xhrPostBlob } from '../uploadProgress.js';
+import { createStallTimer } from '../stallTimer.js';
+import { EXPLORER_UPLOAD_MAX_BYTES } from '../ui/explorerDriver.js';
 import {
 	B2_DATA_PLANE_RELAY_PATH,
 	B2_RELAY_METHOD_HEADER,
 	B2_RELAY_URL_HEADER
 } from './dataPlaneRelay.js';
+
+/** Stall window for a B2 upload leg. */
+const UPLOAD_STALL_MS = 120_000;
 
 export async function sha1HexOfBlob(blob: Blob): Promise<string> {
 	const digest = await crypto.subtle.digest('SHA-1', await blob.arrayBuffer());
@@ -95,40 +100,60 @@ export async function uploadB2SmallFileWithProgress(args: {
 		contentType: args.contentType || 'b2/x-auto',
 		contentSha1: args.contentSha1
 	});
+	// Stall-based abort, not a total budget: every upload tick restarts the
+	// window, so a slow but moving transfer is never cut and a dead one is.
+	const stall = createStallTimer(UPLOAD_STALL_MS, args.signal, 'B2 upload');
+	const bump = (pct: number) => {
+		stall.bump();
+		args.onProgress?.(pct);
+	};
 	args.onProgress?.(0);
 
-	if (typeof XMLHttpRequest !== 'undefined') {
-		try {
-			const res = await xhrPostBlob({
-				url: args.uploadUrl,
-				body: args.file,
-				headers,
-				signal: args.signal,
-				onProgress: args.onProgress
-			});
-			return parseUploadBody(res.status, await res.text(), args.file.size);
-		} catch (e) {
-			if (!isBrowserCorsFailure(e)) throw e;
+	try {
+		if (typeof XMLHttpRequest !== 'undefined') {
+			try {
+				const res = await xhrPostBlob({
+					url: args.uploadUrl,
+					body: args.file,
+					headers,
+					signal: stall.signal,
+					onProgress: bump
+				});
+				return parseUploadBody(res.status, await res.text(), args.file.size);
+			} catch (e) {
+				if (!isBrowserCorsFailure(e)) throw e;
+			}
 		}
-	}
 
-	const relayPath = args.relayPath === undefined ? B2_DATA_PLANE_RELAY_PATH : args.relayPath;
-	if (!relayPath) {
-		throw new Error('B2 upload blocked (CORS) and no data-plane relay is configured');
+		const relayPath = args.relayPath === undefined ? B2_DATA_PLANE_RELAY_PATH : args.relayPath;
+		if (!relayPath) {
+			throw new Error('B2 upload blocked (CORS) and no data-plane relay is configured');
+		}
+		if (args.file.size > EXPLORER_UPLOAD_MAX_BYTES) {
+			// The same-origin relay streams through a Cloudflare Worker, whose
+			// request-body limit sits around 100 MB — a file the direct XHR leg
+			// would have taken must not stall inside the relay instead.
+			throw new Error(
+				`File is ${Math.ceil(args.file.size / (1024 * 1024))} MB; the B2 upload relay accepts at most ` +
+					`${Math.floor(EXPLORER_UPLOAD_MAX_BYTES / (1024 * 1024))} MB. Upload directly to Backblaze instead.`
+			);
+		}
+		const fetchImpl = args.fetchImpl ?? fetch;
+		const res = await fetchPutBlob({
+			url: absoluteAppPath(relayPath),
+			body: args.file,
+			headers: {
+				...headers,
+				[B2_RELAY_URL_HEADER]: args.uploadUrl,
+				[B2_RELAY_METHOD_HEADER]: 'POST'
+			},
+			signal: stall.signal,
+			onProgress: (sent, total) => bump(total > 0 ? sent / total : 0),
+			fetchImpl,
+			extraInit: { method: 'POST' }
+		});
+		return parseUploadBody(res.status, await res.text(), args.file.size);
+	} finally {
+		stall.dispose();
 	}
-	const fetchImpl = args.fetchImpl ?? fetch;
-	const res = await fetchPutBlob({
-		url: absoluteAppPath(relayPath),
-		body: args.file,
-		headers: {
-			...headers,
-			[B2_RELAY_URL_HEADER]: args.uploadUrl,
-			[B2_RELAY_METHOD_HEADER]: 'POST'
-		},
-		signal: args.signal,
-		onProgress: (sent, total) => args.onProgress?.(total > 0 ? sent / total : 0),
-		fetchImpl,
-		extraInit: { method: 'POST' }
-	});
-	return parseUploadBody(res.status, await res.text(), args.file.size);
 }

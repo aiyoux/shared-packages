@@ -383,7 +383,10 @@ export async function createMonitorExplorerDriver(
 					onProgress: dlOpts?.onProgress,
 					onChunk: dlOpts?.onChunk,
 					assemble: dlOpts?.assemble,
-					signal: dlOpts?.signal
+					signal: dlOpts?.signal,
+					// Enforced mid-stream now: the reader cancels as soon as the
+					// body passes the cap instead of after the whole transfer.
+					maxBytes: EXPLORER_DOWNLOAD_MAX_BYTES
 				});
 				if (blob.size > EXPLORER_DOWNLOAD_MAX_BYTES) {
 					throw new ExplorerMonitorError(

@@ -526,6 +526,98 @@ describe('monitor client tolerant parse', () => {
 		});
 	});
 
+	// ---- chunked upload (POST /v1/fs/upload job) ----------------------------
+
+	it('large uploads go through begin → chunks → finish with progress', async () => {
+		// 8 MiB + 1 byte — two chunks under the exported chunk size.
+		const total = 8 * 1024 * 1024 + 1;
+		const bytes = new Uint8Array(total);
+		bytes[total - 1] = 99;
+		const chunkOffsets: string[] = [];
+		const chunkBodies: Uint8Array[] = [];
+		const progress: Array<[number, number]> = [];
+		const mockFetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+			const url = String(input);
+			const method = init?.method ?? 'GET';
+			if (url.endsWith('/v1/fs/upload') && method === 'POST') {
+				return jsonResponse({ jobId: 'job-1', token: 'tok-1', expiresAt: '2030-01-01T00:00:00Z' });
+			}
+			if (url.includes('/v1/fs/upload/job-1/chunk')) {
+				chunkOffsets.push(String(url.match(/offset=(\d+)/)?.[1]));
+				chunkBodies.push(new Uint8Array(await (init?.body as Blob).arrayBuffer()));
+				return jsonResponse({ received: (init?.body as Blob).size, length: 0 });
+			}
+			if (url.includes('/upload/job-1/finish')) {
+				return jsonResponse({ name: 'big.bin', path: '/tmp/big.bin', kind: 'file', size: total });
+			}
+			throw new Error(`unexpected ${method} ${url}`);
+		});
+
+		const client = createMonitorClient({
+			baseUrl: 'http://127.0.0.1:8300',
+			fetchImpl: mockFetch as unknown as typeof fetch
+		});
+		const stat = await client.write('/tmp/big.bin', new Blob([bytes]), {
+			onProgress: (n, total) => progress.push([n, total ?? n])
+		});
+		expect(stat.size).toBe(total);
+		// begin, chunk x2, finish
+		const urls = mockFetch.mock.calls.map((c) => String(c[0]));
+		expect(urls.filter((u) => u.includes('/v1/fs/upload/job-1/chunk')).length).toBe(2);
+		expect(chunkOffsets).toEqual(['0', String(8 * 1024 * 1024)]);
+		// The chunk bodies arrive in order, so the daemon's offset check passes.
+		expect(chunkBodies[0]!.length).toBe(8 * 1024 * 1024);
+		expect(Array.from(chunkBodies[1]!)).toEqual([99]);
+		// Progress climbed to the full size.
+		expect(progress[progress.length - 1]).toEqual([total, total]);
+	});
+
+	it('falls back to single-shot write when the daemon has no upload endpoint', async () => {
+		const bytes = new Uint8Array(8 * 1024 * 1024 + 4); // chunked-sized, old daemon
+		const mockFetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+			const url = String(input);
+			if (url.endsWith('/v1/fs/upload')) return new Response('Not found', { status: 404 });
+			if (url.includes('/v1/fs/write')) {
+				return jsonResponse({
+					name: 'a.bin',
+					path: '/tmp/a.bin',
+					kind: 'file',
+					size: (init?.body as Blob).size
+				});
+			}
+			return new Response('Not found', { status: 404 });
+		});
+		const client = createMonitorClient({
+			baseUrl: 'http://127.0.0.1:8300',
+			fetchImpl: mockFetch as unknown as typeof fetch
+		});
+		const stat = await client.write('/tmp/a.bin', new Blob([bytes]), {});
+		expect(stat.size).toBe(8 * 1024 * 1024 + 4);
+		const urls = mockFetch.mock.calls.map((c) => String(c[0]));
+		expect(urls.some((u) => u.endsWith('/v1/fs/upload'))).toBe(true);
+		expect(urls.some((u) => u.includes('/v1/fs/write'))).toBe(true);
+	});
+
+	it('fails fast on an oversized upload to a daemon without chunked uploads', async () => {
+		// MONITOR_SINGLE_SHOT_MAX_BYTES + 1 bytes against a pre-chunk daemon.
+		const bytes = new Uint8Array(100 * 1024 * 1024 + 1);
+		const mockFetch = vi.fn(async (input: RequestInfo | URL) => {
+			const url = String(input);
+			if (url.endsWith('/v1/fs/upload')) return new Response('Not found', { status: 404 });
+			throw new Error(`unexpected ${url}`);
+		});
+		const client = createMonitorClient({
+			baseUrl: 'http://127.0.0.1:8300',
+			fetchImpl: mockFetch as unknown as typeof fetch
+		});
+		await expect(client.write('/tmp/huge.bin', new Blob([bytes]), {})).rejects.toThrow(
+			/only accepts single-shot writes up to/
+		);
+		// Never reached the single-shot PUT.
+		const urls = mockFetch.mock.calls.map((c) => String(c[0]));
+		expect(urls.some((u) => u.includes('/v1/fs/write'))).toBe(false);
+	});
+
 	it('git-snapshot fixture extra fields are ignored', () => {
 		const snap = coerceGitSnapshot(loadFixture('git-snapshot.json'));
 		expect(snap).toEqual({

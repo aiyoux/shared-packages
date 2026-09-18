@@ -26,6 +26,7 @@ import {
 } from '../ui/explorerDriver.js';
 import { inferFileTypeFromName } from '../index.js';
 import { blobFromResponse } from '../readProgress.js';
+import { createStallTimer, StallError } from '../stallTimer.js';
 import { ExplorerB2Error, mapB2Error } from './errors.js';
 import {
 	baseNameFromKey,
@@ -36,6 +37,9 @@ import {
 	sanitizeSegment
 } from './folderMarkers.js';
 import { createHybridB2Transport } from './hybridTransport.js';
+
+/** Stall window for B2 download legs. */
+const EXPLORER_DOWNLOAD_STALL_MS = 120_000;
 import { ensureExplorerCors } from './b2Cors.js';
 import { assertBucketScopedAuthorization } from './keyScope.js';
 import { sha1HexOfBlob, uploadB2SmallFileWithProgress } from './uploadWithProgress.js';
@@ -743,16 +747,24 @@ export async function createB2ExplorerDriver(
 					// Restricted download token (control plane) + direct GET to f*.backblazeb2.com
 					// with ?Authorization=… (no Authorization header → CORS-friendly).
 					const url = await nativeGetUrl(id);
-					const res = await fetch(url, { method: 'GET', redirect: 'follow' });
-					if (!res.ok) {
-						throw new ExplorerB2Error(
-							'B2_ERROR',
-							`Download failed (${res.status})`
-						);
-					}
+					const stall = createStallTimer(
+						EXPLORER_DOWNLOAD_STALL_MS,
+						dlOpts?.signal,
+						'B2 download'
+					);
 					try {
+						const res = await fetch(url, { method: 'GET', redirect: 'follow', signal: stall.signal });
+						if (!res.ok) {
+							throw new ExplorerB2Error(
+								'B2_ERROR',
+								`Download failed (${res.status})`
+							);
+						}
 						return await blobFromResponse(res, {
-							onProgress: dlOpts?.onProgress,
+							onProgress: (n, total) => {
+								stall.bump();
+								dlOpts?.onProgress?.(n, total);
+							},
 							onChunk: dlOpts?.onChunk,
 							assemble: dlOpts?.assemble,
 							maxBytes: EXPLORER_DOWNLOAD_MAX_BYTES,
@@ -765,38 +777,53 @@ export async function createB2ExplorerDriver(
 						if (e instanceof Error && e.message === 'EXPLORER_TOO_LARGE') {
 							throw new ExplorerB2Error('B2_TOO_LARGE', 'Download exceeded size cap');
 						}
+						if (e instanceof StallError) {
+							throw new ExplorerB2Error('B2_ERROR', e.message);
+						}
 						throw e;
+					} finally {
+						stall.dispose();
 					}
 				}
 
 				// Simulator / injected transport: SDK stream download
-				const result = await bucket!.download(id);
-				const reader = result.body.getReader();
-				const assemble = dlOpts?.assemble !== false;
-				const chunks: Uint8Array[] = [];
-				let total = 0;
-				let lastEmit = 0;
-				for (;;) {
-					const { done, value } = await reader.read();
-					if (done) break;
-					if (value) {
-						total += value.byteLength;
-						if (total > EXPLORER_DOWNLOAD_MAX_BYTES) {
-							await reader.cancel();
-							throw new ExplorerB2Error('B2_TOO_LARGE', 'Download exceeded size cap');
-						}
-						if (assemble) chunks.push(value);
-						await dlOpts?.onChunk?.(value);
-						const now = Date.now();
-						if (!lastEmit || now - lastEmit >= 80) {
-							lastEmit = now;
-							dlOpts?.onProgress?.(total, len || undefined);
+				const stall = createStallTimer(
+					EXPLORER_DOWNLOAD_STALL_MS,
+					dlOpts?.signal,
+					'B2 download'
+				);
+				try {
+					const result = await bucket!.download(id);
+					const reader = result.body.getReader();
+					const assemble = dlOpts?.assemble !== false;
+					const chunks: Uint8Array[] = [];
+					let total = 0;
+					let lastEmit = 0;
+					for (;;) {
+						const { done, value } = await reader.read();
+						if (done) break;
+						if (value) {
+							total += value.byteLength;
+							if (total > EXPLORER_DOWNLOAD_MAX_BYTES) {
+								await reader.cancel();
+								throw new ExplorerB2Error('B2_TOO_LARGE', 'Download exceeded size cap');
+							}
+							if (assemble) chunks.push(value);
+							await dlOpts?.onChunk?.(value);
+							stall.bump();
+							const now = Date.now();
+							if (!lastEmit || now - lastEmit >= 80) {
+								lastEmit = now;
+								dlOpts?.onProgress?.(total, len || undefined);
+							}
 						}
 					}
+					dlOpts?.onProgress?.(total, len || total);
+					const type = result.headers.contentType || 'application/octet-stream';
+					return assemble ? new Blob(chunks as BlobPart[], { type }) : new Blob([], { type });
+				} finally {
+					stall.dispose();
 				}
-				dlOpts?.onProgress?.(total, len || total);
-				const type = result.headers.contentType || 'application/octet-stream';
-				return assemble ? new Blob(chunks as BlobPart[], { type }) : new Blob([], { type });
 			} catch (e) {
 				if (e instanceof ExplorerB2Error) throw e;
 				throw mapB2Error(e);

@@ -211,11 +211,13 @@ export function persistGet(key: string): unknown | undefined {
 		const value = cache.get(key);
 		return value === TOMBSTONE ? undefined : value;
 	}
-	if (!hydrated) {
-		const raw = lsGet(key);
-		return raw === null ? undefined : raw;
-	}
-	return undefined;
+	// Not in cache (and not tombstoned): the localStorage leftover is the only
+	// remaining source of truth. This cannot be gated on `!hydrated` — a
+	// post-hydrate write (a legacy call site, a test seeding localStorage)
+	// would then be unreadable for the rest of the session, because the
+	// migration has already removed the key it knew about.
+	const raw = lsGet(key);
+	return raw === null ? undefined : raw;
 }
 
 export function persistSet(key: string, value: unknown): void {

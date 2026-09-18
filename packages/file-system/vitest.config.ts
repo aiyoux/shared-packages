@@ -41,6 +41,10 @@ export default defineConfig({
 				'../design-system/src/segmented.css'
 			),
 			'@shared-packages/design-system': path.resolve(root, '../design-system/src'),
+			// Subpath imports must list BEFORE the `/ui` prefix alias, or Vite
+			// resolves them to src/ui/index.ts/<subpath> (see the hub vite
+			// config's note on the same trap).
+			'@shared-packages/ui/persistKv': path.resolve(root, '../ui/src/persistKv.ts'),
 			'@shared-packages/ui': path.resolve(root, '../ui/src/index.ts'),
 			'@shared-packages/compress': path.resolve(root, '../compress/src/index.ts'),
 			'@shared-packages/crypto': path.resolve(root, '../crypto/src/index.ts')

@@ -7,6 +7,15 @@
 import type { RcloneCallResult, RcloneTransport } from './rcloneSimulator.js';
 import { mapRcloneError } from './errors.js';
 import { xhrPostForm } from '../uploadProgress.js';
+import { blobFromResponse } from '../readProgress.js';
+import { createStallTimer, StallError } from '../stallTimer.js';
+
+/**
+ * Stall window for rclone transfers: restarted on every progress tick, so a
+ * slow but moving transfer is never cut and a dead one aborts instead of
+ * hanging forever. rclone previously had no timeout at all.
+ */
+const RCLONE_STALL_MS = 120_000;
 
 /** @deprecated Proxy paths unused in direct mode; kept for API compatibility. */
 export type RcloneProxyPaths = {
@@ -84,7 +93,11 @@ export function createRcClient(opts: CreateRcClientOptions): RcloneTransport {
 		},
 
 		async upload(uploadOpts) {
+			// Stall-based abort: XHR upload ticks restart the window; a transfer
+			// that stops moving aborts instead of hanging forever.
+			const stall = createStallTimer(RCLONE_STALL_MS, uploadOpts.signal, 'Rclone upload');
 			try {
+				stall.signal.throwIfAborted();
 				if (uploadOpts.signal?.aborted) {
 					const e = new Error('aborted');
 					(e as Error & { name: string }).name = 'AbortError';
@@ -116,15 +129,18 @@ export function createRcClient(opts: CreateRcClientOptions): RcloneTransport {
 						url,
 						form,
 						headers: { Authorization: auth },
-						signal: uploadOpts.signal,
-						onProgress: uploadOpts.onProgress
+						signal: stall.signal,
+						onProgress: (n) => {
+							stall.bump();
+							uploadOpts.onProgress?.(n);
+						}
 					});
 				} else {
 					res = await fetchFn(url, {
 						method: 'POST',
 						headers: { Authorization: auth },
 						body: form,
-						signal: uploadOpts.signal
+						signal: stall.signal
 					});
 					uploadOpts.onProgress?.(1);
 				}
@@ -140,6 +156,9 @@ export function createRcClient(opts: CreateRcClientOptions): RcloneTransport {
 				}
 				return {};
 			} catch (e) {
+				if (e instanceof StallError) {
+					e.message = e.message.replace(/^transfer /, 'upload ');
+				}
 				if (e instanceof TypeError) {
 					throw mapRcloneError(
 						new Error(
@@ -148,10 +167,16 @@ export function createRcClient(opts: CreateRcClientOptions): RcloneTransport {
 					);
 				}
 				throw mapRcloneError(e);
+			} finally {
+				stall.dispose();
 			}
 		},
 
 		async download(downloadOpts) {
+			// Same shape as the b2/monitor legs: real progress ticks, a
+			// mid-stream cap, and a stall-based abort — `res.blob()` had none of
+			// the three, so a stalled download hung forever.
+			const stall = createStallTimer(RCLONE_STALL_MS, downloadOpts.signal, 'Rclone download');
 			try {
 				// Prefer rc-serve GET; fall back to operations/cat
 				const fs = downloadOpts.fs;
@@ -162,7 +187,7 @@ export function createRcClient(opts: CreateRcClientOptions): RcloneTransport {
 				let res = await fetchFn(serveUrl, {
 					method: 'GET',
 					headers,
-					signal: downloadOpts.signal
+					signal: stall.signal
 				});
 				if (res.status === 404 || res.status === 405) {
 					res = await fetchFn(rcEndpoint(base, 'operations/cat'), {
@@ -172,7 +197,7 @@ export function createRcClient(opts: CreateRcClientOptions): RcloneTransport {
 							'Content-Type': 'application/json'
 						},
 						body: JSON.stringify({ fs, remote: downloadOpts.remote }),
-						signal: downloadOpts.signal
+						signal: stall.signal
 					});
 				}
 				if (!res.ok) {
@@ -181,8 +206,17 @@ export function createRcClient(opts: CreateRcClientOptions): RcloneTransport {
 					err.status = res.status;
 					throw err;
 				}
-				return await res.blob();
+				return await blobFromResponse(res, {
+					onProgress: (n, total) => {
+						stall.bump();
+						downloadOpts.onProgress?.(n, total);
+					},
+					maxBytes: downloadOpts.maxBytes
+				});
 			} catch (e) {
+				if (e instanceof StallError) {
+					e.message = e.message.replace(/^transfer /, 'download ');
+				}
 				if (e instanceof TypeError) {
 					throw mapRcloneError(
 						new Error(
@@ -191,6 +225,8 @@ export function createRcClient(opts: CreateRcClientOptions): RcloneTransport {
 					);
 				}
 				throw mapRcloneError(e);
+			} finally {
+				stall.dispose();
 			}
 		}
 	};

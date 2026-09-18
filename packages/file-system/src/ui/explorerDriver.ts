@@ -103,6 +103,13 @@ export interface ExplorerCapabilities {
  * Defined and exported only from this module.
  */
 export const EXPLORER_DOWNLOAD_MAX_BYTES = 100 * 1024 * 1024; // 100 MiB
+/**
+ * Cap for uploads that must pass through a single request body: the B2
+ * same-origin data-plane relay (a Cloudflare Worker's request-body limit), and
+ * the monitor daemon's single-shot write. Chunked transports bypass it — the
+ * cap is a guard at the entry point, not a property of the backend.
+ */
+export const EXPLORER_UPLOAD_MAX_BYTES = 100 * 1024 * 1024; // 100 MiB
 
 /** Hard cap on list entries returned per list() call (all drivers). */
 export const EXPLORER_LIST_MAX_ENTRIES = 2000;

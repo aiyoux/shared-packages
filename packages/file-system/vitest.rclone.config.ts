@@ -30,6 +30,8 @@ export default defineConfig({
 			'src/monitor/**/*.test.ts',
 			'src/vault/**/*.test.ts',
 			'src/ui/treeDnd/**/*.test.ts',
+			// Top-level src helpers (e.g. stallTimer).
+			'src/*.test.ts',
 			'src/memoryVfs.test.ts',
 			'src/transferRegistry.test.ts'
 		],

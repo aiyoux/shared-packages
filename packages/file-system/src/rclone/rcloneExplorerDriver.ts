@@ -350,7 +350,7 @@ export async function createRcloneExplorerDriver(
 			}
 		},
 
-		async download(id) {
+		async download(id, dlOpts) {
 			try {
 				if (isFolderId(id)) {
 					throw new ExplorerRcloneError('RCLONE_ERROR', 'Cannot download a folder');
@@ -366,7 +366,15 @@ export async function createRcloneExplorerDriver(
 						`File exceeds ${EXPLORER_DOWNLOAD_MAX_BYTES} byte download limit`
 					);
 				}
-				const blob = await transport.download({ fs, remote });
+				const blob = await transport.download({
+					fs,
+					remote,
+					signal: dlOpts?.signal,
+					// Enforced mid-stream now: the reader cancels as soon as the
+					// body passes the cap instead of after the whole transfer.
+					maxBytes: EXPLORER_DOWNLOAD_MAX_BYTES,
+					onProgress: dlOpts?.onProgress
+				});
 				if (blob.size > EXPLORER_DOWNLOAD_MAX_BYTES) {
 					throw new ExplorerRcloneError('RCLONE_TOO_LARGE', 'Download exceeded size cap');
 				}
