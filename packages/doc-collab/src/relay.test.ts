@@ -1,0 +1,98 @@
+import { describe, expect, it, vi } from 'vitest';
+import { createRelaySession, type RelayMember } from './relay.js';
+
+type Frame = { body: string };
+
+function member(id: string): RelayMember<Frame> & { sent: Frame[]; emit: (f: Frame) => void } {
+	const handlers = new Set<(f: Frame) => void>();
+	const sent: Frame[] = [];
+	return {
+		id,
+		sent,
+		send: (f) => void sent.push(f),
+		subscribe(h) {
+			handlers.add(h);
+			return () => handlers.delete(h);
+		},
+		close: vi.fn(),
+		emit: (f) => handlers.forEach((h) => h(f))
+	};
+}
+
+describe('a replica gateway', () => {
+	it('forwards a frame to the other transport, never back onto its own', () => {
+		const bus = member('bus');
+		const peer = member('peer');
+		createRelaySession({ members: [bus, peer], role: 'replica' });
+
+		bus.emit({ body: 'from-a-sibling-tab' });
+		expect(peer.sent).toEqual([{ body: 'from-a-sibling-tab' }]);
+		expect(bus.sent).toEqual([]);
+
+		peer.emit({ body: 'from-the-guest' });
+		expect(bus.sent).toEqual([{ body: 'from-the-guest' }]);
+		expect(peer.sent).toHaveLength(1);
+	});
+
+	it('shows the local runtime everything, whichever transport it came from', () => {
+		const bus = member('bus');
+		const peer = member('peer');
+		const session = createRelaySession({ members: [bus, peer], role: 'replica' });
+		const seen: Frame[] = [];
+		session.subscribe((f) => void seen.push(f));
+
+		bus.emit({ body: 'a' });
+		peer.emit({ body: 'b' });
+		expect(seen).toEqual([{ body: 'a' }, { body: 'b' }]);
+	});
+
+	it('sends a local frame to every transport', () => {
+		const bus = member('bus');
+		const peer = member('peer');
+		createRelaySession({ members: [bus, peer], role: 'replica' }).send({ body: 'mine' });
+		expect(bus.sent).toEqual([{ body: 'mine' }]);
+		expect(peer.sent).toEqual([{ body: 'mine' }]);
+	});
+});
+
+describe('a sequencer', () => {
+	it('does NOT forward, because an inbound frame is not numbered yet', () => {
+		const bus = member('bus');
+		const peer = member('peer');
+		const session = createRelaySession({ members: [bus, peer], role: 'sequencer' });
+		const seen: Frame[] = [];
+		session.subscribe((f) => void seen.push(f));
+
+		bus.emit({ body: 'unstamped' });
+		// Seen locally so it can be stamped and applied; not pushed onward,
+		// which would put an unorderable frame on the far side.
+		expect(seen).toEqual([{ body: 'unstamped' }]);
+		expect(peer.sent).toEqual([]);
+
+		// The stamped re-send is an ordinary local send and reaches everyone,
+		// including the transport the original arrived on.
+		session.send({ body: 'stamped' });
+		expect(peer.sent).toEqual([{ body: 'stamped' }]);
+		expect(bus.sent).toEqual([{ body: 'stamped' }]);
+	});
+});
+
+describe('close', () => {
+	it('closes every member and goes quiet', () => {
+		const bus = member('bus');
+		const peer = member('peer');
+		const session = createRelaySession({ members: [bus, peer], role: 'replica' });
+		const seen: Frame[] = [];
+		session.subscribe((f) => void seen.push(f));
+
+		session.close();
+		expect(bus.close).toHaveBeenCalled();
+		expect(peer.close).toHaveBeenCalled();
+
+		bus.emit({ body: 'after' });
+		expect(seen).toEqual([]);
+		expect(peer.sent).toEqual([]);
+		session.send({ body: 'after' });
+		expect(bus.sent).toEqual([]);
+	});
+});

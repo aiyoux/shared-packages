@@ -1,0 +1,90 @@
+/**
+ * One session over several transports.
+ *
+ * The problem it solves: a peer invite used to REPLACE cross-tab sync, because
+ * the attach layer picked one session and bound one runtime to it. Opening an
+ * invite therefore went deaf to your own other tabs, silently, in both products.
+ *
+ * Here the tab holding the peer connection becomes a gateway instead: frames
+ * from the bus go out to the peer, frames from the peer go out onto the bus, and
+ * the local runtime sees all of them. The topology is a star centred on the
+ * gateway.
+ *
+ * ⚠️ Crossing a seam costs the transport's ordering guarantee. Each transport
+ * orders its own traffic; bus → gateway → peer is not one transport. Pair this
+ * with `createSeqLog` — a relay without sequence numbers applies older-wins and
+ * nothing notices.
+ */
+
+export type RelayMember<F> = {
+	/** Stable, and only ever compared to other members' — never on the wire. */
+	readonly id: string;
+	send(frame: F): void;
+	subscribe(handler: (frame: F) => void): () => void;
+	close(): void;
+};
+
+export type RelaySession<F> = {
+	readonly members: readonly string[];
+	send(frame: F): void;
+	subscribe(handler: (frame: F) => void): () => void;
+	close(): void;
+};
+
+export function createRelaySession<F>(opts: {
+	members: RelayMember<F>[];
+	/**
+	 * A replica gateway is a pipe: what arrives on one transport is forwarded to
+	 * the others as it stands.
+	 *
+	 * A sequencer must NOT forward, because an inbound frame is unnumbered and
+	 * forwarding it would put an unorderable frame on the far side. It applies,
+	 * numbers, and re-sends through `send`, which reaches every member anyway.
+	 */
+	role: 'sequencer' | 'replica';
+}): RelaySession<F> {
+	const { members, role } = opts;
+	const handlers = new Set<(frame: F) => void>();
+	const unsubscribes: Array<() => void> = [];
+	let closed = false;
+
+	for (const member of members) {
+		unsubscribes.push(
+			member.subscribe((frame) => {
+				if (closed) return;
+				for (const handler of [...handlers]) handler(frame);
+				if (role === 'sequencer') return;
+				// Never back onto the transport it arrived on. Two gateways with
+				// two different guests form a tree, not a cycle, so this rule is
+				// sufficient and not merely necessary.
+				for (const other of members) {
+					if (other.id === member.id) continue;
+					other.send(frame);
+				}
+			})
+		);
+	}
+
+	return {
+		get members() {
+			return members.map((m) => m.id);
+		},
+		send(frame) {
+			if (closed) return;
+			for (const member of members) member.send(frame);
+		},
+		subscribe(handler) {
+			handlers.add(handler);
+			return () => {
+				handlers.delete(handler);
+			};
+		},
+		close() {
+			if (closed) return;
+			closed = true;
+			for (const off of unsubscribes) off();
+			handlers.clear();
+			for (const member of members) member.close();
+		}
+	};
+}
