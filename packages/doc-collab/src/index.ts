@@ -21,3 +21,11 @@ export {
 	SUBORDINATE_TTL_MS,
 	type ClaimChannel
 } from './claim.js';
+export {
+	admitAlways,
+	admitOnExactBase,
+	createSequencer,
+	type SeqDecision,
+	type Sequencer,
+	type Submission
+} from './sequencer.js';
