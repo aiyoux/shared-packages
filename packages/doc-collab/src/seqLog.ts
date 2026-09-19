@@ -107,8 +107,19 @@ export type SeqLog<F extends LogFrame> = {
 export function createSeqLog<F extends LogFrame>(opts: {
 	role: SeqRole;
 	clientId: string;
+	/**
+	 * Whether this frame REPLACES its scope, rather than adding to it.
+	 *
+	 * Only a replacing frame may be re-applied when its echo comes back
+	 * contended (see `inFlight`). Re-applying an APPEND duplicates it — two
+	 * copies of the same ink — so the default is `false`, which is the old
+	 * behaviour of dropping every echo. Opting a frame kind in is an
+	 * improvement; opting the wrong one in is data corruption.
+	 */
+	replaces?: (frame: F) => boolean;
 }): SeqLog<F> {
 	const { role, clientId } = opts;
+	const replaces = opts.replaces ?? (() => false);
 	let head = 0;
 
 	/** Last applied sequence number per scope. Only echoes consult it. */
@@ -162,8 +173,10 @@ export function createSeqLog<F extends LogFrame>(opts: {
 				const contended = pending ? (scopeSeq.get(pending.scope) ?? 0) !== pending.mark : false;
 				// Ordered last for a scope somebody else touched while it was in
 				// flight: every other participant ends with ours on top, and we
-				// would end with theirs. Re-apply to agree.
-				if (contended && apply(frame)) {
+				// would end with theirs. Re-apply to agree — but only if this
+				// frame replaces its scope. An append re-applied is an append
+				// twice.
+				if (contended && replaces(frame) && apply(frame)) {
 					noteApplied(frame);
 					return { action: 'applied' };
 				}

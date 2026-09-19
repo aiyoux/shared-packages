@@ -120,7 +120,7 @@ describe('our own frame coming back', () => {
 	});
 
 	it('RE-APPLIES an echo when a peer touched the same scope in flight', () => {
-		const log = createSeqLog<Frame>({ role: 'replica', clientId: 'me' });
+		const log = createSeqLog<Frame>({ role: 'replica', clientId: 'me', replaces: () => true });
 		const doc = recorder();
 		const sent = log.stamp(frame({ clientId: 'me', frameId: 'mine', body: 'mine' }));
 		// A peer's frame for the same scope is ordered first. Locally we already
@@ -131,7 +131,7 @@ describe('our own frame coming back', () => {
 	});
 
 	it('leaves a different scope alone', () => {
-		const log = createSeqLog<Frame>({ role: 'replica', clientId: 'me' });
+		const log = createSeqLog<Frame>({ role: 'replica', clientId: 'me', replaces: () => true });
 		const doc = recorder();
 		const sent = log.stamp(frame({ clientId: 'me', frameId: 'mine', scope: 'page-1' }));
 		log.receive(frame({ seq: 1, clientId: 'them', scope: 'page-2' }), doc.apply);
@@ -195,3 +195,22 @@ describe('a sequencer seeing its own frame come back', () => {
 		expect(log.head).toBe(1);
 	});
 });
+
+	it('does NOT re-apply a contended APPEND — that is the same ink twice', () => {
+		// The repair is last-writer-wins, which only means anything for a frame
+		// that REPLACES its scope. An append is already commutative; applying it
+		// a second time just duplicates it.
+		const log = createSeqLog<Frame>({
+			role: 'replica',
+			clientId: 'me',
+			replaces: (f) => f.body !== 'append'
+		});
+		const doc = recorder();
+		const sent = log.stamp(frame({ clientId: 'me', frameId: 'mine', body: 'append' }));
+		log.receive(frame({ seq: 1, clientId: 'them', body: 'theirs' }), doc.apply);
+		expect(log.receive({ ...sent, seq: 2 }, doc.apply)).toEqual({
+			action: 'dropped',
+			reason: 'echo'
+		});
+		expect(doc.applied.map((f) => f.body)).toEqual(['theirs']);
+	});
