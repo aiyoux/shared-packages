@@ -7,6 +7,7 @@ import {
 	clipVisibleAt,
 	createCompositionClock as reexportedClock,
 	createPlayheadRegistry as reexportedRegistry,
+	ensureAnimIdentity,
 	parseAnimDocument,
 	sameFsBackend,
 	serializeAnimDocument,
@@ -529,6 +530,55 @@ describe('view.autoKeyframeByClock', () => {
 		expect(() =>
 			parseAnimDocument({ ...cloneDoc, view: { autoKeyframeByClock: { primary: 'yes' } } })
 		).toThrow();
+	});
+});
+
+describe('AnimDocument identity', () => {
+	it('parses a document with no id or createdAt', () => {
+		const parsed = parseAnimDocument({ schemaVersion: 1, durationMs: 100, clips: [] });
+		expect(parsed).not.toHaveProperty('id');
+		expect(parsed).not.toHaveProperty('createdAt');
+		expect(JSON.parse(serializeAnimDocument(parsed))).not.toHaveProperty('id');
+		expect(JSON.parse(serializeAnimDocument(parsed))).not.toHaveProperty('createdAt');
+	});
+
+	it('ensureAnimIdentity mints uuid + createdAt without mutating', () => {
+		const orig: AnimDocument = { schemaVersion: 1, durationMs: 100, clips: [] };
+		const before = Date.now();
+		const next = ensureAnimIdentity(orig);
+		expect(orig).not.toHaveProperty('id');
+		expect(orig).not.toHaveProperty('createdAt');
+		expect(next).not.toBe(orig);
+		expect(next.id).toEqual(expect.any(String));
+		expect(next.id!.length).toBeGreaterThan(0);
+		expect(next.createdAt).toBeGreaterThanOrEqual(before);
+		expect(next.createdAt).toBeLessThanOrEqual(Date.now());
+		const again = ensureAnimIdentity(next);
+		expect(again).toBe(next);
+		expect(again.id).toBe(next.id);
+		expect(again.createdAt).toBe(next.createdAt);
+	});
+
+	it('round-trips id and createdAt when present', () => {
+		const doc: AnimDocument = {
+			schemaVersion: 1,
+			id: 'anim-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+			createdAt: 1_700_000_000_000,
+			durationMs: 100,
+			clips: [],
+			canvas: { w: 1920, h: 1080 }
+		};
+		const json = serializeAnimDocument(doc);
+		expect(JSON.parse(json)).toMatchObject({
+			schemaVersion: 1,
+			id: doc.id,
+			createdAt: doc.createdAt
+		});
+		expect(parseAnimDocument(json)).toEqual(doc);
+		expect(parseAnimDocument(serializeAnimDocument(ensureAnimIdentity(doc)))).toMatchObject({
+			id: doc.id,
+			createdAt: doc.createdAt
+		});
 	});
 });
 

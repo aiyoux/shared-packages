@@ -15,6 +15,29 @@
 
 export type DocRank = { createdAt: number; docId: string };
 
+type RankFields = { id?: string; createdAt?: number };
+
+function isRankFields(rec: RankFields | null | undefined): rec is { id: string; createdAt: number } {
+	return (
+		rec != null &&
+		typeof rec.id === 'string' &&
+		rec.id.length > 0 &&
+		typeof rec.createdAt === 'number' &&
+		Number.isFinite(rec.createdAt)
+	);
+}
+
+/** Rank from travelling `.anim` envelope fields. Null when either field is missing. */
+export function rankFromAnimDocument(doc: RankFields | null | undefined): DocRank | null {
+	if (!isRankFields(doc)) return null;
+	return { createdAt: doc.createdAt, docId: doc.id };
+}
+
+/** Rank from travelling `.skch` envelope fields. Null when either field is missing. */
+export function rankFromSketchPayload(payload: RankFields | null | undefined): DocRank | null {
+	return rankFromAnimDocument(payload);
+}
+
 /** Negative if a < b, 0 if equal, positive if a > b. createdAt first, then docId. */
 export function compareDocRank(a: DocRank, b: DocRank): number {
 	if (a.createdAt !== b.createdAt) return a.createdAt < b.createdAt ? -1 : 1;
@@ -28,4 +51,18 @@ export function compareDocRank(a: DocRank, b: DocRank): number {
  */
 export function liveBindAllowed(from: DocRank, to: DocRank): boolean {
 	return compareDocRank(from, to) > 0;
+}
+
+/**
+ * Rank gate for a live bind. Missing ranks skip the check — do not invent a
+ * VFS `createdAt` or node id as a stand-in.
+ *
+ * Returns true only when both ranks are present and `liveBindAllowed` is false.
+ */
+export function liveBindRefused(
+	from: DocRank | null | undefined,
+	to: DocRank | null | undefined
+): boolean {
+	if (from == null || to == null) return false;
+	return !liveBindAllowed(from, to);
 }

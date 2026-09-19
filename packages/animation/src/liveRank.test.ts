@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { compareDocRank, liveBindAllowed, type DocRank } from './liveRank.js';
+import {
+	compareDocRank,
+	liveBindAllowed,
+	liveBindRefused,
+	rankFromAnimDocument,
+	rankFromSketchPayload,
+	type DocRank
+} from './liveRank.js';
 
 const rank = (createdAt: number, docId: string): DocRank => ({ createdAt, docId });
 
@@ -64,4 +71,32 @@ describe('liveBindAllowed', () => {
 
 	// snapshot / clone / gitPin are not this helper's problem: it takes ranks,
 	// not a bind mode, and callers simply do not consult it for those binds.
+});
+
+describe('rankFromAnimDocument / rankFromSketchPayload', () => {
+	it('reads travelling envelope fields and ignores a missing rank', () => {
+		expect(rankFromAnimDocument({ id: 'A', createdAt: 2 })).toEqual({ docId: 'A', createdAt: 2 });
+		expect(rankFromSketchPayload({ id: 'S', createdAt: 1 })).toEqual({ docId: 'S', createdAt: 1 });
+		expect(rankFromAnimDocument({ id: undefined, createdAt: undefined })).toBeNull();
+		expect(rankFromSketchPayload({})).toBeNull();
+		expect(rankFromAnimDocument({ id: 'A' })).toBeNull();
+		expect(rankFromSketchPayload({ createdAt: 1 })).toBeNull();
+	});
+
+	it('missing rank does not call a fake refuse', () => {
+		let refused = 0;
+		const fakeRefuse = () => {
+			refused += 1;
+		};
+		const from = rankFromSketchPayload({});
+		const to = rankFromAnimDocument({});
+		if (from && to && !liveBindAllowed(from, to)) fakeRefuse();
+		expect(from).toBeNull();
+		expect(to).toBeNull();
+		expect(liveBindRefused(from, to)).toBe(false);
+		expect(liveBindRefused(null, rank(1, 'B'))).toBe(false);
+		expect(liveBindRefused(rank(2, 'A'), null)).toBe(false);
+		expect(refused).toBe(0);
+		expect(liveBindRefused(rank(1, 'old'), rank(2, 'new'))).toBe(true);
+	});
 });

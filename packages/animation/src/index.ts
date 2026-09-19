@@ -37,6 +37,7 @@ export {
 	clipVisibleAt,
 	isAudioClip,
 	isVisualClip,
+	ensureAnimIdentity,
 	parseAnimDocument,
 	sameFsBackend,
 	serializeAnimDocument,
@@ -62,7 +63,14 @@ export {
 	type WalkBudget
 } from './refs.js';
 
-export { compareDocRank, liveBindAllowed, type DocRank } from './liveRank.js';
+export {
+	compareDocRank,
+	liveBindAllowed,
+	liveBindRefused,
+	rankFromAnimDocument,
+	rankFromSketchPayload,
+	type DocRank
+} from './liveRank.js';
 
 export {
 	DEFAULT_MAX_DEPTH,

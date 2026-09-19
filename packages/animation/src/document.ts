@@ -301,6 +301,14 @@ function parseCanvas(raw: unknown): AnimCanvas | undefined {
 	return { w, h };
 }
 
+function optionalId(raw: unknown): string | undefined {
+	return typeof raw === 'string' && raw.length > 0 ? raw : undefined;
+}
+
+function optionalCreatedAt(raw: unknown): number | undefined {
+	return typeof raw === 'number' && Number.isFinite(raw) ? raw : undefined;
+}
+
 export function parseAnimDocument(input: Uint8Array | unknown): AnimDocument {
 	const raw = decodeInput(input);
 	if (!isRecord(raw)) throw new AnimParseError('document must be an object');
@@ -310,13 +318,35 @@ export function parseAnimDocument(input: Uint8Array | unknown): AnimDocument {
 	if (!Array.isArray(raw.clips)) throw new AnimParseError('clips must be an array');
 	const view = parseView(raw.view);
 	const canvas = parseCanvas(raw.canvas) ?? { ...DEFAULT_ANIM_CANVAS };
+	const id = optionalId(raw.id);
+	const createdAt = optionalCreatedAt(raw.createdAt);
 	return {
 		schemaVersion: 1,
+		...(id ? { id } : {}),
+		...(createdAt !== undefined ? { createdAt } : {}),
 		durationMs: finiteNumber(raw.durationMs, 'durationMs'),
 		clips: raw.clips.map((clip, i) => parseClip(clip, i)),
 		canvas,
 		...(view ? { view } : {})
 	};
+}
+
+function mintDocId(): string {
+	if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+		return crypto.randomUUID();
+	}
+	return `anim-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+/**
+ * Adopt travelling identity, or mint uuid + `Date.now()` when either field is
+ * missing. Returns a new object when it mints; does not mutate `doc`.
+ */
+export function ensureAnimIdentity(doc: AnimDocument): AnimDocument {
+	const id = optionalId(doc.id) ?? mintDocId();
+	const createdAt = optionalCreatedAt(doc.createdAt) ?? Date.now();
+	if (doc.id === id && doc.createdAt === createdAt) return doc;
+	return { ...doc, id, createdAt };
 }
 
 function persistFragment(fragment: SketchFragment): SketchFragment {
@@ -452,6 +482,8 @@ export function serializeAnimDocument(doc: AnimDocument): string {
 	const clean = parseAnimDocument(doc);
 	return JSON.stringify({
 		schemaVersion: 1 as const,
+		...(clean.id ? { id: clean.id } : {}),
+		...(clean.createdAt !== undefined ? { createdAt: clean.createdAt } : {}),
 		durationMs: clean.durationMs,
 		clips: clean.clips.map(persistClip),
 		canvas: clean.canvas,

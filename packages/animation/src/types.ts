@@ -158,6 +158,10 @@ export const DEFAULT_ANIM_CANVAS: AnimCanvas = { w: 1920, h: 1080 };
 
 export type AnimDocument = {
 	schemaVersion: 1;
+	/** Travelling document identity. Never a VFS node id. */
+	id?: string;
+	/** Epoch ms. Travels with `id`; never a VFS `createdAt`. */
+	createdAt?: number;
 	durationMs: number;
 	clips: AnimClip[];
 	canvas?: AnimCanvas;
