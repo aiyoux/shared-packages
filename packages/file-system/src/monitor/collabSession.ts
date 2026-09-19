@@ -607,6 +607,28 @@ export function createMonitorCollabSession(
 			return mux.clientId ?? opts.clientId;
 		},
 		ready,
+		/**
+		 * DISPATCH, not pass-through — the one adapter where that is true.
+		 *
+		 * `sendOps` below POSTs, keeps its own `baseSeq` from `doc.localSeq`,
+		 * emits the ack itself and recovers from a nack. A frame's own `seq` and
+		 * `baseSeq` were assigned by whoever built it and mean nothing here, so
+		 * forwarding one verbatim would submit ops against a base this session
+		 * never agreed to.
+		 */
+		sendFrame(frame) {
+			if (doc.closed) return;
+			if (frame.kind === 'ops') {
+				void adapter.sendOps(frame.ops, frame.clientOpId, frame.baseSeq);
+				return;
+			}
+			if (frame.kind === 'presence') {
+				adapter.sendPresence(frame.state);
+				return;
+			}
+			// A replica may not snapshot, and every other kind is something the
+			// server originates. Dropping is right: there is nowhere to put it.
+		},
 		async sendOps(ops, clientOpId, _baseSeq) {
 			if (doc.closed) return;
 			const run = async () => {

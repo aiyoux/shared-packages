@@ -61,6 +61,23 @@ export interface CollabSession {
 	/** This client's max understood (capability). */
 	readonly schemaVersion: number;
 	readonly ready: Promise<void>;
+	/**
+	 * Put a frame on this transport as it stands.
+	 *
+	 * The frame-uniform path, and the reason it exists: a RELAY has to forward
+	 * what arrived on one transport to another without knowing what it is.
+	 * Every adapter already had this privately — `tabCollab`, `hubClient` and
+	 * `cmCollab` all declared their own `sendFrame` and the runtime reached it
+	 * through a structural cast — so this hoists an existing contract rather
+	 * than inventing one.
+	 *
+	 * Not a replacement for the typed senders below. The monitor adapter cannot
+	 * pass a frame through: its `sendOps` POSTs, tracks its own `baseSeq`, and
+	 * recovers from a nack, so a frame's own `baseSeq` is meaningless to it. It
+	 * implements this by DISPATCHING to the typed methods, which is correct and
+	 * is why they stay.
+	 */
+	sendFrame(frame: CollabFrame): void;
 	sendOps(ops: Op[], clientOpId: string, baseSeq: number): Promise<void>;
 	sendPresence(state: AwarenessState | null): void;
 	/**
@@ -246,6 +263,10 @@ export function createLoopbackCollabSession(opts: CollabSessionOpts): CollabSess
 		clientId: opts.clientId,
 		schemaVersion: opts.schemaVersion,
 		ready: Promise.resolve(),
+		sendFrame(frame) {
+			if (closed) return;
+			emit(handlers, frame);
+		},
 		async sendOps(ops, clientOpId, baseSeq) {
 			if (closed) return;
 			emit(handlers, {
