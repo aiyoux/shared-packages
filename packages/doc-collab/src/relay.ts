@@ -34,16 +34,21 @@ export type RelaySession<F> = {
 export function createRelaySession<F>(opts: {
 	members: RelayMember<F>[];
 	/**
-	 * A replica gateway is a pipe: what arrives on one transport is forwarded to
-	 * the others as it stands.
+	 * Whether an inbound frame should be passed straight on to the other
+	 * transports.
 	 *
-	 * A sequencer must NOT forward, because an inbound frame is unnumbered and
-	 * forwarding it would put an unorderable frame on the far side. It applies,
-	 * numbers, and re-sends through `send`, which reaches every member anyway.
+	 * Per FRAME, not per role, and the difference is not academic. A replica
+	 * gateway is a pipe and forwards everything. A sequencer must not forward
+	 * anything it is going to NUMBER — an inbound document frame is unordered
+	 * until it applies it, and it re-sends the stamped version through `send`,
+	 * which reaches every member anyway. But traffic it will never number —
+	 * presence, cursors, anything out of band — has no other way across, and a
+	 * blanket "a sequencer does not forward" silently strands it: the guest's
+	 * cursor and peer dot simply never reach the sibling tab.
 	 */
-	role: 'sequencer' | 'replica';
+	forward: (frame: F) => boolean;
 }): RelaySession<F> {
-	const { members, role } = opts;
+	const { members, forward } = opts;
 	const handlers = new Set<(frame: F) => void>();
 	const unsubscribes: Array<() => void> = [];
 	let closed = false;
@@ -53,7 +58,7 @@ export function createRelaySession<F>(opts: {
 			member.subscribe((frame) => {
 				if (closed) return;
 				for (const handler of [...handlers]) handler(frame);
-				if (role === 'sequencer') return;
+				if (!forward(frame)) return;
 				// Never back onto the transport it arrived on. Two gateways with
 				// two different guests form a tree, not a cycle, so this rule is
 				// sufficient and not merely necessary.

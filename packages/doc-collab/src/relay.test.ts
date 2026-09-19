@@ -23,7 +23,7 @@ describe('a replica gateway', () => {
 	it('forwards a frame to the other transport, never back onto its own', () => {
 		const bus = member('bus');
 		const peer = member('peer');
-		createRelaySession({ members: [bus, peer], role: 'replica' });
+		createRelaySession({ members: [bus, peer], forward: () => true });
 
 		bus.emit({ body: 'from-a-sibling-tab' });
 		expect(peer.sent).toEqual([{ body: 'from-a-sibling-tab' }]);
@@ -37,7 +37,7 @@ describe('a replica gateway', () => {
 	it('shows the local runtime everything, whichever transport it came from', () => {
 		const bus = member('bus');
 		const peer = member('peer');
-		const session = createRelaySession({ members: [bus, peer], role: 'replica' });
+		const session = createRelaySession({ members: [bus, peer], forward: () => true });
 		const seen: Frame[] = [];
 		session.subscribe((f) => void seen.push(f));
 
@@ -49,17 +49,17 @@ describe('a replica gateway', () => {
 	it('sends a local frame to every transport', () => {
 		const bus = member('bus');
 		const peer = member('peer');
-		createRelaySession({ members: [bus, peer], role: 'replica' }).send({ body: 'mine' });
+		createRelaySession({ members: [bus, peer], forward: () => true }).send({ body: 'mine' });
 		expect(bus.sent).toEqual([{ body: 'mine' }]);
 		expect(peer.sent).toEqual([{ body: 'mine' }]);
 	});
 });
 
 describe('a sequencer', () => {
-	it('does NOT forward, because an inbound frame is not numbered yet', () => {
+	it('does NOT forward what it will number, but DOES forward what it will not', () => {
 		const bus = member('bus');
 		const peer = member('peer');
-		const session = createRelaySession({ members: [bus, peer], role: 'sequencer' });
+		const session = createRelaySession({ members: [bus, peer], forward: (f) => f.body === 'out-of-band' });
 		const seen: Frame[] = [];
 		session.subscribe((f) => void seen.push(f));
 
@@ -69,10 +69,16 @@ describe('a sequencer', () => {
 		expect(seen).toEqual([{ body: 'unstamped' }]);
 		expect(peer.sent).toEqual([]);
 
+		// Out-of-band traffic — presence — has no stamped re-send to carry it,
+		// so a blanket "a sequencer does not forward" would strand the guest's
+		// cursor before it ever reached the sibling tab.
+		bus.emit({ body: 'out-of-band' });
+		expect(peer.sent).toEqual([{ body: 'out-of-band' }]);
+
 		// The stamped re-send is an ordinary local send and reaches everyone,
 		// including the transport the original arrived on.
 		session.send({ body: 'stamped' });
-		expect(peer.sent).toEqual([{ body: 'stamped' }]);
+		expect(peer.sent).toEqual([{ body: 'out-of-band' }, { body: 'stamped' }]);
 		expect(bus.sent).toEqual([{ body: 'stamped' }]);
 	});
 });
@@ -81,7 +87,7 @@ describe('close', () => {
 	it('closes every member and goes quiet', () => {
 		const bus = member('bus');
 		const peer = member('peer');
-		const session = createRelaySession({ members: [bus, peer], role: 'replica' });
+		const session = createRelaySession({ members: [bus, peer], forward: () => true });
 		const seen: Frame[] = [];
 		session.subscribe((f) => void seen.push(f));
 
