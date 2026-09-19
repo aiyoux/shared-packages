@@ -182,7 +182,7 @@
 		<div class="fe-thumb-fallback">
 			<FeIcon name={fallbackIcon} size={Math.min(maxDim * 0.4, 32)} />
 		</div>
-	{:else if kind && enabled && !shouldLoad}
+	{:else if kind && kind !== 'text' && kind !== 'audio' && enabled && !shouldLoad}
 		<button
 			type="button"
 			class="fe-thumb-load"

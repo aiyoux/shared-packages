@@ -5,6 +5,17 @@
  * optional. When set it is stamped on send and inbound must carry the same
  * `doc` — that is how N documents share one link. A session with no `doc`
  * is the legacy one-document link and still accepts any inbound doc (or none).
+ *
+ * ⚠️ A NAMED session drops an untagged inbound frame, and that is a deliberate
+ * break with peers built before `doc` existed. It cannot be otherwise: once two
+ * documents of one app share a link, an untagged frame is ambiguous and there
+ * is no correct session to give it to. The plan's earlier rule — "absent `doc`
+ * must keep meaning the one document this link was opened for" — is retired,
+ * because it is incompatible with the muxing it was written alongside.
+ *
+ * What is NOT acceptable is dropping it silently, which is how "paired and
+ * moving no data" happens. `onUnaddressed` fires once per session so the caller
+ * can surface "this peer is too old to share a link".
  * Chunking is injected — Documents does not chunk; Creative does.
  *
  * Envelope `v` is 1 and stays 1. A missing or non-string `frame.kind` is a
@@ -42,6 +53,13 @@ export type CmEnvelopeSessionOpts<F> = {
 	chunk?: CmEnvelopeChunker<F>;
 	/** Fires for every accepted complete frame, including those queued before subscribe. */
 	onAccept?: (frame: F) => void;
+	/**
+	 * Fires ONCE when a named session drops an inbound frame carrying no `doc`.
+	 *
+	 * That means the far side predates doc addressing, so nothing it sends will
+	 * ever be accepted here. Silence would look exactly like a quiet link.
+	 */
+	onUnaddressed?: () => void;
 };
 
 function isFrame(value: unknown): value is { kind: string } {
@@ -49,10 +67,11 @@ function isFrame(value: unknown): value is { kind: string } {
 }
 
 export function createCmEnvelopeSession<F>(opts: CmEnvelopeSessionOpts<F>): CmEnvelopeSession<F> {
-	const { sendKb, onKb, app, doc, chunk, onAccept } = opts;
+	const { sendKb, onKb, app, doc, chunk, onAccept, onUnaddressed } = opts;
 	const handlers = new Set<(frame: F) => void>();
 	const queued: F[] = [];
 	let closed = false;
+	let warnedUnaddressed = false;
 
 	function emit(frame: F) {
 		if (handlers.size === 0) {
@@ -79,7 +98,15 @@ export function createCmEnvelopeSession<F>(opts: CmEnvelopeSessionOpts<F>): CmEn
 		if (closed) return;
 		if (!msg || typeof msg !== 'object') return;
 		if ((msg.app ?? DEFAULT_COLLAB_APP) !== app) return;
-		if (doc !== undefined && (msg.doc ?? null) !== doc) return;
+		if (doc !== undefined && (msg.doc ?? null) !== doc) {
+			// Untagged from a peer that predates doc addressing: report once, so
+			// "nothing arrives" is diagnosable rather than mysterious.
+			if (msg.doc === undefined && !warnedUnaddressed) {
+				warnedUnaddressed = true;
+				onUnaddressed?.();
+			}
+			return;
+		}
 		if (!isFrame(msg.frame)) return;
 		if (chunk) {
 			const complete = chunk.push(msg.frame);

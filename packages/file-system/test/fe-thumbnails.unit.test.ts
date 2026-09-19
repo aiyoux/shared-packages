@@ -18,6 +18,7 @@ import {
 	canQuickEditRaster,
 	coerceMediaBlob,
 	getPreviewKind,
+	hasRasterThumbnail,
 	generateImageThumbnail,
 	decodeTextPreview
 } from '../src/ui/feThumbnails.ts';
@@ -48,6 +49,14 @@ describe('getPreviewKind', () => {
 		assert.equal(getPreviewKind(file({ name: 'x', fileType: 'text' })), 'text');
 		assert.equal(getPreviewKind(file({ name: 'x', contentType: 'text/markdown' })), 'text');
 		assert.equal(getPreviewKind({ id: 'f', kind: 'folder', name: 'dir', parentId: null }), null);
+	});
+
+	it('does not raster-thumb text or audio', () => {
+		assert.equal(hasRasterThumbnail('text'), false);
+		assert.equal(hasRasterThumbnail('audio'), false);
+		assert.equal(hasRasterThumbnail('image'), true);
+		assert.equal(hasRasterThumbnail('pdf'), true);
+		assert.equal(hasRasterThumbnail(null), false);
 	});
 });
 

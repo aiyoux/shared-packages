@@ -117,7 +117,12 @@
 	import FeTextPreview from './FeTextPreview.svelte';
 	import FeTreeView from './FeTreeView.svelte';
 	import FeFloatingPreview from './FeFloatingPreview.svelte';
-	import { canQuickConvertSvg, canQuickEditRaster, getPreviewKind } from './feThumbnails.js';
+	import {
+		canQuickConvertSvg,
+		canQuickEditRaster,
+		getPreviewKind,
+		hasRasterThumbnail
+	} from './feThumbnails.js';
 	import { classifyFolder, detectProject, findProjectRoot, type FolderMark } from './detectProject.js';
 	import FeConfirmDialog from './FeConfirmDialog.svelte';
 	import {
@@ -3890,6 +3895,7 @@
 					dndZone === 'into' &&
 					n.kind === 'folder'}
 				{@const previewKind = !row.placeholder && showPreview ? getPreviewKind(n) : null}
+				{@const rasterThumb = hasRasterThumbnail(previewKind)}
 				<!-- svelte-ignore a11y_click_events_have_key_events -->
 				<!-- svelte-ignore a11y_no_static_element_interactions -->
 				<div
@@ -3946,7 +3952,7 @@
 				>
 					{#if viewMode === 'icons'}
 						<span class="fe-row-icon-thumb">
-							{#if previewKind}
+							{#if rasterThumb}
 								<FeThumbnail entry={n} {driver} maxDim={120} enabled={showPreview} />
 							{:else}
 								<span class="fe-row-icon-fallback">
@@ -3962,7 +3968,7 @@
 					{:else if viewMode === 'detailed'}
 						<span class="fe-row-main">
 							<span class="fe-icon">
-								{#if previewKind}
+								{#if rasterThumb}
 									<FeThumbnail entry={n} {driver} maxDim={32} enabled={showPreview} />
 								{:else}
 									<FeIcon name={entryIcon(n)} class={entryMarkClass(n)} size={16} />
@@ -3983,7 +3989,7 @@
 					{:else}
 						<span class="fe-row-main">
 							<span class="fe-icon">
-								{#if previewKind}
+								{#if rasterThumb}
 									<FeThumbnail entry={n} {driver} maxDim={32} enabled={showPreview} />
 								{:else}
 									<FeIcon name={entryIcon(n)} class={entryMarkClass(n)} size={16} />

@@ -88,6 +88,11 @@ export function canQuickConvertSvg(entry: ExplorerEntry): boolean {
 	return ext(entry.name) !== '.svg';
 }
 
+/** List thumbs that load pixels. Text/audio use an icon so a click selects the row. */
+export function hasRasterThumbnail(kind: PreviewKind | null): boolean {
+	return kind === 'image' || kind === 'video' || kind === 'pdf';
+}
+
 /** Icon name for a preview kind (used as fallback when no thumbnail). */
 export function previewKindIcon(kind: PreviewKind): 'image' | 'film' | 'music' | 'file-text' {
 	if (kind === 'image') return 'image';

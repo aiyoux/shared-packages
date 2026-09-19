@@ -109,6 +109,29 @@ describe('FeThumbnail', () => {
 		expect(box.style.getPropertyValue('--fe-thumb-max')).toBe('16px');
 	});
 
+	it('does not put a load-preview button on a text file', async () => {
+		const driver: ExplorerDriver = {
+			id: 'local',
+			capabilities: caps,
+			ready: async () => {},
+			list: async () => ({ entries: [], truncated: false }),
+			getPath: async () => [],
+			delete: async () => {},
+			readBlob: async () => new Blob(['hi'], { type: 'text/plain' })
+		};
+		const entry: ExplorerEntry = {
+			id: 'note-1',
+			kind: 'file',
+			name: 'note.txt',
+			parentId: null,
+			fileType: 'text',
+			contentType: 'text/plain'
+		};
+		render(FeThumbnail, { props: { entry, driver, maxDim: 32, enabled: true } });
+		expect(document.querySelector('[data-testid="fe-thumb-load"]')).toBeNull();
+		expect(document.querySelector('.fe-thumb-img')).toBeNull();
+	});
+
 	it('does not auto-download a B2 image; click loads it', async () => {
 		let downloads = 0;
 		const driver: ExplorerDriver = {

@@ -236,3 +236,51 @@ describe('createCmEnvelopeSession', () => {
 		expect(reset).toEqual(['reset']);
 	});
 });
+
+describe('a peer that predates doc addressing', () => {
+	it('reports the drop ONCE instead of going quiet', () => {
+		// The failure this prevents: a named session silently ignores everything
+		// an older peer sends, which looks identical to a link with nobody on it.
+		const seen: unknown[] = [];
+		let unaddressed = 0;
+		let deliver: (m: CmEnvelope) => void = () => {};
+		const session = createCmEnvelopeSession<{ kind: string }>({
+			sendKb: () => {},
+			onKb: (h) => {
+				deliver = h;
+			},
+			app: 'sketch',
+			doc: 'doc-1',
+			onUnaddressed: () => {
+				unaddressed += 1;
+			}
+		});
+		session.subscribe((f) => seen.push(f));
+
+		deliver({ type: 'kb-collab', v: 1, app: 'sketch', frame: { kind: 'hello' } });
+		deliver({ type: 'kb-collab', v: 1, app: 'sketch', frame: { kind: 'ops' } });
+
+		expect(seen).toEqual([]);
+		expect(unaddressed, 'once per session, not once per frame').toBe(1);
+	});
+
+	it('does not fire for a frame addressed to a DIFFERENT doc', () => {
+		// That is ordinary muxing, not an old peer, and reporting it would make
+		// the signal useless on a link carrying several documents.
+		let unaddressed = 0;
+		let deliver: (m: CmEnvelope) => void = () => {};
+		createCmEnvelopeSession<{ kind: string }>({
+			sendKb: () => {},
+			onKb: (h) => {
+				deliver = h;
+			},
+			app: 'sketch',
+			doc: 'doc-1',
+			onUnaddressed: () => {
+				unaddressed += 1;
+			}
+		});
+		deliver({ type: 'kb-collab', v: 1, app: 'sketch', doc: 'doc-2', frame: { kind: 'ops' } });
+		expect(unaddressed).toBe(0);
+	});
+});
