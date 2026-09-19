@@ -100,7 +100,7 @@ describe('createCmEnvelopeSession', () => {
 		]);
 	});
 
-	it('filters inbound on an optional doc and still accepts absent-doc', () => {
+	it('a named doc session only accepts that doc (mux on one link)', () => {
 		const wire = mockWire();
 		const session = createCmEnvelopeSession<Frame>({
 			sendKb: (m) => wire.sendKb(m),
@@ -113,7 +113,15 @@ describe('createCmEnvelopeSession', () => {
 		wire.deliver({ app: 'sketch', frame: { kind: 'hello' } });
 		wire.deliver({ app: 'sketch', doc: 'doc-1', frame: { kind: 'ops' } });
 		wire.deliver({ app: 'sketch', doc: 'other', frame: { kind: 'snapshot' } });
-		expect(seen.map((f) => f.kind)).toEqual(['hello', 'ops']);
+		expect(seen.map((f) => f.kind)).toEqual(['ops']);
+		session.send({ kind: 'strokes' });
+		expect(wire.sent[0]).toEqual({
+			type: 'kb-collab',
+			v: 1,
+			app: 'sketch',
+			doc: 'doc-1',
+			frame: { kind: 'strokes' }
+		});
 	});
 
 	it('does not filter on doc when the session did not configure one', () => {

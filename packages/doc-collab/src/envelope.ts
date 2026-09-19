@@ -2,9 +2,10 @@
  * Mux a collab session on the shared `'kb-collab'` CM envelope.
  *
  * `app` is the tenant; absent on the wire means Documents (`kb`). `doc` is
- * optional: when set it is stamped on send and inbound with a different doc
- * is ignored; inbound with no doc still matches (the legacy one-document
- * link). Chunking is injected — Documents does not chunk; Creative does.
+ * optional. When set it is stamped on send and inbound must carry the same
+ * `doc` — that is how N documents share one link. A session with no `doc`
+ * is the legacy one-document link and still accepts any inbound doc (or none).
+ * Chunking is injected — Documents does not chunk; Creative does.
  *
  * Envelope `v` is 1 and stays 1. A missing or non-string `frame.kind` is a
  * no-op, never a throw; an unknown string kind is passed through.
@@ -78,7 +79,7 @@ export function createCmEnvelopeSession<F>(opts: CmEnvelopeSessionOpts<F>): CmEn
 		if (closed) return;
 		if (!msg || typeof msg !== 'object') return;
 		if ((msg.app ?? DEFAULT_COLLAB_APP) !== app) return;
-		if (doc !== undefined && msg.doc !== undefined && msg.doc !== doc) return;
+		if (doc !== undefined && (msg.doc ?? null) !== doc) return;
 		if (!isFrame(msg.frame)) return;
 		if (chunk) {
 			const complete = chunk.push(msg.frame);
