@@ -22,9 +22,29 @@ export type EraseDelta = {
     afterLen: number;
     /** Removed originals, `i` indexing the BEFORE array. */
     removed: { i: number; p: PathData }[];
-    /** Added pieces, `i` indexing the AFTER array. */
-    added: { i: number; p: PathData }[];
+    /**
+     * Added pieces, `i` indexing the AFTER array.
+     * `from` is the BEFORE index of the original this fragment came from.
+     * Optional so older peers can omit it; a concurrent-erase transform must
+     * then refuse rather than guess the association.
+     */
+    added: { i: number; p: PathData; from?: number }[];
 };
+
+/** Collector the eraser fills while splitting. `addedFrom` is parallel to
+ *  `added` — the original each fragment came from — so `buildEraseDelta` can
+ *  stamp `from` without reconstructing the association. */
+export type EraseSync = {
+    removed: PathData[];
+    added: PathData[];
+    addedFrom?: PathData[];
+};
+
+export function recordErasePiece(sync: EraseSync | undefined, original: PathData, piece: PathData): void {
+    if (!sync) return;
+    sync.added.push(piece);
+    (sync.addedFrom ??= []).push(original);
+}
 
 /** Build the diff from a pass's input, output and `sync` collector.
  *
@@ -37,7 +57,7 @@ export type EraseDelta = {
 export const buildEraseDelta = (
     before: PathData[],
     after: PathData[],
-    sync: { removed: PathData[]; added: PathData[] }
+    sync: EraseSync
 ): EraseDelta | null => {
     const beforeIdx = new Map<PathData, number>();
     for (let i = 0; i < before.length; i++) beforeIdx.set(before[i], i);
@@ -52,13 +72,16 @@ export const buildEraseDelta = (
         seenRemoved.add(i);
         removed.push({ i, p });
     }
-    const added: { i: number; p: PathData }[] = [];
+    const added: { i: number; p: PathData; from?: number }[] = [];
     const seenAdded = new Set<number>();
-    for (const p of sync.added) {
+    for (let k = 0; k < sync.added.length; k++) {
+        const p = sync.added[k]!;
         const i = afterIdx.get(p);
         if (i === undefined || seenAdded.has(i)) return null;
         seenAdded.add(i);
-        added.push({ i, p });
+        const origin = sync.addedFrom?.[k];
+        const from = origin !== undefined ? beforeIdx.get(origin) : undefined;
+        added.push(from !== undefined ? { i, p, from } : { i, p });
     }
     // The paths neither removed nor added are the untouched carry-throughs, and
     // both sides must agree on how many there are. A mismatch means the diff

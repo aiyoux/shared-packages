@@ -16,7 +16,7 @@ test('delta round-trips a synthetic split in both directions', () => {
     // 'b' is replaced by two pieces; 'a' and 'c' carry through by identity.
     const b1 = p('b1', 'B1'), b2 = p('b2', 'B2');
     const after = [before[0], b1, b2, before[2]];
-    const sync = { removed: [before[1]], added: [b1, b2] };
+    const sync = { removed: [before[1]], added: [b1, b2], addedFrom: [before[1], before[1]] };
 
     const delta = buildEraseDelta(before, after, sync);
     assert.ok(delta, 'delta should be derivable');
@@ -24,6 +24,7 @@ test('delta round-trips a synthetic split in both directions', () => {
     assert.equal(delta.afterLen, 4);
     assert.deepEqual(delta.removed.map(r => r.i), [1]);
     assert.deepEqual(delta.added.map(a => a.i), [1, 2]);
+    assert.deepEqual(delta.added.map(a => a.from), [1, 1], 'fragments record the original they came from');
 
     // after -> before (undo)
     const undone = rebuildFromEraseDelta(after, delta.beforeLen, delta.added, delta.removed);
@@ -54,6 +55,7 @@ test('delta keys off identity, not id (translate-strip emits a new object with t
     assert.ok(delta, 'identity-keyed diff must see this as a real change');
     assert.deepEqual(delta.removed.map(r => r.i), [0]);
     assert.deepEqual(delta.added.map(a => a.i), [0]);
+    assert.equal(delta.added[0].from, undefined, 'origin is omitted when it was not recorded');
     // An id-keyed diff would have produced an empty delta and lost the edit.
     const undone = rebuildFromEraseDelta(after, delta.beforeLen, delta.added, delta.removed);
     assert.equal(undone[0], original);
@@ -93,6 +95,14 @@ test('delta round-trips a REAL erase pass exactly', () => {
 
     const delta = buildEraseDelta(before, after, sync);
     assert.ok(delta, 'delta should be derivable from a real pass');
+    assert.ok(
+        delta.added.every(a => Number.isInteger(a.from)),
+        'a real pass must stamp origin on every fragment'
+    );
+    assert.ok(
+        delta.added.every(a => delta.removed.some(r => r.i === a.from)),
+        'each fragment origin must name one of the removed originals'
+    );
 
     const undone = rebuildFromEraseDelta(after, delta.beforeLen, delta.added, delta.removed);
     assert.ok(undone, 'undo rebuild should succeed');

@@ -1,4 +1,5 @@
 import type { PathData } from './types.ts';
+import { recordErasePiece, type EraseSync } from './eraseDelta.ts';
 import { parsePath, parseTranslate, sampleArc } from './path.ts';
 import { type MultiPolygon, type Polygon, type Ring } from 'polygon-clipping';
 import { difference, intersection, union } from './clipping.ts';
@@ -2957,7 +2958,7 @@ export const splitOnePathByEraser = (
     ctx: EraserCtx,
     isLayerLocked: (layerId?: string) => boolean = () => false,
     candidates?: Set<string>,
-    sync?: { removed: PathData[]; added: PathData[] }
+    sync?: EraseSync
 ): PathData[] => {
     const { sampledEraserPoints, eraserBounds, eraserSegments, eraserPoints, radius } = ctx;
 
@@ -3092,7 +3093,7 @@ export const splitOnePathByEraser = (
                     faded: true,
                     ...(ctx.fade.sweepId != null ? { fadeSweepId: ctx.fade.sweepId } : {}),
                 };
-                if (sync) sync.added.push(worn);
+                recordErasePiece(sync, path, worn);
                 eraseStats.piecesEmitted += 1;
                 return [worn];
             }
@@ -3147,7 +3148,7 @@ export const splitOnePathByEraser = (
             const out = [...outside, ...dimmed];
             if (sync) {
                 sync.removed.push(path);
-                for (const s of out) sync.added.push(s);
+                for (const s of out) recordErasePiece(sync, path, s);
             }
             eraseStats.piecesEmitted += out.length;
             return out;
@@ -3204,7 +3205,7 @@ export const splitOnePathByEraser = (
             eraseStats.piecesEmitted += out.length;
             if (sync) {
                 sync.removed.push(path);
-                for (const s of out) sync.added.push(s);
+                for (const s of out) recordErasePiece(sync, path, s);
             }
         } else {
             // polygon-clipping totally bailed on this outline (every piece was an
@@ -3225,7 +3226,7 @@ export const splitOnePathByEraser = (
             // so nothing changed and no sync is needed.
             if (sync && hasTranslate && !wideOpenStroke) {
                 sync.removed.push(path);
-                sync.added.push(splitPathMetadata);
+                recordErasePiece(sync, path, splitPathMetadata);
             }
         }
         if (isClipFreehand) {
@@ -3256,7 +3257,7 @@ export const splitOnePathByEraser = (
         if (sync) sync.removed.push(path);
         if (step === null) return [];
         const worn = { ...path, id: generateId(), fadeOrigin: path.fadeOrigin ?? path.id, opacity: step.opacity, faded: true, ...(fade.sweepId != null ? { fadeSweepId: fade.sweepId } : {}), transform: hasTranslate ? undefined : path.transform, d: hasTranslate ? flatCmdsToD(flatCmds) : path.d, ...(hasTranslate && path.clipRect ? { clipRect: rebaseClipRect(path, tx, ty) } : {}) };
-        if (sync) sync.added.push(worn);
+        recordErasePiece(sync, path, worn);
         eraseStats.piecesEmitted += 1;
         return [worn];
     }
@@ -3296,7 +3297,7 @@ export const splitOnePathByEraser = (
             ...(opacity !== undefined ? { opacity, faded: true, ...(fade?.sweepId != null ? { fadeSweepId: fade.sweepId } : {}) } : {}),
         };
         pieces.push(piece);
-        if (sync) sync.added.push(piece);
+        recordErasePiece(sync, path, piece);
     };
 
     if (fade) {
@@ -3736,7 +3737,7 @@ export function splitPathsByEraser(
         candidates?: Set<string>;
         /** When provided, records the originals removed and pieces added this pass
          *  so the caller can patch its spatial index without a full rebuild. */
-        sync?: { removed: PathData[]; added: PathData[] };
+        sync?: EraseSync;
         /** Fade instead of cut: ink under the eraser is kept at a reduced
          *  opacity, so repeated passes wear it away like a real rubber. */
         fade?: FadeOptions;
@@ -3763,10 +3764,18 @@ export function splitPathsByEraser(
         const survived = new Set(result);
         for (const p of currentPaths) if (!survived.has(p)) sync.removed.push(p);
         const original = new Set(currentPaths);
-        for (const p of result) if (!original.has(p)) sync.added.push(p);
+        const sole = sync.removed.length === 1 ? sync.removed[0] : undefined;
+        for (const p of result) {
+            if (original.has(p)) continue;
+            if (sole) recordErasePiece(sync, sole, p);
+            // Several originals went away: guessing which fragment belongs to
+            // which would silently reorder ink. Leave `from` unset so a
+            // concurrent-erase transform refuses rather than places them.
+            else sync.added.push(p);
+        }
     };
 
-    const runPass = (paths: PathData[], points: Point[], passSync?: { removed: PathData[]; added: PathData[] }) => {
+    const runPass = (paths: PathData[], points: Point[], passSync?: EraseSync) => {
         // Move-shared eraser geometry: one resample/bounds/segments (and at most one
         // getStroke, lazily) per call, reused across every path via splitOnePathByEraser.
         const ctx = buildEraserCtx(points, radius, opts?.fade);
