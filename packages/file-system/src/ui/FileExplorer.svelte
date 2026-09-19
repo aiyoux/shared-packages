@@ -2513,7 +2513,12 @@
 	}
 
 	function isRowControl(t: EventTarget | null): boolean {
-		return t instanceof Element && !!t.closest('input, button, a, [contenteditable="true"]');
+		return (
+			t instanceof Element &&
+			!!t.closest(
+				'input, button, a, [contenteditable="true"], [data-testid="fe-presence-dot"], [data-testid="fe-presence-dots"]'
+			)
+		);
 	}
 
 	function toggleSelect(id: string, e?: Event) {
@@ -4307,7 +4312,21 @@
 {#snippet presenceDots(fileId: string)}
 	{@const marks = presenceByFileId?.get(fileId)}
 	{#if marks?.length}
-		<span class="fe-presence-dots" data-testid="fe-presence-dots" data-no-drag>
+		<!-- svelte-ignore a11y_click_events_have_key_events -->
+		<!-- svelte-ignore a11y_no_static_element_interactions -->
+		<span
+			class="fe-presence-dots"
+			data-testid="fe-presence-dots"
+			data-no-drag
+			onpointerdown={(e) => e.stopPropagation()}
+			onpointerup={(e) => e.stopPropagation()}
+			onclick={(e) => {
+				e.stopPropagation();
+				e.preventDefault();
+				const entry = nodes.find((n) => n.id === fileId);
+				if (entry && onOpen && (mode === 'open' || mode === 'manage')) void emitOpen(entry);
+			}}
+		>
 			{#each marks as m (m.clientId)}
 				<span
 					class="fe-presence-dot"
@@ -5448,12 +5467,15 @@
 		flex: 0 0 auto;
 		margin-left: 0.35rem;
 		vertical-align: middle;
+		pointer-events: auto;
+		cursor: pointer;
 	}
 	.fe-presence-dot {
 		width: 0.5rem;
 		height: 0.5rem;
 		border-radius: 50%;
 		box-shadow: 0 0 0 1px color-mix(in srgb, #000 25%, transparent);
+		pointer-events: auto;
 	}
 	.fe-empty {
 		padding: 24px;
