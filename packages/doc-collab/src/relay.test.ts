@@ -102,3 +102,48 @@ describe('close', () => {
 		expect(bus.sent).toEqual([]);
 	});
 });
+
+describe('a frame that arrives before the runtime subscribes', () => {
+	it('is replayed, not dropped', () => {
+		// The relay subscribes to its members in its own constructor; the
+		// runtime subscribes to the relay only after that returns. Both real
+		// adapters replay their queued frames to their first subscriber, so a
+		// join snapshot lands in exactly this window — and dropping it leaves a
+		// peer connected to an empty document with no error anywhere.
+		const bus = member('bus');
+		const peer = member('peer');
+		const session = createRelaySession({ members: [bus, peer], forward: () => true });
+
+		peer.emit({ body: 'join-snapshot' });
+
+		const seen: Frame[] = [];
+		session.subscribe((f) => void seen.push(f));
+		expect(seen).toEqual([{ body: 'join-snapshot' }]);
+	});
+
+	it('replays in arrival order, once', () => {
+		const bus = member('bus');
+		const session = createRelaySession({ members: [bus], forward: () => true });
+		bus.emit({ body: 'first' });
+		bus.emit({ body: 'second' });
+
+		const a: Frame[] = [];
+		session.subscribe((f) => void a.push(f));
+		expect(a.map((f) => f.body)).toEqual(['first', 'second']);
+
+		// Drained, so a second subscriber does not get the backlog again.
+		const b: Frame[] = [];
+		session.subscribe((f) => void b.push(f));
+		expect(b).toEqual([]);
+	});
+
+	it('still forwards a queued frame to the other transport immediately', () => {
+		// Forwarding is not gated on anyone listening locally: the sibling tab
+		// is waiting for it either way.
+		const bus = member('bus');
+		const peer = member('peer');
+		createRelaySession({ members: [bus, peer], forward: () => true });
+		bus.emit({ body: 'early' });
+		expect(peer.sent).toEqual([{ body: 'early' }]);
+	});
+});

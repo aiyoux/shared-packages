@@ -51,13 +51,26 @@ export function createRelaySession<F>(opts: {
 	const { members, forward } = opts;
 	const handlers = new Set<(frame: F) => void>();
 	const unsubscribes: Array<() => void> = [];
+	/**
+	 * Frames that arrived before anyone subscribed to the relay.
+	 *
+	 * ⚠️ Not a nicety. The relay subscribes to its members inside this
+	 * constructor, and the runtime subscribes to the RELAY only after it
+	 * returns — so there is a window with a live member and no listener. Both
+	 * the WebRTC and the BroadcastChannel adapters replay their own queued
+	 * frames to their first subscriber, which lands them in that window, and
+	 * for a joining replica the frame in flight is the join snapshot. Dropping
+	 * it leaves a peer connected to an empty document with no error anywhere.
+	 */
+	const queued: F[] = [];
 	let closed = false;
 
 	for (const member of members) {
 		unsubscribes.push(
 			member.subscribe((frame) => {
 				if (closed) return;
-				for (const handler of [...handlers]) handler(frame);
+				if (handlers.size === 0) queued.push(frame);
+				else for (const handler of [...handlers]) handler(frame);
 				if (!forward(frame)) return;
 				// Never back onto the transport it arrived on. Two gateways with
 				// two different guests form a tree, not a cycle, so this rule is
@@ -80,6 +93,9 @@ export function createRelaySession<F>(opts: {
 		},
 		subscribe(handler) {
 			handlers.add(handler);
+			if (queued.length) {
+				for (const frame of queued.splice(0)) handler(frame);
+			}
 			return () => {
 				handlers.delete(handler);
 			};
@@ -89,6 +105,7 @@ export function createRelaySession<F>(opts: {
 			closed = true;
 			for (const off of unsubscribes) off();
 			handlers.clear();
+			queued.length = 0;
 			for (const member of members) member.close();
 		}
 	};
