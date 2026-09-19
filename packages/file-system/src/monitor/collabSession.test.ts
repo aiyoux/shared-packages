@@ -458,6 +458,21 @@ describe('createMonitorCollabSession', () => {
 		session.close();
 	});
 
+	it('empty GET snapshot still emits a join snapshot from seedPage', async () => {
+		const h = createHarness();
+		h.setSnapshot(0, null);
+		const seed = paraPage('seeded');
+		const session = openSession(h, '/tmp/a/index.kb', 'page-1', seed);
+		const frames: CollabFrame[] = [];
+		session.subscribe((f) => frames.push(f));
+		await session.ready;
+		expect(frames.some((f) => f.kind === 'hello' && f.role === 'replica')).toBe(true);
+		const snap = frames.find((f) => f.kind === 'snapshot');
+		expect(snap).toMatchObject({ kind: 'snapshot', seq: 0, reason: 'join' });
+		expect(snapshotText((snap as { page: KbPage }).page)).toBe('seeded');
+		session.close();
+	});
+
 	it('GET {seq:0,page:null} still POSTs snapshot after seed + winning ops', async () => {
 		const h = createHarness();
 		h.setSnapshot(0, null);

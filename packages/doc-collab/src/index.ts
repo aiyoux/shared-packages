@@ -29,3 +29,12 @@ export {
 	type Sequencer,
 	type Submission
 } from './sequencer.js';
+export { colorForClient, MAX_PRESENCE_NAME, PRESENCE_COLORS } from './presence.js';
+export {
+	createCmEnvelopeSession,
+	DEFAULT_COLLAB_APP,
+	type CmEnvelope,
+	type CmEnvelopeChunker,
+	type CmEnvelopeSession,
+	type CmEnvelopeSessionOpts
+} from './envelope.js';

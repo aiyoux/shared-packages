@@ -13,6 +13,7 @@
 		ExplorerContext,
 		ExplorerMode,
 		ExplorerNewMenuItem,
+		ExplorerPresenceDot,
 		RemoteKind
 	} from './componentTypes.js';
 	import type { FileTypeId } from '../types.js';
@@ -270,6 +271,7 @@
 		hideSettingsGear?: boolean;
 		switcherPortal?: string;
 		layoutPortal?: string;
+		presenceByFileId?: ReadonlyMap<string, readonly ExplorerPresenceDot[]>;
 	};
 
 	let {
@@ -317,7 +319,8 @@
 		settingsPortal = '',
 		hideSettingsGear = false,
 		switcherPortal: _switcherPortal = '',
-		layoutPortal = ''
+		layoutPortal = '',
+		presenceByFileId
 	}: Props = $props();
 
 	const persistKey = $derived(instanceKey ? `${dualPaneKey}:${instanceKey}` : dualPaneKey);
@@ -2067,6 +2070,7 @@
 						{onQuickEditVideo}
 						{onQuickEditImage}
 						{onQuickConvertSvg}
+						{presenceByFileId}
 					>
 						{#snippet headerLeading()}
 							{@render paneConn(id)}
@@ -2120,6 +2124,7 @@
 						{onQuickEditVideo}
 						{onQuickEditImage}
 						{onQuickConvertSvg}
+						{presenceByFileId}
 					>
 						{#snippet headerLeading()}
 							{@render paneConn(id)}
@@ -2171,6 +2176,7 @@
 						{onQuickEditVideo}
 						{onQuickEditImage}
 						{onQuickConvertSvg}
+						{presenceByFileId}
 					>
 						{#snippet headerLeading()}
 							{@render paneConn(id)}

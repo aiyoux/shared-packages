@@ -26,6 +26,7 @@ import { VfsError, type BlobRef, type PackOpProgress, type VfsNode } from './typ
 import { descendantFiles } from './projectPack.js';
 import {
 	PROJECT_META_FILE,
+	parseProjectMeta,
 	readProjectMeta,
 	writeProjectMeta,
 	type ProjectMeta
@@ -95,6 +96,12 @@ export async function exportProjectAsFiles(
 	const root = await vfs.get(rootId);
 	const byId = await treeIndex(vfs, rootId);
 	const files = await descendantFiles(vfs, rootId);
+
+	if (preserve) {
+		// Adopt-or-mint before the zip is built, so an older project ships with
+		// an id and two imports of this archive share a room.
+		await readProjectMeta(vfs, rootId);
+	}
 
 	report({ stage: 'wiping', label: `Reading ${files.length} files…` });
 	const entries: ArchiveEntry[] = [];
@@ -344,7 +351,7 @@ async function importFiles(
 	const layoutRaw = members.find((m) => m.name === PACK_LAYOUT_FILE);
 	const metaRaw = members.find((m) => m.name === PROJECT_META_FILE);
 	const meta: ProjectMeta | null = metaRaw
-		? (JSON.parse(new TextDecoder().decode(metaRaw.data)) as ProjectMeta)
+		? parseProjectMeta(JSON.parse(new TextDecoder().decode(metaRaw.data)))
 		: null;
 
 	const root = await vfs.mkdir(parentId, nameHint ?? meta?.name ?? 'Imported project');
@@ -391,12 +398,7 @@ async function importFiles(
 		rebuiltAsBefore = true;
 	}
 
-	if (meta) {
-		await writeProjectMeta(vfs, root.id, {
-			...meta,
-			updatedAt: new Date().toISOString()
-		});
-	}
+	await stampImportedMeta(vfs, root.id, meta);
 	report({ stage: 'done', label: `Imported ${written.length} files` });
 	return {
 		rootId: root.id,
@@ -468,6 +470,7 @@ async function importBundle(
 			};
 		});
 		const written = await vfs.writeFiles(inputs, { pack: mode === 'auto' });
+		await stampImportedMeta(vfs, root.id, manifest.meta ?? null);
 		report({ stage: 'done', label: `Imported ${written.length} files` });
 		return {
 			rootId: root.id,
@@ -540,12 +543,7 @@ async function importBundle(
 	// Nodes last: a ref with no node is swept, a node with no bytes is loss.
 	for (const n of nodesToPut) await vfs.migratePutNode(n);
 
-	if (manifest.meta) {
-		await writeProjectMeta(vfs, root.id, {
-			...manifest.meta,
-			updatedAt: new Date().toISOString()
-		});
-	}
+	await stampImportedMeta(vfs, root.id, manifest.meta ?? null);
 	report({ stage: 'done', label: `Imported ${nodesToPut.length} files` });
 	return {
 		rootId: root.id,
@@ -556,6 +554,19 @@ async function importBundle(
 		idMap: pairIds(manifest.files, nodesToPut),
 		refsRebuildable: manifest.files.every((f) => typeof f.id === 'string')
 	};
+}
+
+/** Keep a travelling id when the archive has one; mint when it does not. */
+async function stampImportedMeta(
+	vfs: VfsService,
+	rootId: string,
+	meta: ProjectMeta | null | undefined
+): Promise<void> {
+	if (!meta) return;
+	await writeProjectMeta(vfs, rootId, {
+		...meta,
+		updatedAt: new Date().toISOString()
+	});
 }
 
 /**

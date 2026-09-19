@@ -127,7 +127,12 @@
 		permanentDeleteCopy,
 		type FeConfirmCopy
 	} from './feConfirm.js';
-	import type { ExplorerMode, ExplorerContext, ExplorerNewMenuItem } from './componentTypes.js';
+	import type {
+		ExplorerMode,
+		ExplorerContext,
+		ExplorerNewMenuItem,
+		ExplorerPresenceDot
+	} from './componentTypes.js';
 
 	interface Props {
 		mode?: ExplorerMode;
@@ -223,6 +228,8 @@
 			},
 			destParentId: string | null
 		) => Promise<void>;
+		/** Who is in which file — Documents `placePresence` marks keyed by fileId. */
+		presenceByFileId?: ReadonlyMap<string, readonly ExplorerPresenceDot[]>;
 	}
 
 	let {
@@ -262,7 +269,8 @@
 		toolbarExtra,
 		headerLeading,
 		isTarget = false,
-		onCopyAcrossFromClipboard
+		onCopyAcrossFromClipboard,
+		presenceByFileId
 	}: Props = $props();
 
 	// Resolve driver once from props (local default). Re-create if prop identity changes via effect below.
@@ -3945,6 +3953,7 @@
 							{/if}
 						</span>
 						<span class="fe-row-icon-name" title={n.name}>{#if renamingId === n.id}{@render renameEditor(n)}{:else}{n.name}{/if}</span>
+						{#if n.kind === 'file'}{@render presenceDots(n.id)}{/if}
 					{:else if viewMode === 'detailed'}
 						<span class="fe-row-main">
 							<span class="fe-icon">
@@ -3960,6 +3969,7 @@
 								<span class="fe-name" title={!actionable && n.kind === 'file' ? 'Wrong type for this app' : n.name}
 									>{n.name}</span
 								>
+								{#if n.kind === 'file'}{@render presenceDots(n.id)}{/if}
 							{/if}
 						</span>
 						<span class="fe-row-col fe-row-size">{n.size != null ? formatBytes(n.size) : '—'}</span>
@@ -3988,6 +3998,7 @@
 										aria-label="in a shared pack">pack</span
 									>
 								{/if}
+								{#if n.kind === 'file'}{@render presenceDots(n.id)}{/if}
 							{/if}
 						</span>
 					{/if}
@@ -4292,6 +4303,23 @@
 		/>
 	{/if}
 </div>
+
+{#snippet presenceDots(fileId: string)}
+	{@const marks = presenceByFileId?.get(fileId)}
+	{#if marks?.length}
+		<span class="fe-presence-dots" data-testid="fe-presence-dots" data-no-drag>
+			{#each marks as m (m.clientId)}
+				<span
+					class="fe-presence-dot"
+					data-testid="fe-presence-dot"
+					data-client-id={m.clientId}
+					title={m.name}
+					style:background={m.color}
+				></span>
+			{/each}
+		</span>
+	{/if}
+{/snippet}
 
 {#snippet renameEditor(n: ExplorerEntry)}
 	<!-- svelte-ignore a11y_click_events_have_key_events -->
@@ -5412,6 +5440,20 @@
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
+	}
+	.fe-presence-dots {
+		display: inline-flex;
+		align-items: center;
+		gap: 3px;
+		flex: 0 0 auto;
+		margin-left: 0.35rem;
+		vertical-align: middle;
+	}
+	.fe-presence-dot {
+		width: 0.5rem;
+		height: 0.5rem;
+		border-radius: 50%;
+		box-shadow: 0 0 0 1px color-mix(in srgb, #000 25%, transparent);
 	}
 	.fe-empty {
 		padding: 24px;

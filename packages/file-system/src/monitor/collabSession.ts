@@ -539,9 +539,14 @@ async function startDoc(mux: Mux, doc: DocState): Promise<void> {
 			if (seed && !doc.ackedPage) doc.ackedPage = clonePage(seed);
 			if (remotePage) {
 				applySnapshot(doc, snap.seq, remotePage, 'join');
+			} else if (seed) {
+				// Empty room: replica still needs a join snapshot so the runtime
+				// unblocks. Seq is the GET seq (0 when no CAS page yet).
+				applySnapshot(doc, snap.seq, seed, 'join');
 			}
 		} catch {
-			if (doc.opts.seedPage && !doc.ackedPage) doc.ackedPage = clonePage(doc.opts.seedPage);
+			const seed = doc.opts.seedPage ?? doc.ackedPage;
+			if (seed) applySnapshot(doc, 0, seed, 'join');
 		}
 		const hello: CollabFrame = {
 			kind: 'hello',

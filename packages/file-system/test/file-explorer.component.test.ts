@@ -1064,6 +1064,25 @@ describe('FileExplorer component', () => {
 		);
 	});
 
+	it('paints presence dots on the file row for fileId', async () => {
+		const created = await vfs.writeFile({ parentId: null, name: 'Doc.kb', body: 'page' });
+		const presenceByFileId = new Map([
+			[created.id, [{ clientId: 'peer-1', color: 'var(--cat-rose)', name: 'Guest' }]]
+		]);
+		render(FileExplorer, {
+			props: { mode: 'manage', vfs, variant: 'panel', presenceByFileId }
+		});
+		await viWaitForRows(1);
+		const row = document.querySelector(
+			`[data-testid="fe-file-row"][data-id="${created.id}"]`
+		) as HTMLElement;
+		expect(row).toBeTruthy();
+		const dot = row.querySelector('[data-testid="fe-presence-dot"]') as HTMLElement;
+		expect(dot).toBeTruthy();
+		expect(dot.getAttribute('data-client-id')).toBe('peer-1');
+		expect(dot.getAttribute('title')).toBe('Guest');
+	});
+
 	it('onContextChange picks up a rename so copy-across gets the new name', async () => {
 		await vfs.writeFile({ parentId: null, name: 'Before.txt', body: 'hi' });
 		const seen: string[] = [];

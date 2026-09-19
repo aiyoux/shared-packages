@@ -24,3 +24,10 @@ export type ExplorerContext = {
 };
 
 export type RemoteKind = 'b2' | 'rclone' | 'monitor';
+
+/** Color dot on a file row — same shape the Documents tree paints. */
+export type ExplorerPresenceDot = {
+	clientId: string;
+	color: string;
+	name: string;
+};

@@ -6,6 +6,11 @@
  * import, it comes along when the folder is copied, git sees it, and a project
  * exported without one imports as an ordinary folder that can be initialised
  * later. A meta row would do none of that.
+ *
+ * `id` is the travelling project identity: two copies that share it are the
+ * same project (the same collab room). It is minted on create, on import of a
+ * file that has none, and when an older project is opened without one — never
+ * on a second import of an export that already carries it.
  */
 import type { VfsService } from './vfs.js';
 import type { PackOpProgress, VfsNode } from './types.js';
@@ -18,11 +23,41 @@ export const PROJECT_META_SCHEMA_VERSION = 1;
 
 export type ProjectMeta = {
 	schemaVersion: number;
+	/** Travelling identity. Same id, same project — including across import. */
+	id?: string;
 	name: string;
 	description?: string;
 	createdAt?: string;
 	updatedAt?: string;
 };
+
+export function mintProjectId(): string {
+	return crypto.randomUUID();
+}
+
+function hasProjectId(meta: ProjectMeta): meta is ProjectMeta & { id: string } {
+	return typeof meta.id === 'string' && meta.id.length > 0;
+}
+
+function withProjectId(meta: ProjectMeta): ProjectMeta & { id: string } {
+	return hasProjectId(meta) ? meta : { ...meta, id: mintProjectId() };
+}
+
+/**
+ * `.project.json` body. A missing `id` is still a project — the id is adopted
+ * on open / stamped on write, not required to parse.
+ *
+ * Extra fields are kept so a write-back (adopt-or-mint) cannot strip unknown
+ * keys. `schemaVersion` stays 1; adding `id` is not a version bump.
+ */
+export function parseProjectMeta(raw: unknown): ProjectMeta | null {
+	if (!raw || typeof raw !== 'object') return null;
+	const rec = raw as Record<string, unknown>;
+	if (typeof rec.name !== 'string') return null;
+	const meta = { ...rec } as ProjectMeta;
+	if (!hasProjectId(meta)) delete (meta as { id?: unknown }).id;
+	return meta;
+}
 
 function metaFileIn(vfs: VfsService, rootId: string): Promise<VfsNode | undefined> {
 	return vfs
@@ -39,11 +74,17 @@ export async function readProjectMeta(
 	if (!node) return null;
 	try {
 		const bytes = await vfs.readBytes(node.id);
-		const raw = JSON.parse(new TextDecoder().decode(bytes)) as unknown;
-		if (!raw || typeof raw !== 'object') return null;
-		const meta = raw as ProjectMeta;
-		if (typeof meta.name !== 'string') return null;
-		return meta;
+		const parsed = parseProjectMeta(JSON.parse(new TextDecoder().decode(bytes)) as unknown);
+		if (!parsed) return null;
+		if (hasProjectId(parsed)) return parsed;
+		// Adopt-or-mint: write the id back so an older file starts travelling.
+		const adopted = withProjectId(parsed);
+		try {
+			await writeProjectMeta(vfs, rootId, adopted);
+		} catch {
+			// Still a project; the id will be retried next open.
+		}
+		return adopted;
 	} catch {
 		// A folder carrying an unreadable .project.json is still a folder. It
 		// must not become an error the user cannot get past.
@@ -55,13 +96,14 @@ export async function isProject(vfs: VfsService, rootId: string): Promise<boolea
 	return (await readProjectMeta(vfs, rootId)) !== null;
 }
 
-/** Write (or replace) the metadata file. */
+/** Write (or replace) the metadata file. An id-less body is stamped before it hits disk. */
 export async function writeProjectMeta(
 	vfs: VfsService,
 	rootId: string,
 	meta: ProjectMeta
 ): Promise<VfsNode> {
-	const body = new TextEncoder().encode(`${JSON.stringify(meta, null, 2)}\n`);
+	const stamped = withProjectId(meta);
+	const body = new TextEncoder().encode(`${JSON.stringify(stamped, null, 2)}\n`);
 	const existing = await metaFileIn(vfs, rootId);
 	if (existing) {
 		return vfs.updateFile(existing.id, body, { force: true, contentType: 'application/json' });
@@ -96,6 +138,7 @@ export async function initProject(
 	const existing = await readProjectMeta(vfs, rootId);
 	const meta: ProjectMeta = {
 		schemaVersion: PROJECT_META_SCHEMA_VERSION,
+		id: existing?.id ?? mintProjectId(),
 		name: opts.name,
 		description: opts.description,
 		createdAt: existing?.createdAt ?? now,

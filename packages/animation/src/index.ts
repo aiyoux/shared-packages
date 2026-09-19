@@ -62,6 +62,8 @@ export {
 	type WalkBudget
 } from './refs.js';
 
+export { compareDocRank, liveBindAllowed, type DocRank } from './liveRank.js';
+
 export {
 	DEFAULT_MAX_DEPTH,
 	emptyContext,
