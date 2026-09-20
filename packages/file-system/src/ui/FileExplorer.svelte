@@ -138,6 +138,7 @@
 		ExplorerNewMenuItem,
 		ExplorerPresenceDot,
 		ExplorerPerson,
+		ExplorerArrivalPolicy,
 		ExplorerCombineResult,
 		ExplorerRoomActionResult,
 		ExplorerUnlinkDrain
@@ -275,6 +276,11 @@
 			roomId: string;
 			keep: boolean;
 		}) => void | Promise<void>;
+		/** Standing answer to what happens when this person's work arrives. */
+		onArrivalPolicy?: (args: {
+			pairingId: string;
+			policy: ExplorerArrivalPolicy;
+		}) => void | Promise<void>;
 		/** Linked + this-session people. Chip/sheet only inside a project. */
 		people?: readonly ExplorerPerson[];
 		onInvitePeople?: () => void;
@@ -330,6 +336,7 @@
 		onCombineRoom,
 		combineBusy = false,
 		onKeepRoom,
+		onArrivalPolicy,
 		onRoomContext,
 		people,
 		onInvitePeople,
@@ -1758,6 +1765,7 @@
 	let combineOpen = $state(false);
 	let combinePending = $state<string | null>(null);
 	let combineConflict = $state<{ label: string; paths: string[] } | null>(null);
+	let combineMissing = $state(false);
 
 	function roomLabelOf(roomId: string): string {
 		return projectRooms.find((r) => r.id === roomId)?.label ?? roomId;
@@ -1778,7 +1786,11 @@
 				combineConflict = { label: roomLabelOf(fromRoomId), paths: result.paths };
 				return;
 			}
-			if (result.status === 'live') return;
+			if (result.status === 'live' || result.status === 'missing') {
+				combineMissing = result.status === 'missing';
+				return;
+			}
+			combineMissing = false;
 			combineOpen = false;
 			await afterRoomChange();
 		} catch (e) {
@@ -3839,6 +3851,25 @@
 													</button>
 												{/if}
 											</div>
+											{#if onArrivalPolicy && person.linked}
+												<label class="fe-people-arrival" data-testid="fe-people-arrival">
+													<span class="fe-people-name-label">When their work arrives</span>
+													<select
+														class="fe-people-arrival-select"
+														data-testid="fe-people-arrival-select"
+														value={person.onArrival ?? 'inspect'}
+														onchange={(e) =>
+															void onArrivalPolicy?.({
+																pairingId: person.pairingId,
+																policy: e.currentTarget.value as ExplorerArrivalPolicy
+															})}
+													>
+														<option value="auto">Merge it for me</option>
+														<option value="inspect">Tell me, I'll look</option>
+														<option value="later">Just keep it</option>
+													</select>
+												</label>
+											{/if}
 											{#if onKeepRoom && person.rooms?.length}
 												<div class="fe-people-rooms" data-testid="fe-people-rooms">
 													<span class="fe-people-name-label">Keep locally</span>
@@ -4892,6 +4923,10 @@
 							<li data-testid="fe-room-combine-conflict-path">{path}</li>
 						{/each}
 					</ul>
+				{:else if combineMissing}
+					<p class="fe-room-note" data-testid="fe-room-combine-missing">
+						Their work hasn’t reached this device yet.
+					</p>
 				{:else if combinePending}
 					<p class="fe-room-note" data-testid="fe-room-combine-dirty">
 						You have unsaved work here. Save it first?
@@ -5735,6 +5770,20 @@
 		background: var(--surface-2);
 		border: 1px solid var(--line-hairline);
 		color: var(--text-primary);
+	}
+	.fe-people-arrival {
+		display: flex;
+		align-items: center;
+		gap: 0.4rem;
+		margin-top: 0.4rem;
+		font-size: 0.8rem;
+	}
+	.fe-people-arrival-select {
+		font: inherit;
+		color: var(--text-primary);
+		background: var(--surface-1);
+		border: 1px solid var(--line-hairline);
+		padding: 0.1rem 0.3rem;
 	}
 	.fe-people-rooms {
 		display: flex;

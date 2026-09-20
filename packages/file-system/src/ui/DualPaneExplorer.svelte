@@ -15,6 +15,7 @@
 		ExplorerNewMenuItem,
 		ExplorerPerson,
 		ExplorerPresenceDot,
+		ExplorerArrivalPolicy,
 		ExplorerCombineResult,
 		ExplorerRoomActionResult,
 		ExplorerUnlinkDrain,
@@ -297,6 +298,10 @@
 			roomId: string;
 			keep: boolean;
 		}) => void | Promise<void>;
+		onArrivalPolicy?: (args: {
+			pairingId: string;
+			policy: ExplorerArrivalPolicy;
+		}) => void | Promise<void>;
 		onRoomContext?: (args: {
 			rootId: ExplorerEntryId | null;
 			roomId: string | null;
@@ -363,6 +368,7 @@
 		onCombineRoom,
 		combineBusy = false,
 		onKeepRoom,
+		onArrivalPolicy,
 		onRoomContext,
 		people,
 		onInvitePeople,
@@ -2156,6 +2162,7 @@
 						onCombineRoom={paneCombineRoom(id)}
 						{combineBusy}
 						{onKeepRoom}
+						{onArrivalPolicy}
 						onRoomContext={paneRoomContext(id)}
 					>
 						{#snippet headerLeading()}
@@ -2221,6 +2228,7 @@
 						onCombineRoom={paneCombineRoom(id)}
 						{combineBusy}
 						{onKeepRoom}
+						{onArrivalPolicy}
 						onRoomContext={paneRoomContext(id)}
 					>
 						{#snippet headerLeading()}
@@ -2284,6 +2292,7 @@
 						onCombineRoom={paneCombineRoom(id)}
 						{combineBusy}
 						{onKeepRoom}
+						{onArrivalPolicy}
 						onRoomContext={paneRoomContext(id)}
 					>
 						{#snippet headerLeading()}

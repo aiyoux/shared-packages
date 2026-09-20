@@ -31,7 +31,29 @@ export type ProjectLink = {
 	pairingId: string;
 	label: string;
 	linkedAt: string;
+	/** What to do when this person's work arrives. Default `inspect`. */
+	onArrival?: ArrivalPolicy;
 };
+
+/**
+ * A merge is a vouch (rule 3.2), so taking someone's work is a decision — but
+ * whose decision, and when, is per person. `auto` still waits for a quiet
+ * moment: it means "combine without asking me", never "combine mid-session".
+ */
+export type ArrivalPolicy =
+	/** Combine as soon as it is quiet. Refusals still surface. */
+	| 'auto'
+	/** Land it and tell me; I will combine. */
+	| 'inspect'
+	/** Land it silently; I will look when I look. */
+	| 'later';
+
+export const DEFAULT_ARRIVAL_POLICY: ArrivalPolicy = 'inspect';
+
+export function arrivalPolicyOf(link: ProjectLink | null | undefined): ArrivalPolicy {
+	const value = link?.onArrival;
+	return value === 'auto' || value === 'later' ? value : DEFAULT_ARRIVAL_POLICY;
+}
 
 export type ProjectMeta = {
 	schemaVersion: number;
@@ -176,10 +198,15 @@ export function parseProjectMeta(raw: unknown): ProjectMeta | null {
 				const link = item as Record<string, unknown>;
 				if (typeof link.pairingId !== 'string' || !link.pairingId.trim()) continue;
 				if (typeof link.label !== 'string') continue;
+				const onArrival =
+					link.onArrival === 'auto' || link.onArrival === 'later' || link.onArrival === 'inspect'
+						? (link.onArrival as ArrivalPolicy)
+						: undefined;
 				links.push({
 					pairingId: link.pairingId,
 					label: link.label,
-					linkedAt: typeof link.linkedAt === 'string' ? link.linkedAt : ''
+					linkedAt: typeof link.linkedAt === 'string' ? link.linkedAt : '',
+					...(onArrival ? { onArrival } : {})
 				});
 			}
 		}

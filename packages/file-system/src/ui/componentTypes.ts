@@ -43,7 +43,9 @@ export type ExplorerCombineResult =
 	| { status: 'ok' }
 	| { status: 'dirty' }
 	| { status: 'live' }
-	| { status: 'conflict'; paths: string[] };
+	| { status: 'conflict'; paths: string[] }
+	/** That person's copy of the room has not arrived on this device yet. */
+	| { status: 'missing' };
 
 /** People-sheet row. Presence dots stay room-scoped; other rooms live here. */
 export type ExplorerPersonNow =
@@ -68,7 +70,11 @@ export type ExplorerPerson = {
 	 * always kept and cannot be unchecked — it is where the user is working.
 	 */
 	rooms?: readonly ExplorerPersonRoom[];
+	/** What happens when this person's work arrives. */
+	onArrival?: ExplorerArrivalPolicy;
 };
+
+export type ExplorerArrivalPolicy = 'auto' | 'inspect' | 'later';
 
 export type ExplorerPersonRoom = {
 	roomId: string;
