@@ -40,6 +40,7 @@ export async function encodeFrames(
 
 	const drainAudio = async (): Promise<void> => {
 		if (!options.audio) return;
+		let shape: { sampleRate: number; numberOfChannels: number } | undefined;
 		for await (const chunk of options.audio.chunks) {
 			const sample = new AudioSample({
 				data: chunk.data,
@@ -49,7 +50,9 @@ export async function encodeFrames(
 				timestamp: chunk.timestamp
 			});
 			try {
-				await session.addAudio(sample);
+				// First chunk fixes the output shape; mediabunny resamples and
+				// remixes any later chunk that differs (mixed-rate stacks).
+				await session.addAudio(sample, (shape ??= chunk));
 			} finally {
 				sample.close();
 			}

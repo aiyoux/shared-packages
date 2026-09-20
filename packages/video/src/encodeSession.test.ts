@@ -343,7 +343,8 @@ describe('encodeSession audio', () => {
 			bitrate: '1M',
 			audio: { codec: 'opus', bitrate: 96_000 }
 		});
-		expect((AudioSampleSource as unknown as { instances: unknown[] }).instances).toHaveLength(1);
+		// Source creation is lazy — nothing exists until the first sample.
+		expect((AudioSampleSource as unknown as { instances: unknown[] }).instances).toHaveLength(0);
 		expect(muxOrder).toEqual(['add-video-track']);
 
 		const sample = new AudioSample({
@@ -353,10 +354,14 @@ describe('encodeSession audio', () => {
 			sampleRate: 48_000,
 			timestamp: 0.25
 		}) as unknown as Parameters<typeof session.addAudio>[0];
-		await session.addAudio(sample);
+		await session.addAudio(sample, { sampleRate: 48_000, numberOfChannels: 1 });
 
 		const audioSource = (AudioSampleSource as unknown as { instances: unknown[] }).instances[0]! as MockAudioSource;
-		expect(audioSource.config).toEqual({ codec: 'opus', bitrate: 96_000 });
+		expect(audioSource.config).toEqual({
+			codec: 'opus',
+			bitrate: 96_000,
+			transform: { sampleRate: 48_000, numberOfChannels: 1 }
+		});
 
 		await session.flush();
 		expect(muxOrder).toEqual(['add-video-track', 'add-audio-track', 'audio-add', 'finalize']);

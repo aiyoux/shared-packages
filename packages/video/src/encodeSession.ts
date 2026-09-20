@@ -66,9 +66,14 @@ export interface EncodeSession {
 	/**
 	 * Add one decoded audio sample (timestamp in seconds, on the output
 	 * timeline). The audio track is created lazily on the first call, so
-	 * sources without audio never produce an empty audio track.
+	 * sources without audio never produce an empty audio track. The first
+	 * call's `shape` becomes the track's shape — later samples are
+	 * resampled/remixed to it, so mixed-rate sources are supported.
 	 */
-	addAudio(sample: AudioSample): Promise<void>;
+	addAudio(
+		sample: AudioSample,
+		shape?: { sampleRate: number; numberOfChannels: number }
+	): Promise<void>;
 	/** flush encoder + mux chain + finalize → video/mp4 Blob. */
 	flush(): Promise<Blob>;
 	close(): void;
@@ -139,20 +144,24 @@ export function createEncodeSession(opts: {
 	let closed = false;
 	let encoderClosed = false;
 
-	// Audio: the track is added lazily so a source without audio yields an
-	// output with no audio track at all rather than an empty one.
+	// Audio: both the source and the track are added lazily so a source
+	// without audio yields an output with no audio track at all. The first
+	// sample's shape fixes the output shape — mediabunny's transform
+	// resamples/remixes later samples to it, so mixed-rate stacks work.
 	let audioSource: AudioSampleSource | null = null;
-	let audioTrackAdded = false;
-	if (opts.audio) {
-		audioSource = new AudioSampleSource({
-			codec: AUDIO_CODEC_MAP[opts.audio.codec ?? 'aac'],
-			bitrate: opts.audio.bitrate ?? DEFAULT_AUDIO_BITRATE
-		});
-	}
-	const addAudio = (sample: AudioSample): Promise<void> => {
-		if (!audioSource) return Promise.resolve();
-		if (!audioTrackAdded) {
-			audioTrackAdded = true;
+	const addAudio = (
+		sample: AudioSample,
+		shape?: { sampleRate: number; numberOfChannels: number }
+	): Promise<void> => {
+		if (!opts.audio) return Promise.resolve();
+		if (!audioSource) {
+			audioSource = new AudioSampleSource({
+				codec: AUDIO_CODEC_MAP[opts.audio.codec ?? 'aac'],
+				bitrate: opts.audio.bitrate ?? DEFAULT_AUDIO_BITRATE,
+				transform: shape
+					? { sampleRate: shape.sampleRate, numberOfChannels: shape.numberOfChannels }
+					: undefined
+			});
 			output.addAudioTrack(audioSource);
 		}
 		// Serialize with the video packet adds on the same mux chain.

@@ -251,7 +251,11 @@ describe('encodeFrames', () => {
 			'finalize'
 		]);
 		const audioSource = (AudioSampleSource as unknown as { instances: unknown[] }).instances[0]! as MockAudioSource;
-		expect(audioSource.config).toEqual({ codec: 'aac', bitrate: 96_000 });
+		expect(audioSource.config).toEqual({
+			codec: 'aac',
+			bitrate: 96_000,
+			transform: { sampleRate: 48_000, numberOfChannels: 2 }
+		});
 		expect(audioSource.adds).toHaveLength(2);
 		const first = audioSource.adds[0]!;
 		const second = audioSource.adds[1]!;
