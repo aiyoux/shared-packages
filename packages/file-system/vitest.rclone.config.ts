@@ -29,6 +29,7 @@ export default defineConfig({
 			'src/rclone/**/*.test.ts',
 			'src/monitor/**/*.test.ts',
 			'src/vault/**/*.test.ts',
+			'src/ai/**/*.test.ts',
 			'src/ui/treeDnd/**/*.test.ts',
 			// Top-level src helpers (e.g. stallTimer).
 			'src/*.test.ts',

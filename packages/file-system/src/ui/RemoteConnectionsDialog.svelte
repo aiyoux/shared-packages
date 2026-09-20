@@ -1,6 +1,6 @@
 <script lang="ts">
 	/**
-	 * One popup for B2, rclone, and monitor: combined list, then new/edit
+	 * One popup for B2, rclone, monitor, and AI: combined list, then new/edit
 	 * fields. New uses a segmented type control.
 	 */
 	import { onMount } from 'svelte';
@@ -8,6 +8,7 @@
 	import '@shared-packages/design-system/segmented.css';
 	import { toast } from '@shared-packages/ui';
 	import {
+		HUB_AI_PROFILES_CHANNEL,
 		HUB_B2_PROFILES_CHANNEL,
 		HUB_MONITOR_PROFILES_CHANNEL,
 		HUB_RCLONE_PROFILES_CHANNEL,
@@ -45,6 +46,20 @@
 		validateMonitorProfileInput,
 		type MonitorConnectionProfileV1
 	} from '../monitor/types.js';
+	import {
+		deleteProfile as deleteAi,
+		getActiveProfileId as getActiveAi,
+		listProfiles as listAi,
+		revealApiKey,
+		saveProfile as saveAi,
+		setActiveProfileId as setActiveAi
+	} from '../ai/credentials.js';
+	import {
+		DEFAULT_AI_BASE_URL,
+		validateAiProfileInput,
+		type AiConnectionProfileV1
+	} from '../ai/types.js';
+	import { fetchAvailableModels, hostOf, testAiConnection } from '../ai/index.js';
 	import VaultPanel from '../vault/VaultPanel.svelte';
 	import { formatExplorerError } from './explorerError.js';
 	import FeConfirmDialog from './FeConfirmDialog.svelte';
@@ -77,9 +92,11 @@
 	let b2Profiles = $state<B2ConnectionProfileV1[]>([]);
 	let rcloneProfiles = $state<RcloneConnectionProfileV1[]>([]);
 	let monitorProfiles = $state<MonitorConnectionProfileV1[]>([]);
+	let aiProfiles = $state<AiConnectionProfileV1[]>([]);
 	let activeB2 = $state<string | null>(null);
 	let activeRclone = $state<string | null>(null);
 	let activeMonitor = $state<string | null>(null);
+	let activeAi = $state<string | null>(null);
 
 	let name = $state('');
 	let applicationKeyId = $state('');
@@ -96,11 +113,21 @@
 	let passDirty = $state(false);
 	let monitorBaseUrl = $state(DEFAULT_MONITOR_BASE_URL);
 	let monitorRoot = $state('/tmp');
+	let aiBaseUrl = $state(DEFAULT_AI_BASE_URL);
+	let aiKey = $state('');
+	let aiKeyDirty = $state(false);
+	let aiModel = $state('');
+	let aiModelTouched = $state(false);
+	let aiModels = $state<string[]>([]);
+	let aiModelsError = $state('');
+	let aiTestResult = $state('');
+	let aiTestOk = $state(false);
 
 	const KIND_LABEL: Record<RemoteKind, string> = {
 		b2: 'B2',
 		rclone: 'rclone',
-		monitor: 'Monitor'
+		monitor: 'Monitor',
+		ai: 'AI'
 	};
 
 	const rows = $derived<Row[]>([
@@ -128,6 +155,15 @@
 				.filter(Boolean)
 				.join(' · '),
 			active: p.id === activeRclone
+		})),
+		...aiProfiles.map((p) => ({
+			kind: 'ai' as const,
+			id: p.id,
+			name: p.name,
+			detail: [p.model, hostOf(p.baseUrl), p.persistSecret === false ? 'this tab' : '']
+				.filter(Boolean)
+				.join(' · '),
+			active: p.id === activeAi
 		}))
 	]);
 
@@ -148,20 +184,24 @@
 	});
 
 	async function reload() {
-		const [b2, rc, mon, aB2, aRc, aMon] = await Promise.all([
+		const [b2, rc, mon, ai, aB2, aRc, aMon, aAi] = await Promise.all([
 			listB2(),
 			listRclone(),
 			listMonitor(),
+			listAi(),
 			getActiveB2(),
 			getActiveRclone(),
-			getActiveMonitor()
+			getActiveMonitor(),
+			getActiveAi()
 		]);
 		b2Profiles = b2;
 		rcloneProfiles = rc;
 		monitorProfiles = mon;
+		aiProfiles = ai;
 		activeB2 = aB2;
 		activeRclone = aRc;
 		activeMonitor = aMon;
+		activeAi = aAi;
 	}
 
 	$effect(() => {
@@ -169,14 +209,22 @@
 		const offs = [
 			subscribeTabChannel(HUB_B2_PROFILES_CHANNEL, () => void reload()),
 			subscribeTabChannel(HUB_RCLONE_PROFILES_CHANNEL, () => void reload()),
-			subscribeTabChannel(HUB_MONITOR_PROFILES_CHANNEL, () => void reload())
+			subscribeTabChannel(HUB_MONITOR_PROFILES_CHANNEL, () => void reload()),
+			subscribeTabChannel(HUB_AI_PROFILES_CHANNEL, () => void reload())
 		];
 		return () => offs.forEach((fn) => fn());
 	});
 
 	function resetKindDefaults(next: RemoteKind) {
 		kind = next;
-		name = next === 'b2' ? 'My B2' : next === 'rclone' ? 'My rclone' : 'Local monitor';
+		name =
+			next === 'b2'
+				? 'My B2'
+				: next === 'rclone'
+					? 'My rclone'
+					: next === 'ai'
+						? 'My AI'
+						: 'Local monitor';
 		applicationKeyId = '';
 		applicationKey = '';
 		bucketName = '';
@@ -191,7 +239,63 @@
 		passDirty = false;
 		monitorBaseUrl = DEFAULT_MONITOR_BASE_URL;
 		monitorRoot = '/tmp';
+		aiBaseUrl = DEFAULT_AI_BASE_URL;
+		aiKey = '';
+		aiKeyDirty = false;
+		aiModel = '';
+		aiModelTouched = false;
+		aiModels = [];
+		aiModelsError = '';
+		aiTestResult = '';
+		aiTestOk = false;
 		error = '';
+	}
+
+	/** The key to send to /models or the test probe: entered key, else the stored one. */
+	async function aiKeyForProbe(): Promise<string> {
+		if (aiKeyDirty || mode === 'new') return aiKey;
+		const existing = editingId ? aiProfiles.find((p) => p.id === editingId) : undefined;
+		if (!existing) return aiKey;
+		try {
+			return (await revealApiKey(existing)) || aiKey;
+		} catch {
+			return aiKey;
+		}
+	}
+
+	async function loadAiModels() {
+		error = '';
+		aiModelsError = '';
+		aiTestResult = '';
+		busy = true;
+		try {
+			const key = await aiKeyForProbe();
+			aiModels = await fetchAvailableModels(aiBaseUrl, key);
+			if (!aiModelTouched && !aiModel && aiModels.length) aiModel = aiModels[0];
+		} catch (e) {
+			aiModels = [];
+			aiModelsError = formatExplorerError(e);
+		} finally {
+			busy = false;
+		}
+	}
+
+	async function runAiTest() {
+		error = '';
+		aiTestResult = '';
+		busy = true;
+		try {
+			const key = await aiKeyForProbe();
+			const models = await testAiConnection(aiBaseUrl, key);
+			aiTestOk = true;
+			aiTestResult = `OK — ${models.length} model${models.length === 1 ? '' : 's'} available`;
+			if (!aiModels.length) aiModels = models;
+		} catch (e) {
+			aiTestOk = false;
+			aiTestResult = formatExplorerError(e);
+		} finally {
+			busy = false;
+		}
 	}
 
 	function startNew() {
@@ -229,6 +333,20 @@
 			rcUser = p.rcUser;
 			rcPass = '';
 			passDirty = false;
+			persistSecret = p.persistSecret !== false;
+		} else if (row.kind === 'ai') {
+			const p = aiProfiles.find((x) => x.id === row.id);
+			if (!p) return;
+			name = p.name;
+			aiBaseUrl = p.baseUrl || DEFAULT_AI_BASE_URL;
+			aiKey = '';
+			aiKeyDirty = false;
+			aiModel = p.model;
+			aiModelTouched = false;
+			aiModels = [];
+			aiModelsError = '';
+			aiTestResult = '';
+			aiTestOk = false;
 			persistSecret = p.persistSecret !== false;
 		} else {
 			const p = monitorProfiles.find((x) => x.id === row.id);
@@ -340,6 +458,45 @@
 			}
 			return;
 		}
+		if (kind === 'ai') {
+			const existing = editingId ? aiProfiles.find((p) => p.id === editingId) : undefined;
+			const keyToSave = aiKeyDirty || !existing ? aiKey : existing.apiKey;
+			const requireApiKey = !existing || aiKeyDirty;
+			const err = validateAiProfileInput({
+				name,
+				baseUrl: aiBaseUrl,
+				apiKey: keyToSave,
+				model: aiModel,
+				requireApiKey
+			});
+			if (err) {
+				error = err;
+				return;
+			}
+			busy = true;
+			try {
+				await saveAi({
+					id: editingId ?? crypto.randomUUID(),
+					name,
+					baseUrl: aiBaseUrl.trim() || DEFAULT_AI_BASE_URL,
+					apiKey: requireApiKey ? keyToSave : '',
+					model: aiModel,
+					persistSecret,
+					createdAt: existing?.createdAt
+				});
+				aiKey = '';
+				aiKeyDirty = false;
+				editingId = null;
+				mode = 'list';
+				await reload();
+			} catch (e) {
+				error = formatExplorerError(e);
+				toast.error(error);
+			} finally {
+				busy = false;
+			}
+			return;
+		}
 		const err = validateMonitorProfileInput({
 			name,
 			baseUrl: monitorBaseUrl,
@@ -384,6 +541,12 @@
 				await setActiveRclone(p.id);
 				activeRclone = p.id;
 				onConnected?.(row.kind, p);
+			} else if (row.kind === 'ai') {
+				const p = aiProfiles.find((x) => x.id === row.id);
+				if (!p) return;
+				await setActiveAi(p.id);
+				activeAi = p.id;
+				onConnected?.(row.kind, p);
 			} else {
 				const p = monitorProfiles.find((x) => x.id === row.id);
 				if (!p) return;
@@ -402,6 +565,7 @@
 	async function removeRow(row: { kind: RemoteKind; id: string }) {
 		if (row.kind === 'b2') await deleteB2(row.id);
 		else if (row.kind === 'rclone') await deleteRclone(row.id);
+		else if (row.kind === 'ai') await deleteAi(row.id);
 		else await deleteMonitor(row.id);
 		if (editingId === row.id && kind === row.kind) {
 			editingId = null;
@@ -409,7 +573,13 @@
 		}
 		await reload();
 		const active =
-			row.kind === 'b2' ? activeB2 : row.kind === 'rclone' ? activeRclone : activeMonitor;
+			row.kind === 'b2'
+				? activeB2
+				: row.kind === 'rclone'
+					? activeRclone
+					: row.kind === 'ai'
+						? activeAi
+						: activeMonitor;
 		if (active === row.id) onDisconnected?.(row.kind);
 	}
 
@@ -544,6 +714,15 @@
 							disabled={busy}
 							onclick={() => setNewKind('monitor')}>Monitor</button
 						>
+						<button
+							type="button"
+							role="radio"
+							class:active={kind === 'ai'}
+							aria-checked={kind === 'ai'}
+							data-testid="connections-kind-ai"
+							disabled={busy}
+							onclick={() => setNewKind('ai')}>AI</button
+						>
 					</div>
 				{/if}
 				<div class="fields">
@@ -661,6 +840,109 @@
 						{#if !persistSecret}
 							<p class="editing-label" data-testid="rclone-session-only-note">
 								This tab only — the password is forgotten when the tab closes.
+							</p>
+						{/if}
+					{:else if kind === 'ai'}
+						{#if mode === 'edit'}
+							<p class="editing-label" data-testid="ai-editing-banner">
+								Leave the API key blank to keep the current key.
+							</p>
+						{/if}
+						<label>
+							Display name
+							<input data-testid="ai-name" bind:value={name} autocomplete="off" />
+						</label>
+						<label>
+							Base URL (OpenAI-compatible)
+							<input
+								data-testid="ai-base-url"
+								bind:value={aiBaseUrl}
+								placeholder={DEFAULT_AI_BASE_URL}
+								autocomplete="off"
+							/>
+						</label>
+						<p class="editing-label">
+							The browser calls this endpoint directly, so it must allow browser (CORS) requests.
+						</p>
+						<label>
+							API key
+							<input
+								data-testid="ai-key"
+								type="password"
+								bind:value={aiKey}
+								autocomplete="off"
+								placeholder={mode === 'edit' ? '(unchanged if blank)' : ''}
+								oninput={() => (aiKeyDirty = true)}
+							/>
+						</label>
+						<label class="check">
+							<input
+								data-testid="ai-persist-secret"
+								type="checkbox"
+								bind:checked={persistSecret}
+							/>
+							Save this key in the browser
+						</label>
+						{#if !persistSecret}
+							<p class="editing-label" data-testid="ai-session-only-note">
+								This tab only — the key is forgotten when the tab closes.
+							</p>
+						{/if}
+						<label>
+							Model
+							{#if aiModels.length}
+								<select
+									data-testid="ai-model"
+									bind:value={aiModel}
+									onchange={() => (aiModelTouched = true)}
+								>
+									{#each aiModels as m}
+										<option value={m}>{m}</option>
+									{/each}
+									{#if aiModel && !aiModels.includes(aiModel)}
+										<option value={aiModel}>{aiModel}</option>
+									{/if}
+								</select>
+							{:else}
+								<input
+									data-testid="ai-model"
+									bind:value={aiModel}
+									oninput={() => (aiModelTouched = true)}
+									placeholder="gpt-4o"
+									autocomplete="off"
+								/>
+							{/if}
+						</label>
+						<div class="ai-probe">
+							<button
+								type="button"
+								class="ds-btn ds-btn--sm ds-btn--secondary"
+								data-testid="ai-load-models"
+								disabled={busy}
+								onclick={() => void loadAiModels()}
+							>
+								Load models
+							</button>
+							<button
+								type="button"
+								class="ds-btn ds-btn--sm ds-btn--secondary"
+								data-testid="ai-test"
+								disabled={busy}
+								onclick={() => void runAiTest()}
+							>
+								Test connection
+							</button>
+						</div>
+						{#if aiModelsError}
+							<p class="editing-label" data-testid="ai-models-error">{aiModelsError}</p>
+						{/if}
+						{#if aiTestResult}
+							<p
+								class="editing-label"
+								class:ai-ok={aiTestOk}
+								data-testid="ai-test-result"
+							>
+								{aiTestResult}
 							</p>
 						{/if}
 					{:else}
@@ -854,6 +1136,21 @@
 		background: var(--surface-1);
 		color: inherit;
 		font: inherit;
+	}
+	.fields select {
+		padding: 0.4rem 0.55rem;
+		border-radius: var(--radius-md);
+		border: 1px solid var(--line-hairline);
+		background: var(--surface-1);
+		color: inherit;
+		font: inherit;
+	}
+	.ai-probe {
+		display: flex;
+		gap: 0.4rem;
+	}
+	.ai-ok {
+		color: var(--accent-light);
 	}
 	.editing-label {
 		margin: 0;

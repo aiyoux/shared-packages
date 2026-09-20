@@ -60,6 +60,11 @@
       "import": "./src/monitor/index.ts",
       "default": "./src/monitor/index.ts"
     },
+    "./ai": {
+      "types": "./src/ai/index.ts",
+      "import": "./src/ai/index.ts",
+      "default": "./src/ai/index.ts"
+    },
     "./monitor/pathIds": {
       "types": "./src/monitor/pathIds.ts",
       "import": "./src/monitor/pathIds.ts",

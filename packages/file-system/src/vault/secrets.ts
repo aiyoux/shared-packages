@@ -113,7 +113,11 @@ export async function materializeForWrite(
 	if (!revealed && existing) revealed = await readSecret(kind, id, existing);
 	if (!revealed) {
 		throw new SecretUnavailableError(
-			kind === 'b2' ? 'Application key is required' : 'RC password is required'
+			kind === 'b2'
+				? 'Application key is required'
+				: kind === 'ai'
+					? 'API key is required'
+					: 'RC password is required'
 		);
 	}
 

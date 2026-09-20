@@ -1,5 +1,6 @@
 /**
- * Shared connection-secret vault (B2 application keys + rclone RC passwords).
+ * Shared connection-secret vault (B2 application keys + rclone RC passwords
+ * + AI API keys).
  *
  * Opt-in. Default remains plaintext IndexedDB (v1). When enabled, secret fields
  * are AES-GCM wrapped with a PBKDF2 key derived from a user passphrase and are
@@ -12,7 +13,7 @@ export const HUB_VAULT_STORE = 'meta';
 export const HUB_VAULT_META_KEY = 'state';
 export { HUB_VAULT_CHANNEL } from '../crossTab.js';
 
-export type SecretKind = 'b2' | 'rclone';
+export type SecretKind = 'b2' | 'rclone' | 'ai';
 
 /** AES-GCM blob stored on a profile in place of the plaintext secret. */
 export type SealedSecret = {

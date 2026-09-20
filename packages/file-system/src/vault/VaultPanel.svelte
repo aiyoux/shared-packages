@@ -48,7 +48,7 @@
 <section class="vault" data-testid="connection-vault">
 	<h4>Lock saved keys</h4>
 	<p class="hint">
-		Optional. A passphrase encrypts Backblaze and rclone secrets in this browser. Default is
+		Optional. A passphrase encrypts Backblaze, rclone, and AI secrets in this browser. Default is
 		unencrypted IndexedDB. Unlock is per tab; locking drops live remote sessions.
 		If you forget the passphrase, re-enter each key.
 	</p>
