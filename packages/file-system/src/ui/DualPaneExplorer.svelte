@@ -41,7 +41,7 @@
 		type QuickConvertSvgContext
 	} from './explorerDriver.js';
 	import { createMemoryExplorerDriver } from './memoryExplorerDriver.js';
-	import { type PaneId, type DualPaneTids } from './dualPaneTypes.js';
+	import { acceptRoomContext, type PaneId, type DualPaneTids } from './dualPaneTypes.js';
 	import { portal } from './portal.js';
 	import FeTipIconBtn from './FeTipIconBtn.svelte';
 	import FeIcon from './FeIcon.svelte';
@@ -602,9 +602,16 @@
 		return onNewRoom;
 	}
 
+	let roomContextOwner: PaneId | null = null;
+
 	function paneRoomContext(id: PaneId) {
 		if (!onRoomContext || !paneAllowsLocalNew(id)) return undefined;
-		return onRoomContext;
+		return (args: { rootId: ExplorerEntryId | null; roomId: string | null }) => {
+			const next = acceptRoomContext(roomContextOwner, id, args.roomId);
+			if (!next.apply) return;
+			roomContextOwner = next.owner;
+			onRoomContext(args);
+		};
 	}
 
 	function paneNewProject(id: PaneId) {

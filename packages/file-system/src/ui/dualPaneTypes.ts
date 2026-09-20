@@ -6,6 +6,21 @@
 
 export type PaneId = 'left' | 'right' | string;
 
+/**
+ * Dual-pane FileExplorers each report room context. A pane that is not in a
+ * project sends `roomId: null`; that must not wipe presence for the pane that
+ * last set a room.
+ */
+export function acceptRoomContext(
+	ownerPane: string | null,
+	fromPane: string,
+	roomId: string | null
+): { owner: string | null; apply: boolean } {
+	if (roomId) return { owner: fromPane, apply: true };
+	if (ownerPane !== null && ownerPane !== fromPane) return { owner: ownerPane, apply: false };
+	return { owner: null, apply: true };
+}
+
 export type DualPaneTids = {
 	/** Outer body grid. */
 	body: string;
