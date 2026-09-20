@@ -133,6 +133,7 @@ export {
 	type ExplorerListResult,
 	type ExplorerOpenTarget,
 	type ExplorerOpenContext,
+	type MediaMetaTarget,
 	type OpenProjectContext,
 	type QuickEditFileContext,
 	type QuickEditVideoContext,
