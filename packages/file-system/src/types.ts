@@ -5,7 +5,6 @@ export type FileTypeId =
 	| 'cari'
 	| 'vrec'
 	| 'vcomp'
-	| 'igfx'
 	| 'kb'
 	| 'anim'
 	| 'digr'

@@ -20,7 +20,7 @@ describe('registry multi-ext image + forceExtension', () => {
 	it('acceptedExtensionsFor product types is primary only', () => {
 		assert.deepEqual(acceptedExtensionsFor('skch'), ['.skch']);
 		assert.deepEqual(acceptedExtensionsFor('vrec'), ['.vrec']);
-		assert.deepEqual(acceptedExtensionsFor('igfx'), ['.igfx']);
+		assert.deepEqual(acceptedExtensionsFor('vcomp'), ['.vcomp']);
 		assert.deepEqual(acceptedExtensionsFor('cari'), ['.cari']);
 		assert.deepEqual(acceptedExtensionsFor('kb'), ['.kb']);
 		assert.deepEqual(acceptedExtensionsFor('anim'), ['.anim']);
@@ -73,8 +73,8 @@ describe('registry multi-ext image + forceExtension', () => {
 		assert.equal(forceExtension('demo', 'skch'), 'demo.skch');
 		assert.equal(forceExtension('demo.skch', 'skch'), 'demo.skch');
 		assert.equal(forceExtension('clip', 'vrec'), 'clip.vrec');
-		assert.equal(forceExtension('demo', 'igfx'), 'demo.igfx');
-		assert.equal(forceExtension('demo.igfx', 'igfx'), 'demo.igfx');
+		assert.equal(forceExtension('demo', 'vcomp'), 'demo.vcomp');
+		assert.equal(forceExtension('demo.vcomp', 'vcomp'), 'demo.vcomp');
 		assert.equal(forceExtension('face', 'cari'), 'face.cari');
 		assert.equal(forceExtension('face.cari', 'cari'), 'face.cari');
 		assert.equal(forceExtension('demo', 'kb'), 'demo.kb');
@@ -87,9 +87,9 @@ describe('registry multi-ext image + forceExtension', () => {
 		assert.equal(forceExtension('note', 'json'), 'note.json');
 		// wrong product ext stripped then primary applied
 		assert.equal(forceExtension('x.vrec', 'skch'), 'x.skch');
-		assert.equal(forceExtension('x.igfx', 'skch'), 'x.skch');
-		assert.equal(forceExtension('x.igfx', 'cari'), 'x.cari');
-		assert.equal(forceExtension('x.cari', 'igfx'), 'x.igfx');
+		assert.equal(forceExtension('x.vcomp', 'skch'), 'x.skch');
+		assert.equal(forceExtension('x.vcomp', 'cari'), 'x.cari');
+		assert.equal(forceExtension('x.cari', 'vcomp'), 'x.vcomp');
 		assert.equal(forceExtension('x.anim', 'skch'), 'x.skch');
 		assert.equal(forceExtension('x.skch', 'anim'), 'x.anim');
 		assert.equal(forceExtension('x.vide', 'skch'), 'x.skch');
@@ -109,7 +109,7 @@ describe('registry multi-ext image + forceExtension', () => {
 		assert.equal(inferFileTypeFromName('draft.skch'), 'skch');
 		assert.equal(inferFileTypeFromName('mesh.ob3d'), 'ob3d');
 		assert.equal(inferFileTypeFromName('face.cari'), 'cari');
-		assert.equal(inferFileTypeFromName('x.igfx'), 'igfx');
+		assert.equal(inferFileTypeFromName('x.vcomp'), 'vcomp');
 		assert.equal(inferFileTypeFromName('a.cari'), 'cari');
 		assert.equal(inferFileTypeFromName('index.kb'), 'kb');
 		assert.equal(inferFileTypeFromName('loop.anim'), 'anim');
@@ -131,7 +131,7 @@ describe('registry multi-ext image + forceExtension', () => {
 		assert.equal(getFileTypeByExtension('.mp4')?.id, 'video');
 		assert.equal(getFileTypeByExtension('.webm')?.id, 'video');
 		assert.equal(getFileTypeByExtension('.skch')?.id, 'skch');
-		assert.equal(getFileTypeByExtension('.igfx')?.id, 'igfx');
+		assert.equal(getFileTypeByExtension('.vcomp')?.id, 'vcomp');
 		assert.equal(getFileTypeByExtension('.cari')?.id, 'cari');
 		assert.equal(getFileTypeByExtension('.kb')?.id, 'kb');
 		assert.equal(getFileTypeByExtension('.anim')?.id, 'anim');
