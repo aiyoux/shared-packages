@@ -63,12 +63,13 @@ export async function encodeGif(
 			const rgba = ctx.getImageData(0, 0, width, height).data;
 			const palette = quantize(rgba, maxColors);
 			const index = applyPalette(rgba, palette);
-			// Cumulative-error delay in centiseconds.
+			// Cumulative-error delay in centiseconds; gifenc's `delay` is in
+			// milliseconds and divides by 10 internally, so feed exact ms.
 			const delayCs = Math.max(
 				MIN_DELAY_CS,
 				Math.round(((i + 1) * 1000) / source.fps / 10) - Math.round((i * 1000) / source.fps / 10)
 			);
-			encoder.writeFrame(index, width, height, { palette, delay: delayCs });
+			encoder.writeFrame(index, width, height, { palette, delay: delayCs * 10 });
 			opts.onProgress?.(i + 1);
 		}
 	} finally {
