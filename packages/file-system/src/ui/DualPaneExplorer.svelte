@@ -416,7 +416,9 @@
 		showRemoteManager = false;
 		if (kind === 'b2') void connectB2(targetPaneId, profile as B2ConnectionProfileV1);
 		else if (kind === 'rclone') void connectRclone(targetPaneId, profile as RcloneConnectionProfileV1);
-		else void connectMonitor(targetPaneId, profile as MonitorConnectionProfileV1);
+		else if (kind === 'monitor') void connectMonitor(targetPaneId, profile as MonitorConnectionProfileV1);
+		// 'ai' is not a file backend: connectRow already set it active; there is
+		// no pane driver to attach, so nothing else to do here.
 	}
 
 	function onRemoteDisconnected(kind: RemoteKind) {
