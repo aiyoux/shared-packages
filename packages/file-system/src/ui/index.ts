@@ -15,6 +15,8 @@ export type {
 	ExplorerContext,
 	ExplorerNewMenuItem,
 	ExplorerPresenceDot,
+	ExplorerCombineResult,
+	ExplorerPersonRoom,
 	ExplorerRoomActionResult,
 	ExplorerPerson,
 	ExplorerPersonNow,

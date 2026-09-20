@@ -15,6 +15,7 @@
 		ExplorerNewMenuItem,
 		ExplorerPerson,
 		ExplorerPresenceDot,
+		ExplorerCombineResult,
 		ExplorerRoomActionResult,
 		ExplorerUnlinkDrain,
 		RemoteKind
@@ -285,6 +286,17 @@
 			label: string;
 			save: boolean;
 		}) => Promise<ExplorerRoomActionResult>;
+		onCombineRoom?: (args: {
+			rootId: ExplorerEntryId;
+			fromRoomId: string;
+			save: boolean;
+		}) => Promise<ExplorerCombineResult>;
+		combineBusy?: boolean;
+		onKeepRoom?: (args: {
+			pairingId: string;
+			roomId: string;
+			keep: boolean;
+		}) => void | Promise<void>;
 		onRoomContext?: (args: {
 			rootId: ExplorerEntryId | null;
 			roomId: string | null;
@@ -348,6 +360,9 @@
 		presenceByFileId,
 		onSwitchRoom,
 		onNewRoom,
+		onCombineRoom,
+		combineBusy = false,
+		onKeepRoom,
 		onRoomContext,
 		people,
 		onInvitePeople,
@@ -615,6 +630,11 @@
 	function paneNewRoom(id: PaneId) {
 		if (!onNewRoom || !paneAllowsLocalNew(id)) return undefined;
 		return onNewRoom;
+	}
+
+	function paneCombineRoom(id: PaneId) {
+		if (!onCombineRoom || !paneAllowsLocalNew(id)) return undefined;
+		return onCombineRoom;
 	}
 
 	let roomContextOwner: PaneId | null = null;
@@ -2133,6 +2153,9 @@
 						{onUnlinkPerson}
 						onSwitchRoom={paneSwitchRoom(id)}
 						onNewRoom={paneNewRoom(id)}
+						onCombineRoom={paneCombineRoom(id)}
+						{combineBusy}
+						{onKeepRoom}
 						onRoomContext={paneRoomContext(id)}
 					>
 						{#snippet headerLeading()}
@@ -2195,6 +2218,9 @@
 						{onUnlinkPerson}
 						onSwitchRoom={paneSwitchRoom(id)}
 						onNewRoom={paneNewRoom(id)}
+						onCombineRoom={paneCombineRoom(id)}
+						{combineBusy}
+						{onKeepRoom}
 						onRoomContext={paneRoomContext(id)}
 					>
 						{#snippet headerLeading()}
@@ -2255,6 +2281,9 @@
 						{onUnlinkPerson}
 						onSwitchRoom={paneSwitchRoom(id)}
 						onNewRoom={paneNewRoom(id)}
+						onCombineRoom={paneCombineRoom(id)}
+						{combineBusy}
+						{onKeepRoom}
 						onRoomContext={paneRoomContext(id)}
 					>
 						{#snippet headerLeading()}

@@ -138,6 +138,7 @@
 		ExplorerNewMenuItem,
 		ExplorerPresenceDot,
 		ExplorerPerson,
+		ExplorerCombineResult,
 		ExplorerRoomActionResult,
 		ExplorerUnlinkDrain
 	} from './componentTypes.js';
@@ -257,6 +258,23 @@
 			rootId: ExplorerEntryId | null;
 			roomId: string | null;
 		}) => void;
+		/**
+		 * Bring another room's work into this one. Disabled during a live
+		 * session: a merge never blocks on a human mid-stroke.
+		 */
+		onCombineRoom?: (args: {
+			rootId: ExplorerEntryId;
+			fromRoomId: string;
+			save: boolean;
+		}) => Promise<ExplorerCombineResult>;
+		/** Someone is editing, so Combine is offered at a quiet moment instead. */
+		combineBusy?: boolean;
+		/** Keep locally: opt in to another of this person's rooms (§11.6). */
+		onKeepRoom?: (args: {
+			pairingId: string;
+			roomId: string;
+			keep: boolean;
+		}) => void | Promise<void>;
 		/** Linked + this-session people. Chip/sheet only inside a project. */
 		people?: readonly ExplorerPerson[];
 		onInvitePeople?: () => void;
@@ -309,6 +327,9 @@
 		presenceByFileId,
 		onSwitchRoom,
 		onNewRoom,
+		onCombineRoom,
+		combineBusy = false,
+		onKeepRoom,
 		onRoomContext,
 		people,
 		onInvitePeople,
@@ -1731,6 +1752,37 @@
 		} catch (e) {
 			reportError(e);
 			return 'error';
+		}
+	}
+
+	let combineOpen = $state(false);
+	let combinePending = $state<string | null>(null);
+	let combineConflict = $state<{ label: string; paths: string[] } | null>(null);
+
+	function roomLabelOf(roomId: string): string {
+		return projectRooms.find((r) => r.id === roomId)?.label ?? roomId;
+	}
+
+	async function runCombine(fromRoomId: string, save: boolean) {
+		const root = projectRootId;
+		if (!root || !onCombineRoom) return;
+		combineConflict = null;
+		try {
+			const result = await onCombineRoom({ rootId: root, fromRoomId, save });
+			if (result.status === 'dirty') {
+				combinePending = fromRoomId;
+				return;
+			}
+			combinePending = null;
+			if (result.status === 'conflict') {
+				combineConflict = { label: roomLabelOf(fromRoomId), paths: result.paths };
+				return;
+			}
+			if (result.status === 'live') return;
+			combineOpen = false;
+			await afterRoomChange();
+		} catch (e) {
+			reportError(e);
 		}
 	}
 
@@ -3681,6 +3733,23 @@
 											</button>
 										{/if}
 									{/if}
+									{#if onCombineRoom && projectRooms.length > 1}
+										<button
+											type="button"
+											class="fe-view-option"
+											data-testid="fe-room-combine"
+											role="menuitem"
+											disabled={combineBusy}
+											onclick={() => (combineOpen = true)}
+										>
+											<span>Combine with…</span>
+										</button>
+										{#if combineBusy}
+											<p class="fe-room-note" data-testid="fe-room-combine-busy">
+												You can combine rooms when nobody is editing.
+											</p>
+										{/if}
+									{/if}
 								</div>
 							{/if}
 						</span>
@@ -3770,6 +3839,29 @@
 													</button>
 												{/if}
 											</div>
+											{#if onKeepRoom && person.rooms?.length}
+												<div class="fe-people-rooms" data-testid="fe-people-rooms">
+													<span class="fe-people-name-label">Keep locally</span>
+													{#each person.rooms as room (room.roomId)}
+														<label class="fe-people-room" data-testid="fe-people-room">
+															<input
+																type="checkbox"
+																data-testid="fe-people-room-keep"
+																data-room-id={room.roomId}
+																checked={room.kept}
+																disabled={room.locked}
+																onchange={(e) =>
+																	void onKeepRoom?.({
+																		pairingId: person.pairingId,
+																		roomId: room.roomId,
+																		keep: e.currentTarget.checked
+																	})}
+															/>
+															<span>{room.label}</span>
+														</label>
+													{/each}
+												</div>
+											{/if}
 										</div>
 									{/each}
 									{#if onInvitePeople}
@@ -4768,6 +4860,79 @@
 		</div>
 	{/if}
 
+	{#if combineOpen}
+		<div
+			class="fe-room-switch-root"
+			data-testid="fe-room-combine-dialog"
+			role="dialog"
+			aria-modal="true"
+			aria-labelledby="fe-room-combine-title"
+		>
+			<button
+				type="button"
+				class="fe-room-switch-scrim"
+				aria-label="Cancel"
+				onclick={() => {
+					combineOpen = false;
+					combineConflict = null;
+					combinePending = null;
+				}}
+			></button>
+			<div class="fe-room-switch-card">
+				<h2 id="fe-room-combine-title" data-testid="fe-room-combine-title">
+					Combine into {currentRoom?.label ?? 'this room'}?
+				</h2>
+				{#if combineConflict}
+					<p class="fe-room-note" data-testid="fe-room-combine-conflict">
+						{currentRoom?.label ?? 'This room'} and {combineConflict.label} couldn’t combine.
+						Both rooms are as they were.
+					</p>
+					<ul class="fe-room-conflict-list">
+						{#each combineConflict.paths as path (path)}
+							<li data-testid="fe-room-combine-conflict-path">{path}</li>
+						{/each}
+					</ul>
+				{:else if combinePending}
+					<p class="fe-room-note" data-testid="fe-room-combine-dirty">
+						You have unsaved work here. Save it first?
+					</p>
+					<div class="fe-room-switch-actions">
+						<button
+							type="button"
+							class="ds-btn ds-btn--sm ds-btn--ghost"
+							onclick={() => (combinePending = null)}
+						>
+							Cancel
+						</button>
+						<button
+							type="button"
+							class="ds-btn ds-btn--sm ds-btn--primary"
+							data-testid="fe-room-combine-save"
+							onclick={() => void runCombine(combinePending!, true)}
+						>
+							Save and combine
+						</button>
+					</div>
+				{:else}
+					<p class="fe-room-note">
+						This keeps the other room’s history in the project. If anything can’t combine
+						(usually notes), both rooms stay as they are.
+					</p>
+					{#each projectRooms.filter((r) => r.id !== currentRoom?.id) as room (room.id)}
+						<button
+							type="button"
+							class="fe-view-option"
+							data-testid="fe-room-combine-pick"
+							data-room-id={room.id}
+							onclick={() => void runCombine(room.id, false)}
+						>
+							<span>{room.label}</span>
+						</button>
+					{/each}
+				{/if}
+			</div>
+		</div>
+	{/if}
 	{#if pendingRoomSwitch}
 		<div
 			class="fe-room-switch-root"
@@ -5570,6 +5735,31 @@
 		background: var(--surface-2);
 		border: 1px solid var(--line-hairline);
 		color: var(--text-primary);
+	}
+	.fe-people-rooms {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 0.6rem;
+		margin-top: 0.4rem;
+		font-size: 0.8rem;
+	}
+	.fe-people-room {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.3rem;
+		color: var(--text-secondary);
+	}
+	.fe-room-note {
+		margin: 0 0 0.75rem;
+		font-size: 0.85rem;
+		color: var(--text-secondary);
+	}
+	.fe-room-conflict-list {
+		margin: 0 0 0.75rem;
+		padding-left: 1.1rem;
+		font-size: 0.85rem;
+		color: var(--text-secondary);
 	}
 	.fe-room-switch-card h2 {
 		margin: 0 0 0.75rem;

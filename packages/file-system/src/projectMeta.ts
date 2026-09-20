@@ -46,6 +46,18 @@ export type ProjectMeta = {
 	currentRoomId?: string;
 	/** Linked people. Unknown keys already survive; this is the typed shape. */
 	links?: ProjectLink[];
+	/**
+	 * Extra `(peer, room)` pairs this copy keeps. The default subscription —
+	 * the current room, for every linked person — is computed, never stored, so
+	 * switching rooms cannot leave a stale pin behind.
+	 */
+	pins?: RoomPin[];
+};
+
+/** One opt-in subscription: keep this person's copy of this room locally. */
+export type RoomPin = {
+	pairingId: string;
+	roomId: string;
 };
 
 export function mintProjectId(): string {
@@ -75,6 +87,25 @@ export function roomsFromMeta(
 
 export function linksFromMeta(meta: ProjectMeta | null | undefined): ProjectLink[] {
 	return meta?.links?.length ? meta.links : [];
+}
+
+export function pinsFromMeta(meta: ProjectMeta | null | undefined): RoomPin[] {
+	return meta?.pins?.length ? meta.pins : [];
+}
+
+function samePin(a: RoomPin, b: RoomPin): boolean {
+	return a.pairingId === b.pairingId && a.roomId === b.roomId;
+}
+
+export function addRoomPin(meta: ProjectMeta, pin: RoomPin): ProjectMeta {
+	const pins = pinsFromMeta(meta);
+	if (pins.some((row) => samePin(row, pin))) return meta;
+	return { ...meta, pins: [...pins, pin] };
+}
+
+export function removeRoomPin(meta: ProjectMeta, pin: RoomPin): ProjectMeta {
+	const pins = pinsFromMeta(meta).filter((row) => !samePin(row, pin));
+	return { ...meta, pins };
 }
 
 export function upsertProjectLink(meta: ProjectMeta, link: ProjectLink): ProjectMeta {

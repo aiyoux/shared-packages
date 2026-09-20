@@ -35,6 +35,16 @@ export type ExplorerPresenceDot = {
 /** Hub git checkout / new-room. `dirty` means the tree has unsaved work. */
 export type ExplorerRoomActionResult = 'ok' | 'dirty';
 
+/**
+ * Combining is atomic: `conflict` means both rooms are exactly as they were,
+ * with `paths` naming what a human has to look at.
+ */
+export type ExplorerCombineResult =
+	| { status: 'ok' }
+	| { status: 'dirty' }
+	| { status: 'live' }
+	| { status: 'conflict'; paths: string[] };
+
 /** People-sheet row. Presence dots stay room-scoped; other rooms live here. */
 export type ExplorerPersonNow =
 	| { kind: 'here' }
@@ -53,6 +63,19 @@ export type ExplorerPerson = {
 	/** Host-only. Guest with write still shows Can edit, not Revoke. */
 	canRevoke?: boolean;
 	linked: boolean;
+	/**
+	 * Which of this person's rooms this device keeps. The current room is
+	 * always kept and cannot be unchecked — it is where the user is working.
+	 */
+	rooms?: readonly ExplorerPersonRoom[];
+};
+
+export type ExplorerPersonRoom = {
+	roomId: string;
+	label: string;
+	kept: boolean;
+	/** The current room: kept for everyone, so the checkbox is locked on. */
+	locked: boolean;
 };
 
 export type ExplorerUnlinkDrain = 'sync' | 'without';

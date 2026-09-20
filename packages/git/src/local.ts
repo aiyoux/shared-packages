@@ -453,6 +453,11 @@ export async function localFindMergeBase(fs: GitFs, dir: string, oids: string[])
 	return Array.isArray(found) ? found.map(String) : [];
 }
 
+/**
+ * `write: true` writes the `.pack` but no `.idx`, and without an index the
+ * objects inside it cannot be read. Always index a pack you intend to rely on
+ * — `localRepackObjects` does both.
+ */
 export async function localPackObjects(
 	fs: GitFs,
 	dir: string,
@@ -460,4 +465,80 @@ export async function localPackObjects(
 ): Promise<PackObjectsResult> {
 	if (!opts.oids.length) throw new Error('packObjects needs at least one oid.');
 	return git.packObjects({ fs, dir, oids: opts.oids, write: opts.write });
+}
+
+export async function localIndexPack(fs: GitFs, dir: string, filepath: string): Promise<void> {
+	await git.indexPack({ fs, dir, filepath });
+}
+
+/** Write a pack of `oids` and index it, so the objects stay readable. */
+export async function localRepackObjects(
+	fs: GitFs,
+	dir: string,
+	oids: string[]
+): Promise<string | null> {
+	const { filename } = await localPackObjects(fs, dir, { oids, write: true });
+	if (!filename) return null;
+	const rel = `.git/objects/pack/${filename}`;
+	await localIndexPack(fs, dir, rel);
+	return rel;
+}
+
+/**
+ * Land a packfile someone sent us and make its objects readable.
+ *
+ * `indexPack` builds the `.idx` beside the `.pack`; without it the objects are
+ * present on disk but invisible to every read.
+ */
+export async function localAddPack(
+	fs: GitFs,
+	dir: string,
+	name: string,
+	pack: Uint8Array
+): Promise<string> {
+	const safe = name.replace(/[^A-Za-z0-9._-]/g, '-');
+	const rel = `.git/objects/pack/${safe}.pack`;
+	const full = `${dir.replace(/\/$/, '')}/${rel}`;
+	const p = (fs as unknown as { promises: PackFsPromises }).promises;
+	for (const part of ['.git', '.git/objects', '.git/objects/pack']) {
+		try {
+			await p.mkdir(`${dir.replace(/\/$/, '')}/${part}`);
+		} catch {
+			/* already there */
+		}
+	}
+	await p.writeFile(full, pack);
+	await git.indexPack({ fs, dir, filepath: rel });
+	return rel;
+}
+
+type PackFsPromises = {
+	mkdir(path: string): Promise<unknown>;
+	writeFile(path: string, data: Uint8Array): Promise<unknown>;
+};
+
+/** Remote tracking ref for one peer's copy of a room. */
+export function remoteRoomRef(pairingId: string, roomId: string): string {
+	return `refs/remotes/${pairingId}/${ROOM_BRANCH_PREFIX}${roomId}`;
+}
+
+export async function localWriteRef(
+	fs: GitFs,
+	dir: string,
+	ref: string,
+	oid: string
+): Promise<void> {
+	await git.writeRef({ fs, dir, ref, value: oid, force: true });
+}
+
+export async function localResolveRef(
+	fs: GitFs,
+	dir: string,
+	ref: string
+): Promise<string | null> {
+	try {
+		return await git.resolveRef({ fs, dir, ref });
+	} catch {
+		return null;
+	}
 }
