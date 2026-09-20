@@ -39,6 +39,7 @@ export {
 	isVisualClip,
 	ensureAnimIdentity,
 	parseAnimDocument,
+	parseAnimView,
 	sameFsBackend,
 	serializeAnimDocument,
 	withDropKeyframes

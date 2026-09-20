@@ -127,7 +127,7 @@ export function clipOnBackend<B extends ClipSource['backend']>(
 	return clip.bind !== 'clone' && clip.source.backend === backend;
 }
 
-/** Window descriptor in the persisted `view` block. Roles are opaque strings:
+/** Window descriptor in the stored view record. Roles are opaque strings:
  *  the animation package stays app-agnostic; the host validates role ids
  *  against its own window catalog on load. */
 export type AnimWindowData = { role: string; clockId?: string };
@@ -136,12 +136,20 @@ export type AnimWindowData = { role: string; clockId?: string };
  *  a reloaded document always resumes paused. */
 export type AnimPlayheadData = { timeMs: number };
 
-/** App/workspace state that travels with the document but is never
- *  authoring data: window layout (`layout` is a serialized pane-layout tree,
- *  validated by the host), per-clock playhead positions, and the
- *  auto-keyframe toggle (whether drags record keyframes) — per clock id, so
- *  one playhead can auto-key while another previews without recording.
- *  Absent for a given clock id defaults to on (see the host's `?? true`). */
+/** Per-user workspace state for one animation: window layout (`layout` is a
+ *  serialized pane-layout tree, validated by the host), per-clock playhead
+ *  positions, and the auto-keyframe toggle (whether drags record keyframes) —
+ *  per clock id, so one playhead can auto-key while another previews without
+ *  recording. Absent for a given clock id defaults to on (host's `?? true`).
+ *
+ *  **Not part of the document. Never write it into the file.** It describes
+ *  one person's machine, so a document carrying it cannot produce identical
+ *  bytes on two devices — which is exactly what `offline-project-collab.md`
+ *  §5.2 needs for a deterministic checkpoint — and it makes every room
+ *  combine conflict on layout drift that has nothing to do with the
+ *  animation. The host persists it per `(viewer, document id)`; see
+ *  `docViewStore.ts`. `parseAnimView` validates a stored record: the shape
+ *  belongs with the format even though the data does not. */
 export type AnimDocView = {
 	layout?: unknown;
 	windows?: Record<string, AnimWindowData>;
@@ -165,5 +173,4 @@ export type AnimDocument = {
 	durationMs: number;
 	clips: AnimClip[];
 	canvas?: AnimCanvas;
-	view?: AnimDocView;
 };

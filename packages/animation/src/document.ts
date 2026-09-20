@@ -259,7 +259,15 @@ function parseAutoKeyframeByClock(raw: unknown): Record<string, boolean> {
 	return out;
 }
 
-function parseView(raw: unknown): AnimDocView | undefined {
+/**
+ * Validate a stored per-user view record.
+ *
+ * Deliberately not called by `parseAnimDocument`: the view is not part of the
+ * document (see `AnimDocView`). The host reads the record from its own
+ * per-viewer store and validates it here, so the shape stays with the format
+ * while the data stays off the file.
+ */
+export function parseAnimView(raw: unknown): AnimDocView | undefined {
 	if (raw === undefined) return undefined;
 	if (!isRecord(raw)) throw new AnimParseError('view must be an object');
 	let windows: Record<string, AnimWindowData> | undefined;
@@ -316,7 +324,9 @@ export function parseAnimDocument(input: Uint8Array | unknown): AnimDocument {
 		throw new AnimParseError(`unsupported schemaVersion: ${String(raw.schemaVersion)}`);
 	}
 	if (!Array.isArray(raw.clips)) throw new AnimParseError('clips must be an array');
-	const view = parseView(raw.view);
+	// `raw.view` is ignored, not parsed: older files carry a view block and it
+	// is per-user state that no longer belongs in the document. Dropping it on
+	// read is what makes the serialized bytes device-independent.
 	const canvas = parseCanvas(raw.canvas) ?? { ...DEFAULT_ANIM_CANVAS };
 	const id = optionalId(raw.id);
 	const createdAt = optionalCreatedAt(raw.createdAt);
@@ -326,8 +336,7 @@ export function parseAnimDocument(input: Uint8Array | unknown): AnimDocument {
 		...(createdAt !== undefined ? { createdAt } : {}),
 		durationMs: finiteNumber(raw.durationMs, 'durationMs'),
 		clips: raw.clips.map((clip, i) => parseClip(clip, i)),
-		canvas,
-		...(view ? { view } : {})
+		canvas
 	};
 }
 
@@ -486,8 +495,7 @@ export function serializeAnimDocument(doc: AnimDocument): string {
 		...(clean.createdAt !== undefined ? { createdAt: clean.createdAt } : {}),
 		durationMs: clean.durationMs,
 		clips: clean.clips.map(persistClip),
-		canvas: clean.canvas,
-		...(clean.view ? { view: clean.view } : {})
+		canvas: clean.canvas
 	});
 }
 

@@ -9,6 +9,7 @@ import {
 	createPlayheadRegistry as reexportedRegistry,
 	ensureAnimIdentity,
 	parseAnimDocument,
+	parseAnimView,
 	sameFsBackend,
 	serializeAnimDocument,
 	type AnimClip,
@@ -398,45 +399,18 @@ describe('parseAnimDocument / serializeAnimDocument', () => {
 		).toThrow(/omit source/);
 	});
 
-	it('round-trips the view block: layout, windows, playheads', () => {
-		const view = {
-			layout: { kind: 'split', id: 'anim-root-split', direction: 'col', ratio: 0.6 },
-			windows: {
-				'anim-canvas': { role: 'canvas', clockId: 'primary' },
-				'anim-timeline': { role: 'timeline', clockId: 'clock-2' }
-			},
-			playheads: { primary: { timeMs: 1200 }, 'clock-2': { timeMs: 3400 } }
-		};
-		const doc: AnimDocument = { ...cloneDoc, view };
-		const json = serializeAnimDocument(doc);
-		expect(parseAnimDocument(json).view).toEqual(view);
-	});
-
-	it('drops junk view fields and omits an empty view', () => {
-		const parsed = parseAnimDocument({
-			schemaVersion: 1,
-			durationMs: 100,
-			clips: [],
-			view: {
-				layout: 'not-a-layout-object',
-				windows: { leaf1: { role: 'canvas', clockId: 'primary' } },
-				playheads: { primary: { timeMs: 500 } },
-				mystery: true
-			}
-		});
-		expect(parsed.view).toEqual({
-			windows: { leaf1: { role: 'canvas', clockId: 'primary' } },
-			playheads: { primary: { timeMs: 500 } }
-		});
-		// Structural junk inside collections is rejected, not silently dropped.
-		expect(() =>
-			parseAnimDocument({ ...cloneDoc, view: { windows: { leaf2: 'junk' } } })
-		).toThrow(/must be an object/);
-		expect(() =>
-			parseAnimDocument({ ...cloneDoc, view: { playheads: { p: { timeMs: 'nope' } } } })
-		).toThrow(/finite number/);
-		const json = serializeAnimDocument({ ...cloneDoc, view: undefined });
+	it('never writes a view into the document, and ignores one on read', () => {
+		// The view is per-viewer state kept outside the file (docViewStore), so
+		// the serialized bytes must be identical on two machines whose layouts
+		// differ — that is what offline-project-collab.md 5.2 needs.
+		const json = serializeAnimDocument(cloneDoc);
 		expect(JSON.parse(json)).not.toHaveProperty('view');
+		const withStaleView = parseAnimDocument({
+			...cloneDoc,
+			view: { layout: { kind: 'split' }, playheads: { primary: { timeMs: 1200 } } }
+		});
+		expect('view' in withStaleView).toBe(false);
+		expect(JSON.parse(serializeAnimDocument(withStaleView))).not.toHaveProperty('view');
 	});
 });
 
@@ -511,25 +485,41 @@ describe('clipSpanMs / clipVisibleAt', () => {
 	});
 });
 
-describe('view.autoKeyframeByClock', () => {
-	it('round-trips per-clock true and false', () => {
-		const doc = parseAnimDocument({
-			...cloneDoc,
-			view: { autoKeyframeByClock: { primary: true, 'clock-2': false } }
+describe('parseAnimView', () => {
+	it('round-trips layout, windows, playheads and per-clock auto-keyframe', () => {
+		const view = {
+			layout: { kind: 'split', id: 'anim-root-split', direction: 'col', ratio: 0.6 },
+			windows: {
+				'anim-canvas': { role: 'canvas', clockId: 'primary' },
+				'anim-timeline': { role: 'timeline', clockId: 'clock-2' }
+			},
+			playheads: { primary: { timeMs: 1200 }, 'clock-2': { timeMs: 3400 } },
+			autoKeyframeByClock: { primary: true, 'clock-2': false }
+		};
+		expect(parseAnimView(view)).toEqual(view);
+	});
+
+	it('drops junk fields and empty collections', () => {
+		expect(
+			parseAnimView({
+				layout: 'not-a-layout-object',
+				windows: { leaf1: { role: 'canvas', clockId: 'primary' } },
+				playheads: { primary: { timeMs: 500 } },
+				autoKeyframeByClock: {},
+				mystery: true
+			})
+		).toEqual({
+			windows: { leaf1: { role: 'canvas', clockId: 'primary' } },
+			playheads: { primary: { timeMs: 500 } }
 		});
-		expect(doc.view).toEqual({ autoKeyframeByClock: { primary: true, 'clock-2': false } });
-		expect(serializeAnimDocument(doc)).toMatch(/autoKeyframeByClock/);
+		expect(parseAnimView(undefined)).toBeUndefined();
+		expect(parseAnimView({})).toBeUndefined();
 	});
 
-	it('drops an empty map', () => {
-		const doc = parseAnimDocument({ ...cloneDoc, view: { autoKeyframeByClock: {} } });
-		expect(doc.view).toBeUndefined();
-	});
-
-	it('rejects a non-boolean entry', () => {
-		expect(() =>
-			parseAnimDocument({ ...cloneDoc, view: { autoKeyframeByClock: { primary: 'yes' } } })
-		).toThrow();
+	it('rejects structural junk inside collections rather than dropping it', () => {
+		expect(() => parseAnimView({ windows: { leaf2: 'junk' } })).toThrow(/must be an object/);
+		expect(() => parseAnimView({ playheads: { p: { timeMs: 'nope' } } })).toThrow(/finite number/);
+		expect(() => parseAnimView({ autoKeyframeByClock: { primary: 'yes' } })).toThrow();
 	});
 });
 
