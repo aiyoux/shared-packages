@@ -3,6 +3,7 @@
 	 * Drag handle between two panes. Visual language matches
 	 * {@link ResizableSidePanel}'s divider (hairline + centered pill).
 	 */
+	import { onDestroy } from 'svelte';
 	let {
 		axis,
 		ariaLabel = 'Resize panes',
@@ -22,6 +23,7 @@
 	let dragging = $state(false);
 	let host: HTMLElement | undefined = $state();
 	let drag: { pointerId: number; grabOffset: number } | null = null;
+	let tracked = false;
 
 	function splitSize(): number {
 		const parent = host?.parentElement;
@@ -36,6 +38,22 @@
 		return axis === 'x' ? r.left + r.width / 2 : r.top + r.height / 2;
 	}
 
+	function trackWindow() {
+		if (tracked) return;
+		tracked = true;
+		window.addEventListener('pointermove', onPointerMove);
+		window.addEventListener('pointerup', endDrag);
+		window.addEventListener('pointercancel', endDrag);
+	}
+
+	function untrackWindow() {
+		if (!tracked) return;
+		tracked = false;
+		window.removeEventListener('pointermove', onPointerMove);
+		window.removeEventListener('pointerup', endDrag);
+		window.removeEventListener('pointercancel', endDrag);
+	}
+
 	function endDrag(e: PointerEvent) {
 		if (!drag || e.pointerId !== drag.pointerId) return;
 		try {
@@ -47,24 +65,20 @@
 		if (host) host.style.removeProperty('pointer-events');
 		drag = null;
 		dragging = false;
+		untrackWindow();
 	}
 
 	// Track the active drag on the window, not the element: if pointer capture
 	// silently failed (or was implicitly released), element-only listeners stop
 	// seeing moves and — worse — never see the pointerup, leaving the drag
 	// armed so that later mere hovers keep resizing the split.
-	$effect(() => {
-		if (!dragging) return;
-		const move = (e: PointerEvent) => onPointerMove(e);
-		const end = (e: PointerEvent) => endDrag(e);
-		window.addEventListener('pointermove', move);
-		window.addEventListener('pointerup', end);
-		window.addEventListener('pointercancel', end);
-		return () => {
-			window.removeEventListener('pointermove', move);
-			window.removeEventListener('pointerup', end);
-			window.removeEventListener('pointercancel', end);
-		};
+	//
+	// The listeners attach synchronously in onPointerDown, not in an effect:
+	// effects run after the state flush, so a quick press-drag-release could
+	// dispatch its moves (and its pointerup) before the effect attached —
+	// swallowing the whole flick and leaving the drag armed.
+	onDestroy(() => {
+		untrackWindow();
 	});
 
 	function onPointerDown(e: PointerEvent) {
@@ -102,6 +116,9 @@
 			grabOffset: (axis === 'x' ? e.clientX : e.clientY) - handleCenter()
 		};
 		dragging = true;
+		// Synchronous: a quick flick's moves/pointerup may dispatch before an
+		// effect could attach, which previously swallowed the whole drag.
+		trackWindow();
 	}
 
 	function onPointerMove(e: PointerEvent) {
