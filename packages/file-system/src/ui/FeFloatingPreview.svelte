@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onDestroy, tick, untrack } from 'svelte';
+	import { onDestroy, tick, untrack, type Snippet } from 'svelte';
 	import FeIcon from './FeIcon.svelte';
 	import {
 		coerceMediaBlob,
@@ -10,9 +10,9 @@
 	import type { ExplorerDriver, ExplorerEntry } from './explorerDriver.js';
 	import {
 		canReadExplorerBlob,
-		embedMediaUrl,
 		loadExplorerMediaSrc,
-		readExplorerBlob
+		readExplorerBlob,
+		type MediaMetaTarget
 	} from './explorerDriver.js';
 	import { formatPreviewReadError } from './explorerError.js';
 	import { PanZoomViewport } from '@shared-packages/ui';
@@ -20,11 +20,14 @@
 	let {
 		entry,
 		driver,
-		onClose
+		onClose,
+		mediaMeta
 	}: {
 		entry: ExplorerEntry;
 		driver: ExplorerDriver;
 		onClose: () => void;
+		/** Metadata panel for video / GIF previews — same slot as the docked preview. */
+		mediaMeta?: Snippet<[MediaMetaTarget]>;
 	} = $props();
 
 	let blobUrl = $state<string | null>(null);
@@ -33,6 +36,17 @@
 	let kind = $derived(getPreviewKind(entry));
 	let pdfBlob = $state<Blob | null>(null);
 	let pdfFallbackUrl = $state<string | null>(null);
+
+	let metaOpen = $state(false);
+
+	function entryHasMediaMeta(): boolean {
+		const k = kind;
+		if (k === 'video') return true;
+		return (
+			k === 'image' &&
+			(entry.name.toLowerCase().endsWith('.gif') || entry.contentType === 'image/gif')
+		);
+	}
 
 	// PDF page state
 	let pdfPageCount = $state(0);
@@ -224,6 +238,17 @@
 	<div class="fe-float-card" role="dialog" aria-modal="true" aria-label={entry.name} tabindex="-1" onclick={(e) => e.stopPropagation()}>
 		<div class="fe-float-header">
 			<span class="fe-float-title" title={entry.name}>{entry.name}</span>
+			{#if mediaMeta && entryHasMediaMeta()}
+				<button
+					type="button"
+					class="fe-float-meta-toggle"
+					aria-pressed={metaOpen}
+					data-testid="fe-float-meta-toggle"
+					onclick={() => (metaOpen = !metaOpen)}
+				>
+					{metaOpen ? 'Hide metadata' : 'Show metadata'}
+				</button>
+			{/if}
 			<button type="button" class="fe-float-close" data-testid="fe-float-close" aria-label="Close" onclick={onClose}>
 				<FeIcon name="x" size={20} />
 			</button>
@@ -238,7 +263,12 @@
 					>{i < links.length - 1 ? ', ' : ''}{/each}
 			</p>
 		{/if}
-		<div class="fe-float-body" class:text={kind === 'text'} class:image={kind === 'image'}>
+			{#if metaOpen && mediaMeta}
+				<div class="fe-float-media-meta" data-testid="fe-float-meta">
+					{@render mediaMeta({ entry, load: () => readExplorerBlob(driver, entry.id) })}
+				</div>
+			{/if}
+			<div class="fe-float-body" class:text={kind === 'text'} class:image={kind === 'image'}>
 			{#if loading}
 				<div class="fe-float-loading">
 					<div class="fe-float-spinner"></div>
@@ -352,7 +382,27 @@
 		background: var(--surface-3, #2a2a2a);
 		color: var(--text-primary, #fff);
 	}
-	.fe-float-body {
+	.fe-float-meta-toggle {
+			flex-shrink: 0;
+			background: none;
+			border: 1px solid var(--line-hairline, #333);
+			border-radius: 4px;
+			color: var(--text-secondary, #aaa);
+			cursor: pointer;
+			padding: 3px 8px;
+			font-size: 0.75rem;
+		}
+		.fe-float-meta-toggle:hover,
+		.fe-float-meta-toggle[aria-pressed='true'] {
+			background: var(--surface-3, #2a2a2a);
+			color: var(--text-primary, #fff);
+		}
+		.fe-float-media-meta {
+			padding: 0 12px 8px;
+			display: flex;
+			justify-content: center;
+		}
+		.fe-float-body {
 		flex: 1;
 		min-height: 0;
 		overflow: auto;

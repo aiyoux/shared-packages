@@ -5219,6 +5219,7 @@
 		<FeFloatingPreview
 			entry={floatingPreviewEntry}
 			{driver}
+			{mediaMeta}
 			onClose={() => (floatingPreviewEntry = null)}
 		/>
 	{/if}
