@@ -88,6 +88,11 @@ export interface BlobRef {
 	 */
 	packOffset?: number;
 	/**
+	 * SHA-256 hex of the member bytes. Optional so existing rows keep working;
+	 * populated on write. Same digest Connections stores as `meta.sha256`.
+	 */
+	contentHash?: string;
+	/**
 	 * IEEE CRC-32 of the member bytes. Optional so existing rows keep working;
 	 * when present, a packed read that doesn't match is a neighbour-byte fail.
 	 */

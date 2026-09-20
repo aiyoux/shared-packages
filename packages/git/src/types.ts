@@ -27,7 +27,14 @@ export type GitChange = {
 	renamedFrom?: string;
 };
 
-export type GitAuthor = { name: string; email: string };
+export type GitAuthor = {
+	name: string;
+	email: string;
+	/** Unix seconds. Omit for wall-clock (human GitHistory commits). */
+	timestamp?: number;
+	/** Minutes from UTC. Omit for the local offset. */
+	timezoneOffset?: number;
+};
 
 /** HEAD vs working-tree text for one changed path, for the commit panel's
  *  per-file expand. `oldText`/`newText` are the exact texts `diffLines` (and
@@ -131,6 +138,8 @@ export type CommitInput = {
 	/** Paths to stage, relative to the working tree root. Must be non-empty. */
 	paths: string[];
 	author: GitAuthor;
+	/** Defaults to `author`. Collab checkpoints must pass both with the same timestamp. */
+	committer?: GitAuthor;
 	/**
 	 * Per-path partial-stage override: exact bytes to commit for that path,
 	 * in place of its working-tree file — built by `applySelection` from a

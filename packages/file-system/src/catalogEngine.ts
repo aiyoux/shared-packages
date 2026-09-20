@@ -6,7 +6,7 @@
  * other tabs (and the extract worker when it is not given a port) speak SQL
  * over BroadcastChannel to that leader.
  */
-import { CATALOG_SCHEMA } from './catalogSchema.js';
+import { applyCatalogColumnMigrations, CATALOG_SCHEMA } from './catalogSchema.js';
 import { createCatalogLock, type CatalogLock, type LockAttempt } from './catalogLock.js';
 
 export { CATALOG_SCHEMA };
@@ -93,6 +93,7 @@ function wrapOo1(db: Oo1Db): SqlEngine {
 				DROP TABLE IF EXISTS leases;
 			`);
 			db.exec(CATALOG_SCHEMA);
+			applyCatalogColumnMigrations((sql) => db.exec(sql));
 			applyLiveNameIndexes(db);
 		},
 		async close() {
@@ -134,6 +135,7 @@ async function openFreshMemory(): Promise<SqlEngine> {
 	const sqlite3 = await loadSqlite3();
 	const db = new sqlite3.oo1.DB(':memory:');
 	db.exec(CATALOG_SCHEMA);
+	applyCatalogColumnMigrations((sql) => db.exec(sql));
 	applyLiveNameIndexes(db);
 	return wrapOo1(db);
 }

@@ -14,6 +14,7 @@ import {
 import { forceExtension, getFileType, inferFileTypeFromName } from './registry.js';
 import { parseJsonBytes, serializeBody } from './serialize.js';
 import { crc32 } from './crc32.js';
+import { sha256Hex } from './contentHash.js';
 import { profileAdd } from './profile.js';
 
 async function blobToBytes(blob: Blob): Promise<Uint8Array> {
@@ -1091,6 +1092,7 @@ export class VfsService {
 			blobId: string;
 			size: number;
 			crc: number;
+			contentHash: string;
 		};
 		const planned: PlannedFile[] = [];
 		const folderKeys = new Set<string>();
@@ -1118,6 +1120,7 @@ export class VfsService {
 				name = forceExtension(name, fileType);
 			}
 			const { bytes, contentType } = await serializeBody(input.body, input.contentType);
+			const contentHash = await sha256Hex(bytes);
 			const dirs = parts;
 			let folderKey = '';
 			for (const seg of dirs) {
@@ -1137,7 +1140,8 @@ export class VfsService {
 				nodeId: generateId('file'),
 				blobId,
 				size: bytes.byteLength,
-				crc: crc32(bytes)
+				crc: crc32(bytes),
+				contentHash
 			});
 		}
 		profileAdd('writeTree.plan+crc', performance.now() - tPlan);
@@ -1373,7 +1377,8 @@ export class VfsService {
 							contentType: p.contentType,
 							pending: false,
 							pendingPromote: false,
-							crc32: p.crc
+							crc32: p.crc,
+							contentHash: p.contentHash
 						});
 					}
 				}
@@ -1444,6 +1449,7 @@ export class VfsService {
 		let finalPath = `root/${name}`;
 		const direct = input.direct === true;
 		const { bytes, contentType } = await serializeBody(input.body, input.contentType);
+		const contentHash = await sha256Hex(bytes);
 		const leaseKey = `write:${blobId}`;
 		const owner = generateId('lease');
 		const now = Date.now();
@@ -1533,6 +1539,7 @@ export class VfsService {
 						ref.pending = false;
 						ref.pendingPromote = false;
 						ref.crc32 = crc32(bytes);
+						ref.contentHash = contentHash;
 						await this.db.blobRefs.put(ref);
 					}
 					const node = await this.db.nodes.get(nodeId);
@@ -1576,6 +1583,7 @@ export class VfsService {
 						ref.pendingPromote = false;
 						ref.pending = false;
 						ref.crc32 = crc32(bytes);
+						ref.contentHash = contentHash;
 						await this.db.blobRefs.put(ref);
 					}
 					await this.db.leases.delete(leaseKey);
@@ -1806,24 +1814,27 @@ export class VfsService {
 		 */
 		onReserved?: () => void
 	): Promise<VfsNode[]> {
-		const prepared = inputs.map(({ input, bytes, contentType }) => {
-			let name = sanitizeName(input.name);
-			const fileType = input.fileType ?? inferFileTypeFromName(name);
-			if (fileType !== 'unknown' && getFileType(fileType)) {
-				name = forceExtension(name, fileType);
-			}
-			const nodeId = input.id ?? generateId('file');
-			return {
-				input,
-				bytes,
-				contentType,
-				name,
-				fileType,
-				nodeId,
-				blobId: generateId('blob'),
-				now: Date.now()
-			};
-		});
+		const prepared = await Promise.all(
+			inputs.map(async ({ input, bytes, contentType }) => {
+				let name = sanitizeName(input.name);
+				const fileType = input.fileType ?? inferFileTypeFromName(name);
+				if (fileType !== 'unknown' && getFileType(fileType)) {
+					name = forceExtension(name, fileType);
+				}
+				const nodeId = input.id ?? generateId('file');
+				return {
+					input,
+					bytes,
+					contentType,
+					name,
+					fileType,
+					nodeId,
+					blobId: generateId('blob'),
+					now: Date.now(),
+					contentHash: await sha256Hex(bytes)
+				};
+			})
+		);
 		for (const p of prepared) {
 			if (p.input.onConflict && p.input.onConflict !== 'rename') {
 				throw new VfsError(
@@ -2193,6 +2204,7 @@ export class VfsService {
 								pending: false,
 								pendingPromote: false,
 								crc32: crc32(r.p.bytes),
+								contentHash: r.p.contentHash,
 								packGeneration: packedIndexes.has(i) ? 1 : undefined
 							});
 						}
@@ -2331,6 +2343,7 @@ export class VfsService {
 		const finalPath = this.rootOpfsPath(rel || node.name);
 		const stagingPath = `tmp/${blobId}.bin`;
 		const { bytes, contentType } = await serializeBody(body, opts.contentType ?? node.contentType);
+		const contentHash = await sha256Hex(bytes);
 		const leaseKey = `write:${blobId}`;
 		const owner = generateId('lease');
 		const now = Date.now();
@@ -2387,6 +2400,7 @@ export class VfsService {
 					// `tmp/blob_<id>.bin` after the move and throws OPFS_IO.
 					ref.pendingPromote = true;
 					ref.crc32 = crc32(bytes);
+					ref.contentHash = contentHash;
 					await this.db.blobRefs.put(ref);
 				}
 				cur.blobId = blobId;
@@ -3075,6 +3089,14 @@ export class VfsService {
 	): Promise<void> {
 		await this.ready();
 		const { byteLength } = await this.opfs.writeFinal(packPath, body as never);
+		const packBytes =
+			body instanceof Uint8Array
+				? body
+				: body instanceof ArrayBuffer
+					? new Uint8Array(body)
+					: ArrayBuffer.isView(body)
+						? new Uint8Array(body.buffer, body.byteOffset, body.byteLength)
+						: await blobToBytes(body as Blob);
 		for (const m of members) {
 			if (m.offset + m.byteLength > byteLength) {
 				throw new VfsError(
@@ -3083,14 +3105,18 @@ export class VfsService {
 				);
 			}
 		}
+		const hashes = await Promise.all(
+			members.map((m) => sha256Hex(packBytes.subarray(m.offset, m.offset + m.byteLength)))
+		);
 		await this.db.blobRefs.bulkPut(
-			members.map((m) => ({
+			members.map((m, i) => ({
 				id: m.blobId,
 				opfsPath: packPath,
 				packOffset: m.offset,
 				byteLength: m.byteLength,
 				createdAt: Date.now(),
-				contentType: m.contentType ?? 'application/octet-stream'
+				contentType: m.contentType ?? 'application/octet-stream',
+				contentHash: hashes[i]
 			}))
 		);
 	}
@@ -3104,6 +3130,7 @@ export class VfsService {
 		const writeId = generateId('mw');
 		const finalPath = `blobs/${blobId}.bin`;
 		const { bytes, contentType: ct } = await serializeBody(body, contentType);
+		const contentHash = await sha256Hex(bytes);
 		const { tmpPath, byteLength } = await this.opfs.writePartial(writeId, bytes);
 		await this.db.blobRefs.put({
 			id: blobId,
@@ -3111,7 +3138,8 @@ export class VfsService {
 			byteLength,
 			createdAt: Date.now(),
 			contentType: ct,
-			pendingPromote: true
+			pendingPromote: true,
+			contentHash
 		});
 		await this.opfs.promote(tmpPath, finalPath);
 		await this.db.blobRefs.put({
@@ -3120,7 +3148,8 @@ export class VfsService {
 			byteLength,
 			createdAt: Date.now(),
 			contentType: ct,
-			pendingPromote: false
+			pendingPromote: false,
+			contentHash
 		});
 		return { byteLength, opfsPath: finalPath };
 	}

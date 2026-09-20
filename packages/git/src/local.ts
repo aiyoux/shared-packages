@@ -1,9 +1,36 @@
 import git from 'isomorphic-git';
+import type {
+	FetchResult,
+	HttpClient,
+	MergeDriverCallback,
+	MergeResult,
+	PackObjectsResult
+} from 'isomorphic-git';
 import { diffLines } from './diffLines.js';
-import type { CommitInput, GitChange, GitFileDiff, GitSnapshot } from './types.js';
+import type { CommitInput, GitAuthor, GitChange, GitFileDiff, GitSnapshot } from './types.js';
 
 /** isomorphic-git's node/browser fs shape (`fs.promises` or LightningFS). */
 export type GitFs = Parameters<typeof git.init>[0]['fs'];
+
+export type { FetchResult, HttpClient, MergeDriverCallback, MergeResult, PackObjectsResult };
+
+/**
+ * Room branches live at `refs/heads/room/<roomId>`. Pass `roomBranchName(id)`
+ * as `localBranch`/`localMerge` `ref` / `theirs`.
+ */
+export const ROOM_BRANCH_PREFIX = 'room/';
+
+export function roomBranchName(roomId: string): string {
+	const id = roomId.trim();
+	if (!id) throw new Error('A room id is required.');
+	return `${ROOM_BRANCH_PREFIX}${id}`;
+}
+
+function withFsBuffer<T>(fs: GitFs, run: () => Promise<T>): Promise<T> {
+	const buffered = fs as { withBuffer?: <U>(fn: () => Promise<U>) => Promise<U> };
+	if (typeof buffered.withBuffer === 'function') return buffered.withBuffer(run);
+	return run();
+}
 
 function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
 	if (a.length !== b.length) return false;
@@ -303,9 +330,150 @@ export async function localCommit(fs: GitFs, dir: string, opts: CommitInput): Pr
 			else await git.remove({ fs, dir, filepath });
 		}
 
-		return git.commit({ fs, dir, message, author: opts.author });
+		return git.commit({
+			fs,
+			dir,
+			message,
+			author: opts.author,
+			committer: opts.committer ?? opts.author
+		});
 	};
-	const buffered = fs as { withBuffer?: <T>(fn: () => Promise<T>) => Promise<T> };
-	if (typeof buffered.withBuffer === 'function') return buffered.withBuffer(run);
-	return run();
+	return withFsBuffer(fs, run);
+}
+
+export type LocalBranchOpts = {
+	/** Name relative to `refs/heads`. Room branches: `room/<roomId>`. */
+	ref: string;
+	checkout?: boolean;
+	object?: string;
+	force?: boolean;
+};
+
+export async function localBranch(fs: GitFs, dir: string, opts: LocalBranchOpts): Promise<void> {
+	const ref = opts.ref.trim();
+	if (!ref) throw new Error('A branch name is required.');
+	return withFsBuffer(fs, () =>
+		git.branch({
+			fs,
+			dir,
+			ref,
+			checkout: opts.checkout,
+			object: opts.object,
+			force: opts.force
+		})
+	);
+}
+
+export async function localDeleteBranch(fs: GitFs, dir: string, ref: string): Promise<void> {
+	const name = ref.trim();
+	if (!name) throw new Error('A branch name is required.');
+	return withFsBuffer(fs, () => git.deleteBranch({ fs, dir, ref: name }));
+}
+
+export async function localListBranches(
+	fs: GitFs,
+	dir: string,
+	opts?: { remote?: string }
+): Promise<string[]> {
+	return git.listBranches({ fs, dir, remote: opts?.remote });
+}
+
+export type LocalMergeOpts = {
+	theirs: string;
+	ours?: string;
+	author: GitAuthor;
+	committer?: GitAuthor;
+	message?: string;
+	mergeDriver?: MergeDriverCallback;
+	abortOnConflict?: boolean;
+	fastForward?: boolean;
+	fastForwardOnly?: boolean;
+	dryRun?: boolean;
+	noUpdateBranch?: boolean;
+	allowUnrelatedHistories?: boolean;
+};
+
+export async function localMerge(fs: GitFs, dir: string, opts: LocalMergeOpts): Promise<MergeResult> {
+	const theirs = opts.theirs.trim();
+	if (!theirs) throw new Error('Merge needs a theirs ref.');
+	const committer = opts.committer ?? opts.author;
+	return withFsBuffer(fs, () =>
+		git.merge({
+			fs,
+			dir,
+			theirs,
+			ours: opts.ours,
+			author: opts.author,
+			committer,
+			message: opts.message,
+			mergeDriver: opts.mergeDriver,
+			abortOnConflict: opts.abortOnConflict,
+			fastForward: opts.fastForward,
+			fastForwardOnly: opts.fastForwardOnly,
+			dryRun: opts.dryRun,
+			noUpdateBranch: opts.noUpdateBranch,
+			allowUnrelatedHistories: opts.allowUnrelatedHistories
+		})
+	);
+}
+
+export type LocalFetchOpts = {
+	http: HttpClient;
+	url?: string;
+	remote?: string;
+	ref?: string;
+	remoteRef?: string;
+	singleBranch?: boolean;
+	depth?: number;
+	tags?: boolean;
+	prune?: boolean;
+	corsProxy?: string;
+	headers?: Record<string, string>;
+};
+
+export async function localFetch(fs: GitFs, dir: string, opts: LocalFetchOpts): Promise<FetchResult> {
+	if (!opts.http) throw new Error('Fetch needs an HTTP client.');
+	if (!opts.url && !opts.remote) throw new Error('Fetch needs a url or remote.');
+	return withFsBuffer(fs, () =>
+		git.fetch({
+			fs,
+			dir,
+			http: opts.http,
+			url: opts.url,
+			remote: opts.remote,
+			ref: opts.ref,
+			remoteRef: opts.remoteRef,
+			singleBranch: opts.singleBranch,
+			depth: opts.depth,
+			tags: opts.tags,
+			prune: opts.prune,
+			corsProxy: opts.corsProxy,
+			headers: opts.headers
+		})
+	);
+}
+
+export async function localFindMergeBase(fs: GitFs, dir: string, oids: string[]): Promise<string[]> {
+	if (!oids.length) throw new Error('findMergeBase needs at least one oid.');
+	const found = await git.findMergeBase({ fs, dir, oids });
+	return Array.isArray(found) ? found.map(String) : [];
+}
+
+export async function localPackObjects(
+	fs: GitFs,
+	dir: string,
+	opts: { oids: string[]; write?: boolean }
+): Promise<PackObjectsResult> {
+	if (!opts.oids.length) throw new Error('packObjects needs at least one oid.');
+	return git.packObjects({ fs, dir, oids: opts.oids, write: opts.write });
+}
+
+export async function localIndexPack(
+	fs: GitFs,
+	dir: string,
+	filepath: string
+): Promise<{ oids: string[] }> {
+	const path = filepath.trim();
+	if (!path) throw new Error('indexPack needs a pack filepath.');
+	return git.indexPack({ fs, dir, filepath: path });
 }

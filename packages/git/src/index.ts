@@ -19,16 +19,34 @@ export {
 } from './diffLines.js';
 export { createGitHost, type CreateGitHostOptions } from './host.js';
 export {
+	ROOM_BRANCH_PREFIX,
+	localBranch,
 	localCommit,
+	localDeleteBranch,
 	localDeleteWorkingFile,
 	localDiffFile,
 	localDiscardAllFile,
 	localDiscardRename,
+	localFetch,
+	localFindMergeBase,
+	localIndexPack,
+	localListBranches,
+	localMerge,
+	localPackObjects,
 	localReadBlobAt,
 	localReadWorkingFile,
 	localSnapshot,
 	localWriteWorkingFile,
-	type GitFs
+	roomBranchName,
+	type FetchResult,
+	type GitFs,
+	type HttpClient,
+	type LocalBranchOpts,
+	type LocalFetchOpts,
+	type LocalMergeOpts,
+	type MergeDriverCallback,
+	type MergeResult,
+	type PackObjectsResult
 } from './local.js';
 export { createVfsGitFs, type CreateVfsGitFsOptions } from './vfsGitFs.js';
 export { ensureBuffer } from './ensureBuffer.js';

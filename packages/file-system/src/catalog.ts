@@ -92,12 +92,13 @@ function bindNode(node: VfsNode): unknown[] {
 	];
 }
 
-const BLOB_UPSERT_SQL = `INSERT INTO blob_refs (id, opfs_path, byte_length, created_at, content_type, pending_promote, pending, pack_offset, crc32, pack_generation)
-       VALUES (?,?,?,?,?,?,?,?,?,?)
+const BLOB_UPSERT_SQL = `INSERT INTO blob_refs (id, opfs_path, byte_length, created_at, content_type, pending_promote, pending, pack_offset, crc32, pack_generation, content_hash)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?)
        ON CONFLICT(id) DO UPDATE SET
          opfs_path=excluded.opfs_path, byte_length=excluded.byte_length, created_at=excluded.created_at,
          content_type=excluded.content_type, pending_promote=excluded.pending_promote, pending=excluded.pending,
-         pack_offset=excluded.pack_offset, crc32=excluded.crc32, pack_generation=excluded.pack_generation`;
+         pack_offset=excluded.pack_offset, crc32=excluded.crc32, pack_generation=excluded.pack_generation,
+         content_hash=excluded.content_hash`;
 
 function bindBlob(ref: BlobRef): unknown[] {
 	return [
@@ -110,7 +111,8 @@ function bindBlob(ref: BlobRef): unknown[] {
 		ref.pending ? 1 : 0,
 		ref.packOffset ?? null,
 		ref.crc32 ?? null,
-		ref.packGeneration ?? null
+		ref.packGeneration ?? null,
+		ref.contentHash ?? null
 	];
 }
 
@@ -165,6 +167,7 @@ function decodeBlob(r: Record<string, unknown>): BlobRef {
 	if (r.pack_offset != null) ref.packOffset = Number(r.pack_offset);
 	if (r.crc32 != null) ref.crc32 = Number(r.crc32);
 	if (r.pack_generation != null) ref.packGeneration = Number(r.pack_generation);
+	if (r.content_hash) ref.contentHash = String(r.content_hash);
 	return ref;
 }
 

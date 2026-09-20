@@ -1,6 +1,13 @@
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { createVfs, createMemoryOpfs, VfsError, isActionable, resetSharedVfsForTests } from '../src/index.ts';
+import {
+	createVfs,
+	createMemoryOpfs,
+	VfsError,
+	isActionable,
+	resetSharedVfsForTests,
+	sha256Hex
+} from '../src/index.ts';
 import { isCatalogDeadError } from '../src/catalogEngine.ts';
 
 describe('VfsService', () => {
@@ -10,6 +17,67 @@ describe('VfsService', () => {
 		resetSharedVfsForTests();
 		vfs = createVfs({ dbName: `test-vfs-${Date.now()}-${Math.random()}`, memoryOpfs: true });
 		await vfs.ready();
+	});
+
+	it('writeFile populates BlobRef.contentHash with SHA-256 of the bytes', async () => {
+		const bytes = new TextEncoder().encode('hello-hash');
+		const file = await vfs.writeFile({
+			parentId: null,
+			name: 'h.txt',
+			fileType: 'text',
+			body: bytes
+		});
+		const ref = await vfs.db.blobRefs.get(file.blobId!);
+		assert.equal(ref?.contentHash, await sha256Hex(bytes));
+		assert.match(ref!.contentHash!, /^[0-9a-f]{64}$/);
+	});
+
+	it('updateFile refreshes contentHash; same bytes keep the same hash', async () => {
+		const first = new TextEncoder().encode('v1');
+		const file = await vfs.writeFile({
+			parentId: null,
+			name: 'u.txt',
+			fileType: 'text',
+			body: first
+		});
+		const a = (await vfs.db.blobRefs.get(file.blobId!))!.contentHash;
+		const updated = await vfs.updateFile(file.id, new TextEncoder().encode('v2'), {
+			expectedGeneration: file.generation
+		});
+		const b = (await vfs.db.blobRefs.get(updated.blobId!))!.contentHash;
+		assert.equal(b, await sha256Hex(new TextEncoder().encode('v2')));
+		assert.notEqual(a, b);
+
+		const again = await vfs.writeFile({
+			parentId: null,
+			name: 'u2.txt',
+			fileType: 'text',
+			body: new TextEncoder().encode('v2')
+		});
+		assert.equal((await vfs.db.blobRefs.get(again.blobId!))!.contentHash, b);
+	});
+
+	it('writeFiles sets contentHash on every member, packed or not', async () => {
+		const folder = await vfs.mkdir(null, 'bulk');
+		const nodes = await vfs.writeFiles([
+			{ parentId: folder.id, name: 'a.txt', body: new TextEncoder().encode('A') },
+			{ parentId: folder.id, name: 'b.txt', body: new TextEncoder().encode('B') }
+		]);
+		assert.equal(nodes.length, 2);
+		const refs = await Promise.all(nodes.map((n) => vfs.db.blobRefs.get(n.blobId!)));
+		assert.equal(refs[0]?.contentHash, await sha256Hex(new TextEncoder().encode('A')));
+		assert.equal(refs[1]?.contentHash, await sha256Hex(new TextEncoder().encode('B')));
+	});
+
+	it('reads a blobRef written without contentHash as missing, not empty', async () => {
+		await vfs.db.blobRefs.put({
+			id: 'legacy-blob',
+			opfsPath: 'blobs/legacy.bin',
+			byteLength: 1,
+			createdAt: Date.now()
+		});
+		const got = await vfs.db.blobRefs.get('legacy-blob');
+		assert.equal(got?.contentHash, undefined);
 	});
 
 	it('mkdir + writeFile + list', async () => {

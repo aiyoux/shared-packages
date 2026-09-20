@@ -7,7 +7,7 @@
  * main thread's SELECT 1 then sits on a port nobody is listening to until
  * catalog RPC times out.
  */
-import { CATALOG_SCHEMA } from './catalogSchema.js';
+import { applyCatalogColumnMigrations, CATALOG_SCHEMA } from './catalogSchema.js';
 
 type Oo1Stmt = {
 	bind(args: unknown[]): Oo1Stmt;
@@ -106,6 +106,7 @@ async function dbFor(dbName: string): Promise<Oo1Db> {
 	const p = await getPool();
 	const db = new p.OpfsSAHPoolDb(`/c-${key}.sqlite`);
 	db.exec(CATALOG_SCHEMA);
+	applyCatalogColumnMigrations((sql) => db.exec(sql));
 	try {
 		db.exec(
 			`CREATE UNIQUE INDEX IF NOT EXISTS nodes_live_parent_name ON nodes(parent_id, name) WHERE deleted_at IS NULL AND parent_id IS NOT NULL`
@@ -178,6 +179,7 @@ async function runOp(
 				DROP TABLE IF EXISTS leases;
 			`);
 			d.exec(CATALOG_SCHEMA);
+			applyCatalogColumnMigrations((sql) => d.exec(sql));
 			return { ok: true };
 		}
 		if (msg.op === 'close') {

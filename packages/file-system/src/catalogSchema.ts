@@ -32,7 +32,8 @@ CREATE TABLE IF NOT EXISTS blob_refs (
   pending INTEGER,
   pack_offset INTEGER,
   crc32 INTEGER,
-  pack_generation INTEGER
+  pack_generation INTEGER,
+  content_hash TEXT
 );
 CREATE INDEX IF NOT EXISTS blob_refs_path ON blob_refs(opfs_path);
 
@@ -57,3 +58,12 @@ CREATE TABLE IF NOT EXISTS leases (
 );
 CREATE INDEX IF NOT EXISTS leases_expires ON leases(expires_at);
 `;
+
+/** Additive columns for catalogs created before they landed in `CATALOG_SCHEMA`. */
+export function applyCatalogColumnMigrations(exec: (sql: string) => void): void {
+	try {
+		exec('ALTER TABLE blob_refs ADD COLUMN content_hash TEXT');
+	} catch {
+		/* new catalogs already have the column */
+	}
+}
