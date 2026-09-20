@@ -26,6 +26,12 @@ export type CreateGitHostOptions = {
 	fetchImpl?: typeof fetch;
 	/** Live local working-tree notifications. Omit for a one-shot local snapshot. */
 	subscribeLocal?: (dir: string, onChange: () => void) => () => void;
+	/**
+	 * Last chance to rewrite what a commit stores. A commit made by hand from
+	 * the history view has to put the same bytes in the tree as an automatic
+	 * one, or the two disagree about what a reference means on another device.
+	 */
+	cleanCommit?: (repoPath: string, input: CommitInput) => Promise<CommitInput>;
 };
 
 function newId(): string {
@@ -40,6 +46,7 @@ export function createGitHost(opts: CreateGitHostOptions = {}): GitHost {
 	const fsForLocal = opts.fsForLocal;
 	const fetchImpl = opts.fetchImpl;
 	const subscribeLocal = opts.subscribeLocal;
+	const cleanCommit = opts.cleanCommit;
 
 	function bindLocal(repoPath: string): { fs: GitFs; dir: string } {
 		if (fsForLocal) return { fs: fsForLocal(repoPath), dir: '/' };
@@ -130,7 +137,8 @@ export function createGitHost(opts: CreateGitHostOptions = {}): GitHost {
 			throw new Error('Committing is only supported for Browser files repos.');
 		}
 		const bound = bindLocal(repo.path);
-		return localCommit(bound.fs, bound.dir, opts);
+		const input = cleanCommit ? await cleanCommit(repo.path, opts) : opts;
+		return localCommit(bound.fs, bound.dir, input);
 	}
 
 	async function initAt(input: Pick<GitRepoRef, 'backend' | 'path'> & { baseUrl?: string }) {
