@@ -42,6 +42,8 @@
 	/** Last id we successfully rendered. Not set until the fetch finishes, so a
 	 * cancelled in-flight load can restart instead of sticking on the spinner. */
 	let loadedId = '';
+	/** Last id that failed. Plain let so a fail does not re-run the effect. */
+	let failedId = '';
 	let shouldLoad = $derived(
 		Boolean(
 			enabled &&
@@ -90,11 +92,14 @@
 			return;
 		}
 
-		// Already showing this file — list refresh must not cancel a good thumb.
-		if (loadedId === e.id && url && !loading) return;
+		// untrack: reading `url` / `loading` here would subscribe the effect to
+		// its own writes. A failed decode used to loop: fail → loading=false →
+		// re-run → new blob URL → revoke → ERR_FILE_NOT_FOUND, and the row
+		// stopped taking clicks.
+		if (untrack(() => loadedId === e.id && Boolean(url) && !loading)) return;
+		if (untrack(() => failedId === e.id)) return;
 
 		let cancelled = false;
-		// untrack: see comment above.
 		untrack(revoke);
 		loading = true;
 		failed = false;
@@ -138,6 +143,7 @@
 				const blob = await readExplorerBlob(d, e.id);
 				if (cancelled) return;
 				if (!blob) {
+					failedId = e.id;
 					failed = true;
 					loading = false;
 					return;
@@ -146,9 +152,11 @@
 				if (cancelled) return;
 				url = thumbUrl;
 				loadedId = e.id;
+				failedId = '';
 				loading = false;
 			} catch {
 				if (!cancelled) {
+					failedId = e.id;
 					failed = true;
 					loading = false;
 				}

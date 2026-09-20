@@ -109,6 +109,43 @@ describe('FeThumbnail', () => {
 		expect(box.style.getPropertyValue('--fe-thumb-max')).toBe('16px');
 	});
 
+	it('does not retry a failed decode in a loop', async () => {
+		const { generateThumbnail } = await import('../src/ui/feThumbnails.js');
+		vi.mocked(generateThumbnail).mockRejectedValue(new Error('not an image'));
+		let reads = 0;
+		const driver: ExplorerDriver = {
+			id: 'local',
+			capabilities: caps,
+			ready: async () => {},
+			list: async () => ({ entries: [], truncated: false }),
+			getPath: async () => [],
+			delete: async () => {},
+			readBlob: async () => {
+				reads += 1;
+				return new Blob(['not a png'], { type: 'image/png' });
+			}
+		};
+		const entry: ExplorerEntry = {
+			id: 'ghost-1',
+			kind: 'file',
+			name: 'ghost.png',
+			parentId: null,
+			fileType: 'image'
+		};
+		const { rerender } = render(FeThumbnail, {
+			props: { entry, driver, maxDim: 32, enabled: true, force: true }
+		});
+		await waitFor(() => {
+			expect(document.querySelector('.fe-thumb-fallback')).toBeTruthy();
+		});
+		const afterFail = reads;
+		expect(afterFail).toBeGreaterThan(0);
+		await rerender({ entry: { ...entry }, driver, maxDim: 32, enabled: true, force: true });
+		await new Promise((r) => setTimeout(r, 50));
+		expect(reads).toBe(afterFail);
+		vi.mocked(generateThumbnail).mockResolvedValue('data:image/webp;base64,AAA');
+	});
+
 	it('does not put a load-preview button on a text file', async () => {
 		const driver: ExplorerDriver = {
 			id: 'local',

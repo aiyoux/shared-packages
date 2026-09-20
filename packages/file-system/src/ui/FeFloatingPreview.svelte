@@ -14,6 +14,7 @@
 		loadExplorerMediaSrc,
 		readExplorerBlob
 	} from './explorerDriver.js';
+	import { formatPreviewReadError } from './explorerError.js';
 	import { PanZoomViewport } from '@shared-packages/ui';
 
 	let {
@@ -174,7 +175,7 @@
 				}
 			} catch (err) {
 				if (!cancelled) {
-					error = err instanceof Error ? err.message : 'Failed to load preview';
+					error = formatPreviewReadError(err);
 					loading = false;
 				}
 			}

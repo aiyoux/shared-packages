@@ -201,3 +201,30 @@ export function inferFileTypeFromName(name: string): FileTypeId {
 	const def = getFileTypeByExtension(name.slice(dot));
 	return def?.id ?? 'unknown';
 }
+
+export type FileTypeHeal = { fileType: FileTypeId; contentType: string };
+
+function mimeForName(fileType: FileTypeId, name: string): string {
+	if (fileType === 'text') {
+		const lower = name.toLowerCase();
+		if (lower.endsWith('.md') || lower.endsWith('.markdown')) return 'text/markdown';
+	}
+	return getFileType(fileType)?.mime ?? 'application/octet-stream';
+}
+
+/**
+ * When the stored type disagrees with the file name (a .txt tagged `image`),
+ * restamp catalog type + MIME from the name. No-op when they already match.
+ * Does not rename.
+ */
+export function fileTypeHeal(node: {
+	name: string;
+	fileType?: string | null;
+	contentType?: string | null;
+}): FileTypeHeal | null {
+	const inferred = inferFileTypeFromName(node.name);
+	if (inferred === 'unknown') return null;
+	const stored = node.fileType && node.fileType !== 'unknown' ? node.fileType : undefined;
+	if (stored === inferred) return null;
+	return { fileType: inferred, contentType: mimeForName(inferred, node.name) };
+}

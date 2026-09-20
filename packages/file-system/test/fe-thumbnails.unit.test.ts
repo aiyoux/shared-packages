@@ -49,6 +49,14 @@ describe('getPreviewKind', () => {
 		assert.equal(getPreviewKind(file({ name: 'x', fileType: 'text' })), 'text');
 		assert.equal(getPreviewKind(file({ name: 'x', contentType: 'text/markdown' })), 'text');
 		assert.equal(getPreviewKind({ id: 'f', kind: 'folder', name: 'dir', parentId: null }), null);
+		// Name wins over a lying stored type / MIME — otherwise a .txt tagged
+		// as image runs the raster decoder and the row stops taking clicks.
+		assert.equal(getPreviewKind(file({ name: 'note.txt', fileType: 'image' })), 'text');
+		assert.equal(
+			getPreviewKind(file({ name: 'note.txt', contentType: 'image/png' })),
+			'text'
+		);
+		assert.equal(getPreviewKind(file({ name: 'photo.png', fileType: 'text' })), 'image');
 	});
 
 	it('does not raster-thumb text or audio', () => {

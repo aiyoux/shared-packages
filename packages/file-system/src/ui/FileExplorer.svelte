@@ -2219,6 +2219,17 @@
 		selected = new Set([n.id]);
 		lastSelectedId = n.id;
 		if (previewEntry && previewEntry.id !== n.id) previewEntry = null;
+		void healSelected(n);
+	}
+
+	/** Catalog type from the name. Never blocks select, preview, or delete. */
+	async function healSelected(n: ExplorerEntry) {
+		if (n.kind !== 'file' || !driver.healFileType) return;
+		try {
+			await driver.healFileType(n.id);
+		} catch {
+			/* ghost rows must still be clickable */
+		}
 	}
 
 	function selectedPrimary(): ExplorerEntry | null {

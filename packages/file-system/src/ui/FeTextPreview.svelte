@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { canReadExplorerBlob, readExplorerBlob } from './explorerDriver.js';
 	import type { ExplorerDriver, ExplorerEntry } from './explorerDriver.js';
+	import { formatPreviewReadError } from './explorerError.js';
 	import { decodeTextPreview } from './feThumbnails.js';
 
 	let {
@@ -53,7 +54,7 @@
 				loading = false;
 			} catch (err) {
 				if (!cancelled) {
-					error = err instanceof Error ? err.message : 'Failed to load preview';
+					error = formatPreviewReadError(err);
 					loading = false;
 				}
 			}

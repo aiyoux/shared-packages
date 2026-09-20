@@ -54,6 +54,7 @@ export type LocalVfsLike = Pick<
 	| 'emptyTrash'
 	| 'readBlob'
 	| 'subscribe'
+	| 'healFileType'
 > &
 	Partial<Pick<VfsService, 'liveList' | 'writeFiles' | 'writeTree'>>;
 
@@ -149,6 +150,11 @@ export function createLocalExplorerDriver(
 
 		async readBlob(entryId) {
 			return vfs.readBlob(entryId);
+		},
+
+		async healFileType(entryId) {
+			const n = await vfs.healFileType(entryId);
+			return n ? nodeToEntry(n) : null;
 		},
 
 		async download(entryId, opts) {

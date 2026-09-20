@@ -11,7 +11,7 @@ import {
 	ensurePersistentStorage,
 	type PersistenceResult
 } from './persist.js';
-import { forceExtension, getFileType, inferFileTypeFromName } from './registry.js';
+import { fileTypeHeal, forceExtension, getFileType, inferFileTypeFromName } from './registry.js';
 import { parseJsonBytes, serializeBody } from './serialize.js';
 import { sha256Uint8 } from '@shared-packages/crypto';
 import { crc32 } from './crc32.js';
@@ -2813,6 +2813,24 @@ export class VfsService {
 			await this.copy(child.id, folder.id);
 		}
 		return folder;
+	}
+
+	/**
+	 * Restamp `fileType` / MIME from the file name when they disagree.
+	 * Catalog-only — does not touch bytes, so a ghost file can still be trashed.
+	 */
+	async healFileType(id: string): Promise<VfsNode | null> {
+		await this.ready();
+		const node = await this.db.nodes.get(id);
+		if (!node || node.kind !== 'file' || node.deletedAt != null) return null;
+		const patch = fileTypeHeal(node);
+		if (!patch) return null;
+		node.fileType = patch.fileType;
+		node.contentType = patch.contentType;
+		node.updatedAt = Date.now();
+		await this.db.nodes.put(node);
+		this.emitChange();
+		return node;
 	}
 
 	// ── Trash ─────────────────────────────────────────────────────

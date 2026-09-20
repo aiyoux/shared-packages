@@ -295,6 +295,12 @@ export interface ExplorerDriver {
 	/** Optional: bytes for copy-across bridge (local/memory). */
 	readBlob?(id: ExplorerEntryId): Promise<Blob>;
 	/**
+	 * Restamp catalog `fileType` / MIME from the file name when they disagree
+	 * (a .txt tagged as image). No-op and `null` when they already match.
+	 * Preview and delete must work even if this is missing or throws.
+	 */
+	healFileType?(id: ExplorerEntryId): Promise<ExplorerEntry | null>;
+	/**
 	 * Optional write for copy-across into local/memory without enabling upload chrome
 	 * (`supportsUpload` may stay false).
 	 */

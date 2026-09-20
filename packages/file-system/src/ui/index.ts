@@ -83,7 +83,7 @@ export {
 	type OsDropFileProgress,
 	type OsDropNode
 } from './osDrop.js';
-export { formatExplorerError } from './explorerError.js';
+export { formatExplorerError, formatPreviewReadError } from './explorerError.js';
 export {
 	setCrossWindowDrag,
 	getCrossWindowDrag,

@@ -49,20 +49,29 @@ function ext(name: string): string {
 	return dot < 0 ? '' : name.slice(dot).toLowerCase();
 }
 
-export function getPreviewKind(entry: ExplorerEntry): PreviewKind | null {
-	if (entry.kind !== 'file') return null;
-	if (entry.fileType === 'image') return 'image';
-	if (entry.fileType === 'video') return 'video';
-	if (entry.fileType === 'audio') return 'audio';
-	if (entry.fileType === 'pdf') return 'pdf';
-	if (entry.fileType === 'text') return 'text';
-	const e = ext(entry.name);
+export function previewKindFromExt(e: string): PreviewKind | null {
 	if (IMAGE_EXTS.includes(e)) return 'image';
 	if (VIDEO_EXTS.includes(e)) return 'video';
 	if (AUDIO_EXTS.includes(e)) return 'audio';
 	if (PDF_EXTS.includes(e)) return 'pdf';
 	if (TEXT_EXTS.includes(e)) return 'text';
-	// Also check contentType for robustness
+	return null;
+}
+
+/**
+ * Preview from the name first. A stored `fileType` that disagrees with the
+ * extension (a .txt tagged as image) must not run the image/PDF decoder —
+ * that path revokes blob URLs in a loop and the row stops taking clicks.
+ */
+export function getPreviewKind(entry: ExplorerEntry): PreviewKind | null {
+	if (entry.kind !== 'file') return null;
+	const fromName = previewKindFromExt(ext(entry.name));
+	if (fromName) return fromName;
+	if (entry.fileType === 'image') return 'image';
+	if (entry.fileType === 'video') return 'video';
+	if (entry.fileType === 'audio') return 'audio';
+	if (entry.fileType === 'pdf') return 'pdf';
+	if (entry.fileType === 'text') return 'text';
 	const ct = entry.contentType ?? '';
 	if (ct.startsWith('image/')) return 'image';
 	if (ct.startsWith('video/')) return 'video';

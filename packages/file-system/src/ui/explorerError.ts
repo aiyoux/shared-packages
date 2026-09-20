@@ -23,6 +23,7 @@ const CODE_LABELS: Record<string, string> = {
 	VAULT_WRONG_PASSPHRASE: 'That passphrase does not unlock the connection vault.',
 	SECRET_UNAVAILABLE: 'This key was not saved to disk. Re-enter it to connect.',
 	OPFS_IO: 'Could not write the file to browser storage.',
+	WRITE_IN_FLIGHT: 'This file is still being written.',
 	OPFS_UNAVAILABLE: 'Browser file storage is not available in this context.',
 	NOT_FOUND: 'That file or folder was not found.',
 	TRASH_STATE: 'That folder is in the trash (or was deleted while writing).',
@@ -53,6 +54,17 @@ function looksLikeRevokedDrop(e: unknown): boolean {
 		name === 'NotFoundError' ||
 		/could not be found at the time an operation was processed/i.test(msg)
 	);
+}
+
+/** Preview/read failures must not look like a hard stop — trash still works. */
+export function formatPreviewReadError(e: unknown): string {
+	const code = codeOf(e);
+	if (code === 'WRITE_IN_FLIGHT') return 'This file is still being written. You can still delete it.';
+	if (code === 'OPFS_IO' || code === 'NOT_FOUND') {
+		return "This file's data is missing. You can still delete it.";
+	}
+	const msg = formatExplorerError(e);
+	return msg ? `${msg} You can still delete it.` : 'Could not preview this file. You can still delete it.';
 }
 
 export function formatExplorerError(e: unknown): string {

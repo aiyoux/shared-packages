@@ -80,6 +80,25 @@ describe('VfsService', () => {
 		assert.equal(got?.contentHash, undefined);
 	});
 
+	it('healFileType restamps a nameless stored type; trash still works', async () => {
+		const node = await vfs.writeFile({
+			parentId: null,
+			name: 'ghost.txt',
+			fileType: 'unknown',
+			contentType: 'image/png',
+			body: new Blob(['hello'], { type: 'image/png' })
+		});
+		assert.equal(node.fileType, undefined);
+		const healed = await vfs.healFileType(node.id);
+		assert.ok(healed);
+		assert.equal(healed!.fileType, 'text');
+		assert.equal(healed!.contentType, 'text/plain');
+		assert.equal(await vfs.healFileType(node.id), null, 'second heal is a no-op');
+		await vfs.trash(node.id);
+		const gone = await vfs.get(node.id);
+		assert.ok(gone?.deletedAt);
+	});
+
 	it('mkdir + writeFile + list', async () => {
 		const folder = await vfs.mkdir(null, 'Sketches');
 		const file = await vfs.writeFile({

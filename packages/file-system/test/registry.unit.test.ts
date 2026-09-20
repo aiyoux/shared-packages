@@ -2,6 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
 	acceptedExtensionsFor,
+	fileTypeHeal,
 	forceExtension,
 	getFileTypeByExtension,
 	inferFileTypeFromName
@@ -140,5 +141,24 @@ describe('registry multi-ext image + forceExtension', () => {
 		assert.equal(getFileTypeByExtension('.txt')?.id, 'text');
 		assert.equal(getFileTypeByExtension('.md')?.id, 'text');
 		assert.equal(getFileTypeByExtension('markdown')?.id, 'text');
+	});
+});
+
+describe('fileTypeHeal', () => {
+	it('restamps a lying stored type from the name', () => {
+		assert.deepEqual(fileTypeHeal({ name: 'note.txt', fileType: 'image' }), {
+			fileType: 'text',
+			contentType: 'text/plain'
+		});
+		assert.deepEqual(fileTypeHeal({ name: 'readme.md', fileType: 'cari' }), {
+			fileType: 'text',
+			contentType: 'text/markdown'
+		});
+		assert.equal(fileTypeHeal({ name: 'note.txt', fileType: 'text' }), null);
+		assert.deepEqual(fileTypeHeal({ name: 'note.txt' }), {
+			fileType: 'text',
+			contentType: 'text/plain'
+		});
+		assert.equal(fileTypeHeal({ name: 'noext', fileType: 'image' }), null);
 	});
 });
