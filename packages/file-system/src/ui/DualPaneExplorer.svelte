@@ -16,6 +16,8 @@
 		ExplorerPerson,
 		ExplorerPresenceDot,
 		ExplorerArrivalPolicy,
+		ExplorerSplitBrain,
+		ExplorerSplitBrainChoice,
 		ProjectHistoryStats,
 		ExplorerCombineResult,
 		ExplorerRoomActionResult,
@@ -310,6 +312,8 @@
 		}) => void | Promise<void>;
 		projectHistory?: ProjectHistoryStats | null;
 		onPackHistory?: () => Promise<void>;
+		splitBrain?: ExplorerSplitBrain | null;
+		onSplitBrainChoice?: (choice: ExplorerSplitBrainChoice) => void | Promise<void>;
 		onRoomContext?: (args: {
 			rootId: ExplorerEntryId | null;
 			roomId: string | null;
@@ -380,6 +384,8 @@
 		onArrivalPolicy,
 		projectHistory = null,
 		onPackHistory,
+		splitBrain = null,
+		onSplitBrainChoice,
 		onRoomContext,
 		people,
 		onInvitePeople,
@@ -2177,6 +2183,8 @@
 						{onArrivalPolicy}
 						{projectHistory}
 						{onPackHistory}
+						{splitBrain}
+						{onSplitBrainChoice}
 						onRoomContext={paneRoomContext(id)}
 					>
 						{#snippet headerLeading()}
@@ -2246,6 +2254,8 @@
 						{onArrivalPolicy}
 						{projectHistory}
 						{onPackHistory}
+						{splitBrain}
+						{onSplitBrainChoice}
 						onRoomContext={paneRoomContext(id)}
 					>
 						{#snippet headerLeading()}
@@ -2313,6 +2323,8 @@
 						{onArrivalPolicy}
 						{projectHistory}
 						{onPackHistory}
+						{splitBrain}
+						{onSplitBrainChoice}
 						onRoomContext={paneRoomContext(id)}
 					>
 						{#snippet headerLeading()}

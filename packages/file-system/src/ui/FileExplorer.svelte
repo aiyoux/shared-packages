@@ -139,6 +139,8 @@
 		ExplorerPresenceDot,
 		ExplorerPerson,
 		ExplorerArrivalPolicy,
+		ExplorerSplitBrain,
+		ExplorerSplitBrainChoice,
 		ProjectHistoryStats,
 		ExplorerCombineResult,
 		ExplorerRoomActionResult,
@@ -283,6 +285,12 @@
 			roomId: string;
 			keep: boolean;
 		}) => void | Promise<void>;
+		/**
+		 * Another group is live in this room. Never resolved automatically:
+		 * the only honest answers are to wait, to branch off, or to not join.
+		 */
+		splitBrain?: ExplorerSplitBrain | null;
+		onSplitBrainChoice?: (choice: ExplorerSplitBrainChoice) => void | Promise<void>;
 		/** Git history sizes for the Project storage panel. */
 		projectHistory?: ProjectHistoryStats | null;
 		onPackHistory?: () => Promise<void>;
@@ -350,6 +358,8 @@
 		onArrivalPolicy,
 		projectHistory = null,
 		onPackHistory,
+		splitBrain = null,
+		onSplitBrainChoice,
 		onRoomContext,
 		people,
 		onInvitePeople,
@@ -4906,6 +4916,52 @@
 						onclick={() => void confirmUnlink('without')}
 					>
 						Unlink without sync
+					</button>
+				</div>
+			</div>
+		</div>
+	{/if}
+
+	{#if splitBrain}
+		<div
+			class="fe-room-switch-root"
+			data-testid="fe-split-brain"
+			role="dialog"
+			aria-modal="true"
+			aria-labelledby="fe-split-brain-title"
+		>
+			<div class="fe-room-switch-card">
+				<h2 id="fe-split-brain-title" data-testid="fe-split-brain-title">
+					Another group is already editing {splitBrain.roomLabel}.
+				</h2>
+				<p class="fe-room-note">
+					Joining them would mix two live sessions. Your work is safe either way — nothing
+					has been combined.
+				</p>
+				<div class="fe-room-switch-actions">
+					<button
+						type="button"
+						class="ds-btn ds-btn--sm ds-btn--ghost"
+						data-testid="fe-split-brain-cancel"
+						onclick={() => void onSplitBrainChoice?.('cancel')}
+					>
+						Don’t connect
+					</button>
+					<button
+						type="button"
+						class="ds-btn ds-btn--sm ds-btn--ghost"
+						data-testid="fe-split-brain-new-room"
+						onclick={() => void onSplitBrainChoice?.('new-room')}
+					>
+						New room from my work
+					</button>
+					<button
+						type="button"
+						class="ds-btn ds-btn--sm ds-btn--primary"
+						data-testid="fe-split-brain-wait"
+						onclick={() => void onSplitBrainChoice?.('wait')}
+					>
+						Wait until they’re done
 					</button>
 				</div>
 			</div>

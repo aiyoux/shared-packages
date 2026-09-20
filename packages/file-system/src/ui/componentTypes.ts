@@ -99,3 +99,14 @@ export type ProjectHistoryStats = {
 		sharedBytes: number;
 	}[];
 };
+
+/**
+ * Two live sessions met on one room (rule 3.8). Their seq counters are
+ * independent, so joining them would compare two unrelated clocks — the
+ * mistake rule 3.4 exists to stop.
+ */
+export type ExplorerSplitBrain = {
+	roomLabel: string;
+};
+
+export type ExplorerSplitBrainChoice = 'wait' | 'new-room' | 'cancel';

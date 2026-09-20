@@ -18,6 +18,8 @@ export type {
 	ExplorerArrivalPolicy,
 	ExplorerCombineResult,
 	ExplorerPersonRoom,
+	ExplorerSplitBrain,
+	ExplorerSplitBrainChoice,
 	ProjectHistoryStats,
 	ExplorerRoomActionResult,
 	ExplorerPerson,
