@@ -1655,9 +1655,13 @@ describe('FileExplorer component', () => {
 		const unlinkCopy = (unlink.textContent ?? '').replace(/\s+/g, ' ');
 		expect(unlinkCopy).toMatch(/Unlink Alice\?/);
 		expect(unlinkCopy).toMatch(/Stops future work from them. Work already in this project stays./);
-		expect(unlinkCopy).toMatch(/They may have unsaved work./);
+		expect(unlinkCopy).toMatch(
+			/Keeping their work first takes their last save — if they are still editing/
+		);
 		expect(unlinkCopy).not.toMatch(/revoke/i);
-		expect((screen.getByTestId('fe-people-unlink-sync') as HTMLButtonElement).disabled).toBe(true);
+		// Alice is `here`, so keep-their-work is available. Bob (offline) is the
+		// other row — that button is disabled separately.
+		expect((screen.getByTestId('fe-people-unlink-sync') as HTMLButtonElement).disabled).toBe(false);
 		await fireEvent.click(screen.getByTestId('fe-people-unlink-without'));
 		expect(unlinks).toEqual([{ pairingId: 'aa'.repeat(16), drain: 'without' }]);
 	});

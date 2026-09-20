@@ -1,8 +1,23 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/svelte';
+import { __resetPersistKvForTests } from '@shared-packages/ui/persistKv';
 import GitHistory from './GitHistory.svelte';
 
+async function wipePersistKv(): Promise<void> {
+	__resetPersistKvForTests();
+	await new Promise<void>((resolve) => {
+		const req = indexedDB.deleteDatabase('scratch-persist-kv');
+		req.onsuccess = () => resolve();
+		req.onerror = () => resolve();
+		req.onblocked = () => resolve();
+	});
+}
+
 describe('GitHistory', () => {
+	beforeEach(async () => {
+		await wipePersistKv();
+	});
+
 	it('renders empty state when no snapshot', () => {
 		render(GitHistory, { props: { snapshot: null } });
 		expect(screen.getByTestId('git-history')).toBeTruthy();

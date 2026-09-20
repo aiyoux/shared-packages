@@ -167,10 +167,22 @@ function enqueueWrite(fn: (database: IDBDatabase) => IDBTransaction): void {
 	});
 }
 
+function maybeUnref(ch: BroadcastChannel): void {
+	const unref = (ch as BroadcastChannel & { unref?: () => void }).unref;
+	if (typeof unref === 'function') unref.call(ch);
+}
+
 function listenChannel(): void {
 	if (typeof BroadcastChannel === 'undefined') return;
 	try {
 		channel = new BroadcastChannel(CHANNEL);
+		// Node's BroadcastChannel is a ref'd MessagePort. Without unref(), any
+		// node:test file that imports this module (even a pure helper) never
+		// exits — file-system's archive-ops suite hung the whole `test:all`
+		// run that way. Cross-tab still works; the process is just allowed to
+		// leave when nothing else is pending. Same pattern as file-system
+		// crossTab.ts / live/bus.ts.
+		maybeUnref(channel);
 	} catch {
 		channel = null;
 		return;

@@ -88,7 +88,7 @@
     "src"
   ],
   "scripts": {
-    "test": "node --experimental-strip-types --import ./test/setup.mjs --import ./test/resolve-hook.mjs --test test/*.unit.test.ts",
+    "test": "node --experimental-strip-types --import ./test/setup.mjs --import ./test/resolve-hook.mjs --test --test-timeout 30000 test/*.unit.test.ts",
     "test:unit": "npm test",
     "test:b2": "vitest run --config vitest.b2.config.ts",
     "test:rclone": "vitest run --config vitest.rclone.config.ts",
