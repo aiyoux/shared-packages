@@ -9,6 +9,7 @@
 	 */
 	import { toast } from '@shared-packages/ui';
 	import type { VfsService } from '../vfs.js';
+	import type { ProjectHistoryStats } from './componentTypes.js';
 	import type { PackOpProgress } from '../types.js';
 	import {
 		compactProject,
@@ -32,10 +33,22 @@
 		onChanged,
 		onImported,
 		onScanExportRefs,
-		onResolveExportRefs
+		onResolveExportRefs,
+		history,
+		onPackHistory
 	}: {
 		vfs: VfsService;
 		rootId: string;
+		/**
+		 * Git history, supplied by the host because it lives in a package this
+		 * one does not depend on. Rooms share nearly all of their objects, so
+		 * per-room bytes are split into what only that room reaches and what
+		 * something else reaches too — the first number is what dropping it
+		 * would actually reclaim.
+		 */
+		history?: ProjectHistoryStats | null;
+		/** Pack loose git objects. Maintenance you repeat, like Pack all. */
+		onPackHistory?: () => Promise<void>;
 		onChanged?: () => void;
 		/**
 		 * Repoint the imported documents' references at their new ids.
@@ -274,7 +287,45 @@
 			{/if}
 		{/if}
 
+		{#if history}
+			<dl class="stats" data-testid="project-history-stats">
+				<div>
+					<dt>History</dt>
+					<dd data-testid="stat-history">{fmt(history.historyBytes)}</dd>
+				</div>
+				<div>
+					<dt>Loose objects</dt>
+					<dd data-testid="stat-loose">
+						{history.looseObjects}<span class="of"> · {fmt(history.looseBytes)}</span>
+					</dd>
+				</div>
+			</dl>
+			{#if history.rooms.length}
+				<ul class="room-bytes" data-testid="project-room-bytes">
+					{#each history.rooms as room (room.roomId)}
+						<li data-testid="project-room-bytes-row" data-room-id={room.roomId}>
+							<span>{room.label}{room.current ? ' (here)' : ''}</span>
+							<span class="of">
+								{fmt(room.uniqueBytes)} only here · {fmt(room.sharedBytes)} shared
+							</span>
+						</li>
+					{/each}
+				</ul>
+			{/if}
+		{/if}
+
 		<div class="actions">
+			{#if onPackHistory}
+				<button
+					type="button"
+					class="ds-btn ds-btn--sm ds-btn--secondary"
+					disabled={!!busy}
+					data-testid="project-pack-history-btn"
+					onclick={() => run('pack-history', async () => void (await onPackHistory()))}
+				>
+					{busy === 'pack-history' ? 'Packing history…' : 'Pack history'}
+				</button>
+			{/if}
 			<button
 				type="button"
 				class="ds-btn ds-btn--sm ds-btn--secondary"
@@ -532,6 +583,18 @@
 	}
 	.check.indent {
 		padding-left: var(--space-5);
+	}
+	.room-bytes {
+		list-style: none;
+		margin: 0 0 0.6rem;
+		padding: 0;
+		font-size: 0.8rem;
+	}
+	.room-bytes li {
+		display: flex;
+		justify-content: space-between;
+		gap: 0.75rem;
+		padding: 0.15rem 0;
 	}
 	.actions {
 		display: flex;

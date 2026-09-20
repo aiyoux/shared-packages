@@ -4,6 +4,7 @@
 	 */
 	import '@shared-packages/design-system/button.css';
 	import ProjectStoragePanel from './ProjectStoragePanel.svelte';
+	import type { ProjectHistoryStats } from './componentTypes.js';
 	import type { VfsService } from '../vfs.js';
 
 	let {
@@ -13,11 +14,15 @@
 		onChanged,
 		onImported,
 		onScanExportRefs,
-		onResolveExportRefs
+		onResolveExportRefs,
+		history,
+		onPackHistory
 	}: {
 		vfs: VfsService;
 		rootId: string;
 		onClose: () => void;
+		history?: ProjectHistoryStats | null;
+		onPackHistory?: () => Promise<void>;
 		onChanged?: () => void;
 		onImported?: (result: {
 			rootId: string;
@@ -47,7 +52,16 @@
 	<button type="button" class="scrim" aria-label="Close" onclick={onClose}></button>
 	<div class="card">
 		<h2>Project storage</h2>
-		<ProjectStoragePanel {vfs} {rootId} {onChanged} {onImported} {onScanExportRefs} {onResolveExportRefs} />
+		<ProjectStoragePanel
+			{vfs}
+			{rootId}
+			{onChanged}
+			{onImported}
+			{onScanExportRefs}
+			{onResolveExportRefs}
+			{history}
+			{onPackHistory}
+		/>
 		<div class="actions">
 			<button
 				type="button"

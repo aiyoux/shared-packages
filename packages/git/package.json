@@ -16,7 +16,8 @@
     "./vfsGitFs": "./src/vfsGitFs.ts",
     "./GitHistory.svelte": "./src/GitHistory.svelte",
     "./GitApp.svelte": "./src/GitApp.svelte",
-    "./ProjectApp.svelte": "./src/ProjectApp.svelte"
+    "./ProjectApp.svelte": "./src/ProjectApp.svelte",
+    "./DiffView.svelte": "./src/DiffView.svelte"
   },
   "types": "./src/index.ts",
   "files": [

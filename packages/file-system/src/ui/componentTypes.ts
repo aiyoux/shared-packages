@@ -85,3 +85,17 @@ export type ExplorerPersonRoom = {
 };
 
 export type ExplorerUnlinkDrain = 'sync' | 'without';
+
+/** Git history sizes for the Project storage panel, supplied by the host. */
+export type ProjectHistoryStats = {
+	historyBytes: number;
+	looseObjects: number;
+	looseBytes: number;
+	rooms: readonly {
+		roomId: string;
+		label: string;
+		current: boolean;
+		uniqueBytes: number;
+		sharedBytes: number;
+	}[];
+};

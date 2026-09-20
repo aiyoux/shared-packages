@@ -14,7 +14,7 @@ export type GitFs = Parameters<typeof git.init>[0]['fs'];
 
 export type { FetchResult, HttpClient, MergeDriverCallback, MergeResult, PackObjectsResult };
 /** Part of this module's public surface via `CommitInput.author` / `committer`. */
-export type { GitAuthor } from './types.js';
+export type { GitAuthor, GitFileDiff } from './types.js';
 
 /**
  * Room branches live at `refs/heads/room/<roomId>`. Pass `roomBranchName(id)`
@@ -350,6 +350,35 @@ export type LocalBranchOpts = {
 	object?: string;
 	force?: boolean;
 };
+
+/**
+ * Diff one path between two refs.
+ *
+ * `localDiffFile` compares HEAD to the working tree, which is the wrong pair
+ * for reviewing a combine: there the question is what *their* room did to a
+ * file versus what ours did, and neither side is the working tree.
+ */
+export async function localDiffRefs(
+	fs: GitFs,
+	dir: string,
+	opts: { ours: string; theirs: string; filepath: string }
+): Promise<GitFileDiff> {
+	const read = async (rev: string): Promise<Uint8Array | null> => {
+		try {
+			return await localReadBlobAt(fs, dir, rev, opts.filepath);
+		} catch {
+			return null;
+		}
+	};
+	const oursBytes = await read(opts.ours);
+	const theirsBytes = await read(opts.theirs);
+	if ((oursBytes && looksBinary(oursBytes)) || (theirsBytes && looksBinary(theirsBytes))) {
+		return { oldText: '', newText: '', diff: { kind: 'binary' } };
+	}
+	const oldText = oursBytes ? decoder.decode(oursBytes) : '';
+	const newText = theirsBytes ? decoder.decode(theirsBytes) : '';
+	return { oldText, newText, diff: diffLines(oldText, newText) };
+}
 
 export async function localBranch(fs: GitFs, dir: string, opts: LocalBranchOpts): Promise<void> {
 	const ref = opts.ref.trim();

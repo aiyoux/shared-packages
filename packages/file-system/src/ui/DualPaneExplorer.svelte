@@ -16,6 +16,7 @@
 		ExplorerPerson,
 		ExplorerPresenceDot,
 		ExplorerArrivalPolicy,
+		ProjectHistoryStats,
 		ExplorerCombineResult,
 		ExplorerRoomActionResult,
 		ExplorerUnlinkDrain,
@@ -293,6 +294,11 @@
 			save: boolean;
 		}) => Promise<ExplorerCombineResult>;
 		combineBusy?: boolean;
+		onReviewConflict?: (args: {
+			rootId: ExplorerEntryId;
+			fromRoomId: string;
+			path: string;
+		}) => void | Promise<void>;
 		onKeepRoom?: (args: {
 			pairingId: string;
 			roomId: string;
@@ -302,6 +308,8 @@
 			pairingId: string;
 			policy: ExplorerArrivalPolicy;
 		}) => void | Promise<void>;
+		projectHistory?: ProjectHistoryStats | null;
+		onPackHistory?: () => Promise<void>;
 		onRoomContext?: (args: {
 			rootId: ExplorerEntryId | null;
 			roomId: string | null;
@@ -367,8 +375,11 @@
 		onNewRoom,
 		onCombineRoom,
 		combineBusy = false,
+		onReviewConflict,
 		onKeepRoom,
 		onArrivalPolicy,
+		projectHistory = null,
+		onPackHistory,
 		onRoomContext,
 		people,
 		onInvitePeople,
@@ -2161,8 +2172,11 @@
 						onNewRoom={paneNewRoom(id)}
 						onCombineRoom={paneCombineRoom(id)}
 						{combineBusy}
+						{onReviewConflict}
 						{onKeepRoom}
 						{onArrivalPolicy}
+						{projectHistory}
+						{onPackHistory}
 						onRoomContext={paneRoomContext(id)}
 					>
 						{#snippet headerLeading()}
@@ -2227,8 +2241,11 @@
 						onNewRoom={paneNewRoom(id)}
 						onCombineRoom={paneCombineRoom(id)}
 						{combineBusy}
+						{onReviewConflict}
 						{onKeepRoom}
 						{onArrivalPolicy}
+						{projectHistory}
+						{onPackHistory}
 						onRoomContext={paneRoomContext(id)}
 					>
 						{#snippet headerLeading()}
@@ -2291,8 +2308,11 @@
 						onNewRoom={paneNewRoom(id)}
 						onCombineRoom={paneCombineRoom(id)}
 						{combineBusy}
+						{onReviewConflict}
 						{onKeepRoom}
 						{onArrivalPolicy}
+						{projectHistory}
+						{onPackHistory}
 						onRoomContext={paneRoomContext(id)}
 					>
 						{#snippet headerLeading()}

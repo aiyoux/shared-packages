@@ -18,6 +18,7 @@ export type {
 	ExplorerArrivalPolicy,
 	ExplorerCombineResult,
 	ExplorerPersonRoom,
+	ProjectHistoryStats,
 	ExplorerRoomActionResult,
 	ExplorerPerson,
 	ExplorerPersonNow,

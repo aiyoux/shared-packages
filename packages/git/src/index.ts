@@ -76,6 +76,7 @@ export {
 } from './openProject.js';
 
 export { default as GitHistory } from './GitHistory.svelte';
+export { default as DiffView } from './DiffView.svelte';
 export { default as GitApp } from './GitApp.svelte';
 export { default as ProjectApp } from './ProjectApp.svelte';
 export {

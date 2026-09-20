@@ -139,6 +139,7 @@
 		ExplorerPresenceDot,
 		ExplorerPerson,
 		ExplorerArrivalPolicy,
+		ProjectHistoryStats,
 		ExplorerCombineResult,
 		ExplorerRoomActionResult,
 		ExplorerUnlinkDrain
@@ -270,12 +271,21 @@
 		}) => Promise<ExplorerCombineResult>;
 		/** Someone is editing, so Combine is offered at a quiet moment instead. */
 		combineBusy?: boolean;
+		/** Open the review surface for a path the combine could not merge. */
+		onReviewConflict?: (args: {
+			rootId: ExplorerEntryId;
+			fromRoomId: string;
+			path: string;
+		}) => void | Promise<void>;
 		/** Keep locally: opt in to another of this person's rooms (§11.6). */
 		onKeepRoom?: (args: {
 			pairingId: string;
 			roomId: string;
 			keep: boolean;
 		}) => void | Promise<void>;
+		/** Git history sizes for the Project storage panel. */
+		projectHistory?: ProjectHistoryStats | null;
+		onPackHistory?: () => Promise<void>;
 		/** Standing answer to what happens when this person's work arrives. */
 		onArrivalPolicy?: (args: {
 			pairingId: string;
@@ -335,8 +345,11 @@
 		onNewRoom,
 		onCombineRoom,
 		combineBusy = false,
+		onReviewConflict,
 		onKeepRoom,
 		onArrivalPolicy,
+		projectHistory = null,
+		onPackHistory,
 		onRoomContext,
 		people,
 		onInvitePeople,
@@ -1764,7 +1777,7 @@
 
 	let combineOpen = $state(false);
 	let combinePending = $state<string | null>(null);
-	let combineConflict = $state<{ label: string; paths: string[] } | null>(null);
+	let combineConflict = $state<{ label: string; roomId: string; paths: string[] } | null>(null);
 	let combineMissing = $state(false);
 
 	function roomLabelOf(roomId: string): string {
@@ -1783,7 +1796,11 @@
 			}
 			combinePending = null;
 			if (result.status === 'conflict') {
-				combineConflict = { label: roomLabelOf(fromRoomId), paths: result.paths };
+				combineConflict = {
+					label: roomLabelOf(fromRoomId),
+					roomId: fromRoomId,
+					paths: result.paths
+				};
 				return;
 			}
 			if (result.status === 'live' || result.status === 'missing') {
@@ -4857,8 +4874,9 @@
 					Unlink {unlinkTarget.label}?
 				</h2>
 				<p data-testid="fe-people-unlink-body">
-					Stops future work from them. Work already in this project stays. They may have unsaved
-					work.
+					Stops future work from them. Work already in this project stays. Keeping their work
+					first takes their last save — if they are still editing, what is on their screen is
+					not saved yet and will not come across.
 				</p>
 				<div class="fe-room-switch-actions">
 					<button
@@ -4873,10 +4891,13 @@
 						type="button"
 						class="ds-btn ds-btn--sm ds-btn--ghost"
 						data-testid="fe-people-unlink-sync"
-						disabled
-						title="Packfile drain is not available yet"
+						disabled={unlinkTarget.now.kind === 'offline'}
+						title={unlinkTarget.now.kind === 'offline'
+							? 'They are not connected, so there is nothing to keep'
+							: undefined}
+						onclick={() => void confirmUnlink('sync')}
 					>
-						Sync once, then unlink
+						Keep their work, then unlink
 					</button>
 					<button
 						type="button"
@@ -4920,7 +4941,25 @@
 					</p>
 					<ul class="fe-room-conflict-list">
 						{#each combineConflict.paths as path (path)}
-							<li data-testid="fe-room-combine-conflict-path">{path}</li>
+							<li data-testid="fe-room-combine-conflict-path">
+								<span>{path}</span>
+								{#if onReviewConflict && projectRootId}
+									<button
+										type="button"
+										class="ds-btn ds-btn--sm ds-btn--ghost"
+										data-testid="fe-room-combine-review"
+										data-path={path}
+										onclick={() =>
+											void onReviewConflict?.({
+												rootId: projectRootId!,
+												fromRoomId: combineConflict!.roomId,
+												path
+											})}
+									>
+										Review
+									</button>
+								{/if}
+							</li>
 						{/each}
 					</ul>
 				{:else if combineMissing}
@@ -5024,6 +5063,8 @@
 			onImported={driver.rebuildImportedRefs}
 			onScanExportRefs={driver.scanExportRefs}
 			onResolveExportRefs={driver.resolveExportRefs}
+			history={projectHistory}
+			onPackHistory={onPackHistory}
 			onClose={() => (projectStorageOpen = false)}
 		/>
 	{/if}
@@ -5805,10 +5846,18 @@
 		color: var(--text-secondary);
 	}
 	.fe-room-conflict-list {
+		list-style: none;
 		margin: 0 0 0.75rem;
-		padding-left: 1.1rem;
+		padding: 0;
 		font-size: 0.85rem;
 		color: var(--text-secondary);
+	}
+	.fe-room-conflict-list li {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 0.6rem;
+		padding: 0.1rem 0;
 	}
 	.fe-room-switch-card h2 {
 		margin: 0 0 0.75rem;
