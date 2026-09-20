@@ -13,6 +13,8 @@ import type { CommitInput, GitAuthor, GitChange, GitFileDiff, GitSnapshot } from
 export type GitFs = Parameters<typeof git.init>[0]['fs'];
 
 export type { FetchResult, HttpClient, MergeDriverCallback, MergeResult, PackObjectsResult };
+/** Part of this module's public surface via `CommitInput.author` / `committer`. */
+export type { GitAuthor } from './types.js';
 
 /**
  * Room branches live at `refs/heads/room/<roomId>`. Pass `roomBranchName(id)`
