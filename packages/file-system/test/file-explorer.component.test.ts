@@ -1438,6 +1438,29 @@ describe('FileExplorer component', () => {
 		expect(hits).toEqual([{ id: 'skch', parent: null }]);
 	});
 
+	it('hides the room chip when there is no onSwitchRoom', async () => {
+		const proj = await vfs.mkdir(null, 'poster');
+		await vfs.writeFile({
+			parentId: proj.id,
+			name: '.project.json',
+			body: {
+				schemaVersion: 1,
+				name: 'poster',
+				rooms: [{ id: 'r1', label: 'Poster' }],
+				currentRoomId: 'r1'
+			},
+			contentType: 'application/json'
+		});
+		await vfs.mkdir(proj.id, '.git');
+		render(FileExplorer, { props: { mode: 'manage', vfs, variant: 'panel' } });
+		await viWaitFor(() => !!document.querySelector('[data-testid="fe-folder-row"]'));
+		await fireEvent.dblClick(
+			document.querySelector('[data-testid="fe-folder-row"][data-name="poster"]') as HTMLElement
+		);
+		await viWaitFor(() => !!document.querySelector('[data-testid="fe-inside-project-badge"]'));
+		expect(document.querySelector('[data-testid="fe-room-chip"]')).toBeNull();
+	});
+
 	it('shows the room chip with the current label and lists rooms', async () => {
 		const proj = await vfs.mkdir(null, 'poster');
 		await vfs.writeFile({
@@ -1455,7 +1478,18 @@ describe('FileExplorer component', () => {
 			contentType: 'application/json'
 		});
 		await vfs.mkdir(proj.id, '.git');
-		render(FileExplorer, { props: { mode: 'manage', vfs, variant: 'panel' } });
+		const switches: string[] = [];
+		render(FileExplorer, {
+			props: {
+				mode: 'manage',
+				vfs,
+				variant: 'panel',
+				onSwitchRoom: async ({ roomId }) => {
+					switches.push(roomId);
+					return 'ok';
+				}
+			}
+		});
 		await viWaitFor(() => !!document.querySelector('[data-testid="fe-folder-row"]'));
 		expect(document.querySelector('[data-testid="fe-room-chip"]')).toBeNull();
 
@@ -1470,6 +1504,9 @@ describe('FileExplorer component', () => {
 		expect(items.map((el) => el.textContent)).toEqual(
 			expect.arrayContaining([expect.stringContaining('Poster'), expect.stringContaining('Side')])
 		);
+		const here = items.find((el) => el.getAttribute('data-room-id') === 'r1');
+		await fireEvent.click(here!);
+		expect(switches).toEqual(['r1']);
 	});
 
 	it('dirty stay does not switch; save and switch does', async () => {

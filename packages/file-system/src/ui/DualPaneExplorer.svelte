@@ -283,6 +283,10 @@
 			label: string;
 			save: boolean;
 		}) => Promise<ExplorerRoomActionResult>;
+		onRoomContext?: (args: {
+			rootId: ExplorerEntryId | null;
+			roomId: string | null;
+		}) => void;
 	};
 
 	let {
@@ -333,7 +337,8 @@
 		layoutPortal = '',
 		presenceByFileId,
 		onSwitchRoom,
-		onNewRoom
+		onNewRoom,
+		onRoomContext
 	}: Props = $props();
 
 	const persistKey = $derived(instanceKey ? `${dualPaneKey}:${instanceKey}` : dualPaneKey);
@@ -595,6 +600,11 @@
 	function paneNewRoom(id: PaneId) {
 		if (!onNewRoom || !paneAllowsLocalNew(id)) return undefined;
 		return onNewRoom;
+	}
+
+	function paneRoomContext(id: PaneId) {
+		if (!onRoomContext || !paneAllowsLocalNew(id)) return undefined;
+		return onRoomContext;
 	}
 
 	function paneNewProject(id: PaneId) {
@@ -2096,6 +2106,7 @@
 						{presenceByFileId}
 						onSwitchRoom={paneSwitchRoom(id)}
 						onNewRoom={paneNewRoom(id)}
+						onRoomContext={paneRoomContext(id)}
 					>
 						{#snippet headerLeading()}
 							{@render paneConn(id)}
@@ -2152,6 +2163,7 @@
 						{presenceByFileId}
 						onSwitchRoom={paneSwitchRoom(id)}
 						onNewRoom={paneNewRoom(id)}
+						onRoomContext={paneRoomContext(id)}
 					>
 						{#snippet headerLeading()}
 							{@render paneConn(id)}
@@ -2206,6 +2218,7 @@
 						{presenceByFileId}
 						onSwitchRoom={paneSwitchRoom(id)}
 						onNewRoom={paneNewRoom(id)}
+						onRoomContext={paneRoomContext(id)}
 					>
 						{#snippet headerLeading()}
 							{@render paneConn(id)}

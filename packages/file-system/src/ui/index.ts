@@ -15,7 +15,6 @@ export type {
 	ExplorerContext,
 	ExplorerNewMenuItem,
 	ExplorerPresenceDot,
-	ExplorerProjectRoom,
 	ExplorerRoomActionResult,
 	RemoteKind
 } from './componentTypes.js';

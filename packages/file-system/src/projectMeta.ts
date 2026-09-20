@@ -53,19 +53,6 @@ export function mintDefaultRoom(label: string): { rooms: ProjectRoom[]; currentR
 	return { rooms: [room], currentRoomId: room.id };
 }
 
-export function parseProjectRooms(raw: unknown): ProjectRoom[] {
-	if (!Array.isArray(raw)) return [];
-	const rooms: ProjectRoom[] = [];
-	for (const item of raw) {
-		if (!item || typeof item !== 'object') continue;
-		const rec = item as Record<string, unknown>;
-		if (typeof rec.id !== 'string' || !rec.id.trim()) continue;
-		if (typeof rec.label !== 'string') continue;
-		rooms.push({ id: rec.id, label: rec.label });
-	}
-	return rooms;
-}
-
 export function roomsFromMeta(
 	meta: ProjectMeta | null | undefined
 ): { rooms: ProjectRoom[]; currentRoomId: string | null } {
@@ -99,7 +86,16 @@ export function parseProjectMeta(raw: unknown): ProjectMeta | null {
 	const meta = { ...rec } as ProjectMeta;
 	if (!hasProjectId(meta)) delete (meta as { id?: unknown }).id;
 	if ('rooms' in rec) {
-		const rooms = parseProjectRooms(rec.rooms);
+		const rooms: ProjectRoom[] = [];
+		if (Array.isArray(rec.rooms)) {
+			for (const item of rec.rooms) {
+				if (!item || typeof item !== 'object') continue;
+				const room = item as Record<string, unknown>;
+				if (typeof room.id !== 'string' || !room.id.trim()) continue;
+				if (typeof room.label !== 'string') continue;
+				rooms.push({ id: room.id, label: room.label });
+			}
+		}
 		if (rooms.length) meta.rooms = rooms;
 		else delete meta.rooms;
 	}

@@ -137,10 +137,9 @@
 		ExplorerContext,
 		ExplorerNewMenuItem,
 		ExplorerPresenceDot,
-		ExplorerProjectRoom,
 		ExplorerRoomActionResult
 	} from './componentTypes.js';
-	import { readProjectMeta } from '../projectMeta.js';
+	import { readProjectMeta, roomsFromMeta, type ProjectRoom } from '../projectMeta.js';
 
 	interface Props {
 		mode?: ExplorerMode;
@@ -252,6 +251,10 @@
 			label: string;
 			save: boolean;
 		}) => Promise<ExplorerRoomActionResult>;
+		onRoomContext?: (args: {
+			rootId: ExplorerEntryId | null;
+			roomId: string | null;
+		}) => void;
 	}
 
 	let {
@@ -294,7 +297,8 @@
 		onCopyAcrossFromClipboard,
 		presenceByFileId,
 		onSwitchRoom,
-		onNewRoom
+		onNewRoom,
+		onRoomContext
 	}: Props = $props();
 
 	// Resolve driver once from props (local default). Re-create if prop identity changes via effect below.
@@ -720,13 +724,13 @@
 	let projectRootId = $state<ExplorerEntryId | null>(null);
 	let isGitEnabled = $state(false);
 	let gitRootId = $state<ExplorerEntryId | null>(null);
-	let projectRooms = $state<ExplorerProjectRoom[]>([]);
+	let projectRooms = $state<ProjectRoom[]>([]);
 	let projectCurrentRoomId = $state<string | null>(null);
 	let pendingRoomSwitch = $state<{ kind: 'switch'; roomId: string } | { kind: 'new'; label: string } | null>(
 		null
 	);
 	const showRoomChip = $derived(
-		Boolean(isInsideProject && isGitEnabled && projectRooms.length && localVfs)
+		Boolean(onSwitchRoom && isInsideProject && isGitEnabled && projectRooms.length && localVfs)
 	);
 	const currentRoom = $derived(
 		projectRooms.find((r) => r.id === projectCurrentRoomId) ?? projectRooms[0] ?? null
@@ -746,14 +750,12 @@
 			findProjectRoot(d, curParentId, 'git')
 		])
 			.then(async ([project, git]) => {
-				let rooms: ExplorerProjectRoom[] = [];
+				let rooms: ProjectRoom[] = [];
 				let current: string | null = null;
 				if (project.found && vfs) {
-					const meta = await readProjectMeta(vfs, project.id);
-					rooms = meta?.rooms ?? [];
-					const cur = meta?.currentRoomId;
-					current =
-						cur && rooms.some((r) => r.id === cur) ? cur : (rooms[0]?.id ?? null);
+					const fromMeta = roomsFromMeta(await readProjectMeta(vfs, project.id));
+					rooms = fromMeta.rooms;
+					current = fromMeta.currentRoomId;
 				}
 				if (gen !== currentDetectGen) return;
 				isInsideProject = project.found;
@@ -763,6 +765,10 @@
 				projectRooms = rooms;
 				projectCurrentRoomId = current;
 				if (!rooms.length) roomMenuOpen = false;
+				onRoomContext?.({
+					rootId: project.found ? project.id : null,
+					roomId: git.found ? current : null
+				});
 			})
 			.catch(() => {
 				if (gen !== currentDetectGen) return;
@@ -773,6 +779,7 @@
 				projectRooms = [];
 				projectCurrentRoomId = null;
 				roomMenuOpen = false;
+				onRoomContext?.({ rootId: null, roomId: null });
 			});
 	});
 
@@ -1652,11 +1659,9 @@
 
 	async function reloadProjectRooms() {
 		if (!localVfs || !projectRootId) return;
-		const meta = await readProjectMeta(localVfs, projectRootId);
-		projectRooms = meta?.rooms ?? [];
-		const cur = meta?.currentRoomId;
-		projectCurrentRoomId =
-			cur && projectRooms.some((r) => r.id === cur) ? cur : (projectRooms[0]?.id ?? null);
+		const fromMeta = roomsFromMeta(await readProjectMeta(localVfs, projectRootId));
+		projectRooms = fromMeta.rooms;
+		projectCurrentRoomId = fromMeta.currentRoomId;
 	}
 
 	async function afterRoomChange() {
@@ -1672,26 +1677,32 @@
 	async function applyRoomAction(
 		pending: { kind: 'switch'; roomId: string } | { kind: 'new'; label: string },
 		save: boolean
-	): Promise<ExplorerRoomActionResult> {
+	): Promise<ExplorerRoomActionResult | 'error'> {
 		const root = projectRootId;
-		if (!root) return 'ok';
-		if (pending.kind === 'switch') {
-			if (!onSwitchRoom) return 'ok';
-			return onSwitchRoom({ rootId: root, roomId: pending.roomId, save });
+		if (!root) return 'error';
+		try {
+			if (pending.kind === 'switch') {
+				if (!onSwitchRoom) return 'error';
+				return await onSwitchRoom({ rootId: root, roomId: pending.roomId, save });
+			}
+			if (!onNewRoom) return 'error';
+			return await onNewRoom({ rootId: root, label: pending.label, save });
+		} catch (e) {
+			reportError(e);
+			return 'error';
 		}
-		if (!onNewRoom) return 'ok';
-		return onNewRoom({ rootId: root, label: pending.label, save });
 	}
 
 	async function chooseRoom(roomId: string) {
 		closeRoomMenu();
-		if (!projectRootId || roomId === projectCurrentRoomId) return;
+		if (!projectRootId || !onSwitchRoom) return;
 		const pending = { kind: 'switch' as const, roomId };
 		const result = await applyRoomAction(pending, false);
 		if (result === 'dirty') {
 			pendingRoomSwitch = pending;
 			return;
 		}
+		if (result !== 'ok') return;
 		projectCurrentRoomId = roomId;
 		await afterRoomChange();
 	}
@@ -1706,6 +1717,7 @@
 			pendingRoomSwitch = pending;
 			return;
 		}
+		if (result !== 'ok') return;
 		await afterRoomChange();
 	}
 
@@ -1714,7 +1726,7 @@
 		pendingRoomSwitch = null;
 		if (!pending) return;
 		const result = await applyRoomAction(pending, true);
-		if (result === 'dirty') return;
+		if (result !== 'ok') return;
 		if (pending.kind === 'switch') projectCurrentRoomId = pending.roomId;
 		await afterRoomChange();
 	}
