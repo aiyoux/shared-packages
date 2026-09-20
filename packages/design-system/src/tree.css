@@ -175,18 +175,24 @@
 		background: var(--accent);
 	}
 
+	/*
+	 * The before-line (painted on the lower row) and the after-line (painted
+	 * on the upper row) both describe the same gap. `--dnd-line-offset` is
+	 * set by tree-dnd.ts to half that gap so the two never disagree on where
+	 * the line sits, however the pointer flips between them.
+	 */
 	[data-tree-row].dnd-zone-before::before,
 	[data-tree-bar].dnd-zone-before::before,
 	[data-dnd-row].dnd-zone-before::before,
 	[data-dnd-bar].dnd-zone-before::before {
-		top: 0;
+		top: calc(-1 * var(--dnd-line-offset, 0px));
 	}
 
 	[data-tree-row].dnd-zone-after::after,
 	[data-tree-bar].dnd-zone-after::after,
 	[data-dnd-row].dnd-zone-after::after,
 	[data-dnd-bar].dnd-zone-after::after {
-		bottom: 0;
+		bottom: calc(-1 * var(--dnd-line-offset, 0px));
 	}
 
 	[data-tree-row].dnd-zone-into,

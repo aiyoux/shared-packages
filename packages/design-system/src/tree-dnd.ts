@@ -233,6 +233,7 @@ export function createPointerDrag<K extends string = string, M = unknown>(
 	function clearPaint() {
 		if (liveDropEl) {
 			liveDropEl.classList.remove(...ZONE_CLASSES);
+			liveDropEl.style.removeProperty('--dnd-line-offset');
 			liveDropEl = null;
 		}
 		liveOver = null;
@@ -249,13 +250,36 @@ export function createPointerDrag<K extends string = string, M = unknown>(
 		return bar;
 	}
 
+	/**
+	 * Half the gap between `row` and its before/after sibling, so the
+	 * before-line painted on the next row and the after-line painted on the
+	 * previous row land on the exact same pixel — one shared line at the
+	 * midpoint of the gap, instead of two lines that jump as the hit-tested
+	 * row flips near the boundary.
+	 */
+	function siblingGapOffset(row: HTMLElement, zone: Zone): number {
+		const sibling = zone === 'before' ? row.previousElementSibling : row.nextElementSibling;
+		if (!sibling) return 0;
+		const rowRect = row.getBoundingClientRect();
+		const sibRect = sibling.getBoundingClientRect();
+		const gap = zone === 'before' ? rowRect.top - sibRect.bottom : sibRect.top - rowRect.bottom;
+		return gap > 0 ? gap / 2 : 0;
+	}
+
 	function paint(el: HTMLElement | null, over: TreeDrag<K, M> | null, zone: Zone | null) {
-		if (liveDropEl) liveDropEl.classList.remove(...ZONE_CLASSES);
+		if (liveDropEl) {
+			liveDropEl.classList.remove(...ZONE_CLASSES);
+			liveDropEl.style.removeProperty('--dnd-line-offset');
+		}
 		liveOver = over;
 		liveZone = zone;
 		if (el && zone) {
 			liveDropEl = paintTarget(el, zone);
 			liveDropEl.classList.add(`dnd-zone-${zone}`);
+			if (zone === 'before' || zone === 'after') {
+				const offset = siblingGapOffset(el, zone);
+				if (offset > 0) liveDropEl.style.setProperty('--dnd-line-offset', `${offset}px`);
+			}
 		} else {
 			liveDropEl = null;
 		}
