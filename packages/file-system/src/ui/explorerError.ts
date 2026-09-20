@@ -60,7 +60,7 @@ function looksLikeRevokedDrop(e: unknown): boolean {
 export function formatPreviewReadError(e: unknown): string {
 	const code = codeOf(e);
 	if (code === 'WRITE_IN_FLIGHT') return 'This file is still being written. You can still delete it.';
-	if (code === 'OPFS_IO' || code === 'NOT_FOUND') {
+	if (code === 'BLOB_ABSENT' || code === 'OPFS_IO' || code === 'NOT_FOUND') {
 		return "This file's data is missing. You can still delete it.";
 	}
 	const msg = formatExplorerError(e);

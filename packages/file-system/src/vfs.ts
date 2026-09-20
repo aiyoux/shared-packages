@@ -2466,7 +2466,7 @@ export class VfsService {
 		const node = await this.db.nodes.get(nodeId);
 		if (!node) throw new VfsError('NOT_FOUND');
 		if (node.kind !== 'file') throw new VfsError('NOT_A_FILE');
-		if (!node.blobId) throw new VfsError('OPFS_IO', 'Missing blobId', { nodeId });
+		if (!node.blobId) throw new VfsError('BLOB_ABSENT', 'File has no stored bytes', { nodeId });
 		const ref = await this.loadReadableRef(node.blobId, nodeId);
 		if (ref.packOffset != null) {
 			const slice = await this.readPacked(ref);
@@ -2664,7 +2664,7 @@ export class VfsService {
 		const node = await this.db.nodes.get(nodeId);
 		if (!node) throw new VfsError('NOT_FOUND');
 		if (node.kind !== 'file') throw new VfsError('NOT_A_FILE');
-		if (!node.blobId) throw new VfsError('OPFS_IO', 'Missing blobId');
+		if (!node.blobId) throw new VfsError('BLOB_ABSENT', 'File has no stored bytes', { nodeId });
 		const ref = await this.loadReadableRef(node.blobId);
 		const contentType = node.contentType ?? ref.contentType;
 		if (ref.packOffset != null) {

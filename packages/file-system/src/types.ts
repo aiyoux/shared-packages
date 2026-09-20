@@ -253,6 +253,11 @@ export type VfsErrorCode =
 	| 'CYCLE'
 	| 'OPFS_UNAVAILABLE'
 	| 'OPFS_IO'
+	// Bytes simply not on this device (never stored, or a partial transfer has
+	// not brought this blob yet) is not an I/O failure: OPFS_IO means "the
+	// storage layer failed", and a per-file transfer path must be able to tell
+	// the two apart before it offers to fetch the bytes (collab gotcha 10.8).
+	| 'BLOB_ABSENT'
 	| 'QUOTA_EXCEEDED'
 	| 'API_MISUSE'
 	| 'MIGRATION_IN_PROGRESS'

@@ -243,7 +243,7 @@ export class MemoryVfsService {
 		const node = getState().nodes.get(id);
 		if (!node) throw new VfsError('NOT_FOUND');
 		const b = getState().blobs.get(node.blobId);
-		if (!b) throw new VfsError('OPFS_IO', 'missing blob');
+		if (!b) throw new VfsError('BLOB_ABSENT', 'File has no stored bytes');
 		return new Uint8Array(b.bytes);
 	}
 

@@ -865,6 +865,26 @@ describe('VfsService', () => {
 		assert.equal(await vfs.opfs.exists('root/orphan-audit.bin'), false);
 	});
 
+	it('readBytes on a node with no blobId is BLOB_ABSENT, not an I/O failure', async () => {
+		const file = await vfs.writeFile({
+			parentId: null,
+			name: 'absent.txt',
+			fileType: 'text',
+			body: new TextEncoder().encode('bytes')
+		});
+		// Simulate bytes that never arrived: the node exists, its bytes do not.
+		await vfs.db.nodes.update(file.id, { blobId: undefined });
+		for (const read of [() => vfs.readBytes(file.id), () => vfs.readBlob(file.id)]) {
+			await assert.rejects(read, (e: unknown) => {
+				assert.ok(e instanceof VfsError);
+				// Gotcha 10.8: lazily-absent must not read as corruption — a future
+				// per-file transfer offers to fetch bytes it can see are absent.
+				assert.equal(e.code, 'BLOB_ABSENT');
+				return true;
+			});
+		}
+	});
+
 	it('isCatalogDeadError matches worker-death messages', () => {
 		assert.equal(isCatalogDeadError(new Error('catalog leader gone')), true);
 		assert.equal(isCatalogDeadError(new Error('catalog RPC timeout')), true);
