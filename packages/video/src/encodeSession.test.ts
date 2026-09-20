@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { AudioSample, AudioSampleSource } from 'mediabunny';
 import { avcLevelByte, createEncodeSession, parseBitrate } from './encodeSession.js';
 import { processVideo } from './process.js';
+
+const muxOrder: string[] = [];
 
 vi.mock('mediabunny', () => {
 	class BufferTarget {
@@ -17,19 +20,53 @@ vi.mock('mediabunny', () => {
 			return { chunk };
 		}
 	}
+	class AudioSample {
+		closed = false;
+		constructor(public init: Record<string, unknown>) {}
+		close() {
+			this.closed = true;
+		}
+	}
+	class AudioSampleSource {
+		static instances: AudioSampleSource[] = [];
+		adds: unknown[] = [];
+		constructor(public config: unknown) {
+			(AudioSampleSource as unknown as { instances: unknown[] }).instances.push(this);
+		}
+		async add(sample: unknown) {
+			this.adds.push(sample);
+			muxOrder.push('audio-add');
+		}
+	}
 	class Output {
 		target: BufferTarget;
 		constructor(opts: { target: BufferTarget }) {
 			this.target = opts.target;
 		}
-		addVideoTrack() {}
+		addVideoTrack() {
+			muxOrder.push('add-video-track');
+		}
+		addAudioTrack() {
+			muxOrder.push('add-audio-track');
+		}
 		async start() {}
 		async finalize() {
+			muxOrder.push('finalize');
 			this.target.buffer = new Uint8Array([1, 2, 3, 4]).buffer;
 		}
 	}
-	return { Output, Mp4OutputFormat, BufferTarget, EncodedVideoPacketSource, EncodedPacket };
+	return {
+		Output,
+		Mp4OutputFormat,
+		BufferTarget,
+		EncodedVideoPacketSource,
+		EncodedPacket,
+		AudioSample,
+		AudioSampleSource
+	};
 });
+
+type MockAudioSource = { config: unknown; adds: Array<{ init: Record<string, unknown>; closed: boolean }> };
 
 type EncodeCall = { timestamp: number; keyFrame?: boolean };
 
@@ -214,6 +251,8 @@ afterEach(() => {
 	restoreCodecs = undefined;
 	restoreDom?.();
 	restoreDom = undefined;
+	muxOrder.length = 0;
+	(AudioSampleSource as unknown as { instances: unknown[] }).instances.length = 0;
 });
 
 describe('avcLevelByte / parseBitrate', () => {
@@ -292,6 +331,45 @@ describe('createEncodeSession', () => {
 		expect(enc.flushCount).toBe(1);
 		session.close();
 		expect(enc.closeCount).toBe(1);
+	});
+});
+
+describe('encodeSession audio', () => {
+	it('adds the audio track lazily on the first sample', async () => {
+		restoreCodecs = installCodecs();
+		const session = createEncodeSession({
+			width: 64,
+			height: 64,
+			bitrate: '1M',
+			audio: { codec: 'opus', bitrate: 96_000 }
+		});
+		expect((AudioSampleSource as unknown as { instances: unknown[] }).instances).toHaveLength(1);
+		expect(muxOrder).toEqual(['add-video-track']);
+
+		const sample = new AudioSample({
+			data: new Uint8Array(new ArrayBuffer(4)),
+			format: 'f32',
+			numberOfChannels: 1,
+			sampleRate: 48_000,
+			timestamp: 0.25
+		}) as unknown as Parameters<typeof session.addAudio>[0];
+		await session.addAudio(sample);
+
+		const audioSource = (AudioSampleSource as unknown as { instances: unknown[] }).instances[0]! as MockAudioSource;
+		expect(audioSource.config).toEqual({ codec: 'opus', bitrate: 96_000 });
+
+		await session.flush();
+		expect(muxOrder).toEqual(['add-video-track', 'add-audio-track', 'audio-add', 'finalize']);
+		session.close();
+	});
+
+	it('emits no audio track when addAudio is never called', async () => {
+		restoreCodecs = installCodecs();
+		const session = createEncodeSession({ width: 64, height: 64, bitrate: '1M' });
+		expect((AudioSampleSource as unknown as { instances: unknown[] }).instances).toHaveLength(0);
+		await session.flush();
+		expect(muxOrder).toEqual(['add-video-track', 'finalize']);
+		session.close();
 	});
 });
 

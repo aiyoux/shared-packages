@@ -1,4 +1,6 @@
+import { AudioSample } from 'mediabunny';
 import { createEncodeSession, parseBitrate } from './encodeSession.js';
+import { openAudioChunks, type RawAudioChunk } from './audio.js';
 import type { ProcessOptions } from './types.js';
 
 export type { ProcessOptions };
@@ -99,8 +101,39 @@ export async function processVideo(inputBlob: Blob, options: ProcessOptions): Pr
 			width: outWidth,
 			height: outHeight,
 			bitrate: options.bitrate,
-			fpsHint: 30
+			fpsHint: options.fpsHint ?? 30,
+			audio: options.audio ? { codec: options.audio.codec ?? 'aac', bitrate: options.audio.bitrate } : undefined
 		});
+
+		// Audio drains concurrently with the video capture: the decoded
+		// source track is trimmed to the window and its PTS rebased by the
+		// same -start offset the video frames use. Nothing is added when the
+		// source has no audio (the audio track stays out of the output).
+		const audioDrain = options.audio
+			? (async () => {
+					for await (const chunk of openAudioChunks(inputBlob, {
+						startSec: options.start,
+						endSec: options.end
+					})) {
+						const chunkRebased: RawAudioChunk = {
+							...chunk,
+							timestamp: Math.max(0, chunk.timestamp - options.start)
+						};
+						const sample = new AudioSample({
+							data: chunkRebased.data,
+							format: chunkRebased.format,
+							numberOfChannels: chunkRebased.numberOfChannels,
+							sampleRate: chunkRebased.sampleRate,
+							timestamp: chunkRebased.timestamp
+						});
+						try {
+							await session.addAudio(sample);
+						} finally {
+							sample.close();
+						}
+					}
+				})()
+			: null;
 
 		let lastReportedProgress = -1;
 		const reportProgress = (mediaTimeSec: number) => {
@@ -174,6 +207,12 @@ export async function processVideo(inputBlob: Blob, options: ProcessOptions): Pr
 		});
 
 		await captureDone;
+		if (audioDrain) {
+			// Swallow a rejected drain if capture already failed; the real
+			// await below surfaces audio errors on the happy path.
+			audioDrain.catch(() => {});
+			await audioDrain;
+		}
 
 		if (!video.paused) video.pause();
 

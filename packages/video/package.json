@@ -19,12 +19,15 @@
     "./VideoLightbox.svelte": "./src/VideoLightbox.svelte"
   },
   "types": "./src/index.ts",
-  "files": ["src"],
+  "files": [
+    "src"
+  ],
   "scripts": {
     "test": "vitest run",
     "check": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
+    "gifenc": "^1.0.3",
     "mediabunny": "^1.50.9"
   },
   "peerDependencies": {

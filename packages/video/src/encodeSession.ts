@@ -1,4 +1,22 @@
-import { Output, Mp4OutputFormat, BufferTarget, EncodedVideoPacketSource, EncodedPacket } from 'mediabunny';
+import {
+	Output,
+	Mp4OutputFormat,
+	BufferTarget,
+	EncodedVideoPacketSource,
+	EncodedPacket,
+	AudioSample,
+	AudioSampleSource,
+	type AudioCodec
+} from 'mediabunny';
+
+export type AudioExportCodec = 'aac' | 'opus';
+
+const AUDIO_CODEC_MAP: Record<AudioExportCodec, AudioCodec> = {
+	aac: 'aac',
+	opus: 'opus'
+};
+
+const DEFAULT_AUDIO_BITRATE = 128_000;
 
 export function parseBitrate(bitrate: string): number {
 	const match = bitrate.match(/^(\d+(?:\.\d+)?)\s*(k|M|G)?$/i);
@@ -45,6 +63,12 @@ export interface EncodeSession {
 	readonly height: number;
 	/** Push one frame. `frame.timestamp` is used as PTS (µs). */
 	encode(frame: VideoFrame, opts?: { keyFrame?: boolean }): void;
+	/**
+	 * Add one decoded audio sample (timestamp in seconds, on the output
+	 * timeline). The audio track is created lazily on the first call, so
+	 * sources without audio never produce an empty audio track.
+	 */
+	addAudio(sample: AudioSample): Promise<void>;
 	/** flush encoder + mux chain + finalize → video/mp4 Blob. */
 	flush(): Promise<Blob>;
 	close(): void;
@@ -55,6 +79,7 @@ export function createEncodeSession(opts: {
 	height: number;
 	bitrate: string;
 	fpsHint?: number;
+	audio?: { codec?: AudioExportCodec; bitrate?: number };
 	onProgress?: (n: number) => void;
 }): EncodeSession {
 	if (typeof VideoEncoder === 'undefined' || typeof VideoFrame === 'undefined') {
@@ -114,6 +139,33 @@ export function createEncodeSession(opts: {
 	let closed = false;
 	let encoderClosed = false;
 
+	// Audio: the track is added lazily so a source without audio yields an
+	// output with no audio track at all rather than an empty one.
+	let audioSource: AudioSampleSource | null = null;
+	let audioTrackAdded = false;
+	if (opts.audio) {
+		audioSource = new AudioSampleSource({
+			codec: AUDIO_CODEC_MAP[opts.audio.codec ?? 'aac'],
+			bitrate: opts.audio.bitrate ?? DEFAULT_AUDIO_BITRATE
+		});
+	}
+	const addAudio = (sample: AudioSample): Promise<void> => {
+		if (!audioSource) return Promise.resolve();
+		if (!audioTrackAdded) {
+			audioTrackAdded = true;
+			output.addAudioTrack(audioSource);
+		}
+		// Serialize with the video packet adds on the same mux chain.
+		const added = muxChain.then(() => audioSource!.add(sample));
+		muxChain = added.then(
+			() => undefined,
+			(e) => {
+				muxError = muxError ?? (e instanceof Error ? e : new Error(String(e)));
+			}
+		);
+		return added;
+	};
+
 	const closeEncoder = () => {
 		if (encoderClosed) return;
 		encoderClosed = true;
@@ -127,6 +179,7 @@ export function createEncodeSession(opts: {
 	return {
 		width,
 		height,
+		addAudio,
 		encode(frame, encodeOpts) {
 			if (closed || encoderClosed) {
 				throw new Error('EncodeSession is closed');

@@ -11,7 +11,7 @@ export type VideoInterpolator = {
 
 export type EngineId = 'native';
 
-export type VideoFormat = 'mp4' | 'webm';
+export type VideoFormat = 'mp4' | 'webm' | 'gif';
 
 export type EngineInfo = {
 	id: EngineId;
@@ -27,6 +27,10 @@ export interface ProcessOptions {
 	height?: number;
 	bitrate: string;
 	format?: VideoFormat;
+	/** Encoder rate-control hint only; source PTS drives real output timing. */
+	fpsHint?: number;
+	/** Include the source's audio, decoded and re-encoded into the output. */
+	audio?: { codec?: 'aac' | 'opus'; bitrate?: number };
 	onProgress?: (progress: number) => void;
 }
 
@@ -49,17 +53,20 @@ export const DEFAULT_ENGINE: EngineId = 'native';
 
 export const FORMAT_LABEL: Record<VideoFormat, string> = {
 	mp4: 'MP4 (H.264)',
-	webm: 'WebM (VP8)'
+	webm: 'WebM (VP8)',
+	gif: 'GIF (animated)'
 };
 
 export const FORMAT_EXTENSION: Record<VideoFormat, string> = {
 	mp4: '.mp4',
-	webm: '.webm'
+	webm: '.webm',
+	gif: '.gif'
 };
 
 export const FORMAT_MIME: Record<VideoFormat, string> = {
 	mp4: 'video/mp4',
-	webm: 'video/webm'
+	webm: 'video/webm',
+	gif: 'image/gif'
 };
 
 export const DEFAULT_BITRATE = '1M';

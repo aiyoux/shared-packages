@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { AudioSampleSource } from 'mediabunny';
 import { encodeFrames, type FrameSource } from './encodeFrames.js';
+
+const muxOrder: string[] = [];
 
 vi.mock('mediabunny', () => {
 	class BufferTarget {
@@ -16,19 +19,55 @@ vi.mock('mediabunny', () => {
 			return { chunk };
 		}
 	}
+	class AudioSample {
+		closed = false;
+		constructor(public init: Record<string, unknown>) {
+			this.init = init;
+		}
+		close() {
+			this.closed = true;
+		}
+	}
+	class AudioSampleSource {
+		static instances: AudioSampleSource[] = [];
+		adds: unknown[] = [];
+		constructor(public config: unknown) {
+			(AudioSampleSource as unknown as { instances: unknown[] }).instances.push(this);
+		}
+		async add(sample: unknown) {
+			this.adds.push(sample);
+			muxOrder.push('audio-add');
+		}
+	}
 	class Output {
 		target: BufferTarget;
 		constructor(opts: { target: BufferTarget }) {
 			this.target = opts.target;
 		}
-		addVideoTrack() {}
+		addVideoTrack() {
+			muxOrder.push('add-video-track');
+		}
+		addAudioTrack() {
+			muxOrder.push('add-audio-track');
+		}
 		async start() {}
 		async finalize() {
+			muxOrder.push('finalize');
 			this.target.buffer = new Uint8Array([1, 2, 3, 4]).buffer;
 		}
 	}
-	return { Output, Mp4OutputFormat, BufferTarget, EncodedVideoPacketSource, EncodedPacket };
+	return {
+		Output,
+		Mp4OutputFormat,
+		BufferTarget,
+		EncodedVideoPacketSource,
+		EncodedPacket,
+		AudioSample,
+		AudioSampleSource
+	};
 });
+
+type MockAudioSource = { config: unknown; adds: Array<{ init: Record<string, unknown>; closed: boolean }> };
 
 type EncodeCall = { timestamp: number; keyFrame?: boolean };
 
@@ -96,6 +135,7 @@ let restoreCodecs: (() => void) | undefined;
 afterEach(() => {
 	restoreCodecs?.();
 	restoreCodecs = undefined;
+	muxOrder.length = 0;
 });
 
 describe('encodeFrames', () => {
@@ -145,5 +185,100 @@ describe('encodeFrames', () => {
 		await expect(encodeFrames(source, { bitrate: '1M' })).rejects.toThrow('pull failed');
 		expect(source.pull).toHaveBeenCalledTimes(1);
 		expect(source.close).toHaveBeenCalledTimes(1);
+	});
+
+	it('ceils the frame count so the frame overlapping the cut is kept', async () => {
+		restoreCodecs = installCodecs();
+		const pulls: number[] = [];
+		const source: FrameSource = {
+			width: 32,
+			height: 32,
+			durationMs: 1050,
+			fps: 10,
+			pull: vi.fn(async (tMs) => {
+				pulls.push(tMs);
+				return { kind: 'canvas' } as unknown as CanvasImageSource;
+			})
+		};
+
+		await encodeFrames(source, { bitrate: '1M' });
+		expect(pulls).toHaveLength(11); // ceil(10.5) — round would give 10 (or 11 by luck)
+		expect(pulls[10]).toBe(1000);
+	});
+
+	it('drains rebased audio chunks into a lazily added audio track before flush', async () => {
+		restoreCodecs = installCodecs();
+		const chunks = [
+			{
+				data: new Uint8Array(new ArrayBuffer(8)),
+				format: 'f32' as AudioSampleFormat,
+				numberOfChannels: 2,
+				sampleRate: 48_000,
+				timestamp: 0
+			},
+			{
+				data: new Uint8Array(new ArrayBuffer(8)),
+				format: 'f32' as AudioSampleFormat,
+				numberOfChannels: 2,
+				sampleRate: 48_000,
+				timestamp: 0.5
+			}
+		];
+		const source: FrameSource = {
+			width: 32,
+			height: 32,
+			durationMs: 100,
+			fps: 10,
+			pull: vi.fn(async () => ({ kind: 'canvas' }) as unknown as CanvasImageSource)
+		};
+
+		await encodeFrames(source, {
+			bitrate: '1M',
+			audio: {
+				chunks: (async function* () {
+					for (const c of chunks) yield c;
+				})(),
+				codec: 'aac',
+				bitrate: 96_000
+			}
+		});
+
+		expect(muxOrder).toEqual([
+			'add-video-track',
+			'add-audio-track',
+			'audio-add',
+			'audio-add',
+			'finalize'
+		]);
+		const audioSource = (AudioSampleSource as unknown as { instances: unknown[] }).instances[0]! as MockAudioSource;
+		expect(audioSource.config).toEqual({ codec: 'aac', bitrate: 96_000 });
+		expect(audioSource.adds).toHaveLength(2);
+		const first = audioSource.adds[0]!;
+		const second = audioSource.adds[1]!;
+		expect(first.init.timestamp).toBe(0);
+		expect(second.init.timestamp).toBe(0.5);
+		expect(second.init.sampleRate).toBe(48_000);
+		expect(first.closed).toBe(true);
+		expect(second.closed).toBe(true);
+	});
+
+	it('adds no audio track when the chunk stream is empty', async () => {
+		restoreCodecs = installCodecs();
+		const source: FrameSource = {
+			width: 32,
+			height: 32,
+			durationMs: 100,
+			fps: 10,
+			pull: vi.fn(async () => ({ kind: 'canvas' }) as unknown as CanvasImageSource)
+		};
+
+		await encodeFrames(source, {
+			bitrate: '1M',
+			audio: {
+				chunks: (async function* () {})(),
+				codec: 'aac'
+			}
+		});
+		expect(muxOrder).not.toContain('add-audio-track');
 	});
 });

@@ -1,6 +1,19 @@
 export { processVideo } from './process.js';
-export { parseBitrate, createEncodeSession, type EncodeSession } from './encodeSession.js';
-export { encodeFrames, type FrameSource } from './encodeFrames.js';
+export {
+	parseBitrate,
+	createEncodeSession,
+	type AudioExportCodec,
+	type EncodeSession
+} from './encodeSession.js';
+export { encodeFrames, type EncodeFramesAudio, type FrameSource } from './encodeFrames.js';
+export {
+	mergeChunkAt,
+	openAudioChunks,
+	silenceChunk,
+	type RawAudioChunk
+} from './audio.js';
+export { encodeGif, type EncodeGifOpts } from './gif.js';
+export { probeVideoMetadata, type VideoMetadata, type VideoFpsMetrics } from './probe.js';
 export { createVideoUrl, getVideoDuration, getVideoFrameRate, revokeVideoUrl } from './meta.js';
 export { formatTimecode } from './time.js';
 export {
