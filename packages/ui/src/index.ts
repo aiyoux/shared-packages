@@ -26,7 +26,7 @@ export { default as DateRangePicker } from './DateRangePicker.svelte';
 export { default as DatePicker } from './DatePicker.svelte';
 export { default as FileDropZone } from './FileDropZone.svelte';
 export { default as BindPrompt } from './BindPrompt.svelte';
-export type { BindPromptIds, BindPromptPending, VfsBindMode } from './BindPrompt.svelte';
+export type { BindPromptIds, BindPromptPending, VfsBindMode } from './bindPrompt.ts';
 export { default as DropRejectHint } from './DropRejectHint.svelte';
 export {
 	parseExplorerDropPayload,

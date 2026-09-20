@@ -374,7 +374,7 @@ export function lineBoxesOf(block: HTMLElement): LineBox[] {
 				line.right = Math.max(line.right, rect.right);
 				line.startOffset = Math.min(line.startOffset, offset + i);
 				line.endOffset = Math.max(line.endOffset, offset + i + 1);
-				line.glyphs.push(glyph);
+				(line.glyphs ??= []).push(glyph);
 			}
 		}
 		offset += len;

@@ -1,7 +1,7 @@
 import type { VfsNode } from './types.js';
 import type { VfsService } from './vfs.js';
 
-export type LiveLinkState = 'live' | 'trashed' | 'missing' | 'replaced';
+export type LiveLinkState = 'live' | 'trashed' | 'missing' | 'replaced' | 'missing-fragment';
 
 export type LiveLinkSnapshot = {
 	state: LiveLinkState;
