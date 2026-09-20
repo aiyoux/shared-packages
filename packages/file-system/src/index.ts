@@ -53,4 +53,3 @@ export {
 export * from './migrate/runAll.js';
 export { serializeBody, parseJsonBytes } from './serialize.js';
 export { crc32 } from './crc32.js';
-export { sha256Hex } from './contentHash.js';

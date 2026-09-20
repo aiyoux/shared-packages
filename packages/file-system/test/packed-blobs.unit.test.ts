@@ -1,6 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { createVfs, createMemoryOpfs, resetSharedVfsForTests, sha256Hex } from '../src/index.ts';
+import { sha256Uint8 } from '@shared-packages/crypto';
+import { createVfs, createMemoryOpfs, resetSharedVfsForTests } from '../src/index.ts';
 import type { OpfsBlobStore } from '../src/opfs.ts';
 
 const enc = new TextEncoder();
@@ -66,7 +67,7 @@ describe('packed blobs', () => {
 			'every member records its offset'
 		);
 		for (let i = 0; i < N; i++) {
-			assert.equal(refs[i]!.contentHash, await sha256Hex(enc.encode(`member-${i}`)));
+			assert.equal(refs[i]!.contentHash, await sha256Uint8(enc.encode(`member-${i}`)));
 		}
 
 		// Offsets must be distinct and sizes must be the member sizes, not the

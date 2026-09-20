@@ -5,9 +5,9 @@ import {
 	createMemoryOpfs,
 	VfsError,
 	isActionable,
-	resetSharedVfsForTests,
-	sha256Hex
+	resetSharedVfsForTests
 } from '../src/index.ts';
+import { sha256Uint8 } from '@shared-packages/crypto';
 import { isCatalogDeadError } from '../src/catalogEngine.ts';
 
 describe('VfsService', () => {
@@ -28,7 +28,7 @@ describe('VfsService', () => {
 			body: bytes
 		});
 		const ref = await vfs.db.blobRefs.get(file.blobId!);
-		assert.equal(ref?.contentHash, await sha256Hex(bytes));
+		assert.equal(ref?.contentHash, await sha256Uint8(bytes));
 		assert.match(ref!.contentHash!, /^[0-9a-f]{64}$/);
 	});
 
@@ -45,7 +45,7 @@ describe('VfsService', () => {
 			expectedGeneration: file.generation
 		});
 		const b = (await vfs.db.blobRefs.get(updated.blobId!))!.contentHash;
-		assert.equal(b, await sha256Hex(new TextEncoder().encode('v2')));
+		assert.equal(b, await sha256Uint8(new TextEncoder().encode('v2')));
 		assert.notEqual(a, b);
 
 		const again = await vfs.writeFile({
@@ -65,8 +65,8 @@ describe('VfsService', () => {
 		]);
 		assert.equal(nodes.length, 2);
 		const refs = await Promise.all(nodes.map((n) => vfs.db.blobRefs.get(n.blobId!)));
-		assert.equal(refs[0]?.contentHash, await sha256Hex(new TextEncoder().encode('A')));
-		assert.equal(refs[1]?.contentHash, await sha256Hex(new TextEncoder().encode('B')));
+		assert.equal(refs[0]?.contentHash, await sha256Uint8(new TextEncoder().encode('A')));
+		assert.equal(refs[1]?.contentHash, await sha256Uint8(new TextEncoder().encode('B')));
 	});
 
 	it('reads a blobRef written without contentHash as missing, not empty', async () => {

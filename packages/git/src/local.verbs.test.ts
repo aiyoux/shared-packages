@@ -6,11 +6,8 @@ import {
 	ROOM_BRANCH_PREFIX,
 	localBranch,
 	localCommit,
-	localDeleteBranch,
 	localFetch,
 	localFindMergeBase,
-	localIndexPack,
-	localListBranches,
 	localMerge,
 	localPackObjects,
 	roomBranchName,
@@ -109,7 +106,7 @@ describe('localBranch room refs', () => {
 		expect(ref).toBe(`${ROOM_BRANCH_PREFIX}abc`);
 
 		await localBranch(fs, '/', { ref });
-		const listed = await localListBranches(fs, '/');
+		const listed = await git.listBranches({ fs, dir: '/' });
 		expect(listed).toContain('room/abc');
 		expect(listed).toContain('main');
 		expect(await git.resolveRef({ fs, dir: '/', ref: `refs/heads/${ref}` })).toBe(head);
@@ -128,15 +125,6 @@ describe('localBranch room refs', () => {
 		await seed(fs);
 		await expect(localBranch(fs, '/', { ref: '  ' })).rejects.toThrow(/branch name/i);
 		expect(() => roomBranchName('')).toThrow(/room id/i);
-		await expect(localDeleteBranch(fs, '/', '')).rejects.toThrow(/branch name/i);
-	});
-
-	it('deletes a room branch', async () => {
-		const { fs } = await repo('branch-del');
-		await seed(fs);
-		await localBranch(fs, '/', { ref: roomBranchName('gone') });
-		await localDeleteBranch(fs, '/', roomBranchName('gone'));
-		expect(await localListBranches(fs, '/')).not.toContain('room/gone');
 	});
 });
 
@@ -206,6 +194,9 @@ describe('localMerge mergeDriver', () => {
 		expect(result.oid).toMatch(/^[0-9a-f]{40}$/);
 		const blob = await git.readBlob({ fs, dir: '/', oid: result.oid!, filepath: 'a.txt' });
 		expect(new TextDecoder().decode(blob.blob)).toBe('theirs\nours\n');
+		const work = await fs.promises.readFile('/a.txt');
+		const workBytes = work instanceof Uint8Array ? work : new Uint8Array(work as ArrayBuffer);
+		expect(new TextDecoder().decode(workBytes)).toBe('theirs\nours\n');
 	});
 
 	it('refuses an empty theirs ref', async () => {
@@ -222,15 +213,13 @@ describe('localFindMergeBase / pack / fetch', () => {
 		await expect(localFindMergeBase(fs, '/', [])).rejects.toThrow(/at least one/i);
 	});
 
-	it('packs objects and refuses an empty oid list or a missing pack', async () => {
+	it('packs objects and refuses an empty oid list', async () => {
 		const { fs } = await repo('pack');
 		const oid = await seed(fs);
 		const packed = await localPackObjects(fs, '/', { oids: [oid] });
 		expect(packed.filename).toMatch(/pack-.*\.pack/);
 		expect(packed.packfile?.byteLength).toBeGreaterThan(0);
 		await expect(localPackObjects(fs, '/', { oids: [] })).rejects.toThrow(/at least one/i);
-		await expect(localIndexPack(fs, '/', '')).rejects.toThrow(/filepath/i);
-		await expect(localIndexPack(fs, '/', '.git/objects/pack/missing.pack')).rejects.toThrow();
 	});
 
 	it('fetch requires http and a url or remote, and surfaces HTTP errors', async () => {

@@ -13,8 +13,8 @@ import {
 } from './persist.js';
 import { forceExtension, getFileType, inferFileTypeFromName } from './registry.js';
 import { parseJsonBytes, serializeBody } from './serialize.js';
+import { sha256Uint8 } from '@shared-packages/crypto';
 import { crc32 } from './crc32.js';
-import { sha256Hex } from './contentHash.js';
 import { profileAdd } from './profile.js';
 
 async function blobToBytes(blob: Blob): Promise<Uint8Array> {
@@ -1120,7 +1120,7 @@ export class VfsService {
 				name = forceExtension(name, fileType);
 			}
 			const { bytes, contentType } = await serializeBody(input.body, input.contentType);
-			const contentHash = await sha256Hex(bytes);
+			const contentHash = await sha256Uint8(bytes);
 			const dirs = parts;
 			let folderKey = '';
 			for (const seg of dirs) {
@@ -1449,7 +1449,7 @@ export class VfsService {
 		let finalPath = `root/${name}`;
 		const direct = input.direct === true;
 		const { bytes, contentType } = await serializeBody(input.body, input.contentType);
-		const contentHash = await sha256Hex(bytes);
+		const contentHash = await sha256Uint8(bytes);
 		const leaseKey = `write:${blobId}`;
 		const owner = generateId('lease');
 		const now = Date.now();
@@ -1831,7 +1831,7 @@ export class VfsService {
 					nodeId,
 					blobId: generateId('blob'),
 					now: Date.now(),
-					contentHash: await sha256Hex(bytes)
+					contentHash: await sha256Uint8(bytes)
 				};
 			})
 		);
@@ -2343,7 +2343,7 @@ export class VfsService {
 		const finalPath = this.rootOpfsPath(rel || node.name);
 		const stagingPath = `tmp/${blobId}.bin`;
 		const { bytes, contentType } = await serializeBody(body, opts.contentType ?? node.contentType);
-		const contentHash = await sha256Hex(bytes);
+		const contentHash = await sha256Uint8(bytes);
 		const leaseKey = `write:${blobId}`;
 		const owner = generateId('lease');
 		const now = Date.now();
@@ -3106,7 +3106,7 @@ export class VfsService {
 			}
 		}
 		const hashes = await Promise.all(
-			members.map((m) => sha256Hex(packBytes.subarray(m.offset, m.offset + m.byteLength)))
+			members.map((m) => sha256Uint8(packBytes.subarray(m.offset, m.offset + m.byteLength)))
 		);
 		await this.db.blobRefs.bulkPut(
 			members.map((m, i) => ({
@@ -3130,7 +3130,7 @@ export class VfsService {
 		const writeId = generateId('mw');
 		const finalPath = `blobs/${blobId}.bin`;
 		const { bytes, contentType: ct } = await serializeBody(body, contentType);
-		const contentHash = await sha256Hex(bytes);
+		const contentHash = await sha256Uint8(bytes);
 		const { tmpPath, byteLength } = await this.opfs.writePartial(writeId, bytes);
 		await this.db.blobRefs.put({
 			id: blobId,

@@ -93,7 +93,7 @@ function wrapOo1(db: Oo1Db): SqlEngine {
 				DROP TABLE IF EXISTS leases;
 			`);
 			db.exec(CATALOG_SCHEMA);
-			applyCatalogColumnMigrations((sql) => db.exec(sql));
+			applyCatalogColumnMigrations(db);
 			applyLiveNameIndexes(db);
 		},
 		async close() {
@@ -135,7 +135,7 @@ async function openFreshMemory(): Promise<SqlEngine> {
 	const sqlite3 = await loadSqlite3();
 	const db = new sqlite3.oo1.DB(':memory:');
 	db.exec(CATALOG_SCHEMA);
-	applyCatalogColumnMigrations((sql) => db.exec(sql));
+	applyCatalogColumnMigrations(db);
 	applyLiveNameIndexes(db);
 	return wrapOo1(db);
 }

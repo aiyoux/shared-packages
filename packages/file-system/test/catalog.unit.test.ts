@@ -1,6 +1,7 @@
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { createVfs, resetSharedVfsForTests, MIGRATED_KEY } from '../src/index.ts';
+import { applyCatalogColumnMigrations } from '../src/catalogSchema.ts';
 
 function seedIdbNode(dbName: string): Promise<void> {
 	return new Promise((resolve, reject) => {
@@ -151,3 +152,28 @@ describe('SqliteCatalog', () => {
 		assert.ok(draftHits >= 1);
 	});
 });
+
+describe('applyCatalogColumnMigrations', () => {
+	it('skips ALTER when content_hash is already present', () => {
+		let altered = false;
+		applyCatalogColumnMigrations({
+			selectObjects: () => [{ name: 'content_hash' }],
+			exec: () => {
+				altered = true;
+			}
+		});
+		assert.equal(altered, false);
+	});
+
+	it('ALTERs only when the column is missing', () => {
+		const sql: string[] = [];
+		applyCatalogColumnMigrations({
+			selectObjects: () => [{ name: 'crc32' }],
+			exec: (s) => {
+				sql.push(s);
+			}
+		});
+		assert.deepEqual(sql, ['ALTER TABLE blob_refs ADD COLUMN content_hash TEXT']);
+	});
+});
+

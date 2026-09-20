@@ -364,20 +364,6 @@ export async function localBranch(fs: GitFs, dir: string, opts: LocalBranchOpts)
 	);
 }
 
-export async function localDeleteBranch(fs: GitFs, dir: string, ref: string): Promise<void> {
-	const name = ref.trim();
-	if (!name) throw new Error('A branch name is required.');
-	return withFsBuffer(fs, () => git.deleteBranch({ fs, dir, ref: name }));
-}
-
-export async function localListBranches(
-	fs: GitFs,
-	dir: string,
-	opts?: { remote?: string }
-): Promise<string[]> {
-	return git.listBranches({ fs, dir, remote: opts?.remote });
-}
-
 export type LocalMergeOpts = {
 	theirs: string;
 	ours?: string;
@@ -386,19 +372,22 @@ export type LocalMergeOpts = {
 	message?: string;
 	mergeDriver?: MergeDriverCallback;
 	abortOnConflict?: boolean;
-	fastForward?: boolean;
-	fastForwardOnly?: boolean;
-	dryRun?: boolean;
-	noUpdateBranch?: boolean;
-	allowUnrelatedHistories?: boolean;
 };
 
+/**
+ * Merge `theirs` into `ours` (the current branch if omitted).
+ *
+ * isomorphic-git updates the branch ref but not the worktree/index. After a
+ * clean merge this checks out the new tip so the next snapshot is not dirty
+ * with pre-merge bytes. Leaves `abortOnConflict` at isomorphic-git's default
+ * (true) unless the caller sets it.
+ */
 export async function localMerge(fs: GitFs, dir: string, opts: LocalMergeOpts): Promise<MergeResult> {
 	const theirs = opts.theirs.trim();
 	if (!theirs) throw new Error('Merge needs a theirs ref.');
 	const committer = opts.committer ?? opts.author;
-	return withFsBuffer(fs, () =>
-		git.merge({
+	return withFsBuffer(fs, async () => {
+		const result = await git.merge({
 			fs,
 			dir,
 			theirs,
@@ -407,14 +396,15 @@ export async function localMerge(fs: GitFs, dir: string, opts: LocalMergeOpts): 
 			committer,
 			message: opts.message,
 			mergeDriver: opts.mergeDriver,
-			abortOnConflict: opts.abortOnConflict,
-			fastForward: opts.fastForward,
-			fastForwardOnly: opts.fastForwardOnly,
-			dryRun: opts.dryRun,
-			noUpdateBranch: opts.noUpdateBranch,
-			allowUnrelatedHistories: opts.allowUnrelatedHistories
-		})
-	);
+			abortOnConflict: opts.abortOnConflict
+		});
+		if (result.oid) {
+			const ours =
+				opts.ours ?? (await git.currentBranch({ fs, dir, fullname: false })) ?? result.oid;
+			await git.checkout({ fs, dir, ref: ours, force: true });
+		}
+		return result;
+	});
 }
 
 export type LocalFetchOpts = {
@@ -424,11 +414,6 @@ export type LocalFetchOpts = {
 	ref?: string;
 	remoteRef?: string;
 	singleBranch?: boolean;
-	depth?: number;
-	tags?: boolean;
-	prune?: boolean;
-	corsProxy?: string;
-	headers?: Record<string, string>;
 };
 
 export async function localFetch(fs: GitFs, dir: string, opts: LocalFetchOpts): Promise<FetchResult> {
@@ -443,12 +428,7 @@ export async function localFetch(fs: GitFs, dir: string, opts: LocalFetchOpts): 
 			remote: opts.remote,
 			ref: opts.ref,
 			remoteRef: opts.remoteRef,
-			singleBranch: opts.singleBranch,
-			depth: opts.depth,
-			tags: opts.tags,
-			prune: opts.prune,
-			corsProxy: opts.corsProxy,
-			headers: opts.headers
+			singleBranch: opts.singleBranch
 		})
 	);
 }
@@ -466,14 +446,4 @@ export async function localPackObjects(
 ): Promise<PackObjectsResult> {
 	if (!opts.oids.length) throw new Error('packObjects needs at least one oid.');
 	return git.packObjects({ fs, dir, oids: opts.oids, write: opts.write });
-}
-
-export async function localIndexPack(
-	fs: GitFs,
-	dir: string,
-	filepath: string
-): Promise<{ oids: string[] }> {
-	const path = filepath.trim();
-	if (!path) throw new Error('indexPack needs a pack filepath.');
-	return git.indexPack({ fs, dir, filepath: path });
 }

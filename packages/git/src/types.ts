@@ -32,7 +32,10 @@ export type GitAuthor = {
 	email: string;
 	/** Unix seconds. Omit for wall-clock (human GitHistory commits). */
 	timestamp?: number;
-	/** Minutes from UTC. Omit for the local offset. */
+	/**
+	 * Minutes from local time to UTC (`Date#getTimezoneOffset`). Collab
+	 * fingerprints should pass `0` with a UTC `timestamp`.
+	 */
 	timezoneOffset?: number;
 };
 

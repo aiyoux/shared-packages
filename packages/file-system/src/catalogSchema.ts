@@ -60,10 +60,11 @@ CREATE INDEX IF NOT EXISTS leases_expires ON leases(expires_at);
 `;
 
 /** Additive columns for catalogs created before they landed in `CATALOG_SCHEMA`. */
-export function applyCatalogColumnMigrations(exec: (sql: string) => void): void {
-	try {
-		exec('ALTER TABLE blob_refs ADD COLUMN content_hash TEXT');
-	} catch {
-		/* new catalogs already have the column */
-	}
+export function applyCatalogColumnMigrations(db: {
+	exec(sql: string): void;
+	selectObjects(sql: string): Array<Record<string, unknown>>;
+}): void {
+	const cols = db.selectObjects('PRAGMA table_info(blob_refs)');
+	if (cols.some((c) => c.name === 'content_hash')) return;
+	db.exec('ALTER TABLE blob_refs ADD COLUMN content_hash TEXT');
 }
