@@ -3738,7 +3738,7 @@
 												Later · {person.linked ? 'Linked' : 'Session only'}
 											</p>
 											<div class="fe-people-row-actions">
-												{#if person.sessionGrant === 'edit'}
+												{#if person.canRevoke}
 													<button
 														type="button"
 														class="ds-btn ds-btn--sm ds-btn--ghost"
@@ -4723,7 +4723,7 @@
 					Unlink {unlinkTarget.label}?
 				</h2>
 				<p data-testid="fe-people-unlink-body">
-					Stops future work from her. Work already in this project stays. She may have unsaved
+					Stops future work from them. Work already in this project stays. They may have unsaved
 					work.
 				</p>
 				<div class="fe-room-switch-actions">
@@ -4738,18 +4738,19 @@
 					<button
 						type="button"
 						class="ds-btn ds-btn--sm ds-btn--ghost"
-						data-testid="fe-people-unlink-without"
-						onclick={() => void confirmUnlink('without')}
+						data-testid="fe-people-unlink-sync"
+						disabled
+						title="Packfile drain is not available yet"
 					>
-						Unlink without sync
+						Sync once, then unlink
 					</button>
 					<button
 						type="button"
 						class="ds-btn ds-btn--sm ds-btn--primary"
-						data-testid="fe-people-unlink-sync"
-						onclick={() => void confirmUnlink('sync')}
+						data-testid="fe-people-unlink-without"
+						onclick={() => void confirmUnlink('without')}
 					>
-						Sync once, then unlink
+						Unlink without sync
 					</button>
 				</div>
 			</div>

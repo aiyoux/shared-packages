@@ -1601,6 +1601,7 @@ describe('FileExplorer component', () => {
 						color: 'var(--cat-rose)',
 						now: { kind: 'here' },
 						sessionGrant: 'edit',
+						canRevoke: true,
 						linked: true
 					},
 					{
@@ -1653,9 +1654,10 @@ describe('FileExplorer component', () => {
 		const unlink = await screen.findByTestId('fe-people-unlink-dialog');
 		const unlinkCopy = (unlink.textContent ?? '').replace(/\s+/g, ' ');
 		expect(unlinkCopy).toMatch(/Unlink Alice\?/);
-		expect(unlinkCopy).toMatch(/Stops future work from her. Work already in this project stays./);
-		expect(unlinkCopy).toMatch(/She may have unsaved work./);
+		expect(unlinkCopy).toMatch(/Stops future work from them. Work already in this project stays./);
+		expect(unlinkCopy).toMatch(/They may have unsaved work./);
 		expect(unlinkCopy).not.toMatch(/revoke/i);
+		expect((screen.getByTestId('fe-people-unlink-sync') as HTMLButtonElement).disabled).toBe(true);
 		await fireEvent.click(screen.getByTestId('fe-people-unlink-without'));
 		expect(unlinks).toEqual([{ pairingId: 'aa'.repeat(16), drain: 'without' }]);
 	});

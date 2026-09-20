@@ -50,6 +50,8 @@ export type ExplorerPerson = {
 	now: ExplorerPersonNow;
 	lastSyncAt?: number;
 	sessionGrant?: ExplorerPersonGrant | null;
+	/** Host-only. Guest with write still shows Can edit, not Revoke. */
+	canRevoke?: boolean;
 	linked: boolean;
 };
 
