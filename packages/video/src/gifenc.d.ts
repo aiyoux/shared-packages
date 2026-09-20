@@ -29,4 +29,11 @@ declare module 'gifenc' {
 		bytesView(): Uint8Array;
 		reset(): void;
 	};
+
+	const gifenc: {
+		quantize: typeof quantize;
+		applyPalette: typeof applyPalette;
+		GIFEncoder: typeof GIFEncoder;
+	};
+	export default gifenc;
 }

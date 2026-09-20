@@ -1,4 +1,8 @@
-import { GIFEncoder, quantize, applyPalette } from 'gifenc';
+import gifenc from 'gifenc';
+
+// gifenc is CJS. Named ESM imports 500 under Vite SSR (`applyPalette` is not
+// a named export). The default object is the runtime module.
+const { GIFEncoder, quantize, applyPalette } = gifenc;
 import type { FrameSource } from './encodeFrames.js';
 
 export type EncodeGifOpts = {

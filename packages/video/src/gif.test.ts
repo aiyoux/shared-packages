@@ -40,7 +40,7 @@ vi.mock('gifenc', () => {
 		gifSpies.applyPalette += 1;
 		return [0, 1];
 	}
-	return { GIFEncoder, quantize, applyPalette };
+	return { GIFEncoder, quantize, applyPalette, default: { GIFEncoder, quantize, applyPalette } };
 });
 
 type FakeCtx = {
