@@ -37,6 +37,13 @@ export type QuickEditFileContext = {
 /** Read the previewed video and write a sibling file on the same backend. */
 export type QuickEditVideoContext = QuickEditFileContext;
 
+/** Host-provided media metadata panel target (video / GIF preview). */
+export type MediaMetaTarget = {
+	entry: ExplorerEntry;
+	/** Resolve the file's bytes on demand (only called while shown). */
+	load: () => Promise<Blob>;
+};
+
 /** Read the previewed raster and write a sibling file on the same backend. */
 export type QuickEditImageContext = QuickEditFileContext;
 

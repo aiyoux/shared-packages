@@ -11,6 +11,7 @@
 	import { fileTypeMime, persistKv } from '@shared-packages/ui';
 	import {
 		readExplorerBlob,
+		type MediaMetaTarget,
 		explorerThumbsAreEager,
 		type ExplorerDriver,
 		type ExplorerEntry,
@@ -186,6 +187,11 @@
 		sendLabel?: string;
 		/** Preview "Quick edit" for video files — host opens the trimmer. */
 		onQuickEditVideo?: (entry: ExplorerEntry, ctx: QuickEditVideoContext) => void;
+		/**
+		 * Metadata panel for media the host can probe (video / GIF). Rendered
+		 * inside the file preview when the user asks for metadata.
+		 */
+		mediaMeta?: Snippet<[MediaMetaTarget]>;
 		/** Preview "Quick edit" for raster images — host opens Image Edit. */
 		onQuickEditImage?: (entry: ExplorerEntry, ctx: QuickEditImageContext) => void;
 		/** Preview "Convert to SVG" for bitmaps — host opens Images to SVG. */
@@ -333,6 +339,7 @@
 		sendLabel = 'Send this file',
 		onQuickEditVideo,
 		onQuickEditImage,
+		mediaMeta,
 		onQuickConvertSvg,
 		openLabel,
 		onSave,
@@ -426,6 +433,7 @@
 	/** Off: click selects one row. On: click toggles multi-select. */
 	let selectMulti = $state(false);
 	let previewEntry = $state<ExplorerEntry | null>(null);
+	let mediaMetaOpenId = $state<string | null>(null);
 	let previewBusy = $state(false);
 	/** Folder preview: whether self or an ancestor has a `.git` child. `null` while detecting. */
 	let previewIsProject = $state<boolean | null>(null);
@@ -692,6 +700,22 @@
 	const showNewMenu = $derived(
 		mode === 'manage' && Boolean(onNewProject || newMenuItems.length)
 	);
+
+	function entryHasMediaMeta(entry: ExplorerEntry): boolean {
+		if (entry.kind !== 'file') return false;
+		const kind = getPreviewKind(entry);
+		if (kind === 'video') return true;
+		return (
+			kind === 'image' &&
+			(entry.name.toLowerCase().endsWith('.gif') || entry.contentType === 'image/gif')
+		);
+	}
+
+	async function loadMediaBlob(entry: ExplorerEntry): Promise<Blob> {
+		const blob = await readExplorerBlob(driver, entry.id);
+		if (!blob) throw new Error('File is empty');
+		return blob;
+	}
 
 	function openFloatingPreview() {
 		if (previewEntry && previewEntry.kind === 'file' && getPreviewKind(previewEntry)) {
@@ -5437,6 +5461,22 @@
 			</div>
 		{/if}
 	</dl>
+		{#if mediaMeta && entryHasMediaMeta(entry)}
+			<button
+				type="button"
+				class="ds-btn ds-btn--sm ds-btn--secondary fe-preview-meta-toggle"
+				data-testid="fe-file-preview-meta-toggle"
+				aria-pressed={mediaMetaOpenId === entry.id}
+				onclick={() => (mediaMetaOpenId = mediaMetaOpenId === entry.id ? null : entry.id)}
+			>
+				{mediaMetaOpenId === entry.id ? 'Hide metadata' : 'Show metadata'}
+			</button>
+			{#if mediaMetaOpenId === entry.id}
+				<div class="fe-preview-media-meta" data-testid="fe-file-preview-meta">
+					{@render mediaMeta({ entry, load: () => loadMediaBlob(entry) })}
+				</div>
+			{/if}
+		{/if}
 	<div
 		class="fe-preview-actions"
 		data-fe-is-project={
@@ -6331,6 +6371,12 @@
 		font-size: 1rem;
 		font-weight: 650;
 		word-break: break-word;
+	}
+	.fe-preview-meta-toggle {
+		align-self: flex-start;
+	}
+	.fe-preview-media-meta {
+		width: 100%;
 	}
 	.fe-preview-meta {
 		margin: 0 0 14px;

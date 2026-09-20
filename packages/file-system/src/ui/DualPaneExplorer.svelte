@@ -7,7 +7,7 @@
 	 * top-left window management, TARGET window tracking for clipboard and system
 	 * operations, and full copy-across matrix execution between any window pair.
 	 */
-	import { onMount, onDestroy } from 'svelte';
+	import { onMount, onDestroy, type Snippet } from 'svelte';
 	import { default as FileExplorer } from './FileExplorer.svelte';
 	import type {
 		ExplorerContext,
@@ -43,6 +43,7 @@
 		type ExplorerOpenContext,
 		type ExplorerOpenTarget,
 		type OpenProjectContext,
+		type MediaMetaTarget,
 		type QuickEditVideoContext,
 		type QuickEditImageContext,
 		type QuickConvertSvgContext
@@ -272,6 +273,8 @@
 			entries: ExplorerEntry[];
 		}) => void | Promise<void>;
 		onQuickEditVideo?: (entry: ExplorerEntry, ctx: QuickEditVideoContext) => void;
+		/** Metadata panel for video / GIF preview — rendered inside the file preview. */
+		mediaMeta?: Snippet<[MediaMetaTarget]>;
 		onQuickEditImage?: (entry: ExplorerEntry, ctx: QuickEditImageContext) => void;
 		onQuickConvertSvg?: (entry: ExplorerEntry, ctx: QuickConvertSvgContext) => void;
 		tids?: Partial<DualPaneTids>;
@@ -367,6 +370,7 @@
 		onDualChange,
 		onSend,
 		onQuickEditVideo,
+		mediaMeta,
 		onQuickEditImage,
 		onQuickConvertSvg,
 		tids: tidsOverride = {},
@@ -2166,6 +2170,7 @@
 							handleClipboardCopyAcross(payload, id, destParent)}
 						onContextChange={(ctx) => applyPaneCtx(id, ctx)}
 						{onQuickEditVideo}
+						{mediaMeta}
 						{onQuickEditImage}
 						{onQuickConvertSvg}
 						{presenceByFileId}
@@ -2237,6 +2242,7 @@
 							handleClipboardCopyAcross(payload, id, destParent)}
 						onContextChange={(ctx) => applyPaneCtx(id, ctx)}
 						{onQuickEditVideo}
+						{mediaMeta}
 						{onQuickEditImage}
 						{onQuickConvertSvg}
 						{presenceByFileId}
@@ -2306,6 +2312,7 @@
 							handleClipboardCopyAcross(payload, id, destParent)}
 						onContextChange={(ctx) => applyPaneCtx(id, ctx)}
 						{onQuickEditVideo}
+						{mediaMeta}
 						{onQuickEditImage}
 						{onQuickConvertSvg}
 						{presenceByFileId}
