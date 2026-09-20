@@ -560,6 +560,34 @@ export async function localWriteRef(
 	await git.writeRef({ fs, dir, ref, value: oid, force: true });
 }
 
+/**
+ * Drop a ref. Objects it named become unreachable *unless* something else
+ * still reaches them — a room branch, or a merge parent from a combine
+ * (gotcha 10.11). Deleting is therefore safe: combined history survives.
+ */
+export async function localDeleteRef(fs: GitFs, dir: string, ref: string): Promise<void> {
+	try {
+		await git.deleteRef({ fs, dir, ref });
+	} catch {
+		/* already gone */
+	}
+}
+
+/** Every room this peer has a tracking ref for on this device. */
+export async function localPeerRoomRefs(
+	fs: GitFs,
+	dir: string,
+	pairingId: string
+): Promise<string[]> {
+	const prefix = `refs/remotes/${pairingId}/${ROOM_BRANCH_PREFIX}`;
+	try {
+		const refs = await git.listRefs({ fs, dir, filepath: prefix.replace(/\/$/, '') });
+		return refs.map((r) => r.split('/').pop()!).filter(Boolean);
+	} catch {
+		return [];
+	}
+}
+
 export async function localResolveRef(
 	fs: GitFs,
 	dir: string,
