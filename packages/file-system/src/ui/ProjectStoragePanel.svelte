@@ -175,13 +175,6 @@
 		});
 	}
 
-	async function exportAsIs() {
-		const pending = pendingExport;
-		if (!pending) return;
-		pendingExport = null;
-		await run('export', pending.go);
-	}
-
 	function download(name: string, bytes: Uint8Array) {
 		const url = URL.createObjectURL(new Blob([bytes as BlobPart]));
 		const a = document.createElement('a');

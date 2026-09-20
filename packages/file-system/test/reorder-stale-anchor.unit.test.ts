@@ -10,7 +10,7 @@ import { createVfs } from '../src/index.ts';
  */
 describe('reorder with an anchor that no longer exists', () => {
 	async function threeFiles() {
-		const vfs = createVfs({ name: `reorder-${crypto.randomUUID()}` });
+		const vfs = createVfs({ dbName: `reorder-${crypto.randomUUID()}` });
 		await vfs.ready();
 		const root = await vfs.mkdir(null, 'dir');
 		const mk = (name: string) =>

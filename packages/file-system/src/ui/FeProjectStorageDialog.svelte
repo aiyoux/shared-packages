@@ -29,7 +29,11 @@
 		onResolveExportRefs?: (
 			rootId: string,
 			choices: Array<{ key: string; choice: 'embed' | 'include' }>
-		) => Promise<{ refused: Array<{ name: string; why: string }> } | void>;
+		) => Promise<{
+			exportRootId?: string;
+			refused: Array<{ name: string; why: string }>;
+			cleanup: () => Promise<void>;
+		}>;
 	} = $props();
 </script>
 

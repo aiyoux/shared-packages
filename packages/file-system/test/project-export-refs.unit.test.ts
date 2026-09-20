@@ -18,7 +18,7 @@ import {
  */
 describe('project export carries node ids for reference rebuilding', () => {
 	async function projectWithTwoFiles() {
-		const vfs = createVfs({ name: `refs-${crypto.randomUUID()}` });
+		const vfs = createVfs({ dbName: `refs-${crypto.randomUUID()}` });
 		await vfs.ready();
 		const root = await vfs.mkdir(null, 'Project A');
 		const page = await vfs.writeFile({

@@ -793,7 +793,7 @@
 			.then(async ([project, git]) => {
 				let rooms: ProjectRoom[] = [];
 				let current: string | null = null;
-				if (project.found && vfs) {
+				if (project.found && project.id && vfs) {
 					const fromMeta = roomsFromMeta(await readProjectMeta(vfs, project.id));
 					rooms = fromMeta.rooms;
 					current = fromMeta.currentRoomId;

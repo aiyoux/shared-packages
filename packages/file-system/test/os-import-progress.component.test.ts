@@ -1,7 +1,7 @@
 import { render } from '@testing-library/svelte';
 import { describe, it, expect } from 'vitest';
 import FileExplorer from '../src/ui/FileExplorer.svelte';
-import { createLocalExplorerDriver } from '../src/ui/localExplorerDriver.js';
+import { createMemoryExplorerDriver } from '../src/ui/memoryExplorerDriver.js';
 import { getMemoryVfs } from '../src/memoryVfs.js';
 import { listTransfers } from '../src/transferRegistry.js';
 import { toast } from '@shared-packages/ui';
@@ -37,15 +37,20 @@ describe('device import transfer rows', () => {
 		try {
 			persistKv.removeItem('fe:viewMode');
 			localStorage.setItem('fe:viewMode', 'list');
-			const vfs = getMemoryVfs();
-			const base = createLocalExplorerDriver(vfs);
+			const base = createMemoryExplorerDriver(getMemoryVfs());
 			let release!: () => void;
 			const gate = new Promise<void>((r) => (release = r));
 			const driver = {
 				...base,
 				upload: async () => {
 					await gate;
-					return { id: 'f1', name: 'big.bin', kind: 'file' as const, size: 4 };
+					return {
+						id: 'f1',
+						name: 'big.bin',
+						kind: 'file' as const,
+						size: 4,
+						parentId: null
+					};
 				}
 			};
 			render(FileExplorer, { props: { mode: 'manage', driver, variant: 'panel' } });
@@ -79,8 +84,7 @@ describe('device import transfer rows', () => {
 		try {
 			persistKv.removeItem('fe:viewMode');
 			localStorage.setItem('fe:viewMode', 'list');
-			const vfs = getMemoryVfs();
-			const base = createLocalExplorerDriver(vfs);
+			const base = createMemoryExplorerDriver(getMemoryVfs());
 			const driver = {
 				...base,
 				upload: async () => {
