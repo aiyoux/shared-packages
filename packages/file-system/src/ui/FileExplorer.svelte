@@ -137,7 +137,9 @@
 		ExplorerContext,
 		ExplorerNewMenuItem,
 		ExplorerPresenceDot,
-		ExplorerRoomActionResult
+		ExplorerPerson,
+		ExplorerRoomActionResult,
+		ExplorerUnlinkDrain
 	} from './componentTypes.js';
 	import { readProjectMeta, roomsFromMeta, type ProjectRoom } from '../projectMeta.js';
 
@@ -255,6 +257,15 @@
 			rootId: ExplorerEntryId | null;
 			roomId: string | null;
 		}) => void;
+		/** Linked + this-session people. Chip/sheet only inside a project. */
+		people?: readonly ExplorerPerson[];
+		onInvitePeople?: () => void;
+		onRenamePerson?: (pairingId: string, label: string) => void | Promise<void>;
+		onRevokePerson?: (pairingId: string) => void | Promise<void>;
+		onUnlinkPerson?: (
+			pairingId: string,
+			drain: ExplorerUnlinkDrain
+		) => void | Promise<void>;
 	}
 
 	let {
@@ -298,7 +309,12 @@
 		presenceByFileId,
 		onSwitchRoom,
 		onNewRoom,
-		onRoomContext
+		onRoomContext,
+		people,
+		onInvitePeople,
+		onRenamePerson,
+		onRevokePerson,
+		onUnlinkPerson
 	}: Props = $props();
 
 	// Resolve driver once from props (local default). Re-create if prop identity changes via effect below.
@@ -524,6 +540,10 @@
 	let roomMenuOpen = $state(false);
 	let newRoomNameOpen = $state(false);
 	let newRoomName = $state('');
+	let peopleSheetOpen = $state(false);
+	let revokeTarget = $state<ExplorerPerson | null>(null);
+	let unlinkTarget = $state<ExplorerPerson | null>(null);
+	let peopleRenameDrafts = $state<Record<string, string>>({});
 	let rootEl = $state<HTMLDivElement | undefined>();
 	let floatingPreviewEntry = $state<ExplorerEntry | null>(null);
 	/** Remote (B2/rclone) preview-pane media is opt-in — keyed by entry id. */
@@ -549,6 +569,7 @@
 			toolbarMoreOpen = false;
 			newMenuOpen = false;
 			roomMenuOpen = false;
+			peopleSheetOpen = false;
 		}
 	}
 	function closeViewSwitcher() {
@@ -570,8 +591,21 @@
 			viewSwitcherOpen = false;
 			toolbarMoreOpen = false;
 			newMenuOpen = false;
+			peopleSheetOpen = false;
 			newRoomNameOpen = false;
 			newRoomName = '';
+		}
+	}
+	function closePeopleSheet() {
+		peopleSheetOpen = false;
+	}
+	function togglePeopleSheet() {
+		peopleSheetOpen = !peopleSheetOpen;
+		if (peopleSheetOpen) {
+			viewSwitcherOpen = false;
+			toolbarMoreOpen = false;
+			newMenuOpen = false;
+			roomMenuOpen = false;
 		}
 	}
 	function toggleToolbarMore() {
@@ -580,6 +614,7 @@
 			viewSwitcherOpen = false;
 			newMenuOpen = false;
 			roomMenuOpen = false;
+			peopleSheetOpen = false;
 		}
 	}
 	function toggleNewMenu() {
@@ -587,6 +622,7 @@
 		if (newMenuOpen) {
 			viewSwitcherOpen = false;
 			toolbarMoreOpen = false;
+			peopleSheetOpen = false;
 			roomMenuOpen = false;
 		}
 	}
@@ -735,6 +771,11 @@
 	const currentRoom = $derived(
 		projectRooms.find((r) => r.id === projectCurrentRoomId) ?? projectRooms[0] ?? null
 	);
+	const showPeopleChip = $derived(
+		Boolean(isInsideProject && (people || onInvitePeople))
+	);
+	const peopleHere = $derived((people ?? []).filter((p) => p.now.kind === 'here'));
+	const peopleElsewhere = $derived((people ?? []).filter((p) => p.now.kind !== 'here'));
 	let currentDetectGen = 0;
 	let projectStorageOpen = $state(false);
 	let projectIntegrityOpen = $state(false);
@@ -1729,6 +1770,62 @@
 		if (result !== 'ok') return;
 		if (pending.kind === 'switch') projectCurrentRoomId = pending.roomId;
 		await afterRoomChange();
+	}
+
+	function personNowLabel(person: ExplorerPerson): string {
+		if (person.now.kind === 'here') return 'In this room';
+		if (person.now.kind === 'room') return `in ${person.now.label}`;
+		if (person.lastSyncAt) {
+			return `offline · ${new Date(person.lastSyncAt).toLocaleString()}`;
+		}
+		return 'offline';
+	}
+
+	function personSessionLabel(person: ExplorerPerson): string {
+		if (person.sessionGrant === 'edit') return 'Can edit';
+		if (person.sessionGrant === 'view') return 'View only';
+		return '—';
+	}
+
+	function peopleChipText(): string {
+		const names = peopleHere.map((p) => p.label).filter(Boolean);
+		if (names.length) {
+			const shown = names.slice(0, 2).join(', ');
+			const extra = peopleElsewhere.length;
+			return extra ? `${shown} +${extra}` : shown;
+		}
+		if (peopleElsewhere.length) return `+${peopleElsewhere.length}`;
+		return 'People';
+	}
+
+	async function commitPersonLabel(pairingId: string, raw: string) {
+		const next = raw.trim();
+		if (!next) {
+			const current = (people ?? []).find((p) => p.pairingId === pairingId);
+			peopleRenameDrafts = { ...peopleRenameDrafts, [pairingId]: current?.label ?? '' };
+			return;
+		}
+		await onRenamePerson?.(pairingId, next);
+	}
+
+	async function confirmRevokeEdit() {
+		const person = revokeTarget;
+		revokeTarget = null;
+		if (!person) return;
+		await onRevokePerson?.(person.pairingId);
+	}
+
+	function revokeToUnlink() {
+		const person = revokeTarget;
+		revokeTarget = null;
+		if (person) unlinkTarget = person;
+	}
+
+	async function confirmUnlink(drain: ExplorerUnlinkDrain) {
+		const person = unlinkTarget;
+		unlinkTarget = null;
+		if (!person) return;
+		await onUnlinkPerson?.(person.pairingId, drain);
 	}
 
 	async function goUp() {
@@ -3433,7 +3530,7 @@
 		if (
 			t instanceof Element &&
 			t.closest(
-				'[data-testid="fe-toolbar-more-wrap"], [data-testid="fe-view-switcher"], [data-testid="fe-new-menu"], [data-testid="fe-room-chip-wrap"]'
+				'[data-testid="fe-toolbar-more-wrap"], [data-testid="fe-view-switcher"], [data-testid="fe-new-menu"], [data-testid="fe-room-chip-wrap"], [data-testid="fe-people-chip-wrap"], [data-testid="fe-people-revoke-dialog"], [data-testid="fe-people-unlink-dialog"]'
 			)
 		) {
 			return;
@@ -3442,6 +3539,7 @@
 		if (toolbarMoreOpen) closeToolbarMore();
 		if (newMenuOpen) closeNewMenu();
 		if (roomMenuOpen) closeRoomMenu();
+		if (peopleSheetOpen) closePeopleSheet();
 	}}
 >
 	<header class="fe-header" data-testid="fe-header">
@@ -3571,6 +3669,110 @@
 												<span>New room</span>
 											</button>
 										{/if}
+									{/if}
+								</div>
+							{/if}
+						</span>
+					{/if}
+					{#if showPeopleChip}
+						<!-- svelte-ignore a11y_click_events_have_key_events -->
+						<!-- svelte-ignore a11y_no_static_element_interactions -->
+						<span
+							class="fe-people-chip-wrap"
+							data-testid="fe-people-chip-wrap"
+							onclick={(e) => e.stopPropagation()}
+						>
+							<button
+								type="button"
+								class="fe-people-chip"
+								data-testid="fe-people-chip"
+								aria-haspopup="dialog"
+								aria-expanded={peopleSheetOpen}
+								onclick={togglePeopleSheet}
+							>
+								{#each peopleHere as person (person.pairingId)}
+									<span
+										class="fe-people-chip-dot"
+										style:background={person.color ?? 'var(--accent, #38bdf8)'}
+										aria-hidden="true"
+									></span>
+								{/each}
+								{peopleChipText()}
+								<span class="fe-room-chip-caret" aria-hidden="true">▾</span>
+							</button>
+							{#if peopleSheetOpen}
+								<div
+									class="fe-view-popup fe-people-sheet"
+									data-testid="fe-people-sheet"
+									role="dialog"
+									aria-label="People"
+									tabindex="-1"
+									onclick={(e) => e.stopPropagation()}
+								>
+									{#each people ?? [] as person (person.pairingId)}
+										<div class="fe-people-row" data-testid="fe-people-row" data-pairing-id={person.pairingId}>
+											<label class="fe-people-name">
+												<span class="fe-people-name-label">Name</span>
+												<input
+													class="fe-people-rename"
+													data-testid="fe-people-rename"
+													value={peopleRenameDrafts[person.pairingId] ?? person.label}
+													aria-label="Nickname"
+													onchange={(e) => {
+														const value = e.currentTarget.value;
+														peopleRenameDrafts = {
+															...peopleRenameDrafts,
+															[person.pairingId]: value
+														};
+														void commitPersonLabel(person.pairingId, value);
+													}}
+												/>
+											</label>
+											<p class="fe-people-now" data-testid="fe-people-now">
+												{personNowLabel(person)}
+											</p>
+											<p class="fe-people-session" data-testid="fe-people-session">
+												This session · {personSessionLabel(person)}
+											</p>
+											<p class="fe-people-later" data-testid="fe-people-later">
+												Later · {person.linked ? 'Linked' : 'Session only'}
+											</p>
+											<div class="fe-people-row-actions">
+												{#if person.sessionGrant === 'edit'}
+													<button
+														type="button"
+														class="ds-btn ds-btn--sm ds-btn--ghost"
+														data-testid="fe-people-revoke"
+														onclick={() => (revokeTarget = person)}
+													>
+														Revoke edit
+													</button>
+												{/if}
+												{#if person.linked}
+													<button
+														type="button"
+														class="ds-btn ds-btn--sm ds-btn--ghost"
+														data-testid="fe-people-unlink"
+														onclick={() => (unlinkTarget = person)}
+													>
+														Unlink…
+													</button>
+												{/if}
+											</div>
+										</div>
+									{/each}
+									{#if onInvitePeople}
+										<button
+											type="button"
+											class="fe-view-option"
+											data-testid="fe-people-invite"
+											onclick={() => {
+												closePeopleSheet();
+												onInvitePeople();
+											}}
+										>
+											<span>Invite</span>
+										</button>
 									{/if}
 								</div>
 							{/if}
@@ -4453,6 +4655,107 @@
 		/>
 	{/if}
 
+	{#if revokeTarget}
+		<div
+			class="fe-room-switch-root"
+			data-testid="fe-people-revoke-dialog"
+			role="dialog"
+			aria-modal="true"
+			aria-labelledby="fe-people-revoke-title"
+		>
+			<button
+				type="button"
+				class="fe-room-switch-scrim"
+				aria-label="Cancel"
+				onclick={() => (revokeTarget = null)}
+			></button>
+			<div class="fe-room-switch-card">
+				<h2 id="fe-people-revoke-title" data-testid="fe-people-revoke-title">
+					{revokeTarget.label} can still send work later unless you unlink. This only affects the current
+					session.
+				</h2>
+				<div class="fe-room-switch-actions">
+					<button
+						type="button"
+						class="ds-btn ds-btn--sm ds-btn--ghost"
+						data-testid="fe-people-revoke-cancel"
+						onclick={() => (revokeTarget = null)}
+					>
+						Cancel
+					</button>
+					<button
+						type="button"
+						class="ds-btn ds-btn--sm ds-btn--ghost"
+						data-testid="fe-people-revoke-unlink"
+						onclick={revokeToUnlink}
+					>
+						Unlink…
+					</button>
+					<button
+						type="button"
+						class="ds-btn ds-btn--sm ds-btn--primary"
+						data-testid="fe-people-revoke-confirm"
+						onclick={() => void confirmRevokeEdit()}
+					>
+						Revoke edit
+					</button>
+				</div>
+			</div>
+		</div>
+	{/if}
+
+	{#if unlinkTarget}
+		<div
+			class="fe-room-switch-root"
+			data-testid="fe-people-unlink-dialog"
+			role="dialog"
+			aria-modal="true"
+			aria-labelledby="fe-people-unlink-title"
+		>
+			<button
+				type="button"
+				class="fe-room-switch-scrim"
+				aria-label="Cancel"
+				onclick={() => (unlinkTarget = null)}
+			></button>
+			<div class="fe-room-switch-card">
+				<h2 id="fe-people-unlink-title" data-testid="fe-people-unlink-title">
+					Unlink {unlinkTarget.label}?
+				</h2>
+				<p data-testid="fe-people-unlink-body">
+					Stops future work from her. Work already in this project stays. She may have unsaved
+					work.
+				</p>
+				<div class="fe-room-switch-actions">
+					<button
+						type="button"
+						class="ds-btn ds-btn--sm ds-btn--ghost"
+						data-testid="fe-people-unlink-cancel"
+						onclick={() => (unlinkTarget = null)}
+					>
+						Cancel
+					</button>
+					<button
+						type="button"
+						class="ds-btn ds-btn--sm ds-btn--ghost"
+						data-testid="fe-people-unlink-without"
+						onclick={() => void confirmUnlink('without')}
+					>
+						Unlink without sync
+					</button>
+					<button
+						type="button"
+						class="ds-btn ds-btn--sm ds-btn--primary"
+						data-testid="fe-people-unlink-sync"
+						onclick={() => void confirmUnlink('sync')}
+					>
+						Sync once, then unlink
+					</button>
+				</div>
+			</div>
+		</div>
+	{/if}
+
 	{#if pendingRoomSwitch}
 		<div
 			class="fe-room-switch-root"
@@ -5179,11 +5482,13 @@
 		align-items: center;
 		gap: 6px;
 	}
-	.fe-room-chip-wrap {
+	.fe-room-chip-wrap,
+	.fe-people-chip-wrap {
 		position: relative;
 		display: inline-flex;
 	}
 	.fe-room-chip,
+	.fe-people-chip,
 	.fe-inside-project-badge,
 	.fe-git-enabled-badge {
 		display: inline-flex;
@@ -5200,6 +5505,7 @@
 		white-space: nowrap;
 	}
 	button.fe-room-chip,
+	button.fe-people-chip,
 	button.fe-git-enabled-badge,
 	.fe-folder-action {
 		cursor: pointer;
@@ -5258,10 +5564,71 @@
 		font-size: 1.05rem;
 		font-weight: 600;
 	}
+	.fe-room-switch-card p {
+		margin: 0 0 0.75rem;
+		font-size: 0.9rem;
+		color: var(--text-secondary, inherit);
+	}
 	.fe-room-switch-actions {
 		display: flex;
 		justify-content: flex-end;
+		flex-wrap: wrap;
 		gap: 0.5rem;
+	}
+	.fe-people-chip-dot {
+		width: 8px;
+		height: 8px;
+		border-radius: 50%;
+		flex: 0 0 auto;
+		margin-right: 4px;
+	}
+	.fe-people-sheet {
+		min-width: 260px;
+		max-width: min(360px, 90vw);
+		max-height: min(70vh, 480px);
+		overflow: auto;
+		padding: 8px;
+		display: flex;
+		flex-direction: column;
+		gap: 8px;
+	}
+	.fe-people-row {
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
+		padding: 8px;
+		border: 1px solid var(--line-hairline);
+		border-radius: var(--radius-sm, 4px);
+	}
+	.fe-people-name {
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
+		font-size: 0.72rem;
+		color: var(--text-secondary, inherit);
+	}
+	.fe-people-rename {
+		width: 100%;
+		padding: 4px 8px;
+		font: inherit;
+		font-size: 0.9rem;
+		color: var(--text-primary);
+		background: var(--surface-secondary, rgba(255, 255, 255, 0.04));
+		border: 1px solid var(--line-hairline);
+		border-radius: var(--radius-sm, 4px);
+	}
+	.fe-people-now,
+	.fe-people-session,
+	.fe-people-later {
+		margin: 0;
+		font-size: 0.8rem;
+		color: var(--text-secondary, inherit);
+	}
+	.fe-people-row-actions {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 6px;
+		justify-content: flex-end;
 	}
 	.fe-folder-action {
 		display: inline-flex;
@@ -5278,6 +5645,7 @@
 	}
 	.fe-folder-action:hover,
 	button.fe-room-chip:hover,
+	button.fe-people-chip:hover,
 	button.fe-git-enabled-badge:hover {
 		border-color: var(--accent, #38bdf8);
 		color: var(--text-primary);

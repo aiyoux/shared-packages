@@ -16,6 +16,10 @@ export type {
 	ExplorerNewMenuItem,
 	ExplorerPresenceDot,
 	ExplorerRoomActionResult,
+	ExplorerPerson,
+	ExplorerPersonNow,
+	ExplorerPersonGrant,
+	ExplorerUnlinkDrain,
 	RemoteKind
 } from './componentTypes.js';
 export {

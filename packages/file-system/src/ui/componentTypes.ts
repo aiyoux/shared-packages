@@ -34,3 +34,23 @@ export type ExplorerPresenceDot = {
 
 /** Hub git checkout / new-room. `dirty` means the tree has unsaved work. */
 export type ExplorerRoomActionResult = 'ok' | 'dirty';
+
+/** People-sheet row. Presence dots stay room-scoped; other rooms live here. */
+export type ExplorerPersonNow =
+	| { kind: 'here' }
+	| { kind: 'offline' }
+	| { kind: 'room'; label: string };
+
+export type ExplorerPersonGrant = 'edit' | 'view';
+
+export type ExplorerPerson = {
+	pairingId: string;
+	label: string;
+	color?: string;
+	now: ExplorerPersonNow;
+	lastSyncAt?: number;
+	sessionGrant?: ExplorerPersonGrant | null;
+	linked: boolean;
+};
+
+export type ExplorerUnlinkDrain = 'sync' | 'without';

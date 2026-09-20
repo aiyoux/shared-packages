@@ -26,6 +26,13 @@ export type ProjectRoom = {
 	label: string;
 };
 
+/** Durable peer on this project. Pairing stays the CM transport token. */
+export type ProjectLink = {
+	pairingId: string;
+	label: string;
+	linkedAt: string;
+};
+
 export type ProjectMeta = {
 	schemaVersion: number;
 	/** Travelling identity. Same id, same project — including across import. */
@@ -37,6 +44,8 @@ export type ProjectMeta = {
 	/** Occupied/pinned rooms on this copy. Not a gossip of the whole graph. */
 	rooms?: ProjectRoom[];
 	currentRoomId?: string;
+	/** Linked people. Unknown keys already survive; this is the typed shape. */
+	links?: ProjectLink[];
 };
 
 export function mintProjectId(): string {
@@ -62,6 +71,32 @@ export function roomsFromMeta(
 			? meta.currentRoomId
 			: (rooms[0]?.id ?? null);
 	return { rooms, currentRoomId: current };
+}
+
+export function linksFromMeta(meta: ProjectMeta | null | undefined): ProjectLink[] {
+	return meta?.links?.length ? meta.links : [];
+}
+
+export function upsertProjectLink(meta: ProjectMeta, link: ProjectLink): ProjectMeta {
+	const links = linksFromMeta(meta).filter((row) => row.pairingId !== link.pairingId);
+	links.push(link);
+	return { ...meta, links };
+}
+
+export function removeProjectLink(meta: ProjectMeta, pairingId: string): ProjectMeta {
+	const links = linksFromMeta(meta).filter((row) => row.pairingId !== pairingId);
+	const next = { ...meta };
+	if (links.length) next.links = links;
+	else delete next.links;
+	return next;
+}
+
+export function renameProjectLink(meta: ProjectMeta, pairingId: string, label: string): ProjectMeta {
+	const links = linksFromMeta(meta).map((row) =>
+		row.pairingId === pairingId ? { ...row, label } : row
+	);
+	if (!links.length) return meta;
+	return { ...meta, links };
 }
 
 function hasProjectId(meta: ProjectMeta): meta is ProjectMeta & { id: string } {
@@ -101,6 +136,24 @@ export function parseProjectMeta(raw: unknown): ProjectMeta | null {
 	}
 	if (typeof rec.currentRoomId !== 'string' || !rec.currentRoomId.trim()) {
 		delete (meta as { currentRoomId?: unknown }).currentRoomId;
+	}
+	if ('links' in rec) {
+		const links: ProjectLink[] = [];
+		if (Array.isArray(rec.links)) {
+			for (const item of rec.links) {
+				if (!item || typeof item !== 'object') continue;
+				const link = item as Record<string, unknown>;
+				if (typeof link.pairingId !== 'string' || !link.pairingId.trim()) continue;
+				if (typeof link.label !== 'string') continue;
+				links.push({
+					pairingId: link.pairingId,
+					label: link.label,
+					linkedAt: typeof link.linkedAt === 'string' ? link.linkedAt : ''
+				});
+			}
+		}
+		if (links.length) meta.links = links;
+		else delete meta.links;
 	}
 	return meta;
 }
@@ -193,7 +246,8 @@ export async function initProject(
 		createdAt: existing?.createdAt ?? now,
 		updatedAt: now,
 		rooms: minted.rooms,
-		currentRoomId: minted.currentRoomId ?? minted.rooms[0]!.id
+		currentRoomId: minted.currentRoomId ?? minted.rooms[0]!.id,
+		...(existing?.links?.length ? { links: existing.links } : {})
 	};
 	await writeProjectMeta(vfs, rootId, meta);
 	if (opts.pack) {

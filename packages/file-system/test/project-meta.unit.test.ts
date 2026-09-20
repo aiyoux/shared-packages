@@ -4,8 +4,11 @@ import { packFiles } from '@shared-packages/compress';
 import { createVfs, resetSharedVfsForTests } from '../src/index.ts';
 import {
 	initProject,
+	linksFromMeta,
 	parseProjectMeta,
 	readProjectMeta,
+	removeProjectLink,
+	upsertProjectLink,
 	writeProjectMeta,
 	PROJECT_META_FILE,
 	PROJECT_META_SCHEMA_VERSION
@@ -81,6 +84,31 @@ describe('parseProjectMeta', () => {
 		assert.equal(again.currentRoomId, 'r2');
 	});
 
+	it('parses project-links and keeps them on write-back', () => {
+		const parsed = parseProjectMeta({
+			schemaVersion: 1,
+			name: 'Poster',
+			id: 'pid',
+			links: [
+				{ pairingId: 'aa'.repeat(16), label: 'Sunny River', linkedAt: '2026-09-20T00:00:00.000Z' },
+				{ pairingId: '', label: 'bad' },
+				{ pairingId: 'bb'.repeat(16), label: 'Quiet Harbor' }
+			]
+		});
+		assert.ok(parsed);
+		assert.deepEqual(linksFromMeta(parsed), [
+			{ pairingId: 'aa'.repeat(16), label: 'Sunny River', linkedAt: '2026-09-20T00:00:00.000Z' },
+			{ pairingId: 'bb'.repeat(16), label: 'Quiet Harbor', linkedAt: '' }
+		]);
+		const withLink = upsertProjectLink(parsed, {
+			pairingId: 'cc'.repeat(16),
+			label: 'Cedar Lake',
+			linkedAt: '2026-09-20T01:00:00.000Z'
+		});
+		assert.equal(withLink.links?.length, 3);
+		assert.equal(removeProjectLink(withLink, 'aa'.repeat(16)).links?.length, 2);
+	});
+
 	it('drops an empty or non-string id rather than failing the parse', () => {
 		assert.equal(parseProjectMeta({ name: 'N', id: '' })?.id, undefined);
 		assert.equal(parseProjectMeta({ name: 'N', id: 3 })?.id, undefined);
@@ -112,6 +140,25 @@ describe('project meta id', () => {
 		assert.equal(again.name, 'Renamed');
 		assert.equal(again.currentRoomId, meta.currentRoomId);
 		assert.deepEqual(again.rooms, meta.rooms);
+		assert.deepEqual(again.links, meta.links);
+		await vfs.db.delete();
+	});
+
+	it('init preserves existing project-links', async () => {
+		const vfs = await mk();
+		const folder = await vfs.mkdir(null, 'Proj');
+		const link = {
+			pairingId: 'aa'.repeat(16),
+			label: 'Sunny River',
+			linkedAt: '2026-09-20T00:00:00.000Z'
+		};
+		await writeProjectMeta(vfs, folder.id, {
+			schemaVersion: 1,
+			name: 'Proj',
+			links: [link]
+		});
+		const again = await initProject(vfs, folder.id, { name: 'Proj' });
+		assert.deepEqual(again.links, [link]);
 		await vfs.db.delete();
 	});
 

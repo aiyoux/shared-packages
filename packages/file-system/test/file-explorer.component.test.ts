@@ -1573,6 +1573,92 @@ describe('FileExplorer component', () => {
 		]);
 		await viWaitFor(() => screen.getByTestId('fe-room-chip').textContent?.includes('Side') === true);
 	});
+
+	it('shows the people chip and sheet with revoke vs unlink copy', async () => {
+		const proj = await vfs.mkdir(null, 'poster');
+		await vfs.writeFile({
+			parentId: proj.id,
+			name: '.project.json',
+			body: {
+				schemaVersion: 1,
+				name: 'poster',
+				rooms: [{ id: 'r1', label: 'Poster' }],
+				currentRoomId: 'r1'
+			},
+			contentType: 'application/json'
+		});
+		const unlinks: Array<{ pairingId: string; drain: string }> = [];
+		const revokes: string[] = [];
+		render(FileExplorer, {
+			props: {
+				mode: 'manage',
+				vfs,
+				variant: 'panel',
+				people: [
+					{
+						pairingId: 'aa'.repeat(16),
+						label: 'Alice',
+						color: 'var(--cat-rose)',
+						now: { kind: 'here' },
+						sessionGrant: 'edit',
+						linked: true
+					},
+					{
+						pairingId: 'bb'.repeat(16),
+						label: 'Bob',
+						now: { kind: 'offline' },
+						linked: true
+					}
+				],
+				onInvitePeople: () => {},
+				onRevokePerson: (id) => {
+					revokes.push(id);
+				},
+				onUnlinkPerson: (id, drain) => {
+					unlinks.push({ pairingId: id, drain });
+				}
+			}
+		});
+		await viWaitFor(() => !!document.querySelector('[data-testid="fe-folder-row"]'));
+		await fireEvent.dblClick(
+			document.querySelector('[data-testid="fe-folder-row"][data-name="poster"]') as HTMLElement
+		);
+		const chip = await screen.findByTestId('fe-people-chip');
+		expect(chip.textContent).toMatch(/Alice/);
+		expect(chip.textContent).toMatch(/\+1/);
+		await fireEvent.click(chip);
+		const sheet = await screen.findByTestId('fe-people-sheet');
+		expect(sheet.textContent).toMatch(/In this room/);
+		expect(sheet.textContent).toMatch(/offline/);
+		expect(sheet.textContent).toMatch(/Linked/);
+		expect(sheet.textContent).not.toMatch(/remote/i);
+		expect(await screen.findByTestId('fe-people-invite')).toBeTruthy();
+
+		await fireEvent.click(screen.getByTestId('fe-people-revoke'));
+		const revoke = await screen.findByTestId('fe-people-revoke-dialog');
+		const revokeCopy = (revoke.textContent ?? '').replace(/\s+/g, ' ');
+		expect(revokeCopy).toMatch(
+			/Alice can still send work later unless you unlink. This only affects the current session/
+		);
+		expect(revokeCopy).toMatch(/Revoke edit/);
+		expect(revokeCopy).toMatch(/Unlink/);
+		await fireEvent.click(screen.getByTestId('fe-people-revoke-confirm'));
+		expect(revokes).toEqual(['aa'.repeat(16)]);
+
+		if (!document.querySelector('[data-testid="fe-people-sheet"]')) {
+			await fireEvent.click(screen.getByTestId('fe-people-chip'));
+		}
+		const unlinkBtns = await screen.findAllByTestId('fe-people-unlink');
+		await fireEvent.click(unlinkBtns[0]!);
+		const unlink = await screen.findByTestId('fe-people-unlink-dialog');
+		const unlinkCopy = (unlink.textContent ?? '').replace(/\s+/g, ' ');
+		expect(unlinkCopy).toMatch(/Unlink Alice\?/);
+		expect(unlinkCopy).toMatch(/Stops future work from her. Work already in this project stays./);
+		expect(unlinkCopy).toMatch(/She may have unsaved work./);
+		expect(unlinkCopy).not.toMatch(/revoke/i);
+		await fireEvent.click(screen.getByTestId('fe-people-unlink-without'));
+		expect(unlinks).toEqual([{ pairingId: 'aa'.repeat(16), drain: 'without' }]);
+	});
 });
 
 async function viWaitForRows(min: number, ms = 4000) {

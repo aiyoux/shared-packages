@@ -13,8 +13,10 @@
 		ExplorerContext,
 		ExplorerMode,
 		ExplorerNewMenuItem,
+		ExplorerPerson,
 		ExplorerPresenceDot,
 		ExplorerRoomActionResult,
+		ExplorerUnlinkDrain,
 		RemoteKind
 	} from './componentTypes.js';
 	import type { FileTypeId } from '../types.js';
@@ -287,6 +289,14 @@
 			rootId: ExplorerEntryId | null;
 			roomId: string | null;
 		}) => void;
+		people?: readonly ExplorerPerson[];
+		onInvitePeople?: () => void;
+		onRenamePerson?: (pairingId: string, label: string) => void | Promise<void>;
+		onRevokePerson?: (pairingId: string) => void | Promise<void>;
+		onUnlinkPerson?: (
+			pairingId: string,
+			drain: ExplorerUnlinkDrain
+		) => void | Promise<void>;
 	};
 
 	let {
@@ -338,7 +348,12 @@
 		presenceByFileId,
 		onSwitchRoom,
 		onNewRoom,
-		onRoomContext
+		onRoomContext,
+		people,
+		onInvitePeople,
+		onRenamePerson,
+		onRevokePerson,
+		onUnlinkPerson
 	}: Props = $props();
 
 	const persistKey = $derived(instanceKey ? `${dualPaneKey}:${instanceKey}` : dualPaneKey);
@@ -2111,6 +2126,11 @@
 						{onQuickEditImage}
 						{onQuickConvertSvg}
 						{presenceByFileId}
+						{people}
+						{onInvitePeople}
+						{onRenamePerson}
+						{onRevokePerson}
+						{onUnlinkPerson}
 						onSwitchRoom={paneSwitchRoom(id)}
 						onNewRoom={paneNewRoom(id)}
 						onRoomContext={paneRoomContext(id)}
@@ -2168,6 +2188,11 @@
 						{onQuickEditImage}
 						{onQuickConvertSvg}
 						{presenceByFileId}
+						{people}
+						{onInvitePeople}
+						{onRenamePerson}
+						{onRevokePerson}
+						{onUnlinkPerson}
 						onSwitchRoom={paneSwitchRoom(id)}
 						onNewRoom={paneNewRoom(id)}
 						onRoomContext={paneRoomContext(id)}
@@ -2223,6 +2248,11 @@
 						{onQuickEditImage}
 						{onQuickConvertSvg}
 						{presenceByFileId}
+						{people}
+						{onInvitePeople}
+						{onRenamePerson}
+						{onRevokePerson}
+						{onUnlinkPerson}
 						onSwitchRoom={paneSwitchRoom(id)}
 						onNewRoom={paneNewRoom(id)}
 						onRoomContext={paneRoomContext(id)}
