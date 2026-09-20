@@ -9,6 +9,8 @@
 //
 // Render <ToastHost /> once at the app root (e.g. in +layout.svelte).
 
+import { untrack } from 'svelte';
+
 export type ToastKind = 'info' | 'success' | 'error' | 'warning';
 
 export type Toast = {
@@ -39,12 +41,18 @@ function push(kind: ToastKind, message: string, duration?: number): number {
 		duration: duration ?? DEFAULT_DURATION[kind],
 		createdAt: Date.now()
 	};
-	toasts = [...toasts, toast];
+	// Read the list untracked. Pushing a toast is not a subscription to the
+	// toast list, but `[...toasts, toast]` reads it, and a caller inside an
+	// `$effect` would therefore take a dependency on the very state this write
+	// invalidates — the effect re-runs, pushes again, and loops until Svelte's
+	// guard stops it. `$effect(() => { if (err) toast.error(err) })` is a
+	// common shape here, so this has to be safe from inside one.
+	toasts = [...untrack(() => toasts), toast];
 	return id;
 }
 
 export function dismiss(id: number): void {
-	toasts = toasts.filter((t) => t.id !== id);
+	toasts = untrack(() => toasts).filter((t) => t.id !== id);
 }
 
 export function clear(): void {
