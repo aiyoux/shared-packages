@@ -364,6 +364,18 @@ export async function localBranch(fs: GitFs, dir: string, opts: LocalBranchOpts)
 	);
 }
 
+export type LocalCheckoutOpts = {
+	/** Name relative to `refs/heads`, or a full ref. Room branches: `room/<roomId>`. */
+	ref: string;
+	force?: boolean;
+};
+
+export async function localCheckout(fs: GitFs, dir: string, opts: LocalCheckoutOpts): Promise<void> {
+	const ref = opts.ref.trim();
+	if (!ref) throw new Error('A branch name is required.');
+	return withFsBuffer(fs, () => git.checkout({ fs, dir, ref, force: opts.force }));
+}
+
 export type LocalMergeOpts = {
 	theirs: string;
 	ours?: string;

@@ -5,6 +5,7 @@ import { createVfs, type VfsService } from '@shared-packages/file-system';
 import {
 	ROOM_BRANCH_PREFIX,
 	localBranch,
+	localCheckout,
 	localCommit,
 	localFetch,
 	localFindMergeBase,
@@ -117,6 +118,16 @@ describe('localBranch room refs', () => {
 		const { fs } = await repo('branch-co');
 		await seed(fs);
 		await localBranch(fs, '/', { ref: roomBranchName('r1'), checkout: true });
+		expect(await git.currentBranch({ fs, dir: '/', fullname: false })).toBe('room/r1');
+	});
+
+	it('localCheckout switches to an existing room branch', async () => {
+		const { fs } = await repo('branch-switch');
+		await seed(fs);
+		await localBranch(fs, '/', { ref: roomBranchName('r1') });
+		await localBranch(fs, '/', { ref: roomBranchName('r2'), checkout: true });
+		expect(await git.currentBranch({ fs, dir: '/', fullname: false })).toBe('room/r2');
+		await localCheckout(fs, '/', { ref: roomBranchName('r1') });
 		expect(await git.currentBranch({ fs, dir: '/', fullname: false })).toBe('room/r1');
 	});
 

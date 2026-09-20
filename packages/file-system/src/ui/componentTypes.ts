@@ -31,3 +31,11 @@ export type ExplorerPresenceDot = {
 	color: string;
 	name: string;
 };
+
+export type ExplorerProjectRoom = {
+	id: string;
+	label: string;
+};
+
+/** Hub git checkout / new-room. `dirty` means the tree has unsaved work. */
+export type ExplorerRoomActionResult = 'ok' | 'dirty';

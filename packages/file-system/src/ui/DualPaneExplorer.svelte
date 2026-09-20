@@ -14,6 +14,7 @@
 		ExplorerMode,
 		ExplorerNewMenuItem,
 		ExplorerPresenceDot,
+		ExplorerRoomActionResult,
 		RemoteKind
 	} from './componentTypes.js';
 	import type { FileTypeId } from '../types.js';
@@ -272,6 +273,16 @@
 		switcherPortal?: string;
 		layoutPortal?: string;
 		presenceByFileId?: ReadonlyMap<string, readonly ExplorerPresenceDot[]>;
+		onSwitchRoom?: (args: {
+			rootId: ExplorerEntryId;
+			roomId: string;
+			save: boolean;
+		}) => Promise<ExplorerRoomActionResult>;
+		onNewRoom?: (args: {
+			rootId: ExplorerEntryId;
+			label: string;
+			save: boolean;
+		}) => Promise<ExplorerRoomActionResult>;
 	};
 
 	let {
@@ -320,7 +331,9 @@
 		hideSettingsGear = false,
 		switcherPortal: _switcherPortal = '',
 		layoutPortal = '',
-		presenceByFileId
+		presenceByFileId,
+		onSwitchRoom,
+		onNewRoom
 	}: Props = $props();
 
 	const persistKey = $derived(instanceKey ? `${dualPaneKey}:${instanceKey}` : dualPaneKey);
@@ -572,6 +585,16 @@
 	function paneAllowsLocalNew(id: PaneId): boolean {
 		if (id === 'right' && overrideRight) return false;
 		return paneState(id).activeKind === 'local';
+	}
+
+	function paneSwitchRoom(id: PaneId) {
+		if (!onSwitchRoom || !paneAllowsLocalNew(id)) return undefined;
+		return onSwitchRoom;
+	}
+
+	function paneNewRoom(id: PaneId) {
+		if (!onNewRoom || !paneAllowsLocalNew(id)) return undefined;
+		return onNewRoom;
 	}
 
 	function paneNewProject(id: PaneId) {
@@ -2071,6 +2094,8 @@
 						{onQuickEditImage}
 						{onQuickConvertSvg}
 						{presenceByFileId}
+						onSwitchRoom={paneSwitchRoom(id)}
+						onNewRoom={paneNewRoom(id)}
 					>
 						{#snippet headerLeading()}
 							{@render paneConn(id)}
@@ -2125,6 +2150,8 @@
 						{onQuickEditImage}
 						{onQuickConvertSvg}
 						{presenceByFileId}
+						onSwitchRoom={paneSwitchRoom(id)}
+						onNewRoom={paneNewRoom(id)}
 					>
 						{#snippet headerLeading()}
 							{@render paneConn(id)}
@@ -2177,6 +2204,8 @@
 						{onQuickEditImage}
 						{onQuickConvertSvg}
 						{presenceByFileId}
+						onSwitchRoom={paneSwitchRoom(id)}
+						onNewRoom={paneNewRoom(id)}
 					>
 						{#snippet headerLeading()}
 							{@render paneConn(id)}

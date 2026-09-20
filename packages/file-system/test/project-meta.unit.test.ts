@@ -53,11 +53,32 @@ describe('parseProjectMeta', () => {
 			schemaVersion: 1,
 			name: 'N',
 			id: 'kept',
-			extra: true
+			extra: true,
+			rooms: [{ id: 'r1', label: 'Design' }],
+			currentRoomId: 'r1'
 		});
 		assert.ok(parsed);
 		assert.equal(parsed.id, 'kept');
 		assert.equal((parsed as { extra?: boolean }).extra, true);
+		assert.deepEqual(parsed.rooms, [{ id: 'r1', label: 'Design' }]);
+		assert.equal(parsed.currentRoomId, 'r1');
+	});
+
+	it('round-trips extra keys and rooms through JSON', () => {
+		const parsed = parseProjectMeta({
+			schemaVersion: 1,
+			name: 'Poster',
+			id: 'pid',
+			gossip: { n: 1 },
+			rooms: [{ id: 'r1', label: 'Poster' }, { id: 'r2', label: 'Side' }],
+			currentRoomId: 'r2'
+		});
+		assert.ok(parsed);
+		const again = parseProjectMeta(JSON.parse(JSON.stringify(parsed)));
+		assert.ok(again);
+		assert.equal((again as { gossip?: { n: number } }).gossip?.n, 1);
+		assert.deepEqual(again.rooms, parsed.rooms);
+		assert.equal(again.currentRoomId, 'r2');
 	});
 
 	it('drops an empty or non-string id rather than failing the parse', () => {
@@ -79,11 +100,18 @@ describe('project meta id', () => {
 		const meta = await initProject(vfs, folder.id, { name: 'Proj' });
 		assert.equal(meta.schemaVersion, PROJECT_META_SCHEMA_VERSION);
 		assert.match(meta.id!, UUID_RE);
+		assert.equal(meta.rooms?.length, 1);
+		assert.equal(meta.rooms![0]!.label, 'Proj');
+		assert.match(meta.rooms![0]!.id, UUID_RE);
+		assert.equal(meta.currentRoomId, meta.rooms![0]!.id);
 		assert.equal((await rawMeta(vfs, folder.id)).id, meta.id);
+		assert.equal((await rawMeta(vfs, folder.id)).currentRoomId, meta.currentRoomId);
 
 		const again = await initProject(vfs, folder.id, { name: 'Renamed' });
 		assert.equal(again.id, meta.id);
 		assert.equal(again.name, 'Renamed');
+		assert.equal(again.currentRoomId, meta.currentRoomId);
+		assert.deepEqual(again.rooms, meta.rooms);
 		await vfs.db.delete();
 	});
 

@@ -12,6 +12,8 @@
       "import": "./src/index.ts",
       "default": "./src/index.ts"
     },
+    "./local": "./src/local.ts",
+    "./vfsGitFs": "./src/vfsGitFs.ts",
     "./GitHistory.svelte": "./src/GitHistory.svelte",
     "./GitApp.svelte": "./src/GitApp.svelte",
     "./ProjectApp.svelte": "./src/ProjectApp.svelte"

@@ -21,6 +21,11 @@ export const PROJECT_META_FILE = '.project.json';
 
 export const PROJECT_META_SCHEMA_VERSION = 1;
 
+export type ProjectRoom = {
+	id: string;
+	label: string;
+};
+
 export type ProjectMeta = {
 	schemaVersion: number;
 	/** Travelling identity. Same id, same project — including across import. */
@@ -29,10 +34,47 @@ export type ProjectMeta = {
 	description?: string;
 	createdAt?: string;
 	updatedAt?: string;
+	/** Occupied/pinned rooms on this copy. Not a gossip of the whole graph. */
+	rooms?: ProjectRoom[];
+	currentRoomId?: string;
 };
 
 export function mintProjectId(): string {
 	return crypto.randomUUID();
+}
+
+export function mintRoomId(): string {
+	return crypto.randomUUID();
+}
+
+/** Room #1 at project create. Label defaults to the project name; not a trunk. */
+export function mintDefaultRoom(label: string): { rooms: ProjectRoom[]; currentRoomId: string } {
+	const room: ProjectRoom = { id: mintRoomId(), label };
+	return { rooms: [room], currentRoomId: room.id };
+}
+
+export function parseProjectRooms(raw: unknown): ProjectRoom[] {
+	if (!Array.isArray(raw)) return [];
+	const rooms: ProjectRoom[] = [];
+	for (const item of raw) {
+		if (!item || typeof item !== 'object') continue;
+		const rec = item as Record<string, unknown>;
+		if (typeof rec.id !== 'string' || !rec.id.trim()) continue;
+		if (typeof rec.label !== 'string') continue;
+		rooms.push({ id: rec.id, label: rec.label });
+	}
+	return rooms;
+}
+
+export function roomsFromMeta(
+	meta: ProjectMeta | null | undefined
+): { rooms: ProjectRoom[]; currentRoomId: string | null } {
+	const rooms = meta?.rooms?.length ? meta.rooms : [];
+	const current =
+		meta?.currentRoomId && rooms.some((r) => r.id === meta.currentRoomId)
+			? meta.currentRoomId
+			: (rooms[0]?.id ?? null);
+	return { rooms, currentRoomId: current };
 }
 
 function hasProjectId(meta: ProjectMeta): meta is ProjectMeta & { id: string } {
@@ -56,6 +98,14 @@ export function parseProjectMeta(raw: unknown): ProjectMeta | null {
 	if (typeof rec.name !== 'string') return null;
 	const meta = { ...rec } as ProjectMeta;
 	if (!hasProjectId(meta)) delete (meta as { id?: unknown }).id;
+	if ('rooms' in rec) {
+		const rooms = parseProjectRooms(rec.rooms);
+		if (rooms.length) meta.rooms = rooms;
+		else delete meta.rooms;
+	}
+	if (typeof rec.currentRoomId !== 'string' || !rec.currentRoomId.trim()) {
+		delete (meta as { currentRoomId?: unknown }).currentRoomId;
+	}
 	return meta;
 }
 
@@ -136,13 +186,18 @@ export async function initProject(
 ): Promise<ProjectMeta> {
 	const now = new Date().toISOString();
 	const existing = await readProjectMeta(vfs, rootId);
+	const minted = existing?.rooms?.length
+		? roomsFromMeta(existing)
+		: mintDefaultRoom(opts.name);
 	const meta: ProjectMeta = {
 		schemaVersion: PROJECT_META_SCHEMA_VERSION,
 		id: existing?.id ?? mintProjectId(),
 		name: opts.name,
 		description: opts.description,
 		createdAt: existing?.createdAt ?? now,
-		updatedAt: now
+		updatedAt: now,
+		rooms: minted.rooms,
+		currentRoomId: minted.currentRoomId ?? minted.rooms[0]!.id
 	};
 	await writeProjectMeta(vfs, rootId, meta);
 	if (opts.pack) {

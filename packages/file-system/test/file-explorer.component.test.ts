@@ -1437,6 +1437,105 @@ describe('FileExplorer component', () => {
 		await fireEvent.click(await screen.findByTestId('fe-new-skch'));
 		expect(hits).toEqual([{ id: 'skch', parent: null }]);
 	});
+
+	it('shows the room chip with the current label and lists rooms', async () => {
+		const proj = await vfs.mkdir(null, 'poster');
+		await vfs.writeFile({
+			parentId: proj.id,
+			name: '.project.json',
+			body: {
+				schemaVersion: 1,
+				name: 'poster',
+				rooms: [
+					{ id: 'r1', label: 'Poster' },
+					{ id: 'r2', label: 'Side' }
+				],
+				currentRoomId: 'r1'
+			},
+			contentType: 'application/json'
+		});
+		await vfs.mkdir(proj.id, '.git');
+		render(FileExplorer, { props: { mode: 'manage', vfs, variant: 'panel' } });
+		await viWaitFor(() => !!document.querySelector('[data-testid="fe-folder-row"]'));
+		expect(document.querySelector('[data-testid="fe-room-chip"]')).toBeNull();
+
+		await fireEvent.dblClick(
+			document.querySelector('[data-testid="fe-folder-row"][data-name="poster"]') as HTMLElement
+		);
+		const chip = await screen.findByTestId('fe-room-chip');
+		expect(chip.textContent).toMatch(/Poster/);
+		await fireEvent.click(chip);
+		const items = await screen.findAllByTestId('fe-room-item');
+		expect(items.map((el) => el.getAttribute('data-room-id')).sort()).toEqual(['r1', 'r2']);
+		expect(items.map((el) => el.textContent)).toEqual(
+			expect.arrayContaining([expect.stringContaining('Poster'), expect.stringContaining('Side')])
+		);
+	});
+
+	it('dirty stay does not switch; save and switch does', async () => {
+		const proj = await vfs.mkdir(null, 'poster');
+		await vfs.writeFile({
+			parentId: proj.id,
+			name: '.project.json',
+			body: {
+				schemaVersion: 1,
+				name: 'poster',
+				rooms: [
+					{ id: 'r1', label: 'Poster' },
+					{ id: 'r2', label: 'Side' }
+				],
+				currentRoomId: 'r1'
+			},
+			contentType: 'application/json'
+		});
+		await vfs.mkdir(proj.id, '.git');
+		const switches: Array<{ roomId: string; save: boolean }> = [];
+		render(FileExplorer, {
+			props: {
+				mode: 'manage',
+				vfs,
+				variant: 'panel',
+				onSwitchRoom: async ({ roomId, save }) => {
+					switches.push({ roomId, save });
+					return save ? 'ok' : 'dirty';
+				}
+			}
+		});
+		await viWaitFor(() => !!document.querySelector('[data-testid="fe-folder-row"]'));
+		await fireEvent.dblClick(
+			document.querySelector('[data-testid="fe-folder-row"][data-name="poster"]') as HTMLElement
+		);
+		await screen.findByTestId('fe-room-chip');
+		await fireEvent.click(screen.getByTestId('fe-room-chip'));
+		const side = [...(await screen.findAllByTestId('fe-room-item'))].find((el) =>
+			el.getAttribute('data-room-id') === 'r2'
+		);
+		expect(side).toBeTruthy();
+		await fireEvent.click(side!);
+		const dirty = await screen.findByTestId('fe-room-switch-dirty');
+		expect(dirty.textContent).toMatch(/You have unsaved work in Poster/);
+		expect(dirty.textContent).toMatch(/Save and switch/);
+		expect(dirty.textContent).toMatch(/Stay/);
+		await fireEvent.click(screen.getByTestId('fe-room-stay'));
+		expect(document.querySelector('[data-testid="fe-room-switch-dirty"]')).toBeNull();
+		expect(screen.getByTestId('fe-room-chip').textContent).toMatch(/Poster/);
+		expect(switches).toEqual([{ roomId: 'r2', save: false }]);
+
+		await fireEvent.click(screen.getByTestId('fe-room-chip'));
+		const sideAgain = [...(await screen.findAllByTestId('fe-room-item'))].find((el) =>
+			el.getAttribute('data-room-id') === 'r2'
+		);
+		await fireEvent.click(sideAgain!);
+		await screen.findByTestId('fe-room-switch-dirty');
+		await fireEvent.click(screen.getByTestId('fe-room-save-switch'));
+		await viWaitFor(() => switches.some((s) => s.save));
+		expect(switches).toEqual([
+			{ roomId: 'r2', save: false },
+			{ roomId: 'r2', save: false },
+			{ roomId: 'r2', save: true }
+		]);
+		await viWaitFor(() => screen.getByTestId('fe-room-chip').textContent?.includes('Side') === true);
+	});
 });
 
 async function viWaitForRows(min: number, ms = 4000) {

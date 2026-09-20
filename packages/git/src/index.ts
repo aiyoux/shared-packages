@@ -21,6 +21,7 @@ export { createGitHost, type CreateGitHostOptions } from './host.js';
 export {
 	ROOM_BRANCH_PREFIX,
 	localBranch,
+	localCheckout,
 	localCommit,
 	localDeleteWorkingFile,
 	localDiffFile,
@@ -39,6 +40,7 @@ export {
 	type GitFs,
 	type HttpClient,
 	type LocalBranchOpts,
+	type LocalCheckoutOpts,
 	type LocalFetchOpts,
 	type LocalMergeOpts,
 	type MergeDriverCallback,

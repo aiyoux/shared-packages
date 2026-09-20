@@ -136,8 +136,11 @@
 		ExplorerMode,
 		ExplorerContext,
 		ExplorerNewMenuItem,
-		ExplorerPresenceDot
+		ExplorerPresenceDot,
+		ExplorerProjectRoom,
+		ExplorerRoomActionResult
 	} from './componentTypes.js';
+	import { readProjectMeta } from '../projectMeta.js';
 
 	interface Props {
 		mode?: ExplorerMode;
@@ -235,6 +238,20 @@
 		) => Promise<void>;
 		/** Who is in which file — Documents `placePresence` marks keyed by fileId. */
 		presenceByFileId?: ReadonlyMap<string, readonly ExplorerPresenceDot[]>;
+		/**
+		 * Switch the checked-out room. Return `dirty` when unsaved work must be
+		 * saved first — FileExplorer then shows Save and switch / Stay.
+		 */
+		onSwitchRoom?: (args: {
+			rootId: ExplorerEntryId;
+			roomId: string;
+			save: boolean;
+		}) => Promise<ExplorerRoomActionResult>;
+		onNewRoom?: (args: {
+			rootId: ExplorerEntryId;
+			label: string;
+			save: boolean;
+		}) => Promise<ExplorerRoomActionResult>;
 	}
 
 	let {
@@ -275,7 +292,9 @@
 		headerLeading,
 		isTarget = false,
 		onCopyAcrossFromClipboard,
-		presenceByFileId
+		presenceByFileId,
+		onSwitchRoom,
+		onNewRoom
 	}: Props = $props();
 
 	// Resolve driver once from props (local default). Re-create if prop identity changes via effect below.
@@ -498,6 +517,9 @@
 	);
 	let toolbarMoreOpen = $state(false);
 	let newMenuOpen = $state(false);
+	let roomMenuOpen = $state(false);
+	let newRoomNameOpen = $state(false);
+	let newRoomName = $state('');
 	let rootEl = $state<HTMLDivElement | undefined>();
 	let floatingPreviewEntry = $state<ExplorerEntry | null>(null);
 	/** Remote (B2/rclone) preview-pane media is opt-in — keyed by entry id. */
@@ -522,6 +544,7 @@
 		if (viewSwitcherOpen) {
 			toolbarMoreOpen = false;
 			newMenuOpen = false;
+			roomMenuOpen = false;
 		}
 	}
 	function closeViewSwitcher() {
@@ -533,11 +556,26 @@
 	function closeNewMenu() {
 		newMenuOpen = false;
 	}
+	function closeRoomMenu() {
+		roomMenuOpen = false;
+		newRoomNameOpen = false;
+	}
+	function toggleRoomMenu() {
+		roomMenuOpen = !roomMenuOpen;
+		if (roomMenuOpen) {
+			viewSwitcherOpen = false;
+			toolbarMoreOpen = false;
+			newMenuOpen = false;
+			newRoomNameOpen = false;
+			newRoomName = '';
+		}
+	}
 	function toggleToolbarMore() {
 		toolbarMoreOpen = !toolbarMoreOpen;
 		if (toolbarMoreOpen) {
 			viewSwitcherOpen = false;
 			newMenuOpen = false;
+			roomMenuOpen = false;
 		}
 	}
 	function toggleNewMenu() {
@@ -545,6 +583,7 @@
 		if (newMenuOpen) {
 			viewSwitcherOpen = false;
 			toolbarMoreOpen = false;
+			roomMenuOpen = false;
 		}
 	}
 	function chooseNewProject() {
@@ -681,6 +720,17 @@
 	let projectRootId = $state<ExplorerEntryId | null>(null);
 	let isGitEnabled = $state(false);
 	let gitRootId = $state<ExplorerEntryId | null>(null);
+	let projectRooms = $state<ExplorerProjectRoom[]>([]);
+	let projectCurrentRoomId = $state<string | null>(null);
+	let pendingRoomSwitch = $state<{ kind: 'switch'; roomId: string } | { kind: 'new'; label: string } | null>(
+		null
+	);
+	const showRoomChip = $derived(
+		Boolean(isInsideProject && isGitEnabled && projectRooms.length && localVfs)
+	);
+	const currentRoom = $derived(
+		projectRooms.find((r) => r.id === projectCurrentRoomId) ?? projectRooms[0] ?? null
+	);
 	let currentDetectGen = 0;
 	let projectStorageOpen = $state(false);
 	let projectIntegrityOpen = $state(false);
@@ -689,26 +739,41 @@
 	$effect(() => {
 		const curParentId = parentId;
 		const d = driver;
+		const vfs = localVfs;
 		const gen = ++currentDetectGen;
 		void Promise.all([
 			findProjectRoot(d, curParentId, 'project'),
 			findProjectRoot(d, curParentId, 'git')
-		]).then(
-			([project, git]) => {
+		])
+			.then(async ([project, git]) => {
+				let rooms: ExplorerProjectRoom[] = [];
+				let current: string | null = null;
+				if (project.found && vfs) {
+					const meta = await readProjectMeta(vfs, project.id);
+					rooms = meta?.rooms ?? [];
+					const cur = meta?.currentRoomId;
+					current =
+						cur && rooms.some((r) => r.id === cur) ? cur : (rooms[0]?.id ?? null);
+				}
 				if (gen !== currentDetectGen) return;
 				isInsideProject = project.found;
 				projectRootId = project.found ? project.id : null;
 				isGitEnabled = git.found;
 				gitRootId = git.found ? git.id : null;
-			},
-			() => {
+				projectRooms = rooms;
+				projectCurrentRoomId = current;
+				if (!rooms.length) roomMenuOpen = false;
+			})
+			.catch(() => {
 				if (gen !== currentDetectGen) return;
 				isInsideProject = false;
 				projectRootId = null;
 				isGitEnabled = false;
 				gitRootId = null;
-			}
-		);
+				projectRooms = [];
+				projectCurrentRoomId = null;
+				roomMenuOpen = false;
+			});
 	});
 
 	$effect(() => {
@@ -1583,6 +1648,75 @@
 		selected = new Set();
 		lastSelectedId = null;
 		focusIndex = -1;
+	}
+
+	async function reloadProjectRooms() {
+		if (!localVfs || !projectRootId) return;
+		const meta = await readProjectMeta(localVfs, projectRootId);
+		projectRooms = meta?.rooms ?? [];
+		const cur = meta?.currentRoomId;
+		projectCurrentRoomId =
+			cur && projectRooms.some((r) => r.id === cur) ? cur : (projectRooms[0]?.id ?? null);
+	}
+
+	async function afterRoomChange() {
+		const root = projectRootId;
+		if (parentId && root && parentId !== root) {
+			const path = await driver.getPath(parentId).catch(() => []);
+			if (!path.length) await goCrumb(root);
+		}
+		await reloadProjectRooms();
+		await refresh(true, 'delay', true);
+	}
+
+	async function applyRoomAction(
+		pending: { kind: 'switch'; roomId: string } | { kind: 'new'; label: string },
+		save: boolean
+	): Promise<ExplorerRoomActionResult> {
+		const root = projectRootId;
+		if (!root) return 'ok';
+		if (pending.kind === 'switch') {
+			if (!onSwitchRoom) return 'ok';
+			return onSwitchRoom({ rootId: root, roomId: pending.roomId, save });
+		}
+		if (!onNewRoom) return 'ok';
+		return onNewRoom({ rootId: root, label: pending.label, save });
+	}
+
+	async function chooseRoom(roomId: string) {
+		closeRoomMenu();
+		if (!projectRootId || roomId === projectCurrentRoomId) return;
+		const pending = { kind: 'switch' as const, roomId };
+		const result = await applyRoomAction(pending, false);
+		if (result === 'dirty') {
+			pendingRoomSwitch = pending;
+			return;
+		}
+		projectCurrentRoomId = roomId;
+		await afterRoomChange();
+	}
+
+	async function submitNewRoom() {
+		const label = newRoomName.trim() || `Room ${projectRooms.length + 1}`;
+		closeRoomMenu();
+		if (!projectRootId || !onNewRoom) return;
+		const pending = { kind: 'new' as const, label };
+		const result = await applyRoomAction(pending, false);
+		if (result === 'dirty') {
+			pendingRoomSwitch = pending;
+			return;
+		}
+		await afterRoomChange();
+	}
+
+	async function confirmSaveAndSwitch() {
+		const pending = pendingRoomSwitch;
+		pendingRoomSwitch = null;
+		if (!pending) return;
+		const result = await applyRoomAction(pending, true);
+		if (result === 'dirty') return;
+		if (pending.kind === 'switch') projectCurrentRoomId = pending.roomId;
+		await afterRoomChange();
 	}
 
 	async function goUp() {
@@ -3287,7 +3421,7 @@
 		if (
 			t instanceof Element &&
 			t.closest(
-				'[data-testid="fe-toolbar-more-wrap"], [data-testid="fe-view-switcher"], [data-testid="fe-new-menu"]'
+				'[data-testid="fe-toolbar-more-wrap"], [data-testid="fe-view-switcher"], [data-testid="fe-new-menu"], [data-testid="fe-room-chip-wrap"]'
 			)
 		) {
 			return;
@@ -3295,6 +3429,7 @@
 		if (viewSwitcherOpen) closeViewSwitcher();
 		if (toolbarMoreOpen) closeToolbarMore();
 		if (newMenuOpen) closeNewMenu();
+		if (roomMenuOpen) closeRoomMenu();
 	}}
 >
 	<header class="fe-header" data-testid="fe-header">
@@ -3343,6 +3478,92 @@
 			{/if}
 			{#if isInsideProject || isGitEnabled}
 				<div class="fe-folder-badges" data-testid="fe-folder-badges">
+					{#if showRoomChip && currentRoom}
+						<!-- svelte-ignore a11y_click_events_have_key_events -->
+						<!-- svelte-ignore a11y_no_static_element_interactions -->
+						<span
+							class="fe-room-chip-wrap"
+							data-testid="fe-room-chip-wrap"
+							onclick={(e) => e.stopPropagation()}
+						>
+							<button
+								type="button"
+								class="fe-room-chip"
+								data-testid="fe-room-chip"
+								aria-haspopup="menu"
+								aria-expanded={roomMenuOpen}
+								onclick={toggleRoomMenu}
+							>
+								{currentRoom.label}
+								<span class="fe-room-chip-caret" aria-hidden="true">▾</span>
+							</button>
+							{#if roomMenuOpen}
+								<div
+									class="fe-view-popup fe-room-menu"
+									data-testid="fe-room-menu"
+									role="menu"
+									tabindex="-1"
+									onclick={(e) => e.stopPropagation()}
+								>
+									{#each projectRooms as room (room.id)}
+										<button
+											type="button"
+											class="fe-view-option"
+											class:active={room.id === currentRoom.id}
+											data-testid="fe-room-item"
+											data-room-id={room.id}
+											role="menuitem"
+											aria-current={room.id === currentRoom.id ? 'true' : undefined}
+											onclick={() => void chooseRoom(room.id)}
+										>
+											<span>{room.label}</span>
+											{#if room.id === currentRoom.id}
+												<span class="fe-view-check" aria-hidden="true">✓</span>
+											{/if}
+										</button>
+									{/each}
+									<div class="fe-view-divider"></div>
+									{#if onNewRoom}
+										{#if newRoomNameOpen}
+											<form
+												class="fe-room-new-form"
+												data-testid="fe-room-new-form"
+												onsubmit={(e) => {
+													e.preventDefault();
+													void submitNewRoom();
+												}}
+											>
+												<input
+													class="fe-room-new-input"
+													data-testid="fe-room-new-input"
+													bind:value={newRoomName}
+													placeholder="Room name"
+													aria-label="New room name"
+												/>
+												<button
+													type="submit"
+													class="ds-btn ds-btn--sm ds-btn--primary"
+													data-testid="fe-room-new-create"
+												>
+													Create
+												</button>
+											</form>
+										{:else}
+											<button
+												type="button"
+												class="fe-view-option"
+												data-testid="fe-room-new"
+												role="menuitem"
+												onclick={() => (newRoomNameOpen = true)}
+											>
+												<span>New room</span>
+											</button>
+										{/if}
+									{/if}
+								</div>
+							{/if}
+						</span>
+					{/if}
 					{#if isInsideProject}
 						<span class="fe-inside-project-badge" data-testid="fe-inside-project-badge">
 							Inside Project
@@ -4220,6 +4441,46 @@
 		/>
 	{/if}
 
+	{#if pendingRoomSwitch}
+		<div
+			class="fe-room-switch-root"
+			data-testid="fe-room-switch-dirty"
+			role="dialog"
+			aria-modal="true"
+			aria-labelledby="fe-room-switch-title"
+		>
+			<button
+				type="button"
+				class="fe-room-switch-scrim"
+				aria-label="Stay"
+				onclick={() => (pendingRoomSwitch = null)}
+			></button>
+			<div class="fe-room-switch-card">
+				<h2 id="fe-room-switch-title" data-testid="fe-room-switch-title">
+					You have unsaved work in {currentRoom?.label ?? 'this room'}.
+				</h2>
+				<div class="fe-room-switch-actions">
+					<button
+						type="button"
+						class="ds-btn ds-btn--sm ds-btn--ghost"
+						data-testid="fe-room-stay"
+						onclick={() => (pendingRoomSwitch = null)}
+					>
+						Stay
+					</button>
+					<button
+						type="button"
+						class="ds-btn ds-btn--sm ds-btn--primary"
+						data-testid="fe-room-save-switch"
+						onclick={() => void confirmSaveAndSwitch()}
+					>
+						Save and switch
+					</button>
+				</div>
+			</div>
+		</div>
+	{/if}
+
 	{#if storageDialogOpen && localVfs}
 		<FeStorageDialog
 			vfs={localVfs}
@@ -4906,6 +5167,11 @@
 		align-items: center;
 		gap: 6px;
 	}
+	.fe-room-chip-wrap {
+		position: relative;
+		display: inline-flex;
+	}
+	.fe-room-chip,
 	.fe-inside-project-badge,
 	.fe-git-enabled-badge {
 		display: inline-flex;
@@ -4921,10 +5187,69 @@
 		user-select: none;
 		white-space: nowrap;
 	}
+	button.fe-room-chip,
 	button.fe-git-enabled-badge,
 	.fe-folder-action {
 		cursor: pointer;
 		font: inherit;
+	}
+	.fe-room-chip-caret {
+		margin-left: 4px;
+		font-size: 0.65rem;
+		opacity: 0.8;
+	}
+	.fe-room-menu {
+		min-width: 180px;
+	}
+	.fe-room-new-form {
+		display: flex;
+		gap: 6px;
+		padding: 4px;
+		align-items: center;
+	}
+	.fe-room-new-input {
+		flex: 1;
+		min-width: 0;
+		padding: 4px 8px;
+		font: inherit;
+		font-size: 0.85rem;
+		color: var(--text-primary);
+		background: var(--surface-secondary, rgba(255, 255, 255, 0.04));
+		border: 1px solid var(--line-hairline);
+		border-radius: var(--radius-sm, 4px);
+	}
+	.fe-room-switch-root {
+		position: fixed;
+		inset: 0;
+		z-index: 80;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+	}
+	.fe-room-switch-scrim {
+		position: absolute;
+		inset: 0;
+		border: 0;
+		background: rgb(var(--scrim-rgb) / 0.55);
+	}
+	.fe-room-switch-card {
+		position: relative;
+		z-index: 1;
+		width: min(440px, calc(100vw - 2rem));
+		padding: 1.15rem 1.25rem;
+		background: var(--surface-2);
+		border: 1px solid var(--line-hairline);
+		color: var(--text-primary);
+	}
+	.fe-room-switch-card h2 {
+		margin: 0 0 0.75rem;
+		font-size: 1.05rem;
+		font-weight: 600;
+	}
+	.fe-room-switch-actions {
+		display: flex;
+		justify-content: flex-end;
+		gap: 0.5rem;
 	}
 	.fe-folder-action {
 		display: inline-flex;
@@ -4940,6 +5265,7 @@
 		white-space: nowrap;
 	}
 	.fe-folder-action:hover,
+	button.fe-room-chip:hover,
 	button.fe-git-enabled-badge:hover {
 		border-color: var(--accent, #38bdf8);
 		color: var(--text-primary);
