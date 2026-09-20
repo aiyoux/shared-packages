@@ -10,6 +10,7 @@
 	import type { ExplorerDriver, ExplorerEntry } from './explorerDriver.js';
 	import {
 		canReadExplorerBlob,
+		embedMediaUrl,
 		loadExplorerMediaSrc,
 		readExplorerBlob,
 		type MediaMetaTarget
