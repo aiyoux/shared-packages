@@ -1246,6 +1246,7 @@ describe('FileExplorer component', () => {
 			expect(await screen.findByTestId('file-explorer')).toBeTruthy();
 			expect(screen.getByTestId('file-explorer').getAttribute('data-fe-compact')).toBe('on');
 			expect(screen.getByTestId('fe-toolbar-more')).toBeTruthy();
+			expect(screen.getByTestId('fe-storage-persist')).toBeTruthy();
 			expect(screen.queryByTestId('fe-upload')).toBeNull();
 			expect(screen.queryByTestId('fe-selection-actions')).toBeNull();
 			await fireEvent.click(screen.getByTestId('fe-toolbar-more'));

@@ -2,7 +2,13 @@
 	/**
 	 * Combined (i) for the dual-pane chrome: current connection(s) + the
 	 * copy route between them. Replaces the per-switcher info buttons.
+	 *
+	 * The popup is portaled into the pane header, which clips overflow. An
+	 * absolute tip paints under that clip (the same failure as the file menu).
+	 * Mount it on hover and pin it with `escapePaneClip`.
 	 */
+	import { onDestroy } from 'svelte';
+	import { escapePaneClip } from '@shared-packages/ui';
 	import FeIcon from './FeIcon.svelte';
 	import { capabilityRows, connectionKindNote } from './connectionInfo.js';
 	import type { CopyAcrossPath } from './copyAcross.js';
@@ -35,19 +41,53 @@
 			? `Connections: ${left.label} and ${right!.label}`
 			: `Connection: ${left.label}`
 	);
+
+	let tipOpen = $state(false);
+	let closeTimer: ReturnType<typeof setTimeout> | undefined;
+
+	function openTip() {
+		if (closeTimer) {
+			clearTimeout(closeTimer);
+			closeTimer = undefined;
+		}
+		tipOpen = true;
+	}
+
+	/** Delay lets the pointer cross the gap onto the fixed popup. */
+	function scheduleCloseTip() {
+		if (closeTimer) clearTimeout(closeTimer);
+		closeTimer = setTimeout(() => {
+			tipOpen = false;
+			closeTimer = undefined;
+		}, 160);
+	}
+
+	onDestroy(() => {
+		if (closeTimer) clearTimeout(closeTimer);
+	});
 </script>
 
-<div class="pair-info-wrap" data-testid="fe-pair-info">
+<div
+	class="pair-info-wrap"
+	role="group"
+	aria-label={aria}
+	data-testid="fe-pair-info"
+	onmouseenter={openTip}
+	onmouseleave={scheduleCloseTip}
+	onfocusin={openTip}
+	onfocusout={scheduleCloseTip}
+>
 	<button
 		type="button"
 		class="pair-info"
 		data-testid="conn-caps-info"
 		aria-label={aria}
-		aria-describedby="conn-caps-tip"
+		aria-describedby={tipOpen ? 'conn-caps-tip' : undefined}
 	>
 		<FeIcon name="info" size={14} />
 	</button>
-	<div class="pair-tip" id="conn-caps-tip" data-testid="conn-caps-tooltip" role="tooltip">
+	{#if tipOpen}
+	<div class="pair-tip" id="conn-caps-tip" data-testid="conn-caps-tooltip" role="tooltip" use:escapePaneClip>
 		<p class="caps-title">
 			{#if dual && !sameConn}
 				{left.label} ↔ {right!.label}
@@ -117,6 +157,7 @@
 			</p>
 		</div>
 	</div>
+	{/if}
 </div>
 
 <style>
@@ -143,7 +184,6 @@
 		color: var(--text-primary);
 	}
 	.pair-tip {
-		display: none;
 		position: absolute;
 		z-index: 80;
 		top: calc(100% + 6px);
@@ -158,10 +198,6 @@
 		box-shadow: 0 10px 28px rgb(var(--scrim-rgb) / 0.45);
 		font-size: 0.78rem;
 		line-height: 1.35;
-	}
-	.pair-info-wrap:hover .pair-tip,
-	.pair-info-wrap:focus-within .pair-tip {
-		display: block;
 	}
 	.caps-title {
 		margin: 0 0 0.35rem;

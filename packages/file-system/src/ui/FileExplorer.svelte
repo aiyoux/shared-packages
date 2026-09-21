@@ -388,8 +388,9 @@
 	);
 	let showPersistChip = $derived(showPersistence && driver.id === 'local' && !!localVfs);
 	/**
-	 * The storage map reads OPFS state, so it needs the local VFS — but it is
-	 * independent of the persistence chip, which DualPaneExplorer suppresses.
+	 * The storage map reads OPFS state, so it needs the local VFS. The Files
+	 * window header owns the persistence pill; pane explorers suppress it.
+	 * Popups that hide that header turn the pill back on.
 	 */
 	let showStorageBtn = $derived(mode === 'manage' && driver.id === 'local' && !!localVfs);
 	/** Storage inspector + integrity check. Local only — it reads OPFS state. */
@@ -4084,9 +4085,6 @@
 		{/snippet}
 
 		{#snippet toolbarActions(kind: 'icon' | 'menu')}
-			{#if showPersistChip && localVfs && kind === 'icon'}
-				<StoragePersistenceStatus vfs={localVfs} compact class="fe-persist-slot" />
-			{/if}
 			{#if showStorageBtn}
 				{@render actionBtn(kind, 'fe-storage-open', 'Storage map and integrity check', 'storage-map', () => (storageDialogOpen = true), { label: 'Storage' })}
 			{/if}
@@ -4350,6 +4348,9 @@
 				{/if}
 				{#if onClose}
 					<FeTipIconBtn testid="fe-close" tip="Close" icon="x" onclick={onClose} />
+				{/if}
+				{#if showPersistChip && localVfs}
+					<StoragePersistenceStatus vfs={localVfs} compact class="fe-persist-slot" />
 				{/if}
 			</div>
 			{#if mode === 'manage' && !compactToolbar}

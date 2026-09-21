@@ -54,6 +54,7 @@
 	import FeTipIconBtn from './FeTipIconBtn.svelte';
 	import FeIcon from './FeIcon.svelte';
 	import ConnectionPairInfo from './ConnectionPairInfo.svelte';
+	import StoragePersistenceStatus from './StoragePersistenceStatus.svelte';
 	import {
 		AppWindows,
 		AppWindowsButton,
@@ -2157,7 +2158,7 @@
 						variant="panel"
 						{onClose}
 						driver={overrideRight.driver}
-						showPersistence={false}
+						showPersistence={hideToggles}
 						initialParentId={p.ctx.parentId}
 						onOpen={paneOnOpen('peer')}
 						onOpenProject={paneOpenProject(id)}
@@ -2218,7 +2219,7 @@
 						variant="panel"
 						{onClose}
 						driver={localDriver}
-						showPersistence={false}
+						showPersistence={hideToggles}
 						initialParentId={p.ctx.parentId}
 						onOpen={paneFileOpen(id)}
 						onOpenProject={paneOpenProject(id)}
@@ -2290,7 +2291,7 @@
 						variant="panel"
 						{onClose}
 						driver={drv}
-						showPersistence={false}
+						showPersistence={hideToggles}
 						initialParentId={p.ctx.parentId}
 						onOpen={paneFileOpen(id) ?? paneOnOpen(p.activeKind)}
 						onOpenProject={paneOpenProject(id)}
@@ -2415,6 +2416,9 @@
 			bind:slicing={windowSliceOpen}
 			testid="fe-windows-btn"
 		/>
+		<!-- Origin storage, not the pane backend. Popups (hideToggles) show this
+		     on the explorer toolbar instead, because this cluster is not mounted. -->
+		<StoragePersistenceStatus vfs={persistenceVfs} compact class="fe-persist-slot" />
 		{#if pairInfoInChrome}
 			<ConnectionPairInfo
 				left={pairSide('left')}
