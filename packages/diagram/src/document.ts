@@ -105,7 +105,15 @@ function parseWindowData(raw: unknown, leafId: string): DigrWindowData {
 	return { role: nonEmptyString(raw.role, `view.windows["${leafId}"].role`) };
 }
 
-function parseView(raw: unknown): DigrDocView | undefined {
+/**
+ * Validate a stored per-user view record.
+ *
+ * Deliberately not called by `parseDigrDocument`: the view is not part of the
+ * document (see `DigrDocView`). The host reads the record from its own
+ * per-viewer store and validates it here, so the shape stays with the format
+ * while the data stays off the file.
+ */
+export function parseDigrView(raw: unknown): DigrDocView | undefined {
 	if (raw === undefined) return undefined;
 	if (!isRecord(raw)) throw new DigrParseError('view must be an object');
 	let windows: Record<string, DigrWindowData> | undefined;
@@ -131,6 +139,14 @@ function parseCanvas(raw: unknown): DigrCanvas {
 	return { w, h };
 }
 
+function optionalId(raw: unknown): string | undefined {
+	return typeof raw === 'string' && raw.length > 0 ? raw : undefined;
+}
+
+function optionalCreatedAt(raw: unknown): number | undefined {
+	return typeof raw === 'number' && Number.isFinite(raw) ? raw : undefined;
+}
+
 export function parseDigrDocument(input: Uint8Array | unknown): DigrDocument {
 	const raw = decodeInput(input);
 	if (!isRecord(raw)) throw new DigrParseError('document must be an object');
@@ -138,14 +154,41 @@ export function parseDigrDocument(input: Uint8Array | unknown): DigrDocument {
 		throw new DigrParseError(`unsupported schemaVersion: ${String(raw.schemaVersion)}`);
 	}
 	if (!Array.isArray(raw.nodes)) throw new DigrParseError('nodes must be an array');
-	const view = parseView(raw.view);
+	// `raw.view` is ignored, not parsed: older files carry a view block and it is
+	// per-user state that does not belong in the document. Dropping it on read is
+	// what makes the serialized bytes device-independent.
 	const canvas = parseCanvas(raw.canvas);
+	const id = optionalId(raw.id);
+	const createdAt = optionalCreatedAt(raw.createdAt);
 	return {
 		schemaVersion: 1,
+		...(id !== undefined ? { id } : {}),
+		...(createdAt !== undefined ? { createdAt } : {}),
 		nodes: raw.nodes.map((node, i) => parseNode(node, i)),
-		canvas,
-		...(view ? { view } : {})
+		canvas
 	};
+}
+
+function mintDocId(): string {
+	if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+		return crypto.randomUUID();
+	}
+	return `digr-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+/**
+ * Adopt travelling identity, or mint uuid + `Date.now()` when either field is
+ * missing. Returns a new object when it mints; does not mutate `doc`.
+ *
+ * A diagram needs one for the same two reasons an animation does: it is the key
+ * its per-viewer layout is stored under, and it is what lets another document
+ * name this one across a room switch, where node ids mean nothing.
+ */
+export function ensureDigrIdentity(doc: DigrDocument): DigrDocument {
+	const id = optionalId(doc.id) ?? mintDocId();
+	const createdAt = optionalCreatedAt(doc.createdAt) ?? Date.now();
+	if (doc.id === id && doc.createdAt === createdAt) return doc;
+	return { ...doc, id, createdAt };
 }
 
 function persistStyle(style: DigrNodeStyle): DigrNodeStyle {
@@ -179,8 +222,9 @@ export function serializeDigrDocument(doc: DigrDocument): string {
 	const clean = parseDigrDocument(doc);
 	return JSON.stringify({
 		schemaVersion: 1 as const,
+		...(clean.id !== undefined ? { id: clean.id } : {}),
+		...(clean.createdAt !== undefined ? { createdAt: clean.createdAt } : {}),
 		nodes: clean.nodes.map(persistNode),
-		canvas: clean.canvas,
-		...(clean.view ? { view: clean.view } : {})
+		canvas: clean.canvas
 	});
 }

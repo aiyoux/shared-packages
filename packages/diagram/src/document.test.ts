@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
 	DigrParseError,
+	ensureDigrIdentity,
 	parseDigrDocument,
+	parseDigrView,
 	serializeDigrDocument
 } from './document.js';
 import type { DigrDocument } from './types.js';
@@ -45,20 +47,56 @@ describe('parseDigrDocument', () => {
 		const parsed = parseDigrDocument({ schemaVersion: 1, nodes: [{ id: 'a', x: 0, y: 0, w: 10, h: 10 }] });
 		expect(parsed.canvas).toEqual({ w: 1600, h: 1000 });
 		expect(parsed.nodes[0].text).toBe('');
-		expect(parsed.view).toBeUndefined();
+		expect(parsed.id).toBeUndefined();
 	});
 
-	it('keeps a persisted view block', () => {
-		const parsed = parseDigrDocument({
+	it('never writes a view into the document, and ignores one on read', () => {
+		// The view is per-viewer state kept outside the file (docViewStore), so
+		// the serialized bytes must be identical on two machines whose layouts
+		// differ — that is what offline-project-collab.md 5.2 needs, and it is
+		// what lets `.digr` be merged without conflicting on window chrome.
+		const stale = parseDigrDocument({
 			schemaVersion: 1,
 			nodes: [],
 			canvas: { w: 100, h: 100 },
 			view: { layout: { kind: 'leaf' }, windows: { leaf1: { role: 'canvas' } } }
 		});
-		expect(parsed.view).toEqual({
-			layout: { kind: 'leaf' },
-			windows: { leaf1: { role: 'canvas' } }
+		expect('view' in stale).toBe(false);
+		expect(JSON.parse(serializeDigrDocument(stale))).not.toHaveProperty('view');
+	});
+
+	it('round-trips travelling identity and mints it once', () => {
+		const parsed = parseDigrDocument({
+			schemaVersion: 1,
+			id: 'digr-1',
+			createdAt: 42,
+			nodes: [],
+			canvas: { w: 100, h: 100 }
 		});
+		expect(parsed.id).toBe('digr-1');
+		expect(parsed.createdAt).toBe(42);
+		expect(JSON.parse(serializeDigrDocument(parsed))).toMatchObject({
+			id: 'digr-1',
+			createdAt: 42
+		});
+
+		const fresh = ensureDigrIdentity({ schemaVersion: 1, nodes: [], canvas: { w: 1, h: 1 } });
+		expect(typeof fresh.id).toBe('string');
+		expect(fresh.id).not.toBe('');
+		// Idempotent: a document that already has identity keeps the same object,
+		// so a save cannot quietly re-mint and orphan the stored view record.
+		expect(ensureDigrIdentity(fresh)).toBe(fresh);
+	});
+
+	it('validates a stored view record without it being part of the document', () => {
+		const view = {
+			layout: { kind: 'split', id: 'digr-root', direction: 'row', ratio: 0.5 },
+			windows: { 'digr-canvas': { role: 'canvas' } }
+		};
+		expect(parseDigrView(view)).toEqual(view);
+		expect(parseDigrView(undefined)).toBeUndefined();
+		expect(parseDigrView({ windows: {} })).toBeUndefined();
+		expect(() => parseDigrView({ windows: { a: { role: '' } } })).toThrow(DigrParseError);
 	});
 
 	it('rejects the wrong schemaVersion', () => {

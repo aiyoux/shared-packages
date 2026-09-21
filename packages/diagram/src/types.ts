@@ -36,14 +36,23 @@ export type DigrNode = {
 	style?: DigrNodeStyle;
 };
 
-/** Window descriptor in the persisted `view` block. Roles are opaque strings:
- *  the diagram package stays app-agnostic; the host validates role ids against
- *  its own window catalog on load. (Same rule as `AnimWindowData`.) */
+/** Window descriptor in the stored view record. Roles are opaque strings: the
+ *  diagram package stays app-agnostic; the host validates role ids against its
+ *  own window catalog on load. (Same rule as `AnimWindowData`.) */
 export type DigrWindowData = { role: string };
 
-/** App/workspace state that travels with the document but is never authoring
- *  data: the window layout tree. Per-window pan/zoom cameras are session-only
- *  and deliberately absent — a saved file is a diagram, not an editing session. */
+/** Per-user workspace state for one diagram: the window layout tree. Per-window
+ *  pan/zoom cameras are session-only and deliberately absent — a saved file is a
+ *  diagram, not an editing session.
+ *
+ *  **Not part of the document. Never write it into the file.** It describes one
+ *  person's machine, so a document carrying it cannot produce identical bytes on
+ *  two devices — which is what `offline-project-collab.md` §5.2 needs for a
+ *  deterministic checkpoint — and it makes every room combine conflict on layout
+ *  drift that has nothing to do with the diagram. The host persists it per
+ *  `(viewer, document id)`; see `docViewStore.ts`. `parseDigrView` validates a
+ *  stored record: the shape belongs with the format even though the data does
+ *  not. Same conclusion `AnimDocView` reached first. */
 export type DigrDocView = {
 	layout?: unknown;
 	windows?: Record<string, DigrWindowData>;
@@ -51,7 +60,10 @@ export type DigrDocView = {
 
 export type DigrDocument = {
 	schemaVersion: 1;
+	/** Travelling document identity. Never a VFS node id. */
+	id?: string;
+	/** Epoch ms. Travels with `id`; never a VFS `createdAt`. */
+	createdAt?: number;
 	nodes: DigrNode[];
 	canvas: DigrCanvas;
-	view?: DigrDocView;
 };
