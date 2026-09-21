@@ -38,7 +38,32 @@ export type CollabFrame =
 	| { kind: 'nack'; clientOpId: string; headSeq: number }
 	| { kind: 'resync'; pageId: string; reason: string }
 	| { kind: 'presence'; clientId: string; state: AwarenessState | null }
-	| { kind: 'schema-mismatch'; local: number; remote: number };
+	| { kind: 'schema-mismatch'; local: number; remote: number }
+	/**
+	 * Asset bytes travel as SESSION content, never as durable identity — a
+	 * replica asks for a `src` its own store cannot resolve, the peer answers
+	 * with chunked bytes (docs/design/kb-ephemeral-join.md §5). Purely
+	 * transport-level: no op semantics, no persistence, no undo. The chunk
+	 * framing is the frame's own (`index`/`total` over base64 `chunk`s) — the
+	 * envelope `seq` is NOT involved: the checkpoint line reads `frame.seq`
+	 * for op ordering, and asset frames must never mean two things there.
+	 */
+	| { kind: 'asset-request'; pageId: string; clientId: string; roomId?: string; srcs: string[] }
+	| {
+			kind: 'asset';
+			pageId: string;
+			clientId: string;
+			roomId?: string;
+			/** Opaque source key as it appears on the page (e.g. `assets/<file>`). */
+			src: string;
+			/** Content fingerprint — the receiver skips an unchanged re-push. */
+			hash: string;
+			/** 0-based; `index === total - 1` completes the payload. */
+			index: number;
+			total: number;
+			/** base64 chunk of the asset's bytes. */
+			chunk: string;
+	  };
 
 /** Wire wrapper so CM dispatch is one `msg.type` branch. */
 export type KbCollabMessage = { type: 'kb-collab'; v: 1; frame: CollabFrame };
@@ -249,6 +274,91 @@ export function dropUndoGroupsTouchedByRemote(groups: Op[][], page: KbPage, remo
 
 function emit(handlers: Set<(frame: CollabFrame) => void>, frame: CollabFrame): void {
 	for (const handler of handlers) handler(frame);
+}
+
+/**
+ * Asset-channel payload helpers. Pure and dependency-free so the runtime and
+ * its tests can share one framing. 64 KiB pre-encode: well under every
+ * datachannel's message ceiling, and a 5 MiB asset caps at 80 frames.
+ */
+const ASSET_CHUNK_BYTES = 64 * 1024;
+
+/** FNV-1a 32-bit, hex — a change detector, not a integrity boundary. */
+export function assetHash(bytes: Uint8Array): string {
+	let hash = 0x811c9dc5;
+	for (let i = 0; i < bytes.length; i++) {
+		hash ^= bytes[i]!;
+		hash = Math.imul(hash, 0x01000193) >>> 0;
+	}
+	return hash.toString(16).padStart(8, '0');
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+	let out = '';
+	const step = 0x8000;
+	for (let i = 0; i < bytes.length; i += step) {
+		out += String.fromCharCode(...bytes.subarray(i, i + step));
+	}
+	if (typeof btoa === 'function') return btoa(out);
+	return Buffer.from(out, 'binary').toString('base64');
+}
+
+function base64ToBytes(text: string): Uint8Array {
+	if (typeof atob === 'function') {
+		const binary = atob(text);
+		const out = new Uint8Array(binary.length);
+		for (let i = 0; i < binary.length; i++) out[i] = binary.charCodeAt(i);
+		return out;
+	}
+	return Uint8Array.from(Buffer.from(text, 'base64'));
+}
+
+/** Split asset bytes into ordered base64 chunks for `asset` frames. */
+export function chunkAsset(bytes: Uint8Array, chunkBytes = ASSET_CHUNK_BYTES): string[] {
+	const chunks: string[] = [];
+	for (let i = 0; i < bytes.length; i += chunkBytes) {
+		chunks.push(bytesToBase64(bytes.subarray(i, i + chunkBytes)));
+	}
+	if (chunks.length === 0) chunks.push('');
+	return chunks;
+}
+
+/** Reassemble ordered `asset` frame chunks back into bytes. */
+export function reassembleAsset(chunks: string[]): Uint8Array {
+	const parts = chunks.map(base64ToBytes);
+	const total = parts.reduce((n, part) => n + part.length, 0);
+	const out = new Uint8Array(total);
+	let at = 0;
+	for (const part of parts) {
+		out.set(part, at);
+		at += part.length;
+	}
+	return out;
+}
+
+/**
+ * `asset` frame factory: chunks bytes and stamps the fingerprint once.
+ * Empty assets are legal and carry one empty chunk.
+ */
+export function assetFrames(
+	src: string,
+	bytes: Uint8Array,
+	envelope: { pageId: string; clientId: string; roomId?: string }
+): { hash: string; frames: Extract<CollabFrame, { kind: 'asset' }>[] } {
+	const hash = assetHash(bytes);
+	const chunks = chunkAsset(bytes);
+	return {
+		hash,
+		frames: chunks.map((chunk, index) => ({
+			kind: 'asset',
+			...envelope,
+			src,
+			hash,
+			index,
+			total: chunks.length,
+			chunk
+		}))
+	};
 }
 
 /** Loopback session for engine tests. Adapters (CM / monitor) construct the real thing. */

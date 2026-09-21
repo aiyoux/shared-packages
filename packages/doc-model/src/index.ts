@@ -2,10 +2,14 @@ export { apply, applyMany, resolveInsertAnchor, UnresolvedPointError } from './a
 export { applyRemote, applyRemoteBatch, applyRemoteMany, clampPoint } from './applyRemote.js';
 export {
 	REPLICA_SEND_SNAPSHOT_ERROR,
+	assetFrames,
+	assetHash,
 	blockIdsTouchedByOp,
+	chunkAsset,
 	createLoopbackCollabSession,
 	dropUndoGroupsTouchedByRemote,
 	opNamesBlockIds,
+	reassembleAsset,
 	schemaCompatible,
 	shouldReplaceFromSnapshot,
 	type AwarenessState,
