@@ -9,7 +9,7 @@
 // document takes anywhere in the codebase. `animation` owns that vocabulary
 // and is itself pure (no VFS, no DOM), so the edge costs nothing at runtime.
 
-import type { DocSource } from '@shared-packages/animation';
+import type { DocSource } from '@shared-packages/doc-refs';
 
 /** A single eraser stroke's vector outline. */
 export interface EraserPath {

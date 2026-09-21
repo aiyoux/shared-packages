@@ -21,7 +21,8 @@
   },
   "dependencies": {
     "@shared-packages/bytes-gate": "file:../bytes-gate",
-    "@shared-packages/composition": "file:../composition"
+    "@shared-packages/composition": "file:../composition",
+    "@shared-packages/doc-refs": "file:../doc-refs"
   },
   "devDependencies": {
     "@types/node": "^26.1.1",

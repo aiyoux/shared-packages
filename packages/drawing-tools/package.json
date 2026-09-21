@@ -29,7 +29,8 @@
     "clipper2-wasm": "^0.4.0",
     "perfect-freehand": "^1.2.3",
     "polygon-clipping": "^0.15.7",
-    "@shared-packages/animation": "file:../animation"
+    "@shared-packages/animation": "file:../animation",
+    "@shared-packages/doc-refs": "file:../doc-refs"
   },
   "devDependencies": {
     "@types/node": "^26.1.1",

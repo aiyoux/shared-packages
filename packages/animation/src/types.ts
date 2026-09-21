@@ -1,6 +1,29 @@
-export const BIND_MODES = ['clone', 'live', 'snapshot', 'gitPin'] as const;
+/**
+ * The reference vocabulary lives in `@shared-packages/doc-refs`, which depends
+ * on nothing. It was declared here, and that made a composition of audio
+ * recordings — and the hub's reference pipeline, and a drawing tool — depend on
+ * the animation package to say "this points at a VFS node". `compositionVfs.ts`
+ * declined and re-declared the shape structurally, which is the drift a single
+ * declaration exists to prevent.
+ *
+ * Re-exported rather than removed: other worktrees are mid-flight against this
+ * path, and this package is consumed live. Every consumer that wanted *only*
+ * the vocabulary now imports `@shared-packages/doc-refs` — the voice-rec
+ * composition store, the hub's registry and map, `drawing-tools`, the
+ * sketcher's scene types. What still takes them from here are animation's own
+ * consumers, naming a `BindMode` beside a dozen anim types, which is not the
+ * dependency this move was about.
+ */
+import type { BindMode, DocSource } from '@shared-packages/doc-refs';
 
-export type BindMode = (typeof BIND_MODES)[number];
+export {
+	BIND_MODES,
+	type BindMode,
+	type DocSource,
+	type FsBackend,
+	type MonitorDocSource,
+	type VfsDocSource
+} from '@shared-packages/doc-refs';
 
 export const SKETCH_OBJECT_KINDS = ['image', 'bake', 'sticker', 'text', 'path'] as const;
 export type SketchObjectKind = (typeof SKETCH_OBJECT_KINDS)[number];
@@ -21,40 +44,8 @@ export type SketchFragment =
 			objectId: string;
 	  };
 
-/**
- * One document pointing at another, in the one shape every document type uses.
- *
- * `backend` is the discriminant: read it and you know whether to expect a VFS
- * node id or a monitor profile + path. That is what lets a reference keep
- * resolving wherever its document ends up, and what lets one reader and one
- * writer serve every format.
- *
- * It is deliberately not per-app. `.skch` used to store `vfsNodeId` as a bare
- * string, which could not name a monitor file at all and needed its own
- * extractor and its own rewriter; `docs/design/live-reference-cycles.md`
- * catalogued four such shapes rather than collapsing them. This is the collapse.
- */
-export type VfsDocSource = {
-	backend: 'shared-vfs';
-	nodeId: string;
-	generation?: number;
-	blobId?: string;
-};
-
-export type MonitorDocSource = {
-	backend: 'monitor';
-	profileId: string;
-	ino?: string;
-	dev?: string;
-	relPath: string;
-};
-
-export type DocSource = VfsDocSource | MonitorDocSource;
-
 /** A `DocSource` that may also name part of a sketch. Anim clips only. */
 export type ClipSource = DocSource & { fragment?: SketchFragment };
-
-export type FsBackend = DocSource['backend'];
 
 export const CLIP_MEDIA_KINDS = ['image', 'sketch-fragment', 'video', 'audio'] as const;
 export type ClipMediaKind = (typeof CLIP_MEDIA_KINDS)[number];
