@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": false,
   "type": "module",
-  "description": "Software hidden-line 3D scene → SVG path encode (SVGRenderer + computeSpans worker). Shared by svg-sketcher and infographic.",
+  "description": "Software hidden-line 3D scene → SVG path encode (SVGRenderer + computeSpans worker). Used by svg-sketcher.",
   "exports": {
     ".": {
       "types": "./src/index.ts",
