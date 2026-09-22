@@ -8,8 +8,10 @@ import type {
 	NodeDocument,
 	NodeSnapshot,
 	NodeWindowData,
+	QueryNode,
 	ScalarKind,
 	ValueType,
+	ViewSource,
 	Wire
 } from './types.js';
 
@@ -177,6 +179,8 @@ function parseNode(raw: unknown, index: number): FlowNode {
 				inputCount: clampPackCount(finiteNumber(raw.inputCount, `${field}.inputCount`))
 			};
 		}
+		case 'query':
+			return parseQuery(raw, field, head);
 		case 'filter': {
 			if (!isFilterKind(raw.filter)) {
 				throw new NodeParseError(`${field}.filter is unknown: ${String(raw.filter)}`);
@@ -215,6 +219,40 @@ function parseImage(
 		throw new NodeParseError(`${field} ${bind} bind requires source`);
 	}
 	return { ...head, kind: 'image', bind, source: parseSource(raw.source, `${field}.source`), ...snap };
+}
+
+function parseViewSource(raw: unknown, field: string, viewId: string): ViewSource {
+	const source = parseSource(raw, field);
+	const embedded = isRecord(raw) && typeof raw.viewId === 'string' && raw.viewId ? raw.viewId : viewId;
+	return { ...source, viewId: embedded };
+}
+
+function parseQuery(
+	raw: Record<string, unknown>,
+	field: string,
+	head: { id: string; x: number; y: number; name?: string }
+): QueryNode {
+	const viewId = nonEmptyString(raw.viewId, `${field}.viewId`);
+	const valueType = parseValueType(raw.valueType, `${field}.valueType`);
+	if (valueType.kind === 'image' || (valueType.kind === 'array' && valueType.of === 'image')) {
+		throw new NodeParseError(`${field}.valueType cannot be an image`);
+	}
+	const bind = parseBind(raw.bind, `${field}.bind`);
+	const snapshot = raw.snapshot === undefined ? undefined : parseSnapshot(raw.snapshot, `${field}.snapshot`);
+	const snap = snapshot ? { snapshot } : {};
+	if (bind === 'clone') {
+		return { ...head, kind: 'query', viewId, valueType, bind: 'clone', ...snap };
+	}
+	if (raw.source === undefined) throw new NodeParseError(`${field} ${bind} bind requires source`);
+	return {
+		...head,
+		kind: 'query',
+		viewId,
+		valueType,
+		bind,
+		source: parseViewSource(raw.source, `${field}.source`, viewId),
+		...snap
+	};
 }
 
 function parseWire(raw: unknown, index: number): Wire {
@@ -383,6 +421,21 @@ function persistNode(node: FlowNode): FlowNode {
 				element: node.element,
 				inputCount: clampPackCount(node.inputCount)
 			};
+		case 'query': {
+			const snap = node.snapshot ? { snapshot: persistSnapshot(node.snapshot) } : {};
+			if (node.bind === 'clone') {
+				return { ...head, kind: 'query', viewId: node.viewId, valueType: persistValueType(node.valueType), bind: 'clone', ...snap };
+			}
+			return {
+				...head,
+				kind: 'query',
+				viewId: node.viewId,
+				valueType: persistValueType(node.valueType),
+				bind: node.bind,
+				source: { ...persistSource(node.source), viewId: node.source.viewId || node.viewId },
+				...snap
+			};
+		}
 		case 'filter':
 			return {
 				...head,

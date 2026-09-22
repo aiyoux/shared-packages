@@ -73,6 +73,8 @@ export function socketsOf(node: FlowNode): SocketDef[] {
 			});
 			return sockets;
 		}
+		case 'query':
+			return [{ key: 'out', dir: 'out', type: valueType(node.valueType), label: 'Value' }];
 		case 'filter':
 			return [
 				{ key: 'image', dir: 'in', type: { kind: 'image' }, label: 'Image' },

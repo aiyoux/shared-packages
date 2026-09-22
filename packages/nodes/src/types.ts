@@ -1,6 +1,6 @@
-import type { BindMode, DocSource } from '@shared-packages/doc-refs';
+import type { BindMode, DocSource, ViewSource } from '@shared-packages/doc-refs';
 
-export type { BindMode, DocSource };
+export type { BindMode, DocSource, ViewSource };
 
 export type ScalarKind = 'image' | 'int' | 'float' | 'string';
 export type ValueType = { kind: ScalarKind } | { kind: 'array'; of: ScalarKind };
@@ -29,7 +29,18 @@ export type FilterNode = FlowNodeBase & {
 	contrast: number;
 };
 
-export type FlowNode = OutputNode | ImageNode | ConstNode | PackNode | FilterNode;
+/** Reads one saved view of a `.data` file. `viewId` is also on `source` when a source exists. */
+export type QueryNode = FlowNodeBase & {
+	kind: 'query';
+	viewId: string;
+	valueType: ValueType;
+	snapshot?: NodeSnapshot;
+} & (
+	| { bind: 'clone' }
+	| { bind: Exclude<BindMode, 'clone'>; source: ViewSource }
+);
+
+export type FlowNode = OutputNode | ImageNode | ConstNode | PackNode | FilterNode | QueryNode;
 export type Wire = {
 	id: string;
 	fromNodeId: string;

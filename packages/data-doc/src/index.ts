@@ -7,6 +7,7 @@ export type {
 	DataWindowData,
 	FieldDef,
 	FieldType,
+	ViewCardinality,
 	ViewClause,
 	ViewCompare
 } from './types.js';
@@ -22,4 +23,4 @@ export {
 
 export { applyDataOp, type DataOp } from './ops.js';
 
-export { evaluateView, type ViewResult, type ViewRow } from './eval.js';
+export { evaluateView, viewOutputShape, type ViewResult, type ViewRow, type ViewScalar } from './eval.js';

@@ -119,6 +119,28 @@ function copyNode(node: FlowNode): FlowNode {
 				brightness: node.brightness,
 				contrast: node.contrast
 			};
+		case 'query': {
+			const snap = node.snapshot ? { snapshot: copySnapshot(node.snapshot) } : {};
+			if (node.bind === 'clone') {
+				return {
+					...head,
+					kind: 'query',
+					viewId: node.viewId,
+					valueType: copyType(node.valueType),
+					bind: 'clone',
+					...snap
+				};
+			}
+			return {
+				...head,
+				kind: 'query',
+				viewId: node.viewId,
+				valueType: copyType(node.valueType),
+				bind: node.bind,
+				source: { ...copySource(node.source), viewId: node.source.viewId },
+				...snap
+			};
+		}
 		default: {
 			const never: never = node;
 			return never;

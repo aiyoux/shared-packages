@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { applyDataOp } from './ops.js';
 import { emptyDataDocument, parseDataDocument, serializeDataDocument } from './document.js';
-import { evaluateView } from './eval.js';
+import { evaluateView, viewOutputShape } from './eval.js';
 import type { DataDocument } from './types.js';
 
 function doc(): DataDocument {
@@ -62,6 +62,16 @@ describe('data document', () => {
 		const result = evaluateView(withView, 'c');
 		if (!result.ok) throw new Error(result.message);
 		expect(result.rows.map((r) => r.recordId)).toEqual(['a', 'c']);
+	});
+
+	it('declares an array of strings unless the view asks for one value', () => {
+		const base = doc();
+		expect(viewOutputShape(base, 'v')).toEqual({ scalar: 'string', many: true });
+		const one = applyDataOp(base, {
+			t: 'put-view',
+			view: { ...base.views[0]!, cardinality: 'one' }
+		});
+		expect(viewOutputShape(one, 'v')).toEqual({ scalar: 'string', many: false });
 	});
 
 	it('drops a field from records and view clauses', () => {

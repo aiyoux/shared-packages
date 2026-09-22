@@ -26,10 +26,14 @@ export type ViewClause = {
  * A named transform over the records. `where` clauses are AND-ed. `selectFieldId`
  * is the column the view returns; omit it to return every field of each match.
  */
+/** `one` is the first match. `many` is every match. Omit means `many`. */
+export type ViewCardinality = 'one' | 'many';
+
 export type DataView = {
 	id: string;
 	name: string;
 	selectFieldId?: string;
+	cardinality?: ViewCardinality;
 	where: ViewClause[];
 };
 

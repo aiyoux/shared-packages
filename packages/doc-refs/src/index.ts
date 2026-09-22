@@ -20,5 +20,8 @@ export {
 	type DocSource,
 	type FsBackend,
 	type MonitorDocSource,
-	type VfsDocSource
+	type ViewSelector,
+	type ViewSource,
+	type VfsDocSource,
+	isViewSource
 } from './docSource.js';

@@ -6,6 +6,7 @@ import type {
 	DataView,
 	FieldDef,
 	FieldType,
+	ViewCardinality,
 	ViewClause,
 	ViewCompare
 } from './types.js';
@@ -89,10 +90,13 @@ function parseView(raw: unknown, index: number): DataView {
 		: [];
 	const select =
 		typeof raw.selectFieldId === 'string' && raw.selectFieldId ? raw.selectFieldId : undefined;
+	const cardinality: ViewCardinality | undefined =
+		raw.cardinality === 'one' || raw.cardinality === 'many' ? raw.cardinality : undefined;
 	return {
 		id: nonEmpty(raw.id, `views[${index}].id`),
 		name: typeof raw.name === 'string' ? raw.name : '',
 		...(select ? { selectFieldId: select } : {}),
+		...(cardinality ? { cardinality } : {}),
 		where
 	};
 }
@@ -138,6 +142,7 @@ export function parseDataDocument(input: Uint8Array | string | unknown): DataDoc
 		views: views.map((view) => {
 			const next: DataView = { id: view.id, name: view.name, where: view.where };
 			if (view.selectFieldId) next.selectFieldId = view.selectFieldId;
+			if (view.cardinality) next.cardinality = view.cardinality;
 			return next;
 		})
 	};
@@ -156,6 +161,7 @@ function persistView(view: DataView): DataView {
 		id: view.id,
 		name: view.name,
 		...(view.selectFieldId ? { selectFieldId: view.selectFieldId } : {}),
+		...(view.cardinality ? { cardinality: view.cardinality } : {}),
 		where: view.where.map((c) => ({ fieldId: c.fieldId, op: c.op, value: c.value }))
 	};
 }

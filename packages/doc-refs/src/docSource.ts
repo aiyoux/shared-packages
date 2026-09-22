@@ -28,6 +28,22 @@ export type MonitorDocSource = {
 
 export type DocSource = VfsDocSource | MonitorDocSource;
 
+/**
+ * Names one saved view inside a `.data` file. This is not a VFS node id —
+ * `nodeId` on a selector would be treated as an unvisited reference.
+ * It sits on the source object, the same way a sketch `fragment` does, so a
+ * rewrite that stops at the source keeps it.
+ */
+export type ViewSelector = { kind: 'view'; viewId: string };
+
+/** A `DocSource` that also names a view in that file. */
+export type ViewSource = DocSource & { viewId: string };
+
+export function isViewSource(source: DocSource): source is ViewSource {
+	const viewId = (source as { viewId?: unknown }).viewId;
+	return typeof viewId === 'string' && viewId !== '';
+}
+
 export type FsBackend = DocSource['backend'];
 
 /**

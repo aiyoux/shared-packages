@@ -13,6 +13,7 @@ export type {
 	NodeWindowData,
 	OutputNode,
 	PackNode,
+	QueryNode,
 	ScalarKind,
 	ValueType,
 	Wire
@@ -32,4 +33,4 @@ export {
 
 export { applyNodeOp, invertNodeOp, type NodeOp } from './ops.js';
 
-export { evaluateOutput, type EvalHost, type EvalResult } from './eval.js';
+export { evaluateOutput, type EvalHost, type EvalResult, type QueryValue } from './eval.js';

@@ -53,6 +53,21 @@ function matches(doc: DataDocument, view: DataView, values: Record<string, CellV
 }
 
 /** Run one named view. The document is not modified. */
+export type ViewScalar = 'string' | 'int' | 'float';
+
+/** The socket shape a consumer should declare for this view. Dates and booleans travel as strings. */
+export function viewOutputShape(
+	doc: DataDocument,
+	viewId: string
+): { scalar: ViewScalar; many: boolean } | null {
+	const view = doc.views.find((v) => v.id === viewId);
+	if (!view?.selectFieldId) return null;
+	const field = doc.fields.find((f) => f.id === view.selectFieldId);
+	if (!field) return null;
+	const scalar: ViewScalar = field.type === 'int' ? 'int' : field.type === 'float' ? 'float' : 'string';
+	return { scalar, many: view.cardinality !== 'one' };
+}
+
 export function evaluateView(doc: DataDocument, viewId: string): ViewResult {
 	const view = doc.views.find((v) => v.id === viewId);
 	if (!view) return { ok: false, message: 'View not found.' };

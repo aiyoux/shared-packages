@@ -8,13 +8,21 @@ import type {
 	NodeDocument,
 	OutputNode,
 	PackNode,
+	QueryNode,
 	ScalarKind,
 	ValueType
 } from './types.js';
 
+export type QueryValue =
+	| { kind: 'string'; value: string }
+	| { kind: 'int'; value: number }
+	| { kind: 'float'; value: number }
+	| { kind: 'array'; of: Exclude<ScalarKind, 'image'>; items: Array<{ kind: 'string'; value: string } | { kind: 'int'; value: number } | { kind: 'float'; value: number }> };
+
 export type EvalHost<I> = {
 	loadImage(node: ImageNode): Promise<I | null>;
 	applyFilter(image: I, filter: FilterKind, params: FilterParams): Promise<I | null>;
+	loadQuery?(node: QueryNode): Promise<QueryValue | null>;
 };
 
 type Item<I> =
@@ -211,6 +219,14 @@ export async function evaluateOutput<I>(doc: NodeDocument, host: EvalHost<I>): P
 				const image = await host.loadImage(node);
 				if (image == null) return { ok: false, message: 'Image source is missing.' };
 				return { ok: true, kind: 'image', image };
+			}
+			case 'query': {
+				const loaded = host.loadQuery ? await host.loadQuery(node) : null;
+				if (loaded == null) return { ok: false, message: 'Data view is missing.' };
+				if (loaded.kind === 'array') {
+					return { ok: true, kind: 'array', of: loaded.of, items: loaded.items };
+				}
+				return { ok: true, ...loaded };
 			}
 			case 'pack':
 				return evalPack(node);

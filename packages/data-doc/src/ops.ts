@@ -57,6 +57,7 @@ function stripField(doc: DataDocument, fieldId: string): DataDocument {
 		})).map((view) => {
 			const next: DataView = { id: view.id, name: view.name, where: view.where };
 			if (view.selectFieldId && view.selectFieldId !== fieldId) next.selectFieldId = view.selectFieldId;
+			if (view.cardinality) next.cardinality = view.cardinality;
 			return next;
 		})
 	};
@@ -142,6 +143,9 @@ export function applyDataOp(doc: DataDocument, op: DataOp): DataDocument {
 				name: op.view.name,
 				...(op.view.selectFieldId && known.has(op.view.selectFieldId)
 					? { selectFieldId: op.view.selectFieldId }
+					: {}),
+				...(op.view.cardinality === 'one' || op.view.cardinality === 'many'
+					? { cardinality: op.view.cardinality }
 					: {}),
 				where
 			};
