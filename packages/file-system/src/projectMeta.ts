@@ -13,7 +13,7 @@
  * on a second import of an export that already carries it.
  */
 import type { VfsService } from './vfs.js';
-import type { PackOpProgress, VfsNode } from './types.js';
+import { VfsError, type PackOpProgress, type VfsNode } from './types.js';
 import { descendantFiles } from './projectPack.js';
 
 /** Lives in the project's own folder so it travels with the files. */
@@ -261,16 +261,33 @@ export async function writeProjectMeta(
 ): Promise<VfsNode> {
 	const stamped = withProjectId(meta);
 	const body = new TextEncoder().encode(`${JSON.stringify(stamped, null, 2)}\n`);
-	const existing = await metaFileIn(vfs, rootId);
-	if (existing) {
-		return vfs.updateFile(existing.id, body, { force: true, contentType: 'application/json' });
+	// A meta rewrite is a read-modify-write, so it is a save window: CAS
+	// against the generation just read and retry on a concurrent commit —
+	// force-overwriting here used to silently drop whatever the other writer
+	// (rooms state, an export) had just saved.
+	for (let attempt = 0; attempt < 3; attempt++) {
+		const existing = await metaFileIn(vfs, rootId);
+		if (!existing) {
+			return vfs.writeFile({
+				parentId: rootId,
+				name: PROJECT_META_FILE,
+				body,
+				contentType: 'application/json'
+			});
+		}
+		try {
+			return await vfs.updateFile(existing.id, body, {
+				expectedGeneration: existing.generation,
+				contentType: 'application/json'
+			});
+		} catch (err) {
+			if (!(err instanceof VfsError && err.code === 'GENERATION_CONFLICT')) throw err;
+		}
 	}
-	return vfs.writeFile({
-		parentId: rootId,
-		name: PROJECT_META_FILE,
-		body,
-		contentType: 'application/json'
-	});
+	throw new VfsError(
+		'GENERATION_CONFLICT',
+		`${PROJECT_META_FILE} kept changing under the write`
+	);
 }
 
 /**

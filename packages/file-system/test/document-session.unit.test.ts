@@ -1,8 +1,8 @@
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { createVfs, resetSharedVfsForTests, VfsError } from '../src/index.ts';
-import { createOpenDocument, diffDocumentSnapshots } from '../src/documentSession.ts';
-import type { DocumentHost, DocumentSnapshot, UpdateFileOpts, VfsNode, WriteFileInput } from '../src/types.ts';
+import { createOpenDocument, diffDocumentSnapshots, type DocumentHost } from '../src/documentSession.ts';
+import type { DocumentSnapshot, UpdateFileOpts, VfsNode, WriteFileInput } from '../src/types.ts';
 import type { DocumentEvent } from '../src/types.ts';
 
 function wait(ms = 20): Promise<void> {
@@ -272,7 +272,7 @@ function createGatedHost(initial: VfsNode) {
 		async getPath() {
 			return [{ ...node }];
 		},
-		subscribe(fn) {
+		subscribe(fn: () => void) {
 			listeners.add(fn);
 			return () => {
 				listeners.delete(fn);
@@ -340,7 +340,10 @@ describe('save-window foreign re-delivery', () => {
 		release!();
 		await saved;
 		await wait(10);
-		const redelivered = events.filter((e) => e.type === 'content' && e.conflict);
+		const redelivered = events.filter(
+			(e): e is Extract<DocumentEvent, { type: 'content' }> =>
+				e.type === 'content' && e.conflict
+		);
 		assert.equal(redelivered.length, 1);
 		assert.equal(redelivered[0]?.generation, 3);
 		// Our own generation is kept: the foreign write surfaced, not adopted.
@@ -382,7 +385,10 @@ describe('save-window foreign re-delivery', () => {
 		release3!();
 		await saved;
 		await wait(10);
-		const adopted = events.filter((e) => e.type === 'content' && !e.conflict);
+		const adopted = events.filter(
+			(e): e is Extract<DocumentEvent, { type: 'content' }> =>
+				e.type === 'content' && !e.conflict
+		);
 		assert.equal(adopted.length, 1);
 		assert.equal(adopted[0]?.generation, 3);
 		assert.equal(doc.generation, 3);
