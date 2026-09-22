@@ -1,8 +1,13 @@
 <script lang="ts">
 	/**
-	 * Pollable origin storage persistence badge (navigator.storage.persist).
+	 * Origin storage persistence pill (navigator.storage.persist).
 	 * Covers Dexie IDB + OPFS for this origin. Best-effort; denial is not fatal.
+	 *
+	 * Click opens an explanation. The pane header and the explorer both clip
+	 * overflow, so the popup is placed with escapePaneClip — the same fix as
+	 * the file menu and the connection (i) tip.
 	 */
+	import { escapePaneClip } from '@shared-packages/ui';
 	import {
 		ensurePersistentStorage,
 		getPersistenceStatus,
@@ -21,7 +26,7 @@
 		pollMs?: number;
 		/** Compact toolbar chip (default true). */
 		compact?: boolean;
-		/** Show request button when status is not persistent (default true). */
+		/** Show the permission button in the popup when storage is not persistent. */
 		showRequest?: boolean;
 		class?: string;
 	}
@@ -39,6 +44,9 @@
 	let quota = $state<number | undefined>(undefined);
 	let busy = $state(false);
 	let lastError = $state('');
+	let open = $state(false);
+	let wrapEl = $state<HTMLDivElement | undefined>();
+	const popupId = `fe-storage-persist-popup-${Math.random().toString(36).slice(2, 8)}`;
 
 	const label = $derived.by(() => {
 		switch (status) {
@@ -55,29 +63,37 @@
 		}
 	});
 
-	const title = $derived.by(() => {
-		const parts: string[] = [];
-		if (status === 'persistent') {
-			parts.push(
-				'This origin has persistent storage. IndexedDB and OPFS are less likely to be evicted under disk pressure.'
-			);
-		} else if (status === 'best-effort') {
-			parts.push(
-				'Browser denied or has not granted persistent storage. Local files may be cleared under storage pressure.'
-			);
-		} else if (status === 'unsupported') {
-			parts.push('navigator.storage.persist is not available in this environment.');
-		} else {
-			parts.push('Checking storage persistence…');
-		}
-		if (usage != null && quota != null && quota > 0) {
-			parts.push(`Usage ${formatBytes(usage)} / ${formatBytes(quota)}.`);
-		} else if (usage != null) {
-			parts.push(`Usage ${formatBytes(usage)}.`);
-		}
-		if (lastError) parts.push(lastError);
-		return parts.join(' ');
+	const heading = $derived.by(() => {
+		if (status === 'persistent') return 'Storage is persistent';
+		if (status === 'loading') return 'Checking storage';
+		return 'Storage is not persistent';
 	});
+
+	const explanation = $derived.by(() => {
+		if (status === 'persistent') {
+			return 'This browser will keep this site’s files. IndexedDB and OPFS are much less likely to be cleared when the disk is full.';
+		}
+		if (status === 'best-effort') {
+			return 'This browser has not agreed to keep this site’s files. Local files can be cleared when the disk is under pressure.';
+		}
+		if (status === 'unsupported') {
+			return 'This browser does not offer persistent storage, so local files may be cleared when the disk is under pressure.';
+		}
+		return 'Checking whether this browser will keep this site’s files.';
+	});
+
+	const usageLine = $derived.by(() => {
+		if (usage != null && quota != null && quota > 0) {
+			return `${formatBytes(usage)} of ${formatBytes(quota)} used`;
+		}
+		if (usage != null) return `${formatBytes(usage)} used`;
+		return '';
+	});
+
+	/** Asking only helps when the browser has the API and has not already granted it. */
+	const canRequest = $derived(
+		showRequest && status !== 'persistent' && status !== 'loading' && status !== 'unsupported'
+	);
 
 	function formatBytes(n: number): string {
 		if (!Number.isFinite(n) || n < 0) return '—';
@@ -147,6 +163,10 @@
 		}
 	}
 
+	function toggleOpen() {
+		open = !open;
+	}
+
 	$effect(() => {
 		void vfs;
 		void pollMs;
@@ -168,48 +188,96 @@
 			if (timer) clearInterval(timer);
 		};
 	});
+
+	$effect(() => {
+		if (!open) return;
+		const onDoc = (e: MouseEvent) => {
+			if (wrapEl && e.target instanceof Node && wrapEl.contains(e.target)) return;
+			open = false;
+		};
+		const onKey = (e: KeyboardEvent) => {
+			if (e.key === 'Escape') open = false;
+		};
+		document.addEventListener('mousedown', onDoc);
+		document.addEventListener('keydown', onKey);
+		return () => {
+			document.removeEventListener('mousedown', onDoc);
+			document.removeEventListener('keydown', onKey);
+		};
+	});
 </script>
 
-<div
-	class="fe-persist {className}"
-	class:compact
-	class:persistent={status === 'persistent'}
-	class:best-effort={status === 'best-effort'}
-	class:unsupported={status === 'unsupported'}
-	class:loading={status === 'loading'}
-	data-testid="fe-storage-persist"
-	data-status={status}
-	title={title}
-	role="status"
-	aria-live="polite"
->
-	<span class="fe-persist-dot" aria-hidden="true"></span>
-	<span class="fe-persist-label" data-testid="fe-storage-persist-label">{label}</span>
-	{#if usage != null && quota != null && !compact}
-		<span class="fe-persist-usage" data-testid="fe-storage-persist-usage">
-			{formatBytes(usage)} / {formatBytes(quota)}
-		</span>
-	{/if}
-	{#if showRequest && status !== 'persistent' && status !== 'loading' && status !== 'unsupported'}
-		<button
-			type="button"
-			class="fe-persist-request"
-			data-testid="fe-storage-persist-request"
-			disabled={busy}
-			title="Ask the browser to keep this site's data (IndexedDB + OPFS)"
-			onclick={() => void onRequest()}
+<div class="fe-persist-wrap {className}" bind:this={wrapEl}>
+	<button
+		type="button"
+		class="fe-persist"
+		class:compact
+		class:persistent={status === 'persistent'}
+		class:best-effort={status === 'best-effort'}
+		class:unsupported={status === 'unsupported'}
+		class:loading={status === 'loading'}
+		class:open
+		data-testid="fe-storage-persist"
+		data-status={status}
+		aria-haspopup="dialog"
+		aria-expanded={open}
+		aria-controls={open ? popupId : undefined}
+		onclick={toggleOpen}
+	>
+		<span class="fe-persist-dot" aria-hidden="true"></span>
+		<span class="fe-persist-label" data-testid="fe-storage-persist-label">{label}</span>
+	</button>
+	{#if open}
+		<div
+			class="fe-persist-pop"
+			class:persistent={status === 'persistent'}
+			class:best-effort={status === 'best-effort'}
+			class:unsupported={status === 'unsupported'}
+			class:loading={status === 'loading'}
+			id={popupId}
+			data-testid="fe-storage-persist-popup"
+			data-status={status}
+			role="dialog"
+			aria-label={heading}
+			use:escapePaneClip
 		>
-			{busy ? 'Requesting…' : 'Keep data'}
-		</button>
+			<p class="fe-persist-pop-title">{heading}</p>
+			<p class="fe-persist-explain" data-testid="fe-storage-persist-explain">{explanation}</p>
+			{#if usageLine}
+				<p class="fe-persist-usage" data-testid="fe-storage-persist-usage">{usageLine}</p>
+			{/if}
+			{#if lastError}
+				<p class="fe-persist-error" role="alert">{lastError}</p>
+			{/if}
+			{#if canRequest}
+				<button
+					type="button"
+					class="fe-persist-request"
+					data-testid="fe-storage-persist-request"
+					disabled={busy}
+					onclick={() => void onRequest()}
+				>
+					{busy ? 'Requesting…' : 'Request permission'}
+				</button>
+			{/if}
+		</div>
 	{/if}
 </div>
 
 <style>
+	.fe-persist-wrap {
+		position: relative;
+		display: inline-flex;
+		flex-shrink: 0;
+		max-width: 100%;
+	}
+
 	.fe-persist {
+		appearance: none;
 		display: inline-flex;
 		align-items: center;
 		gap: 6px;
-		flex-shrink: 0;
+		font: inherit;
 		font-size: 0.78rem;
 		line-height: 1.2;
 		padding: 3px 8px;
@@ -219,6 +287,7 @@
 		color: inherit;
 		max-width: 100%;
 		user-select: none;
+		cursor: pointer;
 	}
 
 	.fe-persist.compact {
@@ -259,30 +328,87 @@
 		color: var(--cat-red-soft);
 	}
 
+	.fe-persist.open,
+	.fe-persist:hover {
+		filter: brightness(1.08);
+	}
+
 	.fe-persist-label {
 		white-space: nowrap;
 		opacity: 0.92;
 	}
 
+	.fe-persist-pop {
+		z-index: 80;
+		width: min(18rem, calc(100vw - 24px));
+		padding: 0.7rem 0.8rem 0.75rem;
+		border-radius: 10px;
+		border: 2px solid var(--line-hairline);
+		background: var(--surface-2);
+		color: var(--text-primary);
+		box-shadow: 0 10px 28px rgb(var(--scrim-rgb) / 0.45);
+		font-size: 0.8rem;
+		line-height: 1.4;
+		text-align: left;
+	}
+
+	.fe-persist-pop.persistent {
+		border-color: var(--cat-green-soft);
+	}
+	.fe-persist-pop.best-effort,
+	.fe-persist-pop.unsupported {
+		border-color: var(--cat-red-soft);
+	}
+
+	.fe-persist-pop-title {
+		margin: 0 0 0.35rem;
+		font-weight: 700;
+		font-size: 0.84rem;
+	}
+
+	.fe-persist-pop.persistent .fe-persist-pop-title {
+		color: var(--cat-green-soft);
+	}
+	.fe-persist-pop.best-effort .fe-persist-pop-title,
+	.fe-persist-pop.unsupported .fe-persist-pop-title {
+		color: var(--cat-red-soft);
+	}
+
+	.fe-persist-explain,
+	.fe-persist-usage,
+	.fe-persist-error {
+		margin: 0;
+	}
+
 	.fe-persist-usage {
-		opacity: 0.7;
-		white-space: nowrap;
+		margin-top: 0.4rem;
+		opacity: 0.75;
+		font-size: 0.74rem;
+	}
+
+	.fe-persist-error {
+		margin-top: 0.4rem;
+		color: var(--cat-red-soft);
 	}
 
 	.fe-persist-request {
 		appearance: none;
-		border: 1px solid color-mix(in srgb, currentColor 28%, transparent);
-		background: color-mix(in srgb, currentColor 10%, transparent);
-		color: inherit;
+		display: inline-flex;
+		margin-top: 0.65rem;
+		border: 1px solid rgb(var(--cat-red-soft-rgb) / 0.55);
+		background: rgb(var(--cat-red-soft-rgb) / 0.14);
+		color: var(--cat-red-soft);
 		border-radius: 999px;
-		padding: 1px 7px;
-		font-size: inherit;
+		padding: 4px 10px;
+		font: inherit;
+		font-size: 0.75rem;
+		font-weight: 650;
 		cursor: pointer;
 		line-height: 1.35;
 	}
 
 	.fe-persist-request:hover:not(:disabled) {
-		background: color-mix(in srgb, currentColor 16%, transparent);
+		background: rgb(var(--cat-red-soft-rgb) / 0.24);
 	}
 
 	.fe-persist-request:disabled {
