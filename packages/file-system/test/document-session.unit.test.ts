@@ -1,8 +1,8 @@
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { createVfs, resetSharedVfsForTests, VfsError } from '../src/index.ts';
-import { diffDocumentSnapshots } from '../src/documentSession.ts';
-import type { DocumentSnapshot } from '../src/types.ts';
+import { createOpenDocument, diffDocumentSnapshots } from '../src/documentSession.ts';
+import type { DocumentHost, DocumentSnapshot, UpdateFileOpts, VfsNode, WriteFileInput } from '../src/types.ts';
 import type { DocumentEvent } from '../src/types.ts';
 
 function wait(ms = 20): Promise<void> {
@@ -255,5 +255,137 @@ describe('document session', () => {
 			() => vfs.openDocument(f.id),
 			(e: unknown) => e instanceof VfsError && e.code === 'TRASH_STATE'
 		);
+	});
+});
+
+/** Minimal DocumentHost over one node with a gateable updateFile, so a
+ *  foreign commit can be injected inside the save window deterministically. */
+function createGatedHost(initial: VfsNode) {
+	let node: VfsNode = { ...initial };
+	const listeners = new Set<() => void>();
+	let gate: Promise<void> | null = null;
+	let openGate: (() => void) | null = null;
+	const host: DocumentHost = {
+		async get() {
+			return { ...node };
+		},
+		async getPath() {
+			return [{ ...node }];
+		},
+		subscribe(fn) {
+			listeners.add(fn);
+			return () => {
+				listeners.delete(fn);
+			};
+		},
+		async updateFile(_id: string, _body: unknown, opts: UpdateFileOpts) {
+			const expected = node.generation;
+			if (!opts.force && opts.expectedGeneration !== expected) {
+				throw new VfsError('GENERATION_CONFLICT', _id);
+			}
+			if (gate) await gate;
+			// Our commit: +1 over the generation the CAS read. A foreign commit
+			// after ours is simulated by the test bumping `node` past this.
+			node = { ...node, generation: expected + 1, updatedAt: expected + 1 };
+			return { ...node };
+		},
+		async writeFile(input: WriteFileInput) {
+			return { ...initial, ...(input as object), id: 'copy', generation: 1 } as VfsNode;
+		}
+	};
+	return {
+		host,
+		poll: () => {
+			for (const fn of [...listeners]) fn();
+		},
+		bump: (gen: number) => {
+			node = { ...node, generation: gen, updatedAt: gen };
+		},
+		holdGate: () => {
+			gate = new Promise<void>((resolve) => {
+				openGate = resolve;
+			});
+		},
+		openGate: () => openGate
+	};
+}
+
+describe('save-window foreign re-delivery', () => {
+	const baseNode: VfsNode = {
+		id: 'f1',
+		parentId: null,
+		name: 'w.skch',
+		kind: 'file',
+		createdAt: 1,
+		updatedAt: 1,
+		generation: 1
+	};
+
+	it('a foreign write inside the save window is re-delivered as a conflict once the save settles', async () => {
+		const g = createGatedHost(baseNode);
+		const doc = await createOpenDocument(g.host, 'f1');
+		const events: DocumentEvent[] = [];
+		doc.subscribe((e) => events.push(e));
+		doc.markDirty();
+		g.holdGate();
+		const saved = doc.save({ v: 2 });
+		// A foreign tab commits on top of ours while our write is still in
+		// flight: gen 3, above anything our write could produce (2). The user
+		// also keeps editing during the window, so the settle must surface the
+		// foreign write, not adopt it.
+		g.bump(3);
+		g.poll();
+		doc.markDirty();
+		const release = g.openGate();
+		release!();
+		await saved;
+		await wait(10);
+		const redelivered = events.filter((e) => e.type === 'content' && e.conflict);
+		assert.equal(redelivered.length, 1);
+		assert.equal(redelivered[0]?.generation, 3);
+		// Our own generation is kept: the foreign write surfaced, not adopted.
+		assert.equal(doc.generation, 2);
+		assert.equal(doc.dirty, true);
+		doc.close();
+	});
+
+	it('our own echo inside the window is absorbed, not re-delivered', async () => {
+		const g = createGatedHost(baseNode);
+		const doc = await createOpenDocument(g.host, 'f1');
+		const events: DocumentEvent[] = [];
+		doc.subscribe((e) => events.push(e));
+		doc.markDirty();
+		g.holdGate();
+		const saved = doc.save({ v: 2 });
+		// gen 2 is exactly our own echo's settled generation.
+		g.bump(2);
+		g.poll();
+		const release2 = g.openGate();
+		release2!();
+		await saved;
+		await wait(10);
+		assert.equal(events.filter((e) => e.type === 'content' && e.conflict).length, 0);
+		assert.equal(doc.dirty, false);
+		doc.close();
+	});
+
+	it('a foreign write during a clean save window is re-delivered as an adoption', async () => {
+		const g = createGatedHost(baseNode);
+		const doc = await createOpenDocument(g.host, 'f1');
+		const events: DocumentEvent[] = [];
+		doc.subscribe((e) => events.push(e));
+		g.holdGate();
+		const saved = doc.save({ v: 2 });
+		g.bump(3);
+		g.poll();
+		const release3 = g.openGate();
+		release3!();
+		await saved;
+		await wait(10);
+		const adopted = events.filter((e) => e.type === 'content' && !e.conflict);
+		assert.equal(adopted.length, 1);
+		assert.equal(adopted[0]?.generation, 3);
+		assert.equal(doc.generation, 3);
+		doc.close();
 	});
 });

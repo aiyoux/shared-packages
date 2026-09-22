@@ -163,6 +163,16 @@ export async function createOpenDocument(
 	 *  generation while we are still dirty; treating that as a foreign CAS
 	 *  conflict is what raised "edited in another tab" on a single-tab idle. */
 	let saveInFlight = false;
+	/** A content generation observed inside the save window, above the
+	 *  generation we held at entry. Echo suppression must stay — it is what
+	 *  keeps a save's own echo from raising a false conflict — but the
+	 *  watcher's dedup key consumes the event on first delivery, so a FOREIGN
+	 *  write absorbed here would never be seen again: the session would be
+	 *  clean yet anchored one generation stale, and the user's next honest
+	 *  save would CAS-fail into an overwrite confirm for content they were
+	 *  never shown. Remembered and re-delivered once the save settles, when
+	 *  our own echo's generation is known and anything above it is foreign. */
+	let suppressedForeignGen: number | null = null;
 	const listeners = new Set<(event: DocumentEvent) => void>();
 
 	const emit = (event: DocumentEvent) => {
@@ -173,6 +183,25 @@ export async function createOpenDocument(
 				/* a stale editor must not break others */
 			}
 		}
+	};
+
+	/** Re-deliver a foreign write that landed inside a save window. Runs once
+	 *  the window closes, so the classification uses the settled generation:
+	 *  anything still above it was not our echo. Dirty → surface the conflict;
+	 *  clean → adopt, exactly as the live event would have. */
+	const settleSuppressedForeign = (): void => {
+		const pending = suppressedForeignGen;
+		suppressedForeignGen = null;
+		if (pending == null || !bound || pending <= generation) return;
+		if (dirty) {
+			emit({ type: 'content', generation: pending, conflict: true });
+			return;
+		}
+		generation = pending;
+		void host.get(id).then((fresh) => {
+			if (fresh && bound) node = fresh;
+		});
+		emit({ type: 'content', generation: pending, conflict: false });
 	};
 
 	let unsubWatch: () => void = () => {};
@@ -192,6 +221,10 @@ export async function createOpenDocument(
 		}
 		if (event.type === 'content') {
 			if (saveInFlight || event.generation <= generation) {
+				if (saveInFlight && event.generation > generation) {
+					// Not explainable as a stale tick — remember for the settle check.
+					suppressedForeignGen = Math.max(suppressedForeignGen ?? 0, event.generation);
+				}
 				// Own-write echo, a snapshot refresh at a gen we already hold,
 				// or a stale tick. A follow-up local edit can mark dirty again
 				// before the echo of the save arrives — that is not another tab.
@@ -267,6 +300,7 @@ export async function createOpenDocument(
 				return result;
 			} finally {
 				saveInFlight = false;
+				settleSuppressedForeign();
 			}
 		},
 		async saveAs(input) {

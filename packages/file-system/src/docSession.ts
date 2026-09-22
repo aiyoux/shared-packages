@@ -21,6 +21,7 @@
  */
 import { getSharedVfs, type VfsService } from './vfs.js';
 import type { OpenDocument } from './types.js';
+import { VfsError } from './types.js';
 import { fingerprintText } from '@shared-packages/bytes-gate';
 
 export type DocSessionHold<Doc> = {
@@ -136,18 +137,40 @@ export function createDocSession<Doc>(options: {
 	async function save(hold: DocSessionHold<Doc>): Promise<void> {
 		const serialized = options.serialize(hold.value);
 		const fingerprint = fingerprintText(serialized);
-		// W7b — a save that changes nothing must not reach the VFS.
-		if (hold.savedFingerprint === fingerprint) {
-			hold.dirty = false;
-			hold.error = '';
+		// W7b — a save that changes nothing must not reach the VFS. The gate
+		// needs TWO proofs: the serialization still matches what we last know
+		// reached disk, AND nothing foreign moved the file since. The
+		// fingerprint is refreshed only by a clean adoption, so under a foreign
+		// write it goes stale — claiming clean from it alone anchors the hold
+		// over bytes we never saw and skips the CAS that would have raised the
+		// conflict.
+		if (hold.savedFingerprint === fingerprint && hold.doc.generation === hold.generation) {
+			// Only a write nothing edited during may claim the hold clean; the
+			// claimant (hold.doc) holds that proof in its own dirty flag
+			// (documentSession keeps doc.dirty when an edit landed mid-save).
+			if (!hold.doc.dirty) hold.dirty = false;
 			notify(hold);
 			return;
+		}
+		if (hold.savedFingerprint === fingerprint) {
+			// Serialization unchanged but a foreign write moved the file while
+			// we were dirty: writing would revert content we never saw, and
+			// claiming clean would strand `hold.value` behind a silent hold.
+			// Surface the conflict instead of saving or claiming anything —
+			// hosts surface VfsError GENERATION_CONFLICT like any CAS conflict.
+			throw new VfsError('GENERATION_CONFLICT', hold.nodeId);
 		}
 		const payload = JSON.parse(serialized) as Doc;
 		const node = await hold.doc.save(payload);
 		hold.savedFingerprint = fingerprint;
 		hold.generation = node.generation;
-		hold.dirty = false;
+		// Only a write nothing edited during may claim the hold clean; the
+		// claimant (hold.doc) holds that proof in its own dirty flag. An edit
+		// that landed mid-save keeps hold.dirty — hold.value already holds it
+		// and the next save writes it. Clearing unconditionally stranded the
+		// edit behind a clean hold, and hosts discarded their recovery drafts
+		// on exactly this false claim.
+		if (!hold.doc.dirty) hold.dirty = false;
 		hold.error = '';
 		notify(hold);
 	}
