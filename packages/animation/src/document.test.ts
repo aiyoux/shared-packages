@@ -324,6 +324,27 @@ describe('parseAnimDocument / serializeAnimDocument', () => {
 		expect(parseAnimDocument(json)).toEqual(doc);
 	});
 
+	it('round-trips a nodes clip and its processed output', () => {
+		const doc: AnimDocument = {
+			schemaVersion: 1,
+			durationMs: 4000,
+			clips: [
+				{
+					id: 'graph',
+					startMs: 0,
+					durationMs: 4000,
+					frame: { x: 40, y: 40, w: 240, h: 180 },
+					bind: 'live',
+					mediaKind: 'nodes',
+					source: { backend: 'shared-vfs', nodeId: 'nodes-1' },
+					output: { bytesRef: 'data:image/png;base64,xx' }
+				}
+			],
+			canvas: { w: 1920, h: 1080 }
+		};
+		expect(parseAnimDocument(serializeAnimDocument(doc))).toEqual(doc);
+	});
+
 	it('drops unknown fragment kinds', () => {
 		expect(() =>
 			parseAnimDocument({

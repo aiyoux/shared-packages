@@ -8,6 +8,7 @@ export type FileTypeId =
 	| 'kb'
 	| 'anim'
 	| 'digr'
+	| 'node'
 	| 'vide'
 	| 'image'
 	| 'svg'

@@ -47,7 +47,7 @@ export type SketchFragment =
 /** A `DocSource` that may also name part of a sketch. Anim clips only. */
 export type ClipSource = DocSource & { fragment?: SketchFragment };
 
-export const CLIP_MEDIA_KINDS = ['image', 'sketch-fragment', 'video', 'audio'] as const;
+export const CLIP_MEDIA_KINDS = ['image', 'sketch-fragment', 'video', 'audio', 'nodes'] as const;
 export type ClipMediaKind = (typeof CLIP_MEDIA_KINDS)[number];
 
 /** Canvas box. `rotation` is radians, clockwise, default 0. */
@@ -84,6 +84,11 @@ type AnimClipBase = {
 	 *  never touches a linked source file — it only labels the clip in the
 	 *  object tree and timeline. Omit / empty = fall back to a derived label. */
 	name?: string;
+	/**
+	 * Raster of a processed nodes clip. Absent until Process is clicked.
+	 * The nodes document itself stays on `snapshot` / `source`.
+	 */
+	output?: { bytesRef: string };
 };
 
 export type AnimClip =

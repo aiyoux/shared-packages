@@ -145,6 +145,11 @@ function fragmentHasLocation(fragment: SketchFragment | undefined): boolean {
 	return fragment != null && fragment.kind !== 'file';
 }
 
+function parseOutput(raw: unknown, field: string): { bytesRef: string } {
+	if (!isRecord(raw)) throw new AnimParseError(`${field} must be an object`);
+	return { bytesRef: nonEmptyString(raw.bytesRef, `${field}.bytesRef`) };
+}
+
 function parseSource(raw: unknown): ClipSource {
 	if (!isRecord(raw)) throw new AnimParseError('clip.source must be an object');
 	const fragment =
@@ -210,6 +215,8 @@ function parseClip(raw: unknown, index: number): AnimClip {
 	// `name` is a cosmetic, document-local label. A malformed value is ignored
 	// rather than rejecting the whole document.
 	const name = typeof raw.name === 'string' && raw.name.trim() ? raw.name.trim() : undefined;
+	const output =
+		raw.output === undefined ? undefined : parseOutput(raw.output, `clips[${index}].output`);
 	const base = {
 		id: nonEmptyString(raw.id, `clips[${index}].id`),
 		startMs: finiteNumber(raw.startMs, `clips[${index}].startMs`),
@@ -219,7 +226,8 @@ function parseClip(raw: unknown, index: number): AnimClip {
 		...(raw.snapshot !== undefined ? { snapshot: parseSnapshot(raw.snapshot) } : {}),
 		...(mediaKind && mediaKind !== 'image' ? { mediaKind } : {}),
 		...(pairId ? { pairId } : {}),
-		...(name ? { name } : {})
+		...(name ? { name } : {}),
+		...(output ? { output } : {})
 	};
 	if (bind === 'clone') {
 		if (raw.source !== undefined) {
@@ -434,7 +442,8 @@ function persistClip(clip: AnimClip): AnimClip {
 		...(clip.snapshot ? { snapshot: persistSnapshot(clip.snapshot) } : {}),
 		...(clip.mediaKind && clip.mediaKind !== 'image' ? { mediaKind: clip.mediaKind } : {}),
 		...(clip.pairId ? { pairId: clip.pairId } : {}),
-		...(clip.name && clip.name.trim() ? { name: clip.name.trim() } : {})
+		...(clip.name && clip.name.trim() ? { name: clip.name.trim() } : {}),
+		...(clip.output ? { output: { bytesRef: clip.output.bytesRef } } : {})
 	};
 	if (clip.bind === 'clone') return { ...base, bind: 'clone' };
 	return { ...base, bind: clip.bind, source: persistSource(clip.source) };
