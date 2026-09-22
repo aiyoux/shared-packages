@@ -31,6 +31,7 @@ export type Mark =
 	| { type: 'color'; hex: string }
 	| { type: 'highlight'; color: PaletteId }
 	| { type: 'highlight'; hex: string }
+	| { type: 'review'; id: string; style: 'marker' | 'underline'; color: PaletteId; note?: string }
 	| { type: 'code' }
 	| { type: 'font_family'; family: 'sans' | 'serif' | 'mono' }
 	| { type: 'font_size'; size: string }
@@ -38,8 +39,10 @@ export type Mark =
 
 export type TextSpan = {
 	type: 'text';
+	/** Stable span identity. Omitted until a stamp op fills it. */
+	id?: string;
 	text: string; // MAY contain '\n' (Shift+Enter hard break). `code.text` MAY contain `\n`.
-	marks: Mark[]; // canonical order: bold, italic, underline, color, highlight, code, font_family, font_size, link
+	marks: Mark[]; // canonical order: bold, italic, underline, color, highlight, review, code, font_family, font_size, link
 };
 
 export type Inline = TextSpan; // v1: text spans only. A hard break is '\n' inside a span, not an inline node.
@@ -181,9 +184,25 @@ export type Range = { anchor: Point; head: Point };
 
 export type Op =
 	| { kind: 'set-title'; title: string }
-	| { kind: 'insert-text'; at: Point; text: string; marks?: Mark[] }
+	| { kind: 'insert-text'; at: Point; text: string; marks?: Mark[]; spanId?: string }
+	| {
+			kind: 'stamp-span-ids';
+			/**
+			 * Non-empty `id` fills a span that has none (a different id is left
+			 * alone). `id: ''` clears, so invert can restore an absent id.
+			 */
+			spans: { blockId: string; index: number; id: string }[];
+	  }
 	| { kind: 'delete-range'; range: Range }
 	| { kind: 'format-range'; range: Range; mark: Mark; on: boolean }
+	| {
+			kind: 'set-review';
+			id: string;
+			style?: 'marker' | 'underline';
+			color?: PaletteId;
+			note?: string | null;
+			remove?: boolean;
+	  }
 	| { kind: 'split-block'; at: Point; newId: string }
 	| { kind: 'merge-block'; keepId: string; dropId: string }
 	| { kind: 'insert-block'; afterId: string | null; parentId?: string | null; block: Block }

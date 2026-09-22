@@ -57,7 +57,22 @@ export const SELECTED_ATTR = 'data-kb-selected';
  * validation (coerce should have dropped it, but a peer-authored doc may
  * still carry it) — such marks simply render as nothing.
  */
+function reviewElement(doc: Document, mark: Mark): HTMLElement | undefined {
+	const rec = mark as { type: string; id?: string; style?: string; color?: string };
+	if (rec.type !== 'review' || !rec.id) return undefined;
+	const el = doc.createElement(rec.style === 'underline' ? 'u' : 'mark');
+	el.setAttribute('data-kb-review', rec.id);
+	el.setAttribute('data-kb-review-style', rec.style === 'underline' ? 'underline' : 'marker');
+	if (rec.color) {
+		el.setAttribute('data-kb-review-color', rec.color);
+		el.style.setProperty('--kb-review-ink', `var(--kb-highlight-${rec.color}, var(--kb-highlight-yellow))`);
+	}
+	return el;
+}
+
 function markElement(doc: Document, mark: Mark): HTMLElement | undefined {
+	const review = reviewElement(doc, mark);
+	if (review) return review;
 	switch (mark.type) {
 		case 'bold':
 			return doc.createElement('strong');
@@ -76,6 +91,8 @@ function markElement(doc: Document, mark: Mark): HTMLElement | undefined {
 			}
 			return span;
 		}
+		case 'review':
+			return reviewElement(doc, mark);
 		case 'highlight': {
 			const el = doc.createElement('mark');
 			const id = paintPalette(mark);

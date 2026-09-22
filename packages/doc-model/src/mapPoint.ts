@@ -65,6 +65,8 @@ export function mapPointThroughOp(pageBefore: KbPage, point: StickyPoint, op: Op
 		case 'set-title':
 		case 'set-children':
 		case 'format-range':
+		case 'stamp-span-ids':
+		case 'set-review':
 		case 'insert-block':
 		case 'move-block':
 		case 'set-toggle':

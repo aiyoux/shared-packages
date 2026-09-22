@@ -43,6 +43,7 @@ export {
 	canonicalMarks,
 	marksAtCaret,
 	marksEqual,
+	missingSpanIds,
 	normalizeBody,
 	normalizePage,
 	normalizeSpans,

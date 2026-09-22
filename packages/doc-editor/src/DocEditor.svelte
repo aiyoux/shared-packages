@@ -38,7 +38,7 @@
 	import { mapKeydown } from './keymap.js';
 	import { followEditorLink } from './href.js';
 	import { BLOCK_ID_ATTR, BLOCK_TYPE_ATTR, paintLocalSelection, project, type MediaResolver } from './project.js';
-	import { paintSelectionOutline } from './selectionOutline.js';
+	import { paintReviewOutlines, paintSelectionOutline, type ReviewOutline } from './selectionOutline.js';
 	import {
 		plaintextFromDom,
 		rangeFromInputEvent,
@@ -70,7 +70,8 @@
 		onKeyDownCapture = undefined,
 		onBeforeInputCapture = undefined,
 		testIdPrefix = 'kb',
-		ink = 'studio'
+		ink = 'studio',
+		reviewRanges = []
 	}: {
 		state: EditorState<TDoc>;
 		editable?: boolean;
@@ -119,6 +120,8 @@
 		 * dark). Light `data-color-scheme` also selects paper mapping via CSS.
 		 */
 		ink?: 'studio' | 'paper';
+		/** Review-mark outlines. Empty hides them. The formatting highlight is unaffected. */
+		reviewRanges?: ReviewOutline[];
 	} = $props();
 
 	/**
@@ -142,6 +145,7 @@
 
 	let host = $state<HTMLDivElement | undefined>(undefined);
 	let selSvg = $state<SVGSVGElement | undefined>(undefined);
+	let reviewSvg = $state<SVGSVGElement | undefined>(undefined);
 	let gutterEl = $state<HTMLDivElement | undefined>(undefined);
 	let localComposing = $state(false);
 	let localJustCommitted = $state(false);
@@ -298,6 +302,7 @@
 		if (!el) return;
 		paintLocalSelection(el, page, selection);
 		if (svg) paintSelectionOutline(el, svg, page, selection);
+		if (reviewSvg) paintReviewOutlines(el, reviewSvg, page, reviewRanges);
 	});
 
 	function syncHandleLayout(): void {
@@ -822,6 +827,12 @@
 			aria-hidden="true"
 			data-testid={`${testIdPrefix}-sel-outline`}
 		></svg>
+		<svg
+			class="kb-review-outline"
+			bind:this={reviewSvg}
+			aria-hidden="true"
+			data-testid={`${testIdPrefix}-review-outline`}
+		></svg>
 		<div
 			class="kb-host"
 			data-ink={ink}
@@ -966,6 +977,31 @@
 		stroke-width: 0.5;
 		stroke-linejoin: round;
 		vector-effect: non-scaling-stroke;
+	}
+	.kb-review-outline {
+		position: absolute;
+		inset: 0;
+		width: 100%;
+		height: 100%;
+		pointer-events: none;
+		overflow: visible;
+		z-index: 0;
+	}
+	.kb-review-outline :global(path) {
+		fill: color-mix(in srgb, var(--kb-review-ink, var(--accent)) 12%, transparent);
+		stroke: color-mix(in srgb, var(--kb-review-ink, var(--accent)) 55%, transparent);
+		stroke-width: 1;
+		stroke-linejoin: round;
+		vector-effect: non-scaling-stroke;
+	}
+	.kb-host :global([data-kb-review-style='marker']) {
+		background-color: color-mix(in srgb, var(--kb-review-ink, var(--kb-highlight-yellow)) 45%, transparent);
+	}
+	.kb-host :global([data-kb-review-style='underline']) {
+		text-decoration: underline;
+		text-decoration-thickness: 2px;
+		text-underline-offset: 2px;
+		background: none;
 	}
 	.kb-host {
 		position: relative;

@@ -1,6 +1,6 @@
 import type { DocBody } from './types.js';
-import { isContainer } from './plaintext.js';
-import { blockChildren } from './tree.js';
+import { isContainer, isTextLike } from './plaintext.js';
+import { blockChildren, documentOrder } from './tree.js';
 import {
 	KB_FORMAT,
 	type Block,
@@ -22,7 +22,7 @@ import {
 	type Align,
 	type VAlign
 } from './types.js';
-import { coerceColorMark, coerceHighlightMark, paintHex, paintPalette } from './palette.js';
+import { coerceColorMark, coerceHighlightMark, isPaletteId, paintHex, paintPalette } from './palette.js';
 
 const MARK_RANK: Record<Mark['type'], number> = {
 	bold: 0,
@@ -30,10 +30,11 @@ const MARK_RANK: Record<Mark['type'], number> = {
 	underline: 2,
 	color: 3,
 	highlight: 4,
-	code: 5,
-	font_family: 6,
-	font_size: 7,
-	link: 8
+	review: 5,
+	code: 6,
+	font_family: 7,
+	font_size: 8,
+	link: 9
 };
 
 const CALLOUT_VARIANTS: ReadonlySet<string> = new Set(['info', 'warning', 'note']);
@@ -118,6 +119,11 @@ export function canonicalMarks(marks: Mark[]): Mark[] {
 			if (next) byType.set('highlight', next);
 			continue;
 		}
+		if (mark.type === 'review') {
+			const next = coerceReviewMark(mark);
+			if (next) byType.set('review', next);
+			continue;
+		}
 		byType.set(mark.type, mark);
 	}
 	return [...byType.values()].sort((a, b) => MARK_RANK[a.type] - MARK_RANK[b.type]);
@@ -182,6 +188,7 @@ function markPayload(mark: Mark): string | undefined {
 	if (mark.type === 'link') return mark.href;
 	if (mark.type === 'font_family') return mark.family;
 	if (mark.type === 'font_size') return mark.size;
+	if (mark.type === 'review') return JSON.stringify([mark.id, mark.style, mark.color, mark.note ?? '']);
 	if (mark.type === 'color' || mark.type === 'highlight') {
 		return paintPalette(mark) ?? paintHex(mark) ?? undefined;
 	}
@@ -195,10 +202,30 @@ function linkHrefOf(marks: Mark[]): string | null {
 	return null;
 }
 
+function reviewIdOf(marks: Mark[]): string | null {
+	for (const mark of marks) {
+		if (mark.type === 'review') return mark.id;
+	}
+	return null;
+}
+
 /**
- * Marks for a caret or insert at `offset`. Link is exclusive at the trailing
- * edge: typing after a hyperlink is plain text; typing inside it stays linked.
+ * Marks for a caret or insert at `offset`. Link and review are exclusive at
+ * the trailing edge: typing inside the span inherits them; at the edge each
+ * is kept only when the next span carries the same link href or review id.
+ * Offset at the end of the content is plain.
  */
+function marksAtEdge(left: Mark[], right: Mark[] | null): Mark[] {
+	let marks = left;
+	const leftHref = linkHrefOf(marks);
+	const rightHref = right ? linkHrefOf(right) : null;
+	if (leftHref && leftHref !== rightHref) marks = marks.filter((m) => m.type !== 'link');
+	const leftReview = reviewIdOf(marks);
+	const rightReview = right ? reviewIdOf(right) : null;
+	if (leftReview && leftReview !== rightReview) marks = marks.filter((m) => m.type !== 'review');
+	return canonicalMarks(marks);
+}
+
 export function marksAtCaret(content: TextSpan[], offset: number): Mark[] {
 	const spans = content && content.length > 0 ? content : emptySpans();
 	const total = spans.reduce((sum, span) => sum + span.text.length, 0);
@@ -212,30 +239,14 @@ export function marksAtCaret(content: TextSpan[], offset: number): Mark[] {
 			continue;
 		}
 		if (offset > pos && offset < next) return canonicalMarks(span.marks);
-		if (offset === next) {
-			const right = spans[i + 1];
-			const leftHref = linkHrefOf(span.marks);
-			const rightHref = right ? linkHrefOf(right.marks) : null;
-			if (leftHref && leftHref !== rightHref) {
-				return canonicalMarks(span.marks.filter((m) => m.type !== 'link'));
-			}
-			return canonicalMarks(span.marks);
-		}
+		if (offset === next) return marksAtEdge(span.marks, spans[i + 1]?.marks ?? null);
 		if (offset === 0) return canonicalMarks(span.marks);
 		const prev = spans[i - 1];
-		if (prev) {
-			const leftHref = linkHrefOf(prev.marks);
-			const rightHref = linkHrefOf(span.marks);
-			if (leftHref && leftHref !== rightHref) {
-				return canonicalMarks(prev.marks.filter((m) => m.type !== 'link'));
-			}
-			return canonicalMarks(prev.marks);
-		}
+		if (prev) return marksAtEdge(prev.marks, span.marks);
 		return canonicalMarks(span.marks);
 	}
 	const last = spans[spans.length - 1]!;
-	const href = linkHrefOf(last.marks);
-	return canonicalMarks(href ? last.marks.filter((m) => m.type !== 'link') : last.marks);
+	return marksAtEdge(last.marks, null);
 }
 
 export function marksEqual(a: Mark[], b: Mark[]): boolean {
@@ -251,6 +262,12 @@ export function marksEqual(a: Mark[], b: Mark[]): boolean {
 	return true;
 }
 
+function spanWith(text: string, marks: Mark[], id?: string): TextSpan {
+	const next: TextSpan = { type: 'text', text, marks };
+	if (id) next.id = id;
+	return next;
+}
+
 export function normalizeSpans(spans: TextSpan[]): TextSpan[] {
 	const out: TextSpan[] = [];
 	for (const span of spans) {
@@ -260,8 +277,9 @@ export function normalizeSpans(spans: TextSpan[]): TextSpan[] {
 		const prev = out[out.length - 1];
 		if (prev && marksEqual(prev.marks, marks)) {
 			prev.text += text;
+			if (!prev.id && span.id) prev.id = span.id;
 		} else {
-			out.push({ type: 'text', text, marks });
+			out.push(spanWith(text, marks, span.id));
 		}
 	}
 	if (out.length === 0) return emptySpans();
@@ -273,19 +291,32 @@ export function splitSpans(content: TextSpan[], offset: number): [TextSpan[], Te
 	const right: TextSpan[] = [];
 	let pos = 0;
 	for (const span of content) {
+		const marks = canonicalMarks(span.marks);
 		const next = pos + span.text.length;
 		if (next <= offset) {
-			left.push({ type: 'text', text: span.text, marks: canonicalMarks(span.marks) });
+			left.push(spanWith(span.text, marks, span.id));
 		} else if (pos >= offset) {
-			right.push({ type: 'text', text: span.text, marks: canonicalMarks(span.marks) });
+			right.push(spanWith(span.text, marks, span.id));
 		} else {
 			const inner = offset - pos;
-			left.push({ type: 'text', text: span.text.slice(0, inner), marks: canonicalMarks(span.marks) });
-			right.push({ type: 'text', text: span.text.slice(inner), marks: canonicalMarks(span.marks) });
+			left.push(spanWith(span.text.slice(0, inner), marks, span.id));
+			right.push(spanWith(span.text.slice(inner), marks, span.id));
 		}
 		pos = next;
 	}
 	return [left, right];
+}
+
+/** Text-like spans with no id, in document order. Does not mint ids. */
+export function missingSpanIds(page: DocBody): { blockId: string; index: number }[] {
+	const missing: { blockId: string; index: number }[] = [];
+	for (const block of documentOrder(page)) {
+		if (!isTextLike(block)) continue;
+		for (let index = 0; index < block.content.length; index++) {
+			if (!block.content[index]?.id) missing.push({ blockId: block.id, index });
+		}
+	}
+	return missing;
 }
 
 export function sliceSpans(content: TextSpan[], from: number, to: number): TextSpan[] {
@@ -317,7 +348,30 @@ function coerceMark(raw: unknown): Mark | null {
 	}
 	if (rec.type === 'color') return coerceColorMark(rec);
 	if (rec.type === 'highlight') return coerceHighlightMark(rec);
+	if (rec.type === 'review') return coerceReviewMark(rec);
 	return null;
+}
+
+function coerceReviewMark(raw: {
+	id?: unknown;
+	style?: unknown;
+	color?: unknown;
+	note?: unknown;
+}): Mark | null {
+	if (typeof raw.id !== 'string' || !raw.id) return null;
+	if (raw.style !== 'marker' && raw.style !== 'underline') return null;
+	if (!isPaletteId(raw.color)) return null;
+	const mark: Extract<Mark, { type: 'review' }> = {
+		type: 'review',
+		id: raw.id,
+		style: raw.style,
+		color: raw.color
+	};
+	if (typeof raw.note === 'string') {
+		const note = raw.note.trim();
+		if (note) mark.note = note;
+	}
+	return mark;
 }
 
 function coerceSpans(raw: unknown): TextSpan[] {
@@ -330,16 +384,16 @@ function coerceSpans(raw: unknown): TextSpan[] {
 		const marks = Array.isArray(rec.marks)
 			? rec.marks.map(coerceMark).filter((m): m is Mark => m != null)
 			: [];
-		spans.push({ type: 'text', text, marks });
+		const id = typeof rec.id === 'string' && rec.id ? rec.id : undefined;
+		spans.push(spanWith(text, marks, id));
 	}
 	return normalizeSpans(spans);
 }
 
 function orderedSpan(span: TextSpan): Inline {
-	return {
-		type: 'text',
-		text: span.text,
-		marks: canonicalMarks(span.marks).map((mark) => {
+	return spanWith(
+		span.text,
+		canonicalMarks(span.marks).map((mark) => {
 			switch (mark.type) {
 				case 'link':
 					return { type: 'link', href: mark.href };
@@ -357,11 +411,22 @@ function orderedSpan(span: TextSpan): Inline {
 					const hex = paintHex(mark);
 					return id ? { type: 'highlight', color: id } : { type: 'highlight', hex: hex! };
 				}
+				case 'review': {
+					const next: Extract<Mark, { type: 'review' }> = {
+						type: 'review',
+						id: mark.id,
+						style: mark.style,
+						color: mark.color
+					};
+					if (mark.note) next.note = mark.note;
+					return next;
+				}
 				default:
 					return { type: mark.type };
 			}
-		})
-	};
+		}),
+		span.id
+	);
 }
 
 function calloutVariant(value: unknown): CalloutVariant {

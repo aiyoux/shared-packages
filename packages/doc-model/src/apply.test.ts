@@ -402,6 +402,11 @@ describe('apply split-block', () => {
 		expect(plaintextOf(hs.blocks[0])).toBe('He');
 		expect(plaintextOf(hs.blocks[1])).toBe('llo');
 
+		const end = apply(h, { kind: 'split-block', at: { blockId: 'h', offset: 5 }, newId: 'p' });
+		expect(end.blocks[0]).toMatchObject({ type: 'heading', level: 2 });
+		expect(end.blocks[1]).toMatchObject({ type: 'paragraph', id: 'p' });
+		expect(plaintextOf(end.blocks[1])).toBe('');
+
 		const li = page([item('l', 'ab', true)]);
 		const ls = apply(li, { kind: 'split-block', at: { blockId: 'l', offset: 1 }, newId: 'n' });
 		expect(ls.blocks[0]).toMatchObject({ type: 'list_item', ordered: true });

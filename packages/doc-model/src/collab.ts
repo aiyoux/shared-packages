@@ -1,3 +1,4 @@
+import { isTextLike } from './plaintext.js';
 import { blockChildren, documentOrder, findBlock } from './tree.js';
 import type { Block, KbPage, Op } from './types.js';
 import type { StickyPoint } from './mapPoint.js';
@@ -168,6 +169,19 @@ export function blockIdsTouchedByOp(page: KbPage, op: Op): Set<string> {
 			return new Set();
 		case 'insert-text':
 			return new Set([op.at.blockId]);
+		case 'stamp-span-ids':
+			return new Set(op.spans.map((span) => span.blockId));
+		case 'set-review': {
+			const ids = new Set<string>();
+			if (!op.id) return ids;
+			for (const block of documentOrder(page)) {
+				if (!isTextLike(block)) continue;
+				if (block.content.some((span) => span.marks.some((mark) => mark.type === 'review' && mark.id === op.id))) {
+					ids.add(block.id);
+				}
+			}
+			return ids;
+		}
 		case 'delete-range':
 		case 'format-range': {
 			const ids = new Set([op.range.anchor.blockId, op.range.head.blockId]);
@@ -225,6 +239,10 @@ export function opNamesBlockIds(op: Op): string[] {
 			return [];
 		case 'insert-text':
 			return [op.at.blockId];
+		case 'stamp-span-ids':
+			return op.spans.map((span) => span.blockId);
+		case 'set-review':
+			return [];
 		case 'delete-range':
 		case 'format-range':
 			return [op.range.anchor.blockId, op.range.head.blockId];

@@ -147,12 +147,15 @@ function insertIntoSpans(
 	content: TextSpan[],
 	offset: number,
 	text: string,
-	marksOverride?: Mark[]
+	marksOverride?: Mark[],
+	spanId?: string
 ): TextSpan[] {
 	const spans = ensureSpans(content);
 	const marks = marksOverride ? canonicalMarks(marksOverride) : marksAtInsert(spans, offset);
 	const [left, right] = splitSpans(spans, offset);
-	return normalizeSpans([...left, { type: 'text', text, marks }, ...right]);
+	const inserted: TextSpan = { type: 'text', text, marks };
+	if (spanId) inserted.id = spanId;
+	return normalizeSpans([...left, inserted, ...right]);
 }
 
 function deleteFromSpans(content: TextSpan[], from: number, to: number): TextSpan[] {
@@ -173,7 +176,7 @@ function formatSpans(
 	const formatted = mid.map((span) => {
 		let marks = span.marks.filter((item) => item.type !== mark.type);
 		if (on) marks = [...marks, mark];
-		return { type: 'text' as const, text: span.text, marks };
+		return { ...span, marks };
 	});
 	return normalizeSpans([...left, ...formatted, ...right]);
 }
@@ -203,7 +206,7 @@ function applyInsertText(page: KbPage, op: Extract<Op, { kind: 'insert-text' }>)
 	if (isTextLike(at.block)) {
 		const next = {
 			...at.block,
-			content: insertIntoSpans(at.block.content, at.offset, op.text, op.marks)
+			content: insertIntoSpans(at.block.content, at.offset, op.text, op.marks, op.spanId)
 		};
 		replaceBlock(page, at.parent, at.indexInParent, next);
 		return;
@@ -410,6 +413,53 @@ function applyFormatRange(page: KbPage, op: Extract<Op, { kind: 'format-range' }
 	}
 }
 
+function applyStampSpanIds(page: KbPage, op: Extract<Op, { kind: 'stamp-span-ids' }>): void {
+	for (const assignment of op.spans) {
+		const loc = locateBlock(page, assignment.blockId);
+		if (!loc || !isTextLike(loc.block)) continue;
+		const span = loc.block.content[assignment.index];
+		if (!span) continue;
+		// Empty id clears so invert can restore an absent id. A non-empty id
+		// only fills a span that does not already have one.
+		if (!assignment.id) {
+			if (span.id) delete span.id;
+			continue;
+		}
+		if (!span.id) span.id = assignment.id;
+	}
+}
+
+function applySetReview(page: KbPage, op: Extract<Op, { kind: 'set-review' }>): void {
+	if (!op.id) return;
+	for (const block of documentOrder(page)) {
+		if (!isTextLike(block)) continue;
+		for (const span of block.content) {
+			const index = span.marks.findIndex((mark) => mark.type === 'review' && mark.id === op.id);
+			if (index < 0) continue;
+			if (op.remove) {
+				span.marks = span.marks.filter((_, i) => i !== index);
+				continue;
+			}
+			const current = span.marks[index] as Extract<Mark, { type: 'review' }>;
+			const next: Extract<Mark, { type: 'review' }> = {
+				type: 'review',
+				id: current.id,
+				style: op.style ?? current.style,
+				color: op.color ?? current.color
+			};
+			if (typeof op.note === 'string') {
+				const note = op.note.trim();
+				if (note) next.note = note;
+			} else if (op.note !== null && current.note) {
+				next.note = current.note;
+			}
+			const marks = span.marks.slice();
+			marks[index] = next;
+			span.marks = marks;
+		}
+	}
+}
+
 function isCodeEmptyLastLine(block: CodeBlock, offset: number): boolean {
 	return offset === block.text.length && (block.text === '' || block.text.endsWith('\n'));
 }
@@ -445,7 +495,10 @@ function applySplitBlock(page: KbPage, op: Extract<Op, { kind: 'split-block' }>)
 		const dropContent = normalizeSpans(right);
 		replaceBlock(page, at.parent, at.indexInParent, { ...block, content: keepContent });
 		let created: Block;
-		if (block.type === 'heading') {
+		// Enter at the end of a heading starts body text. A split in the middle
+		// stays a heading, so one heading can be broken into two.
+		const atEnd = at.offset >= block.content.reduce((n, span) => n + span.text.length, 0);
+		if (block.type === 'heading' && !atEnd) {
 			created = { id: op.newId, type: 'heading', level: block.level, content: dropContent };
 		} else if (block.type === 'list_item') {
 			created = { id: op.newId, type: 'list_item', ordered: block.ordered, content: dropContent };
@@ -922,11 +975,17 @@ export function apply(page: KbPage, op: Op): KbPage {
 		case 'insert-text':
 			applyInsertText(next, op);
 			break;
+		case 'stamp-span-ids':
+			applyStampSpanIds(next, op);
+			break;
 		case 'delete-range':
 			applyDeleteRange(next, op);
 			break;
 		case 'format-range':
 			applyFormatRange(next, op);
+			break;
+		case 'set-review':
+			applySetReview(next, op);
 			break;
 		case 'split-block':
 			applySplitBlock(next, op);

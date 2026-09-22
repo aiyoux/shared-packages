@@ -79,9 +79,16 @@ export function remapOpIds(map: IdMap, op: Op): Op {
 		case 'set-title':
 		// `children` here are page slugs, not block ids.
 		case 'set-children':
+		// Review ids are mark ids, not block ids.
+		case 'set-review':
 			return op;
 		case 'insert-text':
 			return { ...op, at: remapPoint(map, op.at) };
+		case 'stamp-span-ids':
+			return {
+				...op,
+				spans: op.spans.map((span) => ({ ...span, blockId: to(map, span.blockId) }))
+			};
 		case 'delete-range':
 		case 'format-range':
 			return { ...op, range: remapRange(map, op.range) };

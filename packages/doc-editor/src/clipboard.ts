@@ -13,6 +13,7 @@ import {
 	plaintextOf,
 	type Block,
 	type KbPage,
+	type Mark,
 	type Op,
 	type Range,
 	type TableBlock,
@@ -66,6 +67,34 @@ export function remapBlock(block: Block): Block {
 	const kids = blockChildren(block);
 	if (kids) (next as Block & { children: Block[] }).children = kids.map(remapBlock);
 	return next;
+}
+
+/** One pasted review stays one review, and it is not the review it was copied from. */
+function remintReviewMarks(marks: Mark[], ids: Map<string, string>): Mark[] {
+	return marks.map((mark) => {
+		const rec = mark as { type: string; id?: string };
+		if (rec.type !== 'review' || typeof rec.id !== 'string' || !rec.id) return mark;
+		let id = ids.get(rec.id);
+		if (!id) {
+			id = newBlockId();
+			ids.set(rec.id, id);
+		}
+		return id === rec.id ? mark : ({ ...mark, id } as Mark);
+	});
+}
+
+function remintReviewBlock(block: Block, ids: Map<string, string>): Block {
+	const content = (block as { content?: TextSpan[] }).content;
+	let next: Block = block;
+	if (Array.isArray(content)) {
+		next = {
+			...block,
+			content: content.map((span) => ({ ...span, marks: remintReviewMarks(span.marks, ids) }))
+		} as Block;
+	}
+	const kids = blockChildren(next);
+	if (!kids) return next;
+	return { ...next, children: kids.map((kid) => remintReviewBlock(kid, ids)) } as Block;
 }
 
 function sliceSpans(content: TextSpan[], from: number, to: number): TextSpan[] {
@@ -311,7 +340,10 @@ export function pasteOps(
 	const rawAt = isCollapsed(live) ? live.anchor : orderedRange(state.page, live).start;
 	const clamped = clampPoint(working.page, rawAt);
 	const at = textInsertPoint(working.page, clamped) ?? clamped;
-	const jsonBlocks = input.json ? parseSlice(input.json) : null;
+	const reviewIds = new Map<string, string>();
+	const jsonBlocks = input.json
+		? parseSlice(input.json)?.map((block) => remintReviewBlock(block, reviewIds))
+		: null;
 	if (jsonBlocks && jsonBlocks.length > 0) {
 		ops.push(...jsonInsertOps(working, at, jsonBlocks));
 		return ops;

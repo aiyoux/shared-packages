@@ -197,6 +197,8 @@ function selectionAfter(pre: DocBody, post: DocBody, op: Op, prev: Range): Range
 		case 'set-line-height':
 		case 'set-space-after':
 		case 'set-indent':
+		case 'stamp-span-ids':
+		case 'set-review':
 			return prev;
 		default: {
 			const _never: never = op;

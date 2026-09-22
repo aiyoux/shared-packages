@@ -161,6 +161,23 @@ describe('remapOpIds', () => {
 		expect(remapOpIds(map, op)).toEqual(op);
 	});
 
+	it('rewrites stamp-span-ids block ids and leaves review ids and span ids', () => {
+		expect(
+			remapOpIds(map, {
+				kind: 'stamp-span-ids',
+				spans: [{ blockId: 'temp:a', index: 1, id: 'span-1' }]
+			})
+		).toEqual({
+			kind: 'stamp-span-ids',
+			spans: [{ blockId: 'records:1', index: 1, id: 'span-1' }]
+		});
+		const review: Op = { kind: 'set-review', id: 'temp:a', color: 'red' };
+		expect(remapOpIds(map, review)).toEqual(review);
+		expect(
+			remapOpIds(map, { kind: 'insert-text', at: point('temp:a'), text: 'x', spanId: 'span-1' })
+		).toEqual({ kind: 'insert-text', at: point('records:1'), text: 'x', spanId: 'span-1' });
+	});
+
 	it('leaves unmapped ids untouched', () => {
 		const op: Op = { kind: 'delete-block', id: 'records:already-real' };
 		expect(remapOpIds(map, op)).toEqual(op);
@@ -232,8 +249,10 @@ describe('walker parity', () => {
 	const kinds: Op['kind'][] = [
 		'set-title',
 		'insert-text',
+		'stamp-span-ids',
 		'delete-range',
 		'format-range',
+		'set-review',
 		'split-block',
 		'merge-block',
 		'insert-block',

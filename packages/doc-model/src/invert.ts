@@ -51,6 +51,7 @@ const STRIP_MARKS: Mark[] = [
 	{ type: 'underline' },
 	{ type: 'color', color: 'red' },
 	{ type: 'highlight', color: 'yellow' },
+	{ type: 'review', id: 'strip', style: 'marker', color: 'gray' },
 	{ type: 'code' },
 	{ type: 'font_family', family: 'sans' },
 	{ type: 'font_size', size: '1px' },
@@ -247,7 +248,7 @@ function invertDeleteRange(page: KbPage, op: Extract<Op, { kind: 'delete-range' 
 function findMarkPayload(
 	page: KbPage,
 	range: Extract<Op, { kind: 'format-range' }>['range'],
-	type: 'link' | 'font_family' | 'font_size' | 'color' | 'highlight'
+	type: 'link' | 'font_family' | 'font_size' | 'color' | 'highlight' | 'review'
 ): Mark | null {
 	const { start, end } = normalizeRange(page, range);
 	const order = documentOrder(page);
@@ -276,7 +277,8 @@ function invertFormatRange(page: KbPage, op: Extract<Op, { kind: 'format-range' 
 			mark.type === 'font_family' ||
 			mark.type === 'font_size' ||
 			mark.type === 'color' ||
-			mark.type === 'highlight')
+			mark.type === 'highlight' ||
+			mark.type === 'review')
 	) {
 		const found = findMarkPayload(page, op.range, mark.type);
 		if (found) mark = found;
@@ -476,6 +478,76 @@ function invertConvertBlock(page: KbPage, op: Extract<Op, { kind: 'convert-block
 	return [backOp, ...restoreSolePayload(op.id, block, payloadLength(back))];
 }
 
+function invertStampSpanIds(page: KbPage, op: Extract<Op, { kind: 'stamp-span-ids' }>): Op[] {
+	const original = new Map<string, Map<number, string | undefined>>();
+	const finalIds = new Map<string, Map<number, string | undefined>>();
+	for (const assignment of op.spans) {
+		const loc = locateBlock(page, assignment.blockId);
+		if (!loc || !isTextLike(loc.block)) continue;
+		const span = loc.block.content[assignment.index];
+		if (!span) continue;
+		let orig = original.get(assignment.blockId);
+		let fin = finalIds.get(assignment.blockId);
+		if (!orig || !fin) {
+			orig = new Map();
+			fin = new Map();
+			original.set(assignment.blockId, orig);
+			finalIds.set(assignment.blockId, fin);
+		}
+		if (!orig.has(assignment.index)) orig.set(assignment.index, span.id);
+		const before = fin.has(assignment.index) ? fin.get(assignment.index) : span.id;
+		let after = before;
+		if (!assignment.id) after = undefined;
+		else if (!before) after = assignment.id;
+		fin.set(assignment.index, after);
+	}
+	const clears: { blockId: string; index: number; id: string }[] = [];
+	const restores: { blockId: string; index: number; id: string }[] = [];
+	for (const [blockId, orig] of original) {
+		const fin = finalIds.get(blockId);
+		if (!fin) continue;
+		for (const [index, before] of orig) {
+			const after = fin.get(index);
+			if (before === after) continue;
+			// A span that gained an id has to be cleared before a previous id
+			// can be stamped back — stamp will not overwrite a different id.
+			if (after) clears.push({ blockId, index, id: '' });
+			if (before) restores.push({ blockId, index, id: before });
+		}
+	}
+	const ops: Op[] = [];
+	if (clears.length > 0) ops.push({ kind: 'stamp-span-ids', spans: clears });
+	if (restores.length > 0) ops.push({ kind: 'stamp-span-ids', spans: restores });
+	return ops;
+}
+
+function invertSetReview(page: KbPage, op: Extract<Op, { kind: 'set-review' }>): Op[] {
+	const ops: Op[] = [];
+	for (const block of documentOrder(page)) {
+		if (!isTextLike(block)) continue;
+		let pos = 0;
+		for (const span of block.content) {
+			const end = pos + span.text.length;
+			const mark = span.marks.find(
+				(item): item is Extract<Mark, { type: 'review' }> => item.type === 'review' && item.id === op.id
+			);
+			if (mark && end > pos) {
+				ops.push({
+					kind: 'format-range',
+					range: {
+						anchor: { blockId: block.id, offset: pos },
+						head: { blockId: block.id, offset: end }
+					},
+					mark,
+					on: true
+				});
+			}
+			pos = end;
+		}
+	}
+	return ops;
+}
+
 function invertInsertText(page: KbPage, op: Extract<Op, { kind: 'insert-text' }>): Op[] {
 	const at = resolvePoint(page, op.at);
 	if (op.text === '') return [];
@@ -499,10 +571,14 @@ export function invert(page: KbPage, op: Op): Op[] {
 			return [{ kind: 'set-title', title: page.title }];
 		case 'insert-text':
 			return invertInsertText(page, op);
+		case 'stamp-span-ids':
+			return invertStampSpanIds(page, op);
 		case 'delete-range':
 			return invertDeleteRange(page, op);
 		case 'format-range':
 			return invertFormatRange(page, op);
+		case 'set-review':
+			return invertSetReview(page, op);
 		case 'split-block':
 			return invertSplitBlock(page, op);
 		case 'merge-block':

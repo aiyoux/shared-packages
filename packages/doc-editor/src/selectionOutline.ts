@@ -360,6 +360,33 @@ export function selectionOutlinePath(slabs: Slab[], radius = SELECTION_ROUND_PX)
 	return roundPolygonSvg(points, radius);
 }
 
+export type ReviewOutline = { color: string; range: Range };
+
+/** One path per review, in the review colour, quieter than the accent selection. */
+export function paintReviewOutlines(
+	host: HTMLElement,
+	svg: SVGSVGElement,
+	page: KbPage,
+	reviews: ReviewOutline[]
+): void {
+	while (svg.firstChild) svg.removeChild(svg.firstChild);
+	const w = Math.max(host.offsetWidth, 1);
+	const h = Math.max(host.offsetHeight, 1);
+	svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
+	svg.setAttribute('width', String(w));
+	svg.setAttribute('height', String(h));
+	const doc = host.ownerDocument;
+	for (const review of reviews) {
+		const d = selectionOutlinePath(selectionSlabs(host, page, review.range));
+		if (!d) continue;
+		const path = doc.createElementNS('http://www.w3.org/2000/svg', 'path');
+		path.setAttribute('d', d);
+		path.setAttribute('data-kb-review-outline', review.color);
+		path.style.setProperty('--kb-review-ink', `var(--kb-highlight-${review.color}, var(--accent))`);
+		svg.appendChild(path);
+	}
+}
+
 export function paintSelectionOutline(
 	host: HTMLElement,
 	svg: SVGSVGElement,
