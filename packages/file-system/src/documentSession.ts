@@ -150,6 +150,13 @@ export async function createOpenDocument(
 	let path = await host.getPath(id);
 	let generation = opts?.generation ?? initial.generation;
 	let dirty = false;
+	/** Bumped by `markDirty`. A completing save snapshots it and only clears
+	 *  `dirty` when nothing edited during the write: clearing unconditionally
+	 *  stranded an edit applied mid-save — the session showed clean while the
+	 *  bytes were still in the editor, and (worse) the next foreign write was
+	 *  then absorbed as a non-conflict instead of raising one, letting the
+	 *  next local save overwrite it with a stale body under a fresh CAS. */
+	let dirtySeq = 0;
 	let bound = true;
 	let gone: 'trash' | 'permanent' | null = null;
 	/** True while `save()` is inside `updateFile`. Own-write echoes bump
@@ -232,7 +239,10 @@ export async function createOpenDocument(
 			return path;
 		},
 		markDirty() {
-			if (bound) dirty = true;
+			if (bound) {
+				dirtySeq += 1;
+				dirty = true;
+			}
 		},
 		async save(body, opts) {
 			if (!bound) {
@@ -247,11 +257,13 @@ export async function createOpenDocument(
 					? { expectedGeneration: generation, meta }
 					: { expectedGeneration: generation };
 			saveInFlight = true;
+			const dirtyAtStart = dirtySeq;
 			try {
 				const result = await host.updateFile(id, body, cas);
 				generation = result.generation;
 				node = result;
-				dirty = false;
+				// Only a write nothing edited during may claim the session is clean.
+				if (dirtySeq === dirtyAtStart) dirty = false;
 				return result;
 			} finally {
 				saveInFlight = false;
