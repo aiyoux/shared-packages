@@ -1,5 +1,5 @@
 /**
- * Re-seal / unseal B2 + rclone + AI persisted secrets when the vault is toggled.
+ * Re-seal / unseal B2 + rclone persisted secrets when the vault is toggled.
  * Imported dynamically from store.ts to avoid a credentials ↔ vault cycle.
  */
 import {
@@ -10,10 +10,6 @@ import {
 	listStoredProfiles as listRcloneStored,
 	rewriteStoredSecret as rewriteRcloneSecret
 } from '../rclone/credentials.js';
-import {
-	listStoredProfiles as listAiStored,
-	rewriteStoredSecret as rewriteAiSecret
-} from '../ai/credentials.js';
 import { evictAllB2Drivers } from '../b2/b2DriverCache.js';
 import { evictAllRcloneDrivers } from '../rclone/rcloneDriverCache.js';
 import { wrapSecret, unwrapSecret } from './crypto.js';
@@ -42,15 +38,6 @@ export async function resealPersistedSecrets(): Promise<void> {
 		const sealed = await wrapSecret(secret, `rclone:${p.id}`);
 		await rewriteRcloneSecret(p.id, { persistSecret: true, plaintext: '', sealed });
 	}
-	for (const p of await listAiStored()) {
-		if (p.persistSecret === false) continue;
-		const plain = p.apiKey;
-		if (!plain && !p.sealedApiKey) continue;
-		const secret = plain || (p.sealedApiKey ? await unwrapSecret(p.sealedApiKey, `ai:${p.id}`) : '');
-		if (!secret) continue;
-		const sealed = await wrapSecret(secret, `ai:${p.id}`);
-		await rewriteAiSecret(p.id, { persistSecret: true, plaintext: '', sealed });
-	}
 }
 
 export async function unsealPersistedSecrets(): Promise<void> {
@@ -66,12 +53,6 @@ export async function unsealPersistedSecrets(): Promise<void> {
 		if (!p.sealedRcPass) continue;
 		const secret = await unwrapSecret(p.sealedRcPass, `rclone:${p.id}`);
 		await rewriteRcloneSecret(p.id, { persistSecret: true, plaintext: secret, sealed: undefined });
-	}
-	for (const p of await listAiStored()) {
-		if (p.persistSecret === false) continue;
-		if (!p.sealedApiKey) continue;
-		const secret = await unwrapSecret(p.sealedApiKey, `ai:${p.id}`);
-		await rewriteAiSecret(p.id, { persistSecret: true, plaintext: secret, sealed: undefined });
 	}
 }
 

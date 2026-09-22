@@ -1,11 +1,12 @@
 /**
- * Shared connection-secret vault (B2 application keys + rclone RC passwords
- * + AI API keys).
+ * Shared connection-secret vault (B2 application keys + rclone RC passwords).
  *
  * Opt-in. Default remains plaintext IndexedDB (v1). When enabled, secret fields
  * are AES-GCM wrapped with a PBKDF2 key derived from a user passphrase and are
  * never written back as plaintext. Unlock is per tab; lock drops the wrapping
  * key from memory.
+ *
+ * AI keys are not vaulted: they live on the monitor daemon, not the browser.
  */
 
 export const HUB_VAULT_DB_NAME = 'HubVault';
@@ -13,7 +14,7 @@ export const HUB_VAULT_STORE = 'meta';
 export const HUB_VAULT_META_KEY = 'state';
 export { HUB_VAULT_CHANNEL } from '../crossTab.js';
 
-export type SecretKind = 'b2' | 'rclone' | 'ai';
+export type SecretKind = 'b2' | 'rclone';
 
 /** AES-GCM blob stored on a profile in place of the plaintext secret. */
 export type SealedSecret = {

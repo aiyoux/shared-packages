@@ -9,8 +9,16 @@
 import { blobFromResponse } from '../readProgress.js';
 import { fetchPutBlob } from '../uploadProgress.js';
 import { createStallTimer } from '../stallTimer.js';
-import { withLocalAddressSpace } from './localNetwork';
+import { withLocalAddressSpace } from './localNetwork.js';
 import { openJsonSse } from './sse.js';
+import type {
+	AiChatRequest,
+	AiChatResponse,
+	AiInstallProfileInput,
+	AiModelListResult,
+	AiProfileListResult,
+	AiProfileSummary
+} from '../ai/types.js';
 
 /**
  * A transfer that is making progress is never aborted: the stall window
@@ -35,6 +43,8 @@ export const MONITOR_SINGLE_SHOT_MAX_BYTES = 100 * 1024 * 1024;
 export type MonitorCapabilities = {
 	fs?: { ino?: boolean; rename?: boolean; archive?: boolean; mkdir?: boolean; thumb?: boolean };
 	git?: { blob?: boolean; init?: boolean };
+	/** AI feature (`/v1/ai/**`); absent on daemons without it. */
+	ai?: { chat?: boolean; streaming?: boolean; profiles?: number };
 };
 
 export type MonitorListEntry = {
@@ -231,6 +241,24 @@ export type MonitorTransport = {
 	gitBlob?(repoPath: string, rev: string, file: string): Promise<Uint8Array>;
 	/** POST /v1/git/init `{path}`. Callers gate on `capabilities.git.init`. */
 	gitInit?(path: string): Promise<{ path: string; already: boolean }>;
+	/**
+	 * AI feature (`/v1/ai/**`), present only on daemons that serve it —
+	 * callers gate on `capabilities.ai`. Keys live daemon-side; these calls
+	 * are keyless.
+	 */
+	aiListModels?(): Promise<AiModelListResult>;
+	aiListProfiles?(): Promise<AiProfileListResult>;
+	aiInstallProfile?(input: AiInstallProfileInput): Promise<AiProfileSummary>;
+	aiUpdateProfile?(id: string, patch: Partial<AiInstallProfileInput>): Promise<AiProfileSummary>;
+	aiDeleteProfile?(id: string): Promise<void>;
+	aiChat?(
+		req: AiChatRequest,
+		opts?: { aiProfileId?: string; signal?: AbortSignal }
+	): Promise<AiChatResponse>;
+	aiChatStream?(
+		req: AiChatRequest,
+		opts?: { aiProfileId?: string; signal?: AbortSignal }
+	): Promise<Response>;
 	download(
 		path: string,
 		opts?: {
@@ -486,6 +514,7 @@ export function coerceMonitorCapabilities(raw: unknown): MonitorCapabilities {
 	const o = raw as Record<string, unknown>;
 	const fs = o.fs && typeof o.fs === 'object' ? (o.fs as Record<string, unknown>) : {};
 	const git = o.git && typeof o.git === 'object' ? (o.git as Record<string, unknown>) : {};
+	const ai = o.ai && typeof o.ai === 'object' ? (o.ai as Record<string, unknown>) : undefined;
 	return {
 		fs: {
 			ino: fs.ino === true,
@@ -494,7 +523,16 @@ export function coerceMonitorCapabilities(raw: unknown): MonitorCapabilities {
 			mkdir: fs.mkdir === true,
 			thumb: fs.thumb === true
 		},
-		git: { blob: git.blob === true, init: git.init === true }
+		git: { blob: git.blob === true, init: git.init === true },
+		...(ai
+			? {
+					ai: {
+						chat: ai.chat === true,
+						streaming: ai.streaming === true,
+						profiles: num(ai.profiles) ?? 0
+					}
+				}
+			: {})
 	};
 }
 
@@ -941,6 +979,74 @@ export function coerceGitSnapshot(data: unknown): MonitorGitSnapshot | null {
 	return { branch, dirty, log };
 }
 
+// ---------------------------------------------------------------------------
+// AI (`/v1/ai/**`) — coercion and path helper
+// ---------------------------------------------------------------------------
+
+function aiChatPath(aiProfileId?: string): string {
+	return aiProfileId
+		? `/v1/ai/chat/completions?profile=${encodeURIComponent(aiProfileId)}`
+		: '/v1/ai/chat/completions';
+}
+
+function str(v: unknown): string {
+	return typeof v === 'string' ? v : '';
+}
+
+function coerceAiModelList(raw: unknown): AiModelListResult {
+	const o = (raw ?? {}) as {
+		models?: unknown;
+		errors?: unknown;
+	};
+	const models = Array.isArray(o.models) ? o.models : [];
+	const errors = Array.isArray(o.errors) ? o.errors : [];
+	return {
+		models: models
+			.map((m) => {
+				const e = (m ?? {}) as Record<string, unknown>;
+				const id = str(e['id']);
+				if (!id) return null;
+				return {
+					id,
+					profile: str(e['profile']),
+					profileName: str(e['profileName']),
+					defaultProfile: e['defaultProfile'] === true
+				} satisfies AiModelListResult['models'][number];
+			})
+			.filter((m): m is AiModelListResult['models'][number] => m !== null),
+		errors: errors.map((e) => {
+			const r = (e ?? {}) as Record<string, unknown>;
+			return {
+				profile: str(r['profile']),
+				code: str(r['code']),
+				message: str(r['message'])
+			};
+		})
+	};
+}
+
+function coerceAiProfileSummary(raw: unknown): AiProfileSummary {
+	const p = (raw ?? {}) as Record<string, unknown>;
+	const source = p['source'] === 'config' ? 'config' : 'managed';
+	return {
+		id: str(p['id']),
+		name: str(p['name']),
+		baseUrl: str(p['baseUrl']),
+		default: p['default'] === true,
+		source,
+		keyFingerprint: typeof p['keyFingerprint'] === 'string' ? (p['keyFingerprint'] as string) : null
+	};
+}
+
+function coerceAiProfileList(raw: unknown): AiProfileListResult {
+	const o = (raw ?? {}) as { profiles?: unknown; defaultProfile?: unknown };
+	const profiles = Array.isArray(o.profiles) ? o.profiles.map(coerceAiProfileSummary) : [];
+	return {
+		profiles,
+		defaultProfile: typeof o.defaultProfile === 'string' ? o.defaultProfile : null
+	};
+}
+
 export function createMonitorClient(opts: {
 	baseUrl: string;
 	fetchImpl?: typeof fetch;
@@ -1022,6 +1128,44 @@ export function createMonitorClient(opts: {
 			throw e;
 		} finally {
 			clearTimeout(t);
+		}
+	}
+
+	/**
+	 * AI feature request: same envelope/TypeError mapping as the JSON
+	 * helpers, but no fixed 12 s timer — chat and first-time model listings
+	 * can legitimately take longer than that; the caller's signal bounds it.
+	 * Returns the raw Response so `aiChatStream` can hand back an SSE body.
+	 */
+	async function aiFetch(path: string, init: RequestInit): Promise<Response> {
+		const url = joinUrl(base, path);
+		try {
+			const res = await fetchFn(url, withLocalAddressSpace(url, init));
+			if (!res.ok) {
+				const parsed = (await res.json().catch(() => ({}))) as {
+					error?: { message?: string; code?: string } | string;
+				};
+				const err = parsed.error;
+				const msg =
+					typeof err === 'string'
+						? err
+						: err && typeof err === 'object' && 'message' in err
+							? String(err.message)
+							: res.statusText;
+				const code = err && typeof err === 'object' && 'code' in err ? String(err.code) : '';
+				throw new Error(
+					code ? `[${code}] ${msg || res.statusText}` : (msg || `Monitor AI request failed (${res.status})`)
+				);
+			}
+			return res;
+		} catch (e) {
+			if (e instanceof Error && e.name === 'AbortError') throw e;
+			if (e instanceof TypeError) {
+				throw new Error(
+					`Cannot reach monitor at ${base} (network/CORS). Is it running and allowing this origin?`
+				);
+			}
+			throw e;
 		}
 	}
 
@@ -1713,6 +1857,52 @@ export function createMonitorClient(opts: {
 					const snap = coerceGitSnapshot(data);
 					if (snap) opts.onSnapshot(snap);
 				}
+			});
+		},
+		async aiListModels() {
+			return coerceAiModelList(await (await aiFetch('/v1/ai/models', { method: 'GET' })).json());
+		},
+		async aiListProfiles() {
+			return coerceAiProfileList(
+				await (await aiFetch('/v1/ai/profiles', { method: 'GET' })).json()
+			);
+		},
+		async aiInstallProfile(input: AiInstallProfileInput) {
+			const res = await aiFetch('/v1/ai/profiles', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify(input)
+			});
+			return coerceAiProfileSummary(await res.json());
+		},
+		async aiUpdateProfile(id: string, patch: Partial<AiInstallProfileInput>) {
+			const res = await aiFetch(`/v1/ai/profiles/${encodeURIComponent(id)}`, {
+				method: 'PATCH',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify(patch)
+			});
+			return coerceAiProfileSummary(await res.json());
+		},
+		async aiDeleteProfile(id: string) {
+			await aiFetch(`/v1/ai/profiles/${encodeURIComponent(id)}`, { method: 'DELETE' });
+		},
+		async aiChat(req, opts) {
+			const path = aiChatPath(opts?.aiProfileId);
+			const res = await aiFetch(path, {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ ...req, stream: false }),
+				signal: opts?.signal
+			});
+			return (await res.json()) as AiChatResponse;
+		},
+		async aiChatStream(req, opts) {
+			const path = aiChatPath(opts?.aiProfileId);
+			return aiFetch(path, {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ ...req, stream: true }),
+				signal: opts?.signal
 			});
 		}
 	};

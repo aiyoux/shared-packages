@@ -23,7 +23,7 @@ export type ExplorerContext = {
 	entries: ExplorerEntry[];
 };
 
-export type RemoteKind = 'b2' | 'rclone' | 'monitor' | 'ai';
+export type RemoteKind = 'b2' | 'rclone' | 'monitor';
 
 /** Color dot on a file row — same shape the Documents tree paints. */
 export type ExplorerPresenceDot = {
