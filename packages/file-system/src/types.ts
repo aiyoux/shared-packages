@@ -9,6 +9,7 @@ export type FileTypeId =
 	| 'anim'
 	| 'digr'
 	| 'node'
+	| 'data'
 	| 'vide'
 	| 'image'
 	| 'svg'

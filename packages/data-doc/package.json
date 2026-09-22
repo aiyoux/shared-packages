@@ -1,0 +1,27 @@
+{
+	"name": "@shared-packages/data-doc",
+	"version": "0.1.0",
+	"private": false,
+	"type": "module",
+	"description": "Data document: id-keyed records and named views evaluated on read.",
+	"exports": {
+		".": {
+			"types": "./src/index.ts",
+			"import": "./src/index.ts",
+			"default": "./src/index.ts"
+		}
+	},
+	"types": "./src/index.ts",
+	"files": ["src"],
+	"scripts": {
+		"test": "vitest run",
+		"check": "tsc --noEmit -p tsconfig.json"
+	},
+	"devDependencies": {
+		"@types/node": "^26.1.1",
+		"typescript": "^5.7.3",
+		"vitest": "^4.1.2"
+	},
+	"engines": { "node": ">=22.7.0" },
+	"publishConfig": { "access": "public" }
+}

@@ -65,6 +65,13 @@ const DEFAULT_TYPES: FileTypeDef[] = [
 		schemaVersion: 1
 	},
 	{
+		id: 'data',
+		extension: '.data',
+		mime: 'application/x-scratch-data+json',
+		label: 'Data',
+		schemaVersion: 1
+	},
+	{
 		id: 'vide',
 		extension: '.vide',
 		mime: 'application/x-scratch-vide+json',
