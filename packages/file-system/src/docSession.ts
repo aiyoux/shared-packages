@@ -149,6 +149,7 @@ export function createDocSession<Doc>(options: {
 			// claimant (hold.doc) holds that proof in its own dirty flag
 			// (documentSession keeps doc.dirty when an edit landed mid-save).
 			if (!hold.doc.dirty) hold.dirty = false;
+			hold.error = '';
 			notify(hold);
 			return;
 		}
