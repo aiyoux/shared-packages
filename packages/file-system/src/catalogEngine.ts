@@ -426,6 +426,14 @@ function noteCatalogFailure(reason: string): void {
 	lastCatalogFailure = reason;
 }
 
+function clearCatalogFailure(): void {
+	lastCatalogFailure = null;
+}
+
+function failureText(e: unknown): string {
+	return e instanceof Error ? e.message : String(e);
+}
+
 /** Reason the live catalog is unavailable, if one was recorded. */
 export function catalogFailureReason(): string | null {
 	return lastCatalogFailure;
@@ -657,17 +665,24 @@ export async function openWorkerEngine(dbName = 'SharedVFS'): Promise<SqlEngine 
 				const port = connectCatalogPort(dbName);
 				if (!port) {
 					noteCatalogFailure('leader worker started but would not open a port');
-					resetCatalogLeader();
+					await shutdownCatalogLeader();
 					continue;
 				}
 				const eng = engineFromPort(port, dbName);
 				try {
 					await eng.exec('SELECT 1 AS ok');
-				} catch {
+				} catch (e) {
+					// The worker answered with the real reason (SAH pool still
+					// held, wasm failed to load). Dropping it here is why the
+					// user only ever saw "three attempts".
+					noteCatalogFailure(failureText(e));
 					await eng.close().catch(() => {});
-					resetCatalogLeader();
+					// pauseVfs before terminate. A hard reset leaves the sync
+					// handles held, so the next attempt times out the same way.
+					await shutdownCatalogLeader();
 					continue;
 				}
+				clearCatalogFailure();
 				leaderAnnounced = true;
 				leaderBridge?.postMessage({ type: 'ready' });
 				return eng;
@@ -683,8 +698,10 @@ export async function openWorkerEngine(dbName = 'SharedVFS'): Promise<SqlEngine 
 				await waitForLeader(attempt === 2 ? 1_000 : 3_000);
 				const follower = engineFromBroadcast(dbName);
 				await follower.exec('SELECT 1 AS ok');
+				clearCatalogFailure();
 				return follower;
-			} catch {
+			} catch (e) {
+				noteCatalogFailure(failureText(e));
 				/* previous leader shutting down — try to take the lock */
 			}
 		}

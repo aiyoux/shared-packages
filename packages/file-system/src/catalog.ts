@@ -285,8 +285,14 @@ export class SqliteCatalog {
 				// Carry the reason: this message is often read on a phone, where
 				// the console line that explains it cannot be.
 				const why = catalogFailureReason();
+				const stuck = /SAH pool timed out|catalog leader timeout|three attempts to become or reach/.test(
+					why ?? ''
+				);
+				const hint = stuck
+					? ' Close every other tab of this site, then reload. A previous tab is still holding the catalog.'
+					: '';
 				throw new Error(
-					`Live OPFS catalog is unavailable (SAH worker / COOP)${why ? ` — ${why}` : ''}`
+					`Live OPFS catalog is unavailable (SAH worker / COOP)${why ? ` — ${why}` : ''}.${hint}`
 				);
 			}
 			await worker.exec('SELECT 1 AS ok');
