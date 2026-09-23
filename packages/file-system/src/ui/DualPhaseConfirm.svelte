@@ -1,5 +1,6 @@
 <script lang="ts">
 	import '@shared-packages/design-system/button.css';
+	import { portalModal } from './portal.js';
 
 	interface Props {
 		sourceLabel: string;
@@ -11,6 +12,7 @@
 	let { sourceLabel, destLabel, onConfirm, onCancel }: Props = $props();
 </script>
 
+<div class="portal-root" use:portalModal>
 <div
 	class="modal-root"
 	data-testid="fe-dual-phase-confirm"
@@ -39,8 +41,12 @@
 		</div>
 	</div>
 </div>
+</div>
 
 <style>
+	.portal-root {
+		display: contents;
+	}
 	.modal-root {
 		position: fixed;
 		inset: 0;

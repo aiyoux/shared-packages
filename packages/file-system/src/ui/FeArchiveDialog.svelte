@@ -6,6 +6,7 @@
 	import '@shared-packages/design-system/button.css';
 	import { toast, persistKv } from '@shared-packages/ui';
 	import { formatExplorerError } from './explorerError.js';
+	import { portalModal } from './portal.js';
 	import {
 		CODEC_LABEL,
 		defaultCodecFor,
@@ -399,6 +400,7 @@
 	}
 </script>
 
+<div class="portal-root" use:portalModal>
 <div
 	class="modal-root"
 	data-testid="fe-archive-dialog"
@@ -780,8 +782,12 @@
 		</div>
 	</div>
 </div>
+</div>
 
 <style>
+	.portal-root {
+		display: contents;
+	}
 	.modal-root {
 		position: fixed;
 		inset: 0;

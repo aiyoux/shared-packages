@@ -6,6 +6,7 @@
 	import ProjectStoragePanel from './ProjectStoragePanel.svelte';
 	import type { ProjectHistoryStats } from './componentTypes.js';
 	import type { VfsService } from '../vfs.js';
+	import { portalModal } from './portal.js';
 
 	let {
 		vfs,
@@ -42,6 +43,7 @@
 	} = $props();
 </script>
 
+<div class="portal-root" use:portalModal>
 <div
 	class="wrap"
 	role="dialog"
@@ -74,8 +76,12 @@
 		</div>
 	</div>
 </div>
+</div>
 
 <style>
+	.portal-root {
+		display: contents;
+	}
 	.wrap {
 		position: fixed;
 		inset: 0;

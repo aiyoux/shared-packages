@@ -2,6 +2,7 @@
 	import { onMount } from 'svelte';
 	import '@shared-packages/design-system/button.css';
 	import type { FeConfirmCopy } from './feConfirm.js';
+	import { portalModal } from './portal.js';
 
 	interface Props {
 		copy: FeConfirmCopy;
@@ -23,6 +24,7 @@
 	});
 </script>
 
+<div class="portal-root" use:portalModal>
 <div
 	class="modal-root"
 	data-testid="fe-confirm-dialog"
@@ -55,8 +57,12 @@
 		</div>
 	</div>
 </div>
+</div>
 
 <style>
+	.portal-root {
+		display: contents;
+	}
 	.modal-root {
 		position: fixed;
 		inset: 0;

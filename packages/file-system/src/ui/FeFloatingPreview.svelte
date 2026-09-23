@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onDestroy, tick, untrack, type Snippet } from 'svelte';
 	import FeIcon from './FeIcon.svelte';
+	import { portalModal } from './portal.js';
 	import {
 		coerceMediaBlob,
 		getPreviewKind,
@@ -233,6 +234,7 @@
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <!-- svelte-ignore a11y_click_events_have_key_events -->
+<div class="portal-root" use:portalModal>
 <div class="fe-float-backdrop" onclick={onClose}>
 	<!-- svelte-ignore a11y_no_static_element_interactions -->
 	<!-- svelte-ignore a11y_click_events_have_key_events -->
@@ -327,8 +329,12 @@
 		</div>
 	</div>
 </div>
+</div>
 
 <style>
+	.portal-root {
+		display: contents;
+	}
 	.fe-float-backdrop {
 		position: fixed;
 		inset: 0;

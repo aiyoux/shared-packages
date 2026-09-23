@@ -23,6 +23,7 @@
 		type QuickConvertSvgContext
 	} from './explorerDriver.js';
 	import { createLocalExplorerDriver } from './localExplorerDriver.js';
+	import { portalModal } from './portal.js';
 	import StoragePersistenceStatus from './StoragePersistenceStatus.svelte';
 	import FeStorageDialog from './FeStorageDialog.svelte';
 	import FeProjectStorageDialog from './FeProjectStorageDialog.svelte';
@@ -4843,6 +4844,7 @@
 	{#if revokeTarget}
 		<div
 			class="fe-room-switch-root"
+			use:portalModal
 			data-testid="fe-people-revoke-dialog"
 			role="dialog"
 			aria-modal="true"
@@ -4892,6 +4894,7 @@
 	{#if unlinkTarget}
 		<div
 			class="fe-room-switch-root"
+			use:portalModal
 			data-testid="fe-people-unlink-dialog"
 			role="dialog"
 			aria-modal="true"
@@ -4949,6 +4952,7 @@
 	{#if splitBrain}
 		<div
 			class="fe-room-switch-root"
+			use:portalModal
 			data-testid="fe-split-brain"
 			role="dialog"
 			aria-modal="true"
@@ -4995,6 +4999,7 @@
 	{#if combineOpen}
 		<div
 			class="fe-room-switch-root"
+			use:portalModal
 			data-testid="fe-room-combine-dialog"
 			role="dialog"
 			aria-modal="true"
@@ -5090,6 +5095,7 @@
 	{#if pendingRoomSwitch}
 		<div
 			class="fe-room-switch-root"
+			use:portalModal
 			data-testid="fe-room-switch-dirty"
 			role="dialog"
 			aria-modal="true"
@@ -5178,6 +5184,7 @@
 	{#if innerFs}
 		<div
 			class="fe-inner-fs"
+			use:portalModal
 			data-testid="fe-inner-fs-dialog"
 			role="dialog"
 			aria-modal="true"

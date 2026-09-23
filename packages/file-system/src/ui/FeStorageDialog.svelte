@@ -10,6 +10,7 @@
 	 */
 	import '@shared-packages/design-system/button.css';
 	import { toast } from '@shared-packages/ui';
+	import { portalModal } from './portal.js';
 	import FeStorageInspector from './FeStorageInspector.svelte';
 	import { buildStorageTree } from './storageInspect.js';
 	import { formatSize, type TreemapInput, type TreemapRect } from './sizeTreemap.js';
@@ -137,6 +138,7 @@
 	}
 </script>
 
+<div class="portal-root" use:portalModal>
 <div class="wrap" role="dialog" aria-modal="true" aria-label={heading} data-testid="fe-storage-dialog">
 	<button type="button" class="scrim" aria-label="Close" onclick={onClose}></button>
 	<div class="card">
@@ -243,8 +245,12 @@
 		</div>
 	</div>
 </div>
+</div>
 
 <style>
+	.portal-root {
+		display: contents;
+	}
 	.wrap {
 		position: fixed;
 		inset: 0;

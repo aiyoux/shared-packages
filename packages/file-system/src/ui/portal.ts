@@ -40,3 +40,18 @@ export function portal(node: HTMLElement, target: string | HTMLElement | null | 
 		}
 	};
 }
+
+/**
+ * Full-screen modal overlays must not live inside a windowing leaf.
+ *
+ * The windowing shells isolate each window's body (`isolation: isolate` on
+ * AppWindows' `.aw-body`, so in-pane toolbars cannot bleed through edit
+ * overlays). A viewport-fixed modal rendered inside that body is trapped in
+ * the stacking context: it centers on screen, but a sibling window paints
+ * over it and steals its clicks. Portal the overlay to document.body so its
+ * z-index competes at the root. Theme variables are root-scoped, so the move
+ * costs nothing visually.
+ */
+export function portalModal(node: HTMLElement) {
+	return portal(node, 'body');
+}
