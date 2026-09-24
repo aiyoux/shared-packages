@@ -88,6 +88,7 @@ describe('RemoteConnectionsDialog', () => {
 		expect(onConnected).not.toHaveBeenCalled();
 		await screen.findByText(/Monitor · Home/);
 		expect(screen.queryByTestId('connections-kind')).toBeNull();
+		await fireEvent.click(screen.getByTestId('monitor-profile-edit'));
 		await fireEvent.click(screen.getByTestId('monitor-connect-profile'));
 		await vi.waitFor(() => expect(onConnected).toHaveBeenCalled());
 	});

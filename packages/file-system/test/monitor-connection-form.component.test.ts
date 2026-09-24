@@ -48,6 +48,7 @@ describe('MonitorConnectionForm', () => {
 		await vi.waitFor(async () => expect(await listProfiles()).toHaveLength(1));
 		expect(onConnected).not.toHaveBeenCalled();
 		await screen.findByText('Home');
+		await fireEvent.click(screen.getByTestId('monitor-profile-edit'));
 		await fireEvent.click(screen.getByTestId('monitor-connect-profile'));
 		await vi.waitFor(() => expect(onConnected).toHaveBeenCalled());
 	});

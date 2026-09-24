@@ -5,6 +5,7 @@
 	 */
 	import { onMount, type Snippet } from 'svelte';
 	import '@shared-packages/design-system/button.css';
+	import ConnectionProfileList, { type ConnectionListRow } from './ConnectionProfileList.svelte';
 	import FeConfirmDialog from './FeConfirmDialog.svelte';
 	import type { FeConfirmCopy } from './feConfirm.js';
 	import { portal } from './portal.js';
@@ -33,6 +34,8 @@
 		connectTestid?: string;
 		fields: Snippet;
 		extra?: Snippet;
+		/** Id of the profile open in the edit form, so Connect can target it. */
+		editingId?: string | null;
 		onClose: () => void;
 		onNew: () => void;
 		onEdit: (id: string) => void;
@@ -55,6 +58,7 @@
 		connectTestid,
 		fields,
 		extra,
+		editingId = null,
 		onClose,
 		onNew,
 		onEdit,
@@ -65,6 +69,14 @@
 	}: Props = $props();
 
 	const connectTid = $derived(connectTestid ?? `${prefix}-profile-select`);
+	const listRows = $derived<ConnectionListRow[]>(
+		profiles.map((p) => ({
+			key: p.id,
+			label: p.name,
+			openTestId: `${prefix}-profile-edit`,
+			removeTestId: `${prefix}-profile-delete`
+		}))
+	);
 	const submitLabel = $derived(mode === 'edit' ? 'Update' : 'Add');
 	const formTitle = $derived(mode === 'edit' ? `Edit ${title}` : `New ${title}`);
 
@@ -122,39 +134,17 @@
 		{#if mode === 'list'}
 			<div class="saved" data-testid="{prefix}-saved-profiles">
 				{#if profiles.length}
-					<ul data-testid="{prefix}-profile-list">
-						{#each profiles as p (p.id)}
-							<li class:active={p.active}>
-								<div class="profile-main">
-									<span class="profile-name">{p.name}</span>
-									{#if p.detail}
-										<span class="meta">{p.detail}</span>
-									{/if}
-								</div>
-								<button
-									type="button"
-									class="ds-btn ds-btn--sm ds-btn--secondary"
-									data-testid="{prefix}-profile-edit"
-									disabled={busy}
-									onclick={() => onEdit(p.id)}>Edit</button
-								>
-								<button
-									type="button"
-									class="ds-btn ds-btn--sm ds-btn--primary"
-									data-testid={connectTid}
-									disabled={busy}
-									onclick={() => onConnect(p.id)}>Connect</button
-								>
-								<button
-									type="button"
-									class="ds-btn ds-btn--sm ds-btn--ghost danger"
-									data-testid="{prefix}-profile-delete"
-									disabled={busy}
-									onclick={() => (removePrompt = { id: p.id, name: p.name })}>Remove</button
-								>
-							</li>
-						{/each}
-					</ul>
+					<div data-testid="{prefix}-profile-list">
+						<ConnectionProfileList
+							rows={listRows}
+							{busy}
+							onOpen={onEdit}
+							onRemove={(id) => {
+								const name = profiles.find((p) => p.id === id)?.name ?? 'this connection';
+								removePrompt = { id, name };
+							}}
+						/>
+					</div>
 				{:else}
 					<p class="empty" data-testid="{prefix}-empty">No saved connections.</p>
 				{/if}
@@ -185,6 +175,19 @@
 				>
 					Cancel
 				</button>
+				{#if mode === 'edit' && editingId}
+					<button
+						type="button"
+						class="ds-btn ds-btn--sm ds-btn--secondary"
+						data-testid={connectTid}
+						disabled={busy}
+						onclick={() => {
+							if (editingId) onConnect(editingId);
+						}}
+					>
+						Connect
+					</button>
+				{/if}
 				<button
 					type="button"
 					class="ds-btn ds-btn--sm ds-btn--primary"
@@ -270,43 +273,6 @@
 		display: flex;
 		flex-direction: column;
 		gap: 0.65rem;
-	}
-	ul {
-		list-style: none;
-		margin: 0;
-		padding: 0;
-		display: flex;
-		flex-direction: column;
-		gap: 0.4rem;
-	}
-	li {
-		display: flex;
-		flex-wrap: wrap;
-		align-items: center;
-		gap: 0.35rem;
-		padding: 0.45rem 0.5rem;
-		border: 1px solid var(--line-hairline);
-	}
-	li.active {
-		border-color: var(--accent);
-	}
-	.profile-main {
-		flex: 1 1 8rem;
-		min-width: 0;
-		display: flex;
-		flex-direction: column;
-		gap: 0.1rem;
-	}
-	.profile-name {
-		font-weight: 650;
-		font-size: 0.88rem;
-	}
-	.meta {
-		font-size: 0.75rem;
-		opacity: 0.7;
-	}
-	.danger {
-		color: var(--cat-red-soft);
 	}
 	.fields {
 		display: flex;

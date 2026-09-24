@@ -47,6 +47,7 @@
 		validateMonitorProfileInput,
 		type MonitorConnectionProfileV1
 	} from '../monitor/types.js';
+	import ConnectionProfileList, { type ConnectionListRow } from './ConnectionProfileList.svelte';
 	import VaultPanel from '../vault/VaultPanel.svelte';
 	import MonitorAiSection from './MonitorAiSection.svelte';
 	import { formatExplorerError } from './explorerError.js';
@@ -59,8 +60,6 @@
 		kind: RemoteKind;
 		id: string;
 		name: string;
-		detail: string;
-		active: boolean;
 	};
 
 	interface Props {
@@ -110,29 +109,32 @@
 		...b2Profiles.map((p) => ({
 			kind: 'b2' as const,
 			id: p.id,
-			name: p.name,
-			detail: [p.bucketName, p.namePrefix, p.persistSecret === false ? 'this tab' : '']
-				.filter(Boolean)
-				.join(' · '),
-			active: p.id === activeB2
+			name: p.name
 		})),
 		...monitorProfiles.map((p) => ({
 			kind: 'monitor' as const,
 			id: p.id,
-			name: p.name,
-			detail: `${p.rootPath} · ${p.baseUrl}`,
-			active: p.id === activeMonitor
+			name: p.name
 		})),
 		...rcloneProfiles.map((p) => ({
 			kind: 'rclone' as const,
 			id: p.id,
-			name: p.name,
-			detail: [p.fs, p.rootPath, p.baseUrl, p.persistSecret === false ? 'this tab' : '']
-				.filter(Boolean)
-				.join(' · '),
-			active: p.id === activeRclone
+			name: p.name
 		}))
 	]);
+
+	const listRows = $derived<ConnectionListRow[]>(
+		rows.map((p) => ({
+			key: `${p.kind}:${p.id}`,
+			label: `${KIND_LABEL[p.kind]} · ${p.name}`,
+			openTestId: `${p.kind}-profile-edit`,
+			removeTestId: `${p.kind}-profile-delete`
+		}))
+	);
+
+	function rowByKey(key: string): Row | undefined {
+		return rows.find((p) => `${p.kind}:${p.id}` === key);
+	}
 
 	const submitLabel = $derived(mode === 'edit' ? 'Update' : 'Add');
 	const formTitle = $derived(
@@ -473,40 +475,20 @@
 			{#if mode === 'list'}
 				<div class="saved" data-testid="connections-saved-profiles">
 					{#if rows.length}
-						<ul data-testid="connections-profile-list">
-							{#each rows as p (`${p.kind}:${p.id}`)}
-								<li class:active={p.active}>
-									<div class="profile-main">
-										<span class="profile-name">{KIND_LABEL[p.kind]} · {p.name}</span>
-										{#if p.detail}
-											<span class="meta">{p.detail}</span>
-										{/if}
-									</div>
-									<button
-										type="button"
-										class="ds-btn ds-btn--sm ds-btn--secondary"
-										data-testid="{p.kind}-profile-edit"
-										disabled={busy}
-										onclick={() => startEdit(p)}>Edit</button
-									>
-									<button
-										type="button"
-										class="ds-btn ds-btn--sm ds-btn--primary"
-										data-testid={connectTid(p.kind)}
-										disabled={busy}
-										onclick={() => void connectRow(p)}>Connect</button
-									>
-									<button
-										type="button"
-										class="ds-btn ds-btn--sm ds-btn--ghost danger"
-										data-testid="{p.kind}-profile-delete"
-										disabled={busy}
-										onclick={() => (removePrompt = { kind: p.kind, id: p.id, name: p.name })}
-										>Remove</button
-									>
-								</li>
-							{/each}
-						</ul>
+						<div data-testid="connections-profile-list">
+							<ConnectionProfileList
+								rows={listRows}
+								{busy}
+								onOpen={(key) => {
+									const row = rowByKey(key);
+									if (row) startEdit(row);
+								}}
+								onRemove={(key) => {
+									const row = rowByKey(key);
+									if (row) removePrompt = { kind: row.kind, id: row.id, name: row.name };
+								}}
+							/>
+						</div>
 					{:else}
 						<p class="empty" data-testid="connections-empty">No saved connections.</p>
 					{/if}
@@ -711,6 +693,21 @@
 					>
 						Cancel
 					</button>
+					{#if mode === 'edit' && editingId}
+						<button
+							type="button"
+							class="ds-btn ds-btn--sm ds-btn--secondary"
+							data-testid={connectTid(kind)}
+							disabled={busy}
+							onclick={() => {
+								const id = editingId;
+								if (!id) return;
+								void connectRow({ kind, id, name });
+							}}
+						>
+							Connect
+						</button>
+					{/if}
 					<button
 						type="button"
 						class="ds-btn ds-btn--sm ds-btn--primary"
@@ -795,43 +792,6 @@
 		display: flex;
 		flex-direction: column;
 		gap: 0.65rem;
-	}
-	ul {
-		list-style: none;
-		margin: 0;
-		padding: 0;
-		display: flex;
-		flex-direction: column;
-		gap: 0.4rem;
-	}
-	li {
-		display: flex;
-		flex-wrap: wrap;
-		align-items: center;
-		gap: 0.35rem;
-		padding: 0.45rem 0.5rem;
-		border: 1px solid var(--line-hairline);
-	}
-	li.active {
-		border-color: var(--accent);
-	}
-	.profile-main {
-		flex: 1 1 8rem;
-		min-width: 0;
-		display: flex;
-		flex-direction: column;
-		gap: 0.1rem;
-	}
-	.profile-name {
-		font-weight: 650;
-		font-size: 0.88rem;
-	}
-	.meta {
-		font-size: 0.75rem;
-		opacity: 0.7;
-	}
-	.danger {
-		color: var(--cat-red-soft);
 	}
 	.kind-seg {
 		width: 100%;

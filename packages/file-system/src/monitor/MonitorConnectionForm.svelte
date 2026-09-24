@@ -167,6 +167,7 @@
 	connectTestid="monitor-connect-profile"
 	onClose={() => onCancel?.()}
 	onNew={clearFieldsForNew}
+	editingId={editingId}
 	onEdit={editById}
 	onConnect={connectById}
 	onRemove={(id) => void removeProfile(id)}

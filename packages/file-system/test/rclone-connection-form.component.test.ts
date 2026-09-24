@@ -219,6 +219,7 @@ describe('RcloneConnectionForm', () => {
 			expect(rows[0]?.baseUrl).toBe(DEFAULT_RCLONE_BASE_URL);
 		});
 		expect(onConnected).not.toHaveBeenCalled();
+		await fireEvent.click(screen.getByTestId('rclone-profile-edit'));
 		await fireEvent.click(screen.getByTestId('rclone-profile-select'));
 		await vi.waitFor(() => expect(onConnected).toHaveBeenCalled());
 		const connected = onConnected.mock.calls[0]?.[0];

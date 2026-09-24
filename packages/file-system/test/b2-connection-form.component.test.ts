@@ -45,6 +45,7 @@ describe('B2ConnectionForm', () => {
 		await vi.waitFor(async () => expect(await listProfiles()).toHaveLength(1));
 		expect(onConnected).not.toHaveBeenCalled();
 		await screen.findByText('Photos');
+		await fireEvent.click(screen.getByTestId('b2-profile-edit'));
 		await fireEvent.click(screen.getByTestId('b2-profile-select'));
 		await vi.waitFor(() => expect(onConnected).toHaveBeenCalled());
 	});
