@@ -607,6 +607,15 @@
 	let peopleRenameDrafts = $state<Record<string, string>>({});
 	let rootEl = $state<HTMLDivElement | undefined>();
 	let floatingPreviewEntry = $state<ExplorerEntry | null>(null);
+	/**
+	 * macOS-style Quick Look on Space. A tap pins the popup open (tap again
+	 * to close); holding Space peeks while held and closes on release.
+	 * Entries without a preview kind keep the legacy selection toggle.
+	 */
+	let quickLookPinned = $state(false);
+	let quickLookPeek = $state(false);
+	let spaceDownAt = $state(0);
+	const QUICK_LOOK_HOLD_MS = 300;
 	/** Remote (B2/rclone) preview-pane media is opt-in — keyed by entry id. */
 	let previewMediaId = $state<string | null>(null);
 
@@ -724,6 +733,45 @@
 			floatingPreviewEntry = previewEntry;
 		}
 	}
+	/** Focused row first, else the primary selection — when previewable. */
+	function quickLookTarget(): ExplorerEntry | null {
+		const n = focusedNode() ?? selectedPrimary();
+		if (!n || n.kind !== 'file' || !getPreviewKind(n)) return null;
+		return n;
+	}
+	function openQuickLook(entry: ExplorerEntry, pinned: boolean) {
+		floatingPreviewEntry = entry;
+		quickLookPinned = pinned;
+		quickLookPeek = !pinned;
+	}
+	function closeQuickLook() {
+		floatingPreviewEntry = null;
+		quickLookPinned = false;
+		quickLookPeek = false;
+		spaceDownAt = 0;
+	}
+	function onQuickLookKeyup(e: KeyboardEvent) {
+		if (e.key !== ' ' && e.key !== 'Spacebar') return;
+		if (!quickLookPeek || !floatingPreviewEntry) {
+			quickLookPeek = false;
+			spaceDownAt = 0;
+			return;
+		}
+		if (Date.now() - spaceDownAt >= QUICK_LOOK_HOLD_MS) closeQuickLook();
+		else {
+			quickLookPinned = true;
+			quickLookPeek = false;
+			spaceDownAt = 0;
+		}
+	}
+	// The popup closes itself on Escape/backdrop: drop the stale mode flags.
+	$effect(() => {
+		if (!floatingPreviewEntry && (quickLookPinned || quickLookPeek)) {
+			quickLookPinned = false;
+			quickLookPeek = false;
+			spaceDownAt = 0;
+		}
+	});
 	function requestPreviewMedia(id: string) {
 		previewMediaId = id;
 	}
@@ -3531,6 +3579,19 @@
 			return;
 		}
 		if (e.key === ' ' || e.key === 'Spacebar') {
+			if (e.repeat) return;
+			const target = quickLookTarget();
+			if (target) {
+				e.preventDefault();
+				if (floatingPreviewEntry && quickLookPinned) {
+					if (floatingPreviewEntry.id === target.id) closeQuickLook();
+					else openQuickLook(target, true);
+					return;
+				}
+				spaceDownAt = Date.now();
+				openQuickLook(target, false);
+				return;
+			}
 			const n = focusedNode();
 			if (n) {
 				e.preventDefault();
@@ -3630,6 +3691,7 @@
 	);
 </script>
 
+<svelte:window onkeyup={onQuickLookKeyup} onblur={() => quickLookPeek && closeQuickLook()} />
 <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
 <div
 	class="fe-root {variant} {className}"

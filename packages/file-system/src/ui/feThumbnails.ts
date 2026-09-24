@@ -64,7 +64,9 @@ export function previewKindFromExt(e: string): PreviewKind | null {
  * that path revokes blob URLs in a loop and the row stops taking clicks.
  */
 export function getPreviewKind(entry: ExplorerEntry): PreviewKind | null {
-	if (entry.kind !== 'file') return null;
+	// Svelte 5 props are live getters: while a preview popup is unmounting the
+	// entry prop can read null mid-dispatch (e.g. closing on Space). Tolerate it.
+	if (!entry || entry.kind !== 'file') return null;
 	const fromName = previewKindFromExt(ext(entry.name));
 	if (fromName) return fromName;
 	if (entry.fileType === 'image') return 'image';

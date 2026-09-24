@@ -221,7 +221,13 @@
 	}
 
 	function onKeydown(e: KeyboardEvent) {
-		if (e.key === 'Escape') onClose();
+		if (e.key === 'Escape') {
+			onClose();
+			return;
+		}
+		// Closing on Space unsets the parent's entry mid-dispatch, while this
+		// window listener is still attached — the live prop reads null here.
+		if (!entry) return;
 		if (kind === 'pdf') {
 			if (e.key === 'ArrowLeft') prevPage();
 			if (e.key === 'ArrowRight') nextPage();
