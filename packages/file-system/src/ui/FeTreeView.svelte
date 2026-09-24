@@ -20,11 +20,7 @@
 	import FeIcon from './FeIcon.svelte';
 	import type { ExplorerDriver, ExplorerEntry, ExplorerEntryId } from './explorerDriver.js';
 	import { dataTransferHasExplorerIds } from './copyAcross.js';
-	import {
-		classifyFolder,
-		folderMarkFromKids,
-		type FolderMark
-	} from './detectProject.js';
+	import { folderMarkFromKids, type FolderMark } from './detectProject.js';
 	import { folderIconName, folderMarkClass } from './feIcons.js';
 
 	let {
@@ -110,6 +106,16 @@
 		return parentId ?? ROOT_KEY;
 	}
 
+	/** Rows a node renders — folders only, unless the tree includes files. */
+	function rowsFor(entries: ExplorerEntry[]): ExplorerEntry[] {
+		return entries
+			.filter((e) => includeFiles || e.kind === 'folder')
+			.sort((a, b) => {
+				if (a.kind !== b.kind) return a.kind === 'folder' ? -1 : 1;
+				return a.name.localeCompare(b.name);
+			});
+	}
+
 	async function loadChildren(
 		d: ExplorerDriver,
 		parentId: ExplorerEntryId | null,
@@ -131,20 +137,33 @@
 			marks = nextMarks;
 			const toProbe = folders.filter((f) => !listed.has(f.id));
 			if (toProbe.length) {
-				void Promise.all(toProbe.map(async (f) => [f.id, await classifyFolder(d, f)] as const)).then(
-					(pairs) => {
-						const later = new Map(marks);
-						for (const [id, mark] of pairs) later.set(id, mark);
-						marks = later;
+				// Probe every not-yet-listed folder once: it yields both the
+				// project mark and, kept below, the child list that decides
+				// whether the row shows an expand chevron at all.
+				void Promise.all(
+					toProbe.map(async (f) => {
+						try {
+							return [f, (await d.list({ parentId: f.id })).entries] as const;
+						} catch {
+							return [f, null] as const;
+						}
+					})
+				).then((pairs) => {
+					const nextListed = new Map(listed);
+					const nextChildren = new Map(children);
+					const nextMarks = new Map(marks);
+					for (const [f, entries] of pairs) {
+						if (!entries) continue;
+						nextListed.set(f.id, entries);
+						nextChildren.set(f.id, rowsFor(entries));
+						nextMarks.set(f.id, folderMarkFromKids(f.meta, entries));
 					}
-				);
-			}
-			const rows = entries
-				.filter((e) => includeFiles || e.kind === 'folder')
-				.sort((a, b) => {
-					if (a.kind !== b.kind) return a.kind === 'folder' ? -1 : 1;
-					return a.name.localeCompare(b.name);
+					listed = nextListed;
+					children = nextChildren;
+					marks = nextMarks;
 				});
+			}
+			const rows = rowsFor(entries);
 			children = new Map(children).set(key, rows);
 		} catch {
 			// Best-effort nav aid — leave the node collapsed-looking (no cached
@@ -266,6 +285,9 @@
 	{@const kids = children.get(entry.id)}
 	{@const isLoading = loading.has(entry.id)}
 	{@const folderMark = isFolder ? markFor(entry) : 'plain'}
+	<!-- A folder with a known-empty child list gets no chevron: there is
+		nothing to expand. Unknown (not yet probed) keeps the chevron. -->
+	{@const expandable = !isFolder || kids === undefined || kids.length > 0}
 	<div class="fe-tree-row-wrap">
 		<!-- svelte-ignore a11y_click_events_have_key_events -->
 		<!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -283,7 +305,7 @@
 			data-fe-drop-parent={isFolder ? entry.id : undefined}
 			role="treeitem"
 			aria-selected={isActive}
-			aria-expanded={isFolder ? isOpen : undefined}
+			aria-expanded={expandable && isFolder ? isOpen : undefined}
 			tabindex="-1"
 			onclick={(e) => {
 				if ((e.target as HTMLElement).closest('.fe-tree-toggle')) return;
@@ -299,7 +321,7 @@
 			<button
 				type="button"
 				class="fe-tree-toggle"
-				class:invisible={!isFolder}
+				class:invisible={!expandable}
 				data-testid="fe-tree-toggle"
 				aria-label={isOpen ? 'Collapse folder' : 'Expand folder'}
 				onclick={(e) => {
@@ -327,15 +349,6 @@
 					{#each kids as child (child.id)}
 						{@render node(child, depth + 1)}
 					{/each}
-				{:else}
-					<div
-						class="fe-tree-hint"
-						style="padding-left: {(depth + 1) * 14 + 4}px"
-						data-testid="fe-tree-empty"
-					>
-						<span class="fe-tree-toggle invisible" aria-hidden="true"></span>
-						Empty
-					</div>
 				{/if}
 			</div>
 		{/if}

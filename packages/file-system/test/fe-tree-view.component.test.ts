@@ -72,22 +72,38 @@ describe('FeTreeView', () => {
 		expect(screen.getByTestId('fe-tree-row-root').textContent).toContain('project');
 	});
 
-	it('empty folder keeps a collapse chevron and an indented Empty hint', async () => {
+	it('childless folder hides its chevron; a folder with subfolders keeps it', async () => {
 		await vfs.mkdir(null, 'blank');
+		const parent = await vfs.mkdir(null, 'parent');
+		await vfs.mkdir(parent.id, 'child');
 		const driver = createLocalExplorerDriver(vfs);
 		render(FeTreeView, {
 			props: { driver, activeId: null, onNavigate: () => {} }
 		});
-		const row = await screen.findByTestId('fe-tree-row');
-		expect(row.getAttribute('data-name')).toBe('blank');
-		const toggle = row.querySelector('[data-testid="fe-tree-toggle"]') as HTMLButtonElement;
-		expect(toggle.classList.contains('invisible')).toBe(false);
-		await fireEvent.click(toggle);
-		const hint = await screen.findByTestId('fe-tree-empty');
-		expect(hint.textContent).toMatch(/Empty/);
-		expect(toggle.classList.contains('invisible')).toBe(false);
-		await fireEvent.click(toggle);
+		await viWaitFor(() =>
+			Boolean(document.querySelector('[data-testid="fe-tree-row"][data-name="blank"]'))
+		);
+		const blankRow = document.querySelector(
+			'[data-testid="fe-tree-row"][data-name="blank"]'
+		) as HTMLElement;
+		// The probe listing lands asynchronously; once known empty, the
+		// chevron hides and no Empty hint ever renders.
+		await viWaitFor(() => {
+			const toggle = blankRow.querySelector(
+				'[data-testid="fe-tree-toggle"]'
+			) as HTMLButtonElement | null;
+			return !!toggle && toggle.classList.contains('invisible');
+		});
 		expect(screen.queryByTestId('fe-tree-empty')).toBeNull();
+		const parentRow = document.querySelector(
+			'[data-testid="fe-tree-row"][data-name="parent"]'
+		) as HTMLElement;
+		const parentToggle = parentRow.querySelector(
+			'[data-testid="fe-tree-toggle"]'
+		) as HTMLButtonElement;
+		expect(parentToggle.classList.contains('invisible')).toBe(false);
+		await fireEvent.click(parentToggle);
+		expect(await screen.findByText('child')).toBeTruthy();
 	});
 
 	it('marks git, project, and combined folders in the tree', async () => {
