@@ -11,7 +11,13 @@ type Fflate = typeof import('fflate');
 let mod: Fflate | null = null;
 
 async function get(): Promise<Fflate> {
-	if (!mod) mod = await import('fflate');
+	if (!mod) {
+		// The package root's `node` export is worker_threads. In the Vite
+		// browser bundle that is an empty module, so `new Worker` throws
+		// instead of compressing. The browser entry uses blob workers, and
+		// zip() below still falls back to the sync codec if those fail.
+		mod = await import('fflate/browser');
+	}
 	return mod;
 }
 
@@ -122,9 +128,16 @@ export const fflateEngine: CompressionEngine = {
 		// one member (fflate's own guidance). Single-file stays sync.
 		const names = Object.keys(tree);
 		if (names.length <= 1) return f.zipSync(tree, { level });
-		return new Promise<Uint8Array>((resolve, reject) => {
-			f.zip(tree, { level }, (err, data) => (err ? reject(err) : resolve(data)));
-		});
+		try {
+			return await new Promise<Uint8Array>((resolve, reject) => {
+				f.zip(tree, { level }, (err, data) => (err ? reject(err) : resolve(data)));
+			});
+		} catch (err) {
+			if ((err as Error)?.name === 'AbortError') throw err;
+			// Blob workers die under some CSP / COEP combinations. The bytes
+			// are the same as the sync codec.
+			return f.zipSync(tree, { level });
+		}
 	},
 
 	async unzip(bytes: Uint8Array, opts?: UnzipProgressOpts) {

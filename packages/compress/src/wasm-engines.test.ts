@@ -30,6 +30,23 @@ describe('zipkit wasm', () => {
 		expect(seen).toEqual(['n.txt']);
 	});
 
+	it('zips several large entries', async () => {
+		// Two entries and 256 KB is where ZipKit fans deflate across workers.
+		const chunk = new Uint8Array(200_000);
+		chunk.fill(7);
+		const packed = await packFiles(
+			'zipkit',
+			[
+				{ name: 'a.bin', data: chunk },
+				{ name: 'b.bin', data: chunk }
+			],
+			'zip'
+		);
+		const files = await expandBytes('zipkit', packed[0]!.data, 'zip', packed[0]!.name);
+		expect(files.map((f) => f.name).sort()).toEqual(['a.bin', 'b.bin']);
+		expect(files.every((f) => f.data.byteLength === chunk.byteLength)).toBe(true);
+	});
+
 	it('unzip of an fflate ZIP still streams via onEntry', async () => {
 		const packed = await packFiles('fflate', [{ name: 'n.txt', data: SAMPLE }], 'zip');
 		const seen: string[] = [];
@@ -122,6 +139,14 @@ describe('libarchive wasm', () => {
 });
 
 describe('addmaple wasm', () => {
+	it('round-trips lz4 that compresses past the 10× output guess', async () => {
+		const data = new Uint8Array(80_000);
+		const packed = await packFiles('addmaple', [{ name: 'z.bin', data }], 'lz4');
+		const expanded = await expandBytes('addmaple', packed[0]!.data, 'lz4', packed[0]!.name);
+		expect(expanded[0]!.data.byteLength).toBe(data.byteLength);
+		expect(expanded[0]!.data.every((byte) => byte === 0)).toBe(true);
+	});
+
 	it('round-trips gzip via the gzip module', async () => {
 		const packed = await packFiles('addmaple', [{ name: 'n.txt', data: SAMPLE }], 'gzip');
 		expect(packed[0]!.data.byteLength).toBeGreaterThan(0);

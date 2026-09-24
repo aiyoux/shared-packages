@@ -1,4 +1,10 @@
 import { engineInfo, type CompressOptions, type CompressionEngine } from '../types.js';
+import {
+	alloc,
+	free,
+	memoryU8,
+	wasmExports
+} from '../../../../node_modules/@addmaple/lz4/dist/core.js';
 
 type MapleMod = {
 	init: (imports?: Record<string, unknown>, opts?: { backend?: string }) => Promise<void>;
@@ -56,6 +62,45 @@ export const addmapleEngine: CompressionEngine = {
 			throw new Error(`AddMaple cannot expand ${codec}`);
 		}
 		const mod = await get(codec);
+		if (codec === 'lz4') return decompressLz4(mod, bytes);
 		return mod.decompress(bytes);
 	}
 };
+
+/**
+ * AddMaple's frame decoder sizes the output at `compressedLen * 10`. When the
+ * file beats that ratio the wasm call returns `-originalSize` (`decompress_lz4
+ * failed: -80000` for 80 KB of zeros). Retry with that exact length. The
+ * instance is the one `init()` already loaded — core.js is a singleton.
+ */
+function lz4Shortfall(error: unknown): number | null {
+	const message = error instanceof Error ? error.message : String(error);
+	const match = /decompress_lz4 failed: -(\d+)/.exec(message);
+	if (!match) return null;
+	const needed = Number(match[1]);
+	return Number.isFinite(needed) && needed > 0 ? needed : null;
+}
+
+async function decompressLz4(mod: MapleMod, bytes: Uint8Array): Promise<Uint8Array> {
+	try {
+		return await mod.decompress(bytes);
+	} catch (error) {
+		const needed = lz4Shortfall(error);
+		if (needed == null) throw error;
+		const len = bytes.byteLength;
+		const inPtr = alloc(len);
+		const outPtr = alloc(needed);
+		try {
+			memoryU8().set(bytes, inPtr);
+			const decode = wasmExports() as unknown as {
+				decompress_lz4(inPtr: number, inLen: number, outPtr: number, outLen: number): number;
+			};
+			const written = decode.decompress_lz4(inPtr, len, outPtr, needed);
+			if (written < 0) throw new Error(`decompress_lz4 failed: ${written}`);
+			return memoryU8().slice(outPtr, outPtr + written);
+		} finally {
+			free(inPtr, len);
+			free(outPtr, needed);
+		}
+	}
+}

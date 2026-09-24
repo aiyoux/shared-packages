@@ -8,7 +8,11 @@ import {
 
 type Zipkit = typeof import('@myrialabs/zipkit');
 
+/** Same cutoff ZipKit uses before it fans entries across a worker pool. */
+const PARALLEL_MIN_BYTES = 256 * 1024;
+
 let mod: Zipkit | null = null;
+let zipChain: Promise<unknown> = Promise.resolve();
 
 async function get(): Promise<Zipkit> {
 	if (!mod) mod = await import('@myrialabs/zipkit');
@@ -28,6 +32,60 @@ function asU8(data: unknown): Uint8Array | null {
 		return new Uint8Array(v.buffer, v.byteOffset, v.byteLength);
 	}
 	return null;
+}
+
+type ZipEntry = {
+	name: string;
+	data: Uint8Array;
+	method: 'store' | 'deflate';
+	level: number;
+};
+
+/**
+ * Browser ZIP. Large deflate archives are compressed on the Web Worker pool,
+ * then ZipKit's own container writer runs with `parallel: false` so it does
+ * not touch `node:worker_threads`. The writer still calls `deflateCompress`;
+ * the patched method returns the bytes the workers already produced.
+ */
+async function zipInBrowser(
+	z: Zipkit,
+	mapped: ZipEntry[],
+	method: 'store' | 'deflate',
+	level: number
+): Promise<Uint8Array> {
+	const total = mapped.reduce((sum, entry) => sum + entry.data.byteLength, 0);
+	const fanOut = method === 'deflate' && mapped.length >= 2 && total >= PARALLEL_MIN_BYTES;
+	if (!fanOut) return z.zip(mapped, { parallel: false });
+
+	let compressed: Map<Uint8Array, Uint8Array> | null = null;
+	try {
+		const pool = await import('./zipkitBrowserPool.js');
+		// Main-thread engine (CRC, container) loads while the workers deflate.
+		const engineReady = z.getEngine();
+		const parts = await pool.deflateEntries(mapped.map((entry) => ({ data: entry.data, level })));
+		await engineReady;
+		if (parts) compressed = new Map(mapped.map((entry, index) => [entry.data, parts[index]!]));
+	} catch {
+		compressed = null;
+	}
+	if (!compressed) return z.zip(mapped, { parallel: false });
+	const ready = compressed;
+
+	const engine = await z.getEngine();
+	const slot = engine as unknown as {
+		deflateCompress(data: Uint8Array, level?: number): Uint8Array;
+	};
+	const orig = slot.deflateCompress;
+	slot.deflateCompress = (data, lv) => {
+		const hit = ready.get(data);
+		if (hit && (lv ?? 6) === level) return hit;
+		return orig.call(engine, data, lv);
+	};
+	try {
+		return await z.zip(mapped, { parallel: false });
+	} finally {
+		slot.deflateCompress = orig;
+	}
 }
 
 export const zipkitEngine: CompressionEngine = {
@@ -96,18 +154,27 @@ export const zipkitEngine: CompressionEngine = {
 
 	async zip(entries: ArchiveEntry[], options?: CompressOptions) {
 		const z = await get();
-		const method = options?.level === 'speed' ? 'store' : 'deflate';
+		const method: ZipEntry['method'] = options?.level === 'speed' ? 'store' : 'deflate';
 		const level = options?.level === 'ratio' ? 9 : options?.level === 'speed' ? 1 : 5;
-		return z.zip(
-			entries
-				.filter((e) => e.name && !e.name.endsWith('/'))
-				.map((e) => ({
-					name: e.name.replace(/^\/+/, ''),
-					data: e.data,
-					method,
-					level
-				}))
+		const mapped: ZipEntry[] = entries
+			.filter((e) => e.name && !e.name.endsWith('/'))
+			.map((e) => ({
+				name: e.name.replace(/^\/+/, ''),
+				data: e.data,
+				method,
+				level
+			}));
+		// Node can use ZipKit's worker_threads pool. The browser bundle cannot:
+		// Vite resolves that import to an empty module and `new Worker` throws.
+		if (typeof window === 'undefined') {
+			return z.zip(mapped, method === 'store' ? { parallel: false } : undefined);
+		}
+		const run = zipChain.then(() => zipInBrowser(z, mapped, method, level));
+		zipChain = run.then(
+			() => undefined,
+			() => undefined
 		);
+		return run;
 	},
 
 	async unzip(bytes: Uint8Array, opts?: UnzipProgressOpts) {

@@ -59,7 +59,7 @@ function profileAdd(name: string, ms: number): void {
  * Encrypted / Zip64 / odd method zips throw and we fall back to zip.js.
  */
 async function unzipSyncAll(bytes: Uint8Array, opts?: UnzipProgressOpts): Promise<ArchiveEntry[]> {
-	const fflate = await import('fflate');
+	const fflate = await import('fflate/browser');
 	abortIf(opts?.signal);
 	const t0 = performance.now();
 	// Worker unzip beats unzipSync on many deflated members (2–5× in-process).
