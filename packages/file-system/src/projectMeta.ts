@@ -96,6 +96,28 @@ export function mintDefaultRoom(label: string): { rooms: ProjectRoom[]; currentR
 	return { rooms: [room], currentRoomId: room.id };
 }
 
+/**
+ * The checked-out room's label for the project that contains `nodeId`.
+ * Null when the file is not inside a project. This does not switch rooms.
+ */
+export async function roomLabelForNode(vfs: VfsService, nodeId: string): Promise<string | null> {
+	const start = await vfs.get(nodeId).catch(() => undefined);
+	if (!start) return null;
+	const seen = new Set<string>();
+	let folderId = start.kind === 'folder' ? start.id : (start.parentId ?? null);
+	while (folderId && !seen.has(folderId)) {
+		seen.add(folderId);
+		const meta = await readProjectMeta(vfs, folderId);
+		if (meta) {
+			const { rooms, currentRoomId } = roomsFromMeta(meta);
+			return rooms.find((room) => room.id === currentRoomId)?.label ?? null;
+		}
+		const folder = await vfs.get(folderId).catch(() => undefined);
+		folderId = folder?.parentId ?? null;
+	}
+	return null;
+}
+
 export function roomsFromMeta(
 	meta: ProjectMeta | null | undefined
 ): { rooms: ProjectRoom[]; currentRoomId: string | null } {

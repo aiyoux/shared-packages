@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
 	DEFAULT_COLLAB_APP,
 	createCmEnvelopeSession,
+	openCollabChannel,
 	type CmEnvelope,
 	type CmEnvelopeChunker
 } from './envelope.js';
@@ -282,5 +283,27 @@ describe('a peer that predates doc addressing', () => {
 		});
 		deliver({ type: 'kb-collab', v: 1, app: 'sketch', doc: 'doc-2', frame: { kind: 'ops' } });
 		expect(unaddressed).toBe(0);
+	});
+});
+
+describe('openCollabChannel', () => {
+	it('does not deliver a frame that fails accept, and does deliver one that passes', () => {
+		const wire = mockWire();
+		const session = openCollabChannel<Frame>({
+			sendKb: (m) => wire.sendKb(m),
+			onKb: (h) => wire.onKb(h),
+			app: 'sketch',
+			accept: (frame) => frame.kind === 'ops'
+		});
+		wire.deliver({ app: 'sketch', frame: { kind: 'hello' } });
+		wire.deliver({ app: 'sketch', frame: { kind: 'ops', n: 1 } });
+		const seen: Frame[] = [];
+		session.subscribe((frame) => seen.push(frame));
+		wire.deliver({ app: 'sketch', frame: { kind: 'snapshot' } });
+		wire.deliver({ app: 'sketch', frame: { kind: 'ops', n: 2 } });
+		expect(seen).toEqual([
+			{ kind: 'ops', n: 1 },
+			{ kind: 'ops', n: 2 }
+		]);
 	});
 });

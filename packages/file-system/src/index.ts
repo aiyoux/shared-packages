@@ -30,18 +30,12 @@ export * from './docSession.js';
 export { liveDocNames, type LiveDocNames } from './live/names.js';
 export { createLeaderElection, type LeaderElection } from './live/leader.js';
 export { createLiveBus, type LiveBus, type LiveBusOptions, type LiveEnvelope } from './live/bus.js';
-export {
-	createLiveSession,
-	type LiveSession,
-	type LiveSessionOptions,
-	type LiveRole,
-	type LiveDocMeta,
-	type LiveSavedInfo
-} from './live/session.js';
+
 export * from './liveLink.js';
 export * from './memoryVfs.js';
 export * from './projectPack.js';
 export * from './projectMeta.js';
+export * from './openSessions.js';
 export * from './projectExport.js';
 export * from './transferRegistry.js';
 export {

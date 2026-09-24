@@ -140,3 +140,28 @@ export function createCmEnvelopeSession<F>(opts: CmEnvelopeSessionOpts<F>): CmEn
 		}
 	};
 }
+
+/**
+ * `createCmEnvelopeSession`, plus an optional frame predicate. `accept` runs
+ * only inside `subscribe` — a frame that fails it is not delivered. Send,
+ * app/doc addressing, chunking, and `onAccept` are unchanged.
+ */
+export function openCollabChannel<F>(
+	opts: CmEnvelopeSessionOpts<F> & {
+		accept?: (frame: F) => boolean;
+	}
+): CmEnvelopeSession<F> {
+	const { accept, ...sessionOpts } = opts;
+	const session = createCmEnvelopeSession(sessionOpts);
+	if (!accept) return session;
+	return {
+		send: session.send,
+		close: session.close,
+		subscribe(handler) {
+			return session.subscribe((frame) => {
+				if (!accept(frame)) return;
+				handler(frame);
+			});
+		}
+	};
+}

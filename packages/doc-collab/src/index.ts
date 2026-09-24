@@ -7,6 +7,7 @@ export {
 	type Election,
 	type Role
 } from './leadership.js';
+export { bindTabCollab, installCollabUnload } from './tabBind.js';
 export {
 	createAttachRegistry,
 	type AttachRegistry,
@@ -31,8 +32,10 @@ export {
 } from './sequencer.js';
 export { colorForClient, MAX_PRESENCE_NAME, PRESENCE_COLORS } from './presence.js';
 export { COLLAB_HEARTBEAT_MS, COLLAB_STALE_MS, staleIds } from './liveness.js';
+export { presenceBoard, type PresenceSeat } from './presenceBoard.js';
 export {
 	createCmEnvelopeSession,
+	openCollabChannel,
 	DEFAULT_COLLAB_APP,
 	type CmEnvelope,
 	type CmEnvelopeChunker,
