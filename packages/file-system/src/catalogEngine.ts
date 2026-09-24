@@ -204,6 +204,17 @@ const CATALOG_LOCK = 'vfs-catalog-sah';
 const LEADER_ATTEMPTS: LockAttempt[] = [{}, { waitMs: 3_000 }, { steal: true }];
 const CATALOG_BC = 'vfs-catalog-sql';
 const RPC_TIMEOUT_MS = 20_000;
+/**
+ * How long a follower waits for the leader to answer `who` before treating it
+ * as gone. The SQL call itself may legitimately take much longer (a big
+ * `runMany` runs on the worker, off the leader's main thread); `who` is
+ * answered on that main thread, so silence here means the tab is closed or
+ * frozen, not that the query is slow. Recovery then probes the lock: a closed
+ * tab has already released it, so the follower becomes leader without waiting
+ * out `RPC_TIMEOUT_MS`. A frozen holder still has the lock, and the existing
+ * escalate-then-steal path is what runs — this probe does not steal by itself.
+ */
+const LEADER_PROBE_MS = 2_500;
 let leaderAnnounced = false;
 /** Election for CATALOG_LOCK, built on first use — its deps are defined below. */
 let catalogLock: CatalogLock | null = null;
@@ -336,44 +347,87 @@ function inBrowserMain(): boolean {
 	return typeof window !== 'undefined' && typeof document !== 'undefined';
 }
 
-function engineFromBroadcast(dbName: string): SqlEngine {
+/** Follower engine. Exported for the leader-gone probe test. */
+export function engineFromBroadcast(dbName: string): SqlEngine {
 	const bc = new BroadcastChannel(CATALOG_BC);
 	let next = 1;
 	const session = newSession();
-	const pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
+	const pending = new Map<
+		number,
+		{ resolve: (v: unknown) => void; reject: (e: Error) => void; who?: ReturnType<typeof setTimeout> }
+	>();
+	/** Bumped on every `ready` so an in-flight probe can tell a live leader from silence. */
+	let leaderToken = 0;
+	let leaderGone = false;
 	bc.onmessage = (ev: MessageEvent) => {
 		const msg = ev.data as RpcRes & { type?: string };
+		if (msg?.type === 'ready') {
+			leaderToken += 1;
+			for (const row of pending.values()) {
+				if (row.who) clearTimeout(row.who);
+				row.who = undefined;
+			}
+			return;
+		}
 		if (msg?.type !== 'sql-res' || msg.session !== session) return;
 		const p = pending.get(msg.id);
 		if (!p) return;
 		pending.delete(msg.id);
+		if (p.who) clearTimeout(p.who);
 		if (msg.ok) p.resolve(msg.rows);
 		else p.reject(new Error(msg.error ?? 'catalog leader error'));
 	};
 	const call = (msg: Omit<RpcMsg, 'id' | 'session' | 'db'>) =>
 		new Promise<unknown>((resolve, reject) => {
+			if (leaderGone) {
+				reject(new Error('catalog leader unreachable'));
+				return;
+			}
 			const id = next++;
-			const t = setTimeout(() => {
+			const tokenAtStart = leaderToken;
+			let t: ReturnType<typeof setTimeout> | undefined;
+			const fail = (err: Error) => {
+				const row = pending.get(id);
+				if (!row) return;
 				pending.delete(id);
-				reject(new Error('catalog RPC timeout'));
-			}, RPC_TIMEOUT_MS);
+				row.reject(err);
+			};
+			t = setTimeout(() => fail(new Error('catalog RPC timeout')), RPC_TIMEOUT_MS);
+			const who = setTimeout(() => {
+				if (leaderToken !== tokenAtStart) return;
+				leaderGone = true;
+				fail(new Error('catalog leader unreachable'));
+			}, LEADER_PROBE_MS);
 			pending.set(id, {
 				resolve: (v) => {
 					clearTimeout(t);
+					clearTimeout(who);
 					resolve(v);
 				},
 				reject: (e) => {
 					clearTimeout(t);
+					clearTimeout(who);
 					reject(e);
-				}
+				},
+				who
 			});
-			bc.postMessage({ type: 'sql', ...msg, id, session, db: dbName });
+			try {
+				bc.postMessage({ type: 'who' });
+				bc.postMessage({ type: 'sql', ...msg, id, session, db: dbName });
+			} catch (err) {
+				fail(err instanceof Error ? err : new Error('catalog leader unreachable'));
+			}
 		});
 	const engine = engineFromCall(call);
 	return {
 		...engine,
 		async close() {
-			await engine.close().catch(() => {});
+			if (!leaderGone) await engine.close().catch(() => {});
+			for (const row of pending.values()) {
+				if (row.who) clearTimeout(row.who);
+				row.reject(new Error('catalog leader unreachable'));
+			}
+			pending.clear();
 			try {
 				bc.close();
 			} catch {
@@ -459,7 +513,7 @@ function catalogLeaderGone(): boolean {
 
 export function isCatalogDeadError(e: unknown): boolean {
 	const m = e instanceof Error ? e.message : String(e);
-	return /catalog RPC timeout|catalog worker failed|catalog worker messageerror|catalog leader gone|Live OPFS catalog is unavailable/.test(
+	return /catalog RPC timeout|catalog worker failed|catalog worker messageerror|catalog leader gone|catalog leader unreachable|Live OPFS catalog is unavailable/.test(
 		m
 	);
 }
