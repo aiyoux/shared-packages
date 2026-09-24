@@ -38,7 +38,13 @@ export type CollabFrame =
 	/** v1: no opsSince. Replica waits for localSeq === headSeq then replace-from-snapshot. */
 	| { kind: 'nack'; clientOpId: string; headSeq: number }
 	| { kind: 'resync'; pageId: string; reason: string }
-	| { kind: 'presence'; clientId: string; state: AwarenessState | null }
+	| {
+			kind: 'presence';
+			clientId: string;
+			state: AwarenessState | null;
+			/** Ask peers to re-announce. Not a leave — see doc-collab `liveness.ts`. */
+			ping?: true;
+	  }
 	| { kind: 'schema-mismatch'; local: number; remote: number }
 	/**
 	 * Asset bytes travel as SESSION content, never as durable identity — a

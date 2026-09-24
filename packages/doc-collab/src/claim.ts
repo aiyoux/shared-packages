@@ -1,4 +1,5 @@
 import type { Role } from './leadership.js';
+import { COLLAB_HEARTBEAT_MS, COLLAB_STALE_MS, staleIds } from './liveness.js';
 
 /**
  * "This side of the call does not elect its own sequencer."
@@ -23,12 +24,19 @@ import type { Role } from './leadership.js';
  * connection with it, so the guest side should go back to electing its own
  * sequencer — and without expiry it would instead sit subordinate to a call
  * that no longer exists, with no sequencer at all and nothing syncing.
+ *
+ * The window is `COLLAB_STALE_MS`, not three heartbeats. A hidden gateway's
+ * own timer is clamped, so three beats (12s) looks like the call ended and a
+ * sibling elects a second sequencer. The watcher re-asks `who` on every
+ * sweep; the gateway answers from its message handler, and silence past the
+ * stale window is what a crash looks like. An explicit release is still
+ * immediate.
  */
 
-/** Re-announced this often, so silence is distinguishable from departure. */
-export const SUBORDINATE_HEARTBEAT_MS = 4_000;
-/** Three missed heartbeats, matching `PRESENCE_TTL_MS`. */
-export const SUBORDINATE_TTL_MS = 3 * SUBORDINATE_HEARTBEAT_MS;
+/** Re-announced this often while the tab's timers are running. */
+export const SUBORDINATE_HEARTBEAT_MS = COLLAB_HEARTBEAT_MS;
+/** Shared with every other collab liveness sweep. See `liveness.ts`. */
+export const SUBORDINATE_TTL_MS = COLLAB_STALE_MS;
 
 type ClaimMessage =
 	| { t: 'claim'; from: string }
@@ -144,9 +152,15 @@ export function watchSubordinate(
 
 	function sweep(): void {
 		if (stopped) return;
-		const cutoff = Date.now() - ttlMs;
-		for (const [id, at] of seen) if (at < cutoff) seen.delete(id);
+		for (const id of staleIds(seen, Date.now(), ttlMs)) seen.delete(id);
 		publish();
+		// A hidden gateway will not reach its own interval. Asking is what
+		// its message handler still answers.
+		try {
+			channel.postMessage({ t: 'who', from: clientId });
+		} catch {
+			/* channel already closed */
+		}
 	}
 
 	const onMessage = (event: { data?: unknown }): void => {

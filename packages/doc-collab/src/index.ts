@@ -30,6 +30,7 @@ export {
 	type Submission
 } from './sequencer.js';
 export { colorForClient, MAX_PRESENCE_NAME, PRESENCE_COLORS } from './presence.js';
+export { COLLAB_HEARTBEAT_MS, COLLAB_STALE_MS, staleIds } from './liveness.js';
 export {
 	createCmEnvelopeSession,
 	DEFAULT_COLLAB_APP,
