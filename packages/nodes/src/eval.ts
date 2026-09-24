@@ -6,10 +6,13 @@ import type {
 	FlowNode,
 	ImageNode,
 	NodeDocument,
+	OutlinesNode,
 	OutputNode,
 	PackNode,
+	PathValue,
 	QueryNode,
 	ScalarKind,
+	SceneNode,
 	ValueType
 } from './types.js';
 
@@ -19,38 +22,50 @@ export type QueryValue =
 	| { kind: 'float'; value: number }
 	| { kind: 'array'; of: Exclude<ScalarKind, 'image'>; items: Array<{ kind: 'string'; value: string } | { kind: 'int'; value: number } | { kind: 'float'; value: number }> };
 
-export type EvalHost<I> = {
+export type EvalHost<I, S = unknown> = {
 	loadImage(node: ImageNode): Promise<I | null>;
 	applyFilter(image: I, filter: FilterKind, params: FilterParams): Promise<I | null>;
 	loadQuery?(node: QueryNode): Promise<QueryValue | null>;
+	/** Resolve a scene node. A `host` clone is the surrounding page object's scene. */
+	loadScene?(node: SceneNode): Promise<S | null>;
+	/** Turn a loaded scene into SVG outline paths. The nodes package does not import Three.js. */
+	encodeOutlines?(scene: S): Promise<PathValue[] | null>;
 };
+
+type PathItem = { kind: 'path'; d: string; stroke?: string; strokeWidth?: number };
 
 type Item<I> =
 	| { kind: 'image'; image: I }
 	| { kind: 'int'; value: number }
 	| { kind: 'float'; value: number }
-	| { kind: 'string'; value: string };
+	| { kind: 'string'; value: string }
+	| PathItem;
 
-export type EvalResult<I> =
+export type EvalResult<I, S = unknown> =
 	| { ok: false; message: string }
 	| { ok: true; type: { kind: 'image' }; image: I }
 	| { ok: true; type: { kind: 'int' }; value: number }
 	| { ok: true; type: { kind: 'float' }; value: number }
 	| { ok: true; type: { kind: 'string' }; value: string }
+	| { ok: true; type: { kind: 'path' }; d: string; stroke?: string; strokeWidth?: number }
+	| { ok: true; type: { kind: 'scene' }; scene: S }
 	| { ok: true; type: { kind: 'array'; of: ScalarKind }; items: Array<Item<I>> };
 
 type Fail = { ok: false; message: string };
 
-type Ok<I> =
+type Ok<I, S = unknown> =
 	| { ok: true; kind: 'image'; image: I }
 	| { ok: true; kind: 'int'; value: number }
 	| { ok: true; kind: 'float'; value: number }
 	| { ok: true; kind: 'string'; value: string }
+	| { ok: true; kind: 'path'; d: string; stroke?: string; strokeWidth?: number }
+	| { ok: true; kind: 'scene'; scene: S }
 	| { ok: true; kind: 'array'; of: ScalarKind; items: Array<Item<I>> };
 
-type Runtime<I> = Fail | Ok<I>;
+type Runtime<I, S = unknown> = Fail | Ok<I, S>;
 
-function coerce<I>(value: Ok<I>, target: ValueType): Ok<I> | null {
+function coerce<I, S>(value: Ok<I, S>, target: ValueType): Ok<I, S> | null {
+	if (target.kind === 'scene') return value.kind === 'scene' ? value : null;
 	if (target.kind === 'array') {
 		if (value.kind !== 'array') return null;
 		if (value.of === target.of) return value;
@@ -74,7 +89,15 @@ function coerce<I>(value: Ok<I>, target: ValueType): Ok<I> | null {
 	return null;
 }
 
-function project<I>(value: Ok<I>): EvalResult<I> {
+function pathFields(value: { d: string; stroke?: string; strokeWidth?: number }) {
+	return {
+		d: value.d,
+		...(value.stroke !== undefined ? { stroke: value.stroke } : {}),
+		...(value.strokeWidth !== undefined ? { strokeWidth: value.strokeWidth } : {})
+	};
+}
+
+function project<I, S>(value: Ok<I, S>): EvalResult<I, S> {
 	switch (value.kind) {
 		case 'image':
 			return { ok: true, type: { kind: 'image' }, image: value.image };
@@ -84,6 +107,10 @@ function project<I>(value: Ok<I>): EvalResult<I> {
 			return { ok: true, type: { kind: 'float' }, value: value.value };
 		case 'string':
 			return { ok: true, type: { kind: 'string' }, value: value.value };
+		case 'path':
+			return { ok: true, type: { kind: 'path' }, ...pathFields(value) };
+		case 'scene':
+			return { ok: true, type: { kind: 'scene' }, scene: value.scene };
 		case 'array':
 			return { ok: true, type: { kind: 'array', of: value.of }, items: value.items };
 		default: {
@@ -93,7 +120,7 @@ function project<I>(value: Ok<I>): EvalResult<I> {
 	}
 }
 
-function toItem<I>(value: Ok<I>, element: ScalarKind): Item<I> | null {
+function toItem<I, S>(value: Ok<I, S>, element: ScalarKind): Item<I> | null {
 	if (value.kind !== element) return null;
 	switch (value.kind) {
 		case 'image':
@@ -104,6 +131,8 @@ function toItem<I>(value: Ok<I>, element: ScalarKind): Item<I> | null {
 			return { kind: 'float', value: value.value };
 		case 'string':
 			return { kind: 'string', value: value.value };
+		case 'path':
+			return { kind: 'path', ...pathFields(value) };
 		default:
 			return null;
 	}
@@ -140,7 +169,10 @@ function displayName(node: FlowNode): string {
  * Evaluate the first output node. Host failures (`null`) become result
  * messages; host throws are not caught. Each node runs at most once.
  */
-export async function evaluateOutput<I>(doc: NodeDocument, host: EvalHost<I>): Promise<EvalResult<I>> {
+export async function evaluateOutput<I, S = unknown>(
+	doc: NodeDocument,
+	host: EvalHost<I, S>
+): Promise<EvalResult<I, S>> {
 	const output = doc.nodes.find((node): node is OutputNode => node.kind === 'output');
 	if (!output) return { ok: false, message: 'Output is not wired.' };
 	const wired = doc.wires.some((wire) => wire.toNodeId === output.id && wire.toSocket === 'in');
@@ -151,10 +183,10 @@ export async function evaluateOutput<I>(doc: NodeDocument, host: EvalHost<I>): P
 	for (const node of doc.nodes) {
 		if (!byId.has(node.id)) byId.set(node.id, node);
 	}
-	const memo = new Map<string, Promise<Runtime<I>>>();
+	const memo = new Map<string, Promise<Runtime<I, S>>>();
 	const active = new Set<string>();
 
-	function evalNode(node: FlowNode): Promise<Runtime<I>> {
+	function evalNode(node: FlowNode): Promise<Runtime<I, S>> {
 		const cached = memo.get(node.id);
 		if (cached) return cached;
 		if (active.has(node.id)) {
@@ -168,7 +200,7 @@ export async function evaluateOutput<I>(doc: NodeDocument, host: EvalHost<I>): P
 		return pending;
 	}
 
-	async function readRequired(node: FlowNode, socket: SocketDef): Promise<Runtime<I>> {
+	async function readRequired(node: FlowNode, socket: SocketDef): Promise<Runtime<I, S>> {
 		const wire = doc.wires.find((candidate) => candidate.toNodeId === node.id && candidate.toSocket === socket.key);
 		if (!wire) {
 			if (node.kind === 'output') return { ok: false, message: 'Output is not wired.' };
@@ -200,7 +232,7 @@ export async function evaluateOutput<I>(doc: NodeDocument, host: EvalHost<I>): P
 		return read.value;
 	}
 
-	async function dispatch(node: FlowNode): Promise<Runtime<I>> {
+	async function dispatch(node: FlowNode): Promise<Runtime<I, S>> {
 		switch (node.kind) {
 			case 'int':
 			case 'float':
@@ -232,6 +264,13 @@ export async function evaluateOutput<I>(doc: NodeDocument, host: EvalHost<I>): P
 				return evalPack(node);
 			case 'filter':
 				return evalFilter(node);
+			case 'scene': {
+				const scene = host.loadScene ? await host.loadScene(node) : null;
+				if (scene == null) return { ok: false, message: 'Scene is missing.' };
+				return { ok: true, kind: 'scene', scene };
+			}
+			case 'outlines':
+				return evalOutlines(node);
 			case 'output': {
 				const socket = socketOf(node, 'in');
 				if (!socket) return { ok: false, message: 'Output is not wired.' };
@@ -244,7 +283,23 @@ export async function evaluateOutput<I>(doc: NodeDocument, host: EvalHost<I>): P
 		}
 	}
 
-	async function evalPack(node: PackNode): Promise<Runtime<I>> {
+	async function evalOutlines(node: OutlinesNode): Promise<Runtime<I, S>> {
+		const socket = socketOf(node, 'scene');
+		if (!socket) return { ok: false, message: `${displayName(node)} Scene is not wired.` };
+		const scene = await readRequired(node, socket);
+		if (!scene.ok) return scene;
+		if (scene.kind !== 'scene') return { ok: false, message: 'Type mismatch.' };
+		const paths = host.encodeOutlines ? await host.encodeOutlines(scene.scene) : null;
+		if (!paths) return { ok: false, message: 'Outlines could not be encoded.' };
+		return {
+			ok: true,
+			kind: 'array',
+			of: 'path',
+			items: paths.map((path) => ({ kind: 'path' as const, ...pathFields(path) }))
+		};
+	}
+
+	async function evalPack(node: PackNode): Promise<Runtime<I, S>> {
 		const items: Array<Item<I>> = [];
 		for (const socket of socketsOf(node)) {
 			if (socket.dir !== 'in') continue;
@@ -257,7 +312,7 @@ export async function evaluateOutput<I>(doc: NodeDocument, host: EvalHost<I>): P
 		return { ok: true, kind: 'array', of: node.element, items };
 	}
 
-	async function evalFilter(node: FilterNode): Promise<Runtime<I>> {
+	async function evalFilter(node: FilterNode): Promise<Runtime<I, S>> {
 		const imageSocket = socketOf(node, 'image');
 		if (!imageSocket) return { ok: false, message: `${displayName(node)} Image is not wired.` };
 		const image = await readRequired(node, imageSocket);

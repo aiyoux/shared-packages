@@ -43,7 +43,7 @@ export type NodeOp =
 	| { t: 'connect'; wire: Wire }
 	| { t: 'disconnect'; wireId: string };
 
-const SCALAR_KINDS: readonly ScalarKind[] = ['image', 'int', 'float', 'string'];
+const SCALAR_KINDS: readonly ScalarKind[] = ['image', 'int', 'float', 'string', 'path'];
 const FILTER_KINDS: readonly FilterKind[] = ['grayscale', 'blur', 'brightness-contrast', 'invert'];
 
 function isScalarKind(value: unknown): value is ScalarKind {
@@ -58,11 +58,13 @@ function isValueType(value: unknown): value is ValueType {
 	if (value == null || typeof value !== 'object') return false;
 	const v = value as ValueType;
 	if (v.kind === 'array') return isScalarKind(v.of);
+	if (v.kind === 'scene') return true;
 	return isScalarKind(v.kind);
 }
 
 function copyType(type: ValueType): ValueType {
 	if (type.kind === 'array') return { kind: 'array', of: type.of };
+	if (type.kind === 'scene') return { kind: 'scene' };
 	return { kind: type.kind };
 }
 
@@ -141,6 +143,14 @@ function copyNode(node: FlowNode): FlowNode {
 				...snap
 			};
 		}
+		case 'scene': {
+			const snap = node.snapshot ? { snapshot: copySnapshot(node.snapshot) } : {};
+			const host = node.host === true ? { host: true as const } : {};
+			if (node.bind === 'clone') return { ...head, kind: 'scene', bind: 'clone', ...host, ...snap };
+			return { ...head, kind: 'scene', bind: node.bind, source: copySource(node.source), ...snap };
+		}
+		case 'outlines':
+			return { ...head, kind: 'outlines' };
 		default: {
 			const never: never = node;
 			return never;

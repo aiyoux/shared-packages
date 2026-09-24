@@ -198,7 +198,9 @@ export interface ImportedImage {
     /** Radians. Optional so older saves still load. */
     rotation?: number;
     /** Bind mode. Absent = a cloned/embedded copy (the historical default). */
-    bind?: 'clone' | 'live' | 'snapshot';
+    bind?: 'clone' | 'live' | 'snapshot' | 'gitPin';
+    /** Commit named by a git pin. Absent on every other bind. */
+    atCommit?: string;
     /**
      * The document this image was bound from. Live re-reads it.
      *

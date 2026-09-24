@@ -11,10 +11,13 @@ export type {
 	NodeDocument,
 	NodeSnapshot,
 	NodeWindowData,
+	OutlinesNode,
 	OutputNode,
 	PackNode,
+	PathValue,
 	QueryNode,
 	ScalarKind,
+	SceneNode,
 	ValueType,
 	Wire
 } from './types.js';
@@ -26,6 +29,7 @@ export {
 	NodeParseError,
 	emptyNodeDocument,
 	ensureNodeIdentity,
+	outlineNodeDocument,
 	parseNodeDocument,
 	parseNodeView,
 	serializeNodeDocument

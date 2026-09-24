@@ -15,6 +15,7 @@ export function clampPackCount(count: number): number {
 
 function valueType(type: ValueType): ValueType {
 	if (type.kind === 'array') return { kind: 'array', of: type.of };
+	if (type.kind === 'scene') return { kind: 'scene' };
 	return { kind: type.kind };
 }
 
@@ -81,6 +82,13 @@ export function socketsOf(node: FlowNode): SocketDef[] {
 				...filterParams(node),
 				{ key: 'out', dir: 'out', type: { kind: 'image' }, label: 'Image' }
 			];
+		case 'scene':
+			return [{ key: 'out', dir: 'out', type: { kind: 'scene' }, label: 'Scene' }];
+		case 'outlines':
+			return [
+				{ key: 'scene', dir: 'in', type: { kind: 'scene' }, label: 'Scene' },
+				{ key: 'out', dir: 'out', type: { kind: 'array', of: 'path' }, label: 'Paths' }
+			];
 		default: {
 			const never: never = node;
 			return never;
@@ -98,6 +106,7 @@ export function socketOf(node: FlowNode, key: string): SocketDef | undefined {
  * not an array.
  */
 export function typesCompatible(from: ValueType, to: ValueType): boolean {
+	if (from.kind === 'scene' || to.kind === 'scene') return from.kind === 'scene' && to.kind === 'scene';
 	if (from.kind === 'array' || to.kind === 'array') {
 		if (from.kind !== 'array' || to.kind !== 'array') return false;
 		return from.of === to.of || (from.of === 'int' && to.of === 'float');
@@ -109,6 +118,7 @@ export function typesCompatible(from: ValueType, to: ValueType): boolean {
 /** CSS class names for a socket chip. Arrays carry both the family and the element. */
 export function typeClass(type: ValueType): string {
 	if (type.kind === 'array') return `type-array type-array-of-${type.of}`;
+	if (type.kind === 'scene') return 'type-scene';
 	return `type-${type.kind}`;
 }
 

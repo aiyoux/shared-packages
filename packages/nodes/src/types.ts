@@ -2,8 +2,12 @@ import type { BindMode, DocSource, ViewSource } from '@shared-packages/doc-refs'
 
 export type { BindMode, DocSource, ViewSource };
 
-export type ScalarKind = 'image' | 'int' | 'float' | 'string';
-export type ValueType = { kind: ScalarKind } | { kind: 'array'; of: ScalarKind };
+export type ScalarKind = 'image' | 'int' | 'float' | 'string' | 'path';
+/** A scalar, an array of scalars, or one 3D scene. A scene is not a scalar: it cannot be packed. */
+export type ValueType = { kind: ScalarKind } | { kind: 'array'; of: ScalarKind } | { kind: 'scene' };
+
+/** One SVG outline path. `d` is the path data; stroke fields are optional paint. */
+export type PathValue = { d: string; stroke?: string; strokeWidth?: number };
 
 export type NodeSnapshot = { bytesRef: string; atGeneration?: number; atCommit?: string };
 
@@ -40,7 +44,21 @@ export type QueryNode = FlowNodeBase & {
 	| { bind: Exclude<BindMode, 'clone'>; source: ViewSource }
 );
 
-export type FlowNode = OutputNode | ImageNode | ConstNode | PackNode | FilterNode | QueryNode;
+/**
+ * A 3D scene input. `host: true` with `bind: 'clone'` means the surrounding
+ * page object supplies the scene, so the graph stores no second copy of it.
+ * Any other bind names an `.ob3d` file the same way an image node names a picture.
+ */
+export type SceneNode = FlowNodeBase & {
+	kind: 'scene';
+	host?: boolean;
+	snapshot?: NodeSnapshot;
+} & ({ bind: 'clone' } | { bind: Exclude<BindMode, 'clone'>; source: DocSource });
+
+/** Scene in, SVG outline paths out. The host encodes; this node holds no Three.js. */
+export type OutlinesNode = FlowNodeBase & { kind: 'outlines' };
+
+export type FlowNode = OutputNode | ImageNode | ConstNode | PackNode | FilterNode | QueryNode | SceneNode | OutlinesNode;
 export type Wire = {
 	id: string;
 	fromNodeId: string;

@@ -22,7 +22,7 @@ export class NodeParseError extends Error {
 	}
 }
 
-const SCALAR_KINDS: readonly ScalarKind[] = ['image', 'int', 'float', 'string'];
+const SCALAR_KINDS: readonly ScalarKind[] = ['image', 'int', 'float', 'string', 'path'];
 const FILTER_KINDS: readonly FilterKind[] = ['grayscale', 'blur', 'brightness-contrast', 'invert'];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -89,6 +89,7 @@ function optionalName(raw: unknown, field: string): string | undefined {
 
 function parseValueType(raw: unknown, field: string): ValueType {
 	if (!isRecord(raw)) throw new NodeParseError(`${field} must be an object`);
+	if (raw.kind === 'scene') return { kind: 'scene' };
 	if (raw.kind === 'array') {
 		if (!isScalarKind(raw.of)) {
 			throw new NodeParseError(`${field}.of is unknown: ${String(raw.of)}`);
@@ -181,6 +182,10 @@ function parseNode(raw: unknown, index: number): FlowNode {
 		}
 		case 'query':
 			return parseQuery(raw, field, head);
+		case 'scene':
+			return parseScene(raw, field, head);
+		case 'outlines':
+			return { ...head, kind: 'outlines' };
 		case 'filter': {
 			if (!isFilterKind(raw.filter)) {
 				throw new NodeParseError(`${field}.filter is unknown: ${String(raw.filter)}`);
@@ -234,8 +239,13 @@ function parseQuery(
 ): QueryNode {
 	const viewId = nonEmptyString(raw.viewId, `${field}.viewId`);
 	const valueType = parseValueType(raw.valueType, `${field}.valueType`);
-	if (valueType.kind === 'image' || (valueType.kind === 'array' && valueType.of === 'image')) {
-		throw new NodeParseError(`${field}.valueType cannot be an image`);
+	if (
+		valueType.kind === 'image' ||
+		valueType.kind === 'scene' ||
+		valueType.kind === 'path' ||
+		(valueType.kind === 'array' && (valueType.of === 'image' || valueType.of === 'path'))
+	) {
+		throw new NodeParseError(`${field}.valueType cannot be an image, scene, or path`);
 	}
 	const bind = parseBind(raw.bind, `${field}.bind`);
 	const snapshot = raw.snapshot === undefined ? undefined : parseSnapshot(raw.snapshot, `${field}.snapshot`);
@@ -253,6 +263,23 @@ function parseQuery(
 		source: parseViewSource(raw.source, `${field}.source`, viewId),
 		...snap
 	};
+}
+
+function parseScene(
+	raw: Record<string, unknown>,
+	field: string,
+	head: { id: string; x: number; y: number; name?: string }
+): FlowNode {
+	const bind = parseBind(raw.bind, `${field}.bind`);
+	const snapshot = raw.snapshot === undefined ? undefined : parseSnapshot(raw.snapshot, `${field}.snapshot`);
+	const snap = snapshot ? { snapshot } : {};
+	if (bind === 'clone') {
+		if (raw.source !== undefined) throw new NodeParseError(`${field} clone bind must omit source`);
+		return { ...head, kind: 'scene', bind: 'clone', ...(raw.host === true ? { host: true } : {}), ...snap };
+	}
+	if (raw.host === true) throw new NodeParseError(`${field} host scene must be a clone`);
+	if (raw.source === undefined) throw new NodeParseError(`${field} ${bind} bind requires source`);
+	return { ...head, kind: 'scene', bind, source: parseSource(raw.source, `${field}.source`), ...snap };
 }
 
 function parseWire(raw: unknown, index: number): Wire {
@@ -344,6 +371,32 @@ export function ensureNodeIdentity(doc: NodeDocument): NodeDocument {
 	return { ...doc, id, createdAt };
 }
 
+/**
+ * The automatic outline graph a sketch stores on a placed 3D object.
+ * Scene (host) → Outlines → path Output. No file reference.
+ */
+export function outlineNodeDocument(): NodeDocument {
+	return {
+		schemaVersion: 1,
+		nodes: [
+			{ id: 'scene', x: 40, y: 80, name: 'Scene', kind: 'scene', bind: 'clone', host: true },
+			{ id: 'outlines', x: 280, y: 80, name: 'Outlines', kind: 'outlines' },
+			{
+				id: 'output',
+				x: 540,
+				y: 80,
+				name: 'Output',
+				kind: 'output',
+				valueType: { kind: 'array', of: 'path' }
+			}
+		],
+		wires: [
+			{ id: 'w-scene', fromNodeId: 'scene', fromSocket: 'out', toNodeId: 'outlines', toSocket: 'scene' },
+			{ id: 'w-out', fromNodeId: 'outlines', fromSocket: 'out', toNodeId: 'output', toSocket: 'in' }
+		]
+	};
+}
+
 /** One image output, centred toward the right of a default canvas, plus identity. */
 export function emptyNodeDocument(): NodeDocument {
 	return ensureNodeIdentity({
@@ -364,6 +417,7 @@ export function emptyNodeDocument(): NodeDocument {
 
 function persistValueType(type: ValueType): ValueType {
 	if (type.kind === 'array') return { kind: 'array', of: type.of };
+	if (type.kind === 'scene') return { kind: 'scene' };
 	return { kind: type.kind };
 }
 
@@ -446,6 +500,14 @@ function persistNode(node: FlowNode): FlowNode {
 				brightness: node.brightness,
 				contrast: node.contrast
 			};
+		case 'scene': {
+			const snap = node.snapshot ? { snapshot: persistSnapshot(node.snapshot) } : {};
+			const host = node.host === true ? { host: true as const } : {};
+			if (node.bind === 'clone') return { ...head, kind: 'scene', bind: 'clone', ...host, ...snap };
+			return { ...head, kind: 'scene', bind: node.bind, source: persistSource(node.source), ...snap };
+		}
+		case 'outlines':
+			return { ...head, kind: 'outlines' };
 		default: {
 			const never: never = node;
 			return never;
