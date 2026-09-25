@@ -1725,6 +1725,8 @@ export class VfsService {
 		let reserveChain: Promise<void> = Promise.resolve();
 		const inFlight = new Set<Promise<void>>();
 		const ordered: VfsNode[][] = [];
+		const completedSlots = new Set<number>();
+		let nextProgressSlot = 0;
 		let inFlightBytes = 0;
 
 		const flush = async () => {
@@ -1767,7 +1769,11 @@ export class VfsService {
 					// waiting on a promise nothing resolves.
 					release();
 				}
-				opts?.onProgress?.(ordered[slot]!);
+				completedSlots.add(slot);
+				while (completedSlots.delete(nextProgressSlot)) {
+					opts?.onProgress?.(ordered[nextProgressSlot]!);
+					nextProgressSlot++;
+				}
 			})();
 			const tracked = task.finally(() => {
 				inFlight.delete(tracked);
@@ -2803,15 +2809,66 @@ export class VfsService {
 				meta: src.meta ? { ...src.meta } : undefined
 			});
 		}
+		let ancestorId = newParentId;
+		while (ancestorId) {
+			if (ancestorId === id) throw new VfsError('CYCLE', 'Cannot copy folder into itself');
+			ancestorId = (await this.db.nodes.get(ancestorId))?.parentId ?? null;
+		}
 		// folder: recursive. `meta` travels like it does on the file arm above —
 		// dropping it lost a project folder's `projectPack` on copy.
 		const folder = await this.mkdir(newParentId, src.name, {
 			meta: src.meta ? { ...src.meta } : undefined
 		});
-		const children = await this.list({ parentId: id });
-		for (const child of children) {
-			await this.copy(child.id, folder.id);
+		const pending: Array<{ source: VfsNode; parentId: string }> = [];
+		const collect = async (sourceId: string, destId: string): Promise<void> => {
+			const children = await this.list({ parentId: sourceId });
+			for (const child of children) {
+				if (child.kind === 'folder') {
+					const next = await this.mkdir(destId, child.name, {
+						meta: child.meta ? { ...child.meta } : undefined
+					});
+					await collect(child.id, next.id);
+				} else {
+					pending.push({ source: child, parentId: destId });
+				}
+			}
+		};
+		await collect(id, folder.id);
+		// A copied tree still has one blob per file, but the catalog can reserve
+		// and confirm files from many destination folders in shared chunks.
+		let batch: typeof pending = [];
+		let batchBytes = 0;
+		const flushCopy = async () => {
+			if (!batch.length) return;
+			const group = batch;
+			batch = [];
+			batchBytes = 0;
+			const inputs = new Array<WriteFileInput>(group.length);
+			let cursor = 0;
+			await Promise.all(Array.from({ length: Math.min(8, group.length) }, async () => {
+				while (cursor < group.length) {
+					const index = cursor++;
+					const { source, parentId } = group[index]!;
+					inputs[index] = {
+						parentId,
+						name: source.name,
+						body: await this.readBlob(source.id),
+						fileType: source.fileType,
+						contentType: source.contentType,
+						meta: source.meta ? { ...source.meta } : undefined
+					};
+				}
+			}));
+			await this.writeFiles(inputs);
+		};
+		for (const { source, parentId } of pending) {
+			if (batch.length && (batch.length >= 512 || batchBytes + (source.size ?? 0) > (64 << 20))) {
+				await flushCopy();
+			}
+			batch.push({ source, parentId });
+			batchBytes += source.size ?? 0;
 		}
+		await flushCopy();
 		return folder;
 	}
 

@@ -43,11 +43,15 @@ describe('stackTransferItems', () => {
 				transferred: 30,
 				size: 100,
 				hop: 'dual-phase',
-				hopNote: 'Through this device'
+				hopNote: 'Through this device',
+				destParentId: 'nested-folder',
+				entryKind: 'file'
 			})
 		]);
 		assert.equal(stacked[0]!.hop, 'dual-phase');
 		assert.equal(stacked[0]!.hopNote, 'Through this device');
+		assert.equal(stacked[0]!.destParentId, 'nested-folder');
+		assert.equal(stacked[0]!.entryKind, 'file');
 
 		const single = stackTransferItems([
 			item({

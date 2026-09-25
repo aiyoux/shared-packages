@@ -38,6 +38,8 @@ export type StackedProgress = {
 	ice?: CopyIce;
 	icePath?: CopyIcePath;
 	hopNote?: string;
+	destParentId?: string | null;
+	entryKind?: 'file' | 'folder';
 };
 
 export function stagePercent(n: number, size: number, done: boolean): number {
@@ -177,7 +179,9 @@ export function stackTransferItems(items: TransferItem[]): StackedProgress[] {
 			hop: primary.hop ?? iced?.hop,
 			ice: iced?.ice ?? primary.ice,
 			icePath: iced?.icePath ?? primary.icePath,
-			hopNote: iced?.hopNote ?? primary.hopNote
+			hopNote: iced?.hopNote ?? primary.hopNote,
+			destParentId: primary.destParentId,
+			entryKind: primary.entryKind
 		});
 	}
 
@@ -201,7 +205,9 @@ export function stackTransferItems(items: TransferItem[]): StackedProgress[] {
 			hop: t.hop,
 			ice: t.ice,
 			icePath: t.icePath,
-			hopNote: t.hopNote
+			hopNote: t.hopNote,
+			destParentId: t.destParentId,
+			entryKind: t.entryKind
 		});
 	}
 	return out;

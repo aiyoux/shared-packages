@@ -4,7 +4,8 @@
  * Chromium revokes `DataTransfer.files` from a dropped *directory* once the
  * drop handler returns (`NotFoundError`). `webkitGetAsEntry()` /
  * `getAsFileSystemHandle()` must be called in that same turn; those handles
- * stay readable. Snapshot bytes into in-memory `File`s, then mkdir + write.
+ * stay readable. FileList fallback bytes are snapshotted during the drop;
+ * handle-backed files are opened when the destination is ready to write.
  */
 import type { ExplorerDriver, ExplorerEntryId } from './explorerDriver.js';
 import { formatExplorerError } from './explorerError.js';
@@ -15,8 +16,10 @@ export type OsDropNode = {
 	/** POSIX relative path from the drop root. Folders have no trailing slash. */
 	relativePath: string;
 	kind: 'file' | 'folder';
-	/** In-memory snapshot; set for files. */
+	/** A captured FileList snapshot or picker File. */
 	file?: File;
+	/** A persistent drop entry/handle, opened when the destination writes. */
+	loadFile?: () => Promise<File>;
 };
 
 type EntryLike = {
@@ -103,17 +106,30 @@ export function nodesFromFiles(files: File[]): OsDropNode[] {
 
 export async function snapshotFiles(files: File[]): Promise<OsDropNode[]> {
 	const folders = new Set<string>();
-	const nodes: OsDropNode[] = [];
-	for (const f of files) {
+	const nodes = await mapBounded(files, 8, async (f): Promise<OsDropNode> => {
 		const rel = relativePathOf(f);
-		for (const dir of folderPathsFromFilePath(rel)) folders.add(dir);
 		const copy = await snapshotFile(f);
-		nodes.push({ relativePath: rel, kind: 'file', file: copy });
+		return { relativePath: rel, kind: 'file', file: copy };
+	});
+	for (const node of nodes) {
+		for (const dir of folderPathsFromFilePath(node.relativePath)) folders.add(dir);
 	}
 	return [
 		...[...folders].sort().map((p) => ({ relativePath: p, kind: 'folder' as const })),
 		...nodes
 	];
+}
+
+async function mapBounded<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+	const out = new Array<R>(items.length);
+	let cursor = 0;
+	await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {
+		while (cursor < items.length) {
+			const i = cursor++;
+			out[i] = await fn(items[i]!);
+		}
+	}));
+	return out;
 }
 
 function readEntryFile(entry: EntryLike): Promise<File> {
@@ -155,16 +171,13 @@ async function walkEntry(entry: EntryLike, prefix: string): Promise<OsDropNode[]
 	const name = entry.name || 'untitled';
 	const rel = prefix ? `${prefix}/${name}` : name;
 	if (entry.isFile) {
-		const file = await readEntryFile(entry);
-		const snap = await snapshotFile(file);
-		return [{ relativePath: rel, kind: 'file', file: snap }];
+		return [{ relativePath: rel, kind: 'file', loadFile: () => readEntryFile(entry) }];
 	}
 	if (entry.isDirectory) {
 		const kids = await readDirEntries(entry);
 		const out: OsDropNode[] = [{ relativePath: rel, kind: 'folder' }];
-		for (const kid of kids) {
-			out.push(...(await walkEntry(kid, rel)));
-		}
+		const children = await mapBounded(kids, 8, (kid) => walkEntry(kid, rel));
+		for (const child of children) out.push(...child);
 		return out;
 	}
 	return [];
@@ -178,17 +191,19 @@ type DirHandleWithValues = FileSystemDirectoryHandle & {
 async function walkHandle(handle: FileSystemHandle, prefix: string): Promise<OsDropNode[]> {
 	const rel = prefix ? `${prefix}/${handle.name}` : handle.name;
 	if (handle.kind === 'file') {
-		const file = await (handle as FileSystemFileHandle).getFile();
-		const snap = await snapshotFile(file);
-		return [{ relativePath: rel, kind: 'file', file: snap }];
+		return [{
+			relativePath: rel, kind: 'file',
+			loadFile: () => (handle as FileSystemFileHandle).getFile()
+		}];
 	}
 	if (handle.kind !== 'directory') return [];
 	const dir = handle as DirHandleWithValues;
 	const out: OsDropNode[] = [{ relativePath: rel, kind: 'folder' }];
 	if (typeof dir.values === 'function') {
-		for await (const child of dir.values()) {
-			out.push(...(await walkHandle(child, rel)));
-		}
+		const children: FileSystemHandle[] = [];
+		for await (const child of dir.values()) children.push(child);
+		const walked = await mapBounded(children, 8, (child) => walkHandle(child, rel));
+		for (const child of walked) out.push(...child);
 	}
 	return out;
 }
@@ -281,7 +296,7 @@ export function collectOsDrop(dt: DataTransfer | null | undefined): Promise<OsDr
 	}
 
 	const filesNow: File[] = dt.files?.length ? Array.from(dt.files) : [];
-	const listPending = filesNow.map((f) => {
+	const listPending = (captured.some((c) => c.entry?.isDirectory) ? [] : filesNow).map((f) => {
 		const bytes = readFileBytes(f);
 		bytes.catch(() => {
 			/* used only if handles/entries fail; avoid unhandled rejection */
@@ -296,6 +311,9 @@ export function collectOsDrop(dt: DataTransfer | null | undefined): Promise<OsDr
 	});
 
 	return (async () => {
+		if (filesNow.length === captured.length && captured.every((c) => c.entry?.isFile)) {
+			return snapshotPending(listPending);
+		}
 		const fromHandles: OsDropNode[] = [];
 		for (const c of captured) {
 			if (!c.handleP) continue;
@@ -339,6 +357,9 @@ export type OsDropFileProgress = {
 	size: number;
 	transferred: number;
 	done: boolean;
+	relativePath?: string;
+	parentId?: ExplorerEntryId | null;
+	entryKind?: 'file' | 'folder';
 };
 
 /**
@@ -356,16 +377,16 @@ export function createDeviceImportReporter(driver: { id: string }): {
 	signal: AbortSignal;
 } {
 	const ac = new AbortController();
-	const ids = new Map<string, string>();
+	const ids = new Map<string, { id: string; name: string; size: number }>();
 	const idOf = (ev: OsDropFileProgress): string => {
-		const key = `${ev.name}:${ev.size}`;
-		let id = ids.get(key);
-		if (!id) {
-			id = generateId('import');
-			ids.set(key, id);
-			attachTransferAbort(id, ac);
+		const key = ev.relativePath ?? ev.name;
+		let item = ids.get(key);
+		if (!item) {
+			item = { id: generateId('import'), name: ev.name, size: ev.size };
+			ids.set(key, item);
+			attachTransferAbort(item.id, ac);
 		}
-		return id;
+		return item.id;
 	};
 	const report = (
 		ev: OsDropFileProgress,
@@ -388,12 +409,11 @@ export function createDeviceImportReporter(driver: { id: string }): {
 			const aborted = err instanceof Error && err.name === 'AbortError';
 			const msg = err instanceof Error ? err.message : String(err);
 			const status = aborted ? 'cancelled' : 'failed';
-			for (const [key, id] of ids) {
-				const cut = key.lastIndexOf(':');
+			for (const { id, name, size } of ids.values()) {
 				upsertProgress({
 					id,
-					name: key.slice(0, cut),
-					size: Number(key.slice(cut + 1)) || 0,
+					name,
+					size,
 					transferred: 0,
 					direction: 'copying',
 					done: true,
@@ -432,91 +452,194 @@ export async function importOsDropToDriver(
 	}
 
 	const folderIds = new Map<string, ExplorerEntryId | null>();
+	const folderNames = new Map<string, string>();
 	folderIds.set('', destParentId);
+	const abortIfNeeded = () => {
+		if (!opts?.signal?.aborted) return;
+		const error = new Error('Import cancelled');
+		error.name = 'AbortError';
+		throw error;
+	};
 
 	const ensureFolder = async (relDir: string): Promise<ExplorerEntryId | null> => {
 		if (!relDir) return destParentId;
 		const hit = folderIds.get(relDir);
 		if (hit !== undefined) return hit;
+		abortIfNeeded();
 		const slash = relDir.lastIndexOf('/');
 		const parentRel = slash >= 0 ? relDir.slice(0, slash) : '';
 		const name = slash >= 0 ? relDir.slice(slash + 1) : relDir;
 		const parentId = await ensureFolder(parentRel);
 		const created = await driver.mkdir!(parentId, name);
 		folderIds.set(relDir, created.id);
+		folderNames.set(relDir, created.name);
 		return created.id;
 	};
 
 	let files = 0;
 	let folders = 0;
-	for (const n of nodes) {
-		if (n.kind === 'folder') {
-			await ensureFolder(n.relativePath);
-			folders += 1;
+	const folderPaths = new Set<string>();
+	for (const node of nodes) {
+		if (node.kind === 'folder') folderPaths.add(node.relativePath);
+		else for (const path of folderPathsFromFilePath(node.relativePath)) folderPaths.add(path);
+	}
+	const sortedFolders = [...folderPaths].sort((a, b) =>
+		a.split('/').length - b.split('/').length || a.localeCompare(b)
+	);
+	// Top-level folders must be freshly named by mkdir. Within those new
+	// folders, the local driver can reserve the remaining tree in one batch.
+	for (const path of sortedFolders.filter((p) => !p.includes('/'))) {
+		await ensureFolder(path);
+	}
+	if (driver.ensureFolders) {
+		for (const root of sortedFolders.filter((p) => !p.includes('/'))) {
+			const descendants = sortedFolders
+				.filter((p) => p.startsWith(`${root}/`))
+				.map((p) => p.slice(root.length + 1).split('/'));
+			if (!descendants.length) continue;
+			abortIfNeeded();
+			const mapped = await driver.ensureFolders(folderIds.get(root)!, descendants, {
+				signal: opts?.signal
+			});
+			for (const [path, id] of mapped) {
+				if (path) {
+					folderIds.set(`${root}/${path}`, id);
+					folderNames.set(`${root}/${path}`, path.split('/').at(-1)!);
+				}
+			}
 		}
 	}
-	// Group by destination folder so a driver with a bulk write can take a
-	// whole folder in one call. Dropping a 3000-file tree used to be 3000
-	// separate writes; each one is ~4 OPFS round trips, and that per-file cost
-	// dominates the drop regardless of how large the files are.
-	const byParent = new Map<string, { parentId: string | null; files: File[] }>();
-	for (const n of nodes) {
-		if (n.kind !== 'file' || !n.file) continue;
-		const slash = n.relativePath.lastIndexOf('/');
-		const dir = slash >= 0 ? n.relativePath.slice(0, slash) : '';
-		const parentId = await ensureFolder(dir);
-		const key = parentId ?? '';
-		const group = byParent.get(key);
-		if (group) group.files.push(n.file);
-		else byParent.set(key, { parentId, files: [n.file] });
+	for (const path of sortedFolders) await ensureFolder(path);
+	folders = nodes.filter((n) => n.kind === 'folder').length;
+
+	type Planned = { node: OsDropNode; file: File; parentId: ExplorerEntryId | null };
+	const planned: Planned[] = await mapBounded(
+		nodes.filter((n) => n.kind === 'file'), 8,
+		async (n) => {
+			abortIfNeeded();
+			const file = n.file ?? await n.loadFile?.();
+			if (!file) throw new OsDropError(`Could not read ${n.relativePath}`);
+			const slash = n.relativePath.lastIndexOf('/');
+			const dir = slash >= 0 ? n.relativePath.slice(0, slash) : '';
+			return { node: n, file, parentId: await ensureFolder(dir) };
+		}
+	);
+	const folderTotals = new Map<string, { size: number; transferred: number; count: number; completed: number }>();
+	for (const path of sortedFolders) folderTotals.set(path, { size: 0, transferred: 0, count: 0, completed: 0 });
+	for (const p of planned) {
+		for (const path of folderPathsFromFilePath(p.node.relativePath)) {
+			const total = folderTotals.get(path);
+			if (total) {
+				total.size += p.file.size;
+				total.count++;
+			}
+		}
+	}
+	const emitFolder = (path: string) => {
+		const slash = path.lastIndexOf('/');
+		const parentPath = slash < 0 ? '' : path.slice(0, slash);
+		const total = folderTotals.get(path)!;
+		opts?.onFile?.({
+			name: folderNames.get(path) ?? path.slice(slash + 1), relativePath: path,
+			parentId: folderIds.get(parentPath) ?? destParentId,
+			entryKind: 'folder', size: total.size,
+			transferred: total.transferred, done: total.completed >= total.count
+		});
+	};
+	for (const path of sortedFolders) emitFolder(path);
+	abortIfNeeded();
+	const emitFile = (p: Planned, transferred: number, done: boolean) => {
+		opts?.onFile?.({
+			name: p.file.name, relativePath: p.node.relativePath,
+			parentId: p.parentId, entryKind: 'file',
+			size: p.file.size, transferred, done
+		});
+	};
+	const settleFile = (p: Planned) => {
+		emitFile(p, p.file.size, true);
+		files += 1;
+		for (const path of folderPathsFromFilePath(p.node.relativePath)) {
+			const total = folderTotals.get(path);
+			if (total) {
+				total.transferred += p.file.size;
+				total.completed++;
+				emitFolder(path);
+			}
+		}
+	};
+
+	// Local VFS can write a mixed-parent tree in one chunked call. It preserves
+	// each file's actual parent without paying a reserve/confirm cycle per dir.
+	if (!driver.upload && driver.writeFilesAcross && planned.length) {
+		for (const p of planned) emitFile(p, 0, false);
+		abortIfNeeded();
+		let settled = 0;
+		await driver.writeFilesAcross(
+			planned.map((p) => ({ parentId: p.parentId, name: p.file.name, body: p.file })),
+			{
+				signal: opts?.signal,
+				onProgress: (written) => {
+					for (let i = 0; i < written.length && settled < planned.length; i++) {
+						settleFile(planned[settled++]!);
+					}
+				}
+			}
+		);
+		abortIfNeeded();
+		while (settled < planned.length) settleFile(planned[settled++]!);
+		return { files, folders };
 	}
 
-	for (const { parentId, files: group } of byParent.values()) {
+	const byParent = new Map<string, { parentId: ExplorerEntryId | null; items: Planned[] }>();
+	for (const p of planned) {
+		const key = p.parentId ?? '';
+		const group = byParent.get(key);
+		if (group) group.items.push(p);
+		else byParent.set(key, { parentId: p.parentId, items: [p] });
+	}
+
+	for (const { parentId, items: group } of byParent.values()) {
+		abortIfNeeded();
 		// upload() carries per-file progress that the bulk path cannot express,
 		// so a driver offering it keeps the per-file route.
 		const bulk = typeof driver.upload !== 'function' && typeof driver.writeFiles === 'function';
 		if (bulk) {
-			for (const file of group) {
-				opts?.onFile?.({ name: file.name, size: file.size, transferred: 0, done: false });
-			}
+			for (const p of group) emitFile(p, 0, false);
+			abortIfNeeded();
 			let settled = 0;
 			const settle = (upTo: number) => {
 				while (settled < upTo) {
-					const file = group[settled++]!;
-					opts?.onFile?.({
-						name: file.name,
-						size: file.size,
-						transferred: file.size,
-						done: true
-					});
-					files += 1;
+					settleFile(group[settled++]!);
 				}
 			};
-			await driver.writeFiles!(parentId, group, {
+			await driver.writeFiles!(parentId, group.map((p) => p.file), {
+				signal: opts?.signal,
 				onProgress: (written) => settle(Math.min(settled + written.length, group.length))
 			});
+			abortIfNeeded();
 			settle(group.length);
 			continue;
 		}
-		for (const file of group) {
+		for (const p of group) {
+			abortIfNeeded();
+			const { file } = p;
 			const size = file.size;
-			const name = file.name;
-			opts?.onFile?.({ name, size, transferred: 0, done: false });
+			emitFile(p, 0, false);
 			if (typeof driver.upload === 'function') {
 				await driver.upload(parentId, file, {
 					signal: opts?.signal,
 					onProgress: (pct) => {
 						const transferred = Math.round(size * Math.min(1, Math.max(0, pct)));
-						opts?.onFile?.({ name, size, transferred, done: false });
+						emitFile(p, transferred, false);
 					}
 				});
 			} else {
 				await driver.writeFile!(parentId, file);
-				opts?.onFile?.({ name, size, transferred: size, done: false });
+				emitFile(p, size, false);
 			}
-			opts?.onFile?.({ name, size, transferred: size, done: true });
-			files += 1;
+			settleFile(p);
 		}
 	}
+	abortIfNeeded();
 	return { files, folders };
 }

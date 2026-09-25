@@ -248,19 +248,23 @@ describe('os folder drop', () => {
 			nodes.map((n) => `${n.kind}:${n.relativePath}`),
 			['folder:Trip', 'file:Trip/a.txt', 'folder:Trip/inner', 'file:Trip/inner/b.txt']
 		);
-		const a = nodes.find((n) => n.relativePath === 'Trip/a.txt')?.file;
-		const b = nodes.find((n) => n.relativePath === 'Trip/inner/b.txt')?.file;
+		const a = await nodes.find((n) => n.relativePath === 'Trip/a.txt')?.loadFile?.();
+		const b = await nodes.find((n) => n.relativePath === 'Trip/inner/b.txt')?.loadFile?.();
 		assert.equal(await a!.text(), 'alpha');
 		assert.equal(await b!.text(), 'beta');
 	});
 
 	it('collectOsDrop walks getAsFileSystemHandle directories', async () => {
 		const { collectOsDrop } = await import('../src/ui/osDrop.ts');
+		let fileReads = 0;
 		const fileHandle = (name: string, body: string): FileSystemFileHandle =>
 			({
 				kind: 'file' as const,
 				name,
-				getFile: async () => new File([body], name, { type: 'text/plain' })
+				getFile: async () => {
+					fileReads++;
+					return new File([body], name, { type: 'text/plain' });
+				}
 			}) as FileSystemFileHandle;
 		const dirHandle = (
 			name: string,
@@ -290,7 +294,11 @@ describe('os folder drop', () => {
 			nodes.map((n) => `${n.kind}:${n.relativePath}`),
 			['folder:Album', 'file:Album/shot.jpg']
 		);
-		assert.equal(await nodes[1]!.file!.text(), 'jpeg');
+		assert.equal(fileReads, 0, 'capturing handles does not read every file up front');
+		const driver = mockDriver({ mkdir: true });
+		await importOsDropToDriver(driver, null, nodes);
+		assert.equal(fileReads, 1);
+		assert.equal(driver.writes[0]?.text, 'jpeg');
 	});
 
 	it('flat file drop works without mkdir', async () => {
@@ -393,7 +401,7 @@ describe('os folder drop batching', () => {
 		const seen: string[] = [];
 		const res = await importOsDropToDriver(driver, null, nodes, {
 			onFile: (ev) => {
-				if (ev.done) seen.push(ev.name);
+				if (ev.done && ev.entryKind !== 'folder') seen.push(ev.name);
 			}
 		});
 		assert.equal(res.files, 3);
@@ -402,6 +410,35 @@ describe('os folder drop batching', () => {
 		assert.deepEqual(written[0]!.names, ['a.txt', 'b.txt', 'c.txt']);
 		// Per-file UI ticks must survive batching.
 		assert.deepEqual(seen.sort(), ['a.txt', 'b.txt', 'c.txt']);
+	});
+
+	it('passes mixed-parent files through one bulk call with distinct progress paths and cancellation', async () => {
+		const { driver } = recordingDriver({ bulk: true });
+		const ac = new AbortController();
+		const received: Array<{ parentId: string | null; name: string }> = [];
+		let passedSignal: AbortSignal | undefined;
+		(driver as { writeFilesAcross?: unknown }).writeFilesAcross = async (files: typeof received, opts: { signal?: AbortSignal; onProgress?: (written: ExplorerEntry[]) => void }) => {
+			passedSignal = opts.signal;
+			received.push(...files);
+			opts.onProgress?.(files.map((f, i) => ({ id: `f${i}`, parentId: f.parentId, kind: 'file', name: f.name })));
+			return files.map((f, i) => ({ id: `f${i}`, parentId: f.parentId, kind: 'file', name: f.name }));
+		};
+		const events: Array<{ path?: string; parent?: string | null; kind?: string }> = [];
+		await importOsDropToDriver(driver, null, [
+			{ kind: 'folder', relativePath: 'Trip' },
+			{ kind: 'folder', relativePath: 'Trip/inner' },
+			fileAt('same.txt', 'Trip/same.txt'),
+			fileAt('same.txt', 'Trip/inner/same.txt')
+		], {
+			signal: ac.signal,
+			onFile: (ev) => events.push({ path: ev.relativePath, parent: ev.parentId, kind: ev.entryKind })
+		});
+		assert.equal(passedSignal, ac.signal);
+		assert.equal(received.length, 2);
+		assert.notEqual(received[0]!.parentId, received[1]!.parentId);
+		assert.deepEqual(events.filter((e) => e.kind === 'file' && e.path?.endsWith('same.txt')).map((e) => e.path).filter((v, i, a) => a.indexOf(v) === i), [
+			'Trip/same.txt', 'Trip/inner/same.txt'
+		]);
 	});
 
 	it('keeps the per-file path when the driver reports upload progress', async () => {

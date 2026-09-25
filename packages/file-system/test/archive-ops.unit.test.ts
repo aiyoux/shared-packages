@@ -677,6 +677,7 @@ describe('archiveOps', () => {
 		assert.ok(destRows.some((e) => e.name === 'a.txt'));
 		assert.ok(destRows.some((e) => e.name === 'b.txt'));
 		assert.ok(destRows.some((e) => e.parentId !== folder.id), 'nested file writes to a subfolder');
+		assert.ok(destRows.filter((e) => e.name === 'b.txt').every((e) => e.parentId !== folder.id), 'nested file progress never appears at the extraction root');
 		const repoFolder = destRows.filter((e) => e.entryKind === 'folder' && e.name === 'repo');
 		assert.ok(repoFolder.length, 'dest listing paints the extract folder');
 		assert.ok(repoFolder.some((e) => e.parentId === folder.id));
@@ -687,6 +688,7 @@ describe('archiveOps', () => {
 		const kids = await driver.list({ parentId: folder.id });
 		const repo = kids.entries.find((e) => e.name === 'repo' && e.kind === 'folder');
 		assert.ok(repo);
+		assert.ok(nestedFolder.every((e) => e.parentId === repo.id), 'nested folder progress stays inside its parent');
 		await vfs.db.delete();
 	});
 
@@ -1073,7 +1075,7 @@ describe('archiveOps', () => {
 		await vfs.db.delete();
 	});
 
-	it('writeEntriesToDriver stops mid-tree when the abort signal fires', async () => {
+	it('writeEntriesToDriver stops before tree commit when the abort signal fires', async () => {
 		const vfs = createVfs({
 			dbName: `archive-ops-abort-write-${Date.now()}-${Math.random()}`,
 			memoryOpfs: true,
@@ -1096,13 +1098,13 @@ describe('archiveOps', () => {
 					files,
 					() => {
 						seen += 1;
-						if (seen >= 4) ac.abort();
+						if (seen >= 1) ac.abort();
 					},
 					ac.signal
 				),
 			(e: unknown) => e instanceof Error && e.name === 'AbortError'
 		);
-		assert.ok(seen >= 4);
+		assert.ok(seen >= 1);
 		const root = await driver.list({ parentId: null });
 		const tree = root.entries.find((e) => e.name === 'tree' && e.kind === 'folder');
 		// Catalog commits after OPFS, so an abort mid-window leaves no IDB tree

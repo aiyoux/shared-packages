@@ -530,7 +530,6 @@
 
 	let copyDestPane = $state<PaneId | null>(null);
 	let copyDestDriverKey = $state<string | null>(null);
-	let copyDestParentId = $state<ExplorerEntry['parentId'] | undefined>(undefined);
 	let copyItems = $state<TransferItem[]>([]);
 	let dismissedCopyIds = $state<Set<string>>(new Set());
 	let copyProgressUnsub: (() => void) | null = null;
@@ -852,7 +851,7 @@
 	const visibleCopyItems = $derived(copyItems.filter((t) => !dismissedCopyIds.has(t.id)));
 	const destCopyPending = $derived(
 		stackTransferItems(visibleCopyItems)
-			.filter((t) => t.hop && (!t.done || t.status === 'failed'))
+			.filter((t) => t.hop && t.destParentId !== undefined && (!t.done || t.status === 'failed'))
 			.map((t) => ({
 				id: t.id,
 				name: t.name,
@@ -862,7 +861,8 @@
 				direction: 'receiving' as const,
 				status: t.status,
 				done: t.done,
-				destParentId: copyDestParentId
+				destParentId: t.destParentId,
+				entryKind: t.entryKind
 			}))
 	);
 
@@ -870,10 +870,9 @@
 		return `${drv.id}:${drv.connectionId ?? drv.endpointKey ?? ''}`;
 	}
 
-	function markCopyDest(id: PaneId, drv: ExplorerDriver, parentId: ExplorerEntry['parentId']) {
+	function markCopyDest(id: PaneId, drv: ExplorerDriver) {
 		copyDestPane = id;
 		copyDestDriverKey = destDriverKey(drv);
-		copyDestParentId = parentId;
 	}
 
 	function panePending(id: PaneId) {
@@ -1322,13 +1321,13 @@
 		if (!(drv.upload || drv.writeFile)) return;
 		copyBusy = true;
 		const parent = destParentId !== undefined ? destParentId : p.ctx.parentId;
-		markCopyDest(id, drv, parent);
+		markCopyDest(id, drv);
 		// The registry reporter adds what the inline bump lacked: abort wiring
 		// per row, and a failed/cancelled import marking its rows instead of
 		// leaving them spinning forever.
 		const reporter = createDeviceImportReporter(drv);
 		const bump = (ev: OsDropFileProgress) => {
-			reporter.onFile(ev);
+			if (ev.entryKind !== 'folder') reporter.onFile(ev);
 		};
 		try {
 			const nodes = await pending;
@@ -1697,7 +1696,7 @@
 		const signal = copyAbort.signal;
 		copyBusy = true;
 		const destParent = opts?.destParentId !== undefined ? opts.destParentId : dst.ctx.parentId;
-		markCopyDest(destId, destDriver, destParent);
+		markCopyDest(destId, destDriver);
 		try {
 			const n = await copyAcross({
 				sourceDriver: activeDriver(src, from),
@@ -1747,7 +1746,7 @@
 		copyAbort = new AbortController();
 		const signal = copyAbort.signal;
 		copyBusy = true;
-		markCopyDest(destId, destDriver, destParentId);
+		markCopyDest(destId, destDriver);
 		try {
 			const n = await copyAcross({
 				sourceDriver,
@@ -1810,7 +1809,7 @@
 			: payload.ids.map((id) => ({ id, name: id, kind: 'file' as const, parentId: null }));
 
 		copyBusy = true;
-		markCopyDest(destPaneId, destDriver, destParentId);
+		markCopyDest(destPaneId, destDriver);
 		try {
 			await copyAcross({
 				sourceDriver: srcDriver,

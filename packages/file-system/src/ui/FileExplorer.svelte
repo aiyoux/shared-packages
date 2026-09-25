@@ -82,6 +82,7 @@
 		collectOsDrop,
 		createDeviceImportReporter,
 		importOsDropToDriver,
+		nodesFromFiles,
 		snapshotFiles,
 		type OsDropFileProgress,
 		type OsDropNode
@@ -3312,7 +3313,8 @@
 					name: n.name,
 					transferred: 0,
 					size: n.size ?? 0,
-					direction: 'receiving'
+					direction: 'receiving',
+					destParentId: n.parentId
 				}
 			];
 			try {
@@ -3417,16 +3419,17 @@
 		uploadBusy = true;
 		error = '';
 		const ids: string[] = [];
-		const idByName = new Map<string, string>();
+		const idByPath = new Map<string, string>();
 		// The header bar carries the transfer-shaped view (same as the dual
 		// pane): every import from this device is a transfer into the open
 		// destination, remote or local. The listing keeps its pending rows.
 		const reporter = createDeviceImportReporter(driver);
 		const bump = (ev: OsDropFileProgress) => {
-			let id = idByName.get(ev.name);
+			const key = `${ev.entryKind ?? 'file'}:${ev.relativePath ?? ev.name}`;
+			let id = idByPath.get(key);
 			if (!id) {
 				id = generateId('osdrop');
-				idByName.set(ev.name, id);
+				idByPath.set(key, id);
 				ids.push(id);
 			}
 			const row: ListingPending = {
@@ -3435,12 +3438,14 @@
 				transferred: ev.transferred,
 				size: ev.size,
 				direction: 'receiving',
-				done: ev.done
+				done: ev.done,
+				destParentId: ev.parentId ?? destParentId,
+				entryKind: ev.entryKind ?? 'file'
 			};
 			inboundOps = inboundOps.some((o) => o.id === id)
 				? inboundOps.map((o) => (o.id === id ? row : o))
 				: [...inboundOps, row];
-			reporter?.onFile(ev);
+			if (ev.entryKind !== 'folder') reporter.onFile(ev);
 		};
 		try {
 			const incoming = await dropNodes;
@@ -3459,9 +3464,15 @@
 		}
 	}
 
-	async function importDeviceFiles(files: File[], destParentId: string | null = parentId) {
+	async function importDeviceFiles(
+		files: File[],
+		destParentId: string | null = parentId,
+		fromPicker = false
+	) {
 		if (!files.length) return;
-		await importOsNodes(snapshotFiles(files), destParentId);
+		// Input-picked Files remain readable after the change handler returns.
+		// Clipboard Files may not, so only that route needs an eager snapshot.
+		await importOsNodes(fromPicker ? Promise.resolve(nodesFromFiles(files)) : snapshotFiles(files), destParentId);
 	}
 
 	function allowOsFileDrag(e: DragEvent): boolean {
@@ -4436,7 +4447,7 @@
 						const list = (e.currentTarget as HTMLInputElement).files;
 						if (!list?.length) return;
 						const el = e.currentTarget;
-						void importDeviceFiles(Array.from(list), parentId).finally(() => {
+						void importDeviceFiles(Array.from(list), parentId, true).finally(() => {
 							el.value = '';
 						});
 					}}
@@ -4454,7 +4465,7 @@
 						const list = (e.currentTarget as HTMLInputElement).files;
 						if (!list?.length) return;
 						const el = e.currentTarget;
-						void importDeviceFiles(Array.from(list), parentId).finally(() => {
+						void importDeviceFiles(Array.from(list), parentId, true).finally(() => {
 							el.value = '';
 						});
 					}}

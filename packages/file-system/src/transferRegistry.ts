@@ -42,6 +42,9 @@ export interface TransferProgress {
 	ice?: CopyIce;
 	icePath?: CopyIcePath;
 	hopNote?: string;
+	/** Destination folder for an explorer copy row. */
+	destParentId?: string | null;
+	entryKind?: 'file' | 'folder';
 }
 
 export interface ReceivedFile {
@@ -79,6 +82,8 @@ export interface TransferItem {
 	ice?: CopyIce;
 	icePath?: CopyIcePath;
 	hopNote?: string;
+	destParentId?: string | null;
+	entryKind?: 'file' | 'folder';
 	completedAt?: number;
 	savedToLibrary?: {
 		nodeId: string;
@@ -217,6 +222,8 @@ export function upsertProgress(progress: TransferProgress): TransferItem {
 		size: progress.size,
 		direction: progress.direction,
 		status: progress.status ?? prev?.status ?? 'active',
+		destParentId: progress.destParentId !== undefined ? progress.destParentId : prev?.destParentId,
+		entryKind: progress.entryKind ?? prev?.entryKind,
 		transferred: progress.transferred,
 		done: progress.done,
 		integrity: progress.integrity ?? prev?.integrity,

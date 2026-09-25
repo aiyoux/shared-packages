@@ -422,6 +422,26 @@ export async function copyAcross(args: CopyAcrossArgs): Promise<number> {
 	let count = 0;
 	for (const entry of selected) {
 		if (entry.kind === 'folder') {
+			if (sourceDriver === destDriver && sourceDriver.id === 'local' && destDriver.copy) {
+				const progressId = generateId('copy');
+				reportCopyProgress(progressId, entry, {
+					transferred: 0, size: 0, status: 'active', hop: 'server'
+				}, destParentId);
+				try {
+					await destDriver.copy(entry.id, destParentId);
+					reportCopyProgress(progressId, entry, {
+						transferred: 1, size: 1, status: 'done', done: true, hop: 'server'
+					}, destParentId);
+				} catch (error) {
+					reportCopyProgress(progressId, entry, {
+						transferred: 0, size: 1, status: 'failed', done: true, hop: 'server',
+						error: error instanceof Error ? error.message : String(error)
+					}, destParentId);
+					throw error;
+				}
+				count += 1;
+				continue;
+			}
 			count += await copyFolderTree(
 				sourceDriver,
 				destDriver,
@@ -450,7 +470,12 @@ type CopyProgressPatch = {
 	hopNote?: string;
 };
 
-function reportCopy(id: string, entry: ExplorerEntry, patch: CopyProgressPatch): void {
+function reportCopyProgress(
+	id: string,
+	entry: ExplorerEntry,
+	patch: CopyProgressPatch,
+	destParentId: string | null
+): void {
 	const size = patch.size ?? entry.size ?? patch.transferred;
 	upsertProgress({
 		id,
@@ -464,7 +489,9 @@ function reportCopy(id: string, entry: ExplorerEntry, patch: CopyProgressPatch):
 		hop: patch.hop,
 		ice: patch.ice,
 		icePath: patch.icePath,
-		hopNote: patch.hopNote
+		hopNote: patch.hopNote,
+		destParentId,
+		entryKind: entry.kind
 	});
 }
 
@@ -511,6 +538,8 @@ async function copyFile(
 		throw new CopyAcrossError('EXPLORER_TOO_LARGE', 'File exceeds download size cap');
 	}
 	const opId = generateId('copy');
+	const reportCopy = (id: string, item: ExplorerEntry, patch: CopyProgressPatch) =>
+		reportCopyProgress(id, item, patch, destParentId);
 	const known = entry.size ?? 0;
 	const dual = kind === 'dual-phase';
 	const splitPush = kind === 'delegated' && source.id === 'monitor' && dest.id === 'b2';
@@ -540,7 +569,9 @@ async function copyFile(
 			hop: patch.hop ?? hop,
 			ice: patch.ice,
 			icePath: patch.icePath,
-			hopNote: patch.hopNote ?? hopNote
+			hopNote: patch.hopNote ?? hopNote,
+			destParentId,
+			entryKind: 'file'
 		});
 	};
 	const failAll = (err: unknown) => {
@@ -1012,13 +1043,13 @@ async function copyFolderTree(
 			{ signal }
 		);
 		for (const b of batch) {
-			reportCopy(generateId('copy'), b.entry, {
+			reportCopyProgress(generateId('copy'), b.entry, {
 				transferred: b.file.size,
 				size: b.file.size,
 				done: true,
 				status: 'done',
 				hop: 'direct'
-			});
+			}, created.id);
 		}
 	};
 

@@ -298,6 +298,34 @@ describe('copyAcross truncated folder', () => {
 		assert.equal(copies[0]!.transferred, 4);
 	});
 
+	it('copies a local folder through the VFS folder copy once', async () => {
+		resetTransferRegistryForTests();
+		const folder: ExplorerEntry = { id: 'source', parentId: null, name: 'source', kind: 'folder' };
+		let copies = 0;
+		const local = {
+			id: 'local',
+			capabilities: { supportsMkdir: true },
+			async list() { return { entries: [folder], truncated: false }; },
+			async copy(id: string, parentId: string | null) {
+				assert.equal(id, folder.id);
+				assert.equal(parentId, 'destination');
+				copies++;
+				return { ...folder, id: 'copy', parentId };
+			}
+		} as unknown as ExplorerDriver;
+		await copyAcross({
+			sourceDriver: local,
+			destDriver: local,
+			selectedIds: [folder.id],
+			sourceEntries: [folder],
+			destParentId: 'destination'
+		});
+		assert.equal(copies, 1);
+		const progress = listTransfers().find((t) => t.name === 'source');
+		assert.equal(progress?.entryKind, 'folder');
+		assert.equal(progress?.destParentId, 'destination');
+	});
+
 	it('copyAcross uses the live list name, not a stale sourceEntries snapshot', async () => {
 		const stale: ExplorerEntry = {
 			id: 'note',
@@ -704,6 +732,9 @@ describe('copyAcross truncated folder', () => {
 		});
 		assert.equal(n, 2);
 		assert.deepEqual(uploaded, ['f.txt']);
+		const copiedFile = listTransfers().find((t) => t.name === 'f.txt' && t.direction === 'copying');
+		assert.equal(copiedFile?.destParentId, 'dir/');
+		assert.equal(copiedFile?.entryKind, 'file');
 	});
 
 	it('B2 folder copies into local browser VFS (mkdir + file download)', async () => {
@@ -755,6 +786,8 @@ describe('copyAcross truncated folder', () => {
 		});
 		assert.equal(n, 2);
 		assert.deepEqual(wrote, ['a.txt']);
+		const copiedFile = listTransfers().find((t) => t.name === 'a.txt' && t.direction === 'copying');
+		assert.equal(copiedFile?.destParentId, 'local-photos');
 	});
 });
 
@@ -1302,4 +1335,3 @@ describe('classify copy-across routing', () => {
 		);
 	});
 });
-

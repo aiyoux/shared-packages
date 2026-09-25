@@ -391,6 +391,30 @@ describe('VfsService', () => {
 		assert.deepEqual(await vfs.readJson(copy.id), { x: 1 });
 	});
 
+	it('copies a nested folder with one bulk file write and preserves metadata', async () => {
+		const source = await vfs.mkdir(null, 'Source', { meta: { projectPack: true } });
+		const child = await vfs.mkdir(source.id, 'Child', { meta: { marker: 'nested' } });
+		await vfs.writeFile({ parentId: source.id, name: 'a.txt', body: new Blob(['a']), meta: { tag: 1 } });
+		await vfs.writeFile({ parentId: child.id, name: 'b.txt', body: new Blob(['b']) });
+		const writeFiles = vfs.writeFiles.bind(vfs);
+		let bulkCalls = 0;
+		vfs.writeFiles = (inputs, opts) => {
+			bulkCalls++;
+			return writeFiles(inputs, opts);
+		};
+		const copied = await vfs.copy(source.id, null);
+		assert.equal(bulkCalls, 1);
+		assert.equal(copied.meta?.projectPack, true);
+		const top = await vfs.list({ parentId: copied.id });
+		const copiedChild = top.find((n) => n.kind === 'folder' && n.name === 'Child')!;
+		assert.equal(copiedChild.meta?.marker, 'nested');
+		const a = top.find((n) => n.kind === 'file' && n.name === 'a.txt')!;
+		const b = (await vfs.list({ parentId: copiedChild.id })).find((n) => n.name === 'b.txt')!;
+		assert.equal(a.meta?.tag, 1);
+		assert.equal(await (await vfs.readBlob(a.id)).text(), 'a');
+		assert.equal(await (await vfs.readBlob(b.id)).text(), 'b');
+	});
+
 	it('drafts not in list', async () => {
 		await vfs.putDraft({
 			id: 'sketcher:current',

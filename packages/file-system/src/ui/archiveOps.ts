@@ -776,6 +776,10 @@ export async function writeEntriesToDriver(
 	if (writeTree && files.length) {
 		throwIfAborted(signal);
 		for (const plan of planned) {
+			// Nested folder ids do not exist until writeTree commits. Their
+			// aggregate folder row is already visible; avoid painting each child
+			// at the extraction root while the tree is being written.
+			if (plan.dirs.length) continue;
 			onFile?.({
 				name: plan.name,
 				parentId: plan.destParent,
@@ -798,20 +802,29 @@ export async function writeEntriesToDriver(
 			});
 			if (plan.dirs.length) bumpFolderAggs(plan.dirs, size);
 		};
-		await writeTree(
+		throwIfAborted(signal);
+		const writtenNodes = await writeTree(
 			parentId,
 			files.map((f) => ({ path: f.path, body: f.data })),
-			{
-				signal,
-				onProgress: (written) => {
-					for (let i = 0; i < written.length && settled < planned.length; i++) {
-						const entry = written[i]!;
-						settlePlan(planned[settled++]!, entry.parentId ?? parentId);
-					}
-				}
-			}
+			{ signal }
 		);
-		while (settled < planned.length) settlePlan(planned[settled++]!);
+		const resolvedParents = new Set<string>();
+		for (let i = 0; i < planned.length; i++) {
+			const plan = planned[i]!;
+			const written = writtenNodes[i];
+			if (!written || plan.dirs.length < 2 || !written.parentId || resolvedParents.has(written.parentId)) continue;
+			resolvedParents.add(written.parentId);
+			const chain = await driver.getPath(written.id);
+			const dirs = chain.slice(-(plan.dirs.length + 1), -1);
+			for (let depth = 2; depth <= plan.dirs.length; depth++) {
+				folderParents.set(plan.dirs.slice(0, depth).join('/'), dirs[depth - 2]!.id);
+			}
+		}
+		while (settled < planned.length) {
+			const index = settled;
+			settlePlan(planned[settled++]!, writtenNodes[index]?.parentId ?? parentId);
+		}
+		throwIfAborted(signal);
 		return;
 	}
 
