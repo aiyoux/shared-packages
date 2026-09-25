@@ -11,10 +11,10 @@
  * AnimFileChrome, sketcher InputModeControls, …) must use this action.
  */
 
-export type EscapeAlign = 'start' | 'end';
+export type EscapeAlign = 'start' | 'center' | 'end';
 
 export type EscapePaneClipOpts = {
-	/** `end` pins the menu's right edge to the trigger's right edge. */
+	/** `end` pins the menu's right edge to the trigger's right edge. `center` puts the menu's midpoint on the trigger's midpoint. */
 	align?: EscapeAlign;
 };
 
@@ -34,7 +34,13 @@ export function escapedMenuBox(
 	const maxHeight = Math.max(80, viewport.height - pad * 2);
 	const height = Math.min(menu.height || 0, maxHeight);
 	const width = menu.width || 170;
-	const preferredLeft = opts.align === 'end' ? trigger.right - width : trigger.left;
+	const triggerWidth = trigger.right - trigger.left;
+	const preferredLeft =
+		opts.align === 'end'
+			? trigger.right - width
+			: opts.align === 'center'
+				? trigger.left + triggerWidth / 2 - width / 2
+				: trigger.left;
 	const left = Math.max(pad, Math.min(preferredLeft, viewport.width - width - pad));
 	const preferredTop = trigger.bottom + gap;
 	const top = Math.max(pad, Math.min(preferredTop, viewport.height - height - pad));

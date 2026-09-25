@@ -20,6 +20,17 @@ describe('escapedMenuBox', () => {
 		expect(box.top).toBe(36);
 	});
 
+	it('centers the menu on the trigger', () => {
+		const box = escapedMenuBox(
+			{ left: 400, right: 570, bottom: 30 },
+			{ width: 170, height: 40 },
+			viewport,
+			{ align: 'center' }
+		);
+		expect(box.left).toBe(400);
+		expect(box.top).toBe(36);
+	});
+
 	it('end-aligns to the trigger right edge', () => {
 		const box = escapedMenuBox(
 			{ left: 700, right: 780, bottom: 30 },
