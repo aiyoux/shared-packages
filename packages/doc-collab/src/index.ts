@@ -1,7 +1,6 @@
 export { createSeqLog, type LogDecision, type LogFrame, type SeqLog, type SeqRole } from './seqLog.js';
 export { createRelaySession, type RelayMember, type RelaySession } from './relay.js';
 export {
-	LEADERSHIP_GRACE_MS,
 	roleForLeadership,
 	watchLeadership,
 	type Election,
@@ -16,11 +15,11 @@ export {
 } from './attach.js';
 export {
 	announceSubordinate,
+	gatewayLockName,
 	resolveRole,
 	watchSubordinate,
-	SUBORDINATE_HEARTBEAT_MS,
-	SUBORDINATE_TTL_MS,
-	type ClaimChannel
+	type ClaimChannel,
+	type ClaimLocks
 } from './claim.js';
 export {
 	admitAlways,
@@ -31,7 +30,6 @@ export {
 	type Submission
 } from './sequencer.js';
 export { colorForClient, MAX_PRESENCE_NAME, PRESENCE_COLORS } from './presence.js';
-export { COLLAB_HEARTBEAT_MS, COLLAB_STALE_MS, staleIds } from './liveness.js';
 export { presenceBoard, type PresenceSeat } from './presenceBoard.js';
 export {
 	createCmEnvelopeSession,

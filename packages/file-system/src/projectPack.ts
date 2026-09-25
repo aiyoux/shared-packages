@@ -18,6 +18,7 @@
 import type { VfsService } from './vfs.js';
 import type { BlobRef, PackOpProgress, PackOpStage, VfsNode } from './types.js';
 import { crc32 } from './crc32.js';
+import { leasesAreExact } from './leaseOwner.js';
 
 /** Marks a folder as a project. Does not mean its bytes are packed. */
 export const PROJECT_PACK_META = 'projectPack';
@@ -352,10 +353,11 @@ export async function deleteFromProject(
 		let pending: Iterable<string> = touched.keys();
 		let failed: string[] = [];
 		// A pack lands in `failedPacks` for exactly one reason: another tab holds
-		// its claim right now. That is contention, not a fault — the other tab's
-		// rewrite finishes in milliseconds — so refusing the user's delete over
-		// it made a routine race look like a broken app. Wait it out briefly and
-		// try the refused packs again; only give up if it stays held.
+		// its claim right now. That is contention, not a fault, so refusing the
+		// user's delete over it made a routine race look like a broken app.
+		// Wait for that tab to let go — `whenPackFree` queues on its claim, so
+		// this resumes the moment it finishes — and try the refused packs again.
+		// The retry cap only bounds a tab that keeps re-claiming the same pack.
 		for (let attempt = 0; attempt <= COMPACT_CONTENTION_RETRIES; attempt++) {
 			if (opts?.signal?.aborted) break;
 			const compacted = await vfs.compactPacks(pending, {
@@ -369,7 +371,12 @@ export async function deleteFromProject(
 			if (!failed.length) break;
 			if (attempt === COMPACT_CONTENTION_RETRIES) break;
 			report('compacting', 'Deleting — waiting for another tab to finish a pack…');
-			await new Promise((r) => setTimeout(r, COMPACT_CONTENTION_BACKOFF_MS << attempt));
+			await vfs.whenPackFree(failed);
+			// Without Web Locks the claim is a clock lease with nothing to wait
+			// on, so back off instead.
+			if (!leasesAreExact()) {
+				await new Promise((r) => setTimeout(r, COMPACT_CONTENTION_BACKOFF_MS << attempt));
+			}
 			pending = failed;
 		}
 		if (failed.length) {

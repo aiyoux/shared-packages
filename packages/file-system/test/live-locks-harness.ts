@@ -23,12 +23,23 @@ function abortError(message: string): Error {
 	return Object.assign(new Error(message), { name: 'AbortError' });
 }
 
-export type LockHarness = { held: Map<string, boolean>; reset: () => void };
+export type LockHarness = {
+	held: Map<string, boolean>;
+	reset: () => void;
+	/**
+	 * Hold back the rejection a steal sends its victim, the way a frozen tab
+	 * only hears about it at thaw. `thaw()` delivers what was held.
+	 */
+	freezeVictims: () => void;
+	thaw: () => void;
+};
 
 export function installLockPolyfill(): LockHarness {
 	const queues = new Map<string, Waiter[]>();
 	const held = new Map<string, boolean>();
 	const holders = new Map<string, Waiter>();
+	let frozen = false;
+	const heldBack: Array<() => void> = [];
 
 	/**
 	 * `steal: true` releases the current holder and rejects the promise its
@@ -42,7 +53,9 @@ export function installLockPolyfill(): LockHarness {
 		cur.broken = true;
 		holders.delete(name);
 		held.set(name, false);
-		cur.fail(abortError('lock stolen'));
+		const notice = () => cur.fail(abortError('lock stolen'));
+		if (frozen) heldBack.push(notice);
+		else notice();
 	}
 
 	function pump(name: string): void {
@@ -134,6 +147,15 @@ export function installLockPolyfill(): LockHarness {
 			queues.clear();
 			held.clear();
 			holders.clear();
+			frozen = false;
+			heldBack.length = 0;
+		},
+		freezeVictims: () => {
+			frozen = true;
+		},
+		thaw: () => {
+			frozen = false;
+			for (const notice of heldBack.splice(0)) notice();
 		}
 	};
 }

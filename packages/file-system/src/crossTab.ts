@@ -1,10 +1,17 @@
 /**
- * Best-effort BroadcastChannel for raw IndexedDB stores (rclone / B2 / monitor
- * profiles) that Dexie liveQuery cannot observe.
+ * Change pings for raw IndexedDB stores (rclone / B2 / monitor profiles, the
+ * vault) and the VFS itself, which Dexie liveQuery cannot observe.
  *
- * Same-tab writers already reload after their own save; BroadcastChannel does
- * not echo to the posting instance, which is the intended split.
+ * The channel names live here; the channel itself is `@shared-packages/ui`'s
+ * `tabChannel`, the one implementation. The two ways to listen are named for
+ * what they mean rather than for how BroadcastChannel happens to deliver:
  */
+import {
+	notifyTabChannel,
+	subscribeTabChannel as subscribe
+} from '@shared-packages/ui/tabChannel';
+
+export { notifyTabChannel };
 
 export const HUB_RCLONE_PROFILES_CHANNEL = 'hub-rclone-profiles';
 export const HUB_B2_PROFILES_CHANNEL = 'hub-b2-profiles';
@@ -12,87 +19,18 @@ export const HUB_MONITOR_PROFILES_CHANNEL = 'hub-monitor-profiles';
 export const HUB_AI_PROFILES_CHANNEL = 'hub-ai-profiles';
 export const HUB_VAULT_CHANNEL = 'hub-vault';
 
-const notifyChannels = new Map<string, BroadcastChannel>();
-
-function maybeUnref(ch: BroadcastChannel): void {
-	const unref = (ch as BroadcastChannel & { unref?: () => void }).unref;
-	if (typeof unref === 'function') unref.call(ch);
-}
-
-function openNotifyChannel(name: string): BroadcastChannel | null {
-	try {
-		if (typeof BroadcastChannel === 'undefined') return null;
-		let ch = notifyChannels.get(name);
-		if (!ch) {
-			ch = new BroadcastChannel(name);
-			maybeUnref(ch);
-			notifyChannels.set(name, ch);
-		}
-		return ch;
-	} catch {
-		return null;
-	}
-}
-
-export function notifyTabChannel(name: string): void {
-	try {
-		openNotifyChannel(name)?.postMessage({ t: Date.now() });
-	} catch {
-		/* missing API or closed channel */
-	}
+/**
+ * Hear every ping, this tab's included — for a listener that is not the
+ * writer (the explorer, when a form in the same tab saved a profile).
+ */
+export function subscribeTabChannel(name: string, listener: () => void): () => void {
+	return subscribe(name, listener, { includeThisTab: true });
 }
 
 /**
- * Listen on the same BroadcastChannel instance used to post, so this tab
- * does not re-query from its own notify (a same-tab echo used to race persist
- * and wipe in-memory writes).
+ * Hear other tabs only — for the writer itself, which already reloaded after
+ * its own save; a same-tab echo used to race persist and wipe in-memory writes.
  */
 export function subscribeOwnTabChannel(name: string, listener: () => void): () => void {
-	try {
-		const ch = openNotifyChannel(name);
-		if (!ch) return () => {};
-		const onMsg = () => {
-			try {
-				listener();
-			} catch {
-				/* a stale subscriber must not break others */
-			}
-		};
-		ch.addEventListener('message', onMsg);
-		return () => {
-			try {
-				ch.removeEventListener('message', onMsg);
-			} catch {
-				/* ignore */
-			}
-		};
-	} catch {
-		return () => {};
-	}
-}
-
-export function subscribeTabChannel(name: string, listener: () => void): () => void {
-	try {
-		if (typeof BroadcastChannel === 'undefined') return () => {};
-		const ch = new BroadcastChannel(name);
-		maybeUnref(ch);
-		const onMsg = () => {
-			try {
-				listener();
-			} catch {
-				/* a stale subscriber must not break others */
-			}
-		};
-		ch.addEventListener('message', onMsg);
-		return () => {
-			try {
-				ch.removeEventListener('message', onMsg);
-				ch.close();
-			} catch {
-				/* ignore */
-			}
-		};
-	} catch {
-		return () => {};
-	}
+	return subscribe(name, listener);
 }

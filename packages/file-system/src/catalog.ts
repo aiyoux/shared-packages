@@ -16,7 +16,6 @@ import {
 	openMemoryEngine,
 	catalogFailureReason,
 	openWorkerEngine,
-	resetCatalogLeader,
 	type SqlEngine
 } from './catalogEngine.js';
 
@@ -216,9 +215,19 @@ export class SqliteCatalog {
 	private engine: SqlEngine | null = null;
 	private txDepth = 0;
 	private catalogPort: MessagePort | null = null;
+	/** The leader `catalogPort` belongs to; see `engineFromPort`. */
+	private catalogLeaderId: string | null = null;
 	private catalogPersist = false;
 	private store: OpfsBlobStore | null = null;
-	private recovering = false;
+	/**
+	 * The one rebuild in flight after the engine died. Every caller that was on
+	 * the dead engine, or arrives while it is rebuilt, waits on this and retries.
+	 * A flag here used to make the second caller rethrow the death instead, so
+	 * one lost leader failed every overlapping call but the first.
+	 */
+	private recovery: Promise<void> | null = null;
+	/** The last rebuild failed; the next call tries again rather than "not open". */
+	private engineLost = false;
 	/** False until migrate ran successfully (or a fresh catalog was stamped). GC must skip. */
 	migrationOk = false;
 	nodes!: NodeTable;
@@ -227,9 +236,13 @@ export class SqliteCatalog {
 	meta!: MetaTable;
 	leases!: LeaseTable;
 
-	constructor(name: string, opts?: { catalogPort?: MessagePort | null }) {
+	constructor(
+		name: string,
+		opts?: { catalogPort?: MessagePort | null; catalogLeaderId?: string | null }
+	) {
 		this.name = name;
 		this.catalogPort = opts?.catalogPort ?? null;
+		this.catalogLeaderId = opts?.catalogLeaderId ?? null;
 		this.nodes = new NodeTable(this);
 		this.blobRefs = new BlobTable(this);
 		this.drafts = new DraftTable(this);
@@ -242,25 +255,43 @@ export class SqliteCatalog {
 		return this.engine;
 	}
 
-	private async recoverEngine(): Promise<void> {
-		if (this.recovering) return;
-		this.recovering = true;
-		try {
-			this.close();
-			resetCatalogLeader();
-			if (this.store) await this.openWithStore(this.store, this.catalogPersist);
-			else await this.open();
-		} finally {
-			this.recovering = false;
-		}
+	private recoverEngine(): Promise<void> {
+		this.recovery ??= (async () => {
+			try {
+				this.close();
+				// A handed port dies with the leader that gave it; from here on
+				// talk to whoever leads. A routed engine needs nothing reset —
+				// resetting here once terminated this tab's own worker while
+				// it was the leader.
+				this.catalogPort = null;
+				if (this.store) await this.openWithStore(this.store, this.catalogPersist);
+				else await this.open();
+			} catch (e) {
+				this.engineLost = true;
+				throw e;
+			} finally {
+				this.recovery = null;
+			}
+		})();
+		return this.recovery;
+	}
+
+	/** An engine to run on, waiting out (or retrying) a rebuild first. */
+	private async liveEngine(): Promise<SqlEngine> {
+		if (this.recovery) await this.recovery;
+		else if (!this.engine && this.engineLost) await this.recoverEngine();
+		return this.eng();
 	}
 
 	private async withEngine<T>(fn: (e: SqlEngine) => Promise<T>): Promise<T> {
+		const eng = await this.liveEngine();
 		try {
-			return await fn(this.eng());
+			return await fn(eng);
 		} catch (e) {
-			if (this.txDepth > 0 || this.recovering || !isCatalogDeadError(e)) throw e;
-			await this.recoverEngine();
+			if (this.txDepth > 0 || !isCatalogDeadError(e)) throw e;
+			// Only the first caller to see this engine die rebuilds it. A caller
+			// whose engine was already replaced just retries on the new one.
+			if (this.engine === eng || this.recovery) await this.recoverEngine();
 			return fn(this.eng());
 		}
 	}
@@ -275,7 +306,9 @@ export class SqliteCatalog {
 		this.store = _opfs;
 		this.catalogPersist = persist;
 		if (this.catalogPort) {
-			this.engine = engineFromPort(this.catalogPort, this.name);
+			this.engine = engineFromPort(this.catalogPort, this.name, {
+				boundTo: this.catalogLeaderId
+			});
 			await this.engine.exec('SELECT 1 AS ok');
 			return;
 		}
@@ -285,14 +318,8 @@ export class SqliteCatalog {
 				// Carry the reason: this message is often read on a phone, where
 				// the console line that explains it cannot be.
 				const why = catalogFailureReason();
-				const stuck = /SAH pool timed out|catalog leader timeout|three attempts to become or reach/.test(
-					why ?? ''
-				);
-				const hint = stuck
-					? ' Close every other tab of this site, then reload. A previous tab is still holding the catalog.'
-					: '';
 				throw new Error(
-					`Live OPFS catalog is unavailable (SAH worker / COOP)${why ? ` — ${why}` : ''}.${hint}`
+					`Live OPFS catalog is unavailable (SAH worker / COOP)${why ? ` — ${why}` : ''}.`
 				);
 			}
 			await worker.exec('SELECT 1 AS ok');
@@ -387,11 +414,12 @@ export class SqliteCatalog {
 				throw e;
 			}
 		};
+		const eng = await this.liveEngine();
 		try {
 			return await runOnce();
 		} catch (e) {
-			if (this.recovering || !isCatalogDeadError(e)) throw e;
-			await this.recoverEngine();
+			if (!isCatalogDeadError(e)) throw e;
+			if (this.engine === eng || this.recovery) await this.recoverEngine();
 			return runOnce();
 		}
 	}
@@ -399,6 +427,7 @@ export class SqliteCatalog {
 	close(): void {
 		void this.engine?.close();
 		this.engine = null;
+		this.engineLost = false;
 	}
 
 	async delete(): Promise<void> {

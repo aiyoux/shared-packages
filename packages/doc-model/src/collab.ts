@@ -42,7 +42,7 @@ export type CollabFrame =
 			kind: 'presence';
 			clientId: string;
 			state: AwarenessState | null;
-			/** Ask peers to re-announce. Not a leave — see doc-collab `liveness.ts`. */
+			/** Ask peers to re-announce. Not a leave. Sent once, on joining. */
 			ping?: true;
 	  }
 	| { kind: 'schema-mismatch'; local: number; remote: number }

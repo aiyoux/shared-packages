@@ -959,7 +959,9 @@ describe('VfsService', () => {
 
 	it('isCatalogDeadError matches worker-death messages', () => {
 		assert.equal(isCatalogDeadError(new Error('catalog leader gone')), true);
-		assert.equal(isCatalogDeadError(new Error('catalog RPC timeout')), true);
+		assert.equal(isCatalogDeadError(new Error('catalog leader changed')), true);
+		// A slow answer is not a death: nothing fails a call on a clock any more.
+		assert.equal(isCatalogDeadError(new Error('catalog RPC timeout')), false);
 		assert.equal(isCatalogDeadError(new Error('no such table: nodes')), false);
 	});
 

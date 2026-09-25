@@ -12,6 +12,11 @@
 
 export type Election = {
 	readonly isLeader: boolean;
+	/**
+	 * False only until the lock has answered. The answer is exact and prompt
+	 * (see `createElection`), so there is nothing to guess in the meantime.
+	 */
+	readonly decided: boolean;
 	onChange(fn: () => void): () => void;
 	yieldLeadership(): void;
 	destroy(): void;
@@ -29,51 +34,35 @@ export function roleForLeadership(isLeader: boolean): Role {
 }
 
 /**
- * How long to wait for a lock before concluding somebody else holds it.
+ * Report leadership once the lock has answered, and every change after.
  *
- * An uncontended lock is granted within a task, so this only ever elapses when
- * another context really is leading.
- */
-export const LEADERSHIP_GRACE_MS = 250;
-
-/**
- * Report leadership, never guessing "not leader" before the lock resolves.
- *
- * The grant is asynchronous, so a lone tab is momentarily not-yet-leader.
- * Guessing there is not a harmless early guess: the answer decides who owns
- * persistence, so a single tab would briefly turn its own autosave off and
- * silently drop any write landing in that window. Documents lost a page rename
- * that way, which is how the grace period came to exist.
- *
- * Fires immediately with the current answer, and again whenever the lock moves.
+ * Never guesses. A lone tab is momentarily undecided while its lock request is
+ * in flight, and guessing "not leader" there turned its own autosave off — the
+ * page rename Documents once lost. That used to be papered over with a grace
+ * timer, which a page busy for longer than the grace still lost to. The
+ * election now answers "not leader" exactly, from the lock, so this just waits
+ * for that answer.
  */
 export function watchLeadership(
 	election: Election,
-	onLead: (isLeader: boolean) => void,
-	graceMs: number = LEADERSHIP_GRACE_MS
+	onLead: (isLeader: boolean) => void
 ): () => void {
 	let last: boolean | null = null;
 	let stopped = false;
 
-	function report(isLeader: boolean): void {
-		if (stopped || isLeader === last) return;
+	function report(): void {
+		if (stopped || !election.decided) return;
+		const isLeader = election.isLeader;
+		if (isLeader === last) return;
 		last = isLeader;
 		onLead(isLeader);
 	}
 
-	const off = election.onChange(() => {
-		if (election.isLeader) report(true);
-		else if (last !== null) report(false); // a real demotion, e.g. a yield
-	});
-
-	if (election.isLeader) report(true);
-	const timer = setTimeout(() => {
-		if (last === null) report(election.isLeader);
-	}, graceMs);
+	const off = election.onChange(report);
+	report();
 
 	return () => {
 		stopped = true;
-		clearTimeout(timer);
 		off();
 	};
 }

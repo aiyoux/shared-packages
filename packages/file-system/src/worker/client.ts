@@ -75,7 +75,7 @@ export class VfsWorkerClient {
 	): Promise<void> {
 		if (this.disposed) return Promise.reject(new Error('VFS worker disposed'));
 		const jobId = `wx-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-		const { connectCatalogPort } = await import('../catalogEngine.js');
+		const { connectCatalogPort, catalogLeaderId } = await import('../catalogEngine.js');
 		return new Promise<void>((resolve, reject) => {
 			this.pending.set(jobId, { resolve, reject, onProgress: opts?.onProgress });
 			if (opts?.signal) {
@@ -94,7 +94,10 @@ export class VfsWorkerClient {
 			}
 			const catalogPort = connectCatalogPort(req.dbName);
 			if (catalogPort) {
-				this.worker.postMessage({ type: 'extract', jobId, ...req }, [catalogPort]);
+				this.worker.postMessage(
+					{ type: 'extract', jobId, ...req, catalogLeaderId: catalogLeaderId() },
+					[catalogPort]
+				);
 			} else {
 				this.send({ type: 'extract', jobId, ...req });
 			}

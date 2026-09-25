@@ -28,7 +28,22 @@ export * from './documentSession.js';
 export * from './docSession.js';
 // Live cross-tab document editing (docs/design/live-documents.md in scratch-pad).
 export { liveDocNames, type LiveDocNames } from './live/names.js';
-export { createLeaderElection, type LeaderElection } from './live/leader.js';
+export { createLeaderElection, createPersistElection, type LeaderElection } from './live/leader.js';
+export {
+	createElection,
+	getTabId,
+	type Election,
+	type ElectionOpts,
+	type ElectionState,
+	type LeaderRef
+} from './live/election.js';
+export {
+	clearTabWait,
+	reportTabWait,
+	subscribeTabWaits,
+	REPORT_AFTER_MS,
+	type TabWait
+} from './live/waits.js';
 export { createLiveBus, type LiveBus, type LiveBusOptions, type LiveEnvelope } from './live/bus.js';
 
 export * from './liveLink.js';

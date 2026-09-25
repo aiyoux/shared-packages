@@ -92,7 +92,7 @@ describe('createLiveBus', () => {
 
 	it('buffers an out-of-order message and flushes it when the gap fills', async () => {
 		const name = nextChannel();
-		const b = createLiveBus<Msg>(name, 'b', { isImmediate, gapTimeoutMs: 50 });
+		const b = createLiveBus<Msg>(name, 'b', { isImmediate });
 		const got: number[] = [];
 		b.onMessage((m) => got.push(m.n));
 		const raw = rawPoster(name);
@@ -112,23 +112,23 @@ describe('createLiveBus', () => {
 		b.destroy();
 	});
 
-	it('abandons a gap after the deadline rather than wedging forever (M7)', async () => {
+	it('steps past a hole the sender reports, with no deadline to wait out (M7)', async () => {
 		const name = nextChannel();
-		const b = createLiveBus<Msg>(name, 'b', { isImmediate, gapTimeoutMs: 40 });
+		const b = createLiveBus<Msg>(name, 'b', { isImmediate });
 		const got: number[] = [];
 		b.onMessage((m) => got.push(m.n));
 		const raw = rawPoster(name);
 
 		raw.send({ sender: 'a', seq: 1, msg: { kind: 'commit', n: 1 } });
 		await until(() => got.length === 1);
-		// seq 2 never arrives.
+		// seq 2 could not be posted; the sender says so.
 		raw.send({ sender: 'a', seq: 3, msg: { kind: 'commit', n: 3 } });
-		await until(() => got.length === 2, 500);
+		await wait(20);
+		assert.deepEqual(got, [1], 'held behind the hole until told');
+		raw.send({ sender: 'a', seq: 2, skip: true, msg: undefined as unknown as Msg });
+		await until(() => got.length === 2);
+		assert.deepEqual(got, [1, 3], 'released the moment the hole is reported');
 
-		assert.deepEqual(got, [1, 3], 'buffered message is released once the gap is abandoned');
-
-		// And the sender is resynchronised past the hole, so later messages
-		// flow immediately instead of piling up behind the dead seq.
 		raw.send({ sender: 'a', seq: 4, msg: { kind: 'commit', n: 4 } });
 		await until(() => got.length === 3);
 		assert.deepEqual(got, [1, 3, 4]);
@@ -137,10 +137,31 @@ describe('createLiveBus', () => {
 		b.destroy();
 	});
 
+	it('a sender whose post throws reports the hole itself', async () => {
+		const name = nextChannel();
+		const a = createLiveBus<{ kind: string; n: number; bad?: unknown }>(name, 'a', {
+			flushSync: true
+		});
+		const b = createLiveBus<{ kind: string; n: number }>(name, 'b');
+		const got: number[] = [];
+		b.onMessage((m) => got.push(m.n));
+
+		a.broadcast({ kind: 'commit', n: 1 });
+		await until(() => got.length === 1);
+		// A function will not structured-clone: this post throws.
+		a.broadcast({ kind: 'commit', n: 2, bad: () => {} });
+		a.broadcast({ kind: 'commit', n: 3 });
+		await until(() => got.length === 2, 500);
+		assert.deepEqual(got, [1, 3], 'the message after the lost one is not held back');
+
+		a.destroy();
+		b.destroy();
+	});
+
 	it('force-flushes when the out-of-order buffer hits its cap (M7)', async () => {
 		const name = nextChannel();
 		// A deadline long enough that only the cap can explain a flush.
-		const b = createLiveBus<Msg>(name, 'b', { isImmediate, gapTimeoutMs: 60_000 });
+		const b = createLiveBus<Msg>(name, 'b', { isImmediate });
 		const got: number[] = [];
 		b.onMessage((m) => got.push(m.n));
 		const raw = rawPoster(name);
@@ -165,7 +186,7 @@ describe('createLiveBus', () => {
 
 	it('immediate messages bypass sequencing entirely (M8)', async () => {
 		const name = nextChannel();
-		const b = createLiveBus<Msg>(name, 'b', { isImmediate, gapTimeoutMs: 60_000 });
+		const b = createLiveBus<Msg>(name, 'b', { isImmediate });
 		const got: Msg[] = [];
 		b.onMessage((m) => got.push(m));
 		const raw = rawPoster(name);
@@ -189,7 +210,7 @@ describe('createLiveBus', () => {
 
 	it('discards stale and duplicate sequence numbers', async () => {
 		const name = nextChannel();
-		const b = createLiveBus<Msg>(name, 'b', { isImmediate, gapTimeoutMs: 50 });
+		const b = createLiveBus<Msg>(name, 'b', { isImmediate });
 		const got: number[] = [];
 		b.onMessage((m) => got.push(m.n));
 		const raw = rawPoster(name);
@@ -210,7 +231,7 @@ describe('createLiveBus', () => {
 
 	it('tracks sequences per sender independently', async () => {
 		const name = nextChannel();
-		const b = createLiveBus<Msg>(name, 'b', { isImmediate, gapTimeoutMs: 60_000 });
+		const b = createLiveBus<Msg>(name, 'b', { isImmediate });
 		const got: number[] = [];
 		b.onMessage((m) => got.push(m.n));
 		const raw = rawPoster(name);

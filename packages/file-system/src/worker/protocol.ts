@@ -31,6 +31,8 @@ export type ExtractJobRequest = {
 	pack?: boolean;
 	/** Accumulate phase timers and log `[vfs-profile]` when the job ends. */
 	profile?: boolean;
+	/** The catalog leader a transferred port belongs to; see `engineFromPort`. */
+	catalogLeaderId?: string | null;
 };
 
 export type WorkerRequest =

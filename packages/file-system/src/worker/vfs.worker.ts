@@ -31,20 +31,29 @@ const ctx = self as unknown as {
 
 const services = new Map<string, VfsService>();
 const cancels = new Map<string, AbortController>();
-const vfsWithPort = new WeakSet<VfsService>();
 
-function vfsFor(dbName: string, opfsRoot: string, catalogPort?: MessagePort | null): VfsService {
+function vfsFor(
+	dbName: string,
+	opfsRoot: string,
+	catalogPort?: MessagePort | null,
+	catalogLeaderId?: string | null
+): VfsService {
 	const key = `${dbName}::${opfsRoot}`;
 	let vfs = services.get(key);
-	if (vfs && catalogPort && !vfsWithPort.has(vfs)) vfs = undefined;
+	// A fresh port means a (possibly new) leader: never keep a service bound to
+	// an older one's port, whose far end may be gone.
+	if (vfs && catalogPort) {
+		vfs.db.close();
+		vfs = undefined;
+	}
 	if (!vfs) {
 		vfs = createVfs({
 			dbName,
 			opfs: createSyncOpfsStore(opfsRoot),
 			catalogPort: catalogPort ?? null,
+			catalogLeaderId: catalogLeaderId ?? null,
 			requestPersist: false
 		});
-		if (catalogPort) vfsWithPort.add(vfs);
 		services.set(key, vfs);
 	}
 	return vfs;
@@ -83,7 +92,7 @@ async function withJobLock<T>(jobId: string, fn: () => Promise<T>): Promise<T> {
 }
 
 async function runExtract(req: ExtractJobRequest, catalogPort?: MessagePort | null): Promise<void> {
-	const vfs = vfsFor(req.dbName, req.opfsRoot, catalogPort);
+	const vfs = vfsFor(req.dbName, req.opfsRoot, catalogPort, req.catalogLeaderId);
 	await vfs.ready();
 	const driver = createLocalExplorerDriver(vfs);
 	await driver.ready();

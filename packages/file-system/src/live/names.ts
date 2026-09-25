@@ -27,6 +27,11 @@ export type LiveDocNames = {
 	 * Must not equal lockName or channelName.
 	 */
 	readonly persistLockName: string;
+	/**
+	 * BroadcastChannel for call-gateway claims (`announceSubordinate`), and the
+	 * prefix of each gateway's lock. Control traffic, so never the document bus.
+	 */
+	readonly claimChannelName: string;
 };
 
 /**
@@ -41,6 +46,7 @@ export function liveDocNames(nodeId: string): LiveDocNames {
 	return {
 		lockName: `${LIVE_DOC_PREFIX}:${id}:lock`,
 		channelName: `${LIVE_DOC_PREFIX}:${id}:bus`,
-		persistLockName: `${LIVE_DOC_PREFIX}:${id}:persist`
+		persistLockName: `${LIVE_DOC_PREFIX}:${id}:persist`,
+		claimChannelName: `${LIVE_DOC_PREFIX}:${id}:bus:sub`
 	};
 }

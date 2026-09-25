@@ -4,10 +4,12 @@
  *
  * sqlite-wasm is loaded lazily AFTER onmessage is wired. A static import
  * (or a bundled wasm fetch during module eval) delays the handler; the
- * main thread's SELECT 1 then sits on a port nobody is listening to until
- * catalog RPC times out.
+ * main thread's first call then sits on a port nobody is listening to.
+ *
+ * Nothing here gives up on a clock (scratch-pad docs/design/tab-coordination.md).
  */
 import { applyCatalogColumnMigrations, CATALOG_SCHEMA } from './catalogSchema.js';
+import { CATALOG_SESSION_LOCK } from './catalogSession.js';
 
 type Oo1Stmt = {
 	bind(args: unknown[]): Oo1Stmt;
@@ -38,7 +40,6 @@ type PoolUtil = {
 
 let pool: PoolUtil | null = null;
 const dbs = new Map<string, Oo1Db>();
-let aliveTimer: ReturnType<typeof setInterval> | null = null;
 
 function safeName(dbName: string): string {
 	return dbName.replace(/[^a-zA-Z0-9._-]+/g, '_').slice(0, 80) || 'SharedVFS';
@@ -52,20 +53,30 @@ function wasmHref(): string {
 	}
 }
 
-function withTimeout<T>(p: Promise<T>, ms: number, msg: string): Promise<T> {
-	return new Promise<T>((resolve, reject) => {
-		const t = setTimeout(() => reject(new Error(msg)), ms);
-		p.then(
-			(v) => {
-				clearTimeout(t);
-				resolve(v);
-			},
-			(e) => {
-				clearTimeout(t);
-				reject(e);
-			}
-		);
-	});
+/**
+ * The SAH pool's files are held by another context. Only a context that is
+ * going away can be holding them — this tab holds the catalog lock, and a
+ * leader lets go of the files before the lock — so this is worth retrying,
+ * not a verdict. The exception is a takeover from a frozen tab, whose worker
+ * keeps the files until that tab thaws; hence the status message, which lets
+ * the page tell a person what it is waiting for.
+ */
+function filesBusy(e: unknown): boolean {
+	const name = (e as { name?: string } | null)?.name ?? '';
+	const msg = e instanceof Error ? e.message : String(e);
+	return (
+		name === 'NoModificationAllowedError' ||
+		name === 'InvalidStateError' ||
+		/NoModificationAllowed|Access Handles cannot be created/.test(msg)
+	);
+}
+
+function postStatus(waiting: string | null): void {
+	try {
+		ctx.postMessage({ type: 'status', waiting });
+	} catch {
+		/* closing */
+	}
 }
 
 async function getPool(): Promise<PoolUtil> {
@@ -76,26 +87,35 @@ async function getPool(): Promise<PoolUtil> {
 	const init = sqlite3InitModule as unknown as (opts: {
 		locateFile: (file: string) => string;
 	}) => Promise<unknown>;
-	const sqlite3 = await withTimeout(
-		init({
-			locateFile: (file: string) => (file.endsWith('.wasm') ? wasmHref() : file)
-		}) as Promise<{
-			installOpfsSAHPoolVfs: (opts: {
-				name: string;
-				directory: string;
-			}) => Promise<PoolUtil>;
-		}>,
-		15_000,
-		'catalog sqlite3.wasm load timed out'
-	);
-	pool = await withTimeout(
-		sqlite3.installOpfsSAHPoolVfs({
-			name: 'vfs-catalog',
-			directory: 'vfs-catalog-sah'
-		}),
-		15_000,
-		'catalog OPFS SAH pool timed out (another tab may hold the catalog lock)'
-	);
+	const sqlite3 = (await init({
+		locateFile: (file: string) => (file.endsWith('.wasm') ? wasmHref() : file)
+	})) as {
+		installOpfsSAHPoolVfs: (opts: {
+			name: string;
+			directory: string;
+			forceReinitIfPreviouslyFailed?: boolean;
+		}) => Promise<PoolUtil>;
+	};
+	// Backoff while the files are held (see `filesBusy`). There is no event
+	// for an access handle being released, so this polls — and only polls; it
+	// never decides the other side is dead.
+	let wait = 100;
+	for (;;) {
+		try {
+			pool = await sqlite3.installOpfsSAHPoolVfs({
+				name: 'vfs-catalog',
+				directory: 'vfs-catalog-sah',
+				forceReinitIfPreviouslyFailed: true
+			});
+			break;
+		} catch (e) {
+			if (!filesBusy(e)) throw e;
+			postStatus('another tab still has the file catalog open');
+			await new Promise((r) => setTimeout(r, wait));
+			wait = Math.min(wait * 2, 2_000);
+		}
+	}
+	postStatus(null);
 	return pool;
 }
 
@@ -235,7 +255,10 @@ async function pump(dbName: string): Promise<void> {
 			const i = q.items.findIndex((it) => q.txSession == null || it.msg.session === q.txSession);
 			if (i < 0) return;
 			const item = q.items.splice(i, 1)[0]!;
-			if (item.msg.op === 'begin') q.txSession = item.msg.session ?? 'anon';
+			if (item.msg.op === 'begin') {
+				q.txSession = item.msg.session ?? 'anon';
+				watchSession(q.txSession);
+			}
 			const result = await runOp(item.dbName, item.msg);
 			if (item.msg.op === 'commit' || item.msg.op === 'rollback' || item.msg.op === 'wipe' || item.msg.op === 'close') {
 				q.txSession = null;
@@ -254,6 +277,37 @@ async function pump(dbName: string): Promise<void> {
 			void pump(dbName);
 		}
 	}
+}
+
+const watchedSessions = new Set<string>();
+
+/**
+ * Queue on the session's lock. Its grant means the context that owns the
+ * session is gone, so a transaction it left open can never commit: roll it
+ * back and let everyone else through. See `catalogSession.ts`.
+ */
+function watchSession(session: string): void {
+	if (session === 'anon' || watchedSessions.has(session)) return;
+	const locks = (self as unknown as { navigator?: { locks?: LockManager } }).navigator?.locks;
+	if (!locks?.request) return;
+	watchedSessions.add(session);
+	void locks
+		.request(`${CATALOG_SESSION_LOCK}${session}`, () => {
+			watchedSessions.delete(session);
+			for (const [dbName, q] of queues) {
+				q.items = q.items.filter((it) => it.msg.session !== session);
+				if (q.txSession !== session) continue;
+				const d = dbs.get(safeName(dbName));
+				try {
+					d?.exec('ROLLBACK');
+				} catch {
+					/* nothing open */
+				}
+				q.txSession = null;
+				void pump(dbName);
+			}
+		})
+		.catch(() => watchedSessions.delete(session));
 }
 
 function enqueue(dbName: string, msg: Incoming, reply: (msg: unknown) => void): void {
@@ -298,14 +352,6 @@ async function shutdownPool(): Promise<void> {
 	pool = null;
 }
 
-function pingAlive(): void {
-	try {
-		ctx.postMessage({ type: 'alive' });
-	} catch {
-		/* closing */
-	}
-}
-
 ctx.onmessage = (ev: MessageEvent) => {
 	if (ev.data?.type === 'shutdown') {
 		void shutdownPool().then(() => {
@@ -314,11 +360,36 @@ ctx.onmessage = (ev: MessageEvent) => {
 			} catch {
 				/* ignore */
 			}
-			if (aliveTimer) {
-				clearInterval(aliveTimer);
-				aliveTimer = null;
-			}
 		});
+		return;
+	}
+	if (ev.data?.type === 'hold' && typeof ev.data.lock === 'string') {
+		// Held for this worker's whole life. The page queues on it: the grant
+		// is the one exact sign that this worker is gone — `self.close()` and
+		// a crash fire no `error` event on the page.
+		const locks = (self as unknown as { navigator?: { locks?: LockManager } }).navigator?.locks;
+		if (!locks?.request) {
+			ctx.postMessage({ type: 'held', ok: false });
+			return;
+		}
+		void locks.request(ev.data.lock as string, () => {
+			ctx.postMessage({ type: 'held', ok: true });
+			return new Promise<void>(() => {});
+		});
+		return;
+	}
+	if (ev.data?.type === 'pool' && typeof ev.data.id === 'number') {
+		const id = ev.data.id as number;
+		getPool().then(
+			() => ctx.postMessage({ type: 'pool-res', id, ok: true }),
+			(e: unknown) =>
+				ctx.postMessage({
+					type: 'pool-res',
+					id,
+					ok: false,
+					error: e instanceof Error ? e.message : String(e)
+				})
+		);
 		return;
 	}
 	if (ev.data?.type === 'connect' && ev.ports[0]) {
@@ -338,5 +409,4 @@ ctx.onmessage = (ev: MessageEvent) => {
 	enqueue(msg.db || 'SharedVFS', msg, (out) => ctx.postMessage(out));
 };
 
-pingAlive();
-aliveTimer = setInterval(pingAlive, 1_000);
+

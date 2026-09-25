@@ -63,6 +63,7 @@ export default defineConfig({
 			// Subpath must list BEFORE the package-root alias, or Vite resolves
 			// `@shared-packages/ui/persistKv` to src/index.ts/persistKv.
 			'@shared-packages/ui/persistKv': path.resolve(root, '../ui/src/persistKv.ts'),
+			'@shared-packages/ui/tabChannel': path.resolve(root, '../ui/src/tabChannel.ts'),
 			'@shared-packages/ui': path.resolve(root, '../ui/src/index.ts')
 		}
 	}

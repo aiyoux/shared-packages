@@ -3,6 +3,7 @@ import { notifyTabChannel, subscribeTabChannel } from './crossTab.js';
 import { ROOT_PARENT_KEY } from './db.js';
 import { SqliteCatalog, MIGRATED_KEY } from './catalog.js';
 import { resetCatalogLeader, resetMemoryEngines } from './catalogEngine.js';
+import { leaseLiveness, leaseOwner, leasesAreExact, tryHoldLock, whenLockFree } from './leaseOwner.js';
 import { migrateIdbToSqlite } from './migrateIdb.js';
 import { generateId } from './id.js';
 import { sanitizeName, withNumericSuffix } from './names.js';
@@ -56,6 +57,8 @@ export interface VfsServiceOptions {
 	opfs?: OpfsBlobStore;
 	/** MessagePort to the live catalog worker (extract worker). */
 	catalogPort?: MessagePort | null;
+	/** The leader that port belongs to. */
+	catalogLeaderId?: string | null;
 	/** Write lease / tmp GC grace ms */
 	graceMs?: number;
 	/**
@@ -87,6 +90,10 @@ const COMPACT_MIN_RECLAIM_BYTES = 1 << 20;
  * decide which blobs are still being written; a pack path must never be
  * mistaken for a blob id.
  */
+function packClaimLock(packPath: string): string {
+	return `vfs-pack-claim:${packPath}`;
+}
+
 function packClaimKey(packPath: string): string {
 	return `compact:${packPath}`;
 }
@@ -214,7 +221,8 @@ export class VfsService {
 
 	constructor(opts: VfsServiceOptions = {}) {
 		this.db = new SqliteCatalog(opts.dbName ?? 'SharedVFS', {
-			catalogPort: opts.catalogPort ?? null
+			catalogPort: opts.catalogPort ?? null,
+			catalogLeaderId: opts.catalogLeaderId ?? null
 		});
 		this.graceMs = opts.graceMs ?? DEFAULT_GRACE;
 		const isMemory =
@@ -1421,7 +1429,7 @@ export class VfsService {
 		const nodeId = generateId('file');
 		const blobId = generateId('blob');
 		const leaseKey = `write:${blobId}`;
-		const owner = generateId('lease');
+		const owner = await leaseOwner('lease');
 		const now = Date.now();
 		let name = sanitizeName(input.name);
 		const fileType = inferFileTypeFromName(name);
@@ -1449,21 +1457,24 @@ export class VfsService {
 				sortOrder: await this.nextAppendSortOrder(input.parentId)
 			});
 		});
-		// A 5 GB archive can take longer than the normal two-minute GC grace.
-		// Keep the pending write's lease alive across tabs until close or abort.
+		// Where leases are judged by the clock (no Web Locks), a 5 GB archive
+		// outlasts the two-minute grace, so renew it until close or abort.
+		// Everywhere else the lease lives exactly as long as this context.
 		let leaseActive = true;
-		const keepAlive = setInterval(() => {
-			void (async () => {
-				const lease = await this.db.leases.get(leaseKey);
-				if (leaseActive && lease) {
-					await this.db.leases.put({ ...lease, expiresAt: Date.now() + this.graceMs });
-				}
-			})().catch(() => {});
-		}, Math.max(50, Math.floor(this.graceMs / 3)));
+		const keepAlive = leasesAreExact()
+			? null
+			: setInterval(() => {
+					void (async () => {
+						const lease = await this.db.leases.get(leaseKey);
+						if (leaseActive && lease) {
+							await this.db.leases.put({ ...lease, expiresAt: Date.now() + this.graceMs });
+						}
+					})().catch(() => {});
+				}, Math.max(50, Math.floor(this.graceMs / 3)));
 		try {
 			const { byteLength } = await this.opfs.writeStream(finalPath, stream, opts);
 			leaseActive = false;
-			clearInterval(keepAlive);
+			if (keepAlive) clearInterval(keepAlive);
 			if (opts?.signal?.aborted) throw new DOMException('Cancelled', 'AbortError');
 			await this.db.transaction('rw', this.db.nodes, this.db.blobRefs, this.db.leases, async () => {
 				if (input.parentId) {
@@ -1483,7 +1494,7 @@ export class VfsService {
 			});
 		} catch (error) {
 			leaseActive = false;
-			clearInterval(keepAlive);
+			if (keepAlive) clearInterval(keepAlive);
 			await this.db.nodes.delete(nodeId);
 			await this.db.blobRefs.delete(blobId);
 			await this.db.leases.delete(leaseKey);
@@ -1491,7 +1502,7 @@ export class VfsService {
 			throw error;
 		} finally {
 			leaseActive = false;
-			clearInterval(keepAlive);
+			if (keepAlive) clearInterval(keepAlive);
 		}
 		const node = await this.db.nodes.get(nodeId);
 		if (!node) throw new VfsError('NOT_FOUND');
@@ -1544,7 +1555,7 @@ export class VfsService {
 		const { bytes, contentType } = await serializeBody(input.body, input.contentType);
 		const contentHash = await sha256Uint8(bytes);
 		const leaseKey = `write:${blobId}`;
-		const owner = generateId('lease');
+		const owner = await leaseOwner('lease');
 		const now = Date.now();
 
 		if (input.id) {
@@ -1953,7 +1964,7 @@ export class VfsService {
 		};
 		const reserved: Reserved[] = [];
 		const leaseKeys = prepared.map((p) => `write:${p.blobId}`);
-		const owner = generateId('lease');
+		const owner = await leaseOwner('lease');
 		const abortError = () => {
 			const e = new Error('Cancelled');
 			e.name = 'AbortError';
@@ -2398,15 +2409,15 @@ export class VfsService {
 	 * is not deleted out from under a live compact or writeFiles confirm.
 	 */
 	private async unlinkIfOrphanNow(path: string): Promise<boolean> {
-		const now = Date.now();
+		const live = await leaseLiveness();
 		const packLease = await this.db.leases.get(packWriteKey(path));
-		if (packLease && packLease.expiresAt > now) return false;
+		if (packLease && live(packLease)) return false;
 		const named = await this.db.blobRefs.where('opfsPath').equals(path).first();
 		if (named) return false;
 		if (path.startsWith('blobs/')) {
 			const blobId = path.replace(/^blobs\//, '').replace(/\.bin$/, '');
 			const writeLease = await this.db.leases.get(`write:${blobId}`);
-			if (writeLease && writeLease.expiresAt > now) return false;
+			if (writeLease && live(writeLease)) return false;
 		}
 		for (let attempt = 0; attempt < 3; attempt++) {
 			try {
@@ -2444,7 +2455,7 @@ export class VfsService {
 		const { bytes, contentType } = await serializeBody(body, opts.contentType ?? node.contentType);
 		const contentHash = await sha256Uint8(bytes);
 		const leaseKey = `write:${blobId}`;
-		const owner = generateId('lease');
+		const owner = await leaseOwner('lease');
 		const now = Date.now();
 
 		let tmpPath: string | undefined;
@@ -3359,6 +3370,8 @@ export class VfsService {
 		const LAST_RUN = 'gc:lastRun';
 
 		try {
+			const live = await leaseLiveness(now);
+			const gcOwner = await leaseOwner('gc');
 			const claimed = await this.db.transaction(
 				'rw',
 				this.db.meta,
@@ -3369,13 +3382,13 @@ export class VfsService {
 						if (typeof last === 'number' && now - last < minInterval) return false;
 					}
 					const held = await this.db.leases.get(CLAIM);
-					if (held && held.expiresAt > now) return false;
+					if (held && live(held)) return false;
 					// Stamp the run BEFORE sweeping: a tab that dies mid-sweep must
 					// not leave every other tab retrying immediately.
 					await this.db.meta.put({ key: LAST_RUN, value: now });
 					await this.db.leases.put({
 						key: CLAIM,
-						owner: generateId('gc'),
+						owner: gcOwner,
 						expiresAt: now + Math.max(this.graceMs, 60_000)
 					});
 					return true;
@@ -3649,18 +3662,23 @@ export class VfsService {
 	private async holdPackWrite(opfsPath: string): Promise<void> {
 		await this.db.leases.put({
 			key: packWriteKey(opfsPath),
-			owner: generateId('packw'),
+			owner: await leaseOwner('packw'),
 			expiresAt: Date.now() + this.leaseTtlMs()
 		});
 	}
 
 	private async leaseStillHeld(key: string): Promise<boolean> {
 		const row = await this.db.leases.get(key);
-		return !!row && row.expiresAt > Date.now();
+		return !!row && (await leaseLiveness())(row);
 	}
 
-	/** Renew live leases; never resurrect an expired one. */
+	/**
+	 * Renew live leases; never resurrect an expired one. Only where the clock
+	 * judges leases (see `leaseOwner.ts`) — elsewhere a lease is live exactly
+	 * as long as its owner's context, and there is nothing to renew.
+	 */
 	private startLeaseHeartbeat(keys: string[]): () => void {
+		if (leasesAreExact()) return () => {};
 		const ttl = () => this.leaseTtlMs();
 		const tick = async () => {
 			const now = Date.now();
@@ -3697,18 +3715,27 @@ export class VfsService {
 	 * Take the exclusive right to rewrite one pack, or report that someone else
 	 * holds it.
 	 *
-	 * Same mechanism `maybeGc` uses for `gc:run` — the lease table, claimed
-	 * inside a transaction so two tabs cannot both read "free" and both write.
+	 * A Web Lock where there are Web Locks: taken with `ifAvailable`, so "another
+	 * tab is rewriting it" is an exact answer, and `whenPackFree` can wait for
+	 * that tab to finish instead of sleeping and guessing. Elsewhere, the lease
+	 * table, claimed inside a transaction so two tabs cannot both read "free".
 	 * Returns false when the pack is already being rewritten, which is not an
 	 * error: the work is being done, just not here.
 	 */
 	private async claimPack(packPath: string, owner: string): Promise<boolean> {
 		const key = packClaimKey(packPath);
+		if (leasesAreExact()) {
+			const release = await tryHoldLock(packClaimLock(packPath));
+			if (!release) return false;
+			this.packClaimReleases.set(packPath, release);
+			return true;
+		}
 		try {
+			const live = await leaseLiveness();
 			return await this.db.transaction('rw', this.db.leases, async () => {
 				const now = Date.now();
 				const held = await this.db.leases.get(key);
-				if (held && held.expiresAt > now) return false;
+				if (held && live(held)) return false;
 				await this.db.leases.put({
 					key,
 					owner,
@@ -3721,6 +3748,28 @@ export class VfsService {
 			// costs disk space; guessing costs live bytes.
 			return false;
 		}
+	}
+
+	private readonly packClaimReleases = new Map<string, () => void>();
+
+	private async releasePackClaim(packPath: string): Promise<void> {
+		const release = this.packClaimReleases.get(packPath);
+		if (release) {
+			this.packClaimReleases.delete(packPath);
+			release();
+			return;
+		}
+		await this.db.leases.delete(packClaimKey(packPath));
+	}
+
+	/**
+	 * Resolve once no tab holds a claim on any of `packPaths` — the tab that
+	 * refused us has finished. Immediate where claims are clock leases, since
+	 * there is nothing to wait on there.
+	 */
+	async whenPackFree(packPaths: Iterable<string>): Promise<void> {
+		if (!leasesAreExact()) return;
+		for (const p of packPaths) await whenLockFree(packClaimLock(p));
 	}
 
 	/**
@@ -3766,7 +3815,7 @@ export class VfsService {
 		let compactedPacks = 0;
 		let reclaimedBytes = 0;
 		const failedPacks: string[] = [];
-		const owner = generateId('compact');
+		const owner = await leaseOwner('compact');
 		for (const packPath of new Set(packPaths)) {
 			if (opts?.signal?.aborted) break;
 			// Claimed BEFORE the survivors are read: a claim taken afterwards
@@ -3816,7 +3865,7 @@ export class VfsService {
 			} finally {
 				stopBeat();
 				try {
-					await this.db.leases.delete(packClaimKey(packPath));
+					await this.releasePackClaim(packPath);
 				} catch {
 					/* the claim expires on its own */
 				}
@@ -3868,7 +3917,7 @@ export class VfsService {
 
 		report('compacting', `Unpacking ${packed.length} file${packed.length === 1 ? '' : 's'}…`);
 		const oldPaths = new Set(packed.map((r) => r.ref.opfsPath));
-		const owner = generateId('unpack');
+		const owner = await leaseOwner('unpack');
 		for (const path of oldPaths) {
 			if (!(await this.claimPack(path, owner))) {
 				throw new VfsError('WRITE_IN_FLIGHT', `Pack ${path} is being rewritten`);
@@ -3933,7 +3982,7 @@ export class VfsService {
 			stopClaims();
 			for (const path of oldPaths) {
 				try {
-					await this.db.leases.delete(packClaimKey(path));
+					await this.releasePackClaim(path);
 				} catch {
 					/* expires */
 				}
@@ -3987,7 +4036,7 @@ export class VfsService {
 		if (refs.length < 2) return { packs: 0, movedFiles: 0 };
 
 		const sourcePaths = [...new Set(refs.filter((r) => r.packOffset != null).map((r) => r.opfsPath))];
-		const owner = generateId('repack');
+		const owner = await leaseOwner('repack');
 		for (const path of sourcePaths) {
 			if (!(await this.claimPack(path, owner))) {
 				throw new VfsError('WRITE_IN_FLIGHT', `Pack ${path} is being rewritten`);
@@ -4116,7 +4165,7 @@ export class VfsService {
 			stopSources();
 			for (const path of sourcePaths) {
 				try {
-					await this.db.leases.delete(packClaimKey(path));
+					await this.releasePackClaim(path);
 				} catch {
 					/* expires */
 				}
@@ -4162,11 +4211,12 @@ export class VfsService {
 			expiredLeasesRemoved: 0
 		};
 		const now = Date.now();
+		const live = await leaseLiveness(now);
 		const nodes = await this.db.nodes.toArray();
 		const referenced = new Set(nodes.map((n) => n.blobId).filter(Boolean) as string[]);
 		const leases = await this.db.leases.toArray();
 		const activeLeases = new Set(
-			leases.filter((l) => l.expiresAt > now).map((l) => l.key.replace(/^write:/, ''))
+			leases.filter((l) => live(l)).map((l) => l.key.replace(/^write:/, ''))
 		);
 
 		const refs = await this.db.blobRefs.toArray();
@@ -4179,7 +4229,7 @@ export class VfsService {
 		}
 		const packWriteLeases = new Set(
 			leases
-				.filter((l) => l.expiresAt > now && l.key.startsWith('packwrite:'))
+				.filter((l) => live(l) && l.key.startsWith('packwrite:'))
 				.map((l) => l.key.slice('packwrite:'.length))
 		);
 		for (const p of packWriteLeases) namedPaths.add(p);
@@ -4231,7 +4281,7 @@ export class VfsService {
 
 		// expired leases
 		for (const l of leases) {
-			if (l.expiresAt <= now) {
+			if (!live(l)) {
 				await this.db.leases.delete(l.key);
 				report.expiredLeasesRemoved++;
 			}

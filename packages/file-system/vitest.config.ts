@@ -45,6 +45,7 @@ export default defineConfig({
 			// resolves them to src/ui/index.ts/<subpath> (see the hub vite
 			// config's note on the same trap).
 			'@shared-packages/ui/persistKv': path.resolve(root, '../ui/src/persistKv.ts'),
+			'@shared-packages/ui/tabChannel': path.resolve(root, '../ui/src/tabChannel.ts'),
 			'@shared-packages/ui': path.resolve(root, '../ui/src/index.ts'),
 			'@shared-packages/compress': path.resolve(root, '../compress/src/index.ts'),
 			'@shared-packages/crypto': path.resolve(root, '../crypto/src/index.ts')

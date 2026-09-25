@@ -1,8 +1,9 @@
 /**
  * Cross-tab ping over BroadcastChannel.
  *
- * Two things are easy to get wrong here, and both were live in the two
- * app-local copies this replaces:
+ * The one implementation: `@shared-packages/file-system`'s `crossTab.ts` is
+ * only channel names on top of this. Two things are easy to get wrong here,
+ * and both were live in the copies this replaces:
  *
  * 1. BroadcastChannel suppresses delivery only to the *object that posted*,
  *    not to the posting document. A helper that constructs a fresh channel per
@@ -25,11 +26,17 @@ type Ping = { t: number; origin: string };
 
 const posters = new Map<string, BroadcastChannel>();
 
+/** Node keeps its event loop alive for an open channel; tests would never exit. */
+function unref(ch: BroadcastChannel): BroadcastChannel {
+	(ch as BroadcastChannel & { unref?: () => void }).unref?.();
+	return ch;
+}
+
 function poster(name: string): BroadcastChannel | null {
 	const existing = posters.get(name);
 	if (existing) return existing;
 	try {
-		const ch = new BroadcastChannel(name);
+		const ch = unref(new BroadcastChannel(name));
 		posters.set(name, ch);
 		return ch;
 	} catch {
@@ -46,17 +53,29 @@ export function notifyTabChannel(name: string): void {
 	}
 }
 
-/** Run `fn` when another tab pings `name`. Returns an unsubscribe function. */
-export function subscribeTabChannel(name: string, fn: () => void): () => void {
+/**
+ * Run `fn` when a tab pings `name`. Returns an unsubscribe function.
+ *
+ * By default only OTHER tabs count: a tab that already reloaded after its own
+ * save must not reload again, and that same-tab echo once raced a persist and
+ * wiped in-memory writes. `includeThisTab` is for a listener that is not the
+ * writer — a panel in the same tab as a form that saved — and needs to hear it.
+ */
+export function subscribeTabChannel(
+	name: string,
+	fn: () => void,
+	opts?: { includeThisTab?: boolean }
+): () => void {
 	let ch: BroadcastChannel;
 	try {
-		ch = new BroadcastChannel(name);
+		ch = unref(new BroadcastChannel(name));
 	} catch {
 		return () => {};
 	}
+	const includeThisTab = opts?.includeThisTab === true;
 	const on = (e: MessageEvent) => {
 		const data = e.data as Partial<Ping> | null;
-		if (data && typeof data === 'object' && data.origin === ORIGIN) return;
+		if (!includeThisTab && data && typeof data === 'object' && data.origin === ORIGIN) return;
 		fn();
 	};
 	ch.addEventListener('message', on);

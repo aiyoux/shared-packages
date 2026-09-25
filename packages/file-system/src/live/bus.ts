@@ -22,6 +22,8 @@ export type LiveEnvelope<M> = {
 	/** Absent on immediate messages — they are deliberately unsequenced. */
 	readonly seq?: number;
 	readonly msg: M;
+	/** The sender could not post this number; step past it. Carries no `msg`. */
+	readonly skip?: true;
 };
 
 export type LiveBus<M> = {
@@ -30,6 +32,13 @@ export type LiveBus<M> = {
 	/** Unordered, lossy-tolerant delivery. Use for transient previews. */
 	broadcastImmediate(msg: M): void;
 	onMessage(handler: (msg: M, sender: string) => void): () => void;
+	/**
+	 * A sender this bus has heard from is gone: its bus was destroyed or its
+	 * tab died. Exact — every bus holds a Web Lock for its sender id, and this
+	 * fires when that lock is granted to us. Everything learned from that
+	 * sender (its presence, and anyone it relayed) is gone with it.
+	 */
+	onSenderGone(handler: (sender: string) => void): () => void;
 	destroy(): void;
 };
 
@@ -38,24 +47,32 @@ export type LiveBusOptions<M> = {
 	isImmediate?: (msg: M) => boolean;
 	/** Test seam — flush synchronously instead of on a frame. */
 	flushSync?: boolean;
-	/** Override the gap-abandon deadline. Tests use a short one. */
-	gapTimeoutMs?: number;
 };
 
 /**
- * How long a receiver waits for a missing sequence number before giving up and
- * delivering what it has buffered.
+ * Where a gap can come from, and why no timer waits on one.
  *
- * Without this, a single undelivered envelope (a `postMessage` that threw, a
- * sender that died mid-broadcast) stalls EVERY later message from that sender
- * forever — the buffer only grows and nothing is delivered again until a
- * reload. Losing one message is survivable; silently withholding all later ones
- * looks exactly like "the other tab stopped syncing" (M7).
+ * BroadcastChannel delivers one sender's posts in order to every live context,
+ * and a batch is posted whole or not at all — a sender that dies mid-broadcast
+ * loses a batch nobody numbered past. So a hole can only be a `postMessage`
+ * that threw (a payload that will not structured-clone), and the sender knows
+ * when that happens. It says so with `skip` envelopes, and receivers step past
+ * the hole at once. This used to be a two-second deadline on the receiver,
+ * which held every later message behind a hole for two seconds and then
+ * guessed (M7).
+ *
+ * The cap below stays as a backstop for the one case a sender cannot report:
+ * the storage transport, whose write can fail on quota.
  */
-const SEQ_GAP_TIMEOUT_MS = 2000;
-
-/** Hard cap per sender; hitting it force-flushes immediately (see above). */
 const MAX_OUT_OF_ORDER_BUFFER = 256;
+
+type LockManagerLike = {
+	request(
+		name: string,
+		options: { signal?: AbortSignal },
+		cb: (lock: unknown) => Promise<void> | void
+	): Promise<unknown>;
+};
 
 function maybeUnref(ch: BroadcastChannel): void {
 	// Node keeps the event loop alive for an open channel, which hangs tests.
@@ -78,7 +95,6 @@ export function createLiveBus<M>(
 	options?: LiveBusOptions<M>
 ): LiveBus<M> {
 	const isImmediate = options?.isImmediate ?? (() => false);
-	const gapTimeoutMs = options?.gapTimeoutMs ?? SEQ_GAP_TIMEOUT_MS;
 	const storageKey = `${channelName}:storage`;
 	let destroyed = false;
 
@@ -93,6 +109,60 @@ export function createLiveBus<M>(
 	}
 
 	let handlers: Array<(msg: M, sender: string) => void> = [];
+	let goneHandlers: Array<(sender: string) => void> = [];
+
+	// --- sender locks ------------------------------------------------------
+	const locks = (() => {
+		const nav = (globalThis as { navigator?: { locks?: LockManagerLike } }).navigator;
+		return typeof nav?.locks?.request === 'function' ? nav.locks : null;
+	})();
+	const senderLock = (sender: string) => `${channelName}:sender:${sender}`;
+	/**
+	 * Nothing is posted until this bus holds its own sender lock: a receiver
+	 * that heard from us first would queue on a free lock and read that as
+	 * "gone".
+	 */
+	let lockHeld = !locks;
+	let releaseOwnLock: (() => void) | null = null;
+	if (locks) {
+		void locks
+			.request(senderLock(senderId), {}, () => {
+				if (destroyed) return;
+				lockHeld = true;
+				if (pending.length && !cancelFlush) flush();
+				return new Promise<void>((resolve) => {
+					releaseOwnLock = resolve;
+				});
+			})
+			.catch(() => {
+				lockHeld = true;
+			});
+	}
+	/** Senders we are watching, with the abort for our wait on their lock. */
+	const watching = new Map<string, AbortController>();
+
+	function watchSender(sender: string): void {
+		if (!locks || watching.has(sender) || sender === senderId) return;
+		const ctl = new AbortController();
+		watching.set(sender, ctl);
+		void locks
+			.request(senderLock(sender), { signal: ctl.signal }, () => {
+				if (destroyed || watching.get(sender) !== ctl) return;
+				watching.delete(sender);
+				expectedSeqs.delete(sender);
+				buffers.delete(sender);
+				for (const h of [...goneHandlers]) {
+					try {
+						h(sender);
+					} catch {
+						/* one bad subscriber must not stop the others */
+					}
+				}
+			})
+			.catch(() => {
+				/* aborted on destroy */
+			});
+	}
 
 	// --- outgoing ----------------------------------------------------------
 	let outSeq = 1;
@@ -104,10 +174,22 @@ export function createLiveBus<M>(
 		if (channel) {
 			try {
 				channel.postMessage(batch);
-				return;
 			} catch {
-				/* fall through to storage */
+				// Could not post it (a payload that will not clone). Say which
+				// numbers are gone so receivers step past them now, instead of
+				// holding everything after them.
+				const lost: LiveEnvelope<M>[] = batch
+					.filter((e) => e.seq !== undefined)
+					.map((e) => ({ sender: e.sender, seq: e.seq, skip: true, msg: undefined as M }));
+				if (lost.length) {
+					try {
+						channel.postMessage(lost);
+					} catch {
+						/* channel closed */
+					}
+				}
 			}
+			return;
 		}
 		if (typeof localStorage !== 'undefined') {
 			try {
@@ -122,7 +204,7 @@ export function createLiveBus<M>(
 
 	function flush(): void {
 		cancelFlush = null;
-		if (destroyed) return;
+		if (destroyed || !lockHeld) return;
 		const batch = pending;
 		pending = [];
 		publish(batch);
@@ -141,9 +223,9 @@ export function createLiveBus<M>(
 	// --- incoming ----------------------------------------------------------
 	const expectedSeqs = new Map<string, number>();
 	const buffers = new Map<string, Map<number, LiveEnvelope<M>>>();
-	const gapTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 	function deliver(envelope: LiveEnvelope<M>): void {
+		if (envelope.skip) return; // a number the sender could not post: nothing to hand on
 		for (const h of [...handlers]) {
 			try {
 				h(envelope.msg, envelope.sender);
@@ -153,28 +235,9 @@ export function createLiveBus<M>(
 		}
 	}
 
-	function clearGapTimer(sender: string): void {
-		const t = gapTimers.get(sender);
-		if (t !== undefined) {
-			clearTimeout(t);
-			gapTimers.delete(sender);
-		}
-	}
-
-	function armGapTimer(sender: string): void {
-		if (gapTimers.has(sender)) return;
-		const t = setTimeout(() => {
-			gapTimers.delete(sender);
-			abandonGap(sender);
-		}, gapTimeoutMs);
-		(t as { unref?: () => void }).unref?.();
-		gapTimers.set(sender, t);
-	}
-
 	/**
-	 * Give up on a missing sequence number: deliver everything buffered for
-	 * this sender in ascending order and resynchronise past the hole.
-	 *
+	 * Step past a hole the sender never reported (the buffer cap): deliver
+	 * everything buffered for this sender in order and resynchronise after it.
 	 * Degraded-but-live beats correct-but-wedged (M7).
 	 */
 	function abandonGap(sender: string): void {
@@ -200,10 +263,7 @@ export function createLiveBus<M>(
 			buffer.delete(next);
 			next += 1;
 		}
-		if (buffer.size === 0) {
-			buffers.delete(sender);
-			clearGapTimer(sender);
-		}
+		if (buffer.size === 0) buffers.delete(sender);
 		return next;
 	}
 
@@ -211,7 +271,7 @@ export function createLiveBus<M>(
 		const { sender, seq } = envelope;
 
 		// Immediate (or seq-less) messages skip ordering entirely.
-		if (seq === undefined || isImmediate(envelope.msg)) {
+		if (seq === undefined || (!envelope.skip && isImmediate(envelope.msg))) {
 			deliver(envelope);
 			return;
 		}
@@ -234,12 +294,7 @@ export function createLiveBus<M>(
 				buffers.set(sender, buffer);
 			}
 			buffer.set(seq, envelope);
-			if (buffer.size >= MAX_OUT_OF_ORDER_BUFFER) {
-				clearGapTimer(sender);
-				abandonGap(sender);
-			} else {
-				armGapTimer(sender);
-			}
+			if (buffer.size >= MAX_OUT_OF_ORDER_BUFFER) abandonGap(sender);
 			return;
 		}
 
@@ -255,6 +310,7 @@ export function createLiveBus<M>(
 			// Self-filter at the transport. Op semantics stay idempotent so no
 			// "did I originate this?" bookkeeping is needed above (M11).
 			if (envelope.sender === senderId) continue;
+			watchSender(envelope.sender);
 			processSequence(envelope);
 		}
 	}
@@ -293,6 +349,12 @@ export function createLiveBus<M>(
 				handlers = handlers.filter((h) => h !== handler);
 			};
 		},
+		onSenderGone(handler) {
+			goneHandlers.push(handler);
+			return () => {
+				goneHandlers = goneHandlers.filter((h) => h !== handler);
+			};
+		},
 		destroy() {
 			// Post what was already sent before closing. Callers send a last
 			// frame and destroy in the same tick — a tab's leave on close is
@@ -303,7 +365,11 @@ export function createLiveBus<M>(
 			flush();
 			destroyed = true;
 			handlers = [];
-			for (const sender of [...gapTimers.keys()]) clearGapTimer(sender);
+			goneHandlers = [];
+			for (const ctl of watching.values()) ctl.abort();
+			watching.clear();
+			// Our sender lock going is the news, for anyone watching it.
+			releaseOwnLock?.();
 			buffers.clear();
 			expectedSeqs.clear();
 			try {

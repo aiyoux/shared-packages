@@ -1,9 +1,8 @@
-import { staleIds } from './liveness.js';
-
 /**
  * One presence table for every app. A seat is a client in one place
- * (a cursor, a caret, or a file row). Apps paint `place`. They do not
- * keep a second clock.
+ * (a cursor, a caret, or a file row). Apps paint `place`. Nobody sweeps it
+ * on a clock: a seat goes when its peer leaves, or when the transport it came
+ * over says that peer is gone.
  */
 
 export type PresenceSeat<T> = {
@@ -30,11 +29,6 @@ export function presenceBoard<T>(key: string) {
 		},
 		clear() {
 			map.clear();
-		},
-		sweep(now = Date.now(), staleMs?: number): string[] {
-			const gone = staleIds(new Map([...map].map(([id, row]) => [id, row.at])), now, staleMs);
-			for (const id of gone) map.delete(id);
-			return gone;
 		},
 		list(): PresenceSeat<T>[] {
 			return [...map.values()] as PresenceSeat<T>[];
