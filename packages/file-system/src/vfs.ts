@@ -1406,6 +1406,99 @@ export class VfsService {
 
 	// ── write / update ────────────────────────────────────────────
 
+	/**
+	 * Commit a large file from a bounded byte stream. The catalog row stays
+	 * pending until OPFS closes the stream, so readers never see a partial ZIP.
+	 */
+	async writeFileStream(
+		input: { parentId: string | null; name: string; contentType?: string },
+		stream: ReadableStream<Uint8Array>,
+		opts?: { signal?: AbortSignal }
+	): Promise<VfsNode> {
+		await this.ready();
+		if (opts?.signal?.aborted) throw new DOMException('Cancelled', 'AbortError');
+		if (!this.opfs.writeStream) throw new VfsError('OPFS_IO', 'Streaming writes are unavailable');
+		const nodeId = generateId('file');
+		const blobId = generateId('blob');
+		const leaseKey = `write:${blobId}`;
+		const owner = generateId('lease');
+		const now = Date.now();
+		let name = sanitizeName(input.name);
+		const fileType = inferFileTypeFromName(name);
+		if (fileType !== 'unknown' && getFileType(fileType)) name = forceExtension(name, fileType);
+		let finalPath = '';
+		await this.db.transaction('rw', this.db.nodes, this.db.blobRefs, this.db.leases, async () => {
+			if (input.parentId) {
+				const parent = await this.db.nodes.get(input.parentId);
+				if (!parent || parent.kind !== 'folder') throw new VfsError('NOT_A_FOLDER');
+				if (parent.deletedAt != null) throw new VfsError('TRASH_STATE');
+			}
+			name = await this.ensureUniqueName(input.parentId, name, undefined, 'rename');
+			const parentRel = await this.relPathOf(input.parentId);
+			finalPath = this.rootOpfsPath(parentRel ? `${parentRel}/${name}` : name);
+			await this.db.blobRefs.put({
+				id: blobId, opfsPath: finalPath, byteLength: 0, createdAt: now,
+				contentType: input.contentType, pending: true, pendingPromote: false
+			});
+			await this.db.leases.put({ key: leaseKey, owner, expiresAt: now + this.graceMs });
+			await this.db.nodes.put({
+				id: nodeId, parentId: input.parentId, name, kind: 'file',
+				fileType: fileType === 'unknown' ? undefined : fileType,
+				size: 0, createdAt: now, updatedAt: now, generation: 1, blobId,
+				contentType: input.contentType, deletedAt: null,
+				sortOrder: await this.nextAppendSortOrder(input.parentId)
+			});
+		});
+		// A 5 GB archive can take longer than the normal two-minute GC grace.
+		// Keep the pending write's lease alive across tabs until close or abort.
+		let leaseActive = true;
+		const keepAlive = setInterval(() => {
+			void (async () => {
+				const lease = await this.db.leases.get(leaseKey);
+				if (leaseActive && lease) {
+					await this.db.leases.put({ ...lease, expiresAt: Date.now() + this.graceMs });
+				}
+			})().catch(() => {});
+		}, Math.max(50, Math.floor(this.graceMs / 3)));
+		try {
+			const { byteLength } = await this.opfs.writeStream(finalPath, stream, opts);
+			leaseActive = false;
+			clearInterval(keepAlive);
+			if (opts?.signal?.aborted) throw new DOMException('Cancelled', 'AbortError');
+			await this.db.transaction('rw', this.db.nodes, this.db.blobRefs, this.db.leases, async () => {
+				if (input.parentId) {
+					const parent = await this.db.nodes.get(input.parentId);
+					if (!parent || parent.kind !== 'folder' || parent.deletedAt != null) throw new VfsError('TRASH_STATE');
+				}
+				const ref = await this.db.blobRefs.get(blobId);
+				const node = await this.db.nodes.get(nodeId);
+				if (!ref || !node) throw new VfsError('NOT_FOUND');
+				ref.byteLength = byteLength;
+				ref.pending = false;
+				await this.db.blobRefs.put(ref);
+				node.size = byteLength;
+				node.updatedAt = Date.now();
+				await this.db.nodes.put(node);
+				await this.db.leases.delete(leaseKey);
+			});
+		} catch (error) {
+			leaseActive = false;
+			clearInterval(keepAlive);
+			await this.db.nodes.delete(nodeId);
+			await this.db.blobRefs.delete(blobId);
+			await this.db.leases.delete(leaseKey);
+			try { await this.opfs.remove(finalPath); } catch { /* best effort */ }
+			throw error;
+		} finally {
+			leaseActive = false;
+			clearInterval(keepAlive);
+		}
+		const node = await this.db.nodes.get(nodeId);
+		if (!node) throw new VfsError('NOT_FOUND');
+		this.emitChange();
+		return node;
+	}
+
 	async writeFile(input: WriteFileInput): Promise<VfsNode> {
 		await this.ready();
 		let name = sanitizeName(input.name);

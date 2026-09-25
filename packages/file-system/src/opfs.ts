@@ -18,6 +18,12 @@ export interface OpfsBlobStore {
 		data: BufferSource | Blob | Uint8Array,
 		opts?: { flush?: boolean }
 	): Promise<{ byteLength: number }>;
+	/** Write a byte stream without assembling a single ArrayBuffer. */
+	writeStream?(
+		opfsPath: string,
+		stream: ReadableStream<Uint8Array>,
+		opts?: { signal?: AbortSignal }
+	): Promise<{ byteLength: number }>;
 	/**
 	 * Many files in one call. OPFS has no multi-file write syscall — this is
 	 * still N create/write/close — but the store can create parent dirs once
@@ -125,6 +131,34 @@ export function createMemoryOpfs(): OpfsBlobStore {
 			const bytes = await toUint8Array(data);
 			files.set(opfsPath, { bytes: new Uint8Array(bytes), mtimeMs: Date.now() });
 			return { byteLength: bytes.byteLength };
+		},
+		async writeStream(opfsPath, stream, opts) {
+			const parts: Uint8Array[] = [];
+			let byteLength = 0;
+			const reader = stream.getReader();
+			const onAbort = () => { void reader.cancel(new DOMException('Cancelled', 'AbortError')); };
+			opts?.signal?.addEventListener('abort', onAbort, { once: true });
+			try {
+				while (true) {
+					if (opts?.signal?.aborted) throw new DOMException('Cancelled', 'AbortError');
+					const { value, done } = await reader.read();
+					if (done) break;
+					parts.push(value);
+					byteLength += value.byteLength;
+				}
+				if (opts?.signal?.aborted) throw new DOMException('Cancelled', 'AbortError');
+				const bytes = new Uint8Array(byteLength);
+				let offset = 0;
+				for (const part of parts) {
+					bytes.set(part, offset);
+					offset += part.byteLength;
+				}
+				files.set(opfsPath, { bytes, mtimeMs: Date.now() });
+				return { byteLength };
+			} finally {
+				opts?.signal?.removeEventListener('abort', onAbort);
+				reader.releaseLock();
+			}
 		},
 		async writeMany(entries) {
 			for (const e of entries) {
@@ -424,6 +458,34 @@ export function createOpfsBlobStore(rootDirName = 'shared-vfs'): OpfsBlobStore {
 			const bytes = await toUint8Array(data);
 			await writeFileHandle(handle, bytes);
 			return { byteLength: bytes.byteLength };
+		},
+		async writeStream(opfsPath, stream, opts) {
+			const handle = await getFile(opfsPath, true);
+			const writable = await handle.createWritable();
+			const reader = stream.getReader();
+			const onAbort = () => { void reader.cancel(new DOMException('Cancelled', 'AbortError')); };
+			opts?.signal?.addEventListener('abort', onAbort, { once: true });
+			let byteLength = 0;
+			try {
+				while (true) {
+					if (opts?.signal?.aborted) throw new DOMException('Cancelled', 'AbortError');
+					const { value, done } = await reader.read();
+					if (done) break;
+					await writable.write(copyViewForWrite(value) as BufferSource);
+					byteLength += value.byteLength;
+				}
+				if (opts?.signal?.aborted) throw new DOMException('Cancelled', 'AbortError');
+				await writable.close();
+				return { byteLength };
+			} catch (error) {
+				try { await writable.abort(); } catch { /* already closed */ }
+				try { await reader.cancel(error); } catch { /* already cancelled */ }
+				if ((error as { name?: string } | null)?.name === 'AbortError') throw error;
+				throw asWriteError(error, 'write');
+			} finally {
+				opts?.signal?.removeEventListener('abort', onAbort);
+				reader.releaseLock();
+			}
 		},
 		async writeMany(entries, opts) {
 			void opts;

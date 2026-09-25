@@ -29,7 +29,6 @@ type Waiter = {
 let workers: Worker[] | null = null;
 let broken = false;
 let seq = 0;
-let next = 0;
 const waiters = new Map<number, Waiter>();
 
 function poolSize(): number {
@@ -95,19 +94,27 @@ function start(): Worker[] | null {
 export async function deflateEntries(entries: Entry[]): Promise<Uint8Array[] | null> {
 	const pool = start();
 	if (!pool || pool.length === 0) return null;
-	return Promise.all(
-		entries.map(
-			(entry) =>
-				new Promise<Uint8Array>((resolve, reject) => {
-					const id = seq++;
-					waiters.set(id, { resolve, reject });
-					// Transfer a copy. The archive writer still needs the caller's bytes for the CRC.
+	const results = new Array<Uint8Array>(entries.length);
+	let cursor = 0;
+	await Promise.all(pool.map(async (worker) => {
+		while (cursor < entries.length) {
+			const index = cursor++;
+			const entry = entries[index]!;
+			results[index] = await new Promise<Uint8Array>((resolve, reject) => {
+				const id = seq++;
+				waiters.set(id, { resolve, reject });
+				// Only one source copy per worker is live. The writer retains the
+				// original for CRC, but thousands of files no longer mean thousands
+				// of simultaneous cloned buffers and queued worker messages.
+				try {
 					const copy = entry.data.slice();
-					pool[next++ % pool.length]!.postMessage(
-						{ id, data: copy, level: entry.level },
-						[copy.buffer]
-					);
-				})
-		)
-	);
+					worker.postMessage({ id, data: copy, level: entry.level }, [copy.buffer]);
+				} catch (error) {
+					waiters.delete(id);
+					reject(error);
+				}
+			});
+		}
+	}));
+	return results;
 }

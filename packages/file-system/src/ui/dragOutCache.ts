@@ -9,7 +9,7 @@
  */
 import { packFiles } from '@shared-packages/compress';
 import { EXPLORER_DOWNLOAD_MAX_BYTES, type ExplorerDriver, type ExplorerEntry } from './explorerDriver.js';
-import { collectPackEntries, toArchiveEntries } from './archiveOps.js';
+import { collectPackEntries, collectPackSources, toArchiveEntries } from './archiveOps.js';
 import { httpDownloadIsSafe } from './saveToDisk.js';
 
 const TTL_MS = 5 * 60 * 1000; // 5 minutes
@@ -164,6 +164,12 @@ async function zipFolderForDragOut(
 	entry: ExplorerEntry
 ): Promise<File | null> {
 	const zipName = folderZipName(entry);
+	const sources = await collectPackSources(driver, [entry]);
+	// The drag-out fallback must fit in a File. Check before reading any bytes.
+	if (sources.some(({ entry: source }) => source.size == null) ||
+		sources.reduce((sum, { entry: source }) => sum + source.size!, 0) > EXPLORER_DOWNLOAD_MAX_BYTES) {
+		return null;
+	}
 	const packed = await collectPackEntries(driver, [entry]);
 	const total = packed.reduce((n, p) => n + p.data.byteLength, 0);
 	if (total > EXPLORER_DOWNLOAD_MAX_BYTES) return null;

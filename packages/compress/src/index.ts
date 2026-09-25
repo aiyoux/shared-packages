@@ -32,6 +32,8 @@ export { expandBytes, packFiles, resolveExpandCodec, type PackedFile } from './o
 
 export { isJunkArchivePath } from './junk.js';
 
+export { streamZip } from './streamZip.js';
+
 export {
 	compressBytes,
 	decompressBytes,

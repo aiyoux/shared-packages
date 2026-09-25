@@ -117,27 +117,73 @@ export const fflateEngine: CompressionEngine = {
 
 	async zip(entries: ArchiveEntry[], options?: CompressOptions) {
 		const f = await get();
-		const tree: import('fflate').Zippable = {};
+		const files: Array<{ name: string; data: Uint8Array }> = [];
 		for (const entry of entries) {
 			const name = entry.name.replace(/^\/+/, '') || 'file';
 			if (name.endsWith('/')) continue;
-			tree[name] = asU8(entry.data);
+			files.push({ name, data: asU8(entry.data) });
 		}
 		const level = zipLevel(options);
-		// Async zip uses workers — faster than zipSync once there is more than
-		// one member (fflate's own guidance). Single-file stays sync.
-		const names = Object.keys(tree);
-		if (names.length <= 1) return f.zipSync(tree, { level });
-		try {
-			return await new Promise<Uint8Array>((resolve, reject) => {
-				f.zip(tree, { level }, (err, data) => (err ? reject(err) : resolve(data)));
+		// fflate.zip starts one worker for EVERY member >=160 KB. A folder of
+		// photos can therefore create hundreds of workers and duplicate all
+		// input buffers before the first finishes. Feed its streaming ZIP writer
+		// one member at a time; at most one worker and one clone are live.
+		return new Promise<Uint8Array>((resolve, reject) => {
+			const chunks: Uint8Array[] = [];
+			let total = 0;
+			let settled = false;
+			const fail = (error: unknown) => {
+				if (settled) return;
+				settled = true;
+				reject(error);
+			};
+			const zip = new f.Zip((err, chunk, final) => {
+				if (err) return fail(err);
+				if (chunk) {
+					chunks.push(chunk);
+					total += chunk.byteLength;
+				}
+				if (!final || settled) return;
+				try {
+					const out = new Uint8Array(total);
+					let offset = 0;
+					for (const part of chunks) {
+						out.set(part, offset);
+						offset += part.byteLength;
+					}
+					settled = true;
+					resolve(out);
+				} catch (error) {
+					fail(error);
+				}
 			});
-		} catch (err) {
-			if ((err as Error)?.name === 'AbortError') throw err;
-			// Blob workers die under some CSP / COEP combinations. The bytes
-			// are the same as the sync codec.
-			return f.zipSync(tree, { level });
-		}
+			void (async () => {
+				try {
+					for (let i = 0; i < files.length; i++) {
+						if (settled) return;
+						const { name, data } = files[i]!;
+						const stream = data.byteLength >= 160_000 && typeof Worker !== 'undefined'
+							? new f.AsyncZipDeflate(name, { level })
+							: new f.ZipDeflate(name, { level });
+						zip.add(stream);
+						await new Promise<void>((done, failMember) => {
+							const ondata = stream.ondata;
+							stream.ondata = (err, chunk, final) => {
+								ondata(err, chunk, final);
+								if (err) failMember(err);
+								else if (final) done();
+							};
+							stream.push(data, true);
+						});
+						if ((i & 31) === 31) await new Promise((done) => setTimeout(done, 0));
+					}
+					zip.end();
+				} catch (error) {
+					zip.terminate();
+					fail(error);
+				}
+			})();
+		});
 	},
 
 	async unzip(bytes: Uint8Array, opts?: UnzipProgressOpts) {

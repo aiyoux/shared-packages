@@ -590,6 +590,9 @@
 				{enginePlan.lines.join(' ')}
 			</p>
 		{/if}
+		{#if kind === 'compress' && codec === 'zip' && !useHost && driver.writeFileStream}
+			<p class="hint">Large ZIPs use ZIP64 streaming with zip.js, regardless of the selected library.</p>
+		{/if}
 
 		{#if engineStatus === 'loading'}
 			<p class="hint">Loading engine…</p>

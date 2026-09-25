@@ -4,6 +4,7 @@
  */
 import {
 	CODEC_LABEL,
+	CODEC_EXTENSION,
 	ENGINE_CATALOG,
 	DEFAULT_ENGINE as DEFAULT_COMPRESS_ENGINE,
 	detectFormat,
@@ -15,6 +16,8 @@ import {
 	isJunkArchivePath,
 	loadEngine as loadCompressEngine,
 	packFiles,
+	streamZip,
+	suggestArchiveName,
 	type ArchiveEntry,
 	type Codec,
 	type EngineId as CompressEngineId
@@ -424,19 +427,39 @@ export async function collectPackEntries(
 	entries: ExplorerEntry[],
 	opts?: { signal?: AbortSignal; onFile?: (packed: number) => void }
 ): Promise<PackedPath[]> {
+	const sources = await collectPackSources(driver, entries, { signal: opts?.signal });
 	const out: PackedPath[] = [];
-	async function walk(entry: ExplorerEntry, prefix: string) {
+	for (const { entry, path } of sources) {
 		throwIfAborted(opts?.signal);
+		out.push({ path, data: await readEntryBytes(driver, entry) });
+		opts?.onFile?.(out.length);
+	}
+	if (!out.length) throw new Error('Nothing to pack');
+	return out;
+}
+
+export async function collectPackSources(
+	driver: ExplorerDriver,
+	entries: ExplorerEntry[],
+	opts?: { signal?: AbortSignal; onFile?: (count: number) => void }
+): Promise<Array<{ entry: ExplorerEntry; path: string }>> {
+	const out: Array<{ entry: ExplorerEntry; path: string }> = [];
+	async function walk(entry: ExplorerEntry, prefix: string): Promise<void> {
+		throwIfAborted(opts?.signal);
+		const path = prefix ? `${prefix}/${entry.name}` : entry.name;
 		if (entry.kind === 'file') {
-			const data = await readEntryBytes(driver, entry);
-			const path = prefix ? `${prefix}/${entry.name}` : entry.name;
-			out.push({ path, data });
+			out.push({ entry, path });
 			opts?.onFile?.(out.length);
 			return;
 		}
-		const listed = await driver.list({ parentId: entry.id });
-		const next = prefix ? `${prefix}/${entry.name}` : entry.name;
-		for (const child of listed.entries) await walk(child, next);
+		const children = driver.listAll
+			? await driver.listAll({ parentId: entry.id })
+			: await (async () => {
+				const listed = await driver.list({ parentId: entry.id });
+				if (listed.truncated) throw new Error('Folder listing is truncated; cannot safely archive every file');
+				return listed.entries;
+			})();
+		for (const child of children) await walk(child, path);
 	}
 	for (const entry of entries) await walk(entry, '');
 	if (!out.length) throw new Error('Nothing to pack');
@@ -1412,6 +1435,106 @@ export async function runArchiveJob(spec: ArchiveJobSpec): Promise<ArchiveJobRes
 
 	if (kind === 'compress' || kind === 'encrypt') {
 		emitJobPct(0);
+		// ZIP64 must never pass through collectPackEntries/packFiles: both turn
+		// the entire selection (and then the output) into one ArrayBuffer.
+		// Metadata traversal is cheap and also catches truncated remote lists.
+		const packSources = kind === 'compress'
+			? await collectPackSources(driver, entries, { signal, onFile: (n) => setNote(`${n} file${n === 1 ? '' : 's'}…`) })
+			: null;
+		const sourceBytes = packSources?.reduce((sum, source) => sum + (source.entry.size ?? 0), 0) ?? 0;
+		const needsStream = !!packSources && (
+			sourceBytes > 64 * 1024 * 1024 || packSources.length > 128 ||
+			packSources.some((source) => source.entry.size == null)
+		);
+		if (needsStream) {
+			if (!driver.writeFileStream || !driver.readBlob || (dest !== 'same' && dest !== 'folder')) {
+				throw new Error('This destination cannot stream a large archive. Choose a local VFS folder.');
+			}
+			if (spec.codec === 'gzip' || spec.codec === 'zlib') {
+				if (packSources!.length !== 1 || typeof CompressionStream === 'undefined') {
+					throw new Error('Large gzip and zlib jobs need one source file and browser streaming support.');
+				}
+				const source = packSources![0]!;
+				const role = describeCompressRole(spec.compressEngineId, spec.codec, 'create');
+				remember({
+					...role, used: 'browser-stream', usedLabel: 'browser stream', fallback: true,
+					reason: 'large files use bounded streaming'
+				}, 'Compressing');
+				const blob = await driver.readBlob(source.entry.id);
+				let readBytes = 0;
+				const tally = new TransformStream<Uint8Array, Uint8Array>({
+					transform(chunk, controller) {
+						readBytes += chunk.byteLength;
+						emitJobPct((readBytes / Math.max(blob.size, 1)) * 99);
+						controller.enqueue(chunk);
+					}
+				});
+				const compressed = blob.stream().pipeThrough(tally).pipeThrough(
+					new CompressionStream(spec.codec === 'gzip' ? 'gzip' : 'deflate') as unknown as
+						ReadableWritablePair<Uint8Array, Uint8Array>
+				);
+				const written = await driver.writeFileStream(
+					destParentId, spec.outputName?.trim() || `${source.entry.name}${CODEC_EXTENSION[spec.codec]}`, compressed,
+					{ signal, contentType: 'application/octet-stream' }
+				);
+				onProgress?.({
+					name: written.name, parentId: destParentId, transferred: written.size ?? 0,
+					size: written.size ?? 0, done: true, entryKind: 'file'
+				});
+				emitJobPct(100, true);
+				return { title, engines };
+			}
+			if (spec.codec !== 'zip') {
+				throw new Error('This format cannot stream a large file in the browser. Choose ZIP or gzip.');
+			}
+			const role = describeCompressRole(spec.compressEngineId, 'zip', 'create');
+			remember({
+				...role, used: 'zipjs', usedLabel: 'zip.js', fallback: role.used !== 'zipjs',
+				reason: 'large ZIPs use bounded ZIP64 streaming'
+			}, 'Compressing');
+			const name = spec.outputName?.trim() || suggestArchiveName(
+				packSources!.map((source) => ({ name: source.path })), 'archive', 'zip'
+			);
+			const pipe = new TransformStream<Uint8Array, Uint8Array>();
+			const ac = new AbortController();
+			const abort = () => ac.abort();
+			if (signal?.aborted) ac.abort();
+			else signal?.addEventListener('abort', abort, { once: true });
+			const output = driver.writeFileStream(destParentId, name, pipe.readable, {
+				signal: ac.signal, contentType: 'application/zip'
+			});
+			void output.catch(() => {});
+			let completedBytes = 0;
+			try {
+				await streamZip((async function* () {
+					for (const source of packSources!) {
+						throwIfAborted(ac.signal);
+						const blob = await driver.readBlob!(source.entry.id);
+						setNote(`Compressing ${source.path} with zip.js…`);
+						yield { name: source.path, blob };
+						completedBytes += blob.size;
+					}
+				})(), pipe.writable, {
+					signal: ac.signal,
+					onProgress: (_name, transferred) => {
+						emitJobPct(((completedBytes + transferred) / Math.max(sourceBytes, 1)) * 99);
+					}
+				});
+				const written = await output;
+				onProgress?.({
+					name: written.name, parentId: destParentId, transferred: written.size ?? 0,
+					size: written.size ?? 0, done: true, entryKind: 'file'
+				});
+			} catch (error) {
+				ac.abort();
+				await output.catch(() => {});
+				throw error;
+			} finally {
+				signal?.removeEventListener('abort', abort);
+			}
+			emitJobPct(100, true);
+			return { title, engines };
+		}
 		const packed = await collectPackEntries(driver, entries, {
 			signal,
 			onFile: (n) => {

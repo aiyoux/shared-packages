@@ -149,11 +149,20 @@ export interface ExplorerDriver {
 	readonly capabilities: ExplorerCapabilities;
 	ready(): Promise<void>;
 	list(opts: ExplorerListOptions): Promise<ExplorerListResult>;
+	/** Uncapped listing for archive traversal; absent on paginated backends. */
+	listAll?(opts: ExplorerListOptions): Promise<ExplorerEntry[]>;
 	/**
 	 * Breadcrumb chain from effective root to `id` (exclusive of root chrome).
 	 * FE: `breadcrumbs = parentId ? await getPath(parentId) : []`.
 	 */
 	getPath(id: ExplorerEntryId): Promise<ExplorerEntry[]>;
+	/** Bounded-memory output for large local archives. */
+	writeFileStream?(
+		parentId: ExplorerEntryId | null,
+		name: string,
+		stream: ReadableStream<Uint8Array>,
+		opts?: { signal?: AbortSignal; contentType?: string }
+	): Promise<ExplorerEntry>;
 	mkdir?(parentId: ExplorerEntryId | null, name: string): Promise<ExplorerEntry>;
 	/** Coalesce explorer/git notifies across a dump. */
 	batch?<T>(fn: () => Promise<T>): Promise<T>;

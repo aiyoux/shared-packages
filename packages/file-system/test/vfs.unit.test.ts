@@ -19,6 +19,54 @@ describe('VfsService', () => {
 		await vfs.ready();
 	});
 
+	it('writeFileStream hides pending bytes and commits only after close', async () => {
+		const pipe = new TransformStream<Uint8Array, Uint8Array>();
+		const pending = vfs.writeFileStream(
+			{ parentId: null, name: 'large.zip', contentType: 'application/zip' }, pipe.readable
+		);
+		const writer = pipe.writable.getWriter();
+		await writer.write(new TextEncoder().encode('part-one'));
+		assert.deepEqual(await vfs.list({ parentId: null }), []);
+		await writer.write(new TextEncoder().encode('part-two'));
+		await writer.close();
+		const node = await pending;
+		assert.equal(node.size, 16);
+		assert.equal((await vfs.db.blobRefs.get(node.blobId!))?.pending, false);
+		assert.equal(await (await vfs.readBlob(node.id)).text(), 'part-onepart-two');
+	});
+
+	it('writeFileStream abort removes the partial catalog entry and blob', async () => {
+		const ac = new AbortController();
+		const pipe = new TransformStream<Uint8Array, Uint8Array>();
+		const pending = vfs.writeFileStream(
+			{ parentId: null, name: 'cancelled.zip' }, pipe.readable, { signal: ac.signal }
+		);
+		const writer = pipe.writable.getWriter();
+		await writer.write(new TextEncoder().encode('partial'));
+		ac.abort();
+		await assert.rejects(pending, (error: unknown) => error instanceof Error && error.name === 'AbortError');
+		assert.deepEqual(await vfs.list({ parentId: null }), []);
+		assert.equal((await vfs.opfs.listOrphans('root/')).length, 0);
+	});
+
+	it('writeFileStream renews its lease while a long stream is still open', async () => {
+		const durable = createVfs({
+			dbName: `test-stream-lease-${Date.now()}-${Math.random()}`,
+			memoryOpfs: true, graceMs: 120
+		});
+		await durable.ready();
+		const pipe = new TransformStream<Uint8Array, Uint8Array>();
+		const pending = durable.writeFileStream({ parentId: null, name: 'slow.zip' }, pipe.readable);
+		const writer = pipe.writable.getWriter();
+		await writer.write(new Uint8Array([1]));
+		await new Promise((resolve) => setTimeout(resolve, 300));
+		await durable.gc();
+		assert.equal((await durable.db.nodes.toArray()).filter((n) => n.name === 'slow.zip').length, 1);
+		await writer.close();
+		assert.equal((await pending).size, 1);
+		await durable.db.delete();
+	});
+
 	it('writeFile populates BlobRef.contentHash with SHA-256 of the bytes', async () => {
 		const bytes = new TextEncoder().encode('hello-hash');
 		const file = await vfs.writeFile({

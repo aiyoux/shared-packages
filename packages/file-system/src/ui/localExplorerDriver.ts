@@ -56,7 +56,7 @@ export type LocalVfsLike = Pick<
 	| 'subscribe'
 	| 'healFileType'
 > &
-	Partial<Pick<VfsService, 'liveList' | 'writeFiles' | 'writeTree'>>;
+	Partial<Pick<VfsService, 'liveList' | 'writeFiles' | 'writeTree' | 'writeFileStream'>>;
 
 export type LocalExplorerDriverOptions = {
 	/** Driver id: `local` (default) or `memory`. */
@@ -90,6 +90,14 @@ export function createLocalExplorerDriver(
 				sort: caps.supportsSiblingOrder ? 'order' : 'name'
 			});
 			return applyListCap(mapNodes(nodes));
+		},
+
+		async listAll(listOpts: ExplorerListOptions): Promise<ExplorerEntry[]> {
+			return mapNodes(await vfs.list({
+				parentId: listOpts.parentId,
+				trashOnly: listOpts.trashOnly,
+				sort: caps.supportsSiblingOrder ? 'order' : 'name'
+			}));
 		},
 
 		async getPath(entryId: ExplorerEntryId): Promise<ExplorerEntry[]> {
@@ -151,6 +159,12 @@ export function createLocalExplorerDriver(
 		async readBlob(entryId) {
 			return vfs.readBlob(entryId);
 		},
+
+		writeFileStream: vfs.writeFileStream
+			? async (parentId, name, stream, opts) => nodeToEntry(await vfs.writeFileStream!(
+				{ parentId, name, contentType: opts?.contentType }, stream, { signal: opts?.signal }
+			))
+			: undefined,
 
 		async healFileType(entryId) {
 			const n = await vfs.healFileType(entryId);

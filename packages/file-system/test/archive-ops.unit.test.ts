@@ -1,11 +1,12 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { packFiles } from '@shared-packages/compress';
+import { expandBytes, packFiles } from '@shared-packages/compress';
 import { sealVault } from '@shared-packages/crypto';
 import { createVfs } from '../src/index.ts';
 import { createLocalExplorerDriver } from '../src/ui/localExplorerDriver.ts';
 import {
 	collectPackEntries,
+	collectPackSources,
 	createInnerFsSession,
 	describeCompressRole,
 	expandPackedBytes,
@@ -379,6 +380,68 @@ describe('archiveOps', () => {
 		assert.equal(inner.entries[0]?.name, 'b.txt');
 		await vfs.db.delete();
 		await dest.db.delete();
+	});
+
+	it('streams a ZIP when source metadata exceeds one ArrayBuffer', async () => {
+		const vfs = createVfs({
+			dbName: `archive-stream-${Date.now()}-${Math.random()}`,
+			memoryOpfs: true,
+			requestPersist: false
+		});
+		await vfs.ready();
+		const driver = createLocalExplorerDriver(vfs);
+		await driver.ready();
+		await driver.writeFile!(null, new File(['small body'], 'large.txt'));
+		const source = (await driver.list({ parentId: null })).entries.find((e) => e.name === 'large.txt')!;
+		const result = await runArchiveJob({
+			kind: 'compress', entries: [{ ...source, size: 5 * 1024 ** 3 }], driver,
+			dest: 'same', destParentId: null, title: 'large.txt',
+			compressEngineId: 'zipkit', codec: 'zip', cryptoEngineId: 'webcrypto',
+			password: '', skipSystemFiles: true, useHost: false
+		});
+		assert.ok(result.engines.some((engine) => engine.used === 'zipjs' && engine.fallback));
+		const output = (await driver.list({ parentId: null })).entries.find((e) => e.name === 'large.zip')!;
+		assert.ok(output);
+		const bytes = new Uint8Array(await (await driver.readBlob!(output.id)).arrayBuffer());
+		const unpacked = await expandBytes('fflate', bytes, 'zip');
+		assert.equal(new TextDecoder().decode(unpacked[0]!.data), 'small body');
+		await vfs.db.delete();
+	});
+
+	it('streams gzip for a large single file without collecting source bytes', async () => {
+		const vfs = createVfs({
+			dbName: `archive-gzip-stream-${Date.now()}-${Math.random()}`,
+			memoryOpfs: true,
+			requestPersist: false
+		});
+		await vfs.ready();
+		const driver = createLocalExplorerDriver(vfs);
+		await driver.ready();
+		await driver.writeFile!(null, new File(['gzip body'], 'large.txt'));
+		const source = (await driver.list({ parentId: null })).entries.find((e) => e.name === 'large.txt')!;
+		const result = await runArchiveJob({
+			kind: 'compress', entries: [{ ...source, size: 5 * 1024 ** 3 }], driver,
+			dest: 'same', destParentId: null, title: 'large.txt',
+			compressEngineId: 'fflate', codec: 'gzip', cryptoEngineId: 'webcrypto',
+			password: '', skipSystemFiles: true, useHost: false
+		});
+		assert.ok(result.engines.some((engine) => engine.used === 'browser-stream'));
+		const output = (await driver.list({ parentId: null })).entries.find((e) => e.name === 'large.txt.gz')!;
+		const bytes = new Uint8Array(await (await driver.readBlob!(output.id)).arrayBuffer());
+		const unpacked = await expandBytes('fflate', bytes, 'gzip', output.name);
+		assert.equal(new TextDecoder().decode(unpacked[0]!.data), 'gzip body');
+		await vfs.db.delete();
+	});
+
+	it('refuses to pack a truncated folder listing', async () => {
+		const driver = {
+			...noMkdirDriver([]),
+			list: async () => ({ entries: [], truncated: true })
+		};
+		await assert.rejects(
+			() => collectPackSources(driver, [{ id: 'folder', name: 'folder', kind: 'folder', parentId: null }]),
+			/truncated/i
+		);
 	});
 
 	it('writeEntriesToDriver reports dest-file progress', async () => {

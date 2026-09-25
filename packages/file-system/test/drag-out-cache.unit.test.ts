@@ -13,7 +13,7 @@ import {
 	formatDownloadURL,
 	type DragOutUrl
 } from '../src/ui/dragOutCache.ts';
-import type { ExplorerDriver, ExplorerEntry } from '../src/ui/explorerDriver.ts';
+import { EXPLORER_DOWNLOAD_MAX_BYTES, type ExplorerDriver, type ExplorerEntry } from '../src/ui/explorerDriver.ts';
 import { createVfs } from '../src/index.ts';
 import { createLocalExplorerDriver } from '../src/ui/localExplorerDriver.ts';
 
@@ -154,6 +154,18 @@ describe('dragOutCache', () => {
 			formatDownloadURL(loc),
 			'image/png:photo.png:https://f000.backblazeb2.com/file/bucket/photo.png?Authorization=tok'
 		);
+	});
+
+	it('refuses an oversized folder before reading its contents', async () => {
+		let reads = 0;
+		const folder = makeEntry({ id: 'folder', kind: 'folder', name: 'Huge', size: undefined });
+		const file = makeEntry({ id: 'huge', parentId: 'folder', size: EXPLORER_DOWNLOAD_MAX_BYTES + 1 });
+		const driver = makeDriver(new Blob(), {
+			list: async () => ({ entries: [file], truncated: false }),
+			readBlob: async () => { reads++; throw new Error('should not read'); }
+		});
+		assert.equal(await prefetchForDragOut(driver, folder), null);
+		assert.equal(reads, 0);
 	});
 
 	it('prefetchForDragOut zips a local folder for OS drag-out', async () => {
