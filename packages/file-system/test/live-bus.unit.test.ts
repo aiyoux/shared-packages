@@ -242,4 +242,21 @@ describe('createLiveBus', () => {
 		assert.deepEqual(got, []);
 		a.destroy();
 	});
+
+	it('posts a frame sent just before destroy()', async () => {
+		const name = nextChannel();
+		// flushSync off: the last frame is still waiting on its batch when the
+		// sender goes away, which is how a tab's leave-on-close is sent.
+		const a = createLiveBus<Msg>(name, 'a', { isImmediate });
+		const b = createLiveBus<Msg>(name, 'b', { isImmediate, flushSync: true });
+		const got: Msg[] = [];
+		b.onMessage((m) => got.push(m));
+
+		a.broadcastImmediate({ kind: 'pose', n: 1 });
+		a.destroy();
+		await until(() => got.length === 1);
+
+		assert.deepEqual(got, [{ kind: 'pose', n: 1 }]);
+		b.destroy();
+	});
 });

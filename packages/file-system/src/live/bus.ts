@@ -294,10 +294,14 @@ export function createLiveBus<M>(
 			};
 		},
 		destroy() {
-			destroyed = true;
+			// Post what was already sent before closing. Callers send a last
+			// frame and destroy in the same tick — a tab's leave on close is
+			// exactly that — and a frame-batched send would otherwise be
+			// dropped here, silently, leaving the peer to time the tab out.
 			cancelFlush?.();
 			cancelFlush = null;
-			pending = [];
+			flush();
+			destroyed = true;
 			handlers = [];
 			for (const sender of [...gapTimers.keys()]) clearGapTimer(sender);
 			buffers.clear();
