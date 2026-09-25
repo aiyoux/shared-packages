@@ -112,3 +112,62 @@ function newSessionId(now: number): string {
 	seq += 1;
 	return `ses-${now.toString(36)}-${seq.toString(36)}`;
 }
+
+/** A saved file is one session. An unsaved document is keyed by its own id. */
+export function sessionMergeKey(session: OpenSession): string {
+	return session.fileId ? `file:${session.fileId}` : `id:${session.id}`;
+}
+
+/**
+ * Union two tabs' session lists.
+ *
+ * The later `updatedAt` supplies the fields. The id is the lesser of the two,
+ * so both tabs converge on one id for a file instead of each keeping its own
+ * and rewriting the list forever.
+ */
+export function mergeSessions(local: readonly OpenSession[], remote: readonly OpenSession[]): OpenSession[] {
+	const map = new Map<string, OpenSession>();
+	const put = (session: OpenSession) => {
+		const key = sessionMergeKey(session);
+		const prev = map.get(key);
+		if (!prev) {
+			map.set(key, session);
+			return;
+		}
+		const newer = session.updatedAt >= prev.updatedAt ? session : prev;
+		const id = prev.id < session.id ? prev.id : session.id;
+		map.set(key, { ...newer, id, updatedAt: Math.max(prev.updatedAt, session.updatedAt) });
+	};
+	for (const session of local) put(session);
+	for (const session of remote) put(session);
+	return [...map.values()];
+}
+
+/** Point a tab's connected id at the merged session for the same document. */
+export function retargetConnected(
+	connectedId: string | undefined,
+	before: readonly OpenSession[],
+	after: readonly OpenSession[]
+): string | undefined {
+	if (!connectedId) return undefined;
+	if (after.some((session) => session.id === connectedId)) return connectedId;
+	const old = before.find((session) => session.id === connectedId);
+	if (!old) return undefined;
+	const key = sessionMergeKey(old);
+	return after.find((session) => sessionMergeKey(session) === key)?.id;
+}
+
+/**
+ * What a tab does when another tab writes the file.
+ *
+ * A replicated document (both tabs already share the bytes) drops Unsaved.
+ * A tab that has not edited reloads the file. A tab with its own edits keeps
+ * them.
+ */
+export type ForeignSaveAction = 'clear-dirty' | 'reload' | 'keep';
+
+export function foreignSaveAction(opts: { replicated: boolean; uiDirty: boolean }): ForeignSaveAction {
+	if (opts.replicated) return 'clear-dirty';
+	if (!opts.uiDirty) return 'reload';
+	return 'keep';
+}

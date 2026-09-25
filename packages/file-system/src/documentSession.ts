@@ -83,6 +83,27 @@ function snapshotKey(s: DocumentSnapshot): string {
 	].join('|');
 }
 
+/**
+ * One subscription for every open file: rename, a clean save from another
+ * tab, a save that conflicts with local edits, and deletion.
+ */
+export function followOpenDocument(
+	doc: OpenDocument,
+	hooks: {
+		onRenamed?: (event: Extract<DocumentEvent, { type: 'path' }>) => void;
+		onCleanSave?: (generation: number) => void;
+		onConflict?: (generation: number) => void;
+		onDeleted?: (reason: 'trash' | 'permanent') => void;
+	}
+): () => void {
+	return doc.subscribe((event) => {
+		if (event.type === 'path') hooks.onRenamed?.(event);
+		else if (event.type === 'deleted') hooks.onDeleted?.(event.reason);
+		else if (event.conflict) hooks.onConflict?.(event.generation);
+		else hooks.onCleanSave?.(event.generation);
+	});
+}
+
 export function watchNode(
 	host: DocumentHost,
 	id: string,
