@@ -26,40 +26,69 @@ export function emptySessionIndex(): OpenSessionIndex {
 	return { sessions: [] };
 }
 
+/**
+ * Find this document's session, or open one.
+ *
+ * A saved file joins the session that already names it. An unsaved document
+ * has no file id to join by, so the caller passes the session it is already
+ * on as `sessionId`: without it every call would open another session, and
+ * callers run on every title or dirty change. That session is joined only
+ * while it names no other file, so it also adopts the file id on first save.
+ *
+ * `changed` is false when nothing but the clock would move. The index is then
+ * returned as given, so a caller can skip the write — and a reactive caller
+ * does not re-run on its own no-op.
+ */
 export function joinOrCreate(
 	index: OpenSessionIndex,
 	input: {
 		kind: SessionKind;
 		title: string;
 		fileId?: string;
+		/** The session this caller is already connected to, if any. */
+		sessionId?: string;
 		dirty?: boolean;
 		remote?: boolean;
 		roomLabel?: string | null;
 		now?: number;
 	}
-): { index: OpenSessionIndex; session: OpenSession } {
+): { index: OpenSessionIndex; session: OpenSession; changed: boolean } {
 	const now = input.now ?? Date.now();
 	const fileId = input.fileId?.trim() || undefined;
-	if (fileId) {
-		const existing = index.sessions.find((s) => s.fileId === fileId);
-		if (existing) {
-			const session: OpenSession = {
-				...existing,
-				title: input.title || existing.title,
-				kind: input.kind,
-				dirty: input.dirty ?? existing.dirty,
-				remote: input.remote ?? existing.remote,
-				...(input.roomLabel !== undefined ? { roomLabel: input.roomLabel || undefined } : {}),
-				updatedAt: now
-			};
-			return {
-				session,
-				index: {
-					connectedId: session.id,
-					sessions: index.sessions.map((s) => (s.id === session.id ? session : s))
-				}
-			};
+	const byFile = fileId ? index.sessions.find((s) => s.fileId === fileId) : undefined;
+	const byId = input.sessionId ? index.sessions.find((s) => s.id === input.sessionId) : undefined;
+	const existing = byFile ?? (byId && (byId.fileId === undefined || byId.fileId === fileId) ? byId : undefined);
+	if (existing) {
+		const next: OpenSession = {
+			...existing,
+			title: input.title || existing.title,
+			kind: input.kind,
+			...(fileId ? { fileId } : {}),
+			dirty: input.dirty ?? existing.dirty,
+			remote: input.remote ?? existing.remote
+		};
+		if (input.roomLabel !== undefined) {
+			if (input.roomLabel) next.roomLabel = input.roomLabel;
+			else delete next.roomLabel;
 		}
+		const changed =
+			index.connectedId !== existing.id ||
+			next.title !== existing.title ||
+			next.kind !== existing.kind ||
+			next.fileId !== existing.fileId ||
+			next.dirty !== existing.dirty ||
+			next.remote !== existing.remote ||
+			next.roomLabel !== existing.roomLabel;
+		if (!changed) return { index, session: existing, changed: false };
+		const session: OpenSession = { ...next, updatedAt: now };
+		return {
+			session,
+			changed: true,
+			index: {
+				connectedId: session.id,
+				sessions: index.sessions.map((s) => (s.id === session.id ? session : s))
+			}
+		};
 	}
 	const session: OpenSession = {
 		id: newSessionId(now),
@@ -71,7 +100,11 @@ export function joinOrCreate(
 		...(input.roomLabel ? { roomLabel: input.roomLabel } : {}),
 		updatedAt: now
 	};
-	return { session, index: { connectedId: session.id, sessions: [...index.sessions, session] } };
+	return {
+		session,
+		changed: true,
+		index: { connectedId: session.id, sessions: [...index.sessions, session] }
+	};
 }
 
 let seq = 0;
