@@ -1,10 +1,4 @@
 import { engineInfo, type CompressOptions, type CompressionEngine } from '../types.js';
-import {
-	alloc,
-	free,
-	memoryU8,
-	wasmExports
-} from '../../../../node_modules/@addmaple/lz4/dist/core.js';
 
 type MapleMod = {
 	init: (imports?: Record<string, unknown>, opts?: { backend?: string }) => Promise<void>;
@@ -13,6 +7,12 @@ type MapleMod = {
 		options?: { level?: number }
 	) => Promise<Uint8Array>;
 	decompress: (input: Uint8Array | ArrayBuffer | string) => Promise<Uint8Array>;
+	wasmExports?: () => {
+		memory: WebAssembly.Memory;
+		alloc_bytes: (len: number) => number;
+		free_bytes: (ptr: number, len: number) => void;
+		decompress_lz4: (inPtr: number, inLen: number, outPtr: number, outLen: number) => number;
+	};
 };
 
 type MapleCodec = 'gzip' | 'brotli' | 'lz4';
@@ -86,21 +86,19 @@ async function decompressLz4(mod: MapleMod, bytes: Uint8Array): Promise<Uint8Arr
 		return await mod.decompress(bytes);
 	} catch (error) {
 		const needed = lz4Shortfall(error);
-		if (needed == null) throw error;
+		if (needed == null || !mod.wasmExports) throw error;
+		const decode = mod.wasmExports();
 		const len = bytes.byteLength;
-		const inPtr = alloc(len);
-		const outPtr = alloc(needed);
+		const inPtr = decode.alloc_bytes(len) >>> 0;
+		const outPtr = decode.alloc_bytes(needed) >>> 0;
 		try {
-			memoryU8().set(bytes, inPtr);
-			const decode = wasmExports() as unknown as {
-				decompress_lz4(inPtr: number, inLen: number, outPtr: number, outLen: number): number;
-			};
+			new Uint8Array(decode.memory.buffer).set(bytes, inPtr);
 			const written = decode.decompress_lz4(inPtr, len, outPtr, needed);
 			if (written < 0) throw new Error(`decompress_lz4 failed: ${written}`);
-			return memoryU8().slice(outPtr, outPtr + written);
+			return new Uint8Array(decode.memory.buffer).slice(outPtr, outPtr + written);
 		} finally {
-			free(inPtr, len);
-			free(outPtr, needed);
+			decode.free_bytes(inPtr, len);
+			decode.free_bytes(outPtr, needed);
 		}
 	}
 }
