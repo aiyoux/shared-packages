@@ -153,6 +153,28 @@ describe('FeFloatingPreview', () => {
 		const audio = document.querySelector('[data-testid="fe-float-audio"] audio') as HTMLAudioElement | null;
 		expect(audio).toBeTruthy();
 		expect(audio?.getAttribute('src')?.startsWith('blob:')).toBe(true);
+		expect(audio?.hasAttribute('autoplay')).toBe(false);
+	});
+
+	it('does not autoplay video', async () => {
+		render(FeFloatingPreview, {
+			props: {
+				entry: {
+					id: 'clip.webm',
+					kind: 'file',
+					name: 'clip.webm',
+					parentId: null,
+					fileType: 'video',
+					contentType: 'video/webm'
+				},
+				driver: driverWith(new Blob([new Uint8Array([1, 2, 3])], { type: 'video/webm' })),
+				onClose: () => {}
+			}
+		});
+		await waitFor(() => {
+			expect(document.querySelector('video')).toBeTruthy();
+		});
+		expect(document.querySelector('video')?.hasAttribute('autoplay')).toBe(false);
 	});
 
 	it('previews an image from a same-origin downloadUrl without buffering bytes', async () => {

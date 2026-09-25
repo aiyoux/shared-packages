@@ -137,6 +137,7 @@ describe('DualPaneExplorer onOpenProject context', () => {
 		) as HTMLElement;
 		await fireEvent.click(row);
 		await fireEvent.click(screen.getByTestId('fe-item-details'));
+		await fireEvent.click(await screen.findByTestId('fe-preview-actions'));
 		await fireEvent.click(await screen.findByTestId('fe-init-project'));
 		await viWaitFor(() => inited.length === 1);
 		expect(inited).toEqual([{ name: 'plain', ctx: { kind: 'local' } }]);
@@ -174,6 +175,7 @@ describe('DualPaneExplorer onOpenProject context', () => {
 		await fireEvent.click(row);
 		await fireEvent.click(left.querySelector('[data-testid="fe-item-details"]') as HTMLElement);
 		const preview = await screen.findByTestId('fe-file-preview');
+		await fireEvent.click(screen.getByTestId('fe-preview-actions'));
 		expect(preview.querySelector('[data-testid="fe-file-preview-copy-across"]')).toBeTruthy();
 	});
 
@@ -226,6 +228,7 @@ describe('DualPaneExplorer onOpenProject context', () => {
 		const row = document.querySelector('[data-testid="fe-file-row"]') as HTMLElement;
 		await fireEvent.click(row);
 		await fireEvent.click(screen.getByTestId('fe-item-details'));
+		await fireEvent.click(await screen.findByTestId('fe-preview-actions'));
 		await fireEvent.click(await screen.findByTestId('fe-file-preview-quick-edit'));
 		expect(hits).toEqual(['clip.webm']);
 	});
@@ -253,6 +256,7 @@ describe('DualPaneExplorer onOpenProject context', () => {
 		const row = document.querySelector('[data-testid="fe-file-row"]') as HTMLElement;
 		await fireEvent.click(row);
 		await fireEvent.click(screen.getByTestId('fe-item-details'));
+		await fireEvent.click(await screen.findByTestId('fe-preview-actions'));
 		await fireEvent.click(await screen.findByTestId('fe-file-preview-quick-edit'));
 		expect(hits).toEqual(['photo.png']);
 	});
@@ -280,6 +284,7 @@ describe('DualPaneExplorer onOpenProject context', () => {
 		const row = document.querySelector('[data-testid="fe-file-row"]') as HTMLElement;
 		await fireEvent.click(row);
 		await fireEvent.click(screen.getByTestId('fe-item-details'));
+		await fireEvent.click(await screen.findByTestId('fe-preview-actions'));
 		await fireEvent.click(await screen.findByTestId('fe-file-preview-convert-svg'));
 		expect(hits).toEqual(['photo.png']);
 	});

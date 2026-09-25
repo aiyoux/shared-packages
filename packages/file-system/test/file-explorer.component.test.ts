@@ -366,6 +366,7 @@ describe('FileExplorer component', () => {
 		await fireEvent.click(txt);
 		await fireEvent.click(screen.getByTestId('fe-item-details'));
 		await screen.findByTestId('fe-file-preview');
+		await fireEvent.click(screen.getByTestId('fe-preview-actions'));
 		expect(screen.queryByTestId('fe-file-preview-quick-edit')).toBeNull();
 		expect(screen.getByTestId('fe-file-preview-compress')).toBeTruthy();
 		await fireEvent.click(screen.getByTestId('fe-file-preview-close'));
@@ -376,6 +377,7 @@ describe('FileExplorer component', () => {
 		await fireEvent.click(video);
 		await fireEvent.click(screen.getByTestId('fe-item-details'));
 		const preview = await screen.findByTestId('fe-file-preview');
+		await fireEvent.click(screen.getByTestId('fe-preview-actions'));
 		const previewIds = [...preview.querySelectorAll('[data-testid]')].map((el) =>
 			el.getAttribute('data-testid')
 		);
@@ -429,6 +431,7 @@ describe('FileExplorer component', () => {
 		await fireEvent.click(gif);
 		await fireEvent.click(screen.getByTestId('fe-item-details'));
 		await screen.findByTestId('fe-file-preview');
+		await fireEvent.click(screen.getByTestId('fe-preview-actions'));
 		expect(screen.queryByTestId('fe-file-preview-quick-edit')).toBeNull();
 		expect(screen.getByTestId('fe-file-preview-compress')).toBeTruthy();
 		await fireEvent.click(screen.getByTestId('fe-file-preview-close'));
@@ -439,6 +442,7 @@ describe('FileExplorer component', () => {
 		await fireEvent.click(png);
 		await fireEvent.click(screen.getByTestId('fe-item-details'));
 		const preview = await screen.findByTestId('fe-file-preview');
+		await fireEvent.click(screen.getByTestId('fe-preview-actions'));
 		const previewIds = [...preview.querySelectorAll('[data-testid]')].map((el) =>
 			el.getAttribute('data-testid')
 		);
@@ -487,6 +491,7 @@ describe('FileExplorer component', () => {
 		await fireEvent.click(txt);
 		await fireEvent.click(screen.getByTestId('fe-item-details'));
 		await screen.findByTestId('fe-file-preview');
+		await fireEvent.click(screen.getByTestId('fe-preview-actions'));
 		expect(screen.queryByTestId('fe-file-preview-convert-svg')).toBeNull();
 		await fireEvent.click(screen.getByTestId('fe-file-preview-close'));
 
@@ -496,6 +501,7 @@ describe('FileExplorer component', () => {
 		await fireEvent.click(png);
 		await fireEvent.click(screen.getByTestId('fe-item-details'));
 		await screen.findByTestId('fe-file-preview');
+		await fireEvent.click(screen.getByTestId('fe-preview-actions'));
 		await fireEvent.click(screen.getByTestId('fe-file-preview-convert-svg'));
 		expect(hits).toEqual(['photo.png']);
 	});
@@ -514,6 +520,7 @@ describe('FileExplorer component', () => {
 		await fireEvent.click(row);
 		await fireEvent.click(screen.getByTestId('fe-item-details'));
 		await screen.findByTestId('fe-file-preview');
+		await fireEvent.click(screen.getByTestId('fe-preview-actions'));
 		expect(screen.queryByTestId('fe-file-preview-quick-edit')).toBeNull();
 		expect(screen.getByTestId('fe-file-preview-compress')).toBeTruthy();
 	});
@@ -532,6 +539,7 @@ describe('FileExplorer component', () => {
 		await fireEvent.click(row);
 		await fireEvent.click(screen.getByTestId('fe-item-details'));
 		await screen.findByTestId('fe-file-preview');
+		await fireEvent.click(screen.getByTestId('fe-preview-actions'));
 		await fireEvent.click(screen.getByTestId('fe-file-preview-compress'));
 		const compressDlg = await screen.findByTestId('fe-archive-dialog');
 		expect(compressDlg.getAttribute('data-kind')).toBe('compress');
@@ -542,6 +550,7 @@ describe('FileExplorer component', () => {
 		await fireEvent.click(screen.getByTestId('fe-archive-cancel'));
 		expect(screen.queryByTestId('fe-archive-dialog')).toBeNull();
 
+		await fireEvent.click(screen.getByTestId('fe-preview-actions'));
 		await fireEvent.click(screen.getByTestId('fe-file-preview-encrypt'));
 		const encryptDlg = await screen.findByTestId('fe-archive-dialog');
 		expect(encryptDlg.getAttribute('data-kind')).toBe('encrypt');
@@ -838,6 +847,7 @@ describe('FileExplorer component', () => {
 		await fireEvent.click(screen.getByTestId('fe-item-details'));
 		const preview = await screen.findByTestId('fe-file-preview');
 		await viWaitFor(() => preview.querySelector('[data-fe-is-project="false"]') != null);
+		await fireEvent.click(screen.getByTestId('fe-preview-actions'));
 		const initBtn = await screen.findByTestId('fe-init-project');
 		expect(initBtn.textContent).toMatch(/Init project/);
 		// Open is unconditional; only Init is gated on detection.
@@ -945,6 +955,7 @@ describe('FileExplorer component', () => {
 		await fireEvent.click(row);
 		await fireEvent.click(screen.getByTestId('fe-item-details'));
 		await screen.findByTestId('fe-file-preview');
+		await fireEvent.click(screen.getByTestId('fe-preview-actions'));
 		expect(screen.getByTestId('fe-file-preview-decompress')).toBeTruthy();
 		expect(screen.getByTestId('fe-file-preview-open-archive').textContent).toMatch(/Open archive/);
 		expect(screen.getByTestId('fe-file-preview-open').textContent).toMatch(/Open archive/);
@@ -955,6 +966,7 @@ describe('FileExplorer component', () => {
 		expect(screen.getByTestId('fe-archive-dest-popup')).toBeTruthy();
 		await fireEvent.click(screen.getByTestId('fe-archive-cancel'));
 
+		await fireEvent.click(screen.getByTestId('fe-preview-actions'));
 		await fireEvent.click(screen.getByTestId('fe-file-preview-open-archive'));
 		const inner = await screen.findByTestId('fe-inner-fs-dialog', undefined, { timeout: 8000 });
 		expect(inner.textContent).toMatch(/archive\.zip|hello/);
@@ -995,6 +1007,7 @@ describe('FileExplorer component', () => {
 		await fireEvent.click(vaultRow);
 		await fireEvent.click(screen.getByTestId('fe-item-details'));
 		await screen.findByTestId('fe-file-preview');
+		await fireEvent.click(screen.getByTestId('fe-preview-actions'));
 		expect(screen.getByTestId('fe-file-preview-decrypt')).toBeTruthy();
 		expect(screen.getByTestId('fe-file-preview-open-archive').textContent).toMatch(/Open vault/);
 		expect((screen.getByTestId('fe-decrypt-selected') as HTMLButtonElement).disabled).toBe(false);
@@ -1193,6 +1206,7 @@ describe('FileExplorer component', () => {
 		);
 		expect(names.sort()).toEqual(['Docs', 'a.txt', 'b.txt']);
 		expect(screen.getByTestId('fe-file-preview-size').textContent).toMatch(/\d+ B \+ 1 unknown/);
+		await fireEvent.click(screen.getByTestId('fe-preview-actions'));
 		expect(preview.querySelector('[data-testid="fe-file-preview-compress"]')).toBeTruthy();
 		expect(preview.querySelector('[data-testid="fe-file-preview-encrypt"]')).toBeTruthy();
 		expect(preview.querySelector('[data-testid="fe-row-copy"]')).toBeTruthy();
@@ -1279,6 +1293,7 @@ describe('FileExplorer component', () => {
 		await fireEvent.click(row);
 		await fireEvent.click(screen.getByTestId('fe-item-details'));
 		const preview = await screen.findByTestId('fe-file-preview');
+		await fireEvent.click(screen.getByTestId('fe-preview-actions'));
 		expect(preview.querySelector('[data-testid="fe-file-preview-copy-across"]')).toBeTruthy();
 		const previewIds = [...preview.querySelectorAll('[data-testid]')].map((el) =>
 			el.getAttribute('data-testid')

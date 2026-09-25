@@ -14,11 +14,14 @@
 		contentWidth,
 		contentHeight,
 		testidPrefix = 'pz',
+		chromeLeading,
 		children
 	}: {
 		contentWidth: number;
 		contentHeight: number;
 		testidPrefix?: string;
+		/** Sits on the left of the zoom bar. The zoom cluster stays on the right. */
+		chromeLeading?: Snippet;
 		children: Snippet;
 	} = $props();
 
@@ -149,9 +152,13 @@
 	<!-- svelte-ignore a11y_no_static_element_interactions -->
 	<div
 		class="pz-chrome"
+		class:split={!!chromeLeading}
 		onpointerdown={(e) => e.stopPropagation()}
 		onpointerup={(e) => e.stopPropagation()}
 	>
+		{#if chromeLeading}
+			<div class="pz-leading">{@render chromeLeading()}</div>
+		{/if}
 		<PanZoomControls
 			scale={view.scale}
 			mode={zoomMode}
@@ -216,11 +223,23 @@
 		flex: 0 0 auto;
 		display: flex;
 		justify-content: flex-end;
+		align-items: center;
+		gap: 8px;
 		padding: 4px 8px;
 		background: var(--surface-2, #1c1c24);
 		border-top: 1px solid var(--line-hairline, #333);
 		pointer-events: auto;
 		isolation: isolate;
 		z-index: var(--z-zoom, 50);
+	}
+	.pz-chrome.split {
+		justify-content: space-between;
+	}
+	.pz-leading {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 2px;
+		min-width: 0;
 	}
 </style>

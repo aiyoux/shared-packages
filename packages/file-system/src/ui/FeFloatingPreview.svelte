@@ -21,16 +21,40 @@
 
 	let {
 		entry,
+		entries = [],
 		driver,
 		onClose,
-		mediaMeta
+		mediaMeta,
+		variant = 'popup',
+		loadMedia = true,
+		onRequestMedia,
+		infoLine = '',
+		sizeText = '',
+		projectState = null,
+		actions,
+		showClose = true
 	}: {
 		entry: ExplorerEntry;
+		/** More than one entry replaces the media stage with the selection list. */
+		entries?: ExplorerEntry[];
 		driver: ExplorerDriver;
 		onClose: () => void;
 		/** Metadata panel for video / GIF previews — same slot as the docked preview. */
 		mediaMeta?: Snippet<[MediaMetaTarget]>;
+		variant?: 'popup' | 'dock';
+		/** Popup loads immediately. A dock that follows selection waits. */
+		loadMedia?: boolean;
+		onRequestMedia?: () => void;
+		/** Size, type, and updated time under the file name. */
+		infoLine?: string;
+		/** Combined size label for a multi-selection. */
+		sizeText?: string;
+		projectState?: boolean | null;
+		actions?: Snippet;
+		showClose?: boolean;
 	} = $props();
+
+	const multi = $derived(entries.length > 1);
 
 	let blobUrl = $state<string | null>(null);
 	let loading = $state(true);
@@ -66,6 +90,10 @@
 	let links = $state<Array<{ name: string; missing: boolean }>>([]);
 
 	$effect(() => {
+		if (entries.length > 1) {
+			links = [];
+			return;
+		}
 		const id = entry.id;
 		let cancelled = false;
 		links = [];
@@ -97,6 +125,13 @@
 		const e = entry;
 		const d = driver;
 		const k = kind;
+		const shouldLoad = loadMedia && entries.length <= 1;
+		if (!shouldLoad) {
+			untrack(revokeUrl);
+			loading = false;
+			error = '';
+			return;
+		}
 		if (k === 'text') {
 			untrack(revokeUrl);
 			loading = false;
@@ -236,18 +271,35 @@
 
 </script>
 
-<svelte:window onkeydown={onKeydown} />
+<svelte:window onkeydown={variant === 'popup' ? onKeydown : undefined} />
 
-<!-- svelte-ignore a11y_no_static_element_interactions -->
-<!-- svelte-ignore a11y_click_events_have_key_events -->
-<div class="portal-root" use:portalModal>
-<div class="fe-float-backdrop" onclick={onClose}>
-	<!-- svelte-ignore a11y_no_static_element_interactions -->
-	<!-- svelte-ignore a11y_click_events_have_key_events -->
-	<div class="fe-float-card" role="dialog" aria-modal="true" aria-label={entry.name} tabindex="-1" onclick={(e) => e.stopPropagation()}>
+{#snippet stage()}
+	<div
+		class="fe-float-card"
+		class:dock={variant === 'dock'}
+		role={variant === 'popup' ? 'dialog' : 'region'}
+		aria-modal={variant === 'popup' ? true : undefined}
+		aria-label={multi ? `${entries.length} items selected` : entry.name}
+		tabindex="-1"
+		data-fe-is-project={projectState === true ? 'true' : projectState === false ? 'false' : undefined}
+		onclick={(e) => e.stopPropagation()}
+	>
 		<div class="fe-float-header">
-			<span class="fe-float-title" title={entry.name}>{entry.name}</span>
-			{#if mediaMeta && entryHasMediaMeta()}
+			<div class="fe-float-heading">
+				<span class="fe-float-title" data-testid="fe-file-preview-name" title={multi ? `${entries.length} items selected` : entry.name}>
+					{multi ? `${entries.length} items selected` : entry.name}
+				</span>
+				{#if multi}
+					<p class="fe-float-sub">
+						<span data-testid="fe-file-preview-count">{entries.length}</span>
+						items ·
+						<span data-testid="fe-file-preview-size">{sizeText}</span>
+					</p>
+				{:else if infoLine}
+					<p class="fe-float-sub" data-testid="fe-file-preview-info">{infoLine}</p>
+				{/if}
+			</div>
+			{#if !multi && mediaMeta && entryHasMediaMeta()}
 				<button
 					type="button"
 					class="fe-float-meta-toggle"
@@ -258,11 +310,13 @@
 					{metaOpen ? 'Hide metadata' : 'Show metadata'}
 				</button>
 			{/if}
-			<button type="button" class="fe-float-close" data-testid="fe-float-close" aria-label="Close" onclick={onClose}>
-				<FeIcon name="x" size={20} />
-			</button>
+			{#if showClose}
+				<button type="button" class="fe-float-close" data-testid="fe-file-preview-close" aria-label="Close" onclick={onClose}>
+					<FeIcon name="x" size={20} />
+				</button>
+			{/if}
 		</div>
-		{#if links.length}
+		{#if !multi && links.length}
 			<p class="fe-float-links" data-testid="fe-float-links">
 				Links to
 				{#each links as link, i (link.name)}<span
@@ -272,13 +326,26 @@
 					>{i < links.length - 1 ? ', ' : ''}{/each}
 			</p>
 		{/if}
-			{#if metaOpen && mediaMeta}
-				<div class="fe-float-media-meta" data-testid="fe-float-meta">
-					{@render mediaMeta({ entry, load: () => readExplorerBlob(driver, entry.id) })}
-				</div>
-			{/if}
-			<div class="fe-float-body" class:text={kind === 'text'} class:image={kind === 'image'}>
-			{#if loading}
+		{#if !multi && metaOpen && mediaMeta}
+			<div class="fe-float-media-meta" data-testid="fe-float-meta">
+				{@render mediaMeta({ entry, load: () => readExplorerBlob(driver, entry.id) })}
+			</div>
+		{/if}
+		<div class="fe-float-body" class:text={!multi && kind === 'text'} class:image={!multi && kind === 'image' && !!blobUrl}>
+			{#if multi}
+				<ul class="fe-float-items" data-testid="fe-file-preview-items">
+					{#each entries as n (n.id)}
+						<li data-testid="fe-file-preview-item" data-name={n.name} data-kind={n.kind}>
+							<FeIcon name={n.kind === 'folder' ? 'folder' : 'file'} size={14} />
+							<span class="fe-float-item-name">{n.name}</span>
+						</li>
+					{/each}
+				</ul>
+			{:else if kind && !loadMedia}
+				<button type="button" class="ds-btn ds-btn--sm ds-btn--secondary" data-testid="fe-show-preview" onclick={() => onRequestMedia?.()}>
+					Show preview
+				</button>
+			{:else if loading}
 				<div class="fe-float-loading">
 					<div class="fe-float-spinner"></div>
 				</div>
@@ -289,6 +356,7 @@
 					contentWidth={imageSize.w}
 					contentHeight={imageSize.h}
 					testidPrefix="fe-float"
+					chromeLeading={actions}
 				>
 					<img
 						class="fe-float-image"
@@ -306,36 +374,61 @@
 				</PanZoomViewport>
 			{:else if kind === 'video' && blobUrl}
 				<!-- svelte-ignore a11y_media_has_caption -->
-				<video class="fe-float-video" src={blobUrl} controls autoplay playsinline></video>
+				<video class="fe-float-video" src={blobUrl} controls playsinline preload="metadata"></video>
 			{:else if kind === 'audio' && blobUrl}
 				<div class="fe-float-audio" data-testid="fe-float-audio">
 					<FeIcon name="music" size={48} />
-					<audio class="fe-float-audio-player" src={blobUrl} controls autoplay></audio>
+					<audio class="fe-float-audio-player" src={blobUrl} controls preload="metadata"></audio>
 				</div>
 			{:else if kind === 'pdf' && pdfFallbackUrl}
 				<iframe class="fe-float-pdf-frame" title={entry.name} src={pdfFallbackUrl}></iframe>
 			{:else if kind === 'text'}
-				<FeTextPreview {entry} {driver} maxChars={200_000} variant="full" />
+				<FeTextPreview {entry} {driver} maxChars={variant === 'dock' ? 4_000 : 200_000} variant={variant === 'dock' ? 'snippet' : 'full'} />
 			{:else if kind === 'pdf'}
 				<div class="fe-float-pdf">
 					<canvas bind:this={pdfCanvas} class="fe-float-pdf-canvas"></canvas>
-					{#if pdfPageCount > 1}
-						<div class="fe-float-pdf-nav">
-							<button type="button" class="ds-btn ds-btn--sm ds-btn--ghost" onclick={prevPage} disabled={pdfCurrentPage === 0}>
-								<FeIcon name="chevron-left" size={16} />
-							</button>
-							<span class="fe-float-pdf-pager">{pdfCurrentPage + 1} / {pdfPageCount}</span>
-							<button type="button" class="ds-btn ds-btn--sm ds-btn--ghost" onclick={nextPage} disabled={pdfCurrentPage >= pdfPageCount - 1}>
-								<FeIcon name="chevron-right" size={16} />
-							</button>
-						</div>
-					{/if}
+				</div>
+			{:else}
+				<div class="fe-float-fallback" data-testid="fe-float-fallback">
+					<FeIcon name={entry.kind === 'folder' ? 'folder' : 'file'} size={48} />
 				</div>
 			{/if}
 		</div>
+		{#if actions && !(kind === 'image' && blobUrl && loadMedia)}
+			<div class="fe-float-bar">
+				<div class="fe-float-actions">{@render actions()}</div>
+				{#if !multi && kind === 'pdf' && pdfPageCount > 1}
+					<div class="fe-float-pdf-nav">
+						<button type="button" class="ds-btn ds-btn--sm ds-btn--ghost" onclick={prevPage} disabled={pdfCurrentPage === 0} aria-label="Previous page">
+							<FeIcon name="chevron-left" size={16} />
+						</button>
+						<span class="fe-float-pdf-pager">{pdfCurrentPage + 1} / {pdfPageCount}</span>
+						<button type="button" class="ds-btn ds-btn--sm ds-btn--ghost" onclick={nextPage} disabled={pdfCurrentPage >= pdfPageCount - 1} aria-label="Next page">
+							<FeIcon name="chevron-right" size={16} />
+						</button>
+					</div>
+				{/if}
+			</div>
+		{/if}
 	</div>
-</div>
-</div>
+{/snippet}
+
+{#if variant === 'popup'}
+	<!-- svelte-ignore a11y_no_static_element_interactions -->
+	<!-- svelte-ignore a11y_click_events_have_key_events -->
+	<div class="portal-root" use:portalModal>
+		<div
+			class="fe-float-backdrop"
+			data-testid="fe-file-preview"
+			data-multi={multi ? 'true' : undefined}
+			onclick={onClose}
+		>
+			{@render stage()}
+		</div>
+	</div>
+{:else}
+	{@render stage()}
+{/if}
 
 <style>
 	.portal-root {
@@ -362,6 +455,14 @@
 		box-shadow: 0 16px 48px rgb(0 0 0 / 0.5);
 		overflow: hidden;
 	}
+	.fe-float-card.dock {
+		width: 100%;
+		height: 100%;
+		min-height: 0;
+		border: none;
+		border-radius: 0;
+		box-shadow: none;
+	}
 	.fe-float-header {
 		display: flex;
 		align-items: center;
@@ -371,13 +472,67 @@
 		border-bottom: 1px solid var(--line-hairline, #333);
 		flex-shrink: 0;
 	}
-	.fe-float-title {
+	.fe-float-heading {
 		flex: 1;
+		min-width: 0;
+	}
+	.fe-float-title {
+		display: block;
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
 		font-weight: 600;
 		font-size: 0.9rem;
+	}
+	.fe-float-sub {
+		margin: 2px 0 0;
+		font-size: 0.75rem;
+		color: var(--text-muted, #aaa);
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.fe-float-bar {
+		flex: 0 0 auto;
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 8px;
+		padding: 4px 8px;
+		border-top: 1px solid var(--line-hairline, #333);
+		background: var(--surface-2, #1c1c24);
+	}
+	.fe-float-actions {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 2px;
+		min-width: 0;
+	}
+	.fe-float-items {
+		list-style: none;
+		margin: 0;
+		padding: 12px;
+		width: 100%;
+		overflow: auto;
+		display: grid;
+		gap: 4px;
+		align-content: start;
+	}
+	.fe-float-items li {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		min-width: 0;
+		font-size: 0.85rem;
+	}
+	.fe-float-item-name {
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.fe-float-fallback {
+		color: var(--text-muted, #888);
 	}
 	.fe-float-close {
 		flex-shrink: 0;
