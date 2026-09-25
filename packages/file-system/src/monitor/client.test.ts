@@ -368,6 +368,32 @@ describe('monitor client tolerant parse', () => {
 		expect(meta.capabilities?.git?.init).toBe(true);
 	});
 
+	it('keeps ai.sessions and treats a missing sessions key as false', async () => {
+		const withSessions = createMonitorClient({
+			baseUrl: 'http://127.0.0.1:8300',
+			fetchImpl: vi.fn(async () =>
+				jsonResponse({
+					capabilities: { ai: { chat: true, streaming: true, profiles: 2, sessions: true } }
+				})
+			) as unknown as typeof fetch
+		});
+		expect((await withSessions.meta()).capabilities?.ai).toEqual({
+			chat: true,
+			streaming: true,
+			profiles: 2,
+			sessions: true
+		});
+		const without = createMonitorClient({
+			baseUrl: 'http://127.0.0.1:8300',
+			fetchImpl: vi.fn(async () =>
+				jsonResponse({
+					capabilities: { ai: { chat: true, streaming: true, profiles: 1 } }
+				})
+			) as unknown as typeof fetch
+		});
+		expect((await without.meta()).capabilities?.ai?.sessions).toBe(false);
+	});
+
 	it('ignores extra JSON fields on meta', async () => {
 		const mockFetch = vi.fn(async (_input: RequestInfo | URL) =>
 			jsonResponse({

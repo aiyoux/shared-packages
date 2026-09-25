@@ -44,7 +44,7 @@ export type MonitorCapabilities = {
 	fs?: { ino?: boolean; rename?: boolean; archive?: boolean; mkdir?: boolean; thumb?: boolean };
 	git?: { blob?: boolean; init?: boolean };
 	/** AI feature (`/v1/ai/**`); absent on daemons without it. */
-	ai?: { chat?: boolean; streaming?: boolean; profiles?: number };
+	ai?: { chat?: boolean; streaming?: boolean; profiles?: number; sessions?: boolean };
 };
 
 export type MonitorListEntry = {
@@ -529,7 +529,8 @@ export function coerceMonitorCapabilities(raw: unknown): MonitorCapabilities {
 					ai: {
 						chat: ai.chat === true,
 						streaming: ai.streaming === true,
-						profiles: num(ai.profiles) ?? 0
+						profiles: num(ai.profiles) ?? 0,
+						sessions: ai.sessions === true
 					}
 				}
 			: {})
