@@ -4,7 +4,8 @@
  * Keys live monitor-side (see monitor docs/design/ai-feature.md); the browser
  * makes keyless requests through its monitor connection. The task surface is
  * deliberately narrow: resolve a monitor, list models/profiles, install or
- * update a profile (key sent once, never stored here), chat (text or SSE).
+ * update a profile (key sent once, never stored here), chat (text or SSE),
+ * and bind a client session an agent can list and invoke.
  */
 import { formatAiErrorMessage } from './errors.js';
 
@@ -30,6 +31,24 @@ export {
 	type AiCapabilities,
 	type AiMonitor
 } from './monitor.js';
+export {
+	AI_SESSION_HEARTBEAT_MS,
+	AiInvokeUnsupported,
+	aiSessionDeleteUrl,
+	answerSessionInvoke,
+	bindAiSession,
+	coerceAiSession,
+	connectAiSession,
+	deleteAiSession,
+	listAiSessions,
+	registerAiSession,
+	type AiSessionAgent,
+	type AiSessionBinding,
+	type AiSessionDocument,
+	type AiSessionInfo,
+	type AiSessionInvokeHandler,
+	type AiSessionRegisterInput
+} from './sessions.js';
 export {
 	HUB_AI_DB_NAME,
 	HUB_AI_META,

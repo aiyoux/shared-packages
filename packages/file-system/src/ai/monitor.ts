@@ -23,6 +23,8 @@ export type AiCapabilities = {
 	chat?: boolean;
 	streaming?: boolean;
 	profiles?: number;
+	/** True when this daemon lists bound client sessions. Missing means false. */
+	sessions?: boolean;
 };
 
 /** A reachable monitor that serves the AI feature. */
