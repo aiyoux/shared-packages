@@ -3,11 +3,34 @@
  * connected is still that session. One file has one session.
  */
 
-export type SessionKind = 'image' | 'svg' | 'pdf' | 'sketch' | 'document' | 'remote';
+export type SessionKind =
+	| 'image'
+	| 'svg'
+	| 'pdf'
+	| 'sketch'
+	| 'document'
+	| 'remote'
+	| 'diagram'
+	| 'nodes'
+	| 'animation'
+	| 'data'
+	| 'text'
+	| 'video';
+
+/** Which app paints this session. Absent on rows written before the shared list. */
+export type SessionApp =
+	| 'creative'
+	| 'diagrams'
+	| 'nodes'
+	| 'animations'
+	| 'data'
+	| 'text'
+	| 'video';
 
 export type OpenSession = {
 	id: string;
 	kind: SessionKind;
+	app?: SessionApp;
 	title: string;
 	fileId?: string;
 	dirty: boolean;
@@ -43,10 +66,15 @@ export function joinOrCreate(
 	index: OpenSessionIndex,
 	input: {
 		kind: SessionKind;
+		app?: SessionApp;
 		title: string;
 		fileId?: string;
 		/** The session this caller is already connected to, if any. */
 		sessionId?: string;
+		/** Id to use when this call creates a session. An existing id is left as it is. */
+		id?: string;
+		/** When false, this tab's connected session stays where it was. */
+		connect?: boolean;
 		dirty?: boolean;
 		remote?: boolean;
 		roomLabel?: string | null;
@@ -63,6 +91,7 @@ export function joinOrCreate(
 			...existing,
 			title: input.title || existing.title,
 			kind: input.kind,
+			...(input.app ? { app: input.app } : {}),
 			...(fileId ? { fileId } : {}),
 			dirty: input.dirty ?? existing.dirty,
 			remote: input.remote ?? existing.remote
@@ -75,6 +104,7 @@ export function joinOrCreate(
 			index.connectedId !== existing.id ||
 			next.title !== existing.title ||
 			next.kind !== existing.kind ||
+			next.app !== existing.app ||
 			next.fileId !== existing.fileId ||
 			next.dirty !== existing.dirty ||
 			next.remote !== existing.remote ||
@@ -85,14 +115,17 @@ export function joinOrCreate(
 			session,
 			changed: true,
 			index: {
-				connectedId: session.id,
+				connectedId: input.connect === false ? index.connectedId : session.id,
 				sessions: index.sessions.map((s) => (s.id === session.id ? session : s))
 			}
 		};
 	}
+	const requestedId =
+		input.id && !index.sessions.some((session) => session.id === input.id) ? input.id : undefined;
 	const session: OpenSession = {
-		id: newSessionId(now),
+		id: requestedId ?? newSessionId(now),
 		kind: input.kind,
+		...(input.app ? { app: input.app } : {}),
 		title: input.title || 'Untitled',
 		...(fileId ? { fileId } : {}),
 		dirty: input.dirty ?? false,
@@ -103,7 +136,10 @@ export function joinOrCreate(
 	return {
 		session,
 		changed: true,
-		index: { connectedId: session.id, sessions: [...index.sessions, session] }
+		index: {
+			connectedId: input.connect === false ? index.connectedId : session.id,
+			sessions: [...index.sessions, session]
+		}
 	};
 }
 

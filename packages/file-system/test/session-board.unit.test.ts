@@ -62,6 +62,22 @@ describe('session board', () => {
 		assert.equal(board.current().sessions.length, 2);
 		assert.equal(tab.get('k'), mine.id);
 	});
+
+	it('drops one session by id, including an unsaved row', () => {
+		const board = createSessionBoard({
+			load: () => null,
+			save: () => {},
+			tabGet: () => null,
+			tabSet: () => {}
+		});
+		const saved = board.note({ kind: 'diagram', app: 'diagrams', title: 'Plan', fileId: 'file-1', now: 1 });
+		const unsaved = board.note({ kind: 'text', app: 'text', title: 'Note', id: 'scratch-1', now: 2 });
+		board.forget(unsaved.id);
+		assert.equal(board.current().sessions.length, 1);
+		assert.equal(board.current().sessions[0]?.id, saved.id);
+		board.forget(saved.id);
+		assert.equal(board.current().sessions.length, 0);
+	});
 });
 
 describe('foreign save', () => {

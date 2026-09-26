@@ -14,7 +14,10 @@ import {
 export type SessionBoard = {
 	current(): OpenSessionIndex;
 	remember(input: Parameters<typeof joinOrCreate>[1]): OpenSession;
+	/** Join or create without adopting this tab's connected unsaved session. */
+	note(input: Parameters<typeof joinOrCreate>[1]): OpenSession;
 	connect(id: string): void;
+	forget(sessionId: string): void;
 	forgetFile(fileId: string): void;
 	/** Write the list this tab holds. Used after a merge the other tab has not seen. */
 	flush(): void;
@@ -64,9 +67,23 @@ export function createSessionBoard(opts: {
 			persist();
 			return next.session;
 		},
+		note(input) {
+			const next = joinOrCreate(index, input);
+			if (!next.changed) return next.session;
+			index = next.index;
+			persist();
+			return next.session;
+		},
 		connect(id) {
 			if (!index.sessions.some((session) => session.id === id) || index.connectedId === id) return;
 			index = { ...index, connectedId: id };
+			persist();
+		},
+		forget(sessionId) {
+			if (!index.sessions.some((session) => session.id === sessionId)) return;
+			const sessions = index.sessions.filter((session) => session.id !== sessionId);
+			const connectedId = index.connectedId === sessionId ? undefined : index.connectedId;
+			index = { sessions, connectedId };
 			persist();
 		},
 		forgetFile(fileId) {
