@@ -16,7 +16,12 @@
 		onFocus,
 		onSplit,
 		onClose,
-		onApps
+		onApps,
+		onMinimize,
+		onCycleMode,
+		minimized = false,
+		workspaceMode = 'docked',
+		hidden = false
 	}: {
 		id: string;
 		focused: boolean;
@@ -27,6 +32,12 @@
 		onSplit: (leafId: string, direction: SplitDirection) => void;
 		onClose: (leafId: string) => void;
 		onApps?: (leafId: string) => void;
+		onMinimize?: (leafId: string) => void;
+		/** Middle button: docked → floater → fullscreen → docked. */
+		onCycleMode?: (leafId: string) => void;
+		minimized?: boolean;
+		workspaceMode?: 'docked' | 'floating' | 'fullscreen';
+		hidden?: boolean;
 	} = $props();
 
 	let clipboardOpen = $state(false);
@@ -39,9 +50,11 @@
 <div
 	class="pl-leaf"
 	class:focused
+	class:pl-hidden={hidden}
 	data-testid="pl-leaf"
 	data-pl-id={id}
 	data-pl-focused={focused ? 'true' : 'false'}
+	data-pl-hidden={hidden ? 'true' : undefined}
 	onclick={() => onFocus(id)}
 	use:homeLeaf={id}
 >
@@ -126,6 +139,45 @@
 				>
 					<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 12h18"/></svg>
 				</button>
+				{#if onMinimize}
+					<button
+						type="button"
+						data-testid="pl-minimize"
+						title={minimized ? 'Restore from tray' : 'Minimize to tray'}
+						aria-label={minimized ? 'Restore from tray' : 'Minimize to tray'}
+						data-tooltip={minimized ? 'Restore' : 'Minimize'}
+						data-tooltip-pos="bottom-left"
+						onclick={(e) => {
+							e.stopPropagation();
+							onMinimize(id);
+						}}
+					>
+						<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/></svg>
+					</button>
+				{/if}
+				{#if onCycleMode}
+					<button
+						type="button"
+						data-testid={workspaceMode === 'floating' ? 'pl-maximize' : workspaceMode === 'fullscreen' ? 'pl-dock' : 'pl-float'}
+						title={workspaceMode === 'floating' ? 'Maximize' : workspaceMode === 'fullscreen' ? 'Back to workspace' : 'Float'}
+						aria-label={workspaceMode === 'floating' ? 'Maximize' : workspaceMode === 'fullscreen' ? 'Back to workspace' : 'Float'}
+						data-tooltip={workspaceMode === 'floating' ? 'Maximize' : workspaceMode === 'fullscreen' ? 'Dock' : 'Float'}
+						data-tooltip-pos="bottom-left"
+						onclick={(e) => {
+							e.stopPropagation();
+							onCycleMode(id);
+						}}
+					>
+						{#if workspaceMode === 'floating'}
+							<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h6v6"/><path d="M9 21H3v-6"/><path d="M21 3l-7 7"/><path d="M3 21l7-7"/></svg>
+						{:else if workspaceMode === 'fullscreen'}
+							<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3v3a2 2 0 0 1-2 2H3"/><path d="M21 8h-3a2 2 0 0 1-2-2V3"/><path d="M3 16h3a2 2 0 0 1 2 2v3"/><path d="M16 21v-3a2 2 0 0 1 2-2h3"/></svg>
+						{:else}
+							<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="13" height="13" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+						{/if}
+					</button>
+				{/if}
+				{/if}
 				<button
 					type="button"
 					data-testid="pl-close"

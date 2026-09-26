@@ -22,6 +22,10 @@
 		showChrome = true,
 		onApps,
 		onCloseLast,
+		onMinimize,
+		onCycleMode,
+		minimizedIds = [],
+		workspaceMode = 'docked',
 		pane
 	}: {
 		root?: LayoutNode;
@@ -31,6 +35,14 @@
 		onApps?: (leafId: string) => void;
 		/** Last remaining leaf: host unloads the app instead of removing the pane. */
 		onCloseLast?: (leafId: string) => void;
+		/** Minimize button — host docks the pane (e.g. to a tray). */
+		onMinimize?: (leafId: string) => void;
+		/** Middle button — host cycles docked → floater → fullscreen → docked. */
+		onCycleMode?: (leafId: string) => void;
+		/** Leaves docked by the host; hidden but kept mounted. */
+		minimizedIds?: readonly string[];
+		/** Where the whole group lives; drives the middle-button icon. */
+		workspaceMode?: 'docked' | 'floating' | 'fullscreen';
 		pane: Snippet<[{ id: string; focused: boolean }]>;
 	} = $props();
 
@@ -126,6 +138,11 @@
 				onSplit={(id, dir) => splitAt(id, dir)}
 				onClose={(id) => closeAt(id)}
 				{onApps}
+				{onMinimize}
+				{onCycleMode}
+				minimized={minimizedIds.includes(leaf.id)}
+				workspaceMode={workspaceMode}
+				hidden={minimizedIds.includes(leaf.id)}
 			/>
 		{/each}
 	</div>
@@ -143,5 +160,9 @@
 	}
 	.pl-host {
 		position: relative;
+	}
+	/* Leaves render inside PaneLeaf, so this must stay global to match them. */
+	:global(.pl-leaf.pl-hidden) {
+		display: none;
 	}
 </style>
