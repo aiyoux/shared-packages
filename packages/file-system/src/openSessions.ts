@@ -20,6 +20,7 @@ export type SessionKind =
 /** Which app paints this session. Absent on rows written before the shared list. */
 export type SessionApp =
 	| 'creative'
+	| 'documents'
 	| 'diagrams'
 	| 'nodes'
 	| 'animations'
@@ -40,10 +41,24 @@ export type OpenSession = {
 	updatedAt: number;
 };
 
+/**
+ * A session someone closed. Without it, a tab that still holds the row writes
+ * it back on its next merge, because merging is a union. `at` covers every
+ * version of the row up to that time; a row noted later is a new open.
+ */
+export type ClosedSession = {
+	key: string;
+	at: number;
+};
+
 export type OpenSessionIndex = {
 	sessions: OpenSession[];
 	connectedId?: string;
+	closed?: ClosedSession[];
 };
+
+/** Tombstones kept per list. Older ones only guard rows no tab still writes. */
+export const CLOSED_SESSIONS_KEPT = 200;
 
 export function emptySessionIndex(): OpenSessionIndex {
 	return { sessions: [] };
@@ -152,6 +167,32 @@ function newSessionId(now: number): string {
 /** A saved file is one session. An unsaved document is keyed by its own id. */
 export function sessionMergeKey(session: OpenSession): string {
 	return session.fileId ? `file:${session.fileId}` : `id:${session.id}`;
+}
+
+/** Merge two tombstone lists: one per key, the later time wins, newest kept. */
+export function mergeClosed(
+	a: readonly ClosedSession[] = [],
+	b: readonly ClosedSession[] = []
+): ClosedSession[] {
+	const map = new Map<string, number>();
+	for (const item of [...a, ...b]) {
+		if (!item || typeof item.key !== 'string' || typeof item.at !== 'number') continue;
+		map.set(item.key, Math.max(map.get(item.key) ?? -Infinity, item.at));
+	}
+	return [...map.entries()]
+		.map(([key, at]) => ({ key, at }))
+		.sort((x, y) => y.at - x.at)
+		.slice(0, CLOSED_SESSIONS_KEPT);
+}
+
+/** Drop every row a tombstone covers. */
+export function applyClosed(sessions: readonly OpenSession[], closed: readonly ClosedSession[]): OpenSession[] {
+	if (closed.length === 0) return [...sessions];
+	const at = new Map(closed.map((item) => [item.key, item.at]));
+	return sessions.filter((session) => {
+		const closedAt = at.get(sessionMergeKey(session));
+		return closedAt === undefined || session.updatedAt > closedAt;
+	});
 }
 
 /**

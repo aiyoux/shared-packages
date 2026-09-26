@@ -87,3 +87,68 @@ describe('foreign save', () => {
 		assert.equal(foreignSaveAction({ replicated: false, uiDirty: true }), 'keep');
 	});
 });
+
+describe('closing a session across tabs', () => {
+	function tabs() {
+		let shared: string | null = null;
+		const make = () => {
+			let tab: string | null = null;
+			return createSessionBoard({
+				load: () => shared,
+				save: (json) => {
+					shared = json;
+				},
+				tabGet: () => tab,
+				tabSet: (id) => {
+					tab = id;
+				}
+			});
+		};
+		return { make, raw: () => shared };
+	}
+
+	it('keeps a closed session closed when another tab still held it', () => {
+		const t = tabs();
+		const a = t.make();
+		const row = a.note({ kind: 'diagram', app: 'diagrams', title: 'Plan', fileId: 'f1', connect: false });
+		const b = t.make();
+		assert.equal(b.current().sessions.length, 1);
+		a.forget(row.id);
+		const heard = b.absorb(t.raw());
+		assert.deepEqual(heard.closed.map((s) => s.id), [row.id]);
+		if (heard.publish) b.flush();
+		a.absorb(t.raw());
+		assert.equal(a.current().sessions.length, 0);
+		assert.equal(b.current().sessions.length, 0);
+	});
+
+	it('drops a copy the other tab touched after the close, then converges', () => {
+		const t = tabs();
+		const a = t.make();
+		const row = a.note({ kind: 'diagram', title: 'Plan', fileId: 'f1', now: 1 });
+		const b = t.make();
+		a.forget(row.id);
+		const closedRaw = t.raw();
+		// b edits before it hears of the close, and its write lands first.
+		b.note({ kind: 'diagram', title: 'Plan', fileId: 'f1', dirty: true, now: Date.now() + 5000 });
+		const bWrite = t.raw();
+		a.absorb(bWrite);
+		const heard = b.absorb(closedRaw);
+		assert.equal(heard.closed.length, 1);
+		b.flush();
+		a.absorb(t.raw());
+		assert.equal(a.current().sessions.length, 0);
+		assert.equal(b.current().sessions.length, 0);
+	});
+
+	it('opens the same file again after a close', () => {
+		const t = tabs();
+		const a = t.make();
+		const row = a.note({ kind: 'diagram', title: 'Plan', fileId: 'f1' });
+		a.forget(row.id);
+		const again = a.note({ kind: 'diagram', title: 'Plan', fileId: 'f1' });
+		const b = t.make();
+		assert.equal(b.current().sessions.length, 1);
+		assert.equal(b.current().sessions[0]?.id, again.id);
+	});
+});

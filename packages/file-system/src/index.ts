@@ -60,6 +60,7 @@ export * from './projectPack.js';
 export * from './projectMeta.js';
 export * from './openSessions.js';
 export * from './sessionBoard.js';
+export * from './workspaceSessions.js';
 export * from './projectExport.js';
 export * from './transferRegistry.js';
 export {
