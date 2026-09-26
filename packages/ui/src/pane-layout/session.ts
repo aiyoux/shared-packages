@@ -9,12 +9,26 @@ export const PANE_SESSION_VERSION = 1 as const;
 
 export const PANE_SESSION_STORAGE_PREFIX = 'sp:pane-session:';
 
+/** One floating window inside a workspace snapshot. Viewport rect in CSS pixels. */
+export type FloaterSnapshot<TView = unknown> = {
+	id: string;
+	n: number;
+	root: LayoutNode;
+	focusedId: string | null;
+	views: Record<string, TView>;
+	rect: { x: number; y: number; w: number; h: number } | null;
+	hidden: boolean;
+	fullscreen: boolean;
+};
+
 export type PaneSessionSnapshot<TView = unknown> = {
 	version: typeof PANE_SESSION_VERSION;
 	id: string;
 	root: LayoutNode;
 	focusedId: string | null;
 	views: Record<string, TView>;
+	/** Extra floating windows. Absent on snapshots written before floaters. */
+	floaters?: FloaterSnapshot<TView>[];
 	updatedAt: number;
 };
 
@@ -100,6 +114,56 @@ export function parseLayoutNode(raw: unknown): LayoutNode | null {
 	return null;
 }
 
+function parseFloatRect(raw: unknown): { x: number; y: number; w: number; h: number } | null {
+	if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+	const r = raw as Record<string, unknown>;
+	const parts = [r.x, r.y, r.w, r.h];
+	if (!parts.every((n) => typeof n === 'number' && Number.isFinite(n))) return null;
+	const [x, y, w, h] = parts as [number, number, number, number];
+	if (w <= 0 || h <= 0) return null;
+	return { x, y, w, h };
+}
+
+function parseViews<TView>(raw: unknown, parseView?: (value: unknown) => TView | null): Record<string, TView> | null {
+	if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+	const views: Record<string, TView> = {};
+	for (const [leafId, value] of Object.entries(raw as Record<string, unknown>)) {
+		if (!leafId) continue;
+		if (parseView) {
+			const view = parseView(value);
+			if (view != null) views[leafId] = view;
+		} else {
+			views[leafId] = value as TView;
+		}
+	}
+	return views;
+}
+
+/** Invalid floaters are dropped; valid siblings still restore. */
+export function parseFloaterSnapshot<TView>(
+	raw: unknown,
+	parseView?: (value: unknown) => TView | null
+): FloaterSnapshot<TView> | null {
+	if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+	const f = raw as Record<string, unknown>;
+	if (typeof f.id !== 'string' || !f.id) return null;
+	const root = parseLayoutNode(f.root);
+	if (!root) return null;
+	if (f.focusedId !== null && typeof f.focusedId !== 'string') return null;
+	const views = parseViews<TView>(f.views, parseView);
+	if (!views) return null;
+	return {
+		id: f.id,
+		n: typeof f.n === 'number' && Number.isFinite(f.n) ? f.n : 0,
+		root,
+		focusedId: f.focusedId as string | null,
+		views,
+		rect: f.rect == null ? null : parseFloatRect(f.rect),
+		hidden: f.hidden === true,
+		fullscreen: f.fullscreen === true
+	};
+}
+
 export function parsePaneSessionSnapshot<TView>(
 	raw: unknown,
 	parseView?: (value: unknown) => TView | null
@@ -113,17 +177,15 @@ export function parsePaneSessionSnapshot<TView>(
 	if (snap.focusedId !== null && typeof snap.focusedId !== 'string') return null;
 	if (!snap.views || typeof snap.views !== 'object' || Array.isArray(snap.views)) return null;
 
-	const views: Record<string, TView> = {};
-	for (const [leafId, value] of Object.entries(snap.views as Record<string, unknown>)) {
-		if (!leafId) continue;
-		if (parseView) {
-			const view = parseView(value);
-			if (view != null) views[leafId] = view;
-		} else {
-			views[leafId] = value as TView;
+	const views = parseViews<TView>(snap.views, parseView);
+	if (!views) return null;
+	const floaters: FloaterSnapshot<TView>[] = [];
+	if (Array.isArray(snap.floaters)) {
+		for (const rawFloater of snap.floaters) {
+			const floater = parseFloaterSnapshot<TView>(rawFloater, parseView);
+			if (floater) floaters.push(floater);
 		}
 	}
-
 	const updatedAt = typeof snap.updatedAt === 'number' && Number.isFinite(snap.updatedAt) ? snap.updatedAt : 0;
 	return {
 		version: PANE_SESSION_VERSION,
@@ -131,6 +193,7 @@ export function parsePaneSessionSnapshot<TView>(
 		root,
 		focusedId: snap.focusedId,
 		views,
+		floaters,
 		updatedAt
 	};
 }
@@ -191,6 +254,7 @@ export function createPaneSessionStore<TView = unknown>(opts?: {
 				root: snapshot.root,
 				focusedId: snapshot.focusedId,
 				views: snapshot.views,
+				floaters: snapshot.floaters ?? [],
 				updatedAt: snapshot.updatedAt
 			});
 			const key = keyFor(snapshot.id);

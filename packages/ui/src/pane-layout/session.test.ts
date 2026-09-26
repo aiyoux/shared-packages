@@ -89,10 +89,43 @@ describe('pane session helpers', () => {
 			root,
 			focusedId: 'home',
 			views: { home: { kind: 'home' } },
+			floaters: [],
 			updatedAt: 42
 		});
+
 		expect(session.getItem('sp:pane-session:tab1')).toContain('"tab1"');
 		expect(local.getItem('sp:pane-session:tab1')).toContain('"tab1"');
+	});
+
+	it('round-trips floater windows and drops invalid ones', () => {
+		const storage = memoryStorage();
+		const store = createPaneSessionStore({ storages: [storage] });
+		const root = createLeaf('fw-home');
+		store.save({
+			version: 1,
+			id: 'floated',
+			root: createLeaf('home'),
+			focusedId: 'home',
+			views: {},
+			floaters: [
+				{ id: 'w1', n: 1, root, focusedId: 'fw-home', views: {}, rect: { x: 10, y: 20, w: 300, h: 200 }, hidden: true, fullscreen: false },
+				{ id: '', n: 0, root: null, focusedId: null, views: {}, rect: null, hidden: false, fullscreen: false }
+			],
+			updatedAt: 7
+		});
+		const loaded = store.load('floated');
+		expect(loaded?.floaters).toEqual([
+			{ id: 'w1', n: 1, root, focusedId: 'fw-home', views: {}, rect: { x: 10, y: 20, w: 300, h: 200 }, hidden: true, fullscreen: false }
+		]);
+	});
+
+	it('loads snapshots written before floaters with an empty list', () => {
+		const storage = memoryStorage();
+		storage.setItem(
+			'sp:pane-session:legacy',
+			JSON.stringify({ version: 1, id: 'legacy', root: { kind: 'leaf', id: 'home' }, focusedId: null, views: {}, updatedAt: 1 })
+		);
+		expect(createPaneSessionStore({ storages: [storage] }).load('legacy')?.floaters).toEqual([]);
 	});
 
 	it('falls back to the next storage when the first slot is empty', () => {

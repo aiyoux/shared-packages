@@ -146,10 +146,12 @@ export {
 	isWorkspacePath,
 	parseLayoutNode,
 	parsePaneSessionSnapshot,
+	parseFloaterSnapshot,
 	createPaneSessionStore
 } from './pane-layout/session.ts';
 export type {
 	PaneSessionSnapshot,
+	FloaterSnapshot,
 	PaneSessionStore,
 	StorageLike
 } from './pane-layout/session.ts';
