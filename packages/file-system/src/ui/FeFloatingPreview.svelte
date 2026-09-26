@@ -60,6 +60,15 @@
 	let loading = $state(true);
 	let error = $state('');
 	let kind = $derived(getPreviewKind(entry));
+	/**
+	 * The image viewer carries the actions in its own chrome, so the bottom bar
+	 * steps aside, but only while that viewer is on screen. An image that fails
+	 * to display (or is still loading) shows no viewer, and without the bar its
+	 * preview would have no Open or Delete at all.
+	 */
+	const actionsInViewer = $derived(
+		!multi && kind === 'image' && !!blobUrl && !!loadMedia && !loading && !error
+	);
 	let pdfBlob = $state<Blob | null>(null);
 	let pdfFallbackUrl = $state<string | null>(null);
 
@@ -394,7 +403,7 @@
 				</div>
 			{/if}
 		</div>
-		{#if actions && !(kind === 'image' && blobUrl && loadMedia)}
+		{#if actions && !actionsInViewer}
 			<div class="fe-float-bar">
 				<div class="fe-float-actions">{@render actions()}</div>
 				{#if !multi && kind === 'pdf' && pdfPageCount > 1}

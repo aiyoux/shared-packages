@@ -5,6 +5,7 @@
  */
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/svelte';
+import { createRawSnippet } from 'svelte';
 import FeFloatingPreview from '../src/ui/FeFloatingPreview.svelte';
 import type { ExplorerDriver, ExplorerEntry } from '../src/ui/explorerDriver.ts';
 
@@ -64,6 +65,36 @@ const svgEntry: ExplorerEntry = {
 };
 
 describe('FeFloatingPreview', () => {
+	it('keeps the actions when an image fails to display', async () => {
+		const actions = createRawSnippet(() => ({
+			render: () => '<button type="button" data-testid="fe-row-trash">Delete</button>'
+		}));
+		const pngEntry: ExplorerEntry = {
+			id: 'png-1',
+			kind: 'file',
+			name: 'ghost.png',
+			parentId: null,
+			fileType: 'image',
+			contentType: 'image/png',
+			size: 9
+		};
+		render(FeFloatingPreview, {
+			props: {
+				entry: pngEntry,
+				driver: driverWith(new Blob(['not a png'], { type: 'image/png' })),
+				onClose: () => {},
+				actions
+			}
+		});
+		// Shown in the image viewer's chrome, once.
+		await waitFor(() => expect(document.querySelector('.fe-float-image')).toBeTruthy());
+		expect(screen.getAllByTestId('fe-row-trash')).toHaveLength(1);
+		// The bytes are not an image: the viewer goes, and the actions must not.
+		document.querySelector('.fe-float-image')!.dispatchEvent(new Event('error'));
+		await waitFor(() => expect(screen.getByText('Image failed to display')).toBeTruthy());
+		expect(screen.getAllByTestId('fe-row-trash')).toHaveLength(1);
+	});
+
 	it('drops the spinner and shows a PDF canvas after the blob loads', async () => {
 		render(FeFloatingPreview, {
 			props: {
