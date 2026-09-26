@@ -765,7 +765,9 @@ describe('VfsService', () => {
 			{ path: 'repo/a.txt', body: new Uint8Array([1, 2, 3]) },
 			{ path: 'repo/nested/b.txt', body: new Uint8Array([4, 5]) }
 		]);
-		assert.equal(txns, 1, 'catalog is one txn after OPFS writes');
+		// One small txn for the GC cover before any bytes land, then the whole
+		// tree's rows in one commit after the OPFS writes.
+		assert.equal(txns, 2, 'cover, then one catalog txn for the tree');
 		assert.equal(nodes.length, 2);
 		const repo = await vfs.childByName(root.id, 'repo');
 		assert.equal(repo?.kind, 'folder');

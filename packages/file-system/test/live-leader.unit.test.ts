@@ -1,6 +1,10 @@
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { createLeaderElection } from '../src/live/leader.ts';
+import {
+	createLeaderElection,
+	createPersistElection,
+	takeOverDocument
+} from '../src/live/leader.ts';
 import { liveDocNames } from '../src/live/names.ts';
 import {
 	clearWindowListeners,
@@ -192,6 +196,41 @@ describe('createLeaderElection', () => {
 		} finally {
 			Object.defineProperty(nav, 'locks', { value: saved, configurable: true, writable: true });
 		}
+	});
+
+	it('takeOverDocument takes sequencing and saving from a stuck tab, and nothing else', async () => {
+		// The stuck tab leads both roles for doc-1, and leads doc-2.
+		const stuckSeq = createLeaderElection('doc-1');
+		const stuckSave = createPersistElection('doc-1');
+		const otherDoc = createLeaderElection('doc-2');
+		await tick();
+		const seq = createLeaderElection('doc-1');
+		const save = createPersistElection('doc-1');
+		await tick();
+		assert.equal(seq.isLeader, false);
+		assert.equal(save.isLeader, false);
+
+		takeOverDocument('doc-1');
+		await tick();
+		assert.equal(seq.isLeader, true, 'sequencing taken');
+		assert.equal(save.isLeader, true, 'saving taken with it');
+		assert.equal(stuckSeq.isLeader, false);
+		assert.equal(stuckSave.isLeader, false);
+		assert.equal(otherDoc.isLeader, true, 'another document is left alone');
+
+		for (const e of [stuckSeq, stuckSave, otherDoc, seq, save]) e.destroy();
+	});
+
+	it('a destroyed election is not taken over again', async () => {
+		const a = createLeaderElection('doc-3');
+		await tick();
+		const b = createLeaderElection('doc-3');
+		await tick();
+		b.destroy();
+		takeOverDocument('doc-3');
+		await tick();
+		assert.equal(a.isLeader, true, 'nothing stole from the live leader');
+		a.destroy();
 	});
 
 	it('tab id is stable across elections and not read from sessionStorage (M6)', async () => {

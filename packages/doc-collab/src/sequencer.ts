@@ -93,7 +93,14 @@ export function createSequencer<Doc, Op>(opts: {
 			const ops = body(input.ops);
 			if (ops.length === 0) return { kind: 'ignore' };
 			if (!opts.admit(input, headSeq)) return { kind: 'reject', headSeq };
-			doc = opts.apply(doc, ops);
+			// An op that does not fit the document (a replica whose copy drifted)
+			// is refused like a stale one. Thrown, it was neither acked nor
+			// nacked: the sender's outbox stalled behind it for good.
+			try {
+				doc = opts.apply(doc, ops);
+			} catch {
+				return { kind: 'reject', headSeq };
+			}
 			headSeq += 1;
 			return { kind: 'accept', seq: headSeq, ops };
 		},

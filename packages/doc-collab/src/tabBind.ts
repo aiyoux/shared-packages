@@ -6,8 +6,9 @@
  * `persisted` hide is not a close: the page can return with its session
  * intact, and tearing it down here would leave it mute.
  *
- * `pagehide` does not fire for a crashed or killed tab. The liveness sweep
- * covers that; this is only the common case.
+ * `pagehide` does not fire for a crashed or killed tab. The bus's
+ * sender-gone signal covers that (the browser releases the dead tab's lock);
+ * this is only the common case.
  *
  * Who wins each lock stays in the host's watcher. This starts them together
  * and stops them together — it does not pick a winner.

@@ -119,3 +119,23 @@ describe('reset', () => {
 		expect(s.doc).toEqual(['adopted']);
 	});
 });
+
+describe('an op the document cannot take', () => {
+	it('is rejected, leaving the head and document untouched, instead of throwing', () => {
+		const s = createSequencer<Doc, Op>({
+			emptyDoc: [],
+			apply: (doc, ops) => {
+				if (ops.includes('bad')) throw new Error('unknown block');
+				return [...doc, ...ops];
+			},
+			admit: admitOnExactBase
+		});
+		s.seed(['x']);
+		// A replica whose copy drifted can send one. Thrown, it was neither
+		// acked nor nacked, and the replica's outbox stalled behind it for good;
+		// rejected, the replica recovers from the snapshot a reject carries.
+		expect(s.submit({ baseSeq: 0, ops: ['bad'] })).toEqual({ kind: 'reject', headSeq: 0 });
+		expect(s.doc).toEqual(['x']);
+		expect(s.submit({ baseSeq: 0, ops: ['ok'] })).toEqual({ kind: 'accept', seq: 1, ops: ['ok'] });
+	});
+});

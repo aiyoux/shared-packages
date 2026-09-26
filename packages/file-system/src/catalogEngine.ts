@@ -15,7 +15,7 @@
 import { applyCatalogColumnMigrations, CATALOG_SCHEMA } from './catalogSchema.js';
 import { createElection, type Election } from './live/election.js';
 import { CATALOG_SESSION_LOCK } from './catalogSession.js';
-import { clearTabWait, reportTabWait, REPORT_AFTER_MS } from './live/waits.js';
+import { createWaitTracker, type TabWait } from './live/waits.js';
 
 export { CATALOG_SCHEMA };
 
@@ -392,64 +392,33 @@ function setCatalogWaiting(reason: string | null): void {
 	if (catalogWaiting === reason) return;
 	catalogWaiting = reason;
 	for (const fn of [...waitingListeners]) fn();
-	if (reportedStuck) reportStuck();
+	catalogWaits.refresh();
 }
 
 // --- "still waiting" notice (report-only) ---------------------------------
 
-const WAIT_ID = 'vfs-catalog';
-/** Calls held up on another tab (or on no leader yet), by when they started. */
-const blockedCalls = new Map<symbol, number>();
-let reportTimer: ReturnType<typeof setTimeout> | null = null;
-let reportedStuck = false;
+/** Calls held up on another tab (or on no leader yet). */
+const catalogWaits = createWaitTracker('vfs-catalog', describeCatalogWait, {
+	enabled: inBrowserMain
+});
 
-function blockedStart(): symbol {
-	const token = Symbol('blocked');
-	blockedCalls.set(token, Date.now());
-	if (!reportTimer && inBrowserMain()) {
-		// Decides only when a notice is worth showing; see `live/waits.ts`.
-		reportTimer = setTimeout(() => {
-			reportTimer = null;
-			if (blockedCalls.size) reportStuck();
-		}, REPORT_AFTER_MS);
-	}
-	return token;
-}
-
-function blockedEnd(token: symbol): void {
-	blockedCalls.delete(token);
-	if (blockedCalls.size) return;
-	if (reportTimer) clearTimeout(reportTimer);
-	reportTimer = null;
-	reportedStuck = false;
-	clearTabWait(WAIT_ID);
-}
-
-function reportStuck(): void {
-	if (!blockedCalls.size) return;
-	reportedStuck = true;
-	const since = Math.min(...blockedCalls.values());
+function describeCatalogWait(): Omit<TabWait, 'id' | 'since'> {
 	const e = election;
 	if (catalogWaiting) {
 		// This tab leads, but another tab's worker still has the files open.
 		// Taking over again would not help; that tab has to run to let go.
-		reportTabWait({
-			id: WAIT_ID,
+		return {
 			what: 'your files',
-			detail: `${catalogWaiting}. Switch to that tab once and it will let go.`,
-			since
-		});
-		return;
+			detail: `${catalogWaiting}. Switch to that tab once and it will let go.`
+		};
 	}
-	reportTabWait({
-		id: WAIT_ID,
+	return {
 		what: 'your files',
 		detail: e?.leader
 			? 'Another tab is handling your files and has not answered. It may be busy, or frozen in the background.'
 			: 'No tab is handling your files yet.',
-		since,
 		takeOver: e && inBrowserMain() ? () => e.takeOver() : undefined
-	});
+	};
 }
 
 /** Reason the live catalog is unavailable, if one was recorded. */
@@ -914,10 +883,10 @@ function routedEngine(dbName: string): SqlEngine {
 		sessionLock.ready.then(
 			() =>
 				new Promise<unknown>((resolve, reject) => {
-					let token: symbol | null = null;
+					let endWait: (() => void) | null = null;
 					const done = () => {
-						if (token) blockedEnd(token);
-						token = null;
+						endWait?.();
+						endWait = null;
 					};
 					send(
 						msg,
@@ -930,7 +899,7 @@ function routedEngine(dbName: string): SqlEngine {
 							reject(err);
 						},
 						() => {
-							token ??= blockedStart();
+							endWait ??= catalogWaits.begin();
 						}
 					);
 				})

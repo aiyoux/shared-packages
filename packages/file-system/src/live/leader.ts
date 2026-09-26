@@ -13,6 +13,7 @@
 
 import { liveDocNames } from './names.js';
 import { createElection, type Election, type ElectionOpts } from './election.js';
+import { createWaitTracker, type WaitTracker } from './waits.js';
 
 export { getTabId } from './election.js';
 
@@ -30,7 +31,54 @@ export type LeaderElectionOpts = Omit<ElectionOpts, 'prepare' | 'teardown' | 'ab
 
 export function createLeaderElection(nodeId: string, opts?: LeaderElectionOpts): LeaderElection {
 	const { lockName, ...rest } = opts ?? {};
-	return createElection(lockName ?? liveDocNames(nodeId).lockName, rest);
+	const election = createElection(lockName ?? liveDocNames(nodeId).lockName, rest);
+	return registered(nodeId, election);
+}
+
+/** This tab's live elections per document, so a person can take one over. */
+const byNode = new Map<string, Set<Election>>();
+
+function registered(nodeId: string, election: Election): Election {
+	let set = byNode.get(nodeId);
+	if (!set) byNode.set(nodeId, (set = new Set()));
+	set.add(election);
+	const destroy = election.destroy;
+	election.destroy = () => {
+		const cur = byNode.get(nodeId);
+		cur?.delete(election);
+		if (cur && !cur.size) byNode.delete(nodeId);
+		destroy();
+	};
+	return election;
+}
+
+/**
+ * Take a document over from a tab that is not answering: its sequencing and
+ * its saving both, so the tab that takes over is also the one that saves.
+ * Only for a person pressing a button (see `Election.takeOver`). The old tab
+ * rejoins as a follower when it next runs.
+ */
+export function takeOverDocument(nodeId: string): void {
+	for (const election of byNode.get(nodeId) ?? []) election.takeOver();
+}
+
+/**
+ * Waits on the tab that sequences `nodeId`, reported under one notice whose
+ * button calls `takeOverDocument`. A session begins a wait when it needs the
+ * sequencer (the join snapshot, an edit to be ordered) and ends it on any
+ * sign the sequencer is running.
+ */
+export function createDocumentWait(nodeId: string, what: string): WaitTracker {
+	return createWaitTracker(
+		`live-doc:${nodeId}`,
+		() => ({
+			what,
+			detail:
+				'The tab coordinating this document has not answered. It may be busy, or frozen in the background.',
+			takeOver: () => takeOverDocument(nodeId)
+		}),
+		{ enabled: () => typeof window !== 'undefined' }
+	);
 }
 
 /**
@@ -42,11 +90,22 @@ export function createLeaderElection(nodeId: string, opts?: LeaderElectionOpts):
  */
 export function createPersistElection(
 	nodeId: string,
-	opts?: Omit<LeaderElectionOpts, 'lockName' | 'yieldWhenHidden'>
+	opts?: Omit<LeaderElectionOpts, 'lockName' | 'yieldWhenHidden'> & {
+		/**
+		 * Write this tab's unsaved edits before the role moves on (a hidden
+		 * tab yielding, an ordinary close). Awaited before the lock is let go,
+		 * so the next owner starts from a file that already holds them, and
+		 * this tab is clean rather than holding edits another tab now saves.
+		 */
+		beforeHandover?: () => Promise<void> | void;
+	}
 ): LeaderElection {
-	return createLeaderElection(nodeId, {
-		...opts,
-		lockName: liveDocNames(nodeId).persistLockName,
+	const { beforeHandover, ...rest } = opts ?? {};
+	const nodeLock = liveDocNames(nodeId).persistLockName;
+	const election = createElection(nodeLock, {
+		...rest,
+		teardown: beforeHandover,
 		yieldWhenHidden: true
 	});
+	return registered(nodeId, election);
 }

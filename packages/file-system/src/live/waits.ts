@@ -53,3 +53,75 @@ export function subscribeTabWaits(fn: (waits: TabWait[]) => void): () => void {
 	fn([...waits.values()]);
 	return () => listeners.delete(fn);
 }
+
+export type WaitTracker = {
+	/**
+	 * Something this tab now waits on another tab for. Call the returned
+	 * function when it arrives (or is abandoned); calling it twice is harmless.
+	 */
+	begin(): () => void;
+	/** The reason changed: re-describe the wait if it is on screen. */
+	refresh(): void;
+	/** Drop every open wait, e.g. the session waiting on them closed. */
+	dispose(): void;
+};
+
+/**
+ * Turn "waits that begin and end" into one reported `TabWait` under `id`,
+ * shown once the oldest open wait has lasted `REPORT_AFTER_MS`, cleared when
+ * the last one ends. `describe` is read when the notice is (re)shown, so it
+ * can reflect who is being waited on at that moment.
+ */
+export function createWaitTracker(
+	id: string,
+	describe: () => Omit<TabWait, 'id' | 'since'>,
+	opts: { enabled?: () => boolean } = {}
+): WaitTracker {
+	const open = new Map<symbol, number>();
+	let timer: ReturnType<typeof setTimeout> | null = null;
+	let shown = false;
+
+	function show(): void {
+		if (!open.size) return;
+		shown = true;
+		reportTabWait({ ...describe(), id, since: Math.min(...open.values()) });
+	}
+
+	function settle(): void {
+		if (open.size) return;
+		if (timer) clearTimeout(timer);
+		timer = null;
+		if (shown) {
+			shown = false;
+			clearTabWait(id);
+		}
+	}
+
+	return {
+		begin() {
+			const token = Symbol(id);
+			open.set(token, Date.now());
+			if (!timer && !shown && (opts.enabled?.() ?? true)) {
+				// Decides only when a notice is worth showing.
+				timer = setTimeout(() => {
+					timer = null;
+					show();
+				}, REPORT_AFTER_MS);
+			}
+			let ended = false;
+			return () => {
+				if (ended) return;
+				ended = true;
+				open.delete(token);
+				settle();
+			};
+		},
+		refresh() {
+			if (shown) show();
+		},
+		dispose() {
+			open.clear();
+			settle();
+		}
+	};
+}

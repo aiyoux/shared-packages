@@ -104,6 +104,41 @@ function packWriteKey(opfsPath: string): string {
 }
 
 /**
+ * A cover lease: "my bytes are at this path and the row naming them is not
+ * committed yet". GC's orphan rule — no committed row names the file — is
+ * false for every writer somewhere between its OPFS write and its commit, and
+ * a frozen tab can sit in that window indefinitely, so file age cannot stand
+ * in for it. The writer says so instead, and the lease is live exactly as long
+ * as the writer's context (see `leaseOwner.ts`).
+ *
+ * A path covers itself and everything under it (a folder being moved or
+ * extracted into); a trailing `*` makes it a name prefix (flat staging names
+ * in tmp/). Each holder gets its own row, so two writers covering the same
+ * folder cannot release each other's protection.
+ */
+function coverKey(holder: string, path: string): string {
+	return `cover:${holder}:${path}`;
+}
+
+/** The path a lease protects from GC's orphan sweep, or null. */
+function protectedPathOf(key: string): string | null {
+	if (key.startsWith('packwrite:')) return key.slice('packwrite:'.length);
+	if (!key.startsWith('cover:')) return null;
+	const rest = key.slice('cover:'.length);
+	const i = rest.indexOf(':');
+	return i < 0 ? null : rest.slice(i + 1);
+}
+
+function pathCovered(pattern: string, path: string): boolean {
+	if (pattern.endsWith('*')) return path.startsWith(pattern.slice(0, -1));
+	return path === pattern || path.startsWith(`${pattern}/`);
+}
+
+function coveredBy(patterns: readonly string[], path: string): boolean {
+	return patterns.some((c) => pathCovered(c, path));
+}
+
+/**
  * Tests inject a crash between compact phases. Production leaves this null.
  * after-write: dest bytes exist, no refs yet. after-swap: refs name dest, old still there.
  */
@@ -627,12 +662,14 @@ export class VfsService {
 
 	private async relocatePrefix(fromPrefix: string, toPrefix: string): Promise<void> {
 		if (fromPrefix === toPrefix) return;
-		await this.holdPackWrite(toPrefix);
+		// Between the move and the row rewrite, every file under `toPrefix` is
+		// named by nothing. The cover is on the folder, so it spans them all.
+		const release = await this.holdCover([toPrefix]);
 		try {
 			await this.opfs.movePrefix(fromPrefix, toPrefix);
 			await this.db.rewriteBlobPrefix(fromPrefix, toPrefix);
 		} finally {
-			await this.dropPackWrite(toPrefix);
+			await release();
 		}
 	}
 
@@ -1087,6 +1124,32 @@ export class VfsService {
 			if (!parent || parent.kind !== 'folder') throw new VfsError('NOT_A_FOLDER');
 			if (parent.deletedAt != null) throw new VfsError('TRASH_STATE');
 		}
+		const destRel = await this.relPathOf(parentId);
+		// Staged bytes, and then members moved under `root/<destRel>` inside
+		// the catalog transaction, are named by no committed row until that
+		// transaction ends. Cover both for the whole write.
+		const stagePrefix = `tmp/tree-${generateId('t')}-`;
+		const release = await this.holdCover([
+			`${stagePrefix}*`,
+			destRel ? this.rootOpfsPath(destRel) : 'root'
+		]);
+		try {
+			return await this.writeTreeCovered(parentId, files, destRel, stagePrefix, opts);
+		} finally {
+			await release();
+		}
+	}
+
+	private async writeTreeCovered(
+		parentId: string | null,
+		files: Array<{ path: string; body: unknown; contentType?: string }>,
+		destRel: string,
+		stagePrefix: string,
+		opts?: {
+			signal?: AbortSignal;
+			onProgress?: (written: VfsNode[]) => void;
+		}
+	): Promise<VfsNode[]> {
 
 		type PlannedFile = {
 			dirs: string[];
@@ -1104,7 +1167,6 @@ export class VfsService {
 		};
 		const planned: PlannedFile[] = [];
 		const folderKeys = new Set<string>();
-		const destRel = await this.relPathOf(parentId);
 
 		const tPlan = performance.now();
 		for (const input of files) {
@@ -1141,7 +1203,7 @@ export class VfsService {
 				dirs,
 				name,
 				relPath,
-				opfsPath: `tmp/tree-${blobId}.bin`,
+				opfsPath: `${stagePrefix}${blobId}.bin`,
 				bytes,
 				contentType,
 				fileType,
@@ -2409,9 +2471,8 @@ export class VfsService {
 	 * is not deleted out from under a live compact or writeFiles confirm.
 	 */
 	private async unlinkIfOrphanNow(path: string): Promise<boolean> {
+		if (coveredBy(await this.protectedPaths(), path)) return false;
 		const live = await leaseLiveness();
-		const packLease = await this.db.leases.get(packWriteKey(path));
-		if (packLease && live(packLease)) return false;
 		const named = await this.db.blobRefs.where('opfsPath').equals(path).first();
 		if (named) return false;
 		if (path.startsWith('blobs/')) {
@@ -2460,6 +2521,9 @@ export class VfsService {
 
 		let tmpPath: string | undefined;
 		let nodeCommitted = false;
+		// The partial, then the staging file it is promoted to, are each named
+		// by no committed row for a moment (write → txn below).
+		const releaseStage = await this.holdCover([`tmp/${writeId}.partial`, stagingPath]);
 
 		try {
 			await this.db.transaction('r', this.db.nodes, async () => {
@@ -2545,6 +2609,8 @@ export class VfsService {
 				}
 			}
 			throw e;
+		} finally {
+			await releaseStage();
 		}
 
 		if (prevBlobId && prevBlobId !== blobId) {
@@ -3667,6 +3733,39 @@ export class VfsService {
 		});
 	}
 
+	/**
+	 * Protect `paths` from GC's orphan sweep until the returned release runs.
+	 * See `coverKey` for what a path covers. Written outside any transaction
+	 * so another tab's GC sees it before the first byte lands.
+	 */
+	private async holdCover(paths: string[]): Promise<() => Promise<void>> {
+		const holder = generateId('cv');
+		const owner = await leaseOwner('cover');
+		const expiresAt = Date.now() + this.leaseTtlMs();
+		const keys = paths.map((path) => coverKey(holder, path));
+		await this.db.leases.bulkPut(keys.map((key) => ({ key, owner, expiresAt })));
+		const stopBeat = this.startLeaseHeartbeat(keys);
+		return async () => {
+			stopBeat();
+			try {
+				await this.db.leases.bulkDelete(keys);
+			} catch {
+				/* dead owner: gc drops the rows */
+			}
+		};
+	}
+
+	/** Paths live writers have asked GC to leave alone, from one lease snapshot. */
+	private async protectedPaths(): Promise<string[]> {
+		const live = await leaseLiveness();
+		const out: string[] = [];
+		for (const row of await this.db.leases.toArray()) {
+			const path = protectedPathOf(row.key);
+			if (path != null && live(row)) out.push(path);
+		}
+		return out;
+	}
+
 	private async leaseStillHeld(key: string): Promise<boolean> {
 		const row = await this.db.leases.get(key);
 		return !!row && (await leaseLiveness())(row);
@@ -4227,12 +4326,10 @@ export class VfsService {
 			// row still names tmp/… — treat the legacy blobs/ dest as live too.
 			if (ref.pendingPromote) namedPaths.add(`blobs/${ref.id}.bin`);
 		}
-		const packWriteLeases = new Set(
-			leases
-				.filter((l) => live(l) && l.key.startsWith('packwrite:'))
-				.map((l) => l.key.slice('packwrite:'.length))
-		);
-		for (const p of packWriteLeases) namedPaths.add(p);
+		const covered = leases
+			.filter((l) => live(l))
+			.map((l) => protectedPathOf(l.key))
+			.filter((p): p is string => p != null);
 
 		const releasable: string[] = [];
 		const stalePendingNodes: string[] = [];
@@ -4272,7 +4369,7 @@ export class VfsService {
 				if (await this.unlinkIfOrphanNow(t.path)) report.tmpPartialsRemoved++;
 				continue;
 			}
-			if (namedPaths.has(t.path)) continue;
+			if (namedPaths.has(t.path) || coveredBy(covered, t.path)) continue;
 			const age = t.mtimeMs != null ? now - t.mtimeMs : this.graceMs + 1;
 			if (age > this.graceMs) {
 				if (await this.unlinkIfOrphanNow(t.path)) report.tmpPartialsRemoved++;
@@ -4303,8 +4400,7 @@ export class VfsService {
 						if (await this.unlinkIfOrphanNow(p)) report.orphanOpfsRemoved++;
 						continue;
 					}
-					if (namedPaths.has(p)) continue;
-					if (packWriteLeases.has(p)) continue;
+					if (namedPaths.has(p) || coveredBy(covered, p)) continue;
 					if (prefix === 'blobs') {
 						const blobId = p.replace(/^blobs\//, '').replace(/\.bin$/, '');
 						if (activeLeases.has(blobId)) continue;
