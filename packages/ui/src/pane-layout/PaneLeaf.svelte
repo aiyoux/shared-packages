@@ -177,7 +177,6 @@
 						{/if}
 					</button>
 				{/if}
-				{/if}
 				<button
 					type="button"
 					data-testid="pl-close"
