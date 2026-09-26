@@ -25,6 +25,8 @@ export type AiCapabilities = {
 	profiles?: number;
 	/** True when this daemon lists bound client sessions. Missing means false. */
 	sessions?: boolean;
+	/** True when a bound tab can grant access and upload artifacts. Missing means false. */
+	sessionArtifacts?: boolean;
 };
 
 /** A reachable monitor that serves the AI feature. */

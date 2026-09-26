@@ -25,7 +25,7 @@ class FakeSocket {
 
 	url: string;
 	readyState = FakeSocket.CONNECTING;
-	sent: string[] = [];
+	sent: Array<string | Uint8Array> = [];
 	onopen: (() => void) | null = null;
 	onmessage: ((ev: { data: string }) => void) | null = null;
 	onclose: (() => void) | null = null;
@@ -42,8 +42,8 @@ class FakeSocket {
 		this.listeners.set(type, list);
 	}
 
-	send(data: string) {
-		this.sent.push(data);
+	send(data: string | Uint8Array) {
+		this.sent.push(typeof data === 'string' ? data : new Uint8Array(data));
 	}
 
 	close() {
@@ -161,6 +161,8 @@ describe('session REST', () => {
 		assert.equal(rows.length, 1);
 		assert.equal(rows[0].document?.kind, 'skch');
 		assert.equal(rows[0].bound, true);
+		assert.deepEqual(rows[0].grants, []);
+		assert.deepEqual(rows[0].artifacts, []);
 
 		await deleteAiSession(BASE, created.id);
 		assert.equal(calls[2].method, 'DELETE');
@@ -184,15 +186,49 @@ describe('session sockets', () => {
 
 		browser.receive(JSON.stringify({ type: 'invoke', id: 'r1', name: 'status', args: {} }));
 		await new Promise((resolve) => setTimeout(resolve, 0));
-		const reply = JSON.parse(browser.sent.at(-1)!);
+		const reply = JSON.parse(browser.sent.at(-1) as string);
 		assert.equal(reply.ok, true);
 		assert.equal(reply.value.name, 'status');
 
-		binding.update({ title: 'Renamed', document: null });
-		const update = JSON.parse(browser.sent.at(-1)!);
+		binding.update({ title: 'Renamed', document: null, grants: ['access'], actions: ['snapshot', 'status', 'refresh'] });
+		const update = JSON.parse(browser.sent.at(-1) as string);
 		assert.equal(update.type, 'update');
 		assert.equal(update.title, 'Renamed');
 		assert.equal(update.document, null);
+		assert.deepEqual(update.grants, ['access']);
+		assert.deepEqual(update.actions, ['snapshot', 'status', 'refresh']);
+
+		const payload = new TextEncoder().encode('hello artifact');
+		const uploaded = binding.sendArtifact({ name: 'file', filename: 'file.skch', bytes: payload });
+		let beginText = '';
+		for (let i = 0; i < 50 && !beginText; i++) {
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			beginText =
+				browser.sent.find(
+					(item): item is string => typeof item === 'string' && item.includes('"artifact-begin"')
+				) ?? '';
+		}
+		const begin = JSON.parse(beginText);
+		assert.equal(begin.type, 'artifact-begin');
+		assert.equal(begin.name, 'file');
+		assert.equal(begin.bytes, payload.byteLength);
+		assert.equal(begin.filename, 'file.skch');
+		assert.equal(begin.sha256.length, 64);
+		const binary = browser.sent.find((item) => item instanceof Uint8Array) as Uint8Array;
+		assert.deepEqual(binary, payload);
+		const end = JSON.parse(browser.sent.at(-1) as string);
+		assert.equal(end.type, 'artifact-end');
+		browser.receive(
+			JSON.stringify({
+				type: 'artifact',
+				name: 'file',
+				ok: true,
+				path: '/tmp/monitor-ai-sessions/file.skch',
+				bytes: payload.byteLength,
+				sha256: begin.sha256
+			})
+		);
+		assert.equal((await uploaded).path, '/tmp/monitor-ai-sessions/file.skch');
 
 		const agentPromise = connectAiSession(BASE, 'abc');
 		const agentSocket = FakeSocket.all[1];
@@ -200,14 +236,14 @@ describe('session sockets', () => {
 		agentSocket.open();
 		const agent = await agentPromise;
 		const pending = agent.invoke('snapshot');
-		const sent = JSON.parse(agentSocket.sent[0]);
+		const sent = JSON.parse(agentSocket.sent[0] as string);
 		assert.equal(sent.type, 'invoke');
 		assert.equal(sent.name, 'snapshot');
 		agentSocket.receive(JSON.stringify({ type: 'result', id: sent.id, ok: true, value: { dataUrl: 'data:x' } }));
 		assert.deepEqual(await pending, { dataUrl: 'data:x' });
 
 		const denied = agent.invoke('draw');
-		const deniedFrame = JSON.parse(agentSocket.sent.at(-1)!);
+		const deniedFrame = JSON.parse(agentSocket.sent.at(-1) as string);
 		agentSocket.receive(
 			JSON.stringify({ type: 'result', id: deniedFrame.id, ok: false, error: 'unsupported' })
 		);

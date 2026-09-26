@@ -44,7 +44,14 @@ export type MonitorCapabilities = {
 	fs?: { ino?: boolean; rename?: boolean; archive?: boolean; mkdir?: boolean; thumb?: boolean };
 	git?: { blob?: boolean; init?: boolean };
 	/** AI feature (`/v1/ai/**`); absent on daemons without it. */
-	ai?: { chat?: boolean; streaming?: boolean; profiles?: number; sessions?: boolean };
+	ai?: {
+		chat?: boolean;
+		streaming?: boolean;
+		profiles?: number;
+		sessions?: boolean;
+		/** True when a bound tab can grant access and upload artifacts. Missing means false. */
+		sessionArtifacts?: boolean;
+	};
 };
 
 export type MonitorListEntry = {
@@ -530,7 +537,8 @@ export function coerceMonitorCapabilities(raw: unknown): MonitorCapabilities {
 						chat: ai.chat === true,
 						streaming: ai.streaming === true,
 						profiles: num(ai.profiles) ?? 0,
-						sessions: ai.sessions === true
+						sessions: ai.sessions === true,
+						sessionArtifacts: ai.sessionArtifacts === true
 					}
 				}
 			: {})

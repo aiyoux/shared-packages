@@ -381,7 +381,8 @@ describe('monitor client tolerant parse', () => {
 			chat: true,
 			streaming: true,
 			profiles: 2,
-			sessions: true
+			sessions: true,
+			sessionArtifacts: false
 		});
 		const without = createMonitorClient({
 			baseUrl: 'http://127.0.0.1:8300',
@@ -392,6 +393,16 @@ describe('monitor client tolerant parse', () => {
 			) as unknown as typeof fetch
 		});
 		expect((await without.meta()).capabilities?.ai?.sessions).toBe(false);
+		expect((await without.meta()).capabilities?.ai?.sessionArtifacts).toBe(false);
+		const withArtifacts = createMonitorClient({
+			baseUrl: 'http://127.0.0.1:8300',
+			fetchImpl: vi.fn(async () =>
+				jsonResponse({
+					capabilities: { ai: { chat: true, sessions: true, sessionArtifacts: true } }
+				})
+			) as unknown as typeof fetch
+		});
+		expect((await withArtifacts.meta()).capabilities?.ai?.sessionArtifacts).toBe(true);
 	});
 
 	it('ignores extra JSON fields on meta', async () => {

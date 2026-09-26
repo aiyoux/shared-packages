@@ -18,6 +18,15 @@ export const AI_SESSION_HEARTBEAT_MS = 10_000;
 export type AiSessionDocument = Record<string, unknown>;
 
 /** One row from `GET /v1/ai/sessions`. */
+/** One file the bound tab has placed on the monitor for a local agent to read. */
+export type AiSessionArtifact = {
+	name: string;
+	path: string;
+	bytes: number;
+	sha256: string;
+	updated: string;
+};
+
 export type AiSessionInfo = {
 	id: string;
 	app: string;
@@ -25,6 +34,9 @@ export type AiSessionInfo = {
 	actions: string[];
 	bound: boolean;
 	document: AiSessionDocument | null;
+	/** Empty when the tab has not granted access. An old daemon omits this. */
+	grants: string[];
+	artifacts: AiSessionArtifact[];
 };
 
 export type AiSessionRegisterInput = {
@@ -47,11 +59,34 @@ export type AiSessionInvokeHandler = (
 	args: Record<string, unknown>
 ) => Promise<unknown>;
 
+export type AiSessionArtifactUpload = {
+	name: 'file' | 'debug';
+	filename: string;
+	bytes: Uint8Array;
+};
+
 /** The browser side of a bound session. */
 export type AiSessionBinding = {
-	update(patch: { title?: string; document?: object | null }): void;
+	update(patch: {
+		title?: string;
+		document?: object | null;
+		grants?: string[];
+		actions?: string[];
+	}): void;
+	/** Upload one artifact on the bind socket. Resolves with the daemon's path record. */
+	sendArtifact(input: AiSessionArtifactUpload): Promise<AiSessionArtifact>;
 	close(): void;
 };
+
+/** Upload one artifact. The binding must already be open. */
+export function sendSessionArtifact(
+	binding: AiSessionBinding,
+	input: AiSessionArtifactUpload
+): Promise<AiSessionArtifact> {
+	return binding.sendArtifact(input);
+}
+
+const ARTIFACT_CHUNK_BYTES = 8 * 1024 * 1024;
 
 /** The agent side of a bound session. */
 export type AiSessionAgent = {
@@ -106,6 +141,14 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 	return value as Record<string, unknown>;
 }
 
+function safeParse(text: string): unknown {
+	try {
+		return JSON.parse(text) as unknown;
+	} catch {
+		return null;
+	}
+}
+
 export function coerceAiSession(raw: unknown): AiSessionInfo {
 	const row = asRecord(raw);
 	if (!row || typeof row.id !== 'string' || !row.id) {
@@ -115,14 +158,42 @@ export function coerceAiSession(raw: unknown): AiSessionInfo {
 		? row.actions.filter((name): name is string => typeof name === 'string')
 		: [];
 	const document = asRecord(row.document);
+	const grants = Array.isArray(row.grants)
+		? row.grants.filter((name): name is string => typeof name === 'string')
+		: [];
+	const artifacts = Array.isArray(row.artifacts)
+		? row.artifacts.flatMap((item) => {
+				const artifact = coerceArtifact(item);
+				return artifact ? [artifact] : [];
+			})
+		: [];
 	return {
 		id: row.id,
 		app: typeof row.app === 'string' ? row.app : '',
 		title: typeof row.title === 'string' ? row.title : '',
 		actions,
 		bound: row.bound === true,
-		document
+		document,
+		grants,
+		artifacts
 	};
+}
+
+function coerceArtifact(raw: unknown): AiSessionArtifact | null {
+	const row = asRecord(raw);
+	if (!row || typeof row.name !== 'string' || typeof row.path !== 'string') return null;
+	return {
+		name: row.name,
+		path: row.path,
+		bytes: typeof row.bytes === 'number' && Number.isFinite(row.bytes) ? row.bytes : 0,
+		sha256: typeof row.sha256 === 'string' ? row.sha256 : '',
+		updated: typeof row.updated === 'string' ? row.updated : ''
+	};
+}
+
+async function sha256Hex(bytes: Uint8Array): Promise<string> {
+	const digest = await crypto.subtle.digest('SHA-256', bytes.slice());
+	return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
 /** `POST /v1/ai/sessions`. The session stays hidden until `bindAiSession` connects. */
@@ -211,6 +282,11 @@ export function bindAiSession(
 	const ws = new WebSocket(url);
 	let chain: Promise<void> = Promise.resolve();
 	let closed = false;
+	let artifactWait: {
+		name: string;
+		resolve: (value: AiSessionArtifact) => void;
+		reject: (error: Error) => void;
+	} | null = null;
 	const timer = setInterval(() => {
 		if (ws.readyState === WebSocket.OPEN) {
 			ws.send(JSON.stringify({ type: 'heartbeat' }));
@@ -221,12 +297,37 @@ export function bindAiSession(
 		if (closed) return;
 		closed = true;
 		clearInterval(timer);
+		artifactWait?.reject(new AiCredentialsError('AI_ERROR', 'The AI session socket closed.'));
+		artifactWait = null;
 		opts?.onClose?.();
 	}
 
 	ws.onmessage = (ev) => {
 		const text = typeof ev.data === 'string' ? ev.data : '';
 		if (!text) return;
+		const ack = asRecord(safeParse(text));
+		if (ack?.type === 'artifact') {
+			const waiter = artifactWait;
+			if (!waiter || ack.name !== waiter.name) return;
+			artifactWait = null;
+			if (ack.ok === true && typeof ack.path === 'string') {
+				waiter.resolve({
+					name: waiter.name,
+					path: ack.path,
+					bytes: typeof ack.bytes === 'number' ? ack.bytes : 0,
+					sha256: typeof ack.sha256 === 'string' ? ack.sha256 : '',
+					updated: ''
+				});
+			} else {
+				waiter.reject(
+					new AiCredentialsError(
+						'AI_ERROR',
+						typeof ack.error === 'string' && ack.error ? ack.error : 'unsupported'
+					)
+				);
+			}
+			return;
+		}
 		chain = chain
 			.then(async () => {
 				const reply = await answerSessionInvoke(text, handler);
@@ -249,7 +350,41 @@ export function bindAiSession(
 				const frame: Record<string, unknown> = { type: 'update' };
 				if (patch.title !== undefined) frame.title = patch.title;
 				if (patch.document !== undefined) frame.document = patch.document;
+				if (patch.grants !== undefined) frame.grants = patch.grants;
+				if (patch.actions !== undefined) frame.actions = patch.actions;
 				ws.send(JSON.stringify(frame));
+			},
+			sendArtifact(input) {
+				if (ws.readyState !== WebSocket.OPEN) {
+					return Promise.reject(
+						new AiCredentialsError('AI_ERROR', 'The AI session socket closed.')
+					);
+				}
+				if (artifactWait) {
+					return Promise.reject(
+						new AiCredentialsError('AI_ERROR', 'An artifact upload is already in progress.')
+					);
+				}
+				return sha256Hex(input.bytes).then(
+					(sha256) =>
+						new Promise<AiSessionArtifact>((resolve, reject) => {
+							artifactWait = { name: input.name, resolve, reject };
+							ws.send(
+								JSON.stringify({
+									type: 'artifact-begin',
+									name: input.name,
+									bytes: input.bytes.byteLength,
+									sha256,
+									filename: input.filename
+								})
+							);
+							for (let offset = 0; offset < input.bytes.byteLength; offset += ARTIFACT_CHUNK_BYTES) {
+								const slice = input.bytes.subarray(offset, Math.min(offset + ARTIFACT_CHUNK_BYTES, input.bytes.byteLength));
+								ws.send(slice);
+							}
+							ws.send(JSON.stringify({ type: 'artifact-end', name: input.name }));
+						})
+				);
 			},
 			close() {
 				finish();
