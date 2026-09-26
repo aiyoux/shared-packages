@@ -365,10 +365,20 @@ export function bindAiSession(
 						new AiCredentialsError('AI_ERROR', 'An artifact upload is already in progress.')
 					);
 				}
-				return sha256Hex(input.bytes).then(
-					(sha256) =>
-						new Promise<AiSessionArtifact>((resolve, reject) => {
-							artifactWait = { name: input.name, resolve, reject };
+				// Hold the one upload slot before hashing: a second call made while
+				// this one hashes must be refused, not overwrite the waiter and
+				// leave this promise pending forever.
+				return new Promise<AiSessionArtifact>((resolve, reject) => {
+					const wait = { name: input.name, resolve, reject };
+					artifactWait = wait;
+					sha256Hex(input.bytes).then(
+						(sha256) => {
+							if (artifactWait !== wait) return;
+							if (ws.readyState !== WebSocket.OPEN) {
+								artifactWait = null;
+								reject(new AiCredentialsError('AI_ERROR', 'The AI session socket closed.'));
+								return;
+							}
 							ws.send(
 								JSON.stringify({
 									type: 'artifact-begin',
@@ -380,11 +390,18 @@ export function bindAiSession(
 							);
 							for (let offset = 0; offset < input.bytes.byteLength; offset += ARTIFACT_CHUNK_BYTES) {
 								const slice = input.bytes.subarray(offset, Math.min(offset + ARTIFACT_CHUNK_BYTES, input.bytes.byteLength));
-								ws.send(slice);
+								// Uploads come from fresh ArrayBuffers (encoders, blobs), never shared memory.
+								ws.send(slice as Uint8Array<ArrayBuffer>);
 							}
 							ws.send(JSON.stringify({ type: 'artifact-end', name: input.name }));
-						})
-				);
+						},
+						(error: unknown) => {
+							if (artifactWait !== wait) return;
+							artifactWait = null;
+							reject(error instanceof Error ? error : new AiCredentialsError('AI_ERROR', String(error)));
+						}
+					);
+				});
 			},
 			close() {
 				finish();

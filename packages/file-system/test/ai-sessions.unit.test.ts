@@ -253,6 +253,56 @@ describe('session sockets', () => {
 		assert.equal(closed, true);
 	});
 
+	it('refuses a second upload started while the first is still hashing', async () => {
+		installSocket();
+		const bindingPromise = bindAiSession(BASE, 'abc', async () => null);
+		const browser = FakeSocket.all[0];
+		browser.open();
+		const binding = await bindingPromise;
+
+		const first = binding.sendArtifact({
+			name: 'file',
+			filename: 'file.skch',
+			bytes: new TextEncoder().encode('first')
+		});
+		// Same turn: the first has not finished hashing yet.
+		await assert.rejects(
+			binding.sendArtifact({ name: 'file', filename: 'file.skch', bytes: new TextEncoder().encode('second') }),
+			/already in progress/
+		);
+		let begin = '';
+		for (let i = 0; i < 50 && !begin; i++) {
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			begin =
+				browser.sent.find(
+					(item): item is string => typeof item === 'string' && item.includes('"artifact-begin"')
+				) ?? '';
+		}
+		assert.equal(
+			browser.sent.filter((item) => typeof item === 'string' && item.includes('"artifact-begin"')).length,
+			1
+		);
+		browser.receive(
+			JSON.stringify({ type: 'artifact', name: 'file', ok: true, path: '/tmp/x/file.skch', bytes: 5, sha256: JSON.parse(begin).sha256 })
+		);
+		assert.equal((await first).path, '/tmp/x/file.skch');
+	});
+
+	it('rejects an upload still hashing when the socket closes', async () => {
+		installSocket();
+		const bindingPromise = bindAiSession(BASE, 'abc', async () => null);
+		const browser = FakeSocket.all[0];
+		browser.open();
+		const binding = await bindingPromise;
+		const pending = binding.sendArtifact({ name: 'debug', filename: 'debug.json', bytes: new Uint8Array([1]) });
+		browser.close();
+		await assert.rejects(pending, /closed/);
+		assert.equal(
+			browser.sent.filter((item) => typeof item === 'string' && item.includes('"artifact-begin"')).length,
+			0
+		);
+	});
+
 	it('rejects the bind when the socket never opens', async () => {
 		installSocket();
 		const bindingPromise = bindAiSession(BASE, 'abc', async () => null);
