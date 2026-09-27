@@ -1375,7 +1375,7 @@ describe('FileExplorer component', () => {
 			document.querySelector('[data-testid="fe-folder-row"][data-name="extracted"]') as HTMLElement
 		);
 		await viWaitFor(() =>
-			document.querySelector('[data-testid="fe-crumb"]')?.textContent?.includes('extracted')
+			!!document.querySelector('[data-testid="fe-crumb"]')?.textContent?.includes('extracted')
 		);
 		expect(document.querySelector('[data-testid="fe-git-enabled-badge"]')).toBeNull();
 
