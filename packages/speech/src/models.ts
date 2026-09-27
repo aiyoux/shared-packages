@@ -222,3 +222,13 @@ export function kokoroVoice(voiceId: string): KokoroVoice {
 	if (!found) throw new Error(`Unknown Kokoro voice: ${voiceId}`);
 	return found;
 }
+
+/** Kokoro's catalog def extended with one voice bin, so the import card
+ *  lists and accepts the voices/<voice>.bin file that voice needs. The
+ *  def id is unchanged, so the manifest the card's presence check matches
+ *  stays the model's own. An empty/unknown voice falls back to the first
+ *  catalog voice (the picker's default). */
+export function kokoroVoiceDef(voice: string): SpeechModelDef {
+	const bin = kokoroVoice(voice || KOKORO_VOICES[0]!.id).bin;
+	return { ...KOKORO_82M, files: [...KOKORO_82M.files, { path: bin }] };
+}

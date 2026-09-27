@@ -33,6 +33,7 @@ export {
 	defaultTtsModel,
 	hfResolveUrl,
 	kokoroVoice,
+	kokoroVoiceDef,
 	kokoroVoicePath,
 	modelDef,
 	sttModelsFor,

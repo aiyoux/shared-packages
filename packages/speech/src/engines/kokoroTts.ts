@@ -98,6 +98,26 @@ export function createKokoroTts(): TtsEngine {
 					`Missing voice file ${storedName(binPath)}. Download it from ${hfResolveUrl(def, binPath)} and import it.`
 				);
 			}
+			// kokoro-js fetches voice bins itself, bypassing the transformers
+			// cache — the only local source it consults is the 'kokoro-voices'
+			// Cache Storage, so seed it from the VFS import to keep generation
+			// fully offline. The URL must be byte-identical to the library's.
+			const voiceUrl = hfResolveUrl(def, binPath);
+			try {
+				const voiceCache = await caches.open('kokoro-voices');
+				const hit = await voiceCache.match(voiceUrl);
+				if (!hit) {
+					const blob = await store.readBlobPath(dirId, binPath);
+					await voiceCache.put(
+						voiceUrl,
+						new Response(blob, { status: 200, headers: { 'Content-Type': 'application/octet-stream' } })
+					);
+				}
+			} catch (err) {
+				// Cache API unavailable (private mode?) → the library falls back to
+				// its network fetch, which fails under COEP — same as before.
+				console.warn('kokoro voice cache seed failed', err);
+			}
 			const segments: TtsRender['segments'] = [];
 			const sentences = splitSentences(text);
 			for (const sentence of sentences) {
