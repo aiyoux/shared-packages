@@ -1,4 +1,4 @@
-import type { SpeechModelDef, SttEngineId, TtsEngineId, TtsVoice } from './types.js';
+import type { SpeechModelDef, SttEngineId, TtsDevice, TtsEngineId, TtsVoice } from './types.js';
 
 export type { SpeechModelDef };
 
@@ -142,7 +142,30 @@ export const KOKORO_82M: SpeechModelDef = {
 	// pre-fetches the chosen voice so it lands in Files too.
 	sizeBytes: 92_364_770,
 	languages: ['en'],
-	downloadRoot: 'hf'
+	downloadRoot: 'hf',
+	devices: ['wasm']
+};
+
+/** Full-precision Kokoro weights — what kokoro-js recommends on WebGPU (the
+ *  quantized ops of the q8 file fall back to CPU there). Same repo, same
+ *  small files, bigger model file. */
+export const KOKORO_82M_FP32: SpeechModelDef = {
+	id: 'kokoro-82m-fp32',
+	task: 'tts',
+	engine: 'kokoro',
+	repo: 'onnx-community/Kokoro-82M-v1.0-ONNX',
+	revision: 'main',
+	dtype: 'fp32',
+	files: [
+		f('config.json', 44),
+		f('tokenizer.json', 3497),
+		f('tokenizer_config.json', 113),
+		f('onnx/model.onnx', 325532232)
+	],
+	sizeBytes: 325_535_886,
+	languages: ['en'],
+	downloadRoot: 'hf',
+	devices: ['webgpu']
 };
 
 export const MODEL_CATALOG: readonly SpeechModelDef[] = [
@@ -151,7 +174,8 @@ export const MODEL_CATALOG: readonly SpeechModelDef[] = [
 	WHISPER_SMALL,
 	MOONSHINE_TINY,
 	MOONSHINE_BASE,
-	KOKORO_82M
+	KOKORO_82M,
+	KOKORO_82M_FP32
 ] as const;
 
 export function modelDef(id: string): SpeechModelDef {
@@ -171,6 +195,12 @@ export function ttsModelsFor(engine: TtsEngineId): readonly SpeechModelDef[] {
 export function defaultSttModel(engine: SttEngineId): string | null {
 	const models = sttModelsFor(engine);
 	return models.length ? models[0]!.id : null;
+}
+
+/** The engine's model meant for `device` (a def without `devices` fits any). */
+export function ttsModelForDevice(engine: TtsEngineId, device: TtsDevice): SpeechModelDef | null {
+	const models = ttsModelsFor(engine);
+	return models.find((m) => !m.devices || m.devices.includes(device)) ?? models[0] ?? null;
 }
 
 export function defaultTtsModel(engine: TtsEngineId): string | null {
@@ -250,8 +280,8 @@ export function kokoroVoice(voiceId: string): KokoroVoice {
  *  def id is unchanged, so the manifest the card's presence check matches
  *  stays the model's own. An empty/unknown voice falls back to the first
  *  catalog voice (the picker's default). */
-export function kokoroVoiceDef(voice: string): SpeechModelDef {
+export function kokoroVoiceDef(voice: string, base: SpeechModelDef = KOKORO_82M): SpeechModelDef {
 	const known = KOKORO_VOICES.find((v) => v.id === voice) ?? KOKORO_VOICES[0]!;
 	const bin = known.bin;
-	return { ...KOKORO_82M, files: [...KOKORO_82M.files, { path: bin }] };
+	return { ...base, files: [...base.files, { path: bin }] };
 }

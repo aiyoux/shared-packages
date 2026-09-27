@@ -5,9 +5,8 @@
  * HF fetches are blocked under the hub's COEP isolation, and the library's
  * `writeBlob` is not exported, so we write the same layout ourselves.
  *
- * The library keeps one session per page and reuses it even when `voiceId`
- * changes (the reused instance keeps the first voice's model), so a voice
- * switch resets that singleton and creates a fresh session.
+ * Inference runs in a dedicated worker (piper.worker.ts), so rendering never
+ * blocks the page; the mirror, WAV decode and playback stay here.
  */
 
 import {
@@ -31,6 +30,7 @@ import {
 	type PiperVoice
 } from '../piperVoices.js';
 import { SegmentPlayer, splitSentences, streamSentences } from './playback.js';
+import { createWorkerRpc } from './workerRpc.js';
 
 const info: TtsEngineInfo = {
 	id: 'piper',
@@ -43,11 +43,6 @@ const info: TtsEngineInfo = {
 	voices: 'model',
 	supportsSpeed: false
 };
-
-type PiperSession = { predict: (text: string) => Promise<Blob>; voiceId: string };
-
-let session: PiperSession | null = null;
-let sessionVoiceId: string | null = null;
 
 /* --- OPFS mirror (same layout the library's internal cache reads) --- */
 
@@ -91,37 +86,20 @@ async function ensureVoiceMirrored(voice: PiperVoice, dirId?: string): Promise<v
 	}
 }
 
-async function sessionFor(voiceId: string): Promise<PiperSession> {
-	if (session && sessionVoiceId === voiceId) return session;
-	const lib = await import('@mintplex-labs/piper-tts-web');
-	// The library's session is a page-wide singleton that ignores a changed
-	// voiceId on reuse — reset it so each voice loads its own model.
-	(lib.TtsSession as unknown as { _instance: unknown })._instance = null;
-	session = (await lib.TtsSession.create({
-		voiceId,
-		// The lib's ORT (1.30) fetches its glue+wasm from this base — the
-		// vendored pair, since the lib's cdnjs default names files cdnjs does
-		// not host for the version this ORT requests (404 → blob fallback →
-		// CSP block). piperData/piperWasm keep the lib's jsdelivr defaults.
-		wasmPaths: {
-			onnxWasm: '/vendor/ort-piper/',
-			piperData: lib.TtsSession.WASM_LOCATIONS.piperData,
-			piperWasm: lib.TtsSession.WASM_LOCATIONS.piperWasm
-		}
-	}) as unknown as PiperSession);
-	sessionVoiceId = voiceId;
-	return session;
-}
-
-async function renderSentence(voiceId: string, sentence: string): Promise<TtsRenderSegment> {
-	const wav = await (await sessionFor(voiceId)).predict(sentence);
-	const decoded = await decodeMono(wav);
-	return { samples: decoded.samples, sampleRate: decoded.sampleRate, text: sentence };
-}
-
 export function createPiperTts(): TtsEngine {
 	const player = new SegmentPlayer();
 	let selectedDirId: string | undefined;
+	const worker = createWorkerRpc(
+		() => new Worker(new URL('./piper.worker.ts', import.meta.url), { type: 'module', name: 'piper-tts' }),
+		'Piper',
+		() => {}
+	);
+
+	async function renderSentence(voiceId: string, sentence: string): Promise<TtsRenderSegment> {
+		const wav = await worker.call<Blob>('generate', { voiceId, text: sentence });
+		const decoded = await decodeMono(wav);
+		return { samples: decoded.samples, sampleRate: decoded.sampleRate, text: sentence };
+	}
 
 	return {
 		info,

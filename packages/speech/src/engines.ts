@@ -52,7 +52,7 @@ async function importTtsEngine(id: TtsEngineId): Promise<TtsEngine> {
  * that track their own selected model/dir.
  */
 export async function loadSttEngine(id: SttEngineId, opts?: EngineLoadOpts): Promise<SttEngine> {
-	const key = `${opts?.modelId ?? ''}|${opts?.dirId ?? ''}`;
+	const key = `${opts?.modelId ?? ''}|${opts?.dirId ?? ''}|${opts?.device ?? ''}`;
 	const hit = sttLoaded.get(id);
 	if (hit && hit.key === key) return hit.engine;
 
@@ -64,7 +64,7 @@ export async function loadSttEngine(id: SttEngineId, opts?: EngineLoadOpts): Pro
 
 /** Load one TTS engine on demand. Same (model, dir) cache-key rule. */
 export async function loadTtsEngine(id: TtsEngineId, opts?: TtsLoadOpts): Promise<TtsEngine> {
-	const key = `${opts?.modelId ?? ''}|${opts?.dirId ?? ''}`;
+	const key = `${opts?.modelId ?? ''}|${opts?.dirId ?? ''}|${opts?.device ?? ''}`;
 	const hit = ttsLoaded.get(id);
 	if (hit && hit.key === key) return hit.engine;
 

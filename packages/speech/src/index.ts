@@ -17,6 +17,7 @@ export {
 	type SttSegment,
 	type TtsEngine,
 	type TtsEngineId,
+	type TtsDevice,
 	type TtsEngineInfo,
 	type TtsLoadOpts,
 	type TtsRender,
@@ -27,6 +28,7 @@ export {
 
 export {
 	KOKORO_82M,
+	KOKORO_82M_FP32,
 	KOKORO_VOICES,
 	MODEL_CATALOG,
 	defaultSttModel,
@@ -37,6 +39,7 @@ export {
 	kokoroVoicePath,
 	modelDef,
 	sttModelsFor,
+	ttsModelForDevice,
 	ttsModelsFor,
 	type KokoroVoice
 } from './models.js';

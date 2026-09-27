@@ -1,77 +1,94 @@
 /**
- * Kokoro-82M TTS via kokoro-js (which runs on transformers.js + ORT wasm).
- * Weights and voice bins are user-imported into the shared VFS; text is split
- * into sentences so long renders stream and can cancel.
+ * Kokoro-82M TTS via kokoro-js (transformers.js + ORT). Inference runs in a
+ * dedicated worker (kokoro.worker.ts) on WebAssembly or WebGPU, so rendering
+ * never blocks the page. Weights and voice bins are user-imported into the
+ * shared VFS; the page reads them and hands them to the worker. Text is split
+ * into sentences so read-aloud streams and can stop.
  */
 
 import {
 	SpeechEngineError,
-	type ModelDownloadProgress,
+	type TtsDevice,
 	type TtsEngine,
 	type TtsEngineInfo,
 	type TtsRender,
 	type TtsRenderSegment,
 	type TtsVoice
 } from '../types.js';
-import { KOKORO_82M, KOKORO_VOICES, kokoroVoicePath, hfResolveUrl } from '../models.js';
+import { KOKORO_82M, KOKORO_VOICES, kokoroVoicePath, hfResolveUrl, modelDef } from '../models.js';
 import type { SpeechModelDef } from '../models.js';
 import { storedName } from '../modelStore.manifest.js';
-import { getSpeechModelStore, type ModelStore } from '../modelStore.js';
-import { createVfsCache } from './transformersVfsCache.js';
-import { configureTransformersEnv } from './transformersEnv.js';
+import { getSpeechModelStore } from '../modelStore.js';
 import { SegmentPlayer, splitSentences, streamSentences } from './playback.js';
+import { createWorkerRpc } from './workerRpc.js';
 
 const info: TtsEngineInfo = {
 	id: 'kokoro',
 	label: 'Kokoro 82M (local)',
 	description:
-		'Neural TTS running fully in this tab via WebAssembly — 28 English voices, exports WAV. Import the model files into Files, then each voice you pick needs its own small voice file.',
+		'Neural TTS running in a background worker on WebAssembly or WebGPU — 28 English voices, exports WAV. Import the model files into Files; each voice you pick also needs its own small voice file.',
 	livePlayback: true,
 	renderToBuffer: true,
 	exportFormats: ['wav'],
-	voices: 'model'
+	voices: 'model',
+	devices: ['wasm', 'webgpu']
 };
 
 export const KOKORO_SAMPLE_RATE = 24000;
 
-type RawAudio = { audio: Float32Array; sampling_rate: number };
-type KokoroTts = {
-	generate: (text: string, opts?: { voice?: string; speed?: number }) => Promise<RawAudio>;
-};
-
 export function createKokoroTts(): TtsEngine {
 	const player = new SegmentPlayer();
-	let instance: KokoroTts | null = null;
+	// What the current worker has loaded; cleared when the worker is lost.
 	let loadedKey: string | null = null;
-	let selectedDirId: string | undefined;
+	let selected: { def: SpeechModelDef; dirId?: string; device: TtsDevice } = {
+		def: KOKORO_82M,
+		device: 'wasm'
+	};
+	const worker = createWorkerRpc(
+		() => new Worker(new URL('./kokoro.worker.ts', import.meta.url), { type: 'module', name: 'kokoro-tts' }),
+		'Kokoro',
+		() => {
+			loadedKey = null;
+		}
+	);
 
-	async function ttsFor(
-		def: SpeechModelDef,
-		store: ModelStore,
-		dirId: string,
-		opts?: { onProgress?: (p: ModelDownloadProgress) => void; signal?: AbortSignal }
-	): Promise<KokoroTts> {
-		const key = `${def.id}|${dirId}`;
-		if (instance && loadedKey === key) return instance;
-		const mod = await import('@huggingface/transformers');
-		configureTransformersEnv(mod as unknown as Parameters<typeof configureTransformersEnv>[0], createVfsCache(store, def, { dirId, onProgress: opts?.onProgress }));
-		const { KokoroTTS } = await import('kokoro-js');
-		instance = (await KokoroTTS.from_pretrained(def.repo, {
-			dtype: def.dtype,
-			device: 'wasm'
-		})) as unknown as KokoroTts;
+	/** Load the model into the worker unless it already holds this exact one. */
+	async function ensureLoaded(def: SpeechModelDef, dirId: string, device: TtsDevice): Promise<void> {
+		const key = `${def.id}|${dirId}|${device}`;
+		if (loadedKey === key) return;
+		const store = await getSpeechModelStore();
+		const files: Record<string, Blob> = {};
+		for (const file of def.files) files[file.path] = await store.readBlobPath(dirId, file.path);
+		loadedKey = null;
+		try {
+			await worker.call('load', { repo: def.repo, dtype: def.dtype, device, files });
+		} catch (err) {
+			if (device === 'webgpu') {
+				throw new SpeechEngineError(
+					'UNSUPPORTED_BROWSER',
+					`WebGPU could not run Kokoro here (${err instanceof Error ? err.message : String(err)}). Switch the device to WebAssembly.`,
+					err
+				);
+			}
+			throw err;
+		}
 		loadedKey = key;
-		return instance;
 	}
 
 	return {
 		info,
 
 		async load(opts) {
+			const def = opts?.modelId ? modelDef(opts.modelId) : KOKORO_82M;
+			if (def.engine !== 'kokoro') throw new Error(`Not a Kokoro model: ${def.id}`);
+			const device = opts?.device ?? 'wasm';
+			if (device === 'webgpu' && !(typeof navigator !== 'undefined' && 'gpu' in navigator)) {
+				throw new SpeechEngineError('UNSUPPORTED_BROWSER', 'This browser has no WebGPU — switch the device to WebAssembly.');
+			}
+			selected = { def, dirId: opts?.dirId, device };
 			const store = await getSpeechModelStore();
-			selectedDirId = opts?.dirId;
-			const dirId = await store.requireModelDir(KOKORO_82M, opts?.dirId);
-			await ttsFor(KOKORO_82M, store, dirId, opts);
+			const dirId = await store.requireModelDir(def, opts?.dirId);
+			await ensureLoaded(def, dirId, device);
 		},
 
 		async listVoices(): Promise<TtsVoice[]> {
@@ -112,10 +129,10 @@ export function createKokoroTts(): TtsEngine {
 		dirId?: string;
 	}): Promise<(sentence: string) => Promise<TtsRenderSegment>> {
 		const store = await getSpeechModelStore();
-		const def = KOKORO_82M;
-		const dirId = await store.requireModelDir(def, opts?.dirId ?? selectedDirId);
-		const tts = await ttsFor(def, store, dirId, { signal: opts?.signal });
-		const voice = opts?.voice ?? KOKORO_VOICES[0]!.id;
+		const { def, device } = selected;
+		const dirId = await store.requireModelDir(def, opts?.dirId ?? selected.dirId);
+		await ensureLoaded(def, dirId, device);
+		const voice = KOKORO_VOICES.some((v) => v.id === opts?.voice) ? opts!.voice! : KOKORO_VOICES[0]!.id;
 		// The voice bin must be imported like the weights — fetches from HF
 		// are blocked under the hub's COEP isolation.
 		const binPath = kokoroVoicePath(voice);
@@ -147,8 +164,11 @@ export function createKokoroTts(): TtsEngine {
 			console.warn('kokoro voice cache seed failed', err);
 		}
 		return async (sentence) => {
-			const audio = await tts.generate(sentence, { voice, speed: opts?.speed });
-			return { samples: audio.audio, sampleRate: audio.sampling_rate, text: sentence };
+			const { samples, sampleRate } = await worker.call<{ samples: Float32Array; sampleRate: number }>(
+				'generate',
+				{ text: sentence, voice, speed: opts?.speed }
+			);
+			return { samples, sampleRate, text: sentence };
 		};
 	}
 }

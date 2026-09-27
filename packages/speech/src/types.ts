@@ -27,6 +27,8 @@ export type SpeechModelDef = {
 	sizeBytes: number;
 	languages: readonly string[];
 	downloadRoot: ModelDownloadRoot;
+	/** Devices this weight file is meant for (TTS engines with a device choice). */
+	devices?: readonly TtsDevice[];
 };
 
 export type ModelDownloadProgress = {
@@ -73,6 +75,9 @@ export type SttEngineInfo = {
 	onDevice: boolean;
 };
 
+/** Where a local engine runs its model: ORT WebAssembly (CPU) or WebGPU. */
+export type TtsDevice = 'wasm' | 'webgpu';
+
 export type TtsVoice = {
 	id: string;
 	label: string;
@@ -96,6 +101,8 @@ export type TtsEngineInfo = {
 	voices: 'builtin' | 'system' | 'model';
 	/** false when the engine has no speed control (hide the slider). */
 	supportsSpeed?: boolean;
+	/** Compute devices the engine can run on (first = default). Omitted = no choice. */
+	devices?: readonly TtsDevice[];
 };
 
 export type TtsRenderSegment = {
@@ -128,7 +135,7 @@ export type TtsLoadOpts = {
 	modelId?: string;
 	/** VFS folder the model was imported into (user-chosen; default tree when omitted). */
 	dirId?: string;
-	device?: 'wasm' | 'webgpu';
+	device?: TtsDevice;
 	onProgress?: (p: ModelDownloadProgress) => void;
 	signal?: AbortSignal;
 };
@@ -262,11 +269,12 @@ export const TTS_ENGINE_CATALOG: readonly TtsEngineInfo[] = [
 		id: 'kokoro',
 		label: 'Kokoro 82M (local)',
 		description:
-			'Neural TTS running fully in this tab via WebAssembly — 54 voices, exports WAV. Downloads the model into Files on first use.',
+			'Neural TTS running in a background worker on WebAssembly or WebGPU — 28 English voices, exports WAV. Import the model files into Files; each voice you pick also needs its own small voice file.',
 		livePlayback: true,
 		renderToBuffer: true,
 		exportFormats: ['wav'],
-		voices: 'model'
+		voices: 'model',
+		devices: ['wasm', 'webgpu']
 	},
 	{
 		id: 'piper',
