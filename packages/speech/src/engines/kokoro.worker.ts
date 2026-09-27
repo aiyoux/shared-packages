@@ -34,6 +34,21 @@ function blobCache(repo: string, files: Map<string, Blob>) {
 	};
 }
 
+/** Size, readability and leading bytes of each handed-over file. */
+async function describeFiles(files: Map<string, Blob>): Promise<string> {
+	const parts: string[] = [];
+	for (const [path, blob] of files) {
+		try {
+			const head = new Uint8Array(await blob.slice(0, 8).arrayBuffer());
+			const hex = [...head].map((b) => b.toString(16).padStart(2, '0')).join(' ');
+			parts.push(`${path}: ${blob.size} B, starts ${hex || '(nothing)'}`);
+		} catch (readErr) {
+			parts.push(`${path}: ${blob.size} B, unreadable (${readErr instanceof Error ? readErr.name : String(readErr)})`);
+		}
+	}
+	return parts.join('; ');
+}
+
 serveWorkerRpc({
 	async load(payload) {
 		const { repo, dtype, device, files } = payload as {
@@ -50,10 +65,18 @@ serveWorkerRpc({
 			blobCache(repo, fileMap)
 		);
 		const { KokoroTTS } = await import('kokoro-js');
-		tts = (await KokoroTTS.from_pretrained(repo, {
-			dtype: dtype as 'fp32',
-			device
-		})) as unknown as KokoroTts;
+		try {
+			tts = (await KokoroTTS.from_pretrained(repo, {
+				dtype: dtype as 'fp32',
+				device
+			})) as unknown as KokoroTts;
+		} catch (err) {
+			// Failure path only: say what the worker actually held, so a
+			// runtime error ("no graph was found in the protobuf") can be told
+			// apart from a file that never arrived intact.
+			const message = err instanceof Error ? err.message : String(err);
+			throw new Error(`${message} [${device}/${dtype}; ${await describeFiles(fileMap)}]`);
+		}
 		// The session holds the weights now; let the handed-over Blobs go.
 		fileMap.clear();
 		return { result: null };
