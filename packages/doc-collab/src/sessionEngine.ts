@@ -94,6 +94,12 @@ export type SessionEngineOpts<F, R extends { close(): void }> = {
 	 * previews, save notices) — it re-sends what it numbers itself.
 	 */
 	isOrdered?: (frame: F) => boolean;
+	/**
+	 * With no room and no peer there is nobody to sync with. By default the
+	 * runtime still runs (a reducer session applies its own edits through it);
+	 * set this when the runtime is only a transport and costs something to build.
+	 */
+	idleWhenAlone?: boolean;
 	onRole?: (role: Role, meta: { promoted: boolean }) => void;
 	onPersist?: (owner: boolean) => void;
 	onRuntime?: (runtime: R | null) => void;
@@ -211,12 +217,14 @@ export function createSessionEngine<F, R extends { close(): void }>(
 		if (destroyed || !started) return;
 		const next = resolve();
 		const changedRole = next !== role;
-		const changedMembers = runtime !== null && memberKey() !== builtOver;
+		const alone = !tabRoom && peers.size === 0;
+		const idle = alone && !!opts.idleWhenAlone;
+		const changedMembers = (runtime !== null || !idle) && memberKey() !== builtOver;
 		if (!changedRole && !changedMembers) return;
 		const previous = role;
 		role = next;
 		teardownRuntime();
-		if (next) build(next);
+		if (next && !idle) build(next);
 		if (changedRole && next) opts.onRole?.(next, { promoted: previous === 'replica' && next === 'sequencer' });
 	}
 

@@ -340,3 +340,29 @@ describe('session engine: peers', () => {
 		expect(guest.doc.items).toEqual(['a', 'b@here']);
 	});
 });
+
+describe('session engine: idle when alone', () => {
+	it('builds no runtime with no room and no peer, and one once a peer comes', async () => {
+		const { createSessionEngine } = await import('./sessionEngine.js');
+		const built: string[] = [];
+		const engine = createSessionEngine<Frame, { close(): void }>({
+			clientId: 'c',
+			room: '',
+			tab: null,
+			idleWhenAlone: true,
+			runtime: (t) => {
+				built.push(t.role);
+				return { close: () => built.push('closed') };
+			}
+		});
+		await settle();
+		expect(built).toEqual([]);
+		expect(engine.role).toBe('sequencer');
+		const wire = link();
+		engine.setPeer('p', { role: 'replica', member: peerMember('p', wire.a) });
+		expect(built).toEqual(['replica']);
+		engine.setPeer('p', null);
+		expect(built).toEqual(['replica', 'closed']);
+		engine.destroy();
+	});
+});
