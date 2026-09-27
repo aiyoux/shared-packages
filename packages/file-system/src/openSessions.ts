@@ -15,7 +15,12 @@ export type SessionKind =
 	| 'animation'
 	| 'data'
 	| 'text'
-	| 'video';
+	| 'video'
+	| 'scene'
+	| 'caricature'
+	| 'composition'
+	| 'expressions'
+	| 'recording';
 
 /** Which app paints this session. Absent on rows written before the shared list. */
 export type SessionApp =
@@ -26,7 +31,13 @@ export type SessionApp =
 	| 'animations'
 	| 'data'
 	| 'text'
-	| 'video';
+	| 'video'
+	| 'three'
+	| 'caricature'
+	| 'composition'
+	| 'expressions'
+	| 'voice'
+	| 'pdf';
 
 export type OpenSession = {
 	id: string;
