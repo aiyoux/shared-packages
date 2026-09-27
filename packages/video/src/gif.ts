@@ -1,8 +1,20 @@
-import gifenc from 'gifenc';
+import * as gifencNs from 'gifenc';
 
-// gifenc is CJS. Named ESM imports 500 under Vite SSR (`applyPalette` is not
-// a named export). The default object is the runtime module.
-const { GIFEncoder, quantize, applyPalette } = gifenc;
+type GifencApi = Pick<typeof gifencNs, 'GIFEncoder' | 'quantize' | 'applyPalette'>;
+
+/**
+ * gifenc ships two shapes. The browser gets its ESM build: real named exports,
+ * and `default` is `GIFEncoder` itself. Node (Vite SSR) gets its CJS build,
+ * whose esbuild getters hide the names from Node's lexer, so only `default`
+ * (the exports object) exists. Take whichever carries the API.
+ */
+export function resolveGifenc(ns: unknown): GifencApi {
+	const m = ns as Partial<GifencApi> & { default?: unknown };
+	if (typeof m.applyPalette === 'function') return m as GifencApi;
+	return m.default as GifencApi;
+}
+
+const { GIFEncoder, quantize, applyPalette } = resolveGifenc(gifencNs);
 import type { FrameSource } from './encodeFrames.js';
 
 export type EncodeGifOpts = {

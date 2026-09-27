@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { GIFEncoder, quantize, applyPalette } from 'gifenc';
-import { encodeGif, type EncodeGifOpts } from './gif.js';
+import { encodeGif, resolveGifenc, type EncodeGifOpts } from './gif.js';
 import type { FrameSource } from './encodeFrames.js';
 
 const gifCalls: {
@@ -40,7 +40,8 @@ vi.mock('gifenc', () => {
 		gifSpies.applyPalette += 1;
 		return [0, 1];
 	}
-	return { GIFEncoder, quantize, applyPalette, default: { GIFEncoder, quantize, applyPalette } };
+	// The browser (ESM) shape: named exports, and `default` is GIFEncoder.
+	return { GIFEncoder, quantize, applyPalette, default: GIFEncoder };
 });
 
 type FakeCtx = {
@@ -150,5 +151,16 @@ describe('encodeGif', () => {
 		const delays = gifCalls.frames.map((f) => f.options?.delay) as number[];
 		expect(delays.reduce((a, b) => a + b, 0)).toBe(1000); // 24 frames over exactly 1s
 		expect(delays.some((d) => d === 40)).toBe(true);
+	});
+});
+describe('resolveGifenc', () => {
+	const api = { GIFEncoder, quantize, applyPalette };
+
+	it('takes the named exports from the browser ESM build (default is GIFEncoder)', () => {
+		expect(resolveGifenc({ ...api, default: GIFEncoder })).toMatchObject(api);
+	});
+
+	it('takes the exports object from default under Node CJS (no named exports)', () => {
+		expect(resolveGifenc({ default: api })).toBe(api);
 	});
 });

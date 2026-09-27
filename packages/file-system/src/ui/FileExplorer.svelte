@@ -735,6 +735,18 @@
 		return blob;
 	}
 
+	/**
+	 * A handoff to another tool's popup (Quick edit, Convert to SVG) closes the
+	 * preview first. The preview is portalled to <body>, so left open it paints
+	 * over a popup mounted inside the pane and swallows every click in it.
+	 */
+	function closePreviewForHandoff() {
+		actionsMenuOpen = false;
+		floatingPreviewEntry = null;
+		// The details popup; a docked preview is not modal and can stay.
+		if (previewDock === 'off') previewEntry = null;
+	}
+
 	function openFloatingPreview() {
 		if (previewEntry && previewEntry.kind === 'file' && getPreviewKind(previewEntry)) {
 			floatingPreviewEntry = previewEntry;
@@ -5475,6 +5487,7 @@
 			data-testid="fe-file-preview-quick-edit"
 			onclick={() => {
 				const target = entry;
+				closePreviewForHandoff();
 				const ctx = {
 					read: () => readOpenTarget(target),
 					save: (file: File) => driver.writeFile!(target.parentId, file)
@@ -5494,6 +5507,7 @@
 			data-testid="fe-file-preview-convert-svg"
 			onclick={() => {
 				const target = entry;
+				closePreviewForHandoff();
 				onQuickConvertSvg(target, {
 					read: () => readOpenTarget(target),
 					save: (file: File) => driver.writeFile!(target.parentId, file)
