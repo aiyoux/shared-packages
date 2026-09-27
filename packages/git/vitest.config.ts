@@ -4,6 +4,7 @@ import { svelteTesting } from '@testing-library/svelte/vite';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { uiSubpathAliases } from '../ui/subpathAliases.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 
@@ -60,10 +61,8 @@ export default defineConfig({
 			),
 			'@shared-packages/file-system': path.resolve(root, '../file-system/src/index.ts'),
 			'@shared-packages/design-system': path.resolve(root, '../design-system/src'),
-			// Subpath must list BEFORE the package-root alias, or Vite resolves
-			// `@shared-packages/ui/persistKv` to src/index.ts/persistKv.
-			'@shared-packages/ui/persistKv': path.resolve(root, '../ui/src/persistKv.ts'),
-			'@shared-packages/ui/tabChannel': path.resolve(root, '../ui/src/tabChannel.ts'),
+			// Every ui subpath, from ui's own `exports`; must precede the root alias.
+			...uiSubpathAliases(),
 			'@shared-packages/ui': path.resolve(root, '../ui/src/index.ts')
 		}
 	}

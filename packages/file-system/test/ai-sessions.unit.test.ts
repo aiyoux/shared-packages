@@ -71,6 +71,9 @@ const realWebSocket = globalThis.WebSocket;
 const realFetch = globalThis.fetch;
 
 afterEach(() => {
+	// A binding left open keeps its heartbeat interval alive, and node:test
+	// then waits out the whole file timeout after the last test passes.
+	for (const s of FakeSocket.all) if (s.readyState !== FakeSocket.CLOSED) s.close();
 	FakeSocket.all = [];
 	globalThis.WebSocket = realWebSocket;
 	globalThis.fetch = realFetch;

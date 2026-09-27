@@ -541,11 +541,13 @@ describe('createGitHost fsForLocal', () => {
 		const snaps: { dirty: boolean }[] = [];
 		const unsub = host.subscribe(repo.id, (s) => snaps.push({ dirty: s.status.dirty }));
 		await vi.waitFor(() => expect(snaps.length).toBeGreaterThan(0));
+		// A poller would be installed by subscribe. Stop watching before the
+		// write: VfsService.updateFile starts its own lease heartbeat interval.
+		expect(interval).not.toHaveBeenCalled();
+		interval.mockRestore();
 		await fs.promises.writeFile('/README.md', 'changed\n');
 		await vi.waitFor(() => expect(snaps.some((s) => s.dirty)).toBe(true));
-		expect(interval).not.toHaveBeenCalled();
 		unsub();
-		interval.mockRestore();
 	});
 
 	it('readBlobAt returns committed bytes after a dirty worktree edit', async () => {
