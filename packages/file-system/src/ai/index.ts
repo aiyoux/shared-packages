@@ -2,18 +2,20 @@
  * AI via the monitor daemon (`/v1/ai/**`).
  *
  * Keys live monitor-side (see monitor docs/design/ai-feature.md); the browser
- * makes keyless requests through its monitor connection. The task surface is
- * deliberately narrow: resolve a monitor, list models/profiles, install or
- * update a profile (key sent once, never stored here), chat (text or SSE),
- * and bind a client session an agent can list and invoke.
+ * makes keyless requests through its monitor connection. Shared task clients
+ * cover offer discovery, chat, speech/image media, and bound agent sessions.
  */
 import { formatAiErrorMessage } from './errors.js';
 
 export {
 	listAiOffers,
+	completeAiChat,
+	requestAiChatCompletion,
 	resolveNativeAiMonitor,
+	runAiMedia,
 	runAiNativeJob,
 	type AiCatalog,
+	type AiChatMessage,
 	type AiDeviceClass,
 	type AiLocation,
 	type AiNativeProgress,

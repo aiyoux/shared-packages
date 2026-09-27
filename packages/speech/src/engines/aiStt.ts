@@ -5,11 +5,11 @@
  * daemon change. Keys stay daemon-side; requests are keyless.
  */
 
-import { resolveAiMonitor, type AiMonitor } from '@shared-packages/file-system/ai';
+import { resolveAiMonitor, requestAiChatCompletion, AiCredentialsError, type AiMonitor } from '@shared-packages/file-system/ai';
 import { SpeechEngineError, type SttEngine, type SttEngineInfo, type SttResult } from '../types.js';
 import { base64FromBytes, decodeToMono16k, DURATION_MAX_MS, TARGET_SAMPLE_RATE } from '../audio.js';
 import { encodeWav } from '../wav.js';
-import { aiStatusToCode, buildSttAudioMessages, checkAiAudioSize } from '../aiParts.js';
+import { buildSttAudioMessages, checkAiAudioSize } from '../aiParts.js';
 
 const info: SttEngineInfo = {
 	id: 'ai',
@@ -83,35 +83,20 @@ export function createAiStt(): SttEngine {
 			const wav = encodeWav(audio, sampleRate, 1);
 			const body = buildSttAudioMessages(chosen, base64FromBytes(wav));
 
-			const url =
-				`${monitor.baseUrl}/v1/ai/chat/completions` +
-				(opts?.aiProfileId ? `?profile=${encodeURIComponent(opts.aiProfileId)}` : '');
-			let res: Response;
-			try {
-				res = await fetch(url, {
-					method: 'POST',
-					headers: { 'Content-Type': 'application/json' },
-					body: JSON.stringify(body),
-					signal: opts?.signal
-				});
-			} catch (error) {
-				if (error instanceof DOMException && error.name === 'AbortError') throw error;
-				throw new SpeechEngineError('AI_NETWORK', 'Could not reach the monitor', error);
-			}
-			if (!res.ok) {
-				const detail = await res.text().catch(() => '');
-				if (res.status === 400 || res.status === 404) {
-					throw new SpeechEngineError(
-						'AI_NOT_FOUND',
-						`Model “${chosen}” may not accept audio input (${res.status})`,
-						detail
-					);
-				}
-				throw new SpeechEngineError(aiStatusToCode(res.status), `AI request failed (${res.status})`, detail);
-			}
-			const json = (await res.json()) as {
+			let json: {
 				choices?: Array<{ message?: { content?: string | Array<{ type: string; text?: string }> } }>;
 			};
+			try {
+				json = await requestAiChatCompletion(monitor.baseUrl, body, opts?.aiProfileId, opts?.signal) as typeof json;
+			} catch (error) {
+				if (error instanceof AiCredentialsError) {
+					if (error.code === 'AI_ABORTED') throw new DOMException('Request aborted', 'AbortError');
+					const code = ['AI_AUTH', 'AI_NOT_FOUND', 'AI_RATE', 'AI_NETWORK'].includes(error.code)
+						? error.code as 'AI_AUTH' | 'AI_NOT_FOUND' | 'AI_RATE' | 'AI_NETWORK' : 'AI_ERROR';
+					throw new SpeechEngineError(code, error.message, error);
+				}
+				throw error;
+			}
 			const message = json.choices?.[0]?.message?.content;
 			const text =
 				typeof message === 'string'

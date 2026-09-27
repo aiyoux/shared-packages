@@ -68,12 +68,55 @@ async function request(baseUrl: string, path: string, init: RequestInit = {}): P
 			const body = (await response.json()) as { error?: { message?: string } };
 			if (body.error?.message) message = body.error.message;
 		} catch { /* preserve status */ }
-		const code = response.status === 404
+		const code = response.status === 401 || response.status === 403 ? 'AI_AUTH'
+			: response.status === 429 ? 'AI_RATE'
+			: response.status === 404
 			? (path === '/v1/ai/catalog' ? 'AI_UNSUPPORTED' : 'AI_NOT_FOUND')
 			: response.status === 409 ? 'AI_BUSY' : 'AI_ERROR';
 		throw new AiCredentialsError(code, message);
 	}
 	return response;
+}
+
+export type AiChatMessage = {
+	role: 'system' | 'user' | 'assistant';
+	content: string | Array<{ type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } }>;
+};
+
+/** Raw completion for task adapters that use content parts beyond text/image. */
+export async function requestAiChatCompletion(
+	baseUrl: string,
+	body: object,
+	profileId?: string | null,
+	signal?: AbortSignal
+): Promise<unknown> {
+	const suffix = profileId ? `?profile=${encodeURIComponent(profileId)}` : '';
+	const response = await request(baseUrl, `/v1/ai/chat/completions${suffix}`, {
+		method: 'POST', headers: { 'content-type': 'application/json' }, signal,
+		body: JSON.stringify(body)
+	});
+	try { return await response.json(); }
+	catch { throw new AiCredentialsError('AI_ERROR', 'The monitor returned a non-JSON response.'); }
+}
+
+/** Shared chat transport and response parsing for Hub, Creative, and Documents. */
+export async function completeAiChat(
+	baseUrl: string,
+	input: { model: string; messages: AiChatMessage[]; maxTokens: number; profileId?: string | null },
+	signal?: AbortSignal
+): Promise<{ text: string; thinking: string | null }> {
+	const body = await requestAiChatCompletion(baseUrl, {
+		model: input.model, messages: input.messages, max_tokens: input.maxTokens
+	}, input.profileId, signal) as {
+		choices?: Array<{ message?: { content?: unknown; reasoning_content?: unknown; reasoning?: unknown } }>
+	};
+	const message = body?.choices?.[0]?.message;
+	if (typeof message?.content !== 'string' || !message.content.trim()) {
+		throw new AiCredentialsError('AI_ERROR', 'The AI server returned an empty reply.');
+	}
+	const thinking = [message.reasoning_content, message.reasoning]
+		.find((value) => typeof value === 'string' && value.trim());
+	return { text: message.content.trim(), thinking: typeof thinking === 'string' ? thinking.trim() : null };
 }
 
 function offer(raw: unknown): AiOffer | null {
@@ -156,4 +199,26 @@ export async function runAiNativeJob(
 	} finally {
 		opts.signal?.removeEventListener('abort', abortOnServer);
 	}
+}
+
+/** Run a media offer using its declared execution location. Provider calls
+ * return bytes directly; native calls use the monitor's cancellable job API. */
+export async function runAiMedia(
+	baseUrl: string,
+	offer: AiOffer,
+	input: { text?: string; prompt?: string; speed?: number; seed?: number },
+	opts: { signal?: AbortSignal; onProgress?: (progress: AiNativeProgress) => void } = {}
+): Promise<{ blob: Blob; seed: number | null }> {
+	if (offer.location === 'monitor-native') {
+		return runAiNativeJob(baseUrl, { offerId: offer.id, ...input }, opts);
+	}
+	if (offer.location !== 'monitor-provider' || !['text-to-speech', 'image-generation'].includes(offer.task)) {
+		throw new AiCredentialsError('AI_UNSUPPORTED', 'This offer cannot run as a media task.');
+	}
+	const path = offer.task === 'image-generation' ? '/v1/ai/images/generations' : '/v1/ai/audio/speech';
+	const response = await request(baseUrl, path, {
+		method: 'POST', headers: { 'content-type': 'application/json' },
+		body: JSON.stringify({ offerId: offer.id, ...input }), signal: opts.signal
+	});
+	return { blob: await response.blob(), seed: null };
 }
