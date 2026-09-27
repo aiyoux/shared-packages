@@ -2644,6 +2644,16 @@
 	.dpe-layout-cluster:global(.portaled) {
 		visibility: visible;
 	}
+	/*
+	 * The Windows button places itself on mount, before this cluster is
+	 * portaled: standalone it finds no pane header and marks itself
+	 * `in-overlay` (absolute, top-left). Carried into a host toolbar (the hub
+	 * topbar on /tools/files) that sat it on top of the sidebar toggle. In a
+	 * host toolbar it flows with the rest of the cluster.
+	 */
+	.dpe-layout-cluster:global(.portaled) :global(.aw-btn-wrap.in-overlay) {
+		position: static;
+	}
 	.dpe-layout-cluster:global(.in-overlay) {
 		position: absolute;
 		top: calc(12px + env(safe-area-inset-top, 0px));
