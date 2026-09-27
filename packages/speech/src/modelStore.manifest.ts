@@ -135,3 +135,21 @@ export function manifestCovers(
 	const have = new Set(presentNames);
 	return def.files.every((file) => have.has(storedName(file.path)));
 }
+
+/**
+ * Why a stored model file can't be the real one, or null. An empty file still
+ * parses as an (empty) ONNX model — ORT then fails with "No graph was found
+ * in the protobuf" — so this runs before any bytes reach a runtime. The
+ * catalog size, when known, is the repo file's size; an incomplete browser
+ * download or import lands short of it.
+ */
+export function modelFileSizeProblem(path: string, actual: number, expected?: number): string | null {
+	const name = storedName(path);
+	if (actual === 0) {
+		return `${name} in Files is empty — download it again and re-import it.`;
+	}
+	if (expected != null && actual !== expected) {
+		return `${name} in Files is ${formatModelBytes(actual)} but should be ${formatModelBytes(expected)} — the download or import was incomplete. Download it again and re-import it.`;
+	}
+	return null;
+}

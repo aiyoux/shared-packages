@@ -17,7 +17,7 @@ import {
 } from '../types.js';
 import { KOKORO_82M, KOKORO_VOICES, kokoroVoicePath, hfResolveUrl, modelDef } from '../models.js';
 import type { SpeechModelDef } from '../models.js';
-import { storedName } from '../modelStore.manifest.js';
+import { modelFileSizeProblem, storedName } from '../modelStore.manifest.js';
 import { getSpeechModelStore } from '../modelStore.js';
 import { SegmentPlayer, splitSentences, streamSentences } from './playback.js';
 import { createWorkerRpc } from './workerRpc.js';
@@ -58,7 +58,12 @@ export function createKokoroTts(): TtsEngine {
 		if (loadedKey === key) return;
 		const store = await getSpeechModelStore();
 		const files: Record<string, Blob> = {};
-		for (const file of def.files) files[file.path] = await store.readBlobPath(dirId, file.path);
+		for (const file of def.files) {
+			const blob = await store.readBlobPath(dirId, file.path);
+			const problem = modelFileSizeProblem(file.path, blob.size, file.bytes);
+			if (problem) throw new SpeechEngineError('NO_MODEL', problem);
+			files[file.path] = blob;
+		}
 		loadedKey = null;
 		try {
 			await worker.call('load', { repo: def.repo, dtype: def.dtype, device, files });

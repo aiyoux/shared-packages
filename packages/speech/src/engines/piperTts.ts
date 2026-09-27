@@ -19,7 +19,7 @@ import {
 	type TtsVoice
 } from '../types.js';
 import { decodeMono } from '../audio.js';
-import { storedName } from '../modelStore.manifest.js';
+import { modelFileSizeProblem, storedName } from '../modelStore.manifest.js';
 import { getSpeechModelStore } from '../modelStore.js';
 import {
 	piperConfigPath,
@@ -82,6 +82,8 @@ async function ensureVoiceMirrored(voice: PiperVoice, dirId?: string): Promise<v
 		{ name: storedName(piperConfigPath(voice)), blob: await store.readBlobPath(dir, piperConfigPath(voice)) }
 	];
 	for (const { name, blob } of pairs) {
+		const problem = modelFileSizeProblem(name, blob.size);
+		if (problem) throw new SpeechEngineError('NO_MODEL', problem);
 		if (!(await opfsHas(name, blob.size))) await opfsWrite(name, blob);
 	}
 }

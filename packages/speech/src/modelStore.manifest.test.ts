@@ -4,6 +4,7 @@ import {
 	MANIFEST_NAME,
 	MODEL_STORE_ROOT_FOLDER,
 	formatModelBytes,
+	modelFileSizeProblem,
 	manifestCovers,
 	manifestFor,
 	modelFolderKey,
@@ -110,5 +111,23 @@ describe('manifest origin', () => {
 		// parseManifest tolerates the optional field round-tripping through JSON.
 		const bytes = new TextEncoder().encode(JSON.stringify(imported));
 		expect(parseManifest(bytes, 'kokoro-82m')?.origin).toBe('imported');
+	});
+});
+
+describe('modelFileSizeProblem', () => {
+	it('rejects an empty file (ORT would report "no graph" instead)', () => {
+		expect(modelFileSizeProblem('onnx/model.onnx', 0, 325532232)).toMatch(/^model\.onnx in Files is empty/);
+		expect(modelFileSizeProblem('voice.onnx', 0)).toMatch(/is empty/);
+	});
+
+	it('rejects a short file against the catalog size', () => {
+		expect(modelFileSizeProblem('onnx/model.onnx', 104857600, 325532232)).toBe(
+			'model.onnx in Files is 100.0 MB but should be 310.5 MB — the download or import was incomplete. Download it again and re-import it.'
+		);
+	});
+
+	it('accepts the exact size, or any non-empty size when the catalog has none', () => {
+		expect(modelFileSizeProblem('onnx/model.onnx', 325532232, 325532232)).toBeNull();
+		expect(modelFileSizeProblem('voice.onnx', 63201294)).toBeNull();
 	});
 });
