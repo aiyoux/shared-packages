@@ -171,8 +171,8 @@ export class ModelStore {
 	/**
 	 * Store user-imported files for `def` under `targetDirId` (any folder the
 	 * user chose) and write the manifest sidecar. Files land flat by basename.
-	 * Already-present files with a matching size are left alone, so a retry
-	 * after a partial import only writes what is missing.
+	 * A selected file always replaces an existing copy. Catalog size alone
+	 * cannot prove that OPFS still holds the bytes.
 	 */
 	async importModel(
 		def: SpeechModelDef,
@@ -182,29 +182,32 @@ export class ModelStore {
 	): Promise<ImportedModelResult> {
 		await this.ready();
 		const manifestFiles: SpeechModelManifestFile[] = [];
-		const existingManifest = await this.readManifest(targetDirId, def.id);
-
 		for (const file of files) {
 			const name = storedName(file.path);
-			const prior = existingManifest?.files.find((x) => x.name === name);
-			const node = await this.vfs.childByName(targetDirId, name);
-			if (node?.kind === 'file') {
-				const expected = prior?.bytes;
-				if (expected == null || node.size === expected) {
-					manifestFiles.push({
-						path: file.path,
-						name,
-						bytes: node.size ?? 0,
-						sha256: prior?.sha256,
-						sourceUrl: hfResolveUrl(def, file.path)
-					});
-					continue;
+			if (file.blob.size === 0) throw new SpeechEngineError('NO_MODEL', `${name} is empty`);
+			const previous = await this.vfs.childByName(targetDirId, name);
+			if (previous?.kind === 'folder') throw new SpeechEngineError('NO_MODEL', `${name} is a folder in Files`);
+			// Keep the old copy until the new OPFS file has closed and reads back.
+			const importName = previous ? `${name}.import-${crypto.randomUUID()}` : name;
+			const { node: staged, sha256 } = await this.pumpBlob(file.blob, targetDirId, importName, opts);
+			let written = staged;
+			let previousDeleted = false;
+			try {
+				const savedSize = (await this.vfs.readBlob(staged.id)).size;
+				if (savedSize !== file.blob.size) {
+					throw new SpeechEngineError('NO_MODEL', `${name} saved as ${savedSize} bytes in Files; expected ${file.blob.size}`);
 				}
-				// Wrong size: replace rather than pile up a bad copy. Model files
-				// are re-importable, so they are permanently deleted.
-				await this.vfs.permanentDelete(node.id, { recursive: false });
+				if (previous) {
+					await this.vfs.permanentDelete(previous.id, { recursive: false });
+					previousDeleted = true;
+					written = await this.vfs.rename(staged.id, name);
+				}
+			} catch (error) {
+				if (!previousDeleted) {
+					await this.vfs.permanentDelete(staged.id, { recursive: false }).catch(() => {});
+				}
+				throw error;
 			}
-			const { node: written, sha256 } = await this.pumpBlob(file.blob, targetDirId, name, opts);
 			manifestFiles.push({
 				path: file.path,
 				name,

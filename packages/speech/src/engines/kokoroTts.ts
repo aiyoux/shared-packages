@@ -61,8 +61,8 @@ export function createKokoroTts(): TtsEngine {
 		const transfer: Transferable[] = [];
 		for (const file of def.files) {
 			if (device === 'webgpu' && file.path.endsWith('.onnx')) {
-				// Chrome on Windows ARM can clone an OPFS-backed Blob into a worker
-				// as an empty Blob. Read the weight here and transfer its bytes instead.
+				// Transfer bytes so the worker does not depend on cloning an
+				// OPFS-backed Blob. An empty read here now identifies Files as source.
 				const bytes = await store.readBytesPath(dirId, file.path);
 				if (bytes.byteLength === 0) {
 					throw new SpeechEngineError('NO_MODEL', `${file.path} read as 0 bytes from Files`);
