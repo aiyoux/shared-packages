@@ -61,3 +61,35 @@ export async function renderRaster(
 	const png = await canvasToPng(canvas);
 	return { width: Math.round(viewport.width), height: Math.round(viewport.height), png };
 }
+
+/**
+ * Render a page straight to an encoded image. In a worker the raster and the
+ * encode both stay off the main thread; the Blob crosses postMessage without
+ * a copy, and an `<img>` decodes it off-thread too.
+ */
+export async function renderImage(
+	handle: PdfHandle,
+	index: number,
+	opts?: { scale?: number; type?: string; quality?: number }
+): Promise<{ width: number; height: number; blob: Blob }> {
+	const scale = opts?.scale ?? 1;
+	const type = opts?.type ?? 'image/png';
+	const page = await getPage(handle, index);
+	const viewport = page.getViewport({ scale });
+	const { canvas, ctx } = createCanvas(viewport.width, viewport.height);
+	await page.render({
+		canvasContext: ctx as CanvasRenderingContext2D,
+		viewport,
+		canvas
+	} as Parameters<typeof page.render>[0]).promise;
+	let blob: Blob | null;
+	if ('convertToBlob' in canvas && typeof canvas.convertToBlob === 'function') {
+		blob = await canvas.convertToBlob({ type, quality: opts?.quality });
+	} else {
+		blob = await new Promise<Blob | null>((resolve) =>
+			(canvas as HTMLCanvasElement).toBlob(resolve, type, opts?.quality)
+		);
+	}
+	if (!blob) throw new Error('PDF rasterization could not encode the page.');
+	return { width: Math.round(viewport.width), height: Math.round(viewport.height), blob };
+}

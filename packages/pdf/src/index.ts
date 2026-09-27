@@ -15,7 +15,7 @@ export type {
 } from './types.js';
 
 export { openPdf, pageCount, pageSizePt, destroy, resetPdfEngineForTests } from './engine.js';
-export { renderRaster } from './raster.js';
+export { renderRaster, renderImage } from './raster.js';
 export { interpretPage } from './interpret.js';
 export { irToSvg } from './svg.js';
 export { paintIr } from './paint.js';

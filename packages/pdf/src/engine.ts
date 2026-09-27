@@ -1,6 +1,7 @@
 import type { PDFDocumentProxy, PDFPageProxy } from 'pdfjs-dist';
 import type { PdfHandle, PdfPageSize } from './types.js';
 import { FsStandardFontDataFactory, StubCanvasFactory } from './canvasStub.js';
+import { isWorkerScope, NoopFilterFactory, OffscreenCanvasFactory } from './workerCanvas.js';
 
 type PdfjsModule = typeof import('pdfjs-dist/legacy/build/pdf.mjs');
 
@@ -74,7 +75,10 @@ export async function openPdf(bytes: Uint8Array): Promise<PdfHandle> {
 
 	const pdfjs = await loadPdfjs();
 	const data = copyBytes(bytes);
-	const needsStubCanvas = typeof document === 'undefined';
+	// No document means Node (stubbed canvas, fs fonts) or a Web Worker
+	// (OffscreenCanvas; fonts fetch like the main thread).
+	const inWorker = isWorkerScope();
+	const needsStubCanvas = typeof document === 'undefined' && !inWorker;
 	let standardFontDataUrl: string | undefined;
 	try {
 		if (typeof document === 'undefined' && typeof process !== 'undefined' && process.versions?.node) {
@@ -112,6 +116,7 @@ export async function openPdf(bytes: Uint8Array): Promise<PdfHandle> {
 		isOffscreenCanvasSupported: false,
 		isImageDecoderSupported: false,
 		canvasFactory: needsStubCanvas ? new StubCanvasFactory() : undefined,
+		...(inWorker ? { CanvasFactory: OffscreenCanvasFactory, FilterFactory: NoopFilterFactory } : {}),
 		standardFontDataUrl,
 		StandardFontDataFactory:
 			needsStubCanvas && standardFontDataUrl ? FsStandardFontDataFactory : undefined,
