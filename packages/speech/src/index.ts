@@ -41,7 +41,7 @@ export {
 	type KokoroVoice
 } from './models.js';
 
-export { listSttEngines, listTtsEngines, loadSttEngine, loadTtsEngine, peekSttEngine, peekTtsEngine } from './engines.js';
+export { listSttEngines, listTtsEngines, loadSttEngine, loadTtsEngine, listTtsVoices, peekSttEngine, peekTtsEngine } from './engines.js';
 
 export {
 	ModelStore,

@@ -1,4 +1,4 @@
-import { STT_ENGINE_CATALOG, TTS_ENGINE_CATALOG, type SttEngine, type SttEngineId, type TtsEngine, type TtsEngineId, type TtsLoadOpts } from './types.js';
+import { STT_ENGINE_CATALOG, TTS_ENGINE_CATALOG, type SttEngine, type SttEngineId, type TtsEngine, type TtsEngineId, type TtsLoadOpts, type TtsVoice } from './types.js';
 
 /** Load options shared by both engine kinds. */
 export type EngineLoadOpts = TtsLoadOpts & { modelId?: string | null };
@@ -72,6 +72,12 @@ export async function loadTtsEngine(id: TtsEngineId, opts?: TtsLoadOpts): Promis
 	await engine.load(opts);
 	ttsLoaded.set(id, { engine, key });
 	return engine;
+}
+
+/** An engine's voice catalog without loading its model (the list is static
+ *  for local engines; browser speech enumerates the platform's voices). */
+export async function listTtsVoices(id: TtsEngineId): Promise<TtsVoice[]> {
+	return (ttsLoaded.get(id)?.engine ?? (await importTtsEngine(id))).listVoices();
 }
 
 export function peekSttEngine(id: SttEngineId): SttEngine | null {

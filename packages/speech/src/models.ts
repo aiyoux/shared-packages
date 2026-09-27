@@ -188,34 +188,56 @@ export function kokoroVoicePath(voice: string): string {
 	return `voices/${voice}.bin`;
 }
 
-export type KokoroVoice = TtsVoice & { bin: string };
+export type KokoroVoice = TtsVoice & { bin: string; grade: string };
 
-/** The 29 English voices shipped with Kokoro-82M v1.0. */
+function kokoroEntry(id: string, name: string, gender: 'female' | 'male', grade: string): KokoroVoice {
+	const american = id.startsWith('a');
+	return {
+		id,
+		label: `${name} · ${gender} · grade ${grade}`,
+		language: american ? 'en-US' : 'en-GB',
+		group: american ? 'American English' : 'British English',
+		grade,
+		bin: kokoroVoicePath(id)
+	};
+}
+
+/**
+ * Every voice kokoro-js 1.2.1 accepts (its internal VOICES table — the
+ * other 26 bins in the model repo are non-English and it rejects them).
+ * Grades are the library's overall quality grade; each accent group is
+ * ordered best first. `kokoroVoices.test.ts` pins this list to the library.
+ */
 export const KOKORO_VOICES: readonly KokoroVoice[] = [
-	{ id: 'af_heart', label: 'Heart · American, female', bin: 'voices/af_heart.bin' },
-	{ id: 'af_bella', label: 'Bella · American, female', bin: 'voices/af_bella.bin' },
-	{ id: 'af_nicole', label: 'Nicole · American, female', bin: 'voices/af_nicole.bin' },
-	{ id: 'af_aoede', label: 'Aoede · American, female', bin: 'voices/af_aoede.bin' },
-	{ id: 'af_kore', label: 'Kore · American, female', bin: 'voices/af_kore.bin' },
-	{ id: 'af_sarah', label: 'Sarah · American, female', bin: 'voices/af_sarah.bin' },
-	{ id: 'af_sky', label: 'Sky · American, female', bin: 'voices/af_sky.bin' },
-	{ id: 'am_michael', label: 'Michael · American, male', bin: 'voices/am_michael.bin' },
-	{ id: 'am_fenrir', label: 'Fenrir · American, male', bin: 'voices/am_fenrir.bin' },
-	{ id: 'am_puck', label: 'Puck · American, male', bin: 'voices/am_puck.bin' },
-	{ id: 'am_adam', label: 'Adam · American, male', bin: 'voices/am_adam.bin' },
-	{ id: 'am_echo', label: 'Echo · American, male', bin: 'voices/am_echo.bin' },
-	{ id: 'am_eric', label: 'Eric · American, male', bin: 'voices/am_eric.bin' },
-	{ id: 'am_onyx', label: 'Onyx · American, male', bin: 'voices/am_onyx.bin' },
-	{ id: 'am_santa', label: 'Santa · American, male', bin: 'voices/am_santa.bin' },
-	{ id: 'bf_emma', label: 'Emma · British, female', bin: 'voices/bf_emma.bin' },
-	{ id: 'bf_isabella', label: 'Isabella · British, female', bin: 'voices/bf_isabella.bin' },
-	{ id: 'bf_alice', label: 'Alice · British, female', bin: 'voices/bf_alice.bin' },
-	{ id: 'bf_lily', label: 'Lily · British, female', bin: 'voices/bf_lily.bin' },
-	{ id: 'bm_george', label: 'George · British, male', bin: 'voices/bm_george.bin' },
-	{ id: 'bm_fable', label: 'Fable · British, male', bin: 'voices/bm_fable.bin' },
-	{ id: 'bm_lewis', label: 'Lewis · British, male', bin: 'voices/bm_lewis.bin' },
-	{ id: 'bm_daniel', label: 'Daniel · British, male', bin: 'voices/bm_daniel.bin' }
-] as const;
+	kokoroEntry('af_heart', 'Heart', 'female', 'A'),
+	kokoroEntry('af_bella', 'Bella', 'female', 'A-'),
+	kokoroEntry('af_nicole', 'Nicole', 'female', 'B-'),
+	kokoroEntry('af_aoede', 'Aoede', 'female', 'C+'),
+	kokoroEntry('af_kore', 'Kore', 'female', 'C+'),
+	kokoroEntry('af_sarah', 'Sarah', 'female', 'C+'),
+	kokoroEntry('af_alloy', 'Alloy', 'female', 'C'),
+	kokoroEntry('af_nova', 'Nova', 'female', 'C'),
+	kokoroEntry('af_sky', 'Sky', 'female', 'C-'),
+	kokoroEntry('af_jessica', 'Jessica', 'female', 'D'),
+	kokoroEntry('af_river', 'River', 'female', 'D'),
+	kokoroEntry('am_fenrir', 'Fenrir', 'male', 'C+'),
+	kokoroEntry('am_michael', 'Michael', 'male', 'C+'),
+	kokoroEntry('am_puck', 'Puck', 'male', 'C+'),
+	kokoroEntry('am_echo', 'Echo', 'male', 'D'),
+	kokoroEntry('am_eric', 'Eric', 'male', 'D'),
+	kokoroEntry('am_liam', 'Liam', 'male', 'D'),
+	kokoroEntry('am_onyx', 'Onyx', 'male', 'D'),
+	kokoroEntry('am_santa', 'Santa', 'male', 'D-'),
+	kokoroEntry('am_adam', 'Adam', 'male', 'F+'),
+	kokoroEntry('bf_emma', 'Emma', 'female', 'B-'),
+	kokoroEntry('bf_isabella', 'Isabella', 'female', 'C'),
+	kokoroEntry('bf_alice', 'Alice', 'female', 'D'),
+	kokoroEntry('bf_lily', 'Lily', 'female', 'D'),
+	kokoroEntry('bm_fable', 'Fable', 'male', 'C'),
+	kokoroEntry('bm_george', 'George', 'male', 'C'),
+	kokoroEntry('bm_lewis', 'Lewis', 'male', 'D+'),
+	kokoroEntry('bm_daniel', 'Daniel', 'male', 'D')
+];
 
 export function kokoroVoice(voiceId: string): KokoroVoice {
 	const found = KOKORO_VOICES.find((v) => v.id === voiceId);
@@ -229,6 +251,7 @@ export function kokoroVoice(voiceId: string): KokoroVoice {
  *  stays the model's own. An empty/unknown voice falls back to the first
  *  catalog voice (the picker's default). */
 export function kokoroVoiceDef(voice: string): SpeechModelDef {
-	const bin = kokoroVoice(voice || KOKORO_VOICES[0]!.id).bin;
+	const known = KOKORO_VOICES.find((v) => v.id === voice) ?? KOKORO_VOICES[0]!;
+	const bin = known.bin;
 	return { ...KOKORO_82M, files: [...KOKORO_82M.files, { path: bin }] };
 }

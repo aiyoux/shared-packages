@@ -16,6 +16,7 @@ import {
 	type TtsEngine,
 	type TtsEngineInfo,
 	type TtsRender,
+	type TtsRenderSegment,
 	type TtsVoice
 } from '../types.js';
 import { decodeMono } from '../audio.js';
@@ -29,7 +30,7 @@ import {
 	DEFAULT_PIPER_VOICE,
 	type PiperVoice
 } from '../piperVoices.js';
-import { SegmentPlayer, splitSentences } from './playback.js';
+import { SegmentPlayer, splitSentences, streamSentences } from './playback.js';
 
 const info: TtsEngineInfo = {
 	id: 'piper',
@@ -112,6 +113,12 @@ async function sessionFor(voiceId: string): Promise<PiperSession> {
 	return session;
 }
 
+async function renderSentence(voiceId: string, sentence: string): Promise<TtsRenderSegment> {
+	const wav = await (await sessionFor(voiceId)).predict(sentence);
+	const decoded = await decodeMono(wav);
+	return { samples: decoded.samples, sampleRate: decoded.sampleRate, text: sentence };
+}
+
 export function createPiperTts(): TtsEngine {
 	const player = new SegmentPlayer();
 	let selectedDirId: string | undefined;
@@ -139,22 +146,19 @@ export function createPiperTts(): TtsEngine {
 			const voice = piperVoice(voiceId);
 			await ensureVoiceMirrored(voice, opts?.dirId ?? selectedDirId);
 			const segments: TtsRender['segments'] = [];
-			for (const sentence of splitSentences(text)) {
+			const sentences = splitSentences(text);
+			for (const sentence of sentences) {
 				if (opts?.signal?.aborted) throw new SpeechEngineError('CANCELLED', 'Synthesis cancelled');
-				const wav = await (await sessionFor(voiceId)).predict(sentence);
-				const decoded = await decodeMono(wav);
-				segments.push({
-					samples: decoded.samples,
-					sampleRate: decoded.sampleRate,
-					text: sentence
-				});
+				segments.push(await renderSentence(voiceId, sentence));
+				opts?.onSegment?.({ done: segments.length, total: sentences.length });
 			}
 			return { segments, channels: 1 };
 		},
 
 		async speak(text, opts) {
-			const render = await this.synthesize(text, { voice: opts?.voice, signal: opts?.signal });
-			await player.play(render, { signal: opts?.signal });
+			const voiceId = opts?.voice ?? DEFAULT_PIPER_VOICE;
+			await ensureVoiceMirrored(piperVoice(voiceId), selectedDirId);
+			await streamSentences(text, (sentence) => renderSentence(voiceId, sentence), player, opts);
 		},
 
 		stop() {

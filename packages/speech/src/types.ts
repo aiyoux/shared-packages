@@ -77,6 +77,8 @@ export type TtsVoice = {
 	id: string;
 	label: string;
 	language?: string;
+	/** Picker heading this voice is listed under (e.g. accent). */
+	group?: string;
 	/** Preview text hint, when the voice has a known good sample sentence. */
 	preview?: string;
 };
@@ -111,7 +113,15 @@ export type TtsSpeakOpts = {
 	voice?: string;
 	speed?: number;
 	signal?: AbortSignal;
-	onProgress?: (p: { text: string; segmentIndex: number }) => void;
+	/** Per-sentence progress from engines that render locally: 'rendering'
+	 *  while the listener waits on sentence `segmentIndex`, 'playing' as it
+	 *  starts. Engines that stream natively (browser speech) may not report. */
+	onProgress?: (p: {
+		phase: 'rendering' | 'playing';
+		text: string;
+		segmentIndex: number;
+		segmentCount: number;
+	}) => void;
 };
 
 export type TtsLoadOpts = {
@@ -164,6 +174,8 @@ export interface TtsEngine {
 			speed?: number;
 			signal?: AbortSignal;
 			onProgress?: (p: ModelDownloadProgress) => void;
+			/** Called after each sentence renders — `done` of `total` sentences. */
+			onSegment?: (p: { done: number; total: number }) => void;
 			/** VFS folder the model was imported into (overrides the load-time choice). */
 			dirId?: string;
 		}

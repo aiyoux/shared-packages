@@ -10,6 +10,7 @@ import {
 	type TtsEngine,
 	type TtsEngineInfo,
 	type TtsRender,
+	type TtsRenderSegment,
 	type TtsVoice
 } from '../types.js';
 import { KOKORO_82M, KOKORO_VOICES, kokoroVoicePath, hfResolveUrl } from '../models.js';
@@ -18,13 +19,13 @@ import { storedName } from '../modelStore.manifest.js';
 import { getSpeechModelStore, type ModelStore } from '../modelStore.js';
 import { createVfsCache } from './transformersVfsCache.js';
 import { configureTransformersEnv } from './transformersEnv.js';
-import { SegmentPlayer, splitSentences } from './playback.js';
+import { SegmentPlayer, splitSentences, streamSentences } from './playback.js';
 
 const info: TtsEngineInfo = {
 	id: 'kokoro',
 	label: 'Kokoro 82M (local)',
 	description:
-		'Neural TTS running fully in this tab via WebAssembly — 54 voices, exports WAV. Import the model files into Files, then pick a voice.',
+		'Neural TTS running fully in this tab via WebAssembly — 28 English voices, exports WAV. Import the model files into Files, then each voice you pick needs its own small voice file.',
 	livePlayback: true,
 	renderToBuffer: true,
 	exportFormats: ['wav'],
@@ -74,77 +75,82 @@ export function createKokoroTts(): TtsEngine {
 		},
 
 		async listVoices(): Promise<TtsVoice[]> {
-			return KOKORO_VOICES.map((v) => ({
-				id: v.id,
-				label: v.label,
-				language: 'en',
-				preview: 'Hello from the scratch pad. This voice runs entirely in your browser.'
-			}));
+			return KOKORO_VOICES.map(({ bin: _bin, grade: _grade, ...voice }) => voice);
 		},
 
 		async synthesize(text, opts): Promise<TtsRender> {
-			const store = await getSpeechModelStore();
-			const def = KOKORO_82M;
-			const dirId = await store.requireModelDir(def, opts?.dirId ?? selectedDirId);
-			const tts = await ttsFor(def, store, dirId, { signal: opts?.signal });
-			const voice = opts?.voice ?? KOKORO_VOICES[0]!.id;
-			// The voice bin must be imported like the weights — fetches from HF
-			// are blocked under the hub's COEP isolation.
-			const binPath = kokoroVoicePath(voice);
-			const binNode = await store.resolveFileNode(dirId, binPath);
-			if (!binNode) {
-				throw new SpeechEngineError(
-					'NO_MODEL',
-					`Missing voice file ${storedName(binPath)}. Download it from ${hfResolveUrl(def, binPath)} and import it.`
-				);
-			}
-			// kokoro-js fetches voice bins itself, bypassing the transformers
-			// cache — the only local source it consults is the 'kokoro-voices'
-			// Cache Storage, so seed it from the VFS import to keep generation
-			// fully offline. The URL must be byte-identical to the library's.
-			const voiceUrl = hfResolveUrl(def, binPath);
-			try {
-				const voiceCache = await caches.open('kokoro-voices');
-				const hit = await voiceCache.match(voiceUrl);
-				if (!hit) {
-					const blob = await store.readBlobPath(dirId, binPath);
-					await voiceCache.put(
-						voiceUrl,
-						new Response(blob, { status: 200, headers: { 'Content-Type': 'application/octet-stream' } })
-					);
-				}
-			} catch (err) {
-				// Cache API unavailable (private mode?) → the library falls back to
-				// its network fetch, which fails under COEP — same as before.
-				console.warn('kokoro voice cache seed failed', err);
-			}
+			const renderOne = await sentenceRenderer(opts);
 			const segments: TtsRender['segments'] = [];
 			const sentences = splitSentences(text);
 			for (const sentence of sentences) {
 				if (opts?.signal?.aborted) throw new SpeechEngineError('CANCELLED', 'Synthesis cancelled');
-				const audio = await tts.generate(sentence, { voice, speed: opts?.speed });
-				segments.push({
-					samples: audio.audio,
-					sampleRate: audio.sampling_rate,
-					text: sentence
-				});
+				segments.push(await renderOne(sentence));
+				opts?.onSegment?.({ done: segments.length, total: sentences.length });
 			}
 			return { segments, channels: 1 };
 		},
 
 		async speak(text, opts) {
-			const render = await this.synthesize(text, {
+			const renderOne = await sentenceRenderer({
 				voice: opts?.voice,
 				speed: opts?.speed,
 				signal: opts?.signal
 			});
-			await player.play(render, { signal: opts?.signal });
+			await streamSentences(text, renderOne, player, opts);
 		},
 
 		stop() {
 			player.stop();
 		}
 	};
+
+	/** Resolve model + voice once, then render one sentence per call. */
+	async function sentenceRenderer(opts?: {
+		voice?: string;
+		speed?: number;
+		signal?: AbortSignal;
+		dirId?: string;
+	}): Promise<(sentence: string) => Promise<TtsRenderSegment>> {
+		const store = await getSpeechModelStore();
+		const def = KOKORO_82M;
+		const dirId = await store.requireModelDir(def, opts?.dirId ?? selectedDirId);
+		const tts = await ttsFor(def, store, dirId, { signal: opts?.signal });
+		const voice = opts?.voice ?? KOKORO_VOICES[0]!.id;
+		// The voice bin must be imported like the weights — fetches from HF
+		// are blocked under the hub's COEP isolation.
+		const binPath = kokoroVoicePath(voice);
+		const binNode = await store.resolveFileNode(dirId, binPath);
+		if (!binNode) {
+			throw new SpeechEngineError(
+				'NO_MODEL',
+				`Missing voice file ${storedName(binPath)}. Download it from ${hfResolveUrl(def, binPath)} and import it.`
+			);
+		}
+		// kokoro-js fetches voice bins itself, bypassing the transformers
+		// cache — the only local source it consults is the 'kokoro-voices'
+		// Cache Storage, so seed it from the VFS import to keep generation
+		// fully offline. The URL must be byte-identical to the library's.
+		const voiceUrl = hfResolveUrl(def, binPath);
+		try {
+			const voiceCache = await caches.open('kokoro-voices');
+			const hit = await voiceCache.match(voiceUrl);
+			if (!hit) {
+				const blob = await store.readBlobPath(dirId, binPath);
+				await voiceCache.put(
+					voiceUrl,
+					new Response(blob, { status: 200, headers: { 'Content-Type': 'application/octet-stream' } })
+				);
+			}
+		} catch (err) {
+			// Cache API unavailable (private mode?) → the library falls back to
+			// its network fetch, which fails under COEP — same as before.
+			console.warn('kokoro voice cache seed failed', err);
+		}
+		return async (sentence) => {
+			const audio = await tts.generate(sentence, { voice, speed: opts?.speed });
+			return { samples: audio.audio, sampleRate: audio.sampling_rate, text: sentence };
+		};
+	}
 }
 
 export const kokoroTts: TtsEngine = createKokoroTts();
