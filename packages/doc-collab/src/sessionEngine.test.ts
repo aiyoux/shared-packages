@@ -383,3 +383,82 @@ describe('session engine: idle when alone', () => {
 		engine.destroy();
 	});
 });
+
+describe('doc session: presence', () => {
+	type Place = { at: number };
+	const keep = (_id: string, raw: unknown): Place | null => {
+		const at = (raw as { at?: unknown } | null)?.at;
+		return typeof at === 'number' ? { at } : null;
+	};
+
+	function seatsOn(s: DocSession<Doc, Op>) {
+		let seen: ReadonlyMap<string, Place> = new Map();
+		const seats = s.presence<Place>({ sanitize: keep, onChange: (m) => (seen = m) });
+		return { seats, seen: () => seen };
+	}
+
+	it('another tab sees where this one is, and loses it when it leaves', async () => {
+		const { tab } = browser();
+		const a = open(tab, 'r');
+		const b = open(tab, 'r');
+		await settle();
+		const pa = seatsOn(a);
+		const pb = seatsOn(b);
+		pa.seats.set({ at: 3 });
+		await settle();
+		expect([...pb.seen()]).toEqual([[a.clientId, { at: 3 }]]);
+		pa.seats.close();
+		await settle();
+		expect(pb.seen().size).toBe(0);
+	});
+
+	it('a newcomer asks and hears peers who are not moving', async () => {
+		const { tab } = browser();
+		const a = open(tab, 'r');
+		await settle();
+		seatsOn(a).seats.set({ at: 1 });
+		const b = open(tab, 'r');
+		await settle();
+		const pb = seatsOn(b);
+		pb.seats.ask();
+		await settle();
+		expect([...pb.seen()]).toEqual([[a.clientId, { at: 1 }]]);
+	});
+
+	it('destroying the session leaves', async () => {
+		const { tab } = browser();
+		const a = open(tab, 'r');
+		const b = open(tab, 'r');
+		await settle();
+		seatsOn(a).seats.set({ at: 2 });
+		const pb = seatsOn(b);
+		await settle();
+		pb.seats.ask();
+		await settle();
+		expect(pb.seen().size).toBe(1);
+		a.destroy();
+		await settle();
+		expect(pb.seen().size).toBe(0);
+	});
+
+	it("a dropped link takes the guest's seat from the host's other tab", async () => {
+		const devA = browser();
+		const devB = browser();
+		const a1 = open(devA.tab, 'file-a');
+		await settle();
+		const a2 = open(devA.tab, 'file-a');
+		const b1 = open(devB.tab, 'file-b');
+		await settle();
+		const wire = link();
+		a1.setPeer('invite', { role: 'sequencer', member: peerMember('invite', wire.a) });
+		b1.setPeer('invite', { role: 'replica', member: peerMember('invite', wire.b) });
+		await settle();
+		const pa2 = seatsOn(a2);
+		seatsOn(b1).seats.set({ at: 7 });
+		await settle();
+		expect([...pa2.seen()]).toEqual([[b1.clientId, { at: 7 }]]);
+		a1.setPeer('invite', null);
+		await settle();
+		expect(pa2.seen().size).toBe(0);
+	});
+});

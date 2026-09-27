@@ -11,10 +11,21 @@
  * and a guess is not harmless: a runtime keeps the role it was built with. So
  * edits made before the answer are held, and each role change builds a fresh
  * runtime.
+ *
+ * Where everyone is (`presence`) is `createPresenceSeats` on the same engine:
+ * the app supplies a place type, a `sanitize` and a painter. A tab closing or
+ * a link dropping reaches the seats as a leave the engine makes up, so no app
+ * sweeps them.
  */
 import { createCollabRuntime, type CollabDocFrame, type CollabRuntime } from './docRuntime.js';
 import type { Role } from './leadership.js';
 import type { LogFrame } from './seqLog.js';
+import {
+	createPresenceSeats,
+	isPresenceFrame,
+	type PresenceSeats,
+	type PresenceSeatsOpts
+} from './presenceSeats.js';
 import {
 	createSessionEngine,
 	type EnginePeer,
@@ -43,8 +54,12 @@ export type DocSession<Doc, Op> = {
 	replaceDoc(doc: Doc): void;
 	setRoom(room: string): void;
 	setPeer(id: string, peer: EnginePeer<DocSessionFrame<Doc, Op>> | null): void;
+	/** Seats for everyone in this document. Closing them (or `destroy`) leaves. */
+	presence<P>(opts: DocPresenceOpts<P>): PresenceSeats<P>;
 	destroy(): void;
 };
+
+export type DocPresenceOpts<P> = Omit<PresenceSeatsOpts<P>, 'clientId' | 'send' | 'board'>;
 
 export type DocSessionOpts<Doc, Op> = {
 	clientId?: string;
@@ -83,6 +98,8 @@ export function createDocSession<Doc, Op>(opts: DocSessionOpts<Doc, Op>): DocSes
 	let destroyed = false;
 	/** Submitted before any runtime existed; sent once one does. */
 	const held: CollabDocFrame<unknown>[] = [];
+	/** Every open set of seats; presence frames go to each. */
+	const seats = new Set<PresenceSeats<unknown>>();
 
 	function emit(reason: 'local' | 'remote' | 'replace' | 'snapshot') {
 		opts.onDoc?.(doc, { reason });
@@ -133,6 +150,10 @@ export function createDocSession<Doc, Op>(opts: DocSessionOpts<Doc, Op>): DocSes
 		if (destroyed) return;
 		opts.onFrame?.(frame);
 		if (frame.clientId === clientId) return;
+		if (isPresenceFrame(frame)) {
+			for (const s of seats) s.receive(frame);
+			return;
+		}
 		if (frame.kind === 'transient') {
 			opts.onTransient?.(frame.payload, frame.clientId);
 			return;
@@ -201,8 +222,28 @@ export function createDocSession<Doc, Op>(opts: DocSessionOpts<Doc, Op>): DocSes
 		setPeer(id, peer) {
 			engine.setPeer(id, peer);
 		},
+		presence<P>(p: DocPresenceOpts<P>): PresenceSeats<P> {
+			const inner = createPresenceSeats<P>({
+				...p,
+				clientId,
+				board: engine.room,
+				send: (frame) => {
+					if (!destroyed) engine.send(frame as unknown as Frame);
+				}
+			});
+			const handle: PresenceSeats<P> = {
+				...inner,
+				close() {
+					seats.delete(handle as PresenceSeats<unknown>);
+					inner.close();
+				}
+			};
+			seats.add(handle as PresenceSeats<unknown>);
+			return handle;
+		},
 		destroy() {
 			if (destroyed) return;
+			for (const s of [...seats]) s.close();
 			destroyed = true;
 			offFrames();
 			held.length = 0;

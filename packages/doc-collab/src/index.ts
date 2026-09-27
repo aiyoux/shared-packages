@@ -70,6 +70,7 @@ export {
 	type DocSession,
 	type DocSessionFrame,
 	type DocSessionOpts,
+	type DocPresenceOpts,
 	type DocSessionRole
 } from './docSession.js';
 export { jsonChunker, openPeerLink, PEER_CHUNK_CHARS } from './peerLink.js';
