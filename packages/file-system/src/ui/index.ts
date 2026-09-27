@@ -139,6 +139,7 @@ export {
 	type OpenProjectContext,
 	type QuickEditFileContext,
 	type QuickEditVideoContext,
+	type QuickEditAudioContext,
 	type QuickEditImageContext,
 	type QuickConvertSvgContext
 } from './explorerDriver.js';

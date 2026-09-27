@@ -19,6 +19,7 @@
 		type ExplorerOpenTarget,
 		type ExplorerOpenContext,
 		type QuickEditVideoContext,
+		type QuickEditAudioContext,
 		type QuickEditImageContext,
 		type QuickConvertSvgContext
 	} from './explorerDriver.js';
@@ -189,6 +190,8 @@
 		sendLabel?: string;
 		/** Preview "Quick edit" for video files — host opens the trimmer. */
 		onQuickEditVideo?: (entry: ExplorerEntry, ctx: QuickEditVideoContext) => void;
+		/** Preview "Quick edit" for audio files — host opens the trimmer. */
+		onQuickEditAudio?: (entry: ExplorerEntry, ctx: QuickEditAudioContext) => void;
 		/**
 		 * Metadata panel for media the host can probe (video / GIF). Rendered
 		 * inside the file preview when the user asks for metadata.
@@ -340,6 +343,7 @@
 		onSendFile,
 		sendLabel = 'Send this file',
 		onQuickEditVideo,
+		onQuickEditAudio,
 		onQuickEditImage,
 		mediaMeta,
 		onQuickConvertSvg,
@@ -5464,7 +5468,7 @@
 {/snippet}
 
 {#snippet archiveButtons(entry: ExplorerEntry)}
-	{#if driver.writeFile && ((onQuickEditVideo && getPreviewKind(entry) === 'video') || (onQuickEditImage && canQuickEditRaster(entry)))}
+	{#if driver.writeFile && ((onQuickEditVideo && getPreviewKind(entry) === 'video') || (onQuickEditAudio && getPreviewKind(entry) === 'audio') || (onQuickEditImage && canQuickEditRaster(entry)))}
 		<button
 			type="button"
 			class="ds-btn ds-btn--sm ds-btn--secondary"
@@ -5476,6 +5480,7 @@
 					save: (file: File) => driver.writeFile!(target.parentId, file)
 				};
 				if (getPreviewKind(target) === 'video') onQuickEditVideo?.(target, ctx);
+				else if (getPreviewKind(target) === 'audio') onQuickEditAudio?.(target, ctx);
 				else onQuickEditImage?.(target, ctx);
 			}}
 		>

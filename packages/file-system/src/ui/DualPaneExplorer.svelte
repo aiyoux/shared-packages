@@ -46,6 +46,7 @@
 		type OpenProjectContext,
 		type MediaMetaTarget,
 		type QuickEditVideoContext,
+		type QuickEditAudioContext,
 		type QuickEditImageContext,
 		type QuickConvertSvgContext
 	} from './explorerDriver.js';
@@ -275,6 +276,8 @@
 			entries: ExplorerEntry[];
 		}) => void | Promise<void>;
 		onQuickEditVideo?: (entry: ExplorerEntry, ctx: QuickEditVideoContext) => void;
+		/** Preview "Quick edit" for audio files — forwarded to both panes. */
+		onQuickEditAudio?: (entry: ExplorerEntry, ctx: QuickEditAudioContext) => void;
 		/** Metadata panel for video / GIF preview — rendered inside the file preview. */
 		mediaMeta?: Snippet<[MediaMetaTarget]>;
 		onQuickEditImage?: (entry: ExplorerEntry, ctx: QuickEditImageContext) => void;
@@ -372,6 +375,7 @@
 		onDualChange,
 		onSend,
 		onQuickEditVideo,
+		onQuickEditAudio,
 		mediaMeta,
 		onQuickEditImage,
 		onQuickConvertSvg,
@@ -2173,6 +2177,7 @@
 							handleClipboardCopyAcross(payload, id, destParent)}
 						onContextChange={(ctx) => applyPaneCtx(id, ctx)}
 						{onQuickEditVideo}
+						{onQuickEditAudio}
 						{mediaMeta}
 						{onQuickEditImage}
 						{onQuickConvertSvg}
@@ -2245,6 +2250,7 @@
 							handleClipboardCopyAcross(payload, id, destParent)}
 						onContextChange={(ctx) => applyPaneCtx(id, ctx)}
 						{onQuickEditVideo}
+						{onQuickEditAudio}
 						{mediaMeta}
 						{onQuickEditImage}
 						{onQuickConvertSvg}
@@ -2315,6 +2321,7 @@
 							handleClipboardCopyAcross(payload, id, destParent)}
 						onContextChange={(ctx) => applyPaneCtx(id, ctx)}
 						{onQuickEditVideo}
+						{onQuickEditAudio}
 						{mediaMeta}
 						{onQuickEditImage}
 						{onQuickConvertSvg}
