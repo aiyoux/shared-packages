@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { chunkAudio, quietestCut } from './audio.js';
 import { DEFAULT_STT_PROMPT, aiStatusToCode, buildSttAudioMessages, checkAiAudioSize, looksAudioCapable, rankModelsForAudio } from './aiParts.js';
-import { MODEL_CATALOG, defaultSttModel, defaultTtsModel, sttModelsFor, ttsModelsFor } from './models.js';
+import { MODEL_CATALOG, defaultSttModel, defaultTtsModel, sttModelsFor, ttsModelForDevice, ttsModelsFor } from './models.js';
 
 describe('chunkAudio', () => {
 	it('returns one chunk for short audio', () => {
@@ -94,9 +94,13 @@ describe('model catalog integrity', () => {
 		expect(sttModelsFor('transformers').map((m) => m.id)).toEqual([
 			'whisper-tiny', 'whisper-base', 'whisper-small', 'moonshine-tiny', 'moonshine-base'
 		]);
-		expect(ttsModelsFor('kokoro').map((m) => m.id)).toEqual(['kokoro-82m']);
+		expect(ttsModelsFor('kokoro').map((m) => m.id)).toEqual(['kokoro-82m', 'kokoro-82m-fp32']);
 		expect(defaultSttModel('transformers')).toBe('whisper-tiny');
 		expect(defaultTtsModel('kokoro')).toBe('kokoro-82m');
+		// Device picks the weights: q8 on WebAssembly, fp32 on WebGPU.
+		expect(ttsModelForDevice('kokoro', 'wasm')?.id).toBe('kokoro-82m');
+		expect(ttsModelForDevice('kokoro', 'webgpu')?.id).toBe('kokoro-82m-fp32');
+		expect(ttsModelForDevice('webspeech', 'wasm')).toBeNull();
 	});
 
 	it('weights stay under the biggest useful download', () => {
