@@ -47,6 +47,12 @@ export {
 export { listSttEngines, listTtsEngines, loadSttEngine, loadTtsEngine, listTtsVoices, peekSttEngine, peekTtsEngine } from './engines.js';
 
 export {
+	DEFAULT_BRIDGE_BASE_URL,
+	bridgeFetchUrl,
+	fetchModelFileViaBridge
+} from './bridgeFetch.js';
+
+export {
 	ModelStore,
 	getSpeechModelStore,
 	type ImportedModelFile,
