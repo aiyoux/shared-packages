@@ -10,6 +10,18 @@
 import { formatAiErrorMessage } from './errors.js';
 
 export {
+	listAiOffers,
+	resolveNativeAiMonitor,
+	runAiNativeJob,
+	type AiCatalog,
+	type AiDeviceClass,
+	type AiLocation,
+	type AiNativeProgress,
+	type AiOffer,
+	type AiTask
+} from './catalog.js';
+
+export {
 	AiCredentialsError,
 	formatAiErrorMessage,
 	toAiCredentialsError

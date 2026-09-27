@@ -27,6 +27,8 @@ export type AiCapabilities = {
 	sessions?: boolean;
 	/** True when a bound tab can grant access and upload artifacts. Missing means false. */
 	sessionArtifacts?: boolean;
+	/** True when this daemon offers monitor-owned model jobs. */
+	nativeJobs?: boolean;
 };
 
 /** A reachable monitor that serves the AI feature. */
