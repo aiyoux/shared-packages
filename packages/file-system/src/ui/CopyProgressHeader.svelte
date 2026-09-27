@@ -8,9 +8,15 @@
 		items: TransferItem[];
 		onDismiss?: (id: string) => void;
 		onDismissAll?: () => void;
+		/**
+		 * Reshow a hidden archive (compress/extract) dialog. Return true when one
+		 * came back — the chip then skips its transfer menu, which would only be
+		 * in the way. False falls through to the menu as before.
+		 */
+		onShow?: () => boolean;
 	}
 
-	let { items, onDismiss, onDismissAll }: Props = $props();
+	let { items, onDismiss, onDismissAll, onShow }: Props = $props();
 
 	const stacked = $derived(stackTransferItems(items));
 	const latest = $derived.by((): StackedProgress | null => {
@@ -53,6 +59,14 @@
 		for (const id of t.ids) onDismiss(id);
 	}
 
+	function onChipClick() {
+		if (onShow?.()) {
+			open = false;
+			return;
+		}
+		open = !open;
+	}
+
 	function onDocPointer(e: PointerEvent) {
 		if (!open) return;
 		if (rootEl && e.target instanceof Node && rootEl.contains(e.target)) return;
@@ -82,7 +96,7 @@
 			aria-expanded={open}
 			aria-haspopup="true"
 			title={latest.error || hopStatus(latest) || latest.name}
-			onclick={() => (open = !open)}
+			onclick={onChipClick}
 		>
 			<div
 				class="bar dpe-copy-bar"

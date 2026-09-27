@@ -26,6 +26,7 @@
 	} from './componentTypes.js';
 	import type { FileTypeId } from '../types.js';
 	import CopyProgressHeader from './CopyProgressHeader.svelte';
+	import { requestArchiveDialogShow } from './archiveReshow.js';
 	import DualPhaseConfirm from './DualPhaseConfirm.svelte';
 	import { stackTransferItems } from './stackProgress.js';
 	import {
@@ -2431,6 +2432,7 @@
 			items={visibleCopyItems}
 			onDismiss={dismissCopy}
 			onDismissAll={dismissAllSettledCopy}
+			onShow={requestArchiveDialogShow}
 		/>
 	</div>
 {/if}

@@ -53,6 +53,7 @@ export {
 	type WaitTracker
 } from './live/waits.js';
 export { createLiveBus, type LiveBus, type LiveBusOptions, type LiveEnvelope } from './live/bus.js';
+export { browserEngineTab, type BrowserEngineTab, type EngineTabMember } from './live/engineTab.js';
 
 export * from './liveLink.js';
 export * from './memoryVfs.js';

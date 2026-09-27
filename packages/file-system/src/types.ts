@@ -3,6 +3,7 @@ export type FileTypeId =
 	| 'skch'
 	| 'ob3d'
 	| 'cari'
+	| 'expr'
 	| 'vrec'
 	| 'vcomp'
 	| 'kb'

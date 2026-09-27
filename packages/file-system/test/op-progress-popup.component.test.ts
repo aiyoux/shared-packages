@@ -118,4 +118,25 @@ describe('CopyProgressHeader', () => {
 		await fireEvent.click(screen.getByTestId('fe-op-progress-dismiss'));
 		expect(onDismissAll).toHaveBeenCalledTimes(1);
 	});
+
+	it('clicking the chip reshows a hidden archive dialog instead of the menu', async () => {
+		const onShow = vi.fn(() => true);
+		render(CopyProgressHeader, {
+			props: { items: [item({ id: 'w1', name: 'photos.zip', transferred: 40, size: 100 })], onShow }
+		});
+		await fireEvent.click(screen.getByTestId('fe-op-progress-row'));
+		expect(onShow).toHaveBeenCalledTimes(1);
+		// The dialog came back, so the menu never had a reason to open.
+		expect(screen.queryByTestId('fe-op-progress-menu')).toBeNull();
+	});
+
+	it('falls back to the transfer menu when nothing can reshow', async () => {
+		const onShow = vi.fn(() => false);
+		render(CopyProgressHeader, {
+			props: { items: [item({ id: 'w1', name: 'photos.zip', transferred: 40, size: 100 })], onShow }
+		});
+		await fireEvent.click(screen.getByTestId('fe-op-progress-row'));
+		expect(onShow).toHaveBeenCalledTimes(1);
+		expect(screen.getByTestId('fe-op-progress-menu')).toBeTruthy();
+	});
 });

@@ -35,6 +35,7 @@
 	import FeTipIconBtn from './FeTipIconBtn.svelte';
 	import FeArchiveDialog from './FeArchiveDialog.svelte';
 	import CopyProgressHeader from './CopyProgressHeader.svelte';
+	import { registerArchiveDialogShow, requestArchiveDialogShow } from './archiveReshow.js';
 	import {
 		createInnerFsSession,
 		expandPackedBytes,
@@ -463,6 +464,7 @@
 		};
 		pull();
 		archiveProgressUnsub = subscribeTransfers(pull);
+		const unsubReshow = registerArchiveDialogShow(showHiddenArchiveDialog);
 		const unsubDrag = subscribeCrossWindowDrag(() => {
 			if (getCrossWindowDrag() || isPointerDragActive()) return;
 			copyHoverActive = false;
@@ -482,6 +484,7 @@
 		return () => {
 			archiveProgressUnsub?.();
 			archiveProgressUnsub = null;
+			unsubReshow();
 			unsubDrag();
 			ro?.disconnect();
 		};
@@ -2460,6 +2463,18 @@
 		archiveDialogOpen = false;
 	}
 
+	/**
+	 * Hiding mid-job (Hide button, Escape, scrim) must not strand the job with
+	 * no way back — the header chip asks the archiveReshow registry first and
+	 * lands here. Registered for the pane's lifetime; it declines whenever this
+	 * pane has nothing hidden and running, so other panes get their turn.
+	 */
+	function showHiddenArchiveDialog(): boolean {
+		if (!archiveJobRunning || archiveDialogOpen) return false;
+		archiveDialogOpen = true;
+		return true;
+	}
+
 	const archivePendingScratch = new Map<string, ListingPending>();
 	let archiveListingFlush: ReturnType<typeof setTimeout> | null = null;
 
@@ -4126,6 +4141,7 @@
 		{#if !headerLeading}
 			<CopyProgressHeader
 				items={visibleArchiveOps}
+				onShow={requestArchiveDialogShow}
 				onDismiss={(id) => {
 					abortTransfer(id);
 					if (id === archiveTransferId) abortArchiveJob();

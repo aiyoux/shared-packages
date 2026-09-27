@@ -35,6 +35,55 @@ describe('session list merge', () => {
 	});
 });
 
+describe('first save across tabs', () => {
+	it('drops the unsaved copy of a row another tab saved', () => {
+		const unsaved = session({ id: 'a', title: 'Untitled', dirty: true, updatedAt: 5 });
+		const saved = session({ id: 'a', fileId: 'file-1', title: 'Plan', updatedAt: 3 });
+		for (const merged of [mergeSessions([unsaved], [saved]), mergeSessions([saved], [unsaved])]) {
+			assert.equal(merged.length, 1);
+			assert.equal(merged[0].fileId, 'file-1');
+		}
+	});
+
+	it('drops it when the file row took the lesser id of two tabs', () => {
+		const merged = mergeSessions(
+			[session({ id: 'b', updatedAt: 5 }), session({ id: 'b', fileId: 'file-1', updatedAt: 3 })],
+			[session({ id: 'a', fileId: 'file-1', updatedAt: 2 })]
+		);
+		assert.deepEqual(
+			merged.map((row) => [row.id, row.fileId]),
+			[['a', 'file-1']]
+		);
+	});
+
+	it('the tab that had not heard converges, and publishes nothing back', () => {
+		let storedA: string | null = null;
+		const a = createSessionBoard({
+			load: () => storedA,
+			save: (json) => (storedA = json),
+			tabGet: () => null,
+			tabSet: () => {}
+		});
+		const row = a.note({ kind: 'sketch', title: 'Untitled', dirty: true });
+		let storedB: string | null = storedA;
+		const b = createSessionBoard({
+			load: () => storedB,
+			save: (json) => (storedB = json),
+			tabGet: () => null,
+			tabSet: () => {}
+		});
+		assert.equal(b.current().sessions.length, 1);
+
+		a.note({ kind: 'sketch', title: 'Plan', fileId: 'file-1', sessionId: row.id, dirty: false });
+		const result = b.absorb(storedA);
+		assert.equal(result.publish, false);
+		assert.deepEqual(
+			b.current().sessions.map((s) => [s.id, s.fileId]),
+			[[row.id, 'file-1']]
+		);
+	});
+});
+
 describe('session board', () => {
 	it('keeps this tab connected when another tab publishes its list', () => {
 		const shared = new Map<string, string>();

@@ -189,6 +189,15 @@ export function workspaceSessionsReady(): Promise<void> {
 	return bag().ready ?? Promise.resolve();
 }
 
+/**
+ * The collab room of a session: its file once it has one, the session itself
+ * before. Every tab and pane showing the session meets there; on the first
+ * save, whoever is in the session's room moves to the file's.
+ */
+export function sessionRoom(session: { id: string; fileId?: string }): string {
+	return session.fileId || `session:${session.id}`;
+}
+
 export function listWorkspaceSessions(): WorkspaceSession[] {
 	return shared().board.current().sessions;
 }

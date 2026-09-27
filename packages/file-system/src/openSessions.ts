@@ -201,8 +201,14 @@ export function applyClosed(sessions: readonly OpenSession[], closed: readonly C
  * The later `updatedAt` supplies the fields. The id is the lesser of the two,
  * so both tabs converge on one id for a file instead of each keeping its own
  * and rewriting the list forever.
+ *
+ * A row never loses its file once it has one, so an unsaved row whose id also
+ * names a file row is that session before its first save. It is dropped, or
+ * the tab that had not heard of the save keeps it as a second row with the
+ * same id and publishes it back to every tab.
  */
 export function mergeSessions(local: readonly OpenSession[], remote: readonly OpenSession[]): OpenSession[] {
+	const saved = new Set([...local, ...remote].filter((session) => session.fileId).map((session) => session.id));
 	const map = new Map<string, OpenSession>();
 	const put = (session: OpenSession) => {
 		const key = sessionMergeKey(session);
@@ -215,8 +221,10 @@ export function mergeSessions(local: readonly OpenSession[], remote: readonly Op
 		const id = prev.id < session.id ? prev.id : session.id;
 		map.set(key, { ...newer, id, updatedAt: Math.max(prev.updatedAt, session.updatedAt) });
 	};
-	for (const session of local) put(session);
-	for (const session of remote) put(session);
+	for (const session of [...local, ...remote]) {
+		if (!session.fileId && saved.has(session.id)) continue;
+		put(session);
+	}
 	return [...map.values()];
 }
 
