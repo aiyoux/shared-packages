@@ -32,6 +32,14 @@ export {
 export { colorForClient, MAX_PRESENCE_NAME, PRESENCE_COLORS } from './presence.js';
 export { presenceBoard, type PresenceSeat } from './presenceBoard.js';
 export {
+	createPresenceSeats,
+	isPresenceFrame,
+	presenceLeave,
+	type PresenceFrame,
+	type PresenceSeats,
+	type PresenceSeatsOpts
+} from './presenceSeats.js';
+export {
 	createCmEnvelopeSession,
 	openCollabChannel,
 	DEFAULT_COLLAB_APP,

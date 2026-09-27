@@ -293,6 +293,23 @@ describe('session engine: peers', () => {
 		expect(saves).toEqual([]);
 	});
 
+	it('a dropped link takes everyone who spoke over it with it, for the other tabs too', async () => {
+		const { a1, a2, b2 } = await call();
+		const seen: Array<{ clientId: string; state: unknown }> = [];
+		a2.engine.onFrame((frame) => {
+			const f = frame as unknown as { kind: string; clientId: string; state: unknown };
+			if (f.kind === 'presence') seen.push({ clientId: f.clientId, state: f.state });
+		});
+		// B2 speaks; it reaches A2 through B's gateway, the call, and A's gateway.
+		b2.engine.send({ kind: 'presence', clientId: 'b2-seat', state: { at: 1 } } as unknown as Frame);
+		await settle();
+		expect(seen).toEqual([{ clientId: 'b2-seat', state: { at: 1 } }]);
+		// The host's gateway drops the call without B saying goodbye.
+		a1.setPeer('invite', null);
+		await settle();
+		expect(seen.at(-1)).toEqual({ clientId: 'b2-seat', state: null });
+	});
+
 	it('the guest side keeps syncing between its tabs after the call ends', async () => {
 		const { a1, b1, b2 } = await call();
 		b1.setPeer('invite', null);

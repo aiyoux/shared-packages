@@ -38,6 +38,15 @@ function toWire<T>(frame: T): T {
 	}
 }
 
+type PresenceShape = { kind?: unknown; clientId?: unknown; state?: unknown; ping?: unknown };
+
+/** A presence frame (`@shared-packages/doc-collab` `PresenceFrame`), by shape. */
+function presenceClient(frame: unknown): { clientId: string; leaves: boolean } | null {
+	const f = frame as PresenceShape | null;
+	if (!f || typeof f !== 'object' || f.kind !== 'presence' || typeof f.clientId !== 'string') return null;
+	return { clientId: f.clientId, leaves: f.state === null && !f.ping };
+}
+
 export function browserEngineTab<F>(opts: {
 	/** Frames that go unordered (previews, presence). */
 	isImmediate?: (frame: F) => boolean;
@@ -50,6 +59,31 @@ export function browserEngineTab<F>(opts: {
 	return {
 		member(room, clientId) {
 			const bus = createLiveBus<F>(liveDocNames(room).channelName, clientId, { isImmediate });
+			/**
+			 * Who each sending tab speaks for: itself, and — for a call's
+			 * gateway — the peers it relays. When that tab is gone (its lock
+			 * was released, exactly), they all leave. No silence timeout.
+			 */
+			const clientsBySender = new Map<string, Set<string>>();
+			const handlers = new Set<(frame: F) => void>();
+			const deliver = (frame: F) => {
+				for (const handler of [...handlers]) handler(frame);
+			};
+			const offMessage = bus.onMessage((frame, sender) => {
+				const presence = presenceClient(frame);
+				if (presence) {
+					let set = clientsBySender.get(sender);
+					if (!set) clientsBySender.set(sender, (set = new Set()));
+					if (presence.leaves) set.delete(presence.clientId);
+					else set.add(presence.clientId);
+				}
+				deliver(frame);
+			});
+			const offGone = bus.onSenderGone((sender) => {
+				const gone = clientsBySender.get(sender);
+				clientsBySender.delete(sender);
+				for (const id of gone ?? []) deliver({ kind: 'presence', clientId: id, state: null } as F);
+			});
 			return {
 				id: 'tab',
 				send(frame) {
@@ -57,8 +91,18 @@ export function browserEngineTab<F>(opts: {
 					if (isImmediate?.(wire)) bus.broadcastImmediate(wire);
 					else bus.broadcast(wire);
 				},
-				subscribe: (handler) => bus.onMessage((frame) => handler(frame)),
-				close: () => bus.destroy()
+				subscribe(handler) {
+					handlers.add(handler);
+					return () => {
+						handlers.delete(handler);
+					};
+				},
+				close() {
+					offMessage();
+					offGone();
+					handlers.clear();
+					bus.destroy();
+				}
 			};
 		},
 		election: (room) => createLeaderElection(room),

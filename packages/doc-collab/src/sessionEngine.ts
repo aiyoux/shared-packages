@@ -19,12 +19,17 @@
  *  - **Who saves.** A second lock on the room (`persist`), reported as it is.
  *  - **One relay.** The tab bus and every peer are members of one relay, so a
  *    frame from any of them reaches the runtime and, where it must, the rest.
+ *  - **Who is still here.** A peer link that is dropped takes everyone who
+ *    spoke over it (the device, and the tabs behind its gateway) with it: the
+ *    engine tells the remaining members they left (`presenceLeave`). The tab
+ *    bus does the same for a tab that is gone.
  *
  * The runtime is rebuilt whenever the role or the set of members changes; a
  * runtime fixes its role when it is built (see `createSeqLog`).
  */
 import { announceSubordinate, resolveRole, watchSubordinate } from './claim.js';
 import { watchLeadership, type Election, type Role } from './leadership.js';
+import { isPresenceFrame, presenceLeave } from './presenceSeats.js';
 import { createRelaySession, type RelayMember, type RelaySession } from './relay.js';
 import { installCollabUnload } from './tabBind.js';
 
@@ -113,11 +118,18 @@ function defaultOrdered(frame: unknown): boolean {
 }
 
 /** A member whose close is the engine's business, not the relay's. */
-function held<F>(member: RelayMember<F>): RelayMember<F> {
+function held<F>(member: RelayMember<F>, seen?: Set<string>): RelayMember<F> {
 	return {
 		id: member.id,
 		send: (frame) => member.send(frame),
-		subscribe: (handler) => member.subscribe(handler),
+		subscribe: (handler) =>
+			member.subscribe((frame) => {
+				if (seen && isPresenceFrame(frame)) {
+					if (frame.state === null && !frame.ping) seen.delete(frame.clientId);
+					else seen.add(frame.clientId);
+				}
+				handler(frame);
+			}),
 		close: () => {}
 	};
 }
@@ -138,6 +150,8 @@ export function createSessionEngine<F, R extends { close(): void }>(
 	let subordinate = false;
 	let persistOwner = true;
 	const peers = new Map<string, EnginePeer<F>>();
+	/** Presence client ids each peer link has spoken for, until it is dropped. */
+	const seenOver = new Map<string, Set<string>>();
 	let tabRoom: TabRoom<F> | null = null;
 
 	let role: Role | null = null;
@@ -191,7 +205,11 @@ export function createSessionEngine<F, R extends { close(): void }>(
 	function build(next: Role): void {
 		const members: RelayMember<F>[] = [];
 		if (tabRoom) members.push(held(tabRoom.member));
-		for (const [id, peer] of peers) members.push(held({ ...peer.member, id: `peer:${id}` }));
+		for (const [id, peer] of peers) {
+			let seen = seenOver.get(id);
+			if (!seen) seenOver.set(id, (seen = new Set()));
+			members.push(held({ ...peer.member, id: `peer:${id}` }, seen));
+		}
 		const session = createRelaySession<F>({
 			members,
 			forward: (frame) => next === 'replica' || !isOrdered(frame)
@@ -340,11 +358,17 @@ export function createSessionEngine<F, R extends { close(): void }>(
 			const previous = peers.get(id);
 			if (previous === peer) return;
 			if (previous && peer && previous.member === peer.member && previous.role === peer.role) return;
+			const dropped = previous && previous.member !== peer?.member;
+			const gone = dropped ? [...(seenOver.get(id) ?? [])] : [];
+			if (dropped) seenOver.delete(id);
 			if (peer) peers.set(id, peer);
 			else peers.delete(id);
 			syncAnnounce();
 			update();
-			if (previous && previous.member !== peer?.member) previous.member.close();
+			if (dropped) previous.member.close();
+			// Whoever spoke over that link left with it. The other tabs and
+			// peers only heard them through this one, so only this one can say so.
+			for (const clientId of gone) relay?.send(presenceLeave(clientId) as F);
 		},
 		send(frame) {
 			relay?.send(frame);
@@ -363,6 +387,7 @@ export function createSessionEngine<F, R extends { close(): void }>(
 			leaveRoom();
 			for (const peer of peers.values()) peer.member.close();
 			peers.clear();
+			seenOver.clear();
 		}
 	};
 }
