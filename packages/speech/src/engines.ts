@@ -1,7 +1,10 @@
-import { STT_ENGINE_CATALOG, TTS_ENGINE_CATALOG, type SttEngine, type SttEngineId, type TtsEngine, type TtsEngineId } from './types.js';
+import { STT_ENGINE_CATALOG, TTS_ENGINE_CATALOG, type SttEngine, type SttEngineId, type TtsEngine, type TtsEngineId, type TtsLoadOpts } from './types.js';
 
-const sttCache = new Map<SttEngineId, SttEngine>();
-const ttsCache = new Map<TtsEngineId, TtsEngine>();
+/** Load options shared by both engine kinds. */
+export type EngineLoadOpts = TtsLoadOpts & { modelId?: string | null };
+
+const sttLoaded = new Map<SttEngineId, { engine: SttEngine; key: string }>();
+const ttsLoaded = new Map<TtsEngineId, { engine: TtsEngine; key: string }>();
 
 export function listSttEngines(): readonly typeof STT_ENGINE_CATALOG[number][] {
 	return STT_ENGINE_CATALOG;
@@ -11,55 +14,70 @@ export function listTtsEngines(): readonly typeof TTS_ENGINE_CATALOG[number][] {
 	return TTS_ENGINE_CATALOG;
 }
 
-/** Load one STT engine on demand. Cached after first call. */
-export async function loadSttEngine(id: SttEngineId): Promise<SttEngine> {
-	const hit = sttCache.get(id);
-	if (hit) return hit;
-
-	let engine: SttEngine;
+async function importSttEngine(id: SttEngineId): Promise<SttEngine> {
 	if (id === 'webspeech') {
 		const { webspeechStt } = await import('./engines/webspeechStt.js');
-		engine = webspeechStt;
-	} else if (id === 'transformers') {
-		const { transformersStt } = await import('./engines/transformersStt.js');
-		engine = transformersStt;
-	} else if (id === 'ai') {
-		const { aiStt } = await import('./engines/aiStt.js');
-		engine = aiStt;
-	} else {
-		throw new Error(`Unknown STT engine: ${id}`);
+		return webspeechStt;
 	}
+	if (id === 'transformers') {
+		const { transformersStt } = await import('./engines/transformersStt.js');
+		return transformersStt;
+	}
+	if (id === 'ai') {
+		const { aiStt } = await import('./engines/aiStt.js');
+		return aiStt;
+	}
+	throw new Error(`Unknown STT engine: ${id}`);
+}
 
-	await engine.load();
-	sttCache.set(id, engine);
+async function importTtsEngine(id: TtsEngineId): Promise<TtsEngine> {
+	if (id === 'webspeech') {
+		const { webspeechTts } = await import('./engines/webspeechTts.js');
+		return webspeechTts;
+	}
+	if (id === 'kokoro') {
+		const { kokoroTts } = await import('./engines/kokoroTts.js');
+		return kokoroTts;
+	}
+	if (id === 'piper') {
+		const { piperTts } = await import('./engines/piperTts.js');
+		return piperTts;
+	}
+	throw new Error(`Unknown TTS engine: ${id}`);
+}
+
+/**
+ * Load one STT engine on demand. The (model, dir) pair is part of the cache
+ * key so a folder change re-runs `load` — engine instances are singletons
+ * that track their own selected model/dir.
+ */
+export async function loadSttEngine(id: SttEngineId, opts?: EngineLoadOpts): Promise<SttEngine> {
+	const key = `${opts?.modelId ?? ''}|${opts?.dirId ?? ''}`;
+	const hit = sttLoaded.get(id);
+	if (hit && hit.key === key) return hit.engine;
+
+	const engine = hit?.engine ?? (await importSttEngine(id));
+	await engine.load(opts?.modelId ?? undefined, opts);
+	sttLoaded.set(id, { engine, key });
 	return engine;
 }
 
-/** Load one TTS engine on demand. Cached after first call. */
-export async function loadTtsEngine(id: TtsEngineId): Promise<TtsEngine> {
-	const hit = ttsCache.get(id);
-	if (hit) return hit;
+/** Load one TTS engine on demand. Same (model, dir) cache-key rule. */
+export async function loadTtsEngine(id: TtsEngineId, opts?: TtsLoadOpts): Promise<TtsEngine> {
+	const key = `${opts?.modelId ?? ''}|${opts?.dirId ?? ''}`;
+	const hit = ttsLoaded.get(id);
+	if (hit && hit.key === key) return hit.engine;
 
-	let engine: TtsEngine;
-	if (id === 'webspeech') {
-		const { webspeechTts } = await import('./engines/webspeechTts.js');
-		engine = webspeechTts;
-	} else if (id === 'kokoro') {
-		const { kokoroTts } = await import('./engines/kokoroTts.js');
-		engine = kokoroTts;
-	} else {
-		throw new Error(`Unknown TTS engine: ${id}`);
-	}
-
-	await engine.load();
-	ttsCache.set(id, engine);
+	const engine = hit?.engine ?? (await importTtsEngine(id));
+	await engine.load(opts);
+	ttsLoaded.set(id, { engine, key });
 	return engine;
 }
 
 export function peekSttEngine(id: SttEngineId): SttEngine | null {
-	return sttCache.get(id) ?? null;
+	return sttLoaded.get(id)?.engine ?? null;
 }
 
 export function peekTtsEngine(id: TtsEngineId): TtsEngine | null {
-	return ttsCache.get(id) ?? null;
+	return ttsLoaded.get(id)?.engine ?? null;
 }

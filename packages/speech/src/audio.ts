@@ -44,6 +44,24 @@ export async function decodeToMono16k(blob: Blob): Promise<DecodedAudio> {
 	}
 }
 
+/**
+ * Decode an audio blob (e.g. a piper WAV) to mono Float32 at its native
+ * sample rate — no resample, so TTS output keeps its original quality.
+ */
+export async function decodeMono(blob: Blob): Promise<{ samples: Float32Array; sampleRate: number }> {
+	const AudioCtx =
+		(window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext);
+	if (!AudioCtx) throw new SpeechEngineError('UNSUPPORTED_BROWSER', 'Web Audio is unavailable');
+	const ctx = new AudioCtx();
+	try {
+		const decoded = await ctx.decodeAudioData(await blob.arrayBuffer());
+		const mono = mixDown(decoded);
+		return { samples: mono.samples, sampleRate: mono.sampleRate };
+	} finally {
+		void ctx.close().catch(() => {});
+	}
+}
+
 function mixDown(buffer: AudioBuffer): { samples: Float32Array; sampleRate: number } {
 	const channels = buffer.numberOfChannels;
 	if (channels === 1) return { samples: buffer.getChannelData(0).slice(), sampleRate: buffer.sampleRate };

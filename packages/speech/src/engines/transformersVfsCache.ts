@@ -1,7 +1,10 @@
 /**
  * transformers.js custom cache backed by the VFS model store (v3
  * `CacheInterface`: `match` / `put`). Weights live only in the VFS — no
- * mirrored browser Cache, no duplicated storage.
+ * mirrored browser Cache, no duplicated storage. The model files must already
+ * be there (user-imported); this cache never downloads — a miss makes the
+ * library fetch, which fails under the hub's COEP isolation, so engines
+ * pre-check the catalog before loading.
  *
  * Critical contract: `match` must return `undefined` on a miss so the library
  * fetches the file and calls `put`. A 404 Response would abort the load.
@@ -28,20 +31,18 @@ export function repoPathFromUrl(url: string, repo: string): string | null {
 export function createVfsCache(
 	store: ModelStore,
 	def: SpeechModelDef,
-	opts?: { onProgress?: (p: ModelDownloadProgress) => void }
+	opts: { dirId: string; onProgress?: (p: ModelDownloadProgress) => void }
 ): TransformersCache {
-	let dirIdPromise: Promise<string> | null = null;
-	const dirId = () => (dirIdPromise ??= store.modelDirId(def));
+	const { dirId } = opts;
 
 	return {
 		async match(request) {
 			const url = typeof request === 'string' ? request : 'url' in request ? request.url : String(request);
 			const path = repoPathFromUrl(url, def.repo);
 			if (!path) return undefined;
-			const dir = await dirId();
-			const node = await store.hasFile(dir, path);
-			if (node === 'missing' || node === 'corrupt') return undefined;
-			const blob = await store.readBlob(dir, path);
+			const node = await store.resolveFileNode(dirId, path);
+			if (!node) return undefined;
+			const blob = await store.readBlobPath(dirId, path);
 			return new Response(blob, {
 				status: 200,
 				headers: { 'Content-Type': 'application/octet-stream' }
@@ -54,7 +55,7 @@ export function createVfsCache(
 			// they are re-fetchable by the library on a miss.
 			if (!path) return;
 			if (!response.ok || !response.body) return;
-			await store.ingestResponse(def, path, response, { onProgress: opts?.onProgress });
+			await store.ingestResponse(def, path, response, { dirId, onProgress: opts.onProgress });
 		}
 	};
 }

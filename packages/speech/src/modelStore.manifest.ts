@@ -30,6 +30,8 @@ export type SpeechModelManifest = {
 	dtype: string;
 	files: SpeechModelManifestFile[];
 	downloadedAt: number;
+	/** How the files arrived: fetched by the app, or imported by the user. */
+	origin?: 'imported' | 'downloaded';
 };
 
 /** `<engine>/<modelId>` pair for one catalog entry. */
@@ -58,7 +60,11 @@ export function storedName(repoPath: string): string {
 	return idx >= 0 ? repoPath.slice(idx + 1) : repoPath;
 }
 
-export function manifestFor(def: SpeechModelDef, files: SpeechModelManifestFile[]): SpeechModelManifest {
+export function manifestFor(
+	def: SpeechModelDef,
+	files: SpeechModelManifestFile[],
+	opts?: { origin?: SpeechModelManifest['origin'] }
+): SpeechModelManifest {
 	return {
 		catalogVersion: MANIFEST_CATALOG_VERSION,
 		modelId: def.id,
@@ -68,7 +74,8 @@ export function manifestFor(def: SpeechModelDef, files: SpeechModelManifestFile[
 		revision: def.revision,
 		dtype: def.dtype,
 		files,
-		downloadedAt: Date.now()
+		downloadedAt: Date.now(),
+		...opts
 	};
 }
 
@@ -108,4 +115,23 @@ export function formatModelBytes(bytes: number): string {
 	if (bytes >= 1024 ** 2) return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
 	if (bytes >= 1024) return `${(bytes / 1024).toFixed(0)} KB`;
 	return `${bytes} B`;
+}
+
+/** Repo path → nested folder segments below a model dir, e.g. `onnx/model.onnx` → `['onnx', 'model.onnx']`. */
+export function pathSegments(repoPath: string): string[] {
+	return repoPath.split('/').filter(Boolean);
+}
+
+/**
+ * Do the file basenames present in a folder cover everything `def` needs?
+ * Used when a folder has no manifest — e.g. files the user imported flat from
+ * their Downloads folder. Only basenames are compared; sizes are checked
+ * separately by the caller.
+ */
+export function manifestCovers(
+	def: Pick<SpeechModelDef, 'files'>,
+	presentNames: readonly string[]
+): boolean {
+	const have = new Set(presentNames);
+	return def.files.every((file) => have.has(storedName(file.path)));
 }

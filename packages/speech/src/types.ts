@@ -92,6 +92,8 @@ export type TtsEngineInfo = {
 	/** e.g. ['wav']; empty = this engine cannot export audio. */
 	exportFormats: readonly string[];
 	voices: 'builtin' | 'system' | 'model';
+	/** false when the engine has no speed control (hide the slider). */
+	supportsSpeed?: boolean;
 };
 
 export type TtsRenderSegment = {
@@ -114,6 +116,8 @@ export type TtsSpeakOpts = {
 
 export type TtsLoadOpts = {
 	modelId?: string;
+	/** VFS folder the model was imported into (user-chosen; default tree when omitted). */
+	dirId?: string;
 	device?: 'wasm' | 'webgpu';
 	onProgress?: (p: ModelDownloadProgress) => void;
 	signal?: AbortSignal;
@@ -160,6 +164,8 @@ export interface TtsEngine {
 			speed?: number;
 			signal?: AbortSignal;
 			onProgress?: (p: ModelDownloadProgress) => void;
+			/** VFS folder the model was imported into (overrides the load-time choice). */
+			dirId?: string;
 		}
 	): Promise<TtsRender>;
 	/** Live speak-and-stream playback (works even without renderToBuffer). */
@@ -249,6 +255,17 @@ export const TTS_ENGINE_CATALOG: readonly TtsEngineInfo[] = [
 		renderToBuffer: true,
 		exportFormats: ['wav'],
 		voices: 'model'
+	},
+	{
+		id: 'piper',
+		label: 'Piper (local)',
+		description:
+			'Fast neural voices from the Piper catalog — 100+ language variants, exports WAV. Import a voice pair (.onnx + .onnx.json) into Files, then pick it.',
+		livePlayback: true,
+		renderToBuffer: true,
+		exportFormats: ['wav'],
+		voices: 'model',
+		supportsSpeed: false
 	}
 ] as const;
 

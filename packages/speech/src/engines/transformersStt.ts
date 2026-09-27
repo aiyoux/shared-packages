@@ -40,17 +40,18 @@ async function loadPipeline(
 	mod: { env: TransformEnv; pipeline: (task: string, repo: string, opts?: Record<string, unknown>) => Promise<AsrPipeline> },
 	def: SpeechModelDef,
 	store: ModelStore,
+	dirId: string,
 	opts?: { onProgress?: (p: ModelDownloadProgress) => void; signal?: AbortSignal }
 ): Promise<AsrPipeline> {
-	const cached = pipelines.get(def.id);
+	const key = `${def.id}|${dirId}`;
+	const cached = pipelines.get(key);
 	if (cached) return cached;
-	await store.ensureModel(def, { onProgress: opts?.onProgress, signal: opts?.signal });
-	configureTransformersEnv(mod, createVfsCache(store, def, { onProgress: opts?.onProgress }));
+	configureTransformersEnv(mod, createVfsCache(store, def, { dirId, onProgress: opts?.onProgress }));
 	const pipe = await mod.pipeline('automatic-speech-recognition', def.repo, {
 		dtype: def.dtype,
 		device: 'wasm'
 	});
-	pipelines.set(def.id, pipe);
+	pipelines.set(key, pipe);
 	return pipe;
 }
 
@@ -62,6 +63,7 @@ function modelDefById(id: string | null): SpeechModelDef {
 
 export function createTransformersStt(): SttEngine {
 	let selectedModelId: string | null = null;
+	let selectedDirId: string | undefined;
 	let recorder: import('../mic.js').MicRecorder | null = null;
 
 	async function pipelineFor(
@@ -70,11 +72,13 @@ export function createTransformersStt(): SttEngine {
 	): Promise<{ pipe: AsrPipeline; def: SpeechModelDef }> {
 		const def = modelDefById(modelId ?? selectedModelId ?? defaultSttModel('transformers'));
 		const store = await getSpeechModelStore();
+		const dirId = await store.requireModelDir(def, selectedDirId);
 		const mod = await import('@huggingface/transformers');
 		const pipe = await loadPipeline(
 			mod as unknown as Parameters<typeof loadPipeline>[0],
 			def,
 			store,
+			dirId,
 			opts
 		);
 		return { pipe, def };
@@ -90,6 +94,7 @@ export function createTransformersStt(): SttEngine {
 		async load(modelId, opts) {
 			if (!modelId) throw new SpeechEngineError('NO_MODEL', 'Pick a model first');
 			selectedModelId = modelId;
+			selectedDirId = opts?.dirId;
 			await pipelineFor(modelId, opts);
 		},
 

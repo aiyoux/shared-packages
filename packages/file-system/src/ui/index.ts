@@ -1,5 +1,6 @@
 export { default as FileExplorer } from './FileExplorer.svelte';
 export { default as FileExplorerDialog } from './FileExplorerDialog.svelte';
+export { default as FeFolderPickerDialog } from './FeFolderPickerDialog.svelte';
 export { default as FeTreeView } from './FeTreeView.svelte';
 export { default as UnsavedChangesDialog } from './UnsavedChangesDialog.svelte';
 export { default as TabWaitNotice } from './TabWaitNotice.svelte';

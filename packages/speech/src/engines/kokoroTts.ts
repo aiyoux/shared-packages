@@ -1,7 +1,7 @@
 /**
  * Kokoro-82M TTS via kokoro-js (which runs on transformers.js + ORT wasm).
- * Weights and voice bins download into the shared VFS through the custom
- * cache; text is split into sentences so long renders stream and can cancel.
+ * Weights and voice bins are user-imported into the shared VFS; text is split
+ * into sentences so long renders stream and can cancel.
  */
 
 import {
@@ -12,17 +12,19 @@ import {
 	type TtsRender,
 	type TtsVoice
 } from '../types.js';
-import { KOKORO_82M, KOKORO_VOICES, kokoroVoicePath } from '../models.js';
+import { KOKORO_82M, KOKORO_VOICES, kokoroVoicePath, hfResolveUrl } from '../models.js';
 import type { SpeechModelDef } from '../models.js';
+import { storedName } from '../modelStore.manifest.js';
 import { getSpeechModelStore, type ModelStore } from '../modelStore.js';
 import { createVfsCache } from './transformersVfsCache.js';
 import { configureTransformersEnv } from './transformersEnv.js';
+import { SegmentPlayer, splitSentences } from './playback.js';
 
 const info: TtsEngineInfo = {
 	id: 'kokoro',
 	label: 'Kokoro 82M (local)',
 	description:
-		'Neural TTS running fully in this tab via WebAssembly — 54 voices, exports WAV. Downloads the model into Files on first use.',
+		'Neural TTS running fully in this tab via WebAssembly — 54 voices, exports WAV. Import the model files into Files, then pick a voice.',
 	livePlayback: true,
 	renderToBuffer: true,
 	exportFormats: ['wav'],
@@ -36,56 +38,28 @@ type KokoroTts = {
 	generate: (text: string, opts?: { voice?: string; speed?: number }) => Promise<RawAudio>;
 };
 
-/** Play rendered segments back-to-back; one AudioContext, cancelable. */
-class SegmentPlayer {
-	private ctx: AudioContext | null = null;
-	private current: AudioBufferSourceNode | null = null;
-
-	async play(render: TtsRender, opts?: { signal?: AbortSignal }): Promise<void> {
-		this.ctx ??= new AudioContext();
-		await this.ctx.resume();
-		for (const segment of render.segments) {
-			if (opts?.signal?.aborted || !this.ctx) return;
-			const buffer = this.ctx.createBuffer(1, segment.samples.length, segment.sampleRate);
-			buffer.getChannelData(0).set(segment.samples);
-			await new Promise<void>((resolve) => {
-				if (!this.ctx) return resolve();
-				const source = this.ctx.createBufferSource();
-				source.buffer = buffer;
-				source.connect(this.ctx.destination);
-				this.current = source;
-				source.onended = () => resolve();
-				source.start();
-			});
-		}
-	}
-
-	stop(): void {
-		this.current?.stop();
-		this.current = null;
-	}
-}
-
 export function createKokoroTts(): TtsEngine {
 	const player = new SegmentPlayer();
 	let instance: KokoroTts | null = null;
-	let loadedModelId: string | null = null;
+	let loadedKey: string | null = null;
+	let selectedDirId: string | undefined;
 
 	async function ttsFor(
 		def: SpeechModelDef,
 		store: ModelStore,
+		dirId: string,
 		opts?: { onProgress?: (p: ModelDownloadProgress) => void; signal?: AbortSignal }
 	): Promise<KokoroTts> {
-		if (instance && loadedModelId === def.id) return instance;
-		await store.ensureModel(def, { onProgress: opts?.onProgress, signal: opts?.signal });
+		const key = `${def.id}|${dirId}`;
+		if (instance && loadedKey === key) return instance;
 		const mod = await import('@huggingface/transformers');
-		configureTransformersEnv(mod as unknown as Parameters<typeof configureTransformersEnv>[0], createVfsCache(store, def, { onProgress: opts?.onProgress }));
+		configureTransformersEnv(mod as unknown as Parameters<typeof configureTransformersEnv>[0], createVfsCache(store, def, { dirId, onProgress: opts?.onProgress }));
 		const { KokoroTTS } = await import('kokoro-js');
 		instance = (await KokoroTTS.from_pretrained(def.repo, {
 			dtype: def.dtype,
 			device: 'wasm'
 		})) as unknown as KokoroTts;
-		loadedModelId = def.id;
+		loadedKey = key;
 		return instance;
 	}
 
@@ -94,7 +68,9 @@ export function createKokoroTts(): TtsEngine {
 
 		async load(opts) {
 			const store = await getSpeechModelStore();
-			await ttsFor(KOKORO_82M, store, opts);
+			selectedDirId = opts?.dirId;
+			const dirId = await store.requireModelDir(KOKORO_82M, opts?.dirId);
+			await ttsFor(KOKORO_82M, store, dirId, opts);
 		},
 
 		async listVoices(): Promise<TtsVoice[]> {
@@ -109,10 +85,19 @@ export function createKokoroTts(): TtsEngine {
 		async synthesize(text, opts): Promise<TtsRender> {
 			const store = await getSpeechModelStore();
 			const def = KOKORO_82M;
-			const tts = await ttsFor(def, store, { onProgress: opts?.onProgress, signal: opts?.signal });
+			const dirId = await store.requireModelDir(def, opts?.dirId ?? selectedDirId);
+			const tts = await ttsFor(def, store, dirId, { signal: opts?.signal });
 			const voice = opts?.voice ?? KOKORO_VOICES[0]!.id;
-			// Pre-fetch the chosen voice bin so it lands in Files with the model.
-			await store.ensureExtraFile(def, kokoroVoicePath(voice), { signal: opts?.signal });
+			// The voice bin must be imported like the weights — fetches from HF
+			// are blocked under the hub's COEP isolation.
+			const binPath = kokoroVoicePath(voice);
+			const binNode = await store.resolveFileNode(dirId, binPath);
+			if (!binNode) {
+				throw new SpeechEngineError(
+					'NO_MODEL',
+					`Missing voice file ${storedName(binPath)}. Download it from ${hfResolveUrl(def, binPath)} and import it.`
+				);
+			}
 			const segments: TtsRender['segments'] = [];
 			const sentences = splitSentences(text);
 			for (const sentence of sentences) {
@@ -140,11 +125,6 @@ export function createKokoroTts(): TtsEngine {
 			player.stop();
 		}
 	};
-}
-
-function splitSentences(text: string): string[] {
-	const parts = text.split(/(?<=[.!?;:])\s+/).map((s) => s.trim()).filter(Boolean);
-	return parts.length ? parts : text.trim() ? [text.trim()] : [];
 }
 
 export const kokoroTts: TtsEngine = createKokoroTts();

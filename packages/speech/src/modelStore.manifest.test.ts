@@ -4,10 +4,12 @@ import {
 	MANIFEST_NAME,
 	MODEL_STORE_ROOT_FOLDER,
 	formatModelBytes,
+	manifestCovers,
 	manifestFor,
 	modelFolderKey,
 	modelFolderSegments,
 	parseManifest,
+	pathSegments,
 	sizeMatches,
 	storedName
 } from './modelStore.manifest.js';
@@ -70,5 +72,43 @@ describe('formatModelBytes', () => {
 	it('formats the common model sizes', () => {
 		expect(formatModelBytes(44_204_860)).toBe('42.2 MB');
 		expect(formatModelBytes(31_949_635)).toBe('30.5 MB');
+	});
+});
+
+describe('pathSegments', () => {
+	it('splits nested repo paths and leaves flat names alone', () => {
+		expect(pathSegments('onnx/encoder_model_quantized.onnx')).toEqual(['onnx', 'encoder_model_quantized.onnx']);
+		expect(pathSegments('config.json')).toEqual(['config.json']);
+		expect(pathSegments('voices/af_heart.bin')).toEqual(['voices', 'af_heart.bin']);
+	});
+});
+
+describe('manifestCovers', () => {
+	it('accepts a folder whose flat basenames cover the catalog', () => {
+		const names = WHISPER_TINY.files.map((f) => storedName(f.path));
+		expect(manifestCovers(WHISPER_TINY, names)).toBe(true);
+	});
+
+	it('rejects when any catalog file is absent', () => {
+		const names = WHISPER_TINY.files.map((f) => storedName(f.path)).slice(1);
+		expect(manifestCovers(WHISPER_TINY, names)).toBe(false);
+		expect(manifestCovers(WHISPER_TINY, [])).toBe(false);
+	});
+
+	it('ignores unrelated files in the folder', () => {
+		const names = [...KOKORO_82M.files.map((f) => storedName(f.path)), 'manifest.json', 'notes.txt'];
+		expect(manifestCovers(KOKORO_82M, names)).toBe(true);
+	});
+});
+
+describe('manifest origin', () => {
+	it('defaults to no origin and stamps imported when asked', () => {
+		const base = manifestFor(KOKORO_82M, []);
+		expect(base.origin).toBeUndefined();
+		const imported = manifestFor(KOKORO_82M, [], { origin: 'imported' });
+		expect(imported.origin).toBe('imported');
+		// parseManifest tolerates the optional field round-tripping through JSON.
+		const bytes = new TextEncoder().encode(JSON.stringify(imported));
+		expect(parseManifest(bytes, 'kokoro-82m')?.origin).toBe('imported');
 	});
 });

@@ -45,7 +45,8 @@ export { listSttEngines, listTtsEngines, loadSttEngine, loadTtsEngine, peekSttEn
 export {
 	ModelStore,
 	getSpeechModelStore,
-	type EnsureModelResult,
+	type ImportedModelFile,
+	type ImportedModelResult,
 	type ModelStoreFileState
 } from './modelStore.js';
 
@@ -54,10 +55,12 @@ export {
 	MANIFEST_NAME,
 	MODEL_STORE_ROOT_FOLDER,
 	formatModelBytes,
+	manifestCovers,
 	modelDirPath,
 	modelFolderKey,
 	modelFolderSegments,
 	parseManifest,
+	pathSegments,
 	sizeMatches,
 	storedName,
 	type SpeechModelManifest,
@@ -72,6 +75,7 @@ export {
 	TARGET_SAMPLE_RATE,
 	base64FromBytes,
 	chunkAudio,
+	decodeMono,
 	decodeToMono16k,
 	quietestCut,
 	type AudioChunk,
@@ -102,4 +106,17 @@ export { probeWebspeech, installWebspeechOnDevice } from './engines/webspeechStt
 export { resolveAiBackend } from './engines/aiStt.js';
 export { repoPathFromUrl, createVfsCache } from './engines/transformersVfsCache.js';
 export { configureTransformersEnv } from './engines/transformersEnv.js';
+export { SegmentPlayer, splitSentences } from './engines/playback.js';
 export { KOKORO_SAMPLE_RATE } from './engines/kokoroTts.js';
+export {
+	PIPER_VOICES,
+	piperVoice,
+	piperVoiceDef,
+	piperVoiceIds,
+	piperVoiceList,
+	piperFileUrl,
+	piperConfigPath,
+	DEFAULT_PIPER_VOICE,
+	type PiperVoice
+} from './piperVoices.js';
+export { piperTts } from './engines/piperTts.js';

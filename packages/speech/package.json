@@ -21,6 +21,7 @@
   },
   "dependencies": {
     "@huggingface/transformers": "^3.7.6",
+    "@mintplex-labs/piper-tts-web": "^1.0.5",
     "@shared-packages/file-system": "file:../file-system",
     "hash-wasm": "^4.12.0",
     "kokoro-js": "^1.2.1"

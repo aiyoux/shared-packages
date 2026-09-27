@@ -1,16 +1,17 @@
 /**
- * VFS-backed model weight store. Weights download from a CDN on first use and
- * live as ordinary files under `Speech Models/<engine>/<model>/` in the shared
- * VFS, so they show up in the File Explorer and persist across reloads.
+ * VFS-backed model weight store. The app never downloads weights itself —
+ * users follow per-file download links (plain browser downloads, which bypass
+ * the page's COEP isolation) and import the files into a VFS folder of their
+ * choosing. Engines load from wherever the user pointed them; the legacy
+ * fixed tree `Speech Models/<engine>/<model>/` remains the default location.
  *
  * Provenance lives in a per-model `manifest.json` sidecar (VfsService has no
  * meta-only patch). Corruption handling is size-based; content hashing is an
- * explicit user action (`verifyModel`), never automatic.
+ * explicit user action (`verifyModel`) or part of an import, never automatic.
  */
 
 import {
 	getSharedVfs,
-	blobFromResponse,
 	type VfsNode,
 	type VfsService
 } from '@shared-packages/file-system';
@@ -22,16 +23,21 @@ import {
 	MANIFEST_NAME,
 	MODEL_STORE_ROOT_FOLDER,
 	type SpeechModelManifest,
+	type SpeechModelManifestFile,
+	manifestCovers,
 	manifestFor,
 	modelFolderKey,
 	modelFolderSegments,
 	parseManifest,
+	pathSegments,
 	storedName
 } from './modelStore.manifest.js';
 
 export type ModelStoreFileState = VfsNode | 'missing' | 'corrupt';
 
-export type EnsureModelResult = { dirId: string; fresh: boolean; manifest: SpeechModelManifest };
+export type ImportedModelFile = { path: string; blob: Blob };
+
+export type ImportedModelResult = { dirId: string; manifest: SpeechModelManifest };
 
 export class ModelStore {
 	private constructor(private readonly vfs: VfsService) {}
@@ -62,17 +68,97 @@ export class ModelStore {
 	async rootDirId(): Promise<string> {
 		const folders = await this.vfs.ensureFolders(null, [[MODEL_STORE_ROOT_FOLDER]]);
 		const id = folders.get(MODEL_STORE_ROOT_FOLDER);
-		if (id == null) throw new SpeechEngineError('DOWNLOAD_FAILED', 'Could not create the model store folder');
+		if (id == null) throw new SpeechEngineError('NO_MODEL', 'Could not create the model store folder');
 		return id;
 	}
 
-	/** Folder id for one model, creating the tree if needed. */
-	async modelDirId(def: SpeechModelDef): Promise<string> {
+	/** Default folder id for one model, creating the tree if needed. */
+	async defaultModelDirId(def: SpeechModelDef): Promise<string> {
 		const segments = modelFolderSegments(def);
 		const folders = await this.vfs.ensureFolders(null, [segments]);
 		const id = folders.get(modelFolderKey(def));
-		if (id == null) throw new SpeechEngineError('DOWNLOAD_FAILED', `Could not create the folder for ${def.id}`);
+		if (id == null) throw new SpeechEngineError('NO_MODEL', `Could not create the folder for ${def.id}`);
 		return id;
+	}
+
+	/**
+	 * Resolve the folder holding `def`'s files, without creating anything.
+	 * `startDirId === null` scans the legacy fixed tree. First a manifest
+	 * matching `def.id` wins (BFS, depth ≤ maxDepth); otherwise the first
+	 * folder whose file basenames cover `def.files` does — imports without a
+	 * manifest are still usable.
+	 */
+	async findModelDir(
+		def: SpeechModelDef,
+		startDirId: string | null,
+		opts?: { maxDepth?: number }
+	): Promise<string | null> {
+		await this.ready();
+		const maxDepth = opts?.maxDepth ?? 3;
+		const queue: Array<{ id: string; depth: number }> = [];
+		const visited: string[] = [];
+		const seen = new Set<string>();
+
+		if (startDirId == null) {
+			// Legacy fixed tree, resolved without creating engine/model folders.
+			const rootId = await this.rootDirId();
+			const engine = await this.vfs.childByName(rootId, def.engine);
+			if (engine?.kind === 'folder') {
+				const model = await this.vfs.childByName(engine.id, def.id);
+				if (model?.kind === 'folder') queue.push({ id: model.id, depth: 0 });
+			}
+		} else {
+			queue.push({ id: startDirId, depth: 0 });
+		}
+
+		while (queue.length) {
+			const { id, depth } = queue.shift()!;
+			if (seen.has(id)) continue;
+			seen.add(id);
+			visited.push(id);
+			const manifest = await this.readManifest(id, def.id);
+			if (manifest) return id;
+			if (depth < maxDepth) {
+				const children = await this.vfs.list({ parentId: id });
+				for (const child of children) {
+					if (child.kind === 'folder') queue.push({ id: child.id, depth: depth + 1 });
+				}
+			}
+		}
+
+		for (const id of visited) {
+			const children = await this.vfs.list({ parentId: id });
+			const names = children.filter((c) => c.kind === 'file').map((c) => c.name);
+			if (manifestCovers(def, names)) return id;
+		}
+		return null;
+	}
+
+	/**
+	 * Locate a file by repo path under `dirId`: walk the path's folder
+	 * segments, then fall back to a flat basename lookup (imports land flat,
+	 * and the legacy store stored everything by basename).
+	 */
+	async resolveFileNode(dirId: string, path: string): Promise<VfsNode | null> {
+		const segments = pathSegments(path);
+		const name = segments[segments.length - 1]!;
+		let parent: string | null = dirId;
+		let nested = true;
+		for (const segment of segments.slice(0, -1)) {
+			const next = await this.vfs.childByName(parent, segment);
+			if (!next || next.kind !== 'folder') {
+				nested = false;
+				break;
+			}
+			parent = next.id;
+		}
+		if (nested) {
+			const node = await this.vfs.childByName(parent, name);
+			if (node?.kind === 'file') return node;
+		}
+		// Flat fallback in the starting dir itself.
+		const flat = await this.vfs.childByName(dirId, name);
+		return flat?.kind === 'file' ? flat : null;
 	}
 
 	async hasFile(dirId: string, name: string, expectedBytes?: number): Promise<ModelStoreFileState> {
@@ -83,71 +169,54 @@ export class ModelStore {
 	}
 
 	/**
-	 * Make sure every catalog file for `def` is in the VFS, downloading what
-	 * is missing and (re)writing the manifest sidecar. `fresh` is true when
-	 * anything had to be downloaded.
+	 * Store user-imported files for `def` under `targetDirId` (any folder the
+	 * user chose) and write the manifest sidecar. Files land flat by basename.
+	 * Already-present files with a matching size are left alone, so a retry
+	 * after a partial import only writes what is missing.
 	 */
-	async ensureModel(
+	async importModel(
 		def: SpeechModelDef,
+		files: readonly ImportedModelFile[],
+		targetDirId: string,
 		opts?: { onProgress?: (p: ModelDownloadProgress) => void; signal?: AbortSignal }
-	): Promise<EnsureModelResult> {
+	): Promise<ImportedModelResult> {
 		await this.ready();
-		const dirId = await this.modelDirId(def);
-		const manifestFiles: SpeechModelManifest['files'] = [];
-		let fresh = false;
+		const manifestFiles: SpeechModelManifestFile[] = [];
+		const existingManifest = await this.readManifest(targetDirId, def.id);
 
-		// If a valid manifest exists, reuse its sha256 hashes for unchanged files.
-		const existingManifest = await this.readManifest(dirId, def.id);
-
-		for (const file of def.files) {
-			const prior = existingManifest?.files.find((x) => x.path === file.path);
-			const expected = prior?.bytes ?? file.bytes;
-			const state = await this.hasFile(dirId, file.path, expected);
-			if (state !== 'missing' && state !== 'corrupt') {
-				manifestFiles.push({
-					path: file.path,
-					name: storedName(file.path),
-					bytes: state.size ?? 0,
-					sha256: prior?.sha256,
-					sourceUrl: hfResolveUrl(def, file.path)
-				});
-				continue;
+		for (const file of files) {
+			const name = storedName(file.path);
+			const prior = existingManifest?.files.find((x) => x.name === name);
+			const node = await this.vfs.childByName(targetDirId, name);
+			if (node?.kind === 'file') {
+				const expected = prior?.bytes;
+				if (expected == null || node.size === expected) {
+					manifestFiles.push({
+						path: file.path,
+						name,
+						bytes: node.size ?? 0,
+						sha256: prior?.sha256,
+						sourceUrl: hfResolveUrl(def, file.path)
+					});
+					continue;
+				}
+				// Wrong size: replace rather than pile up a bad copy. Model files
+				// are re-importable, so they are permanently deleted.
+				await this.vfs.permanentDelete(node.id, { recursive: false });
 			}
-			if (state === 'corrupt') await this.discardNode(dirId, file.path);
-			const downloaded = await this.downloadFile(def, file.path, {
-				onProgress: opts?.onProgress,
-				signal: opts?.signal
-			});
-			fresh = true;
+			const { node: written, sha256 } = await this.pumpBlob(file.blob, targetDirId, name, opts);
 			manifestFiles.push({
 				path: file.path,
-				name: storedName(file.path),
-				bytes: downloaded.node.size ?? 0,
-				sha256: downloaded.sha256,
+				name,
+				bytes: written.size ?? 0,
+				sha256,
 				sourceUrl: hfResolveUrl(def, file.path)
 			});
 		}
 
-		const manifest = manifestFor(def, manifestFiles);
-		await this.writeManifest(dirId, def.id, manifest);
-		return { dirId, fresh, manifest };
-	}
-
-	/**
-	 * Pre-fetch one extra file that the runtime will want (e.g. a Kokoro voice
-	 * bin) so it lands in Files alongside the model.
-	 */
-	async ensureExtraFile(
-		def: SpeechModelDef,
-		path: string,
-		opts?: { onProgress?: (p: ModelDownloadProgress) => void; signal?: AbortSignal }
-	): Promise<void> {
-		await this.ready();
-		const dirId = await this.modelDirId(def);
-		const state = await this.hasFile(dirId, path);
-		if (state !== 'missing' && state !== 'corrupt') return;
-		if (state === 'corrupt') await this.discardNode(dirId, path);
-		await this.downloadFile(def, path, { onProgress: opts?.onProgress, signal: opts?.signal });
+		const manifest = manifestFor(def, manifestFiles, { origin: 'imported' });
+		await this.writeManifest(targetDirId, manifest);
+		return { dirId: targetDirId, manifest };
 	}
 
 	/**
@@ -158,12 +227,12 @@ export class ModelStore {
 		def: SpeechModelDef,
 		path: string,
 		res: Response,
-		opts?: { onProgress?: (p: ModelDownloadProgress) => void; signal?: AbortSignal }
+		opts: { dirId: string; onProgress?: (p: ModelDownloadProgress) => void; signal?: AbortSignal }
 	): Promise<void> {
 		if (!res.ok || !res.body) {
-			throw new SpeechEngineError('DOWNLOAD_FAILED', `Cannot ingest ${path}: ${res.status}`);
+			throw new SpeechEngineError('NO_MODEL', `Cannot ingest ${path}: ${res.status}`);
 		}
-		const dirId = await this.modelDirId(def);
+		const { dirId } = opts;
 		const name = storedName(path);
 		const state = await this.hasFile(dirId, path);
 		if (state !== 'missing' && state !== 'corrupt') return;
@@ -186,11 +255,28 @@ export class ModelStore {
 		name: string,
 		opts?: { onProgress?: (p: ModelDownloadProgress) => void; signal?: AbortSignal }
 	): Promise<{ node: VfsNode; sha256: string }> {
+		return this.pumpStream(res.body!.getReader(), contentLength(res), dirId, name, opts);
+	}
+
+	private async pumpBlob(
+		blob: Blob,
+		dirId: string,
+		name: string,
+		opts?: { onProgress?: (p: ModelDownloadProgress) => void; signal?: AbortSignal }
+	): Promise<{ node: VfsNode; sha256: string }> {
+		return this.pumpStream(blob.stream().getReader(), blob.size, dirId, name, opts);
+	}
+
+	private async pumpStream(
+		reader: ReadableStreamDefaultReader<Uint8Array>,
+		total: number | undefined,
+		dirId: string,
+		name: string,
+		opts?: { onProgress?: (p: ModelDownloadProgress) => void; signal?: AbortSignal }
+	): Promise<{ node: VfsNode; sha256: string }> {
 		const hasher = await createSHA256();
 		hasher.init();
 		let transferred = 0;
-		const total = contentLength(res);
-		const reader = res.body!.getReader();
 		const node = await this.vfs.writeFileStream(
 			{ parentId: dirId, name, contentType: 'application/octet-stream' },
 			new ReadableStream<Uint8Array>({
@@ -222,7 +308,7 @@ export class ModelStore {
 			const manifest = (await this.readManifest(dirId, def.id)) ?? manifestFor(def, []);
 			if (manifest.files.some((x) => x.path === entry.path)) return;
 			manifest.files.push({ ...entry });
-			await this.writeManifest(dirId, def.id, manifest);
+			await this.writeManifest(dirId, manifest);
 		} catch {
 			// Manifest bookkeeping is best-effort; the weights themselves are intact.
 		}
@@ -235,7 +321,7 @@ export class ModelStore {
 		return parseManifest(bytes, modelId);
 	}
 
-	private async writeManifest(dirId: string, _modelId: string, manifest: SpeechModelManifest): Promise<void> {
+	private async writeManifest(dirId: string, manifest: SpeechModelManifest): Promise<void> {
 		const body = new Blob([JSON.stringify(manifest, null, '\t')], { type: 'application/json' });
 		await this.vfs.writeFile({
 			parentId: dirId,
@@ -246,46 +332,7 @@ export class ModelStore {
 		});
 	}
 
-	private async downloadFile(
-		def: SpeechModelDef,
-		path: string,
-		opts?: { onProgress?: (p: ModelDownloadProgress) => void; signal?: AbortSignal }
-	): Promise<{ node: VfsNode; sha256?: string }> {
-		const url = hfResolveUrl(def, path);
-		const name = storedName(path);
-		const dirId = await this.modelDirId(def);
-		try {
-			const res = await fetch(url, { signal: opts?.signal });
-			if (!res.ok || !res.body) {
-				throw new SpeechEngineError('DOWNLOAD_FAILED', `${res.status} ${res.statusText} fetching ${path}`);
-			}
-			return await this.pumpInto(res, dirId, name, opts);
-		} catch (error) {
-			if (error instanceof DOMException && error.name === 'AbortError') throw error;
-			// If OPFS streaming is unavailable on this browser, fall back to an
-			// assembled blob write so the model is still obtainable.
-			const blob = await blobFromResponse(await fetch(url, { signal: opts?.signal }), {
-				onProgress: (done_, total_) =>
-					opts?.onProgress?.({ file: name, transferred: done_, total: total_, done: false }),
-				contentType: 'application/octet-stream'
-			});
-			const node = await this.vfs.writeFile({
-				parentId: dirId,
-				name,
-				body: blob,
-				contentType: 'application/octet-stream',
-				onConflict: 'rename'
-			});
-			opts?.onProgress?.({ file: name, transferred: blob.size, total: blob.size, done: true });
-			return { node };
-		}
-	}
-
-	/**
-	 * Remove a bad node so a fresh download can take its name. Model files
-	 * are re-fetchable, so they are permanently deleted rather than trashed —
-	 * trash-then-rewrite would leak a dead copy on every retry.
-	 */
+	/** Remove a bad node so a fresh import can take its name. */
 	private async discardNode(dirId: string, name: string): Promise<void> {
 		const node = await this.vfs.childByName(dirId, storedName(name));
 		if (!node || node.kind !== 'file') return;
@@ -295,15 +342,15 @@ export class ModelStore {
 	/** Explicit user action: re-hash stored files against the manifest. */
 	async verifyModel(
 		def: SpeechModelDef,
-		opts?: { onProgress?: (p: ModelDownloadProgress) => void; signal?: AbortSignal }
-	): Promise<{ ok: boolean; problems: string[] }> {
+		opts?: { dirId?: string; onProgress?: (p: ModelDownloadProgress) => void; signal?: AbortSignal }
+	): Promise<{ ok: boolean; problems: string[]; dirId: string | null }> {
 		await this.ready();
-		const dirId = await this.modelDirId(def);
+		const dirId = opts?.dirId ?? (await this.findModelDir(def, null)) ?? (await this.defaultModelDirId(def));
 		const manifest = await this.readManifest(dirId, def.id);
 		const problems: string[] = [];
 		for (const file of def.files) {
-			const node = await this.vfs.childByName(dirId, file.path);
-			if (!node || node.kind !== 'file') {
+			const node = await this.resolveFileNode(dirId, file.path);
+			if (!node) {
 				problems.push(`${file.path}: missing`);
 				continue;
 			}
@@ -321,7 +368,7 @@ export class ModelStore {
 			if (hasher.digest('hex') !== sha256) problems.push(`${file.path}: checksum mismatch`);
 			opts?.onProgress?.({ file: file.path, transferred: blob.size, total: blob.size, done: true });
 		}
-		return { ok: problems.length === 0, problems };
+		return { ok: problems.length === 0, problems, dirId };
 	}
 
 	async readBlob(dirId: string, name: string): Promise<Blob> {
@@ -336,32 +383,101 @@ export class ModelStore {
 		return this.vfs.readBytes(node.id);
 	}
 
-	async hasModel(def: SpeechModelDef): Promise<boolean> {
+	/** Read a file by repo path under `dirId` (walk + flat fallback). */
+	async readBlobPath(dirId: string, path: string): Promise<Blob> {
+		const node = await this.resolveFileNode(dirId, path);
+		if (!node) throw new SpeechEngineError('NO_MODEL', `Model file ${storedName(path)} is not downloaded yet`);
+		return this.vfs.readBlob(node.id);
+	}
+
+	async readBytesPath(dirId: string, path: string): Promise<Uint8Array> {
+		const node = await this.resolveFileNode(dirId, path);
+		if (!node) throw new SpeechEngineError('NO_MODEL', `Model file ${storedName(path)} is not downloaded yet`);
+		return this.vfs.readBytes(node.id);
+	}
+
+	/** All catalog files present with sane sizes? When `dirId` is omitted the
+	 * legacy fixed tree is checked. */
+	async hasModel(def: SpeechModelDef, dirId?: string): Promise<boolean> {
 		await this.ready();
-		const dirId = await this.modelDirId(def);
+		const dir = dirId ?? (await this.defaultModelDirId(def));
+		const manifest = await this.readManifest(dir, def.id);
 		for (const file of def.files) {
-			const state = await this.hasFile(dirId, file.path, file.bytes);
-			if (state === 'missing' || state === 'corrupt') return false;
+			const node = await this.resolveFileNode(dir, file.path);
+			if (!node) return false;
+			const expected = manifest?.files.find((x) => x.path === file.path)?.bytes ?? file.bytes;
+			if (expected != null && node.size !== expected) return false;
 		}
 		return true;
 	}
 
-	/** Delete one model folder (weights + manifest). */
-	async removeModel(engine: string, modelId: string): Promise<void> {
+	/**
+	 * Resolve `def`'s folder (the chosen one, or a scan from the legacy tree)
+	 * and require every catalog file to be present with a sane size — engines
+	 * call this instead of downloading. Throws `NO_MODEL` naming the missing
+	 * basenames and a download link when anything is absent.
+	 */
+	async requireModelDir(def: SpeechModelDef, dirId?: string): Promise<string> {
 		await this.ready();
-		const segments = [MODEL_STORE_ROOT_FOLDER, engine, modelId];
+		const dir = dirId ?? (await this.findModelDir(def, null));
+		if (!dir) throw this.missingModelError(def, def.files.map((f) => f.path));
+		const manifest = await this.readManifest(dir, def.id);
+		const missing: string[] = [];
+		for (const file of def.files) {
+			const node = await this.resolveFileNode(dir, file.path);
+			if (!node) {
+				missing.push(file.path);
+				continue;
+			}
+			const expected = manifest?.files.find((x) => x.path === file.path)?.bytes ?? file.bytes;
+			if (expected != null && node.size !== expected) missing.push(file.path);
+		}
+		if (missing.length) throw this.missingModelError(def, missing);
+		return dir;
+	}
+
+	private missingModelError(def: SpeechModelDef, paths: readonly string[]): SpeechEngineError {
+		const names = paths.map((p) => storedName(p)).join(', ');
+		const link = hfResolveUrl(def, paths[0]!);
+		return new SpeechEngineError(
+			'NO_MODEL',
+			`Missing model files: ${names}. Download them from ${link} and import them below.`
+		);
+	}
+
+	/** Delete one model's files. With `dirId` only the tracked files and the
+	 * manifest are removed (the folder itself belongs to the user); otherwise
+	 * the whole default model folder goes. */
+	async removeModel(def: SpeechModelDef, opts?: { dirId?: string }): Promise<void> {
+		await this.ready();
+		if (opts?.dirId) {
+			const manifest = await this.readManifest(opts.dirId, def.id);
+			const paths = new Set([
+				...def.files.map((f) => f.path),
+				...(manifest?.files.map((f) => f.path) ?? [])
+			]);
+			for (const path of paths) {
+				const node = await this.resolveFileNode(opts.dirId, path);
+				if (node) await this.vfs.permanentDelete(node.id, { recursive: false });
+			}
+			const manifestNode = await this.vfs.childByName(opts.dirId, MANIFEST_NAME);
+			if (manifestNode?.kind === 'file') {
+				await this.vfs.permanentDelete(manifestNode.id, { recursive: false });
+			}
+			return;
+		}
+		const segments = modelFolderSegments(def);
 		const folders = await this.vfs.ensureFolders(null, [segments]);
-		const dirId = folders.get(segments.join('/'));
+		const dirId = folders.get(modelFolderKey(def));
 		if (dirId == null) return;
 		await this.vfs.permanentDelete(dirId, { recursive: true });
 	}
 
-	/** Everything currently stored, for a manage/delete UI. */
-	async listStoredModels(): Promise<Array<{ engine: string; modelId: string; bytes: number }>> {
+	/** Everything currently stored, for a manage/delete UI. With `dirId`,
+	 * immediate subfolders of the chosen folder are listed instead. */
+	async listStoredModels(opts?: { dirId?: string }): Promise<Array<{ engine: string; modelId: string; bytes: number }>> {
 		await this.ready();
-		const folders = await this.vfs.ensureFolders(null, [[MODEL_STORE_ROOT_FOLDER]]);
-		const rootId = folders.get(MODEL_STORE_ROOT_FOLDER);
-		if (rootId == null) return [];
+		const rootId = opts?.dirId ?? (await this.rootDirId());
 		const result: Array<{ engine: string; modelId: string; bytes: number }> = [];
 		const engines = await this.vfs.list({ parentId: rootId });
 		for (const engine of engines) {
@@ -385,7 +501,7 @@ function contentLength(res: Response): number | undefined {
 	return Number.isFinite(n) ? n : undefined;
 }
 
-/** Shared singleton — all speech engines download through one store. */
+/** Shared singleton — all speech engines load weights through one store. */
 export function getSpeechModelStore(): Promise<ModelStore> {
 	return ModelStore.get();
 }
