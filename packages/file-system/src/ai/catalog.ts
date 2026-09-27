@@ -145,8 +145,14 @@ export async function runAiNativeJob(
 				const onAbort = () => { clearTimeout(timer); reject(new DOMException('Job aborted', 'AbortError')); };
 				timer = setTimeout(() => { opts.signal?.removeEventListener('abort', onAbort); resolve(); }, 750);
 				opts.signal?.addEventListener('abort', onAbort, { once: true });
+				if (opts.signal?.aborted) onAbort();
 			});
 		}
+	} catch (error) {
+		// A failed poll or result transfer leaves a server job running unless we
+		// explicitly cancel it. Aborting an already finished job is harmless.
+		if (!aborted) abortOnServer();
+		throw error;
 	} finally {
 		opts.signal?.removeEventListener('abort', abortOnServer);
 	}
