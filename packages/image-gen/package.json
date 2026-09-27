@@ -1,0 +1,38 @@
+{
+  "name": "@shared-packages/image-gen",
+  "version": "0.1.0",
+  "private": false,
+  "type": "module",
+  "description": "Browser text-to-image engines (Stable Diffusion via onnxruntime-web WebGPU) with a VFS-backed model store.",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./worker": {
+      "types": "./src/sd.worker.ts",
+      "import": "./src/sd.worker.ts",
+      "default": "./src/sd.worker.ts"
+    }
+  },
+  "types": "./src/index.ts",
+  "files": [
+    "src"
+  ],
+  "scripts": {
+    "test": "vitest run",
+    "check": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "^3.7.6",
+    "@shared-packages/file-system": "file:../file-system",
+    "hash-wasm": "^4.12.0",
+    "onnxruntime-web": "1.22.0-dev.20250409-89f8206ba4"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
+  }
+}
