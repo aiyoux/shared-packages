@@ -21,6 +21,7 @@ export type SessionKind =
 	| 'caricature'
 	| 'composition'
 	| 'expressions'
+	| 'presentation'
 	| 'recording';
 
 /** Which app paints this session. Absent on rows written before the shared list. */
