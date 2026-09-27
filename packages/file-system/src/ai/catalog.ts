@@ -73,7 +73,7 @@ async function request(baseUrl: string, path: string, init: RequestInit = {}): P
 			: response.status === 404
 			? (path === '/v1/ai/catalog' ? 'AI_UNSUPPORTED' : 'AI_NOT_FOUND')
 			: response.status === 409 ? 'AI_BUSY' : 'AI_ERROR';
-		throw new AiCredentialsError(code, message);
+		throw new AiCredentialsError(code, message, response.status);
 	}
 	return response;
 }

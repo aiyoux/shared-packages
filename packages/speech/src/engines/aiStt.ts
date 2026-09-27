@@ -91,6 +91,9 @@ export function createAiStt(): SttEngine {
 			} catch (error) {
 				if (error instanceof AiCredentialsError) {
 					if (error.code === 'AI_ABORTED') throw new DOMException('Request aborted', 'AbortError');
+					if (error.status === 400 || error.status === 404) {
+						throw new SpeechEngineError('AI_NOT_FOUND', `Model “${chosen}” may not accept audio input (${error.status})`, error);
+					}
 					const code = ['AI_AUTH', 'AI_NOT_FOUND', 'AI_RATE', 'AI_NETWORK'].includes(error.code)
 						? error.code as 'AI_AUTH' | 'AI_NOT_FOUND' | 'AI_RATE' | 'AI_NETWORK' : 'AI_ERROR';
 					throw new SpeechEngineError(code, error.message, error);
