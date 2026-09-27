@@ -9,6 +9,16 @@
       "types": "./src/index.ts",
       "import": "./src/index.ts",
       "default": "./src/index.ts"
+    },
+    "./service": {
+      "types": "./src/service/index.ts",
+      "import": "./src/service/index.ts",
+      "default": "./src/service/index.ts"
+    },
+    "./service/assets": {
+      "types": "./src/service/assets.ts",
+      "import": "./src/service/assets.ts",
+      "default": "./src/service/assets.ts"
     }
   },
   "types": "./src/index.ts",
@@ -20,6 +30,7 @@
     "check": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
+    "@embedpdf/pdfium": "^2.15.1",
     "pdf-lib": "^1.17.1",
     "pdfjs-dist": "^6.3.289"
   },

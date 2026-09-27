@@ -252,6 +252,16 @@ describe('parsePageRange', () => {
 	it('returns every page for an empty range string', () => {
 		expect(parsePageRange('', 5)).toEqual([0, 1, 2, 3, 4]);
 	});
+
+	it('parses single pages and drops ones out of range', () => {
+		expect(parsePageRange('1, 3, 5', 5)).toEqual([0, 2, 4]);
+		expect(parsePageRange('2-4', 5)).toEqual([1, 2, 3]);
+		expect(parsePageRange('0, 1, 99', 3)).toEqual([0]);
+	});
+
+	it('deduplicates and sorts', () => {
+		expect(parsePageRange('3, 1-2, 2', 4)).toEqual([0, 1, 2]);
+	});
 });
 
 describe('calculatePageFit', () => {
