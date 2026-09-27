@@ -40,3 +40,28 @@ export {
 	type CmEnvelopeSession,
 	type CmEnvelopeSessionOpts
 } from './envelope.js';
+export {
+	createCollabRuntime,
+	type CollabDocFrame,
+	type CollabPort,
+	type CollabRole,
+	type CollabRuntime,
+	type CollabTransport
+} from './docRuntime.js';
+export {
+	createSessionEngine,
+	peerMember,
+	type EnginePeer,
+	type EngineTab,
+	type EngineTransport,
+	type SessionEngine,
+	type SessionEngineOpts
+} from './sessionEngine.js';
+export {
+	createDocSession,
+	type DocSession,
+	type DocSessionFrame,
+	type DocSessionOpts,
+	type DocSessionRole
+} from './docSession.js';
+export { jsonChunker, openPeerLink, PEER_CHUNK_CHARS } from './peerLink.js';
