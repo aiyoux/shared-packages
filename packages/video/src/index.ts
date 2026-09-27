@@ -12,6 +12,12 @@ export {
 	silenceChunk,
 	type RawAudioChunk
 } from './audio.js';
+export {
+	extractAudio,
+	suggestAudioExtractName,
+	type AudioExtractContainer,
+	type ExtractedAudio
+} from './extractAudio.js';
 export { encodeGif, type EncodeGifOpts } from './gif.js';
 export { probeVideoMetadata, type VideoMetadata, type VideoFpsMetrics } from './probe.js';
 export { createVideoUrl, getVideoDuration, getVideoFrameRate, revokeVideoUrl } from './meta.js';
