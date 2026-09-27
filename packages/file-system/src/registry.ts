@@ -30,6 +30,13 @@ const DEFAULT_TYPES: FileTypeDef[] = [
 		schemaVersion: 1
 	},
 	{
+		id: 'pres',
+		extension: '.pres',
+		mime: 'application/x-scratch-pres+json',
+		label: 'Presentation',
+		schemaVersion: 1
+	},
+	{
 		id: 'vrec',
 		extension: '.vrec',
 		mime: 'application/x-scratch-vrec+json',
@@ -55,6 +62,13 @@ const DEFAULT_TYPES: FileTypeDef[] = [
 		extension: '.anim',
 		mime: 'application/x-scratch-anim+json',
 		label: 'Animation',
+		schemaVersion: 1
+	},
+	{
+		id: 'playlist',
+		extension: '.playlist',
+		mime: 'application/x-scratch-playlist+json',
+		label: 'Playlist',
 		schemaVersion: 1
 	},
 	{
@@ -149,7 +163,7 @@ const MULTI_EXT: Partial<Record<FileTypeId, readonly string[]>> = {
 };
 
 /** Product extensions stripped before re-applying a forced primary extension. */
-const STRIPPABLE_PRODUCT_EXT = /\.(skch|ob3d|cari|expr|vrec|vcomp|kb|anim|digr|nodes|vide|json)$/i;
+const STRIPPABLE_PRODUCT_EXT = /\.(skch|ob3d|cari|expr|pres|vrec|vcomp|kb|anim|playlist|digr|nodes|vide|json)$/i;
 
 const registry = new Map<FileTypeId, FileTypeDef>(DEFAULT_TYPES.map((t) => [t.id, t]));
 
