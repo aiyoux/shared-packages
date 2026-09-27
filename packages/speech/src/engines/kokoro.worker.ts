@@ -55,10 +55,12 @@ serveWorkerRpc({
 			repo: string;
 			dtype: string;
 			device: 'wasm' | 'webgpu';
-			files: Record<string, Blob>;
+			files: Record<string, Blob | ArrayBuffer>;
 		};
 		tts = null;
-		const fileMap = new Map(Object.entries(files));
+		const fileMap = new Map(
+			Object.entries(files).map(([path, value]) => [path, value instanceof Blob ? value : new Blob([value])])
+		);
 		const mod = await import('@huggingface/transformers');
 		configureTransformersEnv(
 			mod as unknown as Parameters<typeof configureTransformersEnv>[0],

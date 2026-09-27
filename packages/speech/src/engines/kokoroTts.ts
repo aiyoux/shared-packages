@@ -57,11 +57,28 @@ export function createKokoroTts(): TtsEngine {
 		const key = `${def.id}|${dirId}|${device}`;
 		if (loadedKey === key) return;
 		const store = await getSpeechModelStore();
-		const files: Record<string, Blob> = {};
-		for (const file of def.files) files[file.path] = await store.readBlobPath(dirId, file.path);
+		const files: Record<string, Blob | ArrayBuffer> = {};
+		const transfer: Transferable[] = [];
+		for (const file of def.files) {
+			if (device === 'webgpu' && file.path.endsWith('.onnx')) {
+				// Chrome on Windows ARM can clone an OPFS-backed Blob into a worker
+				// as an empty Blob. Read the weight here and transfer its bytes instead.
+				const bytes = await store.readBytesPath(dirId, file.path);
+				if (bytes.byteLength === 0) {
+					throw new SpeechEngineError('NO_MODEL', `${file.path} read as 0 bytes from Files`);
+				}
+				const buffer = bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength && bytes.buffer instanceof ArrayBuffer
+					? bytes.buffer
+					: bytes.slice().buffer as ArrayBuffer;
+				files[file.path] = buffer;
+				transfer.push(buffer);
+			} else {
+				files[file.path] = await store.readBlobPath(dirId, file.path);
+			}
+		}
 		loadedKey = null;
 		try {
-			await worker.call('load', { repo: def.repo, dtype: def.dtype, device, files });
+			await worker.call('load', { repo: def.repo, dtype: def.dtype, device, files }, transfer);
 		} catch (err) {
 			if (device === 'webgpu') {
 				throw new SpeechEngineError(
