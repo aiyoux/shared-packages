@@ -185,11 +185,14 @@ export class ModelStore {
 		for (const file of files) {
 			const name = storedName(file.path);
 			if (file.blob.size === 0) throw new SpeechEngineError('NO_MODEL', `${name} is empty`);
-			const previous = await this.vfs.childByName(targetDirId, name);
-			if (previous?.kind === 'folder') throw new SpeechEngineError('NO_MODEL', `${name} is a folder in Files`);
+			const previous = await this.resolveFileNode(targetDirId, file.path);
+			const writeDirId = previous?.parentId ?? targetDirId;
+			if (!previous && (await this.vfs.childByName(writeDirId, name))?.kind === 'folder') {
+				throw new SpeechEngineError('NO_MODEL', `${name} is a folder in Files`);
+			}
 			// Keep the old copy until the new OPFS file has closed and reads back.
 			const importName = previous ? `${name}.import-${crypto.randomUUID()}` : name;
-			const { node: staged, sha256 } = await this.pumpBlob(file.blob, targetDirId, importName, opts);
+			const { node: staged, sha256 } = await this.pumpBlob(file.blob, writeDirId, importName, opts);
 			let written = staged;
 			let previousDeleted = false;
 			try {
