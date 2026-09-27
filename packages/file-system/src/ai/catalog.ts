@@ -127,6 +127,7 @@ export async function runAiNativeJob(
 		void request(baseUrl, `${path}/abort`, { method: 'POST' }).catch(() => {});
 	};
 	opts.signal?.addEventListener('abort', abortOnServer, { once: true });
+	if (opts.signal?.aborted) abortOnServer();
 	try {
 		for (;;) {
 			if (opts.signal?.aborted || aborted) throw new DOMException('Job aborted', 'AbortError');
