@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { detectProject, findProjectRoot, folderMarkFromKids } from '../src/ui/detectProject.ts';
+import { classifyFolder, detectProject, findProjectRoot, folderMarkFromKids } from '../src/ui/detectProject.ts';
 import type { ExplorerDriver, ExplorerEntry, ExplorerEntryId } from '../src/ui/explorerDriver.ts';
 
 function driverWith(entries: Array<Pick<ExplorerEntry, 'name' | 'kind'>>): ExplorerDriver {
@@ -109,6 +109,20 @@ function treeDriver(rootChildren: TreeNode[]): ExplorerDriver {
 }
 
 describe('detectProject', () => {
+	it('finds .git beyond the visible listing cap after a packed archive import', async () => {
+		const driver = driverWith([]);
+		const git: ExplorerEntry = { id: 'git', parentId: 'folder', name: '.git', kind: 'folder' };
+		let fullLists = 0;
+		driver.list = async () => ({ entries: [], truncated: true });
+		driver.listAll = async () => {
+			fullLists++;
+			return [git];
+		};
+		assert.deepEqual(await findProjectRoot(driver, 'folder', 'git'), { found: true, id: 'folder' });
+		assert.equal(await classifyFolder(driver, { id: 'folder', kind: 'folder' }), 'git');
+		assert.equal(fullLists, 2);
+	});
+
 	it('is true when a child is named .git (folder)', async () => {
 		const ok = await detectProject(
 			driverWith([

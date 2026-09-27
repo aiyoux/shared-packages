@@ -1365,6 +1365,24 @@ describe('FileExplorer component', () => {
 		expect(integrity.getAttribute('aria-label')).toMatch(/Check project integrity|Project storage/);
 	});
 
+	it('detects Git when extraction adds .git to the open folder', async () => {
+		const folder = await vfs.mkdir(null, 'extracted');
+		render(FileExplorer, {
+			props: { mode: 'manage', vfs, variant: 'panel' }
+		});
+		await viWaitFor(() => !!document.querySelector('[data-testid="fe-folder-row"][data-name="extracted"]'));
+		await fireEvent.dblClick(
+			document.querySelector('[data-testid="fe-folder-row"][data-name="extracted"]') as HTMLElement
+		);
+		await viWaitFor(() =>
+			document.querySelector('[data-testid="fe-crumb"]')?.textContent?.includes('extracted')
+		);
+		expect(document.querySelector('[data-testid="fe-git-enabled-badge"]')).toBeNull();
+
+		await vfs.mkdir(folder.id, '.git');
+		await viWaitFor(() => !!document.querySelector('[data-testid="fe-git-enabled-badge"]'));
+	});
+
 	it('marks git, project, and combined folders in the listing', async () => {
 		const git = await vfs.mkdir(null, 'repo');
 		await vfs.mkdir(git.id, '.git');

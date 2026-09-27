@@ -2,8 +2,9 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { expandBytes, packFiles } from '@shared-packages/compress';
 import { sealVault } from '@shared-packages/crypto';
-import { createVfs } from '../src/index.ts';
+import { createMemoryOpfs, createVfs } from '../src/index.ts';
 import { createLocalExplorerDriver } from '../src/ui/localExplorerDriver.ts';
+import { findProjectRoot } from '../src/ui/detectProject.ts';
 import {
 	collectPackEntries,
 	collectPackSources,
@@ -73,6 +74,64 @@ function noMkdirDriver(writes: string[]): Parameters<typeof writeEntriesToDriver
 }
 
 describe('archiveOps', () => {
+	it('detects an extracted tar repo with keep as packed enabled', async () => {
+		const base = createMemoryOpfs();
+		const vfs = createVfs({
+			dbName: `archive-git-${Date.now()}-${Math.random()}`,
+			opfs: {
+				...base,
+				writeFinal: (path, data) => base.writeFinal(path, data),
+				async readRange(path, offset, length, contentType) {
+					const bytes = (await base.read(path)).subarray(offset, offset + length);
+					return new Blob([bytes as BlobPart], { type: contentType });
+				}
+			},
+			requestPersist: false
+		});
+		await vfs.ready();
+		try {
+			const driver = createLocalExplorerDriver(vfs);
+			const tar = await packFiles(
+				'tarjs',
+				[
+					{ name: 'repo/.git/HEAD', data: enc.encode('ref: refs/heads/main\n') },
+					{ name: 'repo/.git/config', data: enc.encode('[core]\n') },
+					{ name: 'repo/README.md', data: enc.encode('hello\n') }
+				],
+				'tar'
+			);
+			const archive = await driver.writeFile!(null, new File([tar[0]!.data as BlobPart], 'repo.tar'));
+			await runArchiveJob({
+				kind: 'decompress',
+				entries: [archive],
+				driver,
+				dest: 'same',
+				destParentId: null,
+				title: archive.name,
+				compressEngineId: 'tarjs',
+				codec: 'tar',
+				cryptoEngineId: 'webcrypto',
+				password: '',
+				skipSystemFiles: true,
+				wrapInSubfolder: true,
+				pack: true,
+				useHost: false
+			});
+			const container = (await driver.list({ parentId: null })).entries.find(
+				(e) => e.kind === 'folder'
+			)!;
+			const repo = (await driver.list({ parentId: container.id })).entries.find(
+				(e) => e.name === 'repo'
+			)!;
+			assert.deepEqual(await findProjectRoot(driver, repo.id, 'git'), { found: true, id: repo.id });
+			const git = (await vfs.list({ parentId: repo.id })).find((e) => e.name === '.git')!;
+			const head = (await vfs.list({ parentId: git.id })).find((e) => e.name === 'HEAD')!;
+			assert.notEqual((await vfs.db.blobRefs.get(head.blobId!))?.packOffset, undefined);
+		} finally {
+			await vfs.db.delete();
+		}
+	});
+
 	it('names an extract subfolder after the archive', () => {
 		assert.equal(extractContainerName('photos.zip'), 'photos');
 		assert.equal(extractContainerName('src.tar.gz'), 'src');

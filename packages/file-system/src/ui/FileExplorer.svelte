@@ -910,6 +910,9 @@
 		const curParentId = parentId;
 		const d = driver;
 		const vfs = localVfs;
+		// An extract or import can add .git to the open folder without navigation.
+		// Refresh increments this after the new listing has landed.
+		void treeVersion;
 		const gen = ++currentDetectGen;
 		void Promise.all([
 			findProjectRoot(d, curParentId, 'project'),

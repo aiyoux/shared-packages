@@ -47,7 +47,7 @@ async function isProjectFolder(
 		if (matched && isProjectMeta(matched.meta)) return true;
 	}
 	try {
-		const { entries } = await driver.list({ parentId: folderId });
+		const entries = await markerChildren(driver, folderId);
 		return entries.some(
 			(e) =>
 				(wantsGit(marker) && e.name === '.git') ||
@@ -56,6 +56,22 @@ async function isProjectFolder(
 	} catch {
 		return false;
 	}
+}
+
+/** A marker may sit beyond the visible listing's 2,000-entry cap. */
+async function markerChildren(
+	driver: ExplorerDriver,
+	parentId: ExplorerEntryId | null
+): Promise<ExplorerEntry[]> {
+	const listed = await driver.list({ parentId });
+	if (listed.truncated && driver.listAll) {
+		try {
+			return await driver.listAll({ parentId });
+		} catch {
+			// A failed full listing must not hide a marker already in the visible rows.
+		}
+	}
+	return listed.entries;
 }
 
 /** Self, then parents from `getPath`, then explorer root. Deduped. */
@@ -168,10 +184,9 @@ export async function classifyFolder(
 ): Promise<FolderMark> {
 	if (folder.kind === 'file') return 'plain';
 	try {
-		const { entries } = await driver.list({ parentId: folder.id });
+		const entries = await markerChildren(driver, folder.id);
 		return folderMarkFromKids(folder.meta, entries);
 	} catch {
 		return isProjectMeta(folder.meta) ? 'project' : 'plain';
 	}
 }
-
