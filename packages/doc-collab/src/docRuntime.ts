@@ -44,7 +44,15 @@ export type CollabDocFrame<Doc> = LogFrame & {
 	/** The sequencer that numbered this frame. Absent until it is numbered. */
 	sequencer?: string;
 } & (
-		| { kind: 'snapshot'; doc: Doc }
+		| {
+				kind: 'snapshot';
+				doc: Doc;
+				/**
+				 * Ids of the latest edits the document already holds (`appliedIds`):
+				 * a replica drops its own resent copies of them.
+				 */
+				applied?: string[];
+		  }
 		| { kind: 'edit' }
 		| { kind: 'hello'; role: CollabRole }
 		| { kind: 'resync' }
@@ -52,7 +60,10 @@ export type CollabDocFrame<Doc> = LogFrame & {
 
 export type CollabPort<Doc> = {
 	snapshot: () => Doc;
-	replace: (doc: Doc) => void;
+	/** `applied`: the ids of the latest edits `doc` holds, when the snapshot says. */
+	replace: (doc: Doc, applied?: readonly string[]) => void;
+	/** The ids of the latest edits the document holds, sent with a snapshot. */
+	appliedIds?: () => string[];
 	/** False means this edit does not fit the document we hold. */
 	apply: (frame: CollabDocFrame<Doc>) => boolean;
 };
@@ -131,6 +142,7 @@ function createOrderedRuntime<Doc>(
 		frames.announce({
 			kind: 'snapshot',
 			doc: port.snapshot(),
+			...(port.appliedIds ? { applied: port.appliedIds() } : {}),
 			seq: 0,
 			scope: 'doc',
 			clientId,
@@ -147,7 +159,7 @@ function createOrderedRuntime<Doc>(
 		isSnapshot: (frame) => frame.kind === 'snapshot',
 		applyFrame(frame) {
 			if (frame.kind === 'snapshot') {
-				port.replace(frame.doc as Doc);
+				port.replace(frame.doc as Doc, frame.applied);
 				return true;
 			}
 			return port.apply(frame as CollabDocFrame<Doc>);

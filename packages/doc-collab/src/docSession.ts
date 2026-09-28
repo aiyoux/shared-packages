@@ -96,8 +96,30 @@ export function createDocSession<Doc, Op>(opts: DocSessionOpts<Doc, Op>): DocSes
 	const clientId = opts.clientId ?? newId();
 	let doc = opts.initial;
 	let destroyed = false;
-	/** Submitted before any runtime existed; sent once one does. */
+	/** Submitted while no runtime existed, in order; sent once one does. */
 	const held: CollabDocFrame<unknown>[] = [];
+	/**
+	 * Our edits not yet applied in the sequencer's order, oldest first, by
+	 * frame id. A runtime is thrown away when the role changes (the sequencer's
+	 * tab died, froze and was taken over, or a peer came or went), and with it
+	 * whatever it was waiting on; these go to the next runtime, under the same
+	 * ids, so an edit sent to a sequencer that died is not lost.
+	 */
+	const unconfirmed = new Map<string, CollabDocFrame<unknown>>();
+	/**
+	 * Recently applied edit ids. A resent edit the old sequencer did number (and
+	 * that reached this document before it died) is not applied twice.
+	 */
+	const applied = new Set<string>();
+	const APPLIED_LIMIT = 4096;
+	const SNAPSHOT_APPLIED = 256;
+
+	function noteApplied(frameId: string): void {
+		applied.add(frameId);
+		if (applied.size <= APPLIED_LIMIT) return;
+		const oldest = applied.values().next().value;
+		if (oldest !== undefined) applied.delete(oldest);
+	}
 	/** Every open set of seats; presence frames go to each. */
 	const seats = new Set<PresenceSeats<unknown>>();
 
@@ -121,18 +143,33 @@ export function createDocSession<Doc, Op>(opts: DocSessionOpts<Doc, Op>): DocSes
 				},
 				port: {
 					snapshot: () => doc,
-					replace(next) {
+					// Enough to cover edits in flight across a sequencer change, and
+					// small enough to ride every snapshot.
+					appliedIds: () => [...applied].slice(-SNAPSHOT_APPLIED),
+					replace(next, ids) {
 						doc = next;
+						if (ids) {
+							// The snapshot's document is what this one is now: what it holds
+							// is applied, and our copies of those edits are confirmed.
+							applied.clear();
+							for (const id of ids) {
+								noteApplied(id);
+								unconfirmed.delete(id);
+							}
+						}
 						emit('snapshot');
 					},
 					apply(frame) {
 						const op = (frame as CollabDocFrame<Doc> & { op?: Op }).op;
 						if (frame.kind !== 'edit' || op === undefined) return true;
+						if (frame.clientId === clientId) unconfirmed.delete(frame.frameId);
+						if (applied.has(frame.frameId)) return true;
 						try {
 							doc = opts.reduce(doc, op);
 						} catch {
 							return false;
 						}
+						noteApplied(frame.frameId);
 						emit(frame.clientId === clientId ? 'local' : 'remote');
 						return true;
 					}
@@ -142,7 +179,12 @@ export function createDocSession<Doc, Op>(opts: DocSessionOpts<Doc, Op>): DocSes
 		onPersist: (owner) => opts.onPersist?.(owner),
 		onRuntime: (runtime) => {
 			if (!runtime) return;
-			for (const frame of held.splice(0)) runtime.submit(frame);
+			// Edits the last runtime sent and never saw applied go first: they were
+			// made before anything held since. Then what waited for a runtime.
+			const queued = held.splice(0);
+			const waiting = new Set(queued.map((frame) => frame.frameId));
+			for (const frame of unconfirmed.values()) if (!waiting.has(frame.frameId)) runtime.submit(frame);
+			for (const frame of queued) runtime.submit(frame);
 		}
 	});
 
@@ -166,6 +208,7 @@ export function createDocSession<Doc, Op>(opts: DocSessionOpts<Doc, Op>): DocSes
 	});
 
 	function submit(frame: CollabDocFrame<unknown>) {
+		if (frame.kind === 'edit') unconfirmed.set(frame.frameId, frame);
 		const runtime = engine.runtime;
 		if (!runtime) {
 			held.push(frame);
