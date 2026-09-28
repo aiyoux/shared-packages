@@ -10,12 +10,17 @@
  * The list is shared by the tabs of this origin. Window pointers belong to one
  * tab (sessionStorage), so another tab cannot move this tab's windows.
  *
+ * A session another device shares with this one is on the list too, with an
+ * `origin`: windows point at it and the Sessions menu lists it like any other.
+ * It lives only in the tab that holds the link to that device, so it is never
+ * stored or sent to other tabs, and it goes when the link or the share ends.
+ *
  * State lives on `globalThis`: a page can load this package in two module
  * graphs (hub layout and an embedded app), and both must see one list.
  */
 import { persistKv, persistReady } from '@shared-packages/ui/persistKv';
 import { subscribeStorageKey } from '@shared-packages/ui/subscribeStorageKey';
-import type { OpenSession, SessionApp, SessionKind } from './openSessions.js';
+import type { OpenSession, SessionApp, SessionKind, SessionOrigin } from './openSessions.js';
 import {
 	sharedSessionBoard,
 	type SessionBoardStorage,
@@ -52,6 +57,8 @@ type Bag = {
 	shared: SharedSessionBoard | null;
 	boardKey: string;
 	requests: Map<string, WorkspaceSession>;
+	/** Sessions other devices share with this tab, by row id. */
+	joined: Map<string, WorkspaceSession>;
 	changeListeners: Set<() => void>;
 	closeListeners: Set<(event: SessionClosedEvent) => void>;
 	showListeners: Set<(windowId: string, session: WorkspaceSession) => void>;
@@ -68,6 +75,7 @@ function bag(): Bag {
 		shared: null,
 		boardKey: WORKSPACE_SESSIONS_KEY,
 		requests: new Map(),
+		joined: new Map(),
 		changeListeners: new Set(),
 		closeListeners: new Set(),
 		showListeners: new Set(),
@@ -199,7 +207,71 @@ export function sessionRoom(session: { id: string; fileId?: string }): string {
 }
 
 export function listWorkspaceSessions(): WorkspaceSession[] {
+	const stored = shared().board.current().sessions;
+	const joined = bag().joined;
+	return joined.size === 0 ? stored : [...stored, ...joined.values()];
+}
+
+/** This device's own sessions: what it can share with another device. */
+export function ownWorkspaceSessions(): WorkspaceSession[] {
 	return shared().board.current().sessions;
+}
+
+/** The row id a shared session gets on this device. */
+export function joinedSessionId(origin: Pick<SessionOrigin, 'peerId' | 'sessionId'>): string {
+	return `join:${origin.peerId}:${origin.sessionId}`;
+}
+
+/**
+ * A session another device shares with this tab. Adding it again updates it
+ * (a new title, a changed write grant) and keeps the windows showing it.
+ */
+export function addJoinedSession(input: {
+	app: SessionApp;
+	kind: SessionKind;
+	title: string;
+	dirty?: boolean;
+	origin: SessionOrigin;
+}): WorkspaceSession {
+	shared();
+	const id = joinedSessionId(input.origin);
+	const before = bag().joined.get(id);
+	const row: WorkspaceSession = {
+		id,
+		app: input.app,
+		kind: input.kind,
+		title: input.title || before?.title || 'Untitled',
+		dirty: input.dirty ?? before?.dirty ?? false,
+		origin: { ...input.origin },
+		updatedAt: before?.updatedAt ?? Date.now()
+	};
+	if (
+		before &&
+		before.title === row.title &&
+		before.dirty === row.dirty &&
+		before.app === row.app &&
+		before.origin?.write === row.origin?.write &&
+		before.origin?.device === row.origin?.device
+	) {
+		return before;
+	}
+	bag().joined.set(id, row);
+	emitChange();
+	return row;
+}
+
+/**
+ * The share ended (this device left, the other device stopped sharing, or the
+ * link went). Windows showing it hear `onWorkspaceSessionClosed` with the row,
+ * whose `origin` tells them to keep what they hold as their own copy.
+ */
+export function endJoinedSession(id: string): WorkspaceSession | undefined {
+	const row = bag().joined.get(id);
+	if (!row) return undefined;
+	bag().joined.delete(id);
+	emitClosed(row, true);
+	emitChange();
+	return row;
 }
 
 export function findWorkspaceSession(id: string | null | undefined): WorkspaceSession | undefined {
@@ -232,7 +304,6 @@ export function noteWorkspaceSession(input: {
 	title: string;
 	fileId?: string;
 	dirty?: boolean;
-	remote?: boolean;
 	roomLabel?: string | null;
 }): WorkspaceSession {
 	const board = shared().board;
@@ -245,6 +316,7 @@ export function noteWorkspaceSession(input: {
 
 /** Close a session for every tab. Windows showing it hear `onWorkspaceSessionClosed`. */
 export function closeWorkspaceSession(id: string): WorkspaceSession | undefined {
+	if (bag().joined.has(id)) return endJoinedSession(id);
 	const row = shared().board.forget(id);
 	if (!row) return undefined;
 	emitClosed(row, true);
@@ -339,7 +411,7 @@ export function bootWindowSession(
 	const shown = new Set(Object.values(storage().readWindows()));
 	return (
 		// Newest first; on a tie, the row added later.
-		[...listWorkspaceSessions()]
+		[...ownWorkspaceSessions()]
 			.reverse()
 			.filter((row) => row.app === app && !shown.has(row.id))
 			.sort((a, b) => b.updatedAt - a.updatedAt)[0] ?? null
@@ -358,6 +430,7 @@ export function _resetWorkspaceSessionsForTest(next?: WorkspaceStorage): void {
 	b.storage = next ?? null;
 	b.boardKey = `${WORKSPACE_SESSIONS_KEY}:test:${Math.random().toString(36).slice(2)}`;
 	b.requests.clear();
+	b.joined.clear();
 	b.changeListeners.clear();
 	b.closeListeners.clear();
 	b.showListeners.clear();

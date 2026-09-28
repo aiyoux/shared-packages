@@ -8,7 +8,6 @@ function session(partial: Partial<OpenSession> & Pick<OpenSession, 'id' | 'updat
 		kind: 'sketch',
 		title: partial.id,
 		dirty: false,
-		remote: false,
 		...partial
 	};
 }

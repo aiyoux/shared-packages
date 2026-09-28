@@ -50,10 +50,28 @@ export type OpenSession = {
 	title: string;
 	fileId?: string;
 	dirty: boolean;
-	remote: boolean;
+	/**
+	 * Set on a session another device shares with this one (joined from the
+	 * Sessions menu, or an invite this device accepted). Such a row lives only
+	 * in the tab that holds the link to that device: it is never stored or
+	 * merged, and it goes when the link or the share ends.
+	 */
+	origin?: SessionOrigin;
 	/** Checked-out project room, when this file lives in a project. A label, not a switch. */
 	roomLabel?: string;
 	updatedAt: number;
+};
+
+/** Where a session shared by another device lives. */
+export type SessionOrigin = {
+	/** The link to that device, as the workspace host names it. */
+	peerId: string;
+	/** That device's name, for the Sessions menu. */
+	device: string;
+	/** The session's id on that device: the tag its frames carry. */
+	sessionId: string;
+	/** False when this device may only view it. */
+	write: boolean;
 };
 
 /**
@@ -106,7 +124,6 @@ export function joinOrCreate(
 		/** When false, this tab's connected session stays where it was. */
 		connect?: boolean;
 		dirty?: boolean;
-		remote?: boolean;
 		roomLabel?: string | null;
 		now?: number;
 	}
@@ -123,8 +140,7 @@ export function joinOrCreate(
 			kind: input.kind,
 			...(input.app ? { app: input.app } : {}),
 			...(fileId ? { fileId } : {}),
-			dirty: input.dirty ?? existing.dirty,
-			remote: input.remote ?? existing.remote
+			dirty: input.dirty ?? existing.dirty
 		};
 		if (input.roomLabel !== undefined) {
 			if (input.roomLabel) next.roomLabel = input.roomLabel;
@@ -137,7 +153,6 @@ export function joinOrCreate(
 			next.app !== existing.app ||
 			next.fileId !== existing.fileId ||
 			next.dirty !== existing.dirty ||
-			next.remote !== existing.remote ||
 			next.roomLabel !== existing.roomLabel;
 		if (!changed) return { index, session: existing, changed: false };
 		const session: OpenSession = { ...next, updatedAt: now };
@@ -159,7 +174,6 @@ export function joinOrCreate(
 		title: input.title || 'Untitled',
 		...(fileId ? { fileId } : {}),
 		dirty: input.dirty ?? false,
-		remote: input.remote ?? false,
 		...(input.roomLabel ? { roomLabel: input.roomLabel } : {}),
 		updatedAt: now
 	};
