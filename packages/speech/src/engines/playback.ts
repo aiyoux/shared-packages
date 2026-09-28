@@ -11,21 +11,33 @@ export class SegmentPlayer {
 	private current: AudioBufferSourceNode | null = null;
 
 	async play(render: TtsRender, opts?: { signal?: AbortSignal }): Promise<void> {
+		// A new play supersedes anything still sounding (a previous run the
+		// caller didn't stop first).
+		this.stop();
 		this.ctx ??= new AudioContext();
 		await this.ctx.resume();
-		for (const segment of render.segments) {
-			if (opts?.signal?.aborted || !this.ctx) return;
-			const buffer = this.ctx.createBuffer(1, segment.samples.length, segment.sampleRate);
-			buffer.getChannelData(0).set(segment.samples);
-			await new Promise<void>((resolve) => {
-				if (!this.ctx) return resolve();
-				const source = this.ctx.createBufferSource();
-				source.buffer = buffer;
-				source.connect(this.ctx.destination);
-				this.current = source;
-				source.onended = () => resolve();
-				source.start();
-			});
+		// Stop must cut audio the moment it fires, not at the next loop check:
+		// while the caller is off awaiting the next sentence's render, the
+		// signal is not observed anywhere else. Wire it to the live source.
+		const onAbort = (): void => this.stop();
+		opts?.signal?.addEventListener('abort', onAbort);
+		try {
+			for (const segment of render.segments) {
+				if (opts?.signal?.aborted || !this.ctx) return;
+				const buffer = this.ctx.createBuffer(1, segment.samples.length, segment.sampleRate);
+				buffer.getChannelData(0).set(segment.samples);
+				await new Promise<void>((resolve) => {
+					if (!this.ctx || opts?.signal?.aborted) return resolve();
+					const source = this.ctx.createBufferSource();
+					source.buffer = buffer;
+					source.connect(this.ctx.destination);
+					this.current = source;
+					source.onended = () => resolve();
+					source.start();
+				});
+			}
+		} finally {
+			opts?.signal?.removeEventListener('abort', onAbort);
 		}
 	}
 
