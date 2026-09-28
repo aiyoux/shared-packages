@@ -83,6 +83,11 @@ async function request(baseUrl: string, path: string, init: RequestInit = {}): P
 	return response;
 }
 
+/** Keyless transport to a monitor's `/v1/ai/**` surface with the shared error
+ * taxonomy. Task surfaces (chat, media, transcription) use it directly; the
+ * library and native-model management clients live in library.ts. */
+export { request as aiMonitorRequest };
+
 export type AiChatMessage = {
 	role: 'system' | 'user' | 'assistant';
 	content: string | Array<{ type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } }>;

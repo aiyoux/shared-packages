@@ -30,6 +30,18 @@ export {
 	toAiCredentialsError
 } from './errors.js';
 export {
+	addAiNativeModel,
+	deleteAiNativeModel,
+	installAiLibraryModel,
+	listAiLibrary,
+	listAiNativeModels,
+	removeAiLibraryModel,
+	type AiLibraryEntry,
+	type AiLibraryListResult,
+	type AiNativeModelInput,
+	type AiNativeModelRow
+} from './library.js';
+export {
 	closeSelectionDbForTests,
 	DEFAULT_SELECTION,
 	getAiSelection,
