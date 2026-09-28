@@ -1,25 +1,35 @@
-import type { ScanEngine, ScanLoadProgress } from './types.js';
+import { SCAN_DETECTORS, resolveDetectorId } from './detectors.js';
+import type { ScanDetectorId, ScanEngine, ScanLoadProgress } from './types.js';
 
 const CACHE_KEY = '__spScanEngine';
+const LAST_KEY = '__spScanLastDetector';
 const URL_KEY = '__spScanOpenCvUrl';
 
-function getCached(): ScanEngine | null {
-	return ((globalThis as Record<string, unknown>)[CACHE_KEY] as ScanEngine | undefined) ?? null;
-}
-
-function setCached(engine: ScanEngine | null) {
-	(globalThis as Record<string, unknown>)[CACHE_KEY] = engine;
-}
-
-let cached: ScanEngine | null = getCached();
+const engines = new Map<ScanDetectorId, ScanEngine>();
 let opencvUrl: string | undefined = (globalThis as Record<string, unknown>)[URL_KEY] as
 	| string
 	| undefined;
 
+function getLast(): ScanDetectorId | null {
+	const saved = (globalThis as Record<string, unknown>)[LAST_KEY] as unknown;
+	const id = resolveDetectorId(saved);
+	if (saved !== id) return null;
+	return (saved as ScanDetectorId) ?? null;
+}
+
+function rememberLast(id: ScanDetectorId) {
+	(globalThis as Record<string, unknown>)[LAST_KEY] = id;
+	(globalThis as Record<string, unknown>)[CACHE_KEY] = engines.get(id) ?? null;
+}
+
 export type LoadScanOptions = {
+	/** Detector backend. Defaults to the last loaded one, else `opencv`. */
+	detector?: ScanDetectorId | string;
 	/** Classic-script URL for opencv.js (required in Vite/ESM). */
 	opencvUrl?: string;
-	/** Download / worker-init progress. Safe to call from the UI. */
+	/** Weight URL for single-file ONNX detectors (docquad, docaligner, yolo-pose). */
+	modelUrl?: string;
+	/** Download / init progress. Safe to call from the UI. */
 	onProgress?: (info: ScanLoadProgress) => void;
 };
 
@@ -32,23 +42,58 @@ export function getOpenCvUrl(): string | undefined {
 	return opencvUrl ?? ((globalThis as Record<string, unknown>)[URL_KEY] as string | undefined);
 }
 
-/** Load OpenCV.js once. Safe to call from the UI on “Start camera”. */
+/** Load (and cache, per detector) the selected detector engine. Safe to call from the UI. */
 export async function loadScanEngine(opts: LoadScanOptions = {}): Promise<ScanEngine> {
-	if (opts.opencvUrl) setOpenCvUrl(opts.opencvUrl);
-	cached = getCached();
-	if (cached) return cached;
-	const { opencvEngine, setOpenCvProgress } = await import('./engines/opencv.js');
-	setOpenCvProgress(opts.onProgress);
-	try {
-		await opencvEngine.load();
-	} finally {
-		setOpenCvProgress(undefined);
+	if (opts.detector !== undefined && resolveDetectorId(opts.detector) !== opts.detector) {
+		throw new Error(`Unknown scan detector '${opts.detector}'. Refusing to substitute another backend.`);
 	}
-	cached = opencvEngine;
-	setCached(cached);
-	return cached;
+	const detector = resolveDetectorId(opts.detector ?? getLast() ?? undefined);
+	if (opts.opencvUrl) setOpenCvUrl(opts.opencvUrl);
+	const hit = engines.get(detector);
+	if (hit) {
+		rememberLast(detector);
+		return hit;
+	}
+	const meta = SCAN_DETECTORS[detector];
+	const modelUrl = opts.modelUrl ?? meta.defaultModelUrl;
+	if (meta.needsModelUrl && !modelUrl) {
+		throw new Error(
+			`${meta.label} needs a model URL. Set one in the scan tool, then reselect this detector. ${meta.weightHint}`
+		);
+	}
+	let engine: ScanEngine;
+	if (detector === 'opencv') {
+		const { opencvEngine, setOpenCvProgress } = await import('./engines/opencv.js');
+		setOpenCvProgress(opts.onProgress);
+		try {
+			await opencvEngine.load();
+		} finally {
+			setOpenCvProgress(undefined);
+		}
+		engine = opencvEngine;
+	} else if (detector === 'scanic') {
+		const { createScanicEngine } = await import('./engines/scanic.js');
+		engine = createScanicEngine({ modelUrl: opts.modelUrl });
+		await engine.load();
+	} else {
+		const { createOnnxQuadEngine } = await import('./engines/onnxQuad.js');
+		engine = createOnnxQuadEngine({
+			id: detector,
+			modelUrl: modelUrl ?? '',
+			mode: meta.decode ?? 'heatmap',
+			inputSize: meta.modelInputSize ?? 256,
+			keypoints: 4,
+			onProgress: opts.onProgress
+		});
+		await engine.load();
+	}
+	engines.set(detector, engine);
+	rememberLast(detector);
+	return engine;
 }
 
 export function peekScanEngine(): ScanEngine | null {
-	return cached;
+	const last = getLast();
+	if (last) return engines.get(last) ?? null;
+	return (globalThis as Record<string, unknown>)[CACHE_KEY] as ScanEngine | null ?? null;
 }

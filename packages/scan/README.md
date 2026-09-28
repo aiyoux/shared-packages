@@ -19,6 +19,26 @@ const pdf = await pagesToPdf([page]);
 
 `loadScanEngine()` / `commitScan()` / `recognizeText()` / `pagesToPdf()` dynamically import their libraries on first use.
 
+## Detectors
+
+```ts
+const engine = await loadScanEngine({
+  detector: 'docquad', // 'opencv' | 'scanic' | 'docquad' | 'docaligner' | 'yolo-pose'
+  modelUrl: 'https://…/docquad.onnx' // required for docquad, docaligner, yolo-pose
+});
+```
+
+`SCAN_DETECTORS` / `SCAN_DETECTOR_ORDER` / `resolveDetectorId()` in
+`src/detectors.ts` are the single registry: label, runtime, license, weight
+provenance, and whether a model URL is required. `opencv` is the default and
+needs no weights. Learned detectors download weights on first use into the
+browser HTTP cache and run in onnxruntime-web; warp is the shared pure-JS
+perspective warp and enhance delegates to the OpenCV worker. Selection is the
+consumer's job (persist the exact id, repair only unknown ids to `opencv`,
+never silently swap a working detector) — see the scan tool's detector picker.
+No weight URLs are invented here: configure per deployment after checking each
+model's license.
+
 ## Local development
 
 Consumers depend on this package via `file:`. Edit here and they HMR. Run `npm install` in a consumer only when `exports` change.

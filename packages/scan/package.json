@@ -21,7 +21,8 @@
   "dependencies": {
     "@techstark/opencv-js": "^5.0.0-release.1",
     "pdf-lib": "^1.17.1",
-    "tesseract.js": "^7.0.0"
+    "tesseract.js": "^7.0.0",
+    "scanic": "^1.6.0"
   },
   "devDependencies": {
     "@types/node": "^26.1.1",

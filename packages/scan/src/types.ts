@@ -37,8 +37,15 @@ export type ScanLoadProgress = {
 	total?: number;
 };
 
+/**
+ * Document-corner detector backends. `opencv` is the bundled classical
+ * pipeline; the rest are learned models that download weights on first use
+ * (browser cache) and never silently substitute for each other.
+ */
+export type ScanDetectorId = 'opencv' | 'scanic' | 'docquad' | 'docaligner' | 'yolo-pose';
+
 export type ScanEngine = {
-	readonly id: 'opencv';
+	readonly id: ScanDetectorId;
 	load(): Promise<void>;
 	detectQuad(image: ImageData, opts?: DetectOptions): Promise<Quad | null>;
 	warp(image: ImageData, quad: Quad, opts?: WarpOptions): Promise<ImageData>;

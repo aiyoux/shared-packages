@@ -5,11 +5,20 @@ export type {
 	Point,
 	Quad,
 	QuadLockStatus,
+	ScanDetectorId,
 	ScanEngine,
 	ScanLoadProgress,
 	ScanPage,
 	WarpOptions
 } from './types.js';
+export {
+	DEFAULT_DETECTOR,
+	SCAN_DETECTOR_ORDER,
+	SCAN_DETECTORS,
+	resolveDetectorId,
+	type OnnxDecodeMode,
+	type ScanDetectorMeta
+} from './detectors.js';
 
 export { plainJson, plainPoint, plainQuad, workerPayload } from './cloneable.js';
 export {
