@@ -108,10 +108,9 @@ export function createAiStt(): SttEngine {
 			} catch (error) {
 				if (error instanceof AiCredentialsError) {
 					if (error.code === 'AI_ABORTED') throw new DOMException('Request aborted', 'AbortError');
-					const code = ['AI_AUTH', 'AI_NOT_FOUND', 'AI_RATE', 'AI_NETWORK', 'AI_BUSY', 'AI_UNSUPPORTED'].includes(
-						error.code
-					)
-						? error.code
+					const known = ['AI_AUTH', 'AI_NOT_FOUND', 'AI_RATE', 'AI_NETWORK', 'AI_BUSY', 'AI_UNSUPPORTED'] as const;
+					const code = (known as readonly string[]).includes(error.code)
+						? (error.code as (typeof known)[number])
 						: 'AI_ERROR';
 					throw new SpeechEngineError(code, error.message, error);
 				}
