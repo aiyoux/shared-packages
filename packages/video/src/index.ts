@@ -21,6 +21,7 @@ export {
 export { encodeGif, type EncodeGifOpts } from './gif.js';
 export {
 	audioOnlyContainer,
+	canEncodeAudioOnly,
 	encodeAudioOnly,
 	type AudioOnlyFormat
 } from './audioOnly.js';

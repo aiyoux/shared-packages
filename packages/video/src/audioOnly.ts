@@ -10,6 +10,7 @@ import {
 	AudioSample,
 	AudioSampleSource,
 	BufferTarget,
+	canEncodeAudio,
 	Mp4OutputFormat,
 	OggOutputFormat,
 	Output,
@@ -31,6 +32,30 @@ const AUDIO_ONLY_CODEC: Record<AudioOnlyFormat, AudioCodec> = {
 
 export function audioOnlyContainer(format: AudioOnlyFormat): { mime: string; ext: string } {
 	return AUDIO_ONLY_CONTAINER[format];
+}
+
+const AUDIO_ONLY_BITRATE = 128_000;
+
+/**
+ * Whether this browser can encode `format` for audio of this shape. Offer a
+ * format only where this is true: Chromium without proprietary codecs (the
+ * open-source build, as opposed to Chrome) has no AAC encoder at all, and an
+ * encode there fails only after the user presses Process.
+ */
+export async function canEncodeAudioOnly(
+	format: AudioOnlyFormat,
+	shape: { numberOfChannels: number; sampleRate: number },
+	opts: { bitrate?: number } = {}
+): Promise<boolean> {
+	if (typeof AudioSample === 'undefined' || typeof Output === 'undefined') return false;
+	try {
+		return await canEncodeAudio(AUDIO_ONLY_CODEC[format], {
+			...shape,
+			bitrate: opts.bitrate ?? AUDIO_ONLY_BITRATE
+		});
+	} catch {
+		return false;
+	}
 }
 
 /**
@@ -56,7 +81,7 @@ export async function encodeAudioOnly(
 	});
 	const source = new AudioSampleSource({
 		codec: AUDIO_ONLY_CODEC[format],
-		bitrate: opts.bitrate ?? 128_000
+		bitrate: opts.bitrate ?? AUDIO_ONLY_BITRATE
 	});
 	output.addAudioTrack(source);
 	const started = output.start();
