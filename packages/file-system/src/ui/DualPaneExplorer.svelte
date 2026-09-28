@@ -9,6 +9,9 @@
 	 */
 	import { onMount, onDestroy, type Snippet } from 'svelte';
 	import { default as FileExplorer } from './FileExplorer.svelte';
+	// Types `onfeexplorerdragbegin` / `onfeexplorerdragend` below in every program
+	// that compiles this component, not only this package's own.
+	import type {} from './customEvents.js';
 	import type {
 		ExplorerContext,
 		ExplorerMode,

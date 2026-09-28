@@ -1,3 +1,4 @@
+/// <reference path="./pdfjsWorker.d.ts" />
 /**
  * The per-document jobs the PDF service runs, on whichever thread hosts it.
  *

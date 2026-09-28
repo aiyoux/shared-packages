@@ -1,3 +1,4 @@
+/// <reference path="./gifenc.d.ts" />
 import * as gifencNs from 'gifenc';
 
 type GifencApi = Pick<typeof gifencNs, 'GIFEncoder' | 'quantize' | 'applyPalette'>;

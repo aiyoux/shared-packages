@@ -7,7 +7,3 @@ declare module '*?url' {
 	const url: string;
 	export default url;
 }
-// pdfjs-dist ships no types for its worker entry; only the handler is read.
-declare module 'pdfjs-dist/legacy/build/pdf.worker.mjs' {
-	export const WorkerMessageHandler: unknown;
-}

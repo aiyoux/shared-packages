@@ -11,6 +11,7 @@
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json"
   },
   "dependencies": {
+    "@shared-packages/design-system": "^0.1.0",
     "@shared-packages/ui": "^0.1.0",
     "clsx": "^2.1.1",
     "dompurify": "^3.4.12",

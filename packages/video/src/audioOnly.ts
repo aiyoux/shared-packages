@@ -39,7 +39,7 @@ export function audioOnlyContainer(format: AudioOnlyFormat): { mime: string; ext
  * the file bytes; throws on encoder or mux errors.
  */
 export async function encodeAudioOnly(
-	chunks: AsyncIterable<RawAudioChunk>,
+	chunks: AsyncIterable<RawAudioChunk> | Iterable<RawAudioChunk>,
 	format: AudioOnlyFormat,
 	opts: { bitrate?: number } = {}
 ): Promise<Uint8Array<ArrayBuffer>> {
