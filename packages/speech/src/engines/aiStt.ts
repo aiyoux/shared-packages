@@ -1,25 +1,25 @@
 /**
- * STT through the monitor's AI connection. The monitor's
- * `/v1/ai/chat/completions` forwards the body unmodified, so OpenAI-style
- * `input_audio` content parts reach audio-capable upstreams without any
- * daemon change. Keys stay daemon-side; requests are keyless.
+ * STT through the monitor connection. The run goes to the transcription offer
+ * picked from the monitor's catalog: a configured runtime on the monitor PC
+ * (cancellable job) or a declared transcription API reached through it. Keys
+ * stay daemon-side; requests are keyless.
  */
 
-import { resolveAiMonitor, requestAiChatCompletion, AiCredentialsError, type AiMonitor } from '@shared-packages/file-system/ai';
+import { resolveAiMonitor, runAiTranscription, AiCredentialsError, type AiMonitor } from '@shared-packages/file-system/ai';
 import { SpeechEngineError, type SttEngine, type SttEngineInfo, type SttResult } from '../types.js';
-import { base64FromBytes, decodeToMono16k, DURATION_MAX_MS, TARGET_SAMPLE_RATE } from '../audio.js';
+import { base64FromBytes, DURATION_MAX_MS, TARGET_SAMPLE_RATE } from '../audio.js';
+import { checkAiAudioSize } from '../aiParts.js';
 import { encodeWav } from '../wav.js';
-import { buildSttAudioMessages, checkAiAudioSize } from '../aiParts.js';
 
 const info: SttEngineInfo = {
 	id: 'ai',
-	label: 'AI connector (monitor)',
+	label: 'Monitor (AI models)',
 	description:
-		'Sends the recording to an audio-capable model through your monitor’s AI connection. Needs a connected monitor.',
+		'Transcribes with a model that runs on the monitor PC, or one on a configured API profile reached through it. Needs a connected monitor; the model list comes from the monitor’s catalog.',
 	supportsMic: false,
 	supportsFileInput: true,
 	streamingPartials: false,
-	languageSelection: false,
+	languageSelection: true,
 	onDevice: false
 };
 
@@ -49,7 +49,7 @@ export function createAiStt(): SttEngine {
 		async startListening() {
 			throw new SpeechEngineError(
 				'UNSUPPORTED_BROWSER',
-				'The AI engine transcribes recordings, not live listening — record first, or use another engine'
+				'The monitor engine transcribes recordings, not live listening — record first, or use another engine'
 			);
 		},
 
@@ -68,52 +68,55 @@ export function createAiStt(): SttEngine {
 					'No monitor with an AI connection is reachable — connect one in Connections'
 				);
 			}
+			if (opts?.aiMonitorBaseUrl && monitor.baseUrl !== opts.aiMonitorBaseUrl) {
+				throw new SpeechEngineError(
+					'AI_NO_BACKEND',
+					'The active monitor changed — refresh the model list and try again'
+				);
+			}
+			const offer = opts?.aiOffer;
+			if (!offer) throw new SpeechEngineError('NO_MODEL', 'Pick a model from the monitor’s catalog first');
+
 			const durationMs = Math.round((audio.length / sampleRate) * 1000);
 			const size = checkAiAudioSize(durationMs);
 			if (durationMs > DURATION_MAX_MS || size.tooLarge) {
 				throw new SpeechEngineError(
 					'AUDIO_TOO_LONG',
-					`Recording is too large for the AI connector (about ${Math.round(size.maxDurationMs / 60000)} min max)`
+					`Recording is too large for the monitor engine (about ${Math.round(size.maxDurationMs / 60000)} min max)`
 				);
 			}
-			const chosen = opts?.aiModel;
-			if (!chosen) throw new SpeechEngineError('NO_MODEL', 'Pick a model first');
 
 			// base64 WAV inflates 4/3; the payload cap bounds both sides.
 			const wav = encodeWav(audio, sampleRate, 1);
-			const body = buildSttAudioMessages(chosen, base64FromBytes(wav));
+			const language = opts?.language && opts.language !== 'auto' ? opts.language : undefined;
 
-			let json: {
-				choices?: Array<{ message?: { content?: string | Array<{ type: string; text?: string }> } }>;
-			};
 			try {
-				json = await requestAiChatCompletion(monitor.baseUrl, body, opts?.aiProfileId, opts?.signal) as typeof json;
+				const { text } = await runAiTranscription(
+					monitor.baseUrl,
+					{ id: offer.id, location: offer.location, task: 'transcription' },
+					{ audioBase64: base64FromBytes(wav), language },
+					{ signal: opts?.signal }
+				);
+				const trimmed = text.trim();
+				return {
+					text: trimmed,
+					segments: trimmed ? [{ text: trimmed }] : [],
+					durationMs,
+					engineId: 'ai',
+					modelId: offer.id
+				};
 			} catch (error) {
 				if (error instanceof AiCredentialsError) {
 					if (error.code === 'AI_ABORTED') throw new DOMException('Request aborted', 'AbortError');
-					if (error.status === 400 || error.status === 404) {
-						throw new SpeechEngineError('AI_NOT_FOUND', `Model “${chosen}” may not accept audio input (${error.status})`, error);
-					}
-					const code = ['AI_AUTH', 'AI_NOT_FOUND', 'AI_RATE', 'AI_NETWORK'].includes(error.code)
-						? error.code as 'AI_AUTH' | 'AI_NOT_FOUND' | 'AI_RATE' | 'AI_NETWORK' : 'AI_ERROR';
+					const code = ['AI_AUTH', 'AI_NOT_FOUND', 'AI_RATE', 'AI_NETWORK', 'AI_BUSY', 'AI_UNSUPPORTED'].includes(
+						error.code
+					)
+						? (error.code as 'AI_AUTH' | 'AI_NOT_FOUND' | 'AI_RATE' | 'AI_NETWORK' | 'AI_BUSY' | 'AI_UNSUPPORTED')
+						: 'AI_ERROR';
 					throw new SpeechEngineError(code, error.message, error);
 				}
 				throw error;
 			}
-			const message = json.choices?.[0]?.message?.content;
-			const text =
-				typeof message === 'string'
-					? message
-					: Array.isArray(message)
-						? message.map((part) => (part.type === 'text' ? (part.text ?? '') : '')).join('')
-						: '';
-			return {
-				text: text.trim(),
-				segments: text.trim() ? [{ text: text.trim() }] : [],
-				durationMs,
-				engineId: 'ai',
-				modelId: chosen
-			};
 		}
 	};
 }

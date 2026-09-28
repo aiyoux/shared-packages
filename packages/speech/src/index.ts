@@ -94,16 +94,7 @@ export {
 
 export { concatWav, encodeWav, resampleLinear, wavBytesFor } from './wav.js';
 
-export {
-	AI_AUDIO_WAV_MAX_BYTES,
-	DEFAULT_STT_PROMPT,
-	aiStatusToCode,
-	buildSttAudioMessages,
-	checkAiAudioSize,
-	looksAudioCapable,
-	rankModelsForAudio,
-	type SttChatMessages
-} from './aiParts.js';
+export { AI_AUDIO_WAV_MAX_BYTES, checkAiAudioSize } from './aiParts.js';
 
 export {
 	createMicRecorder,

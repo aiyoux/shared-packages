@@ -160,9 +160,12 @@ export interface SttEngine {
 		sampleRate: number,
 		opts?: {
 			language?: string;
-			/** AI engine: model id (+ daemon profile id) to route the request to. */
-			aiModel?: string;
-			aiProfileId?: string;
+			/** AI engine: the transcription offer chosen from the monitor's
+			 *  catalog (id + execution location). */
+			aiOffer?: { id: string; location: 'monitor-native' | 'monitor-provider' };
+			/** AI engine: monitor base URL the offer came from. A run against
+			 *  a different active monitor is refused, not silently rerouted. */
+			aiMonitorBaseUrl?: string;
 			onProgress?: (p: { doneChunks: number; chunks: number }) => void;
 			signal?: AbortSignal;
 		}
@@ -243,13 +246,13 @@ export const STT_ENGINE_CATALOG: readonly SttEngineInfo[] = [
 	},
 	{
 		id: 'ai',
-		label: 'AI connector (monitor)',
+		label: 'Monitor (AI models)',
 		description:
-			'Sends the recording to an audio-capable model through your monitor’s AI connection. Needs a connected monitor.',
+			'Transcribes with a model that runs on the monitor PC, or one on a configured API profile reached through it. Needs a connected monitor; the model list comes from the monitor’s catalog.',
 		supportsMic: false,
 		supportsFileInput: true,
 		streamingPartials: false,
-		languageSelection: false,
+		languageSelection: true,
 		onDevice: false
 	}
 ] as const;

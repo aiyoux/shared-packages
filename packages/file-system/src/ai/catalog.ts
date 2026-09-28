@@ -154,7 +154,17 @@ export async function listAiOffers(baseUrl: string, signal?: AbortSignal): Promi
  * binary result. Aborting also asks the daemon to kill the running process. */
 export async function runAiNativeJob(
 	baseUrl: string,
-	input: { offerId: string; text?: string; prompt?: string; seed?: number; speed?: number },
+	input: {
+		offerId: string;
+		text?: string;
+		prompt?: string;
+		seed?: number;
+		speed?: number;
+		/** Transcription only: base64 WAV (16 kHz mono recommended). */
+		audioBase64?: string;
+		/** Transcription only: a language code, or 'auto'. */
+		language?: string;
+	},
 	opts: { signal?: AbortSignal; onProgress?: (progress: AiNativeProgress) => void } = {}
 ): Promise<{ blob: Blob; seed: number | null }> {
 	const submit = await request(baseUrl, '/v1/ai/jobs', {
@@ -221,4 +231,43 @@ export async function runAiMedia(
 		body: JSON.stringify({ offerId: offer.id, ...input }), signal: opts.signal
 	});
 	return { blob: await response.blob(), seed: null };
+}
+
+/** Run a transcription offer and return its transcript text. Native offers
+ * submit a base64 WAV job (same lifecycle as speech and image); provider
+ * offers upload through the monitor's transcription adapter. Aborting a
+ * native job also asks the daemon to kill the runtime. Callers pass an
+ * offer filtered to the transcription task; the monitor revalidates it. */
+export async function runAiTranscription(
+	baseUrl: string,
+	offer: Pick<AiOffer, 'id' | 'location' | 'task'>,
+	input: { audioBase64: string; language?: string },
+	opts: { signal?: AbortSignal; onProgress?: (progress: AiNativeProgress) => void } = {}
+): Promise<{ text: string }> {
+	if (offer.task !== 'transcription') {
+		throw new AiCredentialsError('AI_UNSUPPORTED', 'This offer cannot transcribe audio.');
+	}
+	if (offer.location === 'monitor-native') {
+		const result = await runAiNativeJob(
+			baseUrl,
+			{ offerId: offer.id, audioBase64: input.audioBase64, language: input.language },
+			opts
+		);
+		return { text: (await result.blob.text()).trim() };
+	}
+	if (offer.location !== 'monitor-provider') {
+		throw new AiCredentialsError('AI_UNSUPPORTED', 'This offer cannot run as a media task.');
+	}
+	const response = await request(baseUrl, '/v1/ai/audio/transcriptions', {
+		method: 'POST', headers: { 'content-type': 'application/json' },
+		body: JSON.stringify({ offerId: offer.id, audioBase64: input.audioBase64, language: input.language }),
+		signal: opts.signal
+	});
+	let body: { text?: unknown };
+	try { body = (await response.json()) as { text?: unknown }; }
+	catch { throw new AiCredentialsError('AI_ERROR', 'The monitor returned a non-JSON response.'); }
+	if (typeof body.text !== 'string' || !body.text.trim()) {
+		throw new AiCredentialsError('AI_ERROR', 'The monitor returned no transcript text.');
+	}
+	return { text: body.text.trim() };
 }

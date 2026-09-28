@@ -14,6 +14,7 @@ export {
 	resolveNativeAiMonitor,
 	runAiMedia,
 	runAiNativeJob,
+	runAiTranscription,
 	type AiCatalog,
 	type AiChatMessage,
 	type AiDeviceClass,

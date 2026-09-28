@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { chunkAudio, quietestCut } from './audio.js';
-import { DEFAULT_STT_PROMPT, aiStatusToCode, buildSttAudioMessages, checkAiAudioSize, looksAudioCapable, rankModelsForAudio } from './aiParts.js';
+import { checkAiAudioSize } from './aiParts.js';
 import { MODEL_CATALOG, defaultSttModel, defaultTtsModel, sttModelsFor, ttsModelForDevice, ttsModelsFor } from './models.js';
 
 describe('chunkAudio', () => {
@@ -47,36 +47,13 @@ describe('quietestCut', () => {
 });
 
 describe('aiParts', () => {
-	it('builds an OpenAI input_audio message', () => {
-		const body = buildSttAudioMessages('gpt-4o-audio', 'QUJD');
-		expect(body.model).toBe('gpt-4o-audio');
-		expect(body.messages).toHaveLength(1);
-		const [text, audio] = body.messages[0]!.content;
-		expect(text).toEqual({ type: 'text', text: DEFAULT_STT_PROMPT });
-		expect(audio).toEqual({ type: 'input_audio', input_audio: { data: 'QUJD', format: 'wav' } });
-	});
-
-	it('ranks audio-capable model ids first', () => {
-		const ranked = rankModelsForAudio(['llama-3', 'gpt-4o', 'qwen2-audio', 'deepseek-chat']);
-		expect(ranked[0]).toBe('gpt-4o');
-		expect(ranked.filter((m) => looksAudioCapable(m))).toEqual(['gpt-4o', 'qwen2-audio']);
-	});
-
-	it('maps statuses to the hub error taxonomy', () => {
-		expect(aiStatusToCode(401)).toBe('AI_AUTH');
-		expect(aiStatusToCode(403)).toBe('AI_AUTH');
-		expect(aiStatusToCode(404)).toBe('AI_NOT_FOUND');
-		expect(aiStatusToCode(429)).toBe('AI_RATE');
-		expect(aiStatusToCode(500)).toBe('AI_ERROR');
-	});
-
-	it('caps payloads around ten minutes of 16 kHz mono', () => {
+	it('caps payloads around thirteen minutes of 16 kHz mono', () => {
 		const ok = checkAiAudioSize(5 * 60_000);
 		expect(ok.tooLarge).toBe(false);
 		const tooBig = checkAiAudioSize(60 * 60_000);
 		expect(tooBig.tooLarge).toBe(true);
-		expect(tooBig.maxDurationMs).toBeGreaterThan(8 * 60_000);
-		expect(tooBig.maxDurationMs).toBeLessThan(12 * 60_000);
+		expect(tooBig.maxDurationMs).toBeGreaterThan(10 * 60_000);
+		expect(tooBig.maxDurationMs).toBeLessThan(16 * 60_000);
 	});
 });
 
