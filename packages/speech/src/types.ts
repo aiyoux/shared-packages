@@ -210,6 +210,8 @@ export class SpeechEngineError extends Error {
 			| 'AI_AUTH'
 			| 'AI_NOT_FOUND'
 			| 'AI_RATE'
+			| 'AI_BUSY'
+			| 'AI_UNSUPPORTED'
 			| 'AI_ERROR'
 			| 'AUDIO_TOO_LONG'
 			| 'CANCELLED',

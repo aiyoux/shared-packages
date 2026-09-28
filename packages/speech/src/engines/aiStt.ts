@@ -111,7 +111,7 @@ export function createAiStt(): SttEngine {
 					const code = ['AI_AUTH', 'AI_NOT_FOUND', 'AI_RATE', 'AI_NETWORK', 'AI_BUSY', 'AI_UNSUPPORTED'].includes(
 						error.code
 					)
-						? (error.code as 'AI_AUTH' | 'AI_NOT_FOUND' | 'AI_RATE' | 'AI_NETWORK' | 'AI_BUSY' | 'AI_UNSUPPORTED')
+						? error.code
 						: 'AI_ERROR';
 					throw new SpeechEngineError(code, error.message, error);
 				}
