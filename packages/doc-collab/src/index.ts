@@ -74,3 +74,7 @@ export {
 	type DocSessionRole
 } from './docSession.js';
 export { jsonChunker, openPeerLink, PEER_CHUNK_CHARS } from './peerLink.js';
+
+export type { ExactBaseEvent, ExactBaseRuntime, ExactBaseRuntimeOpts } from './exactBaseRuntime.js';
+export type { OrderedFrameRuntime, OrderedFrameRuntimeOpts } from './frameRuntime.js';
+export { diffTextEdits, mergeTextChanges } from './textMerge.js';

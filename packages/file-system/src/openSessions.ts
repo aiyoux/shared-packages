@@ -147,7 +147,7 @@ export function joinOrCreate(
 			else delete next.roomLabel;
 		}
 		const changed =
-			index.connectedId !== existing.id ||
+			(input.connect !== false && index.connectedId !== existing.id) ||
 			next.title !== existing.title ||
 			next.kind !== existing.kind ||
 			next.app !== existing.app ||

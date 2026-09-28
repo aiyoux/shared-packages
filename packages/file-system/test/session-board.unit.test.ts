@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { createSessionBoard } from '../src/sessionBoard.ts';
-import { foreignSaveAction, mergeSessions, type OpenSession } from '../src/openSessions.ts';
+import { foreignSaveAction, joinOrCreate, mergeSessions, type OpenSession } from '../src/openSessions.ts';
 
 function session(partial: Partial<OpenSession> & Pick<OpenSession, 'id' | 'updatedAt'>): OpenSession {
 	return {
@@ -13,6 +13,18 @@ function session(partial: Partial<OpenSession> & Pick<OpenSession, 'id' | 'updat
 }
 
 describe('session list merge', () => {
+	it('does not update an unchanged row when noting without connecting', () => {
+		const row = session({ id: 'held', updatedAt: 1 });
+		const index = { sessions: [row], connectedId: 'another' };
+		const next = joinOrCreate(index, {
+			sessionId: row.id, kind: row.kind, title: row.title,
+			connect: false, now: 2
+		});
+		assert.equal(next.changed, false);
+		assert.equal(next.index, index);
+		assert.equal(next.session, row);
+	});
+
 	it('keeps one id for a file and the later fields', () => {
 		const merged = mergeSessions(
 			[session({ id: 'b', fileId: 'file-1', title: 'Old', dirty: true, updatedAt: 1 })],

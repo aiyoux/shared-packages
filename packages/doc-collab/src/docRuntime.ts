@@ -1,4 +1,14 @@
-import { createSeqLog, type LogFrame } from './seqLog.js';
+import {
+	createExactBaseRuntime,
+	type ExactBaseRuntime,
+	type ExactBaseRuntimeOpts
+} from './exactBaseRuntime.js';
+import type { LogFrame } from './seqLog.js';
+import {
+	createFrameRuntime,
+	type OrderedFrameRuntime,
+	type OrderedFrameRuntimeOpts
+} from './frameRuntime.js';
 
 /**
  * One collab runtime. The app supplies the document port. Transport, ordering,
@@ -58,155 +68,109 @@ type AnyFrame = CollabDocFrame<unknown>;
 const LOG_KINDS = new Set(['snapshot', 'edit']);
 const CONTROL_KINDS = new Set(['hello', 'resync']);
 
-export function createCollabRuntime<Doc>(opts: {
+export type CollabRuntimeOpts<Doc> = {
 	transport: CollabTransport<AnyFrame>;
 	port: CollabPort<Doc>;
 	/** Default `optimistic`. See the module comment before choosing. */
 	apply?: 'optimistic' | 'sequenced';
-}): CollabRuntime {
+};
+
+export function createCollabRuntime<
+	F extends LogFrame & { sequencer?: string }
+>(opts: OrderedFrameRuntimeOpts<F>): OrderedFrameRuntime<F>;
+export function createCollabRuntime<Doc, Op, Frame>(
+	opts: ExactBaseRuntimeOpts<Doc, Op, Frame>
+): ExactBaseRuntime<Doc, Op>;
+export function createCollabRuntime<Doc>(
+	opts: CollabRuntimeOpts<Doc>
+): CollabRuntime;
+export function createCollabRuntime<
+	Doc,
+	Op,
+	Frame,
+	F extends LogFrame & { sequencer?: string }
+>(
+	opts:
+		| CollabRuntimeOpts<Doc>
+		| ExactBaseRuntimeOpts<Doc, Op, Frame>
+		| OrderedFrameRuntimeOpts<F>
+): CollabRuntime | ExactBaseRuntime<Doc, Op> | OrderedFrameRuntime<F> {
+	if ('policy' in opts && opts.policy === 'exact-base')
+		return createExactBaseRuntime(opts);
+	if ('policy' in opts && opts.policy === 'ordered-frames')
+		return createFrameRuntime(opts);
+	return createOrderedRuntime(opts);
+}
+
+function createOrderedRuntime<Doc>(
+	opts: CollabRuntimeOpts<Doc>
+): CollabRuntime {
 	const { transport, port } = opts;
-	const role = transport.role;
-	const clientId = transport.clientId;
-	const sequencedApply = opts.apply === 'sequenced';
-	const log = createSeqLog<AnyFrame>({
-		role,
-		clientId,
-		replaces: (frame) => frame.kind === 'snapshot'
-	});
-	let ready = role === 'sequencer';
+	const { role, clientId } = transport;
 	let closed = false;
-	/** Replica, sequenced mode: our frames sent but not yet back in order. */
-	const awaiting = new Set<string>();
-	/** Replica: whose numbering we follow. A new sequencer restarts the count. */
-	let following: string | null = null;
-
 	function send(frame: AnyFrame) {
-		if (closed) return;
-		transport.send(frame);
+		if (!closed) transport.send(frame);
 	}
-
-	function stamp(frame: AnyFrame): AnyFrame {
-		return { ...log.stamp(frame), sequencer: clientId };
-	}
-
 	function control(kind: 'hello' | 'resync'): AnyFrame {
 		return kind === 'hello'
-			? { kind, role: 'replica', seq: 0, scope: 'doc', clientId, frameId: newId() }
-			: { kind, seq: 0, scope: 'doc', clientId, frameId: newId() };
-	}
-
-	function resync() {
-		if (role === 'sequencer') {
-			send(
-				stamp({
-					kind: 'snapshot',
-					doc: port.snapshot(),
+			? {
+					kind,
+					role: 'replica',
 					seq: 0,
 					scope: 'doc',
 					clientId,
 					frameId: newId()
-				})
-			);
+				}
+			: { kind, seq: 0, scope: 'doc', clientId, frameId: newId() };
+	}
+	function resync() {
+		if (role === 'replica') {
+			send(control('hello'));
 			return;
 		}
-		send(control('hello'));
+		frames.submit({
+			kind: 'snapshot',
+			doc: port.snapshot(),
+			seq: 0,
+			scope: 'doc',
+			clientId,
+			frameId: newId()
+		});
 	}
-
-	/** Our own frame came back numbered; in sequenced mode this is when it applies. */
-	function applyOwnEcho(frame: AnyFrame): boolean {
-		if (frame.kind === 'snapshot') {
-			port.replace(frame.doc as Doc);
-			return true;
-		}
-		return port.apply(frame as CollabDocFrame<Doc>);
-	}
-
+	const frames = createFrameRuntime<AnyFrame>({
+		policy: 'ordered-frames',
+		role,
+		clientId,
+		send,
+		apply: opts.apply,
+		replaces: (frame) => frame.kind === 'snapshot',
+		isSnapshot: (frame) => frame.kind === 'snapshot',
+		applyFrame(frame) {
+			if (frame.kind === 'snapshot') {
+				port.replace(frame.doc as Doc);
+				return true;
+			}
+			return port.apply(frame as CollabDocFrame<Doc>);
+		},
+		onRepair: resync
+	});
 	const off = transport.subscribe((frame) => {
 		if (closed || !frame || typeof frame !== 'object') return;
-		// Control frames never enter the log. A sequencer answers them; a replica
-		// ignores another replica's, which would otherwise read as a gap and be
-		// answered with a hello of its own — two replicas asking each other
-		// forever.
 		if (CONTROL_KINDS.has(frame.kind)) {
 			if (role === 'sequencer' && frame.clientId !== clientId) resync();
-			return;
-		}
-		// Anything else sharing the transport (previews, save notices) is not
-		// ours. Taking it into the log numbers it or reads it as a gap.
-		if (!LOG_KINDS.has(frame.kind)) return;
-
-		if (role === 'replica') {
-			// Unnumbered: another replica's frame on its way to the sequencer.
-			if (frame.seq <= 0) return;
-			if (frame.sequencer && frame.sequencer !== following) {
-				if (frame.kind !== 'snapshot') {
-					// Numbered by a sequencer we have not joined. Its count is not
-					// ours to compare; ask for the document instead.
-					send(control('hello'));
-					return;
-				}
-				log.reset(0);
-				following = frame.sequencer;
-			}
-		}
-
-		const own = frame.clientId === clientId;
-		const pendingEcho = own && awaiting.delete(frame.frameId);
-		const decision = log.receive(
-			frame,
-			(next) => {
-				if (next.kind === 'snapshot') {
-					port.replace(next.doc as Doc);
-					ready = true;
-					return true;
-				}
-				return port.apply(next as CollabDocFrame<Doc>);
-			},
-			{ rebase: frame.kind === 'snapshot' }
-		);
-		if (pendingEcho && decision.action === 'dropped' && decision.reason === 'echo') {
-			if (!applyOwnEcho(frame)) resync();
-			return;
-		}
-		if (decision.action === 'repair') resync();
-		if (decision.action === 'applied' && decision.broadcast) {
-			send({ ...decision.broadcast, sequencer: clientId });
-		}
+		} else if (LOG_KINDS.has(frame.kind)) frames.receive(frame);
 	});
-
-	if (role === 'replica') send(control('hello'));
-	// A new sequencer announces itself with the document, so replicas that were
-	// following another one restart their count on it instead of dropping every
-	// frame it numbers as stale.
-	else resync();
-
+	resync();
 	return {
 		get ready() {
-			return ready;
+			return frames.ready;
 		},
-		submit(frame) {
-			if (closed) return;
-			if (role === 'sequencer') {
-				const stamped = stamp({ ...frame, clientId });
-				if (stamped.kind === 'snapshot') port.replace(stamped.doc as Doc);
-				else if (!port.apply(stamped as CollabDocFrame<Doc>)) return;
-				send(stamped);
-				return;
-			}
-			const local = { ...frame, seq: 0, clientId };
-			if (sequencedApply) {
-				awaiting.add(local.frameId);
-				send(local);
-				return;
-			}
-			if (local.kind === 'snapshot') port.replace(local.doc as Doc);
-			else if (local.kind === 'edit' && !port.apply(local as CollabDocFrame<Doc>)) return;
-			send(local);
-		},
+		submit: (frame) => frames.submit(frame),
 		close() {
 			if (closed) return;
 			closed = true;
 			off();
+			frames.close();
 			transport.close();
 		}
 	};
@@ -214,5 +178,7 @@ export function createCollabRuntime<Doc>(opts: {
 
 function newId(): string {
 	const c = globalThis.crypto;
-	return typeof c?.randomUUID === 'function' ? c.randomUUID() : `f-${Math.random().toString(36).slice(2)}`;
+	return typeof c?.randomUUID === 'function'
+		? c.randomUUID()
+		: `f-${Math.random().toString(36).slice(2)}`;
 }
