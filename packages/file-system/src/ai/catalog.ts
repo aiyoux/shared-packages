@@ -22,6 +22,11 @@ export type AiOffer = {
 	ready: boolean;
 	available: boolean;
 	reason: string | null;
+	/** Model file size on disk, when the monitor reports it (native offers). */
+	diskBytes?: number;
+	/** Wall time of the most recent completed native job for this model —
+	 * a measurement on that machine, never a promised rate. */
+	lastRunMs?: number;
 };
 
 export type AiCatalog = {
@@ -128,7 +133,7 @@ function offer(raw: unknown): AiOffer | null {
 	if (!['chat', 'text-to-speech', 'image-generation', 'transcription'].includes(String(row.task))) return null;
 	if (!['browser', 'monitor-native', 'monitor-provider'].includes(String(row.location))) return null;
 	if (!['cpu', 'gpu', 'service'].includes(String(row.deviceClass))) return null;
-	return {
+	const parsed: AiOffer = {
 		id: row.id, name: row.name, task: row.task as AiTask,
 		location: row.location as AiLocation, modelId: row.modelId,
 		sourceId: row.sourceId, variantId: row.variantId,
@@ -137,6 +142,14 @@ function offer(raw: unknown): AiOffer | null {
 		available: row.available === true,
 		reason: typeof row.reason === 'string' ? row.reason : null
 	};
+	// Optional estimates: present only on native offers that report them.
+	if (typeof row.diskBytes === 'number' && Number.isFinite(row.diskBytes) && row.diskBytes >= 0) {
+		parsed.diskBytes = row.diskBytes;
+	}
+	if (typeof row.lastRunMs === 'number' && Number.isFinite(row.lastRunMs) && row.lastRunMs >= 0) {
+		parsed.lastRunMs = row.lastRunMs;
+	}
+	return parsed;
 }
 
 /** A monitor with no configured native models still lists provider chat offers. */
