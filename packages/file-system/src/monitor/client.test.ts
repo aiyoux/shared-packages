@@ -382,7 +382,8 @@ describe('monitor client tolerant parse', () => {
 			streaming: true,
 			profiles: 2,
 			sessions: true,
-			sessionArtifacts: false
+			sessionArtifacts: false,
+			nativeJobs: false
 		});
 		const without = createMonitorClient({
 			baseUrl: 'http://127.0.0.1:8300',
@@ -394,6 +395,7 @@ describe('monitor client tolerant parse', () => {
 		});
 		expect((await without.meta()).capabilities?.ai?.sessions).toBe(false);
 		expect((await without.meta()).capabilities?.ai?.sessionArtifacts).toBe(false);
+		expect((await without.meta()).capabilities?.ai?.nativeJobs).toBe(false);
 		const withArtifacts = createMonitorClient({
 			baseUrl: 'http://127.0.0.1:8300',
 			fetchImpl: vi.fn(async () =>
