@@ -19,6 +19,11 @@ export {
 	type ExtractedAudio
 } from './extractAudio.js';
 export { encodeGif, type EncodeGifOpts } from './gif.js';
+export {
+	audioOnlyContainer,
+	encodeAudioOnly,
+	type AudioOnlyFormat
+} from './audioOnly.js';
 export { probeVideoMetadata, type VideoMetadata, type VideoFpsMetrics } from './probe.js';
 export { createVideoUrl, getVideoDuration, getVideoFrameRate, revokeVideoUrl } from './meta.js';
 export { formatTimecode } from './time.js';

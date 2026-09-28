@@ -191,6 +191,21 @@
 		trimEnd = next.end;
 	}
 
+	/** Arrow keys nudge the focused handle one frame; Shift jumps a second. */
+	function nudgeTrim(which: 'start' | 'end', e: KeyboardEvent) {
+		const dir = e.key === 'ArrowLeft' ? -1 : e.key === 'ArrowRight' ? 1 : 0;
+		if (dir === 0) return;
+		e.preventDefault();
+		const step = (e.shiftKey ? 1 : 1 / 30) * dir;
+		if (which === 'start') {
+			trimStart = clampTrimStart(trimStart + step, trimEnd, duration, MIN_TRIM_SPAN);
+			scrubPreview(trimStart, true);
+		} else {
+			trimEnd = clampTrimEnd(trimEnd + step, trimStart, duration, MIN_TRIM_SPAN);
+			scrubPreview(trimEnd, true);
+		}
+	}
+
 	function handlePointerDown(e: PointerEvent) {
 		if (!timelineScrollRef || durationMs <= 0) return;
 		if (e.button !== 0 && e.pointerType === 'mouse') return;
@@ -537,7 +552,9 @@
 				aria-valuemax={trimEnd}
 				aria-valuenow={trimStart}
 				tabindex="0"
+				title="Arrow keys nudge (Shift: 1s)"
 				style="left: {keepLeftPx}px"
+				onkeydown={(e) => nudgeTrim('start', e)}
 			></div>
 			<div
 				class="handle end"
@@ -549,7 +566,9 @@
 				aria-valuemax={duration}
 				aria-valuenow={trimEnd}
 				tabindex="0"
+				title="Arrow keys nudge (Shift: 1s)"
 				style="left: {keepRightPx}px"
+				onkeydown={(e) => nudgeTrim('end', e)}
 			></div>
 			{#if durationMs > 0}
 				<div
