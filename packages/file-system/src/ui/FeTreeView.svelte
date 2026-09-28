@@ -87,6 +87,14 @@
 	let listed = $state<Map<string, ExplorerEntry[]>>(new Map());
 	let marks = $state<Map<string, FolderMark>>(new Map());
 	let expanded = $state<Set<string>>(new Set());
+	/**
+	 * Ids the reveal below opened for the active path (as opposed to the
+	 * user opening them with a chevron). Only these may be collapsed again
+	 * when navigation moves elsewhere.
+	 */
+	let autoExpanded = $state<Set<string>>(new Set());
+	/** Ids the user explicitly expanded with a chevron; navigation never collapses these. */
+	let manualExpanded = $state<Set<string>>(new Set());
 	let loading = $state<Set<string>>(new Set());
 
 	function markFor(entry: ExplorerEntry): FolderMark {
@@ -179,41 +187,62 @@
 		if (!id) return;
 		try {
 			const chain = await d.getPath(id); // root..id, inclusive of id itself
-			// Only ADD to `expanded` — never remove. The user may have
-			// collapsed a node while getPath / loadChildren were in flight;
-			// overwriting `expanded` with a stale snapshot would undo that
-			// collapse. Re-read the live set right before assigning.
-			const toAdd: ExplorerEntryId[] = [];
+			const chainIds = new Set<string>(chain.map((node) => node.id));
 			for (const node of chain) {
-				if (!expanded.has(node.id)) toAdd.push(node.id);
 				await loadChildren(d, node.id);
 			}
-			if (toAdd.length > 0) {
-				const next = new Set(expanded);
-				for (const nid of toAdd) next.add(nid);
-				expanded = next;
+			// Re-read the live sets right before assigning: the user may have
+			// toggled a node while getPath / loadChildren were in flight, and
+			// a stale snapshot would undo that toggle. Collapse folders this
+			// reveal previously opened for an old location — unless the user
+			// explicitly expanded them or they are on the new path — then add
+			// the new chain. Without the collapse, childless siblings pile up
+			// open icons with no chevron to close them by.
+			const next = new Set(expanded);
+			for (const prev of autoExpanded) {
+				if (!chainIds.has(prev) && !manualExpanded.has(prev)) next.delete(prev);
 			}
+			for (const nid of chainIds) next.add(nid);
+			expanded = next;
+			autoExpanded = chainIds;
 		} catch {
 			/* best-effort nav aid; ignore */
 		}
 	}
 
-	async function refreshVisible(d: ExplorerDriver, root: ExplorerEntryId | null): Promise<void> {
+	async function refreshVisible(d: ExplorerDriver, root: ExplorerEntryId | null, deep = false): Promise<void> {
 		await loadChildren(d, root, true);
-		for (const id of expanded) {
+		const ids = new Set<string>(expanded);
+		if (deep) {
+			// Re-check every folder whose children we already know, not just
+			// the expanded ones: a subfolder landing under (or leaving) a
+			// collapsed folder must flip its chevron, and nothing else
+			// refetches those lists.
+			for (const key of children.keys()) {
+				if (key !== ROOT_KEY) ids.add(key);
+			}
+		}
+		for (const id of ids) {
 			await loadChildren(d, id, true);
 		}
 	}
 
 	function toggleExpand(id: ExplorerEntryId): void {
 		const next = new Set(expanded);
+		const manual = new Set(manualExpanded);
+		const auto = new Set(autoExpanded);
 		if (next.has(id)) {
 			next.delete(id);
+			manual.delete(id);
+			auto.delete(id);
 		} else {
 			next.add(id);
+			manual.add(id);
 			void loadChildren(driver, id);
 		}
 		expanded = next;
+		manualExpanded = manual;
+		autoExpanded = auto;
 	}
 
 	// Driver swap (e.g. switching connections) or a new tree root: old ids
@@ -226,6 +255,8 @@
 			listed = new Map();
 			marks = new Map();
 			expanded = new Set();
+			autoExpanded = new Set();
+			manualExpanded = new Set();
 			loading = new Set();
 			void loadChildren(d, root);
 		});
@@ -244,8 +275,9 @@
 
 	// Any mutation that can change folder structure (mkdir/rename/move/
 	// delete/restore, or a live remote change) bumps `treeVersion` in
-	// FileExplorer; re-fetch what's currently visible so the tree doesn't
-	// go stale.
+	// FileExplorer; re-fetch what we know so the tree doesn't go stale —
+	// including collapsed folders, whose chevrons flip when a subfolder
+	// lands or the last one leaves.
 	$effect(() => {
 		const v = treeVersion;
 		const files = includeFiles;
@@ -254,22 +286,35 @@
 		untrack(() => {
 			void v;
 			void files;
-			void refreshVisible(d, root);
+			void refreshVisible(d, root, true);
 		});
 	});
 
-	// Standalone live refresh: subscribe root + expanded folders on the
-	// same driver watch stream FileExplorer already uses (no second client).
+	// Standalone live refresh on the same driver watch stream FileExplorer
+	// already uses (no second client). Besides root + expanded folders this
+	// also watches collapsed folders whose children we already know, so
+	// their chevrons stay in sync across tabs and window instances.
+	//
+	// Deliberately NOT a `children` dependency: resubscribing replays the
+	// backend's initial emission, which refreshes, which reassigns
+	// `children`, which would resubscribe forever. Collapsed folders
+	// discovered later join the watch list on the next resubscribe; the
+	// local driver's global subscription covers everything regardless.
 	$effect(() => {
 		const d = driver;
 		const root = rootId;
 		const expandedIds = expanded;
 		const unsubs: Array<() => void> = [];
 		untrack(() => {
+			const watchedIds = new Set<string>(expandedIds);
+			for (const key of children.keys()) {
+				if (key !== ROOT_KEY) watchedIds.add(key);
+			}
 			if (!d.subscribeChanges) return;
-			unsubs.push(d.subscribeChanges(() => void refreshVisible(d, root), { parentId: root }));
-			for (const id of expandedIds) {
-				unsubs.push(d.subscribeChanges(() => void refreshVisible(d, root), { parentId: id }));
+			const notify = () => void refreshVisible(d, root, true);
+			unsubs.push(d.subscribeChanges(notify, { parentId: root }));
+			for (const id of watchedIds) {
+				unsubs.push(d.subscribeChanges(notify, { parentId: id }));
 			}
 		});
 		return () => {

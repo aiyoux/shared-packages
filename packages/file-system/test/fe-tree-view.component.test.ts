@@ -5,6 +5,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/svelte';
 import FeTreeView from '../src/ui/FeTreeView.svelte';
+import FeTreeNavHarness from './FeTreeNavHarness.svelte';
 import { createLocalExplorerDriver } from '../src/ui/localExplorerDriver.ts';
 import { createVfs, resetSharedVfsForTests, type VfsService } from '../src/index.ts';
 
@@ -148,6 +149,47 @@ describe('FeTreeView', () => {
 				'data-fe-folder-mark'
 			)
 		).toBe('plain');
+	});
+
+	it('navigating between childless siblings closes the previous folder', async () => {
+		await vfs.mkdir(null, 'alpha');
+		await vfs.mkdir(null, 'beta');
+		const driver = createLocalExplorerDriver(vfs);
+		// The harness owns activeId like FileExplorer does: row clicks update
+		// it through props on the live instance.
+		render(FeTreeNavHarness, { props: { driver } });
+		const row = (name: string) =>
+			document.querySelector(`[data-testid="fe-tree-row"][data-name="${name}"]`) as HTMLElement | null;
+		const rowOpen = (name: string) =>
+			!!row(name)?.parentElement?.querySelector(':scope > .fe-tree-children');
+		await viWaitFor(() => !!row('alpha') && !!row('beta'));
+		// Open alpha: its row renders the open (children) container.
+		await fireEvent.click(await screen.findByText('alpha'));
+		await viWaitFor(() => rowOpen('alpha'));
+		expect(rowOpen('beta')).toBe(false);
+		// Open the sibling: alpha must close again even though neither folder
+		// has children (and therefore no chevron to collapse it with).
+		await fireEvent.click(await screen.findByText('beta'));
+		await viWaitFor(() => rowOpen('beta'));
+		expect(rowOpen('alpha')).toBe(false);
+	});
+
+	it('chevron appears when a subfolder lands and hides when the last one leaves', async () => {
+		const blank = await vfs.mkdir(null, 'blank');
+		const driver = createLocalExplorerDriver(vfs);
+		render(FeTreeNavHarness, { props: { driver } });
+		const toggle = () =>
+			document.querySelector(
+				'[data-testid="fe-tree-row"][data-name="blank"] [data-testid="fe-tree-toggle"]'
+			) as HTMLButtonElement | null;
+		// Probed childless: no chevron.
+		await viWaitFor(() => !!toggle() && toggle()!.classList.contains('invisible'));
+		// Another tab adds a subfolder: the chevron must appear on its own.
+		const inner = await vfs.mkdir(blank.id, 'inner');
+		await viWaitFor(() => !!toggle() && !toggle()!.classList.contains('invisible'));
+		// Removing the last subfolder hides it again.
+		await vfs.trash(inner.id);
+		await viWaitFor(() => !!toggle() && toggle()!.classList.contains('invisible'));
 	});
 
 	it('file click calls onSelect, not onNavigate', async () => {
