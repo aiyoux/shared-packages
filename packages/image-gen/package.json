@@ -14,6 +14,11 @@
       "types": "./src/sd.worker.ts",
       "import": "./src/sd.worker.ts",
       "default": "./src/sd.worker.ts"
+    },
+    "./flux2-worker": {
+      "types": "./src/flux2.worker.ts",
+      "import": "./src/flux2.worker.ts",
+      "default": "./src/flux2.worker.ts"
     }
   },
   "types": "./src/index.ts",
@@ -28,7 +33,8 @@
     "@huggingface/transformers": "^3.7.6",
     "@shared-packages/file-system": "file:../file-system",
     "hash-wasm": "^4.12.0",
-    "onnxruntime-web": "1.22.0-dev.20250409-89f8206ba4"
+    "onnxruntime-web": "1.22.0-dev.20250409-89f8206ba4",
+    "onnxruntime-web-flux2": "npm:onnxruntime-web@1.25.0-dev.20260227-dce58e8711"
   },
   "devDependencies": {
     "@types/node": "^26.1.1",

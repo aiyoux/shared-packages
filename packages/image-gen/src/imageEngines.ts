@@ -97,19 +97,25 @@ export type ImageEngineFactory = (createWorker: () => Worker) => {
 };
 
 /**
- * Load an SD-family engine: probe WebGPU, resolve the VFS folder, hand the
+ * Load a diffusion engine: probe WebGPU, resolve the VFS folder, hand the
  * weight blobs to a fresh worker (transferred), and return a tiny engine
  * handle. Weights travel blob → copy → transfer; the transient 2× peak is
- * the price of never touching the network.
+ * the price of never touching the network. The worker URL and label vary
+ * per family — the hub passes `createSdEngine`/`createFlux2Engine` the
+ * matching `new Worker(...)` factory.
  */
-export function createSdEngine(createWorker: () => Worker): {
+function createWorkerEngine(
+	createWorker: () => Worker,
+	label: string,
+	fallbackModelId: string
+): {
 	load(opts: EngineLoadOpts): Promise<ImageEngine>;
 } {
 	return {
 		async load(opts: EngineLoadOpts): Promise<ImageEngine> {
 			const probe = await probeWebGpu();
 			if (!probe.ok) throw new ImageGenError('UNSUPPORTED_DEVICE', probe.reason);
-			const def = imageModelDef(opts.modelId ?? 'sd-turbo');
+			const def = imageModelDef(opts.modelId ?? fallbackModelId);
 			const store = await ImageStore.get();
 			const dirId = opts.dirId ?? (await store.findModelDir(def, null));
 			if (!dirId) {
@@ -119,7 +125,7 @@ export function createSdEngine(createWorker: () => Worker): {
 				);
 			}
 			let loadedId: string | null = null;
-			const rpc = createImageWorkerRpc(createWorker, 'image', () => (loadedId = null));
+			const rpc = createImageWorkerRpc(createWorker, label, () => (loadedId = null));
 			const files: Array<{ path: string; buffer: ArrayBuffer }> = [];
 			const transfer: Transferable[] = [];
 			try {
@@ -146,7 +152,12 @@ export function createSdEngine(createWorker: () => Worker): {
 					if (!loadedId) throw new ImageGenError('NO_MODEL', 'Engine was reset — load again');
 					const out = await rpc.call<{ width: number; height: number; seed: number; rgba: ArrayBuffer }>(
 						'generate',
-						{ prompt, seed: genOpts?.seed },
+						{
+							prompt,
+							seed: genOpts?.seed,
+							width: genOpts?.width,
+							height: genOpts?.height
+						},
 						[]
 					);
 					genOpts?.signal?.throwIfAborted();
@@ -163,4 +174,18 @@ export function createSdEngine(createWorker: () => Worker): {
 			};
 		}
 	};
+}
+
+/** SD-family engine (sd-turbo / sdxs) over the pinned wasm-only ORT. */
+export function createSdEngine(createWorker: () => Worker): {
+	load(opts: EngineLoadOpts): Promise<ImageEngine>;
+} {
+	return createWorkerEngine(createWorker, 'image', 'sd-turbo');
+}
+
+/** FLUX.2 [klein] engine over its own jsep-capable ORT pin. */
+export function createFlux2Engine(createWorker: () => Worker): {
+	load(opts: EngineLoadOpts): Promise<ImageEngine>;
+} {
+	return createWorkerEngine(createWorker, 'image-flux2', 'flux2-klein-4b');
 }

@@ -13,24 +13,56 @@ export type ImageModelFile = {
 	bytes?: number;
 };
 
+export type ImageModelEngine = 'sd-turbo' | 'sdxs' | 'flux2-klein';
+
+export type ImageModelLicense = 'stability-ai-community' | 'apache-2.0';
+
+/** FLUX.2 klein staged-VAE decoder wiring (tensor names from the q4 bundle). */
+export type Flux2VaeConfig = {
+	pre: string;
+	/** Output names of the pre stage: the residual skip plus raw q/kt/v. */
+	preOutputs: { residual: string; q: string; kt: string; v: string };
+	attnChunk: string;
+	/** Query-chunk length the attention-chunk graph was exported for. */
+	chunkSeq: number;
+	/** Post stages, chained in order via inputNames[0] → outputNames[0]. */
+	post: readonly string[];
+};
+
+export type Flux2Config = {
+	textSeqLen: number;
+	contextDim: number;
+	latentChannels: number;
+	latentDownsample: number;
+	/** Distilled step count (guidance 1.0 — no CFG anywhere in the family). */
+	numSteps: number;
+	textEncoder: { graph: string; shards: readonly string[] };
+	transformer: { graph: string; shards: readonly string[] };
+	vae: Flux2VaeConfig;
+};
+
 export type ImageModelDef = {
 	id: string;
 	/** Diffusion family this def belongs to. */
-	engine: 'sd-turbo' | 'sdxs';
+	engine: ImageModelEngine;
 	task: 't2i';
 	repo: string;
 	revision: 'main';
 	dtype: 'fp16' | 'fp32';
 	files: readonly ImageModelFile[];
 	sizeBytes: number;
-	/** Square output edge the pipeline renders. */
-	resolution: number;
-	/** UNet cross-attention width (text embedding dim). */
-	crossAttentionDim: 768 | 1024;
-	/** VAE scale applied before decoding (TAESD uses 1.0). */
-	vaeScale: number;
+	/** Fixed square output edge (SD-family engines). */
+	resolution?: number;
+	/** Selectable square edges in px, multiples of 16 (variable engines). */
+	sizes?: readonly number[];
+	/** UNet cross-attention width (text embedding dim). SD engines. */
+	crossAttentionDim?: 768 | 1024;
+	/** VAE scale applied before decoding (TAESD uses 1.0). SD engines. */
+	vaeScale?: number;
+	/** Engine-specific wiring, present iff the engine needs one. */
+	flux2?: Flux2Config;
 	/** License family for UX notice purposes. */
-	license: 'stability-ai-community';
+	license: ImageModelLicense;
 	languages: readonly string[];
 };
 
@@ -92,7 +124,87 @@ export const SDXS_DREAMSHAPER: ImageModelDef = {
 	languages: ['en']
 };
 
-export const IMAGE_MODEL_CATALOG: readonly ImageModelDef[] = [SD_TURBO, SDXS_DREAMSHAPER];
+/**
+ * FLUX.2 [klein] 4B, Apache 2.0 (Black Forest Labs upstream, weights and
+ * this quantization). Four-step distilled flow matching, guidance 1.0 — no
+ * CFG — rendered by a MatMulNBits q4 transformer with fp16-selective
+ * activations, exported for ORT WebGPU jsep (exported with ORT Python
+ * 1.25.1; the worker runs `onnxruntime-web-flux2`, a pin of the matching
+ * dev line). Staged fp16 VAE decoder: pre (residual + q/kt/v) →
+ * chunked attention → post stages 0-3. Tensor names verified by parsing
+ * the bundle's ONNX graphs directly. Sizes are multiples of 16; the
+ * chunked attention pads the final query chunk to `chunkSeq`.
+ */
+export const FLUX2_KLEIN_4B: ImageModelDef = {
+	id: 'flux2-klein-4b',
+	engine: 'flux2-klein',
+	task: 't2i',
+	repo: 'MarkShark2/flux2-klein-4b-onnx-webgpu-q4',
+	revision: 'main',
+	dtype: 'fp16',
+	files: [
+		f('flux2-config.json', 10_641),
+		f('tokenizer/tokenizer.json', 11_422_650),
+		f('tokenizer/chat_template.jinja', 4_168),
+		f('tokenizer/tokenizer_config.json', 377),
+		f('text-encoder-q4-manifest.json', 77),
+		f('flux2-klein-4b-text-encoder-q4.onnx', 1_844_725),
+		f('text-encoder-q4-00001.onnx_data', 2_136_381_440),
+		f('text-encoder-q4-00002.onnx_data', 430_080_000),
+		f('transformer-q4-manifest.json', 75),
+		f('flux2-klein-4b-transformer-q4.onnx', 1_550_157),
+		f('transformer-q4-00001.onnx_data', 2_128_121_856),
+		f('transformer-q4-00002.onnx_data', 415_703_040),
+		f('flux2-klein-4b-vae-decoder-pre-attn-fp16.onnx', 11_352_251),
+		f('flux2-klein-4b-vae-decoder-attn-chunk-fp16.onnx', 480),
+		f('flux2-klein-4b-vae-decoder-post-stage0-fp16.onnx', 85_202_062),
+		f('flux2-klein-4b-vae-decoder-post-stage1-fp16.onnx', 2_141_312),
+		f('flux2-klein-4b-vae-decoder-post-stage2-fp16.onnx', 1_196_419),
+		f('flux2-klein-4b-vae-decoder-post-stage3-fp16.onnx', 10_460)
+	],
+	sizeBytes: 5_225_022_190,
+	sizes: [256, 512, 768, 1024],
+	flux2: {
+		textSeqLen: 512,
+		contextDim: 7680,
+		latentChannels: 128,
+		latentDownsample: 16,
+		numSteps: 4,
+		textEncoder: {
+			graph: 'flux2-klein-4b-text-encoder-q4.onnx',
+			shards: ['text-encoder-q4-00001.onnx_data', 'text-encoder-q4-00002.onnx_data']
+		},
+		transformer: {
+			graph: 'flux2-klein-4b-transformer-q4.onnx',
+			shards: ['transformer-q4-00001.onnx_data', 'transformer-q4-00002.onnx_data']
+		},
+		vae: {
+			pre: 'flux2-klein-4b-vae-decoder-pre-attn-fp16.onnx',
+			preOutputs: {
+				residual: '/decoder/block_1/Add_output_0',
+				q: '/decoder/attn_1/Mul_6_output_0',
+				kt: '/decoder/attn_1/Mul_7_output_0',
+				v: '/decoder/attn_1/Reshape_2_output_0'
+			},
+			attnChunk: 'flux2-klein-4b-vae-decoder-attn-chunk-fp16.onnx',
+			chunkSeq: 1024,
+			post: [
+				'flux2-klein-4b-vae-decoder-post-stage0-fp16.onnx',
+				'flux2-klein-4b-vae-decoder-post-stage1-fp16.onnx',
+				'flux2-klein-4b-vae-decoder-post-stage2-fp16.onnx',
+				'flux2-klein-4b-vae-decoder-post-stage3-fp16.onnx'
+			]
+		}
+	},
+	license: 'apache-2.0',
+	languages: ['en']
+};
+
+export const IMAGE_MODEL_CATALOG: readonly ImageModelDef[] = [
+	SD_TURBO,
+	SDXS_DREAMSHAPER,
+	FLUX2_KLEIN_4B
+];
 
 export function imageModelDef(id: string): ImageModelDef {
 	const found = IMAGE_MODEL_CATALOG.find((m) => m.id === id);

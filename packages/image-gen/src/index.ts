@@ -2,10 +2,15 @@ export {
 	IMAGE_MODEL_CATALOG,
 	SD_TURBO,
 	SDXS_DREAMSHAPER,
+	FLUX2_KLEIN_4B,
 	hfImageResolveUrl,
 	imageModelDef,
 	type ImageModelDef,
-	type ImageModelFile
+	type ImageModelEngine,
+	type ImageModelFile,
+	type ImageModelLicense,
+	type Flux2Config,
+	type Flux2VaeConfig
 } from './imageModels.js';
 
 export {
@@ -56,6 +61,6 @@ export {
 	type ImageGenResult
 } from './engines.js';
 
-export { createSdEngine, createImageWorkerRpc } from './imageEngines.js';
+export { createSdEngine, createFlux2Engine, createImageWorkerRpc } from './imageEngines.js';
 
 export { fetchImageFileViaBridge, DEFAULT_IMAGE_BRIDGE_BASE_URL } from './bridgeImage.js';

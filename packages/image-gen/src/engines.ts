@@ -28,7 +28,13 @@ export type ImageEngine = {
 	readonly modelId: string;
 	generate(
 		prompt: string,
-		opts?: { seed?: number; signal?: AbortSignal }
+		opts?: {
+			seed?: number;
+			signal?: AbortSignal;
+			/** Square edges in px for variable-resolution engines; ignored otherwise. */
+			width?: number;
+			height?: number;
+		}
 	): Promise<ImageGenResult>;
 	dispose(): void;
 };

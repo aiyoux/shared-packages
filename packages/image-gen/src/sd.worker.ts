@@ -100,6 +100,9 @@ function checkCancelled(): void {
 async function load(payload: Record<string, unknown>): Promise<{ modelId: string }> {
 	const modelId = payload['modelId'] as string;
 	const def = imageModelDef(modelId);
+	if (def.resolution == null || def.vaeScale == null) {
+		throw new ImageGenError('NO_MODEL', `${def.id} is not an SD-family model`);
+	}
 	const files = filesFrom(payload);
 	cancelled = false;
 	await disposeSessions();
@@ -152,8 +155,8 @@ async function load(payload: Record<string, unknown>): Promise<{ modelId: string
 		textEncoder,
 		unet,
 		vaeDecoder,
-		vaeScale: def.vaeScale,
-		resolution: def.resolution
+		vaeScale: def.vaeScale ?? 1.0,
+		resolution: def.resolution ?? 512
 	};
 	return { modelId };
 }
