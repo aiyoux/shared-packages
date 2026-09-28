@@ -10,6 +10,7 @@ import { formatAiErrorMessage } from './errors.js';
 export {
 	listAiOffers,
 	completeAiChat,
+	streamAiChat,
 	requestAiChatCompletion,
 	resolveNativeAiMonitor,
 	runAiMedia,

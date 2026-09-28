@@ -109,6 +109,65 @@ export async function requestAiChatCompletion(
 	catch { throw new AiCredentialsError('AI_ERROR', 'The monitor returned a non-JSON response.'); }
 }
 
+/** Streaming chat completion: yields each delta as it arrives and resolves
+ * with the full reply. `model: "native:<id>"` routes to the monitor's
+ * supervised native runtime; provider models take the profile id. Parses the
+ * OpenAI SSE shape (`data: {...}` lines with `delta.content`, ending at
+ * `data: [DONE]`). */
+export async function streamAiChat(
+	baseUrl: string,
+	input: { model: string; messages: AiChatMessage[]; maxTokens: number; profileId?: string | null },
+	opts: { signal?: AbortSignal; onToken?: (piece: string) => void } = {}
+): Promise<{ text: string; thinking: string | null }> {
+	const response = await request(baseUrl, '/v1/ai/chat/completions', {
+		method: 'POST',
+		headers: { 'content-type': 'application/json' },
+		signal: opts.signal,
+		body: JSON.stringify({
+			model: input.model, messages: input.messages,
+			max_tokens: input.maxTokens, stream: true
+		})
+	});
+	if (!response.body) throw new AiCredentialsError('AI_ERROR', 'The monitor returned no stream body.');
+	const reader = response.body.getReader();
+	const decoder = new TextDecoder();
+	let buffer = '';
+	let text = '';
+	let thinking = '';
+	const consume = (line: string) => {
+		const trimmed = line.trim();
+		if (!trimmed.startsWith('data:')) return;
+		const payload = trimmed.slice(5).trim();
+		if (!payload || payload === '[DONE]') return;
+		let parsed: unknown;
+		try { parsed = JSON.parse(payload); } catch { return; }
+		const delta = (parsed as {
+			choices?: Array<{ delta?: { content?: unknown; reasoning_content?: unknown } }>
+		})?.choices?.[0]?.delta;
+		if (typeof delta?.content === 'string' && delta.content) {
+			text += delta.content;
+			opts.onToken?.(delta.content);
+		}
+		if (typeof delta?.reasoning_content === 'string' && delta.reasoning_content) {
+			thinking += delta.reasoning_content;
+		}
+	};
+	for (;;) {
+		const { done, value } = await reader.read();
+		if (done) break;
+		buffer += decoder.decode(value, { stream: true });
+		let sep = buffer.indexOf('\n');
+		while (sep !== -1) {
+			consume(buffer.slice(0, sep));
+			buffer = buffer.slice(sep + 1);
+			sep = buffer.indexOf('\n');
+		}
+	}
+	consume(buffer);
+	if (!text.trim()) throw new AiCredentialsError('AI_ERROR', 'The AI server returned an empty reply.');
+	return { text: text.trim(), thinking: thinking.trim() || null };
+}
+
 /** Shared chat transport and response parsing for Hub, Creative, and Documents. */
 export async function completeAiChat(
 	baseUrl: string,
