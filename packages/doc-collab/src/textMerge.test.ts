@@ -19,8 +19,12 @@ describe('shared text merge', () => {
 	it('includes identical concurrent inserts once', () => {
 		expect(mergeTextChanges('ab', 'aXb', 'aXb')).toBe('aXb');
 	});
-	it('orders different inserts at the same anchor by the sequencer', () => {
-		expect(mergeTextChanges('ab', 'aXb', 'aYb')).toBe('aXb');
+	it('keeps different inserts at the same anchor, in sequence order', () => {
+		expect(mergeTextChanges('ab', 'aXb', 'aYb')).toBe('aYXb');
+		// Two people typing at the end of a note.
+		expect(mergeTextChanges('note', 'note one', 'note two')).toBe(
+			'note two one'
+		);
 	});
 	it('keeps inserts at deletion boundaries', () => {
 		expect(mergeTextChanges('abc', 'ac', 'aXbcY')).toBe('aXcY');

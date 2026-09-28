@@ -28,7 +28,10 @@ export function diffTextEdits(base: string, next: string): TextEdit[] {
 }
 
 function overlaps(a: TextEdit, b: TextEdit): boolean {
-	if (a.start === a.end && b.start === b.end) return a.start === b.start;
+	// Two inserts at one point are two people typing there: both stay, in
+	// sequence order. Only the same insert (a rebase meeting its own text) is one.
+	if (a.start === a.end && b.start === b.end)
+		return a.start === b.start && a.text === b.text;
 	if (a.start === a.end) return a.start > b.start && a.start < b.end;
 	if (b.start === b.end) return b.start > a.start && b.start < a.end;
 	return Math.max(a.start, b.start) < Math.min(a.end, b.end);
@@ -36,7 +39,8 @@ function overlaps(a: TextEdit, b: TextEdit): boolean {
 
 /**
  * Merge a submitted text change onto the sequencer's current text. Disjoint
- * edits survive. On overlap the incoming (last numbered) replacement wins;
+ * edits survive, and so do different inserts at one point (the earlier
+ * numbered first). On overlap the incoming (last numbered) replacement wins;
  * identical concurrent edits appear once. This is a state merge hook, not a
  * character CRDT: overlapping replacements are deliberately last-writer-wins.
  */

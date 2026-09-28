@@ -128,7 +128,7 @@ function createOrderedRuntime<Doc>(
 			send(control('hello'));
 			return;
 		}
-		frames.submit({
+		frames.announce({
 			kind: 'snapshot',
 			doc: port.snapshot(),
 			seq: 0,

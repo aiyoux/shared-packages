@@ -110,4 +110,41 @@ describe('one ordered frame runtime', () => {
 		expect(r.value()).toBe(0);
 		expect(r.sent).toHaveLength(0);
 	});
+	it('a sequencer answers a hello without replacing its own document', () => {
+		let replaces = 0;
+		let handler: ((f: never) => void) | null = null;
+		const sent: { kind: string }[] = [];
+		createCollabRuntime<number>({
+			apply: 'sequenced',
+			transport: {
+				role: 'sequencer',
+				clientId: 'S',
+				send: (f) => sent.push(f),
+				subscribe: (h) => {
+					handler = h as never;
+					return () => {};
+				},
+				close() {}
+			},
+			port: {
+				snapshot: () => 1,
+				replace: () => {
+					replaces++;
+				},
+				apply: () => true
+			}
+		});
+		(handler as unknown as (f: object) => void)({
+			kind: 'hello',
+			role: 'replica',
+			seq: 0,
+			scope: 'doc',
+			clientId: 'R',
+			frameId: 'h1'
+		});
+		// Announced at start and again for the hello, applied to nothing here:
+		// an app reads a replace as a new document (Nodes drops its undo).
+		expect(sent.map((f) => f.kind)).toEqual(['snapshot', 'snapshot']);
+		expect(replaces).toBe(0);
+	});
 });

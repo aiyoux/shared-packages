@@ -21,6 +21,12 @@ export type OrderedFrameRuntimeOpts<
 export type OrderedFrameRuntime<F> = {
 	readonly ready: boolean;
 	submit(frame: F): void;
+	/**
+	 * Sequencer only: number and send a frame that describes the document as
+	 * it already is (a snapshot answering a hello). It is not applied here —
+	 * replacing a document with itself reads to the app as a new document.
+	 */
+	announce(frame: F): void;
 	receive(frame: F): void;
 	close(): void;
 };
@@ -67,6 +73,11 @@ export function createFrameRuntime<F extends LogFrame & { sequencer?: string }>(
 					? { ...stamped, sequencer: instance }
 					: stamped
 			);
+		},
+		announce(frame) {
+			if (closed || opts.role !== 'sequencer') return;
+			const stamped = log.stamp({ ...frame, clientId: opts.clientId });
+			opts.send({ ...stamped, sequencer: instance });
 		},
 		receive(frame) {
 			if (closed) return;
