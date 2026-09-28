@@ -29,6 +29,10 @@ export type AiCapabilities = {
 	sessionArtifacts?: boolean;
 	/** True when this daemon offers monitor-owned model jobs. */
 	nativeJobs?: boolean;
+	/** True when `POST /v1/ai/chat/completions` with `model: "native:<id>"`
+	 * routes to a supervised long-lived native chat runtime (streaming
+	 * included). Missing means false. */
+	nativeChat?: boolean;
 };
 
 /** A reachable monitor that serves the AI feature. */
