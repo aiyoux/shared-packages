@@ -120,13 +120,17 @@
 		return JSON.stringify(ref);
 	}
 
+	/** Highlight match against a row: the row is the canonical identity, an
+	 * app's stored ref may be more specific than it (chat writes the device
+	 * variant, transcribe the on-device variant) — a row without a variant
+	 * or source still matches such a ref on what it does name. */
 	function sameRef(a: AiModelRef | null, b: AiModelRef): boolean {
 		return (
 			a != null &&
 			a.location === b.location &&
 			a.modelId === b.modelId &&
-			(a.sourceId ?? null) === (b.sourceId ?? null) &&
-			(a.variantId ?? null) === (b.variantId ?? null)
+			(!b.sourceId || a.sourceId === b.sourceId) &&
+			(!b.variantId || a.variantId === b.variantId)
 		);
 	}
 
