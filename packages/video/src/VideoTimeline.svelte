@@ -45,6 +45,13 @@
 
 	let isDragging = $state<'start' | 'end' | 'slip' | 'playhead' | null>(null);
 	let timelineScrollRef = $state<HTMLDivElement | null>(null);
+	/**
+	 * The scroller inset by half a trim handle on each side: time 0 and the
+	 * clip's end sit that far inside the clip edge, so at fit zoom both handles
+	 * (centred on the keep edges) are whole. Measuring, pointer math and the
+	 * wheel-zoom anchor all use this box, so nothing else carries the offset.
+	 */
+	let timelineViewRef = $state<HTMLDivElement | null>(null);
 	let stripVideo = $state<HTMLVideoElement | null>(null);
 	let zoom = $state(1);
 	let scrollX = $state(0);
@@ -98,7 +105,7 @@
 	const PREVIEW_MS = 80;
 
 	const viewportPan = createTimelinePan({
-		getSurface: () => timelineScrollRef,
+		getSurface: () => timelineViewRef,
 		getViewport: () => vp,
 		onScroll: (s) => (scrollX = s),
 		onZoom: (z, s) => {
@@ -207,10 +214,10 @@
 	}
 
 	function handlePointerDown(e: PointerEvent) {
-		if (!timelineScrollRef || durationMs <= 0) return;
+		if (!timelineScrollRef || !timelineViewRef || durationMs <= 0) return;
 		if (e.button !== 0 && e.pointerType === 'mouse') return;
 		e.preventDefault();
-		const rect = timelineScrollRef.getBoundingClientRect();
+		const rect = timelineViewRef.getBoundingClientRect();
 		dragOrigin = { left: rect.left, scrollX: vp.scrollX };
 		const kind = (e.target as HTMLElement | null)
 			?.closest?.('[data-trim-handle]')
@@ -337,7 +344,7 @@
 	});
 
 	$effect(() => {
-		const el = timelineScrollRef;
+		const el = timelineViewRef;
 		if (!el) return;
 		const measure = () => (viewportPx = el.clientWidth);
 		measure();
@@ -507,78 +514,80 @@
 		onpointerup={handlePointerUp}
 		onpointercancel={handlePointerUp}
 	>
-		<div
-			class="timeline-track"
-			style="width: {Math.max(vp.contentPx, viewportPx)}px; transform: translateX({-vp.scrollX}px)"
-		>
-			<div class="tick-ruler" data-testid="video-trim-ticks" style="height: {TICK_ROW_HEIGHT}px">
-				{#each ticks as tick (tick.ms)}
-					<div class="tick major" data-tick="major" style="left: {tick.x}px"></div>
-				{/each}
-			</div>
-			<div class="film-bar" data-testid="video-trim-filmstrip" style="height: {BAR_HEIGHT}px">
-				{#each filmCells as cell (frameCacheKey(cell.t, thumbW, BAR_HEIGHT))}
-					{@const url = frameUrls[frameCacheKey(cell.t, thumbW, BAR_HEIGHT)]}
-					{#if url}
-						<img
-							class="film-cell"
-							src={url}
-							alt=""
-							draggable="false"
-							style="left: {cell.left * 100}%; width: {cell.width * 100}%"
-						/>
-					{/if}
-				{/each}
-				<div class="veil left" style="width: {keepLeftPx}px"></div>
-				<div
-					class="veil right"
-					style="left: {keepRightPx}px; width: {Math.max(0, vp.contentPx - keepRightPx)}px"
-				></div>
-				<div
-					class="keep"
-					data-testid="video-trim-keep"
-					data-trim-handle="slip"
-					style="left: {keepLeftPx}px; width: {keepWidthPx}px"
-					title="Drag to slide the kept range"
-				></div>
-			</div>
+		<div class="timeline-view" bind:this={timelineViewRef}>
 			<div
-				class="handle start"
-				data-testid="video-trim-handle-start"
-				data-trim-handle="start"
-				role="slider"
-				aria-label="Trim start"
-				aria-valuemin={0}
-				aria-valuemax={trimEnd}
-				aria-valuenow={trimStart}
-				tabindex="0"
-				title="Arrow keys nudge (Shift: 1s)"
-				style="left: {keepLeftPx}px"
-				onkeydown={(e) => nudgeTrim('start', e)}
-			></div>
-			<div
-				class="handle end"
-				data-testid="video-trim-handle-end"
-				data-trim-handle="end"
-				role="slider"
-				aria-label="Trim end"
-				aria-valuemin={trimStart}
-				aria-valuemax={duration}
-				aria-valuenow={trimEnd}
-				tabindex="0"
-				title="Arrow keys nudge (Shift: 1s)"
-				style="left: {keepRightPx}px"
-				onkeydown={(e) => nudgeTrim('end', e)}
-			></div>
-			{#if durationMs > 0}
+				class="timeline-track"
+				style="width: {Math.max(vp.contentPx, viewportPx)}px; transform: translateX({-vp.scrollX}px)"
+			>
+				<div class="tick-ruler" data-testid="video-trim-ticks" style="height: {TICK_ROW_HEIGHT}px">
+					{#each ticks as tick (tick.ms)}
+						<div class="tick major" data-tick="major" style="left: {tick.x}px"></div>
+					{/each}
+				</div>
+				<div class="film-bar" data-testid="video-trim-filmstrip" style="height: {BAR_HEIGHT}px">
+					{#each filmCells as cell (frameCacheKey(cell.t, thumbW, BAR_HEIGHT))}
+						{@const url = frameUrls[frameCacheKey(cell.t, thumbW, BAR_HEIGHT)]}
+						{#if url}
+							<img
+								class="film-cell"
+								src={url}
+								alt=""
+								draggable="false"
+								style="left: {cell.left * 100}%; width: {cell.width * 100}%"
+							/>
+						{/if}
+					{/each}
+					<div class="veil left" style="width: {keepLeftPx}px"></div>
+					<div
+						class="veil right"
+						style="left: {keepRightPx}px; width: {Math.max(0, vp.contentPx - keepRightPx)}px"
+					></div>
+					<div
+						class="keep"
+						data-testid="video-trim-keep"
+						data-trim-handle="slip"
+						style="left: {keepLeftPx}px; width: {keepWidthPx}px"
+						title="Drag to slide the kept range"
+					></div>
+				</div>
 				<div
-					class="playhead"
-					data-testid="video-trim-playhead"
-					data-trim-handle="playhead"
-					style="left: {playPx}px"
-					title="Drag to seek"
+					class="handle start"
+					data-testid="video-trim-handle-start"
+					data-trim-handle="start"
+					role="slider"
+					aria-label="Trim start"
+					aria-valuemin={0}
+					aria-valuemax={trimEnd}
+					aria-valuenow={trimStart}
+					tabindex="0"
+					title="Arrow keys nudge (Shift: 1s)"
+					style="left: {keepLeftPx}px"
+					onkeydown={(e) => nudgeTrim('start', e)}
 				></div>
-			{/if}
+				<div
+					class="handle end"
+					data-testid="video-trim-handle-end"
+					data-trim-handle="end"
+					role="slider"
+					aria-label="Trim end"
+					aria-valuemin={trimStart}
+					aria-valuemax={duration}
+					aria-valuenow={trimEnd}
+					tabindex="0"
+					title="Arrow keys nudge (Shift: 1s)"
+					style="left: {keepRightPx}px"
+					onkeydown={(e) => nudgeTrim('end', e)}
+				></div>
+				{#if durationMs > 0}
+					<div
+						class="playhead"
+						data-testid="video-trim-playhead"
+						data-trim-handle="playhead"
+						style="left: {playPx}px"
+						title="Drag to seek"
+					></div>
+				{/if}
+			</div>
 		</div>
 	</div>
 	{#if minimapOpen && durationMs > 0 && viewportPx > 0}
@@ -656,6 +665,12 @@
 		flex-wrap: wrap;
 		justify-content: center;
 		gap: 4px;
+	}
+
+	.timeline-view {
+		position: absolute;
+		/* Half the 22px trim handle. */
+		inset: 0 11px;
 	}
 
 	.timeline-track {
@@ -860,7 +875,9 @@
 		width: 16px;
 		transform: translateX(-50%);
 		cursor: ew-resize;
-		z-index: 5;
+		/* Above the trim handles: parked on one (after an end drag), it stays
+		   visible and draggable; the handle keeps its outer edges and keys. */
+		z-index: 7;
 		touch-action: none;
 		will-change: left;
 	}
