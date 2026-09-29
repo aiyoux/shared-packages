@@ -155,6 +155,8 @@ function installProcessVideoDom() {
 	const currentTimeSets: number[] = [];
 	const rvfc: Array<(now: number, meta: { mediaTime: number }) => void> = [];
 	const play = vi.fn(() => Promise.resolve());
+	const load = vi.fn();
+	const revokes: string[] = [];
 	let currentTime = 0;
 	let src = '';
 	const seeked = new Set<() => void>();
@@ -204,6 +206,12 @@ function installProcessVideoDom() {
 		},
 		pause() {
 			this.paused = true;
+		},
+		removeAttribute(name: string) {
+			if (name === 'src') src = '';
+		},
+		load() {
+			load();
 		}
 	};
 
@@ -226,7 +234,7 @@ function installProcessVideoDom() {
 
 	globalThis.URL = {
 		createObjectURL: () => 'blob:fake-video',
-		revokeObjectURL: () => {}
+		revokeObjectURL: (url: string) => revokes.push(url)
 	} as unknown as typeof URL;
 
 	function deliver(mediaTime: number) {
@@ -240,7 +248,7 @@ function installProcessVideoDom() {
 		globalThis.URL = prevURL;
 	}
 
-	return { play, rvfc, currentTimeSets, deliver, restore };
+	return { play, rvfc, currentTimeSets, deliver, load, revokes, restore };
 }
 
 let restoreCodecs: (() => void) | undefined;
@@ -409,5 +417,13 @@ describe('processVideo capture model', () => {
 		const enc = FakeVideoEncoder.instances[0]!;
 		expect(enc.encodeCalls.map((c) => c.timestamp)).toEqual([0, 33_000, 66_000]);
 		expect(enc.encodeCalls[0]?.keyFrame).toBe(true);
+
+		// Teardown must abort the element's media pipeline before revoking the
+		// object URL: revoking with a fetch still outstanding logs a spurious
+		// `blob:… ERR_FILE_NOT_FOUND` (and revoking "" would leak the real URL).
+		expect(dom.load).toHaveBeenCalled();
+		const revokeIdx = dom.revokes.indexOf('blob:fake-video');
+		expect(revokeIdx).toBeGreaterThanOrEqual(0);
+		expect(dom.revokes.slice(revokeIdx + 1)).toEqual([]);
 	});
 });

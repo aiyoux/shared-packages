@@ -60,7 +60,14 @@ export async function processVideo(inputBlob: Blob, options: ProcessOptions): Pr
 
 	const cleanupDom = () => {
 		if (host.parentNode) host.parentNode.removeChild(host);
-		URL.revokeObjectURL(video.src);
+		// load() aborts any range fetch still in flight; revoking while the
+		// element's pipeline has a fetch outstanding logs a spurious
+		// `blob:… net::ERR_FILE_NOT_FOUND` in the console. Same teardown
+		// order as openTimelineVideoCursor in the hub.
+		const url = video.src;
+		video.removeAttribute('src');
+		video.load();
+		URL.revokeObjectURL(url);
 	};
 
 	let session: ReturnType<typeof createEncodeSession> | null = null;
