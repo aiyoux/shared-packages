@@ -68,16 +68,21 @@ async function request(baseUrl: string, path: string, init: RequestInit = {}): P
 		throw toAiCredentialsError(error);
 	}
 	if (!response.ok) {
-		let message = `Monitor AI request failed (${response.status})`;
-		try {
-			const body = (await response.json()) as { error?: { message?: string } };
-			if (body.error?.message) message = body.error.message;
-		} catch { /* preserve status */ }
 		const code = response.status === 401 || response.status === 403 ? 'AI_AUTH'
 			: response.status === 429 ? 'AI_RATE'
 			: response.status === 404
 			? (path === '/v1/ai/catalog' ? 'AI_UNSUPPORTED' : 'AI_NOT_FOUND')
 			: response.status === 409 ? 'AI_BUSY' : 'AI_ERROR';
+		// With no message from the monitor, say what the status means, in the
+		// same words as the envelope mapping (`toAiCredentialsError`).
+		let message =
+			code === 'AI_AUTH' ? 'API key rejected by the AI server.'
+			: code === 'AI_RATE' ? 'AI server rate limit hit.'
+			: `Monitor AI request failed (${response.status})`;
+		try {
+			const body = (await response.json()) as { error?: { message?: string } };
+			if (body.error?.message) message = body.error.message;
+		} catch { /* preserve status */ }
 		throw new AiCredentialsError(code, message, response.status);
 	}
 	return response;
