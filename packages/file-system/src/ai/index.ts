@@ -44,10 +44,16 @@ export {
 } from './library.js';
 export {
 	closeSelectionDbForTests,
-	DEFAULT_SELECTION,
-	getAiSelection,
-	setAiSelection
-} from './monitorSelection.js';
+	EMPTY_SELECTION_MAP,
+	getAiSelectionMap,
+	resolveAiModelRef,
+	setAiModelRef,
+	setAiSelectionMap,
+	subscribeAiSelection,
+	type AiModelRef,
+	type AiSelectionMap,
+	type AiTaskKey
+} from './selection.js';
 export {
 	aiChatStream,
 	aiChatText,
@@ -92,10 +98,17 @@ export {
 	type AiInstallProfileInput,
 	type AiModelEntry,
 	type AiModelListResult,
-	type AiMonitorSelectionV2,
 	type AiProfileListResult,
 	type AiProfileSummary
 } from './types.js';
+export {
+	listAiLibrarySources,
+	registerAiLibrarySources,
+	type AiLibraryModelRow,
+	type AiLibraryModelStatus,
+	type AiModelSection,
+	type AiTaskSurface
+} from './modelRegistry.js';
 export { HUB_AI_PROFILES_CHANNEL } from '../crossTab.js';
 
 export { formatAiErrorMessage as formatAiError };

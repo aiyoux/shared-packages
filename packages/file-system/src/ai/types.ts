@@ -80,22 +80,6 @@ export type AiChatResponse = {
 };
 
 /**
- * App-side selection: which monitor to use, which daemon profile, which
- * model. No secrets and no provider URLs — those live daemon-side.
- */
-export type AiMonitorSelectionV2 = {
-	v: 2;
-	id: 'active';
-	/** null = follow the active monitor profile in HubMonitor. */
-	monitorProfileId: string | null;
-	/** null = let the daemon route (default profile). */
-	aiProfileId: string | null;
-	/** Model id sent as `model`. */
-	model: string;
-	updatedAt: number;
-};
-
-/**
  * Normalize a pasted upstream base URL: trim, strip a full-endpoint
  * `/chat/completions` suffix (users paste it constantly), strip trailing `/`.
  */

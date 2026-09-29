@@ -1,6 +1,6 @@
 /**
  * Monitor-routed AI client: envelope→taxonomy mapping, monitor resolution,
- * chat extraction, and the v2 selection store.
+ * chat extraction, and the v3 selection store.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import 'fake-indexeddb/auto';
@@ -16,11 +16,11 @@ import {
 	aiChatStream
 } from '../src/ai/monitor.js';
 import {
-	getAiSelection,
-	setAiSelection,
-	DEFAULT_SELECTION,
+	getAiSelectionMap,
+	setAiSelectionMap,
+	EMPTY_SELECTION_MAP,
 	closeSelectionDbForTests
-} from '../src/ai/monitorSelection.js';
+} from '../src/ai/selection.js';
 import { normalizeAiBaseUrl, validateAiProfileInput } from '../src/ai/types.js';
 import { HUB_AI_DB_NAME } from '../src/ai/types.js';
 import {
@@ -240,7 +240,7 @@ describe('ai monitor client', () => {
 	});
 });
 
-describe('ai selection store (HubAi v2)', () => {
+describe('ai selection store (HubAi v3)', () => {
 	beforeEach(async () => {
 		await closeSelectionDbForTests();
 		await wipe(HUB_AI_DB_NAME);
@@ -250,28 +250,25 @@ describe('ai selection store (HubAi v2)', () => {
 		await closeSelectionDbForTests();
 	});
 
-	it('defaults to empty selection and persists updates', async () => {
-		const before = await getAiSelection();
-		expect(before).toMatchObject(DEFAULT_SELECTION);
-		expect(before.model).toBe('');
+	it('defaults to an empty selection map and persists updates', async () => {
+		const before = await getAiSelectionMap();
+		expect(before).toEqual(EMPTY_SELECTION_MAP);
 
-		await setAiSelection({ monitorProfileId: 'm1', aiProfileId: 'p1', model: 'gpt-4o' });
-		const after = await getAiSelection();
-		expect(after.v).toBe(2);
-		expect(after.monitorProfileId).toBe('m1');
-		expect(after.model).toBe('gpt-4o');
-		expect(after.updatedAt).toBeGreaterThan(0);
+		await setAiSelectionMap({
+			v: 3,
+			tasks: {
+				chat: {
+					default: { location: 'monitor-provider', modelId: 'gpt-4o', sourceId: 'p1', variantId: null, monitorProfileId: 'm1' }
+				}
+			}
+		});
+		const after = await getAiSelectionMap();
+		expect(after.v).toBe(3);
+		expect(after.tasks.chat?.default).toMatchObject({ modelId: 'gpt-4o', sourceId: 'p1', monitorProfileId: 'm1' });
 	});
 
 	it('never holds key material — the shape has no secret fields', async () => {
-		const sel = await setAiSelection({ monitorProfileId: null, aiProfileId: null, model: 'm' });
-		expect(Object.keys(sel).sort()).toEqual([
-			'aiProfileId',
-			'id',
-			'model',
-			'monitorProfileId',
-			'updatedAt',
-			'v'
-		]);
+		const sel = await setAiSelectionMap({ v: 3, tasks: {} });
+		expect(Object.keys(sel).sort()).toEqual(['tasks', 'v']);
 	});
 });
