@@ -814,8 +814,9 @@ describe('FileExplorer component', () => {
 		await fireEvent.click(await screen.findByTestId('fe-open-project'));
 		await viWaitFor(() => opened.length === 1);
 		expect(opened).toEqual(['myproj']);
+		// Open hands off to the project and closes the preview (D8).
+		await viWaitFor(() => screen.queryByTestId('fe-file-preview') == null);
 
-		await fireEvent.click(screen.getByTestId('fe-file-preview-close'));
 		await fireEvent.dblClick(projectRow);
 		await viWaitFor(() => !!document.querySelector('[data-testid="fe-folder-row"][data-name=".git"]'));
 		expect(opened).toEqual(['myproj']);
@@ -856,8 +857,9 @@ describe('FileExplorer component', () => {
 		await viWaitFor(() => inited.length === 1);
 		expect(inited).toEqual(['plain']);
 		expect(opened).toEqual([]);
+		// Init hands off to the new project and closes the preview (D8).
+		await viWaitFor(() => screen.queryByTestId('fe-file-preview') == null);
 
-		await fireEvent.click(screen.getByTestId('fe-file-preview-close'));
 		const projectRow = document.querySelector(
 			'[data-testid="fe-folder-row"][data-name="myproj"]'
 		) as HTMLElement;
