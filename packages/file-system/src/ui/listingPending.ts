@@ -126,6 +126,54 @@ export function pendingForViewedParent(
 	return pending.filter((p) => p.destParentId === undefined || p.destParentId === parentId);
 }
 
+export type ListingSortCol = 'name' | 'size' | 'type' | 'modified';
+export type ListingSortDir = 'asc' | 'desc';
+
+/**
+ * Sorted detailed-view pass over the merged rows. Only ever called while a
+ * sort is active — the manual (driver) order passes through untouched so
+ * sibling reorder can stick. Placeholders ride their placeholder entry:
+ * size is known for transfers, updatedAt is unknown and sorts lowest.
+ */
+export function sortListingRows(
+	rows: ListingRow[],
+	col: ListingSortCol,
+	dir: ListingSortDir,
+	foldersFirst: boolean
+): ListingRow[] {
+	const mult = dir === 'desc' ? -1 : 1;
+	const val = (row: ListingRow): string | number => {
+		const n = row.node;
+		switch (col) {
+			case 'name':
+				return n.name;
+			case 'size':
+				return n.size ?? -1;
+			case 'modified':
+				return n.updatedAt ?? -1;
+			case 'type':
+				return n.fileType ?? (n.kind === 'folder' ? 'Folder' : 'File');
+		}
+	};
+	return rows.slice().sort((a, b) => {
+		if (foldersFirst) {
+			const kindCmp = (a.node.kind === 'folder' ? 0 : 1) - (b.node.kind === 'folder' ? 0 : 1);
+			if (kindCmp !== 0) return kindCmp;
+		}
+		const va = val(a);
+		const vb = val(b);
+		const cmp =
+			typeof va === 'string' || typeof vb === 'string'
+				? String(va).localeCompare(String(vb), undefined, { sensitivity: 'base', numeric: true })
+				: va > vb
+					? 1
+					: va < vb
+						? -1
+						: 0;
+		return cmp * mult;
+	});
+}
+
 export function mergeListingWithPending(
 	nodes: ExplorerEntry[],
 	pending: ListingPending[],

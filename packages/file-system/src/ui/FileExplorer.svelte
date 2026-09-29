@@ -93,6 +93,7 @@
 		mergeListingWithPending,
 		pendingLabel,
 		pendingPercent,
+		sortListingRows,
 		type ListingPending
 	} from './listingPending.js';
 	import { formatExplorerError } from './explorerError.js';
@@ -590,6 +591,128 @@
 		})()
 	);
 	let showPreview = $state(persistKv.getItem(SHOW_PREVIEW_KEY) === 'true');
+	const ICON_SIZE_KEY = 'fe:iconSize';
+	const ICON_SIZE_MIN = 56;
+	const ICON_SIZE_MAX = 240;
+	const ICON_SIZE_DEFAULT = 96;
+	let iconSize = $state(
+		(() => {
+			const raw = Number(persistKv.getItem(ICON_SIZE_KEY));
+			if (Number.isFinite(raw) && raw > 0)
+				return Math.min(ICON_SIZE_MAX, Math.max(ICON_SIZE_MIN, Math.round(raw)));
+			return ICON_SIZE_DEFAULT;
+		})()
+	);
+	/** Thumbnail fetch resolution — quantised so sliding never refetches per tick. */
+	const thumbFetchDim = $derived(Math.max(128, Math.ceil(iconSize / 64) * 64));
+	function setIconSize(v: number) {
+		if (!Number.isFinite(v)) return;
+		iconSize = Math.min(ICON_SIZE_MAX, Math.max(ICON_SIZE_MIN, Math.round(v)));
+		persistKv.setItem(ICON_SIZE_KEY, String(iconSize));
+	}
+
+	// ── Detailed view: sortable headings + configurable columns ──
+	type DetailCol = 'size' | 'type' | 'modified';
+	type SortCol = 'name' | DetailCol;
+	type SortDir = 'asc' | 'desc';
+	/** Labels double as the sort-chip text; tracks are shared header/data cell widths. */
+	const DETAIL_COL_META: Record<SortCol, { label: string; track: string }> = {
+		name: { label: 'File name', track: 'minmax(0, 1fr)' },
+		size: { label: 'Size', track: '5rem' },
+		type: { label: 'Type', track: '4.5rem' },
+		modified: { label: 'Modified', track: '8rem' }
+	};
+	const DETAIL_COL_IDS = ['size', 'type', 'modified'] as const;
+	/** "Name" stays first and cannot be hidden — it hosts icon, rename, dots. */
+	const DEFAULT_DETAIL_ORDER: DetailCol[] = ['size', 'type', 'modified'];
+	const COLS_KEY = 'fe:columns';
+	const SORT_KEY = 'fe:sort';
+	const FOLDERS_FIRST_KEY = 'fe:foldersFirst';
+	function isDetailCol(v: unknown): v is DetailCol {
+		return typeof v === 'string' && (DETAIL_COL_IDS as readonly string[]).includes(v);
+	}
+	function loadColumns(): { order: DetailCol[]; hidden: DetailCol[] } {
+		try {
+			const raw = persistKv.getItem(COLS_KEY);
+			if (typeof raw === 'string') {
+				const parsed = JSON.parse(raw) as { order?: unknown[]; hidden?: unknown[] };
+				const order: DetailCol[] = [];
+				if (Array.isArray(parsed.order))
+					for (const id of parsed.order) if (isDetailCol(id) && !order.includes(id)) order.push(id);
+				const hidden: DetailCol[] = [];
+				if (Array.isArray(parsed.hidden))
+					for (const id of parsed.hidden) if (isDetailCol(id) && !hidden.includes(id)) hidden.push(id);
+				// Every known column appears exactly once across the two sets.
+				for (const id of DETAIL_COL_IDS) if (!order.includes(id) && !hidden.includes(id)) order.push(id);
+				if (order.length > 0) return { order, hidden };
+			}
+		} catch {
+			/* malformed or absent — defaults below */
+		}
+		return { order: [...DEFAULT_DETAIL_ORDER], hidden: [] };
+	}
+	function loadSort(): { col: SortCol; dir: SortDir } | null {
+		try {
+			const raw = persistKv.getItem(SORT_KEY);
+			if (typeof raw === 'string') {
+				const parsed = JSON.parse(raw) as { col?: unknown; dir?: unknown };
+				if (parsed.col === 'name' || isDetailCol(parsed.col)) {
+					return { col: parsed.col as SortCol, dir: parsed.dir === 'desc' ? 'desc' : 'asc' };
+				}
+			}
+		} catch {
+			/* fall through */
+		}
+		return null;
+	}
+	let detailColOrder = $state<DetailCol[]>(loadColumns().order);
+	let hiddenCols = $state<DetailCol[]>(loadColumns().hidden);
+	/** Columns shown in the detailed header, in display order. */
+	const detailCols = $derived(detailColOrder.filter((c) => !hiddenCols.includes(c)));
+	/** Fixed cell widths shared by the header buttons and the data cells. */
+	const detailTracks = $derived(detailCols.map((c) => DETAIL_COL_META[c].track).join(' '));
+	function persistColumns() {
+		persistKv.setItem(COLS_KEY, JSON.stringify({ order: detailColOrder, hidden: hiddenCols }));
+	}
+	function toggleDetailCol(c: DetailCol) {
+		if (hiddenCols.includes(c)) {
+			hiddenCols = hiddenCols.filter((h) => h !== c);
+		} else {
+			if (detailCols.length <= 1) return; // at least one data column stays visible
+			hiddenCols = [...hiddenCols, c];
+		}
+		persistColumns();
+	}
+	function moveDetailCol(c: DetailCol, delta: -1 | 1) {
+		const i = detailColOrder.indexOf(c);
+		const j = i + delta;
+		if (i < 0 || j < 0 || j >= detailColOrder.length) return;
+		const next = [...detailColOrder];
+		next[j] = detailColOrder[i]!;
+		next[i] = detailColOrder[j]!;
+		detailColOrder = next;
+		persistColumns();
+	}
+	let foldersFirst = $state(persistKv.getItem(FOLDERS_FIRST_KEY) !== 'false');
+	function setFoldersFirst(v: boolean) {
+		foldersFirst = v;
+		persistKv.setItem(FOLDERS_FIRST_KEY, v ? 'true' : 'false');
+	}
+	let sortSpec = $state<{ col: SortCol; dir: SortDir } | null>(loadSort());
+	/** Sort applies to the detailed view only; other views keep manual/driver order. */
+	const activeSort = $derived(viewMode === 'detailed' ? sortSpec : null);
+	const sortDir = $derived(sortSpec?.dir ?? 'asc');
+	function toggleSort(col: SortCol) {
+		sortSpec =
+			sortSpec && sortSpec.col === col
+				? { col, dir: sortSpec.dir === 'asc' ? 'desc' : 'asc' }
+				: { col, dir: 'asc' };
+		persistKv.setItem(SORT_KEY, JSON.stringify(sortSpec));
+	}
+	function clearSort() {
+		sortSpec = null;
+		persistKv.removeItem(SORT_KEY);
+	}
 	let viewSwitcherOpen = $state(false);
 	/**
 	 * Collapse the icon toolbar into one overflow button. Seed from viewport
@@ -1092,13 +1215,13 @@
 			{ x: clientX, y: clientY },
 			{
 				kind: n.kind,
-				supportsSiblingOrder: caps.supportsSiblingOrder,
+				supportsSiblingOrder: canReorder,
 				layout: viewMode === 'icons' ? 'grid' : 'row'
 			}
 		);
 		let target = n;
 		let targetEl = rowEl;
-		if (!caps.supportsSiblingOrder) {
+		if (!canReorder) {
 			if (n.kind !== 'folder') {
 				dnd.clearDropTarget();
 				clearDndHover();
@@ -1139,7 +1262,7 @@
 
 	function hoverGapAfterLast() {
 		dndIntoId = undefined;
-		if (!caps.supportsSiblingOrder || !nodes.length) {
+		if (!canReorder || !nodes.length) {
 			dnd.setDropTarget(null, 'into');
 			dndTargetId = null;
 			dndZone = 'into';
@@ -1404,7 +1527,7 @@
 					dragIds,
 					target: { id: target.id, parentId: target.parentId, kind: target.kind },
 					zone,
-					supportsSiblingOrder: caps.supportsSiblingOrder
+					supportsSiblingOrder: canReorder
 				});
 				if (!resolved.ok) {
 					// The reason was computed and then discarded, so a drop the UI
@@ -1428,7 +1551,7 @@
 						if (moved && before && moved.name !== before.name) {
 							toast.info(`Renamed to "${moved.name}" — that name was taken there.`);
 						}
-					} else if (caps.supportsSiblingOrder && driver.reorder) {
+					} else if (canReorder && driver.reorder) {
 						if (
 							dragIds.length === 1 &&
 							(resolved.afterId === id || resolved.beforeId === id)
@@ -1723,7 +1846,8 @@
 			} else if (folderMarks.size) {
 				folderMarks = new Map();
 			}
-			if (focusIndex >= nodes.length) focusIndex = nodes.length ? nodes.length - 1 : -1;
+			if (focusIndex >= focusableEntries.length)
+				focusIndex = focusableEntries.length ? focusableEntries.length - 1 : -1;
 			silentRetries = 0;
 			// Folder structure may have changed (mkdir/rename/move/delete/restore,
 			// or a live remote change) — let the tree dock know to re-fetch.
@@ -1825,8 +1949,8 @@
 	}
 
 	function focusedNode(): ExplorerEntry | null {
-		if (focusIndex < 0 || focusIndex >= nodes.length) return null;
-		return nodes[focusIndex] ?? null;
+		if (focusIndex < 0 || focusIndex >= focusableEntries.length) return null;
+		return focusableEntries[focusIndex] ?? null;
 	}
 
 	async function enterFolder(n: ExplorerEntry) {
@@ -3075,7 +3199,7 @@
 		const dx = e.clientX - start.x;
 		const dy = e.clientY - start.y;
 		if (dx * dx + dy * dy > SELECT_SLOP_PX * SELECT_SLOP_PX) return;
-		focusIndex = start.index;
+		focusIndex = focusPosById.get(start.id) ?? -1;
 		selectedOnPointerUp = true;
 		const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
 		if (lastRowActivate && lastRowActivate.id === n.id && now - lastRowActivate.at < DBLCLICK_MS) {
@@ -3092,7 +3216,7 @@
 			selectedOnPointerUp = false;
 			return;
 		}
-		focusIndex = i;
+		focusIndex = focusPosById.get(n.id) ?? -1;
 		void applyRowActivate(n, e);
 	}
 
@@ -3101,7 +3225,7 @@
 		if (renamingId === n.id) return;
 		e.preventDefault();
 		e.stopPropagation();
-		focusIndex = i;
+		focusIndex = focusPosById.get(n.id) ?? -1;
 		selectExclusive(n);
 		void openRow(n);
 	}
@@ -3147,6 +3271,27 @@
 	);
 	const listPending = $derived([...pending, ...saveOps, ...inboundOps]);
 	const listingRows = $derived(mergeListingWithPending(nodes, listPending, parentId));
+	/**
+	 * Detailed view may re-order the listing client-side. Unsorted (or in
+	 * other views) the rows pass through in driver order so sibling
+	 * reorder can stick; a sort always renders a stable copy.
+	 */
+	const sortedRows = $derived(
+		activeSort ? sortListingRows(listingRows, activeSort.col, activeSort.dir, foldersFirst) : listingRows
+	);
+	/** Reorder needs the driver's manual order — sorting it away makes before/after drops meaningless. */
+	const canReorder = $derived(caps.supportsSiblingOrder && !activeSort);
+	/** Real rows in display order — click focus and arrow-key nav walk this, not nodes. */
+	const focusableEntries = $derived.by(() => {
+		const out: ExplorerEntry[] = [];
+		for (const row of sortedRows) if (!row.placeholder) out.push(row.node);
+		return out;
+	});
+	const focusPosById = $derived.by(() => {
+		const m = new Map<string, number>();
+		focusableEntries.forEach((entry, idx) => m.set(entry.id, idx));
+		return m;
+	});
 	/** Enabled only when at least one selected row is a downloadable file. */
 	const canDownloadSelection = $derived(selectedEntries.some((e) => e.kind === 'file'));
 
@@ -3626,13 +3771,13 @@
 		}
 		if (e.key === 'ArrowDown') {
 			e.preventDefault();
-			if (!nodes.length) return;
-			focusIndex = Math.min(nodes.length - 1, Math.max(0, focusIndex) + 1);
+			if (!focusableEntries.length) return;
+			focusIndex = Math.min(focusableEntries.length - 1, Math.max(0, focusIndex) + 1);
 			return;
 		}
 		if (e.key === 'ArrowUp') {
 			e.preventDefault();
-			if (!nodes.length) return;
+			if (!focusableEntries.length) return;
 			focusIndex = Math.max(0, (focusIndex < 0 ? 0 : focusIndex) - 1);
 			return;
 		}
@@ -4442,9 +4587,65 @@
 									<span>Show preview</span>
 									<span class="fe-view-check">{showPreview ? '✓' : ''}</span>
 								</button>
+								{#if viewMode === 'icons'}
+									<div class="fe-view-divider"></div>
+									<label class="fe-view-slider" data-testid="fe-icon-size-slider-wrap">
+										<span class="fe-view-slider-label">Thumbnail size</span>
+										<input
+											type="range"
+											min={ICON_SIZE_MIN}
+											max={ICON_SIZE_MAX}
+											step={4}
+											value={iconSize}
+											oninput={(e) => setIconSize(Number(e.currentTarget.value))}
+											data-testid="fe-icon-size-slider"
+											aria-label="Thumbnail size"
+										/>
+									</label>
+								{/if}
+								{#if viewMode === 'detailed'}
+									<div class="fe-view-divider"></div>
+									<button type="button" class="fe-view-option fe-view-checkbox" class:active={foldersFirst} data-testid="fe-view-folders-first" onclick={() => setFoldersFirst(!foldersFirst)}>
+										<FeIcon name="folder" size={16} />
+										<span>Folders first</span>
+										<span class="fe-view-check">{foldersFirst ? '✓' : ''}</span>
+									</button>
+									<div class="fe-view-subhead">Columns</div>
+									{#each detailColOrder as c (c)}
+										<div class="fe-col-row">
+											<button type="button" class="fe-view-option fe-view-checkbox" class:active={!hiddenCols.includes(c)} data-testid={`fe-col-toggle-${c}`} onclick={() => toggleDetailCol(c)}>
+												<FeIcon name="eye" size={16} />
+												<span>{DETAIL_COL_META[c].label}</span>
+												<span class="fe-view-check">{hiddenCols.includes(c) ? '' : '✓'}</span>
+											</button>
+											<span class="fe-col-order">
+												<button type="button" class="fe-col-order-btn" data-testid={`fe-col-up-${c}`} aria-label={`Move ${DETAIL_COL_META[c].label} earlier`} onclick={() => moveDetailCol(c, -1)} disabled={c === detailColOrder[0]}>
+													↑
+												</button>
+												<button type="button" class="fe-col-order-btn" data-testid={`fe-col-down-${c}`} aria-label={`Move ${DETAIL_COL_META[c].label} later`} onclick={() => moveDetailCol(c, 1)} disabled={c === detailColOrder[detailColOrder.length - 1]}>
+													↓
+												</button>
+											</span>
+										</div>
+									{/each}
+									<p class="fe-view-note">File name always comes first.</p>
+								{/if}
 							</div>
 						{/if}
 					</span>
+				{/if}
+				{#if mode === 'manage' || mode === 'open'}
+					{#if activeSort}
+						<span class="fe-sort-chip" data-testid="fe-sort-chip">
+							<FeIcon name="table" size={12} />
+							<span class="fe-sort-chip-label">
+								Sorted by {DETAIL_COL_META[activeSort.col].label}
+							</span>
+							<button type="button" class="fe-sort-clear" data-testid="fe-sort-clear" aria-label="Clear sort" onclick={clearSort}>
+								<FeIcon name="x" size={12} />
+							</button>
+						</span>
+					{/if}
 				{/if}
 				{#if compactToolbar}
 					<!-- svelte-ignore a11y_click_events_have_key_events -->
@@ -4595,8 +4796,43 @@
 		/>
 	{/if}
 	<div class="fe-split">
-	<div
+	<div class="fe-list-col" style:--fe-detail-tracks="{detailTracks}">
+		{#if viewMode === 'detailed' && detailCols.length > 0}
+			<div class="fe-list-head" data-testid="fe-list-head">
+				<div class="fe-list-head-row">
+					<button
+						type="button"
+						class="fe-head-cell fe-head-name"
+						data-testid="fe-head-name"
+						aria-label="Sort by file name"
+						onclick={() => toggleSort('name')}
+					>
+						<span class="fe-head-label">File name</span>
+						<span class="fe-head-arrow" aria-hidden="true">
+							{#if activeSort?.col === 'name'}{activeSort.dir === 'asc' ? '↑' : '↓'}{/if}
+						</span>
+					</button>
+					{#each detailCols as c (c)}
+						<button
+							type="button"
+							class="fe-head-cell fe-row-col fe-col-head-{c}"
+							data-testid={`fe-head-${c}`}
+							aria-label={`Sort by ${DETAIL_COL_META[c].label.toLowerCase()}`}
+							onclick={() => toggleSort(c)}
+						>
+							<span class="fe-head-label">{DETAIL_COL_META[c].label}</span>
+							<span class="fe-head-arrow" aria-hidden="true">
+								{#if activeSort?.col === c}{activeSort.dir === 'asc' ? '↑' : '↓'}{/if}
+							</span>
+						</button>
+					{/each}
+				</div>
+			</div>
+		{/if}
+		<div
 		class="fe-list"
+		style:--fe-icon-size="{iconSize}px"
+		data-fe-icon-size={iconSize}
 		class:fe-list-icons={viewMode === 'icons'}
 		class:fe-list-detailed={viewMode === 'detailed'}
 		tabindex="0"
@@ -4643,7 +4879,7 @@
 				No files here
 			</div>
 		{:else}
-			{#each listingRows as row (row.key)}
+			{#each sortedRows as row (row.key)}
 				{@const n = row.node}
 				{@const i = row.nodeIndex ?? -1}
 				{@const p = row.pending}
@@ -4713,10 +4949,10 @@
 					{#if viewMode === 'icons'}
 						<span class="fe-row-icon-thumb">
 							{#if rasterThumb}
-								<FeThumbnail entry={n} {driver} maxDim={120} enabled={showPreview} />
+								<FeThumbnail entry={n} {driver} maxDim={thumbFetchDim} enabled={showPreview} />
 							{:else}
 								<span class="fe-row-icon-fallback">
-									<FeIcon name={entryIcon(n)} class={entryMarkClass(n)} size={48} />
+									<FeIcon name={entryIcon(n)} class={entryMarkClass(n)} size={Math.round(iconSize * 0.5)} />
 								</span>
 							{/if}
 							{#if p}
@@ -4743,9 +4979,17 @@
 								{#if n.kind === 'file'}{@render presenceDots(n.id)}{/if}
 							{/if}
 						</span>
-						<span class="fe-row-col fe-row-size">{n.size != null ? formatBytes(n.size) : '—'}</span>
-						<span class="fe-row-col fe-row-type">{n.fileType ?? (n.kind === 'folder' ? 'Folder' : 'File')}</span>
-						<span class="fe-row-col fe-row-modified">{n.updatedAt ? formatWhen(n.updatedAt) : '—'}</span>
+						{#each detailCols as c (c)}
+							<span class="fe-row-col" class:fe-row-size={c === 'size'} class:fe-row-type={c === 'type'} class:fe-row-modified={c === 'modified'}>
+								{#if c === 'size'}
+									{n.size != null ? formatBytes(n.size) : '—'}
+								{:else if c === 'type'}
+									{n.fileType ?? (n.kind === 'folder' ? 'Folder' : 'File')}
+								{:else}
+									{n.updatedAt ? formatWhen(n.updatedAt) : '—'}
+								{/if}
+							</span>
+						{/each}
 					{:else}
 						<span class="fe-row-main">
 							<span class="fe-icon">
@@ -4778,7 +5022,7 @@
 					{/if}
 				</div>
 			{/each}
-			{#if dndEnabled && caps.supportsSiblingOrder && dndLine && (dndZone === 'before' || dndZone === 'after')}
+			{#if dndEnabled && canReorder && dndLine && (dndZone === 'before' || dndZone === 'after')}
 				<div
 					class="fe-dnd-line"
 					class:vertical={dndLine.axis === 'x'}
@@ -4798,6 +5042,7 @@
 				<div class="fe-spinner" aria-hidden="true"></div>
 			</div>
 		{/if}
+	</div>
 	</div>
 	{#if previewDock !== 'off'}
 		<SplitHandle
@@ -6089,7 +6334,7 @@
 	.fe-root.preview-right .fe-split {
 		grid-template-columns: 1fr auto minmax(12rem, var(--preview-ratio, 34%));
 	}
-	.fe-split > .fe-list {
+	.fe-split > .fe-list-col {
 		min-height: 0;
 		min-width: 0;
 	}
@@ -6737,6 +6982,24 @@
 		margin: 4px 0;
 		background: var(--line-hairline);
 	}
+	.fe-view-slider {
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
+		width: 184px;
+		padding: 4px 8px 6px;
+		font: inherit;
+		font-size: 0.85rem;
+		color: var(--text-primary);
+	}
+	.fe-view-slider-label {
+		font-size: 0.85rem;
+	}
+	.fe-view-slider input[type='range'] {
+		width: 100%;
+		margin: 0;
+		accent-color: var(--accent);
+	}
 	.fe-toolbar-more-wrap {
 		position: relative;
 		display: inline-flex;
@@ -6780,7 +7043,7 @@
 	/* ── Icon view ────────────────────────────────────────────── */
 	.fe-list-icons {
 		display: grid;
-		grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+		grid-template-columns: repeat(auto-fill, minmax(calc(var(--fe-icon-size, 96px) + 16px), 1fr));
 		gap: 4px;
 		align-content: start;
 		align-items: start;
@@ -6804,8 +7067,8 @@
 	}
 	.fe-row-icon-thumb {
 		position: relative;
-		width: 96px;
-		height: 96px;
+		width: var(--fe-icon-size, 96px);
+		height: var(--fe-icon-size, 96px);
 		flex: none;
 		display: flex;
 		align-items: center;
@@ -6848,22 +7111,172 @@
 		white-space: nowrap;
 		font-variant-numeric: tabular-nums;
 	}
+	/* Fixed widths, not min-widths: the header buttons share these, so a
+	   long cell clips instead of shifting the columns under it. */
 	.fe-row-size {
-		min-width: 5rem;
+		width: 5rem;
 		text-align: right;
+		overflow: hidden;
+		text-overflow: ellipsis;
 	}
 	.fe-row-type {
-		min-width: 4.5rem;
+		width: 4.5rem;
 		text-transform: capitalize;
+		overflow: hidden;
+		text-overflow: ellipsis;
 	}
 	.fe-row-modified {
-		min-width: 8rem;
+		width: 8rem;
+		overflow: hidden;
+		text-overflow: ellipsis;
 	}
 	.fe-list-detailed .fe-icon,
 	.fe-list-detailed .fe-icon :global(.fe-thumb),
 	.fe-list-detailed .fe-icon :global(.fe-thumb-img) {
 		width: 16px;
 		height: 16px;
+	}
+
+	/* ── Detailed view: header row + sort ────────────────────── */
+	.fe-list-col {
+		display: flex;
+		flex-direction: column;
+		min-height: 0;
+		min-width: 0;
+	}
+	.fe-list-head {
+		flex: none;
+		padding: 0 6px 6px;
+	}
+	.fe-list-head-row {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		padding: 4px 10px;
+	}
+	.fe-head-cell {
+		display: flex;
+		align-items: center;
+		gap: 4px;
+		padding: 0;
+		background: none;
+		border: none;
+		color: var(--text-muted);
+		font: inherit;
+		font-size: 0.78rem;
+		font-weight: 600;
+		white-space: nowrap;
+		cursor: pointer;
+		min-width: 0;
+		overflow: hidden;
+	}
+	.fe-head-cell:hover {
+		color: var(--text-primary);
+	}
+	.fe-head-name {
+		flex: 1 1 0;
+		min-width: 0;
+		text-align: left;
+		justify-content: flex-start;
+		/* icon (16px) + gap (8px) on the data rows — keeps name text aligned */
+		padding-left: 24px;
+	}
+	.fe-col-head-size {
+		width: 5rem;
+		justify-content: flex-end;
+	}
+	.fe-col-head-type {
+		width: 4.5rem;
+	}
+	.fe-col-head-modified {
+		width: 8rem;
+	}
+	.fe-head-arrow {
+		min-width: 12px;
+		text-align: right;
+	}
+	/* Sort chip in the toolbar */
+	.fe-sort-chip {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		padding: 3px 4px 3px 8px;
+		font-size: 0.78rem;
+		color: var(--text-secondary);
+		background: var(--surface-3);
+		border: 1px solid var(--line-hairline);
+		border-radius: 999px;
+		white-space: nowrap;
+		align-self: center;
+	}
+	.fe-sort-chip-label {
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+	.fe-sort-clear {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 18px;
+		height: 18px;
+		padding: 0;
+		background: none;
+		border: none;
+		border-radius: 999px;
+		color: var(--text-secondary);
+		cursor: pointer;
+	}
+	.fe-sort-clear:hover {
+		background: var(--surface-2);
+		color: var(--text-primary);
+	}
+	/* Columns rows inside the view popup */
+	.fe-view-subhead {
+		padding: 4px 8px 2px;
+		font-size: 0.7rem;
+		letter-spacing: 0.04em;
+		text-transform: uppercase;
+		color: var(--text-muted);
+	}
+	.fe-col-row {
+		display: flex;
+		align-items: center;
+	}
+	.fe-col-row .fe-view-option {
+		flex: 1 1 auto;
+		min-width: 0;
+	}
+	.fe-col-order {
+		display: inline-flex;
+		flex: none;
+		gap: 2px;
+		padding-right: 8px;
+	}
+	.fe-col-order-btn {
+		width: 20px;
+		height: 20px;
+		padding: 0;
+		background: none;
+		border: 1px solid var(--line-hairline);
+		border-radius: 3px;
+		color: var(--text-secondary);
+		font-size: 0.7rem;
+		line-height: 1;
+		cursor: pointer;
+	}
+	.fe-col-order-btn:hover:not(:disabled) {
+		background: var(--surface-3);
+		color: var(--text-primary);
+	}
+	.fe-col-order-btn:disabled {
+		opacity: 0.35;
+		cursor: default;
+	}
+	.fe-view-note {
+		padding: 2px 8px 2px;
+		margin: 0;
+		font-size: 0.72rem;
+		color: var(--text-muted);
 	}
 
 </style>
