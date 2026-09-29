@@ -3,7 +3,7 @@
  */
 import type { ExplorerCapabilities } from './explorerDriver.js';
 
-export type ConnectionKind = 'local' | 'memory' | 'disk' | 'b2' | 'rclone' | 'monitor';
+export type ConnectionKind = 'local' | 'memory' | 'disk' | 'b2' | 'monitor';
 
 export function connectionKindNote(kind: string): string {
 	if (kind === 'memory') return 'This tab only — cleared when the tab closes.';
@@ -12,7 +12,6 @@ export function connectionKindNote(kind: string): string {
 		return 'Remote Backblaze B2. Keys stay in this browser (optional passphrase lock in B2 settings).';
 	}
 	if (kind === 'monitor') return 'Live folder via monitor (same connection can server-copy).';
-	if (kind === 'rclone') return 'Remote folder via rclone.';
 	if (kind === 'peer-fs') return 'Folder on the other device.';
 	return 'Saved in this browser (Dexie + OPFS).';
 }

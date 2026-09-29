@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": false,
   "type": "module",
-  "description": "Browser VFS (SQLite catalog + OPFS bytes), FileExplorer UI, optional Backblaze B2, rclone RC, and local monitor remote browsers.",
+  "description": "Browser VFS (SQLite catalog + OPFS bytes), FileExplorer UI, optional Backblaze B2 and local monitor remote browsers.",
   "exports": {
     ".": {
       "types": "./src/index.ts",
@@ -48,12 +48,6 @@
       "import": "./src/b2/index.ts",
       "default": "./src/b2/index.ts"
     },
-    "./rclone": {
-      "types": "./src/rclone/index.ts",
-      "svelte": "./src/rclone/index.ts",
-      "import": "./src/rclone/index.ts",
-      "default": "./src/rclone/index.ts"
-    },
     "./monitor": {
       "types": "./src/monitor/index.ts",
       "svelte": "./src/monitor/index.ts",
@@ -96,11 +90,11 @@
     "test": "node --experimental-strip-types --import ./test/setup.mjs --import ./test/resolve-hook.mjs --test --test-timeout 30000 test/*.unit.test.ts",
     "test:unit": "npm test",
     "test:b2": "vitest run --config vitest.b2.config.ts",
-    "test:rclone": "vitest run --config vitest.rclone.config.ts",
-    "test:tree-dnd": "vitest run --config vitest.rclone.config.ts src/ui/treeDnd",
+    "test:node": "vitest run --config vitest.node.config.ts",
+    "test:tree-dnd": "vitest run --config vitest.node.config.ts src/ui/treeDnd",
     "test:component": "vitest run --config vitest.config.ts",
     "check:test-coverage": "node scripts/check-test-coverage.mjs",
-    "test:all": "npm run check:test-coverage && npm run test && npm run test:b2 && npm run test:rclone && npm run test:component",
+    "test:all": "npm run check:test-coverage && npm run test && npm run test:b2 && npm run test:node && npm run test:component",
     "check": "svelte-check --tsconfig ./tsconfig.json && npm run check:test-coverage"
   },
 

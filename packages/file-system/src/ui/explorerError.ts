@@ -5,7 +5,6 @@
  */
 import { VfsError } from '../types.js';
 import { formatB2ErrorMessage } from '../b2/errors.js';
-import { formatRcloneErrorMessage } from '../rclone/errors.js';
 import { formatMonitorErrorMessage } from '../monitor/errors.js';
 
 const CODE_ONLY = /^[A-Z][A-Z0-9_]{2,}$/;
@@ -35,7 +34,6 @@ const CODE_LABELS: Record<string, string> = {
 	MONITOR_UNAVAILABLE: 'Monitor is unavailable. Check the base URL and that the service is running.',
 	MONITOR_FORBIDDEN: 'That path is not allowed by the monitor.',
 	MONITOR_NOT_FOUND: 'That path was not found on the host.',
-	RCLONE_ERROR: 'rclone could not complete that request.',
 	MOVE_UNSUPPORTED: 'This connection cannot move items here.',
 	COPY_UNSUPPORTED: 'This connection cannot copy items here.'
 };
@@ -93,11 +91,6 @@ export function formatExplorerError(e: unknown): string {
 		if (formatted && !CODE_ONLY.test(formatted)) return formatted;
 		if (CODE_LABELS[code]) return CODE_LABELS[code];
 		return formatted || CODE_LABELS.B2_ERROR;
-	}
-	if (name === 'ExplorerRcloneError' || code.startsWith('RCLONE_')) {
-		const formatted = formatRcloneErrorMessage(e);
-		if (formatted && !CODE_ONLY.test(formatted)) return formatted;
-		return CODE_LABELS[code] || formatted || CODE_LABELS.RCLONE_ERROR;
 	}
 	if (name === 'ExplorerMonitorError' || code.startsWith('MONITOR_')) {
 		return formatMonitorErrorMessage(e);

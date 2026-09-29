@@ -89,6 +89,5 @@ export { default as B2ConnectionForm } from './B2ConnectionForm.svelte';
 export {
 	default as ConnectionSwitcher,
 	type ConnectionKind,
-	type B2ProfileChip,
-	type RcloneProfileChip
+	type B2ProfileChip
 } from './ConnectionSwitcher.svelte';

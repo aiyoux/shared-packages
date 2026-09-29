@@ -1,6 +1,6 @@
 <script lang="ts">
 	/**
-	 * The "Connections" tab of the settings popup: B2, rclone, and monitor
+	 * The "Connections" tab of the settings popup: B2 and monitor
 	 * list/new/edit, moved verbatim out of RemoteConnectionsDialog. Escape
 	 * and the remove-confirmation belong to this tab because the form state
 	 * does; the dialog shell renders the tab bar around it.
@@ -11,7 +11,6 @@
 	import {
 		HUB_B2_PROFILES_CHANNEL,
 		HUB_MONITOR_PROFILES_CHANNEL,
-		HUB_RCLONE_PROFILES_CHANNEL,
 		subscribeTabChannel
 	} from '../crossTab.js';
 	import {
@@ -22,18 +21,6 @@
 		setActiveProfileId as setActiveB2
 	} from '../b2/credentials.js';
 	import { validateProfileInput as validateB2, type B2ConnectionProfileV1 } from '../b2/types.js';
-	import {
-		deleteProfile as deleteRclone,
-		getActiveProfileId as getActiveRclone,
-		listProfiles as listRclone,
-		saveProfile as saveRclone,
-		setActiveProfileId as setActiveRclone
-	} from '../rclone/credentials.js';
-	import {
-		DEFAULT_RCLONE_BASE_URL,
-		validateProfileInput as validateRclone,
-		type RcloneConnectionProfileV1
-	} from '../rclone/types.js';
 	import {
 		deleteProfile as deleteMonitor,
 		getActiveProfileId as getActiveMonitor,
@@ -77,10 +64,8 @@
 	let busy = $state(false);
 
 	let b2Profiles = $state<B2ConnectionProfileV1[]>([]);
-	let rcloneProfiles = $state<RcloneConnectionProfileV1[]>([]);
 	let monitorProfiles = $state<MonitorConnectionProfileV1[]>([]);
 	let activeB2 = $state<string | null>(null);
-	let activeRclone = $state<string | null>(null);
 	let activeMonitor = $state<string | null>(null);
 
 	let name = $state('');
@@ -90,18 +75,11 @@
 	let namePrefix = $state('');
 	let keyDirty = $state(false);
 	let persistSecret = $state(true);
-	let rcBaseUrl = $state(DEFAULT_RCLONE_BASE_URL);
-	let rcFs = $state('');
-	let rcRoot = $state('');
-	let rcUser = $state('');
-	let rcPass = $state('');
-	let passDirty = $state(false);
 	let monitorBaseUrl = $state(DEFAULT_MONITOR_BASE_URL);
 	let monitorRoot = $state('/tmp');
 
 	const KIND_LABEL: Record<RemoteKind, string> = {
 		b2: 'B2',
-		rclone: 'rclone',
 		monitor: 'Monitor'
 	};
 
@@ -116,12 +94,6 @@
 			kind: 'monitor' as const,
 			id: p.id,
 			name: p.name
-		})),
-		...rcloneProfiles.map((p) => ({
-			kind: 'rclone' as const,
-			id: p.id,
-			name: p.name,
-			tabOnly: p.persistSecret === false
 		}))
 	]);
 
@@ -163,19 +135,15 @@
 	});
 
 	async function reload() {
-		const [b2, rc, mon, aB2, aRc, aMon] = await Promise.all([
+		const [b2, mon, aB2, aMon] = await Promise.all([
 			listB2(),
-			listRclone(),
 			listMonitor(),
 			getActiveB2(),
-			getActiveRclone(),
 			getActiveMonitor()
 		]);
 		b2Profiles = b2;
-		rcloneProfiles = rc;
 		monitorProfiles = mon;
 		activeB2 = aB2;
-		activeRclone = aRc;
 		activeMonitor = aMon;
 	}
 
@@ -183,7 +151,6 @@
 		void reload();
 		const offs = [
 			subscribeTabChannel(HUB_B2_PROFILES_CHANNEL, () => void reload()),
-			subscribeTabChannel(HUB_RCLONE_PROFILES_CHANNEL, () => void reload()),
 			subscribeTabChannel(HUB_MONITOR_PROFILES_CHANNEL, () => void reload())
 		];
 		return () => offs.forEach((fn) => fn());
@@ -191,24 +158,13 @@
 
 	function resetKindDefaults(next: RemoteKind) {
 		kind = next;
-		name =
-			next === 'b2'
-				? 'My B2'
-				: next === 'rclone'
-					? 'My rclone'
-					: 'Local monitor';
+		name = next === 'b2' ? 'My B2' : 'Local monitor';
 		applicationKeyId = '';
 		applicationKey = '';
 		bucketName = '';
 		namePrefix = '';
 		keyDirty = false;
 		persistSecret = true;
-		rcBaseUrl = DEFAULT_RCLONE_BASE_URL;
-		rcFs = '';
-		rcRoot = '';
-		rcUser = '';
-		rcPass = '';
-		passDirty = false;
 		monitorBaseUrl = DEFAULT_MONITOR_BASE_URL;
 		monitorRoot = '/tmp';
 		error = '';
@@ -238,17 +194,6 @@
 			keyDirty = false;
 			bucketName = p.bucketName;
 			namePrefix = p.namePrefix ?? '';
-			persistSecret = p.persistSecret !== false;
-		} else if (row.kind === 'rclone') {
-			const p = rcloneProfiles.find((x) => x.id === row.id);
-			if (!p) return;
-			name = p.name;
-			rcBaseUrl = p.baseUrl || DEFAULT_RCLONE_BASE_URL;
-			rcFs = p.fs;
-			rcRoot = p.rootPath ?? '';
-			rcUser = p.rcUser;
-			rcPass = '';
-			passDirty = false;
 			persistSecret = p.persistSecret !== false;
 		} else {
 			const p = monitorProfiles.find((x) => x.id === row.id);
@@ -313,53 +258,6 @@
 			}
 			return;
 		}
-		if (kind === 'rclone') {
-			const existing = editingId ? rcloneProfiles.find((p) => p.id === editingId) : undefined;
-			const passToSave = passDirty || !existing ? rcPass : existing.rcPass;
-			const requireRcPass = !existing || passDirty;
-			const err = validateRclone({
-				name,
-				baseUrl: rcBaseUrl,
-				fs: rcFs,
-				rootPath: rcRoot,
-				rcUser,
-				rcPass: passToSave,
-				requireRcPass
-			});
-			if (err) {
-				error = err;
-				return;
-			}
-			if (requireRcPass && !passToSave?.trim()) {
-				error = 'RC password is required';
-				return;
-			}
-			busy = true;
-			try {
-				await saveRclone({
-					id: editingId ?? crypto.randomUUID(),
-					name,
-					baseUrl: rcBaseUrl.trim() || DEFAULT_RCLONE_BASE_URL,
-					fs: rcFs,
-					rootPath: rcRoot || undefined,
-					rcUser,
-					rcPass: passDirty || !existing ? passToSave : '',
-					persistSecret,
-					createdAt: existing?.createdAt
-				});
-				rcPass = '';
-				passDirty = false;
-				editingId = null;
-				mode = 'list';
-				await reload();
-			} catch (e) {
-				error = formatExplorerError(e);
-				toast.error(error);
-			} finally {
-				busy = false;
-			}
-			return;
-		}
 		const err = validateMonitorProfileInput({
 			name,
 			baseUrl: monitorBaseUrl,
@@ -398,12 +296,6 @@
 				await setActiveB2(p.id);
 				activeB2 = p.id;
 				onConnected?.(row.kind, p);
-			} else if (row.kind === 'rclone') {
-				const p = rcloneProfiles.find((x) => x.id === row.id);
-				if (!p) return;
-				await setActiveRclone(p.id);
-				activeRclone = p.id;
-				onConnected?.(row.kind, p);
 			} else {
 				const p = monitorProfiles.find((x) => x.id === row.id);
 				if (!p) return;
@@ -421,19 +313,13 @@
 
 	async function removeRow(row: { kind: RemoteKind; id: string }) {
 		if (row.kind === 'b2') await deleteB2(row.id);
-		else if (row.kind === 'rclone') await deleteRclone(row.id);
 		else await deleteMonitor(row.id);
 		if (editingId === row.id && kind === row.kind) {
 			editingId = null;
 			mode = 'list';
 		}
 		await reload();
-		const active =
-			row.kind === 'b2'
-				? activeB2
-				: row.kind === 'rclone'
-					? activeRclone
-					: activeMonitor;
+		const active = row.kind === 'b2' ? activeB2 : activeMonitor;
 		if (active === row.id) onDisconnected?.(row.kind);
 	}
 
@@ -512,15 +398,6 @@
 				<button
 					type="button"
 					role="radio"
-					class:active={kind === 'rclone'}
-					aria-checked={kind === 'rclone'}
-					data-testid="connections-kind-rclone"
-					disabled={busy}
-					onclick={() => setNewKind('rclone')}>rclone</button
-				>
-				<button
-					type="button"
-					role="radio"
 					class:active={kind === 'monitor'}
 					aria-checked={kind === 'monitor'}
 					data-testid="connections-kind-monitor"
@@ -579,71 +456,6 @@
 				{#if !persistSecret}
 					<p class="editing-label" data-testid="b2-session-only-note">
 						This tab only — the key is forgotten when the tab closes.
-					</p>
-				{/if}
-			{:else if kind === 'rclone'}
-				{#if mode === 'edit'}
-					<p class="editing-label" data-testid="rclone-editing-banner">
-						Leave the password blank to keep the current secret.
-					</p>
-				{/if}
-				<label>
-					Display name
-					<input data-testid="rclone-name" bind:value={name} autocomplete="off" />
-				</label>
-				<label>
-					RC base URL
-					<input
-						data-testid="rclone-base-url"
-						bind:value={rcBaseUrl}
-						placeholder={DEFAULT_RCLONE_BASE_URL}
-						autocomplete="off"
-					/>
-				</label>
-				<label>
-					Remote (fs)
-					<input
-						data-testid="rclone-fs"
-						bind:value={rcFs}
-						placeholder="remote: or remote:bucket"
-						autocomplete="off"
-					/>
-				</label>
-				<label>
-					Root path (optional)
-					<input
-						data-testid="rclone-root"
-						bind:value={rcRoot}
-						placeholder="team/docs"
-						autocomplete="off"
-					/>
-				</label>
-				<label>
-					RC user
-					<input data-testid="rclone-user" bind:value={rcUser} autocomplete="off" />
-				</label>
-				<label>
-					RC password
-					<input
-						data-testid="rclone-pass"
-						type="password"
-						bind:value={rcPass}
-						autocomplete="off"
-						placeholder={mode === 'edit' ? '(unchanged if blank)' : ''}
-						oninput={() => (passDirty = true)}
-					/>
-				</label>
-				<label class="check">
-					<input
-						data-testid="rclone-persist-secret"
-						type="checkbox"
-						bind:checked={persistSecret}
-					/>
-					Save this password in the browser
-				</label>
-				{#if !persistSecret}
-					<p class="editing-label" data-testid="rclone-session-only-note">
-						This tab only — the password is forgotten when the tab closes.
 					</p>
 				{/if}
 			{:else}

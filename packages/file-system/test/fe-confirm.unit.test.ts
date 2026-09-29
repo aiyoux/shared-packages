@@ -11,7 +11,7 @@ describe('hardDeletePlace', () => {
 	it('memory is not remote', () => {
 		assert.equal(hardDeletePlace('memory'), 'memory');
 		assert.equal(hardDeletePlace('b2'), 'remote');
-		assert.equal(hardDeletePlace('rclone'), 'remote');
+		assert.equal(hardDeletePlace('peer-fs'), 'remote');
 		assert.equal(hardDeletePlace('monitor'), 'remote');
 		assert.equal(hardDeletePlace('disk'), 'disk');
 		assert.equal(hardDeletePlace('local'), 'generic');
@@ -20,7 +20,7 @@ describe('hardDeletePlace', () => {
 
 describe('hardDeleteCopy', () => {
 	it('remote file mentions remote storage', () => {
-		const c = hardDeleteCopy({ driverId: 'rclone', count: 1, folderCount: 0, name: 'x.bin' });
+		const c = hardDeleteCopy({ driverId: 'monitor', count: 1, folderCount: 0, name: 'x.bin' });
 		assert.match(c.body, /remote storage/);
 		assert.match(c.body, /x\.bin/);
 		assert.doesNotMatch(c.body, /in-memory/i);

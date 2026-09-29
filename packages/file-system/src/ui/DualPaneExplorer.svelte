@@ -1,7 +1,7 @@
 <script lang="ts">
 	/**
 	 * Multi-window file explorer with switchable backends (local / memory / b2 /
-	 * rclone / monitor / disk) and copy-across between windows.
+	 * monitor / disk) and copy-across between windows.
 	 *
 	 * Uses the shared AppWindows windowing system to provide dynamic splitting,
 	 * top-left window management, TARGET window tracking for clipboard and system
@@ -121,7 +121,6 @@
 		subscribeTabChannel,
 		HUB_B2_PROFILES_CHANNEL,
 		HUB_MONITOR_PROFILES_CHANNEL,
-		HUB_RCLONE_PROFILES_CHANNEL,
 		HUB_VAULT_CHANNEL,
 		type MemoryVfsService,
 		type VfsService
@@ -141,17 +140,6 @@
 		type ConnectionKind
 	} from '../b2/index.js';
 	import RemoteConnectionsDialog from './RemoteConnectionsDialog.svelte';
-	import {
-		RcloneConnectionForm,
-		acquireRcloneDriver,
-		releaseRcloneDriver,
-		getProfile as getRcloneProfile,
-		listProfiles as listRcloneProfiles,
-		revealRcPass,
-		setActiveProfileId as setActiveRcloneProfileId,
-		mapRcloneError,
-		type RcloneConnectionProfileV1
-	} from '../rclone/index.js';
 	import {
 		isVaultLockedError,
 		isSecretUnavailableError,
@@ -184,7 +172,6 @@
 		send: (id) => `fe-send-${id}`,
 		sendError: 'fe-send-error',
 		dualToggle: 'fe-dual-pane-toggle',
-		rcloneToggle: 'fe-rclone-feature-toggle',
 		monitorToggle: 'fe-monitor-feature-toggle',
 		persist: 'files-storage-persist'
 	};
@@ -242,7 +229,6 @@
 		hideConnectionSwitcher?: boolean;
 		switcherPanes?: PaneId[];
 		monitorEnabled?: boolean;
-		rcloneEnabled?: boolean;
 		switcherShowMemory?: boolean;
 		onExplorerDrag?: (args: {
 			paneId: PaneId;
@@ -369,7 +355,6 @@
 		hideConnectionSwitcher = false,
 		switcherPanes,
 		monitorEnabled: _monitorEnabled = true,
-		rcloneEnabled: _rcloneEnabled = true,
 		switcherShowMemory = true,
 		onExplorerDrag,
 		overrideRight = null,
@@ -424,7 +409,6 @@
 	function onRemoteConnected(kind: RemoteKind, profile: object) {
 		showRemoteManager = false;
 		if (kind === 'b2') void connectB2(targetPaneId, profile as B2ConnectionProfileV1);
-		else if (kind === 'rclone') void connectRclone(targetPaneId, profile as RcloneConnectionProfileV1);
 		else if (kind === 'monitor') void connectMonitor(targetPaneId, profile as MonitorConnectionProfileV1);
 		// 'ai' is not a file backend: connectRow already set it active; there is
 		// no pane driver to attach, so nothing else to do here.
@@ -515,9 +499,7 @@
 	}
 
 	let b2Profiles = $state<B2ConnectionProfileV1[]>([]);
-	let rcloneProfiles = $state<RcloneConnectionProfileV1[]>([]);
 	let monitorProfiles = $state<MonitorConnectionProfileV1[]>([]);
-	const showRclone = true;
 	const showMonitor = true;
 
 	let monitorWatchStatus = $state<Record<string, string>>({});
@@ -552,7 +534,7 @@
 	let dualRootEl = $state<HTMLDivElement | null>(null);
 
 	const availableRoleDefs = $derived(
-		buildFileWindowRoles(b2Profiles, rcloneProfiles, monitorProfiles, {
+		buildFileWindowRoles(b2Profiles, monitorProfiles, {
 			showMemory: switcherShowMemory,
 			hasPeer: Boolean(overrideRight)
 		})
@@ -740,14 +722,11 @@
 	function releaseRemote(kind: ConnectionKind, profileId: string | null | undefined) {
 		if (!profileId || profileId === 'local' || profileId === 'memory' || profileId === 'disk') return;
 		if (kind === 'b2') releaseB2Driver(profileId);
-		else if (kind === 'rclone') releaseRcloneDriver(profileId);
 		else if (kind === 'monitor') releaseMonitorDriver(profileId);
 	}
 
 	async function reloadProfiles() {
 		b2Profiles = await listB2Profiles();
-		if (showRclone) rcloneProfiles = await listRcloneProfiles();
-		else rcloneProfiles = [];
 		if (showMonitor) monitorProfiles = await listMonitorProfiles();
 		else monitorProfiles = [];
 	}
@@ -758,18 +737,6 @@
 			name: p.name,
 			detail: [
 				p.namePrefix ? `${p.bucketName} · ${p.namePrefix}` : p.bucketName,
-				p.persistSecret === false ? 'this tab' : ''
-			]
-				.filter(Boolean)
-				.join(' · ')
-		}))
-	);
-	const rcloneChips = $derived(
-		rcloneProfiles.map((p) => ({
-			id: p.id,
-			name: p.name,
-			detail: [
-				p.rootPath ? `${p.fs} · ${p.rootPath}` : p.fs,
 				p.persistSecret === false ? 'this tab' : ''
 			]
 				.filter(Boolean)
@@ -800,13 +767,8 @@
 			};
 		}
 		if (p.busy) {
-			const kind =
-				p.activeKind === 'monitor' || p.showMonitorForm
-					? 'monitor'
-					: p.activeKind === 'rclone' || p.showRcloneForm
-						? 'rclone'
-						: 'b2';
-			const title = kind === 'monitor' ? 'Monitor' : kind === 'rclone' ? 'rclone' : 'B2';
+			const kind = p.activeKind === 'monitor' || p.showMonitorForm ? 'monitor' : 'b2';
+			const title = kind === 'monitor' ? 'Monitor' : 'B2';
 			return {
 				wrapTestId: `${kind}-connecting-${id}`,
 				status: 'connecting',
@@ -831,15 +793,6 @@
 				wrapTestId: `b2-remote-badge-${id}`,
 				status: 'connected',
 				title: chip?.name ? `B2 · ${chip.name}` : 'B2',
-				lines: [...(chip?.detail ? [chip.detail] : []), 'Open-with off']
-			};
-		}
-		if (p.activeKind === 'rclone') {
-			const chip = rcloneChips.find((c) => c.id === p.activeId);
-			return {
-				wrapTestId: `rclone-remote-badge-${id}`,
-				status: 'connected',
-				title: chip?.name ? `rclone · ${chip.name}` : 'rclone',
 				lines: [...(chip?.detail ? [chip.detail] : []), 'Open-with off']
 			};
 		}
@@ -931,14 +884,13 @@
 				if ((await isVaultEnabled()) && !isVaultUnlocked()) {
 					for (const paneId of Object.keys(windows)) {
 						const cur = paneState(paneId);
-						if (cur.activeKind !== 'b2' && cur.activeKind !== 'rclone') continue;
+						if (cur.activeKind !== 'b2') continue;
 						releaseRemote(cur.activeKind, cur.activeId);
 						setPane(paneId, {
 							remoteDriver: null,
 							activeId: 'local',
 							activeKind: 'local',
-							showB2Form: cur.activeKind === 'b2',
-							showRcloneForm: cur.activeKind === 'rclone',
+							showB2Form: true,
 							error: 'Unlock the connection vault to use saved keys.',
 							explorerKey: cur.explorerKey + 1
 						});
@@ -948,7 +900,6 @@
 		};
 		const unsubs = [
 			subscribeTabChannel(HUB_B2_PROFILES_CHANNEL, reloadOnTab),
-			subscribeTabChannel(HUB_RCLONE_PROFILES_CHANNEL, reloadOnTab),
 			subscribeTabChannel(HUB_MONITOR_PROFILES_CHANNEL, reloadOnTab),
 			subscribeTabChannel(HUB_VAULT_CHANNEL, onVault),
 			subscribeVaultSession(onVault)
@@ -1014,7 +965,7 @@
 		const prevId = p.activeId !== 'local' && p.activeId !== 'memory' ? p.activeId : null;
 		const prevKind = p.activeKind;
 		dropDiskDriver(p);
-		setPane(id, { busy: true, error: '', showRcloneForm: false, showMonitorForm: false });
+		setPane(id, { busy: true, error: '', showMonitorForm: false });
 		try {
 			const applicationKey = await revealApplicationKey(profile);
 			const driver = await acquireB2Driver({ ...profile, applicationKey });
@@ -1029,7 +980,6 @@
 				activeId: profile.id,
 				activeKind: 'b2',
 				showB2Form: false,
-				showRcloneForm: false,
 				showMonitorForm: false,
 				explorerKey: p.explorerKey + 1,
 				busy: false,
@@ -1043,43 +993,6 @@
 			}
 			const mapped = mapB2Error(e);
 			showPaneError(id, formatExplorerError(mapped), { busy: false, showB2Form: true });
-		}
-	}
-
-	async function connectRclone(id: PaneId, profile: RcloneConnectionProfileV1) {
-		const p = paneState(id);
-		dropDiskDriver(p);
-		const prevId = p.activeId !== 'local' && p.activeId !== 'memory' && p.activeId !== 'disk' ? p.activeId : null;
-		const prevKind = p.activeKind;
-		setPane(id, { busy: true, error: '', showB2Form: false, showMonitorForm: false });
-		try {
-			const rcPass = await revealRcPass(profile);
-			const driver = await acquireRcloneDriver({ ...profile, rcPass });
-			if (prevId && !(prevKind === 'rclone' && prevId === profile.id)) {
-				releaseRemote(prevKind, prevId);
-			}
-			void setActiveRcloneProfileId(profile.id);
-			setPane(id, {
-				role: `rclone:${profile.id}`,
-				remoteDriver: driver,
-				memoryDriver: null,
-				activeId: profile.id,
-				activeKind: 'rclone',
-				showB2Form: false,
-				showRcloneForm: false,
-				showMonitorForm: false,
-				explorerKey: p.explorerKey + 1,
-				busy: false,
-				error: '',
-				ctx: emptyCtx('rclone')
-			});
-		} catch (e) {
-			if (isVaultLockedError(e) || isSecretUnavailableError(e)) {
-				showPaneError(id, formatExplorerError(e), { busy: false, showRcloneForm: true });
-				return;
-			}
-			const mapped = mapRcloneError(e);
-			showPaneError(id, formatExplorerError(mapped), { busy: false, showRcloneForm: true });
 		}
 	}
 
@@ -1108,7 +1021,6 @@
 			busy: true,
 			error: '',
 			showB2Form: false,
-			showRcloneForm: false,
 			showMonitorForm: false
 		});
 		try {
@@ -1124,7 +1036,6 @@
 				activeId: profile.id,
 				activeKind: 'monitor',
 				showB2Form: false,
-				showRcloneForm: false,
 				showMonitorForm: false,
 				explorerKey: p.explorerKey + 1,
 				busy: false,
@@ -1175,7 +1086,6 @@
 				memoryDriver: null,
 				diskName: handle.name || 'This computer',
 				showB2Form: false,
-				showRcloneForm: false,
 				showMonitorForm: false,
 				explorerKey: p.explorerKey + 1,
 				error: '',
@@ -1206,7 +1116,6 @@
 			remoteDriver: null,
 			memoryDriver: mem,
 			showB2Form: false,
-			showRcloneForm: false,
 			showMonitorForm: false,
 			explorerKey: p.explorerKey + 1,
 			error: '',
@@ -1230,7 +1139,6 @@
 				memoryDriver: null,
 				error: '',
 				showB2Form: false,
-				showRcloneForm: false,
 				showMonitorForm: false,
 				explorerKey: p.explorerKey + 1,
 				diskName: '',
@@ -1248,19 +1156,12 @@
 		}
 		const selId = selection.startsWith('b2:')
 			? selection.slice(3)
-			: selection.startsWith('rclone:')
-				? selection.slice(7)
-				: selection.startsWith('monitor:')
-					? selection.slice(8)
-					: selection;
+			: selection.startsWith('monitor:')
+				? selection.slice(8)
+				: selection;
 
 		if (p.activeId === selId && p.remoteDriver) return;
 
-		const rclone = showRclone ? await getRcloneProfile(selId) : undefined;
-		if (rclone) {
-			await connectRclone(id, rclone);
-			return;
-		}
 		const mon = showMonitor ? await getMonitorProfile(selId) : undefined;
 		if (mon) {
 			await connectMonitor(id, mon);
@@ -1649,10 +1550,6 @@
 			const chip = b2Chips.find((c) => c.id === p.activeId);
 			return chip ? `B2 · ${chip.name}` : 'B2';
 		}
-		if (p.activeKind === 'rclone') {
-			const chip = rcloneChips.find((c) => c.id === p.activeId);
-			return chip ? `rclone · ${chip.name}` : 'rclone';
-		}
 		if (p.activeKind === 'monitor') {
 			const chip = monitorChips.find((c) => c.id === p.activeId);
 			return chip ? `Monitor · ${chip.name}` : 'Monitor';
@@ -1888,13 +1785,11 @@
 	function inherit(source: PaneState | undefined, role: string): PaneState {
 		const kind = role.startsWith('b2:')
 			? 'b2'
-			: role.startsWith('rclone:')
-				? 'rclone'
-				: role.startsWith('monitor:')
-					? 'monitor'
-					: (role as ConnectionKind);
+			: role.startsWith('monitor:')
+				? 'monitor'
+				: (role as ConnectionKind);
 		const next = emptyFileWindowState(kind, role);
-		if (role.startsWith('b2:') || role.startsWith('rclone:') || role.startsWith('monitor:')) {
+		if (role.startsWith('b2:') || role.startsWith('monitor:')) {
 			next.activeId = role.split(':')[1] || 'local';
 		}
 		return next;
@@ -1942,9 +1837,7 @@
 		copyOtherLabel={hints.copyOtherLabel}
 		copyIdleNote={hints.copyIdleNote}
 		profiles={b2Chips}
-		rcloneProfiles={rcloneChips}
 		monitorProfiles={monitorChips}
-		showRclone={showRclone}
 		showMonitor={showMonitor}
 		showMemory={switcherShowMemory}
 		showSettings={!hostSettings && !hideSettingsGear}
@@ -2071,9 +1964,7 @@
 				class="b2-error"
 				data-testid={p.activeKind === 'monitor' || p.showMonitorForm
 					? `monitor-connect-error-${id}`
-					: p.activeKind === 'rclone' || p.showRcloneForm
-						? `rclone-connect-error-${id}`
-						: `b2-connect-error-${id}`}
+					: `b2-connect-error-${id}`}
 				role="alert"
 			>
 				{p.error}
@@ -2101,31 +1992,6 @@
 						void reloadProfiles();
 					}}
 					onCancel={() => setPane(id, { showB2Form: false })}
-				/>
-			</div>
-		{/if}
-		{#if p.showRcloneForm && showRclone}
-			<div class="pane-form" data-testid={scopedTid(`rclone-form-wrap-${id}`)}>
-				<RcloneConnectionForm
-					onConnected={async (profile) => {
-						await reloadProfiles();
-						await connectRclone(id, profile);
-					}}
-					onDisconnected={() => {
-						const cur = paneState(id);
-						if (cur.activeKind === 'rclone' && cur.activeId !== 'local') {
-							releaseRcloneDriver(cur.activeId);
-						}
-						setPane(id, {
-							remoteDriver: null,
-							activeId: 'local',
-							activeKind: 'local',
-							showRcloneForm: false,
-							explorerKey: cur.explorerKey + 1
-						});
-						void reloadProfiles();
-					}}
-					onCancel={() => setPane(id, { showRcloneForm: false })}
 				/>
 			</div>
 		{/if}
@@ -2453,9 +2319,7 @@
 			<ConnectionSwitcher
 				variant="settings"
 				profiles={b2Chips}
-				rcloneProfiles={rcloneChips}
 				monitorProfiles={monitorChips}
-				showRclone={showRclone}
 				showMonitor={showMonitor}
 				showInfo={false}
 				onConfigure={() => (showRemoteManager = true)}

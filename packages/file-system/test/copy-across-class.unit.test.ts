@@ -32,14 +32,13 @@ describe('isLocalClass / isRemoteClass', () => {
 		assert.equal(isLocalClass('memory'), true);
 		assert.equal(isLocalClass('disk'), true);
 		assert.equal(isLocalClass('b2'), false);
-		assert.equal(isLocalClass('rclone'), false);
+		assert.equal(isLocalClass('peer-fs'), false);
 		assert.equal(isLocalClass('monitor'), false);
 		assert.equal(isLocalClass('other'), false);
 	});
 
-	it('remote-class = b2 | rclone | monitor | peer-fs', () => {
+	it('remote-class = b2 | monitor | peer-fs', () => {
 		assert.equal(isRemoteClass('b2'), true);
-		assert.equal(isRemoteClass('rclone'), true);
 		assert.equal(isRemoteClass('monitor'), true);
 		assert.equal(isRemoteClass('peer-fs'), true);
 		assert.equal(isRemoteClass('local'), false);
@@ -48,17 +47,17 @@ describe('isLocalClass / isRemoteClass', () => {
 	});
 
 	it('matrix: remote↔remote both remote-class', () => {
-		assert.equal(isRemoteClass('b2') && isRemoteClass('rclone'), true);
+		assert.equal(isRemoteClass('b2') && isRemoteClass('peer-fs'), true);
 		assert.equal(isRemoteClass('b2') && isRemoteClass('monitor'), true);
 		assert.equal(isLocalClass('local') || isLocalClass('b2'), true);
-		assert.equal(isLocalClass('b2') || isLocalClass('rclone'), false);
+		assert.equal(isLocalClass('b2') || isLocalClass('peer-fs'), false);
 	});
 
-	it('eager thumbs: local VFS and monitor host thumbs, not B2/rclone', () => {
+	it('eager thumbs: local VFS and monitor host thumbs, not B2', () => {
 		assert.equal(explorerThumbsAreEager({ id: 'local' }), true);
 		assert.equal(explorerThumbsAreEager({ id: 'memory' }), true);
 		assert.equal(explorerThumbsAreEager({ id: 'b2' }), false);
-		assert.equal(explorerThumbsAreEager({ id: 'rclone' }), false);
+		assert.equal(explorerThumbsAreEager({ id: 'peer-fs' }), false);
 		assert.equal(explorerThumbsAreEager({ id: 'monitor' }), false);
 		assert.equal(
 			explorerThumbsAreEager({
@@ -570,9 +569,9 @@ describe('copyAcross truncated folder', () => {
 		} as unknown as ExplorerDriver;
 		const uploaded: string[] = [];
 		const rc = {
-			id: 'rclone',
-			connectionId: 'rclone:other',
-			endpointKey: 'rclone:gdrive::/',
+			id: 'peer-fs',
+			connectionId: 'peer-fs:other',
+			endpointKey: 'peer-fs:drive::/',
 			capabilities: { supportsUpload: true },
 			async upload(_parent: string | null, f: File, opts?: { onProgress?: (pct: number) => void }) {
 				opts?.onProgress?.(1);
@@ -581,7 +580,7 @@ describe('copyAcross truncated folder', () => {
 			}
 		} as unknown as ExplorerDriver;
 		assert.equal(isDualPhaseCopy(b2, rc), true);
-		const path = describeCopyAcrossPath(b2, rc, { source: 'B2 · shots', dest: 'rclone · drive' });
+		const path = describeCopyAcrossPath(b2, rc, { source: 'B2 · shots', dest: 'Peer · drive' });
 		assert.equal(path.kind, 'dual-phase');
 		assert.match(path.detail, /confirm/i);
 		const direct = describeCopyAcrossPath(
@@ -883,20 +882,21 @@ describe('classify copy-across routing', () => {
 		assert.deepEqual(copied, ['a.jpg']);
 	});
 
-	it('rclone same fs different connectionId → dual-phase NOT server', () => {
+	it('same endpoint, different connectionId (not B2/monitor) → dual-phase NOT server', () => {
 		const left = {
-			id: 'rclone',
-			connectionId: 'rclone:p1',
-			endpointKey: 'rclone:gdrive::/',
+			id: 'peer-fs',
+			connectionId: 'peer-fs:p1',
+			endpointKey: 'peer-fs:drive::/',
 			capabilities: { supportsCopy: true, supportsUpload: true },
 			copy: async () => {}
 		} as unknown as ExplorerDriver;
 		const right = {
-			id: 'rclone',
-			connectionId: 'rclone:p2',
-			endpointKey: 'rclone:gdrive::/',
+			id: 'peer-fs',
+			connectionId: 'peer-fs:p2',
+			endpointKey: 'peer-fs:drive::/',
 			capabilities: { supportsCopy: true, supportsUpload: true },
-			copy: async () => {}
+			copy: async () => {},
+			upload: async () => ({ id: 'x', parentId: null, name: 'x', kind: 'file' })
 		} as unknown as ExplorerDriver;
 		assert.equal(classify(left, right).kind, 'dual-phase');
 		assert.equal(canServerCopy(left, right), false);
@@ -1254,9 +1254,9 @@ describe('classify copy-across routing', () => {
 			upload: async () => ({ id: 'x', parentId: null, name: 'x', kind: 'file' })
 		} as unknown as ExplorerDriver;
 		const rc = {
-			id: 'rclone',
-			connectionId: 'rclone:x',
-			endpointKey: 'rclone:fs::/',
+			id: 'peer-fs',
+			connectionId: 'peer-fs:x',
+			endpointKey: 'peer-fs:fs::/',
 			capabilities: { supportsUpload: true },
 			upload: async () => ({ id: 'x', parentId: null, name: 'x', kind: 'file' })
 		} as unknown as ExplorerDriver;
@@ -1315,8 +1315,8 @@ describe('classify copy-across routing', () => {
 		assert.deepEqual(copied, ['huge.bin']);
 
 		const rc = {
-			id: 'rclone',
-			connectionId: 'rclone:z',
+			id: 'peer-fs',
+			connectionId: 'peer-fs:z',
 			capabilities: { supportsUpload: true },
 			async upload() {
 				return { id: 'x', parentId: null, name: 'x', kind: 'file' };

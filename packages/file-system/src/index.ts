@@ -12,7 +12,6 @@ export {
 	notifyTabChannel,
 	subscribeTabChannel,
 	subscribeOwnTabChannel,
-	HUB_RCLONE_PROFILES_CHANNEL,
 	HUB_B2_PROFILES_CHANNEL,
 	HUB_MONITOR_PROFILES_CHANNEL,
 	HUB_VAULT_CHANNEL

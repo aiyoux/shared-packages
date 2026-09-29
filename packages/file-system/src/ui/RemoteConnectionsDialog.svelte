@@ -2,7 +2,7 @@
 	/**
 	 * The gear-icon settings popup: one modal with two tabs.
 	 *
-	 * - "Connections" (ConnectionsTab): B2, rclone, and monitor list/new/edit,
+	 * - "Connections" (ConnectionsTab): B2 and monitor list/new/edit,
 	 *   plus the vault — unchanged behavior, kept behind that tab.
 	 * - "AI models" (AiModelsTab): the browser model library, per-app default
 	 *   pickers, and one AI panel per saved monitor. AI is not a browser-side

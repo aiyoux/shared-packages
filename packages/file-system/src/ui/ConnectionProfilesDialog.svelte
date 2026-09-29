@@ -1,6 +1,6 @@
 <script lang="ts">
 	/**
-	 * Shared B2 / rclone / monitor connection manager: list of saved profiles,
+	 * Shared B2 / monitor connection manager: list of saved profiles,
 	 * then a new or edit form. One popup, two views.
 	 */
 	import { onMount, type Snippet } from 'svelte';
@@ -21,9 +21,9 @@
 
 	interface Props {
 		title: string;
-		/** Root test id (b2-connection-form, rclone-connection-form, …). */
+		/** Root test id (b2-connection-form, monitor-connection-form, …). */
 		testid: string;
-		/** Prefix for list/form control test ids: b2 / rclone / monitor. */
+		/** Prefix for list/form control test ids: b2 / monitor. */
 		prefix: string;
 		profiles: ConnectionProfileRow[];
 		mode: ConnectionFormMode;

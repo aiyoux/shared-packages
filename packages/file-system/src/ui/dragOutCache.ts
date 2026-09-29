@@ -70,10 +70,10 @@ export function folderZipName(entry: ExplorerEntry): string {
 
 /**
  * Folders can leave this tab as a zip. Monitor: URL that zips on GET (drop).
- * Local VFS: zip in this tab. B2/rclone folders have no zip URL — skip.
+ * Local VFS: zip in this tab. B2 folders have no zip URL — skip.
  */
 export function canZipFolderForDragOut(driver: ExplorerDriver): boolean {
-	if (driver.id === 'disk' || driver.id === 'b2' || driver.id === 'rclone') return false;
+	if (driver.id === 'disk' || driver.id === 'b2') return false;
 	if (driver.id === 'monitor') return typeof driver.downloadUrl === 'function';
 	return Boolean(driver.readBlob || driver.download);
 }
@@ -127,7 +127,7 @@ export async function prefetchForDragOut(
 				}
 			}
 			if (entry.kind === 'folder') {
-				if (driver.id === 'b2' || driver.id === 'rclone' || driver.id === 'disk') return null;
+				if (driver.id === 'b2' || driver.id === 'disk') return null;
 				const file = await zipFolderForDragOut(driver, entry);
 				if (!file) return null;
 				cache.set(entry.id, { kind: 'file', file, expiresAt: now() + TTL_MS });

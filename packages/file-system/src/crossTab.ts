@@ -1,5 +1,5 @@
 /**
- * Change pings for raw IndexedDB stores (rclone / B2 / monitor profiles, the
+ * Change pings for raw IndexedDB stores (B2 / monitor profiles, the
  * vault) and the VFS itself, which Dexie liveQuery cannot observe.
  *
  * The channel names live here; the channel itself is `@shared-packages/ui`'s
@@ -13,7 +13,6 @@ import {
 
 export { notifyTabChannel };
 
-export const HUB_RCLONE_PROFILES_CHANNEL = 'hub-rclone-profiles';
 export const HUB_B2_PROFILES_CHANNEL = 'hub-b2-profiles';
 export const HUB_MONITOR_PROFILES_CHANNEL = 'hub-monitor-profiles';
 export const HUB_AI_PROFILES_CHANNEL = 'hub-ai-profiles';

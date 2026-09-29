@@ -12,7 +12,6 @@ import type { ExplorerDriver } from './explorerDriver.js';
 import type { ExplorerContext } from './componentTypes.js';
 import type { ConnectionKind } from './connectionInfo.js';
 import type { B2ConnectionProfileV1 } from '../b2/types.js';
-import type { RcloneConnectionProfileV1 } from '../rclone/types.js';
 import type { MonitorConnectionProfileV1 } from '../monitor/types.js';
 
 export const FILE_WINDOW_LEAF_PREFIX = 'fe-win';
@@ -34,7 +33,6 @@ export interface FileWindowState {
 	busy: boolean;
 	error: string;
 	showB2Form: boolean;
-	showRcloneForm: boolean;
 	showMonitorForm: boolean;
 	explorerKey: number;
 	diskName: string;
@@ -55,7 +53,6 @@ export function emptyFileWindowState(kind: ConnectionKind = 'local', role?: stri
 		busy: false,
 		error: '',
 		showB2Form: false,
-		showRcloneForm: false,
 		showMonitorForm: false,
 		explorerKey: 0,
 		diskName: '',
@@ -85,7 +82,6 @@ export function defaultFileWindows(
 
 export function buildFileWindowRoles(
 	b2Profiles: B2ConnectionProfileV1[] = [],
-	rcloneProfiles: RcloneConnectionProfileV1[] = [],
 	monitorProfiles: MonitorConnectionProfileV1[] = [],
 	options: { showMemory?: boolean; hasPeer?: boolean } = {}
 ): AppWindowRoleDef<string>[] {
@@ -101,12 +97,6 @@ export function buildFileWindowRoles(
 		roles.push({
 			id: `b2:${p.id}`,
 			label: `B2: ${p.name || p.bucketName}`
-		});
-	}
-	for (const p of rcloneProfiles) {
-		roles.push({
-			id: `rclone:${p.id}`,
-			label: `Rclone: ${p.name || p.fs}`
 		});
 	}
 	for (const p of monitorProfiles) {

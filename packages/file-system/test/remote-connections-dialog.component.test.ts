@@ -1,5 +1,5 @@
 /**
- * Combined B2 / rclone / monitor connections popup, split into a
+ * Combined B2 / monitor connections popup, split into a
  * Connections tab (list/new/edit, unchanged) and an AI models tab whose
  * Monitors group hosts one AI panel per saved monitor profile. AI is not a
  * connection kind, and no AI secret is ever stored browser-side.
@@ -14,11 +14,6 @@ import {
 	saveProfile as saveB2
 } from '../src/b2/credentials.js';
 import { HUB_B2_DB_NAME } from '../src/b2/types.js';
-import {
-	closeCredentialsDbForTests as closeRclone,
-	listProfiles as listRclone
-} from '../src/rclone/credentials.js';
-import { HUB_RCLONE_DB_NAME } from '../src/rclone/types.js';
 import {
 	closeCredentialsDbForTests as closeMonitor,
 	listProfiles as listMonitor,
@@ -47,11 +42,9 @@ async function wipe(name: string) {
 
 async function wipeAll() {
 	await closeB2();
-	await closeRclone();
 	await closeMonitor();
 	await closeSelectionDbForTests();
 	await wipe(HUB_B2_DB_NAME);
-	await wipe(HUB_RCLONE_DB_NAME);
 	await wipe(HUB_MONITOR_DB_NAME);
 	await wipe(HUB_AI_DB_NAME);
 }
@@ -63,7 +56,6 @@ describe('RemoteConnectionsDialog', () => {
 
 	afterEach(async () => {
 		await closeB2();
-		await closeRclone();
 		await closeMonitor();
 		await closeSelectionDbForTests();
 	});
@@ -78,14 +70,9 @@ describe('RemoteConnectionsDialog', () => {
 
 		await fireEvent.click(screen.getByTestId('connections-profile-new'));
 		expect(screen.getByTestId('connections-kind-b2')).toBeTruthy();
-		expect(screen.getByTestId('connections-kind-rclone')).toBeTruthy();
 		expect(screen.getByTestId('connections-kind-monitor')).toBeTruthy();
 		// The browser-held AI kind is retired: no segment, no key form.
 		expect(screen.queryByTestId('connections-kind-ai')).toBeNull();
-
-		await fireEvent.click(screen.getByTestId('connections-kind-rclone'));
-		expect(screen.getByTestId('rclone-name')).toBeTruthy();
-		expect(screen.queryByTestId('b2-name')).toBeNull();
 
 		await fireEvent.click(screen.getByTestId('connections-kind-monitor'));
 		await fireEvent.input(screen.getByTestId('monitor-name'), { target: { value: 'Home' } });
@@ -240,6 +227,5 @@ describe('RemoteConnectionsDialog', () => {
 		await fireEvent.click(screen.getByTestId('connections-cancel'));
 		expect((await listMonitor())[0]?.name).toBe('Local');
 		expect((await listB2())[0]?.name).toBe('Photos');
-		expect(await listRclone()).toHaveLength(0);
 	});
 });

@@ -139,9 +139,7 @@
 			useHost
 		})
 	);
-	const isShuttle = $derived(
-		driver.id === 'b2' || driver.id === 'rclone' || (isMonitor && !useHost)
-	);
+	const isShuttle = $derived(driver.id === 'b2' || (isMonitor && !useHost));
 	const canPickFolder = $derived(driver.capabilities.supportsMkdir || useHost);
 	const alreadyMemory = $derived(driver.id === 'memory');
 	const canWriteHere = $derived(Boolean(driver.writeFile || driver.upload) || useHost);

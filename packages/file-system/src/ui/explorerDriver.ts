@@ -1,6 +1,6 @@
 /**
  * Backend-agnostic FileExplorer driver contract.
- * Local wraps VfsService; B2/rclone implement simple object browser ops.
+ * Local wraps VfsService; B2 implements simple object browser ops.
  * @see docs/design/b2-file-explorer-connection.md
  * @see docs/design/dnd-inmem-copy.md
  */
@@ -58,7 +58,7 @@ export type QuickConvertSvgContext = QuickEditFileContext;
  * whether the folder is local VFS, a monitor path, or another backend.
  */
 export type OpenProjectContext = {
-	kind: 'local' | 'memory' | 'monitor' | 'b2' | 'rclone' | 'disk' | 'peer';
+	kind: 'local' | 'memory' | 'monitor' | 'b2' | 'disk' | 'peer';
 	/** Monitor (or other remote) profile id when kind is monitor. */
 	profileId?: string;
 	baseUrl?: string;
@@ -97,7 +97,7 @@ export interface ExplorerCapabilities {
 	supportsDownload: boolean;
 	/**
 	 * When true: show before/after drop lines; same-parent DnD must call reorder().
-	 * Local durable + memory: true. B2 + rclone: false.
+	 * Local durable + memory: true. B2: false.
 	 */
 	supportsSiblingOrder: boolean;
 	/**
@@ -138,7 +138,7 @@ export interface ExplorerListResult {
 }
 
 export interface ExplorerDriver {
-	readonly id: 'local' | 'memory' | 'b2' | 'rclone' | string;
+	readonly id: 'local' | 'memory' | 'b2' | string;
 	/**
 	 * Profile id for this pane connection (`b2:<id>`, `monitor:<id>`, …).
 	 * Two panes on the same saved connection share this value.
@@ -392,7 +392,7 @@ export interface ExplorerDriver {
 	absolutePath?(id: ExplorerEntryId | null): string;
 	/**
 	 * Zip / tar / encrypt / extract on the host (monitor). Paths in `req` are
-	 * host-absolute. Missing on B2/rclone — those always shuttle through this tab.
+	 * host-absolute. Missing on B2 — it always shuttles through this tab.
 	 */
 	archive?(
 		req: {
@@ -553,18 +553,13 @@ export function isLocalClass(driverId: string): boolean {
 }
 
 export function isRemoteClass(driverId: string): boolean {
-	return (
-		driverId === 'b2' ||
-		driverId === 'rclone' ||
-		driverId === 'monitor' ||
-		driverId === 'peer-fs'
-	);
+	return driverId === 'b2' || driverId === 'monitor' || driverId === 'peer-fs';
 }
 
 /**
  * Auto-load list/preview thumbs without a user click.
  * Local VFS generates in the browser. Monitor generates on the host
- * (`thumbUrl`). B2/rclone would otherwise download every file.
+ * (`thumbUrl`). B2 would otherwise download every file.
  */
 export function explorerThumbsAreEager(driver: Pick<ExplorerDriver, 'id' | 'thumbUrl'>): boolean {
 	if (isLocalClass(driver.id)) return true;
@@ -579,7 +574,7 @@ export function canReadExplorerBlob(driver: ExplorerReadDriver): boolean {
 }
 
 /**
- * Bytes for preview/open. Local uses `readBlob`; remotes (B2/rclone/monitor)
+ * Bytes for preview/open. Local uses `readBlob`; remotes (B2/monitor)
  * typically only implement `download`.
  */
 export async function readExplorerBlob(

@@ -82,7 +82,7 @@ if (orphans.length) {
 	for (const f of orphans) console.error(`  ${f}`);
 	console.error(
 		'\nAdd a matching `include` pattern to the appropriate vitest.*.config.ts\n' +
-			'(vitest.rclone.config.ts is the catch-all Node config), or the file will\n' +
+			'(vitest.node.config.ts is the catch-all Node config), or the file will\n' +
 			'silently never execute.\n'
 	);
 	process.exit(1);

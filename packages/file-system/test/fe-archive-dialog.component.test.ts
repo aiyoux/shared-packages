@@ -1,5 +1,5 @@
 /**
- * FeArchiveDialog path copy: shuttle (B2/rclone) vs host (monitor).
+ * FeArchiveDialog path copy: shuttle (B2) vs host (monitor).
  */
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/svelte';

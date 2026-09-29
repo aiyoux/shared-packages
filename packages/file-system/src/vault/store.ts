@@ -138,7 +138,7 @@ function assertPassphrase(passphrase: string): string {
 }
 
 /**
- * Turn on at-rest wrapping. Existing persisted B2/rclone secrets are re-sealed
+ * Turn on at-rest wrapping. Existing persisted B2 secrets are re-sealed
  * and plaintext fields are wiped. Requires a new passphrase (vault must be off).
  */
 export async function enableVault(passphrase: string): Promise<void> {
@@ -206,7 +206,7 @@ export async function unlockVault(passphrase: string): Promise<void> {
 }
 
 /**
- * Drop the wrapping key and evict authorized B2/rclone sessions in this tab.
+ * Drop the wrapping key and evict authorized B2 sessions in this tab.
  * Encrypted IDB rows stay; session-only secrets stay (they were never on disk).
  */
 export async function lockVault(): Promise<void> {

@@ -746,7 +746,7 @@
 	let quickLookPeek = $state(false);
 	let spaceDownAt = $state(0);
 	const QUICK_LOOK_HOLD_MS = 300;
-	/** Remote (B2/rclone) preview-pane media is opt-in — keyed by entry id. */
+	/** Remote (B2) preview-pane media is opt-in — keyed by entry id. */
 	let previewMediaId = $state<string | null>(null);
 
 	function persistViewMode(v: ViewMode) {
@@ -3567,7 +3567,7 @@
 	const canImportFromDevice = $derived(Boolean(driver.upload || driver.writeFile));
 	/** File-picker chrome is local writeFile only; remotes import via drop / copy-across. */
 	// osDrop takes `driver.upload ?? driver.writeFile`, so an upload-only driver
-	// (rclone, B2, monitor) can import device files perfectly well. Gating the
+	// (B2, monitor) can import device files perfectly well. Gating the
 	// picker on writeFile alone hid the button on every remote backend while
 	// drag-and-drop to the same pane still worked.
 	const showDeviceFilePicker = $derived(Boolean(driver.writeFile || driver.upload));

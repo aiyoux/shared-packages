@@ -251,7 +251,7 @@ export function classify(source: ExplorerDriver, dest: ExplorerDriver): CopyAcro
 	// Two disk drivers never server-copy even if dest.copy exists.
 	const bothDisk = source.id === 'disk' && dest.id === 'disk';
 	if (!bothDisk) {
-		// a. rclone (and others) only via same connectionId + dest.copy
+		// a. any backend: same connectionId + dest.copy
 		if (sameCid && dest.copy) return { kind: 'server' };
 		// b. DualPane local×local: same object + dest.copy
 		if (source === dest && dest.copy) return { kind: 'server' };
@@ -294,7 +294,6 @@ export type CopyAcrossPath = {
 function backendName(id: string): string {
 	if (id === 'b2') return 'Backblaze B2';
 	if (id === 'monitor') return 'monitor';
-	if (id === 'rclone') return 'rclone';
 	if (id === 'peer-fs') return 'the other device';
 	if (id === 'disk') return 'This computer';
 	if (id === 'memory') return 'In memory';
@@ -335,13 +334,11 @@ export function describeCopyAcrossPath(
 		const detail =
 			source.id === 'b2'
 				? 'Both panes are the same B2 bucket. B2 copies on the server — nothing downloads through this browser.'
-				: source.id === 'rclone'
-					? 'Both panes are the same rclone remote. rclone copies on the remote — nothing downloads through this browser.'
-					: source.id === 'local'
-						? "Both panes are this browser's files. Copy is a local duplicate in Dexie/OPFS."
-						: source.id === 'memory'
-							? "Both panes are this tab's in-memory list. Copy stays in this tab."
-							: `Both panes are the same ${where} connection. The API copies in place — nothing downloads through this browser.`;
+				: source.id === 'local'
+					? "Both panes are this browser's files. Copy is a local duplicate in Dexie/OPFS."
+					: source.id === 'memory'
+						? "Both panes are this tab's in-memory list. Copy stays in this tab."
+						: `Both panes are the same ${where} connection. The API copies in place — nothing downloads through this browser.`;
 		return {
 			kind: 'server',
 			summary: `Server copy on ${where}`,

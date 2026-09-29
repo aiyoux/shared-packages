@@ -113,15 +113,14 @@ describe('dragOutCache', () => {
 		assert.equal(asFile(file).size, 5);
 	});
 
-	it('canZipFolderForDragOut is false for disk/B2/rclone (no zip-on-GET URL)', () => {
+	it('canZipFolderForDragOut is false for disk/B2 (no zip-on-GET URL)', () => {
 		assert.equal(canZipFolderForDragOut(makeDriver(new Blob(['x']), { id: 'disk' })), false);
 		assert.equal(canZipFolderForDragOut(makeDriver(new Blob(['x']), { id: 'b2' })), false);
-		assert.equal(canZipFolderForDragOut(makeDriver(new Blob(['x']), { id: 'rclone' })), false);
 		assert.equal(folderZipName(makeEntry({ kind: 'folder', name: 'Docs' })), 'Docs.zip');
 	});
 
-	it('prefetchForDragOut skips B2/rclone folders (no zip URL, no in-tab buffer)', async () => {
-		for (const id of ['b2', 'rclone'] as const) {
+	it('prefetchForDragOut skips B2 folders (no zip URL, no in-tab buffer)', async () => {
+		for (const id of ['b2'] as const) {
 			const driver = makeDriver(new Blob(['hello']), { id });
 			const entry = makeEntry({ id: 'docs/', kind: 'folder', name: 'Docs', parentId: null });
 			const file = await prefetchForDragOut(driver, entry);

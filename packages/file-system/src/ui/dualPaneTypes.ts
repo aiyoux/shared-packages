@@ -59,7 +59,6 @@ export type DualPaneTids = {
 	send: (id: PaneId) => string;
 	sendError: string;
 	dualToggle: string;
-	rcloneToggle: string;
 	monitorToggle: string;
 	/** Persist-chip wrapper testid (e.g. files-storage-persist). */
 	persist: string;

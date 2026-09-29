@@ -5,7 +5,7 @@
 	import FeIcon from '../ui/FeIcon.svelte';
 
 	/** Storage backend kind for the hub connection switcher. */
-	export type ConnectionKind = 'local' | 'memory' | 'disk' | 'b2' | 'rclone' | 'monitor';
+	export type ConnectionKind = 'local' | 'memory' | 'disk' | 'b2' | 'monitor';
 
 	export type B2ProfileChip = {
 		id: string;
@@ -15,8 +15,7 @@
 		detail?: string;
 	};
 
-	/** Same chip shape as B2; kept as alias for callers wiring rclone/monitor. */
-	export type RcloneProfileChip = B2ProfileChip;
+	/** Same chip shape as B2; kept as alias for callers wiring monitor. */
 	export type MonitorProfileChip = B2ProfileChip;
 
 	interface Props {
@@ -30,17 +29,10 @@
 		activeKind?: ConnectionKind;
 		/** Saved B2 profiles — each becomes a dropdown option */
 		profiles?: B2ProfileChip[];
-		/** Saved rclone profiles */
-		rcloneProfiles?: RcloneProfileChip[];
 		/** Saved monitor profiles */
 		monitorProfiles?: MonitorProfileChip[];
 		/** True while a connect attempt is in flight — disables controls */
 		busy?: boolean;
-		/**
-		 * Feature gate for rclone (`feature:rcloneFiles`).
-		 * When false, rclone UI is hidden; local + B2 remain.
-		 */
-		showRclone?: boolean;
 		/** Feature gate for monitor (`feature:monitorFiles`). */
 		showMonitor?: boolean;
 		/** Show In memory option (tab-ephemeral VFS). Default true. */
@@ -56,9 +48,9 @@
 		copyOtherLabel?: string;
 		/** Dual pane is off — copy-across is idle. */
 		copyIdleNote?: string | null;
-		/** Select local, memory, disk, or a profile id (B2 / rclone / monitor) */
+		/** Select local, memory, disk, or a profile id (B2 / monitor) */
 		onSelect?: (id: 'local' | 'memory' | 'disk' | string) => void;
-		/** Gear opens the combined B2 / rclone / monitor connections popup. */
+		/** Gear opens the combined B2 / monitor connections popup. */
 		onConfigure?: () => void;
 		/**
 		 * `full` (default): backend dropdown + settings gear.
@@ -80,10 +72,8 @@
 		activeId = 'local',
 		activeKind,
 		profiles = [],
-		rcloneProfiles = [],
 		monitorProfiles = [],
 		busy = false,
-		showRclone = true,
 		showMonitor = true,
 		showMemory = true,
 		capabilities,
@@ -124,10 +114,6 @@
 		if (kind === 'b2') {
 			const p = profiles.find((x) => x.id === activeId);
 			return p ? `B2 · ${p.name}` : 'Backblaze B2';
-		}
-		if (kind === 'rclone') {
-			const p = rcloneProfiles.find((x) => x.id === activeId);
-			return p ? `rclone · ${p.name}` : 'rclone';
 		}
 		if (kind === 'monitor') {
 			const p = monitorProfiles.find((x) => x.id === activeId);
@@ -175,17 +161,6 @@
 			supportsDragOut: true
 		},
 		b2: {
-			supportsTrash: false,
-			supportsSoftDelete: false,
-			supportsRename: true,
-			supportsMove: true,
-			supportsCopy: true,
-			supportsMkdir: true,
-			supportsUpload: true,
-			supportsDownload: true,
-			supportsSiblingOrder: false
-		},
-		rclone: {
 			supportsTrash: false,
 			supportsSoftDelete: false,
 			supportsRename: true,
@@ -355,7 +330,7 @@
 				</button>
 			{/if}
 
-			{#if profiles.length || (showMonitor && monitorProfiles.length) || (showRclone && rcloneProfiles.length)}
+			{#if profiles.length || (showMonitor && monitorProfiles.length)}
 				<div class="conn-sep" role="separator"></div>
 			{/if}
 
@@ -399,26 +374,6 @@
 				{/each}
 			{/if}
 
-			{#if showRclone}
-				{#each rcloneProfiles as p (p.id)}
-					<button
-						type="button"
-						role="option"
-						class:active={kind === 'rclone' && activeId === p.id}
-						aria-selected={kind === 'rclone' && activeId === p.id}
-						data-testid="conn-rclone-profile"
-						data-profile-id={p.id}
-						title={p.detail ? `${p.name} — ${p.detail}` : p.name}
-						disabled={busy}
-						onclick={() => select(p.id)}
-					>
-						<span class="chip-name">rclone · {p.name}</span>
-						{#if p.detail}
-							<span class="chip-detail">{p.detail}</span>
-						{/if}
-					</button>
-				{/each}
-			{/if}
 		</div>
 	</div>
 	{/if}

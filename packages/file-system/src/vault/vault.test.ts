@@ -7,13 +7,6 @@ import {
 	saveProfile as saveB2
 } from '../b2/credentials.js';
 import { HUB_B2_DB_NAME } from '../b2/types.js';
-import {
-	closeCredentialsDbForTests as closeRclone,
-	getProfile as getRclone,
-	listStoredProfiles as listRcloneStored,
-	saveProfile as saveRclone
-} from '../rclone/credentials.js';
-import { HUB_RCLONE_DB_NAME } from '../rclone/types.js';
 import { setVaultKdfCostForTests } from './crypto.js';
 import {
 	closeVaultDbForTests,
@@ -43,16 +36,13 @@ describe('connection vault', () => {
 		setVaultKdfCostForTests(TEST_PBKDF2_ITERATIONS);
 		await closeVaultDbForTests();
 		await closeB2();
-		await closeRclone();
 		await wipe(HUB_VAULT_DB_NAME);
 		await wipe(HUB_B2_DB_NAME);
-		await wipe(HUB_RCLONE_DB_NAME);
 	});
 
 	afterEach(async () => {
 		await closeVaultDbForTests();
 		await closeB2();
-		await closeRclone();
 	});
 
 	it('default is off; secrets stay plaintext', async () => {
@@ -70,21 +60,13 @@ describe('connection vault', () => {
 		expect(stored.sealedApplicationKey).toBeUndefined();
 	});
 
-	it('enable wraps existing B2 and rclone secrets and wipes plaintext', async () => {
+	it('enable wraps existing B2 secrets and wipes plaintext', async () => {
 		await saveB2({
 			id: 'b1',
 			name: 'B',
 			applicationKeyId: '003abc',
 			applicationKey: 'b2-secret',
 			bucketName: 'bucket'
-		});
-		await saveRclone({
-			id: 'r1',
-			name: 'R',
-			baseUrl: 'http://127.0.0.1:7750',
-			fs: 'remote:',
-			rcUser: 'u',
-			rcPass: 'rc-secret'
 		});
 		await enableVault(PASS);
 		expect(await isVaultEnabled()).toBe(true);
@@ -94,11 +76,6 @@ describe('connection vault', () => {
 		expect(b2.applicationKey).toBe('');
 		expect(b2.sealedApplicationKey?.ct).toBeTruthy();
 		expect((await getB2('b1'))?.applicationKey).toBe('b2-secret');
-
-		const rc = (await listRcloneStored())[0]!;
-		expect(rc.rcPass).toBe('');
-		expect(rc.sealedRcPass?.ct).toBeTruthy();
-		expect((await getRclone('r1'))?.rcPass).toBe('rc-secret');
 	});
 
 	it('lock hides persisted secrets until unlock', async () => {

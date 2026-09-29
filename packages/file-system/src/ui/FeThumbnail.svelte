@@ -37,7 +37,7 @@
 	let failed = $state(false);
 	let kind = $derived(getPreviewKind(entry));
 	let eager = $derived(explorerThumbsAreEager(driver));
-	/** User clicked the mini icon (B2/rclone — no auto-download). */
+	/** User clicked the mini icon (B2 — no auto-download). */
 	let requestedId = $state<string | null>(null);
 	/** Last id we successfully rendered. Not set until the fetch finishes, so a
 	 * cancelled in-flight load can restart instead of sticking on the spinner. */

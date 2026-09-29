@@ -4,7 +4,7 @@
  * `fetch` does not expose request-body progress. Streaming the blob through a
  * duplex ReadableStream reports bytes handed to the network stack while still
  * using `fetch` (Local Network Access `targetAddressSpace` stays valid).
- * Multipart FormData (rclone) uses XHR `upload.onprogress` when present.
+ * B2 `b2_upload_file` POSTs use XHR `upload.onprogress` when present.
  */
 
 type DuplexInit = RequestInit & { duplex?: 'half' };
@@ -90,7 +90,7 @@ export type XhrPostResult = {
 
 function xhrPost(args: {
 	url: string;
-	body: Blob | FormData;
+	body: Blob;
 	headers?: Record<string, string>;
 	signal?: AbortSignal;
 	onProgress?: (pct: number) => void;
@@ -139,16 +139,6 @@ function xhrPost(args: {
 		};
 		xhr.send(args.body);
 	});
-}
-
-export function xhrPostForm(args: {
-	url: string;
-	form: FormData;
-	headers?: Record<string, string>;
-	signal?: AbortSignal;
-	onProgress?: (pct: number) => void;
-}): Promise<XhrPostResult> {
-	return xhrPost({ ...args, body: args.form });
 }
 
 /** POST a Blob (B2 `b2_upload_file`) with `xhr.upload.onprogress`. */

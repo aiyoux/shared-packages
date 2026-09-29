@@ -366,7 +366,7 @@ export type OsDropFileProgress = {
  * One PC → destination import registered in the transfer registry, so it
  * shows in the explorer's top header bar like any other transfer — an import
  * from the user's computer is a transfer into the open destination, whether
- * that destination is a remote backend (monitor / b2 / rclone) or a local
+ * that destination is a remote backend (monitor / b2) or a local
  * folder. The listing keeps its pending rows; the header carries the
  * transfer-shaped view with a dismiss/cancel affordance, and a failed or
  * cancelled import marks its rows instead of leaving them spinning.
