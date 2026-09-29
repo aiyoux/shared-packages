@@ -2467,22 +2467,68 @@ export class VfsService {
 	}
 
 	/**
+	 * Orphans an unlink had to leave: a lease still covered the path, or the
+	 * remove itself failed. Each was otherwise left to gc(), so a pack whose
+	 * last member died while anything covered it stayed on disk, named by
+	 * nothing, until the next sweep. They are retried when this tab lets go of
+	 * a lease, and a failed remove once more shortly after.
+	 */
+	private readonly deferredUnlinks = new Set<string>();
+	/** Why recent unlinks were skipped, newest last (diagnostics; bounded). */
+	readonly unlinkSkips: Array<{ path: string; reason: 'covered' | 'write-lease' | 'remove-failed' }> = [];
+	private retryingUnlinks: Promise<void> | null = null;
+
+	private noteUnlinkSkip(path: string, reason: 'covered' | 'write-lease' | 'remove-failed'): void {
+		this.deferredUnlinks.add(path);
+		this.unlinkSkips.push({ path, reason });
+		if (this.unlinkSkips.length > 50) this.unlinkSkips.shift();
+	}
+
+	/** Try the deferred orphans again; a path something names again is dropped. */
+	private retryDeferredUnlinks(): Promise<void> {
+		if (!this.deferredUnlinks.size) return Promise.resolve();
+		this.retryingUnlinks ??= (async () => {
+			try {
+				for (const path of [...this.deferredUnlinks]) {
+					this.deferredUnlinks.delete(path);
+					await this.unlinkIfOrphanNow(path);
+				}
+			} catch {
+				/* gc remains the backstop */
+			} finally {
+				this.retryingUnlinks = null;
+			}
+		})();
+		return this.retryingUnlinks;
+	}
+
+	/**
 	 * Re-stat immediately before unlink so a dest/pack born after gc's snapshot
 	 * is not deleted out from under a live compact or writeFiles confirm.
 	 */
 	private async unlinkIfOrphanNow(path: string): Promise<boolean> {
-		if (coveredBy(await this.protectedPaths(), path)) return false;
+		if (coveredBy(await this.protectedPaths(), path)) {
+			this.noteUnlinkSkip(path, 'covered');
+			return false;
+		}
 		const live = await leaseLiveness();
 		const named = await this.db.blobRefs.where('opfsPath').equals(path).first();
-		if (named) return false;
+		if (named) {
+			this.deferredUnlinks.delete(path);
+			return false;
+		}
 		if (path.startsWith('blobs/')) {
 			const blobId = path.replace(/^blobs\//, '').replace(/\.bin$/, '');
 			const writeLease = await this.db.leases.get(`write:${blobId}`);
-			if (writeLease && live(writeLease)) return false;
+			if (writeLease && live(writeLease)) {
+				this.noteUnlinkSkip(path, 'write-lease');
+				return false;
+			}
 		}
 		for (let attempt = 0; attempt < 3; attempt++) {
 			try {
 				await this.opfs.remove(path);
+				this.deferredUnlinks.delete(path);
 				return true;
 			} catch {
 				if (attempt < 2) {
@@ -2490,6 +2536,11 @@ export class VfsService {
 				}
 			}
 		}
+		this.noteUnlinkSkip(path, 'remove-failed');
+		// Not a liveness decision: a remove that failed (an open handle) is
+		// simply tried again once the moment has passed.
+		const retry = setTimeout(() => void this.retryDeferredUnlinks(), 1_000);
+		(retry as unknown as { unref?: () => void }).unref?.();
 		return false;
 	}
 
@@ -3752,6 +3803,8 @@ export class VfsService {
 			} catch {
 				/* dead owner: gc drops the rows */
 			}
+			// An orphan this cover protected can go now.
+			await this.retryDeferredUnlinks();
 		};
 	}
 
@@ -3808,6 +3861,7 @@ export class VfsService {
 		} catch {
 			/* expires on its own */
 		}
+		await this.retryDeferredUnlinks();
 	}
 
 	/**

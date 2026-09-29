@@ -22,7 +22,7 @@
  * SharedWorker, and a SharedWorker cannot spawn a nested Worker to reach it.
  * That is why the VFS worker is dedicated.
  */
-import { tryMoveDirectory, type OpfsBlobStore } from '../opfs.js';
+import { isGone, removeEntryWhenFree, tryMoveDirectory, type OpfsBlobStore } from '../opfs.js';
 import { VfsError } from '../types.js';
 
 /** Not in lib.dom for this tsconfig; the shape we actually use. */
@@ -226,7 +226,11 @@ export function createSyncOpfsStore(rootDirName = 'shared-vfs'): OpfsBlobStore {
 		}
 		const bytes = await store.read(fromPath);
 		await writeBytes(toPath, bytes);
-		await store.remove(fromPath);
+		try {
+			await store.remove(fromPath);
+		} catch {
+			/* the copy landed; gc sweeps a source left behind */
+		}
 	}
 
 	const store: OpfsBlobStore = {
@@ -273,7 +277,11 @@ export function createSyncOpfsStore(rootDirName = 'shared-vfs'): OpfsBlobStore {
 			} catch {
 				const bytes = await store.read(tmpPath);
 				await writeBytes(finalOpfsPath, bytes);
-				await store.remove(tmpPath);
+				try {
+					await store.remove(tmpPath);
+				} catch {
+					/* gc sweeps tmp/ */
+				}
 			}
 		},
 		read(opfsPath) {
@@ -322,14 +330,15 @@ export function createSyncOpfsStore(rootDirName = 'shared-vfs'): OpfsBlobStore {
 			});
 		},
 		async remove(opfsPath) {
-			const { dir, base } = splitPath(opfsPath);
-			const d = await resolveDir(dir);
 			try {
-				await d.removeEntry(base);
-			} catch {
-				/* already gone */
+				const { dir, base } = splitPath(opfsPath);
+				await removeEntryWhenFree(await resolveDir(dir), base, opfsPath);
+			} catch (e) {
+				// Gone already (the entry or its folder) is what remove wants.
+				if (!isGone(e)) throw e;
+			} finally {
+				invalidateDirCache(opfsPath);
 			}
-			invalidateDirCache(opfsPath);
 		},
 		async exists(opfsPath) {
 			try {

@@ -1,5 +1,41 @@
 import { VfsError } from './types.js';
 
+/** The entry (or a folder on its path) does not exist. */
+export function isGone(e: unknown): boolean {
+	const name = (e as { name?: string } | null)?.name;
+	return name === 'NotFoundError' || name === 'TypeMismatchError';
+}
+
+/**
+ * Remove one entry, waiting out an exclusive lock. A sync access handle on
+ * the file (any tab's worker, mid-read or mid-write) makes `removeEntry` throw
+ * NoModificationAllowedError. `remove` used to swallow that like a missing
+ * file, so an unlink that met a reader "succeeded" and left the file on disk
+ * with nothing naming it: an orphan pack after compaction, 1 run in 6.
+ * Anything else, or a lock that outlasts the waits, is reported.
+ */
+export async function removeEntryWhenFree(
+	dir: FileSystemDirectoryHandle,
+	base: string,
+	opfsPath: string
+): Promise<void> {
+	const waits = [50, 200, 500, 1000, 2000];
+	for (let attempt = 0; ; attempt++) {
+		try {
+			await dir.removeEntry(base);
+			return;
+		} catch (e) {
+			if (isGone(e)) return;
+			const name = (e as { name?: string } | null)?.name ?? '';
+			const locked = name === 'NoModificationAllowedError' || name === 'InvalidStateError';
+			if (!locked || attempt >= waits.length) {
+				throw new VfsError('OPFS_IO', `Failed to remove ${opfsPath}`, { cause: String(e) });
+			}
+			await new Promise((r) => setTimeout(r, waits[attempt]));
+		}
+	}
+}
+
 export interface OpfsBlobStore {
 	/** Accept Uint8Array explicitly — TS 5.7+ ArrayBufferLike generics break bare BufferSource. */
 	writePartial(
@@ -553,12 +589,13 @@ export function createOpfsBlobStore(rootDirName = 'shared-vfs'): OpfsBlobStore {
 		async remove(opfsPath) {
 			try {
 				const { dir, base } = splitPath(opfsPath);
-				const d = await resolveDir(dir);
-				await d.removeEntry(base);
-			} catch {
-				// ignore missing
+				await removeEntryWhenFree(await resolveDir(dir), base, opfsPath);
+			} catch (e) {
+				// Gone already (the entry or its folder) is what remove wants.
+				if (!isGone(e)) throw e;
+			} finally {
+				invalidateDirCache(opfsPath);
 			}
-			invalidateDirCache(opfsPath);
 		},
 		async exists(opfsPath) {
 			try {
