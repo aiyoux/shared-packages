@@ -213,7 +213,9 @@ describe('FileExplorer component', () => {
 		const row = document.querySelector('[data-testid="fe-file-row"]') as HTMLElement;
 		await fireEvent.click(row);
 		expect(row.classList.contains('selected')).toBe(true);
-		expect((screen.getByTestId('fe-rename-btn') as HTMLButtonElement).disabled).toBe(false);
+		// Rename also waits out a listing still in flight (listBusy): the
+		// write's own refresh can outlast the first rows appearing.
+		await viWaitFor(() => !(screen.getByTestId('fe-rename-btn') as HTMLButtonElement).disabled);
 		expect((screen.getByTestId('fe-trash-selected') as HTMLButtonElement).disabled).toBe(false);
 		expect((screen.getByTestId('fe-cut') as HTMLButtonElement).disabled).toBe(false);
 		expect((screen.getByTestId('fe-copy') as HTMLButtonElement).disabled).toBe(false);
