@@ -9,12 +9,6 @@ import { render, screen, fireEvent } from '@testing-library/svelte';
 import 'fake-indexeddb/auto';
 import RemoteConnectionsDialog from '../src/ui/RemoteConnectionsDialog.svelte';
 import {
-	closeCredentialsDbForTests as closeB2,
-	listProfiles as listB2,
-	saveProfile as saveB2
-} from '../src/b2/credentials.js';
-import { HUB_B2_DB_NAME } from '../src/b2/types.js';
-import {
 	closeCredentialsDbForTests as closeMonitor,
 	listProfiles as listMonitor,
 	saveProfile as saveMonitor
@@ -41,10 +35,8 @@ async function wipe(name: string) {
 }
 
 async function wipeAll() {
-	await closeB2();
 	await closeMonitor();
 	await closeSelectionDbForTests();
-	await wipe(HUB_B2_DB_NAME);
 	await wipe(HUB_MONITOR_DB_NAME);
 	await wipe(HUB_AI_DB_NAME);
 }
@@ -55,7 +47,7 @@ describe('RemoteConnectionsDialog', () => {
 	});
 
 	afterEach(async () => {
-		await closeB2();
+		vi.unstubAllGlobals();
 		await closeMonitor();
 		await closeSelectionDbForTests();
 	});
@@ -149,6 +141,8 @@ describe('RemoteConnectionsDialog', () => {
 						{ status: 200 }
 					);
 				}
+				// An older daemon without the b2 feature: B2 rows are simply absent.
+				if (url.endsWith('/v1/b2/connections')) return new Response('', { status: 404 });
 				throw new Error(`unexpected fetch ${url}`);
 			})
 		);
@@ -188,10 +182,70 @@ describe('RemoteConnectionsDialog', () => {
 			await vi.waitFor(() => {
 				expect((screen.getByTestId('monitor-ai-key') as HTMLInputElement).value).toBe('');
 			});
-			expect((await listB2()).length).toBe(0);
 		} finally {
 			vi.unstubAllGlobals();
 		}
+	});
+
+	/** A monitor that holds one B2 connection and records what it is sent. */
+	function stubMonitorB2(sent: Array<{ method: string; url: string; body?: unknown }> = []) {
+		const photos = {
+			id: 'c1',
+			name: 'Photos',
+			keyId: '003e2ekeyaaaaaaaaaaaaa',
+			bucket: 'photos-bucket',
+			namePrefix: '',
+			keyFingerprint: 'a1b2…9f3c'
+		};
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+				const url = String(input);
+				const method = init?.method ?? 'GET';
+				sent.push({ method, url, body: init?.body ? JSON.parse(String(init.body)) : undefined });
+				if (url.endsWith('/v1/b2/connections') && method === 'GET') {
+					return new Response(JSON.stringify({ connections: [photos] }), { status: 200 });
+				}
+				if (url.endsWith('/v1/b2/connections') && method === 'POST') {
+					const body = JSON.parse(String(init?.body));
+					return new Response(
+						JSON.stringify({ id: 'c2', name: body.name, keyId: body.keyId, bucket: body.bucket, namePrefix: '' }),
+						{ status: 200 }
+					);
+				}
+				throw new Error(`unexpected fetch ${method} ${url}`);
+			})
+		);
+		return sent;
+	}
+
+	it('B2 rows come from the monitor that holds them', async () => {
+		await saveMonitor({
+			id: 'm1',
+			name: 'Local',
+			baseUrl: DEFAULT_MONITOR_BASE_URL,
+			rootPath: '/tmp'
+		});
+		const sent = stubMonitorB2();
+		render(RemoteConnectionsDialog, { props: { onClose: vi.fn() } });
+		await screen.findByText(/B2 · Photos/);
+		expect(screen.getByText(/via Local/)).toBeTruthy();
+
+		await fireEvent.click(screen.getByTestId('connections-profile-new'));
+		expect((screen.getByTestId('b2-monitor') as HTMLSelectElement).value).toBe('m1');
+		expect(screen.queryByTestId('b2-persist-secret')).toBeNull();
+		await fireEvent.input(screen.getByTestId('b2-name'), { target: { value: 'Archive' } });
+		await fireEvent.input(screen.getByTestId('b2-key-id'), { target: { value: '003abc' } });
+		await fireEvent.input(screen.getByTestId('b2-key'), { target: { value: 'K005-secret' } });
+		await fireEvent.input(screen.getByTestId('b2-bucket'), { target: { value: 'archive' } });
+		await fireEvent.click(screen.getByTestId('b2-save-only'));
+
+		await vi.waitFor(() => expect(sent.some((r) => r.method === 'POST')).toBe(true));
+		const post = sent.find((r) => r.method === 'POST')!;
+		expect(post.url).toBe(`${DEFAULT_MONITOR_BASE_URL}/v1/b2/connections`);
+		expect(post.body).toMatchObject({ name: 'Archive', keyId: '003abc', key: 'K005-secret', bucket: 'archive' });
+		// Nothing about the key is kept in this browser.
+		expect(JSON.stringify(localStorage)).not.toContain('K005-secret');
 	});
 
 	it('Edit opens type-specific fields; Cancel returns to the list', async () => {
@@ -201,13 +255,7 @@ describe('RemoteConnectionsDialog', () => {
 			baseUrl: DEFAULT_MONITOR_BASE_URL,
 			rootPath: '/tmp'
 		});
-		await saveB2({
-			id: 'b1',
-			name: 'Photos',
-			applicationKeyId: '003e2ekeyaaaaaaaaaaaaa',
-			applicationKey: 'secret-key',
-			bucketName: 'photos-bucket'
-		});
+		stubMonitorB2();
 		render(RemoteConnectionsDialog, { props: { onClose: vi.fn() } });
 		await screen.findByText(/B2 · Photos/);
 		await screen.findByText(/Monitor · Local/);
@@ -226,6 +274,5 @@ describe('RemoteConnectionsDialog', () => {
 		await fireEvent.input(screen.getByTestId('monitor-name'), { target: { value: 'Renamed' } });
 		await fireEvent.click(screen.getByTestId('connections-cancel'));
 		expect((await listMonitor())[0]?.name).toBe('Local');
-		expect((await listB2())[0]?.name).toBe('Photos');
 	});
 });

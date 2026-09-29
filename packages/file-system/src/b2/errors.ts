@@ -3,100 +3,54 @@
 export class ExplorerB2Error extends Error {
 	readonly code: string;
 	constructor(code: string, message?: string) {
-		// Never allow empty message — B2 often returns message: "" (e.g. bad_auth_token).
 		super((message && message.trim()) || code);
 		this.name = 'ExplorerB2Error';
 		this.code = code;
 	}
 }
 
-type B2LikeError = {
-	message?: string;
-	name?: string;
-	code?: string;
-	status?: number;
+/** Monitor wire code (`b2.*`) → explorer code (`B2_*`). */
+const WIRE_CODES: Record<string, string> = {
+	'b2.auth': 'B2_AUTH',
+	'b2.master_key': 'B2_MASTER_KEY',
+	'b2.key_not_scoped': 'B2_MASTER_KEY',
+	'b2.wrong_bucket': 'B2_FORBIDDEN',
+	'b2.forbidden': 'B2_FORBIDDEN',
+	'b2.outside_prefix': 'B2_FORBIDDEN',
+	'b2.not_found': 'B2_NOT_FOUND',
+	'b2.connection_not_found': 'B2_NOT_FOUND',
+	'b2.network': 'B2_NETWORK',
+	'b2.upstream': 'B2_NETWORK',
+	'b2.rate_limit': 'B2_RATE_LIMIT',
+	'b2.folder_not_empty': 'B2_FOLDER_NOT_EMPTY',
+	'b2.folder_op_unsupported': 'B2_FOLDER_OP_UNSUPPORTED',
+	'b2.rename_partial': 'B2_RENAME_PARTIAL',
+	'b2.invalid_name': 'INVALID_NAME',
+	'b2.invalid_connection': 'B2_INVALID'
 };
 
-/**
- * Human-readable text for any thrown value. B2 SDK `BadAuthTokenError` often has
- * `message === ""` with a useful `code` like `bad_auth_token`.
- */
+/** Error for a monitor `{error:{code,message}}` body (or an NDJSON failure line). */
+export function b2ErrorFromWire(code: string | undefined, message: string | undefined): ExplorerB2Error {
+	const mapped = (code && WIRE_CODES[code]) || 'B2_ERROR';
+	return new ExplorerB2Error(mapped, message || code || 'B2 request failed');
+}
+
 export function formatB2ErrorMessage(e: unknown): string {
-	if (e instanceof ExplorerB2Error) return e.message;
-	if (e instanceof Error) {
-		const any = e as Error & B2LikeError;
-		const parts = [
-			any.message?.trim(),
-			any.code && any.code !== any.message ? String(any.code) : '',
-			any.name && any.name !== 'Error' && any.name !== 'ExplorerB2Error' ? any.name : ''
-		].filter(Boolean);
-		if (parts.length) return parts.join(' · ');
-	}
-	if (e && typeof e === 'object') {
-		const any = e as B2LikeError;
-		const parts = [any.message?.trim(), any.code, any.name].filter(Boolean);
-		if (parts.length) return parts.join(' · ');
-	}
+	if (e instanceof Error && e.message.trim()) return e.message;
 	const s = String(e ?? '').trim();
 	return s || 'B2 request failed';
 }
 
 export function mapB2Error(e: unknown): ExplorerB2Error {
 	if (e instanceof ExplorerB2Error) return e;
-
-	const any = (e && typeof e === 'object' ? e : {}) as B2LikeError;
-	const msg = formatB2ErrorMessage(e);
-	const name = e instanceof Error ? e.name : any.name || '';
-	const code = typeof any.code === 'string' ? any.code : '';
-	const status = typeof any.status === 'number' ? any.status : undefined;
-	const lower = `${msg} ${name} ${code}`.toLowerCase();
-
-	if (
-		name.includes('Cors') ||
-		lower.includes('cors') ||
-		lower.includes('failed to fetch') ||
-		lower.includes('networkerror')
-	) {
+	if (e instanceof Error && e.name === 'AbortError') {
+		return new ExplorerB2Error('B2_ABORTED', 'Cancelled');
+	}
+	if (e instanceof TypeError) {
 		return new ExplorerB2Error(
-			'B2_CORS',
-			msg.includes('api.backblazeb2.com') || msg.includes('api0')
-				? 'B2 control-plane blocked in browser. Hub must proxy via /api/b2/proxy (redeploy).'
-				: `${msg} — upload is relayed via /api/b2/data-plane when bucket CORS is missing. If this persists, check the hub proxy and bucket CORS (docs/deploy.md). Origin: ${typeof window !== 'undefined' ? window.location.origin : 'unknown'}.`
+			'B2_NETWORK',
+			'Cannot reach the monitor that holds this B2 connection. Is it running and allowing this origin?'
 		);
 	}
-
-	if (
-		code === 'bad_auth_token' ||
-		code === 'unauthorized' ||
-		name.includes('BadAuthToken') ||
-		status === 401 ||
-		lower.includes('auth') ||
-		lower.includes('unauthorized')
-	) {
-		return new ExplorerB2Error(
-			'B2_AUTH',
-			code === 'bad_auth_token' || name.includes('BadAuthToken')
-				? 'Invalid application key ID or key (bad_auth_token). Check credentials and that the key can access this bucket.'
-				: msg
-		);
-	}
-
-	if (
-		lower.includes('forbidden') ||
-		status === 403 ||
-		lower.includes('access denied') ||
-		code === 'access_denied'
-	) {
-		return new ExplorerB2Error('B2_FORBIDDEN', msg);
-	}
-
-	if (lower.includes('not found') || status === 404 || code === 'not_found') {
-		return new ExplorerB2Error('B2_NOT_FOUND', msg);
-	}
-
-	if (lower.includes('network') || name === 'NetworkError') {
-		return new ExplorerB2Error('B2_NETWORK', msg);
-	}
-
-	return new ExplorerB2Error('B2_ERROR', msg);
+	return new ExplorerB2Error('B2_ERROR', formatB2ErrorMessage(e));
 }

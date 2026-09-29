@@ -11,7 +11,7 @@ import type { LayoutNode, SplitDirection, AppWindowRoleDef } from '@shared-packa
 import type { ExplorerDriver } from './explorerDriver.js';
 import type { ExplorerContext } from './componentTypes.js';
 import type { ConnectionKind } from './connectionInfo.js';
-import type { B2ConnectionProfileV1 } from '../b2/types.js';
+import type { B2ConnectionRow } from '../b2/types.js';
 import type { MonitorConnectionProfileV1 } from '../monitor/types.js';
 
 export const FILE_WINDOW_LEAF_PREFIX = 'fe-win';
@@ -81,7 +81,7 @@ export function defaultFileWindows(
 }
 
 export function buildFileWindowRoles(
-	b2Profiles: B2ConnectionProfileV1[] = [],
+	b2Rows: B2ConnectionRow[] = [],
 	monitorProfiles: MonitorConnectionProfileV1[] = [],
 	options: { showMemory?: boolean; hasPeer?: boolean } = {}
 ): AppWindowRoleDef<string>[] {
@@ -93,10 +93,10 @@ export function buildFileWindowRoles(
 	}
 	roles.push({ id: 'disk', label: 'Local folder (Disk)', required: false });
 
-	for (const p of b2Profiles) {
+	for (const r of b2Rows) {
 		roles.push({
-			id: `b2:${p.id}`,
-			label: `B2: ${p.name || p.bucketName}`
+			id: `b2:${r.rowId}`,
+			label: `B2: ${r.name || r.bucket}`
 		});
 	}
 	for (const p of monitorProfiles) {

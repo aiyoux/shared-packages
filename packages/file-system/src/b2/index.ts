@@ -1,13 +1,16 @@
 /**
- * Backblaze B2 integration for FileExplorer (driver, credentials, hybrid transport, UI).
+ * Backblaze B2 for the hub File Explorer — held by monitor daemons.
  *
- * Import from `@shared-packages/file-system/b2` so local-only apps never pull the B2 SDK.
+ * Keys live on the monitor you add them to (write-only over the wire); this
+ * module lists connections across saved monitors and drives them through
+ * each monitor's `/v1/b2` routes. Nothing about B2 is stored in the browser.
  */
-
 export {
-	createB2ExplorerDriver,
-	type B2ExplorerDriverOptions
-} from './b2ExplorerDriver.js';
+	createMonitorB2Driver,
+	monitorHostKey,
+	B2_CAPS,
+	type MonitorB2DriverOptions
+} from './monitorB2Driver.js';
 export {
 	acquireB2Driver,
 	releaseB2Driver,
@@ -17,73 +20,33 @@ export {
 	B2_DRIVER_HOLD_MS
 } from './b2DriverCache.js';
 export {
-	createHybridB2Transport,
-	DEFAULT_B2_PROXY_PATH,
-	type HybridB2TransportOptions
-} from './hybridTransport.js';
+	createMonitorB2Client,
+	type MonitorB2Client,
+	type MonitorB2Entry,
+	type MonitorB2Listing,
+	type MonitorB2From,
+	type MonitorB2To
+} from './client.js';
 export {
-	assertB2ControlPlaneUrl,
-	isB2ControlPlaneUrl,
-	isB2DataPlaneUrl
-} from './controlPlane.js';
+	listB2Connections,
+	getB2Connection,
+	createB2Connection,
+	updateB2Connection,
+	deleteB2Connection,
+	getActiveB2RowId,
+	setActiveB2RowId,
+	type B2ConnectionListing
+} from './connections.js';
+export { ExplorerB2Error, b2ErrorFromWire, formatB2ErrorMessage, mapB2Error } from './errors.js';
 export {
-	handleB2DataPlaneRelay,
-	assertB2DataPlaneRelayUrl,
-	B2_DATA_PLANE_RELAY_PATH,
-	B2_RELAY_URL_HEADER,
-	B2_RELAY_METHOD_HEADER
-} from './dataPlaneRelay.js';
-export {
-	ensureExplorerCors,
-	mergeExplorerCorsRules,
-	corsAllowsBrowserFileIo,
-	B2_EXPLORER_CORS_RULE
-} from './b2Cors.js';
-export {
-	handleB2ControlPlaneProxy,
-	B2_PROXY_MAX_BODY_BYTES,
-	B2_PROXY_ALLOWED_METHODS,
-	type B2ProxyRequestBody,
-	type B2ProxyResult,
-	type B2ProxySuccess,
-	type B2ProxyFailure
-} from './proxyHandler.js';
-export {
-	closeCredentialsDbForTests,
-	deleteProfile,
-	getActiveProfileId,
-	getProfile,
-	listProfiles,
-	listStoredProfiles,
-	redactProfile,
-	revealApplicationKey,
-	saveProfile,
-	setActiveProfileId
-} from './credentials.js';
-export {
-	ExplorerB2Error,
-	formatB2ErrorMessage,
-	mapB2Error
-} from './errors.js';
-export {
-	baseNameFromKey,
-	baseNameFromPrefix,
-	directChildFolderFromMarker,
-	isFolderMarkerKey,
-	markerKeyForFolderPrefix,
-	sanitizeSegment
-} from './folderMarkers.js';
-export {
-	HUB_B2_DB_NAME,
+	b2RowId,
+	parseB2RowId,
 	normalizeNamePrefix,
-	validateProfileInput,
-	type B2ConnectionProfileV1
+	validateB2Input,
+	type B2ConnectionInput,
+	type B2ConnectionRow,
+	type MonitorB2Connection
 } from './types.js';
-export {
-	assertBucketScopedAuthorization,
-	looksLikeMasterApplicationKeyId,
-	masterKeyIdError
-} from './keyScope.js';
 
 export { default as B2ConnectionForm } from './B2ConnectionForm.svelte';
 export {

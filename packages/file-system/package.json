@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": false,
   "type": "module",
-  "description": "Browser VFS (SQLite catalog + OPFS bytes), FileExplorer UI, optional Backblaze B2 and local monitor remote browsers.",
+  "description": "Browser VFS (SQLite catalog + OPFS bytes), FileExplorer UI, Backblaze B2 (held by monitor) and local monitor remote browsers.",
   "exports": {
     ".": {
       "types": "./src/index.ts",
@@ -73,12 +73,6 @@
       "types": "./src/disk/index.ts",
       "import": "./src/disk/index.ts",
       "default": "./src/disk/index.ts"
-    },
-    "./vault": {
-      "types": "./src/vault/index.ts",
-      "svelte": "./src/vault/index.ts",
-      "import": "./src/vault/index.ts",
-      "default": "./src/vault/index.ts"
     }
   },
   "svelte": "./src/index.ts",
@@ -99,7 +93,6 @@
   },
 
   "dependencies": {
-    "@backblaze-labs/b2-sdk": "^0.2.0",
     "@shared-packages/bytes-gate": "file:../bytes-gate",
     "@sqlite.org/sqlite-wasm": "3.53.0-build1"
   },

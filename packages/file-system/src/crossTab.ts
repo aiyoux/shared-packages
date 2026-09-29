@@ -1,6 +1,6 @@
 /**
- * Change pings for raw IndexedDB stores (B2 / monitor profiles, the
- * vault) and the VFS itself, which Dexie liveQuery cannot observe.
+ * Change pings for monitor / AI profile stores, the B2 connection list
+ * (held by monitors) and the VFS itself, which Dexie liveQuery cannot observe.
  *
  * The channel names live here; the channel itself is `@shared-packages/ui`'s
  * `tabChannel`, the one implementation. The two ways to listen are named for
@@ -16,7 +16,6 @@ export { notifyTabChannel };
 export const HUB_B2_PROFILES_CHANNEL = 'hub-b2-profiles';
 export const HUB_MONITOR_PROFILES_CHANNEL = 'hub-monitor-profiles';
 export const HUB_AI_PROFILES_CHANNEL = 'hub-ai-profiles';
-export const HUB_VAULT_CHANNEL = 'hub-vault';
 
 /**
  * Hear every ping, this tab's included — for a listener that is not the

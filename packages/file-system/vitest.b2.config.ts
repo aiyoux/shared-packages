@@ -5,8 +5,8 @@ import { fileURLToPath } from 'node:url';
 const root = path.dirname(fileURLToPath(import.meta.url));
 
 /**
- * B2 unit tests (simulator, credentials, cache) — Node environment required
- * so Blob/arrayBuffer match the SDK (jsdom Blob is incomplete).
+ * B2 unit tests (monitor client, driver, cache) — Node environment so
+ * Blob/Response streams behave like the browser (jsdom Blob is incomplete).
  */
 export default defineConfig({
 	test: {

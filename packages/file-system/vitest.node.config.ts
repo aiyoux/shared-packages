@@ -26,7 +26,6 @@ export default defineConfig({
 		environment: 'node',
 		include: [
 			'src/monitor/**/*.test.ts',
-			'src/vault/**/*.test.ts',
 			'src/ai/**/*.test.ts',
 			'src/ui/treeDnd/**/*.test.ts',
 			// Top-level src helpers (e.g. stallTimer).
