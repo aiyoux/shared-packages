@@ -2,7 +2,7 @@
 	import type { Snippet } from 'svelte';
 	import type { SplitDirection } from './types.js';
 	import { paneChromeSlotId } from './chrome.js';
-	import { homeLeaf } from './leafHome.js';
+	import type { LeafHome } from './leafHome.js';
 	import Popover from '../Popover.svelte';
 	import ClipboardPopup from '../clipboard/ClipboardPopup.svelte';
 	import { appClipboard } from '../clipboard/clipboardStore.svelte.js';
@@ -13,6 +13,7 @@
 		canClose,
 		showChrome,
 		pane,
+		home,
 		onFocus,
 		onSplit,
 		onClose,
@@ -28,6 +29,7 @@
 		canClose: boolean;
 		showChrome: boolean;
 		pane: Snippet<[{ id: string; focused: boolean }]>;
+		home: LeafHome;
 		onFocus: (id: string) => void;
 		onSplit: (leafId: string, direction: SplitDirection) => void;
 		onClose: (leafId: string) => void;
@@ -56,7 +58,7 @@
 	data-pl-focused={focused ? 'true' : 'false'}
 	data-pl-hidden={hidden ? 'true' : undefined}
 	onclick={() => onFocus(id)}
-	use:homeLeaf={id}
+	use:home.homeLeaf={id}
 >
 	{#if showChrome}
 		<header class="pl-chrome" data-testid="pl-chrome">

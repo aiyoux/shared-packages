@@ -2,7 +2,7 @@
 	import { tick, untrack, type Snippet } from 'svelte';
 	import type { LayoutNode, SplitDirection } from './types.js';
 	import { closeLeaf, createLeaf, leafCount, listLeaves, setSplitRatio, splitLeaf } from './tree.js';
-	import { layoutSlotKey, parkLeaves, rehomeLeaves } from './leafHome.js';
+	import { createLeafHome, layoutSlotKey } from './leafHome.js';
 	import PaneNode from './PaneNode.svelte';
 	import PaneLeaf from './PaneLeaf.svelte';
 
@@ -51,6 +51,9 @@
 	const canClose = $derived(leafCount(root) > 1);
 	const leaves = $derived(listLeaves(root));
 	const slotKey = $derived(layoutSlotKey(root));
+	// Per instance: the docked window and every floater each mount a PaneLayout,
+	// and a shared registry moved one window's leaves into another's park.
+	const home = createLeafHome();
 
 	let parkEl: HTMLElement | null = $state(null);
 
@@ -59,14 +62,14 @@
 	// does not blink the panes.
 	$effect.pre(() => {
 		void slotKey;
-		untrack(() => parkLeaves(parkEl));
+		untrack(() => home.parkLeaves(parkEl));
 	});
 	$effect(() => {
 		void slotKey;
 		const ids = untrack(() => listLeaves(root).map((leaf) => leaf.id));
 		let cancelled = false;
 		void tick().then(() => {
-			if (!cancelled) rehomeLeaves(ids);
+			if (!cancelled) home.rehomeLeaves(ids);
 		});
 		return () => {
 			cancelled = true;
@@ -134,6 +137,7 @@
 				{canClose}
 				{showChrome}
 				{pane}
+				{home}
 				onFocus={(id) => (focusedId = id)}
 				onSplit={(id, dir) => splitAt(id, dir)}
 				onClose={(id) => closeAt(id)}
