@@ -46,6 +46,8 @@ export {
 	closeSelectionDbForTests,
 	EMPTY_SELECTION_MAP,
 	getAiSelectionMap,
+	matchAiModelRef,
+	offerAiRef,
 	resolveAiModelRef,
 	setAiModelRef,
 	setAiSelectionMap,

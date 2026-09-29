@@ -16,7 +16,7 @@
  * single-cell read-modify-write keeps concurrent writers from clobbering each
  * other's tasks.
  */
-import type { AiLocation, AiTask } from './catalog.js';
+import type { AiLocation, AiOffer, AiTask } from './catalog.js';
 import {
 	HUB_AI_PROFILES_CHANNEL,
 	notifyTabChannel,
@@ -173,6 +173,52 @@ export function resolveAiModelRef(
 		return map.tasks[task]?.[appId] ?? map.tasks[task]?.['default'] ?? null;
 	}
 	return map.tasks[task]?.['default'] ?? null;
+}
+
+/**
+ * The durable ref for an offer pick: everything that resolves it. A browser
+ * offer's sourceId is only a display label ('this-browser') — the runtime is
+ * this browser itself, so it is dropped; native and provider rows keep theirs,
+ * and the monitor profile is not part of the identity.
+ */
+export function offerAiRef(offer: AiOffer): AiModelRef {
+	return {
+		location: offer.location,
+		modelId: offer.modelId,
+		sourceId: offer.location === 'browser' ? null : offer.sourceId,
+		variantId: offer.variantId,
+		monitorProfileId: null
+	};
+}
+
+/**
+ * The offer a ref names when restoring into a live catalog: exact identity
+ * first (model, location, source, variant), then model + location with the
+ * ref's source when it names one. Identity only — the monitor profile is
+ * not part of a ref, and the caller decides whether the ref's context
+ * (monitor, task filter) makes a candidate eligible at all. `ai-chats`'s
+ * offer matching moved here so every app restores picks identically.
+ */
+export function matchAiModelRef(
+	ref: AiModelRef,
+	offers: readonly AiOffer[]
+): AiOffer | null {
+	const exact = offers.find(
+		(o) =>
+			o.location === ref.location &&
+			o.modelId === ref.modelId &&
+			o.sourceId === ref.sourceId &&
+			o.variantId === ref.variantId
+	);
+	if (exact) return exact;
+	return (
+		offers.find(
+			(o) =>
+				o.location === ref.location &&
+				o.modelId === ref.modelId &&
+				(!ref.sourceId || o.sourceId === ref.sourceId)
+		) ?? null
+	);
 }
 
 // Only other tabs need the ping in theory; `subscribeTabChannel` includes

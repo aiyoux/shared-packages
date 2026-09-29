@@ -8,6 +8,8 @@ import {
 	closeSelectionDbForTests,
 	EMPTY_SELECTION_MAP,
 	getAiSelectionMap,
+	matchAiModelRef,
+	offerAiRef,
 	resolveAiModelRef,
 	setAiModelRef,
 	setAiSelectionMap,
@@ -15,6 +17,7 @@ import {
 	type AiModelRef
 } from './selection.js';
 import { HUB_AI_DB_NAME } from './types.js';
+import type { AiOffer } from './catalog.js';
 
 async function wipeDb() {
 	await closeSelectionDbForTests();
@@ -151,5 +154,54 @@ describe('AI selection store', () => {
 		await new Promise((resolve) => setTimeout(resolve, 250));
 		stop();
 		expect(seen).toHaveLength(2);
+	});
+});
+
+/** A minimal offer row with just the fields matching reads. */
+function offer(id: string, over: Partial<AiOffer> = {}): AiOffer {
+	return {
+		id, name: id, task: 'chat', location: 'browser',
+		modelId: 'm1', sourceId: 'p1', variantId: 'cpu',
+		deviceClass: 'cpu', supported: true, ready: true, available: true, reason: null,
+		...over
+	};
+}
+
+describe('matchAiModelRef', () => {
+	it('matches exact identity first, then model+location with a named source', () => {
+		const offers = [
+			offer('native', { location: 'monitor-native', modelId: 'llama', sourceId: 'n1', variantId: 'cuda' }),
+			offer('provider', { location: 'monitor-provider', modelId: 'llama', sourceId: 'p1', variantId: 'service' })
+		];
+		const ref: AiModelRef = { location: 'monitor-native', modelId: 'llama', sourceId: 'n1', variantId: 'cuda' };
+		expect(matchAiModelRef(ref, offers)?.id).toBe('native');
+
+		// A ref written by an app without the exact variant still resolves:
+		// loose pass over the same model + location with a named source.
+		const loose: AiModelRef = { location: 'monitor-native', modelId: 'llama', sourceId: '', variantId: '' };
+		const matched = matchAiModelRef(loose, offers);
+		expect(matched?.id).toBe('native');
+		// A ref with a source the catalog doesn't know stays null — a source
+		// never reroutes to another connection's model.
+		expect(matchAiModelRef({ ...ref, sourceId: 'other' }, offers)).toBeNull();
+	});
+
+	it('stays null when nothing matches', () => {
+		const offers = [offer('a', { location: 'browser', modelId: 'k', sourceId: 'this-browser', variantId: 'cpu' })];
+		expect(
+			matchAiModelRef({ location: 'monitor-provider', modelId: 'k', sourceId: null, variantId: null }, offers)
+		).toBeNull();
+		expect(
+			matchAiModelRef({ location: 'browser', modelId: 'other', sourceId: null, variantId: null }, offers)
+		).toBeNull();
+	});
+
+	it('offerAiRef drops the browser display source and keeps monitor sources', () => {
+		expect(
+			offerAiRef(offer('b', { location: 'browser', modelId: 'k', sourceId: 'this-browser', variantId: 'cpu' }))
+		).toEqual({ location: 'browser', modelId: 'k', sourceId: null, variantId: 'cpu', monitorProfileId: null });
+		expect(
+			offerAiRef(offer('p', { location: 'monitor-provider', modelId: 'k', sourceId: 'p1', variantId: 'service' }))
+		).toEqual({ location: 'monitor-provider', modelId: 'k', sourceId: 'p1', variantId: 'service', monitorProfileId: null });
 	});
 });
