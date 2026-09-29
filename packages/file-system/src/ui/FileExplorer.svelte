@@ -736,7 +736,8 @@
 	}
 
 	/**
-	 * A handoff to another tool's popup (Quick edit, Convert to SVG) closes the
+	 * A handoff to another tool's popup (Quick edit, Convert to SVG, a git
+	 * project's commit panel after Open / Init project) closes the
 	 * preview first. The preview is portalled to <body>, so left open it paints
 	 * over a popup mounted inside the pane and swallows every click in it.
 	 */
@@ -2923,6 +2924,7 @@
 			}
 			error = '';
 			await onOpenProject(n);
+			closePreviewForHandoff();
 		} catch (e) {
 			reportError(e);
 		} finally {
@@ -2941,6 +2943,7 @@
 				if (onOpenProject) {
 					error = '';
 					await onOpenProject(n);
+					closePreviewForHandoff();
 				} else {
 					reportMessage('Already a git project');
 				}
@@ -2949,6 +2952,8 @@
 			error = '';
 			await onInitProject(n);
 			previewIsProject = true;
+			// The project's commit panel opens next; the portalled preview would cover it.
+			closePreviewForHandoff();
 		} catch (e) {
 			reportError(e);
 		} finally {
