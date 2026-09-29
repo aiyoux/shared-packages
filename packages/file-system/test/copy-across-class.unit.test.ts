@@ -958,7 +958,7 @@ describe('classify copy-across routing', () => {
 		const b2toMon = describeCopyAcrossPath(b2, mon, { source: 'B2 · shots', dest: 'Monitor · home' });
 		assert.equal(b2toMon.kind, 'delegated');
 		assert.match(b2toMon.summary, /Delegated:/);
-		assert.match(b2toMon.detail, /keys stay in this tab/i);
+		assert.match(b2toMon.detail, /keys stay on their monitor/i);
 		assert.match(b2toMon.detail, /No confirm/);
 		assert.equal(
 			await copyAcross({
@@ -1185,7 +1185,7 @@ describe('classify copy-across routing', () => {
 		assert.equal(copies.some((t) => t.hop === 'dual-phase'), false);
 	});
 
-	it('distinct B2 buckets → dual-phase', () => {
+	it('distinct B2 connections → delegated through their monitors', async () => {
 		const a = {
 			id: 'b2',
 			connectionId: 'b2:a',
@@ -1200,8 +1200,38 @@ describe('classify copy-across routing', () => {
 			capabilities: { supportsUpload: true, supportsCopy: true },
 			copy: async () => {}
 		} as unknown as ExplorerDriver;
-		assert.equal(classify(a, b).kind, 'dual-phase');
+		assert.equal(classify(a, b).kind, 'delegated');
 		assert.equal(canServerCopy(a, b), false);
+
+		// Executed as: source monitor mints, dest monitor pulls. No bytes here.
+		resetTransferRegistryForTests();
+		const pulled: Array<{ url: string; name: string }> = [];
+		const src = {
+			...a,
+			mintDownloadUrl: async (id: string) => ({ url: `https://f000.backblazeb2.com/file/a/${id}?Authorization=x`, filename: id })
+		} as unknown as ExplorerDriver;
+		const dst = {
+			...b,
+			pullFromUrl: async (url: string, _p: string | null, name: string) => {
+				pulled.push({ url, name });
+			}
+		} as unknown as ExplorerDriver;
+		const file = fileEntry('pic.png', 4);
+		assert.equal(
+			await copyAcross({
+				sourceDriver: src,
+				destDriver: dst,
+				selectedIds: [file.id],
+				sourceEntries: [file],
+				destParentId: null
+			}),
+			1
+		);
+		assert.deepEqual(pulled, [
+			{ url: 'https://f000.backblazeb2.com/file/a/pic.png?Authorization=x', name: 'pic.png' }
+		]);
+		const path = describeCopyAcrossPath(src, dst, { source: 'B2 · a', dest: 'B2 · b' });
+		assert.match(path.detail, /pulls it into its bucket/);
 	});
 
 	it('two disk drivers with dest.copy → canServerCopy false, kind direct', () => {

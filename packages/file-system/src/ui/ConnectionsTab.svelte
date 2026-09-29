@@ -14,13 +14,14 @@
 		subscribeTabChannel
 	} from '../crossTab.js';
 	import {
-		deleteProfile as deleteB2,
-		getActiveProfileId as getActiveB2,
-		listProfiles as listB2,
-		saveProfile as saveB2,
-		setActiveProfileId as setActiveB2
-	} from '../b2/credentials.js';
-	import { validateProfileInput as validateB2, type B2ConnectionProfileV1 } from '../b2/types.js';
+		createB2Connection,
+		deleteB2Connection,
+		getActiveB2RowId,
+		listB2Connections,
+		setActiveB2RowId,
+		updateB2Connection
+	} from '../b2/connections.js';
+	import { validateB2Input, type B2ConnectionRow } from '../b2/types.js';
 	import {
 		deleteProfile as deleteMonitor,
 		getActiveProfileId as getActiveMonitor,
@@ -34,7 +35,6 @@
 		type MonitorConnectionProfileV1
 	} from '../monitor/types.js';
 	import ConnectionProfileList, { type ConnectionListRow } from './ConnectionProfileList.svelte';
-	import VaultPanel from '../vault/VaultPanel.svelte';
 	import { formatExplorerError } from './explorerError.js';
 	import FeConfirmDialog from './FeConfirmDialog.svelte';
 	import type { FeConfirmCopy } from './feConfirm.js';
@@ -42,10 +42,11 @@
 
 	type Row = {
 		kind: RemoteKind;
+		/** Monitor profile id, or a B2 row id (`${monitorId}.${connectionId}`). */
 		id: string;
 		name: string;
-		/** The secret lives only in this tab (not saved in the browser). */
-		tabOnly?: boolean;
+		/** B2 rows: which monitor holds the key. */
+		via?: string;
 	};
 
 	interface Props {
@@ -63,18 +64,19 @@
 	let error = $state('');
 	let busy = $state(false);
 
-	let b2Profiles = $state<B2ConnectionProfileV1[]>([]);
+	let b2Rows = $state<B2ConnectionRow[]>([]);
+	/** Monitors that could not list their B2 connections (offline / CORS). */
+	let b2Unreachable = $state<string[]>([]);
 	let monitorProfiles = $state<MonitorConnectionProfileV1[]>([]);
 	let activeB2 = $state<string | null>(null);
 	let activeMonitor = $state<string | null>(null);
 
 	let name = $state('');
-	let applicationKeyId = $state('');
-	let applicationKey = $state('');
-	let bucketName = $state('');
+	let b2MonitorId = $state('');
+	let keyId = $state('');
+	let key = $state('');
+	let bucket = $state('');
 	let namePrefix = $state('');
-	let keyDirty = $state(false);
-	let persistSecret = $state(true);
 	let monitorBaseUrl = $state(DEFAULT_MONITOR_BASE_URL);
 	let monitorRoot = $state('/tmp');
 
@@ -84,11 +86,11 @@
 	};
 
 	const rows = $derived<Row[]>([
-		...b2Profiles.map((p) => ({
+		...b2Rows.map((r) => ({
 			kind: 'b2' as const,
-			id: p.id,
-			name: p.name,
-			tabOnly: p.persistSecret === false
+			id: r.rowId,
+			name: r.name,
+			via: r.monitorName
 		})),
 		...monitorProfiles.map((p) => ({
 			kind: 'monitor' as const,
@@ -103,13 +105,8 @@
 			label: `${KIND_LABEL[p.kind]} · ${p.name}`,
 			openTestId: `${p.kind}-profile-edit`,
 			removeTestId: `${p.kind}-profile-delete`,
-			// A tab-only key looks like any other row otherwise, and the
-			// connection stops working in a new tab (284e4a3 dropped the cue).
-			...(p.tabOnly
-				? {
-						note: 'key not saved',
-						noteTitle: 'The key is kept in this tab only. A new tab asks for it again.'
-					}
+			...(p.via
+				? { note: `via ${p.via}`, noteTitle: `The key is held by the monitor “${p.via}”.` }
 				: {})
 		}))
 	);
@@ -124,26 +121,30 @@
 	);
 	const submitTestid = $derived(`${kind}-save-only`);
 
-	let removePrompt = $state<{ kind: RemoteKind; id: string; name: string } | null>(null);
+	let removePrompt = $state<{ kind: RemoteKind; id: string; name: string; via?: string } | null>(
+		null
+	);
 	const removeCopy = $derived.by((): FeConfirmCopy => {
 		const name = removePrompt?.name ?? 'this connection';
 		return {
 			title: 'Remove connection',
 			confirmLabel: 'Remove',
-			body: `Remove “${name}” from this browser? This does not delete files on the remote.`
+			body: removePrompt?.via
+				? `Remove “${name}” from the monitor “${removePrompt.via}”? Every device that uses that monitor loses this connection. Files in the bucket are not touched.`
+				: `Remove “${name}” from this browser? This does not delete files on the remote.`
 		};
 	});
 
 	async function reload() {
-		const [b2, mon, aB2, aMon] = await Promise.all([
-			listB2(),
+		const [b2, mon, aMon] = await Promise.all([
+			listB2Connections(),
 			listMonitor(),
-			getActiveB2(),
 			getActiveMonitor()
 		]);
-		b2Profiles = b2;
+		b2Rows = b2.rows;
+		b2Unreachable = b2.unreachable.map((u) => u.monitorName);
 		monitorProfiles = mon;
-		activeB2 = aB2;
+		activeB2 = getActiveB2RowId();
 		activeMonitor = aMon;
 	}
 
@@ -159,12 +160,11 @@
 	function resetKindDefaults(next: RemoteKind) {
 		kind = next;
 		name = next === 'b2' ? 'My B2' : 'Local monitor';
-		applicationKeyId = '';
-		applicationKey = '';
-		bucketName = '';
+		b2MonitorId = monitorProfiles[0]?.id ?? '';
+		keyId = '';
+		key = '';
+		bucket = '';
 		namePrefix = '';
-		keyDirty = false;
-		persistSecret = true;
 		monitorBaseUrl = DEFAULT_MONITOR_BASE_URL;
 		monitorRoot = '/tmp';
 		error = '';
@@ -186,15 +186,14 @@
 		editingId = row.id;
 		error = '';
 		if (row.kind === 'b2') {
-			const p = b2Profiles.find((x) => x.id === row.id);
-			if (!p) return;
-			name = p.name;
-			applicationKeyId = p.applicationKeyId;
-			applicationKey = '';
-			keyDirty = false;
-			bucketName = p.bucketName;
-			namePrefix = p.namePrefix ?? '';
-			persistSecret = p.persistSecret !== false;
+			const r = b2Rows.find((x) => x.rowId === row.id);
+			if (!r) return;
+			name = r.name;
+			b2MonitorId = r.monitorProfileId;
+			keyId = r.keyId;
+			key = ''; // write-only: the monitor never sends it back
+			bucket = r.bucket;
+			namePrefix = r.namePrefix;
 		} else {
 			const p = monitorProfiles.find((x) => x.id === row.id);
 			if (!p) return;
@@ -214,39 +213,23 @@
 	async function save() {
 		error = '';
 		if (kind === 'b2') {
-			const existing = editingId ? b2Profiles.find((p) => p.id === editingId) : undefined;
-			const keyToSave = keyDirty || !existing ? applicationKey : existing.applicationKey;
-			const requireApplicationKey = !existing || keyDirty;
-			const err = validateB2({
-				name,
-				applicationKeyId,
-				applicationKey: keyToSave,
-				bucketName,
-				namePrefix,
-				requireApplicationKey
-			});
+			const input = { name, keyId, key, bucket, namePrefix };
+			const err = validateB2Input(input, { requireKey: !editingId });
 			if (err) {
 				error = err;
 				return;
 			}
-			if (!keyToSave?.trim()) {
-				error = 'Application key is required';
+			if (!editingId && !b2MonitorId) {
+				error = 'B2 runs through a monitor. Add a monitor connection first.';
 				return;
 			}
 			busy = true;
 			try {
-				await saveB2({
-					id: editingId ?? crypto.randomUUID(),
-					name,
-					applicationKeyId,
-					applicationKey: requireApplicationKey ? keyToSave : '',
-					bucketName,
-					namePrefix: namePrefix || undefined,
-					persistSecret,
-					createdAt: existing?.createdAt
-				});
-				applicationKey = '';
-				keyDirty = false;
+				// The monitor authorizes the key before storing it, so a bad key
+				// or bucket fails here rather than at first browse.
+				if (editingId) await updateB2Connection(editingId, input);
+				else await createB2Connection(b2MonitorId, input);
+				key = '';
 				editingId = null;
 				mode = 'list';
 				await reload();
@@ -291,11 +274,11 @@
 		busy = true;
 		try {
 			if (row.kind === 'b2') {
-				const p = b2Profiles.find((x) => x.id === row.id);
-				if (!p) return;
-				await setActiveB2(p.id);
-				activeB2 = p.id;
-				onConnected?.(row.kind, p);
+				const r = b2Rows.find((x) => x.rowId === row.id);
+				if (!r) return;
+				setActiveB2RowId(r.rowId);
+				activeB2 = r.rowId;
+				onConnected?.(row.kind, r);
 			} else {
 				const p = monitorProfiles.find((x) => x.id === row.id);
 				if (!p) return;
@@ -312,8 +295,14 @@
 	}
 
 	async function removeRow(row: { kind: RemoteKind; id: string }) {
-		if (row.kind === 'b2') await deleteB2(row.id);
-		else await deleteMonitor(row.id);
+		try {
+			if (row.kind === 'b2') await deleteB2Connection(row.id);
+			else await deleteMonitor(row.id);
+		} catch (e) {
+			error = formatExplorerError(e);
+			toast.error(error);
+			return;
+		}
 		if (editingId === row.id && kind === row.kind) {
 			editingId = null;
 			mode = 'list';
@@ -360,7 +349,8 @@
 						}}
 						onRemove={(key) => {
 							const row = rowByKey(key);
-							if (row) removePrompt = { kind: row.kind, id: row.id, name: row.name };
+							if (row)
+								removePrompt = { kind: row.kind, id: row.id, name: row.name, via: row.via };
 						}}
 					/>
 				</div>
@@ -377,7 +367,11 @@
 				New connection
 			</button>
 		</div>
-		<div class="extra"><VaultPanel /></div>
+		{#if b2Unreachable.length}
+			<p class="empty" data-testid="connections-b2-unreachable">
+				Could not list B2 connections on {b2Unreachable.join(', ')}.
+			</p>
+		{/if}
 	{:else}
 		{#if mode === 'new'}
 			<div
@@ -410,7 +404,29 @@
 			{#if kind === 'b2'}
 				{#if mode === 'edit'}
 					<p class="editing-label" data-testid="b2-editing-banner">
-						Leave the key blank to keep the current key.
+						Leave the key blank to keep the key the monitor holds.
+					</p>
+				{/if}
+				<label>
+					Monitor
+					<select
+						data-testid="b2-monitor"
+						bind:value={b2MonitorId}
+						disabled={busy || mode === 'edit'}
+					>
+						{#each monitorProfiles as m (m.id)}
+							<option value={m.id}>{m.name}</option>
+						{/each}
+					</select>
+				</label>
+				{#if monitorProfiles.length}
+					<p class="editing-label" data-testid="b2-monitor-note">
+						The key is stored on this monitor, never in the browser. Every device that uses
+						the monitor can browse the bucket.
+					</p>
+				{:else}
+					<p class="editing-label" data-testid="b2-needs-monitor">
+						B2 runs through a monitor. Add a monitor connection first.
 					</p>
 				{/if}
 				<label>
@@ -419,22 +435,21 @@
 				</label>
 				<label>
 					Application key ID
-					<input data-testid="b2-key-id" bind:value={applicationKeyId} autocomplete="off" />
+					<input data-testid="b2-key-id" bind:value={keyId} autocomplete="off" />
 				</label>
 				<label>
 					Application key
 					<input
 						data-testid="b2-key"
 						type="password"
-						bind:value={applicationKey}
+						bind:value={key}
 						autocomplete="off"
 						placeholder={mode === 'edit' ? '(unchanged if blank)' : ''}
-						oninput={() => (keyDirty = true)}
 					/>
 				</label>
 				<label>
 					Bucket name
-					<input data-testid="b2-bucket" bind:value={bucketName} autocomplete="off" />
+					<input data-testid="b2-bucket" bind:value={bucket} autocomplete="off" />
 				</label>
 				<label>
 					Name prefix (optional)
@@ -445,19 +460,6 @@
 						autocomplete="off"
 					/>
 				</label>
-				<label class="check">
-					<input
-						data-testid="b2-persist-secret"
-						type="checkbox"
-						bind:checked={persistSecret}
-					/>
-					Save this key in the browser
-				</label>
-				{#if !persistSecret}
-					<p class="editing-label" data-testid="b2-session-only-note">
-						This tab only — the key is forgotten when the tab closes.
-					</p>
-				{/if}
 			{:else}
 				<label>
 					Name
@@ -569,19 +571,11 @@
 		justify-content: flex-end;
 		gap: 0.5rem;
 	}
-	.extra {
-		min-width: 0;
-	}
 	.fields label {
 		display: flex;
 		flex-direction: column;
 		gap: 0.25rem;
 		font-size: 0.85rem;
-	}
-	.fields label.check {
-		flex-direction: row;
-		align-items: center;
-		gap: 0.45rem;
 	}
 	.fields input:not([type='checkbox']) {
 		padding: 0.4rem 0.55rem;

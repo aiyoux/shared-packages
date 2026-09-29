@@ -14,7 +14,9 @@ const CODE_LABELS: Record<string, string> = {
 	B2_AUTH: 'Invalid Backblaze application key. Check the key id and that it can access this bucket.',
 	B2_MASTER_KEY:
 		'Master application keys are not allowed. Create a bucket-scoped application key in the Backblaze dashboard.',
-	B2_CORS: 'Backblaze B2 blocked this browser request (CORS or proxy).',
+	B2_UNSUPPORTED: 'This monitor has no B2 support — update the daemon.',
+	B2_FOLDER_NOT_EMPTY: 'That folder is not empty.',
+	B2_RATE_LIMIT: 'Backblaze B2 is rate limiting requests. Try again in a moment.',
 	B2_FORBIDDEN: 'This Backblaze key cannot write here.',
 	B2_NOT_FOUND: 'That file or folder was not found on Backblaze B2.',
 	B2_NETWORK: 'Network error talking to Backblaze B2.',

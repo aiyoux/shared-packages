@@ -265,7 +265,9 @@ export function classify(source: ExplorerDriver, dest: ExplorerDriver): CopyAcro
 		}
 	}
 
-	// Distinct B2 buckets are NOT delegated.
+	// B2 lives on monitors: one side mints a narrow token and a monitor talks
+	// to B2 directly — same monitor or not, the bytes never touch this tab.
+	if (source.id === 'b2' && dest.id === 'b2') return { kind: 'delegated' };
 	if (source.id === 'b2' && dest.id === 'monitor') return { kind: 'delegated' };
 	if (source.id === 'monitor' && dest.id === 'b2') return { kind: 'delegated' };
 
@@ -346,19 +348,27 @@ export function describeCopyAcrossPath(
 		};
 	}
 	if (kind === 'delegated') {
+		if (source.id === 'b2' && dest.id === 'b2') {
+			return {
+				kind: 'delegated',
+				summary: `Delegated: ${labels.source} → ${labels.dest}`,
+				detail:
+					"The source's monitor mints a short-lived download URL; the destination's monitor pulls it into its bucket. Keys stay on their monitors. No confirm."
+			};
+		}
 		if (source.id === 'b2' && dest.id === 'monitor') {
 			return {
 				kind: 'delegated',
 				summary: `Delegated: ${labels.source} → ${labels.dest}`,
 				detail:
-					'This tab mints a short-lived B2 download URL; the monitor daemon GETs it. Application keys stay in this tab. No confirm.'
+					'The B2 monitor mints a short-lived download URL; the destination monitor GETs it. Keys stay on their monitor. No confirm.'
 			};
 		}
 		return {
 			kind: 'delegated',
 			summary: `Delegated: ${labels.source} → ${labels.dest}`,
 			detail:
-				'This tab mints a short-lived B2 upload URL; the monitor daemon PUTs the file. Application keys stay in this tab. No confirm.'
+				'The B2 monitor mints a one-shot upload URL; the source monitor POSTs the file. Keys stay on their monitor. No confirm.'
 		};
 	}
 	if (kind === 'webrtc') {
@@ -500,6 +510,7 @@ function webrtcHopNote(ice?: CopyIce, icePath?: CopyIcePath): string {
 }
 
 function delegatedNote(source: ExplorerDriver, dest: ExplorerDriver): string {
+	if (source.id === 'b2' && dest.id === 'b2') return 'B2 → B2 via monitor';
 	if (source.id === 'b2' && dest.id === 'monitor') return 'Monitor ← B2';
 	if (source.id === 'monitor' && dest.id === 'b2') return 'Monitor → B2';
 	return 'Delegated';
@@ -682,11 +693,11 @@ async function copyFile(
 			hopNote
 		});
 		try {
-			if (source.id === 'b2' && dest.id === 'monitor') {
+			if (source.id === 'b2' && (dest.id === 'monitor' || dest.id === 'b2')) {
 				if (!source.mintDownloadUrl || !dest.pullFromUrl) {
 					throw new CopyAcrossError(
 						'COPY_ACROSS_NO_DEST',
-						'Delegated B2 → monitor requires mintDownloadUrl and pullFromUrl'
+						`Delegated B2 → ${dest.id} requires mintDownloadUrl and pullFromUrl`
 					);
 				}
 				const minted = await source.mintDownloadUrl(entry.id);

@@ -121,7 +121,6 @@
 		subscribeTabChannel,
 		HUB_B2_PROFILES_CHANNEL,
 		HUB_MONITOR_PROFILES_CHANNEL,
-		HUB_VAULT_CHANNEL,
 		type MemoryVfsService,
 		type VfsService
 	} from '../index.js';
@@ -131,23 +130,14 @@
 		ConnectionSwitcher,
 		acquireB2Driver,
 		releaseB2Driver,
-		getProfile as getB2Profile,
-		listProfiles as listB2Profiles,
-		revealApplicationKey,
-		setActiveProfileId as setActiveB2ProfileId,
+		getB2Connection,
+		listB2Connections,
+		setActiveB2RowId,
 		mapB2Error,
-		type B2ConnectionProfileV1,
+		type B2ConnectionRow,
 		type ConnectionKind
 	} from '../b2/index.js';
 	import RemoteConnectionsDialog from './RemoteConnectionsDialog.svelte';
-	import {
-		isVaultLockedError,
-		isSecretUnavailableError,
-		isVaultEnabled,
-		isVaultUnlocked,
-		subscribeVaultSession,
-		syncVaultFromIdb
-	} from '../vault/index.js';
 	import {
 		MonitorConnectionForm,
 		acquireMonitorDriver,
@@ -408,7 +398,7 @@
 
 	function onRemoteConnected(kind: RemoteKind, profile: object) {
 		showRemoteManager = false;
-		if (kind === 'b2') void connectB2(targetPaneId, profile as B2ConnectionProfileV1);
+		if (kind === 'b2') void connectB2(targetPaneId, profile as B2ConnectionRow);
 		else if (kind === 'monitor') void connectMonitor(targetPaneId, profile as MonitorConnectionProfileV1);
 		// 'ai' is not a file backend: connectRow already set it active; there is
 		// no pane driver to attach, so nothing else to do here.
@@ -498,7 +488,8 @@
 		return undefined;
 	}
 
-	let b2Profiles = $state<B2ConnectionProfileV1[]>([]);
+	/** B2 connections held by the saved monitors (never stored here). */
+	let b2Rows = $state<B2ConnectionRow[]>([]);
 	let monitorProfiles = $state<MonitorConnectionProfileV1[]>([]);
 	const showMonitor = true;
 
@@ -534,7 +525,7 @@
 	let dualRootEl = $state<HTMLDivElement | null>(null);
 
 	const availableRoleDefs = $derived(
-		buildFileWindowRoles(b2Profiles, monitorProfiles, {
+		buildFileWindowRoles(b2Rows, monitorProfiles, {
 			showMemory: switcherShowMemory,
 			hasPeer: Boolean(overrideRight)
 		})
@@ -726,19 +717,16 @@
 	}
 
 	async function reloadProfiles() {
-		b2Profiles = await listB2Profiles();
 		if (showMonitor) monitorProfiles = await listMonitorProfiles();
 		else monitorProfiles = [];
+		b2Rows = (await listB2Connections()).rows;
 	}
 
 	const b2Chips = $derived(
-		b2Profiles.map((p) => ({
-			id: p.id,
-			name: p.name,
-			detail: [
-				p.namePrefix ? `${p.bucketName} · ${p.namePrefix}` : p.bucketName,
-				p.persistSecret === false ? 'this tab' : ''
-			]
+		b2Rows.map((r) => ({
+			id: r.rowId,
+			name: r.name,
+			detail: [r.namePrefix ? `${r.bucket} · ${r.namePrefix}` : r.bucket, `via ${r.monitorName}`]
 				.filter(Boolean)
 				.join(' · ')
 		}))
@@ -877,32 +865,10 @@
 		const reloadOnTab = () => {
 			void reloadProfiles();
 		};
-		const onVault = () => {
-			void (async () => {
-				await syncVaultFromIdb();
-				await reloadProfiles();
-				if ((await isVaultEnabled()) && !isVaultUnlocked()) {
-					for (const paneId of Object.keys(windows)) {
-						const cur = paneState(paneId);
-						if (cur.activeKind !== 'b2') continue;
-						releaseRemote(cur.activeKind, cur.activeId);
-						setPane(paneId, {
-							remoteDriver: null,
-							activeId: 'local',
-							activeKind: 'local',
-							showB2Form: true,
-							error: 'Unlock the connection vault to use saved keys.',
-							explorerKey: cur.explorerKey + 1
-						});
-					}
-				}
-			})();
-		};
 		const unsubs = [
+			// A monitor added or removed changes which B2 connections exist.
 			subscribeTabChannel(HUB_B2_PROFILES_CHANNEL, reloadOnTab),
-			subscribeTabChannel(HUB_MONITOR_PROFILES_CHANNEL, reloadOnTab),
-			subscribeTabChannel(HUB_VAULT_CHANNEL, onVault),
-			subscribeVaultSession(onVault)
+			subscribeTabChannel(HUB_MONITOR_PROFILES_CHANNEL, reloadOnTab)
 		];
 		const mem = getMemoryVfs();
 		memoryVfs = mem;
@@ -960,24 +926,23 @@
 		}
 	}
 
-	async function connectB2(id: PaneId, profile: B2ConnectionProfileV1) {
+	async function connectB2(id: PaneId, profile: B2ConnectionRow) {
 		const p = paneState(id);
 		const prevId = p.activeId !== 'local' && p.activeId !== 'memory' ? p.activeId : null;
 		const prevKind = p.activeKind;
 		dropDiskDriver(p);
 		setPane(id, { busy: true, error: '', showMonitorForm: false });
 		try {
-			const applicationKey = await revealApplicationKey(profile);
-			const driver = await acquireB2Driver({ ...profile, applicationKey });
-			if (prevId && !(prevKind === 'b2' && prevId === profile.id)) {
+			const driver = await acquireB2Driver(profile);
+			if (prevId && !(prevKind === 'b2' && prevId === profile.rowId)) {
 				releaseRemote(prevKind, prevId);
 			}
-			void setActiveB2ProfileId(profile.id);
+			setActiveB2RowId(profile.rowId);
 			setPane(id, {
-				role: `b2:${profile.id}`,
+				role: `b2:${profile.rowId}`,
 				remoteDriver: driver,
 				memoryDriver: null,
-				activeId: profile.id,
+				activeId: profile.rowId,
 				activeKind: 'b2',
 				showB2Form: false,
 				showMonitorForm: false,
@@ -987,10 +952,6 @@
 				ctx: emptyCtx('b2')
 			});
 		} catch (e) {
-			if (isVaultLockedError(e) || isSecretUnavailableError(e)) {
-				showPaneError(id, formatExplorerError(e), { busy: false, showB2Form: true });
-				return;
-			}
 			const mapped = mapB2Error(e);
 			showPaneError(id, formatExplorerError(mapped), { busy: false, showB2Form: true });
 		}
@@ -1167,7 +1128,7 @@
 			await connectMonitor(id, mon);
 			return;
 		}
-		const b2 = await getB2Profile(selId);
+		const b2 = await getB2Connection(selId).catch(() => undefined);
 		if (b2) {
 			await connectB2(id, b2);
 			return;

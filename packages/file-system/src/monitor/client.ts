@@ -690,16 +690,46 @@ function serverMessage(parsed: unknown, fallback: string): string {
 }
 
 /**
- * Chunked browser -> daemon upload (POST /v1/fs/upload job).
+ * Where a chunked upload goes. `/v1/fs/upload` and `/v1/b2/.../upload` share
+ * the protocol — begin mints `{jobId, token}`, chunks PUT at an exact offset,
+ * finish commits — and differ only in these routes and the finish response.
+ */
+export type ChunkedUploadRoute<R> = {
+	beginPath: string;
+	beginBody: Record<string, unknown>;
+	/** Job routes live at `${jobPath}/${jobId}/{chunk,finish,abort}`. */
+	jobPath: string;
+	readFinish: (res: Response) => Promise<R>;
+};
+
+function fsUploadRoute(path: string, size: number): ChunkedUploadRoute<MonitorStatResult> {
+	return {
+		beginPath: '/v1/fs/upload',
+		beginBody: { path, size },
+		jobPath: '/v1/fs/upload',
+		readFinish: async (res) => {
+			const parsed = await res.json().catch(() => ({}));
+			if (!res.ok) {
+				// Leave the partial for a retry — a size mismatch is fixable by
+				// re-sending the tail chunk, so do not abort the job here.
+				throw new Error(serverMessage(parsed, `Upload finish failed (${res.status})`));
+			}
+			return parsed as MonitorStatResult;
+		}
+	};
+}
+
+/**
+ * Chunked browser -> daemon upload (a `/v1/fs/upload` or `/v1/b2` job).
  *
  * Every step gets a stall timer, not a total budget: a chunk acknowledgement
  * is proof of life, and a transfer that stops moving for MONITOR_STALL_MS is
  * the only thing that aborts it. Any failure best-effort-aborts the job so
  * the daemon deletes the partial instead of waiting for its reaper.
  */
-async function chunkedUpload(
+export async function chunkedUpload<R>(
 	base: string,
-	path: string,
+	route: ChunkedUploadRoute<R>,
 	body: Blob,
 	opts:
 		| {
@@ -708,11 +738,11 @@ async function chunkedUpload(
 		  }
 		| undefined,
 	fetchImpl: typeof fetch
-): Promise<MonitorStatResult> {
+): Promise<R> {
 	const abortJob = (jobId: string, token: string) => {
 		// Fire-and-forget, own controller: the outer abort is already in
 		// flight, and the daemon reaper is the backstop if this misses.
-		const url = joinUrl(base, `/v1/fs/upload/${jobId}/abort`);
+		const url = joinUrl(base, `${route.jobPath}/${jobId}/abort`);
 		const ac = new AbortController();
 		const t = setTimeout(() => ac.abort(), 10_000);
 		void fetchImpl(
@@ -732,13 +762,13 @@ async function chunkedUpload(
 	let jobId = '';
 	let token = '';
 	try {
-		const url = joinUrl(base, '/v1/fs/upload');
+		const url = joinUrl(base, route.beginPath);
 		const res = await fetchImpl(
 			url,
 			withLocalAddressSpace(url, {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({ path, size: body.size }),
+				body: JSON.stringify(route.beginBody),
 				signal: beginStall.signal
 			})
 		);
@@ -767,7 +797,7 @@ async function chunkedUpload(
 			);
 			try {
 				const slice = body.slice(offset, offset + MONITOR_CHUNK_BYTES);
-				const url = joinUrl(base, `/v1/fs/upload/${jobId}/chunk?offset=${offset}`);
+				const url = joinUrl(base, `${route.jobPath}/${jobId}/chunk?offset=${offset}`);
 				const res = await fetchImpl(
 					url,
 					withLocalAddressSpace(url, {
@@ -812,7 +842,7 @@ async function chunkedUpload(
 		// --- finish: fsync + rename on the daemon -------------------------------
 		const finishStall = createStallTimer(MONITOR_STALL_MS, opts?.signal, 'Monitor upload finish');
 		try {
-			const url = joinUrl(base, `/v1/fs/upload/${jobId}/finish`);
+			const url = joinUrl(base, `${route.jobPath}/${jobId}/finish`);
 			const res = await fetchImpl(
 				url,
 				withLocalAddressSpace(url, {
@@ -825,14 +855,9 @@ async function chunkedUpload(
 					signal: finishStall.signal
 				})
 			);
-			const parsed = await res.json().catch(() => ({}));
-			if (!res.ok) {
-				// Leave the partial for a retry — a size mismatch is fixable by
-				// re-sending the tail chunk, so do not abort the job here.
-				throw new Error(serverMessage(parsed, `Upload finish failed (${res.status})`));
-			}
+			const result = await route.readFinish(res);
 			opts?.onProgress?.(body.size, body.size);
-			return parsed as MonitorStatResult;
+			return result;
 		} catch (e) {
 			// A stalled or cancelled finish cannot be completed by this tab.
 			if (e instanceof Error && (e.name === 'AbortError' || e.name === 'StallError')) {
@@ -1425,7 +1450,7 @@ export function createMonitorClient(opts: {
 			// total timeout that would kill an active transfer.
 			if (body.size > MONITOR_CHUNK_BYTES) {
 				try {
-					return await chunkedUpload(base, path, body, opts, fetchFn);
+					return await chunkedUpload(base, fsUploadRoute(path, body.size), body, opts, fetchFn);
 				} catch (e) {
 					if (e instanceof MonitorNoChunkRouteError) {
 						// Older daemon without `/v1/fs/upload`: the single-shot PUT
