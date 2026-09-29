@@ -121,6 +121,23 @@ describe('transferRegistry', () => {
 		expect(item.blob?.size).toBe(7);
 	});
 
+	it('binds a keyed sent file only to its own send, even while others run', () => {
+		const a = new File(['aaaa'], 'a.bin');
+		const b = new File(['bbbbbb'], 'b.bin');
+		enqueueSentFile(a, 'op-a');
+		enqueueSentFile(b, 'op-b');
+		// op-b's wire row reports first with a size that matches neither file.
+		upsertProgress(progress({ id: 'op-b:wire', name: 'b.bin', size: 3, direction: 'sending' }));
+		upsertProgress(progress({ id: 'op-a', name: 'a.bin', size: 4, direction: 'sending' }));
+		upsertProgress(progress({ id: 'op-a', name: 'a.bin', size: 4, direction: 'sending', done: true, status: 'done' }));
+		upsertProgress(
+			progress({ id: 'op-b:wire', name: 'b.bin', size: 3, direction: 'sending', done: true, status: 'done' })
+		);
+		const byId = new Map(listTransfers().map((t) => [t.id, t]));
+		expect(byId.get('op-a')?.blob).toBe(a);
+		expect(byId.get('op-b:wire')?.blob).toBe(b);
+	});
+
 	it('enforces the 512 MiB cap by evicting oldest completed', async () => {
 		// Two completed receives; cap is huge in practice, so just assert the
 		// constant is exported and eviction path is no-op under cap.

@@ -102,8 +102,11 @@ const listeners = new Set<Listener>();
 const abortById = new Map<string, AbortController>();
 /** Pending sent File blobs keyed by progress id (attached when send completes). */
 const pendingSentFiles = new Map<string, File>();
-/** Files enqueued for send before progress id is known. */
-const pendingSendQueue: File[] = [];
+/**
+ * Files enqueued for send before a progress row reports. `progressId` pins one
+ * to its own send's rows; without it the file binds by name and size.
+ */
+const pendingSendQueue: Array<{ file: File; progressId?: string }> = [];
 
 let lastEvictionToast = false;
 
@@ -196,9 +199,13 @@ function revokeItemBlob(item: TransferItem): void {
 /**
  * Enqueue a File about to be sent so we can retain it when progress reports
  * an id (symmetric sent retention).
+ *
+ * Pass the send's `progressId` when sends can overlap: the file then binds to
+ * the first row with that id (or `${progressId}:…`), and never to another
+ * send's row by a name/size guess.
  */
-export function enqueueSentFile(file: File): void {
-	pendingSendQueue.push(file);
+export function enqueueSentFile(file: File, progressId?: string): void {
+	pendingSendQueue.push({ file, progressId });
 }
 
 function bindPendingSentFile(progress: TransferProgress): void {
@@ -206,11 +213,19 @@ function bindPendingSentFile(progress: TransferProgress): void {
 	if (pendingSentFiles.has(progress.id)) return;
 	if (pendingSendQueue.length === 0) return;
 	let idx = pendingSendQueue.findIndex(
-		(f) => f.name === progress.name && f.size === progress.size
+		(q) =>
+			q.progressId !== undefined &&
+			(progress.id === q.progressId || progress.id.startsWith(`${q.progressId}:`))
 	);
-	if (idx < 0) idx = 0;
-	const [file] = pendingSendQueue.splice(idx, 1);
-	if (file) pendingSentFiles.set(progress.id, file);
+	if (idx < 0) {
+		idx = pendingSendQueue.findIndex(
+			(q) => q.progressId === undefined && q.file.name === progress.name && q.file.size === progress.size
+		);
+	}
+	if (idx < 0) idx = pendingSendQueue.findIndex((q) => q.progressId === undefined);
+	if (idx < 0) return;
+	const [queued] = pendingSendQueue.splice(idx, 1);
+	if (queued) pendingSentFiles.set(progress.id, queued.file);
 }
 
 export function upsertProgress(progress: TransferProgress): TransferItem {
