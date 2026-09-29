@@ -108,6 +108,7 @@
         role="tab"
         aria-selected={isSelected}
         disabled={item.disabled}
+        data-testid={item.testId}
         class={cn(
           variant === 'pill'
             ? 'relative rounded-[var(--radius-md)] px-3 py-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-2'

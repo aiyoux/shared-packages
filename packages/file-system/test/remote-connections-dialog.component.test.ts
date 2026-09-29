@@ -1,7 +1,8 @@
 /**
- * Combined B2 / rclone / monitor connections popup. AI is not a connection
- * kind: it is configured per monitor (MonitorAiSection), and no AI secret is
- * ever stored browser-side.
+ * Combined B2 / rclone / monitor connections popup, split into a
+ * Connections tab (list/new/edit, unchanged) and an AI models tab whose
+ * Monitors group hosts one AI panel per saved monitor profile. AI is not a
+ * connection kind, and no AI secret is ever stored browser-side.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/svelte';
@@ -24,8 +25,18 @@ import {
 	saveProfile as saveMonitor
 } from '../src/monitor/credentials.js';
 import { DEFAULT_MONITOR_BASE_URL, HUB_MONITOR_DB_NAME } from '../src/monitor/types.js';
-import { closeSelectionDbForTests } from '../src/ai/monitorSelection.js';
+import { closeSelectionDbForTests } from '../src/ai/selection.js';
 import { HUB_AI_DB_NAME } from '../src/ai/types.js';
+
+// The header now hosts the ui package's Tabs primitive, whose indicator
+// measures with ResizeObserver — jsdom does not ship one and the test only
+// needs the tab buttons to exist.
+class StubResizeObserver {
+	observe() {}
+	unobserve() {}
+	disconnect() {}
+}
+globalThis.ResizeObserver ??= StubResizeObserver as unknown as typeof ResizeObserver;
 
 async function wipe(name: string) {
 	await new Promise<void>((resolve) => {
@@ -93,7 +104,7 @@ describe('RemoteConnectionsDialog', () => {
 		await vi.waitFor(() => expect(onConnected).toHaveBeenCalled());
 	});
 
-	it('monitor form hosts the AI section; install sends the key to the monitor only', async () => {
+	it('the AI models tab hosts one AI panel per saved monitor; install sends the key to the monitor only', async () => {
 		// The monitor probe: an AI-capable daemon.
 		const posted: Array<{ url: string; body: unknown }> = [];
 		vi.stubGlobal(
@@ -155,16 +166,23 @@ describe('RemoteConnectionsDialog', () => {
 			})
 		);
 		try {
+			// The panel is keyed to a saved monitor profile; without one the tab
+			// only offers the hint.
+			await saveMonitor({
+				id: 'm1',
+				name: 'Home',
+				baseUrl: 'http://127.0.0.1:8300',
+				rootPath: '/tmp'
+			});
 			render(RemoteConnectionsDialog, { props: { onClose: vi.fn() } });
 			await screen.findByTestId('connections-dialog');
+			expect(screen.queryByTestId('monitor-ai-section')).toBeNull();
 
-			await fireEvent.click(screen.getByTestId('connections-profile-new'));
-			await fireEvent.click(screen.getByTestId('connections-kind-monitor'));
-			await fireEvent.input(screen.getByTestId('monitor-base-url'), {
-				target: { value: 'http://127.0.0.1:8300' }
-			});
-
-			// The AI section probes and lists through the monitor transport.
+			await fireEvent.click(screen.getByTestId('settings-tab-models'));
+			// Without a registered library the tab degrades to a note, never a crash.
+			expect(screen.getByTestId('ai-library-unavailable')).toBeTruthy();
+			// The AI section probes the saved monitor and lists through the
+			// monitor transport.
 			await screen.findByTestId('monitor-ai-section');
 			await vi.waitFor(() => expect(screen.queryByTestId('monitor-ai-probing')).toBeNull());
 			await screen.findByTestId('monitor-ai-install-toggle');
@@ -184,7 +202,6 @@ describe('RemoteConnectionsDialog', () => {
 				expect((screen.getByTestId('monitor-ai-key') as HTMLInputElement).value).toBe('');
 			});
 			expect((await listB2()).length).toBe(0);
-			expect(await listMonitor()).toHaveLength(0);
 		} finally {
 			vi.unstubAllGlobals();
 		}

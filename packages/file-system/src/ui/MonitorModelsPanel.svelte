@@ -1,9 +1,11 @@
 <script lang="ts">
 	/**
-	 * AI section for a monitor connection: capability-gated listing and
-	 * profile install. Keys live daemon-side — the install form sends the key
-	 * to the monitor once and clears it from component state immediately;
-	 * nothing is persisted in the browser.
+	 * The AI panel for one monitor, inside the settings popup's "AI models"
+	 * tab: capability-gated profile/library/native-model management. Moved
+	 * verbatim out of the monitor connection form (RemoteConnectionsDialog
+	 * used to host it there). Keys live daemon-side — the install form sends
+	 * the key to the monitor once and clears it from component state
+	 * immediately; nothing is persisted in the browser.
 	 */
 	import { toast } from '@shared-packages/ui';
 	import { createMonitorClient } from '../monitor/client.js';
@@ -20,7 +22,6 @@
 		normalizeAiBaseUrl,
 		removeAiLibraryModel,
 		validateAiProfileInput,
-		setAiSelection,
 		type AiLibraryListResult,
 		type AiModelListResult,
 		type AiNativeModelRow,
