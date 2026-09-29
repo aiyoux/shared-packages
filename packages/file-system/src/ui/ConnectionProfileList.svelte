@@ -7,6 +7,10 @@
 		label: string;
 		openTestId: string;
 		removeTestId: string;
+		/** A short cue after the label (e.g. the key is not saved). */
+		note?: string;
+		/** What the cue means, on hover. */
+		noteTitle?: string;
 	};
 
 	let {
@@ -33,6 +37,9 @@
 				onclick={() => onOpen(row.key)}
 			>
 				<span class="conn-row-label">{row.label}</span>
+				{#if row.note}
+					<span class="conn-row-note" title={row.noteTitle} data-testid="{row.openTestId}-note">{row.note}</span>
+				{/if}
 			</button>
 			<button
 				type="button"
@@ -77,6 +84,9 @@
 		font-size: 0.85rem;
 		text-align: left;
 		cursor: pointer;
+		display: flex;
+		align-items: baseline;
+		gap: 0.5rem;
 	}
 	.conn-row:disabled,
 	.conn-row-trash:disabled {
@@ -85,9 +95,15 @@
 	}
 	.conn-row-label {
 		display: block;
+		min-width: 0;
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
+	}
+	.conn-row-note {
+		flex: 0 0 auto;
+		font-size: 0.75rem;
+		color: var(--text-muted);
 	}
 	.conn-row-trash {
 		flex: 0 0 auto;

@@ -60,6 +60,8 @@
 		kind: RemoteKind;
 		id: string;
 		name: string;
+		/** The secret lives only in this tab (not saved in the browser). */
+		tabOnly?: boolean;
 	};
 
 	interface Props {
@@ -109,7 +111,8 @@
 		...b2Profiles.map((p) => ({
 			kind: 'b2' as const,
 			id: p.id,
-			name: p.name
+			name: p.name,
+			tabOnly: p.persistSecret === false
 		})),
 		...monitorProfiles.map((p) => ({
 			kind: 'monitor' as const,
@@ -119,7 +122,8 @@
 		...rcloneProfiles.map((p) => ({
 			kind: 'rclone' as const,
 			id: p.id,
-			name: p.name
+			name: p.name,
+			tabOnly: p.persistSecret === false
 		}))
 	]);
 
@@ -128,7 +132,15 @@
 			key: `${p.kind}:${p.id}`,
 			label: `${KIND_LABEL[p.kind]} · ${p.name}`,
 			openTestId: `${p.kind}-profile-edit`,
-			removeTestId: `${p.kind}-profile-delete`
+			removeTestId: `${p.kind}-profile-delete`,
+			// A tab-only key looks like any other row otherwise, and the
+			// connection stops working in a new tab (284e4a3 dropped the cue).
+			...(p.tabOnly
+				? {
+						note: 'key not saved',
+						noteTitle: 'The key is kept in this tab only. A new tab asks for it again.'
+					}
+				: {})
 		}))
 	);
 
