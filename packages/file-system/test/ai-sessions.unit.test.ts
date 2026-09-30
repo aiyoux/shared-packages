@@ -174,6 +174,17 @@ describe('session REST', () => {
 });
 
 describe('session sockets', () => {
+	it('cancels a pending bind and closes its socket when its session loses leadership', async () => {
+		installSocket();
+		const ctl = new AbortController();
+		const pending = bindAiSession(BASE, 'abc', async () => null, { signal: ctl.signal });
+		const socket = FakeSocket.all.at(-1)!;
+		const reason = new Error('Session moved to another tab');
+		ctl.abort(reason);
+		await assert.rejects(pending, reason);
+		assert.equal(socket.readyState, FakeSocket.CLOSED);
+	});
+
 	it('binds, answers an invoke, and lets an agent read the value', async () => {
 		installSocket();
 		let closed = false;

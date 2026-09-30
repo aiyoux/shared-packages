@@ -25,11 +25,12 @@
 		onClose: () => void;
 		appearance?: Snippet;
 		outputs?: Snippet;
+		agentAccess?: Snippet;
 		onConnected?: (kind: RemoteKind, profile: object) => void;
 		onDisconnected?: (kind: RemoteKind) => void;
 	}
 
-	let { onClose, onConnected, onDisconnected, appearance, outputs }: Props = $props();
+	let { onClose, onConnected, onDisconnected, appearance, outputs, agentAccess }: Props = $props();
 
 	const TAB_ITEMS = $derived<TabItem[]>([
 		{ value: 'connections', label: 'Connections', testId: 'settings-tab-connections' },
@@ -90,6 +91,7 @@
 				{/each}
 			{:else if tab === 'models'}
 				<AiModelsTab />
+				{@render agentAccess?.()}
 			{:else if tab === 'appearance'}
 				{@render appearance?.()}
 			{:else if tab === 'outputs'}

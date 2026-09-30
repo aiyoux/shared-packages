@@ -276,8 +276,9 @@ export function bindAiSession(
 	baseUrl: string,
 	id: string,
 	handler: AiSessionInvokeHandler,
-	opts?: { onClose?: () => void }
+	opts?: { onClose?: () => void; signal?: AbortSignal }
 ): Promise<AiSessionBinding> {
+	if (opts?.signal?.aborted) return Promise.reject(opts.signal.reason);
 	const url = toWebSocketUrl(joinUrl(baseUrl, sessionPath(id, '/bind')));
 	const ws = new WebSocket(url);
 	let chain: Promise<void> = Promise.resolve();
@@ -292,10 +293,13 @@ export function bindAiSession(
 	function finish() {
 		if (closed) return;
 		closed = true;
+		opts?.signal?.removeEventListener('abort', abort);
 		artifactWait?.reject(new AiCredentialsError('AI_ERROR', 'The AI session socket closed.'));
 		artifactWait = null;
 		opts?.onClose?.();
 	}
+	function abort() { finish(); ws.close(); }
+	opts?.signal?.addEventListener('abort', abort, { once: true });
 
 	ws.onmessage = (ev) => {
 		const text = typeof ev.data === 'string' ? ev.data : '';
@@ -409,6 +413,8 @@ export function bindAiSession(
 			if (settled) return;
 			settled = true;
 			closed = true;
+			opts?.signal?.removeEventListener('abort', abort);
+			if (opts?.signal?.aborted) { reject(opts.signal.reason); return; }
 				reject(
 				new AiCredentialsError(
 					'AI_NETWORK',
