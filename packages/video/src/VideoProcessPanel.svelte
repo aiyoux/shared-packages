@@ -3,7 +3,7 @@
 	import Scissors from '@lucide/svelte/icons/scissors';
 import Loader2 from '@lucide/svelte/icons/loader-2';
 	import { processVideo } from './process.js';
-	import type { VideoInterpolator } from './types.js';
+	import type { VideoInterpolator, VideoUpscaler } from './types.js';
 
 	let {
 		sourceBlob,
@@ -11,6 +11,7 @@ import Loader2 from '@lucide/svelte/icons/loader-2';
 		trimEnd,
 		videoRef = null as HTMLVideoElement | null,
 		interpolator = null as VideoInterpolator | null,
+		upscaler = null as VideoUpscaler | null,
 		onProcessStart,
 		onProcessed,
 		onError
@@ -21,6 +22,8 @@ import Loader2 from '@lucide/svelte/icons/loader-2';
 		videoRef?: HTMLVideoElement | null;
 		/** Optional local interpolator (e.g. Language Hub RIFE bridge). */
 		interpolator?: VideoInterpolator | null;
+		/** Optional upscaler (SRMD on a monitor running the tools feature). */
+		upscaler?: VideoUpscaler | null;
 		/** Called when processing begins (page should clear prior output blobs). */
 		onProcessStart?: () => void;
 		onProcessed: (blob: Blob) => void;
@@ -31,6 +34,13 @@ import Loader2 from '@lucide/svelte/icons/loader-2';
 	let rifeFps = $state(60);
 	let rifeConnectionStatus = $state<'idle' | 'checking' | 'connected' | 'failed'>('idle');
 	let rifeMessage = $state('');
+
+	let useSrmd = $state(false);
+	let srmdScale = $state(2);
+	let srmdNoise = $state(3);
+	let srmdModel = $state('models-srmd');
+	let srmdConnectionStatus = $state<'idle' | 'checking' | 'connected' | 'failed'>('idle');
+	let srmdMessage = $state('');
 
 	let exportWidth = $state<number | undefined>(undefined);
 	let exportHeight = $state<number | undefined>(undefined);
@@ -75,7 +85,26 @@ import Loader2 from '@lucide/svelte/icons/loader-2';
 
 	onMount(() => {
 		if (interpolator) checkRifeConnection();
+		if (upscaler) checkSrmdConnection();
 	});
+
+	async function checkSrmdConnection() {
+		srmdConnectionStatus = 'checking';
+		srmdMessage = 'Checking...';
+		try {
+			if (!upscaler) {
+				srmdConnectionStatus = 'failed';
+				srmdMessage = 'No upscaler';
+				return;
+			}
+			const data = await upscaler.checkStatus();
+			srmdConnectionStatus = 'connected';
+			srmdMessage = `SRMD connected! (${data.srmdPath || 'srmd-ncnn-vulkan'})`;
+		} catch {
+			srmdConnectionStatus = 'failed';
+			srmdMessage = 'Offline';
+		}
+	}
 
 	function applyPreset(value: string) {
 		selectedPreset = value;
@@ -113,6 +142,37 @@ import Loader2 from '@lucide/svelte/icons/loader-2';
 		progress = 0;
 		processingStep = 'Preparing...';
 
+		// Model stages run at a fixed weight after the trim/resize stage.
+		// Both model stages: trim 0–40, upscale 40–70, interpolate 70–100.
+		const modelStages: { label: string; run: (blob: Blob, onProgress: (p: number) => void) => Promise<Blob> }[] = [];
+		if (useSrmd && upscaler) {
+			const scale = srmdScale;
+			const noise = srmdNoise;
+			const model = srmdModel.trim() || 'models-srmd';
+			modelStages.push({
+				label: `Upscaling ${scale}× (SRMD)...`,
+				run: (blob, onProgress) => {
+					const tempId = upscaler.newJobId();
+					const stopPoll = upscaler.pollProgress(tempId, onProgress);
+					return upscaler.upscale(blob, { scale, noise, model, id: tempId }).finally(() => stopPoll());
+				}
+			});
+		}
+		if (useRife && interpolator) {
+			const fps = rifeFps;
+			modelStages.push({
+				label: `Interpolating frames to ${fps} FPS (RIFE)...`,
+				run: (blob, onProgress) => {
+					const tempId = interpolator.newJobId();
+					const stopPoll = interpolator.pollProgress(tempId, onProgress);
+					return interpolator.interpolate(blob, { fps, id: tempId }).finally(() => stopPoll());
+				}
+			});
+		}
+
+		const trimWeight = modelStages.length === 0 ? 100 : modelStages.length === 1 ? 50 : 40;
+		const modelWeight = modelStages.length === 0 ? 0 : modelStages.length === 1 ? 50 : 30;
+
 		try {
 			processingStep = 'Trimming & Resizing video...';
 			let result = await processVideo(sourceBlob, {
@@ -122,24 +182,18 @@ import Loader2 from '@lucide/svelte/icons/loader-2';
 				height: exportHeight,
 				bitrate: exportBitrate,
 				onProgress: (p) => {
-					progress = useRife ? Math.round(p * 0.5) : p;
+					progress = Math.round(p * (trimWeight / 100));
 				}
 			});
 
-			if (useRife && interpolator) {
-				processingStep = `Interpolating frames to ${rifeFps} FPS (RIFE)...`;
-				progress = 50;
-				const tempId = interpolator.newJobId();
-
-				const stopPoll = interpolator.pollProgress(tempId, (n) => {
-					progress = Math.round(50 + n * 0.5);
-				});
-
-				try {
-					result = await interpolator.interpolate(result, { fps: rifeFps, id: tempId });
-				} finally {
-					stopPoll();
-				}
+			let bandStart = trimWeight;
+			for (const stage of modelStages) {
+				processingStep = stage.label;
+				progress = bandStart;
+				const bandEnd = bandStart + (modelWeight / modelStages.length);
+				result = await stage.run(result);
+				progress = Math.round(bandEnd);
+				bandStart = bandEnd;
 			}
 
 			progress = 100;
@@ -233,6 +287,58 @@ import Loader2 from '@lucide/svelte/icons/loader-2';
 				<div class="setting">
 					<label for="rifeFpsCustom">Custom FPS</label>
 					<input id="rifeFpsCustom" type="number" min={1} max={240} bind:value={rifeFps} />
+				</div>
+			</div>
+		{/if}
+	</div>
+</div>
+{/if}
+
+{#if upscaler}
+<!-- SRMD Video Upscaling -->
+<div class="settings-section">
+	<div class="settings-header-row">
+		<h3>SRMD Upscaling (Monitor)</h3>
+		{#if srmdConnectionStatus !== 'idle'}
+			<div class="rife-connection-badge rife-connection-{srmdConnectionStatus}">
+				<span class="badge-dot"></span>
+				<span>{srmdMessage}</span>
+			</div>
+		{/if}
+	</div>
+	<div class="rife-settings-card">
+		<div class="rife-checkbox-container">
+			<label class="checkbox-label">
+				<input
+					type="checkbox"
+					bind:checked={useSrmd}
+					disabled={srmdConnectionStatus !== 'connected'}
+				/>
+				<span>Upscale video with SRMD</span>
+			</label>
+			{#if srmdConnectionStatus !== 'connected'}
+				<button type="button" class="btn btn-ghost btn-xs check-rife-btn" onclick={checkSrmdConnection}>
+					Retry Connection
+				</button>
+			{/if}
+		</div>
+		{#if useSrmd}
+			<div class="settings-grid rife-options-grid animate-fade-in">
+				<div class="setting">
+					<label for="srmdScale">Scale Factor</label>
+					<select id="srmdScale" bind:value={srmdScale}>
+						<option value={2}>2× (Recommended)</option>
+						<option value={3}>3×</option>
+						<option value={4}>4×</option>
+					</select>
+				</div>
+				<div class="setting">
+					<label for="srmdNoise">Denoise Level (0–5)</label>
+					<input id="srmdNoise" type="number" min={0} max={5} bind:value={srmdNoise} />
+				</div>
+				<div class="setting">
+					<label for="srmdModel">Model</label>
+					<input id="srmdModel" type="text" bind:value={srmdModel} placeholder="models-srmd" />
 				</div>
 			</div>
 		{/if}

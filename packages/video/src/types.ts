@@ -9,6 +9,20 @@ export type VideoInterpolator = {
 	interpolate: (blob: Blob, opts: { fps: number; id: string }) => Promise<Blob>;
 };
 
+export type VideoUpscalerStatus = {
+	srmdPath?: string;
+};
+
+export type VideoUpscaler = {
+	checkStatus: () => Promise<VideoUpscalerStatus>;
+	newJobId: () => string;
+	pollProgress: (id: string, onProgress: (n: number) => void) => () => void;
+	upscale: (
+		blob: Blob,
+		opts: { scale: number; noise?: number; model?: string; id: string }
+	) => Promise<Blob>;
+};
+
 export type EngineId = 'native';
 
 export type VideoFormat = 'mp4' | 'webm' | 'gif';

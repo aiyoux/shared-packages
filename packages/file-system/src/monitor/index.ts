@@ -125,3 +125,4 @@ export {
 
 export { default as MonitorConnectionForm } from './MonitorConnectionForm.svelte';
 export * from './jobs.js';
+export * from './toolsJobs.js';
