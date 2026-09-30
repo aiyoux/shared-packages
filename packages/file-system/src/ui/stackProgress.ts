@@ -6,7 +6,7 @@ import type {
 	TransferIntegrity,
 	TransferItem,
 	TransferStatus
-} from '../transferRegistry.js';
+} from '../transferTypes.js';
 
 export type StackProgressPhase = 'compress' | 'decompress' | 'hashing' | 'transfer';
 

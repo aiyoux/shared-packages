@@ -6,7 +6,20 @@ import { getActiveProfileId, listProfiles } from '../monitor/credentials.js';
 import { AiCredentialsError, toAiCredentialsError } from './errors.js';
 import { opsService, type OpHandle } from '../services/ops.js';
 
-export type AiTask = 'chat' | 'text-to-speech' | 'image-generation' | 'transcription' | 'classify';
+/** Task ids the AI catalog serves. `video-upscale` / `video-interpolate` /
+ * `audio-upsampling` are the monitor tools tasks — their offers derive from
+ * `capabilities.tools.*` on the daemon (tools `offers.rs`, W7.11) and their
+ * run path is `/v1/tools/jobs/**`, not `/v1/ai/jobs` (they exist here only as
+ * selection identities). */
+export type AiTask =
+	| 'chat'
+	| 'text-to-speech'
+	| 'image-generation'
+	| 'transcription'
+	| 'classify'
+	| 'video-upscale'
+	| 'video-interpolate'
+	| 'audio-upsampling';
 export type AiLocation = 'browser' | 'monitor-native' | 'monitor-provider';
 export type AiDeviceClass = 'cpu' | 'gpu' | 'service';
 
@@ -207,7 +220,17 @@ function offer(raw: unknown): AiOffer | null {
 	if (typeof row.id !== 'string' || typeof row.name !== 'string' ||
 		typeof row.modelId !== 'string' || typeof row.sourceId !== 'string' ||
 		typeof row.variantId !== 'string') return null;
-	if (!['chat', 'text-to-speech', 'image-generation', 'transcription', 'classify'].includes(String(row.task))) return null;
+	const TASKS = [
+		'chat',
+		'text-to-speech',
+		'image-generation',
+		'transcription',
+		'classify',
+		'video-upscale',
+		'video-interpolate',
+		'audio-upsampling'
+	];
+	if (!TASKS.includes(String(row.task))) return null;
 	if (!['browser', 'monitor-native', 'monitor-provider'].includes(String(row.location))) return null;
 	if (!['cpu', 'gpu', 'service'].includes(String(row.deviceClass))) return null;
 	const parsed: AiOffer = {

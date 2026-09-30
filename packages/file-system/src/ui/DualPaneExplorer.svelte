@@ -31,11 +31,6 @@
 	import type { FileTypeId } from '../types.js';
 	import { requestArchiveDialogShow } from './archiveReshow.js';
 	import DualPhaseConfirm from './DualPhaseConfirm.svelte';
-	import { stackTransferItems } from './stackProgress.js';
-	import {
-		abortTransfer,
-		type TransferItem
-	} from '../transferRegistry.js';
 	import { generateId } from '../id.js';
 	import {
 		type ExplorerDriver,

@@ -7,7 +7,7 @@
  */
 import { generateId } from '../id.js';
 import { ferryWebrtcCopy, isWebrtcCopyPeer } from '../monitor/webrtcCopy.js';
-import { type CopyHop, type CopyIce, type CopyIcePath } from '../transferRegistry.js';
+import type { CopyHop, CopyIce, CopyIcePath } from '../transferTypes.js';
 import { beginFileOp, reportFileOp, attachFileOpAbort, setFileOpResult } from '../services/fileOps.js';
 import {
 	EXPLORER_DOWNLOAD_MAX_BYTES,

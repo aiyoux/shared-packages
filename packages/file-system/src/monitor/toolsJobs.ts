@@ -34,12 +34,8 @@ import { createMonitorJobsClient } from './jobs.js';
 import type { MonitorConnectionProfileV1 } from './types.js';
 import { opsService, startOp, type OpHandle, type ResultRef } from '../services/ops.js';
 import { stageOpResult } from '../services/landing.js';
-import {
-	getAiSelectionMap,
-	resolveAiModelRef,
-	type AiSelectionMap,
-	type AiTaskKey
-} from '../ai/selection.js';
+import { getAiSelectionMap, resolveAiModelRef, type AiSelectionMap } from '../ai/selection.js';
+import type { AiTask } from '../ai/catalog.js';
 
 /** One NDJSON progress tick (frozen shape, monitor tools-feature.md §4.2). */
 export type MonitorToolProgress = {
@@ -113,14 +109,15 @@ export async function probeToolsFeature(
 }
 
 /**
- * The catalog tasks backed by tools jobs (tools-feature.md + plan Phase 4).
- * The catalog offers deriving one-to-one from the monitor's tools capability
- * are the daemon's job (`/v1/ai/catalog`, `features/tools/offers.rs` — W7.11:
- * no second derivation of which engines exist); `AiTask` in `ai/catalog.ts`
- * adopts these same strings once its pending shared edits are committed, and
- * the cast below keeps the selection store's one vocabulary until then.
+ * The catalog tasks backed by tools jobs (tools-feature.md, plan Phase 4;
+ * `ai/catalog.ts` derives the offers from the monitor daemon once — W7.11:
+ * no second derivation of which engines exist). These run through the tools
+ * job API; the catalog rows are their selection identities.
  */
-export type ToolTaskKey = 'video-upscale' | 'video-interpolate' | 'audio-upsampling';
+export type ToolTaskKey = Extract<
+	AiTask,
+	'video-upscale' | 'video-interpolate' | 'audio-upsampling'
+>;
 
 /** The engine binary a task's catalog offer names on the monitor. */
 export const TOOL_TASK_MODEL: Record<ToolTaskKey, string> = {
@@ -167,7 +164,7 @@ export async function resolveSelectedToolsMonitor(
 	} catch (err) {
 		throw new Error(`Could not read model defaults: ${(err as Error)?.message || err}`);
 	}
-	const ref = resolveAiModelRef(map, task as AiTaskKey, appId);
+	const ref = resolveAiModelRef(map, task, appId);
 	if (!ref) {
 		throw new Error(
 			`Pick a ${taskLabel(task)} monitor in Settings → AI models.`

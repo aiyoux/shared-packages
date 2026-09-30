@@ -1,5 +1,5 @@
-/** File-manager adapters. Transfer blob retention stays in transferRegistry. */
-import type { TransferProgress } from '../transferRegistry.js';
+/** File-manager adapters. Connections' transfer cache (transferRegistry) is not touched here. */
+import type { TransferProgress } from '../transferTypes.js';
 import { startOp, type OpHandle, type OpKindId, type StartOp, type ResultRef } from './ops.js';
 
 const handles = new Map<string, OpHandle>();
