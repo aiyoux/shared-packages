@@ -38,6 +38,31 @@ function pngBlob(): Blob {
 }
 
 describe('FeThumbnail', () => {
+	it('keeps a monitor blob across list refreshes and retires it after its img leaves the DOM', async () => {
+		const thumbUrl = vi.fn(async () => ({ url: 'http://127.0.0.1:9847/v1/fs/thumb?path=pic.png' }));
+		vi.stubGlobal('fetch', vi.fn(async () => new Response(pngBlob())));
+		const driver: ExplorerDriver = {
+			id: 'monitor', capabilities: caps, ready: async () => {},
+			list: async () => ({ entries: [], truncated: false }), getPath: async () => [],
+			delete: async () => {}, download: async () => pngBlob(), thumbUrl
+		};
+		const entry: ExplorerEntry = { id: 'pic.png', kind: 'file', name: 'pic.png', parentId: null };
+		const revoke = vi.spyOn(URL, 'revokeObjectURL').mockImplementation((url) => {
+			expect(document.querySelector(`img[src="${url}"]`)).toBeNull();
+		});
+		try {
+			const view = render(FeThumbnail, { props: { entry, driver } });
+			await waitFor(() => expect(document.querySelector('.fe-thumb-img')).toBeTruthy());
+			const url = document.querySelector('.fe-thumb-img')!.getAttribute('src');
+			await view.rerender({ entry: { ...entry }, driver });
+			expect(thumbUrl).toHaveBeenCalledTimes(1);
+			expect(document.querySelector('.fe-thumb-img')!.getAttribute('src')).toBe(url);
+			expect(revoke).not.toHaveBeenCalled();
+			await view.rerender({ entry, driver, enabled: false });
+			await waitFor(() => expect(revoke).toHaveBeenCalledWith(url));
+		} finally { revoke.mockRestore(); vi.unstubAllGlobals(); }
+	});
+
 	it('leaves the spinner after a cancelled first load of the same file', async () => {
 		let resolveBlob: (b: Blob) => void = () => {};
 		const first = new Promise<Blob>((r) => {

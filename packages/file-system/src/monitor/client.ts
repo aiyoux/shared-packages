@@ -1375,7 +1375,7 @@ export function createMonitorClient(opts: {
 					url,
 					withLocalAddressSpace(url, { method: 'DELETE', signal: ac.signal })
 				);
-				if (!res.ok && res.status !== 404) {
+				if (!res.ok && res.status !== 404 && !(res.status === 409 && !force)) {
 					console.warn(`[monitor] releasing watch root ${rootId} failed (${res.status})`);
 				}
 			} catch {

@@ -15,11 +15,13 @@
  * and `download` on the same origin. Every folder is therefore multiplexed onto
  * one stream and demultiplexed by `sub_id`.
  *
- * **Why per-folder.** Watching the profile root recursively costs inotify
- * descriptors proportional to the whole subtree — the monitor has a
- * `max_watch_descriptors` budget it visibly falls off — and delivers events for
- * thousands of files nobody is looking at. A non-recursive subscription on the
- * folder actually on screen is O(1) descriptors and arrives pre-filtered.
+ * **Why per-folder.** A file manager watches the folder that is open, like
+ * Nautilus or Explorer: cost scales with what is on screen, never with the
+ * shape of the tree. Watching the profile root recursively costs inotify
+ * descriptors for the whole subtree — a home directory is tens of thousands
+ * of folders, past the monitor's `max_watch_descriptors` budget — and
+ * delivers events for files nobody is looking at. A non-recursive
+ * subscription on the open folder is one descriptor and arrives pre-filtered.
  *
  * Flow:
  * 1. `GET /v1/watch/events` with no roots → `watch.hello` carries `client_id`
@@ -27,7 +29,8 @@
  * 3. `POST /v1/watch/subs` with that `client_id` → `watch.subscribed` per folder
  * 4. `watch.event_batch` frames are routed to a folder by `sub_id`
  * 5. Navigating changes the set through step 3 alone: the connection, and every
- *    folder that stayed, are undisturbed
+ *    folder that stayed, are undisturbed. A folder that leaves also DELETEs its
+ *    root, or the daemon's `max_roots` fills with folders nobody shows.
  *
  * Delivery contract — **every (re)connect is a full resync.** The server keeps
  * no replay buffer, so a gap is unrecoverable by design: `watch.subscribed`
@@ -117,6 +120,8 @@ type FolderState = {
 	releaseAt: number | null;
 	coalescer: Coalescer;
 	queued: MonitorWatchFsEvent[];
+	retryAt: number;
+	retryDelayMs: number;
 };
 
 /**
@@ -165,6 +170,7 @@ export function createMonitorWatchStream(
 	let reconnectAttempt = 0;
 	let connecting = false;
 	/** Serializes `POST /v1/watch/subs`; a second request while one is in flight re-runs after. */
+	let retryTimer: ReturnType<typeof setTimeout> | null = null;
 	let syncing = false;
 	let syncAgain = false;
 
@@ -226,11 +232,17 @@ export function createMonitorWatchStream(
 		try {
 			do {
 				syncAgain = false;
-				const currentClient = clientId;
+				const currentClient: string | null = clientId;
 				if (!currentClient) return;
 
+				for (const folder of [...folders.values()]) {
+					if (folder.listeners.size || folder.releaseAt !== null || folder.subId) continue;
+					folders.delete(folder.path);
+					folder.coalescer.cancel();
+					if (folder.rootId) await transport.watchRemoveRoot(folder.rootId, false);
+				}
 				const desired = wanted();
-				const toSubscribe = desired.filter((f) => f.subId === null);
+				const toSubscribe = desired.filter((f) => f.subId === null && f.retryAt <= Date.now());
 				const toUnsubscribe = [...folders.values()].filter(
 					(f) => f.subId !== null && f.listeners.size === 0 && f.releaseAt === null
 				);
@@ -241,18 +253,30 @@ export function createMonitorWatchStream(
 					return;
 				}
 
-				// Register roots for anything new. Non-recursive: the explorer shows one
-				// folder at a time, and a recursive root would pay descriptors for a
-				// whole subtree nobody is looking at.
+				// Register roots for anything new. Non-recursive: a file manager
+				// watches the folder that is open, so the cost is what is on
+				// screen, never the shape of the tree under it.
 				for (const folder of toSubscribe) {
 					if (folder.rootId) continue;
 					try {
 						const root = await transport.watchAddRoot(folder.path, false);
+						if (stopped) {
+							await transport.watchRemoveRoot(root.root_id, false);
+							return;
+						}
 						folder.rootId = root.root_id;
 					} catch {
+						folder.retryDelayMs = Math.min(Math.max(5_000, folder.retryDelayMs * 2), 60_000);
+						folder.retryAt = Date.now() + folder.retryDelayMs;
 						// Leave it unsubscribed; the next reconcile (or reconnect) retries.
 						setStatus('error');
 					}
+				}
+
+				if (stopped) return;
+				if (currentClient !== clientId) {
+					syncAgain = Boolean(clientId);
+					continue;
 				}
 
 				const subscribe = toSubscribe
@@ -261,7 +285,14 @@ export function createMonitorWatchStream(
 				const unsubscribe = toUnsubscribe
 					.map((f) => f.rootId)
 					.filter((id): id is string => Boolean(id));
-				if (subscribe.length === 0 && unsubscribe.length === 0) continue;
+				if (subscribe.length === 0 && unsubscribe.length === 0) {
+					for (const folder of [...folders.values()]) {
+						if (folder.listeners.size || folder.releaseAt !== null || folder.subId) continue;
+						folders.delete(folder.path);
+						if (folder.rootId) await transport.watchRemoveRoot(folder.rootId, false);
+					}
+					continue;
+				}
 
 				try {
 					const result = await transport.watchUpdateSubs({
@@ -269,24 +300,45 @@ export function createMonitorWatchStream(
 						subscribe,
 						unsubscribe
 					});
+					if (stopped) return;
+					if (currentClient !== clientId) {
+						syncAgain = Boolean(clientId);
+						continue;
+					}
 					for (const entry of result.subscribed) {
 						const folder = folderByRootId(entry.root_id);
-						if (folder) folder.subId = entry.sub_id;
+						if (folder) {
+							folder.subId = entry.sub_id;
+							folder.retryAt = 0;
+							folder.retryDelayMs = 0;
+						}
 					}
 				} catch (e) {
+					if (stopped) return;
+					if (currentClient !== clientId) {
+						syncAgain = Boolean(clientId);
+						continue;
+					}
 					// The stream this client_id belongs to is gone: reconnecting mints a
 					// new one, and the reconnect path re-subscribes everything.
 					if (isClientGone(e)) {
 						forceReconnect();
 						return;
 					}
+					for (const folder of toSubscribe) {
+						if (String(e).includes('root_not_found')) folder.rootId = null;
+						folder.retryAt = Date.now() + 5_000;
+					}
 					setStatus('error');
+					return;
 				}
 
 				// Retire folders the server has now dropped.
 				for (const folder of toUnsubscribe) {
+					const rootId = folder.rootId;
 					folder.subId = null;
 					folder.rootId = null;
+					if (rootId) await transport.watchRemoveRoot(rootId, false);
 					folder.coalescer.cancel();
 					if (folder.listeners.size === 0 && folder.releaseAt === null) {
 						folders.delete(folder.path);
@@ -295,6 +347,9 @@ export function createMonitorWatchStream(
 			} while (syncAgain);
 		} finally {
 			syncing = false;
+			if (retryTimer) clearTimeout(retryTimer);
+			const retryAt = Math.min(...wanted().filter((f) => f.subId === null && f.retryAt > 0).map((f) => f.retryAt));
+			if (!stopped && Number.isFinite(retryAt)) retryTimer = setTimeout(() => { retryTimer = null; void syncSubscriptions(); }, Math.max(0, retryAt - Date.now()));
 		}
 	}
 
@@ -326,7 +381,7 @@ export function createMonitorWatchStream(
 
 	function resetWatchdog(): void {
 		if (watchdogTimer) clearTimeout(watchdogTimer);
-		if (stopped) return;
+		if (stopped || watchdogMs <= 0) return;
 		watchdogTimer = setTimeout(() => {
 			if (stopped) return;
 			console.warn('[monitor watch] watchdog timeout — forcing reconnect');
@@ -355,10 +410,7 @@ export function createMonitorWatchStream(
 			reconnectAttempt = 0;
 			// Nothing is subscribed on a fresh stream — including after a reconnect,
 			// where the server has forgotten the old client entirely.
-			for (const folder of folders.values()) {
-				folder.subId = null;
-				folder.rootId = null;
-			}
+			for (const folder of folders.values()) folder.subId = null;
 			void syncSubscriptions();
 			return;
 		}
@@ -382,7 +434,8 @@ export function createMonitorWatchStream(
 			const folder = subId ? folderBySubId(subId) : undefined;
 			if (folder) {
 				folder.subId = null;
-				folder.rootId = null;
+				// Preserve the id until normal unsubscribe cleanup deletes the root.
+				if (folder.listeners.size > 0 || folder.releaseAt !== null) folder.rootId = null;
 				// The server drops a subscription when its root is deleted. If anything
 				// still wants the folder, re-register it from scratch.
 				if (folder.listeners.size > 0 || folder.releaseAt !== null) {
@@ -496,6 +549,8 @@ export function createMonitorWatchStream(
 					rootId: null,
 					subId: null,
 					releaseAt: null,
+					retryAt: 0,
+					retryDelayMs: 0,
 					queued: [],
 					coalescer: createCoalescer(() => flushFolder(created), { debounceMs, maxDebounceMs })
 				};
@@ -537,34 +592,49 @@ export function createMonitorWatchStream(
 
 		stop() {
 			stopped = true;
-			// Release the roots this stream created BEFORE clearing the folder map,
-			// which is the only place their ids are held.
-			//
-			// The daemon drops a root solely on an explicit DELETE — never when a
-			// client disconnects or its SSE stream closes (roots are process-global
-			// with no per-client ownership and no reaping). Without this, every
-			// folder ever browsed leaks a root for the daemon's lifetime, and once
-			// `max_roots` (default 16) is reached every new subscription fails with
-			// a status of `error`, which presents as "live updates just stopped
-			// working" long after the navigation that caused it.
+			// Retire our registrations promptly. The daemon's idle-root TTL is
+			// the backstop when page teardown cannot deliver these requests.
 			const rootIds = [...folders.values()]
 				.map((f) => f.rootId)
 				.filter((id): id is string => !!id);
+			const subscribedRoots = [...folders.values()]
+				.filter((f) => f.subId && f.rootId)
+				.map((f) => f.rootId as string);
+			const lastClient = clientId;
 			for (const folder of folders.values()) folder.coalescer.cancel();
 			folders.clear();
 			if (watchdogTimer) clearTimeout(watchdogTimer);
 			if (reconnectTimer) clearTimeout(reconnectTimer);
 			if (sweepTimer) clearTimeout(sweepTimer);
+			if (retryTimer) clearTimeout(retryTimer);
 			watchdogTimer = null;
 			reconnectTimer = null;
 			sweepTimer = null;
-			abortController?.abort();
+			// The stream stays open until our subscriptions are dropped below;
+			// `stopped` already silences it.
+			const lastStream = abortController;
 			abortController = null;
 			clientId = null;
 			setStatus('closed');
 			// Fire-and-forget: teardown must not block, and the transport already
 			// swallows/warns per-root failures.
-			for (const rootId of rootIds) void transport.watchRemoveRoot(rootId);
+			void (async () => {
+				// Drop our own subscriptions first so the non-forced DELETE sees
+				// only other clients' (a root is shared by path across tabs, and
+				// deleting one another tab still shows would end its updates).
+				// A client the server already reaped makes this fail harmlessly.
+				// Unsubscribing before closing the stream means the server never
+				// has to have noticed the disconnect for the DELETE to succeed.
+				if (lastClient && subscribedRoots.length) {
+					try {
+						await transport.watchUpdateSubs({ clientId: lastClient, unsubscribe: subscribedRoots });
+					} catch {
+						/* stream already gone: its subscriptions went with it */
+					}
+				}
+				lastStream?.abort();
+				for (const rootId of rootIds) await transport.watchRemoveRoot(rootId, false);
+			})();
 		}
 	};
 }
