@@ -26,7 +26,8 @@ import Loader2 from '@lucide/svelte/icons/loader-2';
 		upscaler?: VideoUpscaler | null;
 		/** Called when processing begins (page should clear prior output blobs). */
 		onProcessStart?: () => void;
-		onProcessed: (blob: Blob) => void;
+		/** `name` is the suggested result name (source name + stage suffixes). */
+		onProcessed: (blob: Blob, name?: string) => void;
 		onError: (message: string) => void;
 	} = $props();
 
@@ -144,13 +145,14 @@ import Loader2 from '@lucide/svelte/icons/loader-2';
 
 		// Model stages run at a fixed weight after the trim/resize stage.
 		// Both model stages: trim 0–40, upscale 40–70, interpolate 70–100.
-		const modelStages: { label: string; run: (blob: Blob, onProgress: (p: number) => void) => Promise<Blob> }[] = [];
+		const modelStages: { label: string; suffix: string; run: (blob: Blob, onProgress: (p: number) => void) => Promise<Blob> }[] = [];
 		if (useSrmd && upscaler) {
 			const scale = srmdScale;
 			const noise = srmdNoise;
 			const model = srmdModel.trim() || 'models-srmd';
 			modelStages.push({
 				label: `Upscaling ${scale}× (SRMD)...`,
+				suffix: `_${scale}x`,
 				run: (blob, onProgress) => {
 					const tempId = upscaler.newJobId();
 					const stopPoll = upscaler.pollProgress(tempId, onProgress);
@@ -162,6 +164,7 @@ import Loader2 from '@lucide/svelte/icons/loader-2';
 			const fps = rifeFps;
 			modelStages.push({
 				label: `Interpolating frames to ${fps} FPS (RIFE)...`,
+				suffix: `_${fps}fps`,
 				run: (blob, onProgress) => {
 					const tempId = interpolator.newJobId();
 					const stopPoll = interpolator.pollProgress(tempId, onProgress);
@@ -169,6 +172,8 @@ import Loader2 from '@lucide/svelte/icons/loader-2';
 				}
 			});
 		}
+		// The suggested result name stacks the stage suffixes on the source name.
+		let resultName = sourceBlob instanceof File ? sourceBlob.name : 'video.mp4';
 
 		const trimWeight = modelStages.length === 0 ? 100 : modelStages.length === 1 ? 50 : 40;
 		const modelWeight = modelStages.length === 0 ? 0 : modelStages.length === 1 ? 50 : 30;
@@ -192,13 +197,14 @@ import Loader2 from '@lucide/svelte/icons/loader-2';
 				progress = bandStart;
 				const bandEnd = bandStart + (modelWeight / modelStages.length);
 				result = await stage.run(result);
+				resultName = toStageName(resultName, stage.suffix);
 				progress = Math.round(bandEnd);
 				bandStart = bandEnd;
 			}
 
 			progress = 100;
 			processingStep = 'Complete!';
-			onProcessed(result);
+			onProcessed(result, resultName);
 		} catch (err: any) {
 			console.error('Processing failed:', err);
 			onError(`Video processing failed: ${err.message}`);
@@ -206,6 +212,12 @@ import Loader2 from '@lucide/svelte/icons/loader-2';
 		} finally {
 			isProcessing = false;
 		}
+	}
+
+	/** Tool output is `.mp4`; the stage suffix stacks after the source base. */
+	function toStageName(sourceName: string, suffix: string): string {
+		const dot = sourceName.lastIndexOf('.');
+		return (dot === -1 ? sourceName : sourceName.substring(0, dot)) + suffix + '.mp4';
 	}
 </script>
 
