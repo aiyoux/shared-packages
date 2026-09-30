@@ -14,6 +14,9 @@
 	 * change-pings).
 	 */
 	import { onMount } from 'svelte';
+	import { browserAiHost, type BrowserModelState } from '../ai/browserHost.js';
+	let hostLabel = $state('Not started');
+	let hostModels = $state<Record<string, BrowserModelState>>({});
 	import { toast } from '@shared-packages/ui';
 	import {
 		getAiSelectionMap,
@@ -90,7 +93,7 @@
 		for (const group of defaultsGroups) {
 			if (group.task in candidates) continue;
 			candidates = { ...candidates, [group.task]: null };
-			const section = sources.sections.find((s) => s.task === group.task);
+			const section = sources.sections.find((s) => (s.selectionTask ?? s.task) === group.task);
 			if (!section) continue;
 			section
 				.models()
@@ -235,6 +238,17 @@
 	let monitorsLoaded = $state(false);
 
 	onMount(() => {
+		let offHost = () => {};
+		try {
+		const host = browserAiHost();
+		const updateHost = () => {
+			const leader = host.host;
+			hostLabel = leader ? `Tab ${leader.tabId.slice(0, 8)}` : 'Waiting for a host tab';
+			hostModels = host.models;
+		};
+		updateHost();
+		offHost = host.subscribe(updateHost);
+		} catch (error) { hostLabel = error instanceof Error ? error.message : String(error); }
 		void (async () => {
 			try {
 				monitorProfiles = await listMonitorProfiles();
@@ -243,10 +257,18 @@
 			}
 			monitorsLoaded = true;
 		})();
+		return offHost;
 	});
 </script>
 
 <div class="ai-tab">
+	<section class="group" data-testid="ai-browser-host">
+		<h3>Browser AI host · {hostLabel}</h3>
+		<p>Browser models load once here. Closing the host stops its runs; a new host loads models on demand.</p>
+		{#each Object.entries(hostModels) as [model, state] (model)}
+			<p>{model}: {state === 'not-loaded' ? 'not loaded' : state}</p>
+		{/each}
+	</section>
 	{#if sources.sections.length === 0}
 		<p class="hint" data-testid="ai-library-unavailable">
 			The AI model library is not available in this app. Open the hub's settings popup to manage models.
@@ -304,6 +326,9 @@
 						<ul class="lib-rows">
 							{#each state.rows as row (rowKey(section.id, row))}
 								<li class="lib-row" data-testid="ai-lib-row-{row.ref.modelId}">
+									{#if row.ref.location === 'browser'}
+										<span>Host: {hostModels[row.ref.modelId] ?? 'not loaded'}</span>
+									{/if}
 									<span class="lib-label">{row.label}</span>
 									<span class="chip chip--{row.status}">{statusLabel[row.status]}</span>
 									{#if row.sizeBytes}

@@ -1,3 +1,4 @@
+import { registerBrowserAiHandler, runBrowserAi } from '@shared-packages/file-system/ai';
 import { ImageStore } from './imageStore.js';
 import { imageModelDef } from './imageModels.js';
 import {
@@ -128,6 +129,8 @@ function createWorkerEngine(
 			const rpc = createImageWorkerRpc(createWorker, label, () => (loadedId = null));
 			const files: Array<{ path: string; buffer: ArrayBuffer }> = [];
 			const transfer: Transferable[] = [];
+			const abort = () => rpc.reset();
+			opts.signal?.addEventListener('abort', abort, { once: true });
 			try {
 				for (const file of def.files) {
 					opts.signal?.throwIfAborted();
@@ -145,6 +148,8 @@ function createWorkerEngine(
 					throw new ImageGenError('CANCELLED', 'Model load cancelled');
 				}
 				throw err;
+			} finally {
+				opts.signal?.removeEventListener('abort', abort);
 			}
 			return {
 				modelId: def.id,
@@ -180,12 +185,67 @@ function createWorkerEngine(
 export function createSdEngine(createWorker: () => Worker): {
 	load(opts: EngineLoadOpts): Promise<ImageEngine>;
 } {
-	return createWorkerEngine(createWorker, 'image', 'sd-turbo');
+	registerImageHost('sd', createWorker);
+	return hostedImageEngine('sd', 'sd-turbo');
 }
 
 /** FLUX.2 [klein] engine over its own jsep-capable ORT pin. */
 export function createFlux2Engine(createWorker: () => Worker): {
 	load(opts: EngineLoadOpts): Promise<ImageEngine>;
 } {
-	return createWorkerEngine(createWorker, 'image-flux2', 'flux2-klein-4b');
+	registerImageHost('flux2', createWorker);
+	return hostedImageEngine('flux2', 'flux2-klein-4b');
+}
+
+const registered = new Set<string>();
+function registerImageHost(family: 'sd' | 'flux2', createWorker: () => Worker): void {
+ if (registered.has(family)) return; registered.add(family);
+ let loaded: ImageEngine | null = null;
+ let key: string | null = null;
+ let generation = 0;
+ registerBrowserAiHandler(`image:${family}`, {
+  kind: 'generate',
+  async run(action, value, context) {
+   const payload = value as { modelId: string; dirId?: string; prompt?: string; seed?: number; width?: number; height?: number };
+   const requested = `${payload.modelId}:${payload.dirId ?? ''}`;
+   const epoch = generation;
+   if (!loaded || key !== requested) {
+    loaded?.dispose(); loaded = null; key = null; context.state('loading');
+    const candidate = await createWorkerEngine(createWorker, `image-${family}`, payload.modelId).load({ modelId: payload.modelId, dirId: payload.dirId, signal: context.signal, onProgress: (note, fraction) => context.progress({ note, fraction }) });
+    if (context.signal.aborted || generation !== epoch) { candidate.dispose(); throw context.signal.reason ?? new Error('AI host handed over'); }
+    loaded = candidate;
+    key = requested; context.state('loaded');
+   }
+   context.signal.throwIfAborted();
+   if (action === 'load') return undefined;
+   return loaded.generate(payload.prompt!, { seed: payload.seed, width: payload.width, height: payload.height, signal: context.signal });
+  },
+  async capture(value) {
+   const result = value as ImageGenResult;
+   const canvas = new OffscreenCanvas(result.width, result.height);
+   const ctx = canvas.getContext('2d');
+   if (!ctx) throw new Error('The AI host cannot encode its image');
+   const frame = new ImageData(result.width, result.height); frame.data.set(result.data); ctx.putImageData(frame, 0, 0);
+   return canvas.convertToBlob({ type: 'image/png' });
+  },
+  dispose() { generation++; loaded?.dispose(); loaded = null; key = null; }
+ });
+}
+export function initializeImageBrowserHost(factories: { sd: () => Worker; flux2: () => Worker }): void {
+ registerImageHost('sd', factories.sd); registerImageHost('flux2', factories.flux2);
+}
+function hostedImageEngine(family: 'sd' | 'flux2', fallback: string): { load(opts: EngineLoadOpts): Promise<ImageEngine> } {
+ return {
+  async load(opts) {
+   const modelId = opts.modelId ?? fallback;
+   const selection = { modelId, dirId: opts.dirId };
+   const requirements = { webgpu: true, features: ['shader-f16'] };
+   await runBrowserAi(`image:${family}`, 'load', selection, modelId, { signal: opts.signal, onProgress: (value) => { const p = value as { note: string; fraction?: number }; opts.onProgress?.(p.note, p.fraction); } }, requirements);
+   return {
+    modelId,
+    generate(prompt, options) { return runBrowserAi<ImageGenResult>(`image:${family}`, 'generate', { ...selection, prompt, seed: options?.seed, width: options?.width, height: options?.height }, modelId, { ...options?.browserHost, signal: options?.signal }, requirements); },
+    dispose() { /* The host owns its model; closing a submitter cannot unload it. */ }
+   };
+  }
+ };
 }

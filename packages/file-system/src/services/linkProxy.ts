@@ -22,7 +22,8 @@ export type LinkWire<M> = {
 };
 export type LinkFrame<M> =
 	| { kind: 'hello' }
-	| { kind: 'attach'; lanes: string[] }
+	| { kind: 'attach'; lanes: string[]; token?: string }
+	| { kind: 'ready'; token?: string }
 	| { kind: 'send'; msg: M }
 	| { kind: 'recv'; lane: string; msg: M };
 
@@ -34,13 +35,13 @@ export function serveLink<M>(opts: {
 }): () => void {
 	const { wire, laneOf, bus } = opts;
 	const retained = new Map<string, Set<string>>();
-	const wanted = (lane: string) => [...retained.values()].some((lanes) => lanes.has(lane));
+	const wanted = (lane: string) => [...retained.values()].some((lanes) => lanes.has(lane) || lanes.has('*'));
 	const stopWire = wire.onKb((msg) => {
 		const lane = laneOf(msg);
 		if (wanted(lane)) bus.broadcast({ kind: 'recv', lane, msg });
 	});
 	const stopBus = bus.onMessage((frame, sender) => {
-		if (frame.kind === 'attach') retained.set(sender, new Set(frame.lanes));
+		if (frame.kind === 'attach') { retained.set(sender, new Set(frame.lanes)); bus.broadcast({ kind: 'ready', token: frame.token }); }
 		else if (frame.kind === 'send') wire.sendKb(frame.msg);
 	});
 	const stopGone = bus.onSenderGone((sender) => {
@@ -61,14 +62,19 @@ export function proxyLink<M>(opts: { bus: LiveBus<LinkFrame<M>>; lanes: string[]
 	const { bus } = opts;
 	const lanes = [...new Set(opts.lanes)];
 	const handlers = new Set<(msg: M) => void>();
-	const attach = () => bus.broadcast({ kind: 'attach', lanes });
+	let ready = false;
+	const pending: M[] = [];
+	// The ready reply is addressed to this sender, not another proxy of the lane.
+	const token = crypto.randomUUID();
+	const attach = () => bus.broadcast({ kind: 'attach', lanes, token });
 	const stop = bus.onMessage((frame) => {
-		if (frame.kind === 'hello') attach();
-		else if (frame.kind === 'recv' && lanes.includes(frame.lane)) for (const fn of [...handlers]) fn(frame.msg);
+		if (frame.kind === 'hello') { ready = false; attach(); }
+		else if (frame.kind === 'ready' && frame.token === token) { ready = true; for (const msg of pending.splice(0)) bus.broadcast({ kind: 'send', msg }); }
+		else if (frame.kind === 'recv' && (lanes.includes(frame.lane) || lanes.includes('*'))) for (const fn of [...handlers]) fn(frame.msg);
 	});
 	attach();
 	return {
-		sendKb: (msg) => bus.broadcast({ kind: 'send', msg }),
+		sendKb: (msg) => { if (ready) bus.broadcast({ kind: 'send', msg }); else pending.push(msg); },
 		onKb(handler) {
 			handlers.add(handler);
 			return () => {
@@ -77,7 +83,7 @@ export function proxyLink<M>(opts: { bus: LiveBus<LinkFrame<M>>; lanes: string[]
 		},
 		close() {
 			stop();
-			handlers.clear();
+			handlers.clear(); pending.length = 0;
 			bus.destroy();
 		}
 	};

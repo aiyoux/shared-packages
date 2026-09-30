@@ -10,7 +10,7 @@
  */
 import { createLiveBus, type LiveBus } from '../live/bus.js';
 import { serviceContextId } from '../leaseOwner.js';
-import { tabOwner, watchOwner, currentTabDirectory, type Owner } from './owner.js';
+import { tabOwner, watchOwner, ownerLiveness, currentTabDirectory, type Owner } from './owner.js';
 import { serviceNames } from './names.js';
 import { createRecordStore, type RecordStore } from './store.js';
 
@@ -19,6 +19,8 @@ export type ConnectionState = 'connecting' | 'connected' | 'reconnecting' | 'han
 export type ConnectionRecord = {
 	id: string;
 	purpose: ConnectionPurpose;
+	/** Changes whenever a replacement PC is published, fencing adapters from the old transport. */
+	transportId?: string;
 	peer: { label: string; deviceId?: string; pairingId?: string };
 	/** How it was made: straight to the device, or through a monitor ("Use as RTC face"). */
 	route: 'p2p' | 'face';
@@ -26,8 +28,11 @@ export type ConnectionRecord = {
 	 * A face link: the monitor holding the far device, and the relay job a tab
 	 * reattaches to. `relayToken` is that job's loopback bearer; it stays in
 	 * this origin's storage like the monitor credentials themselves (D-22).
+	 * `salt` is the passcode KDF salt (base64url, public as in every sealed
+	 * payload): a later tab re-derives the session after asking for the
+	 * passcode again (D-19, D-23).
 	 */
-	face?: { profileId: string; name: string; relayJobId?: string; relayToken?: string };
+	face?: { profileId: string; name: string; relayJobId?: string; relayToken?: string; salt?: string };
 	crypto: 'end-to-end' | 'server-terminated' | 'dtls';
 	/** Who keeps the link: the tab holding the PC, or (a face link) the monitor. */
 	owner: Owner;
@@ -57,7 +62,7 @@ export type RegisterConnection = Omit<ConnectionRecord, 'id' | 'owner' | 'holder
 };
 export type ConnectionHandle = {
 	id: string;
-	update(patch: Partial<Pick<ConnectionRecord, 'peer' | 'state' | 'apps' | 'crypto' | 'face'>>): Promise<void>;
+	update(patch: Partial<Pick<ConnectionRecord, 'peer' | 'state' | 'apps' | 'crypto' | 'face' | 'transportId'>>): Promise<void>;
 	/** The owner ended it on purpose (Disconnect, the far device left): the row goes. */
 	end(): Promise<void>;
 	/**
@@ -79,6 +84,7 @@ export function createConnectionsService(options: {
 	watch?: (owner: Owner, signal: AbortSignal) => Promise<void>;
 	/** This tab as an owner, once its context lock is confirmed held. */
 	self?: () => Promise<Extract<Owner, { kind: 'tab' }>>;
+	live?: typeof ownerLiveness;
 }) {
 	const { ctx, store, bus } = options;
 	const watch = options.watch ?? watchOwner;
@@ -172,17 +178,21 @@ export function createConnectionsService(options: {
 	function handleFor(id: string): ConnectionHandle {
 		const handlers = requestHandlers.get(id) ?? new Set<(action: ConnectionAction) => void>();
 		requestHandlers.set(id, handlers);
-		const mine = (current: ConnectionRecord) => isLive(current) && tabOf(current)?.ctx === ctx;
+		let transportId = rows.get(id)?.transportId;
+        const mine = (current: ConnectionRecord) => isLive(current) && tabOf(current)?.ctx === ctx && current.transportId === transportId;
 		const remove = async () => {
 			requestHandlers.delete(id);
-			await store.remove(id);
-			rows.delete(id);
+			await store.remove(id, (current) => !!current && mine(current));
+			await refresh();
 			notify();
 			bus.broadcast({ kind: 'changed', id });
 		};
 		return {
 			id,
-			update: (patch) => change(id, (current) => (mine(current) ? { ...current, ...patch } : current)),
+			async update(patch) {
+                await change(id, (current) => (mine(current) ? { ...current, ...patch } : current));
+                if (patch.transportId && rows.get(id)?.transportId === patch.transportId && tabOf(rows.get(id)!)?.ctx === ctx) transportId = patch.transportId;
+            },
 			end: remove,
 			async detach() {
 				const row = rows.get(id);
@@ -231,6 +241,7 @@ export function createConnectionsService(options: {
 				return {
 					...fields,
 					id,
+					transportId: input.transportId ?? current?.transportId ?? crypto.randomUUID(),
 					owner: monitor ?? me,
 					holder: monitor ? me : undefined,
 					state: input.state ?? 'connected',
@@ -243,6 +254,16 @@ export function createConnectionsService(options: {
 			bus.broadcast({ kind: 'changed', id });
 			return handleFor(id);
 		},
+		/** Transfer the same row after a verified replacement PC is ready. Only its current owner may release it. */
+		async handover(id: string, nextOwner: Extract<Owner, { kind: 'tab' }>): Promise<void> {
+			await ready;
+			if (await (options.live ?? ownerLiveness)(nextOwner) !== 'alive') throw new Error('The tab taking this connection is no longer alive');
+			await change(id, (current) => {
+				if (!isLive(current) || current.owner.kind !== 'tab' || current.owner.ctx !== ctx) throw new Error('This tab no longer owns the connection');
+				return { ...current, owner: nextOwner, state: 'connected' };
+			});
+			requestHandlers.delete(id);
+		},
 		/**
 		 * Resume a parked face link in this tab: become its holder. Refused
 		 * while another live tab holds it, or once it has ended.
@@ -254,7 +275,7 @@ export function createConnectionsService(options: {
 				if (!current || !isLive(current)) throw new Error('That connection has ended');
 				if (current.owner.kind !== 'monitor') throw new Error('Only a link held by a monitor can be resumed');
 				if (current.holder && current.holder.ctx !== ctx) throw new Error(`Connection ${id} is held by another tab`);
-				return { ...current, holder: me };
+				return { ...current, holder: me, transportId: crypto.randomUUID() };
 			});
 			if (!row) throw new Error('Connection was not saved');
 			observe(row);

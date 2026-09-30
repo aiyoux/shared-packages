@@ -1,4 +1,5 @@
 import { createWorkerRpc } from './workerRpc.js';
+import { registerBrowserAiHandler, runBrowserAi, type BrowserAiRunOptions } from '@shared-packages/file-system/ai';
 
 export const BROWSER_CHAT_MODEL = 'onnx-community/SmolLM2-135M-Instruct-ONNX';
 export type BrowserChatDevice = 'wasm' | 'webgpu';
@@ -9,7 +10,7 @@ let currentDevice: BrowserChatDevice | null = null;
 
 /** The worker remains loaded across turns; aborting terminates inference and
  * drops the model, so the next request starts a fresh worker. */
-export async function runBrowserChat(
+async function runLocalBrowserChat(
 	messages: BrowserChatTurn[],
 	device: BrowserChatDevice,
 	signal?: AbortSignal
@@ -39,8 +40,31 @@ export async function runBrowserChat(
 	}
 }
 
-export function disposeBrowserChat(): void {
+function disposeLocalBrowserChat(): void {
 	rpc?.reset();
 	rpc = null;
 	currentDevice = null;
 }
+
+let registered = false;
+export function initializeBrowserChatHost(): void {
+ if (registered) return; registered = true;
+ registerBrowserAiHandler('speech:chat', {
+  kind: 'chat',
+  async run(_action, value, context) {
+   const payload = value as { messages: BrowserChatTurn[]; device: BrowserChatDevice };
+   context.state('loading');
+   const result = await runLocalBrowserChat(payload.messages, payload.device, context.signal);
+   context.state('loaded'); return result;
+  },
+  capture(result) { return new Blob([String(result)], { type: 'text/plain' }); },
+  dispose: disposeLocalBrowserChat
+ });
+}
+export async function runBrowserChat(messages: BrowserChatTurn[], device: BrowserChatDevice, signal?: AbortSignal, options: BrowserAiRunOptions = {}): Promise<string> {
+ initializeBrowserChatHost();
+ return runBrowserAi<string>('speech:chat', 'generate', { messages, device }, BROWSER_CHAT_MODEL, { ...options, signal }, { webgpu: device === 'webgpu' });
+}
+/** Closing a chat view releases playback/UI only. The shared model and any
+ * detached run belong to the host, and must survive the submitting view. */
+export function disposeBrowserChat(): void {}

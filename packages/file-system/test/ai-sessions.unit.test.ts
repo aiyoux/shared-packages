@@ -8,6 +8,7 @@ import {
 	AiInvokeUnsupported,
 	answerSessionInvoke,
 	bindAiSession,
+	coerceAiSession,
 	connectAiSession,
 	deleteAiSession,
 	listAiSessions,
@@ -110,6 +111,10 @@ describe('answerSessionInvoke', () => {
 });
 
 describe('session REST', () => {
+	it('reports exact attached socket counts from list rows', () => {
+		assert.equal(coerceAiSession({ id: 'session', agents: 3 }).agents, 3);
+		assert.equal(coerceAiSession({ id: 'session', agents: -1 }).agents, 0);
+	});
 	it('registers, lists, and deletes against the monitor envelope', async () => {
 		const calls: Array<{ url: string; method: string; body?: string }> = [];
 		globalThis.fetch = (async (input: string | URL, init?: RequestInit) => {
@@ -188,7 +193,9 @@ describe('session sockets', () => {
 	it('binds, answers an invoke, and lets an agent read the value', async () => {
 		installSocket();
 		let closed = false;
+		const counts: number[] = [];
 		const bindingPromise = bindAiSession(BASE, 'abc', async (name) => ({ app: 'sketcher', name }), {
+			onAgents: (count) => counts.push(count),
 			onClose: () => {
 				closed = true;
 			}
@@ -197,6 +204,9 @@ describe('session sockets', () => {
 		assert.equal(browser.url, 'ws://127.0.0.1:8300/v1/ai/sessions/abc/bind');
 		browser.open();
 		const binding = await bindingPromise;
+		browser.receive(JSON.stringify({ type: 'agents', count: 1 }));
+		browser.receive(JSON.stringify({ type: 'agents', count: 0 }));
+		assert.deepEqual(counts, [1, 0]);
 
 		browser.receive(JSON.stringify({ type: 'invoke', id: 'r1', name: 'status', args: {} }));
 		await new Promise((resolve) => setTimeout(resolve, 0));

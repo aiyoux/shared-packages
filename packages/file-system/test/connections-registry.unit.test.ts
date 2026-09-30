@@ -38,6 +38,7 @@ function lockWorld() {
 				signal.addEventListener('abort', () => reject(signal.reason), { once: true });
 			});
 		},
+		live(owner: Owner) { return Promise.resolve(owner.kind === 'tab' && !closed.has(owner.ctx) ? 'alive' as const : 'gone' as const); },
 		close(ctx: string) { closed.add(ctx); for (const fn of waiters.get(ctx) ?? []) fn(); waiters.delete(ctx); }
 	};
 }
@@ -51,6 +52,7 @@ function origin() {
 		store: createRecordStore<ConnectionRecord>('connections-test', factory),
 		bus: bus(ctx),
 		watch: locks.watch,
+        live: locks.live,
 		self: async () => ({ kind: 'tab', ctx, label: `Tab ${ctx}` })
 	});
 	return { tab, locks };
@@ -115,6 +117,27 @@ describe('connection registry', () => {
 		await settle();
 		await assert.rejects(b.register({ ...link, id: 'link-4' }), /held by another tab/);
 	});
+ it('transfers one logical record only to a live tab; stale handles cannot delete or alter the new owner', async () => {
+  const { tab, locks } = origin(); const a = tab('a'); const b = tab('b');
+  await Promise.all([a.ready, b.ready]); const old = await a.register({ ...link, id: 'moving' });
+  await a.handover('moving', { kind: 'tab', ctx: 'b', label: 'Tab b' }); await settle();
+  await old.update({ state: 'handing-over' }); await old.end(); await settle();
+  const owner = b.get('moving')?.owner; assert.equal(owner?.kind, 'tab'); assert.equal(owner?.kind === 'tab' ? owner.ctx : undefined, 'b'); assert.equal(b.get('moving')?.state, 'connected');
+  const next = await b.register({ ...link, id: 'moving' }); await next.update({ transportId: 'next-epoch' }); await settle();
+  assert.equal(a.get('moving')?.transportId, 'next-epoch');
+  locks.close('closed'); await assert.rejects(b.handover('moving', { kind: 'tab', ctx: 'closed', label: 'Closed' }), /no longer alive/);
+  await next.end(); a.dispose(); b.dispose();
+ });
+
+ it('fences a late old handle after same-tab transport replacement', async () => {
+  const { tab } = origin(); const a = tab('a'); await a.ready;
+  const old = await a.register({ ...link, id: 'same-tab', transportId: 'old' });
+  const next = await a.register({ ...link, id: 'same-tab', transportId: 'new' });
+  await old.update({ state: 'handing-over' }); await old.end();
+  assert.equal(a.get('same-tab')?.transportId, 'new'); assert.equal(a.get('same-tab')?.state, 'connected');
+  await next.end(); assert.equal(a.get('same-tab'), undefined); await a.dispose();
+ });
+
 });
 
 describe('link proxy', () => {

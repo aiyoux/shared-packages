@@ -83,3 +83,5 @@ export * from './services/landing.js';
 export * from './services/monitorLink.js';
 export * from './services/connections.js';
 export * from './services/linkProxy.js';
+
+export * from './services/handoverLinks.js';

@@ -53,13 +53,15 @@ export function createKokoroTts(): TtsEngine {
 	);
 
 	/** Load the model into the worker unless it already holds this exact one. */
-	async function ensureLoaded(def: SpeechModelDef, dirId: string, device: TtsDevice): Promise<void> {
+	async function ensureLoaded(def: SpeechModelDef, dirId: string, device: TtsDevice, signal?: AbortSignal): Promise<void> {
+		signal?.throwIfAborted();
 		const key = `${def.id}|${dirId}|${device}`;
 		if (loadedKey === key) return;
 		const store = await getSpeechModelStore();
 		const files: Record<string, Blob | ArrayBuffer> = {};
 		const transfer: Transferable[] = [];
 		for (const file of def.files) {
+			signal?.throwIfAborted();
 			if (device === 'webgpu' && file.path.endsWith('.onnx')) {
 				// Transfer bytes so the worker does not depend on cloning an
 				// OPFS-backed Blob. An empty read here now identifies Files as source.
@@ -78,6 +80,7 @@ export function createKokoroTts(): TtsEngine {
 		}
 		loadedKey = null;
 		try {
+			signal?.throwIfAborted();
 			await worker.call('load', { repo: def.repo, dtype: def.dtype, device, files }, transfer);
 		} catch (err) {
 			if (device === 'webgpu') {
@@ -89,6 +92,7 @@ export function createKokoroTts(): TtsEngine {
 			}
 			throw err;
 		}
+		signal?.throwIfAborted();
 		loadedKey = key;
 	}
 
@@ -105,7 +109,7 @@ export function createKokoroTts(): TtsEngine {
 			selected = { def, dirId: opts?.dirId, device };
 			const store = await getSpeechModelStore();
 			const dirId = await store.requireModelDir(def, opts?.dirId);
-			await ensureLoaded(def, dirId, device);
+			await ensureLoaded(def, dirId, device, opts?.signal);
 		},
 
 		async listVoices(): Promise<TtsVoice[]> {
@@ -119,6 +123,7 @@ export function createKokoroTts(): TtsEngine {
 			for (const sentence of sentences) {
 				if (opts?.signal?.aborted) throw new SpeechEngineError('CANCELLED', 'Synthesis cancelled');
 				segments.push(await renderOne(sentence));
+				opts?.onAudioSegment?.(segments[segments.length - 1]!, segments.length - 1, sentences.length);
 				opts?.onSegment?.({ done: segments.length, total: sentences.length });
 			}
 			return { segments, channels: 1 };
@@ -148,7 +153,7 @@ export function createKokoroTts(): TtsEngine {
 		const store = await getSpeechModelStore();
 		const { def, device } = selected;
 		const dirId = await store.requireModelDir(def, opts?.dirId ?? selected.dirId);
-		await ensureLoaded(def, dirId, device);
+		await ensureLoaded(def, dirId, device, opts?.signal);
 		const voice = KOKORO_VOICES.some((v) => v.id === opts?.voice) ? opts!.voice! : KOKORO_VOICES[0]!.id;
 		// The voice bin must be imported like the weights — fetches from HF
 		// are blocked under the hub's COEP isolation.
@@ -181,6 +186,7 @@ export function createKokoroTts(): TtsEngine {
 			console.warn('kokoro voice cache seed failed', err);
 		}
 		return async (sentence) => {
+			opts?.signal?.throwIfAborted();
 			const { samples, sampleRate } = await worker.call<{ samples: Float32Array; sampleRate: number }>(
 				'generate',
 				{ text: sentence, voice, speed: opts?.speed }

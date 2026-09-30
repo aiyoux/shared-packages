@@ -12,12 +12,15 @@
  *
  * A session another device shares with this one is on the list too, with an
  * `origin`: windows point at it and the Sessions menu lists it like any other.
- * It lives only in the tab that holds the link to that device, so it is never
- * stored or sent to other tabs, and it goes when the link or the share ends.
+ * It is replicated in memory across live tabs, never persisted, and goes
+ * everywhere when the link or the share ends.
  *
  * State lives on `globalThis`: a page can load this package in two module
  * graphs (hub layout and an embedded app), and both must see one list.
  */
+import { createJoinedSessions, type JoinedFrame } from './joinedSessions.js';
+import { createLiveBus } from './live/bus.js';
+import { serviceContextId } from './leaseOwner.js';
 import { persistKv, persistReady } from '@shared-packages/ui/persistKv';
 import { subscribeStorageKey } from '@shared-packages/ui/subscribeStorageKey';
 import type { OpenSession, SessionApp, SessionKind, SessionOrigin } from './openSessions.js';
@@ -58,7 +61,7 @@ type Bag = {
 	boardKey: string;
 	requests: Map<string, WorkspaceSession>;
 	/** Sessions other devices share with this tab, by row id. */
-	joined: Map<string, WorkspaceSession>;
+	joined: ReturnType<typeof createJoinedSessions>;
 	changeListeners: Set<() => void>;
 	closeListeners: Set<(event: SessionClosedEvent) => void>;
 	showListeners: Set<(windowId: string, session: WorkspaceSession) => void>;
@@ -70,12 +73,14 @@ type Bag = {
 
 function bag(): Bag {
 	const g = globalThis as unknown as { __workspaceSessions__?: Bag };
-	return (g.__workspaceSessions__ ??= {
+	if (g.__workspaceSessions__) return g.__workspaceSessions__;
+	const joined = createJoinedSessions({ changed: emitChange, closed: emitClosed });
+	const b: Bag = g.__workspaceSessions__ = {
 		storage: null,
 		shared: null,
 		boardKey: WORKSPACE_SESSIONS_KEY,
 		requests: new Map(),
-		joined: new Map(),
+		joined,
 		changeListeners: new Set(),
 		closeListeners: new Set(),
 		showListeners: new Set(),
@@ -83,7 +88,11 @@ function bag(): Bag {
 		ready: null,
 		hydrated: false,
 		heldWrite: false
-	});
+	};
+	if (typeof window !== 'undefined') void serviceContextId().then((ctx) => {
+		if (g.__workspaceSessions__ === b && b.joined === joined) joined.attach(createLiveBus<JoinedFrame>('workspace:joined-sessions', `${ctx}:${crypto.randomUUID()}`));
+	}).catch((error) => console.error('Could not share joined sessions between tabs', error));
+	return b;
 }
 
 function browserStorage(): WorkspaceStorage {
@@ -209,7 +218,7 @@ export function sessionRoom(session: { id: string; fileId?: string }): string {
 export function listWorkspaceSessions(): WorkspaceSession[] {
 	const stored = shared().board.current().sessions;
 	const joined = bag().joined;
-	return joined.size === 0 ? stored : [...stored, ...joined.values()];
+	return [...stored, ...joined.rows()];
 }
 
 /** This device's own sessions: what it can share with another device. */
@@ -255,8 +264,7 @@ export function addJoinedSession(input: {
 	) {
 		return before;
 	}
-	bag().joined.set(id, row);
-	emitChange();
+	bag().joined.put(row);
 	return row;
 }
 
@@ -266,12 +274,7 @@ export function addJoinedSession(input: {
  * whose `origin` tells them to keep what they hold as their own copy.
  */
 export function endJoinedSession(id: string): WorkspaceSession | undefined {
-	const row = bag().joined.get(id);
-	if (!row) return undefined;
-	bag().joined.delete(id);
-	emitClosed(row, true);
-	emitChange();
-	return row;
+	return bag().joined.end(id);
 }
 
 export function findWorkspaceSession(id: string | null | undefined): WorkspaceSession | undefined {
@@ -431,6 +434,7 @@ export function _resetWorkspaceSessionsForTest(next?: WorkspaceStorage): void {
 	b.boardKey = `${WORKSPACE_SESSIONS_KEY}:test:${Math.random().toString(36).slice(2)}`;
 	b.requests.clear();
 	b.joined.clear();
+	b.joined = createJoinedSessions({ changed: emitChange, closed: emitClosed });
 	b.changeListeners.clear();
 	b.closeListeners.clear();
 	b.showListeners.clear();

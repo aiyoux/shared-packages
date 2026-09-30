@@ -20,8 +20,8 @@ async function importSttEngine(id: SttEngineId): Promise<SttEngine> {
 		return webspeechStt;
 	}
 	if (id === 'transformers') {
-		const { transformersStt } = await import('./engines/transformersStt.js');
-		return transformersStt;
+		const { createHostedStt } = await import('./browserHostEngines.js');
+		return createHostedStt();
 	}
 	if (id === 'ai') {
 		const { aiStt } = await import('./engines/aiStt.js');
@@ -36,12 +36,12 @@ async function importTtsEngine(id: TtsEngineId): Promise<TtsEngine> {
 		return webspeechTts;
 	}
 	if (id === 'kokoro') {
-		const { kokoroTts } = await import('./engines/kokoroTts.js');
-		return kokoroTts;
+		const { createHostedTts } = await import('./browserHostEngines.js');
+		return createHostedTts('kokoro');
 	}
 	if (id === 'piper') {
-		const { piperTts } = await import('./engines/piperTts.js');
-		return piperTts;
+		const { hostedPiperTts } = await import('./browserHostEngines.js');
+		return hostedPiperTts;
 	}
 	throw new Error(`Unknown TTS engine: ${id}`);
 }

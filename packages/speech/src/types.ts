@@ -1,4 +1,5 @@
 import type { OpHandle } from '@shared-packages/file-system';
+import type { BrowserAiOutput } from '@shared-packages/file-system/ai';
 export type SttEngineId = 'webspeech' | 'transformers' | 'sherpa' | 'ai';
 export type TtsEngineId = 'webspeech' | 'kokoro' | 'piper' | 'sherpa' | 'ai';
 
@@ -118,6 +119,7 @@ export type TtsRender = {
 };
 
 export type TtsSpeakOpts = {
+	browserHost?: BrowserAiOutput;
 	voice?: string;
 	speed?: number;
 	signal?: AbortSignal;
@@ -160,6 +162,7 @@ export interface SttEngine {
 		audio: Float32Array,
 		sampleRate: number,
 		opts?: {
+			browserHost?: BrowserAiOutput;
 			language?: string;
 			/** AI engine: the transcription offer chosen from the monitor's
 			 *  catalog (id + execution location). */
@@ -182,12 +185,15 @@ export interface TtsEngine {
 	synthesize(
 		text: string,
 		opts?: {
+			browserHost?: BrowserAiOutput;
 			voice?: string;
 			speed?: number;
 			signal?: AbortSignal;
 			onProgress?: (p: ModelDownloadProgress) => void;
 			/** Called after each sentence renders — `done` of `total` sentences. */
 			onSegment?: (p: { done: number; total: number }) => void;
+			/** Host playback streams each rendered segment once to the listening tab. */
+			onAudioSegment?: (segment: TtsRenderSegment, index: number, total: number) => void;
 			/** VFS folder the model was imported into (overrides the load-time choice). */
 			dirId?: string;
 		}

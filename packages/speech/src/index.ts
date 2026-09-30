@@ -120,5 +120,5 @@ export {
 	DEFAULT_PIPER_VOICE,
 	type PiperVoice
 } from './piperVoices.js';
-export { piperTts } from './engines/piperTts.js';
-export { BROWSER_CHAT_MODEL, runBrowserChat, disposeBrowserChat, type BrowserChatDevice, type BrowserChatTurn } from './engines/browserChat.js';
+export { hostedPiperTts as piperTts, initializeSpeechBrowserHost } from './browserHostEngines.js';
+export { BROWSER_CHAT_MODEL, initializeBrowserChatHost, runBrowserChat, disposeBrowserChat, type BrowserChatDevice, type BrowserChatTurn } from './engines/browserChat.js';

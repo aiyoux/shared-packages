@@ -113,3 +113,4 @@ export {
 export { HUB_AI_PROFILES_CHANNEL } from '../crossTab.js';
 
 export { formatAiErrorMessage as formatAiError };
+export { browserAiHost, configureBrowserAiHost, registerBrowserAiHandler, runBrowserAi, checkBrowserAiCapabilities, type BrowserAiHandler, type BrowserAiOutput, type BrowserAiRunOptions, type BrowserModelState, type BrowserHostContext } from './browserHost.js';

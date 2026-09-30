@@ -6,7 +6,7 @@ import { getActiveProfileId, listProfiles } from '../monitor/credentials.js';
 import { AiCredentialsError, toAiCredentialsError } from './errors.js';
 import { opsService, type OpHandle } from '../services/ops.js';
 
-export type AiTask = 'chat' | 'text-to-speech' | 'image-generation' | 'transcription';
+export type AiTask = 'chat' | 'text-to-speech' | 'image-generation' | 'transcription' | 'classify';
 export type AiLocation = 'browser' | 'monitor-native' | 'monitor-provider';
 export type AiDeviceClass = 'cpu' | 'gpu' | 'service';
 
@@ -207,7 +207,7 @@ function offer(raw: unknown): AiOffer | null {
 	if (typeof row.id !== 'string' || typeof row.name !== 'string' ||
 		typeof row.modelId !== 'string' || typeof row.sourceId !== 'string' ||
 		typeof row.variantId !== 'string') return null;
-	if (!['chat', 'text-to-speech', 'image-generation', 'transcription'].includes(String(row.task))) return null;
+	if (!['chat', 'text-to-speech', 'image-generation', 'transcription', 'classify'].includes(String(row.task))) return null;
 	if (!['browser', 'monitor-native', 'monitor-provider'].includes(String(row.location))) return null;
 	if (!['cpu', 'gpu', 'service'].includes(String(row.deviceClass))) return null;
 	const parsed: AiOffer = {

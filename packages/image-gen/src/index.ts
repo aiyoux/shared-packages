@@ -61,6 +61,6 @@ export {
 	type ImageGenResult
 } from './engines.js';
 
-export { createSdEngine, createFlux2Engine, createImageWorkerRpc } from './imageEngines.js';
+export { createSdEngine, createFlux2Engine, initializeImageBrowserHost, createImageWorkerRpc } from './imageEngines.js';
 
 export { fetchImageFileViaBridge, DEFAULT_IMAGE_BRIDGE_BASE_URL } from './bridgeImage.js';

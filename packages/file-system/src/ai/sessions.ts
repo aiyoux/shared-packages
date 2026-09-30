@@ -33,6 +33,7 @@ export type AiSessionInfo = {
 	title: string;
 	actions: string[];
 	bound: boolean;
+	agents: number;
 	document: AiSessionDocument | null;
 	/** Empty when the tab has not granted access. An old daemon omits this. */
 	grants: string[];
@@ -173,6 +174,7 @@ export function coerceAiSession(raw: unknown): AiSessionInfo {
 		title: typeof row.title === 'string' ? row.title : '',
 		actions,
 		bound: row.bound === true,
+		agents: typeof row.agents === 'number' && Number.isSafeInteger(row.agents) && row.agents >= 0 ? row.agents : 0,
 		document,
 		grants,
 		artifacts
@@ -276,7 +278,7 @@ export function bindAiSession(
 	baseUrl: string,
 	id: string,
 	handler: AiSessionInvokeHandler,
-	opts?: { onClose?: () => void; signal?: AbortSignal }
+	opts?: { onClose?: () => void; onAgents?: (count: number) => void; signal?: AbortSignal }
 ): Promise<AiSessionBinding> {
 	if (opts?.signal?.aborted) return Promise.reject(opts.signal.reason);
 	const url = toWebSocketUrl(joinUrl(baseUrl, sessionPath(id, '/bind')));
@@ -305,6 +307,10 @@ export function bindAiSession(
 		const text = typeof ev.data === 'string' ? ev.data : '';
 		if (!text) return;
 		const ack = asRecord(safeParse(text));
+		if (ack?.type === 'agents') {
+			if (typeof ack.count === 'number' && Number.isSafeInteger(ack.count) && ack.count >= 0) opts?.onAgents?.(ack.count);
+			return;
+		}
 		if (ack?.type === 'artifact') {
 			const waiter = artifactWait;
 			if (!waiter || ack.name !== waiter.name) return;

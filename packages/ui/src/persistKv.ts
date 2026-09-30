@@ -277,6 +277,64 @@ export async function persistFlush(): Promise<void> {
 	await writes;
 }
 
+/**
+ * Read authoritative values and atomically write the synchronous update.
+ * Unlike legacy cache setters, storage failure rejects. The callback can write
+ * additional keys; an undefined value deletes a key. Separate tabs serialize
+ * through IndexedDB's readwrite transaction, rather than their cache snapshots.
+ */
+export async function persistTransaction(
+	keys: string[],
+	update: (values: Map<string, unknown>) => Map<string, unknown | undefined>
+): Promise<void> {
+	await persistReady();
+	const operation = writes.then(() => {
+		if (!db) throw new Error('Durable storage is unavailable.');
+		return new Promise<void>((resolve, reject) => {
+			const tx = db!.transaction(DB_STORE, 'readwrite');
+			const store = tx.objectStore(DB_STORE);
+			const values = new Map<string, unknown>();
+			let changes = new Map<string, unknown | undefined>();
+			let failure: unknown;
+			tx.oncomplete = () => {
+				for (const [key, value] of changes) {
+					cache.set(key, value === undefined ? TOMBSTONE : value);
+					lsRemove(key);
+					notify(key, value);
+				}
+				resolve();
+			};
+			tx.onabort = () => reject(failure ?? tx.error ?? new Error('Durable storage transaction aborted.'));
+			const apply = () => {
+				try {
+					changes = new Map(update(values));
+					for (const [key, value] of changes) {
+						if (value === undefined) store.delete(key);
+						else store.put(value, key);
+					}
+				} catch (error) {
+					failure = error;
+					tx.abort();
+				}
+			};
+			const uniqueKeys = [...new Set(keys)];
+			let remaining = uniqueKeys.length;
+			if (!remaining) apply();
+			else for (const key of uniqueKeys) {
+				const request = store.get(key);
+				request.onsuccess = () => {
+					values.set(key, request.result);
+					if (--remaining === 0) apply();
+				};
+			}
+		});
+	});
+	// A strict failure belongs to its caller; it must not poison later legacy
+	// writes or transactions queued in this tab.
+	writes = operation.catch(() => {});
+	await operation;
+}
+
 /** Drop-in `Storage`-shaped adapter for existing getItem/setItem call sites. */
 export const persistKv: PersistKv = {
 	ready: persistReady,

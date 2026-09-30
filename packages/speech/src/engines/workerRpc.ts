@@ -10,13 +10,16 @@
 import { SpeechEngineError } from '../types.js';
 
 type ErrorCode = SpeechEngineError['code'];
+const resets = new Map<() => void, string>();
+export function resetInferenceWorkers(label?: string): void { for (const [reset, name] of resets) if (!label || label === name) reset(); }
 
 export type WorkerReply =
 	| { id: number; ok: true; result: unknown }
-	| { id: number; ok: false; message: string; code?: ErrorCode };
+	| { id: number; ok: false; message: string; code?: ErrorCode }
+	| { id: number; progress: unknown };
 
 export type WorkerRpc = {
-	call<T>(op: string, payload: object, transfer?: Transferable[]): Promise<T>;
+	call<T>(op: string, payload: object, transfer?: Transferable[], onProgress?: (value: unknown) => void): Promise<T>;
 	/** Drop the worker (and whatever it had loaded); the next call starts a fresh one. */
 	reset(): void;
 };
@@ -28,7 +31,7 @@ export type WorkerRpc = {
 export function createWorkerRpc(create: () => Worker, label: string, onLost: () => void): WorkerRpc {
 	let worker: Worker | null = null;
 	let seq = 0;
-	const waiters = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
+	const waiters = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void; progress?: (value: unknown) => void }>();
 
 	function failAll(err: Error): void {
 		for (const waiter of waiters.values()) waiter.reject(err);
@@ -48,6 +51,7 @@ export function createWorkerRpc(create: () => Worker, label: string, onLost: () 
 			const reply = event.data;
 			const waiter = waiters.get(reply.id);
 			if (!waiter) return;
+			if ('progress' in reply) { waiter.progress?.(reply.progress); return; }
 			waiters.delete(reply.id);
 			if (reply.ok) waiter.resolve(reply.result);
 			else waiter.reject(new SpeechEngineError(reply.code ?? 'SYNTHESIS_FAILED', reply.message));
@@ -66,13 +70,15 @@ export function createWorkerRpc(create: () => Worker, label: string, onLost: () 
 		return created;
 	}
 
+	const reset = () => { failAll(new SpeechEngineError('CANCELLED', `${label} worker reset`)); drop(); };
+	resets.set(reset, label);
 	return {
-		call<T>(op: string, payload: object, transfer: Transferable[] = []): Promise<T> {
+		call<T>(op: string, payload: object, transfer: Transferable[] = [], onProgress?: (value: unknown) => void): Promise<T> {
 			const target = start();
 			const id = ++seq;
 			return new Promise<T>((resolve, reject) => {
-				waiters.set(id, { resolve: resolve as (v: unknown) => void, reject });
-				target.postMessage({ id, op, ...payload }, transfer);
+				waiters.set(id, { resolve: resolve as (v: unknown) => void, reject, progress: onProgress });
+				try { target.postMessage({ id, op, ...payload }, transfer); } catch (error) { waiters.delete(id); reject(error); }
 			});
 		},
 		reset() {
@@ -87,7 +93,7 @@ export function createWorkerRpc(create: () => Worker, label: string, onLost: () 
  * each result (with its transfer list) or error back.
  */
 export function serveWorkerRpc(
-	handlers: Record<string, (payload: Record<string, unknown>) => Promise<{ result: unknown; transfer?: Transferable[] }>>
+	handlers: Record<string, (payload: Record<string, unknown>, progress: (value: unknown) => void) => Promise<{ result: unknown; transfer?: Transferable[] }>>
 ): void {
 	const scope = self as unknown as {
 		onmessage: ((event: MessageEvent<{ id: number; op: string } & Record<string, unknown>>) => void) | null;
@@ -102,7 +108,7 @@ export function serveWorkerRpc(
 			const handler = handlers[op];
 			try {
 				if (!handler) throw new Error(`Unknown worker op: ${op}`);
-				const { result, transfer } = await handler(payload);
+				const { result, transfer } = await handler(payload, (value) => scope.postMessage({ id, progress: value }));
 				scope.postMessage({ id, ok: true, result }, transfer ?? []);
 			} catch (err) {
 				scope.postMessage({

@@ -46,6 +46,8 @@ export type AiLibraryModelRow = {
 export type AiModelSection = {
 	id: string;
 	task: AiTaskKey;
+	/** A specialized app picker can keep its durable choice within classify. */
+	selectionTask?: AiTaskKey;
 	title: string;
 	/** Lazy: status checks read VFS manifests or the monitor, per section. */
 	models: () => Promise<AiLibraryModelRow[]>;

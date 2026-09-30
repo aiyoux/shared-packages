@@ -128,6 +128,7 @@ export function createPiperTts(): TtsEngine {
 			for (const sentence of sentences) {
 				if (opts?.signal?.aborted) throw new SpeechEngineError('CANCELLED', 'Synthesis cancelled');
 				segments.push(await renderSentence(voiceId, sentence));
+				opts?.onAudioSegment?.(segments[segments.length - 1]!, segments.length - 1, sentences.length);
 				opts?.onSegment?.({ done: segments.length, total: sentences.length });
 			}
 			return { segments, channels: 1 };

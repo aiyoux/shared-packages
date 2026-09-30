@@ -1,3 +1,4 @@
+import type { BrowserAiOutput } from '@shared-packages/file-system/ai';
 export type ImageGenErrorCode =
 	| 'NO_MODEL'
 	| 'LOAD_FAILED'
@@ -29,6 +30,7 @@ export type ImageEngine = {
 	generate(
 		prompt: string,
 		opts?: {
+			browserHost?: BrowserAiOutput;
 			seed?: number;
 			signal?: AbortSignal;
 			/** Square edges in px for variable-resolution engines; ignored otherwise. */
@@ -66,5 +68,4 @@ export async function probeWebGpu(): Promise<{ ok: true } | { ok: false; reason:
 		};
 	}
 }
-
 
