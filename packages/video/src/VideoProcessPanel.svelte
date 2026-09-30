@@ -3,7 +3,7 @@
 	import Scissors from '@lucide/svelte/icons/scissors';
 import Loader2 from '@lucide/svelte/icons/loader-2';
 	import { processVideo } from './process.js';
-	import type { VideoInterpolator, VideoUpscaler } from './types.js';
+	import type { VideoInterpolator, VideoUpscaler, VideoAudioUpscaler } from './types.js';
 
 	let {
 		sourceBlob,
@@ -12,6 +12,7 @@ import Loader2 from '@lucide/svelte/icons/loader-2';
 		videoRef = null as HTMLVideoElement | null,
 		interpolator = null as VideoInterpolator | null,
 		upscaler = null as VideoUpscaler | null,
+		audioUpscaler = null as VideoAudioUpscaler | null,
 		onProcessStart,
 		onProcessed,
 		onError
@@ -24,6 +25,8 @@ import Loader2 from '@lucide/svelte/icons/loader-2';
 		interpolator?: VideoInterpolator | null;
 		/** Optional upscaler (SRMD on a monitor running the tools feature). */
 		upscaler?: VideoUpscaler | null;
+		/** Optional audio upsampler (audiosronnx on a monitor; 48 kHz out). */
+		audioUpscaler?: VideoAudioUpscaler | null;
 		/** Called when processing begins (page should clear prior output blobs). */
 		onProcessStart?: () => void;
 		/** `name` is the suggested result name (source name + stage suffixes). */
@@ -42,6 +45,12 @@ import Loader2 from '@lucide/svelte/icons/loader-2';
 	let srmdModel = $state('models-srmd');
 	let srmdConnectionStatus = $state<'idle' | 'checking' | 'connected' | 'failed'>('idle');
 	let srmdMessage = $state('');
+
+	let useAudioUpsample = $state(false);
+	let audioEngine = $state('lavasr');
+	let audioDenoise = $state(false);
+	let audioConnectionStatus = $state<'idle' | 'checking' | 'connected' | 'failed'>('idle');
+	let audioMessage = $state('');
 
 	let exportWidth = $state<number | undefined>(undefined);
 	let exportHeight = $state<number | undefined>(undefined);
@@ -87,6 +96,7 @@ import Loader2 from '@lucide/svelte/icons/loader-2';
 	onMount(() => {
 		if (interpolator) checkRifeConnection();
 		if (upscaler) checkSrmdConnection();
+		if (audioUpscaler) checkAudioUpsampleConnection();
 	});
 
 	async function checkSrmdConnection() {
@@ -104,6 +114,24 @@ import Loader2 from '@lucide/svelte/icons/loader-2';
 		} catch {
 			srmdConnectionStatus = 'failed';
 			srmdMessage = 'Offline';
+		}
+	}
+
+	async function checkAudioUpsampleConnection() {
+		audioConnectionStatus = 'checking';
+		audioMessage = 'Checking...';
+		try {
+			if (!audioUpscaler) {
+				audioConnectionStatus = 'failed';
+				audioMessage = 'No audio upsampler';
+				return;
+			}
+			const data = await audioUpscaler.checkStatus();
+			audioConnectionStatus = 'connected';
+			audioMessage = `Audio upsampler connected! (${data.audioPath || 'audiosronnx'})`;
+		} catch {
+			audioConnectionStatus = 'failed';
+			audioMessage = 'Offline';
 		}
 	}
 
@@ -144,7 +172,9 @@ import Loader2 from '@lucide/svelte/icons/loader-2';
 		processingStep = 'Preparing...';
 
 		// Model stages run at a fixed weight after the trim/resize stage.
-		// Both model stages: trim 0–40, upscale 40–70, interpolate 70–100.
+		// Three model stages: trim 0–40, then one band of ~30 per stage
+		// (upscale, audio, interpolate). Stage order here follows the name
+		// suffix order: `_2x` → `_48k` → `_60fps`.
 		const modelStages: { label: string; suffix: string; run: (blob: Blob, onProgress: (p: number) => void) => Promise<Blob> }[] = [];
 		if (useSrmd && upscaler) {
 			const scale = srmdScale;
@@ -157,6 +187,21 @@ import Loader2 from '@lucide/svelte/icons/loader-2';
 					const tempId = upscaler.newJobId();
 					const stopPoll = upscaler.pollProgress(tempId, onProgress);
 					return upscaler.upscale(blob, { scale, noise, model, id: tempId }).finally(() => stopPoll());
+				}
+			});
+		}
+		if (useAudioUpsample && audioUpscaler) {
+			const engine = audioEngine;
+			const denoise = engine === 'lavasr' && audioDenoise;
+			modelStages.push({
+				label: `Upsampling audio to 48 kHz (${engine})...`,
+				suffix: '_48k',
+				run: (blob, onProgress) => {
+					const tempId = audioUpscaler.newJobId();
+					const stopPoll = audioUpscaler.pollProgress(tempId, onProgress);
+					return audioUpscaler
+						.upsample(blob, { engine, denoise, id: tempId })
+						.finally(() => stopPoll());
 				}
 			});
 		}
@@ -351,6 +396,66 @@ import Loader2 from '@lucide/svelte/icons/loader-2';
 				<div class="setting">
 					<label for="srmdModel">Model</label>
 					<input id="srmdModel" type="text" bind:value={srmdModel} placeholder="models-srmd" />
+				</div>
+			</div>
+		{/if}
+	</div>
+</div>
+{/if}
+
+{#if audioUpscaler}
+<!-- Audio Upsampling (Monitor) -->
+<div class="settings-section">
+	<div class="settings-header-row">
+		<h3>Audio Upsampling (Monitor)</h3>
+		{#if audioConnectionStatus !== 'idle'}
+			<div class="rife-connection-badge rife-connection-{audioConnectionStatus}">
+				<span class="badge-dot"></span>
+				<span>{audioMessage}</span>
+			</div>
+		{/if}
+	</div>
+	<div class="rife-settings-card">
+		<div class="rife-checkbox-container">
+			<label class="checkbox-label">
+				<input
+					type="checkbox"
+					bind:checked={useAudioUpsample}
+					disabled={audioConnectionStatus !== 'connected'}
+				/>
+				<span>Upsample audio to 48 kHz</span>
+			</label>
+			{#if audioConnectionStatus !== 'connected'}
+				<button type="button" class="btn btn-ghost btn-xs check-rife-btn" onclick={checkAudioUpsampleConnection}>
+					Retry Connection
+				</button>
+			{/if}
+		</div>
+		{#if useAudioUpsample}
+			<div class="settings-grid rife-options-grid animate-fade-in">
+				<div class="setting">
+					<label for="audioEngine">Engine</label>
+					<select id="audioEngine" bind:value={audioEngine}>
+						<option value="lavasr">LavaSR (Recommended)</option>
+						<option value="novasr">NovaSR</option>
+						<option value="sidon">Sidon</option>
+						<option value="callenhancer">CallEnhancer</option>
+						<option value="hifiganbwe">HiFiGAN-BWE</option>
+						<option value="apbwe">AP-BWE</option>
+						<option value="flowhigh">FlowHigh</option>
+					</select>
+				</div>
+				<div class="setting">
+					<label for="audioDenoise">Denoise (LavaSR only)</label>
+					<label class="checkbox-label">
+						<input
+							type="checkbox"
+							id="audioDenoise"
+							bind:checked={audioDenoise}
+							disabled={audioEngine !== 'lavasr'}
+						/>
+						<span>Run the denoise pre-pass</span>
+					</label>
 				</div>
 			</div>
 		{/if}

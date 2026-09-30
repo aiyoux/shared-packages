@@ -1,5 +1,6 @@
 /**
- * Shared transport for monitor GPU tool jobs (RIFE / SRMD) — the move of
+ * Shared transport for monitor GPU tool jobs (RIFE / SRMD frames, audio
+ * upsampling) — the move of
  * sign-dictionary's app-local `monitorTools.ts` (Phase 2 of
  * connections/docs/design/tools-ai-integration-plan.md). Import from
  * `@shared-packages/file-system/monitor`.
@@ -57,6 +58,8 @@ export type MonitorToolsProbe = {
 	baseUrl: string;
 	rife: boolean;
 	srmd: boolean;
+	/** `capabilities.tools.audio` — the audio upsampling engine (audiosronnx). */
+	audio: boolean;
 	/** `capabilities.jobs` — the unified lifecycle (W7); false → NDJSON fallback. */
 	jobsApi: boolean;
 };
@@ -84,18 +87,23 @@ export async function probeToolsFeature(
 	baseUrl: string,
 	fetchImpl: typeof fetch = fetch,
 	signal?: AbortSignal
-): Promise<{ rife: boolean; srmd: boolean; jobsApi: boolean }> {
+): Promise<{ rife: boolean; srmd: boolean; audio: boolean; jobsApi: boolean }> {
 	const url = `${baseUrl.replace(/\/$/, '')}/v1/meta`;
 	const res = await fetchImpl(url, withLocalAddressSpace(url, { signal }));
 	if (!res.ok) {
 		await throwEnvelopeError(res, `Monitor meta failed: ${res.status}`);
 	}
 	const meta = (await res.json()) as {
-		capabilities?: { tools?: { rife?: boolean; srmd?: boolean }; jobs?: boolean };
+		capabilities?: { tools?: { rife?: boolean; srmd?: boolean; audio?: boolean }; jobs?: boolean };
 	};
 	const tools = meta.capabilities?.tools;
 	// Missing key = false (mixed-version rule).
-	return { rife: !!tools?.rife, srmd: !!tools?.srmd, jobsApi: meta.capabilities?.jobs === true };
+	return {
+		rife: !!tools?.rife,
+		srmd: !!tools?.srmd,
+		audio: !!tools?.audio,
+		jobsApi: meta.capabilities?.jobs === true
+	};
 }
 
 /**
@@ -124,13 +132,14 @@ export async function resolveToolsMonitor(
 	for (const p of ordered) {
 		try {
 			const caps = await probeToolsFeature(p.baseUrl, fetchImpl);
-			if (caps.rife || caps.srmd) {
+			if (caps.rife || caps.srmd || caps.audio) {
 				return {
 					profileId: p.id,
 					name: p.name,
 					baseUrl: p.baseUrl.replace(/\/$/, ''),
 					rife: caps.rife,
 					srmd: caps.srmd,
+					audio: caps.audio,
 					jobsApi: caps.jobsApi
 				};
 			}
@@ -141,7 +150,7 @@ export async function resolveToolsMonitor(
 	if (profiles.length === 0) {
 		throw new Error('No monitors configured. Add one in the File Explorer settings.');
 	}
-	throw new Error('No reachable monitor has the tools feature (rife/srmd binaries missing?).');
+	throw new Error('No reachable monitor has the tools feature (rife/srmd/audio binaries missing?).');
 }
 
 /** Client-generated submit id (`?id=`) — doubles as the caller's op id. */
@@ -149,15 +158,18 @@ export function newMonitorToolRequestId(): string {
 	return crypto.randomUUID();
 }
 
+/** The monitor's tool kinds (design tools-feature.md §4.1). */
+export type MonitorToolId = 'rife' | 'srmd' | 'audio';
+
 /**
  * The submit URL. `params` are the tool's query parameters (fps for rife;
- * scale / noise / model for srmd); `id` is the caller's client-generated id,
- * which the unified jobs view reports back as `clientRequestId` and the
- * daemon accepts when it matches its job-id jail.
+ * scale / noise / model for srmd; engine / denoise for audio); `id` is the
+ * caller's client-generated id, which the unified jobs view reports back as
+ * `clientRequestId` and the daemon accepts when it matches its job-id jail.
  */
 export function buildToolSubmitUrl(
 	baseUrl: string,
-	tool: 'rife' | 'srmd',
+	tool: MonitorToolId,
 	params: Record<string, string>,
 	id: string
 ): string {
@@ -170,7 +182,7 @@ export function buildToolSubmitUrl(
 export async function submitMonitorToolJob(
 	input: {
 		baseUrl: string;
-		tool: 'rife' | 'srmd';
+		tool: MonitorToolId;
 		params: Record<string, string>;
 		id: string;
 		body: Blob;
@@ -264,7 +276,7 @@ export async function readMonitorToolProgressNdjson(
 export async function runMonitorToolLegacy(
 	input: {
 		baseUrl: string;
-		tool: 'rife' | 'srmd';
+		tool: MonitorToolId;
 		params: Record<string, string>;
 		id: string;
 		body: Blob;
@@ -346,7 +358,7 @@ export async function runMonitorToolJob(
 	handle: OpHandle,
 	input: {
 		monitor: MonitorToolsProbe;
-		tool: 'rife' | 'srmd';
+		tool: MonitorToolId;
 		params: Record<string, string>;
 		body: Blob;
 	},
@@ -357,6 +369,8 @@ export async function runMonitorToolJob(
 		throw new Error('This monitor has no RIFE (rife-ncnn-vulkan not installed).');
 	if (tool === 'srmd' && !monitor.srmd)
 		throw new Error('This monitor has no SRMD (srmd-ncnn-vulkan not installed).');
+	if (tool === 'audio' && !monitor.audio)
+		throw new Error('This monitor has no audio upsampling engine (audiosronnx not installed).');
 	const jobs = createMonitorJobsClient(monitor.baseUrl);
 	let jobId: string | null = null;
 	try {
@@ -553,5 +567,104 @@ export function createMonitorVideoTools(options: MonitorVideoToolsOptions = {}):
 		cancel: async (id) => {
 			(await opsService()).cancel(id);
 		}
+	};
+}
+
+/**
+ * The audio-upsampling tool contract on one monitor (tools-feature.md §3.4):
+ * the same probe/id/progress shape as the video tools, but the op records are
+ * `kind: 'audio-tool'` (landing `.wav` in the apps' `OP_KINDS`) and the result
+ * is always 48 kHz mono — a WAV for an audio-only input, an MP4 (the input's
+ * own video stream muxed back) when the input had video. Structurally
+ * satisfies `VideoAudioUpscaler` in `@shared-packages/video`.
+ */
+export type MonitorAudioTools = {
+	checkStatus: () => Promise<{ audioPath?: string }>;
+	newJobId: () => string;
+	pollProgress: (id: string, onProgress: (n: number) => void) => () => void;
+	upsample: (
+		blob: Blob,
+		opts: { engine?: 'lavasr' | 'novasr' | string; denoise?: boolean; id: string }
+	) => Promise<Blob>;
+	cancel: (id: string) => Promise<void>;
+};
+
+export type MonitorAudioToolsOptions = MonitorVideoToolsOptions;
+
+export function createMonitorAudioTools(options: MonitorAudioToolsOptions = {}): MonitorAudioTools {
+	const preferredProfileId = options.preferredProfileId ?? (() => null);
+	const app = options.app ?? 'files';
+	async function resolve(): Promise<MonitorToolsProbe> {
+		return await resolveToolsMonitor(preferredProfileId());
+	}
+	async function upsampleBlob(blob: Blob, opts: { engine?: string; denoise?: boolean; id: string }): Promise<Blob> {
+		const monitor = await resolve();
+		const handle = await startOp({
+			kind: 'audio-tool',
+			app,
+			title: `Upsample · ${opts.engine || 'lavasr'}${opts.denoise ? ' · denoise' : ''}`,
+			where: { executor: 'monitor', note: monitor.name },
+			id: opts.id
+		});
+		const { blob: result, jobId } = await runMonitorToolJob(handle, {
+			monitor,
+			tool: 'audio',
+			params: {
+				...(opts.engine ? { engine: opts.engine } : {}),
+				...(opts.denoise ? { denoise: '1' } : {})
+			},
+			body: blob
+		});
+		await finishMonitorToolJob(handle, result, { monitor, jobId });
+		return result;
+	}
+	return {
+		checkStatus: async () => {
+			const monitor = await resolve();
+			return {
+				audioPath: monitor.audio ? `monitor:${monitor.name}` : undefined
+			};
+		},
+		newJobId: newMonitorToolRequestId,
+		pollProgress: audioUpsamplerPollProgress,
+		upsample: (blob, opts) => upsampleBlob(blob, opts),
+		cancel: async (id) => {
+			(await opsService()).cancel(id);
+		}
+	};
+}
+
+/** Shared pollProgress body (ops-record driven) — identical to the video facet's. */
+function audioUpsamplerPollProgress(
+	id: string,
+	onProgress: (n: number) => void
+): () => void {
+	let last: number | null = null;
+	let stopped = false;
+	let unsubscribe: (() => void) | undefined;
+	void opsService()
+		.then((service) => {
+			if (stopped) return;
+			const check = () => {
+				const p = service.progressOf(id);
+				if (!p) {
+					// Before the submit: no record yet; polling order preserved.
+					return;
+				}
+				const n = p.total
+					? Math.min(100, Math.round((p.done / (p.total || 100)) * 100))
+					: Math.round(p.done);
+				if (n !== last) {
+					last = n;
+					onProgress(n);
+				}
+			};
+			check();
+			unsubscribe = service.subscribe(check);
+		})
+		.catch(() => {});
+	return () => {
+		stopped = true;
+		unsubscribe?.();
 	};
 }

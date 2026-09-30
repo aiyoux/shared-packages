@@ -48,6 +48,7 @@ it('reads capabilities.tools/jobs and treats missing keys as false', async () =>
 	const caps = await probeToolsFeature('http://127.0.0.1:9847', fetchFrom(requests));
 	assert.equal(caps.rife, true);
 	assert.equal(caps.srmd, false);
+	assert.equal(caps.audio, false);
 	assert.equal(caps.jobsApi, false);
 	assert.equal((requests[0].init as { targetAddressSpace?: string }).targetAddressSpace, 'loopback');
 });
@@ -70,6 +71,10 @@ it('builds the submit URL with the client request id and tool params', () => {
 	assert.equal(
 		buildToolSubmitUrl('http://127.0.0.1:9847', 'srmd', { scale: '2', noise: '3', model: 'models-srmd' }, 'job-2'),
 		'http://127.0.0.1:9847/v1/tools/jobs/srmd?scale=2&noise=3&model=models-srmd&id=job-2'
+	);
+	assert.equal(
+		buildToolSubmitUrl('http://127.0.0.1:9847', 'audio', { engine: 'novasr', denoise: '1' }, 'job-3'),
+		'http://127.0.0.1:9847/v1/tools/jobs/audio?engine=novasr&denoise=1&id=job-3'
 	);
 });
 
@@ -208,4 +213,50 @@ it('prefers the requested profile but falls back to any tools-capable profile', 
 	assert.equal(probe.srmd, true);
 	assert.equal(probe.rife, false);
 	assert.equal(listed, 1);
+});
+
+it('resolves an audio-only monitor and reports the audio capability', async () => {
+	const probe = await resolveToolsMonitor(
+		null,
+		fetchFrom([
+			{ url: 'http://127.0.0.1:9903/v1/meta', res: ok({ capabilities: { tools: { audio: true } } }) }
+		]),
+		async () =>
+			[
+				{ id: 'c', name: 'Audio only', baseUrl: 'http://127.0.0.1:9903' }
+			] as unknown as MonitorConnectionProfileV1[]
+	);
+	assert.equal(probe.profileId, 'c');
+	assert.equal(probe.audio, true);
+	assert.equal(probe.rife, false);
+	assert.equal(probe.srmd, false);
+});
+
+it('rejects an audio run against a monitor without the audio engine', async () => {
+	const { runMonitorToolJob } = await import('../src/monitor/toolsJobs.ts');
+	const monitor = {
+		profileId: 'x',
+		name: 'Frames only',
+		baseUrl: 'http://127.0.0.1:9904',
+		rife: true,
+		srmd: false,
+		audio: false,
+		jobsApi: false
+	};
+	const handle = {
+		id: 'op-1',
+		signal: new AbortController().signal,
+		onCancelRequest: () => () => {},
+		progress: () => {},
+		cancelled: async () => {},
+		cancel: () => {}
+	} as never;
+	await assert.rejects(
+		runMonitorToolJob(
+			handle,
+			{ monitor, tool: 'audio', params: { engine: 'lavasr' }, body: new Blob(['a']) },
+			() => {}
+		),
+		/audiosronnx not installed/
+	);
 });

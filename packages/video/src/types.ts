@@ -23,6 +23,25 @@ export type VideoUpscaler = {
 	) => Promise<Blob>;
 };
 
+export type VideoAudioUpscalerStatus = {
+	audioPath?: string;
+};
+
+/**
+ * Audio upsampling on a monitor (tools-feature.md §3.4): bandwidth extension
+ * to 48 kHz mono — a WAV for an audio-only input, an MP4 (the input's video
+ * stream muxed back) when the input had video.
+ */
+export type VideoAudioUpscaler = {
+	checkStatus: () => Promise<VideoAudioUpscalerStatus>;
+	newJobId: () => string;
+	pollProgress: (id: string, onProgress: (n: number) => void) => () => void;
+	upsample: (
+		blob: Blob,
+		opts: { engine?: string; denoise?: boolean; id: string }
+	) => Promise<Blob>;
+};
+
 export type EngineId = 'native';
 
 export type VideoFormat = 'mp4' | 'webm' | 'gif';

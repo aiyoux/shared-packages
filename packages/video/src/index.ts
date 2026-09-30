@@ -43,7 +43,9 @@ export {
 	type VideoEngine,
 	type VideoFormat,
 	type VideoInterpolator,
-	type VideoInterpolatorStatus
+	type VideoInterpolatorStatus,
+	type VideoAudioUpscaler,
+	type VideoAudioUpscalerStatus
 } from './types.js';
 export { listEngines, loadEngine, peekEngine } from './engines.js';
 export { detectFormatFromName, suggestOutputName } from './detect.js';

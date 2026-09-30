@@ -4,7 +4,7 @@ import { tabOwner, watchOwner, currentTabDirectory, type Owner } from './owner.j
 import { serviceNames } from './names.js';
 import { createRecordStore, type RecordStore } from './store.js';
 
-export type OpKindId = 'copy' | 'extract' | 'compress' | 'encrypt' | 'decrypt' | 'import' | 'send' | 'receive' | 'transcribe' | 'speak' | 'generate' | 'video' | 'chat' | 'agent-access' | 'agent-edit';
+export type OpKindId = 'copy' | 'extract' | 'compress' | 'encrypt' | 'decrypt' | 'import' | 'send' | 'receive' | 'transcribe' | 'speak' | 'generate' | 'video' | 'audio-tool' | 'chat' | 'agent-access' | 'agent-edit';
 export type OpState = 'queued' | 'running' | 'paused' | 'done' | 'failed' | 'cancelled' | 'stopped' | 'landed';
 export type Endpoint = { kind: 'browser' | 'monitor' | 'b2' | 'device' | 'provider'; label: string };
 export type OpWhere = { executor: 'this-browser' | 'monitor' | 'device'; from?: Endpoint; to?: Endpoint; route?: 'server' | 'delegated' | 'webrtc' | 'dual-phase' | 'direct' | 'p2p' | 'face'; note?: string };
