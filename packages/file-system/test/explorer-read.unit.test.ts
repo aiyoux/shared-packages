@@ -70,17 +70,23 @@ describe('readExplorerBlob', () => {
 		assert.equal(same, 'http://127.0.0.1:7990/api/thumb.jpg');
 
 		const orig = globalThis.fetch;
-		globalThis.fetch = (async () =>
-			new Response(new Uint8Array([0xff, 0xd8]), {
+		let init: (RequestInit & { targetAddressSpace?: string }) | undefined;
+		globalThis.fetch = (async (_url: RequestInfo | URL, i?: RequestInit) => {
+			init = i;
+			return new Response(new Uint8Array([0xff, 0xd8]), {
 				status: 200,
 				headers: { 'content-type': 'image/jpeg' }
-			})) as typeof fetch;
+			});
+		}) as typeof fetch;
 		try {
 			const url = await embedMediaUrl(
 				'http://127.0.0.1:8300/v1/fs/thumb?path=a.png',
-				{ pageHref: 'http://127.0.0.1:7990/tools/files' }
+				{ pageHref: 'https://tools.codokie.com/tools/files' }
 			);
 			assert.equal(url.startsWith('blob:'), true);
+			// Declared up front, so Chrome does not file a Local Network Access
+			// issue per thumbnail.
+			assert.equal(init?.targetAddressSpace, 'loopback');
 		} finally {
 			globalThis.fetch = orig;
 		}

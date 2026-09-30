@@ -5,6 +5,7 @@
  * @see docs/design/dnd-inmem-copy.md
  */
 import type { FileTypeId } from '../types.js';
+import { withLocalAddressSpace } from '../monitor/localNetwork.js';
 import { mediaSrcIsEmbeddable } from './saveToDisk.js';
 
 /** Stable id within one driver instance (VFS node id or B2 key/prefix). */
@@ -623,14 +624,15 @@ export async function loadExplorerMediaSrc(
  * Put `url` in `<img>`/`<video>` only when hub CSP allows it. Monitor
  * `http://127.0.0.1:8300/v1/fs/thumb` is another origin and is not in
  * `img-src`, so fetch the bytes (connect-src allows loopback HTTP) and
- * return a `blob:` URL.
+ * return a `blob:` URL. The fetch declares its local address space, or Chrome
+ * files a Local Network Access issue for every thumbnail.
  */
 export async function embedMediaUrl(
 	url: string,
 	opts?: { pageHref?: string }
 ): Promise<string> {
 	if (mediaSrcIsEmbeddable(url, opts?.pageHref)) return url;
-	const res = await fetch(url);
+	const res = await fetch(url, withLocalAddressSpace(url));
 	if (!res.ok) throw new Error(`Could not load media (${res.status})`);
 	return URL.createObjectURL(await res.blob());
 }
