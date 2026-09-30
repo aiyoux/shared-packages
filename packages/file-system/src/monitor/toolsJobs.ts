@@ -62,8 +62,14 @@ export type MonitorToolsProbe = {
 	srmd: boolean;
 	/** `capabilities.tools.audio` — the audio upsampling engine (audiosronnx). */
 	audio: boolean;
+	/** `capabilities.tools.pytorch` — the UniverSR/AudioSR runtime is configured. */
+	pytorch: boolean;
 	/** `capabilities.jobs` — the unified lifecycle (W7); false → NDJSON fallback. */
 	jobsApi: boolean;
+	/** The per-task pick this monitor was resolved from (its `modelId` names the engine). */
+	pickModelId?: string;
+	/** Daemon catalog rows include shared prerequisites such as FFmpeg. */
+	toolOffers?: Record<string, { available: boolean; reason?: string | null }>;
 };
 
 // Last error seen per server job id (the failed tick carries the detail).
@@ -89,23 +95,97 @@ export async function probeToolsFeature(
 	baseUrl: string,
 	fetchImpl: typeof fetch = fetch,
 	signal?: AbortSignal
-): Promise<{ rife: boolean; srmd: boolean; audio: boolean; jobsApi: boolean }> {
+): Promise<Pick<MonitorToolsProbe, 'rife' | 'srmd' | 'audio' | 'pytorch' | 'jobsApi' | 'toolOffers'>> {
 	const url = `${baseUrl.replace(/\/$/, '')}/v1/meta`;
 	const res = await fetchImpl(url, withLocalAddressSpace(url, { signal }));
 	if (!res.ok) {
 		await throwEnvelopeError(res, `Monitor meta failed: ${res.status}`);
 	}
 	const meta = (await res.json()) as {
-		capabilities?: { tools?: { rife?: boolean; srmd?: boolean; audio?: boolean }; jobs?: boolean };
+		capabilities?: {
+			tools?: { rife?: boolean; srmd?: boolean; audio?: boolean; pytorch?: boolean };
+			jobs?: boolean;
+		};
 	};
 	const tools = meta.capabilities?.tools;
 	// Missing key = false (mixed-version rule).
-	return {
+	const caps = {
 		rife: !!tools?.rife,
 		srmd: !!tools?.srmd,
 		audio: !!tools?.audio,
+		pytorch: !!tools?.pytorch,
 		jobsApi: meta.capabilities?.jobs === true
 	};
+	// New daemons publish complete availability in their catalog, including
+	// FFmpeg/ffprobe. Older catalogs may omit tools entirely; keep their meta
+	// flags rather than inventing a missing FFmpeg capability.
+	try {
+		const catalogUrl = `${baseUrl.replace(/\/$/, '')}/v1/ai/catalog`;
+		const catalog = await fetchImpl(catalogUrl, withLocalAddressSpace(catalogUrl, { signal }));
+		if (catalog.ok) {
+			const body = await catalog.json() as { offers?: Array<{ id?: string; available?: boolean; reason?: string | null }> };
+			const toolOffers: NonNullable<MonitorToolsProbe['toolOffers']> = {};
+			for (const row of body.offers ?? []) {
+				if (row.id?.startsWith('tools:') && typeof row.available === 'boolean') {
+					toolOffers[row.id.slice(6)] = { available: row.available, reason: row.reason };
+				}
+			}
+			if (Object.keys(toolOffers).length) return { ...caps, toolOffers };
+		}
+	} catch (error) {
+		if (signal?.aborted) throw error;
+		/* Older monitors can lack the catalog route; their meta remains usable. */
+	}
+	return caps;
+}
+
+/** Audio engines on the monitor's Python/PyTorch runtime (`offers.rs` rows). */
+export const PYTORCH_AUDIO_ENGINES = ['universr', 'audiosr'] as const;
+
+/**
+ * The monitor's catalog row key an engine or tool needs (frozen with
+ * `offers.rs`): `rife`, `srmd`, `audio` (the ONNX engines), `universr`,
+ * `audiosr`.
+ */
+export function toolRowKey(tool: MonitorToolId, engine?: string): string {
+	if (tool !== 'audio') return tool;
+	return (PYTORCH_AUDIO_ENGINES as readonly string[]).includes(engine ?? '') ? engine! : 'audio';
+}
+
+/** Whether a probed monitor has what a row needs. */
+export function toolRowPresent(monitor: Pick<MonitorToolsProbe, 'rife' | 'srmd' | 'audio' | 'pytorch' | 'toolOffers'>, key: string): boolean {
+	const row = monitor.toolOffers?.[key];
+	if (row) return row.available;
+	if (key === 'rife') return monitor.rife;
+	if (key === 'srmd') return monitor.srmd;
+	if (key === 'audio') return monitor.audio;
+	return monitor.pytorch;
+}
+
+/**
+ * Why a monitor cannot run a row, in the daemon's words: its catalog row
+ * carries the install steps (one text, `offers.rs install_hint`). Falls back
+ * to a short line when the catalog cannot be read.
+ */
+export async function toolUnavailableReason(
+	monitor: Pick<MonitorToolsProbe, 'baseUrl' | 'name' | 'toolOffers'>,
+	key: string,
+	fetchImpl: typeof fetch = fetch
+): Promise<string> {
+	const reason = monitor.toolOffers?.[key]?.reason;
+	if (reason) return `${monitor.name}: ${reason}`;
+	try {
+		const url = `${monitor.baseUrl.replace(/\/$/, '')}/v1/ai/catalog`;
+		const res = await fetchImpl(url, withLocalAddressSpace(url, {}));
+		if (res.ok) {
+			const body = (await res.json()) as { offers?: Array<{ id?: string; reason?: unknown }> };
+			const row = body.offers?.find((o) => o.id === `tools:${key}`);
+			if (typeof row?.reason === 'string' && row.reason) return `${monitor.name}: ${row.reason}`;
+		}
+	} catch {
+		/* fall through */
+	}
+	return `"${monitor.name}" cannot run ${key} (not installed). See Settings → AI models for how to install it.`;
 }
 
 /**
@@ -118,13 +198,6 @@ export type ToolTaskKey = Extract<
 	AiTask,
 	'video-upscale' | 'video-interpolate' | 'audio-upsampling'
 >;
-
-/** The engine binary a task's catalog offer names on the monitor. */
-export const TOOL_TASK_MODEL: Record<ToolTaskKey, string> = {
-	'video-upscale': 'srmd-ncnn-vulkan',
-	'video-interpolate': 'rife-ncnn-vulkan',
-	'audio-upsampling': 'audiosronnx'
-};
 
 const TOOL_TASK_LABEL: Record<ToolTaskKey, string> = {
 	'video-upscale': 'video upscale',
@@ -200,24 +273,26 @@ export async function resolveSelectedToolsMonitor(
 		}
 	}
 	const caps = await probeToolsFeature(candidate.baseUrl, deps.fetchImpl);
-	const selectedToolIsMissing =
-		(task === 'video-upscale' && !caps.srmd) ||
-		(task === 'video-interpolate' && !caps.rife) ||
-		(task === 'audio-upsampling' && !caps.audio);
-	if (selectedToolIsMissing) {
-		throw new Error(
-			`"${candidate.name}" has no ${TOOL_TASK_MODEL[task]} (pick a ${taskLabel(task)} monitor in Settings → AI models).`
-		);
-	}
-	return {
+	const monitor: MonitorToolsProbe = {
 		profileId: candidate.id,
 		name: candidate.name,
 		baseUrl: candidate.baseUrl.replace(/\/$/, ''),
 		rife: caps.rife,
 		srmd: caps.srmd,
 		audio: caps.audio,
-		jobsApi: caps.jobsApi
+		pytorch: caps.pytorch,
+		jobsApi: caps.jobsApi,
+		...(caps.toolOffers ? { toolOffers: caps.toolOffers } : {}),
+		pickModelId: ref.modelId
 	};
+	// Video tasks have one engine: say now, with the daemon's install steps,
+	// when the picked monitor lacks it. Audio depends on the engine chosen at
+	// run time, so its check happens there.
+	const videoKey = task === 'video-upscale' ? 'srmd' : task === 'video-interpolate' ? 'rife' : null;
+	if (videoKey && !toolRowPresent(monitor, videoKey)) {
+		throw new Error(await toolUnavailableReason(monitor, videoKey, deps.fetchImpl));
+	}
+	return monitor;
 }
 
 /** Client-generated submit id (`?id=`) — doubles as the caller's op id. */
@@ -432,23 +507,19 @@ export async function runMonitorToolJob(
 	onTick: (tick: MonitorToolProgress) => void = () => {}
 ): Promise<{ blob: Blob; jobId: string }> {
 	const { monitor, tool, params } = input;
-	if (tool === 'rife' && !monitor.rife)
-		throw new Error('This monitor has no RIFE (rife-ncnn-vulkan not installed).');
-	if (tool === 'srmd' && !monitor.srmd)
-		throw new Error('This monitor has no SRMD (srmd-ncnn-vulkan not installed).');
-	if (tool === 'audio' && !monitor.audio)
-		throw new Error('This monitor has no audio upsampling engine (audiosronnx not installed).');
+	const key = toolRowKey(tool, params.engine);
 	const jobs = createMonitorJobsClient(monitor.baseUrl);
 	let jobId: string | null = null;
+	let stopFallbackCancel: (() => void) | undefined;
 	try {
+		if (handle.signal.aborted) throw new Error('Job aborted');
+		if (!toolRowPresent(monitor, key)) throw new Error(await toolUnavailableReason(monitor, key));
 		// Best-effort abort for a cancel that arrives after the submit but
 		// while this tab still owns the job (the W8 leader takes over once
 		// the feed imports the record).
-		const stopFallbackCancel = handle.onCancelRequest(() => {
+		stopFallbackCancel = handle.onCancelRequest(() => {
 			if (jobId && monitor.jobsApi) void jobs.abort(`tools:${jobId}`).catch(() => {});
 		});
-		handle.signal.addEventListener('abort', () => stopFallbackCancel(), { once: true });
-
 		jobId = await submitMonitorToolJob(
 			{ baseUrl: monitor.baseUrl, tool, params, id: handle.id, body: input.body, signal: handle.signal }
 		);
@@ -486,7 +557,12 @@ export async function runMonitorToolJob(
 				/* best effort */
 			}
 		}
+		// OpHandle.fail preserves an imported monitor's durable lifecycle and
+		// leaves terminal records intact, while closing locally owned submits.
+		await handle.fail(error);
 		throw error;
+	} finally {
+		stopFallbackCancel?.();
 	}
 }
 
@@ -588,18 +664,19 @@ export function createMonitorVideoTools(options: MonitorVideoToolsOptions = {}):
 			// Each panel contract resolves its own task; a missing selection or a
 			// dead pick surfaces through the missing path, and the panel turns
 			// that into its own connected/disconnected state.
-			const out: { rifePath?: string; srmdPath?: string } = {};
+			const out: { rifePath?: string; srmdPath?: string; rifeError?: string; srmdError?: string } = {};
 			try {
 				const rife = await resolve('video-interpolate');
-				out.rifePath = rife.rife ? `monitor:${rife.name}` : undefined;
-			} catch {
-				/* no video-interpolate selection (yet) */
+				out.rifePath = `monitor:${rife.name}`;
+			} catch (err) {
+				// No pick, a dead pin, or not installed: the resolver says which.
+				out.rifeError = (err as Error)?.message;
 			}
 			try {
 				const srmd = await resolve('video-upscale');
-				out.srmdPath = srmd.srmd ? `monitor:${srmd.name}` : undefined;
-			} catch {
-				/* no video-upscale selection (yet) */
+				out.srmdPath = `monitor:${srmd.name}`;
+			} catch (err) {
+				out.srmdError = (err as Error)?.message;
 			}
 			return out;
 		},
@@ -662,8 +739,32 @@ export function createMonitorVideoTools(options: MonitorVideoToolsOptions = {}):
  * own video stream muxed back) when the input had video. Structurally
  * satisfies `VideoAudioUpscaler` in `@shared-packages/video`.
  */
+/** Audio engines the panel offers, in order (runtime per `toolRowKey`). */
+export const AUDIO_UPSAMPLE_ENGINES: ReadonlyArray<{ id: string; label: string }> = [
+	{ id: 'lavasr', label: 'LavaSR (speech, fast)' },
+	{ id: 'novasr', label: 'NovaSR (speech, fastest)' },
+	{ id: 'sidon', label: 'Sidon' },
+	{ id: 'callenhancer', label: 'CallEnhancer' },
+	{ id: 'hifiganbwe', label: 'HiFiGAN-BWE' },
+	{ id: 'apbwe', label: 'AP-BWE' },
+	{ id: 'flowhigh', label: 'FlowHigh' },
+	{ id: 'universr', label: 'UniverSR (music + speech, PyTorch)' },
+	{ id: 'audiosr', label: 'AudioSR (highest quality, slow, PyTorch)' }
+];
+
+export type MonitorAudioToolsStatus = {
+	audioPath?: string;
+	/** Why no monitor resolved (no pick, dead pin). */
+	audioError?: string;
+	/** The engine the pick names (`universr`/`audiosr`), else `lavasr`. */
+	defaultEngine?: string;
+	/** Engines the picked monitor cannot run, with the daemon's install steps. */
+	unavailable?: Record<string, string>;
+	engines?: ReadonlyArray<{ id: string; label: string }>;
+};
+
 export type MonitorAudioTools = {
-	checkStatus: () => Promise<{ audioPath?: string }>;
+	checkStatus: () => Promise<MonitorAudioToolsStatus>;
 	newJobId: () => string;
 	pollProgress: (id: string, onProgress: (n: number) => void) => () => void;
 	upsample: (
@@ -681,12 +782,18 @@ export function createMonitorAudioTools(options: MonitorAudioToolsOptions = {}):
 	async function resolve(): Promise<MonitorToolsProbe> {
 		return await resolveSelectedToolsMonitor('audio-upsampling', selectionAppId);
 	}
+	/** A pick of a PyTorch row names its engine; the ONNX row leaves it to the panel. */
+	function pickEngine(monitor: MonitorToolsProbe): string {
+		const id = monitor.pickModelId ?? '';
+		return (PYTORCH_AUDIO_ENGINES as readonly string[]).includes(id) ? id : 'lavasr';
+	}
 	async function upsampleBlob(blob: Blob, opts: { engine?: string; denoise?: boolean; id: string }): Promise<Blob> {
 		const monitor = await resolve();
+		const engine = opts.engine || pickEngine(monitor);
 		const handle = await startOp({
 			kind: 'audio-tool',
 			app,
-			title: `Upsample · ${opts.engine || 'lavasr'}${opts.denoise ? ' · denoise' : ''}`,
+			title: `Upsample · ${engine}${opts.denoise ? ' · denoise' : ''}`,
 			where: { executor: 'monitor', note: monitor.name },
 			id: opts.id
 		});
@@ -694,7 +801,7 @@ export function createMonitorAudioTools(options: MonitorAudioToolsOptions = {}):
 			monitor,
 			tool: 'audio',
 			params: {
-				...(opts.engine ? { engine: opts.engine } : {}),
+				engine,
 				...(opts.denoise ? { denoise: '1' } : {})
 			},
 			body: blob
@@ -704,15 +811,28 @@ export function createMonitorAudioTools(options: MonitorAudioToolsOptions = {}):
 	}
 	return {
 		checkStatus: async () => {
+			let monitor: MonitorToolsProbe;
 			try {
-				const monitor = await resolve();
-				return {
-					audioPath: monitor.audio ? `monitor:${monitor.name}` : undefined
-				};
-			} catch {
-				// No audio-upsampling selection (yet) — the app's catch shows why.
-				return {};
+				monitor = await resolve();
+			} catch (err) {
+				return { audioError: (err as Error)?.message };
 			}
+			const unavailable: Record<string, string> = {};
+			const reasons = new Map<string, Promise<string>>();
+			for (const { id } of AUDIO_UPSAMPLE_ENGINES) {
+				const key = toolRowKey('audio', id);
+				if (toolRowPresent(monitor, key)) continue;
+				if (!reasons.has(key)) reasons.set(key, toolUnavailableReason(monitor, key));
+				unavailable[id] = await reasons.get(key)!;
+			}
+			return {
+				...(AUDIO_UPSAMPLE_ENGINES.some(({ id }) => toolRowPresent(monitor, toolRowKey('audio', id)))
+					? { audioPath: `monitor:${monitor.name}` }
+					: { audioError: unavailable[pickEngine(monitor)] }),
+				engines: AUDIO_UPSAMPLE_ENGINES,
+				defaultEngine: pickEngine(monitor),
+				unavailable
+			};
 		},
 		newJobId: newMonitorToolRequestId,
 		pollProgress: audioUpsamplerPollProgress,

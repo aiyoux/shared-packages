@@ -48,6 +48,17 @@ import Loader2 from '@lucide/svelte/icons/loader-2';
 
 	let useAudioUpsample = $state(false);
 	let audioEngine = $state('lavasr');
+	let audioEngines = $state<ReadonlyArray<{ id: string; label: string }>>([
+		{ id: 'lavasr', label: 'LavaSR (Recommended)' },
+		{ id: 'novasr', label: 'NovaSR' },
+		{ id: 'sidon', label: 'Sidon' },
+		{ id: 'callenhancer', label: 'CallEnhancer' },
+		{ id: 'hifiganbwe', label: 'HiFiGAN-BWE' },
+		{ id: 'apbwe', label: 'AP-BWE' },
+		{ id: 'flowhigh', label: 'FlowHigh' }
+	]);
+	/** Engine → why the picked monitor cannot run it (install steps). */
+	let audioUnavailable = $state<Record<string, string>>({});
 	let audioDenoise = $state(false);
 	let audioConnectionStatus = $state<'idle' | 'checking' | 'connected' | 'failed'>('idle');
 	let audioMessage = $state('');
@@ -87,7 +98,8 @@ import Loader2 from '@lucide/svelte/icons/loader-2';
 			const data = await interpolator.checkStatus();
 			if (!data.rifePath) {
 				rifeConnectionStatus = 'failed';
-				rifeMessage = 'No monitor picked for interpolation — choose one in Settings → AI models.';
+				rifeMessage =
+					data.rifeError || 'No monitor picked for interpolation — choose one in Settings → AI models.';
 				return;
 			}
 			rifeConnectionStatus = 'connected';
@@ -116,7 +128,8 @@ import Loader2 from '@lucide/svelte/icons/loader-2';
 			const data = await upscaler.checkStatus();
 			if (!data.srmdPath) {
 				srmdConnectionStatus = 'failed';
-				srmdMessage = 'No monitor picked for upscaling — choose one in Settings → AI models.';
+				srmdMessage =
+					data.srmdError || 'No monitor picked for upscaling — choose one in Settings → AI models.';
 				return;
 			}
 			srmdConnectionStatus = 'connected';
@@ -139,8 +152,14 @@ import Loader2 from '@lucide/svelte/icons/loader-2';
 			const data = await audioUpscaler.checkStatus();
 			if (!data.audioPath) {
 				audioConnectionStatus = 'failed';
-				audioMessage = 'No monitor picked for audio upsampling — choose one in Settings → AI models.';
+				audioMessage =
+					data.audioError || 'No monitor picked for audio upsampling — choose one in Settings → AI models.';
 				return;
+			}
+			if (data.engines?.length) audioEngines = data.engines;
+			audioUnavailable = data.unavailable ?? {};
+			if (data.defaultEngine && audioEngines.some((e) => e.id === data.defaultEngine)) {
+				audioEngine = data.defaultEngine;
 			}
 			audioConnectionStatus = 'connected';
 			audioMessage = `Audio upsampler ready (${data.audioPath})`;
@@ -236,7 +255,7 @@ import Loader2 from '@lucide/svelte/icons/loader-2';
 		let resultName = sourceBlob instanceof File ? sourceBlob.name : 'video.mp4';
 
 		const trimWeight = modelStages.length === 0 ? 100 : modelStages.length === 1 ? 50 : 40;
-		const modelWeight = modelStages.length === 0 ? 0 : modelStages.length === 1 ? 50 : 30;
+		const modelWeight = 100 - trimWeight;
 
 		try {
 			processingStep = 'Trimming & Resizing video...';
@@ -256,7 +275,9 @@ import Loader2 from '@lucide/svelte/icons/loader-2';
 				processingStep = stage.label;
 				progress = bandStart;
 				const bandEnd = bandStart + (modelWeight / modelStages.length);
-				result = await stage.run(result);
+				result = await stage.run(result, (percent) => {
+					progress = Math.round(bandStart + Math.min(100, Math.max(0, percent)) * modelWeight / (100 * modelStages.length));
+				});
 				resultName = toStageName(resultName, stage.suffix);
 				progress = Math.round(bandEnd);
 				bandStart = bandEnd;
@@ -319,10 +340,10 @@ import Loader2 from '@lucide/svelte/icons/loader-2';
 </div>
 
 {#if interpolator}
-<!-- RIFE Frame Interpolation (Local Bridge) -->
+<!-- RIFE Frame Interpolation -->
 <div class="settings-section">
 	<div class="settings-header-row">
-		<h3>RIFE Frame Interpolation (Local Bridge)</h3>
+		<h3>RIFE Frame Interpolation</h3>
 		{#if rifeConnectionStatus !== 'idle'}
 			<div class="rife-connection-badge rife-connection-{rifeConnectionStatus}">
 				<span class="badge-dot"></span>
@@ -451,14 +472,17 @@ import Loader2 from '@lucide/svelte/icons/loader-2';
 				<div class="setting">
 					<label for="audioEngine">Engine</label>
 					<select id="audioEngine" bind:value={audioEngine}>
-						<option value="lavasr">LavaSR (Recommended)</option>
-						<option value="novasr">NovaSR</option>
-						<option value="sidon">Sidon</option>
-						<option value="callenhancer">CallEnhancer</option>
-						<option value="hifiganbwe">HiFiGAN-BWE</option>
-						<option value="apbwe">AP-BWE</option>
-						<option value="flowhigh">FlowHigh</option>
+						{#each audioEngines as engine (engine.id)}
+							<option value={engine.id}>
+								{engine.label}{audioUnavailable[engine.id] ? ' — not installed' : ''}
+							</option>
+						{/each}
 					</select>
+					{#if audioUnavailable[audioEngine]}
+						<p class="engine-unavailable" data-testid="audio-engine-unavailable">
+							{audioUnavailable[audioEngine]}
+						</p>
+					{/if}
 				</div>
 				<div class="setting">
 					<label for="audioDenoise">Denoise (LavaSR only)</label>
@@ -504,6 +528,13 @@ import Loader2 from '@lucide/svelte/icons/loader-2';
 </div>
 
 <style>
+	.engine-unavailable {
+		margin: 6px 0 0;
+		font-size: 0.8rem;
+		line-height: 1.4;
+		color: var(--text-secondary);
+		overflow-wrap: anywhere;
+	}
 	.settings-section h3 {
 		font-size: 1rem;
 		color: var(--text-secondary);

@@ -20,6 +20,16 @@ beforeEach(() => {
  registerBrowserAiHandler('test', { kind: 'transcribe', run: async (_action, _payload, ctx) => { ctx.state('loaded'); mocks.steps.push('inference'); return 'words'; }, capture: (result) => new Blob([String(result)], { type: 'text/plain' }), dispose: vi.fn() });
 });
 describe('browser host durable execution', () => {
+ it('passes the actual audio-tool container to output selection and keeps its op kind', async () => {
+  const videoLanding = { kind: 'vfs-folder' as const, folderId: 'chosen-folder', name: 'upsampled.mp4' };
+  const chooseOutput = vi.fn(async () => videoLanding);
+  configureBrowserAiHost({ chooseOutput, land: async () => {} });
+  registerBrowserAiHandler('audio-container', { kind: 'audio-tool', run: async () => new Blob(['video'], { type: 'video/mp4' }), capture: (result) => result as Blob, dispose: vi.fn() });
+  const result = await runBrowserAi<Blob>('audio-container', 'upsample', {}, 'NovaSR', { title: 'Upsample', outputExtension: '.mp4' });
+  expect(chooseOutput).toHaveBeenCalledWith('audio-tool', 'Upsample', '.mp4');
+  expect(mocks.start).toHaveBeenCalledWith(expect.objectContaining({ kind: 'audio-tool', landing: videoLanding }));
+  expect(result.type).toBe('video/mp4');
+ });
  it('chooses output, owns the op, captures and lands before returning output', async () => {
   expect(await runBrowserAi('test', 'transcribe', {}, 'test-model')).toBe('words');
   expect(mocks.steps).toEqual(['start', 'inference', 'capture', 'done', 'land']);

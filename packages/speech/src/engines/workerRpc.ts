@@ -48,6 +48,7 @@ export function createWorkerRpc(create: () => Worker, label: string, onLost: () 
 		if (worker) return worker;
 		const created = create();
 		created.onmessage = (event: MessageEvent<WorkerReply>) => {
+			if (worker !== created) return;
 			const reply = event.data;
 			const waiter = waiters.get(reply.id);
 			if (!waiter) return;
@@ -58,6 +59,7 @@ export function createWorkerRpc(create: () => Worker, label: string, onLost: () 
 		};
 		created.onerror = (event) => {
 			event.preventDefault();
+			if (worker !== created) return;
 			failAll(
 				new SpeechEngineError(
 					'SYNTHESIS_FAILED',

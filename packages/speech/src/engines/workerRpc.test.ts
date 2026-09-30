@@ -35,4 +35,18 @@ describe('host inference worker bridge', () => {
   const rpc = createWorkerRpc(() => worker as unknown as Worker, 'test-clone', () => {});
   await expect(rpc.call('load', {})).rejects.toMatchObject({ name: 'DataCloneError' }); rpc.reset();
  });
+ it('an old worker error cannot terminate or reject its replacement', async () => {
+  const stale = new FakeWorker(); const fresh = new FakeWorker();
+  let created = 0;
+  const rpc = createWorkerRpc(() => (created++ === 0 ? stale : fresh) as unknown as Worker, 'test-stale-error', () => {});
+  const original = rpc.call('load', {});
+  const cancelled = expect(original).rejects.toMatchObject({ code: 'CANCELLED' });
+  rpc.reset(); await cancelled;
+  const replacement = rpc.call('load', {});
+  stale.onerror?.({ preventDefault() {}, message: 'queued error from terminated worker' } as ErrorEvent);
+  expect(fresh.terminated).toBe(false);
+  fresh.reply({ id: fresh.requests[0]!.id, ok: true, result: 'loaded' });
+  await expect(replacement).resolves.toBe('loaded'); rpc.reset();
+ });
+
 });

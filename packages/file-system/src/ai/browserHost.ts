@@ -5,9 +5,9 @@ import { stageOpResult } from '../services/landing.js';
 import { createBrowserHostCore, type BrowserHostContext, type BrowserHostFrame, type BrowserHostRequest } from './browserHostCore.js';
 
 export type BrowserAiOutput = { landing: LandingAddress; title?: string; chat?: StartOp['chat'] };
-export type BrowserAiRunOptions = Partial<BrowserAiOutput> & { signal?: AbortSignal; onProgress?: (value: unknown) => void };
+export type BrowserAiRunOptions = Partial<BrowserAiOutput> & { outputExtension?: string; signal?: AbortSignal; onProgress?: (value: unknown) => void };
 export type BrowserAiHandler = {
- kind: Extract<OpKindId, 'transcribe' | 'speak' | 'generate' | 'chat'>;
+ kind: Extract<OpKindId, 'transcribe' | 'speak' | 'generate' | 'chat' | 'audio-tool'>;
  run(action: string, payload: unknown, context: BrowserHostContext): Promise<unknown>;
  capture(result: unknown): Promise<Blob> | Blob;
  reply?(result: unknown, action: string): unknown;
@@ -16,7 +16,7 @@ export type BrowserAiHandler = {
 const handlers = new Map<string, BrowserAiHandler>();
 const tails = new Map<string, Promise<unknown>>();
 const loadedModels = new Map<string, string>();
-let configuration: { chooseOutput?: (kind: OpKindId, title: string) => Promise<LandingAddress | null>; land?: (id: string) => Promise<unknown> } = {};
+let configuration: { chooseOutput?: (kind: OpKindId, title: string, extension?: string) => Promise<LandingAddress | null>; land?: (id: string) => Promise<unknown> } = {};
 let singleton: ReturnType<typeof createBrowserHostCore> | null = null;
 export function configureBrowserAiHost(config: typeof configuration): void { configuration = config; }
 export function registerBrowserAiHandler(id: string, handler: BrowserAiHandler): void { handlers.set(id, handler); }
@@ -111,7 +111,7 @@ export async function runBrowserAi<T>(handler: string, action: string, payload: 
  const entry = handlers.get(handler);
  if (action !== 'load' && action !== 'probe' && !landing) {
   if (!entry || !configuration.chooseOutput) throw new Error('Choose an output destination before starting browser AI');
-  landing = await configuration.chooseOutput(entry.kind, options.title ?? model) ?? undefined;
+  landing = await configuration.chooseOutput(entry.kind, options.title ?? model, options.outputExtension) ?? undefined;
   if (!landing) throw new DOMException('Output selection cancelled', 'AbortError');
  }
  options.signal?.throwIfAborted();

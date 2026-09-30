@@ -280,9 +280,16 @@ it('a pick whose monitor lost the engine is an error, never a reroute', async ()
 				variantId: 'ncnn-vulkan'
 			}),
 			'a',
-			[{ url: 'http://127.0.0.1:9904/v1/meta', res: ok({ capabilities: { tools: { rife: true } } }) }]
+			[
+				{ url: 'http://127.0.0.1:9904/v1/meta', res: ok({ capabilities: { tools: { rife: true } } }) },
+				{
+					url: 'http://127.0.0.1:9904/v1/ai/catalog',
+					res: ok({ offers: [{ id: 'tools:srmd', reason: 'SRMD (srmd-ncnn-vulkan) is not installed on this monitor. Download…' }] })
+				}
+			]
 		)),
-		/Engine gone" has no srmd-ncnn-vulkan/
+		// The daemon's own install steps, prefixed with the monitor's name.
+		/Engine gone: SRMD \(srmd-ncnn-vulkan\) is not installed on this monitor/
 	);
 });
 
@@ -311,14 +318,17 @@ it('rejects an audio run against a monitor without the audio engine', async () =
 		rife: true,
 		srmd: false,
 		audio: false,
+		pytorch: false,
 		jobsApi: false
 	};
+	let failed = 0;
 	const handle = {
 		id: 'op-1',
 		signal: new AbortController().signal,
 		onCancelRequest: () => () => {},
 		progress: () => {},
 		cancelled: async () => {},
+		fail: async () => { failed += 1; },
 		cancel: () => {}
 	} as never;
 	await assert.rejects(
@@ -327,6 +337,126 @@ it('rejects an audio run against a monitor without the audio engine', async () =
 			{ monitor, tool: 'audio', params: { engine: 'lavasr' }, body: new Blob(['a']) },
 			() => {}
 		),
-		/audiosronnx not installed/
+		/Frames only" cannot run audio \(not installed\)/
 	);
+	assert.equal(failed, 1);
+});
+
+it('a PyTorch engine needs the PyTorch runtime, not the ONNX CLI', async () => {
+	const { runMonitorToolJob, toolRowKey, toolRowPresent } = await import('../src/monitor/toolsJobs.ts');
+	assert.equal(toolRowKey('audio', 'universr'), 'universr');
+	assert.equal(toolRowKey('audio', 'lavasr'), 'audio');
+	assert.equal(toolRowKey('rife'), 'rife');
+	const onnxOnly = { rife: false, srmd: false, audio: true, pytorch: false };
+	assert.equal(toolRowPresent(onnxOnly, 'audio'), true);
+	assert.equal(toolRowPresent(onnxOnly, 'audiosr'), false);
+	const monitor = { profileId: 'x', name: 'ONNX only', baseUrl: 'http://127.0.0.1:9905', ...onnxOnly, jobsApi: false };
+	let failed = 0;
+	const handle = {
+		id: 'op-2',
+		signal: new AbortController().signal,
+		onCancelRequest: () => () => {},
+		progress: () => {},
+		cancelled: async () => {},
+		fail: async () => { failed += 1; },
+		cancel: () => {}
+	} as never;
+	await assert.rejects(
+		runMonitorToolJob(handle, { monitor, tool: 'audio', params: { engine: 'universr' }, body: new Blob(['a']) }, () => {}),
+		/cannot run universr/
+	);
+	assert.equal(failed, 1);
+});
+
+it('uses catalog availability when an installed engine lacks FFmpeg', async () => {
+	const { runMonitorToolJob, toolRowPresent, toolUnavailableReason } = await import('../src/monitor/toolsJobs.ts');
+	const reason = 'ffmpeg or ffprobe is not installed. Install both commands.';
+	const requests: FetchMock = [
+		{ url: 'http://127.0.0.1:9906/v1/meta', res: ok({ capabilities: { tools: { srmd: true, audio: true, pytorch: true } } }) },
+		{ url: 'http://127.0.0.1:9906/v1/ai/catalog', res: ok({ offers: ['srmd', 'audio', 'universr', 'audiosr'].map((key) => ({ id: `tools:${key}`, available: false, reason })) }) }
+	];
+	const caps = await probeToolsFeature('http://127.0.0.1:9906', fetchFrom(requests));
+	for (const key of ['srmd', 'audio', 'universr', 'audiosr']) assert.equal(toolRowPresent(caps, key), false);
+	assert.equal(await toolUnavailableReason({ ...caps, baseUrl: 'http://127.0.0.1:9906', name: 'Desktop' }, 'audio', fetchFrom([])), `Desktop: ${reason}`);
+	let failed = 0;
+	await assert.rejects(runMonitorToolJob({
+		id: 'catalog-unavailable', signal: new AbortController().signal,
+		fail: async () => { failed += 1; }
+	} as never, {
+		monitor: { ...caps, profileId: 'desktop', baseUrl: 'http://127.0.0.1:9906', name: 'Desktop' },
+		tool: 'audio', params: { engine: 'audiosr' }, body: new Blob(['input'])
+	}), /Desktop: ffmpeg or ffprobe is not installed/);
+	assert.equal(failed, 1);
+	await assert.rejects(resolveSelectedToolsMonitor('video-upscale', 'files', depsFor(
+		[{ id: 'desktop', name: 'Desktop', baseUrl: 'http://127.0.0.1:9906' }],
+		mapOf('video-upscale', { location: 'monitor-native', modelId: 'srmd-ncnn-vulkan', monitorProfileId: 'desktop' }),
+		'desktop', requests
+	)), /Desktop: ffmpeg or ffprobe is not installed/);
+});
+
+it('a rejected submit fails the local operation with the daemon error', async (context) => {
+	const { runMonitorToolJob } = await import('../src/monitor/toolsJobs.ts');
+	context.mock.method(globalThis, 'fetch', async () => ok({ error: { code: 'tools.tool_unavailable', message: 'Install ffmpeg and ffprobe' } }, 409));
+	let state = 'running';
+	let failure: unknown;
+	let unsubscribed = 0;
+	const handle = {
+		id: 'rejected-submit', signal: new AbortController().signal,
+		onCancelRequest: () => () => { unsubscribed += 1; },
+		fail: async (error: unknown) => { state = 'failed'; failure = error; },
+		cancelled: async () => { state = 'cancelled'; }
+	} as never;
+	await assert.rejects(runMonitorToolJob(handle, {
+		monitor: { profileId: 'desktop', name: 'Desktop', baseUrl: 'http://127.0.0.1:9907', rife: false, srmd: false, audio: true, pytorch: true, jobsApi: true },
+		tool: 'audio', params: { engine: 'audiosr' }, body: new Blob(['input'])
+	}), /tools.tool_unavailable: Install ffmpeg and ffprobe/);
+	assert.equal(state, 'failed');
+	assert.match(String(failure), /Install ffmpeg and ffprobe/);
+	assert.equal(unsubscribed, 1);
+});
+
+it('audio status is unavailable when the catalog says FFmpeg is missing', async (context) => {
+	const { createMonitorAudioTools } = await import('../src/monitor/toolsJobs.ts');
+	const { saveProfile, deleteProfile, closeCredentialsDbForTests } = await import('../src/monitor/credentials.ts');
+	const { setAiModelRef, closeSelectionDbForTests } = await import('../src/ai/selection.ts');
+	const reason = 'ffmpeg or ffprobe is not installed. Install both commands.';
+	context.mock.method(globalThis, 'fetch', fetchFrom([
+		{ url: 'http://127.0.0.1:9909/v1/meta', res: ok({ capabilities: { tools: { audio: true, pytorch: true } } }) },
+		{ url: 'http://127.0.0.1:9909/v1/ai/catalog', res: ok({ offers: ['audio', 'universr', 'audiosr'].map((key) => ({ id: `tools:${key}`, available: false, reason })) }) }
+	]));
+	await saveProfile({ id: 'status-desktop', name: 'Desktop', baseUrl: 'http://127.0.0.1:9909', rootPath: '/' });
+	await setAiModelRef('audio-upsampling', 'missing-ffmpeg-test', { location: 'monitor-native', modelId: 'audiosr', sourceId: 'tools', variantId: 'pytorch', monitorProfileId: 'status-desktop' });
+	try {
+		const status = await createMonitorAudioTools({ app: 'missing-ffmpeg-test' }).checkStatus();
+		assert.equal(status.audioPath, undefined);
+		assert.equal(status.audioError, `Desktop: ${reason}`);
+		assert.equal(status.defaultEngine, 'audiosr');
+		assert.equal(status.unavailable?.audiosr, `Desktop: ${reason}`);
+	} finally {
+		await setAiModelRef('audio-upsampling', 'missing-ffmpeg-test', null);
+		await deleteProfile('status-desktop');
+		await closeCredentialsDbForTests();
+		await closeSelectionDbForTests();
+	}
+});
+
+it('a cancelled unavailable run closes as cancelled without submitting or failing', async (context) => {
+	const { runMonitorToolJob } = await import('../src/monitor/toolsJobs.ts');
+	let requests = 0;
+	context.mock.method(globalThis, 'fetch', async () => { requests += 1; throw new Error('No network request expected'); });
+	const controller = new AbortController(); controller.abort();
+	let cancelled = 0;
+	let failed = 0;
+	const handle = {
+		id: 'cancelled-run', signal: controller.signal,
+		fail: async () => { failed += 1; },
+		cancelled: async () => { cancelled += 1; }
+	} as never;
+	await assert.rejects(runMonitorToolJob(handle, {
+		monitor: { profileId: 'desktop', name: 'Desktop', baseUrl: 'http://127.0.0.1:9908', rife: false, srmd: false, audio: false, pytorch: false, jobsApi: true },
+		tool: 'audio', params: { engine: 'audiosr' }, body: new Blob(['input'])
+	}), /Job aborted/);
+	assert.equal(cancelled, 1);
+	assert.equal(failed, 0);
+	assert.equal(requests, 0);
 });

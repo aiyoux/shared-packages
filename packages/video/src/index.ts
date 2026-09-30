@@ -19,6 +19,7 @@ export {
 	type ExtractedAudio
 } from './extractAudio.js';
 export { encodeGif, type EncodeGifOpts } from './gif.js';
+export { replaceVideoAudio, hasVideoStream } from './replaceAudio.js';
 export {
 	audioOnlyContainer,
 	canEncodeAudioOnly,

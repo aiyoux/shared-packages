@@ -1,5 +1,7 @@
 export type VideoInterpolatorStatus = {
 	rifePath?: string;
+	/** Why there is no path: no pick, a dead pick, or not installed (with steps). */
+	rifeError?: string;
 };
 
 export type VideoInterpolator = {
@@ -11,6 +13,8 @@ export type VideoInterpolator = {
 
 export type VideoUpscalerStatus = {
 	srmdPath?: string;
+	/** Why there is no path: no pick, a dead pick, or not installed (with steps). */
+	srmdError?: string;
 };
 
 export type VideoUpscaler = {
@@ -25,6 +29,14 @@ export type VideoUpscaler = {
 
 export type VideoAudioUpscalerStatus = {
 	audioPath?: string;
+	/** Why there is no path: no pick or a dead pick. */
+	audioError?: string;
+	/** Engines to offer, in order; absent keeps the panel's LavaSR/NovaSR pair. */
+	engines?: ReadonlyArray<{ id: string; label: string }>;
+	/** The engine to preselect (the picked row's). */
+	defaultEngine?: string;
+	/** Engine id → why it cannot run here (install steps). */
+	unavailable?: Record<string, string>;
 };
 
 /**
