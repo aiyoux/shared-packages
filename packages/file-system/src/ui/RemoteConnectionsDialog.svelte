@@ -9,34 +9,50 @@
 	 *   connection kind — it is configured here instead (it used to be part
 	 *   of the monitor edit form).
 	 */
-	import { onMount } from 'svelte';
+	import { onMount, type Snippet } from 'svelte';
 	import '@shared-packages/design-system/button.css';
 	import { Tabs, type TabItem } from '@shared-packages/ui';
 	import ConnectionsTab from './ConnectionsTab.svelte';
 	import AiModelsTab from './AiModelsTab.svelte';
+	import MonitorStatus from './MonitorStatus.svelte';
+	import { listProfiles } from '../monitor/credentials.js';
+	import { HUB_MONITOR_PROFILES_CHANNEL, subscribeTabChannel } from '../crossTab.js';
+	import type { MonitorConnectionProfileV1 } from '../monitor/types.js';
 	import { portal } from './portal.js';
 	import type { RemoteKind } from './componentTypes.js';
 
 	interface Props {
 		onClose: () => void;
+		appearance?: Snippet;
+		outputs?: Snippet;
 		onConnected?: (kind: RemoteKind, profile: object) => void;
 		onDisconnected?: (kind: RemoteKind) => void;
 	}
 
-	let { onClose, onConnected, onDisconnected }: Props = $props();
+	let { onClose, onConnected, onDisconnected, appearance, outputs }: Props = $props();
 
-	const TAB_ITEMS: TabItem[] = [
+	const TAB_ITEMS = $derived<TabItem[]>([
 		{ value: 'connections', label: 'Connections', testId: 'settings-tab-connections' },
-		{ value: 'models', label: 'AI models', testId: 'settings-tab-models' }
-	];
+		{ value: 'models', label: 'AI models', testId: 'settings-tab-models' },
+		...(appearance ? [{ value: 'appearance', label: 'Appearance', testId: 'settings-tab-appearance' }] : []),
+		...(outputs ? [{ value: 'outputs', label: 'Outputs', testId: 'settings-tab-outputs' }] : [])
+	]);
 	type TabValue = (typeof TAB_ITEMS)[number]['value'];
 	let tab = $state<TabValue>('connections');
+	let monitors = $state<MonitorConnectionProfileV1[]>([]);
+	onMount(() => {
+		let disposed = false;
+		const refresh = () => { void listProfiles().then((rows) => { if (!disposed) monitors = rows; }).catch((error) => console.error('Could not read monitor profiles', error)); };
+		refresh();
+		const stop = subscribeTabChannel(HUB_MONITOR_PROFILES_CHANNEL, refresh);
+		return () => { disposed = true; stop(); };
+	});
 
 	onMount(() => {
 		// ConnectionsTab owns Escape while its body shows (cancel form vs
 		// close); the shell closes only while the AI tab is showing.
 		const onKey = (e: KeyboardEvent) => {
-			if (e.key !== 'Escape' || tab !== 'models') return;
+			if (e.key !== 'Escape' || tab === 'connections') return;
 			e.preventDefault();
 			onClose();
 		};
@@ -69,8 +85,15 @@
 
 			{#if tab === 'connections'}
 				<ConnectionsTab {onClose} {onConnected} {onDisconnected} />
-			{:else}
+				{#each monitors as profile (profile.id)}
+					<section aria-label={profile.name}><strong>{profile.name}</strong><MonitorStatus {profile} /></section>
+				{/each}
+			{:else if tab === 'models'}
 				<AiModelsTab />
+			{:else if tab === 'appearance'}
+				{@render appearance?.()}
+			{:else if tab === 'outputs'}
+				{@render outputs?.()}
 			{/if}
 		</div>
 	</div>

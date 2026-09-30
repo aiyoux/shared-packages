@@ -326,7 +326,7 @@ export function createMonitorWatchStream(
 
 	function resetWatchdog(): void {
 		if (watchdogTimer) clearTimeout(watchdogTimer);
-		if (stopped) return;
+		if (stopped || watchdogMs <= 0) return;
 		watchdogTimer = setTimeout(() => {
 			if (stopped) return;
 			console.warn('[monitor watch] watchdog timeout — forcing reconnect');

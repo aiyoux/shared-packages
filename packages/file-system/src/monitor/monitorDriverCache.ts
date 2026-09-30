@@ -8,6 +8,7 @@ import { abortAllHostStreams, abortHostStream } from './hostStream.js';
 import { createMonitorExplorerDriver } from './monitorExplorerDriver.js';
 import type { MonitorTransport } from './client.js';
 import type { MonitorConnectionProfileV1 } from './types.js';
+import { getMonitorLink } from '../services/monitorLink.js';
 
 export const MONITOR_DRIVER_HOLD_MS = 5 * 60 * 1000;
 
@@ -124,7 +125,18 @@ export async function acquireMonitorDriver(
 		const transport =
 			opts?.transport ??
 			createMonitorClient({ baseUrl: profile.baseUrl });
-		const driver = await createMonitorExplorerDriver({ profile, transport });
+  const shared = typeof navigator !== 'undefined' && typeof (navigator as unknown as { locks?: { query?: unknown } }).locks?.query === 'function' ? await getMonitorLink(profile, transport) : null;
+  const held = new Set<() => void>();
+  const watchService = shared ? {
+   watchFolder(path: string, listener: import('./watchStream.js').WatchFolderListener) {
+    const release = shared.watchFolder(path, listener); held.add(release);
+    return () => { held.delete(release); release(); };
+   },
+   getStatus: (): import('./watchStream.js').WatchStreamStatus => shared.status().state === 'unreachable' ? 'error' : shared.status().state === 'connecting' ? 'connecting' : 'subscribed',
+   watchedPaths: () => [],
+   stop() { for (const release of held) release(); held.clear(); }
+  } : undefined;
+		const driver = await createMonitorExplorerDriver({ profile, transport, watchService });
 		await driver.ready();
 		return driver;
 	})();

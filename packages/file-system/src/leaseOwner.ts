@@ -28,6 +28,7 @@ type LocksLike = {
 };
 
 const CONTEXT_LOCK = 'vfs-ctx:';
+export function contextLockName(ctx: string): string { return `${CONTEXT_LOCK}${ctx}`; }
 
 function webLocks(): LocksLike | null {
 	const nav = (globalThis as { navigator?: { locks?: LocksLike } }).navigator;
@@ -60,7 +61,7 @@ function holdContextLock(): Promise<void> {
 	}
 	held = new Promise<void>((granted) => {
 		void locks
-			.request(`${CONTEXT_LOCK}${contextId}`, {}, () => {
+			.request(contextLockName(contextId!), {}, () => {
 				granted();
 				// Never resolves: the lock is released only when this context dies.
 				return new Promise<void>(() => {});
@@ -107,7 +108,7 @@ export async function leaseLiveness(now = Date.now()): Promise<LeaseLiveness> {
 		// A row with no context stamp predates this scheme: only the clock
 		// can speak for it.
 		if (!ctx) return row.expiresAt > now;
-		return names.has(`${CONTEXT_LOCK}${ctx}`);
+		return names.has(contextLockName(ctx));
 	};
 }
 
@@ -140,4 +141,14 @@ export function whenLockFree(name: string): Promise<void> {
 		() => {},
 		() => {}
 	);
+}
+
+/** Service records require exact liveness; never advertise a missing lock. */
+export async function serviceContextId(): Promise<string> {
+ await holdContextLock();
+ const locks = webLocks();
+ if (!locks?.query || !contextId) throw new Error('Platform services require Web Locks');
+ const snap = await locks.query();
+ if (!snap.held?.some((lock) => lock.name === contextLockName(contextId!))) throw new Error('The tab context lock is not held');
+ return contextId;
 }

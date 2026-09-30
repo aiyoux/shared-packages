@@ -1,3 +1,4 @@
+import type { OpHandle } from '@shared-packages/file-system';
 export type SttEngineId = 'webspeech' | 'transformers' | 'sherpa' | 'ai';
 export type TtsEngineId = 'webspeech' | 'kokoro' | 'piper' | 'sherpa' | 'ai';
 
@@ -166,6 +167,7 @@ export interface SttEngine {
 			/** AI engine: monitor base URL the offer came from. A run against
 			 *  a different active monitor is refused, not silently rerouted. */
 			aiMonitorBaseUrl?: string;
+		opHandle?: OpHandle;
 			onProgress?: (p: { doneChunks: number; chunks: number }) => void;
 			signal?: AbortSignal;
 		}

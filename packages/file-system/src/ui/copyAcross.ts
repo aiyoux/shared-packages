@@ -7,7 +7,8 @@
  */
 import { generateId } from '../id.js';
 import { ferryWebrtcCopy, isWebrtcCopyPeer } from '../monitor/webrtcCopy.js';
-import { upsertProgress, type CopyHop, type CopyIce, type CopyIcePath } from '../transferRegistry.js';
+import { type CopyHop, type CopyIce, type CopyIcePath } from '../transferRegistry.js';
+import { beginFileOp, reportFileOp, attachFileOpAbort, setFileOpResult } from '../services/fileOps.js';
 import {
 	EXPLORER_DOWNLOAD_MAX_BYTES,
 	isRemoteClass,
@@ -431,6 +432,7 @@ export async function copyAcross(args: CopyAcrossArgs): Promise<number> {
 		if (entry.kind === 'folder') {
 			if (sourceDriver === destDriver && sourceDriver.id === 'local' && destDriver.copy) {
 				const progressId = generateId('copy');
+				await beginFileOp(progressId, { kind: 'copy', app: 'files', title: entry.name, where: { executor: 'this-browser', route: 'server' }, landing: { kind: 'vfs-folder', folderId: destParentId, name: entry.name }, destination: { driverId: destDriver.id, parentId: destParentId, entryKind: 'folder' }, signal });
 				reportCopyProgress(progressId, entry, {
 					transferred: 0, size: 0, status: 'active', hop: 'server'
 				}, destParentId);
@@ -484,7 +486,7 @@ function reportCopyProgress(
 	destParentId: string | null
 ): void {
 	const size = patch.size ?? entry.size ?? patch.transferred;
-	upsertProgress({
+	reportFileOp({
 		id,
 		name: entry.name,
 		size,
@@ -546,6 +548,17 @@ async function copyFile(
 		throw new CopyAcrossError('EXPLORER_TOO_LARGE', 'File exceeds download size cap');
 	}
 	const opId = generateId('copy');
+ const controller = new AbortController();
+ if (signal?.aborted) controller.abort(signal.reason);
+ else signal?.addEventListener('abort', () => controller.abort(signal?.reason), { once: true });
+ signal = controller.signal;
+ await beginFileOp(opId, {
+  kind: 'copy', app: 'files', title: entry.name, signal,
+  where: { executor: 'this-browser', route: kind === 'idle' || kind === 'blocked' ? undefined : kind, from: { kind: source.id === 'monitor' ? 'monitor' : source.id === 'b2' ? 'b2' : 'browser', label: source.id }, to: { kind: dest.id === 'monitor' ? 'monitor' : dest.id === 'b2' ? 'b2' : 'browser', label: dest.id } },
+  landing: dest.id === 'local' ? { kind: 'vfs-folder', folderId: destParentId, name: entry.name } : undefined,
+  destination: { driverId: dest.id, endpointKey: dest.endpointKey ?? dest.connectionId, parentId: destParentId, entryKind: entry.kind }
+ });
+ attachFileOpAbort(opId, controller);
 	const reportCopy = (id: string, item: ExplorerEntry, patch: CopyProgressPatch) =>
 		reportCopyProgress(id, item, patch, destParentId);
 	const known = entry.size ?? 0;
@@ -565,7 +578,7 @@ async function copyFile(
 					? 'Server copy'
 					: undefined;
 	const reportLeg = (id: string, name: string, patch: CopyProgressPatch) => {
-		upsertProgress({
+		reportFileOp({
 			id,
 			name,
 			size: patch.size ?? known,
@@ -655,7 +668,8 @@ async function copyFile(
 					}
 				});
 			} else if (dest.copy) {
-				await dest.copy(entry.id, destParentId, {
+				const saved = await dest.copy(entry.id, destParentId, {
+					signal, clientRequestId: opId,
 					onProgress: (transferred, total) => {
 						reportCopy(opId, entry, {
 							transferred,
@@ -666,6 +680,7 @@ async function copyFile(
 						});
 					}
 				});
+				if (dest.id === 'local' && saved?.kind === 'file') setFileOpResult(opId, { kind: 'vfs-file', fileId: saved.id, name: saved.name });
 			} else {
 				throw new CopyAcrossError('COPY_ACROSS_NO_DEST', 'Destination cannot server-copy');
 			}
@@ -951,7 +966,8 @@ async function copyFile(
 		});
 
 		if (dest.writeFile) {
-			await dest.writeFile(destParentId, file);
+			const saved = await dest.writeFile(destParentId, file);
+			if (dest.id === 'local') setFileOpResult(opId, { kind: 'vfs-file', fileId: saved.id, name: saved.name });
 			if (dual) {
 				reportLeg(wireId, entry.name, {
 					transferred: blob.size,
@@ -1043,22 +1059,24 @@ async function copyFolderTree(
 	let pending: Array<{ entry: ExplorerEntry; file: File }> = [];
 	const flush = async () => {
 		if (!pending.length) return;
-		const batch = pending;
+		const batch = pending.map((item) => ({ ...item, progressId: generateId('copy') }));
 		pending = [];
-		await dest.writeFiles!(
-			created.id,
-			batch.map((b) => b.file),
-			{ signal }
-		);
-		for (const b of batch) {
-			reportCopyProgress(generateId('copy'), b.entry, {
-				transferred: b.file.size,
-				size: b.file.size,
-				done: true,
-				status: 'done',
-				hop: 'direct'
-			}, created.id);
-		}
+		const batchAbort = new AbortController();
+		const abort = () => batchAbort.abort(signal?.reason);
+		if (signal?.aborted) abort();
+		else signal?.addEventListener('abort', abort, { once: true });
+		try {
+			for (const b of batch) {
+				await beginFileOp(b.progressId, { kind: 'copy', app: 'files', title: b.entry.name, where: { executor: 'this-browser', route: 'direct' }, landing: dest.id === 'local' ? { kind: 'vfs-folder', folderId: created.id, name: b.entry.name } : undefined, destination: { driverId: dest.id, endpointKey: dest.endpointKey ?? dest.connectionId, parentId: created.id }, signal: batchAbort.signal });
+				attachFileOpAbort(b.progressId, batchAbort);
+			}
+			const saved = await dest.writeFiles!(created.id, batch.map((b) => b.file), { signal: batchAbort.signal });
+			if (dest.id === 'local') for (const [index, entry] of (saved ?? []).entries()) { const item = batch[index]; if (item) setFileOpResult(item.progressId, { kind: 'vfs-file', fileId: entry.id, name: entry.name }); }
+			for (const b of batch) reportCopyProgress(b.progressId, b.entry, { transferred: b.file.size, size: b.file.size, done: true, status: 'done', hop: 'direct' }, created.id);
+		} catch (error) {
+			for (const b of batch) reportCopyProgress(b.progressId, b.entry, { transferred: 0, size: b.file.size, done: true, status: batchAbort.signal.aborted ? 'cancelled' : 'failed', error: error instanceof Error ? error.message : String(error), hop: 'direct' }, created.id);
+			throw error;
+		} finally { signal?.removeEventListener('abort', abort); }
 	};
 
 	for (const child of entries) {

@@ -9,7 +9,7 @@
  */
 import type { ExplorerDriver, ExplorerEntryId } from './explorerDriver.js';
 import { formatExplorerError } from './explorerError.js';
-import { attachTransferAbort, upsertProgress } from '../transferRegistry.js';
+import { beginFileOp, attachFileOpAbort, reportFileOp } from '../services/fileOps.js';
 import { generateId } from '../id.js';
 
 export type OsDropNode = {
@@ -371,60 +371,20 @@ export type OsDropFileProgress = {
  * transfer-shaped view with a dismiss/cancel affordance, and a failed or
  * cancelled import marks its rows instead of leaving them spinning.
  */
-export function createDeviceImportReporter(driver: { id: string }): {
-	onFile: (ev: OsDropFileProgress) => void;
-	fail: (err: unknown) => void;
-	signal: AbortSignal;
-} {
+export async function createDeviceImportReporter(driver: { id: string; endpointKey?: string; connectionId?: string }, parentId: string | null = null) {
 	const ac = new AbortController();
-	const ids = new Map<string, { id: string; name: string; size: number }>();
-	const idOf = (ev: OsDropFileProgress): string => {
-		const key = ev.relativePath ?? ev.name;
-		let item = ids.get(key);
-		if (!item) {
-			item = { id: generateId('import'), name: ev.name, size: ev.size };
-			ids.set(key, item);
-			attachTransferAbort(item.id, ac);
-		}
-		return item.id;
-	};
-	const report = (
-		ev: OsDropFileProgress,
-		patch?: { status?: 'cancelled' | 'failed'; error?: string }
-	) => {
-		upsertProgress({
-			id: idOf(ev),
-			name: ev.name,
-			size: ev.size,
-			transferred: ev.transferred,
-			direction: 'copying',
-			done: patch ? true : ev.done,
-			status: patch?.status ?? (ev.done ? 'done' : 'active'),
-			error: patch?.error
-		});
-	};
+	const id = generateId('import');
+	await beginFileOp(id, { kind: 'import', app: 'files', title: 'Import files', where: { executor: 'this-browser', from: { kind: 'browser', label: 'This computer' }, to: { kind: driver.id === 'monitor' ? 'monitor' : driver.id === 'b2' ? 'b2' : 'browser', label: driver.id } }, landing: driver.id === 'local' ? { kind: 'vfs-folder', folderId: parentId, name: 'Import files' } : undefined, destination: { driverId: driver.id, endpointKey: driver.endpointKey ?? driver.connectionId, parentId }, signal: ac.signal });
+	attachFileOpAbort(id, ac);
+	const files = new Map<string, OsDropFileProgress>();
+	function report(done = false, status?: 'failed' | 'cancelled', error?: string) {
+		reportFileOp({ id, name: 'Import files', size: [...files.values()].reduce((sum, file) => sum + file.size, 0), transferred: [...files.values()].reduce((sum, file) => sum + file.transferred, 0), direction: 'copying', done, status: status ?? (done ? 'done' : 'active'), error });
+	}
 	return {
-		onFile: report,
-		fail(err) {
-			const aborted = err instanceof Error && err.name === 'AbortError';
-			const msg = err instanceof Error ? err.message : String(err);
-			const status = aborted ? 'cancelled' : 'failed';
-			for (const { id, name, size } of ids.values()) {
-				upsertProgress({
-					id,
-					name,
-					size,
-					transferred: 0,
-					direction: 'copying',
-					done: true,
-					status,
-					error: aborted ? undefined : msg
-				});
-			}
-		},
-		get signal() {
-			return ac.signal;
-		}
+		onFile(ev: OsDropFileProgress) { files.set(ev.relativePath ?? ev.name, ev); report(); },
+		done() { report(true); },
+		fail(error: unknown) { report(true, error instanceof Error && error.name === 'AbortError' ? 'cancelled' : 'failed', error instanceof Error ? error.message : String(error)); },
+		signal: ac.signal
 	};
 }
 

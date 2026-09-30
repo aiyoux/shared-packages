@@ -4,6 +4,7 @@ import { withLocalAddressSpace } from '../monitor/localNetwork.js';
 import { createMonitorClient } from '../monitor/client.js';
 import { getActiveProfileId, listProfiles } from '../monitor/credentials.js';
 import { AiCredentialsError, toAiCredentialsError } from './errors.js';
+import { opsService, type OpHandle } from '../services/ops.js';
 
 export type AiTask = 'chat' | 'text-to-speech' | 'image-generation' | 'transcription';
 export type AiLocation = 'browser' | 'monitor-native' | 'monitor-provider';
@@ -50,10 +51,17 @@ export async function resolveNativeAiMonitor(): Promise<{ profileId: string; nam
 
 export type AiNativeProgress = {
 	jobId: string;
-	state: 'running' | 'done' | 'failed' | 'aborted';
+	state: 'running' | 'done' | 'failed' | 'aborted' | 'evicted';
 	error?: string | null;
 	seed?: number | null;
 };
+
+export type AiRunOptions = { signal?: AbortSignal; onProgress?: (progress: AiNativeProgress) => void; op?: OpHandle; monitor?: { profileId: string; name: string; baseUrl: string } };
+async function unifiedJobs(baseUrl: string, opts: AiRunOptions): Promise<boolean> {
+ if (!opts.op) return false;
+ try { return (await createMonitorClient({ baseUrl }).meta()).capabilities?.jobs === true; }
+ catch { return false; }
+}
 
 function url(baseUrl: string, path: string): string {
 	return `${baseUrl.replace(/\/+$/, '')}${path}`;
@@ -247,14 +255,20 @@ export async function runAiNativeJob(
 		/** Transcription only: a language code, or 'auto'. */
 		language?: string;
 	},
-	opts: { signal?: AbortSignal; onProgress?: (progress: AiNativeProgress) => void } = {}
+	opts: AiRunOptions = {}
 ): Promise<{ blob: Blob; seed: number | null }> {
+	const unified = await unifiedJobs(baseUrl, opts);
 	const submit = await request(baseUrl, '/v1/ai/jobs', {
 		method: 'POST', headers: { 'content-type': 'application/json' },
-		body: JSON.stringify(input), signal: opts.signal
+		body: JSON.stringify({ ...input, ...(opts.op ? { clientRequestId: opts.op.id } : {}) }), signal: opts.signal
 	});
 	const { jobId } = (await submit.json()) as { jobId?: string };
 	if (!jobId) throw new AiCredentialsError('AI_ERROR', 'Monitor did not return a job id.');
+	if (unified && opts.op) {
+		const monitor = opts.monitor ?? await resolveNativeAiMonitor();
+		if (monitor.baseUrl.replace(/\/+$/, '') !== baseUrl.replace(/\/+$/, '')) throw new AiCredentialsError('AI_ERROR', 'The monitor changed during submission');
+		await (await opsService()).change(opts.op.id, (op) => ({ ...op, owner: { kind: 'monitor', profileId: monitor.profileId, name: monitor.name, jobId: `ai:${jobId}` } }));
+	}
 	const path = `/v1/ai/jobs/${encodeURIComponent(jobId)}`;
 	let aborted = false;
 	const abortOnServer = () => {
@@ -269,7 +283,7 @@ export async function runAiNativeJob(
 			const response = await request(baseUrl, path, { signal: opts.signal });
 			const progress = (await response.json()) as AiNativeProgress;
 			opts.onProgress?.(progress);
-			if (progress.state === 'failed') throw new AiCredentialsError('AI_ERROR', progress.error || 'Monitor inference failed.');
+			if (progress.state === 'failed' || progress.state === 'evicted') throw new AiCredentialsError('AI_ERROR', progress.error || 'Monitor inference failed.');
 			if (progress.state === 'aborted') throw new DOMException('Job aborted', 'AbortError');
 			if (progress.state === 'done') {
 				const result = await request(baseUrl, `${path}/result`, { signal: opts.signal });
@@ -286,7 +300,7 @@ export async function runAiNativeJob(
 	} catch (error) {
 		// A failed poll or result transfer leaves a server job running unless we
 		// explicitly cancel it. Aborting an already finished job is harmless.
-		if (!aborted) abortOnServer();
+		if (!aborted && (!unified || opts.signal?.aborted)) abortOnServer();
 		throw error;
 	} finally {
 		opts.signal?.removeEventListener('abort', abortOnServer);
@@ -299,9 +313,9 @@ export async function runAiMedia(
 	baseUrl: string,
 	offer: AiOffer,
 	input: { text?: string; prompt?: string; speed?: number; seed?: number },
-	opts: { signal?: AbortSignal; onProgress?: (progress: AiNativeProgress) => void } = {}
+	opts: AiRunOptions = {}
 ): Promise<{ blob: Blob; seed: number | null }> {
-	if (offer.location === 'monitor-native') {
+	if (offer.location === 'monitor-native' || (offer.location === 'monitor-provider' && await unifiedJobs(baseUrl, opts))) {
 		return runAiNativeJob(baseUrl, { offerId: offer.id, ...input }, opts);
 	}
 	if (offer.location !== 'monitor-provider' || !['text-to-speech', 'image-generation'].includes(offer.task)) {
@@ -324,12 +338,12 @@ export async function runAiTranscription(
 	baseUrl: string,
 	offer: Pick<AiOffer, 'id' | 'location' | 'task'>,
 	input: { audioBase64: string; language?: string },
-	opts: { signal?: AbortSignal; onProgress?: (progress: AiNativeProgress) => void } = {}
+	opts: AiRunOptions = {}
 ): Promise<{ text: string }> {
 	if (offer.task !== 'transcription') {
 		throw new AiCredentialsError('AI_UNSUPPORTED', 'This offer cannot transcribe audio.');
 	}
-	if (offer.location === 'monitor-native') {
+	if (offer.location === 'monitor-native' || (offer.location === 'monitor-provider' && await unifiedJobs(baseUrl, opts))) {
 		const result = await runAiNativeJob(
 			baseUrl,
 			{ offerId: offer.id, audioBase64: input.audioBase64, language: input.language },

@@ -287,16 +287,11 @@ export function bindAiSession(
 		resolve: (value: AiSessionArtifact) => void;
 		reject: (error: Error) => void;
 	} | null = null;
-	const timer = setInterval(() => {
-		if (ws.readyState === WebSocket.OPEN) {
-			ws.send(JSON.stringify({ type: 'heartbeat' }));
-		}
-	}, AI_SESSION_HEARTBEAT_MS);
+
 
 	function finish() {
 		if (closed) return;
 		closed = true;
-		clearInterval(timer);
 		artifactWait?.reject(new AiCredentialsError('AI_ERROR', 'The AI session socket closed.'));
 		artifactWait = null;
 		opts?.onClose?.();
@@ -414,8 +409,7 @@ export function bindAiSession(
 			if (settled) return;
 			settled = true;
 			closed = true;
-			clearInterval(timer);
-			reject(
+				reject(
 				new AiCredentialsError(
 					'AI_NETWORK',
 					'Could not bind this tab to the monitor AI session.'

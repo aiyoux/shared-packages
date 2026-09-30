@@ -68,7 +68,6 @@ export {
 	type AiMonitor
 } from './monitor.js';
 export {
-	AI_SESSION_HEARTBEAT_MS,
 	AiInvokeUnsupported,
 	aiSessionDeleteUrl,
 	answerSessionInvoke,

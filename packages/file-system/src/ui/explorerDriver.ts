@@ -204,6 +204,7 @@ export interface ExplorerDriver {
 		opts?: {
 			onProgress?: (transferred: number, total?: number) => void;
 			signal?: AbortSignal;
+			clientRequestId?: string;
 		}
 	): Promise<void | ExplorerEntry>;
 	/**

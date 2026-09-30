@@ -1,4 +1,5 @@
 <script lang="ts">
+ import { opsService, isActiveOp, type OpsService, type OpRecord } from '../services/ops.js';
 	/**
 	 * Multi-window file explorer with switchable backends (local / memory / b2 /
 	 * monitor / disk) and copy-across between windows.
@@ -28,15 +29,11 @@
 		RemoteKind
 	} from './componentTypes.js';
 	import type { FileTypeId } from '../types.js';
-	import CopyProgressHeader from './CopyProgressHeader.svelte';
 	import { requestArchiveDialogShow } from './archiveReshow.js';
 	import DualPhaseConfirm from './DualPhaseConfirm.svelte';
 	import { stackTransferItems } from './stackProgress.js';
 	import {
 		abortTransfer,
-		listTransfers,
-		subscribeTransfers,
-		upsertProgress,
 		type TransferItem
 	} from '../transferRegistry.js';
 	import { generateId } from '../id.js';
@@ -511,7 +508,9 @@
 
 	let copyDestPane = $state<PaneId | null>(null);
 	let copyDestDriverKey = $state<string | null>(null);
-	let copyItems = $state<TransferItem[]>([]);
+	let ops = $state<OpsService | null>(null);
+	let copyOps = $state<OpRecord[]>([]);
+	let opProgressVersion = $state(0);
 	let dismissedCopyIds = $state<Set<string>>(new Set());
 	let copyProgressUnsub: (() => void) | null = null;
 	let profileTabUnsub: (() => void) | null = null;
@@ -797,23 +796,13 @@
 
 	const showCopyAcross = $derived(dualPane);
 
-	const visibleCopyItems = $derived(copyItems.filter((t) => !dismissedCopyIds.has(t.id)));
-	const destCopyPending = $derived(
-		stackTransferItems(visibleCopyItems)
-			.filter((t) => t.hop && t.destParentId !== undefined && (!t.done || t.status === 'failed'))
-			.map((t) => ({
-				id: t.id,
-				name: t.name,
-				transferred: t.behind,
-				size: t.size || Math.max(t.ahead, 1),
-				ready: t.ahead,
-				direction: 'receiving' as const,
-				status: t.status,
-				done: t.done,
-				destParentId: t.destParentId,
-				entryKind: t.entryKind
-			}))
-	);
+ function opPending(drv: ExplorerDriver) {
+  void opProgressVersion;
+  return copyOps.filter((op) => op.destination && op.destination.driverId === drv.id && (op.destination.endpointKey ?? '') === (drv.endpointKey ?? drv.connectionId ?? '') && (isActiveOp(op) || op.state === 'failed')).map((op) => {
+   const p = ops?.progressOf(op.id);
+   return { id: op.id, name: op.destination?.entryKind === 'folder' ? op.title : op.landing?.kind === 'vfs-folder' ? op.landing.name : op.title, transferred: p?.done ?? 0, size: p?.total ?? 0, ready: p?.ahead, direction: 'receiving', status: op.state === 'failed' ? 'failed' : 'active', done: false, destParentId: op.destination!.parentId, entryKind: op.destination!.entryKind, owner: op.owner };
+  });
+ }
 
 	function destDriverKey(drv: ExplorerDriver): string {
 		return `${drv.id}:${drv.connectionId ?? drv.endpointKey ?? ''}`;
@@ -826,27 +815,11 @@
 
 	function panePending(id: PaneId) {
 		const drv = activeDriver(paneState(id), id);
-		const extra =
-			id === copyDestPane && copyDestDriverKey != null && destDriverKey(drv) === copyDestDriverKey
-				? destCopyPending
-				: [];
+		const extra = opPending(drv);
 		const base = id === 'left' ? pendingLeft : id === 'right' ? pendingRight : [];
 		return extra.length ? [...base, ...extra] : base;
 	}
 
-	function dismissCopy(id: string) {
-		abortTransfer(id);
-		if (copyBusy) copyAbort?.abort();
-		dismissedCopyIds = new Set([...dismissedCopyIds, id]);
-	}
-
-	function dismissAllSettledCopy() {
-		const next = new Set(dismissedCopyIds);
-		for (const t of copyItems) {
-			if (t.done || t.status === 'failed' || t.status === 'cancelled') next.add(t.id);
-		}
-		dismissedCopyIds = next;
-	}
 
 	onMount(() => {
 		const saved = loadFileWindows(persistKey, leftDefault, rightDefault);
@@ -873,11 +846,14 @@
 		const mem = getMemoryVfs();
 		memoryVfs = mem;
 		void mem.ready().then(() => installMemoryFilesHook(mem));
-		const pullCopy = () => {
-			copyItems = listTransfers().filter((t) => t.direction === 'copying');
-		};
-		pullCopy();
-		copyProgressUnsub = subscribeTransfers(pullCopy);
+  let alive = true;
+  void opsService().then((service) => {
+   if (!alive) return;
+   ops = service;
+   const refresh = () => { copyOps = service.list(); opProgressVersion++; };
+   refresh(); copyProgressUnsub = service.subscribe(refresh);
+  }).catch((error) => console.error('Could not show destination operations', error));
+  const stopOpsMount = () => { alive = false; };
 		window.addEventListener('pointermove', onWinPointerMove, { passive: true });
 		window.addEventListener('pointerup', onWinPointerUp);
 		window.addEventListener('pointercancel', onWinPointerUp);
@@ -886,6 +862,7 @@
 			if (!foreignDragLive && !crossDragFrom) clearWindowDropTargets();
 		});
 		profileTabUnsub = () => {
+			stopOpsMount();
 			for (const u of unsubs) u();
 			unsubDrag();
 		};
@@ -1195,22 +1172,24 @@
 		// The registry reporter adds what the inline bump lacked: abort wiring
 		// per row, and a failed/cancelled import marking its rows instead of
 		// leaving them spinning forever.
-		const reporter = createDeviceImportReporter(drv);
+		let reporter: Awaited<ReturnType<typeof createDeviceImportReporter>> | null = null;
 		const bump = (ev: OsDropFileProgress) => {
-			if (ev.entryKind !== 'folder') reporter.onFile(ev);
+			if (ev.entryKind !== 'folder') reporter?.onFile(ev);
 		};
 		try {
+			reporter = await createDeviceImportReporter(drv, parent);
 			const nodes = await pending;
-			if (!nodes.length) return;
+			if (!nodes.length) { reporter.done(); return; }
 			await importOsDropToDriver(drv, parent, nodes, {
 				onFile: bump,
 				signal: reporter.signal
 			});
+			reporter.done();
 			if (!drv.subscribeChanges) {
 				setPane(id, { explorerKey: p.explorerKey + 1 });
 			}
 		} catch (e) {
-			reporter.fail(e);
+			reporter?.fail(e);
 			toast.error(formatExplorerError(e));
 		} finally {
 			copyBusy = false;
@@ -2265,12 +2244,7 @@
 				idleNote={pairCopy.copyIdleNote}
 			/>
 		{/if}
-		<CopyProgressHeader
-			items={visibleCopyItems}
-			onDismiss={dismissCopy}
-			onDismissAll={dismissAllSettledCopy}
-			onShow={requestArchiveDialogShow}
-		/>
+
 	</div>
 {/if}
 

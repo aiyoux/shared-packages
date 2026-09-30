@@ -61,6 +61,7 @@ export type MonitorExplorerDriverOptions = {
 	transport: MonitorTransport;
 	/** Disable live watch (tests). Default true. */
 	enableWatch?: boolean;
+ watchService?: MonitorWatchStream;
 };
 
 export type MonitorExplorerDriver = ExplorerDriver & {
@@ -82,7 +83,7 @@ export async function createMonitorExplorerDriver(
 		throw new ExplorerMonitorError('MONITOR_ERROR', 'Invalid rootPath');
 	}
 
-	let watch: MonitorWatchStream | null = null;
+	let watch: MonitorWatchStream | null = opts.watchService ?? null;
 	let watchStatus: WatchStreamStatus | 'off' = enableWatch ? 'connecting' : 'off';
 	let cachedMeta: Awaited<ReturnType<MonitorTransport['meta']>> | null = null;
 
@@ -298,6 +299,7 @@ export async function createMonitorExplorerDriver(
 				const to = toAbsolutePath(rootPath, destRel);
 				await transport.copy(from, to, {
 					signal: opts?.signal,
+					clientRequestId: opts?.clientRequestId,
 					onProgress: opts?.onProgress
 				});
 			} catch (e) {

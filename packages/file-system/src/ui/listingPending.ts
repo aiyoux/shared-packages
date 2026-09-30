@@ -7,7 +7,9 @@
  */
 import type { ExplorerEntry } from './explorerDriver.js';
 
+import type { Owner } from '../services/owner.js';
 export type ListingPending = {
+	owner?: Owner;
 	id: string;
 	name: string;
 	transferred: number;

@@ -24,7 +24,12 @@ import {
 	explorerDragFromDataTransfer
 } from '../src/ui/copyAcross.ts';
 import type { ExplorerDriver, ExplorerEntry } from '../src/ui/explorerDriver.ts';
-import { listTransfers, resetTransferRegistryForTests } from '../src/transferRegistry.ts';
+import { listFileOpProgress as listTransfers, resetFileOpsForTest } from '../src/services/fileOps.ts';
+import type { StartOp, OpHandle } from '../src/services/ops.ts';
+function resetTransferRegistryForTests() {
+ resetFileOpsForTest(async (input: StartOp): Promise<OpHandle> => ({ id: input.id!, signal: new AbortController().signal, progress() {}, done: async () => {}, fail: async () => {}, cancelled: async () => {}, onCancelRequest() { return () => {}; } }));
+}
+resetTransferRegistryForTests();
 
 describe('isLocalClass / isRemoteClass', () => {
 	it('local-class = local | memory | disk', () => {

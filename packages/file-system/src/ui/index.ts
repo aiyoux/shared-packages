@@ -190,3 +190,5 @@ export { default as FeStorageInspector } from './FeStorageInspector.svelte';
 export { default as FeStorageDialog } from './FeStorageDialog.svelte';
 export { default as FeProjectStorageDialog } from './FeProjectStorageDialog.svelte';
 export { default as ProjectStoragePanel } from './ProjectStoragePanel.svelte';
+
+export { requestArchiveDialogShow } from './archiveReshow.js';

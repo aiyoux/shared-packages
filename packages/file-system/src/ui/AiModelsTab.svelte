@@ -29,6 +29,7 @@
 	import { listProfiles as listMonitorProfiles } from '../monitor/credentials.js';
 	import type { MonitorConnectionProfileV1 } from '../monitor/types.js';
 	import MonitorModelsPanel from './MonitorModelsPanel.svelte';
+	import MonitorStatus from './MonitorStatus.svelte';
 
 	const sources = listAiLibrarySources();
 
@@ -349,6 +350,7 @@
 				{#each monitorProfiles as profile (profile.id)}
 					<div class="monitor-panel">
 						<h4 class="panel-name">{profile.name}</h4>
+						<MonitorStatus {profile} />
 						<MonitorModelsPanel baseUrl={profile.baseUrl} />
 					</div>
 				{/each}

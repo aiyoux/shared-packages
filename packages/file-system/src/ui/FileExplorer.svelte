@@ -1,4 +1,9 @@
 <script lang="ts">
+ import { ownerLabel } from '../services/owner.js';
+ import { serviceContextId } from '../leaseOwner.js';
+ let ownerCtx = $state('');
+
+ import { beginArchiveOp, reportFileOp as upsertProgress, attachFileOpAbort as attachTransferAbort, abortFileOp as abortTransfer } from '../services/fileOps.js';
 	import { onDestroy, onMount, tick, type Snippet } from 'svelte';
 	import FileExplorer from './FileExplorer.svelte';
 	import {
@@ -35,7 +40,6 @@
 	import { folderIconName, folderMarkClass, type FeIconName } from './feIcons.js';
 	import FeTipIconBtn from './FeTipIconBtn.svelte';
 	import FeArchiveDialog from './FeArchiveDialog.svelte';
-	import CopyProgressHeader from './CopyProgressHeader.svelte';
 	import { registerArchiveDialogShow, requestArchiveDialogShow } from './archiveReshow.js';
 	import {
 		createInnerFsSession,
@@ -52,14 +56,6 @@
 		type ArchiveWriteProgress,
 		type InnerFsSession
 	} from './archiveOps.js';
-	import {
-		abortTransfer,
-		attachTransferAbort,
-		listTransfers,
-		subscribeTransfers,
-		upsertProgress,
-		type TransferItem
-	} from '../transferRegistry.js';
 	import {
 		createTreeDndSession,
 		canonicalizeSiblingZone,
@@ -458,17 +454,9 @@
 	let archiveChipName = $state('');
 	let archiveTransferId: string | null = null;
 	let archiveAbort: AbortController | null = null;
-	let archiveOpItems = $state<TransferItem[]>([]);
-	let archiveDismissed = $state<Set<string>>(new Set());
-	const visibleArchiveOps = $derived(archiveOpItems.filter((t) => !archiveDismissed.has(t.id)));
 	let innerFs = $state<InnerFsSession | null>(null);
-	let archiveProgressUnsub: (() => void) | null = null;
 	onMount(() => {
-		const pull = () => {
-			archiveOpItems = listTransfers().filter((t) => t.direction === 'copying');
-		};
-		pull();
-		archiveProgressUnsub = subscribeTransfers(pull);
+		void serviceContextId().then((ctx) => { ownerCtx = ctx; }).catch(() => {});
 		const unsubReshow = registerArchiveDialogShow(showHiddenArchiveDialog);
 		const unsubDrag = subscribeCrossWindowDrag(() => {
 			if (getCrossWindowDrag() || isPointerDragActive()) return;
@@ -487,8 +475,6 @@
 			ro.observe(el);
 		}
 		return () => {
-			archiveProgressUnsub?.();
-			archiveProgressUnsub = null;
 			unsubReshow();
 			unsubDrag();
 			ro?.disconnect();
@@ -2610,7 +2596,8 @@
 	 * lands here. Registered for the pane's lifetime; it declines whenever this
 	 * pane has nothing hidden and running, so other panes get their turn.
 	 */
-	function showHiddenArchiveDialog(): boolean {
+	function showHiddenArchiveDialog(opId?: string): boolean {
+		if (opId && archiveTransferId !== opId) return false;
 		if (!archiveJobRunning || archiveDialogOpen) return false;
 		archiveDialogOpen = true;
 		return true;
@@ -2763,6 +2750,8 @@
 				!spec.useHost &&
 				(spec.kind === 'decompress' || spec.kind === 'decrypt');
 
+			await beginArchiveOp(id, spec.kind === 'decompress' ? 'extract' : spec.kind, spec.title, spec.destParentId ?? null, ac.signal, { driverId: driver.id, endpointKey: driver.endpointKey ?? driver.connectionId, executor: spec.useHost ? 'monitor' : 'this-browser', note: spec.useHost ? 'Monitor archive job' : workerEligible ? 'Background archive worker' : 'This tab · main thread' });
+
 			let result: Awaited<ReturnType<typeof runArchiveJob>> | undefined;
 			let ranOnWorker = false;
 			/** Non-null once we have degraded, so the UI can say WHY. */
@@ -2805,7 +2794,7 @@
 				}
 				if (fallbackReason) {
 					archiveJobLabel = 'Extracting on this tab (background worker unavailable)…';
-					toast.info(`Background extract unavailable — running here instead. ${fallbackReason}`);
+					upsertProgress({ id, name: spec.title, size: 100, transferred: archiveJobPct, direction: 'copying', done: false, status: 'active', hopNote: `${archiveJobLabel} ${fallbackReason}` });
 				}
 				result = await runArchiveJob({
 					...spec,
@@ -3633,7 +3622,7 @@
 		// The header bar carries the transfer-shaped view (same as the dual
 		// pane): every import from this device is a transfer into the open
 		// destination, remote or local. The listing keeps its pending rows.
-		const reporter = createDeviceImportReporter(driver);
+		let reporter: Awaited<ReturnType<typeof createDeviceImportReporter>> | null = null;
 		const bump = (ev: OsDropFileProgress) => {
 			const key = `${ev.entryKind ?? 'file'}:${ev.relativePath ?? ev.name}`;
 			let id = idByPath.get(key);
@@ -3655,15 +3644,17 @@
 			inboundOps = inboundOps.some((o) => o.id === id)
 				? inboundOps.map((o) => (o.id === id ? row : o))
 				: [...inboundOps, row];
-			if (ev.entryKind !== 'folder') reporter.onFile(ev);
+			if (ev.entryKind !== 'folder') reporter?.onFile(ev);
 		};
 		try {
+			reporter = await createDeviceImportReporter(driver, destParentId);
 			const incoming = await dropNodes;
-			if (!incoming.length) return;
+			if (!incoming.length) { reporter.done(); return; }
 			await importOsDropToDriver(driver, destParentId, incoming, {
 				onFile: bump,
 				signal: reporter?.signal
 			});
+			reporter.done();
 			await refresh();
 		} catch (e) {
 			reporter?.fail(e);
@@ -4304,24 +4295,7 @@
 				{moveDragLabel}
 			</div>
 		{/if}
-		{#if !headerLeading}
-			<CopyProgressHeader
-				items={visibleArchiveOps}
-				onShow={requestArchiveDialogShow}
-				onDismiss={(id) => {
-					abortTransfer(id);
-					if (id === archiveTransferId) abortArchiveJob();
-					archiveDismissed = new Set([...archiveDismissed, id]);
-				}}
-				onDismissAll={() => {
-					const next = new Set(archiveDismissed);
-					for (const t of visibleArchiveOps) {
-						if (t.done || t.status === 'failed' || t.status === 'cancelled') next.add(t.id);
-					}
-					archiveDismissed = next;
-				}}
-			/>
-		{/if}
+
 		{#snippet actionBtn(
 			kind: 'icon' | 'menu',
 			testid: string,
@@ -4870,7 +4844,7 @@
 				<div class="fe-pending-fill ahead" style="width: {aheadPct}%"></div>
 				<div class="fe-pending-fill behind" class:behind={stacked} style="width: {behindPct}%"></div>
 			</div>
-			<span class="fe-pending-pct" class:on-icon={onIcon}>{pendingLabel(p)}</span>
+			<span class="fe-pending-pct" class:on-icon={onIcon}>{pendingLabel(p)}{p.owner ? ` · ${ownerLabel(p.owner, ownerCtx)}` : ''}</span>
 		{/snippet}
 		{#if initialLoad && nodes.length === 0 && listingRows.length === 0}
 			<div class="fe-empty" data-testid="fe-loading">Loading…</div>

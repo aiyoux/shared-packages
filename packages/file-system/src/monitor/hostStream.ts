@@ -4,6 +4,7 @@
 import { createMonitorClient, type MonitorHostSnapshot, type MonitorTransport } from './client.js';
 import { createSnapshotMux, type SnapshotMux } from './snapshotMux.js';
 import type { MonitorConnectionProfileV1 } from './types.js';
+import { getMonitorLink } from '../services/monitorLink.js';
 
 const byProfile = new Map<string, SnapshotMux<MonitorHostSnapshot>>();
 
@@ -16,6 +17,21 @@ export function getHostStream(
 	const existing = byProfile.get(profile.id);
 	if (existing) return existing;
 	const transport = opts?.transport ?? createMonitorClient({ baseUrl: profile.baseUrl });
+ if (typeof navigator !== 'undefined' && typeof (navigator as unknown as { locks?: { query?: unknown } }).locks?.query === 'function') {
+  const listeners = new Map<(snapshot: MonitorHostSnapshot) => void, (() => void) | null>();
+  let stopped = false;
+  const mux: HostStream = {
+   subscribe(listener) {
+    if (stopped) return () => {};
+    listeners.set(listener, null);
+    void getMonitorLink(profile, transport).then((link) => { if (listeners.has(listener) && !stopped) listeners.set(listener, link.subscribeHost(listener)); }).catch((error) => console.error('Could not subscribe to monitor host', error));
+    return () => { listeners.get(listener)?.(); listeners.delete(listener); };
+   },
+   listenerCount: () => listeners.size,
+   abort() { stopped = true; for (const release of listeners.values()) release?.(); listeners.clear(); }
+  };
+  byProfile.set(profile.id, mux); return mux;
+ }
 	const mux = createSnapshotMux<MonitorHostSnapshot>({
 		fetchOnce: () => transport.hostSnapshot(),
 		openEvents: (onSnapshot) => transport.openHostEvents({ onSnapshot })

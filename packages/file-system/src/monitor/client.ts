@@ -41,6 +41,7 @@ export const MONITOR_CHUNK_BYTES = 8 * 1024 * 1024;
 export const MONITOR_SINGLE_SHOT_MAX_BYTES = 100 * 1024 * 1024;
 
 export type MonitorCapabilities = {
+ jobs?: boolean;
 	fs?: { ino?: boolean; rename?: boolean; archive?: boolean; mkdir?: boolean; thumb?: boolean };
 	git?: { blob?: boolean; init?: boolean };
 	/** AI feature (`/v1/ai/**`); absent on daemons without it. */
@@ -308,6 +309,7 @@ export type MonitorTransport = {
 		to: string,
 		opts?: {
 			signal?: AbortSignal;
+			clientRequestId?: string;
 			onProgress?: (transferred: number, total?: number) => void;
 		}
 	): Promise<void>;
@@ -530,6 +532,7 @@ export function coerceMonitorCapabilities(raw: unknown): MonitorCapabilities {
 	const git = o.git && typeof o.git === 'object' ? (o.git as Record<string, unknown>) : {};
 	const ai = o.ai && typeof o.ai === 'object' ? (o.ai as Record<string, unknown>) : undefined;
 	return {
+		...(o.jobs === true ? { jobs: true } : {}),
 		fs: {
 			ino: fs.ino === true,
 			rename: fs.rename === true,
@@ -1530,7 +1533,7 @@ export function createMonitorClient(opts: {
 			}
 		},
 		async copy(from, to, opts) {
-			await postNdjson('/v1/fs/copy', { from, to }, {
+			await postNdjson('/v1/fs/copy', { from, to, ...(opts?.clientRequestId ? { clientRequestId: opts.clientRequestId } : {}) }, {
 				stallMs: MONITOR_STALL_MS,
 				signal: opts?.signal,
 				onProgress: opts?.onProgress,

@@ -9,6 +9,7 @@ export async function openJsonSse(opts: {
 	fetchImpl?: typeof fetch;
 	signal?: AbortSignal;
 	onEvent: (event: string, data: unknown) => void;
+	onClose?: (error: unknown) => void;
 }): Promise<{ abort: () => void }> {
 	const fetchFn = opts.fetchImpl ?? fetch;
 	const ac = new AbortController();
@@ -48,6 +49,7 @@ export async function openJsonSse(opts: {
 	};
 
 	void (async () => {
+		let reason: unknown = new Error('Monitor event stream closed');
 		try {
 			for (;;) {
 				if (stopped) break;
@@ -66,10 +68,11 @@ export async function openJsonSse(opts: {
 					}
 				}
 			}
-		} catch {
-			/* abort / network */
+		} catch (error) {
+			reason = error;
 		} finally {
 			opts.signal?.removeEventListener('abort', onAbort);
+			if (!stopped && !ac.signal.aborted) opts.onClose?.(reason);
 		}
 	})();
 

@@ -95,7 +95,7 @@ export function createAiStt(): SttEngine {
 					monitor.baseUrl,
 					{ id: offer.id, location: offer.location, task: 'transcription' },
 					{ audioBase64: base64FromBytes(wav), language },
-					{ signal: opts?.signal }
+     { signal: opts?.signal, op: opts?.opHandle, monitor: { profileId: monitor.monitorProfileId, name: 'Monitor', baseUrl: monitor.baseUrl } }
 				);
 				const trimmed = text.trim();
 				return {
