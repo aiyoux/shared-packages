@@ -80,13 +80,29 @@ function maybeUnref(ch: BroadcastChannel): void {
 	if (typeof unref === 'function') unref.call(ch);
 }
 
+function pageHidden(): boolean {
+	return typeof document !== 'undefined' && document.visibilityState === 'hidden';
+}
+
+/**
+ * Batch a burst of sends into one post. A visible page batches per frame. A
+ * hidden page never runs animation frames (and throttles timers), so there a
+ * frame-batched send would sit until the tab came forward: a background tab
+ * leading a document, a monitor link, or running an op would go silent while
+ * still alive. Hidden, the batch is the current task's (a microtask).
+ */
 function schedule(fn: () => void): () => void {
-	if (typeof requestAnimationFrame === 'function') {
+	if (typeof requestAnimationFrame === 'function' && !pageHidden()) {
 		const id = requestAnimationFrame(fn);
 		return () => cancelAnimationFrame(id);
 	}
-	const id = setTimeout(fn, 0);
-	return () => clearTimeout(id);
+	let cancelled = false;
+	queueMicrotask(() => {
+		if (!cancelled) fn();
+	});
+	return () => {
+		cancelled = true;
+	};
 }
 
 export function createLiveBus<M>(
@@ -168,6 +184,13 @@ export function createLiveBus<M>(
 	let outSeq = 1;
 	let pending: LiveEnvelope<M>[] = [];
 	let cancelFlush: (() => void) | null = null;
+	/** A frame requested just before the page hid never fires: post it now. */
+	const onVisibility = () => {
+		if (!pageHidden() || !cancelFlush) return;
+		cancelFlush();
+		flush();
+	};
+	if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisibility);
 
 	function publish(batch: LiveEnvelope<M>[]): void {
 		if (batch.length === 0) return;
@@ -364,6 +387,7 @@ export function createLiveBus<M>(
 			cancelFlush = null;
 			flush();
 			destroyed = true;
+			if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisibility);
 			handlers = [];
 			goneHandlers = [];
 			for (const ctl of watching.values()) ctl.abort();

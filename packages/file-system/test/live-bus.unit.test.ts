@@ -281,3 +281,71 @@ describe('createLiveBus', () => {
 		b.destroy();
 	});
 });
+
+describe('createLiveBus in a hidden page', () => {
+	/** A page whose animation frames never run, as a background tab's. */
+	function fakePage(visibility: 'visible' | 'hidden') {
+		const g = globalThis as Record<string, unknown>;
+		const saved = { document: g.document, raf: g.requestAnimationFrame, caf: g.cancelAnimationFrame };
+		const listeners = new Set<() => void>();
+		const doc = {
+			visibilityState: visibility,
+			addEventListener: (_: string, fn: () => void) => listeners.add(fn),
+			removeEventListener: (_: string, fn: () => void) => listeners.delete(fn)
+		};
+		g.document = doc;
+		g.requestAnimationFrame = () => 1;
+		g.cancelAnimationFrame = () => {};
+		return {
+			hide() {
+				doc.visibilityState = 'hidden';
+				for (const fn of [...listeners]) fn();
+			},
+			restore() {
+				g.document = saved.document;
+				g.requestAnimationFrame = saved.raf;
+				g.cancelAnimationFrame = saved.caf;
+			}
+		};
+	}
+
+	it('posts without waiting for a frame that never comes', async () => {
+		const name = nextChannel();
+		const page = fakePage('hidden');
+		const receiver = createLiveBus<Msg>(name, 'b', { isImmediate });
+		const got: Msg[] = [];
+		receiver.onMessage((m) => got.push(m));
+		const sender = createLiveBus<Msg>(name, 'a', { isImmediate });
+		try {
+			sender.broadcast({ kind: 'commit', n: 1 });
+			sender.broadcastImmediate({ kind: 'pose', n: 2 });
+			await until(() => got.length === 2);
+			assert.deepEqual(got.map((m) => m.n), [1, 2]);
+		} finally {
+			page.restore();
+			sender.destroy();
+			receiver.destroy();
+		}
+	});
+
+	it('posts a frame-batched send when the page hides before the frame', async () => {
+		const name = nextChannel();
+		const page = fakePage('visible');
+		const receiver = createLiveBus<Msg>(name, 'b', { isImmediate });
+		const got: Msg[] = [];
+		receiver.onMessage((m) => got.push(m));
+		const sender = createLiveBus<Msg>(name, 'a', { isImmediate });
+		try {
+			sender.broadcast({ kind: 'commit', n: 1 });
+			await wait(20);
+			assert.equal(got.length, 0, 'visible: waits for its frame');
+			page.hide();
+			await until(() => got.length === 1);
+			assert.deepEqual(got.map((m) => m.n), [1]);
+		} finally {
+			page.restore();
+			sender.destroy();
+			receiver.destroy();
+		}
+	});
+});
