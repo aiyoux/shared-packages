@@ -290,36 +290,26 @@
 		});
 	});
 
-	// Standalone live refresh on the same driver watch stream FileExplorer
-	// already uses (no second client). Besides root + expanded folders this
-	// also watches collapsed folders whose children we already know, so
-	// their chevrons stay in sync across tabs and window instances.
+	// Live refresh watches the current folder only, like a file manager: the
+	// cost of watching is what is open, never the shape of the tree. Every
+	// other known folder, expanded or collapsed, re-lists on the deep refresh
+	// a change triggers, on navigation, and on each `treeVersion` bump.
+	// Inside FileExplorer this is the folder its list already watches, so the
+	// stream shares one server subscription. The local driver's global signal
+	// still covers every folder.
 	//
 	// Deliberately NOT a `children` dependency: resubscribing replays the
 	// backend's initial emission, which refreshes, which reassigns
-	// `children`, which would resubscribe forever. Collapsed folders
-	// discovered later join the watch list on the next resubscribe; the
-	// local driver's global subscription covers everything regardless.
+	// `children`, which would resubscribe forever.
 	$effect(() => {
 		const d = driver;
 		const root = rootId;
-		const expandedIds = expanded;
-		const unsubs: Array<() => void> = [];
-		untrack(() => {
-			const watchedIds = new Set<string>(expandedIds);
-			for (const key of children.keys()) {
-				if (key !== ROOT_KEY) watchedIds.add(key);
-			}
-			if (!d.subscribeChanges) return;
-			const notify = () => void refreshVisible(d, root, true);
-			unsubs.push(d.subscribeChanges(notify, { parentId: root }));
-			for (const id of watchedIds) {
-				unsubs.push(d.subscribeChanges(notify, { parentId: id }));
-			}
-		});
-		return () => {
-			for (const u of unsubs) u();
-		};
+		const current = activeId ?? root;
+		if (!d.subscribeChanges) return;
+		const subscribe = d.subscribeChanges.bind(d);
+		return untrack(() =>
+			subscribe(() => void refreshVisible(d, root, true), { parentId: current })
+		);
 	});
 </script>
 

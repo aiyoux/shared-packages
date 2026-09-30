@@ -60,6 +60,9 @@
 	let loading = $state(true);
 	let error = $state('');
 	let kind = $derived(getPreviewKind(entry));
+	const mediaId = $derived(entry.id);
+	const mediaName = $derived(entry.name);
+	let loadedMedia: { id: string; name: string; kind: string; driver: ExplorerDriver } | null = null;
 	/**
 	 * The image viewer carries the actions in its own chrome, so the bottom bar
 	 * steps aside, but only while that viewer is on screen. An image that fails
@@ -124,17 +127,19 @@
 	});
 
 	function revokeUrl() {
-		if (blobUrl?.startsWith('blob:')) URL.revokeObjectURL(blobUrl);
+		const retired = [blobUrl, pdfFallbackUrl].filter((url): url is string => !!url?.startsWith('blob:'));
+		void tick().then(() => {
+			for (const url of retired) URL.revokeObjectURL(url);
+		});
 		blobUrl = null;
-		if (pdfFallbackUrl?.startsWith('blob:')) URL.revokeObjectURL(pdfFallbackUrl);
 		pdfFallbackUrl = null;
 	}
 
 	$effect(() => {
-		const e = entry;
+		const e = { id: mediaId, name: mediaName };
 		const d = driver;
 		const k = kind;
-		const shouldLoad = loadMedia && entries.length <= 1;
+		const shouldLoad = loadMedia && !multi;
 		if (!shouldLoad) {
 			untrack(revokeUrl);
 			loading = false;
@@ -158,6 +163,11 @@
 			error = 'Preview not available for this file type';
 			return;
 		}
+
+		// List refreshes replace entry objects; keep the decoded media for the
+		// same file and driver instead of retiring an image still on screen.
+		if (untrack(() => loadedMedia?.id === e.id && loadedMedia.name === e.name &&
+			loadedMedia.kind === k && loadedMedia.driver === d && !!blobUrl && !loading)) return;
 
 		let cancelled = false;
 		// untrack: see comment above — must not make this effect depend on
@@ -183,6 +193,7 @@
 								return;
 							}
 							blobUrl = src;
+							loadedMedia = { id: e.id, name: e.name, kind: k, driver: d };
 							loading = false;
 							return;
 						}
@@ -197,6 +208,7 @@
 						return;
 					}
 					blobUrl = src.url;
+					loadedMedia = { id: e.id, name: e.name, kind: k, driver: d };
 					loading = false;
 					return;
 				}

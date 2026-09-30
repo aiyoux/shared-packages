@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onDestroy, untrack } from 'svelte';
+	import { onDestroy, tick, untrack } from 'svelte';
 	import FeIcon from './FeIcon.svelte';
 	import type { FeIconName } from './feIcons.js';
 	import {
@@ -42,6 +42,11 @@
 	/** Last id we successfully rendered. Not set until the fetch finishes, so a
 	 * cancelled in-flight load can restart instead of sticking on the spinner. */
 	let loadedId = '';
+	let loadedDriver: ExplorerDriver | null = null;
+	let loadedDim = 0;
+	let loadedName = '';
+	const mediaId = $derived(entry.id);
+	const mediaName = $derived(entry.name);
 	/** Last id that failed. Plain let so a fail does not re-run the effect. */
 	let failedId = '';
 	let shouldLoad = $derived(
@@ -60,7 +65,10 @@
 
 	function revoke() {
 		if (url && url.startsWith('blob:')) {
-			URL.revokeObjectURL(url);
+			const retired = url;
+			// Remove the old src before retiring it; lazy images may still be
+			// queued for loading until Svelte flushes the DOM update.
+			void tick().then(() => URL.revokeObjectURL(retired));
 		}
 		// data: URLs don't need revocation
 		url = null;
@@ -68,7 +76,8 @@
 
 	$effect(() => {
 		// Re-read entry/driver/enabled so effect re-runs on change
-		const e = entry;
+		const e = { id: mediaId, name: mediaName };
+		const dim = maxDim;
 		const d = driver;
 		const en = shouldLoad;
 		// `kind` is a $derived read here, not written — writing it from inside
@@ -96,7 +105,7 @@
 		// its own writes. A failed decode used to loop: fail → loading=false →
 		// re-run → new blob URL → revoke → ERR_FILE_NOT_FOUND, and the row
 		// stopped taking clicks.
-		if (untrack(() => loadedId === e.id && Boolean(url) && !loading)) return;
+		if (untrack(() => loadedId === e.id && loadedDriver === d && loadedDim === dim && loadedName === e.name && Boolean(url) && !loading)) return;
 		if (untrack(() => failedId === e.id)) return;
 
 		let cancelled = false;
@@ -109,7 +118,7 @@
 			try {
 				if (d.thumbUrl) {
 					try {
-						const loc = await d.thumbUrl(e.id, { maxDim });
+						const loc = await d.thumbUrl(e.id, { maxDim: dim });
 						if (cancelled) return;
 						if (loc?.url) {
 							const src = await embedMediaUrl(loc.url);
@@ -119,6 +128,9 @@
 							}
 							url = src;
 							loadedId = e.id;
+							loadedDriver = d;
+							loadedDim = dim;
+							loadedName = e.name;
 							loading = false;
 							return;
 						}
@@ -133,6 +145,9 @@
 						if (loc?.url && mediaSrcIsEmbeddable(loc.url)) {
 							url = loc.url;
 							loadedId = e.id;
+							loadedDriver = d;
+							loadedDim = dim;
+							loadedName = e.name;
 							loading = false;
 							return;
 						}
@@ -148,10 +163,16 @@
 					loading = false;
 					return;
 				}
-				const thumbUrl = await generateThumbnail(blob, k, maxDim, e.name);
-				if (cancelled) return;
+				const thumbUrl = await generateThumbnail(blob, k, dim, e.name);
+				if (cancelled) {
+					if (thumbUrl.startsWith('blob:')) URL.revokeObjectURL(thumbUrl);
+					return;
+				}
 				url = thumbUrl;
 				loadedId = e.id;
+				loadedDriver = d;
+				loadedDim = dim;
+				loadedName = e.name;
 				failedId = '';
 				loading = false;
 			} catch {

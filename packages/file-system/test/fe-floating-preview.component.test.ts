@@ -65,6 +65,26 @@ const svgEntry: ExplorerEntry = {
 };
 
 describe('FeFloatingPreview', () => {
+	it('keeps its image blob across same-file list refreshes and retires it after unmount', async () => {
+		const readBlob = vi.fn(async () => new Blob(['image'], { type: 'image/png' }));
+		const driver = { ...driverWith(new Blob()), readBlob };
+		const revoke = vi.spyOn(URL, 'revokeObjectURL').mockImplementation((url) => {
+			expect(document.querySelector(`img[src="${url}"]`)).toBeNull();
+		});
+		try {
+			const props = { entry: { ...svgEntry, name: 'pic.png' }, driver, onClose: () => {} };
+			const view = render(FeFloatingPreview, { props });
+			await waitFor(() => expect(document.querySelector('.fe-float-image')).toBeTruthy());
+			const url = document.querySelector('.fe-float-image')!.getAttribute('src');
+			await view.rerender({ ...props, entry: { ...props.entry } });
+			expect(readBlob).toHaveBeenCalledTimes(1);
+			expect(document.querySelector('.fe-float-image')!.getAttribute('src')).toBe(url);
+			expect(revoke).not.toHaveBeenCalled();
+			view.unmount();
+			await waitFor(() => expect(revoke).toHaveBeenCalledWith(url));
+		} finally { revoke.mockRestore(); }
+	});
+
 	it('keeps the actions when an image fails to display', async () => {
 		const actions = createRawSnippet(() => ({
 			render: () => '<button type="button" data-testid="fe-row-trash">Delete</button>'

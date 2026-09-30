@@ -107,6 +107,19 @@ const batch = (subId: string) => ({
 });
 
 describe('createMonitorWatchStream', () => {
+	it('cleans up a root registration that finishes after stop', async () => {
+		const h = createHarness();
+		let resolve!: (root: { root_id: string; path: string }) => void;
+		h.watchAddRoot.mockImplementationOnce(() => new Promise((r) => { resolve = r; }));
+		const stream = createMonitorWatchStream({ transport: h.transport, fetchImpl: h.fetchImpl });
+		stream.watchFolder('/project', vi.fn());
+		await vi.waitFor(() => expect(h.watchAddRoot).toHaveBeenCalled());
+		stream.stop();
+		resolve({ root_id: 'late-root', path: '/project' });
+		await vi.waitFor(() => expect(h.watchRemoveRoot).toHaveBeenCalledWith('late-root', false));
+		expect(h.watchUpdateSubs).not.toHaveBeenCalled();
+	});
+
 	it('watches the folder itself, non-recursively', async () => {
 		const h = createHarness();
 		const stream = createMonitorWatchStream({
@@ -148,6 +161,32 @@ describe('createMonitorWatchStream', () => {
 		await vi.waitFor(() => expect(h.watchRemoveRoot).toHaveBeenCalledTimes(2));
 		const released = h.watchRemoveRoot.mock.calls.map((c) => c[0]).sort();
 		expect(released).toEqual(['root:/home/me/a', 'root:/home/me/b']);
+		expect(h.watchRemoveRoot.mock.calls.every((call) => call[1] === false)).toBe(true);
+	});
+
+	it('stop() drops its own subscriptions before the non-forced DELETE', async () => {
+		// A root is shared by path across tabs. DELETE without force refuses
+		// while anyone subscribes, so our own subscription must be gone first —
+		// without relying on the server having noticed the stream close.
+		const h = createHarness();
+		const stream = createMonitorWatchStream({
+			transport: h.transport,
+			fetchImpl: h.fetchImpl,
+			debounceMs: 10
+		});
+		stream.watchFolder('/home/me/a', vi.fn());
+		await vi.waitFor(() => expect(h.subIdFor('/home/me/a')).toBeTruthy());
+
+		stream.stop();
+
+		await vi.waitFor(() => expect(h.watchRemoveRoot).toHaveBeenCalledWith('root:/home/me/a', false));
+		const unsubscribe = h.watchUpdateSubs.mock.calls.findIndex(([req]) =>
+			req.unsubscribe?.includes('root:/home/me/a')
+		);
+		expect(unsubscribe).toBeGreaterThanOrEqual(0);
+		expect(h.watchUpdateSubs.mock.invocationCallOrder[unsubscribe]).toBeLessThan(
+			h.watchRemoveRoot.mock.invocationCallOrder[0]
+		);
 	});
 
 	it('multiplexes several folders over one connection, routed by sub_id', async () => {
@@ -227,6 +266,7 @@ describe('createMonitorWatchStream', () => {
 		release();
 		await vi.waitFor(() => expect(h.subIdFor('/a')).toBeUndefined(), { timeout: 1_000 });
 		expect(stream.watchedPaths()).not.toContain('/a');
+		await vi.waitFor(() => expect(h.watchRemoveRoot).toHaveBeenCalledWith('root:/a', false));
 		stream.stop();
 	});
 
