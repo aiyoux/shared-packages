@@ -9,8 +9,15 @@ const latest = new Map<string, TransferProgress>();
 let starter = startOp;
 const aborts = new Map<string, AbortController>();
 
+/**
+ * The op record reports a copy; it never gates one. A tab that cannot write
+ * the record (storage or Web Locks unavailable) still copies, unlisted.
+ */
 export async function beginFileOp(id: string, input: Omit<StartOp, 'id'>): Promise<void> {
- const handle = await starter({ ...input, id });
+ if (input.signal?.aborted) throw input.signal.reason ?? new DOMException('Cancelled', 'AbortError');
+ let handle: OpHandle;
+ try { handle = await starter({ ...input, id }); }
+ catch (error) { console.error('Could not record operation; continuing without it', error); return; }
  handles.set(id, handle);
  const buffered = latest.get(id);
  if (buffered) reportFileOp(buffered);

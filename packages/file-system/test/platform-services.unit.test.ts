@@ -166,3 +166,18 @@ describe('operation landing', () => {
   await Promise.all([a.dispose(), b.dispose()]);
  });
 });
+
+describe('file op adapter', () => {
+ it('a copy whose op record cannot be written still runs, unlisted', async () => {
+  const { beginFileOp, reportFileOp, resetFileOpsForTest } = await import('../src/services/fileOps.ts');
+  const logged: unknown[] = []; const original = console.error; console.error = (...args: unknown[]) => { logged.push(args); };
+  try {
+   resetFileOpsForTest(async () => { throw new Error('Platform services require Web Locks'); });
+   await beginFileOp('copy-1', { kind: 'copy', app: 'files', title: 'a.txt', where: { executor: 'this-browser' } });
+   reportFileOp({ id: 'copy-1', name: 'a.txt', size: 1, transferred: 1, direction: 'copying', done: true, status: 'done' });
+   assert.equal(logged.length, 1);
+   const aborted = new AbortController(); aborted.abort(new Error('stop'));
+   await assert.rejects(beginFileOp('copy-2', { kind: 'copy', app: 'files', title: 'b.txt', where: { executor: 'this-browser' }, signal: aborted.signal }), /stop/);
+  } finally { console.error = original; resetFileOpsForTest(); }
+ });
+});

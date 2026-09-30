@@ -123,7 +123,16 @@ export function createMonitorLink(options: {
 }
 export type MonitorLink = ReturnType<typeof createMonitorLink>;
 const links = new Map<string, Promise<MonitorLink>>();
-const jobKinds: Record<string, OpKindId> = { transcription: 'transcribe', 'text-to-speech': 'speak', 'image-generation': 'generate', chat: 'chat', copy: 'copy', rife: 'generate', srmd: 'generate' };
+const jobKinds: Record<string, OpKindId> = { transcription: 'transcribe', 'text-to-speech': 'speak', 'image-generation': 'generate', chat: 'chat', copy: 'copy', rife: 'video', srmd: 'video' };
+const TERMINAL_JOB_STATES = ['done', 'failed', 'aborted', 'evicted'];
+/** Relay jobs carry a device link, not an operation: they belong to the connection registry (W9/W10). */
+export const isOpJob = (job: MonitorJob) => job.kind !== 'relay';
+/**
+ * fs and b2 jobs hold no result bytes (the result is already on disk or in the
+ * bucket), so once the op record is durable the daemon's row has nothing left
+ * to collect. ai and tools results wait for landing or an explicit dismissal.
+ */
+export const monitorJobNeedsNoLanding = (job: MonitorJob) => TERMINAL_JOB_STATES.includes(job.state) && (job.feature === 'fs' || job.feature === 'b2');
 export function monitorJobRecord(profile: MonitorConnectionProfileV1, job: MonitorJob): OpRecord {
  const state = job.state === 'done' ? 'done' : job.state === 'aborted' ? 'cancelled' : job.state === 'failed' || job.state === 'evicted' ? 'failed' : 'running';
  const kind = jobKinds[job.kind] ?? 'copy';
@@ -135,11 +144,20 @@ export function getMonitorLink(profile: MonitorConnectionProfileV1, transport?: 
   const ctx = await serviceContextId(); const ops: OpsService = await opsService();
   const jobs = createMonitorJobsClient(profile.baseUrl);
   const election = createElection(serviceNames.monitorLock(profile.id), { tabId: ctx });
+  const acknowledged = new Set<string>();
   const link = createMonitorLink({ ctx, profile, election, bus: createLiveBus(serviceNames.monitorBus(profile.id), ctx), transport: transport ?? createMonitorClient({ baseUrl: profile.baseUrl }), jobs, onJob(job) {
+   if (!isOpJob(job)) return;
    const record = monitorJobRecord(profile, job);
    const original = job.clientRequestId ? ops.get(job.clientRequestId) : undefined;
    if (!original || original.kind !== record.kind || original.owner.kind === 'device' || original.owner.kind === 'monitor' && (original.owner.profileId !== profile.id || original.owner.jobId !== job.id)) record.id = `monitor:${profile.id}:${job.id}`;
-   void ops.importMonitor(record).then(() => { if (job.progress) ops.reportProgress(record.id, job.progress); }).catch((error) => console.error('Could not reconcile monitor job', error));
+   // Every tab receives the same job frame, so progress stays local to each.
+   void ops.importMonitor(record).then(async () => {
+    if (job.progress) ops.reportProgress(record.id, job.progress, { broadcast: false });
+    if (!election.isLeader || !monitorJobNeedsNoLanding(job) || acknowledged.has(job.id)) return;
+    acknowledged.add(job.id);
+    await jobs.landed(job.id);
+    await ops.change(record.id, (current) => ({ ...current, monitorAcknowledged: true }));
+   }).catch((error) => { acknowledged.delete(job.id); console.error('Could not reconcile monitor job', error); });
   } });
   const stopCancel = ops.onCancelRequest((op) => { if (election.isLeader && op.owner.kind === 'monitor' && op.owner.profileId === profile.id && op.owner.jobId) void jobs.abort(op.owner.jobId).catch((error) => console.error('Could not cancel monitor job', error)); });
   const dispose = link.dispose; link.dispose = () => { stopCancel(); dispose(); links.delete(profile.id); };

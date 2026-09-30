@@ -1,6 +1,6 @@
 import { it } from 'node:test';
 import assert from 'node:assert/strict';
-import { createMonitorLink, monitorJobRecord, type MonitorLinkFrame } from '../src/services/monitorLink.ts';
+import { createMonitorLink, isOpJob, monitorJobNeedsNoLanding, monitorJobRecord, type MonitorLinkFrame } from '../src/services/monitorLink.ts';
 import type { LiveBus } from '../src/live/bus.ts';
 import type { Election } from '../src/live/election.ts';
 import type { MonitorTransport } from '../src/monitor/client.ts';
@@ -63,4 +63,16 @@ it('ten tabs share one job feed, status and retry through its owner', async () =
  links[9].retry(); await drain();
  assert.equal(probes, 2); assert.equal(feeds, 2);
  for (const link of links) link.dispose();
+});
+
+it('acknowledges only finished jobs that hold no result, and keeps relays out of ops', () => {
+ const job = (feature: 'ai' | 'tools' | 'fs' | 'b2', state: string, kind = 'copy') => ({ id: `${feature}:1`, jobId: '1', feature, kind, state, createdAt: 1 });
+ assert.equal(monitorJobNeedsNoLanding(job('fs', 'done')), true);
+ assert.equal(monitorJobNeedsNoLanding(job('b2', 'failed')), true);
+ assert.equal(monitorJobNeedsNoLanding(job('fs', 'running')), false, 'a running copy is never acknowledged');
+ assert.equal(monitorJobNeedsNoLanding(job('ai', 'done', 'transcription')), false, 'ai results wait for landing');
+ assert.equal(monitorJobNeedsNoLanding(job('tools', 'done', 'rife')), false, 'tool results wait for landing');
+ assert.equal(isOpJob(job('fs', 'running', 'relay')), false);
+ assert.equal(isOpJob(job('fs', 'running')), true);
+ assert.equal(monitorJobRecord(profile, job('tools', 'done', 'rife')).kind, 'video');
 });

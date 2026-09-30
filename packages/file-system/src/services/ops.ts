@@ -4,7 +4,7 @@ import { tabOwner, watchOwner, currentTabDirectory, type Owner } from './owner.j
 import { serviceNames } from './names.js';
 import { createRecordStore, type RecordStore } from './store.js';
 
-export type OpKindId = 'copy' | 'extract' | 'compress' | 'encrypt' | 'decrypt' | 'import' | 'send' | 'receive' | 'transcribe' | 'speak' | 'generate' | 'chat' | 'agent-access' | 'agent-edit';
+export type OpKindId = 'copy' | 'extract' | 'compress' | 'encrypt' | 'decrypt' | 'import' | 'send' | 'receive' | 'transcribe' | 'speak' | 'generate' | 'video' | 'chat' | 'agent-access' | 'agent-edit';
 export type OpState = 'queued' | 'running' | 'paused' | 'done' | 'failed' | 'cancelled' | 'stopped' | 'landed';
 export type Endpoint = { kind: 'browser' | 'monitor' | 'b2' | 'device' | 'provider'; label: string };
 export type OpWhere = { executor: 'this-browser' | 'monitor' | 'device'; from?: Endpoint; to?: Endpoint; route?: 'server' | 'delegated' | 'webrtc' | 'dual-phase' | 'direct' | 'p2p' | 'face'; note?: string };
@@ -81,7 +81,8 @@ export function createOpsService(options: {
   list: () => [...records.values()].filter((op) => !op.dismissed).sort((a, b) => b.createdAt - a.createdAt),
   get: (id: string) => records.get(id),
   progressOf: (id: string) => progress.get(id),
-  reportProgress(id: string, value: Omit<OpProgress, 'id'>) { const next = { ...value, id }; progress.set(id, next); notify(); bus.broadcast({ kind: 'progress', progress: next }); },
+  /** `broadcast: false` when every tab already receives the same tick (monitor job frames). */
+  reportProgress(id: string, value: Omit<OpProgress, 'id'>, opts: { broadcast?: boolean } = {}) { const next = { ...value, id }; progress.set(id, next); notify(); if (opts.broadcast !== false) bus.broadcast({ kind: 'progress', progress: next }); },
   subscribe(fn: () => void) { listeners.add(fn); return () => { listeners.delete(fn); }; },
   async start(input: StartOp): Promise<OpHandle> {
    await ready;
