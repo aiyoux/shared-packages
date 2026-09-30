@@ -81,3 +81,5 @@ export * from './services/notifications.js';
 export * from './services/fileOps.js';
 export * from './services/landing.js';
 export * from './services/monitorLink.js';
+export * from './services/connections.js';
+export * from './services/linkProxy.js';

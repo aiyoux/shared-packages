@@ -46,6 +46,16 @@ export function createRecordStore<T extends { id: string }>(name: string, factor
     tx.onerror = () => reject(thrown ?? tx.error);
    });
   },
+  async remove(id: string): Promise<void> {
+   const database = await open();
+   return new Promise((resolve, reject) => {
+    const tx = database.transaction(serviceNames.recordStore, 'readwrite');
+    tx.objectStore(serviceNames.recordStore).delete(id);
+    tx.oncomplete = () => resolve();
+    tx.onabort = () => reject(tx.error);
+    tx.onerror = () => reject(tx.error);
+   });
+  },
   async close() { (await db)?.close(); db = null; }
  };
 }
