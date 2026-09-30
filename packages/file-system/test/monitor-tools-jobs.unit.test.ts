@@ -2,19 +2,19 @@ import { it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
 	probeToolsFeature,
-	resolveToolsMonitor,
+	resolveSelectedToolsMonitor,
 	buildToolSubmitUrl,
 	submitMonitorToolJob,
 	runMonitorToolLegacy,
 	readMonitorToolProgressNdjson
 } from '../src/monitor/toolsJobs.ts';
+import type { AiSelectionMap } from '../src/ai/selection.ts';
 import type { MonitorToolProgress } from '../src/monitor/toolsJobs.ts';
 import type { MonitorConnectionProfileV1 } from '../src/monitor/types.ts';
 
-// resolveToolsMonitor's reachability sweep and the ops-feed wait
-// (waitForMonitorToolJob) are app integration territory (IndexedDB + Web
-// Locks live bus); here the transport pieces are exercised with an injected
-// fetchImpl.
+// resolveSelectedToolsMonitor's cross-tab selection store is exercised here
+// only through injected impls (IndexedDB + Web Locks live bus are app
+// integration territory); the transport pieces run with an injected fetchImpl.
 
 type FetchMock = Array<{ url: string; init?: RequestInit; res: Response }>;
 
@@ -38,6 +38,28 @@ function fetchFrom(requests: FetchMock) {
 		if (!entry) throw new Error(`Unexpected request: ${String(url)}`);
 		entry.init = init;
 		return entry.res;
+	};
+}
+
+/** The empty selection map (no picks at all). */
+const EMPTY: AiSelectionMap = { v: 3, tasks: {} };
+
+function mapOf(task: string, ref: unknown): AiSelectionMap {
+	return { v: 3, tasks: { [task]: { default: ref as never } } } as AiSelectionMap;
+}
+
+/** resolveSelectedToolsMonitor deps minus the fetch mock, which `fetches` supplies. */
+function depsFor(
+	profiles: unknown[],
+	map: AiSelectionMap,
+	activeId: string | null = null,
+	fetches: FetchMock = []
+) {
+	return {
+		fetchImpl: fetchFrom(fetches),
+		listProfilesImpl: async () => profiles as MonitorConnectionProfileV1[],
+		getSelectionMapImpl: async () => map,
+		getActiveProfileIdImpl: async () => activeId
 	};
 }
 
@@ -193,43 +215,91 @@ it('tolerates a torn NDJSON line before the terminal tick', async () => {
 	assert.equal(seen.length, 1);
 });
 
-it('prefers the requested profile but falls back to any tools-capable profile', async () => {
+it('resolves the selection through the pick’s pinned profile, requiring its engine', async () => {
 	const profiles = [
 		{ id: 'b', name: 'No tools', baseUrl: 'http://127.0.0.1:9901' },
 		{ id: 'a', name: 'Tools here', baseUrl: 'http://127.0.0.1:9902' }
 	] as unknown as MonitorConnectionProfileV1[];
 	let listed = 0;
-	const probe = await resolveToolsMonitor(
-		'b',
-		fetchFrom([
+	const probe = await resolveSelectedToolsMonitor('video-upscale', 'default-app', {
+		fetchImpl: fetchFrom([
+			// Only profile a is probed: b is never in the path (no reroute).
 			{ url: 'http://127.0.0.1:9902/v1/meta', res: ok({ capabilities: { tools: { srmd: true } } }) }
 		]),
-		async () => {
+		listProfilesImpl: async () => {
 			listed += 1;
 			return profiles;
-		}
-	);
+		},
+		getSelectionMapImpl: async () => mapOf('video-upscale', {
+			location: 'monitor-native',
+			modelId: 'srmd-ncnn-vulkan',
+			sourceId: 'srmd-ncnn-vulkan',
+			variantId: 'ncnn-vulkan',
+			monitorProfileId: 'a'
+		})
+	});
 	assert.equal(probe.profileId, 'a');
 	assert.equal(probe.srmd, true);
 	assert.equal(probe.rife, false);
 	assert.equal(listed, 1);
 });
 
-it('resolves an audio-only monitor and reports the audio capability', async () => {
-	const probe = await resolveToolsMonitor(
-		null,
-		fetchFrom([
-			{ url: 'http://127.0.0.1:9903/v1/meta', res: ok({ capabilities: { tools: { audio: true } } }) }
-		]),
-		async () =>
-			[
-				{ id: 'c', name: 'Audio only', baseUrl: 'http://127.0.0.1:9903' }
-			] as unknown as MonitorConnectionProfileV1[]
+it('no selection is an error naming the settings path, never a reroute', async () => {
+	await assert.rejects(
+		resolveSelectedToolsMonitor('video-interpolate', 'default-app', depsFor([], EMPTY)),
+		/Settings → AI models/
 	);
+});
+
+it('an un-pinned pick resolves through the active monitor', async () => {
+	const probe = await resolveSelectedToolsMonitor('audio-upsampling', 'default-app', depsFor(
+		[{ id: 'c', name: 'Audio only', baseUrl: 'http://127.0.0.1:9903' }],
+		mapOf('audio-upsampling', {
+			location: 'monitor-native',
+			modelId: 'audiosronnx',
+			sourceId: 'audiosronnx',
+			variantId: 'onnx-cpu'
+		}),
+		'c',
+		[{ url: 'http://127.0.0.1:9903/v1/meta', res: ok({ capabilities: { tools: { audio: true } } }) }]
+	));
 	assert.equal(probe.profileId, 'c');
 	assert.equal(probe.audio, true);
 	assert.equal(probe.rife, false);
 	assert.equal(probe.srmd, false);
+});
+
+it('a pick whose monitor lost the engine is an error, never a reroute', async () => {
+	await assert.rejects(
+		resolveSelectedToolsMonitor('video-upscale', 'default-app', depsFor(
+			[{ id: 'a', name: 'Engine gone', baseUrl: 'http://127.0.0.1:9904' }],
+			mapOf('video-upscale', {
+				location: 'monitor-native',
+				modelId: 'srmd-ncnn-vulkan',
+				sourceId: 'srmd-ncnn-vulkan',
+				variantId: 'ncnn-vulkan'
+			}),
+			'a',
+			[{ url: 'http://127.0.0.1:9904/v1/meta', res: ok({ capabilities: { tools: { rife: true } } }) }]
+		)),
+		/Engine gone" has no srmd-ncnn-vulkan/
+	);
+});
+
+it('a pick pinned to a deleted monitor is an error, never a reroute', async () => {
+	await assert.rejects(
+		resolveSelectedToolsMonitor('video-upscale', 'default-app', depsFor(
+			[{ id: 'a', name: 'Still here', baseUrl: 'http://127.0.0.1:9901' }],
+			mapOf('video-upscale', {
+				location: 'monitor-native',
+				modelId: 'srmd-ncnn-vulkan',
+				sourceId: 'srmd-ncnn-vulkan',
+				variantId: 'ncnn-vulkan',
+				monitorProfileId: 'gone'
+			})
+		)),
+		/is gone/
+	);
 });
 
 it('rejects an audio run against a monitor without the audio engine', async () => {

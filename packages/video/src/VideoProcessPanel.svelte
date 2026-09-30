@@ -85,11 +85,16 @@ import Loader2 from '@lucide/svelte/icons/loader-2';
 				return;
 			}
 			const data = await interpolator.checkStatus();
+			if (!data.rifePath) {
+				rifeConnectionStatus = 'failed';
+				rifeMessage = 'No monitor picked for interpolation — choose one in Settings → AI models.';
+				return;
+			}
 			rifeConnectionStatus = 'connected';
-			rifeMessage = `RIFE connected! (Path: ${data.rifePath || 'rife-ncnn-vulkan'})`;
-		} catch {
+			rifeMessage = `RIFE ready (${data.rifePath})`;
+		} catch (err) {
 			rifeConnectionStatus = 'failed';
-			rifeMessage = 'Offline';
+			rifeMessage = err instanceof Error && err.message ? err.message : 'Offline';
 		}
 	}
 
@@ -109,11 +114,16 @@ import Loader2 from '@lucide/svelte/icons/loader-2';
 				return;
 			}
 			const data = await upscaler.checkStatus();
+			if (!data.srmdPath) {
+				srmdConnectionStatus = 'failed';
+				srmdMessage = 'No monitor picked for upscaling — choose one in Settings → AI models.';
+				return;
+			}
 			srmdConnectionStatus = 'connected';
-			srmdMessage = `SRMD connected! (${data.srmdPath || 'srmd-ncnn-vulkan'})`;
-		} catch {
+			srmdMessage = `SRMD ready (${data.srmdPath})`;
+		} catch (err) {
 			srmdConnectionStatus = 'failed';
-			srmdMessage = 'Offline';
+			srmdMessage = err instanceof Error && err.message ? err.message : 'Offline';
 		}
 	}
 
@@ -127,11 +137,16 @@ import Loader2 from '@lucide/svelte/icons/loader-2';
 				return;
 			}
 			const data = await audioUpscaler.checkStatus();
+			if (!data.audioPath) {
+				audioConnectionStatus = 'failed';
+				audioMessage = 'No monitor picked for audio upsampling — choose one in Settings → AI models.';
+				return;
+			}
 			audioConnectionStatus = 'connected';
-			audioMessage = `Audio upsampler connected! (${data.audioPath || 'audiosronnx'})`;
-		} catch {
+			audioMessage = `Audio upsampler ready (${data.audioPath})`;
+		} catch (err) {
 			audioConnectionStatus = 'failed';
-			audioMessage = 'Offline';
+			audioMessage = err instanceof Error && err.message ? err.message : 'Offline';
 		}
 	}
 

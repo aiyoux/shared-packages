@@ -29,11 +29,17 @@
  */
 
 import { withLocalAddressSpace } from './localNetwork.js';
-import { listProfiles } from './credentials.js';
+import { listProfiles, getActiveProfileId } from './credentials.js';
 import { createMonitorJobsClient } from './jobs.js';
 import type { MonitorConnectionProfileV1 } from './types.js';
 import { opsService, startOp, type OpHandle, type ResultRef } from '../services/ops.js';
 import { stageOpResult } from '../services/landing.js';
+import {
+	getAiSelectionMap,
+	resolveAiModelRef,
+	type AiSelectionMap,
+	type AiTaskKey
+} from '../ai/selection.js';
 
 /** One NDJSON progress tick (frozen shape, monitor tools-feature.md §4.2). */
 export type MonitorToolProgress = {
@@ -107,50 +113,114 @@ export async function probeToolsFeature(
 }
 
 /**
- * Resolve the monitor to run tool jobs on: the preferred profile if it is
- * tools-capable and reachable, else the first tools-capable profile
- * (`listProfiles` returns most-recently-updated first). Interim behaviour —
- * the Phase 4 plan replaces the auto-route with explicit per-task selection.
+ * The catalog tasks backed by tools jobs (tools-feature.md + plan Phase 4).
+ * The catalog offers deriving one-to-one from the monitor's tools capability
+ * are the daemon's job (`/v1/ai/catalog`, `features/tools/offers.rs` — W7.11:
+ * no second derivation of which engines exist); `AiTask` in `ai/catalog.ts`
+ * adopts these same strings once its pending shared edits are committed, and
+ * the cast below keeps the selection store's one vocabulary until then.
  */
-export async function resolveToolsMonitor(
-	preferredProfileId?: string | null,
-	fetchImpl: typeof fetch = fetch,
-	listProfilesImpl: typeof listProfiles = listProfiles
+export type ToolTaskKey = 'video-upscale' | 'video-interpolate' | 'audio-upsampling';
+
+/** The engine binary a task's catalog offer names on the monitor. */
+export const TOOL_TASK_MODEL: Record<ToolTaskKey, string> = {
+	'video-upscale': 'srmd-ncnn-vulkan',
+	'video-interpolate': 'rife-ncnn-vulkan',
+	'audio-upsampling': 'audiosronnx'
+};
+
+const TOOL_TASK_LABEL: Record<ToolTaskKey, string> = {
+	'video-upscale': 'video upscale',
+	'video-interpolate': 'frame interpolation',
+	'audio-upsampling': 'audio upsampling'
+};
+
+function taskLabel(task: ToolTaskKey): string {
+	return TOOL_TASK_LABEL[task];
+}
+
+export type ResolveSelectedToolsMonitorDeps = {
+	fetchImpl?: typeof fetch;
+	listProfilesImpl?: typeof listProfiles;
+	getSelectionMapImpl?: typeof getAiSelectionMap;
+	getActiveProfileIdImpl?: typeof getActiveProfileId;
+};
+
+/**
+ * Resolve the monitor the user's per-task selection names — the replacement
+ * for `resolveToolsMonitor`'s first-capable-profile auto-route, which
+ * silently rerouted work (unified-ai-pipeline.md: never). The selection cell
+ * (the app's own, else the task-wide `'default'`) must name a
+ * `monitor-native` ref backed by this task's engine. Resolution pins to the
+ * ref's `monitorProfileId`, or to the active monitor when the pick has no
+ * pin — never to another reachable profile. A missing or no-longer-valid
+ * pick is an error that names the settings path, not a silent reroute.
+ */
+export async function resolveSelectedToolsMonitor(
+	task: ToolTaskKey,
+	appId: string,
+	deps: ResolveSelectedToolsMonitorDeps = {}
 ): Promise<MonitorToolsProbe> {
-	let profiles: MonitorConnectionProfileV1[] = [];
+	let map: AiSelectionMap;
 	try {
-		profiles = await listProfilesImpl();
+		map = await (deps.getSelectionMapImpl ?? getAiSelectionMap)();
+	} catch (err) {
+		throw new Error(`Could not read model defaults: ${(err as Error)?.message || err}`);
+	}
+	const ref = resolveAiModelRef(map, task as AiTaskKey, appId);
+	if (!ref) {
+		throw new Error(
+			`Pick a ${taskLabel(task)} monitor in Settings → AI models.`
+		);
+	}
+	if (ref.location !== 'monitor-native') {
+		throw new Error(
+			`The ${taskLabel(task)} selection is not a monitor offer — pick it again in Settings → AI models.`
+		);
+	}
+	let profiles: MonitorConnectionProfileV1[];
+	try {
+		profiles = await (deps.listProfilesImpl ?? listProfiles)();
 	} catch (err) {
 		throw new Error(`Could not read configured monitors: ${(err as Error)?.message || err}`);
 	}
-	const ordered = preferredProfileId
-		? [
-				...profiles.filter((p) => p.id === preferredProfileId),
-				...profiles.filter((p) => p.id !== preferredProfileId)
-			]
-		: profiles;
-	for (const p of ordered) {
-		try {
-			const caps = await probeToolsFeature(p.baseUrl, fetchImpl);
-			if (caps.rife || caps.srmd || caps.audio) {
-				return {
-					profileId: p.id,
-					name: p.name,
-					baseUrl: p.baseUrl.replace(/\/$/, ''),
-					rife: caps.rife,
-					srmd: caps.srmd,
-					audio: caps.audio,
-					jobsApi: caps.jobsApi
-				};
-			}
-		} catch {
-			/* unreachable monitor: try the next profile */
+	// Pin order: a pick with no profile id means the active monitor; a pinned
+	// pick means exactly that monitor. Anything else is a reroute and stops
+	// with the settings nudge above — the user decides, or fixes the dead pin.
+	let candidate: MonitorConnectionProfileV1 | undefined;
+	if (ref.monitorProfileId) {
+		candidate = profiles.find((p) => p.id === ref.monitorProfileId);
+		if (!candidate) {
+			throw new Error(
+				'The monitor you picked for this tool is gone. Pick it again in Settings → AI models.'
+			);
+		}
+	} else {
+		const activeId = await (deps.getActiveProfileIdImpl ?? getActiveProfileId)().catch(() => null);
+		candidate = activeId ? profiles.find((p) => p.id === activeId) : profiles[0];
+		if (!candidate) {
+			throw new Error('No monitors configured. Add one in the File Explorer settings and pick it in Settings → AI models.');
 		}
 	}
-	if (profiles.length === 0) {
-		throw new Error('No monitors configured. Add one in the File Explorer settings.');
+	const caps = await probeToolsFeature(candidate.baseUrl, deps.fetchImpl);
+	const selectedToolIsMissing =
+		(task === 'video-upscale' && !caps.srmd) ||
+		(task === 'video-interpolate' && !caps.rife) ||
+		(task === 'audio-upsampling' && !caps.audio);
+	if (selectedToolIsMissing) {
+		throw new Error(
+			`"${candidate.name}" has no ${TOOL_TASK_MODEL[task]} (pick a ${taskLabel(task)} monitor in Settings → AI models).`
+		);
 	}
-	throw new Error('No reachable monitor has the tools feature (rife/srmd/audio binaries missing?).');
+	return {
+		profileId: candidate.id,
+		name: candidate.name,
+		baseUrl: candidate.baseUrl.replace(/\/$/, ''),
+		rife: caps.rife,
+		srmd: caps.srmd,
+		audio: caps.audio,
+		jobsApi: caps.jobsApi
+	};
 }
 
 /** Client-generated submit id (`?id=`) — doubles as the caller's op id. */
@@ -468,9 +538,11 @@ export async function finishMonitorToolJob(
  * `VideoUpscaler` in `@shared-packages/video`.
  */
 export type MonitorVideoToolsOptions = {
-	/** Preferred monitor profile — the explicit selection (interim: a pinned profile id). */
-	preferredProfileId?: () => string | null;
-	/** Attributed app surface for the op records (free-form, shown by ops UI). */
+	/**
+	 * Attributed app surface for the op records AND the appId keying the
+	 * per-task selection cell (the catalog Defaults picker writes that cell).
+	 * Falls back to the task-wide `'default'` cell inside the selection store.
+	 */
 	app?: string;
 };
 
@@ -487,10 +559,10 @@ export type MonitorVideoTools = {
 };
 
 export function createMonitorVideoTools(options: MonitorVideoToolsOptions = {}): MonitorVideoTools {
-	const preferredProfileId = options.preferredProfileId ?? (() => null);
-	const app = options.app ?? 'files';
-	async function resolve(): Promise<MonitorToolsProbe> {
-		return await resolveToolsMonitor(preferredProfileId());
+	const selectionAppId = options.app ?? 'files';
+	const app = selectionAppId;
+	async function resolve(task: ToolTaskKey): Promise<MonitorToolsProbe> {
+		return await resolveSelectedToolsMonitor(task, selectionAppId);
 	}
 	async function run(
 		blob: Blob,
@@ -499,7 +571,10 @@ export function createMonitorVideoTools(options: MonitorVideoToolsOptions = {}):
 		id: string,
 		title: string
 	): Promise<Blob> {
-		const monitor = await resolve();
+		// The task drives the selection: rife only ever resolves the
+		// video-interpolate pick, srmd only the video-upscale pick — never
+		// one user default silently running through the other's monitor.
+		const monitor = await resolve(tool === 'rife' ? 'video-interpolate' : 'video-upscale');
 		const handle = await startOp({
 			kind: 'video',
 			app,
@@ -513,11 +588,23 @@ export function createMonitorVideoTools(options: MonitorVideoToolsOptions = {}):
 	}
 	return {
 		checkStatus: async () => {
-			const monitor = await resolve();
-			return {
-				rifePath: monitor.rife ? `monitor:${monitor.name}` : undefined,
-				srmdPath: monitor.srmd ? `monitor:${monitor.name}` : undefined
-			};
+			// Each panel contract resolves its own task; a missing selection or a
+			// dead pick surfaces through the missing path, and the panel turns
+			// that into its own connected/disconnected state.
+			const out: { rifePath?: string; srmdPath?: string } = {};
+			try {
+				const rife = await resolve('video-interpolate');
+				out.rifePath = rife.rife ? `monitor:${rife.name}` : undefined;
+			} catch {
+				/* no video-interpolate selection (yet) */
+			}
+			try {
+				const srmd = await resolve('video-upscale');
+				out.srmdPath = srmd.srmd ? `monitor:${srmd.name}` : undefined;
+			} catch {
+				/* no video-upscale selection (yet) */
+			}
+			return out;
 		},
 		newJobId: newMonitorToolRequestId,
 		pollProgress(id, onProgress) {
@@ -592,10 +679,10 @@ export type MonitorAudioTools = {
 export type MonitorAudioToolsOptions = MonitorVideoToolsOptions;
 
 export function createMonitorAudioTools(options: MonitorAudioToolsOptions = {}): MonitorAudioTools {
-	const preferredProfileId = options.preferredProfileId ?? (() => null);
-	const app = options.app ?? 'files';
+	const selectionAppId = options.app ?? 'files';
+	const app = selectionAppId;
 	async function resolve(): Promise<MonitorToolsProbe> {
-		return await resolveToolsMonitor(preferredProfileId());
+		return await resolveSelectedToolsMonitor('audio-upsampling', selectionAppId);
 	}
 	async function upsampleBlob(blob: Blob, opts: { engine?: string; denoise?: boolean; id: string }): Promise<Blob> {
 		const monitor = await resolve();
@@ -620,10 +707,15 @@ export function createMonitorAudioTools(options: MonitorAudioToolsOptions = {}):
 	}
 	return {
 		checkStatus: async () => {
-			const monitor = await resolve();
-			return {
-				audioPath: monitor.audio ? `monitor:${monitor.name}` : undefined
-			};
+			try {
+				const monitor = await resolve();
+				return {
+					audioPath: monitor.audio ? `monitor:${monitor.name}` : undefined
+				};
+			} catch {
+				// No audio-upsampling selection (yet) — the app's catch shows why.
+				return {};
+			}
 		},
 		newJobId: newMonitorToolRequestId,
 		pollProgress: audioUpsamplerPollProgress,
