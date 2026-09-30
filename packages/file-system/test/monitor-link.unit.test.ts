@@ -76,3 +76,12 @@ it('acknowledges only finished jobs that hold no result, and keeps relays out of
  assert.equal(isOpJob(job('fs', 'running')), true);
  assert.equal(monitorJobRecord(profile, job('tools', 'done', 'rife')).kind, 'video');
 });
+
+it('a relay job ends its face link when the far device has gone', async () => {
+	const { relayJobEnded } = await import('../src/services/monitorLink.ts');
+	const relay = (state: string, note?: string) => ({ id: 'fs:1', jobId: '1', feature: 'fs' as const, kind: 'relay', state, createdAt: 1, progress: note ? { done: 0, note } : undefined });
+	assert.equal(relayJobEnded(relay('running', 'near parked · far connected')), false);
+	assert.equal(relayJobEnded(relay('running', 'near gone · far gone')), true);
+	assert.equal(relayJobEnded(relay('aborted')), true);
+	assert.equal(relayJobEnded({ ...relay('done'), kind: 'copy' }), false);
+});

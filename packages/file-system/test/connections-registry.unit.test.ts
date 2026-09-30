@@ -161,3 +161,54 @@ describe('link proxy', () => {
 		assert.deepEqual(got.map((m) => m.n), [1]);
 	});
 });
+
+describe('face links (held by a monitor)', () => {
+	const faceLink = {
+		...link,
+		route: 'face' as const,
+		crypto: 'server-terminated' as const,
+		face: { profileId: 'lab', name: 'Lab', relayJobId: 'job-1', relayToken: 'tok' },
+		monitor: { kind: 'monitor' as const, profileId: 'lab', name: 'Lab', relayId: 'job-1' }
+	};
+
+	it('outlive the tab that held them: parked, then resumed by another tab', async () => {
+		const { tab, locks } = origin();
+		const a = tab('a'); const b = tab('b');
+		await Promise.all([a.ready, b.ready]);
+		await a.register({ ...faceLink, id: 'face-1' });
+		await settle();
+		assert.equal(b.get('face-1')?.owner.kind, 'monitor');
+		assert.equal(b.get('face-1')?.holder?.ctx, 'a');
+		await assert.rejects(b.claim('face-1'), /held by another tab/);
+
+		locks.close('a');
+		await settle();
+		const parked = b.get('face-1');
+		assert.equal(parked?.state, 'reconnecting', 'parked, not ended');
+		assert.equal(parked?.holder, undefined);
+
+		const handle = await b.claim('face-1');
+		await handle.update({ state: 'connected' });
+		await settle();
+		assert.equal(b.get('face-1')?.holder?.ctx, 'b');
+		assert.equal(b.get('face-1')?.state, 'connected');
+
+		// Closing the pane lets go without ending; the relay ending ends it.
+		await handle.detach();
+		await settle();
+		assert.equal(b.get('face-1')?.state, 'reconnecting');
+		await b.endRelay('lab', 'job-1');
+		await settle();
+		assert.equal(b.get('face-1')?.state, 'ended');
+		await assert.rejects(b.claim('face-1'), /has ended/);
+	});
+
+	it('a tab-owned link cannot be claimed', async () => {
+		const { tab } = origin();
+		const a = tab('a'); const b = tab('b');
+		await Promise.all([a.ready, b.ready]);
+		await a.register({ ...link, id: 'p2p-1' });
+		await settle();
+		await assert.rejects(b.claim('p2p-1'), /Only a link held by a monitor/);
+	});
+});

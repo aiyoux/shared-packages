@@ -6,6 +6,7 @@ import { createMonitorWatchStream, type MonitorWatchFsEvent, type MonitorWatchSt
 import { createMonitorJobsClient, type MonitorJob } from '../monitor/jobs.js';
 import type { MonitorConnectionProfileV1 } from '../monitor/types.js';
 import { opsService, type OpKindId, type OpsService, type OpRecord } from './ops.js';
+import { connectionsService } from './connections.js';
 import { serviceNames } from './names.js';
 
 export type MonitorLinkStatus = { state: 'connecting' | 'reachable' | 'unreachable'; reason?: string; jobs: boolean; ownerCtx?: string; version?: string; capabilities?: MonitorCapabilities };
@@ -23,6 +24,8 @@ export function createMonitorLink(options: {
  ctx: string; profile: MonitorConnectionProfileV1; bus: LiveBus<MonitorLinkFrame>;
  election: Election; transport: MonitorTransport; jobs: ReturnType<typeof createMonitorJobsClient>;
  onJob: (job: MonitorJob) => void; createWatch?: typeof createMonitorWatchStream;
+ /** Leader only: a job the daemon no longer lists (landed, reaped). */
+ onJobRemoved?: (id: string) => void;
 }) {
  const { bus, election, transport } = options;
  const folders = new Map<string, Set<WatchFolderListener>>();
@@ -88,7 +91,7 @@ export function createMonitorLink(options: {
     if (supported) {
      const receive = (job: MonitorJob) => { if (ctl.signal.aborted || election.term !== term) return; const previous = knownJobs.get(job.id); if (previous && ['done', 'failed', 'aborted', 'evicted'].includes(previous.state) && !['done', 'failed', 'aborted', 'evicted'].includes(job.state)) return; knownJobs.set(job.id, job); options.onJob(job); publish({ kind: 'job', term, job }); };
      // Subscribe before list, so a job cannot finish in a list-to-stream gap.
-     await options.jobs.events(receive, ctl.signal, (id) => knownJobs.delete(id), (error) => { if (!ctl.signal.aborted) setStatus({ ...status, state: 'unreachable', reason: String(error) }); });
+     await options.jobs.events(receive, ctl.signal, (id) => { knownJobs.delete(id); options.onJobRemoved?.(id); }, (error) => { if (!ctl.signal.aborted) setStatus({ ...status, state: 'unreachable', reason: String(error) }); });
      for (const job of await options.jobs.list(ctl.signal)) receive(job);
     }
     reconcile();
@@ -127,6 +130,8 @@ const jobKinds: Record<string, OpKindId> = { transcription: 'transcribe', 'text-
 const TERMINAL_JOB_STATES = ['done', 'failed', 'aborted', 'evicted'];
 /** Relay jobs carry a device link, not an operation: they belong to the connection registry (W9/W10). */
 export const isOpJob = (job: MonitorJob) => job.kind !== 'relay';
+/** A relay whose far device has gone is over, whatever its job still says (note: `near … · far …`). */
+export const relayJobEnded = (job: MonitorJob) => job.kind === 'relay' && (TERMINAL_JOB_STATES.includes(job.state) || /\bfar gone\b/.test(job.progress?.note ?? ''));
 /**
  * fs and b2 jobs hold no result bytes (the result is already on disk or in the
  * bucket), so once the op record is durable the daemon's row has nothing left
@@ -145,8 +150,11 @@ export function getMonitorLink(profile: MonitorConnectionProfileV1, transport?: 
   const jobs = createMonitorJobsClient(profile.baseUrl);
   const election = createElection(serviceNames.monitorLock(profile.id), { tabId: ctx });
   const acknowledged = new Set<string>();
-  const link = createMonitorLink({ ctx, profile, election, bus: createLiveBus(serviceNames.monitorBus(profile.id), ctx), transport: transport ?? createMonitorClient({ baseUrl: profile.baseUrl }), jobs, onJob(job) {
-   if (!isOpJob(job)) return;
+  const endRelay = (jobId: string) => void connectionsService().then((links) => links.endRelay(profile.id, jobId)).catch((error) => console.error('Could not end a relayed connection', error));
+  const link = createMonitorLink({ ctx, profile, election, bus: createLiveBus(serviceNames.monitorBus(profile.id), ctx), transport: transport ?? createMonitorClient({ baseUrl: profile.baseUrl }), jobs,
+  onJobRemoved(id) { if (id.startsWith('fs:')) endRelay(id.slice(3)); },
+  onJob(job) {
+   if (!isOpJob(job)) { if (election.isLeader && relayJobEnded(job)) endRelay(job.jobId); return; }
    const record = monitorJobRecord(profile, job);
    const original = job.clientRequestId ? ops.get(job.clientRequestId) : undefined;
    if (!original || original.kind !== record.kind || original.owner.kind === 'device' || original.owner.kind === 'monitor' && (original.owner.profileId !== profile.id || original.owner.jobId !== job.id)) record.id = `monitor:${profile.id}:${job.id}`;

@@ -22,9 +22,20 @@ export type ConnectionRecord = {
 	peer: { label: string; deviceId?: string; pairingId?: string };
 	/** How it was made: straight to the device, or through a monitor ("Use as RTC face"). */
 	route: 'p2p' | 'face';
-	face?: { profileId: string; name: string; relayJobId?: string };
+	/**
+	 * A face link: the monitor holding the far device, and the relay job a tab
+	 * reattaches to. `relayToken` is that job's loopback bearer; it stays in
+	 * this origin's storage like the monitor credentials themselves (D-22).
+	 */
+	face?: { profileId: string; name: string; relayJobId?: string; relayToken?: string };
 	crypto: 'end-to-end' | 'server-terminated' | 'dtls';
+	/** Who keeps the link: the tab holding the PC, or (a face link) the monitor. */
 	owner: Owner;
+	/**
+	 * A monitor-owned link's attached tab, if any. It goes when that tab does;
+	 * the link stays, parked on the monitor, for any tab to resume.
+	 */
+	holder?: Extract<Owner, { kind: 'tab' }>;
 	state: ConnectionState;
 	endedReason?: string;
 	/** Lanes in use, e.g. `presence`, `join:creative`, `files`. */
@@ -38,19 +49,27 @@ export type ConnectionAction = 'disconnect';
 export type ConnectionFrame =
 	| { kind: 'changed'; id: string }
 	| { kind: 'request'; id: string; action: ConnectionAction };
-export type RegisterConnection = Omit<ConnectionRecord, 'id' | 'owner' | 'state' | 'createdAt' | 'endedAt' | 'dismissed' | 'endedReason'> & {
+export type RegisterConnection = Omit<ConnectionRecord, 'id' | 'owner' | 'holder' | 'state' | 'createdAt' | 'endedAt' | 'dismissed' | 'endedReason'> & {
 	id?: string;
 	state?: Exclude<ConnectionState, 'ended'>;
+	/** A face link is owned by its monitor; this tab becomes its holder. */
+	monitor?: Extract<Owner, { kind: 'monitor' }>;
 };
 export type ConnectionHandle = {
 	id: string;
 	update(patch: Partial<Pick<ConnectionRecord, 'peer' | 'state' | 'apps' | 'crypto' | 'face'>>): Promise<void>;
 	/** The owner ended it on purpose (Disconnect, the far device left): the row goes. */
 	end(): Promise<void>;
+	/**
+	 * A monitor-owned link: this tab lets go (its pane closed) and the link
+	 * stays parked on the monitor. For a tab-owned link this is `end`.
+	 */
+	detach(): Promise<void>;
 	onRequest(fn: (action: ConnectionAction) => void): () => void;
 };
 
 export const OWNER_GONE_REASON = 'Ended: its tab closed';
+export const PARKED_STATE_NOTE = 'Held by the monitor — resume it in any tab';
 const isLive = (row: ConnectionRecord) => row.state !== 'ended';
 
 export function createConnectionsService(options: {
@@ -75,26 +94,42 @@ export function createConnectionsService(options: {
 	};
 
 	function unwatch(id: string) {
-		watches.get(id)?.abort();
+		const ctl = watches.get(id);
+		ctl?.abort();
 		watches.delete(id);
+		for (const [key, other] of watches) if (other === ctl) watches.delete(key);
+	}
+	/** The tab this row lives or dies with: a tab owner, or a monitor-owned row's holder. */
+	function tabOf(row: ConnectionRecord): Extract<Owner, { kind: 'tab' }> | undefined {
+		return row.owner.kind === 'tab' ? row.owner : row.holder;
 	}
 	function observe(row: ConnectionRecord) {
 		rows.set(row.id, row);
-		if (!isLive(row) || row.owner.kind !== 'tab' || row.owner.ctx === ctx) return unwatch(row.id);
-		if (watches.has(row.id)) return;
+		const tab = tabOf(row);
+		if (!isLive(row) || !tab || tab.ctx === ctx) return unwatch(row.id);
+		const key = `${row.id}:${tab.ctx}`;
+		if (watches.has(key)) return;
+		unwatch(row.id);
 		const ctl = new AbortController();
 		watches.set(row.id, ctl);
-		const ownerCtx = row.owner.ctx;
-		void watch(row.owner, ctl.signal)
+		watches.set(key, ctl);
+		const tabCtx = tab.ctx;
+		void watch(tab, ctl.signal)
 			.then(async () => {
 				if (disposed || ctl.signal.aborted) return;
 				watches.delete(row.id);
-				currentTabDirectory()?.markGone(ownerCtx);
-				await change(row.id, (current) =>
-					isLive(current) && current.owner.kind === 'tab' && current.owner.ctx === ownerCtx
-						? { ...current, state: 'ended', endedReason: OWNER_GONE_REASON, endedAt: Date.now() }
-						: current
-				);
+				watches.delete(key);
+				currentTabDirectory()?.markGone(tabCtx);
+				await change(row.id, (current) => {
+					if (!isLive(current)) return current;
+					// A tab-owned link ends with its tab.
+					if (current.owner.kind === 'tab' && current.owner.ctx === tabCtx) {
+						return { ...current, state: 'ended', endedReason: OWNER_GONE_REASON, endedAt: Date.now() };
+					}
+					// A face link outlives it: parked on the monitor until a tab resumes it.
+					if (current.holder?.ctx === tabCtx) return { ...current, holder: undefined, state: 'reconnecting' };
+					return current;
+				});
 			})
 			.catch((error) => {
 				if (!ctl.signal.aborted) console.error('Could not watch connection owner', error);
@@ -132,6 +167,37 @@ export function createConnectionsService(options: {
 		if (frame.kind === 'changed') void refresh().catch((error) => console.error('Could not read connections', error));
 		else handleRequest(frame.id, frame.action);
 	});
+
+	/** This tab's handle on a row it owns or holds. */
+	function handleFor(id: string): ConnectionHandle {
+		const handlers = requestHandlers.get(id) ?? new Set<(action: ConnectionAction) => void>();
+		requestHandlers.set(id, handlers);
+		const mine = (current: ConnectionRecord) => isLive(current) && tabOf(current)?.ctx === ctx;
+		const remove = async () => {
+			requestHandlers.delete(id);
+			await store.remove(id);
+			rows.delete(id);
+			notify();
+			bus.broadcast({ kind: 'changed', id });
+		};
+		return {
+			id,
+			update: (patch) => change(id, (current) => (mine(current) ? { ...current, ...patch } : current)),
+			end: remove,
+			async detach() {
+				const row = rows.get(id);
+				if (row?.owner.kind !== 'monitor') return remove();
+				requestHandlers.delete(id);
+				await change(id, (current) => (mine(current) ? { ...current, holder: undefined, state: 'reconnecting' } : current));
+			},
+			onRequest(fn) {
+				handlers.add(fn);
+				return () => {
+					handlers.delete(fn);
+				};
+			}
+		};
+	}
 	const ready = refresh();
 
 	return {
@@ -152,18 +218,21 @@ export function createConnectionsService(options: {
 		/** Owner side: this tab holds the link. The record is written once the tab's lock is confirmed. */
 		async register(input: RegisterConnection): Promise<ConnectionHandle> {
 			await ready;
-			const owner = await self();
-			if (owner.ctx !== ctx) throw new Error('A tab cannot register a link held by another tab');
+			const me = await self();
+			if (me.ctx !== ctx) throw new Error('A tab cannot register a link held by another tab');
+			const { monitor, ...fields } = input;
 			const id = input.id ?? crypto.randomUUID();
 			const row = await store.mutate(id, (current) => {
-				// Re-registering our own live link (a remount) keeps its row.
-				if (current && isLive(current) && !(current.owner.kind === 'tab' && current.owner.ctx === ctx)) {
+				// Re-registering our own live link (a remount) keeps its row;
+				// a parked face link is ours to take.
+				if (current && isLive(current) && tabOf(current) && tabOf(current)!.ctx !== ctx) {
 					throw new Error(`Connection ${id} is held by another tab`);
 				}
 				return {
-					...input,
+					...fields,
 					id,
-					owner,
+					owner: monitor ?? me,
+					holder: monitor ? me : undefined,
 					state: input.state ?? 'connected',
 					createdAt: current && isLive(current) ? current.createdAt : Date.now()
 				};
@@ -172,26 +241,33 @@ export function createConnectionsService(options: {
 			observe(row);
 			notify();
 			bus.broadcast({ kind: 'changed', id });
-			const handlers = new Set<(action: ConnectionAction) => void>();
-			requestHandlers.set(id, handlers);
-			const mine = (current: ConnectionRecord) => current.owner.kind === 'tab' && current.owner.ctx === ctx && isLive(current);
-			return {
-				id,
-				update: (patch) => change(id, (current) => (mine(current) ? { ...current, ...patch } : current)),
-				async end() {
-					requestHandlers.delete(id);
-					await store.remove(id);
-					rows.delete(id);
-					notify();
-					bus.broadcast({ kind: 'changed', id });
-				},
-				onRequest(fn) {
-					handlers.add(fn);
-					return () => {
-						handlers.delete(fn);
-					};
-				}
-			};
+			return handleFor(id);
+		},
+		/**
+		 * Resume a parked face link in this tab: become its holder. Refused
+		 * while another live tab holds it, or once it has ended.
+		 */
+		async claim(id: string): Promise<ConnectionHandle> {
+			await ready;
+			const me = await self();
+			const row = await store.mutate(id, (current) => {
+				if (!current || !isLive(current)) throw new Error('That connection has ended');
+				if (current.owner.kind !== 'monitor') throw new Error('Only a link held by a monitor can be resumed');
+				if (current.holder && current.holder.ctx !== ctx) throw new Error(`Connection ${id} is held by another tab`);
+				return { ...current, holder: me };
+			});
+			if (!row) throw new Error('Connection was not saved');
+			observe(row);
+			notify();
+			bus.broadcast({ kind: 'changed', id });
+			return handleFor(id);
+		},
+		/** The monitor says a relay is over (its far device left): end its face link. */
+		async endRelay(profileId: string, relayJobId: string, reason = 'Ended: the other device left') {
+			for (const row of [...rows.values()]) {
+				if (!isLive(row) || row.face?.profileId !== profileId || row.face.relayJobId !== relayJobId) continue;
+				await change(row.id, (current) => (isLive(current) ? { ...current, state: 'ended', holder: undefined, endedReason: reason, endedAt: Date.now() } : current));
+			}
 		},
 		/** Ask a link's owner (this tab or another) to act. The owner decides; nothing here waits on a clock. */
 		request(id: string, action: ConnectionAction) {
