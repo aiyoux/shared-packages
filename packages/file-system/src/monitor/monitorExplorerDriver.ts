@@ -207,7 +207,12 @@ export async function createMonitorExplorerDriver(
 		async list(opts: ExplorerListOptions): Promise<ExplorerListResult> {
 			try {
 				const abs = toAbsolutePath(rootPath, opts.parentId);
-				const result = await transport.list(abs);
+				const result = opts.probe
+					? await transport.list(abs, { probe: true })
+					: await transport.list(abs);
+				if (result.denied) {
+					throw new ExplorerMonitorError('MONITOR_FORBIDDEN', `Permission denied: ${abs}`);
+				}
 				const entries: ExplorerEntry[] = [];
 				for (const item of result.entries) {
 					if (entries.length >= EXPLORER_LIST_MAX_ENTRIES) break;

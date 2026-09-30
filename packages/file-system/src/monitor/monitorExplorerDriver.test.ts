@@ -353,4 +353,23 @@ describe('monitor explorer driver capabilities', () => {
 		await driver.writeExactName!(null, new File(['y'], 'a.png'), 'a.png');
 		expect(write).toHaveBeenCalledWith('/tmp/a.png', expect.any(File), expect.anything());
 	});
+
+	it('a probe list asks monitor not to 403 and rejects a denied folder', async () => {
+		const list = vi.fn(async (path: string, opts?: { probe?: boolean }) =>
+			opts?.probe && path === '/tmp/locked'
+				? { path, truncated: false, entries: [], denied: true }
+				: { path, truncated: false, entries: [] }
+		);
+		const driver = await createMonitorExplorerDriver({
+			profile,
+			transport: transportStub({ list }),
+			enableWatch: false
+		});
+		await expect(driver.list({ parentId: 'locked/', probe: true })).rejects.toMatchObject({
+			code: 'MONITOR_FORBIDDEN'
+		});
+		expect(list).toHaveBeenLastCalledWith('/tmp/locked', { probe: true });
+		await driver.list({ parentId: 'open/' });
+		expect(list).toHaveBeenLastCalledWith('/tmp/open');
+	});
 });

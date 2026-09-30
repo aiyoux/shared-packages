@@ -71,6 +71,8 @@ export type MonitorListResult = {
 	path: string;
 	entries: MonitorListEntry[];
 	truncated: boolean;
+	/** A `probe` list the host OS refused to open; `entries` is empty. */
+	denied?: boolean;
 };
 
 export type MonitorStatResult = {
@@ -237,7 +239,11 @@ export type MonitorArchiveResult = {
 };
 
 export type MonitorTransport = {
-	list(path: string): Promise<MonitorListResult>;
+	/**
+	 * `probe` asks monitor to answer a permission refusal with `denied: true`
+	 * instead of a 403, so a look-ahead does not log a console error.
+	 */
+	list(path: string, opts?: { probe?: boolean }): Promise<MonitorListResult>;
 	stat(path: string): Promise<MonitorStatResult>;
 	/** GET /v1/meta — missing capabilities parse as all-false. */
 	meta(): Promise<MonitorMeta>;
@@ -942,7 +948,8 @@ export function coerceListResult(data: unknown): MonitorListResult {
 	return {
 		path: typeof o.path === 'string' ? o.path : '',
 		entries,
-		truncated: Boolean(o.truncated)
+		truncated: Boolean(o.truncated),
+		...(o.denied === true ? { denied: true } : {})
 	};
 }
 
@@ -1327,9 +1334,10 @@ export function createMonitorClient(opts: {
 
 	return {
 		baseUrl: base,
-		async list(path: string) {
+		async list(path: string, opts?: { probe?: boolean }) {
+			const probe = opts?.probe ? '&probe=true' : '';
 			return coerceListResult(
-				await getJson(`/v1/fs/list?path=${encodeURIComponent(path)}`)
+				await getJson(`/v1/fs/list?path=${encodeURIComponent(path)}${probe}`)
 			);
 		},
 		async stat(path: string) {

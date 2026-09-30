@@ -31,6 +31,24 @@ function ndjsonResponse(events: unknown[]): Response {
 }
 
 describe('monitor client (direct transport)', () => {
+	it('a probe list adds probe=true and surfaces denied', async () => {
+		const urls: string[] = [];
+		const mockFetch = vi.fn(async (input: RequestInfo | URL) => {
+			urls.push(String(input));
+			return new Response(
+				JSON.stringify({ path: '/tmp/locked', entries: [], truncated: false, denied: true }),
+				{ status: 200, headers: { 'content-type': 'application/json' } }
+			);
+		});
+		const client = createMonitorClient({
+			baseUrl: 'http://127.0.0.1:8300',
+			fetchImpl: mockFetch as unknown as typeof fetch
+		});
+		const res = await client.list('/tmp/locked', { probe: true });
+		expect(urls[0]).toBe('http://127.0.0.1:8300/v1/fs/list?path=%2Ftmp%2Flocked&probe=true');
+		expect(res.denied).toBe(true);
+	});
+
 	it('makes direct HTTP requests to base URL without routing through worker proxy', async () => {
 		const calls: { url: string; method?: string; body?: unknown }[] = [];
 		const mockFetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {

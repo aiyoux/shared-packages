@@ -128,6 +128,13 @@ export interface ExplorerListOptions {
 	parentId: ExplorerEntryId | null;
 	/** Only if supportsTrash */
 	trashOnly?: boolean;
+	/**
+	 * A background look-ahead the user did not ask for (a tree deciding whether
+	 * a folder has children). Drivers that can, ask their backend not to answer
+	 * a refused folder with an HTTP error, since the browser logs every failed
+	 * fetch. The call still rejects, exactly as without the flag.
+	 */
+	probe?: boolean;
 }
 
 /** Typed list result so FE can show truncation banner. */

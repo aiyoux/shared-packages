@@ -151,7 +151,7 @@
 				void Promise.all(
 					toProbe.map(async (f) => {
 						try {
-							return [f, (await d.list({ parentId: f.id })).entries] as const;
+							return [f, (await d.list({ parentId: f.id, probe: true })).entries] as const;
 						} catch {
 							return [f, null] as const;
 						}
