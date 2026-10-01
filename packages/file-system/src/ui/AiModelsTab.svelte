@@ -13,7 +13,8 @@
 	 * a change made in an app's own picker converge (same store, same
 	 * change-pings).
 	 */
-	import { onMount } from 'svelte';
+	import { onMount, type Snippet } from 'svelte';
+	let { modelInstallation }: { modelInstallation?: Snippet } = $props();
 	import { browserAiHost, type BrowserModelState } from '../ai/browserHost.js';
 	let hostLabel = $state('Not started');
 	let hostModels = $state<Record<string, BrowserModelState>>({});
@@ -332,6 +333,7 @@
 				{/each}
 			</div>
 		{/if}
+		{@render modelInstallation?.()}
 		<details class="host-status" data-testid="ai-browser-host">
 			<summary>Browser model status</summary>
 			<p class="hint">{hostLabel}</p>

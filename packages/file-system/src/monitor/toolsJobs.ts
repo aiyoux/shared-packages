@@ -769,7 +769,7 @@ export type MonitorAudioTools = {
 	pollProgress: (id: string, onProgress: (n: number) => void) => () => void;
 	upsample: (
 		blob: Blob,
-		opts: { engine?: 'lavasr' | 'novasr' | string; denoise?: boolean; id: string }
+		opts: { engine?: 'lavasr' | 'novasr' | string; denoise?: boolean; id: string; signal?: AbortSignal }
 	) => Promise<Blob>;
 	cancel: (id: string) => Promise<void>;
 };
@@ -787,13 +787,16 @@ export function createMonitorAudioTools(options: MonitorAudioToolsOptions = {}):
 		const id = monitor.pickModelId ?? '';
 		return (PYTORCH_AUDIO_ENGINES as readonly string[]).includes(id) ? id : 'lavasr';
 	}
-	async function upsampleBlob(blob: Blob, opts: { engine?: string; denoise?: boolean; id: string }): Promise<Blob> {
+	async function upsampleBlob(blob: Blob, opts: { engine?: string; denoise?: boolean; id: string; signal?: AbortSignal }): Promise<Blob> {
+		opts.signal?.throwIfAborted();
 		const monitor = await resolve();
+		opts.signal?.throwIfAborted();
 		const engine = opts.engine || pickEngine(monitor);
 		const handle = await startOp({
 			kind: 'audio-tool',
 			app,
 			title: `Upsample · ${engine}${opts.denoise ? ' · denoise' : ''}`,
+			signal: opts.signal,
 			where: { executor: 'monitor', note: monitor.name },
 			id: opts.id
 		});

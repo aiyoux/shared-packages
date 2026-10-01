@@ -5,6 +5,7 @@ import { createMonitorClient } from '../monitor/client.js';
 import { getActiveProfileId, listProfiles } from '../monitor/credentials.js';
 import { AiCredentialsError, toAiCredentialsError } from './errors.js';
 import { opsService, type OpHandle } from '../services/ops.js';
+import { createMonitorJobsClient } from '../monitor/jobs.js';
 
 /** Task ids the AI catalog serves. `video-upscale` / `video-interpolate` /
  * `audio-upsampling` are the monitor tools tasks — their offers derive from
@@ -69,9 +70,9 @@ export type AiNativeProgress = {
 	seed?: number | null;
 };
 
-export type AiRunOptions = { signal?: AbortSignal; onProgress?: (progress: AiNativeProgress) => void; op?: OpHandle; monitor?: { profileId: string; name: string; baseUrl: string } };
+export type AiRunOptions = { signal?: AbortSignal; onProgress?: (progress: AiNativeProgress) => void; op?: OpHandle; monitor?: { profileId: string; name: string; baseUrl: string }; preview?: boolean };
 async function unifiedJobs(baseUrl: string, opts: AiRunOptions): Promise<boolean> {
- if (!opts.op) return false;
+ if (!opts.op && !opts.preview) return false;
  try { return (await createMonitorClient({ baseUrl }).meta()).capabilities?.jobs === true; }
  catch { return false; }
 }
@@ -310,7 +311,14 @@ export async function runAiNativeJob(
 			if (progress.state === 'aborted') throw new DOMException('Job aborted', 'AbortError');
 			if (progress.state === 'done') {
 				const result = await request(baseUrl, `${path}/result`, { signal: opts.signal });
-				return { blob: await result.blob(), seed: typeof progress.seed === 'number' ? progress.seed : null };
+				const blob = await result.blob();
+				// A preview has collected its bytes into memory, so the daemon
+				// can release the temporary result without waiting for a file save.
+				if (opts.preview && unified) {
+					try { await createMonitorJobsClient(baseUrl).landed(`ai:${jobId}`); }
+					catch (error) { console.warn('Could not release the monitor image preview', error); }
+				}
+				return { blob, seed: typeof progress.seed === 'number' ? progress.seed : null };
 			}
 			await new Promise<void>((resolve, reject) => {
 				let timer: ReturnType<typeof setTimeout>;
@@ -338,6 +346,9 @@ export async function runAiMedia(
 	input: { text?: string; prompt?: string; speed?: number; seed?: number },
 	opts: AiRunOptions = {}
 ): Promise<{ blob: Blob; seed: number | null }> {
+	if (opts.preview && offer.task !== 'image-generation') {
+		throw new AiCredentialsError('AI_UNSUPPORTED', 'Memory previews are only supported for image generation.');
+	}
 	if (offer.location === 'monitor-native' || (offer.location === 'monitor-provider' && await unifiedJobs(baseUrl, opts))) {
 		return runAiNativeJob(baseUrl, { offerId: offer.id, ...input }, opts);
 	}

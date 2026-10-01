@@ -26,11 +26,12 @@
 		appearance?: Snippet;
 		outputs?: Snippet;
 		agentAccess?: Snippet;
+		modelInstallation?: Snippet;
 		onConnected?: (kind: RemoteKind, profile: object) => void;
 		onDisconnected?: (kind: RemoteKind) => void;
 	}
 
-	let { onClose, onConnected, onDisconnected, appearance, outputs, agentAccess }: Props = $props();
+	let { onClose, onConnected, onDisconnected, appearance, outputs, agentAccess, modelInstallation }: Props = $props();
 
 	const TAB_ITEMS = $derived<TabItem[]>([
 		{ value: 'connections', label: 'Connections', testId: 'settings-tab-connections' },
@@ -90,7 +91,7 @@
 					<section aria-label={profile.name}><strong>{profile.name}</strong><MonitorStatus {profile} /></section>
 				{/each}
 			{:else if tab === 'models'}
-				<AiModelsTab />
+				<AiModelsTab {modelInstallation} />
 				{@render agentAccess?.()}
 			{:else if tab === 'appearance'}
 				{@render appearance?.()}

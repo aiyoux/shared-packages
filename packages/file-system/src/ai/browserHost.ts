@@ -4,7 +4,7 @@ import { startOp, opsService, type LandingAddress, type OpKindId, type StartOp }
 import { stageOpResult } from '../services/landing.js';
 import { createBrowserHostCore, type BrowserHostContext, type BrowserHostFrame, type BrowserHostRequest } from './browserHostCore.js';
 
-export type BrowserAiOutput = { landing: LandingAddress; title?: string; chat?: StartOp['chat'] };
+export type BrowserAiOutput = { landing?: LandingAddress; title?: string; chat?: StartOp['chat']; preview?: boolean };
 export type BrowserAiRunOptions = Partial<BrowserAiOutput> & { outputExtension?: string; signal?: AbortSignal; onProgress?: (value: unknown) => void };
 export type BrowserAiHandler = {
  kind: Extract<OpKindId, 'transcribe' | 'speak' | 'generate' | 'chat' | 'audio-tool'>;
@@ -39,7 +39,9 @@ async function execute(request: BrowserHostRequest, context: BrowserHostContext)
  if (request.action === 'probe') return true;
  const loading = request.action === 'load';
  const output = request.output as BrowserAiOutput | undefined;
- if (!loading && !output?.landing) throw new Error('Choose an output destination before starting browser AI');
+ const preview = output?.preview === true;
+ if (preview && handler.kind !== 'generate') throw new Error('Memory previews are only supported for image generation');
+ if (!loading && !preview && !output?.landing) throw new Error('Choose an output destination before starting browser AI');
  const op = loading ? undefined : await startOp({ kind: handler.kind, app: handler.kind, title: output?.title ?? request.model, landing: output!.landing, chat: output?.chat, signal: context.signal, where: { executor: 'this-browser', note: 'Shared browser AI host' } });
  const signal = op?.signal ?? context.signal;
  let running = false;
@@ -61,14 +63,17 @@ async function execute(request: BrowserHostRequest, context: BrowserHostContext)
    } });
    signal.throwIfAborted();
    inferenceCompleted = true;
-   if (op) {
+   if (op && preview) {
+    await op.done();
+    opCompleted = true;
+   } else if (op) {
     const ref = await stageOpResult(op.id, await handler.capture(result));
     signal.throwIfAborted();
     await op.done(ref, false);
     opCompleted = true;
     // Result capture is complete before a reply, even if the submitting tab
     // closed. A landing failure leaves its durable result available in Ops.
-    const requireChatLanding = handler.kind === 'chat' && output?.landing.kind === 'session' && !!output.chat;
+    const requireChatLanding = handler.kind === 'chat' && output?.landing?.kind === 'session' && !!output.chat;
     try {
      const landed = await configuration.land?.(op.id);
      if (requireChatLanding && !landed) throw new Error('Reply finished; its saved chat destination is unavailable. Open Ops to review it.');
@@ -109,13 +114,13 @@ export async function runBrowserAi<T>(handler: string, action: string, payload: 
  options.signal?.throwIfAborted();
  let landing = options.landing;
  const entry = handlers.get(handler);
- if (action !== 'load' && action !== 'probe' && !landing) {
+ if (action !== 'load' && action !== 'probe' && !landing && !options.preview) {
   if (!entry || !configuration.chooseOutput) throw new Error('Choose an output destination before starting browser AI');
   landing = await configuration.chooseOutput(entry.kind, options.title ?? model, options.outputExtension) ?? undefined;
   if (!landing) throw new DOMException('Output selection cancelled', 'AbortError');
  }
  options.signal?.throwIfAborted();
- return browserAiHost().call<T>({ id: crypto.randomUUID(), handler, action, payload, model, requirements, output: landing ? { landing, title: options.title, chat: options.chat } : undefined }, options);
+ return browserAiHost().call<T>({ id: crypto.randomUUID(), handler, action, payload, model, requirements, output: landing || options.preview ? { landing, preview: options.preview, title: options.title, chat: options.chat } : undefined }, options);
 }
 
 export type { BrowserModelState, BrowserHostContext } from './browserHostCore.js';

@@ -4,10 +4,10 @@
  * ORT text encoder) → one Euler UNet step → VAE decode, all on WebGPU.
  *
  * The page reads the model files out of the VFS and hands them over as
- * transferable ArrayBuffers; the CLIP tokenizer files ride through a
- * transformers.js custom cache served from the same blobs, so nothing is
- * fetched. Session IO shapes follow Microsoft's ORT WebGPU js/sd-turbo
- * recipe (fixed timestep 999, sigma 14.6146, no CFG).
+ * transferable ArrayBuffers; CLIP tokenization uses the stored vocabulary
+ * and merges directly, so nothing is fetched. Session IO shapes follow
+ * Microsoft's ORT WebGPU js/sd-turbo recipe (fixed timestep 999,
+ * sigma 14.6146, no CFG).
  *
  * Text embeddings stay on the CPU between sessions (no gpu-buffer
  * chaining) — simpler and robust; GPU-buffer piping is a later tuning knob.
@@ -15,7 +15,7 @@
 
 import * as ort from 'onnxruntime-web/webgpu';
 import type { InferenceSession, Tensor } from 'onnxruntime-common';
-import { AutoTokenizer, env } from '@huggingface/transformers';
+import { createSdTokenizer, encodeSdPrompt } from './sdTokenizer.js';
 import { EULER_SIGMA, eulerStep, randnLatents, mulberry32, vaeToRgb, rgbToRgbaU8 } from './sdEuler.js';
 import { imageModelDef } from './imageModels.js';
 import { ImageGenError } from './engines.js';
@@ -25,8 +25,7 @@ type RpcCall = { id: number; op: string; payload: Record<string, unknown> };
 type LoadedSessions = {
 	modelId: string;
 	repo: string;
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	tokenizer: any;
+	tokenizer: ReturnType<typeof createSdTokenizer>;
 	textEncoder: InferenceSession;
 	unet: InferenceSession;
 	vaeDecoder: InferenceSession;
@@ -40,30 +39,6 @@ let cancelled = false;
 function filesFrom(payload: Record<string, unknown>): Map<string, ArrayBuffer> {
 	const raw = payload['files'] as Array<{ path: string; buffer: ArrayBuffer }>;
 	return new Map(raw.map((f) => [f.path, f.buffer]));
-}
-
-/** transformers.js custom cache served from handed-over blobs. */
-function blobCache(repo: string, files: Map<string, ArrayBuffer>) {
-	return {
-		async match(request: Request | string | URL): Promise<Response | undefined> {
-			const url =
-				typeof request === 'string' ? request : 'url' in request ? request.url : String(request);
-			const prefix = `https://huggingface.co/${repo}/resolve/`;
-			if (!url.startsWith(prefix)) return undefined;
-			const rest = url.slice(prefix.length);
-			const slash = rest.indexOf('/');
-			const path = slash >= 0 ? rest.slice(slash + 1) : null;
-			const buffer = path ? files.get(path) : undefined;
-			if (!buffer) return undefined;
-			return new Response(buffer, {
-				status: 200,
-				headers: { 'Content-Type': 'application/octet-stream' }
-			});
-		},
-		async put(): Promise<void> {
-			// Read-only: every file the model needs was handed over up front.
-		}
-	};
 }
 
 function sessionOpts(
@@ -108,17 +83,7 @@ async function load(payload: Record<string, unknown>): Promise<{ modelId: string
 	await disposeSessions();
 
 	ort.env.wasm.wasmPaths = '/vendor/ort/';
-	env.allowLocalModels = false;
-	env.allowRemoteModels = true;
-	env.useBrowserCache = false;
-	env.useCustomCache = true;
-	env.customCache = blobCache(def.repo, files) as never;
-
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	const tokenizer = await (AutoTokenizer as any).from_pretrained(
-		`https://huggingface.co/${def.repo}`
-	);
-	tokenizer.pad_token_id = 0;
+	const tokenizer = createSdTokenizer(files);
 	checkCancelled();
 
 	const textEncoder = await ort.InferenceSession.create(
@@ -187,13 +152,7 @@ async function generate(payload: Record<string, unknown>): Promise<{
 	const latentLen = 4 * edge * edge;
 	cancelled = false;
 
-	const encoded = await loaded.tokenizer(prompt, {
-		padding: true,
-		max_length: 77,
-		truncation: true,
-		return_tensor: false
-	});
-	const inputIds: number[] = encoded?.input_ids;
+	const inputIds = encodeSdPrompt(loaded.tokenizer, prompt);
 	if (!inputIds || inputIds.length === 0) {
 		throw new ImageGenError('GENERATE_FAILED', 'Tokenizer produced no input ids');
 	}

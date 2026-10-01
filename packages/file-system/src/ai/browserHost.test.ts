@@ -20,6 +20,25 @@ beforeEach(() => {
  registerBrowserAiHandler('test', { kind: 'transcribe', run: async (_action, _payload, ctx) => { ctx.state('loaded'); mocks.steps.push('inference'); return 'words'; }, capture: (result) => new Blob([String(result)], { type: 'text/plain' }), dispose: vi.fn() });
 });
 describe('browser host durable execution', () => {
+ it('returns image previews in memory without selecting, capturing or landing a file', async () => {
+  const chooseOutput = vi.fn();
+  const land = vi.fn();
+  const capture = vi.fn();
+  const frame = { width: 1, height: 1, data: new Uint8ClampedArray([1, 2, 3, 255]) };
+  configureBrowserAiHost({ chooseOutput, land });
+  registerBrowserAiHandler('image-preview', { kind: 'generate', run: async () => frame, capture, dispose: vi.fn() });
+  expect(await runBrowserAi('image-preview', 'generate', {}, 'sdxs', { preview: true })).toEqual(frame);
+  expect(chooseOutput).not.toHaveBeenCalled();
+  expect(capture).not.toHaveBeenCalled();
+  expect(mocks.stage).not.toHaveBeenCalled();
+  expect(land).not.toHaveBeenCalled();
+  expect(mocks.steps).toEqual(['start', 'done']);
+  expect(mocks.start).toHaveBeenCalledWith(expect.objectContaining({ kind: 'generate', landing: undefined }));
+ });
+ it('requires other AI tasks to choose a durable output', async () => {
+  await expect(runBrowserAi('test', 'transcribe', {}, 'test-model', { preview: true })).rejects.toThrow('Memory previews are only supported for image generation');
+  expect(mocks.start).not.toHaveBeenCalled();
+ });
  it('passes the actual audio-tool container to output selection and keeps its op kind', async () => {
   const videoLanding = { kind: 'vfs-folder' as const, folderId: 'chosen-folder', name: 'upsampled.mp4' };
   const chooseOutput = vi.fn(async () => videoLanding);
