@@ -35,8 +35,18 @@
 	import MonitorModelsPanel from './MonitorModelsPanel.svelte';
 	import MonitorStatus from './MonitorStatus.svelte';
 	import { canConfigureNativeTask } from '../ai/nativeModelForm.js';
+	import { MONITOR_MODEL_SETUP, monitorModelSetup } from '../ai/monitorModelSetup.js';
+	import MonitorModelSetup from './MonitorModelSetup.svelte';
 
 	const sources = listAiLibrarySources();
+	// Prerequisite guides are task metadata, not pretend installed model rows.
+	// Standalone hosts and failed catalogs still expose every Monitor feature.
+	const monitorSections = [
+		...sources.sections,
+		...Object.entries(MONITOR_MODEL_SETUP)
+			.filter(([task]) => !sources.sections.some((section) => section.task === task))
+			.map(([task, setup]) => ({ id: task, task: task as keyof typeof MONITOR_MODEL_SETUP, title: setup.title, models: async () => [] }))
+	];
 
 	/** Defaults group: registered surfaces grouped by task, resolved against
 	 * the shared selection map (own cell → task 'default' cell → null). */
@@ -229,7 +239,7 @@
 	}
 
 	function refreshLibrary() {
-		for (const section of sources.sections) void refreshSection(section);
+		for (const section of monitorSections) void refreshSection(section);
 	}
 
 	/** Monitors group: one panel per saved monitor profile. */
@@ -237,7 +247,7 @@
 	let monitorsLoaded = $state(false);
 
 	onMount(() => {
-		for (const section of sources.sections) void ensureRows(section);
+		for (const section of monitorSections) void ensureRows(section);
 		let offHost = () => {};
 		try {
 		const host = browserAiHost();
@@ -261,7 +271,7 @@
 	});
 </script>
 
-{#snippet librarySection(section: (typeof sources.sections)[number], rows: AiLibraryModelRow[], monitorId = '', configureTask: (() => void) | undefined = undefined)}
+{#snippet librarySection(section: (typeof sources.sections)[number], rows: AiLibraryModelRow[], monitorId = '', configureTask: (() => void) | undefined = undefined, location: 'native' | 'api' = 'native')}
 	{@const state = sectionStates[section.id]}
 	<details
 		class="lib-section"
@@ -275,7 +285,11 @@
 			<p class="hint danger">{state.error}</p>
 		{:else if state?.rows}
 			{#if rows.length === 0 && configureTask}
-				<p class="hint" data-testid="ai-monitor-empty-{section.id}-{monitorId}">No model configured for this task on this monitor.</p>
+				{#if sources.sections.includes(section)}
+					<p class="hint" data-testid="ai-monitor-empty-{section.id}-{monitorId}">No model configured for this task on this monitor.</p>
+				{:else}
+					<p class="hint">This app does not provide a task model catalog. Configured models are listed below under On monitor device; you can register a model using Configure model.</p>
+				{/if}
 			{/if}
 			<ul class="lib-rows">
 				{#each rows as row (rowKey(section.id, row))}
@@ -317,6 +331,9 @@
 					</li>
 				{/each}
 			</ul>
+		{/if}
+		{#if monitorId}
+			<MonitorModelSetup task={section.task} {location} />
 		{/if}
 		{#if configureTask}
 			<button type="button" class="ds-btn ds-btn--sm ds-btn--secondary"
@@ -370,19 +387,19 @@
 						hasDeviceModels={sources.sections.some((section) => sectionStates[section.id]?.rows?.some((row) => row.ref.location === 'monitor-native' && row.ref.monitorProfileId === profile.id))}
 					>
 						{#snippet deviceModels(configureTask)}
-							{#each sources.sections as section (section.id)}
+							{#each monitorSections as section (section.id)}
 								{@const task = section.task}
 								{@const rows = sectionStates[section.id]?.rows?.filter((row) => row.ref.location === 'monitor-native' && row.ref.monitorProfileId === profile.id) ?? []}
-								{#if rows.length || canConfigureNativeTask(task)}
+								{#if rows.length || monitorModelSetup(task)}
 									{@render librarySection(section, rows, profile.id, canConfigureNativeTask(task) ? () => configureTask(task) : undefined)}
 								{/if}
 							{/each}
 						{/snippet}
 						{#snippet apiModels(addApiConnection)}
-							{#each sources.sections as section (section.id)}
+							{#each monitorSections as section (section.id)}
 								{@const rows = sectionStates[section.id]?.rows?.filter((row) => row.ref.location === 'monitor-provider' && row.ref.monitorProfileId === profile.id) ?? []}
 								{#if rows.length}
-									{@render librarySection(section, rows, `${profile.id}-api`)}
+									{@render librarySection(section, rows, `${profile.id}-api`, undefined, 'api')}
 								{:else if canConfigureNativeTask(section.task)}
 									<details class="lib-section" data-testid="ai-lib-section-{section.id}-{profile.id}-api">
 										<summary>{section.title}</summary>
@@ -390,12 +407,12 @@
 											<p class="hint danger">{sectionStates[section.id].error}</p>
 										{:else if !sectionStates[section.id]?.rows}
 											<p class="hint">Loading models…</p>
+										{:else if !sources.sections.includes(section)}
+											<p class="hint">This app does not provide a task model catalog. Manage API connections below; open the hub’s AI settings to view configured media offers.</p>
 										{:else}
 											<p class="hint" data-testid="ai-provider-empty-{section.id}-{profile.id}">No {section.title.toLowerCase()} API model configured on this monitor.</p>
 										{/if}
-										{#if section.task !== 'chat'}
-											<p class="hint">Connect an API, then declare its {section.title.toLowerCase()} model in the Monitor configuration. Media model editing is not yet available here.</p>
-										{/if}
+										<MonitorModelSetup task={section.task} location="api" />
 										<button type="button" class="ds-btn ds-btn--sm ds-btn--secondary"
 											aria-label="Configure {section.title} API" onclick={addApiConnection}>Add API connection…</button>
 									</details>
@@ -407,6 +424,14 @@
 			{/each}
 		{:else if monitorsLoaded}
 			<p class="hint" data-testid="ai-monitors-none">No monitors added. Add a monitor on the Connections tab to run models on that device or connect it to an API.</p>
+			<p class="hint">Monitor features stay listed below so you can prepare their backends before connecting a device.</p>
+			{#each Object.entries(MONITOR_MODEL_SETUP) as [task, setup] (task)}
+				<details class="lib-section" data-testid="ai-monitor-discovery-{task}">
+					<summary>{setup.title}</summary>
+					<MonitorModelSetup {task} />
+					{#if canConfigureNativeTask(task)}<MonitorModelSetup {task} location="api" />{/if}
+				</details>
+			{/each}
 			{#if onConfigureMonitor}<button type="button" class="ds-btn ds-btn--sm ds-btn--secondary" onclick={onConfigureMonitor}>Add a Monitor…</button>{/if}
 		{/if}
 	</section>

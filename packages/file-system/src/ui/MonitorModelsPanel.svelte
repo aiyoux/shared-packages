@@ -1,7 +1,7 @@
 <script lang="ts">
 	/**
 	 * The AI panel for one monitor, inside the settings popup's "AI models"
-	 * tab: capability-gated profile/library/native-model management. Moved
+	 * tab: profile/library/native-model management and permanent setup guides. Moved
 	 * verbatim out of the monitor connection form (RemoteConnectionsDialog
 	 * used to host it there). Keys live daemon-side — the install form sends
 	 * the key to the monitor once and clears it from component state
@@ -31,6 +31,7 @@
 	} from '../ai/index.js';
 	import { NATIVE_RUNTIME_NAMES, canConfigureNativeTask, nativeModelLibraryPrefill, nativeModelTaskPrefill, nativeModelFormInput } from '../ai/nativeModelForm.js';
 	import type { AiTask } from '../ai/catalog.js';
+	import MonitorModelSetup from './MonitorModelSetup.svelte';
 	import { formatExplorerError } from './explorerError.js';
 
 	interface Props {
@@ -312,9 +313,9 @@
 		<p class="ai-note" data-testid="monitor-ai-probing">Checking this monitor for AI…</p>
 	{:else if supported === false}
 		<p class="ai-note" data-testid="monitor-ai-unsupported">
-			{probeError || 'This monitor does not serve AI. Update the monitor daemon to enable it.'}
+			{probeError || 'This monitor does not serve AI. Update the monitor daemon to enable it.'} Features and setup instructions remain available below; connect or update Monitor, then Refresh to enable changes.
 		</p>
-	{:else}
+	{/if}
 		<section class="ai-native" data-testid="monitor-ai-native" aria-label="On monitor device">
 			<div class="ai-native-head">
 				<h4 class="ai-native-title">On monitor device:</h4>
@@ -355,7 +356,7 @@
 									type="button"
 									class="ds-btn ds-btn--sm ds-btn--ghost danger"
 									data-testid="monitor-ai-native-delete"
-									disabled={addingModel}
+									disabled={addingModel || supported !== true}
 									onclick={() => void removeNativeRow(row.id)}>Remove</button
 								>
 							{/if}
@@ -369,9 +370,9 @@
 				<p class="ai-note danger" data-testid="monitor-ai-library-error">{libraryError}</p>
 			{/if}
 
-			{#if library && library.entries.length}
-				<details class="ai-downloads">
+				<details class="ai-downloads" data-testid="monitor-ai-downloads">
 					<summary>Downloadable models</summary>
+					{#if library && library.entries.length}
 					<ul class="ai-lib" data-testid="monitor-ai-library">
 						{#each library.entries as entry (entry.id)}
 							<li>
@@ -403,6 +404,7 @@
 										type="button"
 										class="ds-btn ds-btn--sm ds-btn--ghost danger"
 										data-testid="monitor-ai-model-remove-file"
+									disabled={supported !== true}
 										onclick={() => void removeLibraryModel(entry.id)}>Remove</button
 									>
 								{:else}
@@ -410,7 +412,7 @@
 										type="button"
 										class="ds-btn ds-btn--sm ds-btn--secondary"
 										data-testid="monitor-ai-model-download"
-										disabled={installingId !== ''}
+										disabled={installingId !== '' || supported !== true}
 										onclick={() => void installLibraryModel(entry.id)}
 									>
 										{installingId === entry.id ? 'Downloading…' : 'Download'}
@@ -419,13 +421,16 @@
 							</li>
 						{/each}
 					</ul>
-					<p class="ai-note">Download a model, then add it to the models configured on this device.</p>
+					{:else}
+						<p class="ai-note">{supported === true ? 'No downloadable models listed by this Monitor.' : 'Connect or update Monitor, then Refresh to load its downloadable models.'} Manual runtime and model setup remains available for every supported task.</p>
+					{/if}
+					<p class="ai-note">Download a model, then add it to the models configured on this device. Runtime installation is manual.</p>
 				</details>
-			{/if}
 
 			{#if showAddModel}
 				<div class="ai-install" data-testid="monitor-ai-add-model">
 					<p class="ai-note">Install the runtime and its compatible weights on the monitor, then enter their absolute paths here. The downloadable library contains only the models listed above.</p>
+					<MonitorModelSetup task={addTask} />
 					{#if addTask === 'text-to-speech'}
 						<p class="ai-note">Piper needs both the .onnx model and the matching .onnx.json configuration beside it.</p>
 					{/if}
@@ -476,7 +481,7 @@
 						type="button"
 						class="ds-btn ds-btn--sm ds-btn--primary"
 						data-testid="monitor-ai-model-save"
-						disabled={addingModel}
+						disabled={addingModel || supported !== true}
 						onclick={() => void enableModel()}
 					>
 						{addingModel ? 'Enabling…' : 'Enable on monitor'}
@@ -501,6 +506,7 @@
 								</span>
 								<span class="ai-profile-meta">
 									{p.baseUrl}
+									· profile ID: <code>{p.id}</code>
 									{#if p.keyFingerprint}
 										· key {p.keyFingerprint}
 									{:else}
@@ -513,7 +519,7 @@
 									type="button"
 									class="ds-btn ds-btn--sm ds-btn--ghost danger"
 									data-testid="monitor-ai-profile-delete"
-									disabled={listingBusy}
+									disabled={listingBusy || supported !== true}
 									onclick={() => void remove(p.id)}>Remove</button
 								>
 							{/if}
@@ -599,7 +605,7 @@
 						type="button"
 						class="ds-btn ds-btn--sm ds-btn--primary"
 						data-testid="monitor-ai-install-save"
-						disabled={installing}
+						disabled={installing || supported !== true}
 						onclick={() => void install()}
 					>
 						{installing ? 'Saving…' : 'Save API connection'}
@@ -607,7 +613,6 @@
 				</div>
 			{/if}
 		</section>
-	{/if}
 </div>
 
 <style>
