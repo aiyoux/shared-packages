@@ -85,25 +85,14 @@
 		return () => off();
 	});
 
-	/** task → the section rows candidates for the Defaults pickers read;
-	 * loaded lazily and re-read whenever a selection ping arrives. */
-	let candidates = $state<Record<string, AiLibraryModelRow[] | null>>({});
-
-	$effect(() => {
+	/** Defaults and location sections share one read of each registered catalog. */
+	const candidates = $derived.by(() => {
+		const rows: Record<string, AiLibraryModelRow[] | null> = {};
 		for (const group of defaultsGroups) {
-			if (group.task in candidates) continue;
-			candidates = { ...candidates, [group.task]: null };
-			const section = sources.sections.find((s) => (s.selectionTask ?? s.task) === group.task);
-			if (!section) continue;
-			section
-				.models()
-				.then((rows) => {
-					candidates = { ...candidates, [group.task]: rows };
-				})
-				.catch(() => {
-					candidates = { ...candidates, [group.task]: [] };
-				});
+			const section = sources.sections.find((section) => (section.selectionTask ?? section.task) === group.task);
+			rows[group.task] = section ? sectionStates[section.id]?.rows ?? null : [];
 		}
+		return rows;
 	});
 
 	function pickDefaults(group: { task: AiTaskKey }, appId: string, value: string) {
@@ -134,11 +123,12 @@
 			a.location === b.location &&
 			a.modelId === b.modelId &&
 			(!b.sourceId || a.sourceId === b.sourceId) &&
-			(!b.variantId || a.variantId === b.variantId)
+			(!b.variantId || a.variantId === b.variantId) &&
+			(!b.monitorProfileId || a.monitorProfileId === b.monitorProfileId)
 		);
 	}
 
-	/** Library sections: lazy rows per registered section. */
+	/** Catalog metadata is read once, then grouped by each row's execution location. */
 	type SectionState = {
 		rows: AiLibraryModelRow[] | null;
 		busy: boolean;
@@ -169,9 +159,10 @@
 			[section.id]: { rows: state?.rows ?? null, busy: true, error: '' }
 		};
 		try {
+			const rows = await section.models();
 			sectionStates = {
 				...sectionStates,
-				[section.id]: { rows: await section.models(), busy: false, error: '' }
+				[section.id]: { rows, busy: false, error: '' }
 			};
 		} catch (e) {
 			sectionStates = {
@@ -183,7 +174,7 @@
 
 	let inflight = $state<ReadonlySet<string>>(new Set());
 	const rowKey = (sectionId: string, row: AiLibraryModelRow) =>
-		`${sectionId}/${row.ref.modelId}/${row.ref.sourceId ?? ''}`;
+		`${sectionId}/${encodeRef(row.ref)}`;
 
 	async function runInstall(section: (typeof sources.sections)[number], row: AiLibraryModelRow) {
 		if (!row.install) return;
@@ -221,9 +212,10 @@
 		const state = sectionStates[section.id];
 		if (!state) return;
 		try {
+			const rows = await section.models();
 			sectionStates = {
 				...sectionStates,
-				[section.id]: { rows: await section.models(), busy: false, error: '' }
+				[section.id]: { rows, busy: false, error: '' }
 			};
 		} catch (e) {
 			sectionStates = {
@@ -238,6 +230,7 @@
 	let monitorsLoaded = $state(false);
 
 	onMount(() => {
+		for (const section of sources.sections) void ensureRows(section);
 		let offHost = () => {};
 		try {
 		const host = browserAiHost();
@@ -248,7 +241,7 @@
 		};
 		updateHost();
 		offHost = host.subscribe(updateHost);
-		} catch (error) { hostLabel = error instanceof Error ? error.message : String(error); }
+		} catch (error) { hostLabel = 'Browser model status is unavailable.'; }
 		void (async () => {
 			try {
 				monitorProfiles = await listMonitorProfiles();
@@ -261,23 +254,120 @@
 	});
 </script>
 
+{#snippet librarySection(section: (typeof sources.sections)[number], rows: AiLibraryModelRow[], monitorId = '')}
+	{@const state = sectionStates[section.id]}
+	<details
+		class="lib-section"
+		data-testid="ai-lib-section-{section.id}{monitorId ? `-${monitorId}` : ''}"
+		ontoggle={() => void ensureRows(section)}
+	>
+		<summary>{section.title}</summary>
+		{#if state?.busy}
+			<p class="hint">Loading models…</p>
+		{:else if state?.error}
+			<p class="hint danger">{state.error}</p>
+		{:else if state?.rows}
+			<ul class="lib-rows">
+				{#each rows as row (rowKey(section.id, row))}
+					<li class="lib-row" data-testid="ai-lib-row-{row.ref.modelId}">
+						{#if row.ref.location === 'browser'}
+							<span class="hint">{hostModels[row.ref.modelId] ?? 'not loaded'}</span>
+						{/if}
+						<span class="lib-label">{row.label}</span>
+						{#if row.detail}<span class="hint lib-detail">{row.detail}</span>{/if}
+						<span class="chip chip--{row.status}">{statusLabel[row.status]}</span>
+						{#if row.sizeBytes}
+							<span class="hint">{sizeLabel(row.sizeBytes)}</span>
+						{/if}
+						{#if row.install}
+							<button
+								type="button"
+								class="ds-btn ds-btn--sm ds-btn--secondary"
+								data-testid="ai-lib-install-{section.id}-{row.ref.modelId}"
+								disabled={inflight.has(rowKey(section.id, row))}
+								onclick={() => void runInstall(section, row)}
+							>
+								{inflight.has(rowKey(section.id, row)) ? 'Working…' : 'Install'}
+							</button>
+						{/if}
+						{#if row.remove}
+							<button
+								type="button"
+								class="ds-btn ds-btn--sm ds-btn--ghost"
+								data-testid="ai-lib-remove-{section.id}-{row.ref.modelId}"
+								disabled={inflight.has(rowKey(section.id, row))}
+								onclick={() => void runRemove(section, row)}
+							>
+								Remove
+							</button>
+						{/if}
+						{#if row.note}
+							<p class="hint">{row.note}</p>
+						{/if}
+					</li>
+				{/each}
+			</ul>
+		{/if}
+	</details>
+{/snippet}
+
 <div class="ai-tab">
-	<section class="group" data-testid="ai-browser-host">
-		<h3>Browser AI host · {hostLabel}</h3>
-		<p>Browser models load once here. Closing the host stops its runs; a new host loads models on demand.</p>
-		{#each Object.entries(hostModels) as [model, state] (model)}
-			<p>{model}: {state === 'not-loaded' ? 'not loaded' : state}</p>
-		{/each}
+	<details class="group location-group browser-group" data-testid="ai-browser" open>
+		<summary><h3 class="group-title">In browser:</h3></summary>
+		<p class="hint">Models that run on this device in your browser.</p>
+		{#if sources.sections.length === 0}
+			<p class="hint" data-testid="ai-library-unavailable">The browser model library is not available in this app. Open the hub's settings to manage browser models.</p>
+		{:else}
+			<div class="group" data-testid="ai-library">
+				{#if sources.sections.some((section) => !sectionStates[section.id] || sectionStates[section.id].busy)}
+					<p class="hint">Loading models…</p>
+				{/if}
+				{#each sources.sections as section (section.id)}
+					{@const rows = sectionStates[section.id]?.rows?.filter((row) => row.ref.location === 'browser') ?? []}
+					{#if rows.length}
+						{@render librarySection(section, rows)}
+					{:else if sectionStates[section.id]?.error}
+						<p class="hint danger">{section.title}: {sectionStates[section.id].error}</p>
+					{/if}
+				{/each}
+			</div>
+		{/if}
+		<details class="host-status" data-testid="ai-browser-host">
+			<summary>Browser model status</summary>
+			<p class="hint">{hostLabel}</p>
+			{#each Object.entries(hostModels) as [model, state] (model)}
+				<p class="hint">{model}: {state === 'not-loaded' ? 'not loaded' : state}</p>
+			{/each}
+		</details>
+	</details>
+
+	<section class="group" data-testid="ai-monitors">
+		{#if monitorProfiles.length}
+			{#each monitorProfiles as profile (profile.id)}
+				<section class="monitor-panel location-group" data-testid="ai-monitor-{profile.id}" aria-label={profile.name}>
+					<h3 class="group-title">{profile.name}</h3>
+					<MonitorStatus {profile} compact />
+					<MonitorModelsPanel
+						baseUrl={profile.baseUrl}
+						hasDeviceModels={sources.sections.some((section) => sectionStates[section.id]?.rows?.some((row) => row.ref.location === 'monitor-native' && row.ref.monitorProfileId === profile.id))}
+					>
+						{#snippet deviceModels()}
+							{#each sources.sections as section (section.id)}
+								{@const rows = sectionStates[section.id]?.rows?.filter((row) => row.ref.location === 'monitor-native' && row.ref.monitorProfileId === profile.id) ?? []}
+								{#if rows.length}{@render librarySection(section, rows, profile.id)}{/if}
+							{/each}
+						{/snippet}
+					</MonitorModelsPanel>
+				</section>
+			{/each}
+		{:else if monitorsLoaded}
+			<p class="hint" data-testid="ai-monitors-none">No monitors added. Add a monitor on the Connections tab to run models on that device or connect it to an API.</p>
+		{/if}
 	</section>
-	{#if sources.sections.length === 0}
-		<p class="hint" data-testid="ai-library-unavailable">
-			The AI model library is not available in this app. Open the hub's settings popup to manage models.
-		</p>
-	{/if}
 
 	{#if defaultsGroups.length}
-		<section class="group" data-testid="ai-defaults">
-			<h3 class="group-title">Defaults</h3>
+		<details class="group defaults" data-testid="ai-defaults">
+			<summary>Default models for apps</summary>
 			{#each defaultsGroups as group (group.task)}
 				{@const rows = candidates[group.task]}
 				<div class="default-row" data-testid="ai-defaults-{group.task}">
@@ -304,89 +394,9 @@
 					{/each}
 				</div>
 			{/each}
-		</section>
+		</details>
 	{/if}
 
-	{#if sources.sections.length}
-		<section class="group" data-testid="ai-library">
-			<h3 class="group-title">Library</h3>
-			{#each sources.sections as section (section.id)}
-				{@const state = sectionStates[section.id]}
-				<details
-					class="lib-section"
-					data-testid="ai-lib-section-{section.id}"
-					ontoggle={() => void ensureRows(section)}
-				>
-					<summary>{section.title}</summary>
-					{#if state?.busy}
-						<p class="hint">Loading models…</p>
-					{:else if state?.error}
-						<p class="hint danger">{state.error}</p>
-					{:else if state?.rows}
-						<ul class="lib-rows">
-							{#each state.rows as row (rowKey(section.id, row))}
-								<li class="lib-row" data-testid="ai-lib-row-{row.ref.modelId}">
-									{#if row.ref.location === 'browser'}
-										<span>Host: {hostModels[row.ref.modelId] ?? 'not loaded'}</span>
-									{/if}
-									<span class="lib-label">{row.label}</span>
-									<span class="chip chip--{row.status}">{statusLabel[row.status]}</span>
-									{#if row.sizeBytes}
-										<span class="hint">{sizeLabel(row.sizeBytes)}</span>
-									{/if}
-									{#if row.install}
-										<button
-											type="button"
-											class="ds-btn ds-btn--sm ds-btn--secondary"
-											data-testid="ai-lib-install-{section.id}-{row.ref.modelId}"
-											disabled={inflight.has(rowKey(section.id, row))}
-											onclick={() => void runInstall(section, row)}
-										>
-											{inflight.has(rowKey(section.id, row)) ? 'Working…' : 'Install'}
-										</button>
-									{/if}
-									{#if row.remove}
-										<button
-											type="button"
-											class="ds-btn ds-btn--sm ds-btn--ghost"
-											data-testid="ai-lib-remove-{section.id}-{row.ref.modelId}"
-											disabled={inflight.has(rowKey(section.id, row))}
-											onclick={() => void runRemove(section, row)}
-										>
-											Remove
-										</button>
-									{/if}
-									{#if row.note}
-										<p class="hint">{row.note}</p>
-									{/if}
-								</li>
-							{/each}
-						</ul>
-					{/if}
-				</details>
-			{/each}
-		</section>
-	{/if}
-
-	<section class="group" data-testid="ai-monitors">
-		<h3 class="group-title">Monitors</h3>
-		{#if monitorProfiles.length}
-			<div class="monitor-panels">
-				{#each monitorProfiles as profile (profile.id)}
-					<div class="monitor-panel">
-						<h4 class="panel-name">{profile.name}</h4>
-						<MonitorStatus {profile} />
-						<MonitorModelsPanel baseUrl={profile.baseUrl} />
-					</div>
-				{/each}
-			</div>
-		{:else if monitorsLoaded}
-			<p class="hint" data-testid="ai-monitors-none">
-				No monitor connected. Models that run on your other machines are configured per monitor on
-				the Connections tab.
-			</p>
-		{/if}
-	</section>
 </div>
 
 <style>
@@ -402,11 +412,10 @@
 	}
 	.group-title {
 		margin: 0;
-		font-size: 0.8rem;
+		font-size: 0.94rem;
 		font-weight: 700;
 		letter-spacing: 0.04em;
-		text-transform: uppercase;
-		color: var(--text-muted);
+		color: var(--text-primary);
 	}
 	.default-row {
 		display: flex;
@@ -469,8 +478,17 @@
 	.hint.danger {
 		color: var(--cat-red-soft);
 	}
-	.monitor-panel h4 {
-		margin: 0.6rem 0 0.15rem;
-		font-size: 0.8rem;
+	.location-group {
+		padding: 0.75rem;
+		border: 1px solid var(--line-hairline);
+		border-radius: var(--radius-md);
+		background: var(--surface-1);
 	}
+	.monitor-panel { display: flex; flex-direction: column; gap: 0.4rem; }
+	.browser-group > summary { cursor: pointer; }
+	.browser-group > summary h3 { display: inline; }
+	.defaults > summary { cursor: pointer; font-size: 0.86rem; font-weight: 600; }
+	.host-status { font-size: 0.74rem; color: var(--text-muted); }
+	.host-status summary { cursor: pointer; }
+	.lib-detail { flex-basis: 100%; }
 </style>

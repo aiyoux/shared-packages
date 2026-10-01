@@ -7,6 +7,7 @@
 	 * the key to the monitor once and clears it from component state
 	 * immediately; nothing is persisted in the browser.
 	 */
+	import type { Snippet } from 'svelte';
 	import { toast } from '@shared-packages/ui';
 	import { createMonitorClient } from '../monitor/client.js';
 	import {
@@ -34,9 +35,12 @@
 		baseUrl: string;
 		/** Notified after any change so the host can refresh. */
 		onChanged?: () => void;
+		/** Additional catalog tools that run on this monitor device. */
+		deviceModels?: Snippet;
+		hasDeviceModels?: boolean;
 	}
 
-	let { baseUrl, onChanged }: Props = $props();
+	let { baseUrl, onChanged, deviceModels, hasDeviceModels = false }: Props = $props();
 
 	let supported = $state<boolean | null>(null); // null = probing
 	let probeError = $state('');
@@ -170,7 +174,7 @@
 			instDefault = false;
 			await refresh();
 			onChanged?.();
-			toast.success('AI profile installed on the monitor');
+			toast.success('API connection saved on the monitor');
 		} catch (e) {
 			instError = formatExplorerError(e);
 		} finally {
@@ -280,7 +284,7 @@
 
 <div class="ai-section" data-testid="monitor-ai-section">
 	<div class="ai-head">
-		<span class="ai-title">AI</span>
+		<span class="ai-note">Model settings</span>
 		<button
 			type="button"
 			class="ds-btn ds-btn--sm ds-btn--ghost"
@@ -288,7 +292,7 @@
 			disabled={listingBusy}
 			onclick={() => void probe()}
 		>
-			Check
+			Refresh
 		</button>
 	</div>
 
@@ -299,117 +303,62 @@
 			{probeError || 'This monitor does not serve AI. Update the monitor daemon to enable it.'}
 		</p>
 	{:else}
-		{#if profiles && profiles.profiles.length}
-			<ul class="ai-profiles" data-testid="monitor-ai-profiles">
-				{#each profiles.profiles as p (p.id)}
-					<li>
-						<div class="ai-profile-main">
-							<span class="ai-profile-name">
-								{p.name}
-								{#if p.default}<span class="ai-badge">default</span>{/if}
-								<span class="ai-badge ai-badge--muted">{p.source}</span>
-							</span>
-							<span class="ai-profile-meta">
-								{p.baseUrl}
-								{#if p.keyFingerprint}
-									· key {p.keyFingerprint}
-								{:else}
-									· no key
-								{/if}
-							</span>
-						</div>
-						{#if p.source === 'managed'}
-							<button
-								type="button"
-								class="ds-btn ds-btn--sm ds-btn--ghost danger"
-								data-testid="monitor-ai-profile-delete"
-								disabled={listingBusy}
-								onclick={() => void remove(p.id)}>Remove</button
-							>
-						{/if}
-					</li>
-				{/each}
-			</ul>
-		{:else}
-			<p class="ai-note" data-testid="monitor-ai-no-profiles">
-				No AI profile installed on this monitor yet.
-			</p>
-		{/if}
-
-		{#if groupedModels.length}
-			<div class="ai-models" data-testid="monitor-ai-models">
-				{#each groupedModels as [profileId, g] (profileId)}
-					<div class="ai-model-group">
-						<span class="ai-group-name">{g.profileName}</span>
-						<span class="ai-group-models">{g.models.join(', ')}</span>
-					</div>
-				{/each}
-				<p class="ai-note">
-					Pick the model in the app that uses it (Sketcher assistant, Documents assistant).
-				</p>
+		<section class="ai-native" data-testid="monitor-ai-native" aria-label="On monitor device">
+			<div class="ai-native-head">
+				<h4 class="ai-native-title">On monitor device:</h4>
+				<button
+					type="button"
+					class="ds-btn ds-btn--sm ds-btn--ghost"
+					data-testid="monitor-ai-add-model-toggle"
+					disabled={addingModel}
+					onclick={() => (showAddModel = !showAddModel)}
+				>
+					{showAddModel ? 'Cancel' : 'Add model…'}
+				</button>
 			</div>
-		{/if}
-		{#if modelsError}
-			<p class="ai-note danger" data-testid="monitor-ai-models-error">{modelsError}</p>
-		{/if}
-		{#if models && models.errors.length}
-			{#each models.errors as e (e.profile)}
-				<p class="ai-note danger">Profile “{e.profile}”: {e.message}</p>
-			{/each}
-		{/if}
 
-		{#if library || nativeRows.length || libraryError}
-			<div class="ai-native" data-testid="monitor-ai-native">
-				<div class="ai-native-head">
-					<span class="ai-native-title">Models</span>
-					<button
-						type="button"
-						class="ds-btn ds-btn--sm ds-btn--ghost"
-						data-testid="monitor-ai-add-model-toggle"
-						disabled={addingModel}
-						onclick={() => (showAddModel = !showAddModel)}
-					>
-						{showAddModel ? 'Cancel' : 'Add model…'}
-					</button>
-				</div>
+			<p class="ai-note">Models and tools that run on this device.</p>
+			{@render deviceModels?.()}
+			{#if !nativeRows.length && !libraryError && !hasDeviceModels}<p class="ai-note">No models configured on this device yet.</p>{/if}
+			{#if nativeRows.length}
+				<ul class="ai-profiles" data-testid="monitor-ai-native-models">
+					{#each nativeRows as row (row.id)}
+						<li>
+							<div class="ai-profile-main">
+								<span class="ai-profile-name">
+									{row.name}
+									<span class="ai-badge ai-badge--muted">{row.task}</span>
+									<span class="ai-badge ai-badge--muted">{row.device}</span>
+									<span class="ai-badge ai-badge--muted">{row.source}</span>
+								</span>
+								<span class="ai-profile-meta">
+									{row.binary}
+									·
+									{row.model}
+									{#if row.backend}· backend {row.backend}{/if}
+								</span>
+							</div>
+							{#if row.source === 'managed'}
+								<button
+									type="button"
+									class="ds-btn ds-btn--sm ds-btn--ghost danger"
+									data-testid="monitor-ai-native-delete"
+									disabled={addingModel}
+									onclick={() => void removeNativeRow(row.id)}>Remove</button
+								>
+							{/if}
+						</li>
+					{/each}
+				</ul>
+			{/if}
 
-				{#if nativeRows.length}
-					<ul class="ai-profiles" data-testid="monitor-ai-native-models">
-						{#each nativeRows as row (row.id)}
-							<li>
-								<div class="ai-profile-main">
-									<span class="ai-profile-name">
-										{row.name}
-										<span class="ai-badge ai-badge--muted">{row.task}</span>
-										<span class="ai-badge ai-badge--muted">{row.device}</span>
-										<span class="ai-badge ai-badge--muted">{row.source}</span>
-									</span>
-									<span class="ai-profile-meta">
-										{row.binary}
-										·
-										{row.model}
-										{#if row.backend}· backend {row.backend}{/if}
-									</span>
-								</div>
-								{#if row.source === 'managed'}
-									<button
-										type="button"
-										class="ds-btn ds-btn--sm ds-btn--ghost danger"
-										data-testid="monitor-ai-native-delete"
-										disabled={addingModel}
-										onclick={() => void removeNativeRow(row.id)}>Remove</button
-									>
-								{/if}
-							</li>
-						{/each}
-					</ul>
-				{/if}
+			{#if libraryError}
+				<p class="ai-note danger" data-testid="monitor-ai-native-error">{libraryError}</p>
+			{/if}
 
-				{#if libraryError}
-					<p class="ai-note danger" data-testid="monitor-ai-native-error">{libraryError}</p>
-				{/if}
-
-				{#if library && library.entries.length}
+			{#if library && library.entries.length}
+				<details class="ai-downloads">
+					<summary>Downloadable models</summary>
 					<ul class="ai-lib" data-testid="monitor-ai-library">
 						{#each library.entries as entry (entry.id)}
 							<li>
@@ -456,126 +405,189 @@
 							</li>
 						{/each}
 					</ul>
-					<p class="ai-note">Downloads run on the monitor host, not in this browser.</p>
-				{/if}
+					<p class="ai-note">Download a model, then add it to the models configured on this device.</p>
+				</details>
+			{/if}
 
-				{#if showAddModel}
-					<div class="ai-install" data-testid="monitor-ai-add-model">
+			{#if showAddModel}
+				<div class="ai-install" data-testid="monitor-ai-add-model">
+					<label>
+						Name
+						<input data-testid="monitor-ai-model-name" bind:value={addName} autocomplete="off" />
+					</label>
+					<label>
+						Runtime binary (absolute path on the monitor)
+						<input
+							data-testid="monitor-ai-model-binary"
+							bind:value={addBinary}
+							placeholder="/usr/local/bin/whisper-cli"
+							autocomplete="off"
+						/>
+					</label>
+					<label>
+						Model file (absolute path on the monitor)
+						<input data-testid="monitor-ai-model-file" bind:value={addModel} autocomplete="off" />
+					</label>
+					<div class="ai-add-row">
 						<label>
-							Name
-							<input data-testid="monitor-ai-model-name" bind:value={addName} autocomplete="off" />
+							Task
+							<select data-testid="monitor-ai-model-task" bind:value={addTask}>
+								{#each ADD_TASKS as t (t.value)}
+									<option value={t.value}>{t.label}</option>
+								{/each}
+							</select>
 						</label>
 						<label>
-							Runtime binary (absolute path on the monitor)
-							<input
-								data-testid="monitor-ai-model-binary"
-								bind:value={addBinary}
-								placeholder="/usr/local/bin/whisper-cli"
-								autocomplete="off"
-							/>
+							Device
+							<select data-testid="monitor-ai-model-device" bind:value={addDevice}>
+								<option value="cpu">CPU</option>
+								<option value="gpu">GPU</option>
+							</select>
 						</label>
-						<label>
-							Model file (absolute path on the monitor)
-							<input data-testid="monitor-ai-model-file" bind:value={addModel} autocomplete="off" />
-						</label>
-						<div class="ai-add-row">
+						{#if addTask === 'image-generation'}
 							<label>
-								Task
-								<select data-testid="monitor-ai-model-task" bind:value={addTask}>
-									{#each ADD_TASKS as t (t.value)}
-										<option value={t.value}>{t.label}</option>
-									{/each}
-								</select>
+								Backend
+								<input data-testid="monitor-ai-model-backend" bind:value={addBackend} autocomplete="off" />
 							</label>
-							<label>
-								Device
-								<select data-testid="monitor-ai-model-device" bind:value={addDevice}>
-									<option value="cpu">CPU</option>
-									<option value="gpu">GPU</option>
-								</select>
-							</label>
-							{#if addTask === 'image-generation'}
-								<label>
-									Backend
-									<input data-testid="monitor-ai-model-backend" bind:value={addBackend} autocomplete="off" />
-								</label>
-							{/if}
-						</div>
-						{#if addError}
-							<p class="ai-note danger" data-testid="monitor-ai-model-error">{addError}</p>
 						{/if}
-						<button
-							type="button"
-							class="ds-btn ds-btn--sm ds-btn--primary"
-							data-testid="monitor-ai-model-save"
-							disabled={addingModel}
-							onclick={() => void enableModel()}
-						>
-							{addingModel ? 'Enabling…' : 'Enable on monitor'}
-						</button>
 					</div>
-				{/if}
-			</div>
-		{/if}
+					{#if addError}
+						<p class="ai-note danger" data-testid="monitor-ai-model-error">{addError}</p>
+					{/if}
+					<button
+						type="button"
+						class="ds-btn ds-btn--sm ds-btn--primary"
+						data-testid="monitor-ai-model-save"
+						disabled={addingModel}
+						onclick={() => void enableModel()}
+					>
+						{addingModel ? 'Enabling…' : 'Enable on monitor'}
+					</button>
+				</div>
+			{/if}
+		</section>
 
-		<button
-			type="button"
-			class="ds-btn ds-btn--sm ds-btn--secondary"
-			data-testid="monitor-ai-install-toggle"
-			disabled={installing}
-			onclick={() => (showInstall = !showInstall)}
-		>
-			{showInstall ? 'Cancel install' : 'Install profile…'}
-		</button>
-		{#if showInstall}
-			<div class="ai-install" data-testid="monitor-ai-install">
-				<label>
-					Name
-					<input data-testid="monitor-ai-name" bind:value={instName} autocomplete="off" />
-				</label>
-				<label>
-					Upstream base URL (OpenAI-compatible)
-					<input
-						data-testid="monitor-ai-base-url"
-						bind:value={instBaseUrl}
-						placeholder="https://api.openai.com/v1"
-						autocomplete="off"
-					/>
-				</label>
-				<label>
-					API key
-					<input
-						data-testid="monitor-ai-key"
-						type="password"
-						bind:value={instKey}
-						autocomplete="off"
-					/>
-				</label>
-				<p class="ai-note">
-					The key is sent to the monitor once and stored there — never in this browser.
+		<section class="ai-api" data-testid="monitor-ai-api" aria-label="Through monitor to API">
+			<h4 class="ai-native-title">Through monitor to API:</h4>
+			<p class="ai-note">Connect this monitor to an AI API. The monitor makes the requests and stores the API key.</p>
+			{#if profiles && profiles.profiles.length}
+				<ul class="ai-profiles" data-testid="monitor-ai-profiles">
+					{#each profiles.profiles as p (p.id)}
+						<li>
+							<div class="ai-profile-main">
+								<span class="ai-profile-name">
+									{p.name}
+									{#if p.default}<span class="ai-badge">default</span>{/if}
+									<span class="ai-badge ai-badge--muted">{p.source}</span>
+								</span>
+								<span class="ai-profile-meta">
+									{p.baseUrl}
+									{#if p.keyFingerprint}
+										· key {p.keyFingerprint}
+									{:else}
+										· no key
+									{/if}
+								</span>
+							</div>
+							{#if p.source === 'managed'}
+								<button
+									type="button"
+									class="ds-btn ds-btn--sm ds-btn--ghost danger"
+									data-testid="monitor-ai-profile-delete"
+									disabled={listingBusy}
+									onclick={() => void remove(p.id)}>Remove</button
+								>
+							{/if}
+						</li>
+					{/each}
+				</ul>
+			{:else}
+				<p class="ai-note" data-testid="monitor-ai-no-profiles">
+					No API connections configured on this monitor yet.
 				</p>
-				<label class="check">
-					<input
-						data-testid="monitor-ai-default"
-						type="checkbox"
-						bind:checked={instDefault}
-					/>
-					Set as the monitor's default profile
-				</label>
-				{#if instError}
-					<p class="ai-note danger" data-testid="monitor-ai-install-error">{instError}</p>
-				{/if}
-				<button
-					type="button"
-					class="ds-btn ds-btn--sm ds-btn--primary"
-					data-testid="monitor-ai-install-save"
-					disabled={installing}
-					onclick={() => void install()}
-				>
-					{installing ? 'Installing…' : 'Install on monitor'}
-				</button>
-			</div>
-		{/if}
+			{/if}
+
+			{#if groupedModels.length}
+				<div class="ai-models" data-testid="monitor-ai-models">
+					{#each groupedModels as [profileId, g] (profileId)}
+						<div class="ai-model-group">
+							<span class="ai-group-name">{g.profileName}</span>
+							<span class="ai-group-models">{g.models.join(', ')}</span>
+						</div>
+					{/each}
+					<p class="ai-note">
+						Pick the model in the app that uses it (Sketcher assistant, Documents assistant).
+					</p>
+				</div>
+			{/if}
+			{#if modelsError}
+				<p class="ai-note danger" data-testid="monitor-ai-models-error">{modelsError}</p>
+			{/if}
+			{#if models && models.errors.length}
+				{#each models.errors as e (e.profile)}
+					<p class="ai-note danger">Profile “{e.profile}”: {e.message}</p>
+				{/each}
+			{/if}
+
+			<button
+				type="button"
+				class="ds-btn ds-btn--sm ds-btn--secondary"
+				data-testid="monitor-ai-install-toggle"
+				disabled={installing}
+				onclick={() => (showInstall = !showInstall)}
+			>
+				{showInstall ? 'Cancel' : 'Add API connection…'}
+			</button>
+			{#if showInstall}
+				<div class="ai-install" data-testid="monitor-ai-install">
+					<label>
+						Name
+						<input data-testid="monitor-ai-name" bind:value={instName} autocomplete="off" />
+					</label>
+					<label>
+						API base URL (OpenAI-compatible)
+						<input
+							data-testid="monitor-ai-base-url"
+							bind:value={instBaseUrl}
+							placeholder="https://api.openai.com/v1"
+							autocomplete="off"
+						/>
+					</label>
+					<label>
+						API key
+						<input
+							data-testid="monitor-ai-key"
+							type="password"
+							bind:value={instKey}
+							autocomplete="off"
+						/>
+					</label>
+					<p class="ai-note">
+						The key is sent to the monitor once and stored there — never in this browser.
+					</p>
+					<label class="check">
+						<input
+							data-testid="monitor-ai-default"
+							type="checkbox"
+							bind:checked={instDefault}
+						/>
+						Use as the default API connection
+					</label>
+					{#if instError}
+						<p class="ai-note danger" data-testid="monitor-ai-install-error">{instError}</p>
+					{/if}
+					<button
+						type="button"
+						class="ds-btn ds-btn--sm ds-btn--primary"
+						data-testid="monitor-ai-install-save"
+						disabled={installing}
+						onclick={() => void install()}
+					>
+						{installing ? 'Saving…' : 'Save API connection'}
+					</button>
+				</div>
+			{/if}
+		</section>
 	{/if}
 </div>
 
@@ -593,13 +605,7 @@
 		align-items: center;
 		justify-content: space-between;
 	}
-	.ai-title {
-		font-size: 0.8rem;
-		font-weight: 700;
-		letter-spacing: 0.04em;
-		text-transform: uppercase;
-		color: var(--text-muted);
-	}
+
 	.ai-note {
 		margin: 0;
 		font-size: 0.78rem;
@@ -693,7 +699,8 @@
 		color: inherit;
 		font: inherit;
 	}
-	.ai-native {
+	.ai-native,
+	.ai-api {
 		display: flex;
 		flex-direction: column;
 		gap: 0.35rem;
@@ -704,12 +711,14 @@
 		justify-content: space-between;
 	}
 	.ai-native-title {
-		font-size: 0.74rem;
+		margin: 0;
+		font-size: 0.86rem;
 		font-weight: 700;
 		letter-spacing: 0.04em;
-		text-transform: uppercase;
 		color: var(--text-muted);
 	}
+	.ai-downloads summary { cursor: pointer; font-size: 0.78rem; font-weight: 600; margin-bottom: 0.35rem; }
+	.ai-api { border-top: 1px solid var(--line-hairline); padding-top: 0.65rem; margin-top: 0.4rem; }
 	.ai-lib {
 		list-style: none;
 		margin: 0;
