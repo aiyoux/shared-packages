@@ -62,6 +62,19 @@ describe('Monitor model category discovery', () => {
 		expect(screen.getByTestId('ai-default-image-generation-generate').querySelectorAll('option')).toHaveLength(1);
 	});
 
+	it('shows unconfigured API tasks and opens API credentials setup without pretending media editing exists', async () => {
+		render(AiModelsTab);
+		for (const task of ['chat', 'transcription', 'text-to-speech', 'image-generation']) {
+			const section = await screen.findByTestId(`ai-lib-section-${task}-desktop-api`);
+			section.setAttribute('open', '');
+			await screen.findByTestId(`ai-provider-empty-${task}-desktop`);
+		}
+		await fireEvent.click(screen.getByRole('button', { name: 'Configure Image generation API' }));
+		expect(screen.getByTestId('monitor-ai-install')).toBeDefined();
+		expect(screen.getByTestId('ai-lib-section-image-generation-desktop-api').textContent).toContain('Media model editing is not yet available here');
+		expect(screen.getByTestId('ai-default-image-generation-generate').querySelectorAll('option')).toHaveLength(1);
+	});
+
 	it('opens clean task-specific setup and submits the chosen task', async () => {
 		render(AiModelsTab);
 		const images = await screen.findByTestId('ai-lib-section-image-generation-desktop');

@@ -14,7 +14,7 @@
 	 * change-pings).
 	 */
 	import { onMount, type Snippet } from 'svelte';
-	let { modelInstallation }: { modelInstallation?: Snippet<[onChanged: () => void]> } = $props();
+	let { modelInstallation, onConfigureMonitor }: { modelInstallation?: Snippet<[onChanged: () => void]>; onConfigureMonitor?: () => void } = $props();
 	import { browserAiHost, type BrowserModelState } from '../ai/browserHost.js';
 	let hostLabel = $state('Not started');
 	let hostModels = $state<Record<string, BrowserModelState>>({});
@@ -378,10 +378,28 @@
 								{/if}
 							{/each}
 						{/snippet}
-						{#snippet apiModels()}
+						{#snippet apiModels(addApiConnection)}
 							{#each sources.sections as section (section.id)}
 								{@const rows = sectionStates[section.id]?.rows?.filter((row) => row.ref.location === 'monitor-provider' && row.ref.monitorProfileId === profile.id) ?? []}
-								{#if rows.length}{@render librarySection(section, rows, `${profile.id}-api`)}{/if}
+								{#if rows.length}
+									{@render librarySection(section, rows, `${profile.id}-api`)}
+								{:else if canConfigureNativeTask(section.task)}
+									<details class="lib-section" data-testid="ai-lib-section-{section.id}-{profile.id}-api">
+										<summary>{section.title}</summary>
+										{#if sectionStates[section.id]?.error}
+											<p class="hint danger">{sectionStates[section.id].error}</p>
+										{:else if !sectionStates[section.id]?.rows}
+											<p class="hint">Loading models…</p>
+										{:else}
+											<p class="hint" data-testid="ai-provider-empty-{section.id}-{profile.id}">No {section.title.toLowerCase()} API model configured on this monitor.</p>
+										{/if}
+										{#if section.task !== 'chat'}
+											<p class="hint">Connect an API, then declare its {section.title.toLowerCase()} model in the Monitor configuration. Media model editing is not yet available here.</p>
+										{/if}
+										<button type="button" class="ds-btn ds-btn--sm ds-btn--secondary"
+											aria-label="Configure {section.title} API" onclick={addApiConnection}>Add API connection…</button>
+									</details>
+								{/if}
 							{/each}
 						{/snippet}
 					</MonitorModelsPanel>
@@ -389,6 +407,7 @@
 			{/each}
 		{:else if monitorsLoaded}
 			<p class="hint" data-testid="ai-monitors-none">No monitors added. Add a monitor on the Connections tab to run models on that device or connect it to an API.</p>
+			{#if onConfigureMonitor}<button type="button" class="ds-btn ds-btn--sm ds-btn--secondary" onclick={onConfigureMonitor}>Add a Monitor…</button>{/if}
 		{/if}
 	</section>
 

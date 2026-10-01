@@ -56,6 +56,15 @@ describe('RemoteConnectionsDialog', () => {
 		await closeSelectionDbForTests();
 	});
 
+	it('opens directly to model settings and leads an empty Monitor list to connection setup', async () => {
+		render(RemoteConnectionsDialog, { props: { onClose: vi.fn(), initialTab: 'models' } });
+		await screen.findByTestId('ai-browser');
+		await screen.findByTestId('ai-monitors-none');
+		await fireEvent.click(screen.getByRole('button', { name: 'Add a Monitor…' }));
+		expect(screen.queryByTestId('ai-browser')).toBeNull();
+		expect(screen.getByTestId('settings-tab-connections').getAttribute('aria-selected')).toBe('true');
+	});
+
 	it('groups a mixed catalog by browser and monitor device, keeps API setup per monitor, and preserves the selected device', async () => {
 		const browser: AiLibraryModelRow = {
 			ref: { location: 'browser', modelId: 'browser-model', sourceId: null, variantId: null },

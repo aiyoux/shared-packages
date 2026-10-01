@@ -40,7 +40,7 @@
 		onChanged?: () => void;
 		/** Additional catalog tools that run on this monitor device. */
 		deviceModels?: Snippet<[configureTask: (task: AiTask) => void]>;
-		apiModels?: Snippet;
+		apiModels?: Snippet<[addApiConnection: () => void]>;
 		hasDeviceModels?: boolean;
 	}
 
@@ -487,7 +487,7 @@
 
 		<section class="ai-api" data-testid="monitor-ai-api" aria-label="Through monitor to API">
 			<h4 class="ai-native-title">Through monitor to API:</h4>
-			{@render apiModels?.()}
+			{@render apiModels?.(() => (showInstall = true))}
 			<p class="ai-note">Connect this monitor to a chat API. The monitor makes the requests and stores the API key. Image, speech synthesis, and transcription API models currently require media model entries in the monitor configuration.</p>
 			{#if profiles && profiles.profiles.length}
 				<ul class="ai-profiles" data-testid="monitor-ai-profiles">

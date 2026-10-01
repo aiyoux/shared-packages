@@ -9,7 +9,7 @@
 	 *   connection kind — it is configured here instead (it used to be part
 	 *   of the monitor edit form).
 	 */
-	import { onMount, type Snippet } from 'svelte';
+	import { onMount, untrack, type Snippet } from 'svelte';
 	import '@shared-packages/design-system/button.css';
 	import { Tabs, type TabItem } from '@shared-packages/ui';
 	import ConnectionsTab from './ConnectionsTab.svelte';
@@ -23,6 +23,7 @@
 
 	interface Props {
 		onClose: () => void;
+		initialTab?: 'connections' | 'models';
 		appearance?: Snippet;
 		outputs?: Snippet;
 		agentAccess?: Snippet;
@@ -31,7 +32,7 @@
 		onDisconnected?: (kind: RemoteKind) => void;
 	}
 
-	let { onClose, onConnected, onDisconnected, appearance, outputs, agentAccess, modelInstallation }: Props = $props();
+	let { onClose, initialTab = 'connections', onConnected, onDisconnected, appearance, outputs, agentAccess, modelInstallation }: Props = $props();
 
 	const TAB_ITEMS = $derived<TabItem[]>([
 		{ value: 'connections', label: 'Connections', testId: 'settings-tab-connections' },
@@ -40,7 +41,7 @@
 		...(outputs ? [{ value: 'outputs', label: 'Outputs', testId: 'settings-tab-outputs' }] : [])
 	]);
 	type TabValue = (typeof TAB_ITEMS)[number]['value'];
-	let tab = $state<TabValue>('connections');
+	let tab = $state<TabValue>(untrack(() => initialTab));
 	let monitors = $state<MonitorConnectionProfileV1[]>([]);
 	onMount(() => {
 		let disposed = false;
@@ -91,7 +92,7 @@
 					<section aria-label={profile.name}><strong>{profile.name}</strong><MonitorStatus {profile} /></section>
 				{/each}
 			{:else if tab === 'models'}
-				<AiModelsTab {modelInstallation} />
+				<AiModelsTab onConfigureMonitor={() => (tab = 'connections')} {modelInstallation} />
 				{@render agentAccess?.()}
 			{:else if tab === 'appearance'}
 				{@render appearance?.()}
