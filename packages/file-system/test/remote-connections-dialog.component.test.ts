@@ -106,9 +106,16 @@ describe('RemoteConnectionsDialog', () => {
 		await fireEvent.click(within(screen.getByTestId('ai-defaults')).getByText('Default models for apps'));
 		const select = screen.getByTestId('ai-default-audio-upsampling-video') as HTMLSelectElement;
 		await vi.waitFor(() => expect(JSON.parse(select.value)).toEqual(tools[1].ref));
+		// Initial read, then a refresh after each monitor finishes probing.
+		await vi.waitFor(() => expect(models).toHaveBeenCalledTimes(3));
 		await fireEvent.change(select, { target: { value: JSON.stringify(browser.ref) } });
 		await vi.waitFor(async () => expect((await getAiSelectionMap()).tasks['audio-upsampling']?.video).toEqual(browser.ref));
-		expect(models).toHaveBeenCalledOnce();
+		expect(models).toHaveBeenCalledTimes(3);
+		models.mockResolvedValue([{ ...browser, label: 'Browser audio refreshed' }, ...tools]);
+		await fireEvent.click(within(screen.getByTestId('ai-monitor-home')).getByTestId('monitor-ai-check'));
+		await within(inBrowser).findByText('Browser audio refreshed');
+		expect(models).toHaveBeenCalledTimes(4);
+		expect(JSON.parse(select.value)).toEqual(browser.ref);
 	});
 
 	it('lists saved connections; New uses a type segment; Add does not connect', async () => {

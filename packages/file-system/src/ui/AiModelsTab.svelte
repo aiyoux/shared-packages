@@ -34,6 +34,7 @@
 	import type { MonitorConnectionProfileV1 } from '../monitor/types.js';
 	import MonitorModelsPanel from './MonitorModelsPanel.svelte';
 	import MonitorStatus from './MonitorStatus.svelte';
+	import { canConfigureNativeTask } from '../ai/nativeModelForm.js';
 
 	const sources = listAiLibrarySources();
 
@@ -260,7 +261,7 @@
 	});
 </script>
 
-{#snippet librarySection(section: (typeof sources.sections)[number], rows: AiLibraryModelRow[], monitorId = '')}
+{#snippet librarySection(section: (typeof sources.sections)[number], rows: AiLibraryModelRow[], monitorId = '', configureTask: (() => void) | undefined = undefined)}
 	{@const state = sectionStates[section.id]}
 	<details
 		class="lib-section"
@@ -273,6 +274,9 @@
 		{:else if state?.error}
 			<p class="hint danger">{state.error}</p>
 		{:else if state?.rows}
+			{#if rows.length === 0 && configureTask}
+				<p class="hint" data-testid="ai-monitor-empty-{section.id}-{monitorId}">No model configured for this task on this monitor.</p>
+			{/if}
 			<ul class="lib-rows">
 				{#each rows as row (rowKey(section.id, row))}
 					<li class="lib-row" data-testid="ai-lib-row-{row.ref.modelId}">
@@ -313,6 +317,12 @@
 					</li>
 				{/each}
 			</ul>
+		{/if}
+		{#if configureTask}
+			<button type="button" class="ds-btn ds-btn--sm ds-btn--secondary"
+				data-testid="ai-monitor-configure-{section.id}-{monitorId}"
+				aria-label="Configure {section.title} model"
+				onclick={configureTask}>Configure model…</button>
 		{/if}
 	</details>
 {/snippet}
@@ -359,10 +369,13 @@
 						onChanged={refreshLibrary}
 						hasDeviceModels={sources.sections.some((section) => sectionStates[section.id]?.rows?.some((row) => row.ref.location === 'monitor-native' && row.ref.monitorProfileId === profile.id))}
 					>
-						{#snippet deviceModels()}
+						{#snippet deviceModels(configureTask)}
 							{#each sources.sections as section (section.id)}
+								{@const task = section.task}
 								{@const rows = sectionStates[section.id]?.rows?.filter((row) => row.ref.location === 'monitor-native' && row.ref.monitorProfileId === profile.id) ?? []}
-								{#if rows.length}{@render librarySection(section, rows, profile.id)}{/if}
+								{#if rows.length || canConfigureNativeTask(task)}
+									{@render librarySection(section, rows, profile.id, canConfigureNativeTask(task) ? () => configureTask(task) : undefined)}
+								{/if}
 							{/each}
 						{/snippet}
 						{#snippet apiModels()}

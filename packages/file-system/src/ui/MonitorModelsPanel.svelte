@@ -29,7 +29,8 @@
 		type AiNativeModelRow,
 		type AiProfileListResult
 	} from '../ai/index.js';
-	import { NATIVE_RUNTIME_NAMES, nativeModelLibraryPrefill, nativeModelFormInput } from '../ai/nativeModelForm.js';
+	import { NATIVE_RUNTIME_NAMES, canConfigureNativeTask, nativeModelLibraryPrefill, nativeModelTaskPrefill, nativeModelFormInput } from '../ai/nativeModelForm.js';
+	import type { AiTask } from '../ai/catalog.js';
 	import { formatExplorerError } from './explorerError.js';
 
 	interface Props {
@@ -38,7 +39,7 @@
 		/** Notified after any change so the host can refresh. */
 		onChanged?: () => void;
 		/** Additional catalog tools that run on this monitor device. */
-		deviceModels?: Snippet;
+		deviceModels?: Snippet<[configureTask: (task: AiTask) => void]>;
 		apiModels?: Snippet;
 		hasDeviceModels?: boolean;
 	}
@@ -233,6 +234,14 @@
 	/** Prefill the enable form from a library entry's installed file. */
 	function startAddModel(entry: AiLibraryEntry) {
 		const initial = nativeModelLibraryPrefill(entry);
+		applyModelPrefill(initial);
+	}
+
+	function configureTask(task: AiTask) {
+		if (canConfigureNativeTask(task)) applyModelPrefill(nativeModelTaskPrefill(task));
+	}
+
+	function applyModelPrefill(initial: ReturnType<typeof nativeModelTaskPrefill>) {
 		showAddModel = true;
 		addName = initial.name;
 		addModel = initial.model;
@@ -321,7 +330,7 @@
 			</div>
 
 			<p class="ai-note">Models and tools that run on this device.</p>
-			{@render deviceModels?.()}
+			{@render deviceModels?.(configureTask)}
 			{#if !nativeRows.length && !libraryError && !hasDeviceModels}<p class="ai-note">No models configured on this device yet.</p>{/if}
 			{#if nativeRows.length}
 				<ul class="ai-profiles" data-testid="monitor-ai-native-models">
