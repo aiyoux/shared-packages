@@ -3,14 +3,15 @@
  *
  * An HTTPS page reaching `127.0.0.1` (e.g. through an SSH tunnel) is a
  * public -> loopback request. Chrome 142+ gates these behind the Local Network
- * Access permission, and without an explicit annotation each one logs:
+ * Access permission. DevTools can also report:
  *
  *   "site requested a resource from a network that it could only access
  *    because of its users' privileged network position"
  *
- * `targetAddressSpace` declares the intent up front, so the browser resolves
- * address space before DNS and asks the user once instead of warning per
- * request.
+ * `targetAddressSpace` declares the intent up front; it does not grant
+ * permission or suppress DevTools diagnostics. Some Chrome builds retain an
+ * LNA error status even after permission is granted and the request succeeds.
+ * The actual fetch result, rather than that diagnostic, determines success.
  *
  * It is a `fetch` option, with no `EventSource` or `WebSocket` equivalent —
  * which is why the watch stream is SSE consumed via `fetch` rather than either
@@ -71,7 +72,7 @@ export function isLoopbackUrl(url: string): boolean {
 
 /**
  * Annotate `init` with the address space `url` resolves into, so the browser
- * can apply the Local Network Access permission instead of warning per request.
+ * can apply Local Network Access and mixed-content checks to the intended target.
  * Public targets are returned untouched. Browsers that don't implement the
  * option ignore the extra key.
  */

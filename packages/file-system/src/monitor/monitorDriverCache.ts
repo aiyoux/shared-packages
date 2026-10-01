@@ -132,7 +132,7 @@ export async function acquireMonitorDriver(
     const release = shared.watchFolder(path, listener); held.add(release);
     return () => { held.delete(release); release(); };
    },
-   getStatus: (): import('./watchStream.js').WatchStreamStatus => shared.status().state === 'unreachable' ? 'error' : shared.status().state === 'connecting' ? 'connecting' : 'subscribed',
+   getStatus: (): import('./watchStream.js').WatchStreamStatus => shared.status().watchStatus ?? (shared.status().state === 'unreachable' ? 'error' : 'connecting'),
    watchedPaths: () => [],
    stop() { for (const release of held) release(); held.clear(); }
   } : undefined;

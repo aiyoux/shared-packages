@@ -109,6 +109,22 @@ function treeDriver(rootChildren: TreeNode[]): ExplorerDriver {
 }
 
 describe('detectProject', () => {
+	it('uses permission-safe probes for folder icons and project detection', async () => {
+		const driver = driverWith([]);
+		const calls: unknown[] = [];
+		driver.list = async (opts) => {
+			calls.push(opts);
+			if (opts.probe) throw new Error('Permission denied: .Trash');
+			throw new Error('Background folder classification must use a probe');
+		};
+		assert.equal(await classifyFolder(driver, { id: '.Trash/', kind: 'folder' }), 'plain');
+		assert.equal(await detectProject(driver, '.Trash/'), false);
+		assert.deepEqual(calls, [
+			{ parentId: '.Trash/', probe: true },
+			{ parentId: '.Trash/', probe: true },
+			{ parentId: null, probe: true }
+		]);
+	});
 	it('finds .git beyond the visible listing cap after a packed archive import', async () => {
 		const driver = driverWith([]);
 		const git: ExplorerEntry = { id: 'git', parentId: 'folder', name: '.git', kind: 'folder' };

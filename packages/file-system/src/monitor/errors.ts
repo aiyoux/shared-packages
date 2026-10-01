@@ -25,6 +25,9 @@ export function formatMonitorErrorMessage(e: unknown): string {
 		case 'MONITOR_UNAVAILABLE':
 			return 'Monitor unavailable — check Base URL, that the service is running, and CORS for this origin.';
 		case 'MONITOR_FORBIDDEN':
+			if (/permission.denied|permission denied|operation not permitted/i.test(m.message)) {
+				return 'The host denied access to this folder. On macOS, check Files and Folders or Full Disk Access for the app running monitor.';
+			}
 			return 'Path not allowed by monitor config (check allowed_path_prefixes).';
 		case 'MONITOR_NOT_FOUND':
 			return 'Path not found on host.';

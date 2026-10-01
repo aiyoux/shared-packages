@@ -63,10 +63,11 @@ async function markerChildren(
 	driver: ExplorerDriver,
 	parentId: ExplorerEntryId | null
 ): Promise<ExplorerEntry[]> {
-	const listed = await driver.list({ parentId });
+	// Marker detection is a background probe, including folder icon classification.
+	const listed = await driver.list({ parentId, probe: true });
 	if (listed.truncated && driver.listAll) {
 		try {
-			return await driver.listAll({ parentId });
+			return await driver.listAll({ parentId, probe: true });
 		} catch {
 			// A failed full listing must not hide a marker already in the visible rows.
 		}

@@ -5,6 +5,7 @@ import type { LiveBus } from '../src/live/bus.ts';
 import type { Election } from '../src/live/election.ts';
 import type { MonitorTransport } from '../src/monitor/client.ts';
 import type { MonitorWatchStream } from '../src/monitor/watchStream.ts';
+import type { WatchStreamStatus } from '../src/monitor/watchStream.ts';
 const profile = { v: 1 as const, id: 'p', name: 'Desktop', baseUrl: 'http://127.0.0.1:8300', rootPath: '/', createdAt: 1, updatedAt: 1 };
 function channel() {
  const clients = new Map<string, Set<(frame: MonitorLinkFrame, sender: string) => void>>();
@@ -23,6 +24,30 @@ function elections() {
  return { forTab, switchTo(tab: string) { ctx = tab; term++; for (const fn of listeners) fn(); } };
 }
 async function drain() { for (let n = 0; n < 12; n++) await new Promise<void>((resolve) => queueMicrotask(resolve)); }
+it('broadcasts real watch status and starts Files watches when the jobs feed fails', async () => {
+ const bus = channel(); const elected = elections();
+ let onStatus: ((status: WatchStreamStatus) => void) | undefined;
+ let watched = 0; let feeds = 0;
+ const createWatch: typeof import('../src/monitor/watchStream.ts').createMonitorWatchStream = (opts) => {
+  onStatus = opts.onStatus;
+  return { watchFolder() { watched++; opts.onStatus?.('subscribed'); return () => {}; }, getStatus: () => 'subscribed', watchedPaths: () => [], stop() {} };
+ };
+ const transport = { meta: async () => ({ capabilities: { jobs: true } }) } as unknown as MonitorTransport;
+ const jobs = { events: async () => { feeds++; if (feeds === 1) throw new Error('job stream disconnected'); return { abort() {} }; }, list: async () => [], abort: async () => {}, landed: async () => {} };
+ const a = createMonitorLink({ ctx: 'a', profile, bus: bus('a'), election: elected.forTab('a'), transport, jobs, onJob() {}, createWatch });
+ const b = createMonitorLink({ ctx: 'b', profile, bus: bus('b'), election: elected.forTab('b'), transport, jobs, onJob() {} });
+ try {
+  b.watchFolder('/Users/me', () => {});
+  await drain();
+  assert.equal(watched, 1);
+  assert.equal(b.status().state, 'unreachable');
+  assert.equal(b.status().watchStatus, 'subscribed', 'a jobs failure is not a watcher failure');
+  onStatus?.('error'); await drain(); assert.equal(b.status().watchStatus, 'error');
+  onStatus?.('subscribed'); await drain(); assert.equal(b.status().watchStatus, 'subscribed');
+  await new Promise((resolve) => setTimeout(resolve, 550)); await drain();
+  assert.equal(feeds, 2); assert.equal(b.status().state, 'reachable');
+ } finally { a.dispose(); b.dispose(); }
+});
 it('shares folder watches and replays retained subscriptions after leadership changes', async () => {
  const bus = channel(); const elected = elections();
  const watched = new Map<string, Map<string, (events?: unknown[]) => void>>(); let streams = 0;

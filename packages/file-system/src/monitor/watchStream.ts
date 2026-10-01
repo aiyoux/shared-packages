@@ -3,8 +3,8 @@
  *
  * Consumes the SSE stream with `fetch()` + `ReadableStream` rather than
  * `EventSource`, because only `fetch` accepts `targetAddressSpace` — the
- * annotation that lets an HTTPS page reach loopback under a single Local
- * Network Access grant instead of a warning per request. See `./localNetwork`.
+ * annotation that declares the intended local target when an HTTPS page
+ * reaches loopback under a Local Network Access grant. See `./localNetwork`.
  * (Neither transport is blocked as mixed content: loopback is a potentially
  * trustworthy origin, so it is exempt from mixed-content blocking entirely.)
  *
@@ -91,7 +91,7 @@ export type MonitorWatchStreamOptions = {
 	 * common enough to be worth holding for.
 	 */
 	holdMs?: number;
-	/** Give up after this many consecutive failed reconnects (default 12). */
+	/** Give up after this many failed reconnects or folder registrations (default 12). */
 	maxReconnectAttempts?: number;
 	/** Backoff ceiling before jitter (default 10s). */
 	maxReconnectDelayMs?: number;
@@ -122,6 +122,7 @@ type FolderState = {
 	queued: MonitorWatchFsEvent[];
 	retryAt: number;
 	retryDelayMs: number;
+	failures: number;
 };
 
 /**
@@ -175,6 +176,8 @@ export function createMonitorWatchStream(
 	let syncAgain = false;
 
 	const setStatus = (s: WatchStreamStatus) => {
+		if (s === 'subscribed' && [...folders.values()].some((f) => f.listeners.size && f.retryAt > 0)) s = 'error';
+		if (s === status) return;
 		status = s;
 		opts.onStatus?.(s);
 	};
@@ -193,7 +196,16 @@ export function createMonitorWatchStream(
 		const queued = folder.queued;
 		folder.queued = [];
 		notify(folder, queued.length ? queued : undefined);
+		if (clientId) setStatus('subscribed');
 	};
+
+	function retryFolder(folder: FolderState, error: unknown): void {
+		folder.failures += 1;
+		const permanent = /watch\.(?:permission_denied|path_not_allowed|remote_path_rejected|not_a_directory|path_not_utf8|path_too_long)|permission denied|operation not permitted/i.test(String(error));
+		folder.retryDelayMs = Math.min(Math.max(5_000, folder.retryDelayMs * 2), 60_000);
+		folder.retryAt = permanent || folder.failures >= maxReconnectAttempts ? Infinity : Date.now() + folder.retryDelayMs;
+		setStatus('error');
+	}
 
 	const folderBySubId = (subId: string): FolderState | undefined => {
 		for (const f of folders.values()) {
@@ -265,11 +277,8 @@ export function createMonitorWatchStream(
 							return;
 						}
 						folder.rootId = root.root_id;
-					} catch {
-						folder.retryDelayMs = Math.min(Math.max(5_000, folder.retryDelayMs * 2), 60_000);
-						folder.retryAt = Date.now() + folder.retryDelayMs;
-						// Leave it unsubscribed; the next reconcile (or reconnect) retries.
-						setStatus('error');
+					} catch (e) {
+						retryFolder(folder, e);
 					}
 				}
 
@@ -311,6 +320,7 @@ export function createMonitorWatchStream(
 							folder.subId = entry.sub_id;
 							folder.retryAt = 0;
 							folder.retryDelayMs = 0;
+							folder.failures = 0;
 						}
 					}
 				} catch (e) {
@@ -327,7 +337,7 @@ export function createMonitorWatchStream(
 					}
 					for (const folder of toSubscribe) {
 						if (String(e).includes('root_not_found')) folder.rootId = null;
-						folder.retryAt = Date.now() + 5_000;
+						retryFolder(folder, e);
 					}
 					setStatus('error');
 					return;
@@ -344,6 +354,7 @@ export function createMonitorWatchStream(
 						folders.delete(folder.path);
 					}
 				}
+				if (clientId) setStatus('subscribed');
 			} while (syncAgain);
 		} finally {
 			syncing = false;
@@ -491,6 +502,7 @@ export function createMonitorWatchStream(
 		const url = `${transport.baseUrl.replace(/\/$/, '')}/v1/watch/events`;
 		const ac = new AbortController();
 		abortController = ac;
+		let terminalFailure = false;
 		try {
 			const res = await fetchFn(
 				url,
@@ -502,9 +514,8 @@ export function createMonitorWatchStream(
 			);
 			if (!res.ok || !res.body) {
 				setStatus('error');
-				connecting = false;
-				scheduleReconnect();
-				return;
+				terminalFailure = res.status >= 400 && res.status < 500 && res.status !== 408 && res.status !== 429;
+				throw new Error(`Monitor watch failed (${res.status})`);
 			}
 			resetWatchdog();
 
@@ -515,6 +526,8 @@ export function createMonitorWatchStream(
 			for (;;) {
 				const { done, value } = await reader.read();
 				if (done || stopped) break;
+				// SSE keepalive comments count as activity too.
+				resetWatchdog();
 				buffer += decoder.decode(value, { stream: true });
 				// Keep the trailing partial frame for the next chunk.
 				const lastBreak = buffer.lastIndexOf('\n\n');
@@ -529,11 +542,14 @@ export function createMonitorWatchStream(
 			// Abort (navigation, watchdog, stop) and network failure land here alike.
 		} finally {
 			connecting = false;
+			if (watchdogTimer) clearTimeout(watchdogTimer);
+			watchdogTimer = null;
 			if (abortController === ac) abortController = null;
 		}
 		if (!stopped) {
 			clientId = null;
-			scheduleReconnect();
+			setStatus('error');
+			if (!terminalFailure) scheduleReconnect();
 		}
 	}
 
@@ -551,11 +567,18 @@ export function createMonitorWatchStream(
 					releaseAt: null,
 					retryAt: 0,
 					retryDelayMs: 0,
+					failures: 0,
 					queued: [],
 					coalescer: createCoalescer(() => flushFolder(created), { debounceMs, maxDebounceMs })
 				};
 				folder = created;
 				folders.set(path, folder);
+			}
+			// Navigating back is an explicit retry after changing host permissions.
+			if (folder.listeners.size === 0 && folder.retryAt > 0) {
+				folder.retryAt = 0;
+				folder.retryDelayMs = 0;
+				folder.failures = 0;
 			}
 			folder.listeners.add(listener);
 			// Re-entering a folder inside its hold window: cancel the pending release.
@@ -578,6 +601,7 @@ export function createMonitorWatchStream(
 					current.coalescer.cancel();
 					current.releaseAt = Date.now() + holdMs;
 					scheduleSweep();
+					if (clientId) setStatus('subscribed');
 				}
 			};
 		},

@@ -90,6 +90,7 @@ function createHarness() {
 		watchUpdateSubs,
 		watchRemoveRoot,
 		emit,
+		heartbeat: () => controller?.enqueue(encoder.encode(': keepalive\n\n')),
 		subIdFor: (path: string) => subs.get(`root:${path}`),
 		closeStream: () => {
 			controller?.close();
@@ -107,6 +108,74 @@ const batch = (subId: string) => ({
 });
 
 describe('createMonitorWatchStream', () => {
+	it('does not retry a forbidden folder or let its held watch keep a healthy folder red', async () => {
+		vi.useFakeTimers();
+		const h = createHarness();
+		h.watchAddRoot.mockImplementation(async (path) => {
+			if (path.endsWith('.Trash')) throw new Error('[watch.permission_denied] permission denied');
+			return { root_id: `root:${path}`, path };
+		});
+		const stream = createMonitorWatchStream({ transport: h.transport, fetchImpl: h.fetchImpl, watchdogMs: 0, holdMs: 300_000 });
+		try {
+			const release = stream.watchFolder('/Users/me/.Trash', vi.fn());
+			await vi.advanceTimersByTimeAsync(0);
+			expect(stream.getStatus()).toBe('error');
+			stream.watchFolder('/Users/me', vi.fn());
+			await vi.advanceTimersByTimeAsync(0);
+			expect(stream.getStatus()).toBe('error');
+			release();
+			expect(stream.getStatus()).toBe('subscribed');
+			await vi.advanceTimersByTimeAsync(120_000);
+			expect(h.watchAddRoot.mock.calls.filter(([path]) => path.endsWith('.Trash'))).toHaveLength(1);
+		} finally { stream.stop(); vi.useRealTimers(); }
+	});
+
+	it('bounds retries for a persistently failing root', async () => {
+		vi.useFakeTimers();
+		const h = createHarness();
+		h.watchAddRoot.mockRejectedValue(new Error('temporarily unavailable'));
+		const stream = createMonitorWatchStream({ transport: h.transport, fetchImpl: h.fetchImpl, watchdogMs: 0, maxReconnectAttempts: 2 });
+		try {
+			stream.watchFolder('/project', vi.fn());
+			await vi.advanceTimersByTimeAsync(120_000);
+			expect(h.watchAddRoot).toHaveBeenCalledTimes(2);
+			expect(stream.getStatus()).toBe('error');
+		} finally { stream.stop(); vi.useRealTimers(); }
+	});
+
+	it('does not reconnect to an HTTP-forbidden stream', async () => {
+		vi.useFakeTimers();
+		const h = createHarness();
+		const fetchImpl = vi.fn(async () => new Response('{}', { status: 403 }));
+		const stream = createMonitorWatchStream({ transport: h.transport, fetchImpl });
+		try {
+			stream.watchFolder('/project', vi.fn());
+			await vi.advanceTimersByTimeAsync(120_000);
+			expect(fetchImpl).toHaveBeenCalledOnce();
+			expect(stream.getStatus()).toBe('error');
+		} finally { stream.stop(); vi.useRealTimers(); }
+	});
+
+	it('counts comment heartbeats and restores subscribed after resync', async () => {
+		vi.useFakeTimers();
+		const h = createHarness();
+		const stream = createMonitorWatchStream({ transport: h.transport, fetchImpl: h.fetchImpl, watchdogMs: 100, debounceMs: 10 });
+		try {
+			stream.watchFolder('/project', vi.fn());
+			await vi.advanceTimersByTimeAsync(0);
+			h.emit('watch.resync_required', { sub_id: h.subIdFor('/project') });
+			await vi.advanceTimersByTimeAsync(0);
+			expect(stream.getStatus()).toBe('resync');
+			await vi.advanceTimersByTimeAsync(20);
+			expect(stream.getStatus()).toBe('subscribed');
+			for (let i = 0; i < 10; i++) {
+				await vi.advanceTimersByTimeAsync(50);
+				h.heartbeat();
+				await vi.advanceTimersByTimeAsync(0);
+			}
+			expect(h.streamsOpened()).toBe(1);
+		} finally { stream.stop(); vi.useRealTimers(); }
+	});
 	it('cleans up a root registration that finishes after stop', async () => {
 		const h = createHarness();
 		let resolve!: (root: { root_id: string; path: string }) => void;

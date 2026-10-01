@@ -2,7 +2,7 @@
  * FeTreeView standalone reuse (Projects / Monitor).
  * Run: npm run test:component -w @shared-packages/file-system
  */
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/svelte';
 import FeTreeView from '../src/ui/FeTreeView.svelte';
 import FeTreeNavHarness from './FeTreeNavHarness.svelte';
@@ -33,6 +33,66 @@ describe('FeTreeView', () => {
 		expect(await screen.findByText('docs')).toBeTruthy();
 		expect(screen.getByTestId('fe-tree-row-root').textContent).toContain('Root');
 		expect(screen.queryByText('readme.txt')).toBeNull();
+	});
+
+	it('refreshing a collapsed tree does not crawl beyond the folders on screen', async () => {
+		const visible = new Set<string | null>([null]);
+		for (let n = 0; n < 3; n++) {
+			const top = await vfs.mkdir(null, `top-${n}`);
+			visible.add(top.id);
+			for (let m = 0; m < 3; m++) {
+				const inner = await vfs.mkdir(top.id, `inner-${m}`);
+				await vfs.mkdir(inner.id, 'deep');
+			}
+		}
+		const local = createLocalExplorerDriver(vfs);
+		const list = vi.fn(local.list.bind(local));
+		let changed: (() => void) | undefined;
+		const driver = {
+			...local, id: 'monitor', list,
+			subscribeChanges(fn: () => void) { changed = fn; return () => {}; }
+		};
+		render(FeTreeView, { props: { driver, activeId: null, onNavigate: () => {} } });
+		await screen.findByText('top-0');
+		await viWaitFor(() => list.mock.calls.some(([opts]) => opts.parentId === [...visible][1]));
+		for (let n = 0; n < 5; n++) {
+			changed?.();
+			await new Promise((resolve) => setTimeout(resolve, 30));
+		}
+		const outside = list.mock.calls.filter(([opts]) => !visible.has(opts.parentId));
+		expect(outside.map(([opts]) => opts.parentId)).toEqual([]);
+		// One root read plus three visible-row probes, on mount and each change.
+		expect(list.mock.calls.length).toBeLessThanOrEqual(24);
+	});
+
+	it('refreshes expanded rows but stops visiting their descendants after collapse', async () => {
+		const top = await vfs.mkdir(null, 'top');
+		const inner = await vfs.mkdir(top.id, 'inner');
+		const deep = await vfs.mkdir(inner.id, 'deep');
+		await vfs.mkdir(deep.id, 'hidden');
+		const local = createLocalExplorerDriver(vfs);
+		const list = vi.fn(local.list.bind(local));
+		let changed: (() => void) | undefined;
+		const driver = {
+			...local, id: 'monitor', list,
+			subscribeChanges(fn: () => void) { changed = fn; return () => {}; }
+		};
+		render(FeTreeView, { props: { driver, activeId: null, onNavigate: () => {} } });
+		await screen.findByText('top');
+		const toggle = document.querySelector('[data-name="top"] [data-testid="fe-tree-toggle"]')!;
+		await fireEvent.click(toggle);
+		await screen.findByText('inner');
+		await viWaitFor(() => list.mock.calls.some(([opts]) => opts.parentId === inner.id));
+		list.mockClear();
+		changed?.();
+		await viWaitFor(() => list.mock.calls.some(([opts]) => opts.parentId === inner.id));
+		expect(list.mock.calls.some(([opts]) => opts.parentId === deep.id)).toBe(false);
+		await fireEvent.click(toggle);
+		expect(screen.queryByText('inner')).toBeNull();
+		list.mockClear();
+		changed?.();
+		await viWaitFor(() => list.mock.calls.some(([opts]) => opts.parentId === top.id));
+		expect(list.mock.calls.map(([opts]) => opts.parentId)).toEqual([null, top.id]);
 	});
 
 	it('includeFiles shows files and rootLabel overrides Root', async () => {

@@ -4,12 +4,13 @@ import { serviceContextId } from '../leaseOwner.js';
 import { createMonitorClient, type MonitorCapabilities, type MonitorHostSnapshot, type MonitorTransport } from '../monitor/client.js';
 import { createMonitorWatchStream, type MonitorWatchFsEvent, type MonitorWatchStream, type WatchFolderListener } from '../monitor/watchStream.js';
 import { createMonitorJobsClient, type MonitorJob } from '../monitor/jobs.js';
+import type { WatchStreamStatus } from '../monitor/watchStream.js';
 import type { MonitorConnectionProfileV1 } from '../monitor/types.js';
 import { opsService, type OpKindId, type OpsService, type OpRecord } from './ops.js';
 import { connectionsService } from './connections.js';
 import { serviceNames } from './names.js';
 
-export type MonitorLinkStatus = { state: 'connecting' | 'reachable' | 'unreachable'; reason?: string; jobs: boolean; ownerCtx?: string; version?: string; capabilities?: MonitorCapabilities };
+export type MonitorLinkStatus = { state: 'connecting' | 'reachable' | 'unreachable'; reason?: string; jobs: boolean; watchStatus?: WatchStreamStatus; ownerCtx?: string; version?: string; capabilities?: MonitorCapabilities };
 export type MonitorLinkFrame =
  | { kind: 'hello' }
  | { kind: 'retry' }
@@ -42,6 +43,8 @@ export function createMonitorLink(options: {
  let activeTerm = 0;
  let hostStarting = false;
  let disposed = false;
+ let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+ let reconnectAttempts = 0;
  const own = () => ({ paths: [...folders.keys()], host: hostListeners.size > 0 });
  const notify = () => { for (const fn of changes) fn(); };
  function sendOwn() { remote.set(options.ctx, own()); bus.broadcast({ kind: 'subscriptions', ...own() }); reconcile(); }
@@ -50,16 +53,24 @@ export function createMonitorLink(options: {
  function folderEvent(path: string, events?: MonitorWatchFsEvent[]) { for (const fn of folders.get(path) ?? []) fn(events); }
  function hostEvent(snapshot: MonitorHostSnapshot) { lastHost = snapshot; for (const fn of hostListeners) fn(snapshot); }
  function stopStreams() {
+  if (reconnectTimer) clearTimeout(reconnectTimer); reconnectTimer = undefined;
   controller?.abort(); controller = undefined;
   watch?.stop(); watch = undefined;
   for (const stop of subscriptions.values()) stop(); subscriptions.clear();
   host?.abort(); host = undefined; hostStarting = false; activeTerm = 0;
  }
+ function streamFailed(error: unknown, ctl: AbortController) {
+  if (ctl.signal.aborted || controller !== ctl) return;
+  setStatus({ ...status, state: 'unreachable', reason: String(error) });
+  if (disposed || reconnectTimer || reconnectAttempts >= 12) return;
+  const delay = Math.min(500 * 2 ** reconnectAttempts++, 30_000);
+  reconnectTimer = setTimeout(() => { reconnectTimer = undefined; if (controller === ctl && election.isLeader) { stopStreams(); leadership(); } }, delay);
+ }
  function reconcile() {
   if (!election.isLeader || !controller || controller.signal.aborted) return;
   const term = activeTerm; const ctl = controller;
   const paths = new Set([...remote.values()].flatMap((row) => row.paths));
-  if (paths.size && !watch) watch = (options.createWatch ?? createMonitorWatchStream)({ transport, watchdogMs: 0 });
+  if (paths.size && !watch) watch = (options.createWatch ?? createMonitorWatchStream)({ transport, onStatus(watchStatus) { if (!ctl.signal.aborted && election.isLeader && election.term === term) setStatus({ ...status, watchStatus }); } });
   for (const [path, stop] of subscriptions) if (!paths.has(path)) { stop(); subscriptions.delete(path); }
   for (const path of paths) if (!subscriptions.has(path) && watch) {
    subscriptions.set(path, watch.watchFolder(path, (events) => { if (ctl.signal.aborted || !election.isLeader || election.term !== term) return; folderEvent(path, events); publish({ kind: 'folder', term, path, events }); }));
@@ -70,7 +81,7 @@ export function createMonitorLink(options: {
    hostStarting = true;
    void transport.openHostEvents({ onSnapshot(snapshot) { if (ctl.signal.aborted || election.term !== term) return; hostEvent(snapshot); publish({ kind: 'host', term, snapshot }); } }).then((stream) => {
     if (ctl.signal.aborted || election.term !== term || ![...remote.values()].some((row) => row.host)) stream.abort(); else host = stream;
-   }).catch((error) => { if (!ctl.signal.aborted) setStatus({ ...status, state: 'unreachable', reason: String(error) }); }).finally(() => { if (controller === ctl) hostStarting = false; });
+   }).catch((error) => streamFailed(error, ctl)).finally(() => { if (controller === ctl) hostStarting = false; });
   }
  }
  function leadership() {
@@ -87,22 +98,24 @@ export function createMonitorLink(options: {
     const meta = await transport.meta();
     if (ctl.signal.aborted) return;
     const supported = meta.capabilities?.jobs === true;
-    setStatus({ state: 'reachable', jobs: supported, ownerCtx: options.ctx, version: meta.version, capabilities: meta.capabilities });
+    setStatus({ state: 'reachable', jobs: supported, watchStatus: status.watchStatus, ownerCtx: options.ctx, version: meta.version, capabilities: meta.capabilities });
+    // Files watches remain independent of the jobs feed.
+    reconcile();
     if (supported) {
      const receive = (job: MonitorJob) => { if (ctl.signal.aborted || election.term !== term) return; const previous = knownJobs.get(job.id); if (previous && ['done', 'failed', 'aborted', 'evicted'].includes(previous.state) && !['done', 'failed', 'aborted', 'evicted'].includes(job.state)) return; knownJobs.set(job.id, job); options.onJob(job); publish({ kind: 'job', term, job }); };
      // Subscribe before list, so a job cannot finish in a list-to-stream gap.
-     await options.jobs.events(receive, ctl.signal, (id) => { knownJobs.delete(id); options.onJobRemoved?.(id); }, (error) => { if (!ctl.signal.aborted) setStatus({ ...status, state: 'unreachable', reason: String(error) }); });
+     await options.jobs.events(receive, ctl.signal, (id) => { knownJobs.delete(id); options.onJobRemoved?.(id); }, (error) => streamFailed(error, ctl));
      for (const job of await options.jobs.list(ctl.signal)) receive(job);
     }
     reconcile();
-   } catch (error) { if (!ctl.signal.aborted) setStatus({ ...status, state: 'unreachable', reason: String(error) }); }
+   } catch (error) { streamFailed(error, ctl); }
   })();
  }
  const stopBus = bus.onMessage((frame, sender) => {
   if (frame.kind === 'hello') {
    sendOwn();
    if (election.isLeader) { publish({ kind: 'status', term: election.term, status }); for (const job of knownJobs.values()) publish({ kind: 'job', term: election.term, job }); if (lastHost) publish({ kind: 'host', term: election.term, snapshot: lastHost }); }
-  } else if (frame.kind === 'retry') { if (election.isLeader) { stopStreams(); leadership(); } }
+  } else if (frame.kind === 'retry') { reconnectAttempts = 0; if (election.isLeader) { stopStreams(); leadership(); } }
   else if (frame.kind === 'subscriptions') { remote.set(sender, frame); reconcile(); }
   else if (election.leader?.term === frame.term && election.leader.tabId === sender) {
    if (frame.kind === 'status') { status = frame.status; notify(); }
@@ -119,7 +132,7 @@ export function createMonitorLink(options: {
   subscribe(fn: () => void) { changes.add(fn); return () => { changes.delete(fn); }; },
   watchFolder(path: string, listener: WatchFolderListener) { let rows = folders.get(path); if (!rows) folders.set(path, rows = new Set()); rows.add(listener); sendOwn(); return () => { rows!.delete(listener); if (!rows!.size) folders.delete(path); sendOwn(); }; },
   subscribeHost(listener: (snapshot: MonitorHostSnapshot) => void) { hostListeners.add(listener); if (lastHost) listener(lastHost); sendOwn(); return () => { hostListeners.delete(listener); sendOwn(); }; },
-  retry() { if (election.isLeader) { stopStreams(); leadership(); } else { bus.broadcast({ kind: 'retry' }); election.resumeAcquire(); } },
+  retry() { reconnectAttempts = 0; if (election.isLeader) { stopStreams(); leadership(); } else { bus.broadcast({ kind: 'retry' }); election.resumeAcquire(); } },
   takeOwnership() { election.takeOver(); },
   dispose() { disposed = true; stopStreams(); stopElection(); stopBus(); stopGone(); changes.clear(); bus.destroy(); election.destroy(); }
  };

@@ -96,6 +96,8 @@
 	/** Ids the user explicitly expanded with a chevron; navigation never collapses these. */
 	let manualExpanded = $state<Set<string>>(new Set());
 	let loading = $state<Set<string>>(new Set());
+	let generation = 0;
+	let pendingLists = new Map<string, Promise<void>>();
 
 	function markFor(entry: ExplorerEntry): FolderMark {
 		const kids = listed.get(entry.id);
@@ -124,72 +126,62 @@
 			});
 	}
 
-	async function loadChildren(
+	/** Fetch one folder only. A probe must never start another level of probes. */
+	async function loadListing(
 		d: ExplorerDriver,
 		parentId: ExplorerEntryId | null,
-		force = false
+		force = false,
+		probe = false
 	): Promise<void> {
 		const key = keyFor(parentId);
-		if (!force && (children.has(key) || loading.has(key))) return;
+		const pending = pendingLists.get(key);
+		if (pending) return pending;
+		if (!force && children.has(key)) return;
+		const revision = generation;
 		loading = new Set(loading).add(key);
-		try {
-			const { entries } = await d.list({ parentId });
-			listed = new Map(listed).set(key, entries);
-			const nextMarks = new Map(marks);
-			nextMarks.set(key, folderMarkFromKids(undefined, entries));
-			const folders = entries.filter((e) => e.kind === 'folder');
-			for (const f of folders) {
-				const inner = listed.get(f.id);
-				if (inner) nextMarks.set(f.id, folderMarkFromKids(f.meta, inner));
+		const request = Promise.resolve().then(async () => {
+			try {
+				const { entries } = await d.list({ parentId, ...(probe ? { probe: true } : {}) });
+				if (revision !== generation) return;
+				listed = new Map(listed).set(key, entries);
+				marks = new Map(marks).set(key, folderMarkFromKids(undefined, entries));
+				children = new Map(children).set(key, rowsFor(entries));
+			} catch {
+				// Best-effort navigation; keep the last known rows on a failed refresh.
+			} finally {
+				if (revision === generation) {
+					pendingLists.delete(key);
+					const next = new Set(loading);
+					next.delete(key);
+					loading = next;
+				}
 			}
-			marks = nextMarks;
-			const toProbe = folders.filter((f) => !listed.has(f.id));
-			if (toProbe.length) {
-				// Probe every not-yet-listed folder once: it yields both the
-				// project mark and, kept below, the child list that decides
-				// whether the row shows an expand chevron at all.
-				void Promise.all(
-					toProbe.map(async (f) => {
-						try {
-							return [f, (await d.list({ parentId: f.id, probe: true })).entries] as const;
-						} catch {
-							return [f, null] as const;
-						}
-					})
-				).then((pairs) => {
-					const nextListed = new Map(listed);
-					const nextChildren = new Map(children);
-					const nextMarks = new Map(marks);
-					for (const [f, entries] of pairs) {
-						if (!entries) continue;
-						nextListed.set(f.id, entries);
-						nextChildren.set(f.id, rowsFor(entries));
-						nextMarks.set(f.id, folderMarkFromKids(f.meta, entries));
-					}
-					listed = nextListed;
-					children = nextChildren;
-					marks = nextMarks;
-				});
-			}
-			const rows = rowsFor(entries);
-			children = new Map(children).set(key, rows);
-		} catch {
-			// Best-effort nav aid — leave the node collapsed-looking (no cached
-			// children) rather than surfacing a separate error UI here.
-		} finally {
-			const next = new Set(loading);
-			next.delete(key);
-			loading = next;
-		}
+		});
+		pendingLists.set(key, request);
+		return request;
+	}
+
+	async function loadChildren(d: ExplorerDriver, parentId: ExplorerEntryId | null): Promise<void> {
+		const revision = generation;
+		await loadListing(d, parentId);
+		if (revision !== generation) return;
+		// Only these child rows are on screen. Read one level for their marks
+		// and chevrons; their own children stay unprobed until expanded.
+		await Promise.all((children.get(keyFor(parentId)) ?? [])
+			.filter((entry) => entry.kind === 'folder')
+			.map((entry) => loadListing(d, entry.id, false, true)));
 	}
 
 	async function revealPath(d: ExplorerDriver, id: ExplorerEntryId | null): Promise<void> {
 		if (!id) return;
+		const revision = generation;
 		try {
 			const chain = await d.getPath(id); // root..id, inclusive of id itself
+			if (revision !== generation) return;
 			const chainIds = new Set<string>(chain.map((node) => node.id));
 			for (const node of chain) {
 				await loadChildren(d, node.id);
+				if (revision !== generation) return;
 			}
 			// Re-read the live sets right before assigning: the user may have
 			// toggled a node while getPath / loadChildren were in flight, and
@@ -210,21 +202,20 @@
 		}
 	}
 
-	async function refreshVisible(d: ExplorerDriver, root: ExplorerEntryId | null, deep = false): Promise<void> {
-		await loadChildren(d, root, true);
-		const ids = new Set<string>(expanded);
-		if (deep) {
-			// Re-check every folder whose children we already know, not just
-			// the expanded ones: a subfolder landing under (or leaving) a
-			// collapsed folder must flip its chevron, and nothing else
-			// refetches those lists.
-			for (const key of children.keys()) {
-				if (key !== ROOT_KEY) ids.add(key);
-			}
+	async function refreshVisible(d: ExplorerDriver, root: ExplorerEntryId | null): Promise<void> {
+		const revision = generation;
+		async function visit(parentId: ExplorerEntryId | null): Promise<void> {
+			await loadListing(d, parentId, true);
+			if (revision !== generation) return;
+			await Promise.all((children.get(keyFor(parentId)) ?? [])
+				.filter((entry) => entry.kind === 'folder')
+				.map((entry) => expanded.has(entry.id)
+					? visit(entry.id)
+					: loadListing(d, entry.id, true, true)));
 		}
-		for (const id of ids) {
-			await loadChildren(d, id, true);
-		}
+		// Follow rendered rows, not the cache. Cached probes include children
+		// of collapsed folders; refreshing those recursively crawls the disk.
+		await visit(root);
 	}
 
 	function toggleExpand(id: ExplorerEntryId): void {
@@ -251,6 +242,8 @@
 		const d = driver;
 		const root = rootId;
 		untrack(() => {
+			generation += 1;
+			pendingLists = new Map();
 			children = new Map();
 			listed = new Map();
 			marks = new Map();
@@ -275,9 +268,8 @@
 
 	// Any mutation that can change folder structure (mkdir/rename/move/
 	// delete/restore, or a live remote change) bumps `treeVersion` in
-	// FileExplorer; re-fetch what we know so the tree doesn't go stale —
-	// including collapsed folders, whose chevrons flip when a subfolder
-	// lands or the last one leaves.
+	// FileExplorer; refresh visible rows, including collapsed rows whose
+	// chevrons flip when a subfolder lands or the last one leaves.
 	$effect(() => {
 		const v = treeVersion;
 		const files = includeFiles;
@@ -286,14 +278,13 @@
 		untrack(() => {
 			void v;
 			void files;
-			void refreshVisible(d, root, true);
+			void refreshVisible(d, root);
 		});
 	});
 
 	// Live refresh watches the current folder only, like a file manager: the
 	// cost of watching is what is open, never the shape of the tree. Every
-	// other known folder, expanded or collapsed, re-lists on the deep refresh
-	// a change triggers, on navigation, and on each `treeVersion` bump.
+	// visible row refreshes on a change, navigation, or `treeVersion` bump.
 	// Inside FileExplorer this is the folder its list already watches, so the
 	// stream shares one server subscription. The local driver's global signal
 	// still covers every folder.
@@ -308,7 +299,7 @@
 		if (!d.subscribeChanges) return;
 		const subscribe = d.subscribeChanges.bind(d);
 		return untrack(() =>
-			subscribe(() => void refreshVisible(d, root, true), { parentId: current })
+			subscribe(() => void refreshVisible(d, root), { parentId: current })
 		);
 	});
 </script>
