@@ -82,7 +82,9 @@ async function load(payload: Record<string, unknown>): Promise<{ modelId: string
 	cancelled = false;
 	await disposeSessions();
 
-	ort.env.wasm.wasmPaths = '/vendor/ort/';
+	// Dedicated assets from this engine's ORT pin; the hub and transformers
+	// runtimes have their own builds and cannot supply this worker's WASM.
+	ort.env.wasm.wasmPaths = '/vendor/ort-sd/';
 	const tokenizer = createSdTokenizer(files);
 	checkCancelled();
 
