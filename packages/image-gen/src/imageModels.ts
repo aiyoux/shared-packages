@@ -17,6 +17,14 @@ export type ImageModelEngine = 'sd-turbo' | 'sdxs' | 'flux2-klein';
 
 export type ImageModelLicense = 'stability-ai-community' | 'apache-2.0';
 
+/** SD graph IO differs between exports; types/names verified from ONNX ValueInfo. */
+export type SdConfig = {
+	inputIdsType: 'int32' | 'int64';
+	timestepType: 'int64' | 'float32';
+	decoderInput: string;
+	decoderOutput: string;
+};
+
 /** FLUX.2 klein staged-VAE decoder wiring (tensor names from the q4 bundle). */
 export type Flux2VaeConfig = {
 	pre: string;
@@ -59,6 +67,8 @@ export type ImageModelDef = {
 	crossAttentionDim?: 768 | 1024;
 	/** VAE scale applied before decoding (TAESD uses 1.0). SD engines. */
 	vaeScale?: number;
+	/** SD-family graph wiring, independent of weight precision. */
+	sd?: SdConfig;
 	/** Engine-specific wiring, present iff the engine needs one. */
 	flux2?: Flux2Config;
 	/** License family for UX notice purposes. */
@@ -93,6 +103,7 @@ export const SD_TURBO: ImageModelDef = {
 	resolution: 512,
 	crossAttentionDim: 1024,
 	vaeScale: 0.18215,
+	sd: { inputIdsType: 'int32', timestepType: 'int64', decoderInput: 'latent_sample', decoderOutput: 'sample' },
 	license: 'stability-ai-community',
 	languages: ['en']
 };
@@ -120,6 +131,7 @@ export const SDXS_DREAMSHAPER: ImageModelDef = {
 	resolution: 512,
 	crossAttentionDim: 768,
 	vaeScale: 1.0,
+	sd: { inputIdsType: 'int64', timestepType: 'float32', decoderInput: 'latent', decoderOutput: 'image' },
 	license: 'stability-ai-community',
 	languages: ['en']
 };

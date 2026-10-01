@@ -17,7 +17,7 @@ import * as ort from 'onnxruntime-web/webgpu';
 import type { InferenceSession, Tensor } from 'onnxruntime-common';
 import { createSdTokenizer, encodeSdPrompt } from './sdTokenizer.js';
 import { EULER_SIGMA, eulerStep, randnLatents, mulberry32, vaeToRgb, rgbToRgbaU8 } from './sdEuler.js';
-import { imageModelDef } from './imageModels.js';
+import { imageModelDef, type SdConfig } from './imageModels.js';
 import { ImageGenError } from './engines.js';
 
 type RpcCall = { id: number; op: string; payload: Record<string, unknown> };
@@ -31,6 +31,7 @@ type LoadedSessions = {
 	vaeDecoder: InferenceSession;
 	vaeScale: number;
 	resolution: number;
+	sd: SdConfig;
 };
 
 let loaded: LoadedSessions | null = null;
@@ -75,7 +76,7 @@ function checkCancelled(): void {
 async function load(payload: Record<string, unknown>): Promise<{ modelId: string }> {
 	const modelId = payload['modelId'] as string;
 	const def = imageModelDef(modelId);
-	if (def.resolution == null || def.vaeScale == null) {
+	if (def.resolution == null || def.vaeScale == null || !def.sd) {
 		throw new ImageGenError('NO_MODEL', `${def.id} is not an SD-family model`);
 	}
 	const files = filesFrom(payload);
@@ -123,7 +124,8 @@ async function load(payload: Record<string, unknown>): Promise<{ modelId: string
 		unet,
 		vaeDecoder,
 		vaeScale: def.vaeScale ?? 1.0,
-		resolution: def.resolution ?? 512
+		resolution: def.resolution ?? 512,
+		sd: def.sd
 	};
 	return { modelId };
 }
@@ -161,7 +163,11 @@ async function generate(payload: Record<string, unknown>): Promise<{
 	checkCancelled();
 
 	const hidden: Record<string, Tensor> = await loaded.textEncoder.run({
-		input_ids: new ort.Tensor('int32', Int32Array.from(inputIds), [1, inputIds.length])
+		input_ids: new ort.Tensor(
+			loaded.sd.inputIdsType,
+			loaded.sd.inputIdsType === 'int64' ? BigInt64Array.from(inputIds, BigInt) : Int32Array.from(inputIds),
+			[1, inputIds.length]
+		)
 	});
 	const embedding = hidden['last_hidden_state'];
 	if (!embedding) throw new ImageGenError('GENERATE_FAILED', 'Text encoder produced no embedding');
@@ -175,7 +181,11 @@ async function generate(payload: Record<string, unknown>): Promise<{
 
 	const noise: Record<string, Tensor> = await loaded.unet.run({
 		sample: new ort.Tensor('float32', noisy, [1, 4, edge, edge]),
-		timestep: new ort.Tensor('int64', new BigInt64Array([999n]), [1]),
+		timestep: new ort.Tensor(
+			loaded.sd.timestepType,
+			loaded.sd.timestepType === 'float32' ? new Float32Array([999]) : new BigInt64Array([999n]),
+			[1]
+		),
 		encoder_hidden_states: embedding
 	});
 	const predicted = noise['out_sample'];
@@ -189,9 +199,9 @@ async function generate(payload: Record<string, unknown>): Promise<{
 		loaded.vaeScale
 	);
 	const decoded: Record<string, Tensor> = await loaded.vaeDecoder.run({
-		latent_sample: new ort.Tensor('float32', stepped, [1, 4, edge, edge])
+		[loaded.sd.decoderInput]: new ort.Tensor('float32', stepped, [1, 4, edge, edge])
 	});
-	const sample = decoded['sample'];
+	const sample = decoded[loaded.sd.decoderOutput];
 	if (!sample) throw new ImageGenError('GENERATE_FAILED', 'VAE decoder produced no output');
 
 	const rgb = vaeToRgb(
