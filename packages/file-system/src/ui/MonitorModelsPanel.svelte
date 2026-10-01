@@ -24,10 +24,12 @@
 		removeAiLibraryModel,
 		validateAiProfileInput,
 		type AiLibraryListResult,
+		type AiLibraryEntry,
 		type AiModelListResult,
 		type AiNativeModelRow,
 		type AiProfileListResult
 	} from '../ai/index.js';
+	import { NATIVE_RUNTIME_NAMES, nativeModelLibraryPrefill, nativeModelFormInput } from '../ai/nativeModelForm.js';
 	import { formatExplorerError } from './explorerError.js';
 
 	interface Props {
@@ -37,10 +39,11 @@
 		onChanged?: () => void;
 		/** Additional catalog tools that run on this monitor device. */
 		deviceModels?: Snippet;
+		apiModels?: Snippet;
 		hasDeviceModels?: boolean;
 	}
 
-	let { baseUrl, onChanged, deviceModels, hasDeviceModels = false }: Props = $props();
+	let { baseUrl, onChanged, deviceModels, apiModels, hasDeviceModels = false }: Props = $props();
 
 	let supported = $state<boolean | null>(null); // null = probing
 	let probeError = $state('');
@@ -63,6 +66,7 @@
 	let library = $state<AiLibraryListResult | null>(null);
 	let nativeRows = $state<AiNativeModelRow[]>([]);
 	let libraryError = $state('');
+	let nativeError = $state('');
 	let installingId = $state('');
 	let showAddModel = $state(false);
 	let addName = $state('');
@@ -107,7 +111,7 @@
 			supported = false;
 			probeError = formatExplorerError(e);
 		}
-		if (supported) void refresh();
+		if (supported) { await refresh(); onChanged?.(); }
 	}
 
 	async function refresh() {
@@ -124,19 +128,15 @@
 		} finally {
 			listingBusy = false;
 		}
-		// Library and native-model rows are additive: a daemon without them
-		// keeps working, the sections just stay hidden.
-		try {
-			[library, nativeRows] = await Promise.all([
-				listAiLibrary(probedUrl),
-				listAiNativeModels(probedUrl)
-			]);
-			libraryError = '';
-		} catch (e) {
-			library = null;
-			nativeRows = [];
-			libraryError = formatExplorerError(e);
-		}
+		// An older daemon may expose either endpoint. Do not hide a successful
+		// native-model response just because its curated library is unavailable.
+		const [libraryResult, nativeResult] = await Promise.allSettled([
+			listAiLibrary(probedUrl), listAiNativeModels(probedUrl)
+		]);
+		library = libraryResult.status === 'fulfilled' ? libraryResult.value : null;
+		libraryError = libraryResult.status === 'rejected' ? formatExplorerError(libraryResult.reason) : '';
+		nativeRows = nativeResult.status === 'fulfilled' ? nativeResult.value : [];
+		nativeError = nativeResult.status === 'rejected' ? formatExplorerError(nativeResult.reason) : '';
 	}
 
 	// Re-probe when the edited URL settles.
@@ -231,12 +231,15 @@
 	}
 
 	/** Prefill the enable form from a library entry's installed file. */
-	function startAddModel(fileName: string, installedPath: string) {
+	function startAddModel(entry: AiLibraryEntry) {
+		const initial = nativeModelLibraryPrefill(entry);
 		showAddModel = true;
-		addName = fileName.replace(/\.gguf$|\.bin$|\.safetensors$/i, '');
-		addModel = installedPath;
-		addTask = 'transcription';
-		addDevice = 'cpu';
+		addName = initial.name;
+		addModel = initial.model;
+		addTask = initial.task;
+		addBinary = initial.binary;
+		addBackend = initial.backend;
+		addDevice = initial.device;
 		addError = '';
 	}
 
@@ -248,14 +251,14 @@
 		}
 		addingModel = true;
 		try {
-			await addAiNativeModel(probedUrl, {
+			await addAiNativeModel(probedUrl, nativeModelFormInput({
 				name: addName.trim(),
 				task: addTask as AiNativeModelRow['task'],
 				device: addDevice,
 				binary: addBinary.trim(),
 				model: addModel.trim(),
-				backend: addBackend.trim() || undefined
-			});
+				backend: addBackend
+			}));
 			addName = '';
 			addBinary = '';
 			addModel = '';
@@ -352,8 +355,9 @@
 				</ul>
 			{/if}
 
+			{#if nativeError}<p class="ai-note danger" data-testid="monitor-ai-native-error">{nativeError}</p>{/if}
 			{#if libraryError}
-				<p class="ai-note danger" data-testid="monitor-ai-native-error">{libraryError}</p>
+				<p class="ai-note danger" data-testid="monitor-ai-library-error">{libraryError}</p>
 			{/if}
 
 			{#if library && library.entries.length}
@@ -367,6 +371,7 @@
 										{entry.name}
 										<span class="ai-badge ai-badge--muted">{sizeLabel(entry.sizeBytes)}</span>
 										<span class="ai-badge ai-badge--muted">{entry.license}</span>
+										<span class="ai-badge ai-badge--muted">{entry.task}</span>
 									</span>
 									<span class="ai-profile-meta">
 										{#if entry.installedPath}
@@ -381,7 +386,7 @@
 										type="button"
 										class="ds-btn ds-btn--sm ds-btn--secondary"
 										data-testid="monitor-ai-model-enable"
-										onclick={() => startAddModel(entry.fileName, entry.installedPath ?? '')}
+										onclick={() => startAddModel(entry)}
 									>
 										Add model…
 									</button>
@@ -411,6 +416,10 @@
 
 			{#if showAddModel}
 				<div class="ai-install" data-testid="monitor-ai-add-model">
+					<p class="ai-note">Install the runtime and its compatible weights on the monitor, then enter their absolute paths here. The downloadable library contains only the models listed above.</p>
+					{#if addTask === 'text-to-speech'}
+						<p class="ai-note">Piper needs both the .onnx model and the matching .onnx.json configuration beside it.</p>
+					{/if}
 					<label>
 						Name
 						<input data-testid="monitor-ai-model-name" bind:value={addName} autocomplete="off" />
@@ -420,7 +429,7 @@
 						<input
 							data-testid="monitor-ai-model-binary"
 							bind:value={addBinary}
-							placeholder="/usr/local/bin/whisper-cli"
+							placeholder={`/usr/local/bin/${NATIVE_RUNTIME_NAMES[addTask] ?? 'runtime'}`}
 							autocomplete="off"
 						/>
 					</label>
@@ -469,7 +478,8 @@
 
 		<section class="ai-api" data-testid="monitor-ai-api" aria-label="Through monitor to API">
 			<h4 class="ai-native-title">Through monitor to API:</h4>
-			<p class="ai-note">Connect this monitor to an AI API. The monitor makes the requests and stores the API key.</p>
+			{@render apiModels?.()}
+			<p class="ai-note">Connect this monitor to a chat API. The monitor makes the requests and stores the API key. Image, speech synthesis, and transcription API models currently require media model entries in the monitor configuration.</p>
 			{#if profiles && profiles.profiles.length}
 				<ul class="ai-profiles" data-testid="monitor-ai-profiles">
 					{#each profiles.profiles as p (p.id)}

@@ -14,7 +14,7 @@
 	 * change-pings).
 	 */
 	import { onMount, type Snippet } from 'svelte';
-	let { modelInstallation }: { modelInstallation?: Snippet } = $props();
+	let { modelInstallation }: { modelInstallation?: Snippet<[onChanged: () => void]> } = $props();
 	import { browserAiHost, type BrowserModelState } from '../ai/browserHost.js';
 	let hostLabel = $state('Not started');
 	let hostModels = $state<Record<string, BrowserModelState>>({});
@@ -141,7 +141,8 @@
 		installed: 'installed',
 		'not-installed': 'not installed',
 		partial: 'partially imported',
-		remote: 'streamed on use',
+		unavailable: 'unavailable',
+		remote: 'on demand / service',
 		'built-in': 'built-in'
 	};
 
@@ -226,6 +227,10 @@
 		}
 	}
 
+	function refreshLibrary() {
+		for (const section of sources.sections) void refreshSection(section);
+	}
+
 	/** Monitors group: one panel per saved monitor profile. */
 	let monitorProfiles = $state<MonitorConnectionProfileV1[]>([]);
 	let monitorsLoaded = $state(false);
@@ -288,7 +293,7 @@
 								disabled={inflight.has(rowKey(section.id, row))}
 								onclick={() => void runInstall(section, row)}
 							>
-								{inflight.has(rowKey(section.id, row)) ? 'Working…' : 'Install'}
+								{inflight.has(rowKey(section.id, row)) ? 'Working…' : row.installLabel ?? 'Install'}
 							</button>
 						{/if}
 						{#if row.remove}
@@ -333,7 +338,7 @@
 				{/each}
 			</div>
 		{/if}
-		{@render modelInstallation?.()}
+		{@render modelInstallation?.(refreshLibrary)}
 		<details class="host-status" data-testid="ai-browser-host">
 			<summary>Browser model status</summary>
 			<p class="hint">{hostLabel}</p>
@@ -351,12 +356,19 @@
 					<MonitorStatus {profile} compact />
 					<MonitorModelsPanel
 						baseUrl={profile.baseUrl}
+						onChanged={refreshLibrary}
 						hasDeviceModels={sources.sections.some((section) => sectionStates[section.id]?.rows?.some((row) => row.ref.location === 'monitor-native' && row.ref.monitorProfileId === profile.id))}
 					>
 						{#snippet deviceModels()}
 							{#each sources.sections as section (section.id)}
 								{@const rows = sectionStates[section.id]?.rows?.filter((row) => row.ref.location === 'monitor-native' && row.ref.monitorProfileId === profile.id) ?? []}
 								{#if rows.length}{@render librarySection(section, rows, profile.id)}{/if}
+							{/each}
+						{/snippet}
+						{#snippet apiModels()}
+							{#each sources.sections as section (section.id)}
+								{@const rows = sectionStates[section.id]?.rows?.filter((row) => row.ref.location === 'monitor-provider' && row.ref.monitorProfileId === profile.id) ?? []}
+								{#if rows.length}{@render librarySection(section, rows, `${profile.id}-api`)}{/if}
 							{/each}
 						{/snippet}
 					</MonitorModelsPanel>

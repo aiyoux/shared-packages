@@ -26,7 +26,7 @@
 		appearance?: Snippet;
 		outputs?: Snippet;
 		agentAccess?: Snippet;
-		modelInstallation?: Snippet;
+		modelInstallation?: Snippet<[onChanged: () => void]>;
 		onConnected?: (kind: RemoteKind, profile: object) => void;
 		onDisconnected?: (kind: RemoteKind) => void;
 	}

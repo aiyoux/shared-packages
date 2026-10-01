@@ -23,6 +23,8 @@ export type AiLibraryModelStatus =
 	| 'not-installed'
 	/** Imported but with missing or unverified files. */
 	| 'partial'
+	/** Configured, but the runtime/device/service is not ready. */
+	| 'unavailable'
 	/** Runs as a service/URL (webspeech packs, detector-weight URLs) — nothing to install. */
 	| 'remote'
 	/** Ships with the app or is cached out of our control. */
@@ -38,6 +40,8 @@ export type AiLibraryModelRow = {
 	status: AiLibraryModelStatus;
 	/** Optional in-app import flow (package import card, monitor library install). */
 	install?: () => Promise<void>;
+	/** Use "Import files" when the action opens a file chooser. */
+	installLabel?: string;
 	remove?: () => Promise<void>;
 	/** Where the weights actually live, when the status alone does not say it. */
 	note?: string;

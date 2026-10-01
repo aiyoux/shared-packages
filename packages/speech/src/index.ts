@@ -123,3 +123,4 @@ export {
 export { hostedPiperTts as piperTts, initializeSpeechBrowserHost } from './browserHostEngines.js';
 export { BROWSER_CHAT_MODEL, initializeBrowserChatHost, runBrowserChat, disposeBrowserChat, type BrowserChatDevice, type BrowserChatTurn } from './engines/browserChat.js';
 export { novasrUpsample, disposeNovasr, novasrChunks, NOVASR_IN_RATE, NOVASR_OUT_RATE, NOVASR_MODEL_URL } from './engines/novasr.js';
+export { inspectNovasrModel, loadNovasrModel, removeNovasrModel } from './engines/novasrModel.js';

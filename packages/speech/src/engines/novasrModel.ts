@@ -4,6 +4,34 @@ export const NOVASR_MODEL_URL =
 	`https://huggingface.co/TigreGotico/audiosronnx-novasr/resolve/${REVISION}/novasr.onnx`;
 const MODEL_BYTES = 228736;
 const MODEL_SHA256 = '0ece352753caec56d1815fb2410c6a4bd90e06119b2de85f921c20bfa6fc0274';
+const MODEL_PATH = ['Speech Models', 'novasr', REVISION, 'novasr.onnx'];
+
+/** Inspect without creating folders or fetching any weights. */
+async function storedModel() {
+	const { getSharedVfs } = await import('@shared-packages/file-system');
+	const vfs = getSharedVfs();
+	await vfs.ready();
+	let parentId: string | null = null;
+	for (const [index, name] of MODEL_PATH.entries()) {
+		const node = await vfs.childByName(parentId, name);
+		if (!node || node.kind !== (index === MODEL_PATH.length - 1 ? 'file' : 'folder')) return { vfs, node: null };
+		if (index === MODEL_PATH.length - 1) return { vfs, node };
+		parentId = node.id;
+	}
+	return { vfs, node: null };
+}
+
+export async function inspectNovasrModel(): Promise<'installed' | 'partial' | 'not-installed'> {
+	const { vfs, node } = await storedModel();
+	if (!node) return 'not-installed';
+	const bytes = new Uint8Array(await (await vfs.readBlob(node.id)).arrayBuffer());
+	return await valid(bytes, new AbortController().signal) ? 'installed' : 'partial';
+}
+
+export async function removeNovasrModel(): Promise<void> {
+	const { vfs, node } = await storedModel();
+	if (node) await vfs.permanentDelete(node.id, { recursive: false });
+}
 
 async function valid(bytes: Uint8Array<ArrayBuffer>, signal: AbortSignal): Promise<boolean> {
 	if (bytes.length !== MODEL_BYTES) return false;

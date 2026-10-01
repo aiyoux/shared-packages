@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { loadNovasrModel } from './novasrModel.js';
+import { inspectNovasrModel, loadNovasrModel, removeNovasrModel } from './novasrModel.js';
 
 const vfs = vi.hoisted(() => ({ ready: vi.fn(), ensureFolders: vi.fn(), childByName: vi.fn(), readBlob: vi.fn(), permanentDelete: vi.fn(), writeFileStream: vi.fn() }));
 vi.mock('@shared-packages/file-system', () => ({ getSharedVfs: () => vfs }));
@@ -24,6 +24,29 @@ beforeEach(() => {
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe('NovaSR persistent model cache', () => {
+	it('reports a fresh browser without creating folders or downloading', async () => {
+		await expect(inspectNovasrModel()).resolves.toBe('not-installed');
+		expect(vfs.ensureFolders).not.toHaveBeenCalled();
+		expect(fetchModel).not.toHaveBeenCalled();
+	});
+
+	it('verifies installed bytes and exposes corrupt weights as partial', async () => {
+		vfs.childByName.mockImplementation(async (_parent, name) => ({ id: name, kind: name === 'novasr.onnx' ? 'file' : 'folder' }));
+		await expect(inspectNovasrModel()).resolves.toBe('installed');
+		vfs.readBlob.mockResolvedValue(new Blob(['corrupt']));
+		await expect(inspectNovasrModel()).resolves.toBe('partial');
+		expect(fetchModel).not.toHaveBeenCalled();
+	});
+
+	it('removes only the pinned model file, and tolerates an empty store', async () => {
+		await removeNovasrModel();
+		expect(vfs.permanentDelete).not.toHaveBeenCalled();
+		vfs.childByName.mockImplementation(async (_parent, name) => ({ id: name, kind: name === 'novasr.onnx' ? 'file' : 'folder' }));
+		await removeNovasrModel();
+		expect(vfs.permanentDelete).toHaveBeenCalledExactlyOnceWith('novasr.onnx', { recursive: false });
+		expect(vfs.ensureFolders).not.toHaveBeenCalled();
+	});
+
 	it('reuses and validates a cached pinned model without downloading again', async () => {
 		vfs.childByName.mockResolvedValue({ id: 'model', kind: 'file' });
 		const result = await loadNovasrModel(new AbortController().signal);
