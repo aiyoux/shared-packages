@@ -8,6 +8,7 @@
  * All functions are browser-only and return blob: URLs that the caller
  * must revoke via `URL.revokeObjectURL`.
  */
+import { withTimeout } from '@shared-packages/ui/async';
 import type { ExplorerEntry } from './explorerDriver.js';
 
 export type PreviewKind = 'image' | 'video' | 'audio' | 'pdf' | 'text';
@@ -163,22 +164,6 @@ export function coerceMediaBlob(blob: Blob, name: string, kind: PreviewKind): Bl
 
 export function isSvgName(name: string): boolean {
 	return ext(name) === '.svg';
-}
-
-function withTimeout<T>(p: Promise<T>, ms: number, message: string): Promise<T> {
-	return new Promise((resolve, reject) => {
-		const t = setTimeout(() => reject(new Error(message)), ms);
-		p.then(
-			(v) => {
-				clearTimeout(t);
-				resolve(v);
-			},
-			(e) => {
-				clearTimeout(t);
-				reject(e);
-			}
-		);
-	});
 }
 
 // ── Image thumbnail ──────────────────────────────────────────────

@@ -1,4 +1,5 @@
 import { findBlock, plaintextOf, type KbPage, type Point } from '@shared-packages/doc-model';
+import { cssEscape } from './ids.js';
 import { orderedRange } from './range.js';
 import { nodeAtOffset } from './selection.js';
 
@@ -12,10 +13,6 @@ export type RemoteCaret = {
 	head: Point;
 };
 
-function cssEscape(value: string): string {
-	if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') return CSS.escape(value);
-	return value.replace(/"/g, '\\"');
-}
 
 function blockEl(host: HTMLElement, blockId: string): HTMLElement | null {
 	return host.querySelector(`[data-block-id="${cssEscape(blockId)}"]`);

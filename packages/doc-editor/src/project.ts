@@ -1,3 +1,8 @@
+
+
+
+
+
 import {
 	canonicalMarks,
 	childrenOf,
@@ -22,6 +27,7 @@ import {
 	type Point,
 	type Range
 } from '@shared-packages/doc-model';
+import { cssEscape } from './ids.js';
 import { paintCarets, stripCollabWidgets, type RemoteCaret } from './decorations.js';
 import { fontFamilyCss } from './font.js';
 import { allowlistedHref, allowlistedSrc } from './href.js';
@@ -435,11 +441,6 @@ export function project(host: HTMLElement, page: KbPage, opts?: ProjectOpts): vo
 	}
 	if (opts?.carets?.length) paintCarets(host, page, opts.carets);
 	if (opts?.selection) paintLocalSelection(host, page, opts.selection);
-}
-
-function cssEscape(value: string): string {
-	if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') return CSS.escape(value);
-	return value.replace(/"/g, '\\"');
 }
 
 function wantsAtomicChrome(block: Block): boolean {

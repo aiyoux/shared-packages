@@ -8,6 +8,7 @@
 	 * the file menu and the connection (i) tip.
 	 */
 	import { escapePaneClip } from '@shared-packages/ui';
+	import { formatBytes } from '@shared-packages/ui/files';
 	import {
 		ensurePersistentStorage,
 		getPersistenceStatus,
@@ -95,18 +96,6 @@
 		showRequest && status !== 'persistent' && status !== 'loading' && status !== 'unsupported'
 	);
 
-	function formatBytes(n: number): string {
-		if (!Number.isFinite(n) || n < 0) return '—';
-		if (n < 1024) return `${n} B`;
-		const units = ['KB', 'MB', 'GB', 'TB'];
-		let v = n;
-		let i = -1;
-		do {
-			v /= 1024;
-			i += 1;
-		} while (v >= 1024 && i < units.length - 1);
-		return `${v < 10 ? v.toFixed(1) : Math.round(v)} ${units[i]}`;
-	}
 
 	function applyResult(r: PersistenceResult) {
 		status = r.status;

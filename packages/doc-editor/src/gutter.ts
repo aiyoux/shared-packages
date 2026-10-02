@@ -1,3 +1,5 @@
+
+
 import {
 	childrenOf,
 	findBlock,
@@ -12,6 +14,7 @@ import {
 	type KbPage,
 	type Range
 } from '@shared-packages/doc-model';
+import { cssEscape } from './ids.js';
 import { PARENT_ID_ATTR } from './project.js';
 import { collapsed } from './range.js';
 
@@ -140,11 +143,6 @@ export function overlayBoxes(host: HTMLElement, gutter?: HTMLElement | null): Ov
 		});
 	}
 	return boxes;
-}
-
-function cssEscape(value: string): string {
-	if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') return CSS.escape(value);
-	return value.replace(/"/g, '\\"');
 }
 
 /** Gutter handles: visibleOrder minus cells and rows (table has a single handle; cells/rows are not draggable). */

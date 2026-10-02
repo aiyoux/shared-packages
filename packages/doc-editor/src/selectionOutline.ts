@@ -1,3 +1,6 @@
+
+
+
 /**
  * Selection highlight as one SVG outline: only the first and last lines of the
  * whole selection clip to the selected glyphs (last line stops after the last
@@ -15,6 +18,7 @@ import {
 	type KbPage,
 	type Range
 } from '@shared-packages/doc-model';
+import { cssEscape } from './ids.js';
 import { isCollapsed, orderedRange } from './range.js';
 import { BLOCK_ID_ATTR } from './project.js';
 import { lineBoxesOf, type LineBox } from './selection.js';
@@ -271,11 +275,6 @@ export function roundPolygonSvg(points: Array<[number, number]>, radius: number)
 		d += ` A ${ti.toFixed(3)} ${ti.toFixed(3)} 0 0 ${sweep} ${pOutX.toFixed(3)} ${pOutY.toFixed(3)}`;
 	}
 	return d + ' Z';
-}
-
-function cssEscape(value: string): string {
-	if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') return CSS.escape(value);
-	return value.replace(/"/g, '\\"');
 }
 
 function toLocal(slab: Slab, origin: DOMRect): Slab {
