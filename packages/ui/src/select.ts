@@ -1,6 +1,2 @@
-export interface SelectOption<T extends string | number = string> {
-  value: T;
-  label: string;
-  hint?: string;
-  disabled?: boolean;
-}
+/** One option shape for every select: the design-system's. */
+export type { SelectOption } from '@shared-packages/design-system/select';

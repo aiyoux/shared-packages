@@ -52,7 +52,7 @@
 {:else}
   <button
     {type}
-    {disabled}
+    disabled={disabled || loading}
     {onclick}
     {...rest}
     class="ds-btn ds-btn--{variant} ds-btn--{size} {className}"

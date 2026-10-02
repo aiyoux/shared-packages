@@ -1,6 +1,7 @@
 /**
  * IndexedDB store for hub monitor connection profiles.
  */
+import { closeIdbForTests, openIdb } from '@shared-packages/ui/idb';
 import { HUB_MONITOR_PROFILES_CHANNEL, notifyTabChannel } from '../crossTab.js';
 import {
 	DEFAULT_MONITOR_BASE_URL,
@@ -10,44 +11,20 @@ import {
 	type MonitorConnectionProfileV1
 } from './types.js';
 
-let dbPromise: Promise<IDBDatabase> | null = null;
-
 function openDb(): Promise<IDBDatabase> {
-	if (!dbPromise) {
-		dbPromise = new Promise((resolve, reject) => {
-			const req = indexedDB.open(HUB_MONITOR_DB_NAME, 1);
-			req.onupgradeneeded = () => {
-				const db = req.result;
-				if (!db.objectStoreNames.contains(HUB_MONITOR_STORE)) {
-					db.createObjectStore(HUB_MONITOR_STORE, { keyPath: 'id' });
-				}
-			};
-			req.onsuccess = () => {
-				const db = req.result;
-				db.onversionchange = () => {
-					db.close();
-					dbPromise = null;
-				};
-				resolve(db);
-			};
-			req.onerror = () => {
-				dbPromise = null;
-				reject(req.error);
-			};
-		});
-	}
-	return dbPromise;
+	return openIdb({
+		name: HUB_MONITOR_DB_NAME,
+		version: 1,
+		onUpgrade(db) {
+			if (!db.objectStoreNames.contains(HUB_MONITOR_STORE)) {
+				db.createObjectStore(HUB_MONITOR_STORE, { keyPath: 'id' });
+			}
+		}
+	});
 }
 
-export async function closeCredentialsDbForTests(): Promise<void> {
-	if (!dbPromise) return;
-	try {
-		const db = await dbPromise;
-		db.close();
-	} catch {
-		/* ignore */
-	}
-	dbPromise = null;
+export function closeCredentialsDbForTests(): Promise<void> {
+	return closeIdbForTests(HUB_MONITOR_DB_NAME);
 }
 
 function txDone(tx: IDBTransaction): Promise<void> {

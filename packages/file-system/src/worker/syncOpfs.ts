@@ -22,7 +22,7 @@
  * SharedWorker, and a SharedWorker cannot spawn a nested Worker to reach it.
  * That is why the VFS worker is dedicated.
  */
-import { isGone, removeEntryWhenFree, tryMoveDirectory, type OpfsBlobStore } from '../opfs.js';
+import { createOpfsDirectories, opfsPathOperations, splitPath, type OpfsBlobStore } from '../opfs.js';
 import { VfsError } from '../types.js';
 
 /** Not in lib.dom for this tsconfig; the shape we actually use. */
@@ -52,13 +52,6 @@ export function canUseSyncAccessHandles(): boolean {
 	);
 }
 
-function splitPath(opfsPath: string): { dir: string; base: string } {
-	const normalized = opfsPath.replace(/^\/+/, '');
-	const i = normalized.lastIndexOf('/');
-	if (i < 0) return { dir: '', base: normalized };
-	return { dir: normalized.slice(0, i), base: normalized.slice(i + 1) };
-}
-
 /**
  * A sync access handle writes from a buffer view, so a Blob has to be read
  * first.
@@ -85,9 +78,6 @@ async function toBytes(data: BufferSource | Blob | Uint8Array): Promise<Uint8Arr
 
 export function createSyncOpfsStore(rootDirName = 'shared-vfs'): OpfsBlobStore {
 	let rootPromise: Promise<FileSystemDirectoryHandle> | null = null;
-	// Directory handles are stable for the life of the store and each resolve
-	// is its own round trip, so they are cached exactly as the async store does.
-	const dirCache = new Map<string, Promise<FileSystemDirectoryHandle>>();
 
 	const root = (): Promise<FileSystemDirectoryHandle> => {
 		if (!rootPromise) {
@@ -101,29 +91,7 @@ export function createSyncOpfsStore(rootDirName = 'shared-vfs'): OpfsBlobStore {
 		return rootPromise;
 	};
 
-	function resolveDir(dirPath: string): Promise<FileSystemDirectoryHandle> {
-		const cached = dirCache.get(dirPath);
-		if (cached) return cached;
-		const pending = (async () => {
-			let cur = await root();
-			for (const part of dirPath.split('/').filter(Boolean)) {
-				cur = await cur.getDirectoryHandle(part, { create: true });
-			}
-			return cur;
-		})();
-		void pending.catch(() => dirCache.delete(dirPath));
-		dirCache.set(dirPath, pending);
-		return pending;
-	}
-
-	function invalidateDirCache(path: string): void {
-		const dir = splitPath(path).dir;
-		for (const key of [...dirCache.keys()]) {
-			if (key === dir || key.startsWith(dir + '/') || (dir && dir.startsWith(key + '/'))) {
-				dirCache.delete(key);
-			}
-		}
-	}
+	const { resolveDir, invalidateDirCache, clearDirectories } = createOpfsDirectories(root);
 
 	async function fileHandle(opfsPath: string, create: boolean): Promise<FileSystemFileHandle> {
 		const { dir, base } = splitPath(opfsPath);
@@ -234,6 +202,7 @@ export function createSyncOpfsStore(rootDirName = 'shared-vfs'): OpfsBlobStore {
 	}
 
 	const store: OpfsBlobStore = {
+		...opfsPathOperations(resolveDir, invalidateDirCache, fileHandle),
 		writeFinal: (opfsPath, data, opts) => writeBytes(opfsPath, data, opts),
 		async writeMany(entries, opts) {
 			if (!entries.length) return;
@@ -329,25 +298,6 @@ export function createSyncOpfsStore(rootDirName = 'shared-vfs'): OpfsBlobStore {
 				type: contentType ?? 'application/octet-stream'
 			});
 		},
-		async remove(opfsPath) {
-			try {
-				const { dir, base } = splitPath(opfsPath);
-				await removeEntryWhenFree(await resolveDir(dir), base, opfsPath);
-			} catch (e) {
-				// Gone already (the entry or its folder) is what remove wants.
-				if (!isGone(e)) throw e;
-			} finally {
-				invalidateDirCache(opfsPath);
-			}
-		},
-		async exists(opfsPath) {
-			try {
-				await fileHandle(opfsPath, false);
-				return true;
-			} catch {
-				return false;
-			}
-		},
 		async move(from, to) {
 			if (from === to) return;
 			try {
@@ -362,21 +312,6 @@ export function createSyncOpfsStore(rootDirName = 'shared-vfs'): OpfsBlobStore {
 		},
 		async ensureDir(dirPath) {
 			await resolveDir(dirPath);
-		},
-		async movePrefix(fromPrefix, toPrefix) {
-			if (fromPrefix === toPrefix) return;
-			if (await tryMoveDirectory(resolveDir, fromPrefix, toPrefix)) {
-				invalidateDirCache(fromPrefix);
-				invalidateDirCache(toPrefix);
-				return;
-			}
-			const paths = await this.listOrphans(fromPrefix);
-			if (await this.exists(fromPrefix)) paths.push(fromPrefix);
-			paths.sort((a, b) => b.length - a.length);
-			for (const p of paths) {
-				const next = p === fromPrefix ? toPrefix : toPrefix + p.slice(fromPrefix.length);
-				await this.move(p, next);
-			}
 		},
 		async listOrphans(prefix) {
 			const base = prefix.replace(/\/+$/, '');
@@ -421,7 +356,7 @@ export function createSyncOpfsStore(rootDirName = 'shared-vfs'): OpfsBlobStore {
 			const r = await root();
 			const iterable = r as IterableDirHandle;
 			if (!iterable.entries) return;
-			dirCache.clear();
+			clearDirectories();
 			for await (const [name, handle] of iterable.entries()) {
 				if (handle.kind !== 'directory') continue;
 				try {

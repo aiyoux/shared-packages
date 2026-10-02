@@ -1,47 +1,18 @@
+import { createEngineRegistry } from '@shared-packages/ui/engines';
 import { ENGINE_CATALOG, type CompressionEngine, type EngineId, type EngineInfo } from './types.js';
 
-const cache = new Map<EngineId, CompressionEngine>();
-
-export function listEngines(): readonly EngineInfo[] {
-	return ENGINE_CATALOG;
-}
-
 /** Load one engine (and its library / WASM) on demand. Cached after first call. */
-export async function loadEngine(id: EngineId): Promise<CompressionEngine> {
-	const hit = cache.get(id);
-	if (hit) return hit;
-
-	let engine: CompressionEngine;
-	if (id === 'fflate') {
-		const { fflateEngine } = await import('./engines/fflate.js');
-		engine = fflateEngine;
-	} else if (id === 'zipkit') {
-		const { zipkitEngine } = await import('./engines/zipkit.js');
-		engine = zipkitEngine;
-	} else if (id === 'addmaple') {
-		const { addmapleEngine } = await import('./engines/addmaple.js');
-		engine = addmapleEngine;
-	} else if (id === 'tarjs') {
-		const { tarjsEngine } = await import('./engines/tarjs.js');
-		engine = tarjsEngine;
-	} else if (id === 'nanotar') {
-		const { nanotarEngine } = await import('./engines/nanotar.js');
-		engine = nanotarEngine;
-	} else if (id === 'zipjs') {
-		const { zipjsEngine } = await import('./engines/zipjs.js');
-		engine = zipjsEngine;
-	} else if (id === 'libarchive') {
-		const { libarchiveEngine } = await import('./engines/libarchive.js');
-		engine = libarchiveEngine;
-	} else {
-		throw new Error(`Unknown compression engine: ${id}`);
-	}
-
-	await engine.load();
-	cache.set(id, engine);
-	return engine;
-}
-
-export function peekEngine(id: EngineId): CompressionEngine | null {
-	return cache.get(id) ?? null;
-}
+export const { listEngines, loadEngine, peekEngine } = createEngineRegistry<EngineId, CompressionEngine, EngineInfo>({
+	kind: 'compression',
+	catalog: ENGINE_CATALOG,
+	loaders: {
+		fflate: async () => (await import('./engines/fflate.js')).fflateEngine,
+		zipkit: async () => (await import('./engines/zipkit.js')).zipkitEngine,
+		addmaple: async () => (await import('./engines/addmaple.js')).addmapleEngine,
+		tarjs: async () => (await import('./engines/tarjs.js')).tarjsEngine,
+		nanotar: async () => (await import('./engines/nanotar.js')).nanotarEngine,
+		zipjs: async () => (await import('./engines/zipjs.js')).zipjsEngine,
+		libarchive: async () => (await import('./engines/libarchive.js')).libarchiveEngine
+	},
+	prepare: (engine) => engine.load()
+});

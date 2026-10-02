@@ -66,9 +66,17 @@
 			"types": "./src/async.ts",
 			"default": "./src/async.ts"
 		},
+		"./engines": {
+			"types": "./src/engines.ts",
+			"default": "./src/engines.ts"
+		},
 		"./idb": {
 			"types": "./src/idb.ts",
 			"default": "./src/idb.ts"
+		},
+		"./tabSharedCache": {
+			"types": "./src/tabSharedCache.ts",
+			"default": "./src/tabSharedCache.ts"
 		},
 		"./clamp": {
 			"types": "./src/clamp.ts",

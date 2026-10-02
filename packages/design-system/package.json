@@ -42,7 +42,9 @@
     "./button.css": "./src/button.css",
     "./segmented.css": "./src/segmented.css",
     "./motion.css": "./src/motion.css",
-    "./fonts.css": "./src/fonts.css"
+    "./fonts.css": "./src/fonts.css",
+    "./select": "./src/components/select.ts",
+    "./dialog.css": "./src/dialog.css"
   },
   "types": "./src/index.ts",
   "files": [

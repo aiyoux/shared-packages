@@ -13,17 +13,7 @@
    * drive; a future modular-app pass that decouples its own component could
    * consume this instead of maintaining a parallel implementation.
    */
-  import type { Component } from 'svelte';
-
-  export type SidebarNavItem = {
-    id: string;
-    href: string;
-    label: string;
-    icon: Component<{ size?: number }>;
-    show?: boolean;
-    active?: boolean;
-    onclick?: (event: MouseEvent) => void;
-  };
+  import type { SidebarNavItem } from '../sidebar.js';
 
   let {
     items,

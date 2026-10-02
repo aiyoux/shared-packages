@@ -24,12 +24,16 @@ export type LeafHome = {
 	rehomeLeaves: (activeIds?: Iterable<string>) => void;
 };
 
-export function createLeafHome(): LeafHome {
+/**
+ * `slotId` names the element a leaf is homed into: one global sequence for
+ * PaneLayout, per-mount ids for AppWindows (`appWindowSlotId`).
+ */
+export function createLeafHome(slotId: (leafId: string) => string = paneLeafSlotId): LeafHome {
 	const nodes = new Map<string, HTMLElement>();
 
 	function attach(leafId: string, node: HTMLElement): void {
 		if (typeof document === 'undefined') return;
-		const slot = document.getElementById(paneLeafSlotId(leafId));
+		const slot = document.getElementById(slotId(leafId));
 		if (slot && node.parentNode !== slot) slot.appendChild(node);
 	}
 

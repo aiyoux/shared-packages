@@ -268,12 +268,6 @@ async function getRoot(rootDirName: string): Promise<FileSystemDirectoryHandle> 
 	return root.getDirectoryHandle(rootDirName, { create: true });
 }
 
-async function ensureDir(
-	parent: FileSystemDirectoryHandle,
-	name: string
-): Promise<FileSystemDirectoryHandle> {
-	return parent.getDirectoryHandle(name, { create: true });
-}
 
 /**
  * Storage exhaustion is the one OPFS failure the UI has specific wording for
@@ -365,34 +359,16 @@ export async function tryMoveDirectory(
 	}
 }
 
-function splitPath(opfsPath: string): { dir: string; base: string } {
+export function splitPath(opfsPath: string): { dir: string; base: string } {
 	const normalized = opfsPath.replace(/^\/+/, '');
 	const i = normalized.lastIndexOf('/');
 	if (i < 0) return { dir: '', base: normalized };
 	return { dir: normalized.slice(0, i), base: normalized.slice(i + 1) };
 }
 
-export function createOpfsBlobStore(rootDirName = 'shared-vfs'): OpfsBlobStore {
-	let rootPromise: Promise<FileSystemDirectoryHandle> | null = null;
-
-	const root = () => {
-		if (!rootPromise) {
-			rootPromise = getRoot(rootDirName);
-			void rootPromise.catch(() => {
-				rootPromise = null;
-			});
-		}
-		return rootPromise;
-	};
-
-	// Directory handles are memoized per path. Every getFileHandle in this store
-	// resolves `blobs/` (or `tmp/`) first, and each resolve is its own IPC round
-	// trip to the browser process — measured at 1.82ms, roughly one of the ~5
-	// hops a single file write costs. The set of directories is tiny and fixed
-	// for the life of the store, so caching the promise is safe and removes the
-	// hop entirely after the first call.
+/** Cached directory traversal shared by writable streams and worker sync handles. */
+export function createOpfsDirectories(root: () => Promise<FileSystemDirectoryHandle>) {
 	const dirCache = new Map<string, Promise<FileSystemDirectoryHandle>>();
-
 	function resolveDir(dirPath: string): Promise<FileSystemDirectoryHandle> {
 		const cached = dirCache.get(dirPath);
 		if (cached) return cached;
@@ -400,7 +376,7 @@ export function createOpfsBlobStore(rootDirName = 'shared-vfs'): OpfsBlobStore {
 			let cur = await root();
 			if (!dirPath) return cur;
 			for (const part of dirPath.split('/').filter(Boolean)) {
-				cur = await ensureDir(cur, part);
+				cur = await cur.getDirectoryHandle(part, { create: true });
 			}
 			return cur;
 		})();
@@ -420,6 +396,60 @@ export function createOpfsBlobStore(rootDirName = 'shared-vfs'): OpfsBlobStore {
 		}
 	}
 
+	return { resolveDir, invalidateDirCache, clearDirectories: () => dirCache.clear() };
+}
+
+/** Storage operations whose semantics do not depend on the file IO implementation. */
+export function opfsPathOperations(
+	resolveDir: (path: string) => Promise<FileSystemDirectoryHandle>,
+	invalidateDirCache: (path: string) => void,
+	file: (path: string, create: boolean) => Promise<FileSystemFileHandle>
+): Pick<OpfsBlobStore, 'remove' | 'exists' | 'movePrefix'> {
+	return {
+		async remove(opfsPath) {
+			try {
+				const { dir, base } = splitPath(opfsPath);
+				await removeEntryWhenFree(await resolveDir(dir), base, opfsPath);
+			} catch (e) {
+				if (!isGone(e)) throw e;
+			} finally { invalidateDirCache(opfsPath); }
+		},
+		async exists(opfsPath) {
+			try { await file(opfsPath, false); return true; }
+			catch { return false; }
+		},
+		async movePrefix(this: OpfsBlobStore, fromPrefix, toPrefix) {
+			if (fromPrefix === toPrefix) return;
+			if (await tryMoveDirectory(resolveDir, fromPrefix, toPrefix)) {
+				invalidateDirCache(fromPrefix);
+				invalidateDirCache(toPrefix);
+				return;
+			}
+			const paths = await this.listOrphans(fromPrefix);
+			if (await this.exists(fromPrefix)) paths.push(fromPrefix);
+			paths.sort((a, b) => b.length - a.length);
+			for (const path of paths) {
+				await this.move(path, path === fromPrefix ? toPrefix : toPrefix + path.slice(fromPrefix.length));
+			}
+		}
+	};
+}
+
+export function createOpfsBlobStore(rootDirName = 'shared-vfs'): OpfsBlobStore {
+	let rootPromise: Promise<FileSystemDirectoryHandle> | null = null;
+
+	const root = () => {
+		if (!rootPromise) {
+			rootPromise = getRoot(rootDirName);
+			void rootPromise.catch(() => {
+				rootPromise = null;
+			});
+		}
+		return rootPromise;
+	};
+
+	const { resolveDir, invalidateDirCache, clearDirectories } = createOpfsDirectories(root);
+
 	async function getFile(opfsPath: string, create: boolean): Promise<FileSystemFileHandle> {
 		const { dir, base } = splitPath(opfsPath);
 		const d = await resolveDir(dir);
@@ -427,6 +457,7 @@ export function createOpfsBlobStore(rootDirName = 'shared-vfs'): OpfsBlobStore {
 	}
 
 	return {
+		...opfsPathOperations(resolveDir, invalidateDirCache, getFile),
 		async writePartial(writeId, data) {
 			const bytes = await toUint8Array(data);
 			const tmpPath = `tmp/${writeId}.partial`;
@@ -586,25 +617,6 @@ export function createOpfsBlobStore(rootDirName = 'shared-vfs'): OpfsBlobStore {
 				throw new VfsError('OPFS_IO', `Failed to read ${opfsPath}`, { cause: String(e) });
 			}
 		},
-		async remove(opfsPath) {
-			try {
-				const { dir, base } = splitPath(opfsPath);
-				await removeEntryWhenFree(await resolveDir(dir), base, opfsPath);
-			} catch (e) {
-				// Gone already (the entry or its folder) is what remove wants.
-				if (!isGone(e)) throw e;
-			} finally {
-				invalidateDirCache(opfsPath);
-			}
-		},
-		async exists(opfsPath) {
-			try {
-				await getFile(opfsPath, false);
-				return true;
-			} catch {
-				return false;
-			}
-		},
 		async move(from, to) {
 			if (from === to) return;
 			try {
@@ -630,21 +642,6 @@ export function createOpfsBlobStore(rootDirName = 'shared-vfs'): OpfsBlobStore {
 		},
 		async ensureDir(dirPath) {
 			await resolveDir(dirPath);
-		},
-		async movePrefix(fromPrefix, toPrefix) {
-			if (fromPrefix === toPrefix) return;
-			if (await tryMoveDirectory(resolveDir, fromPrefix, toPrefix)) {
-				invalidateDirCache(fromPrefix);
-				invalidateDirCache(toPrefix);
-				return;
-			}
-			const paths = await this.listOrphans(fromPrefix);
-			if (await this.exists(fromPrefix)) paths.push(fromPrefix);
-			paths.sort((a, b) => b.length - a.length);
-			for (const p of paths) {
-				const next = p === fromPrefix ? toPrefix : toPrefix + p.slice(fromPrefix.length);
-				await this.move(p, next);
-			}
 		},
 		async listOrphans(prefix) {
 			const out: string[] = [];
@@ -687,13 +684,13 @@ export function createOpfsBlobStore(rootDirName = 'shared-vfs'): OpfsBlobStore {
 			} catch {
 				// ignore
 			}
-			dirCache.clear();
+			clearDirectories();
 			// resolveDir caches handles on the premise that these directories
 			// live as long as the store does — which is true of everything
 			// EXCEPT this method, which just deleted them. A cached handle to a
 			// removed directory throws NotFoundError on every later write, so
 			// the session would be unable to write anything until a reload.
-			dirCache.clear();
+			clearDirectories();
 			rootPromise = null;
 		}
 	};

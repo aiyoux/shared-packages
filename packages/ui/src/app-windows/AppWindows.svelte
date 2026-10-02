@@ -4,10 +4,10 @@
 	import { findNode, listLeaves, setSplitRatio, swapLeafIds } from '../pane-layout/tree.js';
 	import type { LayoutNode, SplitDirection } from '../pane-layout/types.js';
 	import AppWindowTree from './AppWindowTree.svelte';
+	import { createLeafHome, layoutSlotKey } from '../pane-layout/leafHome.js';
 	import {
 		appWindowBodyId,
-		createAppWindowLeafHome,
-		layoutSlotKey,
+		appWindowSlotId,
 		nextAppWindowLayoutId
 	} from './leafHome.js';
 	import {
@@ -84,7 +84,7 @@
 	// Files hub pane's getElementById rehomed its inner windows into the first.
 	// svelte-ignore state_referenced_locally
 	const instanceLayoutId = nextAppWindowLayoutId(layoutId);
-	const home = createAppWindowLeafHome(instanceLayoutId);
+	const home = createLeafHome((leafId) => appWindowSlotId(instanceLayoutId, leafId));
 	const leaves = $derived(listLeaves(root));
 	const slotKey = $derived(layoutSlotKey(root));
 	const available = $derived(new Set(availableRoles ?? roles.map((r) => r.id)));

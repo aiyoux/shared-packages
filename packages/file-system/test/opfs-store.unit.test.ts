@@ -58,3 +58,32 @@ describe('OpfsBlobStore contract', () => {
 		);
 	});
 });
+
+describe('shared OPFS path operations', () => {
+  it('invalidates directory handles and surfaces a failed removal', async () => {
+    const { createOpfsDirectories, opfsPathOperations } = await import('../src/opfs.ts');
+    let resolutions = 0;
+    const dir = {
+      getDirectoryHandle: async () => { resolutions++; return dir; },
+      removeEntry: async () => { throw new DOMException('denied', 'SecurityError'); }
+    } as unknown as FileSystemDirectoryHandle;
+    const dirs = createOpfsDirectories(async () => dir);
+    await dirs.resolveDir('blobs'); await dirs.resolveDir('blobs');
+    assert.equal(resolutions, 1);
+    const ops = opfsPathOperations(dirs.resolveDir, dirs.invalidateDirCache, async () => {
+      throw new DOMException('gone', 'NotFoundError');
+    });
+    assert.equal(await ops.exists('blobs/missing'), false);
+    await assert.rejects(ops.remove('blobs/a'), (e: unknown) => (e as { code?: string }).code === 'OPFS_IO');
+    await dirs.resolveDir('blobs'); assert.equal(resolutions, 2);
+  });
+  it('moves a prefix through the fallback and does not touch a sibling', async () => {
+    const { opfsPathOperations } = await import('../src/opfs.ts');
+    const store = createMemoryOpfs();
+    await store.writeFinal('x/a', enc.encode('a')); await store.writeFinal('xtra/a', enc.encode('sibling'));
+    const dir = { getDirectoryHandle: async () => { throw new DOMException('gone', 'NotFoundError'); } } as unknown as FileSystemDirectoryHandle;
+    const ops = opfsPathOperations(async () => dir, () => {}, async () => { throw new DOMException('gone', 'NotFoundError'); });
+    await ops.movePrefix.call(store, 'x', 'y');
+    assert.deepEqual(await store.listOrphans('y'), ['y/a']); assert.equal(await store.exists('xtra/a'), true);
+  });
+});

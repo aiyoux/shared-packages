@@ -47,7 +47,8 @@ export type { SelectOption } from './components/select.ts';
 export { default as FormGroup } from './components/FormGroup.svelte';
 export { default as Tooltip } from './components/Tooltip.svelte';
 export { default as LevelMeter } from './components/LevelMeter.svelte';
-export { default as Sidebar, type SidebarNavItem } from './components/Sidebar.svelte';
+export { default as Sidebar } from './components/Sidebar.svelte';
+export type { SidebarNavItem } from './sidebar.js';
 export { default as Tree } from './components/Tree.svelte';
 export { default as TreeNode } from './components/TreeNode.svelte';
 export type {

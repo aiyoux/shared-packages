@@ -1,0 +1,8 @@
+/* Shared geometry for in-pane dialog backdrops; callers own stacking and content alignment. */
+.ds-dialog-scrim {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  background: rgb(var(--scrim-rgb, 0 0 0) / 0.6);
+  padding: 16px;
+}

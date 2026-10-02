@@ -1,22 +1,11 @@
+import { createEngineRegistry } from '@shared-packages/ui/engines';
 import { nativeEngine } from './engines/native.js';
-import { ENGINE_CATALOG, type EngineId, type EngineInfo, type VideoEngine } from './types.js';
+import { ENGINE_CATALOG, type EngineId, type VideoEngine, type EngineInfo } from './types.js';
 
-const cache = new Map<EngineId, VideoEngine>();
-
-export function listEngines(): readonly EngineInfo[] {
-	return ENGINE_CATALOG;
-}
-
-/** Load the WebCodecs engine. Cached after first call. */
-export async function loadEngine(id: EngineId): Promise<VideoEngine> {
-	const hit = cache.get(id);
-	if (hit) return hit;
-
-	await nativeEngine.load();
-	cache.set(id, nativeEngine);
-	return nativeEngine;
-}
-
-export function peekEngine(id: EngineId): VideoEngine | null {
-	return cache.get(id) ?? null;
-}
+/** The WebCodecs engine, loaded on first use. */
+export const { listEngines, loadEngine, peekEngine } = createEngineRegistry<EngineId, VideoEngine, EngineInfo>({
+	kind: 'video',
+	catalog: ENGINE_CATALOG,
+	loaders: { native: async () => nativeEngine },
+	prepare: (engine) => engine.load()
+});
