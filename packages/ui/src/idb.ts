@@ -29,7 +29,8 @@ export function openIdb(options: OpenIdbOptions): Promise<IDBDatabase> {
 	if (cached) return cached;
 	const open = new Promise<IDBDatabase>((resolve, reject) => {
 		const req = indexedDB.open(name, options.version);
-		req.onupgradeneeded = () => options.onUpgrade?.(req.result, req.oldVersion);
+		req.onupgradeneeded = (event) =>
+			options.onUpgrade?.(req.result, (event as IDBVersionChangeEvent).oldVersion);
 		req.onsuccess = () => {
 			const db = req.result;
 			// Another tab upgrading must not leave this one holding a handle
