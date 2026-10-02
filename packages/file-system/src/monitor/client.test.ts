@@ -401,7 +401,9 @@ describe('monitor client tolerant parse', () => {
 			profiles: 2,
 			sessions: true,
 			sessionArtifacts: false,
-			nativeJobs: false
+			nativeJobs: false,
+			nativeFlux2: false,
+			nativeImageComponents: false
 		});
 		const without = createMonitorClient({
 			baseUrl: 'http://127.0.0.1:8300',
@@ -414,6 +416,18 @@ describe('monitor client tolerant parse', () => {
 		expect((await without.meta()).capabilities?.ai?.sessions).toBe(false);
 		expect((await without.meta()).capabilities?.ai?.sessionArtifacts).toBe(false);
 		expect((await without.meta()).capabilities?.ai?.nativeJobs).toBe(false);
+		expect((await without.meta()).capabilities?.ai?.nativeFlux2).toBe(false);
+		expect((await without.meta()).capabilities?.ai?.nativeImageComponents).toBe(false);
+		const withComponents = createMonitorClient({
+			baseUrl: 'http://127.0.0.1:8300',
+			fetchImpl: vi.fn(async () => jsonResponse({ capabilities: { ai: { nativeImageComponents: true } } })) as unknown as typeof fetch
+		});
+		expect((await withComponents.meta()).capabilities?.ai?.nativeImageComponents).toBe(true);
+		const withFlux2 = createMonitorClient({
+			baseUrl: 'http://127.0.0.1:8300',
+			fetchImpl: vi.fn(async () => jsonResponse({ capabilities: { ai: { nativeFlux2: true } } })) as unknown as typeof fetch
+		});
+		expect((await withFlux2.meta()).capabilities?.ai?.nativeFlux2).toBe(true);
 		const withArtifacts = createMonitorClient({
 			baseUrl: 'http://127.0.0.1:8300',
 			fetchImpl: vi.fn(async () =>

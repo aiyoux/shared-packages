@@ -29,7 +29,7 @@
 		type AiNativeModelRow,
 		type AiProfileListResult
 	} from '../ai/index.js';
-	import { NATIVE_RUNTIME_NAMES, canConfigureNativeTask, nativeModelLibraryPrefill, nativeModelTaskPrefill, nativeModelFormInput } from '../ai/nativeModelForm.js';
+	import { FLUX2_MODEL_PRESETS, QWEN_IMAGE_PRESET, NATIVE_RUNTIME_NAMES, canConfigureNativeTask, nativeModelLibraryPrefill, nativeModelTaskPrefill, nativeModelFormInput } from '../ai/nativeModelForm.js';
 	import type { AiTask } from '../ai/catalog.js';
 	import MonitorModelSetup from './MonitorModelSetup.svelte';
 	import { formatExplorerError } from './explorerError.js';
@@ -48,6 +48,8 @@
 	let { baseUrl, onChanged, deviceModels, apiModels, hasDeviceModels = false }: Props = $props();
 
 	let supported = $state<boolean | null>(null); // null = probing
+	let flux2Supported = $state(false);
+	let imageComponentsSupported = $state(false);
 	let probeError = $state('');
 	let probedUrl = $state('');
 	let models = $state<AiModelListResult | null>(null);
@@ -77,6 +79,15 @@
 	let addTask = $state('transcription');
 	let addDevice = $state<'cpu' | 'gpu'>('cpu');
 	let addBackend = $state('');
+	let addImageModel = $state<'stable-diffusion' | '4b' | '9b' | 'qwen-image'>('stable-diffusion');
+	let addVae = $state('');
+	let addLlm = $state('');
+	let addWidth = $state(512);
+	let addHeight = $state(512);
+	const flux2Preset = $derived(addTask === 'image-generation' && (addImageModel === '4b' || addImageModel === '9b') ? FLUX2_MODEL_PRESETS[addImageModel] : null);
+	const qwenPreset = $derived(addTask === 'image-generation' && addImageModel === 'qwen-image' ? QWEN_IMAGE_PRESET : null);
+	/** Whichever component preset the form shows (the FLUX.2 entries predate the shared shape). */
+	const activePreset = $derived(flux2Preset ?? qwenPreset);
 	let addError = $state('');
 	let addingModel = $state(false);
 
@@ -94,6 +105,8 @@
 	];
 
 	async function probe() {
+		flux2Supported = false;
+		imageComponentsSupported = false;
 		const url = normalizeAiBaseUrl(baseUrl);
 		if (!url) {
 			supported = null;
@@ -104,8 +117,10 @@
 		probeError = '';
 		try {
 			const meta = await createMonitorClient({ baseUrl: url }).meta();
-			const caps = (meta.capabilities as { ai?: { chat?: boolean } } | undefined)?.ai;
+			const caps = meta.capabilities?.ai;
 			supported = caps?.chat === true;
+			flux2Supported = caps?.nativeFlux2 === true;
+			imageComponentsSupported = caps?.nativeImageComponents === true;
 			if (!supported) {
 				probeError = 'This monitor is reachable but does not serve AI — update the daemon.';
 			}
@@ -250,6 +265,31 @@
 		addBinary = initial.binary;
 		addBackend = initial.backend;
 		addDevice = initial.device;
+		addImageModel = 'stable-diffusion';
+		addVae = '';
+		addLlm = '';
+		addWidth = 512;
+		addHeight = 512;
+		addError = '';
+	}
+
+	function chooseImageModel(value: 'stable-diffusion' | '4b' | '9b' | 'qwen-image') {
+		if (value === addImageModel) return;
+		const presetName =
+			value === 'stable-diffusion'
+				? ''
+				: value === 'qwen-image'
+					? QWEN_IMAGE_PRESET.name
+					: FLUX2_MODEL_PRESETS[value].name;
+		if (!addName || Object.values(FLUX2_MODEL_PRESETS).some((preset) => preset.name === addName) || addName === QWEN_IMAGE_PRESET.name) {
+			addName = presetName;
+		}
+		addImageModel = value;
+		addModel = '';
+		addLlm = '';
+		addVae = '';
+		addWidth = value === 'qwen-image' ? 1024 : 512;
+		addHeight = value === 'qwen-image' ? 1024 : 512;
 		addError = '';
 	}
 
@@ -257,6 +297,23 @@
 		addError = '';
 		if (!addName.trim() || !addBinary.trim() || !addModel.trim()) {
 			addError = 'Name, binary path, and model path are required.';
+			return;
+		}
+		if (flux2Preset && !flux2Supported) {
+			addError = 'Update Monitor for FLUX.2 Klein support, then Refresh.';
+			return;
+		}
+		if (qwenPreset && !imageComponentsSupported) {
+			addError = 'Update Monitor for component image-model support, then Refresh.';
+			return;
+		}
+		if (activePreset && (!addVae.trim() || !addLlm.trim())) {
+			addError = `${activePreset.name} needs a VAE file and its matching ${activePreset.encoderName} text encoder.`;
+			return;
+		}
+		const validDim = (value: number) => Number.isInteger(value) && value >= 128 && value <= 2048 && value % 32 === 0;
+		if (addTask === 'image-generation' && (!validDim(addWidth) || !validDim(addHeight))) {
+			addError = 'Resolution must be a multiple of 32 between 128–2048 per side.';
 			return;
 		}
 		addingModel = true;
@@ -267,12 +324,21 @@
 				device: addDevice,
 				binary: addBinary.trim(),
 				model: addModel.trim(),
-				backend: addBackend
+				backend: addBackend,
+				...(addTask === 'image-generation' && addImageModel !== 'stable-diffusion' && addImageModel !== 'qwen-image'
+					? { flux2: { variant: addImageModel, vae: addVae, llm: addLlm } } : {}),
+				...(activePreset && imageComponentsSupported ? { vae: addVae, textEncoder: addLlm } : {}),
+				...(addTask === 'image-generation' && imageComponentsSupported ? { width: addWidth, height: addHeight } : {})
 			}));
 			addName = '';
 			addBinary = '';
 			addModel = '';
 			addBackend = '';
+			addVae = '';
+			addLlm = '';
+			addWidth = 512;
+			addHeight = 512;
+			addImageModel = 'stable-diffusion';
 			showAddModel = false;
 			await refresh();
 			onChanged?.();
@@ -349,6 +415,8 @@
 									·
 									{row.model}
 									{#if row.backend}· backend {row.backend}{/if}
+								{#if row.width || row.height}· {row.width ?? 512}×{row.height ?? 512}{/if}
+								{#if row.vae}· +vae/encoder{/if}
 								</span>
 							</div>
 							{#if row.source === 'managed'}
@@ -448,9 +516,35 @@
 						/>
 					</label>
 					<label>
-						Model file (absolute path on the monitor)
-						<input data-testid="monitor-ai-model-file" bind:value={addModel} autocomplete="off" />
+						{activePreset ? 'Diffusion model file' : 'Model file'} (absolute path on the monitor)
+						<input data-testid="monitor-ai-model-file" bind:value={addModel} placeholder={activePreset?.modelExample ?? ''} autocomplete="off" />
 					</label>
+					{#if addTask === 'image-generation'}
+						<label>
+							Image model
+							<select data-testid="monitor-ai-image-model" value={addImageModel} onchange={(event) => chooseImageModel(event.currentTarget.value as typeof addImageModel)}>
+								<option value="stable-diffusion">Stable Diffusion (complete checkpoint)</option>
+								{#each Object.entries(FLUX2_MODEL_PRESETS) as [variant, preset] (variant)}
+									<option value={variant}>{preset.name}</option>
+								{/each}
+								<option value="qwen-image">{QWEN_IMAGE_PRESET.name}</option>
+							</select>
+						</label>
+						{#if activePreset}
+							<p class="ai-note">{activePreset.note}{#if flux2Preset} Generate uses four steps at 512×512. Choose GPU and the Metal backend reported by sd-cli --list-devices on a Mac.{/if}</p>
+							<p class="ai-note"><a href={activePreset.weightsUrl} target="_blank" rel="noopener noreferrer">Download model weights</a> · <a href={activePreset.encoderUrl} target="_blank" rel="noopener noreferrer">Download {activePreset.encoderName} encoder</a> · <a href={activePreset.vaeUrl} target="_blank" rel="noopener noreferrer">Download VAE</a></p>
+							<label>
+								VAE file (absolute path on the monitor)
+								<input data-testid="monitor-ai-model-vae" bind:value={addVae} placeholder={activePreset.vaeExample} autocomplete="off" />
+							</label>
+							<label>
+								{activePreset.encoderName} text encoder (absolute path on the monitor)
+								<input data-testid="monitor-ai-model-llm" bind:value={addLlm} placeholder={activePreset.encoderExample} autocomplete="off" />
+							</label>
+							{#if flux2Preset && !flux2Supported}<p class="ai-note" data-testid="monitor-ai-flux2-update">Update Monitor for FLUX.2 Klein support, then Refresh.</p>{/if}
+							{#if qwenPreset && !imageComponentsSupported}<p class="ai-note" data-testid="monitor-ai-qwen-update">Update Monitor for component image-model support, then Refresh.</p>{/if}
+						{/if}
+					{/if}
 					<div class="ai-add-row">
 						<label>
 							Task
@@ -472,8 +566,17 @@
 								Backend
 								<input data-testid="monitor-ai-model-backend" bind:value={addBackend} autocomplete="off" />
 							</label>
+							<label>
+								Width
+								<input type="number" data-testid="monitor-ai-model-width" bind:value={addWidth} min={128} max={2048} step={32} disabled={!imageComponentsSupported} autocomplete="off" />
+							</label>
+							<label>
+								Height
+								<input type="number" data-testid="monitor-ai-model-height" bind:value={addHeight} min={128} max={2048} step={32} disabled={!imageComponentsSupported} autocomplete="off" />
+							</label>
 						{/if}
 					</div>
+					{#if addTask === 'image-generation' && !imageComponentsSupported}<p class="ai-note">Update Monitor to choose the output resolution. This daemon uses 512×512.</p>{/if}
 					{#if addError}
 						<p class="ai-note danger" data-testid="monitor-ai-model-error">{addError}</p>
 					{/if}
@@ -481,7 +584,7 @@
 						type="button"
 						class="ds-btn ds-btn--sm ds-btn--primary"
 						data-testid="monitor-ai-model-save"
-						disabled={addingModel || supported !== true}
+						disabled={addingModel || supported !== true || (!!flux2Preset && !flux2Supported) || (!!qwenPreset && !imageComponentsSupported)}
 						onclick={() => void enableModel()}
 					>
 						{addingModel ? 'Enabling…' : 'Enable on monitor'}

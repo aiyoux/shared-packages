@@ -36,7 +36,7 @@ vi.mock('@shared-packages/ui', () => ({ toast: { success: vi.fn(), error: vi.fn(
 beforeEach(() => {
 	vi.clearAllMocks();
 	mocks.profiles.mockResolvedValue([{ id: 'desktop', name: 'Desktop', baseUrl: 'http://monitor:8300' }]);
-	mocks.meta.mockResolvedValue({ capabilities: { ai: { chat: true } } });
+	mocks.meta.mockResolvedValue({ capabilities: { ai: { chat: true, nativeFlux2: true } } });
 	mocks.sections = [
 		{ id: 'chat', task: 'chat', title: 'Chat', models: async () => [] },
 		{ id: 'transcription', task: 'transcription', title: 'Speech recognition', models: async () => [] },
@@ -50,6 +50,115 @@ beforeEach(() => {
 });
 
 describe('Monitor model category discovery', () => {
+	it.each(['4b', '9b'] as const)('registers Klein %s with its matching Qwen3 encoder and Metal backend', async (variant) => {
+		render(AiModelsTab);
+		const images = await screen.findByTestId('ai-lib-section-image-generation-desktop');
+		images.setAttribute('open', '');
+		await fireEvent.click(screen.getByTestId('ai-monitor-configure-image-generation-desktop'));
+		await fireEvent.change(screen.getByTestId('monitor-ai-image-model'), { target: { value: variant } });
+		const encoder = variant === '4b' ? '4B' : '8B';
+		expect(screen.getByTestId('monitor-ai-add-model').textContent).toContain(`Qwen3 ${encoder} text encoder`);
+		expect(screen.getByTestId('monitor-ai-model-llm').getAttribute('placeholder')).toContain(`Qwen3-${encoder}`);
+		await fireEvent.input(screen.getByTestId('monitor-ai-model-binary'), { target: { value: '/bin/sd-cli' } });
+		await fireEvent.input(screen.getByTestId('monitor-ai-model-file'), { target: { value: `/models/klein-${variant}.gguf` } });
+		await fireEvent.input(screen.getByTestId('monitor-ai-model-vae'), { target: { value: '/models/flux2_ae.safetensors' } });
+		await fireEvent.input(screen.getByTestId('monitor-ai-model-llm'), { target: { value: `/models/qwen-${encoder}.gguf` } });
+		await fireEvent.change(screen.getByTestId('monitor-ai-model-device'), { target: { value: 'gpu' } });
+		await fireEvent.input(screen.getByTestId('monitor-ai-model-backend'), { target: { value: 'metal' } });
+		await waitFor(() => expect((screen.getByTestId('monitor-ai-model-save') as HTMLButtonElement).disabled).toBe(false));
+		await fireEvent.click(screen.getByTestId('monitor-ai-model-save'));
+		await waitFor(() => expect(mocks.addNative).toHaveBeenCalledWith('http://monitor:8300', {
+			name: `FLUX.2 Klein ${variant.toUpperCase()}`, task: 'image-generation', device: 'gpu',
+			binary: '/bin/sd-cli', model: `/models/klein-${variant}.gguf`, backend: 'metal',
+			flux2: { variant, vae: '/models/flux2_ae.safetensors', llm: `/models/qwen-${encoder}.gguf` },
+		}));
+	});
+
+	it('registers Qwen-Image-2.1 with its components and a chosen resolution', async () => {
+		mocks.meta.mockResolvedValue({ capabilities: { ai: { chat: true, nativeImageComponents: true } } });
+		render(AiModelsTab);
+		const images = await screen.findByTestId('ai-lib-section-image-generation-desktop');
+		images.setAttribute('open', '');
+		await fireEvent.click(screen.getByTestId('ai-monitor-configure-image-generation-desktop'));
+		await fireEvent.change(screen.getByTestId('monitor-ai-image-model'), { target: { value: 'qwen-image' } });
+		expect(screen.getByTestId('monitor-ai-add-model').textContent).toContain('Qwen3-VL 8B text encoder');
+		expect((screen.getByTestId('monitor-ai-model-width') as HTMLInputElement).value).toBe('1024');
+		expect((screen.getByTestId('monitor-ai-model-height') as HTMLInputElement).value).toBe('1024');
+		expect(screen.getByTestId('monitor-ai-model-vae').getAttribute('placeholder')).toContain('qwen_image_2.1_vae_bf16');
+		await waitFor(() => expect(screen.queryByTestId('monitor-ai-qwen-update')).toBeNull());
+		await fireEvent.input(screen.getByTestId('monitor-ai-model-binary'), { target: { value: '/bin/sd-cli' } });
+		await fireEvent.input(screen.getByTestId('monitor-ai-model-file'), { target: { value: '/models/qwen-image.gguf' } });
+		await fireEvent.input(screen.getByTestId('monitor-ai-model-vae'), { target: { value: '/models/vae.safetensors' } });
+		await fireEvent.input(screen.getByTestId('monitor-ai-model-llm'), { target: { value: '/models/qwen3vl.gguf' } });
+		await fireEvent.input(screen.getByTestId('monitor-ai-model-width'), { target: { value: '1024' } });
+		await fireEvent.input(screen.getByTestId('monitor-ai-model-height'), { target: { value: '1024' } });
+		await fireEvent.change(screen.getByTestId('monitor-ai-model-device'), { target: { value: 'gpu' } });
+		await fireEvent.click(screen.getByTestId('monitor-ai-model-save'));
+		await waitFor(() => expect(mocks.addNative).toHaveBeenCalledWith('http://monitor:8300', {
+			name: 'Qwen-Image-2.1', task: 'image-generation', device: 'gpu',
+			binary: '/bin/sd-cli', model: '/models/qwen-image.gguf',
+			vae: '/models/vae.safetensors', textEncoder: '/models/qwen3vl.gguf',
+			width: 1024, height: 1024
+		}));
+	});
+
+	it('gates Qwen-Image-2.1 on an older Monitor and rejects bad resolution', async () => {
+		mocks.meta.mockResolvedValue({ capabilities: { ai: { chat: true } } });
+		render(AiModelsTab);
+		const images = await screen.findByTestId('ai-lib-section-image-generation-desktop');
+		images.setAttribute('open', '');
+		await fireEvent.click(screen.getByTestId('ai-monitor-configure-image-generation-desktop'));
+		await fireEvent.change(screen.getByTestId('monitor-ai-image-model'), { target: { value: 'qwen-image' } });
+		await screen.findByTestId('monitor-ai-qwen-update');
+		expect((screen.getByTestId('monitor-ai-model-save') as HTMLButtonElement).disabled).toBe(true);
+		mocks.meta.mockResolvedValue({ capabilities: { ai: { chat: true, nativeImageComponents: true } } });
+		await fireEvent.click(screen.getByTestId('monitor-ai-check'));
+		await waitFor(() => expect(screen.queryByTestId('monitor-ai-qwen-update')).toBeNull());
+		await fireEvent.input(screen.getByTestId('monitor-ai-model-binary'), { target: { value: '/bin/sd-cli' } });
+		await fireEvent.input(screen.getByTestId('monitor-ai-model-file'), { target: { value: '/models/qwen-image.gguf' } });
+		await fireEvent.input(screen.getByTestId('monitor-ai-model-vae'), { target: { value: '/models/vae.safetensors' } });
+		await fireEvent.input(screen.getByTestId('monitor-ai-model-llm'), { target: { value: '/models/qwen3vl.gguf' } });
+		await fireEvent.input(screen.getByTestId('monitor-ai-model-width'), { target: { value: '64' } });
+		await fireEvent.click(screen.getByTestId('monitor-ai-model-save'));
+		expect(screen.getByTestId('monitor-ai-model-error').textContent).toContain('128–2048');
+		expect(mocks.addNative).not.toHaveBeenCalled();
+	});
+
+	it('keeps Klein discoverable on an older Monitor and enables it after an upgrade', async () => {
+		mocks.meta.mockResolvedValue({ capabilities: { ai: { chat: true } } });
+		render(AiModelsTab);
+		const images = await screen.findByTestId('ai-lib-section-image-generation-desktop');
+		images.setAttribute('open', '');
+		await fireEvent.click(screen.getByTestId('ai-monitor-configure-image-generation-desktop'));
+		await fireEvent.change(screen.getByTestId('monitor-ai-image-model'), { target: { value: '9b' } });
+		await screen.findByTestId('monitor-ai-flux2-update');
+		expect((screen.getByTestId('monitor-ai-model-save') as HTMLButtonElement).disabled).toBe(true);
+		expect(mocks.addNative).not.toHaveBeenCalled();
+		mocks.meta.mockResolvedValue({ capabilities: { ai: { chat: true, nativeFlux2: true } } });
+		await fireEvent.click(screen.getByTestId('monitor-ai-check'));
+		await waitFor(() => expect(screen.queryByTestId('monitor-ai-flux2-update')).toBeNull());
+		expect((screen.getByTestId('monitor-ai-model-save') as HTMLButtonElement).disabled).toBe(false);
+	});
+
+	it('requires Klein companion paths and clears incompatible weights when switching models', async () => {
+		render(AiModelsTab);
+		const images = await screen.findByTestId('ai-lib-section-image-generation-desktop');
+		images.setAttribute('open', '');
+		await fireEvent.click(screen.getByTestId('ai-monitor-configure-image-generation-desktop'));
+		await fireEvent.change(screen.getByTestId('monitor-ai-image-model'), { target: { value: '4b' } });
+		await fireEvent.input(screen.getByTestId('monitor-ai-model-binary'), { target: { value: '/bin/sd-cli' } });
+		await fireEvent.input(screen.getByTestId('monitor-ai-model-file'), { target: { value: '/models/klein-4b.gguf' } });
+		await waitFor(() => expect((screen.getByTestId('monitor-ai-model-save') as HTMLButtonElement).disabled).toBe(false));
+		await fireEvent.click(screen.getByTestId('monitor-ai-model-save'));
+		expect(screen.getByTestId('monitor-ai-model-error').textContent).toContain('matching Qwen3');
+		expect(mocks.addNative).not.toHaveBeenCalled();
+		await fireEvent.input(screen.getByTestId('monitor-ai-model-llm'), { target: { value: '/models/qwen-4b.gguf' } });
+		await fireEvent.change(screen.getByTestId('monitor-ai-image-model'), { target: { value: '9b' } });
+		expect((screen.getByTestId('monitor-ai-model-file') as HTMLInputElement).value).toBe('');
+		expect((screen.getByTestId('monitor-ai-model-llm') as HTMLInputElement).value).toBe('');
+		expect((screen.getByTestId('monitor-ai-model-name') as HTMLInputElement).value).toBe('FLUX.2 Klein 9B');
+	});
+
 	it('shows all four native tasks beside tools even with no configured AI models, without adding fake defaults', async () => {
 		render(AiModelsTab);
 		for (const task of ['chat', 'transcription', 'text-to-speech', 'image-generation']) {

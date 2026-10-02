@@ -15,9 +15,13 @@ export const MONITOR_MODEL_SETUP = {
 		steps: [
 			'Install or build llama.cpp on the computer running Monitor and download a compatible GGUF language model.',
 			'Choose Configure model, enter the absolute paths to llama-cli and the GGUF file, select CPU or a GPU supported by your build, then Enable on monitor.',
-			'Refresh the model list and select this model in Chat or in Default models for apps.'
+			'Refresh the model list and select this model in Chat or in Default models for apps.',
+			'For text-to-SVG through Chat, use a model that returns SVG XML. OmniSVG requires its own Python runtime and SVG token decoder; registering its GGUF as a native chat model does not provide that decoder. A custom OpenAI-compatible service must decode its output into SVG XML before connecting it through a provider profile.'
 		],
-		links: [{ label: 'llama.cpp installation and models', url: 'https://github.com/ggml-org/llama.cpp' }],
+		links: [
+			{ label: 'llama.cpp installation and models', url: 'https://github.com/ggml-org/llama.cpp' },
+			{ label: 'OmniSVG runtime and decoder setup', url: 'https://github.com/OmniSVG/OmniSVG' }
+		],
 		modelExample: '/home/you/models/chat.gguf'
 	},
 	transcription: {
@@ -43,12 +47,14 @@ export const MONITOR_MODEL_SETUP = {
 	'image-generation': {
 		title: 'Image generation',
 		steps: [
-			'Install or build stable-diffusion.cpp on the computer running Monitor. Download a compatible complete checkpoint, such as a Stable Diffusion 1.5 .safetensors file, supported by sd-cli -m. Models needing separate text encoders or a VAE cannot be registered with this single-file form.',
-			'Choose Configure model, enter the absolute paths to sd-cli and the checkpoint, then Enable on monitor. For CPU select CPU and enter cpu as Backend. For GPU build the appropriate CUDA, Vulkan or Metal backend and use a device name reported by sd-cli --list-devices, such as cuda0 or vulkan0.',
+			'Install or build stable-diffusion.cpp on the computer running Monitor. For Stable Diffusion, download a compatible complete checkpoint, such as Stable Diffusion 1.5 .safetensors. For FLUX.2 Klein, download the distilled 4B or 9B diffusion model, the FLUX.2 VAE, and the matching Qwen3 encoder: 4B for Klein 4B, 8B for Klein 9B. For Qwen-Image-2.1, download the quantized diffusion model, the Qwen-Image VAE, and the Qwen3-VL 8B text encoder. Quantized GGUF weights reduce memory use.',
+			'Choose Configure model and select Stable Diffusion, FLUX.2 Klein 4B, FLUX.2 Klein 9B, or Qwen-Image-2.1. Enter the absolute paths to sd-cli and all required model files, set the output resolution (Qwen-Image-2.1 shines at 1024×1024), then Enable on monitor. For CPU select CPU and enter cpu as Backend. For GPU use a CUDA, Vulkan or Metal build and a backend reported by sd-cli --list-devices, such as cuda0, vulkan0 or metal.',
 			'Refresh, open Generate, and select this Monitor and model in the header. Browser SDXS/SD-Turbo ONNX installations are separate from this Monitor runtime.'
 		],
 		links: [
 			{ label: 'stable-diffusion.cpp installation and models', url: 'https://github.com/leejet/stable-diffusion.cpp' },
+			{ label: 'FLUX.2 Klein model and encoder setup', url: 'https://github.com/leejet/stable-diffusion.cpp/blob/master/docs/flux2.md' },
+			{ label: 'Qwen-Image-2.1 component setup', url: 'https://github.com/leejet/stable-diffusion.cpp/blob/master/docs/qwen_image_2.1.md' },
 			{ label: 'Image backend selection', url: 'https://github.com/leejet/stable-diffusion.cpp/blob/master/docs/backend.md' }
 		],
 		modelExample: '/home/you/models/sd-v1-5.safetensors'

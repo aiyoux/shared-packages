@@ -53,6 +53,8 @@ export type MonitorCapabilities = {
 		/** True when a bound tab can grant access and upload artifacts. Missing means false. */
 		sessionArtifacts?: boolean;
 		nativeJobs?: boolean;
+		nativeFlux2?: boolean;
+		nativeImageComponents?: boolean;
 	};
 };
 
@@ -549,7 +551,9 @@ export function coerceMonitorCapabilities(raw: unknown): MonitorCapabilities {
 						profiles: num(ai.profiles) ?? 0,
 						sessions: ai.sessions === true,
 						sessionArtifacts: ai.sessionArtifacts === true,
-						nativeJobs: ai.nativeJobs === true
+						nativeJobs: ai.nativeJobs === true,
+						nativeFlux2: ai.nativeFlux2 === true,
+						nativeImageComponents: ai.nativeImageComponents === true
 					}
 				}
 			: {})

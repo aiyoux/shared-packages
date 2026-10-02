@@ -97,6 +97,13 @@ export async function removeAiLibraryModel(
 	});
 }
 
+export type AiNativeFlux2Config = {
+	variant: '4b' | '9b';
+	/** Absolute paths on the Monitor host. */
+	vae: string;
+	llm: string;
+};
+
 export type AiNativeModelRow = {
 	id: string;
 	name: string;
@@ -105,6 +112,11 @@ export type AiNativeModelRow = {
 	binary: string;
 	model: string;
 	backend: string | null;
+	flux2?: AiNativeFlux2Config | null;
+	vae: string | null;
+	textEncoder: string | null;
+	width: number | null;
+	height: number | null;
 	source: 'config' | 'managed';
 };
 
@@ -115,10 +127,23 @@ function parseRow(raw: unknown): AiNativeModelRow | null {
 		typeof row.binary !== 'string' || typeof row.model !== 'string') return null;
 	if (!['chat', 'text-to-speech', 'image-generation', 'transcription'].includes(String(row.task))) return null;
 	if (!['cpu', 'gpu'].includes(String(row.device))) return null;
+	let flux2: AiNativeFlux2Config | null = null;
+	if (row.flux2 != null) {
+		const config = row.flux2 as Partial<AiNativeFlux2Config>;
+		if ((config.variant !== '4b' && config.variant !== '9b') || typeof config.vae !== 'string' || typeof config.llm !== 'string') return null;
+		flux2 = { variant: config.variant, vae: config.vae, llm: config.llm };
+	}
+	const dim = (value: unknown): number | null =>
+		typeof value === 'number' && Number.isInteger(value) ? value : null;
 	return {
 		id: row.id, name: row.name, task: row.task as AiTask,
 		device: row.device as 'cpu' | 'gpu', binary: row.binary, model: row.model,
 		backend: typeof row.backend === 'string' ? row.backend : null,
+		flux2,
+		vae: typeof row.vae === 'string' ? row.vae : null,
+		textEncoder: typeof row.textEncoder === 'string' ? row.textEncoder : null,
+		width: dim(row.width),
+		height: dim(row.height),
 		source: row.source === 'managed' ? 'managed' : 'config'
 	};
 }
@@ -144,6 +169,14 @@ export type AiNativeModelInput = {
 	model: string;
 	/** `sd-cli --backend` selector (image generation only). */
 	backend?: string;
+	/** Omit for a complete Stable Diffusion checkpoint. */
+	flux2?: AiNativeFlux2Config;
+	/** Component files for multi-file image runtimes (image generation only). */
+	vae?: string;
+	textEncoder?: string;
+	/** Output resolution per side, 128–2048 (image generation only). */
+	width?: number;
+	height?: number;
 };
 
 /** Install a managed native model row; it appears in `/v1/ai/catalog` as

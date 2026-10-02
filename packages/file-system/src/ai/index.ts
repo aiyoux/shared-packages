@@ -40,6 +40,7 @@ export {
 	type AiLibraryEntry,
 	type AiLibraryListResult,
 	type AiNativeModelInput,
+	type AiNativeFlux2Config,
 	type AiNativeModelRow
 } from './library.js';
 export {
