@@ -18,7 +18,7 @@ export type OcrDetailedResult = {
 };
 
 type OcrWorker = {
-	recognize: (image: Blob) => Promise<{ data: { text?: string; blocks?: unknown } }>;
+	recognize: (image: Blob, options?: Record<string, unknown>, output?: { text: boolean; blocks: boolean }) => Promise<{ data: { text?: string; blocks?: unknown } }>;
 	terminate: () => Promise<void>;
 };
 
@@ -108,7 +108,7 @@ export async function recognizeDetailed(
 	lang: OcrLang = 'eng'
 ): Promise<OcrDetailedResult> {
 	const worker = await getWorker(lang);
-	const { data } = await worker.recognize(await toBlob(source));
+	const { data } = await worker.recognize(await toBlob(source), {}, { text: true, blocks: true });
 	return { text: (data.text ?? '').trim(), regions: linesFromPage(data) };
 }
 
