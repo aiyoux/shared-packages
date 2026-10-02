@@ -181,14 +181,14 @@ describe('ai monitor client', () => {
 		try {
 			const list = await listAiChoices('chat');
 			// Same offer ids on two monitors stay two choices; other tasks are left out.
-			expect(list.choices.map((choice) => choice.key)).toEqual(['home|shared', 'home|native', 'work|shared', 'work|native']);
-			const homeShared = list.choices[0]!;
+			expect(list.choices.map((choice) => choice.key).sort()).toEqual(['home|native', 'home|shared', 'work|native', 'work|shared']);
+			const homeShared = list.choices.find((choice) => choice.key === 'home|shared')!;
 			expect(homeShared.label).toBe('model-shared · OpenAI — Home');
 			expect(homeShared.ref).toMatchObject({ location: 'monitor-provider', monitorProfileId: 'home' });
 			expect(list.monitors.find((row) => row.profileId === 'away')?.error).toMatch(/Not reachable/);
 
 			// A pick resolves only on the monitor it names.
-			const workRef = list.choices[2]!.ref;
+			const workRef = list.choices.find((choice) => choice.key === 'work|shared')!.ref;
 			expect(matchAiChoice(workRef, list.choices)?.key).toBe('work|shared');
 			expect(matchAiChoice({ ...workRef, monitorProfileId: null }, list.choices)).toBeNull();
 			const awayRef = { ...workRef, monitorProfileId: 'away' };

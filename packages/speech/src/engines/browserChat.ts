@@ -3,6 +3,7 @@ import { BROWSER_CHAT_MODEL, registerBrowserAiHandler, runBrowserAi, type Browse
 
 export { BROWSER_CHAT_MODEL };
 export type BrowserChatDevice = 'wasm' | 'webgpu';
+export type BrowserChatTurn = { role: 'system' | 'user' | 'assistant'; content: string };
 
 let rpc: ReturnType<typeof createWorkerRpc> | null = null;
 let currentDevice: BrowserChatDevice | null = null;
