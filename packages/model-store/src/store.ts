@@ -25,6 +25,13 @@ function validId(id: string): string {
 function freshManifest(modelId: string): ModelManifest {
   return { v: 1, modelId, revision: crypto.randomUUID(), files: {} };
 }
+const blocking = (status: ModelStatus) => status.files
+  .filter(file => file.state !== 'present' && !(file.optional && file.state === 'missing'))
+  .map(file => `${file.path} (${file.state})`).join(', ');
+/** The same model with the chosen optional files made required (a selected voice). */
+export function requireFiles(def: ModelDef, paths: readonly string[]): ModelDef {
+  return { ...def, files: def.files.map(file => paths.includes(file.path) ? { ...file, optional: false } : file) };
+}
 export type ModelLock = <T>(id: string, mode: 'shared' | 'exclusive', run: () => Promise<T>, signal?: AbortSignal) => Promise<T>;
 const browserLock: ModelLock = async (id, mode, run, signal) => {
   if (!globalThis.navigator?.locks) throw new ModelStoreError('UNAVAILABLE', 'Model storage requires Web Locks');
@@ -34,6 +41,8 @@ const browserLock: ModelLock = async (id, mode, run, signal) => {
 /** OPFS is separate from Files. All contexts, including workers, use the same lock names. */
 export function createModelStore(options: {
   root?: () => Promise<FileSystemDirectoryHandle>;
+  /** The origin's OPFS root, for a context that shims `navigator.storage.getDirectory` for a library. */
+  opfs?: () => Promise<FileSystemDirectoryHandle>;
   lock?: ModelLock;
   changed?: () => void;
 } = {}) {
@@ -55,6 +64,7 @@ export function createModelStore(options: {
   }
   async function root(): Promise<FileSystemDirectoryHandle> {
     if (options.root) return options.root();
+    if (options.opfs) return (await options.opfs()).getDirectoryHandle(ROOT, { create: true });
     if (!globalThis.navigator?.storage?.getDirectory) throw new ModelStoreError('UNAVAILABLE', 'Browser model storage is unavailable');
     return (await navigator.storage.getDirectory()).getDirectoryHandle(ROOT, { create: true });
   }
@@ -124,7 +134,8 @@ export function createModelStore(options: {
       files.push({ ...file, state, ...(actual ? { actual } : {}) });
     }
     const present = files.filter(file => file.state === 'present').length;
-    return { files, present, total: files.length, ready: Boolean(def.builtIn) || present === files.length,
+    const ready = Boolean(def.builtIn) || files.every(file => file.state === 'present' || (file.optional && file.state === 'missing'));
+    return { files, present, total: files.length, ready,
       bytes: files.reduce((sum, file) => sum + (file.actual?.bytes ?? 0), 0), revision: data.revision };
   }
   const api = {
@@ -145,7 +156,7 @@ export function createModelStore(options: {
       return api.read(def.id, async files => {
         options.signal?.throwIfAborted();
         const status = await statusUnlocked(def, options.verify, options.signal);
-        if (!status.ready) throw new ModelStoreError('MISSING_FILES', `${def.label}: ${status.files.filter(file => file.state !== 'present').map(file => `${file.path} (${file.state})`).join(', ')}. Load files in Settings → AI models.`);
+        if (!status.ready) throw new ModelStoreError('MISSING_FILES', `${def.label}: ${blocking(status)}. Load files in Settings → AI models.`);
         options.signal?.throwIfAborted();
         return run(files);
       }, options.signal);
@@ -157,7 +168,7 @@ export function createModelStore(options: {
     },
     async require(def: ModelDef): Promise<ModelStatus> {
       const status = await api.status(def);
-      if (!status.ready) throw new ModelStoreError('MISSING_FILES', `${def.label}: ${status.files.filter(file => file.state !== 'present').map(file => `${file.path} (${file.state})`).join(', ')}. Load files in Settings → AI models.`);
+      if (!status.ready) throw new ModelStoreError('MISSING_FILES', `${def.label}: ${blocking(status)}. Load files in Settings → AI models.`);
       return status;
     },
     write(modelId: string, path: string, source: ReadableStream<Uint8Array>, opts: ModelWriteOptions = {}): Promise<StoredModelFile> {

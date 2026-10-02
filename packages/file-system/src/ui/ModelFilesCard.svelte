@@ -7,7 +7,8 @@
   import { createLocalExplorerDriver } from './localExplorerDriver.js';
   import FeFolderPickerDialog from './FeFolderPickerDialog.svelte';
 
-  let { def, onChanged }: { def: ModelDef; onChanged?: () => void } = $props();
+  /** `onStatus` reports each store read, so an app can gate its engine on `ready`. */
+  let { def, onChanged, onStatus }: { def: ModelDef; onChanged?: () => void; onStatus?: (status: ModelStatus) => void } = $props();
   let status = $state<ModelStatus | null>(null);
   let error = $state('');
   let busy = $state(false);
@@ -27,7 +28,7 @@
     const generation = ++refreshGeneration;
     try {
       const next = await browserModelStore.status(def);
-      if (generation === refreshGeneration) status = next;
+      if (generation === refreshGeneration) { status = next; onStatus?.(next); }
     } catch (e) { if (generation === refreshGeneration) error = message(e); }
   }
   const message = (e: unknown) => e instanceof Error ? e.message : String(e);

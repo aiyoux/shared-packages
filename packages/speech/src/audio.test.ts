@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { chunkAudio, quietestCut } from './audio.js';
 import { checkAiAudioSize } from './aiParts.js';
-import { MODEL_CATALOG, defaultSttModel, defaultTtsModel, sttModelsFor, ttsModelForDevice, ttsModelsFor } from './models.js';
+import { BROWSER_CHAT_MODELS, KOKORO_VOICES_MODEL, MODEL_CATALOG, defaultSttModel, speechBrowserModel, defaultTtsModel, sttModelsFor, ttsModelForDevice, ttsModelsFor } from './models.js';
 
 describe('chunkAudio', () => {
 	it('returns one chunk for short audio', () => {
@@ -58,12 +58,15 @@ describe('aiParts', () => {
 });
 
 describe('model catalog integrity', () => {
-	it('catalog sizes equal the sum of their files', () => {
-		for (const def of MODEL_CATALOG) {
-			const sum = def.files.reduce((n, f) => n + (f.bytes ?? 0), 0);
-			expect(sum).toBe(def.sizeBytes);
+	it('pins every file to a revision with a size and Blake3', () => {
+		for (const def of [...MODEL_CATALOG.map(speechBrowserModel), KOKORO_VOICES_MODEL, ...Object.values(BROWSER_CHAT_MODELS).map((chat) => chat.model)]) {
 			expect(def.files.length).toBeGreaterThan(0);
-			expect(def.repo).toMatch(/^[\w.-]+\/[\w.-]+$/);
+			expect(def.origin).toMatchObject({ kind: 'hf', revision: expect.stringMatching(/^[a-f0-9]{40}$/) });
+			for (const file of def.files) {
+				expect(file.bytes).toBeGreaterThan(0);
+				expect(file.blake3).toMatch(/^[a-f0-9]{64}$/);
+				expect(file.url).toContain(`/resolve/${def.origin.kind === 'hf' ? def.origin.revision : ''}/${file.path}`);
+			}
 		}
 	});
 
@@ -83,7 +86,7 @@ describe('model catalog integrity', () => {
 	it('weights stay under the biggest useful download', () => {
 		for (const def of MODEL_CATALOG) {
 			// Every MVP model is under 1 GB; whisper-small is the ceiling.
-			expect(def.sizeBytes).toBeLessThan(1024 ** 3);
+			expect(def.files.reduce((n, f) => n + (f.bytes ?? 0), 0)).toBeLessThan(1024 ** 3);
 		}
 	});
 });

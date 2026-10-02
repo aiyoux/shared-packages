@@ -43,7 +43,6 @@ export type ImageEngine = {
 
 export type EngineLoadOpts = {
 	modelId?: string | null;
-	dirId?: string;
 	onProgress?: (note: string, fraction?: number) => void;
 	signal?: AbortSignal;
 };

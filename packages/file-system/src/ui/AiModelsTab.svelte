@@ -13,8 +13,8 @@
 	 * a change made in an app's own picker converge (same store, same
 	 * change-pings).
 	 */
-	import { onMount, type Snippet } from 'svelte';
-	let { modelInstallation, onConfigureMonitor }: { modelInstallation?: Snippet<[onChanged: () => void]>; onConfigureMonitor?: () => void } = $props();
+	import { onMount } from 'svelte';
+	let { onConfigureMonitor }: { onConfigureMonitor?: () => void } = $props();
 	import { browserAiHost, type BrowserModelState } from '../ai/browserHost.js';
 	let hostLabel = $state('Not started');
 	let hostModels = $state<Record<string, BrowserModelState>>({});
@@ -188,6 +188,8 @@
 	}
 
 	let inflight = $state<ReadonlySet<string>>(new Set());
+	/** Which of a row's `browserModelOptions` its card shows, by row key. */
+	let pickedModels = $state<Record<string, string>>({});
 	const rowKey = (sectionId: string, row: AiLibraryModelRow) =>
 		`${sectionId}/${encodeRef(row.ref)}`;
 
@@ -327,7 +329,17 @@
 								Remove
 							</button>
 						{/if}
-						{#if row.browserModel}<ModelFilesCard def={row.browserModel} onChanged={() => void refreshSection(section)} />{/if}
+						{#if row.browserModel}
+							{@const options = row.browserModelOptions}
+							{@const picked = options?.find((model) => model.id === pickedModels[rowKey(section.id, row)]) ?? row.browserModel}
+							{#if options?.length}
+								<select aria-label="{row.label}: model" data-testid="ai-lib-pick-{row.ref.modelId}"
+									value={picked.id} onchange={(event) => pickedModels = { ...pickedModels, [rowKey(section.id, row)]: event.currentTarget.value }}>
+									{#each options as model (model.id)}<option value={model.id}>{model.label}</option>{/each}
+								</select>
+							{/if}
+							<ModelFilesCard def={picked} onChanged={() => void refreshSection(section)} />
+						{/if}
 						{#if row.note}
 							<p class="hint">{row.note}</p>
 						{/if}
@@ -368,9 +380,8 @@
 				{/each}
 			</div>
 		{/if}
-		<p class="hint">Connect to another device or add a monitor to fetch models automatically. Remote model sources are being integrated.</p>
+		<p class="hint">Connect to another device or add a monitor to fetch models automatically.</p>
 		<ModelStorageFooter />
-		{@render modelInstallation?.(refreshLibrary)}
 		<details class="host-status" data-testid="ai-browser-host">
 			<summary>Browser model status</summary>
 			<p class="hint">{hostLabel}</p>

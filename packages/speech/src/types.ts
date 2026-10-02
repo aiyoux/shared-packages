@@ -1,34 +1,26 @@
 import type { OpHandle } from '@shared-packages/file-system';
 import type { BrowserAiOutput } from '@shared-packages/file-system/ai';
+import type { ModelFileDef } from '@shared-packages/model-store';
 export type SttEngineId = 'webspeech' | 'transformers' | 'sherpa' | 'ai';
 export type TtsEngineId = 'webspeech' | 'kokoro' | 'piper' | 'sherpa' | 'ai';
 
 export type SpeechTask = 'stt' | 'tts';
 
-/** Where a model's weights are fetched from at download time. */
-export type ModelDownloadRoot = 'hf';
-
-export type SpeechModelFile = {
-	/** Path inside the repo, e.g. `onnx/encoder_model_quantized.onnx`. */
-	path: string;
-	/** Expected byte size — sanity check against the downloaded node. */
-	bytes?: number;
-};
-
 export type SpeechModelDef = {
 	id: string;
+	label: string;
 	task: SpeechTask;
 	engine: 'transformers' | 'kokoro' | 'piper' | 'sherpa';
 	/** HF repo id, e.g. `onnx-community/whisper-tiny`. */
 	repo: string;
+	/** Pinned commit the catalog's sizes and hashes were generated from. */
 	revision: string;
 	/** transformers.js dtype hint used for both the catalog and the load call. */
 	dtype: 'q8' | 'fp32' | 'fp16' | 'q4';
-	files: readonly SpeechModelFile[];
-	/** Sum of the default dtype's files — display + download sanity check. */
-	sizeBytes: number;
+	license?: string;
+	/** Every file the engine loads, with expected size and Blake3. */
+	files: readonly ModelFileDef[];
 	languages: readonly string[];
-	downloadRoot: ModelDownloadRoot;
 	/** Devices this weight file is meant for (TTS engines with a device choice). */
 	devices?: readonly TtsDevice[];
 };
@@ -136,8 +128,6 @@ export type TtsSpeakOpts = {
 
 export type TtsLoadOpts = {
 	modelId?: string;
-	/** VFS folder the model was imported into (user-chosen; default tree when omitted). */
-	dirId?: string;
 	device?: TtsDevice;
 	onProgress?: (p: ModelDownloadProgress) => void;
 	signal?: AbortSignal;
@@ -194,8 +184,6 @@ export interface TtsEngine {
 			onSegment?: (p: { done: number; total: number }) => void;
 			/** Host playback streams each rendered segment once to the listening tab. */
 			onAudioSegment?: (segment: TtsRenderSegment, index: number, total: number) => void;
-			/** VFS folder the model was imported into (overrides the load-time choice). */
-			dirId?: string;
 		}
 	): Promise<TtsRender>;
 	/** Live speak-and-stream playback (works even without renderToBuffer). */

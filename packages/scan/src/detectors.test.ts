@@ -14,7 +14,7 @@ describe('scan detector registry', () => {
 
 	it('defaults to the bundled classical backend', () => {
 		expect(DEFAULT_DETECTOR).toBe('opencv');
-		expect(SCAN_DETECTORS.opencv.needsModelUrl).toBe(false);
+		expect(SCAN_DETECTORS.opencv.model).toBeUndefined();
 	});
 
 	it('documents runtime, license, and weight provenance for every option', () => {
@@ -29,15 +29,15 @@ describe('scan detector registry', () => {
 
 	it('invents no weight URLs', () => {
 		for (const meta of Object.values(SCAN_DETECTORS)) {
-			expect(meta.defaultModelUrl ?? '').toBe('');
+			for (const file of meta.model?.files ?? []) expect(file.url).toBeUndefined();
 		}
 	});
 
-	it('keeps learned detectors gated on a configured model URL, except scanic', () => {
-		expect(SCAN_DETECTORS.scanic.needsModelUrl).toBe(false);
-		expect(SCAN_DETECTORS.docquad.needsModelUrl).toBe(true);
-		expect(SCAN_DETECTORS.docaligner.needsModelUrl).toBe(true);
-		expect(SCAN_DETECTORS['yolo-pose'].needsModelUrl).toBe(true);
+	it('keeps learned detectors gated on a user-loaded model, except scanic', () => {
+		expect(SCAN_DETECTORS.scanic.model).toBeUndefined();
+		expect(SCAN_DETECTORS.docquad.model).toMatchObject({ id: 'scan:docquad', origin: { kind: 'user' }, files: [{ path: 'docquad.onnx' }] });
+		expect(SCAN_DETECTORS.docaligner.model?.id).toBe('scan:docaligner');
+		expect(SCAN_DETECTORS['yolo-pose'].model?.id).toBe('scan:yolo-pose');
 	});
 });
 

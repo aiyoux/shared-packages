@@ -27,17 +27,20 @@ export {
 } from './types.js';
 
 export {
+	BROWSER_CHAT_MODELS,
 	KOKORO_82M,
 	KOKORO_82M_FP32,
 	KOKORO_VOICES,
+	KOKORO_VOICES_MODEL,
 	MODEL_CATALOG,
 	defaultSttModel,
 	defaultTtsModel,
 	hfResolveUrl,
 	kokoroVoice,
-	kokoroVoiceDef,
 	kokoroVoicePath,
+	kokoroVoicesModel,
 	modelDef,
+	speechBrowserModel,
 	sttModelsFor,
 	ttsModelForDevice,
 	ttsModelsFor,
@@ -45,37 +48,6 @@ export {
 } from './models.js';
 
 export { listSttEngines, listTtsEngines, loadSttEngine, loadTtsEngine, listTtsVoices, peekSttEngine, peekTtsEngine } from './engines.js';
-
-export {
-	DEFAULT_BRIDGE_BASE_URL,
-	bridgeFetchUrl,
-	fetchModelFileViaBridge
-} from './bridgeFetch.js';
-
-export {
-	ModelStore,
-	getSpeechModelStore,
-	type ImportedModelFile,
-	type ImportedModelResult,
-	type ModelStoreFileState
-} from './modelStore.js';
-
-export {
-	MANIFEST_CATALOG_VERSION,
-	MANIFEST_NAME,
-	MODEL_STORE_ROOT_FOLDER,
-	formatModelBytes,
-	manifestCovers,
-	modelDirPath,
-	modelFolderKey,
-	modelFolderSegments,
-	parseManifest,
-	pathSegments,
-	sizeMatches,
-	storedName,
-	type SpeechModelManifest,
-	type SpeechModelManifestFile
-} from './modelStore.manifest.js';
 
 export {
 	CHUNK_OVERLAP_SECONDS,
@@ -104,14 +76,13 @@ export {
 } from './mic.js';
 
 export { probeWebspeech, installWebspeechOnDevice } from './engines/webspeechStt.js';
-export { repoPathFromUrl, createVfsCache } from './engines/transformersVfsCache.js';
 export { configureTransformersEnv } from './engines/transformersEnv.js';
 export { SegmentPlayer, splitSentences } from './engines/playback.js';
 export { KOKORO_SAMPLE_RATE } from './engines/kokoroTts.js';
 export {
 	PIPER_VOICES,
 	piperVoice,
-	piperVoiceDef,
+	piperVoiceModel,
 	piperVoiceIds,
 	piperVoiceList,
 	piperFileUrl,

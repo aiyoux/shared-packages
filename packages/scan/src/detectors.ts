@@ -1,3 +1,4 @@
+import type { ModelDef } from '@shared-packages/model-store';
 import type { ScanDetectorId } from './types.js';
 
 export type OnnxDecodeMode = 'heatmap' | 'yolo-pose';
@@ -11,20 +12,24 @@ export type ScanDetectorMeta = {
 	license: string;
 	/** Project page describing the model and its weights. */
 	docsUrl: string;
-	/** Where the weights come from when no explicit model URL is configured. */
+	/** Where the weights come from. */
 	weightHint: string;
 	/**
-	 * Default weight URL. Empty everywhere on purpose: no weight URL is
-	 * invented here — configure one per detector or install its package.
+	 * Browser-store model for learned detectors. No public weights exist, so
+	 * the file is the user's own (`origin: user`), loaded in Settings → AI
+	 * models; it has no expected hash.
 	 */
-	defaultModelUrl?: string;
+	model?: ModelDef;
 	/** ONNX output decoding for single-file `.onnx` detectors. */
 	decode?: OnnxDecodeMode;
 	/** Square model input edge in px. */
 	modelInputSize?: number;
-	/** True when the detector cannot run until a model URL is configured. */
-	needsModelUrl: boolean;
 };
+
+/** The one-file user model a learned detector runs. */
+function userModel(id: ScanDetectorId, label: string, license: string): ModelDef {
+	return { id: `scan:${id}`, task: 'scan-detect', label, license, files: [{ path: `${id}.onnx` }], origin: { kind: 'user' } };
+}
 
 export const DEFAULT_DETECTOR: ScanDetectorId = 'opencv';
 
@@ -44,7 +49,6 @@ export const SCAN_DETECTORS: Record<ScanDetectorId, ScanDetectorMeta> = {
 		license: 'Apache-2.0 (opencv.js build)',
 		docsUrl: 'https://docs.opencv.org',
 		weightHint: 'No weights. Ships with the app at /vendor/opencv.js.',
-		needsModelUrl: false
 	},
 	scanic: {
 		id: 'scanic',
@@ -53,7 +57,6 @@ export const SCAN_DETECTORS: Record<ScanDetectorId, ScanDetectorMeta> = {
 		license: 'MIT (scanic + scanic-ml)',
 		docsUrl: 'https://github.com/marquaye/scanic',
 		weightHint: 'Vendored at build: scanic-ml assets copied to /vendor/scanic-ml/.',
-		needsModelUrl: false
 	},
 	docquad: {
 		id: 'docquad',
@@ -62,10 +65,10 @@ export const SCAN_DETECTORS: Record<ScanDetectorId, ScanDetectorMeta> = {
 		license: 'Check the MakeACopy training page before vendoring weights',
 		docsUrl: 'https://github.com/egdels/makeacopy',
 		weightHint:
-			'ONNX export (corner_heatmaps + mask_logits, 256x256 RGB) ships with the MakeACopy app; host it and set its model URL.',
+			'ONNX export (corner_heatmaps + mask_logits, 256x256 RGB) ships with the MakeACopy app; load its .onnx in Settings → AI models.',
 		decode: 'heatmap',
 		modelInputSize: 256,
-		needsModelUrl: true
+		model: userModel('docquad', 'DocQuadNet-256', 'Check the MakeACopy training page before vendoring weights')
 	},
 	docaligner: {
 		id: 'docaligner',
@@ -74,10 +77,10 @@ export const SCAN_DETECTORS: Record<ScanDetectorId, ScanDetectorMeta> = {
 		license: 'Check DocsaidLab/DocAligner LICENSE before vendoring weights',
 		docsUrl: 'https://github.com/DocsaidLab/DocAligner',
 		weightHint:
-			'Heatmap-regression ONNX export from the DocAligner project; host it and set its model URL.',
+			'Heatmap-regression ONNX export from the DocAligner project; load it in Settings → AI models.',
 		decode: 'heatmap',
 		modelInputSize: 256,
-		needsModelUrl: true
+		model: userModel('docaligner', 'DocAligner', 'Check DocsaidLab/DocAligner LICENSE before vendoring weights')
 	},
 	'yolo-pose': {
 		id: 'yolo-pose',
@@ -86,10 +89,10 @@ export const SCAN_DETECTORS: Record<ScanDetectorId, ScanDetectorMeta> = {
 		license: 'COCO-pose weights are human-only; document weights are yours to train',
 		docsUrl: 'https://docs.ultralytics.com/tasks/pose/',
 		weightHint:
-			'No pretrained document weights exist. Train 1 class + 4 keypoints from a COCO-pose checkpoint, export ONNX, and set its model URL.',
+			'No pretrained document weights exist. Train 1 class + 4 keypoints from a COCO-pose checkpoint, export ONNX, and load it in Settings → AI models.',
 		decode: 'yolo-pose',
 		modelInputSize: 640,
-		needsModelUrl: true
+		model: userModel('yolo-pose', 'YOLO-pose (custom)', 'COCO-pose weights are human-only; document weights are yours to train')
 	}
 };
 

@@ -32,6 +32,7 @@
   "dependencies": {
     "@huggingface/transformers": "^3.7.6",
     "@shared-packages/file-system": "file:../file-system",
+    "@shared-packages/model-store": "file:../model-store",
     "hash-wasm": "^4.12.0",
     "onnxruntime-web": "1.22.0-dev.20250409-89f8206ba4",
     "onnxruntime-web-flux2": "npm:onnxruntime-web@1.25.0-dev.20260227-dce58e8711"

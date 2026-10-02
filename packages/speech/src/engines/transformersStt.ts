@@ -1,9 +1,10 @@
 /**
  * Local-model STT via transformers.js (`automatic-speech-recognition`).
- * Weights download into the shared VFS through the custom cache; ORT runs on
- * the already-vendored `/vendor/ort/` wasm pair.
+ * Weights come only from the browser model store (Settings → AI models); ORT
+ * runs on the already-vendored `/vendor/ort/` wasm pair.
  */
 
+import { browserModelStore, ModelStoreError, transformersCache } from '@shared-packages/model-store';
 import {
 	SpeechEngineError,
 	type ModelDownloadProgress,
@@ -11,18 +12,16 @@ import {
 	type SttEngineInfo,
 	type SttResult
 } from '../types.js';
-import { defaultSttModel, sttModelsFor } from '../models.js';
+import { defaultSttModel, speechBrowserModel, sttModelsFor } from '../models.js';
 import type { SpeechModelDef } from '../models.js';
 import { chunkAudio, decodeToMono16k, DURATION_MAX_MS, TARGET_SAMPLE_RATE } from '../audio.js';
-import { getSpeechModelStore, type ModelStore } from '../modelStore.js';
-import { createVfsCache } from './transformersVfsCache.js';
 import { configureTransformersEnv, type TransformEnv } from './transformersEnv.js';
 
 const info: SttEngineInfo = {
 	id: 'transformers',
 	label: 'Local model (transformers.js)',
 	description:
-		'Whisper and Moonshine run fully in this tab via WebAssembly — nothing leaves the browser after the model downloads into Files.',
+		'Whisper and Moonshine run fully in this tab via WebAssembly — nothing leaves the browser. Load the model in Settings → AI models.',
 	supportsMic: true,
 	supportsFileInput: true,
 	streamingPartials: false,
@@ -33,26 +32,28 @@ const info: SttEngineInfo = {
 type WhisperChunk = { text: string; timestamp: [number | null, number | null] };
 type AsrOutput = { text: string; chunks?: WhisperChunk[] };
 type AsrPipeline = (audio: Float32Array, options?: Record<string, unknown>) => Promise<AsrOutput>;
+type TransformersModule = {
+	env: TransformEnv;
+	pipeline: (task: string, repo: string, opts?: Record<string, unknown>) => Promise<AsrPipeline>;
+};
 
-const pipelines = new Map<string, AsrPipeline>();
+/** One pipeline per model, keyed by the store revision it was built from. */
+const pipelines = new Map<string, { revision: string; pipe: AsrPipeline }>();
 
-async function loadPipeline(
-	mod: { env: TransformEnv; pipeline: (task: string, repo: string, opts?: Record<string, unknown>) => Promise<AsrPipeline> },
-	def: SpeechModelDef,
-	store: ModelStore,
-	dirId: string,
-	opts?: { onProgress?: (p: ModelDownloadProgress) => void; signal?: AbortSignal }
-): Promise<AsrPipeline> {
-	const key = `${def.id}|${dirId}`;
-	const cached = pipelines.get(key);
-	if (cached) return cached;
-	configureTransformersEnv(mod, createVfsCache(store, def, { dirId, onProgress: opts?.onProgress }));
-	const pipe = await mod.pipeline('automatic-speech-recognition', def.repo, {
-		dtype: def.dtype,
-		device: 'wasm'
+/** A clear or replace in Settings changes the revision, so the next run reloads. */
+async function loadPipeline(mod: TransformersModule, def: SpeechModelDef, signal?: AbortSignal): Promise<AsrPipeline> {
+	const model = speechBrowserModel(def);
+	return browserModelStore.readReady(model, async (files) => {
+		const cached = pipelines.get(def.id);
+		if (cached?.revision === files.manifest.revision) return cached.pipe;
+		configureTransformersEnv(mod, transformersCache(model, files));
+		const pipe = await mod.pipeline('automatic-speech-recognition', def.repo, { dtype: def.dtype, device: 'wasm' });
+		pipelines.set(def.id, { revision: files.manifest.revision, pipe });
+		return pipe;
+	}, { signal }).catch((error: unknown) => {
+		throw error instanceof ModelStoreError && error.code === 'MISSING_FILES'
+			? new SpeechEngineError('NO_MODEL', error.message, error) : error;
 	});
-	pipelines.set(key, pipe);
-	return pipe;
 }
 
 function modelDefById(id: string | null): SpeechModelDef {
@@ -63,7 +64,6 @@ function modelDefById(id: string | null): SpeechModelDef {
 
 export function createTransformersStt(): SttEngine {
 	let selectedModelId: string | null = null;
-	let selectedDirId: string | undefined;
 	let recorder: import('../mic.js').MicRecorder | null = null;
 
 	async function pipelineFor(
@@ -71,16 +71,8 @@ export function createTransformersStt(): SttEngine {
 		opts?: { onProgress?: (p: ModelDownloadProgress) => void; signal?: AbortSignal }
 	): Promise<{ pipe: AsrPipeline; def: SpeechModelDef }> {
 		const def = modelDefById(modelId ?? selectedModelId ?? defaultSttModel('transformers'));
-		const store = await getSpeechModelStore();
-		const dirId = await store.requireModelDir(def, selectedDirId);
 		const mod = await import('@huggingface/transformers');
-		const pipe = await loadPipeline(
-			mod as unknown as Parameters<typeof loadPipeline>[0],
-			def,
-			store,
-			dirId,
-			opts
-		);
+		const pipe = await loadPipeline(mod as unknown as TransformersModule, def, opts?.signal);
 		return { pipe, def };
 	}
 
@@ -94,7 +86,6 @@ export function createTransformersStt(): SttEngine {
 		async load(modelId, opts) {
 			if (!modelId) throw new SpeechEngineError('NO_MODEL', 'Pick a model first');
 			selectedModelId = modelId;
-			selectedDirId = opts?.dirId;
 			await pipelineFor(modelId, opts);
 		},
 

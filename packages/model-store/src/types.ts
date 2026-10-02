@@ -1,5 +1,7 @@
 /** Owning packages declare models; consumers aggregate these definitions. */
-export type ModelFileDef = { path: string; bytes?: number; blake3?: string; url?: string };
+/** `optional` files (e.g. one of many voices) never block readiness; a consumer
+ * that needs one requires it with `requireFiles`. */
+export type ModelFileDef = { path: string; bytes?: number; blake3?: string; url?: string; optional?: boolean };
 export type ModelDef = {
   id: string; task: string; label: string; license?: string;
   files: readonly ModelFileDef[];

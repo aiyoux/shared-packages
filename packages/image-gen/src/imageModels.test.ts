@@ -2,9 +2,9 @@ import { describe, expect, it } from 'vitest';
 import {
 	IMAGE_MODEL_CATALOG,
 	hfImageResolveUrl,
+	imageBrowserModel,
 	imageModelDef
 } from './imageModels.js';
-import { manifestCovers, storedName } from './imageManifest.js';
 
 describe('image model catalog', () => {
 	it('resolves known ids and rejects unknown ones', () => {
@@ -19,28 +19,29 @@ describe('image model catalog', () => {
 		}
 	});
 
-	it('lists positive sizes that roughly cover sizeBytes', () => {
+	it('pins every file to a revision with a size and Blake3', () => {
 		for (const def of IMAGE_MODEL_CATALOG) {
-			const known = def.files.filter((f) => f.bytes != null);
-			expect(known.length).toBeGreaterThan(0);
-			for (const f of known) expect(f.bytes!).toBeGreaterThan(0);
-			const sum = known.reduce((n, f) => n + (f.bytes ?? 0), 0);
-			expect(sum).toBeLessThanOrEqual(def.sizeBytes);
-			expect(sum).toBeGreaterThan(def.sizeBytes * 0.5);
+			expect(def.revision).toMatch(/^[a-f0-9]{40}$/);
+			for (const f of def.files) {
+				expect(f.bytes).toBeGreaterThan(0);
+				expect(f.blake3).toMatch(/^[a-f0-9]{64}$/);
+			}
 		}
 	});
 
-	it('builds stable HF resolve URLs', () => {
-		expect(hfImageResolveUrl(imageModelDef('sd-turbo'), 'unet/model.onnx')).toBe(
-			'https://huggingface.co/schmuell/sd-turbo-ort-web/resolve/main/unet/model.onnx'
+	it('builds pinned HF resolve URLs', () => {
+		const def = imageModelDef('sd-turbo');
+		expect(hfImageResolveUrl(def, 'unet/model.onnx')).toBe(
+			`https://huggingface.co/schmuell/sd-turbo-ort-web/resolve/${def.revision}/unet/model.onnx`
 		);
 	});
 
-	it('covers its own file lists by basename', () => {
+	it('derives one namespaced store model per def', () => {
 		for (const def of IMAGE_MODEL_CATALOG) {
-			expect(
-				manifestCovers(def, def.files.map((f) => storedName(f.path)))
-			).toBe(true);
+			const model = imageBrowserModel(def);
+			expect(model.id).toBe(`image:${def.id}`);
+			expect(model.files.map((f) => f.path)).toEqual(def.files.map((f) => f.path));
+			expect(imageBrowserModel(def)).toBe(model);
 		}
 	});
 });

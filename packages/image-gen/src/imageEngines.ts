@@ -1,6 +1,6 @@
 import { registerBrowserAiHandler, runBrowserAi } from '@shared-packages/file-system/ai';
-import { ImageStore } from './imageStore.js';
-import { imageModelDef } from './imageModels.js';
+import { browserModelStore, ModelStoreError } from '@shared-packages/model-store';
+import { imageBrowserModel, imageModelDef } from './imageModels.js';
 import {
 	ImageGenError,
 	probeWebGpu,
@@ -98,10 +98,9 @@ export type ImageEngineFactory = (createWorker: () => Worker) => {
 };
 
 /**
- * Load a diffusion engine: probe WebGPU, resolve the VFS folder, hand the
- * weight blobs to a fresh worker (transferred), and return a tiny engine
- * handle. Weights travel blob → copy → transfer; the transient 2× peak is
- * the price of never touching the network. The worker URL and label vary
+ * Load a diffusion engine: probe WebGPU, read the model from the browser
+ * model store, hand the weights to a fresh worker (transferred), and return
+ * a tiny engine handle. The worker URL and label vary
  * per family — the hub passes `createSdEngine`/`createFlux2Engine` the
  * matching `new Worker(...)` factory.
  */
@@ -117,36 +116,32 @@ function createWorkerEngine(
 			const probe = await probeWebGpu();
 			if (!probe.ok) throw new ImageGenError('UNSUPPORTED_DEVICE', probe.reason);
 			const def = imageModelDef(opts.modelId ?? fallbackModelId);
-			const store = await ImageStore.get();
-			const dirId = opts.dirId ?? (await store.findModelDir(def, null));
-			if (!dirId) {
-				throw new ImageGenError(
-					'NO_MODEL',
-					`${def.id} weights are not in Files — download them first`
-				);
-			}
 			let loadedId: string | null = null;
 			const rpc = createImageWorkerRpc(createWorker, label, () => (loadedId = null));
-			const files: Array<{ path: string; buffer: ArrayBuffer }> = [];
-			const transfer: Transferable[] = [];
 			const abort = () => rpc.reset();
 			opts.signal?.addEventListener('abort', abort, { once: true });
 			try {
-				for (const file of def.files) {
-					opts.signal?.throwIfAborted();
-					const bytes = await store.readBytesPath(dirId, file.path);
-					const copy = bytes.slice().buffer as ArrayBuffer;
-					files.push({ path: file.path, buffer: copy });
-					transfer.push(copy);
-					opts.onProgress?.(`Loading ${file.path}`, files.length / def.files.length);
-				}
-				const out = await rpc.call<{ modelId: string }>('load', { modelId: def.id, files }, transfer);
-				loadedId = out.modelId;
+				// The shared model lock is held until the worker has its copy, so a
+				// clear or replace in Settings waits rather than tearing the load.
+				await browserModelStore.readReady(imageBrowserModel(def), async (snapshot) => {
+					const files: Array<{ path: string; buffer: ArrayBuffer }> = [];
+					const transfer: Transferable[] = [];
+					for (const file of def.files) {
+						opts.signal?.throwIfAborted();
+						const buffer = await (await snapshot.file(file.path)).arrayBuffer();
+						files.push({ path: file.path, buffer });
+						transfer.push(buffer);
+						opts.onProgress?.(`Loading ${file.path}`, files.length / def.files.length);
+					}
+					const out = await rpc.call<{ modelId: string }>('load', { modelId: def.id, files }, transfer);
+					loadedId = out.modelId;
+				}, { signal: opts.signal });
 			} catch (err) {
 				rpc.reset();
 				if (err instanceof DOMException && err.name === 'AbortError') {
 					throw new ImageGenError('CANCELLED', 'Model load cancelled');
 				}
+				if (err instanceof ModelStoreError && err.code === 'MISSING_FILES') throw new ImageGenError('NO_MODEL', err.message);
 				throw err;
 			} finally {
 				opts.signal?.removeEventListener('abort', abort);
@@ -206,12 +201,15 @@ function registerImageHost(family: 'sd' | 'flux2', createWorker: () => Worker): 
  registerBrowserAiHandler(`image:${family}`, {
   kind: 'generate',
   async run(action, value, context) {
-   const payload = value as { modelId: string; dirId?: string; prompt?: string; seed?: number; width?: number; height?: number };
-   const requested = `${payload.modelId}:${payload.dirId ?? ''}`;
+   const payload = value as { modelId: string; prompt?: string; seed?: number; width?: number; height?: number };
+   // A clear or replace in Settings changes the revision; the next run reloads.
+   const revision = await browserModelStore.readReady(imageBrowserModel(imageModelDef(payload.modelId)), async (snapshot) => snapshot.manifest.revision, { signal: context.signal })
+    .catch((err: unknown) => { throw err instanceof ModelStoreError && err.code === 'MISSING_FILES' ? new ImageGenError('NO_MODEL', err.message) : err; });
+   const requested = `${payload.modelId}:${revision}`;
    const epoch = generation;
    if (!loaded || key !== requested) {
     loaded?.dispose(); loaded = null; key = null; context.state('loading');
-    const candidate = await createWorkerEngine(createWorker, `image-${family}`, payload.modelId).load({ modelId: payload.modelId, dirId: payload.dirId, signal: context.signal, onProgress: (note, fraction) => context.progress({ note, fraction }) });
+    const candidate = await createWorkerEngine(createWorker, `image-${family}`, payload.modelId).load({ modelId: payload.modelId, signal: context.signal, onProgress: (note, fraction) => context.progress({ note, fraction }) });
     if (context.signal.aborted || generation !== epoch) { candidate.dispose(); throw context.signal.reason ?? new Error('AI host handed over'); }
     loaded = candidate;
     key = requested; context.state('loaded');
@@ -238,7 +236,7 @@ function hostedImageEngine(family: 'sd' | 'flux2', fallback: string): { load(opt
  return {
   async load(opts) {
    const modelId = opts.modelId ?? fallback;
-   const selection = { modelId, dirId: opts.dirId };
+   const selection = { modelId };
    const requirements = { webgpu: true, features: ['shader-f16'] };
    await runBrowserAi(`image:${family}`, 'load', selection, modelId, { signal: opts.signal, onProgress: (value) => { const p = value as { note: string; fraction?: number }; opts.onProgress?.(p.note, p.fraction); } }, requirements);
    return {

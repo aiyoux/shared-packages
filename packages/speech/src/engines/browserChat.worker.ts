@@ -1,25 +1,35 @@
-/** Small text-only browser LLM. Model files are fetched by Transformers.js and
- * cached in the browser; no input is sent to the monitor or an API provider. */
+/** Small text-only browser LLM. Weights come only from the browser model store
+ * (Settings → AI models); no input is sent to the monitor or an API provider. */
+import { browserModelStore, transformersCache } from '@shared-packages/model-store';
+import { BROWSER_CHAT_MODELS } from '../models.js';
+import { configureTransformersEnv, type TransformEnv } from './transformersEnv.js';
 import { serveWorkerRpc } from './workerRpc.js';
 
-const MODEL = 'onnx-community/SmolLM2-135M-Instruct-ONNX';
 type ChatTurn = { role: 'system' | 'user' | 'assistant'; content: string };
-let generator: ((messages: ChatTurn[], options: object) => Promise<unknown>) | null = null;
-let loadedDevice: 'wasm' | 'webgpu' | null = null;
+type Generator = (messages: ChatTurn[], options: object) => Promise<unknown>;
+let generator: Generator | null = null;
+let loadedKey: string | null = null;
+
+/** Reload when the device or the stored files change (a clear or replace in Settings). */
+async function generatorFor(device: 'wasm' | 'webgpu'): Promise<Generator> {
+	const def = BROWSER_CHAT_MODELS[device];
+	return browserModelStore.readReady(def.model, async (files) => {
+		const key = `${device}|${files.manifest.revision}`;
+		if (generator && loadedKey === key) return generator;
+		const mod = await import('@huggingface/transformers');
+		configureTransformersEnv(mod as unknown as { env: TransformEnv }, transformersCache(def.model, files));
+		generator = await mod.pipeline('text-generation', def.repo, { device, dtype: def.dtype }) as unknown as Generator;
+		loadedKey = key;
+		return generator;
+	});
+}
 
 serveWorkerRpc({
 	async generate(payload) {
 		const device = payload.device === 'webgpu' ? 'webgpu' : 'wasm';
 		const messages = payload.messages as ChatTurn[];
 		if (!Array.isArray(messages) || messages.length === 0) throw new Error('Chat messages are required');
-		if (!generator || loadedDevice !== device) {
-			const { pipeline } = await import('@huggingface/transformers');
-			generator = await pipeline('text-generation', MODEL, {
-				device, dtype: device === 'webgpu' ? 'q4f16' : 'q4'
-			}) as unknown as typeof generator;
-			loadedDevice = device;
-		}
-		const output = await generator!(messages, { max_new_tokens: 256, do_sample: false });
+		const output = await (await generatorFor(device))(messages, { max_new_tokens: 256, do_sample: false });
 		const first = Array.isArray(output) ? output[0] as { generated_text?: unknown } : null;
 		const generated = first?.generated_text;
 		const answer = Array.isArray(generated)

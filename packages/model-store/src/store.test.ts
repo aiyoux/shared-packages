@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createModelStore, type ModelLock } from './store.js';
+import { createModelStore, requireFiles, type ModelLock } from './store.js';
 import { modelPathFromRequest, transformersCache } from './transformers.js';
 import type { ModelDef } from './types.js';
 
@@ -129,13 +129,29 @@ describe('browser model store', () => {
     expect(() => store.write(def.id, '../escape', bytes('x'))).toThrow('Invalid model file path');
     expect((await store.status({ ...def, files: [{ path: 'toString' }] })).files[0].state).toBe('missing');
   });
-  it('matches both transformers cache URLs and returns an optional-file 404 without fetching', async () => {
+  it('matches both transformers cache URLs and reports a missing file as a cache miss', async () => {
     const { store } = setup();
     await store.write(def.id, 'config.json', bytes('{}'));
     const cache = transformersCache(def, store);
     expect(modelPathFromRequest('/models/a/b/config.json', def)).toBe('config.json');
     expect(await (await cache.match('https://huggingface.co/a/b/resolve/abc/config.json'))?.text()).toBe('{}');
-    expect((await cache.match('/models/a/b/missing.json'))?.status).toBe(404);
+    // transformers.js treats any Response as a hit, so a miss must be undefined.
+    expect(await cache.match('/models/a/b/missing.json')).toBeUndefined();
     await expect(cache.put()).rejects.toThrow('Engines cannot write');
+  });
+  it('serves a held snapshot to the transformers cache', async () => {
+    const { store } = setup();
+    await store.write(def.id, 'onnx/model.onnx', bytes('one'));
+    const text = await store.readReady(def, files => transformersCache(def, files)
+      .match('https://huggingface.co/a/b/resolve/main/onnx/model.onnx').then(response => response!.text()));
+    expect(text).toBe('one');
+  });
+  it('ignores missing optional files until a consumer requires one', async () => {
+    const { store } = setup();
+    const voices: ModelDef = { ...def, id: 'test:voices', files: [{ path: 'a.bin', optional: true }, { path: 'b.bin', optional: true }] };
+    await store.write(voices.id, 'a.bin', bytes('a'));
+    expect((await store.status(voices)).ready).toBe(true);
+    expect((await store.status(requireFiles(voices, ['a.bin']))).ready).toBe(true);
+    await expect(store.require(requireFiles(voices, ['b.bin']))).rejects.toThrow('b.bin (missing)');
   });
 });

@@ -1,3 +1,4 @@
+import { browserModelStore } from '@shared-packages/model-store';
 import { SCAN_DETECTORS, resolveDetectorId } from './detectors.js';
 import type { ScanDetectorId, ScanEngine, ScanLoadProgress } from './types.js';
 
@@ -27,8 +28,6 @@ export type LoadScanOptions = {
 	detector?: ScanDetectorId | string;
 	/** Classic-script URL for opencv.js (required in Vite/ESM). */
 	opencvUrl?: string;
-	/** Weight URL for single-file ONNX detectors (docquad, docaligner, yolo-pose). */
-	modelUrl?: string;
 	/** Download / init progress. Safe to call from the UI. */
 	onProgress?: (info: ScanLoadProgress) => void;
 };
@@ -55,12 +54,8 @@ export async function loadScanEngine(opts: LoadScanOptions = {}): Promise<ScanEn
 		return hit;
 	}
 	const meta = SCAN_DETECTORS[detector];
-	const modelUrl = opts.modelUrl ?? meta.defaultModelUrl;
-	if (meta.needsModelUrl && !modelUrl) {
-		throw new Error(
-			`${meta.label} needs a model URL. Set one in the scan tool, then reselect this detector. ${meta.weightHint}`
-		);
-	}
+	// Learned detectors fail here, naming the missing file, before any runtime loads.
+	if (meta.model) await browserModelStore.require(meta.model);
 	let engine: ScanEngine;
 	if (detector === 'opencv') {
 		const { opencvEngine, setOpenCvProgress } = await import('./engines/opencv.js');
@@ -73,13 +68,15 @@ export async function loadScanEngine(opts: LoadScanOptions = {}): Promise<ScanEn
 		engine = opencvEngine;
 	} else if (detector === 'scanic') {
 		const { createScanicEngine } = await import('./engines/scanic.js');
-		engine = createScanicEngine({ modelUrl: opts.modelUrl });
+		engine = createScanicEngine({});
 		await engine.load();
 	} else {
 		const { createOnnxQuadEngine } = await import('./engines/onnxQuad.js');
+		const model = meta.model!;
 		engine = createOnnxQuadEngine({
 			id: detector,
-			modelUrl: modelUrl ?? '',
+			loadModel: (signal) => browserModelStore.readReady(model, async (files) =>
+				new Uint8Array(await (await files.file(model.files[0]!.path)).arrayBuffer()), { signal }),
 			mode: meta.decode ?? 'heatmap',
 			inputSize: meta.modelInputSize ?? 256,
 			keypoints: 4,

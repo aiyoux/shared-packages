@@ -1,15 +1,13 @@
 /**
- * Shared transformers.js/onnxruntime-web environment configuration. Both
- * consumers (transformersStt, kokoroTts) route weight fetches through the
- * VFS-backed cache and run ORT on the vendored same-origin wasm pair.
+ * Shared transformers.js/onnxruntime-web environment configuration. Every
+ * consumer (STT, Kokoro, browser chat) reads weights only from the browser
+ * model store through `offlineTransformersEnv` and runs ORT on the vendored
+ * same-origin wasm pair.
  */
 
-export type TransformEnv = {
-	allowLocalModels: boolean;
-	allowRemoteModels: boolean;
-	useBrowserCache: boolean;
-	useCustomCache: boolean;
-	customCache?: unknown;
+import { offlineTransformersEnv, type TransformersEnvFlags, type transformersCache } from '@shared-packages/model-store';
+
+export type TransformEnv = TransformersEnvFlags & {
 	backends: {
 		onnx: {
 			wasm: { wasmPaths: string; numThreads?: number; proxy?: boolean };
@@ -26,15 +24,11 @@ let configured = false;
  */
 export function configureTransformersEnv(
 	mod: { env: TransformEnv },
-	cache: unknown
+	cache: ReturnType<typeof transformersCache>
 ): void {
-	mod.env.customCache = cache;
+	offlineTransformersEnv(mod.env, cache);
 	if (configured) return;
 	configured = true;
-	mod.env.allowLocalModels = false;
-	mod.env.allowRemoteModels = true;
-	mod.env.useBrowserCache = false;
-	mod.env.useCustomCache = true;
 	mod.env.backends.onnx.wasm.wasmPaths = '/vendor/ort/';
 	mod.env.backends.onnx.wasm.numThreads =
 		typeof crossOriginIsolated !== 'undefined' && crossOriginIsolated ? 2 : 1;

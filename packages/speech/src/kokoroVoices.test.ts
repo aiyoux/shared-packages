@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { describe, expect, it } from 'vitest';
-import { KOKORO_VOICES, kokoroVoiceDef } from './models.js';
+import { KOKORO_VOICES, KOKORO_VOICES_MODEL, kokoroVoicesModel } from './models.js';
 
 // kokoro-js keeps its voice table internal (only a loaded instance exposes
 // it), so read the ids and grades out of the shipped bundle: a library bump
@@ -31,9 +31,15 @@ describe('kokoro voice catalog', () => {
 
 	it('falls back to the first voice for a foreign or empty voice id', () => {
 		const first = KOKORO_VOICES[0]!.bin;
+		const required = (voice: string) => kokoroVoicesModel(voice).files.filter((file) => !file.optional).map((file) => file.path);
 		for (const voice of ['', 'Microsoft George', 'en_US-amy-medium']) {
-			expect(kokoroVoiceDef(voice).files.at(-1)!.path).toBe(first);
+			expect(required(voice)).toEqual([first]);
 		}
-		expect(kokoroVoiceDef('bm_george').files.at(-1)!.path).toBe('voices/bm_george.bin');
+		expect(required('bm_george')).toEqual(['voices/bm_george.bin']);
+	});
+
+	it('stores every voice bin as one optional file of the voices model', () => {
+		expect(KOKORO_VOICES_MODEL.files.map((file) => file.path)).toEqual(KOKORO_VOICES.map((v) => v.bin));
+		expect(KOKORO_VOICES_MODEL.files.every((file) => file.optional)).toBe(true);
 	});
 });

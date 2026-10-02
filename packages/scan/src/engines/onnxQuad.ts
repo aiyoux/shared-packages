@@ -145,7 +145,8 @@ export function yoloPoseToQuad(
 
 export type OnnxQuadConfig = {
 	id: ScanDetectorId;
-	modelUrl: string;
+	/** Model bytes from the browser model store; nothing is downloaded. */
+	loadModel: (signal?: AbortSignal) => Promise<Uint8Array>;
 	mode: OnnxDecodeMode;
 	inputSize: number;
 	keypoints?: number;
@@ -182,37 +183,6 @@ function reportProgress(config: OnnxQuadConfig, info: ScanLoadProgress) {
 	}
 }
 
-async function downloadModel(url: string, config: OnnxQuadConfig): Promise<Uint8Array> {
-	const res = await fetch(url);
-	if (!res.ok) throw new Error(`Failed to download ${config.id} weights from ${url} (${res.status})`);
-	const total = Number(res.headers.get('content-length')) || 0;
-	if (!res.body) {
-		const buf = new Uint8Array(await res.arrayBuffer());
-		reportProgress(config, { phase: 'download', loaded: buf.byteLength, total: buf.byteLength });
-		return buf;
-	}
-	const reader = res.body.getReader();
-	const chunks: Uint8Array[] = [];
-	let loaded = 0;
-	for (;;) {
-		const { done, value } = await reader.read();
-		if (done) break;
-		if (value) {
-			chunks.push(value);
-			loaded += value.byteLength;
-			reportProgress(config, { phase: 'download', loaded, total });
-		}
-	}
-	const out = new Uint8Array(loaded);
-	let offset = 0;
-	for (const chunk of chunks) {
-		out.set(chunk, offset);
-		offset += chunk.byteLength;
-	}
-	reportProgress(config, { phase: 'download', loaded, total: total || loaded });
-	return out;
-}
-
 function pickTensor(
 	named: Record<string, { data: unknown; dims: readonly number[] }>,
 	pick: (name: string, dims: readonly number[]) => boolean
@@ -238,7 +208,7 @@ export function createOnnxQuadEngine(config: OnnxQuadConfig): ScanEngine {
 					throw new Error(`${config.id} needs a browser worker context.`);
 				}
 				ort = (await import('onnxruntime-web')) as unknown as OrtModule;
-				const bytes = await downloadModel(config.modelUrl, config);
+				const bytes = await config.loadModel();
 				reportProgress(config, { phase: 'init' });
 				session = await ort.InferenceSession.create(bytes, { executionProviders: ['wasm'] });
 			})().catch((err) => {

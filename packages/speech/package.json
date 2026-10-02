@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": false,
   "type": "module",
-  "description": "Browser speech engines (STT: Web Speech, transformers.js, monitor AI; TTS: speechSynthesis, kokoro) with a VFS-backed model store.",
+  "description": "Browser speech engines (STT: Web Speech, transformers.js, monitor AI; TTS: speechSynthesis, kokoro, piper) reading weights from the browser model store.",
   "exports": {
     ".": {
       "types": "./src/index.ts",

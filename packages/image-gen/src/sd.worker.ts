@@ -3,7 +3,7 @@
  * SD-family diffusion worker: CLIP text-encode (transformers.js tokenizer +
  * ORT text encoder) → one Euler UNet step → VAE decode, all on WebGPU.
  *
- * The page reads the model files out of the VFS and hands them over as
+ * The page reads the model files out of the browser model store and hands them over as
  * transferable ArrayBuffers; CLIP tokenization uses the stored vocabulary
  * and merges directly, so nothing is fetched. Session IO shapes follow
  * Microsoft's ORT WebGPU js/sd-turbo recipe (fixed timestep 999,

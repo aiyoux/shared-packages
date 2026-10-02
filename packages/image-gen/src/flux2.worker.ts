@@ -6,7 +6,7 @@
  * the 1.25 dev line this q4 bundle was exported against — the SD engines'
  * pinned 1.22 wasm-only build can't run these graphs).
  *
- * The page reads the model files out of the VFS and hands them over as
+ * The page reads the model files out of the browser model store and hands them over as
  * transferable ArrayBuffers; external-data shards go straight into the
  * session as `externalData` entries keyed by the bundle's basenames. The
  * tokenizer files ride through a transformers.js custom cache served from
@@ -20,6 +20,7 @@
 import * as ortFlux from 'onnxruntime-web-flux2/webgpu';
 import type { InferenceSession } from 'onnxruntime-common';
 import { AutoTokenizer, env } from '@huggingface/transformers';
+import { offlineTransformersEnv } from '@shared-packages/model-store';
 import { imageModelDef, type Flux2Config } from './imageModels.js';
 import { ImageGenError } from './engines.js';
 import { f16ToFloat32, float32ToF16 } from './f16.js';
@@ -66,6 +67,7 @@ const TOKENIZER_ROOT_ALIASES: Record<string, string> = {
 	'generation_config.json': 'tokenizer/generation_config.json'
 };
 
+/** Serves the handed-over files; a miss is a cache miss, never a fetch. */
 function blobCache(repo: string, files: Map<string, ArrayBuffer>) {
 	return {
 		async match(request: Request | string | URL): Promise<Response | undefined> {
@@ -79,13 +81,13 @@ function blobCache(repo: string, files: Map<string, ArrayBuffer>) {
 			const resolved = path ? (files.has(path) ? path : TOKENIZER_ROOT_ALIASES[path]) : undefined;
 			const buffer = resolved ? files.get(resolved) : undefined;
 			if (!buffer) return undefined;
-			return new Response(buffer, {
+			return new Response(buffer.slice(0), {
 				status: 200,
 				headers: { 'Content-Type': 'application/octet-stream' }
 			});
 		},
 		async put(): Promise<void> {
-			// Read-only: every file the model needs was handed over up front.
+			throw new Error('Engines cannot write model weights; load files in Settings → AI models.');
 		}
 	};
 }
@@ -136,16 +138,11 @@ async function load(payload: Record<string, unknown>): Promise<{ modelId: string
 	await disposeSessions();
 
 	ortFlux.env.wasm.wasmPaths = '/vendor/ort-flux2/';
-	env.allowLocalModels = false;
-	env.allowRemoteModels = true;
-	env.useBrowserCache = false;
-	env.useCustomCache = true;
-	env.customCache = blobCache(def.repo, files) as never;
+	offlineTransformersEnv(env as never, blobCache(def.repo, files) as never);
 
+	// A repo id (not a URL) so the lookup keys are the repo's resolve URLs.
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	const tokenizer = await (AutoTokenizer as any).from_pretrained(
-		`https://huggingface.co/${def.repo}`
-	);
+	const tokenizer = await (AutoTokenizer as any).from_pretrained(def.repo);
 	checkCancelled();
 
 	const textEncoder = await ortFlux.InferenceSession.create(

@@ -47,12 +47,11 @@ async function importTtsEngine(id: TtsEngineId): Promise<TtsEngine> {
 }
 
 /**
- * Load one STT engine on demand. The (model, dir) pair is part of the cache
- * key so a folder change re-runs `load` — engine instances are singletons
- * that track their own selected model/dir.
+ * Load one STT engine on demand. The (model, device) pair is the cache key
+ * — engine instances are singletons that track their own selected model.
  */
 export async function loadSttEngine(id: SttEngineId, opts?: EngineLoadOpts): Promise<SttEngine> {
-	const key = `${opts?.modelId ?? ''}|${opts?.dirId ?? ''}|${opts?.device ?? ''}`;
+	const key = `${opts?.modelId ?? ''}|${opts?.device ?? ''}`;
 	const hit = sttLoaded.get(id);
 	if (hit && hit.key === key) return hit.engine;
 
@@ -62,9 +61,9 @@ export async function loadSttEngine(id: SttEngineId, opts?: EngineLoadOpts): Pro
 	return engine;
 }
 
-/** Load one TTS engine on demand. Same (model, dir) cache-key rule. */
+/** Load one TTS engine on demand. Same (model, device) cache-key rule. */
 export async function loadTtsEngine(id: TtsEngineId, opts?: TtsLoadOpts): Promise<TtsEngine> {
-	const key = `${opts?.modelId ?? ''}|${opts?.dirId ?? ''}|${opts?.device ?? ''}`;
+	const key = `${opts?.modelId ?? ''}|${opts?.device ?? ''}`;
 	const hit = ttsLoaded.get(id);
 	if (hit && hit.key === key) return hit.engine;
 

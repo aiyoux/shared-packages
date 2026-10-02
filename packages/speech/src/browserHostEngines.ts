@@ -6,7 +6,7 @@ import { KOKORO_82M } from './models.js';
 import { DEFAULT_PIPER_VOICE } from './piperVoices.js';
 import { createWorkerRpc, resetInferenceWorkers } from './engines/workerRpc.js';
 
-type Selection = Pick<TtsLoadOpts, 'modelId' | 'dirId' | 'device'>;
+type Selection = Pick<TtsLoadOpts, 'modelId' | 'device'>;
 type Payload = { selection: Selection; text?: string; audio?: Float32Array; sampleRate?: number; voice?: string; speed?: number; language?: string };
 let installed = false;
 const local = new Map<string, Promise<TtsEngine>>();
@@ -71,7 +71,7 @@ export function createHostedStt(): SttEngine {
   info,
   async probe() { return { supported: typeof WebAssembly !== 'undefined' }; },
   async load(modelId, opts) {
-   selection = { modelId: modelId ?? undefined, dirId: opts?.dirId };
+   selection = { modelId: modelId ?? undefined };
    await invoke('load', {}, { signal: opts?.signal, onProgress: (p) => opts?.onProgress?.(p as Parameters<NonNullable<TtsLoadOpts['onProgress']>>[0]) });
   },
   async startListening() { const { createMicRecorder } = await import('./mic.js'); recorder = await createMicRecorder(); await recorder.start(); },
@@ -98,12 +98,12 @@ export function createHostedTts(id: 'kokoro' | 'piper'): TtsEngine {
  const hosted: TtsEngine = {
   info,
   async load(opts) {
-   selection = { modelId: opts?.modelId, dirId: opts?.dirId, device: opts?.device };
+   selection = { modelId: opts?.modelId, device: opts?.device };
    await invoke('load', {}, { signal: opts?.signal, onProgress: (p) => opts?.onProgress?.(p as Parameters<NonNullable<TtsLoadOpts['onProgress']>>[0]) });
   },
   async listVoices() { return (await engine(id) as TtsEngine).listVoices(); },
   synthesize(text, opts) {
-   return invoke<TtsRender>('synthesize', { text, voice: opts?.voice, speed: opts?.speed, ...(opts?.dirId ? { selection: { ...selection, dirId: opts.dirId } } : {}) }, { ...opts?.browserHost, title: opts?.browserHost?.title ?? text.slice(0, 80), signal: opts?.signal, onProgress: (p) => opts?.onSegment?.(p as { done: number; total: number }) });
+   return invoke<TtsRender>('synthesize', { text, voice: opts?.voice, speed: opts?.speed }, { ...opts?.browserHost, title: opts?.browserHost?.title ?? text.slice(0, 80), signal: opts?.signal, onProgress: (p) => opts?.onSegment?.(p as { done: number; total: number }) });
   },
   async speak(text, opts) {
    hosted.stop(); const controller = new AbortController(); speaking = controller;

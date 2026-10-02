@@ -1,14 +1,13 @@
 /// <reference lib="webworker" />
 /**
  * Kokoro inference worker: kokoro-js + transformers.js (ORT wasm or WebGPU)
- * off the page's main thread. The page reads the model files out of the VFS
- * and hands them over as Blobs; transformers.js reads them through a custom
- * cache, so nothing is fetched. Voice bins come from the origin-wide
- * 'kokoro-voices' Cache Storage, which the page seeds before generating.
+ * off the page's main thread. The page reads the model files and voice bins
+ * out of the browser model store and hands them over; transformers.js reads
+ * the model through a custom cache, and kokoro-js's own voice fetch is served
+ * from the handed-over bins, so nothing is fetched or copied elsewhere.
  */
 
 import { configureTransformersEnv } from './transformersEnv.js';
-import { repoPathFromUrl } from './transformersVfsCache.js';
 import { serveWorkerRpc } from './workerRpc.js';
 
 type RawAudio = { audio: Float32Array; sampling_rate: number };
@@ -17,19 +16,44 @@ type KokoroTts = {
 };
 
 let tts: KokoroTts | null = null;
+const voices = new Map<string, ArrayBuffer>();
 
-/** Serves the handed-over model files; a miss returns undefined (library fetches). */
+/**
+ * kokoro-js reads a voice from the 'kokoro-voices' Cache Storage or fetches
+ * it from huggingface.co and stores a copy there. In this worker the store
+ * is the only source: its cache never matches and never keeps a copy, and its
+ * voice fetch is answered from the bins the page sent.
+ */
+const VOICE_URL = /^https:\/\/huggingface\.co\/onnx-community\/Kokoro-82M-v1\.0-ONNX\/resolve\/[^/]+\/voices\/([a-z_]+)\.bin$/;
+Object.defineProperty(self, 'caches', {
+	configurable: true,
+	value: { open: async () => ({ match: async () => undefined, put: async () => {} }) }
+});
+const networkFetch = self.fetch.bind(self);
+self.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+	const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+	const voice = VOICE_URL.exec(url)?.[1];
+	if (voice) {
+		const bytes = voices.get(voice);
+		if (!bytes) return new Response(null, { status: 404, statusText: `Voice ${voice} is not loaded` });
+		return new Response(bytes.slice(0), { headers: { 'content-type': 'application/octet-stream' } });
+	}
+	return networkFetch(input, init);
+};
+
+/** Serves the handed-over model files; a miss is a cache miss, never a fetch. */
 function blobCache(repo: string, files: Map<string, Blob>) {
+	const prefix = `https://huggingface.co/${repo}/resolve/`;
 	return {
 		async match(request: Request | string | URL): Promise<Response | undefined> {
 			const url = typeof request === 'string' ? request : 'url' in request ? request.url : String(request);
-			const path = repoPathFromUrl(url, repo);
-			const blob = path ? files.get(path) : undefined;
+			const rest = url.startsWith(prefix) ? url.slice(prefix.length) : '';
+			const blob = rest.includes('/') ? files.get(decodeURIComponent(rest.slice(rest.indexOf('/') + 1))) : undefined;
 			if (!blob) return undefined;
 			return new Response(blob, { status: 200, headers: { 'Content-Type': 'application/octet-stream' } });
 		},
 		async put(): Promise<void> {
-			// Read-only: every file the model needs was handed over up front.
+			throw new Error('Engines cannot write model weights; load files in Settings → AI models.');
 		}
 	};
 }
@@ -64,7 +88,7 @@ serveWorkerRpc({
 		const mod = await import('@huggingface/transformers');
 		configureTransformersEnv(
 			mod as unknown as Parameters<typeof configureTransformersEnv>[0],
-			blobCache(repo, fileMap)
+			blobCache(repo, fileMap) as never
 		);
 		const { KokoroTTS } = await import('kokoro-js');
 		try {
@@ -81,6 +105,12 @@ serveWorkerRpc({
 		}
 		// The session holds the weights now; let the handed-over Blobs go.
 		fileMap.clear();
+		return { result: null };
+	},
+
+	async voice(payload) {
+		const { voice, bytes } = payload as { voice: string; bytes: ArrayBuffer };
+		voices.set(voice, bytes);
 		return { result: null };
 	},
 

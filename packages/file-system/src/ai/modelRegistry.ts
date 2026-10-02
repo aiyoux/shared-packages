@@ -18,7 +18,7 @@ import type { ModelDef } from '@shared-packages/model-store';
 import type { AiModelRef, AiTaskKey } from './selection.js';
 
 export type AiLibraryModelStatus =
-	/** Weights present in the owner's store (VFS manifests, monitor library). */
+	/** Weights present in the owner's store (browser model store, monitor library). */
 	| 'installed'
 	/** Catalogued but no weights present yet. */
 	| 'not-installed'
@@ -26,7 +26,7 @@ export type AiLibraryModelStatus =
 	| 'partial'
 	/** Configured, but the runtime/device/service is not ready. */
 	| 'unavailable'
-	/** Runs as a service/URL (webspeech packs, detector-weight URLs) — nothing to install. */
+	/** Runs as a service (webspeech packs, monitor providers) — nothing to install. */
 	| 'remote'
 	/** Ships with the app or is cached out of our control. */
 	| 'built-in';
@@ -41,6 +41,8 @@ export type AiLibraryModelRow = {
 	status: AiLibraryModelStatus;
 	/** Files managed by the dedicated browser model store. */
 	browserModel?: ModelDef;
+	/** One row over many store models (Piper's voices): the card shows the picked one, starting at `browserModel`. */
+	browserModelOptions?: readonly ModelDef[];
 	/** Optional in-app import flow (package import card, monitor library install). */
 	install?: () => Promise<void>;
 	/** Use "Import files" when the action opens a file chooser. */
@@ -56,7 +58,7 @@ export type AiModelSection = {
 	/** A specialized app picker can keep its durable choice within classify. */
 	selectionTask?: AiTaskKey;
 	title: string;
-	/** Lazy: status checks read VFS manifests or the monitor, per section. */
+	/** Lazy: status checks read the browser model store or the monitor, per section. */
 	models: () => Promise<AiLibraryModelRow[]>;
 };
 

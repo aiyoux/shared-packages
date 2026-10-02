@@ -1,17 +1,11 @@
-/**
- * Image model weight catalogs, verified against the live HF repos
- * (research: file lists + byte sizes from the repo trees).
- *
- * Each entry lists the files its engine loads. Small config/tokenizer files
- * ride along so the transformers.js custom VFS cache can serve the CLIP
- * tokenizer offline — the catalog is the pre-download / manifest / display
- * list, and `ingestResponse` captures anything extra the runtime pulls.
- */
+import type { ModelDef, ModelFileDef } from '@shared-packages/model-store';
 
-export type ImageModelFile = {
-	path: string;
-	bytes?: number;
-};
+/**
+ * Image model weight catalogs: every file each engine loads, pinned to an
+ * upstream revision with sizes and Blake3 hashes streamed from it by
+ * `model-store/scripts/hash-catalog.mjs`. Engines read these files only from
+ * the browser model store (Settings → AI models), so the list is complete.
+ */
 
 export type ImageModelEngine = 'sd-turbo' | 'sdxs' | 'flux2-klein';
 
@@ -51,14 +45,15 @@ export type Flux2Config = {
 
 export type ImageModelDef = {
 	id: string;
+	label: string;
 	/** Diffusion family this def belongs to. */
 	engine: ImageModelEngine;
 	task: 't2i';
 	repo: string;
-	revision: 'main';
+	/** Pinned commit the sizes and hashes were generated from. */
+	revision: string;
 	dtype: 'fp16' | 'fp32';
-	files: readonly ImageModelFile[];
-	sizeBytes: number;
+	files: readonly ModelFileDef[];
 	/** Fixed square output edge (SD-family engines). */
 	resolution?: number;
 	/** Selectable square edges in px, multiples of 16 (variable engines). */
@@ -76,7 +71,7 @@ export type ImageModelDef = {
 	languages: readonly string[];
 };
 
-const f = (path: string, bytes?: number): ImageModelFile => ({ path, bytes });
+const f = (path: string, bytes: number, blake3: string): ModelFileDef => ({ path, bytes, blake3 });
 
 /**
  * Single-step distilled SD 2.1 (Euler, timestep 999, no CFG). Browser recipe
@@ -85,21 +80,21 @@ const f = (path: string, bytes?: number): ImageModelFile => ({ path, bytes });
  */
 export const SD_TURBO: ImageModelDef = {
 	id: 'sd-turbo',
+	label: 'SD-Turbo',
 	engine: 'sd-turbo',
 	task: 't2i',
 	repo: 'schmuell/sd-turbo-ort-web',
-	revision: 'main',
+	revision: 'ace89b7d2cd849f9a73914cdbb8a3ea60c853dd1',
 	dtype: 'fp32',
 	files: [
-		f('tokenizer/merges.txt', 524_619),
-		f('tokenizer/vocab.json', 1_059_962),
-		f('tokenizer/tokenizer_config.json'),
-		f('tokenizer/special_tokens_map.json'),
-		f('text_encoder/model.onnx', 681_393_168),
-		f('unet/model.onnx', 1_733_430_199),
-		f('vae_decoder/model.onnx', 99_094_314)
+		f('tokenizer/merges.txt', 524619, '64a704d74f18e52434c694dac7226f4dfa267600c615929126c4795be0d3d8d9'),
+		f('tokenizer/vocab.json', 1059962, 'c3d996e86b659a4c358aa0a9931bc18e4388a75753495399d874b1c3271511e4'),
+		f('tokenizer/tokenizer_config.json', 855, '1e6c9bae58cd4af031ab5b6e8dafd47ae18bc24de4775549bbfa306723f88bba'),
+		f('tokenizer/special_tokens_map.json', 574, 'a329c76562245867fbb39793c841ed4028fa24a523f89bf4cd803df9f4a989b7'),
+		f('text_encoder/model.onnx', 681393168, '02807df49ad7380f4cfb59dfffb99bf0006a11dfeff6f60b43a201eab5f95297'),
+		f('unet/model.onnx', 1733430199, '67c7c35264ff1f01ed6f7afb3361c984f03ac0fb2b5e8bf4978654e190eda0ca'),
+		f('vae_decoder/model.onnx', 99094314, '26de862522d72d41e1267cc97ce84fcc020190e669b92b6ab7fca25f177a219e')
 	],
-	sizeBytes: 2_515_502_262,
 	resolution: 512,
 	crossAttentionDim: 1024,
 	vaeScale: 0.18215,
@@ -115,19 +110,19 @@ export const SD_TURBO: ImageModelDef = {
  */
 export const SDXS_DREAMSHAPER: ImageModelDef = {
 	id: 'sdxs-dreamshaper',
+	label: 'SDXS DreamShaper 512',
 	engine: 'sdxs',
 	task: 't2i',
 	repo: 'skillsafeai/sdxs-512-dreamshaper-onnx-webgpu',
-	revision: 'main',
+	revision: 'b23bf8f4f809a0beb6d095bf52b5854e0b66caef',
 	dtype: 'fp16',
 	files: [
-		f('tokenizer/merges.txt'),
-		f('tokenizer/vocab.json'),
-		f('text_encoder.onnx', 246_275_486),
-		f('unet.onnx', 631_766_742),
-		f('vae_decoder.onnx', 2_467_568)
+		f('tokenizer/merges.txt', 524619, '64a704d74f18e52434c694dac7226f4dfa267600c615929126c4795be0d3d8d9'),
+		f('tokenizer/vocab.json', 1059962, 'c3d996e86b659a4c358aa0a9931bc18e4388a75753495399d874b1c3271511e4'),
+		f('text_encoder.onnx', 246275486, 'c260f3668079f4753b16ddc1b6f46b5d799c493a5b5c0d380c0a6f8124e43432'),
+		f('unet.onnx', 631766742, 'c916290e62de6ca69010dc6a0099d0e09f95163dec8128aa9a8ae768edf6a65c'),
+		f('vae_decoder.onnx', 2467568, 'd56505e84455c2ab007594d49443f82a885cb5646253f6701faa4b241b6f7656')
 	],
-	sizeBytes: 880_509_796,
 	resolution: 512,
 	crossAttentionDim: 768,
 	vaeScale: 1.0,
@@ -149,32 +144,32 @@ export const SDXS_DREAMSHAPER: ImageModelDef = {
  */
 export const FLUX2_KLEIN_4B: ImageModelDef = {
 	id: 'flux2-klein-4b',
+	label: 'FLUX.2 [klein] 4B (q4)',
 	engine: 'flux2-klein',
 	task: 't2i',
 	repo: 'MarkShark2/flux2-klein-4b-onnx-webgpu-q4',
-	revision: 'main',
+	revision: '929085adfad60491e9af05095cd280955fc0c29d',
 	dtype: 'fp16',
 	files: [
-		f('flux2-config.json', 10_641),
-		f('tokenizer/tokenizer.json', 11_422_650),
-		f('tokenizer/chat_template.jinja', 4_168),
-		f('tokenizer/tokenizer_config.json', 377),
-		f('text-encoder-q4-manifest.json', 77),
-		f('flux2-klein-4b-text-encoder-q4.onnx', 1_844_725),
-		f('text-encoder-q4-00001.onnx_data', 2_136_381_440),
-		f('text-encoder-q4-00002.onnx_data', 430_080_000),
-		f('transformer-q4-manifest.json', 75),
-		f('flux2-klein-4b-transformer-q4.onnx', 1_550_157),
-		f('transformer-q4-00001.onnx_data', 2_128_121_856),
-		f('transformer-q4-00002.onnx_data', 415_703_040),
-		f('flux2-klein-4b-vae-decoder-pre-attn-fp16.onnx', 11_352_251),
-		f('flux2-klein-4b-vae-decoder-attn-chunk-fp16.onnx', 480),
-		f('flux2-klein-4b-vae-decoder-post-stage0-fp16.onnx', 85_202_062),
-		f('flux2-klein-4b-vae-decoder-post-stage1-fp16.onnx', 2_141_312),
-		f('flux2-klein-4b-vae-decoder-post-stage2-fp16.onnx', 1_196_419),
-		f('flux2-klein-4b-vae-decoder-post-stage3-fp16.onnx', 10_460)
+		f('flux2-config.json', 10641, '00f117412f11a5a8ebc13db79d73a97df04f0b53392f2fd9f243e45a8b980063'),
+		f('tokenizer/tokenizer.json', 11422650, '4cb4172c5eb12944fd15eff0238c36a26032ea4433c82a1413cbfad4ac366267'),
+		f('tokenizer/chat_template.jinja', 4168, '72a1a5e64f5ff443c86b9332e82c85afd838c9e398b8e8f8bb38579d0e76d892'),
+		f('tokenizer/tokenizer_config.json', 377, 'be78225ca5c14bb3186fb787df3d6969f6bb8cf1b6ccd694f2d8350f4ed52872'),
+		f('text-encoder-q4-manifest.json', 77, '2ac6e078c4275ab7771854c1fcdcf96192e21047f3b040b2f6a3bd2bdbb149bf'),
+		f('flux2-klein-4b-text-encoder-q4.onnx', 1844725, '1d3b3c83cd8ea7dfe4cf722676e3134bba85e34f7ce069c5bf064731327bc458'),
+		f('text-encoder-q4-00001.onnx_data', 2136381440, 'da3587c2e02c574da762b7ee138501991b1bef2bef0b5b7ed4a960cdba2d86aa'),
+		f('text-encoder-q4-00002.onnx_data', 430080000, 'f008ed69eb9d6f6bb0607c198286c6fdfbf8c7d8ba225eee1e949c1e25b04498'),
+		f('transformer-q4-manifest.json', 75, 'b7ee9471d956b4fb58b8f272ecc9a665771c56c0eacbc15e79ae1bc8941a5e02'),
+		f('flux2-klein-4b-transformer-q4.onnx', 1550157, 'd7a8cdbc2ee5c77df56940dfeda7b1a167cb293d6b19612e5e27fe2e15eed612'),
+		f('transformer-q4-00001.onnx_data', 2128121856, '773e57e8fc93d01855af3ef89dc74a59616d9d6bf8617110bef9098ae2f9bbff'),
+		f('transformer-q4-00002.onnx_data', 415703040, '4511fb3599b1b80084c7bf055cfee18dbf357b535275cca37b701a2d46fe6825'),
+		f('flux2-klein-4b-vae-decoder-pre-attn-fp16.onnx', 11352251, '40dbd20a792dada6e97fa1278e674276d33cc5b6ed70e07b7382f04730481df5'),
+		f('flux2-klein-4b-vae-decoder-attn-chunk-fp16.onnx', 480, '429b1ceab844fb3f9c4f0e36183bf707ab162e5b253caf0df774dac3c5196d23'),
+		f('flux2-klein-4b-vae-decoder-post-stage0-fp16.onnx', 85202062, '85db9a6d6c4397bf031d9fd099c6d9b1523bc1409ae9578bd2163e9745d55367'),
+		f('flux2-klein-4b-vae-decoder-post-stage1-fp16.onnx', 2141312, 'cc2caedecb7024175c85446d2540ed9902541dd89dc5ef83c0ca89b25340e13c'),
+		f('flux2-klein-4b-vae-decoder-post-stage2-fp16.onnx', 1196419, 'bd10fc02500b1f3c0baf131b76f76d8f6286129dc9cd99939bb22a944ab20716'),
+		f('flux2-klein-4b-vae-decoder-post-stage3-fp16.onnx', 10460, 'd59da4290ede287675ce12fa37d9907bf5235859f4943984c044c43e3a39eccb')
 	],
-	sizeBytes: 5_225_022_190,
 	sizes: [256, 512, 768, 1024],
 	flux2: {
 		textSeqLen: 512,
@@ -224,7 +219,30 @@ export function imageModelDef(id: string): ImageModelDef {
 	return found;
 }
 
-/** Resolve URL for one file inside an image model repo. */
+/** Pinned download URL for one file inside an image model repo. */
 export function hfImageResolveUrl(def: Pick<ImageModelDef, 'repo' | 'revision'>, path: string): string {
 	return `https://huggingface.co/${def.repo}/resolve/${def.revision}/${path}`;
+}
+
+const browserModels = new WeakMap<ImageModelDef, ModelDef>();
+/** The store's view of an image def — derived, so each model is declared once. */
+export function imageBrowserModel(def: ImageModelDef): ModelDef {
+	let model = browserModels.get(def);
+	if (!model) {
+		model = {
+			id: `image:${def.id}`,
+			task: 'image-generation',
+			label: def.label,
+			license: def.license,
+			files: def.files.map((file) => ({ ...file, url: hfImageResolveUrl(def, file.path) })),
+			origin: { kind: 'hf', repo: def.repo, revision: def.revision }
+		};
+		browserModels.set(def, model);
+	}
+	return model;
+}
+
+/** Total download size, from the catalog's file sizes. */
+export function imageModelBytes(def: ImageModelDef): number {
+	return def.files.reduce((sum, file) => sum + (file.bytes ?? 0), 0);
 }
