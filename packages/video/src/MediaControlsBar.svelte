@@ -89,9 +89,11 @@
 		align-items: center;
 	}
 
-	/* overlay: glass bar over a video frame */
+	/* overlay: glass bar over a video frame. In a narrow stage the speed
+	 * control wraps onto its own line instead of overflowing the frame. */
 	.overlay {
-		gap: 16px;
+		flex-wrap: wrap;
+		gap: 8px 16px;
 		background: rgba(255, 255, 255, 0.1);
 		backdrop-filter: blur(10px);
 		padding: 10px 16px;
@@ -111,6 +113,8 @@
 		transform: scale(1.1);
 	}
 	.overlay .progress-bar {
+		flex: 1 1 200px;
+		min-width: 0;
 		gap: 12px;
 	}
 	.overlay .time,
@@ -130,6 +134,7 @@
 	.overlay .seek-slider,
 	.overlay .speed-slider {
 		flex: 1;
+		min-width: 0;
 		height: 4px;
 		border-radius: var(--radius-2xs);
 		cursor: pointer;
