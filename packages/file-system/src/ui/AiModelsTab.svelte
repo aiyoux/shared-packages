@@ -32,6 +32,8 @@
 	} from '../ai/index.js';
 	import { listProfiles as listMonitorProfiles } from '../monitor/credentials.js';
 	import type { MonitorConnectionProfileV1 } from '../monitor/types.js';
+	import ModelFilesCard from './ModelFilesCard.svelte';
+	import ModelStorageFooter from './ModelStorageFooter.svelte';
 	import MonitorModelsPanel from './MonitorModelsPanel.svelte';
 	import MonitorStatus from './MonitorStatus.svelte';
 	import { canConfigureNativeTask } from '../ai/nativeModelForm.js';
@@ -303,7 +305,7 @@
 						{#if row.sizeBytes}
 							<span class="hint">{sizeLabel(row.sizeBytes)}</span>
 						{/if}
-						{#if row.install}
+						{#if row.install && !row.browserModel}
 							<button
 								type="button"
 								class="ds-btn ds-btn--sm ds-btn--secondary"
@@ -314,7 +316,7 @@
 								{inflight.has(rowKey(section.id, row)) ? 'Working…' : row.installLabel ?? 'Install'}
 							</button>
 						{/if}
-						{#if row.remove}
+						{#if row.remove && !row.browserModel}
 							<button
 								type="button"
 								class="ds-btn ds-btn--sm ds-btn--ghost"
@@ -325,6 +327,7 @@
 								Remove
 							</button>
 						{/if}
+						{#if row.browserModel}<ModelFilesCard def={row.browserModel} onChanged={() => void refreshSection(section)} />{/if}
 						{#if row.note}
 							<p class="hint">{row.note}</p>
 						{/if}
@@ -365,6 +368,8 @@
 				{/each}
 			</div>
 		{/if}
+		<p class="hint">Connect to another device or add a monitor to fetch models automatically. Remote model sources are being integrated.</p>
+		<ModelStorageFooter />
 		{@render modelInstallation?.(refreshLibrary)}
 		<details class="host-status" data-testid="ai-browser-host">
 			<summary>Browser model status</summary>

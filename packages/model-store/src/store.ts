@@ -99,10 +99,11 @@ export function createModelStore(options: {
       await (await (await dir(id)).getDirectoryHandle('.data')).removeEntry(stored.storagePath.slice(6));
     } catch (error) { if (!missing(error)) console.warn('Unused model bytes can be reclaimed on the next write', error); }
   }
-  async function statusUnlocked(def: ModelDef, verify = false): Promise<ModelStatus> {
+  async function statusUnlocked(def: ModelDef, verify = false, signal?: AbortSignal): Promise<ModelStatus> {
     const data = await manifest(def.id);
     const files: ModelStatus['files'] = [];
     for (const file of def.files) {
+      signal?.throwIfAborted();
       validPath(file.path);
       const actual = Object.hasOwn(data.files, file.path) ? data.files[file.path] : undefined;
       let state: ModelStatus['files'][number]['state'] = 'missing';
@@ -114,8 +115,8 @@ export function createModelStore(options: {
           if (verify && state === 'present') {
             const hash = await createBLAKE3(); hash.init();
             const reader = bytes.stream().getReader();
-            try { while (true) { const part = await reader.read(); if (part.done) break; hash.update(part.value); } }
-            finally { reader.releaseLock(); }
+            try { while (true) { const part = await reader.read(); signal?.throwIfAborted(); if (part.done) break; hash.update(part.value); } }
+            finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }
             if (hash.digest('hex') !== actual.blake3) state = 'hash-mismatch';
           }
         } catch (error) { if (!missing(error)) throw error; }
@@ -138,6 +139,16 @@ export function createModelStore(options: {
           return dataFile(modelId, data.files[path]);
         } });
       }, signal);
+    },
+    /** Check readiness under the same shared lock as the consumer, avoiding clear/replace races. */
+    readReady<T>(def: ModelDef, run: (files: { file: (path: string) => Promise<File>; manifest: ModelManifest }) => Promise<T>, options: { signal?: AbortSignal; verify?: boolean } = {}): Promise<T> {
+      return api.read(def.id, async files => {
+        options.signal?.throwIfAborted();
+        const status = await statusUnlocked(def, options.verify, options.signal);
+        if (!status.ready) throw new ModelStoreError('MISSING_FILES', `${def.label}: ${status.files.filter(file => file.state !== 'present').map(file => `${file.path} (${file.state})`).join(', ')}. Load files in Settings → AI models.`);
+        options.signal?.throwIfAborted();
+        return run(files);
+      }, options.signal);
     },
     file(modelId: string, path: string): Promise<File> { return api.read(modelId, files => files.file(path)); },
     status(def: ModelDef, verify = false): Promise<ModelStatus> {

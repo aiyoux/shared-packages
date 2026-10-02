@@ -19,12 +19,13 @@
  */
 
 import { createWorkerRpc, type WorkerRpc } from './workerRpc.js';
-import { loadNovasrModel } from './novasrModel.js';
+import { loadNovasrModel, novasrModelRevision } from './novasrModel.js';
 export { NOVASR_MODEL_URL } from './novasrModel.js';
 export { novasrChunks, NOVASR_IN_RATE, NOVASR_OUT_RATE } from './novasrInference.js';
 
 let worker: WorkerRpc | null = null;
 let loading: Promise<void> | null = null;
+let loadedRevision: string | null = null;
 let loadController: AbortController | null = null;
 let epoch = 0;
 let tail: Promise<unknown> = Promise.resolve();
@@ -36,7 +37,7 @@ function bridge(): WorkerRpc {
 	);
 }
 
-/** Cancel fetches and terminate the worker, freeing its ORT session and WASM heap. */
+/** Cancel model loads and terminate the worker, freeing its ORT session and WASM heap. */
 export function disposeNovasr(): void {
 	epoch++;
 	loadController?.abort(new DOMException('NovaSR stopped', 'AbortError'));
@@ -56,20 +57,28 @@ function abortable<T>(task: Promise<T>, signal: AbortSignal): Promise<T> {
 	});
 }
 
-function load(): Promise<void> {
-	if (loading) return loading;
+async function load(signal?: AbortSignal): Promise<void> {
 	const controller = new AbortController();
 	loadController = controller;
-	const pending = abortable((async () => {
-		const model = await loadNovasrModel(controller.signal);
+	try {
+		signal?.throwIfAborted();
+		const revision = await abortable(novasrModelRevision(controller.signal), controller.signal);
 		controller.signal.throwIfAborted();
-		await bridge().call('load', { model }, [model.buffer]);
-		controller.signal.throwIfAborted();
-	})(), controller.signal);
-	loading = pending;
-	void pending.catch(() => { if (loading === pending) loading = null; })
-		.finally(() => { if (loadController === controller) loadController = null; });
-	return pending;
+		if (loading && loadedRevision === revision) return await loading;
+		if (loadedRevision !== revision) { loading = null; worker?.reset(); }
+		loadedRevision = revision;
+		const pending = abortable((async () => {
+			const model = await loadNovasrModel(controller.signal);
+			controller.signal.throwIfAborted();
+			await bridge().call('load', { model }, [model.buffer]);
+			controller.signal.throwIfAborted();
+		})(), controller.signal);
+		loading = pending;
+		void pending.catch(() => { if (loading === pending) loading = null; });
+		return await pending;
+	} finally {
+		if (loadController === controller) loadController = null;
+	}
 }
 
 /** Upsample in the host's cached worker. Concurrent calls are serialized. */
@@ -86,7 +95,7 @@ export async function novasrUpsample(
 		const aborted = () => disposeNovasr();
 		opts.signal?.addEventListener('abort', aborted, { once: true });
 		try {
-			await load();
+			await load(opts.signal);
 			opts.signal?.throwIfAborted();
 			if (submittedEpoch !== epoch) throw new DOMException('NovaSR stopped', 'AbortError');
 			// Transfer a copy: callers keep ownership of their decoded input.

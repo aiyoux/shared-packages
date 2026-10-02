@@ -96,10 +96,10 @@
     "test:all": "npm run check:test-coverage && npm run test && npm run test:b2 && npm run test:node && npm run test:component",
     "check": "svelte-check --tsconfig ./tsconfig.json && npm run check:test-coverage"
   },
-
   "dependencies": {
     "@shared-packages/bytes-gate": "file:../bytes-gate",
-    "@sqlite.org/sqlite-wasm": "3.53.0-build1"
+    "@sqlite.org/sqlite-wasm": "3.53.0-build1",
+    "@shared-packages/model-store": "file:../model-store"
   },
   "peerDependencies": {
     "svelte": "^5.0.0",

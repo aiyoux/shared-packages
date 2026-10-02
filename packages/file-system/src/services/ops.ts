@@ -4,7 +4,7 @@ import { tabOwner, watchOwner, currentTabDirectory, type Owner } from './owner.j
 import { serviceNames } from './names.js';
 import { createRecordStore, type RecordStore } from './store.js';
 
-export type OpKindId = 'copy' | 'extract' | 'compress' | 'encrypt' | 'decrypt' | 'import' | 'send' | 'receive' | 'transcribe' | 'speak' | 'generate' | 'video' | 'audio-tool' | 'chat' | 'agent-access' | 'agent-edit';
+export type OpKindId = 'copy' | 'extract' | 'compress' | 'encrypt' | 'decrypt' | 'import' | 'send' | 'receive' | 'transcribe' | 'speak' | 'generate' | 'video' | 'audio-tool' | 'chat' | 'agent-access' | 'agent-edit' | 'model-load';
 export type OpState = 'queued' | 'running' | 'paused' | 'done' | 'failed' | 'cancelled' | 'stopped' | 'landed';
 export type Endpoint = { kind: 'browser' | 'monitor' | 'b2' | 'device' | 'provider'; label: string };
 export type OpWhere = { executor: 'this-browser' | 'monitor' | 'device'; from?: Endpoint; to?: Endpoint; route?: 'server' | 'delegated' | 'webrtc' | 'dual-phase' | 'direct' | 'p2p' | 'face'; note?: string };
@@ -12,8 +12,9 @@ export type LandingAddress =
  | { kind: 'vfs-folder'; folderId: string | null; name: string }
  | { kind: 'vfs-file'; fileId: string }
  | { kind: 'session'; sessionId: string; app: string }
- | { kind: 'monitor-path'; profileId: string; path: string };
-export type ResultRef = { kind: 'vfs-file'; fileId: string; name?: string } | { kind: 'session'; sessionId: string } | { kind: 'monitor-path'; profileId: string; path: string } | { kind: 'opfs-file'; path: string; contentType: string };
+ | { kind: 'monitor-path'; profileId: string; path: string }
+ | { kind: 'browser-model'; modelId: string };
+export type ResultRef = { kind: 'browser-model'; modelId: string } | { kind: 'vfs-file'; fileId: string; name?: string } | { kind: 'session'; sessionId: string } | { kind: 'monitor-path'; profileId: string; path: string } | { kind: 'opfs-file'; path: string; contentType: string };
 export type OpDestination = { driverId: string; endpointKey?: string; parentId: string | null; entryKind?: 'file' | 'folder' };
 export type ChatOpContext = { userText: string; connection: { name: string; model: string; offerId?: string } };
 export type OpRecord = { chat?: ChatOpContext; destination?: OpDestination; id: string; kind: OpKindId; app: string; title: string; owner: Owner; where: OpWhere; state: OpState; error?: string; landing?: LandingAddress; result?: ResultRef; resumable: boolean; createdAt: number; endedAt?: number; dismissed?: number; landingError?: string; monitorAcknowledged?: boolean };

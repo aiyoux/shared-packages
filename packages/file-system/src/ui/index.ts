@@ -193,3 +193,5 @@ export { default as FeProjectStorageDialog } from './FeProjectStorageDialog.svel
 export { default as ProjectStoragePanel } from './ProjectStoragePanel.svelte';
 
 export { requestArchiveDialogShow } from './archiveReshow.js';
+
+export { default as ModelFilesCard } from './ModelFilesCard.svelte';

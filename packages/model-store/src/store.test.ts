@@ -75,6 +75,17 @@ describe('browser model store', () => {
     expect((await store.status(def)).ready).toBe(true);
     expect([...fs.files.keys()].filter(key => key.includes('.data/'))).toHaveLength(1);
   });
+  it('checks readiness and corruption before invoking a locked consumer', async () => {
+    const { store, fs } = setup(); let loaded = false;
+    await expect(store.readReady(def, async () => { loaded = true; })).rejects.toThrow('Settings → AI models');
+    expect(loaded).toBe(false);
+    await store.write(def.id, def.files[0].path, bytes('one'));
+    expect(await store.readReady(def, async files => (await files.file(def.files[0].path)).text(), { verify: true })).toBe('one');
+    const key = [...fs.files.keys()].find(key => key.includes('.data/'))!;
+    fs.files.set(key, new Blob(['two']));
+    await expect(store.readReady(def, async () => { loaded = true; }, { verify: true })).rejects.toThrow('hash-mismatch');
+    expect(loaded).toBe(false);
+  });
   it('recovers an interrupted first install and sweeps unpublished bytes before the next write', async () => {
     const { store, fs } = setup(); const path = def.files[0].path;
     fs.failManifest();

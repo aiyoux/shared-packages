@@ -14,6 +14,7 @@
  * never registers (an immersive app mounting the dialog itself) degrades to
  * the "library unavailable" note rather than crashing.
  */
+import type { ModelDef } from '@shared-packages/model-store';
 import type { AiModelRef, AiTaskKey } from './selection.js';
 
 export type AiLibraryModelStatus =
@@ -38,6 +39,8 @@ export type AiLibraryModelRow = {
 	/** Weights on disk when known; null otherwise. */
 	sizeBytes: number | null;
 	status: AiLibraryModelStatus;
+	/** Files managed by the dedicated browser model store. */
+	browserModel?: ModelDef;
 	/** Optional in-app import flow (package import card, monitor library install). */
 	install?: () => Promise<void>;
 	/** Use "Import files" when the action opens a file chooser. */

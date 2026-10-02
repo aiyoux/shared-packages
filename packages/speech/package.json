@@ -25,7 +25,8 @@
     "@shared-packages/file-system": "file:../file-system",
     "hash-wasm": "^4.12.0",
     "kokoro-js": "^1.2.1",
-    "onnxruntime-web": "1.29.0"
+    "onnxruntime-web": "1.29.0",
+    "@shared-packages/model-store": "file:../model-store"
   },
   "devDependencies": {
     "@types/node": "^26.1.1",

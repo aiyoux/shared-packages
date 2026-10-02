@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { disposeNovasr, novasrUpsample, novasrChunks, NOVASR_IN_RATE } from './novasr.js';
 import { runNovasrChunks, type NovaSrOrt, type NovaSrSession, type NovaSrTensor } from './novasrInference.js';
 const model = vi.hoisted(() => vi.fn());
-vi.mock('./novasrModel.js', () => ({ loadNovasrModel: model, NOVASR_MODEL_URL: 'pinned-model' }));
+const revision = vi.hoisted(() => vi.fn());
+vi.mock('./novasrModel.js', () => ({ loadNovasrModel: model, novasrModelRevision: revision, NOVASR_MODEL_URL: 'pinned-model' }));
 
 class FakeWorker {
 	static instances: FakeWorker[] = [];
@@ -22,6 +23,7 @@ class FakeWorker {
 
 beforeEach(() => {
 	disposeNovasr();
+	revision.mockReset().mockResolvedValue('first');
 	FakeWorker.instances = [];
 	vi.stubGlobal('Worker', FakeWorker);
 	model.mockReset().mockResolvedValue(new Uint8Array([1, 2, 3]));
@@ -60,6 +62,38 @@ describe('NovaSR lifecycle', () => {
 	it('rejects a pre-aborted run before acquiring weights or a worker', async () => {
 		const signal = AbortSignal.abort(new DOMException('Cancelled', 'AbortError'));
 		await expect(novasrUpsample(new Float32Array(8), { signal })).rejects.toMatchObject({ name: 'AbortError' });
+		expect(model).not.toHaveBeenCalled();
+		expect(FakeWorker.instances).toHaveLength(0);
+	});
+
+	it('rejects cleared weights even after a session was loaded and reloads replacements', async () => {
+		const first = novasrUpsample(new Float32Array(8));
+		await vi.waitFor(() => expect(FakeWorker.instances[0]?.requests).toHaveLength(2));
+		const before = FakeWorker.instances[0]!;
+		before.reply(before.requests[1]!.id, new Float32Array([1]));
+		await first;
+		revision.mockRejectedValueOnce(new Error('novasr.onnx is missing'));
+		await expect(novasrUpsample(new Float32Array(8))).rejects.toThrow('novasr.onnx is missing');
+		revision.mockResolvedValue('replacement');
+		const next = novasrUpsample(new Float32Array(8));
+		await vi.waitFor(() => expect(FakeWorker.instances[1]?.requests).toHaveLength(2));
+		const after = FakeWorker.instances[1]!;
+		after.reply(after.requests[1]!.id, new Float32Array([2]));
+		expect(Array.from(await next)).toEqual([2]);
+		expect(model).toHaveBeenCalledTimes(2);
+	});
+
+	it('cancels a queued store read on handover and fences its late reply', async () => {
+		let finish!: (revision: string) => void;
+		revision.mockImplementationOnce(() => new Promise<string>(resolve => { finish = resolve; }));
+		const first = novasrUpsample(new Float32Array(8));
+		const rejected = expect(first).rejects.toMatchObject({ name: 'AbortError' });
+		await vi.waitFor(() => expect(revision).toHaveBeenCalledOnce());
+		const queuedSignal = revision.mock.calls[0]![0] as AbortSignal;
+		disposeNovasr();
+		await rejected;
+		expect(queuedSignal.aborted).toBe(true);
+		finish('first');
 		expect(model).not.toHaveBeenCalled();
 		expect(FakeWorker.instances).toHaveLength(0);
 	});
