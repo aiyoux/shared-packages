@@ -13,7 +13,8 @@
  */
 import { createMonitorClient } from '../monitor/client.js';
 import { getProfile, listProfiles } from '../monitor/credentials.js';
-import { listAiOffers, type AiCatalog, type AiOffer, type AiTask } from './catalog.js';
+import { completeAiChat, listAiOffers, runAiNativeJob, type AiCatalog, type AiOffer, type AiTask } from './catalog.js';
+import { runBrowserAi } from './browserHost.js';
 import { AiCredentialsError } from './errors.js';
 import { listAiProfiles, type AiCapabilities } from './monitor.js';
 import { matchAiModelRef, offerAiRef, type AiModelRef } from './selection.js';
@@ -62,6 +63,8 @@ export type AiChoice = {
 	/** `${model} — ${where}`, for flat lists. */
 	label: string;
 	ref: AiModelRef;
+	/** The monitor's AI capabilities (`nativeChat`, `sessions`, …); null for this browser. */
+	capabilities: AiCapabilities | null;
 };
 
 export type AiChoiceList = {
@@ -133,11 +136,12 @@ function browserChoice(offer: AiOffer): AiChoice {
 		model,
 		where: 'This browser',
 		label: `${model} — This browser`,
-		ref: offerAiRef(offer, null)
+		ref: offerAiRef(offer, null),
+		capabilities: null
 	};
 }
 
-function monitorChoice(offer: AiOffer, monitor: AiMonitorTarget, providers: Record<string, string>): AiChoice {
+function monitorChoice(offer: AiOffer, monitor: AiMonitorTarget, providers: Record<string, string>, capabilities: AiCapabilities): AiChoice {
 	const provider = offer.location === 'monitor-provider' ? providers[offer.sourceId] ?? offer.sourceId : null;
 	const model = provider ? `${offer.modelId} · ${provider}` : `${offer.name} · ${deviceLabel(offer)}`;
 	return {
@@ -148,7 +152,8 @@ function monitorChoice(offer: AiOffer, monitor: AiMonitorTarget, providers: Reco
 		model,
 		where: monitor.name,
 		label: `${model} — ${monitor.name}`,
-		ref: offerAiRef(offer, monitor.profileId)
+		ref: offerAiRef(offer, monitor.profileId),
+		capabilities
 	};
 }
 
@@ -169,6 +174,7 @@ export async function listAiChoices(
 		const status = await shared(`meta:${monitor.baseUrl}`, () => probe(monitor));
 		const named = { ...status, ...monitor };
 		if (!status.capabilities) return { status: named, choices: [] as AiChoice[] };
+		const capabilities = status.capabilities;
 		let catalog: AiCatalog;
 		try {
 			catalog = await shared(`catalog:${monitor.baseUrl}`, () => listAiOffers(monitor.baseUrl));
@@ -185,7 +191,7 @@ export async function listAiChoices(
 				providers = Object.fromEntries(list.profiles.map((row) => [row.id, row.name]));
 			} catch { /* labels fall back to the provider id */ }
 		}
-		return { status: named, choices: offers.map((offer) => monitorChoice(offer, monitor, providers)) };
+		return { status: named, choices: offers.map((offer) => monitorChoice(offer, monitor, providers, capabilities)) };
 	}));
 	return { choices: [...browser, ...rows.flatMap((row) => row.choices)], monitors: rows.map((row) => row.status) };
 }
@@ -214,10 +220,66 @@ export function describeMissingAiChoice(ref: AiModelRef, list: AiChoiceList): st
 }
 
 /**
- * Whether a chat choice can read an attached image. The catalog does not
- * declare input kinds yet: provider APIs accept image parts, while the
- * browser and monitor-native chat runtimes are text only.
+ * Whether a chat choice can read an attached image. An offer that declares
+ * its `inputs` is taken at its word. Otherwise the location decides: provider
+ * APIs accept image parts, while the browser and monitor-native chat runtimes
+ * are text only.
  */
 export function aiChoiceReadsImages(choice: AiChoice): boolean {
-	return choice.offer.task === 'chat' && choice.offer.location === 'monitor-provider';
+	if (choice.offer.task !== 'chat') return false;
+	if (choice.offer.inputs) return choice.offer.inputs.includes('image');
+	return choice.offer.location === 'monitor-provider';
+}
+
+export type AiTextMessage = { role: 'system' | 'user' | 'assistant'; content: string };
+
+/** The one-shot native job takes a flat prompt; cap it like the daemon's input. */
+const NATIVE_PROMPT_MAX_BYTES = 16_000;
+
+function nativePrompt(messages: readonly AiTextMessage[]): string {
+	const system = messages.filter((m) => m.role === 'system').map((m) => `System: ${m.content}`);
+	const turns = messages.filter((m) => m.role !== 'system');
+	const render = () => [...system, ...turns.map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`), 'Assistant:'].join('\n\n');
+	let prompt = render();
+	// Drop the oldest turns first; the latest user turn always stays.
+	while (new TextEncoder().encode(prompt).length > NATIVE_PROMPT_MAX_BYTES && turns.length > 1) {
+		turns.shift();
+		prompt = render();
+	}
+	if (new TextEncoder().encode(prompt).length > NATIVE_PROMPT_MAX_BYTES) {
+		throw new AiCredentialsError('AI_ERROR', 'Message is too long for the monitor model.');
+	}
+	return prompt;
+}
+
+/**
+ * One text chat completion on a choice, wherever it runs: this browser's
+ * model on the shared browser AI host (`speech:chat`, registered by the hub),
+ * a monitor-native model on the daemon's supervised chat runtime (or its
+ * one-shot job when the daemon lacks `nativeChat`), or a provider API
+ * through the monitor. The reply comes back to the caller; nothing is saved.
+ */
+export async function completeAiChoiceText(
+	choice: AiChoice,
+	messages: readonly AiTextMessage[],
+	opts: { maxTokens?: number; signal?: AbortSignal; title?: string } = {}
+): Promise<{ text: string; thinking: string | null }> {
+	const maxTokens = opts.maxTokens ?? 1200;
+	if (!choice.monitor) {
+		const device = choice.offer.variantId === 'webgpu' ? 'webgpu' : 'wasm';
+		const text = await runBrowserAi<string>('speech:chat', 'generate', { messages, device }, choice.offer.modelId,
+			{ preview: true, title: opts.title, signal: opts.signal }, { webgpu: device === 'webgpu' });
+		return { text: String(text).trim(), thinking: null };
+	}
+	const { baseUrl } = choice.monitor;
+	if (choice.offer.location === 'monitor-provider') {
+		return completeAiChat(baseUrl, { model: choice.offer.modelId, profileId: choice.offer.sourceId, messages: [...messages], maxTokens }, opts.signal);
+	}
+	if (choice.capabilities?.nativeChat) {
+		return completeAiChat(baseUrl, { model: choice.offer.id, profileId: null, messages: [...messages], maxTokens }, opts.signal);
+	}
+	const result = await runAiNativeJob(baseUrl, { offerId: choice.offer.id, prompt: nativePrompt(messages) }, { signal: opts.signal });
+	const text = (await result.blob.text()).trim();
+	if (!text) throw new AiCredentialsError('AI_ERROR', 'The monitor model returned an empty reply.');
+	return { text, thinking: null };
 }

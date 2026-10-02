@@ -22,6 +22,8 @@ export type AiTask =
 	| 'audio-upsampling';
 export type AiLocation = 'browser' | 'monitor-native' | 'monitor-provider';
 export type AiDeviceClass = 'cpu' | 'gpu' | 'service';
+/** What an offer accepts as input, when its runtime declares it. */
+export type AiInputKind = 'text' | 'image' | 'audio';
 
 export type AiOffer = {
 	id: string;
@@ -41,6 +43,9 @@ export type AiOffer = {
 	/** Wall time of the most recent completed native job for this model —
 	 * a measurement on that machine, never a promised rate. */
 	lastRunMs?: number;
+	/** Declared input kinds. Absent means the runtime did not say; callers
+	 * fall back to what the location implies (`aiChoiceReadsImages`). */
+	inputs?: AiInputKind[];
 };
 
 export type AiCatalog = {
@@ -232,6 +237,9 @@ function offer(raw: unknown): AiOffer | null {
 	// Optional estimates: present only on native offers that report them.
 	if (typeof row.diskBytes === 'number' && Number.isFinite(row.diskBytes) && row.diskBytes >= 0) {
 		parsed.diskBytes = row.diskBytes;
+	}
+	if (Array.isArray(row.inputs)) {
+		parsed.inputs = row.inputs.filter((kind): kind is AiInputKind => kind === 'text' || kind === 'image' || kind === 'audio');
 	}
 	if (typeof row.lastRunMs === 'number' && Number.isFinite(row.lastRunMs) && row.lastRunMs >= 0) {
 		parsed.lastRunMs = row.lastRunMs;

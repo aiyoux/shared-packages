@@ -18,6 +18,7 @@ export {
 	type AiCatalog,
 	type AiChatMessage,
 	type AiDeviceClass,
+	type AiInputKind,
 	type AiLocation,
 	type AiNativeProgress,
 	type AiOffer,
@@ -70,6 +71,7 @@ export {
 	BROWSER_CHAT_MODEL,
 	browserChatOffers,
 	aiChoiceReadsImages,
+	completeAiChoiceText,
 	describeMissingAiChoice,
 	getAiMonitor,
 	listAiChoices,
@@ -78,6 +80,7 @@ export {
 	matchAiChoice,
 	type AiChoice,
 	type AiChoiceList,
+	type AiTextMessage,
 	type AiMonitorStatus,
 	type AiMonitorTarget
 } from './choices.js';

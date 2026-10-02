@@ -22,11 +22,21 @@ import {
 	closeSelectionDbForTests
 } from '../src/ai/selection.js';
 import {
+	aiChoiceReadsImages,
+	completeAiChoiceText,
 	describeMissingAiChoice,
 	getAiMonitor,
 	listAiChoices,
-	matchAiChoice
+	matchAiChoice,
+	type AiChoice
 } from '../src/ai/choices.js';
+import { runBrowserAi } from '../src/ai/browserHost.js';
+
+// The browser path runs on the shared browser AI host; here only the hand-off is checked.
+vi.mock('../src/ai/browserHost.js', async (importOriginal) => ({
+	...await importOriginal<typeof import('../src/ai/browserHost.js')>(),
+	runBrowserAi: vi.fn(async () => ' browser reply ')
+}));
 import { normalizeAiBaseUrl, validateAiProfileInput } from '../src/ai/types.js';
 import { HUB_AI_DB_NAME } from '../src/ai/types.js';
 import {
@@ -195,6 +205,92 @@ describe('ai monitor client', () => {
 			expect(matchAiChoice(awayRef, list.choices)).toBeNull();
 			expect(describeMissingAiChoice(awayRef, list)).toMatch(/^Away — Not reachable/);
 			expect(describeMissingAiChoice({ ...workRef, monitorProfileId: 'deleted' }, list)).toMatch(/removed/);
+		} finally {
+			vi.unstubAllGlobals();
+		}
+	});
+
+	it('listAiChoices shares concurrent catalog reads and reads fresh state on the next list', async () => {
+		await saveMonitorProfile({ id: 'home', name: 'Home', baseUrl: 'http://home.test', rootPath: '/tmp' });
+		let catalogs = 0;
+		let release!: () => void;
+		const held = new Promise<void>((resolve) => { release = resolve; });
+		vi.stubGlobal('fetch', vi.fn(async (input: string | URL) => {
+			const url = String(input);
+			if (url.endsWith('/v1/meta')) return meta({ chat: true });
+			if (url.endsWith('/v1/ai/catalog')) {
+				catalogs += 1;
+				await held;
+				return new Response(JSON.stringify({ offers: [offer('native', 'monitor-native')] }), { status: 200 });
+			}
+			throw new Error(`unexpected fetch ${url}`);
+		}));
+		try {
+			const both = Promise.all([listAiChoices('chat'), listAiChoices('video-upscale')]);
+			await vi.waitFor(() => expect(catalogs).toBe(1));
+			release();
+			const [chat, upscale] = await both;
+			expect(chat.choices).toHaveLength(1);
+			expect(upscale.choices).toHaveLength(0);
+			expect(catalogs).toBe(1);
+			await listAiChoices('chat');
+			expect(catalogs).toBe(2);
+		} finally {
+			vi.unstubAllGlobals();
+		}
+	});
+
+	const choice = (location: 'browser' | 'monitor-native' | 'monitor-provider', extra: Partial<AiChoice> = {}): AiChoice => {
+		const row = offer(location === 'browser' ? 'browser:smollm2-135m:gpu' : location === 'monitor-native' ? 'native:qwen' : 'provider:p1:gpt', location, location === 'browser' ? { variantId: 'webgpu', deviceClass: 'gpu' } : {}) as AiChoice['offer'];
+		return {
+			key: `k|${row.id}`, offer: row, provider: null, model: row.name, where: 'Home', label: row.name,
+			monitor: location === 'browser' ? null : { profileId: 'home', name: 'Home', baseUrl: 'http://home.test' },
+			ref: { location, modelId: row.modelId, sourceId: row.sourceId, variantId: row.variantId, monitorProfileId: location === 'browser' ? null : 'home' },
+			capabilities: location === 'browser' ? null : { chat: true },
+			...extra
+		};
+	};
+
+	it('a declared input list decides whether a choice reads images', () => {
+		expect(aiChoiceReadsImages(choice('monitor-provider'))).toBe(true);
+		expect(aiChoiceReadsImages(choice('monitor-native'))).toBe(false);
+		const vision = choice('monitor-native');
+		vision.offer = { ...vision.offer, inputs: ['text', 'image'] };
+		expect(aiChoiceReadsImages(vision)).toBe(true);
+		const textOnlyApi = choice('monitor-provider');
+		textOnlyApi.offer = { ...textOnlyApi.offer, inputs: ['text'] };
+		expect(aiChoiceReadsImages(textOnlyApi)).toBe(false);
+	});
+
+	it('completeAiChoiceText runs each choice where it lives', async () => {
+		const bodies: Array<{ url: string; body: { model?: string } | null }> = [];
+		vi.stubGlobal('fetch', vi.fn(async (input: string | URL, init?: RequestInit) => {
+			const url = String(input);
+			bodies.push({ url, body: init?.body ? JSON.parse(String(init.body)) : null });
+			if (url.includes('/v1/ai/chat/completions')) return new Response(JSON.stringify({ choices: [{ message: { content: 'chat reply' } }] }), { status: 200 });
+			if (url.endsWith('/v1/ai/jobs')) return new Response(JSON.stringify({ jobId: 'j1' }), { status: 200 });
+			if (url.endsWith('/v1/ai/jobs/j1')) return new Response(JSON.stringify({ jobId: 'j1', state: 'done' }), { status: 200 });
+			if (url.endsWith('/v1/ai/jobs/j1/result')) return new Response('job reply', { status: 200 });
+			throw new Error(`unexpected fetch ${url}`);
+		}));
+		const messages = [{ role: 'system' as const, content: 'Be brief.' }, { role: 'user' as const, content: 'Hi?' }];
+		try {
+			// API: the provider model through the monitor, with its profile.
+			expect((await completeAiChoiceText(choice('monitor-provider'), messages)).text).toBe('chat reply');
+			expect(bodies.at(-1)).toMatchObject({ url: 'http://home.test/v1/ai/chat/completions?profile=p1', body: { model: 'model-provider:p1:gpt' } });
+			// Monitor-native with the supervised runtime: the offer id is the model.
+			const live = choice('monitor-native', { capabilities: { chat: true, nativeChat: true } });
+			expect((await completeAiChoiceText(live, messages)).text).toBe('chat reply');
+			expect(bodies.at(-1)).toMatchObject({ url: 'http://home.test/v1/ai/chat/completions', body: { model: 'native:qwen' } });
+			// Monitor-native without it: the one-shot job with a flat prompt.
+			expect((await completeAiChoiceText(choice('monitor-native'), messages)).text).toBe('job reply');
+			const job = bodies.find((row) => row.url.endsWith('/v1/ai/jobs'))!.body as { offerId?: string; prompt?: string };
+			expect(job.offerId).toBe('native:qwen');
+			expect(job.prompt).toBe('System: Be brief.\n\nUser: Hi?\n\nAssistant:');
+			// This browser: the shared host, returned to the caller rather than saved.
+			expect((await completeAiChoiceText(choice('browser'), messages)).text).toBe('browser reply');
+			expect(vi.mocked(runBrowserAi)).toHaveBeenCalledWith('speech:chat', 'generate', { messages, device: 'webgpu' }, 'model-browser:smollm2-135m:gpu',
+				expect.objectContaining({ preview: true }), { webgpu: true });
 		} finally {
 			vi.unstubAllGlobals();
 		}
