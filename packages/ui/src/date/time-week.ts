@@ -1,3 +1,4 @@
+import { clamp } from '../clamp.ts';
 import type { BaseOrVagueReference, TimeReference, WeekModeCode } from './types.ts';
 import {
   VAGUE_MONTHS,
@@ -31,10 +32,6 @@ export function isLeapYear(year: number): boolean {
 
 export function daysInYear(year: number): number {
   return isLeapYear(year) ? 366 : 365;
-}
-
-export function clamp(value: number, min: number, max: number): number {
-  return Math.max(min, Math.min(max, value));
 }
 
 export function firstDayOfWeek(date: Date, weekStart: number): Date {
