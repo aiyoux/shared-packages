@@ -74,6 +74,11 @@
 			"types": "./src/clamp.ts",
 			"default": "./src/clamp.ts"
 		},
+		"./floatTooltip": {
+			"types": "./src/floatTooltip.ts",
+			"svelte": "./src/floatTooltip.ts",
+			"default": "./src/floatTooltip.ts"
+		},
 		"./workspaceBase": {
 			"types": "./src/workspaceBase.ts",
 			"svelte": "./src/workspaceBase.ts",
