@@ -66,6 +66,10 @@
 			"types": "./src/async.ts",
 			"default": "./src/async.ts"
 		},
+		"./idb": {
+			"types": "./src/idb.ts",
+			"default": "./src/idb.ts"
+		},
 		"./pane-layout/chrome": {
 			"types": "./src/pane-layout/chrome.ts",
 			"svelte": "./src/pane-layout/chrome.ts",

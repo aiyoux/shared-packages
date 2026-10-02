@@ -22,6 +22,7 @@ import {
 	notifyTabChannel,
 	subscribeTabChannel
 } from '../crossTab.js';
+import { closeIdbForTests, openIdb } from '@shared-packages/ui/idb';
 import { HUB_AI_DB_NAME, HUB_AI_META, HUB_AI_STORE } from './types.js';
 
 /**
@@ -55,53 +56,29 @@ export type AiSelectionMap = {
 	tasks: Partial<Record<AiTaskKey, Partial<Record<string, AiModelRef>>>>;
 };
 
-let dbPromise: Promise<IDBDatabase> | null = null;
-
 function openDb(): Promise<IDBDatabase> {
-	if (!dbPromise) {
-		dbPromise = new Promise((resolve, reject) => {
-			// v3 replaces the v2 single chat selection with a per-task map.
-			// Pre-release, no install base: another version reads as empty.
-			const req = indexedDB.open(HUB_AI_DB_NAME, 3);
-			req.onupgradeneeded = () => {
-				const db = req.result;
-				if (db.objectStoreNames.contains('profiles')) {
-					db.deleteObjectStore('profiles');
-				}
-				if (!db.objectStoreNames.contains(HUB_AI_STORE)) {
-					db.createObjectStore(HUB_AI_STORE, { keyPath: 'id' });
-				}
-				if (!db.objectStoreNames.contains(HUB_AI_META)) {
-					db.createObjectStore(HUB_AI_META, { keyPath: 'key' });
-				}
-			};
-			req.onsuccess = () => {
-				const db = req.result;
-				db.onversionchange = () => {
-					db.close();
-					dbPromise = null;
-				};
-				resolve(db);
-			};
-			req.onerror = () => {
-				dbPromise = null;
-				reject(req.error);
-			};
-		});
-	}
-	return dbPromise;
+	// v3 replaces the v2 single chat selection with a per-task map.
+	// Pre-release, no install base: another version reads as empty.
+	return openIdb({
+		name: HUB_AI_DB_NAME,
+		version: 3,
+		onUpgrade(db) {
+			if (db.objectStoreNames.contains('profiles')) {
+				db.deleteObjectStore('profiles');
+			}
+			if (!db.objectStoreNames.contains(HUB_AI_STORE)) {
+				db.createObjectStore(HUB_AI_STORE, { keyPath: 'id' });
+			}
+			if (!db.objectStoreNames.contains(HUB_AI_META)) {
+				db.createObjectStore(HUB_AI_META, { keyPath: 'key' });
+			}
+		}
+	});
 }
 
 /** Test helper: close the connection so deleteDatabase can complete. */
 export async function closeSelectionDbForTests(): Promise<void> {
-	if (!dbPromise) return;
-	try {
-		const db = await dbPromise;
-		db.close();
-	} catch {
-		/* ignore */
-	}
-	dbPromise = null;
+	return closeIdbForTests(HUB_AI_DB_NAME);
 }
 
 export const EMPTY_SELECTION_MAP: AiSelectionMap = { v: 3, tasks: {} };

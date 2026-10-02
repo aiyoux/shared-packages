@@ -1,49 +1,26 @@
 /**
  * IndexedDB store for saved git repo refs.
  */
+import { closeIdbForTests, openIdb } from '@shared-packages/ui/idb';
 import type { GitRepoRef } from './types.js';
 
 export const GIT_REPOS_DB_NAME = 'scratch-git-repos';
 export const GIT_REPOS_STORE = 'repos';
 
-let dbPromise: Promise<IDBDatabase> | null = null;
-
 function openDb(): Promise<IDBDatabase> {
-	if (!dbPromise) {
-		dbPromise = new Promise((resolve, reject) => {
-			const req = indexedDB.open(GIT_REPOS_DB_NAME, 1);
-			req.onupgradeneeded = () => {
-				const db = req.result;
-				if (!db.objectStoreNames.contains(GIT_REPOS_STORE)) {
-					db.createObjectStore(GIT_REPOS_STORE, { keyPath: 'id' });
-				}
-			};
-			req.onsuccess = () => {
-				const db = req.result;
-				db.onversionchange = () => {
-					db.close();
-					dbPromise = null;
-				};
-				resolve(db);
-			};
-			req.onerror = () => {
-				dbPromise = null;
-				reject(req.error);
-			};
-		});
-	}
-	return dbPromise;
+	return openIdb({
+		name: GIT_REPOS_DB_NAME,
+		version: 1,
+		onUpgrade(db) {
+			if (!db.objectStoreNames.contains(GIT_REPOS_STORE)) {
+				db.createObjectStore(GIT_REPOS_STORE, { keyPath: 'id' });
+			}
+		}
+	});
 }
 
 export async function closeGitReposDbForTests(): Promise<void> {
-	if (!dbPromise) return;
-	try {
-		const db = await dbPromise;
-		db.close();
-	} catch {
-		/* ignore */
-	}
-	dbPromise = null;
+	return closeIdbForTests(GIT_REPOS_DB_NAME);
 }
 
 function txDone(tx: IDBTransaction): Promise<void> {
