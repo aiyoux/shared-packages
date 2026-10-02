@@ -13,7 +13,13 @@
       "default": "./src/index.ts"
     },
     "./VideoTimeline.svelte": "./src/VideoTimeline.svelte",
+    "./trimTimeline": {
+      "types": "./src/trimTimeline.svelte.ts",
+      "svelte": "./src/trimTimeline.svelte.ts",
+      "default": "./src/trimTimeline.svelte.ts"
+    },
     "./VideoTransport.svelte": "./src/VideoTransport.svelte",
+    "./MediaControlsBar.svelte": "./src/MediaControlsBar.svelte",
     "./VideoProcessPanel.svelte": "./src/VideoProcessPanel.svelte",
     "./VideoPlayer.svelte": "./src/VideoPlayer.svelte",
     "./VideoLightbox.svelte": "./src/VideoLightbox.svelte"

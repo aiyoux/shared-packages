@@ -2,142 +2,15 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AudioSample, AudioSampleSource } from 'mediabunny';
 import { avcLevelByte, createEncodeSession, parseBitrate } from './encodeSession.js';
 import { processVideo } from './process.js';
+import {
+	FakeVideoEncoder,
+	FakeVideoFrame,
+	installCodecs,
+	muxOrder,
+	type MockAudioSource
+} from './encodeTestHarness.js';
 
-const muxOrder: string[] = [];
-
-vi.mock('mediabunny', () => {
-	class BufferTarget {
-		buffer: ArrayBuffer | null = null;
-	}
-	class Mp4OutputFormat {
-		constructor(_opts?: unknown) {}
-	}
-	class EncodedVideoPacketSource {
-		async add() {}
-	}
-	class EncodedPacket {
-		static fromEncodedChunk(chunk: unknown) {
-			return { chunk };
-		}
-	}
-	class AudioSample {
-		closed = false;
-		constructor(public init: Record<string, unknown>) {}
-		close() {
-			this.closed = true;
-		}
-	}
-	class AudioSampleSource {
-		static instances: AudioSampleSource[] = [];
-		adds: unknown[] = [];
-		constructor(public config: unknown) {
-			(AudioSampleSource as unknown as { instances: unknown[] }).instances.push(this);
-		}
-		async add(sample: unknown) {
-			this.adds.push(sample);
-			muxOrder.push('audio-add');
-		}
-	}
-	class Output {
-		target: BufferTarget;
-		constructor(opts: { target: BufferTarget }) {
-			this.target = opts.target;
-		}
-		addVideoTrack() {
-			muxOrder.push('add-video-track');
-		}
-		addAudioTrack() {
-			muxOrder.push('add-audio-track');
-		}
-		async start() {}
-		async finalize() {
-			muxOrder.push('finalize');
-			this.target.buffer = new Uint8Array([1, 2, 3, 4]).buffer;
-		}
-	}
-	return {
-		Output,
-		Mp4OutputFormat,
-		BufferTarget,
-		EncodedVideoPacketSource,
-		EncodedPacket,
-		AudioSample,
-		AudioSampleSource
-	};
-});
-
-type MockAudioSource = { config: unknown; adds: Array<{ init: Record<string, unknown>; closed: boolean }> };
-
-type EncodeCall = { timestamp: number; keyFrame?: boolean };
-
-class FakeVideoFrame {
-	timestamp: number;
-	closed = false;
-	constructor(_source?: unknown, init?: { timestamp?: number }) {
-		this.timestamp = init?.timestamp ?? 0;
-	}
-	close() {
-		this.closed = true;
-	}
-}
-
-class FakeVideoEncoder {
-	static instances: FakeVideoEncoder[] = [];
-	static reset() {
-		FakeVideoEncoder.instances = [];
-	}
-
-	configureCalls: VideoEncoderConfig[] = [];
-	encodeCalls: EncodeCall[] = [];
-	flushCount = 0;
-	closeCount = 0;
-
-	constructor(private init: VideoEncoderInit) {
-		FakeVideoEncoder.instances.push(this);
-	}
-
-	configure(config: VideoEncoderConfig) {
-		this.configureCalls.push(config);
-	}
-
-	encode(frame: { timestamp: number }, opts?: { keyFrame?: boolean }) {
-		this.encodeCalls.push({ timestamp: frame.timestamp, keyFrame: opts?.keyFrame });
-		const data = new Uint8Array([0, 0, 0, 1]);
-		this.init.output(
-			{
-				type: opts?.keyFrame ? 'key' : 'delta',
-				timestamp: frame.timestamp,
-				duration: 33_333,
-				byteLength: data.byteLength,
-				copyTo(dest: BufferSource) {
-					new Uint8Array(dest as ArrayBuffer).set(data);
-				}
-			} as EncodedVideoChunk,
-			{ decoderConfig: { codec: 'avc1.42E01F' } }
-		);
-	}
-
-	async flush() {
-		this.flushCount += 1;
-	}
-
-	close() {
-		this.closeCount += 1;
-	}
-}
-
-function installCodecs() {
-	const prevEnc = globalThis.VideoEncoder;
-	const prevFrame = globalThis.VideoFrame;
-	FakeVideoEncoder.reset();
-	globalThis.VideoEncoder = FakeVideoEncoder as unknown as typeof VideoEncoder;
-	globalThis.VideoFrame = FakeVideoFrame as unknown as typeof VideoFrame;
-	return () => {
-		globalThis.VideoEncoder = prevEnc;
-		globalThis.VideoFrame = prevFrame;
-		FakeVideoEncoder.reset();
-	};
-}
+vi.mock('mediabunny', async () => (await import('./encodeTestHarness.js')).mediabunnyMock());
 
 function frame(timestamp: number): VideoFrame {
 	return new FakeVideoFrame(undefined, { timestamp }) as unknown as VideoFrame;

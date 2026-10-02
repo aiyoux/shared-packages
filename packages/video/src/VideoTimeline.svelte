@@ -1,31 +1,9 @@
 <script lang="ts">
-	import {
-		MAX_ZOOM,
-		MIN_ZOOM,
-		ZOOM_STEP,
-		clampScrollX,
-		createTimelineViewport,
-		rulerTicks,
-		zoomAtAnchor,
-		zoomToFitDuration,
-		zoomToTimeRange
-	} from '@shared-packages/composition';
+	import { MAX_ZOOM, MIN_ZOOM } from '@shared-packages/composition';
 	import TimelineMinimap from '@shared-packages/ui/timeline/TimelineMinimap.svelte';
-	import { createTimelinePan } from '@shared-packages/ui/timeline/pan';
 	import { formatTimecode } from './time.js';
-	import {
-		BAR_HEIGHT,
-		MIN_TRIM_SPAN,
-		TICK_ROW_HEIGHT,
-		clampTrimEnd,
-		clampTrimStart,
-		filmstripLayout,
-		filmstripThumbWidth,
-		frameCacheKey,
-		playheadNear,
-		setTrimFromPlayhead,
-		slipRange
-	} from './timelineScale.js';
+	import { BAR_HEIGHT, TICK_ROW_HEIGHT, filmstripLayout, filmstripThumbWidth, frameCacheKey } from './timelineScale.js';
+	import { createTrimTimeline } from './trimTimeline.svelte.js';
 
 	let {
 		duration,
@@ -43,7 +21,6 @@
 		sourceUrl?: string | null;
 	} = $props();
 
-	let isDragging = $state<'start' | 'end' | 'slip' | 'playhead' | null>(null);
 	let timelineScrollRef = $state<HTMLDivElement | null>(null);
 	/**
 	 * The scroller inset by half a trim handle on each side: time 0 and the
@@ -53,39 +30,43 @@
 	 */
 	let timelineViewRef = $state<HTMLDivElement | null>(null);
 	let stripVideo = $state<HTMLVideoElement | null>(null);
-	let zoom = $state(1);
-	let scrollX = $state(0);
-	let viewportPx = $state(0);
 	let minimapOpen = $state(true);
-	let fittedDurationMs = $state(-1);
-	let isPanning = $state(false);
-	let panStartX = $state(0);
-	let panStartScroll = $state(0);
-	let clickStartX = $state(0);
-	let clickStartY = $state(0);
-	let hasMoved = $state(false);
-	let slipOrigin = $state({ t: 0, start: 0, end: 0 });
 	let aspect = $state(16 / 9);
 	let frameUrls = $state<Record<string, string>>({});
-	let headTime = $state<number | null>(null);
-	let dragOrigin = { left: 0, scrollX: 0 };
-	let lastPreviewAt = 0;
+
+	// Drag/zoom/scrub engine shared with the hub's audio timeline; this
+	// component keeps the filmstrip, markup and test ids.
+	const tl = createTrimTimeline({
+		duration: () => duration,
+		currentTime: () => currentTime,
+		trimStart: () => trimStart,
+		trimEnd: () => trimEnd,
+		setTrim: (start, end) => {
+			trimStart = start;
+			trimEnd = end;
+		},
+		media: () => videoRef,
+		view: () => timelineViewRef,
+		capture: () => timelineScrollRef
+	});
+	const { bindPan, zoomIn, zoomOut, zoomFit, zoomSelection, setPlayheadAsStart, setPlayheadAsEnd, nudgeTrim, handlePointerDown, handlePointerMove, handlePointerUp } = tl;
 
 	const durationMs = $derived(Math.max(0, duration * 1000));
-	const vp = $derived(createTimelineViewport({ durationMs, viewportPx, zoom, scrollX }));
-	const ticks = $derived(rulerTicks(vp));
+	const vp = $derived(tl.vp);
+	const ticks = $derived(tl.ticks);
+	const viewportPx = $derived(tl.viewportPx);
+	const isDragging = $derived(tl.isDragging);
+	const isPanning = $derived(tl.isPanning);
+	const keepSpan = $derived(tl.keepSpan);
+	const displayTime = $derived(tl.displayTime);
+	const playheadOffHandles = $derived(tl.playheadOffHandles);
+	const atClipStart = $derived(tl.atClipStart);
+	const atClipEnd = $derived(tl.atClipEnd);
+	const keepLeftPx = $derived(tl.keepLeftPx);
+	const keepRightPx = $derived(tl.keepRightPx);
+	const keepWidthPx = $derived(tl.keepWidthPx);
+	const playPx = $derived(tl.playPx);
 	const sourceSrc = $derived(sourceUrl || videoRef?.currentSrc || videoRef?.src || '');
-	const keepSpan = $derived(Math.max(0, trimEnd - trimStart));
-	const displayTime = $derived(headTime ?? currentTime);
-	const playheadOffHandles = $derived(
-		!playheadNear(displayTime, trimStart) && !playheadNear(displayTime, trimEnd)
-	);
-	const atClipStart = $derived(playheadNear(displayTime, 0));
-	const atClipEnd = $derived(duration > 0 && playheadNear(displayTime, duration));
-	const keepLeftPx = $derived(vp.timeToPx(trimStart * 1000));
-	const keepRightPx = $derived(vp.timeToPx(trimEnd * 1000));
-	const keepWidthPx = $derived(Math.max(0, keepRightPx - keepLeftPx));
-	const playPx = $derived(vp.timeToPx(displayTime * 1000));
 	const thumbW = $derived(Math.round(filmstripThumbWidth(BAR_HEIGHT, aspect)));
 	const filmCells = $derived(
 		filmstripLayout({
@@ -101,30 +82,6 @@
 	const frameCache = new Map<string, string>();
 	const cacheOrder: string[] = [];
 	let lastStripSrc = '';
-	let pendingSeek = -1;
-	const PREVIEW_MS = 80;
-
-	const viewportPan = createTimelinePan({
-		getSurface: () => timelineViewRef,
-		getViewport: () => vp,
-		onScroll: (s) => (scrollX = s),
-		onZoom: (z, s) => {
-			zoom = z;
-			scrollX = s;
-		},
-		zoomOnPlainWheel: () => true,
-		shouldDragPan: () => false
-	});
-
-	function bindPan(node: HTMLElement) {
-		node.addEventListener('wheel', viewportPan.onwheel, { passive: false });
-		return {
-			destroy() {
-				node.removeEventListener('wheel', viewportPan.onwheel);
-				viewportPan.destroy();
-			}
-		};
-	}
 
 	function rememberFrame(key: string, url: string) {
 		if (frameCache.has(key)) return;
@@ -136,168 +93,6 @@
 		}
 		frameUrls = { ...frameUrls, [key]: url };
 	}
-
-	function scrubPreview(t: number, previewVideo: boolean) {
-		const next = Math.max(0, Math.min(duration, t));
-		headTime = next;
-		pendingSeek = next;
-		if (!previewVideo || !videoRef) return;
-		const now = performance.now();
-		if (now - lastPreviewAt < PREVIEW_MS) return;
-		lastPreviewAt = now;
-		videoRef.currentTime = next;
-	}
-
-	function flushScrub() {
-		if (videoRef && pendingSeek >= 0) videoRef.currentTime = pendingSeek;
-		lastPreviewAt = 0;
-		pendingSeek = -1;
-	}
-
-	function getTimelineTimeFromEvent(e: PointerEvent | MouseEvent | TouchEvent): number {
-		if (durationMs <= 0) return 0;
-		const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
-		const x = clientX - dragOrigin.left;
-		return Math.max(0, Math.min(duration, vp.pxToTime(dragOrigin.scrollX + x) / 1000));
-	}
-
-	function applyZoom(nextZoom: number, anchorX: number) {
-		const next = zoomAtAnchor(vp, nextZoom, anchorX);
-		zoom = next.zoom;
-		scrollX = next.scrollX;
-	}
-
-	function zoomIn() {
-		applyZoom(vp.zoom * ZOOM_STEP, viewportPx / 2);
-	}
-
-	function zoomOut() {
-		applyZoom(vp.zoom / ZOOM_STEP, viewportPx / 2);
-	}
-
-	function zoomFit() {
-		zoom = zoomToFitDuration(durationMs, viewportPx);
-		scrollX = 0;
-	}
-
-	function zoomSelection() {
-		const next = zoomToTimeRange(durationMs, viewportPx, trimStart * 1000, trimEnd * 1000);
-		zoom = next.zoom;
-		scrollX = next.scrollX;
-	}
-
-	function setPlayheadAsStart() {
-		const next = setTrimFromPlayhead('start', displayTime, trimStart, trimEnd, duration);
-		trimStart = next.start;
-		trimEnd = next.end;
-	}
-
-	function setPlayheadAsEnd() {
-		const next = setTrimFromPlayhead('end', displayTime, trimStart, trimEnd, duration);
-		trimStart = next.start;
-		trimEnd = next.end;
-	}
-
-	/** Arrow keys nudge the focused handle one frame; Shift jumps a second. */
-	function nudgeTrim(which: 'start' | 'end', e: KeyboardEvent) {
-		const dir = e.key === 'ArrowLeft' ? -1 : e.key === 'ArrowRight' ? 1 : 0;
-		if (dir === 0) return;
-		e.preventDefault();
-		const step = (e.shiftKey ? 1 : 1 / 30) * dir;
-		if (which === 'start') {
-			trimStart = clampTrimStart(trimStart + step, trimEnd, duration, MIN_TRIM_SPAN);
-			scrubPreview(trimStart, true);
-		} else {
-			trimEnd = clampTrimEnd(trimEnd + step, trimStart, duration, MIN_TRIM_SPAN);
-			scrubPreview(trimEnd, true);
-		}
-	}
-
-	function handlePointerDown(e: PointerEvent) {
-		if (!timelineScrollRef || !timelineViewRef || durationMs <= 0) return;
-		if (e.button !== 0 && e.pointerType === 'mouse') return;
-		e.preventDefault();
-		const rect = timelineViewRef.getBoundingClientRect();
-		dragOrigin = { left: rect.left, scrollX: vp.scrollX };
-		const kind = (e.target as HTMLElement | null)
-			?.closest?.('[data-trim-handle]')
-			?.getAttribute('data-trim-handle') as 'start' | 'end' | 'slip' | 'playhead' | null;
-		const t = getTimelineTimeFromEvent(e);
-		if (kind === 'start' || kind === 'end') {
-			isDragging = kind;
-			scrubPreview(kind === 'start' ? trimStart : trimEnd, true);
-		} else if (kind === 'playhead') {
-			isDragging = 'playhead';
-			scrubPreview(t, true);
-		} else if (kind === 'slip') {
-			isDragging = 'slip';
-			slipOrigin = { t, start: trimStart, end: trimEnd };
-		} else if (e.altKey) {
-			isPanning = true;
-			panStartX = e.clientX;
-			panStartScroll = vp.scrollX;
-			clickStartX = e.clientX;
-			clickStartY = e.clientY;
-			hasMoved = false;
-		} else {
-			isDragging = 'playhead';
-			scrubPreview(t, true);
-		}
-		try {
-			timelineScrollRef.setPointerCapture(e.pointerId);
-		} catch {
-			/* capture is optional */
-		}
-	}
-
-	function handlePointerMove(e: PointerEvent) {
-		if (isDragging) {
-			const t = getTimelineTimeFromEvent(e);
-			if (isDragging === 'start') {
-				trimStart = clampTrimStart(t, trimEnd, duration, MIN_TRIM_SPAN);
-				scrubPreview(trimStart, true);
-			} else if (isDragging === 'end') {
-				trimEnd = clampTrimEnd(t, trimStart, duration, MIN_TRIM_SPAN);
-				scrubPreview(trimEnd, true);
-			} else if (isDragging === 'playhead') {
-				scrubPreview(t, true);
-			} else {
-				const next = slipRange(slipOrigin.start, slipOrigin.end, t - slipOrigin.t, duration);
-				trimStart = next.start;
-				trimEnd = next.end;
-			}
-		}
-		if (isPanning) {
-			const dx = Math.abs(e.clientX - clickStartX);
-			const dy = Math.abs(e.clientY - clickStartY);
-			if (dx > 3 || dy > 3) hasMoved = true;
-			if (hasMoved) {
-				scrollX = clampScrollX(vp, panStartScroll + (panStartX - e.clientX));
-			}
-		}
-	}
-
-	function handlePointerUp(e: PointerEvent) {
-		if (isPanning && !hasMoved && videoRef) {
-			pendingSeek = Math.max(0, Math.min(duration, getTimelineTimeFromEvent(e)));
-		}
-		if (isDragging === 'start') pendingSeek = trimStart;
-		if (isDragging === 'end') pendingSeek = trimEnd;
-		if (isDragging === 'playhead') {
-			pendingSeek = Math.max(0, Math.min(duration, getTimelineTimeFromEvent(e)));
-		}
-		flushScrub();
-		isDragging = null;
-		isPanning = false;
-		hasMoved = false;
-	}
-
-	$effect(() => {
-		if (headTime == null || isDragging === 'playhead' || isDragging === 'start' || isDragging === 'end') {
-			return;
-		}
-		if (Math.abs(currentTime - headTime) < 0.05) headTime = null;
-	});
 
 	function seekHidden(video: HTMLVideoElement, t: number): Promise<void> {
 		const target = Math.max(0, Math.min(Math.max(0, duration - 0.001), t));
@@ -318,21 +113,6 @@
 	}
 
 	$effect(() => {
-		if (vp.scrollX !== scrollX) scrollX = vp.scrollX;
-		if (vp.zoom !== zoom) zoom = vp.zoom;
-	});
-
-	$effect(() => {
-		const d = durationMs;
-		const w = viewportPx;
-		if (d > 0 && w > 0 && d !== fittedDurationMs) {
-			fittedDurationMs = d;
-			zoom = zoomToFitDuration(d, w);
-			scrollX = 0;
-		}
-	});
-
-	$effect(() => {
 		const v = videoRef;
 		if (!v) return;
 		const apply = () => {
@@ -341,16 +121,6 @@
 		apply();
 		v.addEventListener('loadedmetadata', apply);
 		return () => v.removeEventListener('loadedmetadata', apply);
-	});
-
-	$effect(() => {
-		const el = timelineViewRef;
-		if (!el) return;
-		const measure = () => (viewportPx = el.clientWidth);
-		measure();
-		const ro = new ResizeObserver(measure);
-		ro.observe(el);
-		return () => ro.disconnect();
 	});
 
 	$effect(() => {
@@ -600,7 +370,7 @@
 				playheadMs={currentTime * 1000}
 				height={32}
 				testid="video-trim-minimap"
-				onScroll={(s) => (scrollX = s)}
+				onScroll={(s) => (tl.scrollX = s)}
 			>
 				{#snippet content({ toX })}
 					<span
