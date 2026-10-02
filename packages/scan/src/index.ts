@@ -59,7 +59,17 @@ export {
 } from './cornerTune.js';
 export { applyH, destToSrcHomography, warpImageData } from './warp.js';
 export { pagesToPdf } from './pdf.js';
-export { OCR_ASSET_PATHS, recognizeText, terminateOcr } from './ocr.js';
+export {
+	OCR_ASSET_PATHS,
+	linesFromPage,
+	recognizeDetailed,
+	recognizeText,
+	terminateOcr,
+	type OcrBox,
+	type OcrDetailedResult,
+	type OcrLang,
+	type OcrRegion
+} from './ocr.js';
 export {
 	blobToImageData,
 	copyPixelBuffer,
