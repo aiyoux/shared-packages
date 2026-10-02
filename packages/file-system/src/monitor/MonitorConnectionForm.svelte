@@ -1,10 +1,8 @@
 <script lang="ts">
 	import {
 		deleteProfile,
-		getActiveProfileId,
 		listProfiles,
-		saveProfile,
-		setActiveProfileId
+		saveProfile
 	} from './credentials.js';
 	import { HUB_MONITOR_PROFILES_CHANNEL, subscribeTabChannel } from '../crossTab.js';
 	import {
@@ -23,12 +21,13 @@
 		onConnected?: (profile: MonitorConnectionProfileV1) => void | Promise<void>;
 		onDisconnected?: () => void;
 		onCancel?: () => void;
+		/** The monitor the host pane is connected to; there is no global one. */
+		connectedId?: string | null;
 	}
 
-	let { onConnected, onDisconnected, onCancel }: Props = $props();
+	let { onConnected, onDisconnected, onCancel, connectedId = null }: Props = $props();
 
 	let profiles = $state<MonitorConnectionProfileV1[]>([]);
-	let activeId = $state<string | null>(null);
 	let editingId = $state<string | null>(null);
 	let name = $state('Local monitor');
 	let baseUrl = $state(DEFAULT_MONITOR_BASE_URL);
@@ -42,13 +41,12 @@
 			id: p.id,
 			name: p.name,
 			detail: `${p.rootPath} · ${p.baseUrl}`,
-			active: p.id === activeId
+			active: p.id === connectedId
 		}))
 	);
 
 	async function reload() {
 		profiles = await listProfiles();
-		activeId = await getActiveProfileId();
 	}
 
 	$effect(() => {
@@ -113,7 +111,7 @@
 		busy = true;
 		try {
 			await deleteProfile(id);
-			if (activeId === id) onDisconnected?.();
+			if (connectedId === id) onDisconnected?.();
 			if (editingId === id) {
 				editingId = null;
 				mode = 'list';
@@ -131,8 +129,6 @@
 		busy = true;
 		error = '';
 		try {
-			await setActiveProfileId(p.id);
-			activeId = p.id;
 			await onConnected?.(p);
 			onCancel?.();
 		} catch (e) {

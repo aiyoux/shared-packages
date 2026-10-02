@@ -1,14 +1,12 @@
 /**
- * Task-oriented AI client: routes to the monitor's `/v1/ai/**` feature.
+ * Task-oriented AI client: routes to a monitor's `/v1/ai/**` feature.
  *
  * The monitor resolves monitor profile → upstream and holds every API key;
- * these calls are keyless. Resolution order for the monitor itself mirrors
- * the tools feature: the active HubMonitor profile first, then a capability
- * probe (`GET /v1/meta`) — `null` when no reachable monitor serves AI.
+ * these calls are keyless. Every call takes the monitor's base URL: which
+ * monitor runs a model is part of the user's pick (choices.ts), never
+ * resolved here.
  */
 import { createMonitorClient } from '../monitor/client.js';
-import { getActiveProfileId, listProfiles } from '../monitor/credentials.js';
-import type { MonitorConnectionProfileV1 } from '../monitor/types.js';
 import { AiCredentialsError, toAiCredentialsError } from './errors.js';
 import type {
 	AiChatRequest,
@@ -39,47 +37,6 @@ export type AiCapabilities = {
 	 * included). Missing means false. */
 	nativeChat?: boolean;
 };
-
-/** A reachable monitor that serves the AI feature. */
-export type AiMonitor = {
-	baseUrl: string;
-	monitorProfileId: string;
-	capabilities: AiCapabilities;
-};
-
-/**
- * Resolve a monitor that serves `/v1/ai/**`: the active monitor profile,
- * falling back to probing configured profiles in most-recently-updated
- * order. Returns `null` when no monitor is reachable or none has the AI
- * feature (old daemon) — callers show their "no AI backend" state.
- */
-export async function resolveAiMonitor(signal?: AbortSignal): Promise<AiMonitor | null> {
-	let candidates: MonitorConnectionProfileV1[] = [];
-	try {
-		const activeId = await getActiveProfileId();
-		const all = await listProfiles();
-		candidates = activeId
-			? [...all.filter((p) => p.id === activeId), ...all.filter((p) => p.id !== activeId)]
-			: all;
-	} catch {
-		return null;
-	}
-	for (const profile of candidates) {
-		try {
-			const transport = createMonitorClient({ baseUrl: profile.baseUrl });
-			const meta = await transport.meta();
-			const caps = (meta.capabilities as { ai?: AiCapabilities } | undefined)?.ai;
-			if (caps?.chat) {
-				return { baseUrl: profile.baseUrl, monitorProfileId: profile.id, capabilities: caps };
-			}
-		} catch (e) {
-			if (signal?.aborted) throw toAiCredentialsError(e);
-			// Unreachable monitor: try the next candidate.
-			continue;
-		}
-	}
-	return null;
-}
 
 /** Aggregate model listing via the monitor. */
 export async function listAiModels(baseUrl: string, signal?: AbortSignal): Promise<AiModelListResult> {

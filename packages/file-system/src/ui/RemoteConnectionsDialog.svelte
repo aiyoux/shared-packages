@@ -29,7 +29,8 @@
 		agentAccess?: Snippet;
 		modelInstallation?: Snippet<[onChanged: () => void]>;
 		onConnected?: (kind: RemoteKind, profile: object) => void;
-		onDisconnected?: (kind: RemoteKind) => void;
+		/** A connection was removed; hosts detach whatever shows that id. */
+		onDisconnected?: (kind: RemoteKind, id: string) => void;
 	}
 
 	let { onClose, initialTab = 'connections', onConnected, onDisconnected, appearance, outputs, agentAccess, modelInstallation }: Props = $props();

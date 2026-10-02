@@ -5,7 +5,6 @@
 
 export const HUB_MONITOR_DB_NAME = 'HubMonitor';
 export const HUB_MONITOR_STORE = 'profiles';
-export const HUB_MONITOR_META = 'meta';
 
 /** Default local monitor URL (browser talks to this URL directly). */
 export const DEFAULT_MONITOR_BASE_URL = 'http://127.0.0.1:8300';
@@ -27,10 +26,6 @@ export type MonitorConnectionProfileV1 = {
 	rootPath: string;
 	createdAt: number;
 	updatedAt: number;
-};
-
-export type HubMonitorMeta = {
-	activeProfileId: string | null;
 };
 
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1', '[::1]']);

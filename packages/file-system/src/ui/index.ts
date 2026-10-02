@@ -46,6 +46,7 @@ export { default as DualPhaseConfirm } from './DualPhaseConfirm.svelte';
 export { default as RemoteConnectionsDialog } from './RemoteConnectionsDialog.svelte';
 export { default as ConnectionsTab } from './ConnectionsTab.svelte';
 export { default as AiModelsTab } from './AiModelsTab.svelte';
+export { default as AiChoiceSelect } from './AiChoiceSelect.svelte';
 export { default as MonitorModelsPanel } from './MonitorModelsPanel.svelte';
 export type { DualPaneTids, PaneId as DualPanePaneId } from './dualPaneTypes.js';
 export {

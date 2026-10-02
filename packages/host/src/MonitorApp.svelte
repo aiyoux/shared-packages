@@ -7,10 +7,8 @@
 	import {
 		acquireMonitorDriver,
 		releaseMonitorDriver,
-		getActiveProfileId,
 		getHostStream,
 		listProfiles,
-		setActiveProfileId,
 		toAbsolutePath,
 		baseName,
 		type MonitorConnectionProfileV1,
@@ -27,6 +25,10 @@
 	import { diskPct, memPct, pct, type HostSnapshot } from './types.js';
 	import { SPARKLINE_N, samplesToPoints } from './sparkline.js';
 	import { toast } from '@shared-packages/ui';
+	import { persistKv } from '@shared-packages/ui/persistKv';
+
+	/** This view's own monitor pick. There is no app-wide active monitor. */
+	const PICK_KEY = 'monitor-app:profile';
 
 	const gitHost = createGitHost();
 
@@ -56,7 +58,6 @@
 		try {
 			driver = await acquireMonitorDriver(p);
 			selectedId = null;
-			if (p.id !== (await getActiveProfileId())) await setActiveProfileId(p.id);
 		} catch (e) {
 			error = formatExplorerError(e);
 			toast.error(error);
@@ -68,9 +69,13 @@
 		const all = await listProfiles();
 		if (cancelled?.v) return;
 		profiles = all;
-		const activeId = await getActiveProfileId();
+		let pickId: string | null = null;
+		try {
+			await persistKv.ready();
+			pickId = persistKv.getItem(PICK_KEY);
+		} catch { /* no remembered pick */ }
 		if (cancelled?.v) return;
-		const pick = (activeId && all.find((p) => p.id === activeId)) || all[0] || null;
+		const pick = (pickId && all.find((p) => p.id === pickId)) || null;
 		if (!pick) {
 			if (profile) releaseMonitorDriver(profile.id);
 			profile = null;
@@ -87,7 +92,9 @@
 	function onSelectProfile(e: Event) {
 		const id = (e.currentTarget as HTMLSelectElement).value;
 		const next = profiles.find((p) => p.id === id);
-		if (next) void applyProfile(next);
+		if (!next) return;
+		try { persistKv.setItem(PICK_KEY, next.id); } catch { /* the pick still applies */ }
+		void applyProfile(next);
 	}
 
 	$effect(() => {
@@ -171,9 +178,10 @@
 				<span class="visually-hidden">Monitor connection</span>
 				<select
 					data-testid="monitor-profile-select"
-					value={profile?.id ?? profiles[0]?.id}
+					value={profile?.id ?? ''}
 					onchange={onSelectProfile}
 				>
+					{#if !profile}<option value="" disabled>Choose a monitor</option>{/if}
 					{#each profiles as p (p.id)}
 						<option value={p.id}>{p.name} · {p.rootPath}</option>
 					{/each}

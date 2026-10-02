@@ -2,7 +2,6 @@
  * are assembled by the consuming task UI from its own local engine catalog. */
 import { withLocalAddressSpace } from '../monitor/localNetwork.js';
 import { createMonitorClient } from '../monitor/client.js';
-import { getActiveProfileId, listProfiles } from '../monitor/credentials.js';
 import { AiCredentialsError, toAiCredentialsError } from './errors.js';
 import { opsService, type OpHandle } from '../services/ops.js';
 import { createMonitorJobsClient } from '../monitor/jobs.js';
@@ -49,20 +48,6 @@ export type AiCatalog = {
 	errors: Array<{ profile: string; code: string; message: string }>;
 };
 
-/** Native jobs always use the active monitor connection. A failed active
- * monitor is reported rather than silently moving work to another PC. */
-export async function resolveNativeAiMonitor(): Promise<{ profileId: string; name: string; baseUrl: string }> {
-	const activeId = await getActiveProfileId();
-	const profiles = await listProfiles();
-	const profile = (activeId ? profiles.find((row) => row.id === activeId) : profiles[0]) ?? null;
-	if (!profile) throw new AiCredentialsError('AI_NOT_FOUND', 'Select a monitor connection first.');
-	const meta = await createMonitorClient({ baseUrl: profile.baseUrl }).meta();
-	if (meta.capabilities?.ai?.nativeJobs !== true) {
-		throw new AiCredentialsError('AI_UNSUPPORTED', 'The selected monitor needs an update to run AI models.');
-	}
-	return { profileId: profile.id, name: profile.name, baseUrl: profile.baseUrl };
-}
-
 export type AiNativeProgress = {
 	jobId: string;
 	state: 'running' | 'done' | 'failed' | 'aborted' | 'evicted';
@@ -70,6 +55,7 @@ export type AiNativeProgress = {
 	seed?: number | null;
 };
 
+/** `monitor` is required with `op`: the op records which saved monitor runs the job. */
 export type AiRunOptions = { signal?: AbortSignal; onProgress?: (progress: AiNativeProgress) => void; op?: OpHandle; monitor?: { profileId: string; name: string; baseUrl: string }; preview?: boolean };
 async function unifiedJobs(baseUrl: string, opts: AiRunOptions): Promise<boolean> {
  if (!opts.op && !opts.preview) return false;
@@ -282,15 +268,18 @@ export async function runAiNativeJob(
 	opts: AiRunOptions = {}
 ): Promise<{ blob: Blob; seed: number | null }> {
 	const unified = await unifiedJobs(baseUrl, opts);
+	// The op names the monitor the user picked; it is never looked up.
+	const monitor = opts.monitor;
+	if (unified && opts.op && (!monitor || monitor.baseUrl.replace(/\/+$/, '') !== baseUrl.replace(/\/+$/, ''))) {
+		throw new AiCredentialsError('AI_ERROR', 'The job op must name the monitor it runs on.');
+	}
 	const submit = await request(baseUrl, '/v1/ai/jobs', {
 		method: 'POST', headers: { 'content-type': 'application/json' },
 		body: JSON.stringify({ ...input, ...(opts.op ? { clientRequestId: opts.op.id } : {}) }), signal: opts.signal
 	});
 	const { jobId } = (await submit.json()) as { jobId?: string };
 	if (!jobId) throw new AiCredentialsError('AI_ERROR', 'Monitor did not return a job id.');
-	if (unified && opts.op) {
-		const monitor = opts.monitor ?? await resolveNativeAiMonitor();
-		if (monitor.baseUrl.replace(/\/+$/, '') !== baseUrl.replace(/\/+$/, '')) throw new AiCredentialsError('AI_ERROR', 'The monitor changed during submission');
+	if (unified && opts.op && monitor) {
 		await (await opsService()).change(opts.op.id, (op) => ({ ...op, owner: { kind: 'monitor', profileId: monitor.profileId, name: monitor.name, jobId: `ai:${jobId}` } }));
 	}
 	const path = `/v1/ai/jobs/${encodeURIComponent(jobId)}`;

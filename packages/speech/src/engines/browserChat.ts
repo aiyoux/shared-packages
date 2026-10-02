@@ -1,9 +1,8 @@
 import { createWorkerRpc } from './workerRpc.js';
-import { registerBrowserAiHandler, runBrowserAi, type BrowserAiRunOptions } from '@shared-packages/file-system/ai';
+import { BROWSER_CHAT_MODEL, registerBrowserAiHandler, runBrowserAi, type BrowserAiRunOptions } from '@shared-packages/file-system/ai';
 
-export const BROWSER_CHAT_MODEL = 'onnx-community/SmolLM2-135M-Instruct-ONNX';
+export { BROWSER_CHAT_MODEL };
 export type BrowserChatDevice = 'wasm' | 'webgpu';
-export type BrowserChatTurn = { role: 'system' | 'user' | 'assistant'; content: string };
 
 let rpc: ReturnType<typeof createWorkerRpc> | null = null;
 let currentDevice: BrowserChatDevice | null = null;

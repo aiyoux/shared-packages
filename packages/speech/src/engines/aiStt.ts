@@ -5,7 +5,7 @@
  * stay daemon-side; requests are keyless.
  */
 
-import { resolveAiMonitor, runAiTranscription, AiCredentialsError, type AiMonitor } from '@shared-packages/file-system/ai';
+import { listSavedMonitors, runAiTranscription, AiCredentialsError } from '@shared-packages/file-system/ai';
 import { SpeechEngineError, type SttEngine, type SttEngineInfo, type SttResult } from '../types.js';
 import { base64FromBytes, DURATION_MAX_MS, TARGET_SAMPLE_RATE } from '../audio.js';
 import { checkAiAudioSize } from '../aiParts.js';
@@ -15,7 +15,7 @@ const info: SttEngineInfo = {
 	id: 'ai',
 	label: 'Monitor (AI models)',
 	description:
-		'Transcribes with a model that runs on the monitor PC, or one on a configured API profile reached through it. Needs a connected monitor; the model list comes from the monitor’s catalog.',
+		'Transcribes with a model on one of your monitors, or an API profile reached through it. The model list names the monitor each model runs on.',
 	supportsMic: false,
 	supportsFileInput: true,
 	streamingPartials: false,
@@ -23,8 +23,10 @@ const info: SttEngineInfo = {
 	onDevice: false
 };
 
-export async function resolveAiBackend(): Promise<AiMonitor | null> {
-	return resolveAiMonitor();
+/** The engine is usable once a monitor is saved; which one runs a file is
+ * part of the picked model (`opts.aiMonitor`), never looked up here. */
+async function hasMonitor(): Promise<boolean> {
+	return (await listSavedMonitors().catch(() => [])).length > 0;
 }
 
 export function createAiStt(): SttEngine {
@@ -32,17 +34,16 @@ export function createAiStt(): SttEngine {
 		info,
 
 		async probe() {
-			const monitor = await resolveAiBackend();
+			const saved = await hasMonitor();
 			return {
-				supported: monitor != null,
-				reason: monitor == null ? 'No monitor with an AI connection is reachable' : undefined
+				supported: saved,
+				reason: saved ? undefined : 'Add a monitor in Connections to use its models'
 			};
 		},
 
 		async load() {
-			const monitor = await resolveAiBackend();
-			if (!monitor) {
-				throw new SpeechEngineError('AI_NO_BACKEND', 'No monitor with an AI connection is reachable');
+			if (!(await hasMonitor())) {
+				throw new SpeechEngineError('AI_NO_BACKEND', 'Add a monitor in Connections to use its models');
 			}
 		},
 
@@ -61,21 +62,9 @@ export function createAiStt(): SttEngine {
 			if (sampleRate !== TARGET_SAMPLE_RATE) {
 				throw new SpeechEngineError('TRANSCRIBE_FAILED', `Expected ${TARGET_SAMPLE_RATE} Hz audio, got ${sampleRate}`);
 			}
-			const monitor = await resolveAiBackend();
-			if (!monitor) {
-				throw new SpeechEngineError(
-					'AI_NO_BACKEND',
-					'No monitor with an AI connection is reachable — connect one in Connections'
-				);
-			}
-			if (opts?.aiMonitorBaseUrl && monitor.baseUrl !== opts.aiMonitorBaseUrl) {
-				throw new SpeechEngineError(
-					'AI_NO_BACKEND',
-					'The active monitor changed — refresh the model list and try again'
-				);
-			}
+			const monitor = opts?.aiMonitor;
 			const offer = opts?.aiOffer;
-			if (!offer) throw new SpeechEngineError('NO_MODEL', 'Pick a model from the monitor’s catalog first');
+			if (!offer || !monitor) throw new SpeechEngineError('NO_MODEL', 'Pick a monitor model first');
 
 			const durationMs = Math.round((audio.length / sampleRate) * 1000);
 			const size = checkAiAudioSize(durationMs);
@@ -95,7 +84,7 @@ export function createAiStt(): SttEngine {
 					monitor.baseUrl,
 					{ id: offer.id, location: offer.location, task: 'transcription' },
 					{ audioBase64: base64FromBytes(wav), language },
-     { signal: opts?.signal, op: opts?.opHandle, monitor: { profileId: monitor.monitorProfileId, name: 'Monitor', baseUrl: monitor.baseUrl } }
+					{ signal: opts?.signal, op: opts?.opHandle, monitor }
 				);
 				const trimmed = text.trim();
 				return {
