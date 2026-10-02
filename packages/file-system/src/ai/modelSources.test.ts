@@ -4,7 +4,7 @@ import type { ExplorerDriver, ExplorerEntry } from '../ui/explorerDriver.js';
 
 vi.mock('../monitor/credentials.js', () => ({ listProfiles: async () => [] }));
 vi.mock('../b2/connections.js', () => ({ listB2Connections: async () => ({ rows: [], unreachable: [] }) }));
-import { folderModelFiles, onlineModelFiles, onlineUrl } from './modelSources.js';
+import { folderModelFiles, linkedDeviceFiles, onlineModelFiles, onlineUrl } from './modelSources.js';
 
 const def: ModelDef = {
 	id: 'speech:test', task: 'transcription', label: 'Test',
@@ -70,5 +70,14 @@ describe('model sources', () => {
 	it('has nothing to fetch online for a user-supplied model', () => {
 		const user: ModelDef = { id: 'scan:x', task: 'scan-detect', label: 'X', files: [{ path: 'x.onnx' }], origin: { kind: 'user' } };
 		expect(onlineModelFiles(user, { id: 'o', label: 'PC', baseUrl: 'http://pc', hosts: ['huggingface.co'] })[0]!.state).toBe('not-fetchable');
+	});
+
+	it("counts a linked device's file only with the def's size and hash", () => {
+		const withHash: ModelDef = { ...def, files: [{ path: 'a', bytes: 1, blake3: 'f'.repeat(64) }, { path: 'b', bytes: 2 }, { path: 'c', bytes: 3 }] };
+		expect(linkedDeviceFiles(withHash, [
+			{ path: 'a', bytes: 1, blake3: '0'.repeat(64) },
+			{ path: 'b', bytes: 2, blake3: '1'.repeat(64) },
+			{ path: 'c', bytes: 4, blake3: '2'.repeat(64) }
+		]).map((row) => row.state)).toEqual(['hash-mismatch', 'found', 'size-mismatch']);
 	});
 });

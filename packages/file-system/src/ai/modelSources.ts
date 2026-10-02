@@ -172,3 +172,45 @@ export function onlineModelFiles(def: ModelDef, source: ModelOnlineSource): Mode
 		};
 	});
 }
+
+/**
+ * A live device link that can offer its stored models (platform-services
+ * device links; the hub registers them). `offered` asks the far device what
+ * it holds of one model; `copy` asks it to send those files, which its user
+ * allows or denies there, and lands each one in this browser's store.
+ */
+export type ModelDeviceSource = {
+	id: string;
+	label: string;
+	offered(def: ModelDef, signal: AbortSignal): Promise<ReadonlyArray<{ path: string; bytes: number; blake3: string }>>;
+	copy(def: ModelDef, paths: readonly string[], opts: { signal: AbortSignal; onProgress: (path: string, bytes: number) => void }): Promise<void>;
+};
+type DeviceSourceProvider = { list(): ModelDeviceSource[]; subscribe(fn: () => void): () => void };
+let deviceProvider: DeviceSourceProvider | null = null;
+const deviceListeners = new Set<() => void>();
+let unProvider: (() => void) | null = null;
+/** The hub's live links. A consumer that never registers has no device sources. */
+export function registerModelDeviceSources(provider: DeviceSourceProvider | null): void {
+	unProvider?.();
+	deviceProvider = provider;
+	unProvider = provider?.subscribe(() => { for (const fn of [...deviceListeners]) fn(); }) ?? null;
+	for (const fn of [...deviceListeners]) fn();
+}
+export function modelDeviceSources(): ModelDeviceSource[] {
+	return deviceProvider?.list() ?? [];
+}
+export function onDeviceSourcesChange(fn: () => void): () => void {
+	deviceListeners.add(fn);
+	return () => deviceListeners.delete(fn);
+}
+
+/** What a device offers, against the def: a file counts only with the def's size and hash. */
+export function linkedDeviceFiles(def: ModelDef, offered: ReadonlyArray<{ path: string; bytes: number; blake3: string }>): ModelFileMatch[] {
+	return def.files.map((file): ModelFileMatch => {
+		const have = offered.find((row) => row.path === file.path);
+		if (!have) return { file, state: 'missing' };
+		if (file.bytes != null && have.bytes !== file.bytes) return { file, state: 'size-mismatch' };
+		if (file.blake3 && have.blake3 !== file.blake3.toLowerCase()) return { file, state: 'hash-mismatch' };
+		return { file, state: 'found' };
+	});
+}

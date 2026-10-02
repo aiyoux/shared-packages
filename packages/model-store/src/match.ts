@@ -4,12 +4,13 @@ export type ModelSourceFile = {
   path: string; bytes: number;
   open: (signal: AbortSignal) => Promise<ReadableStream<Uint8Array>>;
 };
-/** `present`: already stored with the expected size and hash, so not loaded
+/** `hash-mismatch`: the source holds a different file under this path (another
+ *  version); `present`: already stored with the expected size and hash, so not loaded
  *  again; `not-fetchable`: the source cannot provide this file (a host the
  *  chosen monitor will not retrieve). */
 export type ModelFileMatch = {
   file: ModelFileDef; source?: ModelSourceFile;
-  state: 'found' | 'missing' | 'ambiguous' | 'size-mismatch' | 'present' | 'not-fetchable';
+  state: 'found' | 'missing' | 'ambiguous' | 'size-mismatch' | 'hash-mismatch' | 'present' | 'not-fetchable';
 };
 /** Relative paths win. Basenames are safe only when unique on both sides. */
 export function matchModelFiles(def: ModelDef, sources: readonly ModelSourceFile[]): ModelFileMatch[] {

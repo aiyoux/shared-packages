@@ -8,8 +8,8 @@
   import { createLocalExplorerDriver } from './localExplorerDriver.js';
   import FeFolderPickerDialog from './FeFolderPickerDialog.svelte';
   import {
-    b2FolderSources, folderModelFiles, monitorFolderSources, onlineModelFiles, onlineSources,
-    type ModelFolderSource, type ModelOnlineSource
+    b2FolderSources, folderModelFiles, linkedDeviceFiles, modelDeviceSources, monitorFolderSources, onDeviceSourcesChange,
+    onlineModelFiles, onlineSources, type ModelDeviceSource, type ModelFolderSource, type ModelOnlineSource
   } from '../ai/modelSources.js';
 
   /** `onStatus` reports each store read, so an app can gate its engine on `ready`. */
@@ -29,6 +29,9 @@
   let folderSources = $state<ModelFolderSource[]>([]);
   let online = $state<ModelOnlineSource[]>([]);
   let onlinePick = $state('');
+  let devices = $state<ModelDeviceSource[]>([]);
+  /** Set while the preview is a linked device's offer: it sends the files, the card does not open them. */
+  let previewDevice = $state<ModelDeviceSource | null>(null);
   let controller = $state<AbortController | null>(null);
   /** Releases the connection a folder preview reads from, once its load ends or it is discarded. */
   let held: (() => void) | null = null;
@@ -52,6 +55,9 @@
     void monitorFolderSources().then((rows) => { if (!sources.signal.aborted) folderSources = [...rows, ...folderSources]; }).catch(() => {});
     void b2FolderSources().then((rows) => { if (!sources.signal.aborted) folderSources = [...folderSources, ...rows]; }).catch(() => {});
     void onlineSources().then((rows) => { if (!sources.signal.aborted) online = rows; }).catch(() => {});
+    devices = modelDeviceSources();
+    const offDevices = onDeviceSourcesChange(() => { devices = modelDeviceSources(); });
+    sources.signal.addEventListener('abort', offDevices, { once: true });
     return () => {
       off(); sources.abort();
       controller?.abort(new DOMException('Model card closed', 'AbortError'));
@@ -59,11 +65,11 @@
     };
   });
   /** Only previewed, matching, not-yet-stored files load; Replace is per file. */
-  function showPreview(rows: ModelFileMatch[], label: string, release: (() => void) | null = null) {
-    held?.(); held = release;
+  function showPreview(rows: ModelFileMatch[], label: string, release: (() => void) | null = null, device: ModelDeviceSource | null = null) {
+    held?.(); held = release; previewDevice = device;
     preview = status ? skipStored(rows, status) : rows; sourceLabel = label; error = '';
   }
-  function discardPreview() { preview = null; held?.(); held = null; }
+  function discardPreview() { preview = null; previewDevice = null; held?.(); held = null; }
   function picked(input: HTMLInputElement, path?: string | null) {
     const files = Array.from(input.files ?? []); input.value = '';
     if (!files.length) return;
@@ -71,7 +77,7 @@
     if (path) { sources[0]!.path = path; }
     // A single-file pick is an explicit Add or Replace, so it is never skipped.
     const rows = matchModelFiles(path ? { ...def, files: def.files.filter(file => file.path === path) } : def, sources);
-    if (path) { held?.(); held = null; preview = rows; sourceLabel = 'This device'; error = ''; }
+    if (path) { held?.(); held = null; previewDevice = null; preview = rows; sourceLabel = 'This device'; error = ''; }
     else showPreview(rows, 'This device');
   }
   async function chooseFolder(label: string, acquire: () => Promise<ExplorerDriver>, release: () => void) {
@@ -95,7 +101,15 @@
     const source = online.find(row => row.id === id); if (!source) return;
     showPreview(onlineModelFiles(def, source), `Online via ${source.label}`);
   }
+  /** Ask a linked device what it holds of this model; its user is asked only when the copy starts. */
+  async function previewDeviceOffer(device: ModelDeviceSource) {
+    busy = true; error = ''; controller = new AbortController();
+    progress = `Asking ${device.label}…`;
+    try { showPreview(linkedDeviceFiles(def, await device.offered(def, controller.signal)), `Copy from ${device.label}`, null, device); }
+    catch (e) { error = message(e); } finally { controller = null; busy = false; progress = ''; }
+  }
   async function loadPreview() {
+    if (previewDevice) return copyFromDevice(previewDevice);
     const matches = preview?.filter(row => row.state === 'found' && row.source) ?? [];
     if (!matches.length || busy) return;
     const model = def; const source = sourceLabel;
@@ -120,6 +134,29 @@
     } catch (e) { error = message(e); if (op) await op.fail(e); }
     finally { controller = null; busy = false; progress = ''; await refresh(); onChanged?.(); }
   }
+  async function copyFromDevice(device: ModelDeviceSource) {
+    const rows = preview?.filter(row => row.state === 'found') ?? [];
+    if (!rows.length || busy) return;
+    const model = def; const source = sourceLabel;
+    busy = true; error = ''; controller = new AbortController();
+    let op: OpHandle | undefined;
+    try {
+      op = await startOp({ kind: 'model-load', app: 'ai-models', title: `Copy ${model.label} from ${device.label}`, signal: controller.signal,
+        where: { executor: 'this-browser', from: { kind: 'browser', label: source }, to: { kind: 'browser', label: 'Browser model store' }, route: 'direct' },
+        landing: { kind: 'browser-model', modelId: model.id } });
+      const total = rows.reduce((sum, row) => sum + (row.file.bytes ?? 0), 0);
+      const landed = new Map<string, number>();
+      progress = `Waiting for ${device.label} to allow the copy…`;
+      await device.copy(model, rows.map(row => row.file.path), { signal: op.signal, onProgress(path, bytes) {
+        landed.set(path, bytes);
+        const done = [...landed.values()].reduce((sum, n) => sum + n, 0);
+        progress = `${path}: ${bytes.toLocaleString()} bytes`;
+        op!.progress({ done, total: total > 0 ? total : undefined, note: path });
+      } });
+      await op.done({ kind: 'browser-model', modelId: model.id }); discardPreview();
+    } catch (e) { error = message(e); if (op) await op.fail(e); }
+    finally { controller = null; busy = false; progress = ''; await refresh(); onChanged?.(); }
+  }
   async function clear(path: string) {
     busy = true; error = '';
     try { await browserModelStore.clear(def.id, path); }
@@ -128,7 +165,7 @@
   }
   const stateLabel: Record<ModelFileMatch['state'], string> = {
     found: 'will load', missing: 'not in this source', ambiguous: 'more than one match', 'size-mismatch': 'wrong size',
-    present: 'already stored', 'not-fetchable': 'not fetchable through this monitor'
+    'hash-mismatch': 'a different version', present: 'already stored', 'not-fetchable': 'not fetchable through this monitor'
   };
   const hasMonitor = $derived(folderSources.some(source => source.id.startsWith('monitor:')));
 </script>
@@ -163,9 +200,13 @@
           {#each online as source (source.id)}<option value={source.id}>{source.label}</option>{/each}
         </select>
       {/if}
+      {#each devices as device (device.id)}
+        <button class="ds-btn ds-btn--sm ds-btn--secondary" disabled={busy} data-testid="model-source-device-{device.id}"
+          onclick={() => void previewDeviceOffer(device)}>Copy from {device.label}</button>
+      {/each}
       {#if busy}<button class="ds-btn ds-btn--sm ds-btn--ghost" onclick={() => controller?.abort(new DOMException('Cancelled', 'AbortError'))} disabled={!controller}>Cancel</button>{/if}
     </div>
-    {#if !hasMonitor}
+    {#if !hasMonitor && !devices.length}
       <p class="hint" data-testid="model-sources-hint">Connect to another device or add a monitor to fetch them automatically.</p>
     {/if}
     <input hidden type="file" multiple bind:this={fileInput} onchange={() => picked(fileInput!)} />
@@ -176,7 +217,7 @@
     <div class="preview" data-testid="model-files-preview">
       <p>Preview · {sourceLabel}</p>
       <ul>{#each preview as row (row.file.path)}<li><code>{row.file.path}</code> · {stateLabel[row.state]}</li>{/each}</ul>
-      <p>Only files marked “will load” are loaded. Their sizes and expected hashes are checked before anything replaces an installed file.</p>
+      <p>Only files marked “will load” are loaded. Their sizes and expected hashes are checked before anything replaces an installed file.{previewDevice ? ` ${previewDevice.label} asks its user to allow the copy.` : ''}</p>
       <button class="ds-btn ds-btn--sm" disabled={busy || !preview.some(row => row.state === 'found')} onclick={() => void loadPreview()}>Load matched files</button>
       <button class="ds-btn ds-btn--sm ds-btn--ghost" disabled={busy} onclick={discardPreview}>Discard preview</button>
     </div>
