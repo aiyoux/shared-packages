@@ -61,3 +61,26 @@ export function pathMatches(pathname: string, relative: string): boolean {
 	const want = !relative || relative === '/' ? '/' : relative.startsWith('/') ? relative : `/${relative}`;
 	return stripTrailingSlash(r) === stripTrailingSlash(want);
 }
+
+/**
+ * Options every product's `mount.ts` accepts (the hub PaneToolHost contract).
+ * Apps that don't read some of them still accept the same shape.
+ */
+export type ProductMountOpts = {
+	/** Hub prefix, e.g. '/tools/creative'. Standalone passes '' (or '/'). */
+	base: string;
+	/** True when hosted inside PaneToolHost — apps skip document scroll-lock. */
+	inPane?: boolean;
+	/** Workspace leaf id — pane chrome injection (sign-dictionary Header). */
+	paneId?: string;
+	/** Pane tool href while the hub URL stays on `/tools?s=` (sign-dictionary). */
+	surfaceHref?: string;
+};
+
+/**
+ * The shared mount body: register the dual-mount base once at boot so route
+ * mapping strips or prepends it. Apps with extra mount work call this first.
+ */
+export function mountProduct(opts: Pick<ProductMountOpts, 'base'>): void {
+	setWorkspaceBase(opts.base);
+}
