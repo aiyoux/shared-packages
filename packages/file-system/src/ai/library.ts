@@ -104,6 +104,13 @@ export type AiNativeFlux2Config = {
 	llm: string;
 };
 
+export type AiNativeOmniSvgConfig = {
+	variant: '4b' | '8b';
+	/** Local Qwen2.5-VL processor/tokenizer/config directory. */
+	baseModel: string;
+	maxTokens?: number;
+};
+
 export type AiNativeModelRow = {
 	id: string;
 	name: string;
@@ -113,6 +120,7 @@ export type AiNativeModelRow = {
 	model: string;
 	backend: string | null;
 	flux2?: AiNativeFlux2Config | null;
+	omnisvg?: AiNativeOmniSvgConfig;
 	vae: string | null;
 	textEncoder: string | null;
 	width: number | null;
@@ -133,6 +141,13 @@ function parseRow(raw: unknown): AiNativeModelRow | null {
 		if ((config.variant !== '4b' && config.variant !== '9b') || typeof config.vae !== 'string' || typeof config.llm !== 'string') return null;
 		flux2 = { variant: config.variant, vae: config.vae, llm: config.llm };
 	}
+	let omnisvg: AiNativeOmniSvgConfig | undefined;
+	if (row.omnisvg != null) {
+		const config = row.omnisvg as Partial<AiNativeOmniSvgConfig>;
+		if ((config.variant !== '4b' && config.variant !== '8b') || typeof config.baseModel !== 'string' ||
+			(config.maxTokens != null && (!Number.isInteger(config.maxTokens) || config.maxTokens < 256 || config.maxTokens > 4096))) return null;
+		omnisvg = { variant: config.variant, baseModel: config.baseModel, ...(config.maxTokens != null ? { maxTokens: config.maxTokens } : {}) };
+	}
 	const dim = (value: unknown): number | null =>
 		typeof value === 'number' && Number.isInteger(value) ? value : null;
 	return {
@@ -140,6 +155,7 @@ function parseRow(raw: unknown): AiNativeModelRow | null {
 		device: row.device as 'cpu' | 'gpu', binary: row.binary, model: row.model,
 		backend: typeof row.backend === 'string' ? row.backend : null,
 		flux2,
+		...(omnisvg ? { omnisvg } : {}),
 		vae: typeof row.vae === 'string' ? row.vae : null,
 		textEncoder: typeof row.textEncoder === 'string' ? row.textEncoder : null,
 		width: dim(row.width),
@@ -171,6 +187,7 @@ export type AiNativeModelInput = {
 	backend?: string;
 	/** Omit for a complete Stable Diffusion checkpoint. */
 	flux2?: AiNativeFlux2Config;
+	omnisvg?: AiNativeOmniSvgConfig;
 	/** Component files for multi-file image runtimes (image generation only). */
 	vae?: string;
 	textEncoder?: string;

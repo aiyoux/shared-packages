@@ -46,3 +46,13 @@ describe('monitor image previews', () => {
   expect(requests).toEqual([]);
  });
 });
+
+
+it('preserves SVG media bytes and MIME type from native jobs', async () => {
+ const svg = '<svg xmlns="http://www.w3.org/2000/svg"><path d="M 0 0 L 10 10"/></svg>';
+ const realFetch = globalThis.fetch;
+ vi.stubGlobal('fetch', vi.fn(async (input: string | URL, init?: RequestInit) => String(input).endsWith('/result') ? new Response(svg, { headers: { 'Content-Type': 'image/svg+xml' } }) : realFetch(input, init)));
+ const output = await runAiMedia(baseUrl, native, { prompt: 'A triangle' }, { preview: true });
+ expect(output.blob.type).toBe('image/svg+xml');
+ expect(await output.blob.text()).toBe(svg);
+});

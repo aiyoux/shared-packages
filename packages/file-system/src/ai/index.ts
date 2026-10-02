@@ -41,6 +41,7 @@ export {
 	type AiLibraryListResult,
 	type AiNativeModelInput,
 	type AiNativeFlux2Config,
+	type AiNativeOmniSvgConfig,
 	type AiNativeModelRow
 } from './library.js';
 export {

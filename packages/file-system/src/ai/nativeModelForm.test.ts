@@ -38,3 +38,12 @@ describe('native model setup', () => {
 		expect(nativeModelFormInput({ ...base, width: 513 })).toEqual(base);
 	});
 });
+
+
+describe('OmniSVG registration', () => {
+	it('trims processor paths, excludes diffusion fields and clears OmniSVG on task changes', () => {
+		const input = { name: ' OmniSVG ', binary: ' /venv/bin/python ', model: ' /models/pytorch_model.bin ', task: 'image-generation' as const, device: 'gpu' as const, backend: 'metal', vae: '/vae', textEncoder: '/llm', omnisvg: { variant: '4b' as const, baseModel: ' /models/qwen ' }, width: 512, height: 512 };
+		expect(nativeModelFormInput(input)).toEqual({ name: 'OmniSVG', binary: '/venv/bin/python', model: '/models/pytorch_model.bin', task: 'image-generation', device: 'gpu', omnisvg: { variant: '4b', baseModel: '/models/qwen' }, width: 512, height: 512 });
+		expect(nativeModelFormInput({ ...input, task: 'chat' })).toEqual({ name: 'OmniSVG', binary: '/venv/bin/python', model: '/models/pytorch_model.bin', task: 'chat', device: 'gpu' });
+	});
+});

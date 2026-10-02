@@ -55,6 +55,7 @@ export type MonitorCapabilities = {
 		nativeJobs?: boolean;
 		nativeFlux2?: boolean;
 		nativeImageComponents?: boolean;
+		nativeOmniSvg?: boolean;
 	};
 };
 
@@ -553,7 +554,8 @@ export function coerceMonitorCapabilities(raw: unknown): MonitorCapabilities {
 						sessionArtifacts: ai.sessionArtifacts === true,
 						nativeJobs: ai.nativeJobs === true,
 						nativeFlux2: ai.nativeFlux2 === true,
-						nativeImageComponents: ai.nativeImageComponents === true
+						nativeImageComponents: ai.nativeImageComponents === true,
+						nativeOmniSvg: ai.nativeOmniSvg === true
 					}
 				}
 			: {})

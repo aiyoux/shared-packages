@@ -16,7 +16,7 @@ export const MONITOR_MODEL_SETUP = {
 			'Install or build llama.cpp on the computer running Monitor and download a compatible GGUF language model.',
 			'Choose Configure model, enter the absolute paths to llama-cli and the GGUF file, select CPU or a GPU supported by your build, then Enable on monitor.',
 			'Refresh the model list and select this model in Chat or in Default models for apps.',
-			'For text-to-SVG through Chat, use a model that returns SVG XML. OmniSVG requires its own Python runtime and SVG token decoder; registering its GGUF as a native chat model does not provide that decoder. A custom OpenAI-compatible service must decode its output into SVG XML before connecting it through a provider profile.'
+			'For text-to-SVG through Chat, use a model that returns SVG XML. For OmniSVG, configure an OmniSVG image model and select it in Generate; Monitor runs its Python model and decodes SVG tokens.'
 		],
 		links: [
 			{ label: 'llama.cpp installation and models', url: 'https://github.com/ggml-org/llama.cpp' },
@@ -47,6 +47,7 @@ export const MONITOR_MODEL_SETUP = {
 	'image-generation': {
 		title: 'Image generation',
 		steps: [
+			'For OmniSVG vector output, choose the 4B or 8B OmniSVG preset. Install PyTorch and transformers 4.51.3 in a Python environment, download official OmniSVG weights and matching Qwen2.5-VL processor files, and enter the Python executable, weights file and processor directory paths.',
 			'Install or build stable-diffusion.cpp on the computer running Monitor. For Stable Diffusion, download a compatible complete checkpoint, such as Stable Diffusion 1.5 .safetensors. For FLUX.2 Klein, download the distilled 4B or 9B diffusion model, the FLUX.2 VAE, and the matching Qwen3 encoder: 4B for Klein 4B, 8B for Klein 9B. For Qwen-Image-2.1, download the quantized diffusion model, the Qwen-Image VAE, and the Qwen3-VL 8B text encoder. Quantized GGUF weights reduce memory use.',
 			'Choose Configure model and select Stable Diffusion, FLUX.2 Klein 4B, FLUX.2 Klein 9B, or Qwen-Image-2.1. Enter the absolute paths to sd-cli and all required model files, set the output resolution (Qwen-Image-2.1 shines at 1024×1024), then Enable on monitor. For CPU select CPU and enter cpu as Backend. For GPU use a CUDA, Vulkan or Metal build and a backend reported by sd-cli --list-devices, such as cuda0, vulkan0 or metal.',
 			'Refresh, open Generate, and select this Monitor and model in the header. Browser SDXS/SD-Turbo ONNX installations are separate from this Monitor runtime.'

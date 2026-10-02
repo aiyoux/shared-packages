@@ -403,7 +403,7 @@ describe('monitor client tolerant parse', () => {
 			sessionArtifacts: false,
 			nativeJobs: false,
 			nativeFlux2: false,
-			nativeImageComponents: false
+			nativeImageComponents: false, nativeOmniSvg: false
 		});
 		const without = createMonitorClient({
 			baseUrl: 'http://127.0.0.1:8300',

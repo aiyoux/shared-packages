@@ -88,7 +88,7 @@ function cleanDim(value: unknown): number | undefined {
 
 /** Hidden image fields must never leak into a different task's request. */
 export function nativeModelFormInput(input: AiNativeModelInput): AiNativeModelInput {
-	const { backend, flux2, vae, textEncoder, width, height, ...rest } = input;
+	const { backend, flux2, omnisvg, vae, textEncoder, width, height, ...rest } = input;
 	const image = input.task === 'image-generation';
 	const cleanWidth = cleanDim(width);
 	const cleanHeight = cleanDim(height);
@@ -97,14 +97,31 @@ export function nativeModelFormInput(input: AiNativeModelInput): AiNativeModelIn
 		name: rest.name.trim(),
 		binary: rest.binary.trim(),
 		model: rest.model.trim(),
-		...(image && backend?.trim() ? { backend: backend.trim() } : {}),
-		...(image && flux2 ? {
+		...(image && !omnisvg && backend?.trim() ? { backend: backend.trim() } : {}),
+		...(image && !omnisvg && flux2 ? {
 			flux2: { variant: flux2.variant, vae: flux2.vae.trim(), llm: flux2.llm.trim() }
 		} : {}),
-		...(image && vae?.trim() && textEncoder?.trim()
+		...(image && !omnisvg && vae?.trim() && textEncoder?.trim()
 			? { vae: vae.trim(), textEncoder: textEncoder.trim() }
 			: {}),
+		...(image && omnisvg ? { omnisvg: { ...omnisvg, baseModel: omnisvg.baseModel.trim() } } : {}),
 		...(image && cleanWidth !== undefined ? { width: cleanWidth } : {}),
 		...(image && cleanHeight !== undefined ? { height: cleanHeight } : {})
 	};
 }
+
+/** Official full-precision OmniSVG 1.1 checkpoints, decoded by Monitor. */
+export const OMNISVG_MODEL_PRESETS = {
+	'omnisvg-4b': {
+		variant: '4b', name: 'OmniSVG 1.1 4B',
+		weightsUrl: 'https://huggingface.co/OmniSVG/OmniSVG1.1_4B',
+		baseUrl: 'https://huggingface.co/Qwen/Qwen2.5-VL-3B-Instruct',
+		baseName: 'Qwen2.5-VL 3B'
+	},
+	'omnisvg-8b': {
+		variant: '8b', name: 'OmniSVG 1.1 8B',
+		weightsUrl: 'https://huggingface.co/OmniSVG/OmniSVG1.1_8B',
+		baseUrl: 'https://huggingface.co/Qwen/Qwen2.5-VL-7B-Instruct',
+		baseName: 'Qwen2.5-VL 7B'
+	}
+} as const;

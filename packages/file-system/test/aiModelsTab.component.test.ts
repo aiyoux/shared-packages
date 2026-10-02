@@ -267,3 +267,38 @@ describe('Monitor model category discovery', () => {
 		await waitFor(() => expect(mocks.addNative).toHaveBeenCalledWith('http://monitor:8300', { name: 'Voice', task: 'text-to-speech', device: 'cpu', binary: '/bin/piper', model: '/models/voice.onnx' }));
 	});
 });
+
+
+describe('OmniSVG model setup', () => {
+	it.each(['4b', '8b'] as const)('registers official %s weights with the matching local processor', async (variant) => {
+		mocks.meta.mockResolvedValue({ capabilities: { ai: { chat: true, nativeOmniSvg: true } } });
+		render(AiModelsTab);
+		(await screen.findByTestId('ai-lib-section-image-generation-desktop')).setAttribute('open', '');
+		await fireEvent.click(screen.getByTestId('ai-monitor-configure-image-generation-desktop'));
+		await fireEvent.change(screen.getByTestId('monitor-ai-image-model'), { target: { value: `omnisvg-${variant}` } });
+		await waitFor(() => expect((screen.getByTestId('monitor-ai-model-save') as HTMLButtonElement).disabled).toBe(false));
+		expect(screen.queryByTestId('monitor-ai-model-vae')).toBeNull();
+		expect((screen.getByTestId('monitor-ai-model-backend') as HTMLInputElement).disabled).toBe(true);
+		await fireEvent.input(screen.getByTestId('monitor-ai-model-binary'), { target: { value: '/venv/bin/python' } });
+		await fireEvent.input(screen.getByTestId('monitor-ai-model-file'), { target: { value: '/models/pytorch_model.bin' } });
+		await fireEvent.change(screen.getByTestId('monitor-ai-model-device'), { target: { value: 'gpu' } });
+		await fireEvent.click(screen.getByTestId('monitor-ai-model-save'));
+		expect(screen.getByTestId('monitor-ai-model-error').textContent).toContain('processor directory');
+		expect(mocks.addNative).not.toHaveBeenCalled();
+		await fireEvent.input(screen.getByTestId('monitor-ai-model-base'), { target: { value: '/models/qwen' } });
+		await fireEvent.click(screen.getByTestId('monitor-ai-model-save'));
+		await waitFor(() => expect(mocks.addNative).toHaveBeenCalledWith('http://monitor:8300', {
+			name: `OmniSVG 1.1 ${variant.toUpperCase()}`, task: 'image-generation', device: 'gpu',
+			binary: '/venv/bin/python', model: '/models/pytorch_model.bin',
+			omnisvg: { variant, baseModel: '/models/qwen' }, width: 512, height: 512
+		}));
+	});
+	it('requires a daemon advertising the OmniSVG decoder', async () => {
+		render(AiModelsTab);
+		(await screen.findByTestId('ai-lib-section-image-generation-desktop')).setAttribute('open', '');
+		await fireEvent.click(screen.getByTestId('ai-monitor-configure-image-generation-desktop'));
+		await fireEvent.change(screen.getByTestId('monitor-ai-image-model'), { target: { value: 'omnisvg-4b' } });
+		expect((screen.getByTestId('monitor-ai-model-save') as HTMLButtonElement).disabled).toBe(true);
+		expect(screen.getByTestId('monitor-ai-omnisvg-update').textContent).toContain('Update Monitor');
+	});
+});
