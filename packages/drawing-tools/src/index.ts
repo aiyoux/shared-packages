@@ -18,6 +18,8 @@ export * from './bucketRaster.ts';
 export * from './bucketVector.ts';
 export * from './combine.ts';
 export * from './parseTransform.ts';
+export * from './elementPaint.ts';
+export * from './pathScale.ts';
 export * from './svgCoords.ts';
 export * from './svgToPaths.ts';
 export * from './svgTree.ts';
