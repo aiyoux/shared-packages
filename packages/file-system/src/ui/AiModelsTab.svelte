@@ -380,7 +380,6 @@
 				{/each}
 			</div>
 		{/if}
-		<p class="hint">Connect to another device or add a monitor to fetch models automatically.</p>
 		<ModelStorageFooter />
 		<details class="host-status" data-testid="ai-browser-host">
 			<summary>Browser model status</summary>

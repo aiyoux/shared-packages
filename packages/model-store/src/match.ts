@@ -4,9 +4,12 @@ export type ModelSourceFile = {
   path: string; bytes: number;
   open: (signal: AbortSignal) => Promise<ReadableStream<Uint8Array>>;
 };
+/** `present`: already stored with the expected size and hash, so not loaded
+ *  again; `not-fetchable`: the source cannot provide this file (a host the
+ *  chosen monitor will not retrieve). */
 export type ModelFileMatch = {
   file: ModelFileDef; source?: ModelSourceFile;
-  state: 'found' | 'missing' | 'ambiguous' | 'size-mismatch';
+  state: 'found' | 'missing' | 'ambiguous' | 'size-mismatch' | 'present' | 'not-fetchable';
 };
 /** Relative paths win. Basenames are safe only when unique on both sides. */
 export function matchModelFiles(def: ModelDef, sources: readonly ModelSourceFile[]): ModelFileMatch[] {
@@ -24,4 +27,9 @@ export function matchModelFiles(def: ModelDef, sources: readonly ModelSourceFile
 export function deviceModelFiles(files: readonly File[]): ModelSourceFile[] {
   return files.map(file => ({ path: file.webkitRelativePath || file.name, bytes: file.size,
     async open(signal) { signal.throwIfAborted(); return file.stream(); } }));
+}
+/** Leave files the store already holds intact out of a load (Replace is per file). */
+export function skipStored(matches: readonly ModelFileMatch[], status: { files: readonly { path: string; state: string }[] }): ModelFileMatch[] {
+  const stored = new Set(status.files.filter(file => file.state === 'present').map(file => file.path));
+  return matches.map(row => stored.has(row.file.path) && row.state === 'found' ? { file: row.file, state: 'present' } : row);
 }
