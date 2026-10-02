@@ -10,6 +10,8 @@ import { blobFromResponse } from '../readProgress.js';
 import { fetchPutBlob } from '../uploadProgress.js';
 import { createStallTimer } from '../stallTimer.js';
 import { withLocalAddressSpace } from './localNetwork.js';
+// Pure transport entry point for consumers that do not need Svelte UI.
+export { withLocalAddressSpace } from './localNetwork.js';
 import { openJsonSse } from './sse.js';
 import type {
 	AiChatRequest,
@@ -41,6 +43,8 @@ export const MONITOR_CHUNK_BYTES = 8 * 1024 * 1024;
 export const MONITOR_SINGLE_SHOT_MAX_BYTES = 100 * 1024 * 1024;
 
 export type MonitorCapabilities = {
+	/** Fixed Protomaps metadata and bounded PMTiles ranges (`/v1/maps/**`). */
+	maps?: { protomaps?: boolean };
  jobs?: boolean;
 	fs?: { ino?: boolean; rename?: boolean; archive?: boolean; mkdir?: boolean; thumb?: boolean };
 	git?: { blob?: boolean; init?: boolean };
@@ -533,9 +537,11 @@ export function coerceMonitorCapabilities(raw: unknown): MonitorCapabilities {
 	const o = raw as Record<string, unknown>;
 	const fs = o.fs && typeof o.fs === 'object' ? (o.fs as Record<string, unknown>) : {};
 	const git = o.git && typeof o.git === 'object' ? (o.git as Record<string, unknown>) : {};
+	const maps = o.maps && typeof o.maps === 'object' ? (o.maps as Record<string, unknown>) : undefined;
 	const ai = o.ai && typeof o.ai === 'object' ? (o.ai as Record<string, unknown>) : undefined;
 	return {
 		...(o.jobs === true ? { jobs: true } : {}),
+		...(maps ? { maps: { protomaps: maps.protomaps === true } } : {}),
 		fs: {
 			ino: fs.ino === true,
 			rename: fs.rename === true,

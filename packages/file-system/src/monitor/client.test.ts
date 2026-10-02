@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, it, expect, vi } from 'vitest';
 import {
 	coerceGitSnapshot,
+	coerceMonitorCapabilities,
 	createMonitorClient
 } from './client.js';
 
@@ -704,4 +705,13 @@ describe('monitor client tolerant parse', () => {
 			]
 		});
 	});
+});
+
+
+describe('Maps capability compatibility', () => {
+ it('only enables maps on a daemon that explicitly advertises it', () => {
+  expect(coerceMonitorCapabilities(undefined).maps?.protomaps).toBeFalsy();
+  expect(coerceMonitorCapabilities({ maps: { protomaps: 'true' } }).maps?.protomaps).toBe(false);
+  expect(coerceMonitorCapabilities({ maps: { protomaps: true } }).maps?.protomaps).toBe(true);
+ });
 });

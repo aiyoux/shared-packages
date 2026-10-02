@@ -59,6 +59,11 @@
       "import": "./src/ai/index.ts",
       "default": "./src/ai/index.ts"
     },
+    "./monitor/client": {
+      "types": "./src/monitor/client.ts",
+      "import": "./src/monitor/client.ts",
+      "default": "./src/monitor/client.ts"
+    },
     "./monitor/pathIds": {
       "types": "./src/monitor/pathIds.ts",
       "import": "./src/monitor/pathIds.ts",
