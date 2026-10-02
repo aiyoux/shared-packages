@@ -1,3 +1,4 @@
+import { finiteNumber as parseFiniteNumber, isRecord, mintDocId, optionalId } from '@shared-packages/parse';
 import {
 	BIND_MODES,
 	CLIP_MEDIA_KINDS,
@@ -27,15 +28,8 @@ export class AnimParseError extends Error {
 	}
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return value != null && typeof value === 'object' && !Array.isArray(value);
-}
-
 function finiteNumber(value: unknown, field: string): number {
-	if (typeof value !== 'number' || !Number.isFinite(value)) {
-		throw new AnimParseError(`${field} must be a finite number`);
-	}
-	return value;
+	return parseFiniteNumber(value, field, (message) => new AnimParseError(message));
 }
 
 function nonEmptyString(value: unknown, field: string): string {
@@ -317,10 +311,6 @@ function parseCanvas(raw: unknown): AnimCanvas | undefined {
 	return { w, h };
 }
 
-function optionalId(raw: unknown): string | undefined {
-	return typeof raw === 'string' && raw.length > 0 ? raw : undefined;
-}
-
 function optionalCreatedAt(raw: unknown): number | undefined {
 	return typeof raw === 'number' && Number.isFinite(raw) ? raw : undefined;
 }
@@ -348,19 +338,12 @@ export function parseAnimDocument(input: Uint8Array | unknown): AnimDocument {
 	};
 }
 
-function mintDocId(): string {
-	if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-		return crypto.randomUUID();
-	}
-	return `anim-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
-}
-
 /**
  * Adopt travelling identity, or mint uuid + `Date.now()` when either field is
  * missing. Returns a new object when it mints; does not mutate `doc`.
  */
 export function ensureAnimIdentity(doc: AnimDocument): AnimDocument {
-	const id = optionalId(doc.id) ?? mintDocId();
+	const id = optionalId(doc.id) ?? mintDocId('anim');
 	const createdAt = optionalCreatedAt(doc.createdAt) ?? Date.now();
 	if (doc.id === id && doc.createdAt === createdAt) return doc;
 	return { ...doc, id, createdAt };

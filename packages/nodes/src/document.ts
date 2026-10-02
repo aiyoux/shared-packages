@@ -1,3 +1,4 @@
+import { finiteNumber as parseFiniteNumber, isRecord, mintDocId, optionalId } from '@shared-packages/parse';
 import { BIND_MODES, type BindMode, type DocSource } from '@shared-packages/doc-refs';
 import { clampPackCount, socketOf } from './sockets.js';
 import type {
@@ -25,15 +26,8 @@ export class NodeParseError extends Error {
 const SCALAR_KINDS: readonly ScalarKind[] = ['image', 'int', 'float', 'string', 'path'];
 const FILTER_KINDS: readonly FilterKind[] = ['grayscale', 'blur', 'brightness-contrast', 'invert'];
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return value != null && typeof value === 'object' && !Array.isArray(value);
-}
-
 function finiteNumber(value: unknown, field: string): number {
-	if (typeof value !== 'number' || !Number.isFinite(value)) {
-		throw new NodeParseError(`${field} must be a finite number`);
-	}
-	return value;
+	return parseFiniteNumber(value, field, (message) => new NodeParseError(message));
 }
 
 function nonEmptyString(value: unknown, field: string): string {
@@ -71,10 +65,6 @@ function decodeInput(input: unknown): unknown {
 		return decodeInput(new TextDecoder().decode(bytes));
 	}
 	return input;
-}
-
-function optionalId(raw: unknown): string | undefined {
-	return typeof raw === 'string' && raw.length > 0 ? raw : undefined;
 }
 
 function optionalCreatedAt(raw: unknown): number | undefined {
@@ -353,19 +343,12 @@ export function parseNodeDocument(input: Uint8Array | string | unknown): NodeDoc
 	};
 }
 
-function mintDocId(): string {
-	if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-		return crypto.randomUUID();
-	}
-	return `node-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
-}
-
 /**
  * Adopt travelling identity, or mint uuid + `Date.now()` when either field is
  * missing. Returns the same reference when both are already set.
  */
 export function ensureNodeIdentity(doc: NodeDocument): NodeDocument {
-	const id = optionalId(doc.id) ?? mintDocId();
+	const id = optionalId(doc.id) ?? mintDocId('node');
 	const createdAt = optionalCreatedAt(doc.createdAt) ?? Date.now();
 	if (doc.id === id && doc.createdAt === createdAt) return doc;
 	return { ...doc, id, createdAt };
@@ -403,7 +386,7 @@ export function emptyNodeDocument(): NodeDocument {
 		schemaVersion: 1,
 		nodes: [
 			{
-				id: mintDocId(),
+				id: mintDocId('node'),
 				x: 640,
 				y: 180,
 				name: 'Output',

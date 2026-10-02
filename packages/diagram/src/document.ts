@@ -1,3 +1,4 @@
+import { finiteNumber as parseFiniteNumber, isRecord, mintDocId, optionalId } from '@shared-packages/parse';
 import {
 	DEFAULT_DIGR_CANVAS,
 	type DigrCanvas,
@@ -15,15 +16,8 @@ export class DigrParseError extends Error {
 	}
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return value != null && typeof value === 'object' && !Array.isArray(value);
-}
-
 function finiteNumber(value: unknown, field: string): number {
-	if (typeof value !== 'number' || !Number.isFinite(value)) {
-		throw new DigrParseError(`${field} must be a finite number`);
-	}
-	return value;
+	return parseFiniteNumber(value, field, (message) => new DigrParseError(message));
 }
 
 /** Text is the one forgiving field: a malformed value becomes an empty box
@@ -139,10 +133,6 @@ function parseCanvas(raw: unknown): DigrCanvas {
 	return { w, h };
 }
 
-function optionalId(raw: unknown): string | undefined {
-	return typeof raw === 'string' && raw.length > 0 ? raw : undefined;
-}
-
 function optionalCreatedAt(raw: unknown): number | undefined {
 	return typeof raw === 'number' && Number.isFinite(raw) ? raw : undefined;
 }
@@ -169,13 +159,6 @@ export function parseDigrDocument(input: Uint8Array | unknown): DigrDocument {
 	};
 }
 
-function mintDocId(): string {
-	if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-		return crypto.randomUUID();
-	}
-	return `digr-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
-}
-
 /**
  * Adopt travelling identity, or mint uuid + `Date.now()` when either field is
  * missing. Returns a new object when it mints; does not mutate `doc`.
@@ -185,7 +168,7 @@ function mintDocId(): string {
  * name this one across a room switch, where node ids mean nothing.
  */
 export function ensureDigrIdentity(doc: DigrDocument): DigrDocument {
-	const id = optionalId(doc.id) ?? mintDocId();
+	const id = optionalId(doc.id) ?? mintDocId('digr');
 	const createdAt = optionalCreatedAt(doc.createdAt) ?? Date.now();
 	if (doc.id === id && doc.createdAt === createdAt) return doc;
 	return { ...doc, id, createdAt };

@@ -1,9 +1,9 @@
 {
-	"name": "@shared-packages/nodes",
+	"name": "@shared-packages/parse",
 	"version": "0.1.0",
 	"private": false,
 	"type": "module",
-	"description": "Node graph document: typed sockets, wires, and on-demand evaluation.",
+	"description": "Parse primitives shared by every document format reader: isRecord, optionalId, finiteNumber, mintDocId.",
 	"exports": {
 		".": {
 			"types": "./src/index.ts",
@@ -18,10 +18,6 @@
 	"scripts": {
 		"test": "vitest run",
 		"check": "tsc --noEmit -p tsconfig.json"
-	},
-	"dependencies": {
-    "@shared-packages/parse": "file:../parse",
-		"@shared-packages/doc-refs": "file:../doc-refs"
 	},
 	"devDependencies": {
 		"@types/node": "^26.1.1",

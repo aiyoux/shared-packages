@@ -70,6 +70,10 @@
 			"types": "./src/idb.ts",
 			"default": "./src/idb.ts"
 		},
+		"./clamp": {
+			"types": "./src/clamp.ts",
+			"default": "./src/clamp.ts"
+		},
 		"./pane-layout/chrome": {
 			"types": "./src/pane-layout/chrome.ts",
 			"svelte": "./src/pane-layout/chrome.ts",

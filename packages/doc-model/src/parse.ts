@@ -1,9 +1,6 @@
+import { isRecord } from '@shared-packages/parse';
 import { normalizePage } from './normalize.js';
 import { KB_FORMAT, type KbPage } from './types.js';
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return !!value && typeof value === 'object' && !Array.isArray(value);
-}
 
 /**
  * Parse a stored kb document. Unknown top-level keys (e.g. a legacy

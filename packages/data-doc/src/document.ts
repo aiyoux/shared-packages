@@ -1,3 +1,4 @@
+import { isRecord, optionalId } from '@shared-packages/parse';
 import type {
 	CellValue,
 	DataDocument,
@@ -20,10 +21,6 @@ export class DataParseError extends Error {
 
 const FIELD_TYPES = new Set<FieldType>(['string', 'int', 'float', 'boolean', 'date']);
 const VIEW_OPS = new Set<ViewCompare>(['eq', 'neq', 'lt', 'lte', 'gt', 'gte', 'contains']);
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return value != null && typeof value === 'object' && !Array.isArray(value);
-}
 
 function nonEmpty(value: unknown, field: string): string {
 	if (typeof value !== 'string' || !value.trim()) throw new DataParseError(`${field} must be a non-empty string`);
@@ -99,11 +96,6 @@ function parseView(raw: unknown, index: number): DataView {
 		...(cardinality ? { cardinality } : {}),
 		where
 	};
-}
-
-function optionalId(value: unknown): string | undefined {
-	if (typeof value !== 'string' || !value.trim()) return undefined;
-	return value;
 }
 
 function optionalCreatedAt(value: unknown): number | undefined {
