@@ -1,3 +1,5 @@
+
+
 import {
 	documentOrder,
 	findBlock,
@@ -10,6 +12,7 @@ import {
 	type Point,
 	type Range
 } from '@shared-packages/doc-model';
+import { cssEscape } from './ids.js';
 import { BLOCK_ID_ATTR, BLOCK_TYPE_ATTR } from './project.js';
 import { clampRange, collapsed } from './range.js';
 
@@ -288,11 +291,6 @@ export function restoreSelection(host: HTMLElement, range: Range, page?: KbPage)
 	domRange.selectNodeContents(target);
 	domRange.collapse(clamp.anchor.offset === 0);
 	sel.addRange(domRange);
-}
-
-function cssEscape(value: string): string {
-	if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') return CSS.escape(value);
-	return value.replace(/"/g, '\\"');
 }
 
 /** One visual line of a text-like block, in viewport coordinates. */

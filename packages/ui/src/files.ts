@@ -1,10 +1,19 @@
-/** Human-readable size for file lists and transfer UIs. */
+/** Human-readable size for file lists and transfer UIs.
+ *
+ * One decimal below 10 of the unit, whole numbers at or above, scaling
+ * through TB. Transfer sizes exceed GB and storage quotas reach TB, so the
+ * scale never truncates and large values do not print as `2048.0 MB`. */
 export function formatBytes(n: number): string {
 	if (!Number.isFinite(n) || n < 0) return '—';
 	if (n < 1024) return `${n} B`;
-	if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-	if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(2)} MB`;
-	return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+	const units = ['KB', 'MB', 'GB', 'TB'];
+	let v = n;
+	let i = -1;
+	do {
+		v /= 1024;
+		i += 1;
+	} while (v >= 1024 && i < units.length - 1);
+	return `${v < 10 ? v.toFixed(1) : Math.round(v)} ${units[i]}`;
 }
 
 /** Copy into a plain ArrayBuffer so Blob/File constructors accept the view. */

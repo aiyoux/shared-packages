@@ -14,6 +14,7 @@
 		type VfsService
 	} from '../index.js';
 	import { fileTypeMime, persistKv } from '@shared-packages/ui';
+	import { formatBytes as formatSize } from '@shared-packages/ui/files';
 	import {
 		readExplorerBlob,
 		type MediaMetaTarget,
@@ -2936,10 +2937,7 @@
 
 	function formatBytes(n: number | undefined): string {
 		if (n == null) return 'Unknown size';
-		if (n < 1024) return `${n} B`;
-		if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-		if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
-		return `${(n / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+		return formatSize(n);
 	}
 
 	function selectionSizeLabel(entries: ExplorerEntry[]): string {

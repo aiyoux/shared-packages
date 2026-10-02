@@ -58,6 +58,14 @@
 			"types": "./src/files.ts",
 			"default": "./src/files.ts"
 		},
+		"./id": {
+			"types": "./src/id.ts",
+			"default": "./src/id.ts"
+		},
+		"./async": {
+			"types": "./src/async.ts",
+			"default": "./src/async.ts"
+		},
 		"./pane-layout/chrome": {
 			"types": "./src/pane-layout/chrome.ts",
 			"svelte": "./src/pane-layout/chrome.ts",

@@ -6,7 +6,11 @@ describe('formatBytes', () => {
 		expect(formatBytes(0)).toBe('0 B');
 		expect(formatBytes(512)).toBe('512 B');
 		expect(formatBytes(1536)).toBe('1.5 KB');
-		expect(formatBytes(2 * 1024 * 1024)).toBe('2.00 MB');
+		expect(formatBytes(2048)).toBe('2.0 KB');
+		expect(formatBytes(2 * 1024 * 1024)).toBe('2.0 MB');
+		// at or above 10 of a unit the decimals drop
+		expect(formatBytes(41 * 1024 * 1024)).toBe('41 MB');
+		expect(formatBytes(3.5 * 1024 * 1024 * 1024 * 1024)).toBe('3.5 TB');
 	});
 
 	it('rejects non-finite input', () => {

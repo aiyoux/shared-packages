@@ -15,6 +15,7 @@
  * inspected, integrity-checked, and backed up as a unit rather than by walking
  * thousands of files.
  */
+import { formatBytes } from '@shared-packages/ui/files';
 import type { VfsService } from './vfs.js';
 import type { BlobRef, PackOpProgress, PackOpStage, VfsNode } from './types.js';
 import { crc32 } from './crc32.js';
@@ -408,13 +409,6 @@ export async function deleteFromProject(
 	return { deleted, compactedPacks: compactedPacks, reclaimedBytes: reclaimedBytes };
 }
 
-
-function formatBytes(n: number): string {
-	if (n < 1024) return `${n} B`;
-	if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
-	if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
-	return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
-}
 
 export type ProjectBackup = {
 	manifest: ProjectPackManifest;
