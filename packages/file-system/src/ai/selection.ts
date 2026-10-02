@@ -29,7 +29,7 @@ import { HUB_AI_DB_NAME, HUB_AI_META, HUB_AI_STORE } from './types.js';
  * `catalog.ts`'s union; the browser-only kinds join the same union so apps,
  * the settings tab, and the model library speak one vocabulary.
  */
-export type AiTaskKey = AiTask | 'handwriting' | 'scan-detect' | 'ocr';
+export type AiTaskKey = AiTask | 'handwriting' | 'scan-detect' | 'ocr' | 'translate';
 
 /**
  * One durable model choice — the identity fields of `AiOffer` minus task.
