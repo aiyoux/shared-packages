@@ -19,12 +19,12 @@ import {
 import { days_between } from './time.ts';
 import {
   addDays,
-  clamp,
   dateFromDayOfYear,
   resolvedWeekRangeForRef,
   weekModeFor,
   weekStartFor
 } from './time-week.ts';
+import { clamp } from '../clamp.ts';
 
 // ---------------------------------------------------------------------------
 // Internal helpers
