@@ -214,6 +214,18 @@ export function persistReady(): Promise<void> {
 	return readyPromise;
 }
 
+/**
+ * The `ClientInit` every product's hooks.client.ts exports: wait for the
+ * saved preferences to hydrate before route modules load, so nothing reads a
+ * saved value too early, gets the default, and keeps it (the hub catalog's
+ * saved Grid came back as List on every reload until this ran first). SvelteKit
+ * `init` runs before any route module is imported, so this covers reads at
+ * module scope as well as in components.
+ */
+export async function persistKvInit(): Promise<void> {
+	await persistReady();
+}
+
 if (typeof indexedDB !== 'undefined' || typeof localStorage !== 'undefined') {
 	void persistReady();
 }

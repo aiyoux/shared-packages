@@ -74,6 +74,11 @@
 			"types": "./src/clamp.ts",
 			"default": "./src/clamp.ts"
 		},
+		"./workspaceBase": {
+			"types": "./src/workspaceBase.ts",
+			"svelte": "./src/workspaceBase.ts",
+			"default": "./src/workspaceBase.ts"
+		},
 		"./icons": {
 			"types": "./src/icons.ts",
 			"svelte": "./src/icons.ts",
