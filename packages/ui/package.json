@@ -74,6 +74,12 @@
 			"types": "./src/clamp.ts",
 			"default": "./src/clamp.ts"
 		},
+		"./icons": {
+			"types": "./src/icons.ts",
+			"svelte": "./src/icons.ts",
+			"default": "./src/icons.ts"
+		},
+		"./Icon.svelte": "./src/Icon.svelte",
 		"./pane-layout/chrome": {
 			"types": "./src/pane-layout/chrome.ts",
 			"svelte": "./src/pane-layout/chrome.ts",
