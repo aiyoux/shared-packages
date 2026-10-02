@@ -1,7 +1,7 @@
 <script lang="ts">
 	import FileExplorer from './FileExplorer.svelte';
 	import type { FileTypeId } from '../types.js';
-	import type { ExplorerOpenTarget } from './explorerDriver.js';
+	import type { ExplorerOpenContext, ExplorerOpenTarget } from './explorerDriver.js';
 
 	let {
 		mode,
@@ -21,7 +21,7 @@
 			name: string;
 			overwrite?: boolean;
 		}) => void | Promise<void>;
-		onOpen?: (entry: ExplorerOpenTarget) => void | Promise<void>;
+		onOpen?: (entry: ExplorerOpenTarget, ctx?: ExplorerOpenContext) => void | Promise<void>;
 		onClose: () => void;
 	} = $props();
 
