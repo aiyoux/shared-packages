@@ -104,7 +104,6 @@ export {
 } from './mic.js';
 
 export { probeWebspeech, installWebspeechOnDevice } from './engines/webspeechStt.js';
-export { resolveAiBackend } from './engines/aiStt.js';
 export { repoPathFromUrl, createVfsCache } from './engines/transformersVfsCache.js';
 export { configureTransformersEnv } from './engines/transformersEnv.js';
 export { SegmentPlayer, splitSentences } from './engines/playback.js';

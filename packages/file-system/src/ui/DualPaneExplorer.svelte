@@ -136,7 +136,6 @@
 		releaseMonitorDriver,
 		getProfile as getMonitorProfile,
 		listProfiles as listMonitorProfiles,
-		setActiveProfileId as setActiveMonitorProfileId,
 		mapMonitorError,
 		formatMonitorErrorMessage,
 		type MonitorConnectionProfileV1
@@ -396,10 +395,11 @@
 		// no pane driver to attach, so nothing else to do here.
 	}
 
-	function onRemoteDisconnected(kind: RemoteKind) {
+	/** A removed connection detaches only the panes showing it. */
+	function onRemoteDisconnected(kind: RemoteKind, id: string) {
 		for (const paneId of Object.keys(windows)) {
 			const cur = paneState(paneId);
-			if (cur.activeKind !== kind) continue;
+			if (cur.activeKind !== kind || cur.activeId !== id) continue;
 			releaseRemote(cur.activeKind, cur.activeId);
 			setPane(paneId, {
 				remoteDriver: null,
@@ -961,7 +961,6 @@
 			if (prevId && !(prevKind === 'monitor' && prevId === profile.id)) {
 				releaseRemote(prevKind, prevId);
 			}
-			void setActiveMonitorProfileId(profile.id);
 			setPane(id, {
 				role: `monitor:${profile.id}`,
 				remoteDriver: driver,
@@ -1933,6 +1932,7 @@
 		{#if p.showMonitorForm && showMonitor}
 			<div class="pane-form" data-testid={scopedTid(`monitor-form-wrap-${id}`)}>
 				<MonitorConnectionForm
+					connectedId={p.activeKind === 'monitor' ? p.activeId : null}
 					onConnected={async (profile) => {
 						await reloadProfiles();
 						await connectMonitor(id, profile);

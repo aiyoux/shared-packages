@@ -90,12 +90,10 @@ export {
 export {
 	closeCredentialsDbForTests,
 	deleteProfile,
-	getActiveProfileId,
 	getProfile,
 	listProfiles,
 	redactProfile,
-	saveProfile,
-	setActiveProfileId
+	saveProfile
 } from './credentials.js';
 export {
 	ExplorerMonitorError,
@@ -115,11 +113,9 @@ export {
 export {
 	DEFAULT_MONITOR_BASE_URL,
 	HUB_MONITOR_DB_NAME,
-	HUB_MONITOR_META,
 	HUB_MONITOR_STORE,
 	normalizeMonitorRootPath,
 	validateMonitorProfileInput,
-	type HubMonitorMeta,
 	type MonitorConnectionProfileV1
 } from './types.js';
 

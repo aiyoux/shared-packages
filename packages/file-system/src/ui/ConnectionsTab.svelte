@@ -16,7 +16,6 @@
 	import {
 		createB2Connection,
 		deleteB2Connection,
-		getActiveB2RowId,
 		listB2Connections,
 		setActiveB2RowId,
 		updateB2Connection
@@ -24,10 +23,8 @@
 	import { validateB2Input, type B2ConnectionRow } from '../b2/types.js';
 	import {
 		deleteProfile as deleteMonitor,
-		getActiveProfileId as getActiveMonitor,
 		listProfiles as listMonitor,
-		saveProfile as saveMonitor,
-		setActiveProfileId as setActiveMonitor
+		saveProfile as saveMonitor
 	} from '../monitor/credentials.js';
 	import {
 		DEFAULT_MONITOR_BASE_URL,
@@ -53,7 +50,8 @@
 		/** Close the popup (the tab's Escape path when the list is showing). */
 		onClose: () => void;
 		onConnected?: (kind: RemoteKind, profile: object) => void;
-		onDisconnected?: (kind: RemoteKind) => void;
+		/** A row was removed; the host detaches whatever shows that id. */
+		onDisconnected?: (kind: RemoteKind, id: string) => void;
 	}
 
 	let { onClose, onConnected, onDisconnected }: Props = $props();
@@ -68,8 +66,6 @@
 	/** Monitors that could not list their B2 connections (offline / CORS). */
 	let b2Unreachable = $state<string[]>([]);
 	let monitorProfiles = $state<MonitorConnectionProfileV1[]>([]);
-	let activeB2 = $state<string | null>(null);
-	let activeMonitor = $state<string | null>(null);
 
 	let name = $state('');
 	let b2MonitorId = $state('');
@@ -136,16 +132,10 @@
 	});
 
 	async function reload() {
-		const [b2, mon, aMon] = await Promise.all([
-			listB2Connections(),
-			listMonitor(),
-			getActiveMonitor()
-		]);
+		const [b2, mon] = await Promise.all([listB2Connections(), listMonitor()]);
 		b2Rows = b2.rows;
 		b2Unreachable = b2.unreachable.map((u) => u.monitorName);
 		monitorProfiles = mon;
-		activeB2 = getActiveB2RowId();
-		activeMonitor = aMon;
 	}
 
 	$effect(() => {
@@ -277,13 +267,10 @@
 				const r = b2Rows.find((x) => x.rowId === row.id);
 				if (!r) return;
 				setActiveB2RowId(r.rowId);
-				activeB2 = r.rowId;
 				onConnected?.(row.kind, r);
 			} else {
 				const p = monitorProfiles.find((x) => x.id === row.id);
 				if (!p) return;
-				await setActiveMonitor(p.id);
-				activeMonitor = p.id;
 				onConnected?.(row.kind, p);
 			}
 		} catch (e) {
@@ -308,8 +295,7 @@
 			mode = 'list';
 		}
 		await reload();
-		const active = row.kind === 'b2' ? activeB2 : activeMonitor;
-		if (active === row.id) onDisconnected?.(row.kind);
+		onDisconnected?.(row.kind, row.id);
 	}
 
 	const connectTid = (k: RemoteKind) =>

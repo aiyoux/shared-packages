@@ -167,9 +167,9 @@ export interface SttEngine {
 			/** AI engine: the transcription offer chosen from the monitor's
 			 *  catalog (id + execution location). */
 			aiOffer?: { id: string; location: 'monitor-native' | 'monitor-provider' };
-			/** AI engine: monitor base URL the offer came from. A run against
-			 *  a different active monitor is refused, not silently rerouted. */
-			aiMonitorBaseUrl?: string;
+			/** AI engine: the saved monitor the offer came from. The run goes
+			 *  there and nowhere else. */
+			aiMonitor?: { profileId: string; name: string; baseUrl: string };
 		opHandle?: OpHandle;
 			onProgress?: (p: { doneChunks: number; chunks: number }) => void;
 			signal?: AbortSignal;

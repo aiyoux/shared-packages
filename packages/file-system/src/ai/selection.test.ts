@@ -196,12 +196,13 @@ describe('matchAiModelRef', () => {
 		).toBeNull();
 	});
 
-	it('offerAiRef drops the browser display source and keeps monitor sources', () => {
+	it('offerAiRef drops the browser display source and pins monitor refs to their monitor', () => {
 		expect(
-			offerAiRef(offer('b', { location: 'browser', modelId: 'k', sourceId: 'this-browser', variantId: 'cpu' }))
+			offerAiRef(offer('b', { location: 'browser', modelId: 'k', sourceId: 'this-browser', variantId: 'cpu' }), null)
 		).toEqual({ location: 'browser', modelId: 'k', sourceId: null, variantId: 'cpu', monitorProfileId: null });
-		expect(
-			offerAiRef(offer('p', { location: 'monitor-provider', modelId: 'k', sourceId: 'p1', variantId: 'service' }))
-		).toEqual({ location: 'monitor-provider', modelId: 'k', sourceId: 'p1', variantId: 'service', monitorProfileId: null });
+		const provider = offer('p', { location: 'monitor-provider', modelId: 'k', sourceId: 'p1', variantId: 'service' });
+		expect(offerAiRef(provider, 'home')).toEqual({ location: 'monitor-provider', modelId: 'k', sourceId: 'p1', variantId: 'service', monitorProfileId: 'home' });
+		// A monitor ref that names no monitor would resolve to "whichever one".
+		expect(() => offerAiRef(provider, null)).toThrow(/must name its monitor/);
 	});
 });

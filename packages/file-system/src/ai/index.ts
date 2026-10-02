@@ -12,7 +12,6 @@ export {
 	completeAiChat,
 	streamAiChat,
 	requestAiChatCompletion,
-	resolveNativeAiMonitor,
 	runAiMedia,
 	runAiNativeJob,
 	runAiTranscription,
@@ -65,10 +64,23 @@ export {
 	installAiProfile,
 	listAiModels,
 	listAiProfiles,
-	resolveAiMonitor,
-	type AiCapabilities,
-	type AiMonitor
+	type AiCapabilities
 } from './monitor.js';
+export {
+	BROWSER_CHAT_MODEL,
+	browserChatOffers,
+	aiChoiceReadsImages,
+	describeMissingAiChoice,
+	getAiMonitor,
+	listAiChoices,
+	listAiMonitors,
+	listSavedMonitors,
+	matchAiChoice,
+	type AiChoice,
+	type AiChoiceList,
+	type AiMonitorStatus,
+	type AiMonitorTarget
+} from './choices.js';
 export {
 	AiInvokeUnsupported,
 	aiSessionDeleteUrl,

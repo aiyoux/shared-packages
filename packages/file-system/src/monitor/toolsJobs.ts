@@ -29,7 +29,7 @@
  */
 
 import { withLocalAddressSpace } from './localNetwork.js';
-import { listProfiles, getActiveProfileId } from './credentials.js';
+import { listProfiles } from './credentials.js';
 import { createMonitorJobsClient } from './jobs.js';
 import type { MonitorConnectionProfileV1 } from './types.js';
 import { opsService, startOp, type OpHandle, type ResultRef } from '../services/ops.js';
@@ -213,7 +213,6 @@ export type ResolveSelectedToolsMonitorDeps = {
 	fetchImpl?: typeof fetch;
 	listProfilesImpl?: typeof listProfiles;
 	getSelectionMapImpl?: typeof getAiSelectionMap;
-	getActiveProfileIdImpl?: typeof getActiveProfileId;
 };
 
 /**
@@ -222,8 +221,8 @@ export type ResolveSelectedToolsMonitorDeps = {
  * silently rerouted work (unified-ai-pipeline.md: never). The selection cell
  * (the app's own, else the task-wide `'default'`) must name a
  * `monitor-native` ref backed by this task's engine. Resolution pins to the
- * ref's `monitorProfileId`, or to the active monitor when the pick has no
- * pin — never to another reachable profile. A missing or no-longer-valid
+ * ref's `monitorProfileId` — never to another reachable profile. A ref
+ * without one names no monitor. A missing or no-longer-valid
  * pick is an error that names the settings path, not a silent reroute.
  */
 export async function resolveSelectedToolsMonitor(
@@ -254,23 +253,18 @@ export async function resolveSelectedToolsMonitor(
 	} catch (err) {
 		throw new Error(`Could not read configured monitors: ${(err as Error)?.message || err}`);
 	}
-	// Pin order: a pick with no profile id means the active monitor; a pinned
-	// pick means exactly that monitor. Anything else is a reroute and stops
-	// with the settings nudge above — the user decides, or fixes the dead pin.
-	let candidate: MonitorConnectionProfileV1 | undefined;
-	if (ref.monitorProfileId) {
-		candidate = profiles.find((p) => p.id === ref.monitorProfileId);
-		if (!candidate) {
-			throw new Error(
-				'The monitor you picked for this tool is gone. Pick it again in Settings → AI models.'
-			);
-		}
-	} else {
-		const activeId = await (deps.getActiveProfileIdImpl ?? getActiveProfileId)().catch(() => null);
-		candidate = activeId ? profiles.find((p) => p.id === activeId) : profiles[0];
-		if (!candidate) {
-			throw new Error('No monitors configured. Add one in the File Explorer settings and pick it in Settings → AI models.');
-		}
+	// A pick means exactly the monitor it names. Anything else is a reroute and
+	// stops with the settings nudge — the user decides, or fixes the dead pin.
+	if (!ref.monitorProfileId) {
+		throw new Error(
+			`The ${taskLabel(task)} selection does not name a monitor — pick it again in Settings → AI models.`
+		);
+	}
+	const candidate = profiles.find((p) => p.id === ref.monitorProfileId);
+	if (!candidate) {
+		throw new Error(
+			'The monitor you picked for this tool is gone. Pick it again in Settings → AI models.'
+		);
 	}
 	const caps = await probeToolsFeature(candidate.baseUrl, deps.fetchImpl);
 	const monitor: MonitorToolsProbe = {

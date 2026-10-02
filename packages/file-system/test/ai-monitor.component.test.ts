@@ -1,6 +1,7 @@
 /**
- * Monitor-routed AI client: envelope→taxonomy mapping, monitor resolution,
- * chat extraction, and the v3 selection store.
+ * Monitor-routed AI client: envelope→taxonomy mapping, choices across saved
+ * monitors (no active monitor, no fallback), chat extraction, and the v3
+ * selection store.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import 'fake-indexeddb/auto';
@@ -10,7 +11,6 @@ import {
 	formatAiErrorMessage
 } from '../src/ai/errors.js';
 import {
-	resolveAiMonitor,
 	listAiModels,
 	aiChatText,
 	aiChatStream
@@ -21,6 +21,12 @@ import {
 	EMPTY_SELECTION_MAP,
 	closeSelectionDbForTests
 } from '../src/ai/selection.js';
+import {
+	describeMissingAiChoice,
+	getAiMonitor,
+	listAiChoices,
+	matchAiChoice
+} from '../src/ai/choices.js';
 import { normalizeAiBaseUrl, validateAiProfileInput } from '../src/ai/types.js';
 import { HUB_AI_DB_NAME } from '../src/ai/types.js';
 import {
@@ -94,26 +100,35 @@ describe('ai monitor client', () => {
 		await closeSelectionDbForTests();
 	});
 
-	it('resolveAiMonitor returns null with no monitor configured', async () => {
-		expect(await resolveAiMonitor()).toBeNull();
+	const meta = (ai: object | null) => new Response(
+		JSON.stringify({ name: 'monitor', features: ai ? ['ai'] : [], ...(ai ? { capabilities: { ai } } : {}) }),
+		{ status: 200 }
+	);
+	const offer = (id: string, location: string, extra: object = {}) => ({
+		id, name: id, task: 'chat', location, modelId: `model-${id}`, sourceId: location === 'monitor-provider' ? 'p1' : 'native-row',
+		variantId: location === 'monitor-provider' ? 'service' : 'gpu', deviceClass: location === 'monitor-provider' ? 'service' : 'gpu',
+		supported: true, ready: true, available: true, reason: null, ...extra
 	});
 
-	it('resolveAiMonitor finds the active monitor with the ai capability', async () => {
+	it('getAiMonitor names a removed monitor instead of finding another', async () => {
+		await saveMonitorProfile({ id: 'm2', name: 'Other', baseUrl: 'http://127.0.0.1:8301', rootPath: '/tmp' });
+		const fetch = vi.fn(async () => meta({ chat: true }));
+		vi.stubGlobal('fetch', fetch);
+		try {
+			await expect(getAiMonitor('gone')).rejects.toMatchObject({ code: 'AI_NOT_FOUND' });
+			expect(fetch).not.toHaveBeenCalled();
+		} finally {
+			vi.unstubAllGlobals();
+		}
+	});
+
+	it('getAiMonitor resolves exactly the named monitor, then chats through it', async () => {
 		await saveMonitorProfile({ id: 'm1', name: 'Local', baseUrl: 'http://127.0.0.1:8300', rootPath: '/tmp' });
 		vi.stubGlobal(
 			'fetch',
 			vi.fn(async (input: string | URL) => {
 				const url = String(input);
-				if (url.endsWith('/v1/meta')) {
-					return new Response(
-						JSON.stringify({
-							name: 'monitor',
-							features: ['ai'],
-							capabilities: { ai: { chat: true, streaming: true, profiles: 0 } }
-						}),
-						{ status: 200 }
-					);
-				}
+				if (url.endsWith('/v1/meta')) return meta({ chat: true, streaming: true, profiles: 0 });
 				if (url.endsWith('/v1/ai/models')) {
 					return new Response(JSON.stringify({ models: [{ id: 'm', profile: 'p', profileName: 'P', defaultProfile: true }], errors: [] }), { status: 200 });
 				}
@@ -124,56 +139,62 @@ describe('ai monitor client', () => {
 			})
 		);
 		try {
-			const mon = await (async () => {
-				const { getActiveProfileId: gid, listProfiles: lp } = await import('../src/monitor/credentials.js');
-				const { createMonitorClient: cmc } = await import('../src/monitor/client.js');
-				const errs: string[] = [];
-				try {
-					const activeId = await gid();
-					errs.push('activeId=' + activeId);
-					const all = await lp();
-					errs.push('n=' + all.length);
-					for (const profile of all) {
-						try {
-							const t = cmc({ baseUrl: profile.baseUrl });
-							const meta = await t.meta();
-							const caps = (meta.capabilities as { ai?: { chat?: boolean } } | undefined)?.ai;
-							errs.push('caps=' + JSON.stringify(caps));
-							if (caps?.chat) return { baseUrl: profile.baseUrl, monitorProfileId: profile.id, capabilities: caps };
-						} catch (e) {
-							errs.push('probe-err=' + String(e));
-						}
-					}
-				} catch (e) {
-					errs.push('outer-err=' + String(e));
-				}
-				require('node:fs').writeFileSync('/tmp/dbg-log.txt', errs.join('\n'));
-				return null;
-			})();
-			expect(mon?.baseUrl).toBe('http://127.0.0.1:8300');
-			expect(mon?.capabilities.chat).toBe(true);
-
-			const models = await listAiModels(mon!.baseUrl);
-			expect(models.models[0]?.id).toBe('m');
-
-			const text = await aiChatText(mon!.baseUrl, {
-				model: 'm',
-				messages: [{ role: 'user', content: 'hi' }]
-			});
-			expect(text).toBe('hello');
+			const mon = await getAiMonitor('m1');
+			expect(mon).toMatchObject({ profileId: 'm1', name: 'Local', baseUrl: 'http://127.0.0.1:8300' });
+			expect(mon.capabilities.chat).toBe(true);
+			expect((await listAiModels(mon.baseUrl)).models[0]?.id).toBe('m');
+			expect(await aiChatText(mon.baseUrl, { model: 'm', messages: [{ role: 'user', content: 'hi' }] })).toBe('hello');
 		} finally {
 			vi.unstubAllGlobals();
 		}
 	});
 
-	it('resolveAiMonitor skips monitors without the capability', async () => {
+	it('getAiMonitor refuses a monitor without the AI feature', async () => {
 		await saveMonitorProfile({ id: 'm1', name: 'Old', baseUrl: 'http://127.0.0.1:1', rootPath: '/tmp' });
+		vi.stubGlobal('fetch', vi.fn(async () => meta(null)));
+		try {
+			await expect(getAiMonitor('m1')).rejects.toMatchObject({ code: 'AI_UNSUPPORTED' });
+		} finally {
+			vi.unstubAllGlobals();
+		}
+	});
+
+	it('listAiChoices tags each offer with its monitor and names unreachable monitors', async () => {
+		await saveMonitorProfile({ id: 'home', name: 'Home', baseUrl: 'http://home.test', rootPath: '/tmp' });
+		await saveMonitorProfile({ id: 'work', name: 'Work', baseUrl: 'http://work.test', rootPath: '/tmp' });
+		await saveMonitorProfile({ id: 'away', name: 'Away', baseUrl: 'http://away.test', rootPath: '/tmp' });
 		vi.stubGlobal(
 			'fetch',
-			vi.fn(async () => new Response(JSON.stringify({ name: 'monitor', features: [] }), { status: 200 }))
+			vi.fn(async (input: string | URL) => {
+				const url = String(input);
+				if (url.startsWith('http://away.test')) throw new TypeError('Failed to fetch');
+				if (url.endsWith('/v1/meta')) return meta({ chat: true, nativeJobs: true });
+				if (url.endsWith('/v1/ai/catalog')) {
+					return new Response(JSON.stringify({ offers: [offer('shared', 'monitor-provider'), offer('native', 'monitor-native'), offer('tts', 'monitor-provider', { task: 'text-to-speech' })] }), { status: 200 });
+				}
+				if (url.endsWith('/v1/ai/profiles')) {
+					return new Response(JSON.stringify({ profiles: [{ id: 'p1', name: 'OpenAI', baseUrl: 'https://api.test', default: true, source: 'managed', keyFingerprint: null }], defaultProfile: 'p1' }), { status: 200 });
+				}
+				throw new Error(`unexpected fetch ${url}`);
+			})
 		);
 		try {
-			expect(await resolveAiMonitor()).toBeNull();
+			const list = await listAiChoices('chat');
+			// Same offer ids on two monitors stay two choices; other tasks are left out.
+			expect(list.choices.map((choice) => choice.key)).toEqual(['home|shared', 'home|native', 'work|shared', 'work|native']);
+			const homeShared = list.choices[0]!;
+			expect(homeShared.label).toBe('model-shared · OpenAI — Home');
+			expect(homeShared.ref).toMatchObject({ location: 'monitor-provider', monitorProfileId: 'home' });
+			expect(list.monitors.find((row) => row.profileId === 'away')?.error).toMatch(/Not reachable/);
+
+			// A pick resolves only on the monitor it names.
+			const workRef = list.choices[2]!.ref;
+			expect(matchAiChoice(workRef, list.choices)?.key).toBe('work|shared');
+			expect(matchAiChoice({ ...workRef, monitorProfileId: null }, list.choices)).toBeNull();
+			const awayRef = { ...workRef, monitorProfileId: 'away' };
+			expect(matchAiChoice(awayRef, list.choices)).toBeNull();
+			expect(describeMissingAiChoice(awayRef, list)).toMatch(/^Away — Not reachable/);
+			expect(describeMissingAiChoice({ ...workRef, monitorProfileId: 'deleted' }, list)).toMatch(/removed/);
 		} finally {
 			vi.unstubAllGlobals();
 		}

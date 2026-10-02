@@ -46,7 +46,9 @@ export type AiModelRef = {
 	sourceId: string | null;
 	/** Device variant, or the voice for TTS refs; null where it does not apply. */
 	variantId: string | null;
-	/** Which monitor connection the choice is pinned to; null = active monitor. */
+	/** The saved monitor the choice runs on. Required for monitor locations:
+	 * a monitor ref without one names no monitor and resolves to nothing.
+	 * Null for browser refs. */
 	monitorProfileId?: string | null;
 };
 
@@ -153,28 +155,30 @@ export function resolveAiModelRef(
 }
 
 /**
- * The durable ref for an offer pick: everything that resolves it. A browser
- * offer's sourceId is only a display label ('this-browser') — the runtime is
- * this browser itself, so it is dropped; native and provider rows keep theirs,
- * and the monitor profile is not part of the identity.
+ * The durable ref for an offer pick: everything that resolves it, including
+ * the monitor it runs on. A browser offer's sourceId is only a display label
+ * ('this-browser') — the runtime is this browser itself, so it is dropped;
+ * native and provider rows keep theirs. Prefer `AiChoice.ref` (choices.ts),
+ * which already pairs the offer with its monitor.
  */
-export function offerAiRef(offer: AiOffer): AiModelRef {
+export function offerAiRef(offer: AiOffer, monitorProfileId: string | null): AiModelRef {
+	if (offer.location !== 'browser' && !monitorProfileId) {
+		throw new Error('A monitor model ref must name its monitor.');
+	}
 	return {
 		location: offer.location,
 		modelId: offer.modelId,
 		sourceId: offer.location === 'browser' ? null : offer.sourceId,
 		variantId: offer.variantId,
-		monitorProfileId: null
+		monitorProfileId: offer.location === 'browser' ? null : monitorProfileId
 	};
 }
 
 /**
  * The offer a ref names when restoring into a live catalog: exact identity
  * first (model, location, source, variant), then model + location with the
- * ref's source when it names one. Identity only — the monitor profile is
- * not part of a ref, and the caller decides whether the ref's context
- * (monitor, task filter) makes a candidate eligible at all. `ai-chats`'s
- * offer matching moved here so every app restores picks identically.
+ * ref's source when it names one. Identity only: the caller passes offers
+ * from the ref's own monitor (`matchAiChoice` in choices.ts does).
  */
 export function matchAiModelRef(
 	ref: AiModelRef,

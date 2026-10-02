@@ -52,14 +52,12 @@ function mapOf(task: string, ref: unknown): AiSelectionMap {
 function depsFor(
 	profiles: unknown[],
 	map: AiSelectionMap,
-	activeId: string | null = null,
 	fetches: FetchMock = []
 ) {
 	return {
 		fetchImpl: fetchFrom(fetches),
 		listProfilesImpl: async () => profiles as MonitorConnectionProfileV1[],
-		getSelectionMapImpl: async () => map,
-		getActiveProfileIdImpl: async () => activeId
+		getSelectionMapImpl: async () => map
 	};
 }
 
@@ -251,16 +249,31 @@ it('no selection is an error naming the settings path, never a reroute', async (
 	);
 });
 
-it('an un-pinned pick resolves through the active monitor', async () => {
+it('a pick that names no monitor is an error, never a guess', async () => {
+	await assert.rejects(
+		resolveSelectedToolsMonitor('audio-upsampling', 'default-app', depsFor(
+			[{ id: 'c', name: 'Audio only', baseUrl: 'http://127.0.0.1:9903' }],
+			mapOf('audio-upsampling', {
+				location: 'monitor-native',
+				modelId: 'audiosronnx',
+				sourceId: 'audiosronnx',
+				variantId: 'onnx-cpu'
+			})
+		)),
+		/does not name a monitor/
+	);
+});
+
+it('a pinned pick resolves on exactly its monitor', async () => {
 	const probe = await resolveSelectedToolsMonitor('audio-upsampling', 'default-app', depsFor(
-		[{ id: 'c', name: 'Audio only', baseUrl: 'http://127.0.0.1:9903' }],
+		[{ id: 'b', name: 'Other', baseUrl: 'http://127.0.0.1:9902' }, { id: 'c', name: 'Audio only', baseUrl: 'http://127.0.0.1:9903' }],
 		mapOf('audio-upsampling', {
 			location: 'monitor-native',
 			modelId: 'audiosronnx',
 			sourceId: 'audiosronnx',
-			variantId: 'onnx-cpu'
+			variantId: 'onnx-cpu',
+			monitorProfileId: 'c'
 		}),
-		'c',
 		[{ url: 'http://127.0.0.1:9903/v1/meta', res: ok({ capabilities: { tools: { audio: true } } }) }]
 	));
 	assert.equal(probe.profileId, 'c');
@@ -277,9 +290,9 @@ it('a pick whose monitor lost the engine is an error, never a reroute', async ()
 				location: 'monitor-native',
 				modelId: 'srmd-ncnn-vulkan',
 				sourceId: 'srmd-ncnn-vulkan',
-				variantId: 'ncnn-vulkan'
+				variantId: 'ncnn-vulkan',
+				monitorProfileId: 'a'
 			}),
-			'a',
 			[
 				{ url: 'http://127.0.0.1:9904/v1/meta', res: ok({ capabilities: { tools: { rife: true } } }) },
 				{
@@ -390,7 +403,7 @@ it('uses catalog availability when an installed engine lacks FFmpeg', async () =
 	await assert.rejects(resolveSelectedToolsMonitor('video-upscale', 'files', depsFor(
 		[{ id: 'desktop', name: 'Desktop', baseUrl: 'http://127.0.0.1:9906' }],
 		mapOf('video-upscale', { location: 'monitor-native', modelId: 'srmd-ncnn-vulkan', monitorProfileId: 'desktop' }),
-		'desktop', requests
+		requests
 	)), /Desktop: ffmpeg or ffprobe is not installed/);
 });
 
