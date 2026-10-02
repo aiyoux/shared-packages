@@ -151,6 +151,36 @@ describe('monitor explorer driver capabilities', () => {
 		expect(loc?.url).toContain(encodeURIComponent('/tmp/a.png'));
 	});
 
+	it('thumbUrl serves video only when fs.videoThumb is advertised', async () => {
+		const noCap = await createMonitorExplorerDriver({
+			profile,
+			transport: transportStub({
+				meta: vi.fn(async () => ({
+					capabilities: { fs: { ino: true, rename: true, thumb: true }, git: { blob: true } }
+				})),
+				thumbUrl: (path: string) => `http://127.0.0.1:8300/v1/fs/thumb?path=${encodeURIComponent(path)}`
+			}),
+			enableWatch: false
+		});
+		expect(await noCap.thumbUrl!('clip.mp4', { maxDim: 96 })).toBe(null);
+
+		const withCap = await createMonitorExplorerDriver({
+			profile,
+			transport: transportStub({
+				meta: vi.fn(async () => ({
+					capabilities: {
+						fs: { ino: true, rename: true, thumb: true, videoThumb: true },
+						git: { blob: true }
+					}
+				})),
+				thumbUrl: (path: string) => `http://127.0.0.1:8300/v1/fs/thumb?path=${encodeURIComponent(path)}`
+			}),
+			enableWatch: false
+		});
+		const loc = await withCap.thumbUrl!('clip.mp4', { maxDim: 96 });
+		expect(loc?.url).toContain(encodeURIComponent('/tmp/clip.mp4'));
+	});
+
 	it('downloadUrl is a header-free GET Chrome can open', async () => {
 		const driver = await createMonitorExplorerDriver({
 			profile,

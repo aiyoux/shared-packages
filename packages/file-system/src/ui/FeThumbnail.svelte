@@ -116,7 +116,9 @@
 
 		(async () => {
 			try {
-				if (d.thumbUrl) {
+				// Only image and video have host thumbs; pdf and others would
+				// just get a benign 415 per row before the real path below.
+				if ((k === 'image' || k === 'video') && d.thumbUrl) {
 					try {
 						const loc = await d.thumbUrl(e.id, { maxDim: dim });
 						if (cancelled) return;
@@ -137,6 +139,18 @@
 					} catch {
 						/* fall through */
 					}
+				}
+				if (k === 'video' && d.thumbUrl && !force) {
+					// Video row icons come from the host poster (monitor
+					// `/v1/fs/thumb` extracts one frame with ffmpeg). No poster
+					// support — cap off, ffmpeg missing, hostile clip — means
+					// the film icon, never a whole-file download just to draw
+					// a 96px icon. (`force` is the real preview pane, where the
+					// user asked for the file.)
+					failedId = e.id;
+					failed = true;
+					loading = false;
+					return;
 				}
 				if (k === 'image' && d.downloadUrl) {
 					try {

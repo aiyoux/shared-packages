@@ -46,7 +46,15 @@ export type MonitorCapabilities = {
 	/** Fixed Protomaps metadata and bounded PMTiles ranges (`/v1/maps/**`). */
 	maps?: { protomaps?: boolean };
  jobs?: boolean;
-	fs?: { ino?: boolean; rename?: boolean; archive?: boolean; mkdir?: boolean; thumb?: boolean };
+	fs?: {
+		ino?: boolean;
+		rename?: boolean;
+		archive?: boolean;
+		mkdir?: boolean;
+		thumb?: boolean;
+		/** `/v1/fs/thumb` also extracts video poster frames (ffmpeg on the host). */
+		videoThumb?: boolean;
+	};
 	git?: { blob?: boolean; init?: boolean };
 	/** AI feature (`/v1/ai/**`); absent on daemons without it. */
 	ai?: {
@@ -528,7 +536,7 @@ export function coerceInoDev(v: unknown): string | undefined {
 }
 
 const FALSE_CAPS: MonitorCapabilities = {
-	fs: { ino: false, rename: false, archive: false, mkdir: false, thumb: false },
+	fs: { ino: false, rename: false, archive: false, mkdir: false, thumb: false, videoThumb: false },
 	git: { blob: false, init: false }
 };
 
@@ -547,7 +555,8 @@ export function coerceMonitorCapabilities(raw: unknown): MonitorCapabilities {
 			rename: fs.rename === true,
 			archive: fs.archive === true,
 			mkdir: fs.mkdir === true,
-			thumb: fs.thumb === true
+			thumb: fs.thumb === true,
+			videoThumb: fs.videoThumb === true
 		},
 		git: { blob: git.blob === true, init: git.init === true },
 		...(ai

@@ -90,13 +90,13 @@ export async function createMonitorExplorerDriver(
 	async function loadMeta() {
 		if (cachedMeta) return cachedMeta;
 		if (!transport.meta) {
-			cachedMeta = { capabilities: { fs: { ino: false, rename: false, archive: false, mkdir: false, thumb: false }, git: { blob: false, init: false } } };
+			cachedMeta = { capabilities: { fs: { ino: false, rename: false, archive: false, mkdir: false, thumb: false, videoThumb: false }, git: { blob: false, init: false } } };
 			return cachedMeta;
 		}
 		try {
 			cachedMeta = await transport.meta();
 		} catch {
-			cachedMeta = { capabilities: { fs: { ino: false, rename: false, archive: false, mkdir: false, thumb: false }, git: { blob: false, init: false } } };
+			cachedMeta = { capabilities: { fs: { ino: false, rename: false, archive: false, mkdir: false, thumb: false, videoThumb: false }, git: { blob: false, init: false } } };
 		}
 		return cachedMeta;
 	}
@@ -106,6 +106,7 @@ export async function createMonitorExplorerDriver(
 	const canArchive = meta.capabilities?.fs?.archive === true;
 	const canMkdir = meta.capabilities?.fs?.mkdir === true;
 	const canThumb = meta.capabilities?.fs?.thumb === true;
+	const canVideoThumb = meta.capabilities?.fs?.videoThumb === true;
 
 	function ensureWatch(): MonitorWatchStream | null {
 		if (!enableWatch) return null;
@@ -422,6 +423,10 @@ export async function createMonitorExplorerDriver(
 		async thumbUrl(id: ExplorerEntryId, opts) {
 			if (!canThumb || !transport.thumbUrl || isFolderId(id)) return null;
 			const abs = toAbsolutePath(rootPath, id);
+			// Videos ride the same endpoint, but extraction needs ffmpeg, so the
+			// daemon advertises it separately (`fs.videoThumb`). Without the cap
+			// the row falls back to its icon instead of downloading the file.
+			if (inferFileTypeFromName(baseName(id)) === 'video' && !canVideoThumb) return null;
 			return { url: transport.thumbUrl(abs, opts?.maxDim ?? 96) };
 		},
 

@@ -264,4 +264,73 @@ describe('FeThumbnail', () => {
 		expect(fetchMock).toHaveBeenCalled();
 		vi.unstubAllGlobals();
 	});
+
+	it('video rows never fall back to a whole-file download; icon instead', async () => {
+		const download = vi.fn(async () => pngBlob());
+		const fetchMock = vi.fn(async () => new Response('nope', { status: 415 }));
+		vi.stubGlobal('fetch', fetchMock);
+		try {
+			// thumbUrl exists but the host poster fails (or cap off → null).
+			const driver: ExplorerDriver = {
+				id: 'monitor',
+				capabilities: caps,
+				ready: async () => {},
+				list: async () => ({ entries: [], truncated: false }),
+				getPath: async () => [],
+				delete: async () => {},
+				download,
+				thumbUrl: async () => null
+			};
+			const entry: ExplorerEntry = {
+				id: 'clip.mp4',
+				kind: 'file',
+				name: 'clip.mp4',
+				parentId: null,
+				fileType: 'video'
+			};
+			render(FeThumbnail, { props: { entry, driver, maxDim: 32, enabled: true } });
+			await waitFor(() => {
+				expect(document.querySelector('.fe-thumb-fallback')).toBeTruthy();
+			});
+			expect(download).not.toHaveBeenCalled();
+			expect(document.querySelector('.fe-thumb-img')).toBeNull();
+		} finally {
+			vi.unstubAllGlobals();
+		}
+	});
+
+	it('video rows show the host poster when the monitor extracts one', async () => {
+		const download = vi.fn(async () => pngBlob());
+		const fetchMock = vi.fn(
+			async () =>
+				new Response(pngBlob(), { status: 200, headers: { 'content-type': 'image/jpeg' } })
+		);
+		vi.stubGlobal('fetch', fetchMock);
+		try {
+			const driver: ExplorerDriver = {
+				id: 'monitor',
+				capabilities: caps,
+				ready: async () => {},
+				list: async () => ({ entries: [], truncated: false }),
+				getPath: async () => [],
+				delete: async () => {},
+				download,
+				thumbUrl: async () => ({ url: 'http://127.0.0.1:9847/v1/fs/thumb?path=clip.mp4&size=32' })
+			};
+			const entry: ExplorerEntry = {
+				id: 'clip.mp4',
+				kind: 'file',
+				name: 'clip.mp4',
+				parentId: null,
+				fileType: 'video'
+			};
+			render(FeThumbnail, { props: { entry, driver, maxDim: 32, enabled: true } });
+			await waitFor(() => {
+				expect(document.querySelector('.fe-thumb-img')).toBeTruthy();
+			});
+			expect(download).not.toHaveBeenCalled();
+		} finally {
+			vi.unstubAllGlobals();
+		}
+	});
 });
