@@ -115,6 +115,7 @@
         {@const installed = status?.files.find(row => row.path === file.path)}
         <li>
           <span><code>{file.path}</code>{file.bytes != null ? ` · ${file.bytes.toLocaleString()} bytes` : ''} · {installed?.state ?? 'missing'}</span>
+          {#if file.url}<a href={file.url} target="_blank" rel="noopener noreferrer">Source file</a>{/if}
           <button class="ds-btn ds-btn--sm ds-btn--secondary" disabled={busy} onclick={() => { singlePath = file.path; singleInput?.click(); }}>{installed?.actual ? 'Replace' : 'Add file'}</button>
           {#if installed?.actual}<button class="ds-btn ds-btn--sm ds-btn--ghost" disabled={busy} onclick={() => void clear(file.path)}>Clear</button>{/if}
         </li>
