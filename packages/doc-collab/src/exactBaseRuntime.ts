@@ -51,8 +51,18 @@ export type ExactBaseRuntimeOpts<Doc, Op, Frame> = {
 	 */
 	reduce?: (doc: Doc, ops: Op[]) => Doc;
 	sameDoc?: (a: Doc, b: Doc) => boolean;
+	/**
+	 * A three-way merge of `base` (the last document the authority confirmed
+	 * to this replica), `ours` (this page, its unconfirmed edits on it) and
+	 * `theirs` (a new authority's): the merged document and the ops that take
+	 * `ours` onto it, or null where the sides overlap. Only an oracle (`adopt`):
+	 * what is sent is still this replica's own submissions.
+	 */
+	merge?: (base: Doc, ours: Doc, theirs: Doc) => { doc: Doc; ops: Op[] } | null;
 	/** Submissions an earlier runtime of this session never had confirmed. */
 	carried?: Op[][];
+	/** The confirmed document `carried` was written on (the earlier runtime's `confirmed()`). */
+	carriedBase?: Doc | null;
 	onStatus?: (readOnly: boolean) => void;
 	onFrame?: (frame: Frame) => void;
 	onHello?: () => void;
@@ -64,6 +74,8 @@ export type ExactBaseRuntime<Doc, Op> = {
 	submit(ops: Op[]): void;
 	/** This replica's submissions not yet confirmed, oldest first. Answers after `close`. */
 	pending(): Op[][];
+	/** The last document the authority confirmed, without `pending()`; null when unknown. */
+	confirmed(): Doc | null;
 	replaceDocument(doc: Doc): void;
 	close(): void;
 };
@@ -100,6 +112,20 @@ export function createExactBaseRuntime<Doc, Op, Frame>(
 	 * (`recover`): kept with this replica's edits (`rebase`), or replaced.
 	 */
 	const held: { seq: number; ops: Op[] }[] = [];
+	/**
+	 * The document as the authority has numbered it, without this replica's
+	 * unconfirmed edits: the base they were written on. Followed with `reduce`;
+	 * null when unknown (no reducer, or an edit it could not reduce).
+	 */
+	let confirmed: Doc | null = authority || queue.length === 0 ? null : (opts.carriedBase ?? null);
+	function confirm(ops: Op[]) {
+		if (!confirmed || !opts.reduce) return;
+		try {
+			confirmed = opts.reduce(confirmed, ops);
+		} catch {
+			confirmed = null;
+		}
+	}
 	const send = (frame: Frame) => {
 		if (!closed) transport.send(frame);
 	};
@@ -131,13 +157,14 @@ export function createExactBaseRuntime<Doc, Op, Frame>(
 	function ack(id: string, seq: number) {
 		if (inFlight === id) {
 			inFlight = null;
-			queue.shift();
+			confirm(queue.shift()!);
 		}
 		localSeq = Math.max(localSeq, seq);
 		flush();
 	}
 	function replace(doc: Doc, seq: number) {
 		port.replace(doc);
+		confirmed = doc;
 		localSeq = seq;
 		nackHead = null;
 		inFlight = null;
@@ -149,6 +176,7 @@ export function createExactBaseRuntime<Doc, Op, Frame>(
 		status();
 		for (const item of later) {
 			port.apply(item.ops);
+			confirm(item.ops);
 			localSeq = item.seq;
 		}
 	}
@@ -162,6 +190,12 @@ export function createExactBaseRuntime<Doc, Op, Frame>(
 	 *  - the snapshot with the queue reduced onto it, in order, is this page:
 	 *    the queue was written against exactly that document, so it is sent
 	 *    again on the snapshot's head.
+	 *  - the snapshot also holds edits this page lacks (the new authority's
+	 *    own, made as it took over), and the app's three-way merge of the
+	 *    confirmed base, this page and the snapshot is exactly the snapshot
+	 *    with the queue reduced onto it (`mergeOnto`): the queue lands where it
+	 *    was written. The merge brings the snapshot's edits into this page and
+	 *    the queue is sent again.
 	 *  - otherwise the snapshot replaces the page, as a nack's does. An op
 	 *    indexes the document it was written against; on any other it lands in
 	 *    the wrong place, so it is not replayed.
@@ -170,14 +204,35 @@ export function createExactBaseRuntime<Doc, Op, Frame>(
 		const same = opts.sameDoc;
 		const mine = port.snapshot();
 		if (same && same(doc, mine)) queue.length = 0;
-		else if (!same || queue.length === 0 || !foldsTo(doc, mine, same)) {
+		else if (!same || queue.length === 0 || !(foldsTo(doc, mine, same) || mergeOnto(doc))) {
 			replace(doc, seq);
 			return;
 		}
+		confirmed = doc;
 		localSeq = seq;
 		nackHead = null;
 		inFlight = null;
 		held.length = 0;
+	}
+	/**
+	 * Keep the queue on `theirs` where the app's three-way merge agrees with
+	 * replaying it: the merge of the confirmed base, this page and theirs must
+	 * be exactly theirs with the queue reduced onto it, because the queue is
+	 * what is sent. Then the merge's ops bring theirs into this page.
+	 */
+	function mergeOnto(theirs: Doc): boolean {
+		const { merge, reduce, sameDoc } = opts;
+		if (!merge || !reduce || !sameDoc || !confirmed) return false;
+		try {
+			const merged = merge(confirmed, port.snapshot(), theirs);
+			if (!merged) return false;
+			const kept = queue.reduce((acc, ops) => reduce(acc, ops), theirs);
+			if (!sameDoc(kept, merged.doc)) return false;
+			if (merged.ops.length > 0) port.apply(merged.ops);
+			return true;
+		} catch {
+			return false;
+		}
 	}
 	function foldsTo(doc: Doc, mine: Doc, same: (a: Doc, b: Doc) => boolean) {
 		const reduce = opts.reduce;
@@ -212,14 +267,16 @@ export function createExactBaseRuntime<Doc, Op, Frame>(
 		if (!reduce || !sameDoc || queue.length === 0) return false;
 		const theirs = [...held].sort((a, b) => a.seq - b.seq);
 		const after = theirs.filter((item) => item.seq > seq);
+		let head: Doc;
 		try {
-			const head = after.reduce((acc, item) => reduce(acc, item.ops), doc);
+			head = after.reduce((acc, item) => reduce(acc, item.ops), doc);
 			const kept = queue.reduce((acc, ops) => reduce(acc, ops), head);
 			const shown = theirs.reduce((acc, item) => reduce(acc, item.ops), port.snapshot());
 			if (!sameDoc(kept, shown)) return false;
 		} catch {
 			return false;
 		}
+		confirmed = head;
 		nackHead = null;
 		inFlight = null;
 		held.length = 0;
@@ -268,6 +325,7 @@ export function createExactBaseRuntime<Doc, Op, Frame>(
 						recover();
 					} else {
 						port.apply(event.ops);
+						confirm(event.ops);
 						localSeq = event.seq;
 					}
 					break;
@@ -348,6 +406,7 @@ export function createExactBaseRuntime<Doc, Op, Frame>(
 			}
 		},
 		pending: () => queue.map((ops) => [...ops]),
+		confirmed: () => confirmed,
 		replaceDocument(doc) {
 			if (!authority || closed) return;
 			const frame = authority.replace(doc);

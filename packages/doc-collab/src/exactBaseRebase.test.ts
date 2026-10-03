@@ -21,6 +21,7 @@ type Member = {
 	replaced: number;
 	runtime: ExactBaseRuntime<Doc, string>;
 	edit(op: string): void;
+	kill(): void;
 };
 
 function reduce(doc: Doc, ops: string[]): Doc {
@@ -30,6 +31,25 @@ function reduce(doc: Doc, ops: string[]): Doc {
 		next[key] = (next[key] ?? '') + text;
 	}
 	return next;
+}
+/**
+ * Block by block: a block one side left as it was takes the other side's.
+ * Appends only, so the ops that bring `ours` onto the merge are the suffixes.
+ */
+function merge(base: Doc, ours: Doc, theirs: Doc): { doc: Doc; ops: string[] } | null {
+	const doc: Doc = {};
+	const ops: string[] = [];
+	for (const key of new Set([...Object.keys(base), ...Object.keys(ours), ...Object.keys(theirs)])) {
+		const b = base[key] ?? '';
+		const o = ours[key] ?? '';
+		const t = theirs[key] ?? '';
+		if (o === t || t === b) doc[key] = o;
+		else if (o === b && t.startsWith(o)) {
+			doc[key] = t;
+			ops.push(`${key}=${t.slice(o.length)}`);
+		} else return null;
+	}
+	return { doc, ops };
 }
 const same = (a: Doc, b: Doc) => JSON.stringify(Object.entries(a).sort()) === JSON.stringify(Object.entries(b).sort());
 
@@ -108,11 +128,16 @@ function room() {
 						}
 					: null,
 			reduce,
-			sameDoc: same
+			sameDoc: same,
+			merge
 		});
 		m.edit = (op) => {
 			m.doc = reduce(m.doc, [op]);
 			m.runtime.submit([op]);
+		};
+		m.kill = () => {
+			m.runtime.close();
+			handlers.delete(id);
 		};
 		return m;
 	}
@@ -217,5 +242,56 @@ describe('exact-base: edits refused because another was numbered first', () => {
 		expect(a.doc).toEqual(all);
 		expect(b.doc).toEqual(all);
 		expect(c.doc).toEqual(all);
+	});
+});
+
+describe('exact-base: an edit made as a new authority takes over', () => {
+	/**
+	 * A dies with B's and C's edits both unanswered. C's tab takes over: its
+	 * page, its own edit on it, is the new authority's.
+	 */
+	function takeover(bEdit: string, cEdit: string) {
+		const { r, a, b, c } = three();
+		b.edit(bEdit);
+		c.edit(cEdit);
+		a.kill();
+		r.drain();
+		c.kill();
+		const c2 = r.join('c', 'sequencer', c.doc);
+		r.drain();
+		return { r, b, c2 };
+	}
+
+	it('keeps an edit to another block than the new authority\'s own', () => {
+		const { r, b, c2 } = takeover('intro=Hello', 'outro=Bye');
+		const both = { title: 'Plan', intro: 'Hello', outro: 'Bye' };
+		expect(c2.doc).toEqual(both);
+		expect(b.doc).toEqual(both);
+		expect(b.runtime.pending()).toEqual([]);
+		// Merged into, not replaced: only the join snapshot ever replaced B's page.
+		expect(b.replaced).toBe(1);
+		// And the next edit goes on the new head.
+		b.edit('intro=!');
+		r.drain();
+		expect(c2.doc).toEqual({ ...both, intro: 'Hello!' });
+	});
+
+	it("takes the new authority's page when both wrote the same block", () => {
+		const { b, c2 } = takeover('title= mine', 'title= theirs');
+		expect(c2.doc).toEqual({ title: 'Plan theirs' });
+		expect(b.doc).toEqual({ title: 'Plan theirs' });
+		expect(b.runtime.pending()).toEqual([]);
+	});
+
+	it('the confirmed base follows numbered edits, its own and others\'', () => {
+		const { r, a, b, c } = three();
+		b.edit('intro=Hello');
+		r.drain();
+		c.edit('outro=Bye');
+		r.drain();
+		expect(b.runtime.confirmed()).toEqual(a.doc);
+		b.edit('note=x');
+		// Unconfirmed edits are not in it.
+		expect(b.runtime.confirmed()).toEqual({ title: 'Plan', intro: 'Hello', outro: 'Bye' });
 	});
 });
