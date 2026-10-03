@@ -212,6 +212,9 @@
 		onClose?: () => void;
 		/** Selection + open folder for dual-pane copy-across. */
 		onContextChange?: (ctx: ExplorerContext) => void;
+		/** Connection-scoped folder shortcuts supplied by DualPaneExplorer. */
+		onToggleFolderFavourite?: (entry: ExplorerEntry) => void;
+		isFolderFavourite?: (folderId: string) => boolean;
 		variant?: 'panel' | 'dialog';
 		class?: string;
 		compatLibraryTestId?: boolean;
@@ -351,6 +354,8 @@
 		onClose,
 		pending = [],
 		onContextChange,
+		onToggleFolderFavourite,
+		isFolderFavourite,
 		variant = 'panel',
 		class: className = '',
 		compatLibraryTestId = false,
@@ -433,6 +438,30 @@
 	let nodes = $state<ExplorerEntry[]>([]);
 	let listTruncated = $state(false);
 	let breadcrumbs = $state<ExplorerEntry[]>([]);
+	const currentFavouriteFolder = $derived(breadcrumbs.find((folder) => folder.id === parentId));
+	let favouriteMenu = $state<{ entry: ExplorerEntry; x: number; y: number } | null>(null);
+	let favouriteMenuEl = $state<HTMLDivElement | null>(null);
+
+	$effect(() => {
+		if (!favouriteMenu) return;
+		const dismiss = (event: PointerEvent) => {
+			if (event.target instanceof Node && favouriteMenuEl?.contains(event.target)) return;
+			favouriteMenu = null;
+		};
+		const escape = (event: KeyboardEvent) => {
+			if (event.key !== 'Escape') return;
+			event.preventDefault();
+			event.stopPropagation();
+			favouriteMenu = null;
+		};
+		document.addEventListener('pointerdown', dismiss);
+		document.addEventListener('keydown', escape, true);
+		favouriteMenuEl?.querySelector<HTMLButtonElement>('button')?.focus();
+		return () => {
+			document.removeEventListener('pointerdown', dismiss);
+			document.removeEventListener('keydown', escape, true);
+		};
+	});
 	let selected = $state<Set<string>>(new Set());
 	/** Most recently toggled-on row — Open uses this when several items are selected. */
 	let lastSelectedId = $state<string | null>(null);
@@ -4162,6 +4191,16 @@
 						</button>
 					{/each}
 				</nav>
+				{#if onToggleFolderFavourite && currentFavouriteFolder}
+					<FeTipIconBtn
+						testid="fe-favourite-folder" icon="star"
+						tip={isFolderFavourite?.(currentFavouriteFolder.id) ? 'Remove folder from favourites' : 'Add folder to favourites'}
+						active={isFolderFavourite?.(currentFavouriteFolder.id)}
+						pressed={isFolderFavourite?.(currentFavouriteFolder.id) ?? false}
+						disabled={listBusy}
+						onclick={() => onToggleFolderFavourite?.(currentFavouriteFolder!)}
+					/>
+				{/if}
 			{/if}
 			{#if isInsideProject || isGitEnabled}
 				<div class="fe-folder-badges" data-testid="fe-folder-badges">
@@ -5145,7 +5184,10 @@
 						}
 					}}
 					oncontextmenu={(e) => {
-						if (pointerDragActive || longPressTimer) e.preventDefault();
+						if (pointerDragActive || longPressTimer) { e.preventDefault(); return; }
+						if (row.placeholder || n.kind !== 'folder' || !onToggleFolderFavourite || listBusy) return;
+						e.preventDefault();
+						favouriteMenu = { entry: n, x: Math.max(0, Math.min(e.clientX, window.innerWidth - 240)), y: Math.max(0, Math.min(e.clientY, window.innerHeight - 48)) };
 					}}
 					onclick={row.placeholder || i < 0 ? undefined : (e) => onRowClick(e, n, i)}
 					ondblclick={row.placeholder || i < 0 ? undefined : (e) => onRowDblClick(e, n, i)}
@@ -6081,6 +6123,9 @@
 			{#if !multi && previewShowsOpen(entry)}
 				{@render previewIcon('fe-file-preview-open', defaultOpenLabel(entry), 'folder-open', () => void confirmPreviewOpen(), previewBusy)}
 			{/if}
+			{#if !multi && onToggleFolderFavourite && entry.kind === 'folder'}
+				{@render previewIcon('fe-preview-favourite-folder', isFolderFavourite?.(entry.id) ? 'Remove folder from favourites' : 'Add folder to favourites', 'star', () => onToggleFolderFavourite?.(entry), listBusy)}
+			{/if}
 			{#if !multi && onOpenProject && entry.kind === 'folder'}
 				{@render previewIcon('fe-open-project', 'Open project', 'folder-project', () => void confirmOpenProject(), previewBusy)}
 			{/if}
@@ -6166,7 +6211,42 @@
 	{/if}
 {/snippet}
 
+{#if favouriteMenu}
+	<div
+		class="fe-favourite-menu" data-testid="fe-folder-context-menu"
+		role="menu" aria-label="Folder actions" tabindex="-1"
+		style:left="{favouriteMenu.x}px" style:top="{favouriteMenu.y}px"
+		bind:this={favouriteMenuEl}
+	>
+		<button
+			type="button" role="menuitem" class="ds-btn ds-btn--sm ds-btn--ghost"
+			data-testid="fe-context-favourite-folder"
+			onclick={() => { onToggleFolderFavourite?.(favouriteMenu!.entry); favouriteMenu = null; }}
+		>
+			<FeIcon name="star" size={14} />
+			{isFolderFavourite?.(favouriteMenu.entry.id) ? 'Remove from favourites' : 'Add to favourites'}
+		</button>
+	</div>
+{/if}
+
 <style>
+	.fe-header :global([data-testid='fe-favourite-folder'][aria-pressed='true']) {
+		color: var(--accent);
+		background: rgb(var(--accent-rgb) / 0.08);
+	}
+	.fe-header :global([data-testid='fe-favourite-folder'][aria-pressed='true'] svg) {
+		fill: currentColor;
+	}
+	.fe-favourite-menu {
+		position: fixed;
+		z-index: 1000;
+		padding: 0.3rem;
+		border: 1px solid var(--line-hairline);
+		background: var(--surface-2);
+		color: var(--text-primary);
+		box-shadow: 0 10px 28px rgb(var(--scrim-rgb) / 0.45);
+	}
+
 	.fe-root {
 		position: relative;
 		display: flex;

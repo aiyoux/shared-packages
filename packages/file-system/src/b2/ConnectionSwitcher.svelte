@@ -3,6 +3,8 @@
 	import type { CopyAcrossPath } from '../ui/copyAcross.js';
 	import { capabilityRows, connectionKindNote } from '../ui/connectionInfo.js';
 	import FeIcon from '../ui/FeIcon.svelte';
+	import type { FolderFavourite } from '../ui/folderFavourites.js';
+	import { tick } from 'svelte';
 
 	/** Storage backend kind for the hub connection switcher. */
 	export type ConnectionKind = 'local' | 'memory' | 'disk' | 'b2' | 'monitor';
@@ -50,6 +52,12 @@
 		copyIdleNote?: string | null;
 		/** Select local, memory, disk, or a profile id (B2 / monitor) */
 		onSelect?: (id: 'local' | 'memory' | 'disk' | string) => void;
+		favourites?: FolderFavourite[];
+		activeFolderId?: string | null;
+		/** Computer folders have distinct roots beneath the same disk option. */
+		activeFavouriteConnectionId?: string;
+		onSelectFavourite?: (favourite: FolderFavourite) => void;
+		onRemoveFavourite?: (id: string) => void;
 		/** Gear opens the combined B2 / monitor connections popup. */
 		onConfigure?: () => void;
 		/**
@@ -82,6 +90,11 @@
 		copyOtherLabel = '',
 		copyIdleNote = null,
 		onSelect,
+		favourites = [],
+		activeFolderId = null,
+		activeFavouriteConnectionId = activeId,
+		onSelectFavourite,
+		onRemoveFavourite,
 		onConfigure,
 		variant = 'full',
 		showSettings = true,
@@ -193,9 +206,13 @@
 		onSelect?.(id);
 	}
 
-	function toggleMenu() {
+	async function toggleMenu() {
 		if (busy) return;
 		menuOpen = !menuOpen;
+		if (menuOpen) {
+			await tick();
+			rootEl?.querySelector<HTMLButtonElement>('[role=menuitem][aria-current=true]')?.focus();
+		}
 	}
 
 	function onDocPointer(e: PointerEvent) {
@@ -205,7 +222,26 @@
 	}
 
 	function onDocKey(e: KeyboardEvent) {
-		if (e.key === 'Escape') menuOpen = false;
+		if (e.key === 'Escape' && menuOpen) {
+			menuOpen = false;
+			rootEl?.querySelector<HTMLButtonElement>('[data-testid=conn-trigger]')?.focus();
+		}
+	}
+
+	function onMenuKey(e: KeyboardEvent) {
+		if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); onDocKey(e); return; }
+		if (e.key === 'Tab') { menuOpen = false; return; }
+		const items = [...(rootEl?.querySelectorAll<HTMLButtonElement>('[role=menuitem]:not(:disabled)') ?? [])];
+		const index = items.indexOf(document.activeElement as HTMLButtonElement);
+		let next: number;
+		if (e.key === 'ArrowDown') next = (index + 1) % items.length;
+		else if (e.key === 'ArrowUp') next = (index - 1 + items.length) % items.length;
+		else if (e.key === 'Home') next = 0;
+		else if (e.key === 'End') next = items.length - 1;
+		else return;
+		e.preventDefault();
+		e.stopPropagation();
+		items[next]?.focus();
 	}
 
 	$effect(() => {
@@ -218,6 +254,29 @@
 		};
 	});
 </script>
+
+{#snippet favouriteRows(connectionKind: ConnectionKind, connectionId?: string)}
+	{#each favourites.filter((f) => f.kind === connectionKind && (!connectionId || f.connectionId === connectionId)) as favourite (favourite.id)}
+		<div class="conn-favourite-row">
+			<button
+				type="button" role="menuitem" class="conn-favourite"
+				class:active={kind === favourite.kind && activeFavouriteConnectionId === favourite.connectionId && activeFolderId === favourite.folderId}
+				data-testid="conn-favourite" data-favourite-id={favourite.id}
+				title={favourite.path} disabled={busy}
+				onclick={() => { menuOpen = false; onSelectFavourite?.(favourite); }}
+			>
+				<FeIcon name="star" size={13} />
+				<span class="conn-favourite-name">{favourite.name}</span>
+			</button>
+			<button
+				type="button" role="menuitem" class="conn-favourite-remove"
+				data-testid="conn-favourite-remove" disabled={busy}
+				aria-label={`Remove ${favourite.name} from favourites`} title="Remove from favourites"
+				onclick={() => onRemoveFavourite?.(favourite.id)}
+			><FeIcon name="x" size={12} /></button>
+		</div>
+	{/each}
+{/snippet}
 
 <div
 	class="conn-switch"
@@ -234,7 +293,7 @@
 			class="conn-trigger"
 			data-testid="conn-trigger"
 			disabled={busy}
-			aria-haspopup="listbox"
+			aria-haspopup="menu"
 			aria-expanded={menuOpen}
 			aria-label="Storage location"
 			onclick={toggleMenu}
@@ -291,12 +350,12 @@
 		{/if}
 		</div>
 
-		<div class="conn-menu" class:open={menuOpen} data-testid="conn-menu" role="listbox">
+		<div class="conn-menu" class:open={menuOpen} data-testid="conn-menu" role="menu" aria-label="Connections and favourite folders" tabindex="-1" onkeydown={onMenuKey}>
 			<button
 				type="button"
-				role="option"
+				role="menuitem"
 				class:active={kind === 'disk'}
-				aria-selected={kind === 'disk'}
+				aria-current={kind === 'disk'}
 				data-testid="conn-disk"
 				disabled={busy}
 				title="Browse a folder on this computer. The browser will ask permission (Chrome / Edge)."
@@ -304,23 +363,25 @@
 			>
 				This computer
 			</button>
+			{@render favouriteRows('disk')}
 			<button
 				type="button"
-				role="option"
+				role="menuitem"
 				class:active={kind === 'local'}
-				aria-selected={kind === 'local'}
+				aria-current={kind === 'local'}
 				data-testid="conn-local"
 				disabled={busy}
 				onclick={() => select('local')}
 			>
 				Browser files
 			</button>
+			{@render favouriteRows('local', 'local')}
 			{#if showMemory}
 				<button
 					type="button"
-					role="option"
+					role="menuitem"
 					class:active={kind === 'memory'}
-					aria-selected={kind === 'memory'}
+					aria-current={kind === 'memory'}
 					data-testid="conn-memory"
 					disabled={busy}
 					title="Tab-only storage — cleared when this tab closes."
@@ -337,9 +398,9 @@
 			{#each profiles as p (p.id)}
 				<button
 					type="button"
-					role="option"
+					role="menuitem"
 					class:active={kind === 'b2' && activeId === p.id}
-					aria-selected={kind === 'b2' && activeId === p.id}
+					aria-current={kind === 'b2' && activeId === p.id}
 					data-testid="conn-b2-profile"
 					data-profile-id={p.id}
 					title={p.detail ? `${p.name} — ${p.detail}` : p.name}
@@ -351,15 +412,16 @@
 						<span class="chip-detail">{p.detail}</span>
 					{/if}
 				</button>
+				{@render favouriteRows('b2', p.id)}
 			{/each}
 
 			{#if showMonitor}
 				{#each monitorProfiles as p (p.id)}
 					<button
 						type="button"
-						role="option"
+						role="menuitem"
 						class:active={kind === 'monitor' && activeId === p.id}
-						aria-selected={kind === 'monitor' && activeId === p.id}
+						aria-current={kind === 'monitor' && activeId === p.id}
 						data-testid="conn-monitor-profile"
 						data-profile-id={p.id}
 						title={p.detail ? `${p.name} — ${p.detail}` : p.name}
@@ -371,6 +433,7 @@
 							<span class="chip-detail">{p.detail}</span>
 						{/if}
 					</button>
+					{@render favouriteRows('monitor', p.id)}
 				{/each}
 			{/if}
 
@@ -625,6 +688,8 @@
 		position: absolute;
 		z-index: 40;
 		min-width: 14rem;
+		max-height: min(28rem, 65vh);
+		overflow-y: auto;
 		max-width: min(22rem, 90vw);
 		padding: 0.35rem;
 		border-radius: 0;
@@ -655,6 +720,32 @@
 		outline: 2px solid var(--accent);
 		outline-offset: 0;
 		background: rgb(var(--accent-rgb) / 0.08);
+	}
+	.conn-favourite-row {
+		display: flex;
+		align-items: center;
+		padding-left: 0.85rem;
+	}
+	.conn-menu .conn-favourite {
+		display: flex;
+		align-items: center;
+		gap: 0.4rem;
+		flex: 1;
+		min-width: 0;
+		font-size: 0.8rem;
+		color: var(--text-secondary);
+	}
+	.conn-favourite-name {
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.conn-menu .conn-favourite-remove {
+		display: inline-flex;
+		justify-content: center;
+		width: 1.8rem;
+		padding: 0.35rem;
+		flex-shrink: 0;
 	}
 	.conn-sep {
 		height: 1px;

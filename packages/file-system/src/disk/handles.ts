@@ -20,6 +20,7 @@ export type DiskDirHandle = {
 	getDirectoryHandle(name: string, opts?: { create?: boolean }): Promise<DiskDirHandle>;
 	getFileHandle(name: string, opts?: { create?: boolean }): Promise<DiskFileHandle>;
 	removeEntry(name: string, opts?: { recursive?: boolean }): Promise<void>;
+	isSameEntry?(other: DiskDirHandle): Promise<boolean>;
 	queryPermission?(opts?: { mode?: 'read' | 'readwrite' }): Promise<PermissionState>;
 	requestPermission?(opts?: { mode?: 'read' | 'readwrite' }): Promise<PermissionState>;
 };

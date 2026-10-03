@@ -10,6 +10,11 @@
 	 */
 	import { onMount, onDestroy, type Snippet } from 'svelte';
 	import { default as FileExplorer } from './FileExplorer.svelte';
+	import {
+		addFolderFavourite, removeFolderFavourite, subscribeFolderFavourites,
+		folderFavouriteId, resolveFavouriteFolder, type FolderFavourite
+	} from './folderFavourites.js';
+	import type { DiskDirHandle } from '../disk/handles.js';
 	// Types `onfeexplorerdragbegin` / `onfeexplorerdragend` below in every program
 	// that compiles this component, not only this package's own.
 	import type {} from './customEvents.js';
@@ -379,6 +384,10 @@
 	const hostSettings = $derived(Boolean(settingsPortal) && !hideSettingsGear);
 	const pairInfoInChrome = $derived(!hideToggles);
 	let showRemoteManager = $state(false);
+	let favourites = $state<FolderFavourite[]>([]);
+	let favouriteBusy = $state<Set<string>>(new Set());
+	// Pane drivers are proxied by Svelte; use scalar connection IDs for root identity.
+	const diskRoots = new Map<string, DiskDirHandle>();
 
 	function portalLayoutCluster(node: HTMLElement) {
 		if (layoutPortal) {
@@ -818,6 +827,7 @@
 
 
 	onMount(() => {
+		const stopFavourites = subscribeFolderFavourites((next) => { favourites = next; });
 		const saved = loadFileWindows(persistKey, leftDefault, rightDefault);
 		if (saved) {
 			syncLayoutIdSeq(saved.root);
@@ -865,6 +875,7 @@
 			if (!foreignDragLive && !crossDragFrom) clearWindowDropTargets();
 		});
 		profileTabUnsub = () => {
+			stopFavourites();
 			stopOpsMount();
 			for (const u of unsubs) u();
 			unsubDrag();
@@ -1091,6 +1102,7 @@
 			const handle = await pickDirectory();
 			const driver = createDiskExplorerDriver(handle);
 			await driver.ready();
+			await rememberDiskRoot(driver, handle);
 			if (p.activeKind === 'disk') p.remoteDriver?.dispose?.();
 			else if (p.activeId !== 'local' && p.activeId !== 'memory') {
 				releaseRemote(p.activeKind, p.activeId);
@@ -1193,6 +1205,113 @@
 		showPaneError(id, 'That connection was removed. Pick another or add one in settings.', {
 			showB2Form: true
 		});
+	}
+
+	async function rememberDiskRoot(driver: ExplorerDriver, root: DiskDirHandle) {
+		for (const favourite of favourites) {
+			if (favourite.kind !== 'disk' || !favourite.diskRoot) continue;
+			try {
+				if (root === favourite.diskRoot || await root.isSameEntry?.(favourite.diskRoot)) {
+					Object.assign(driver, { connectionId: favourite.connectionId });
+					diskRoots.set(favourite.connectionId, root);
+					return;
+				}
+			} catch { /* A previously granted directory may have been removed. */ }
+		}
+		const connectionId = generateId();
+		Object.assign(driver, { connectionId });
+		diskRoots.set(connectionId, root);
+	}
+
+	function favouriteConnection(id: PaneId): { kind: FolderFavourite['kind']; connectionId: string; diskRoot?: DiskDirHandle } | null {
+		const p = paneState(id);
+		if (p.activeKind === 'memory' || (id === 'right' && overrideRight)) return null;
+		if (p.activeKind === 'disk') {
+			const connectionId = activeDriver(p, id).connectionId;
+			const root = connectionId ? diskRoots.get(connectionId) : undefined;
+			return root && connectionId ? { kind: 'disk', connectionId, diskRoot: root } : null;
+		}
+		return { kind: p.activeKind, connectionId: p.activeId };
+	}
+
+	function isFolderFavourite(id: PaneId, folderId: string) {
+		const connection = favouriteConnection(id);
+		return Boolean(connection && favourites.some((f) => f.id === folderFavouriteId(connection.kind, connection.connectionId, folderId)));
+	}
+
+	function paneFavouriteToggle(id: PaneId) {
+		if (!favouriteConnection(id)) return undefined;
+		return (entry: ExplorerEntry) => { void toggleFolderFavourite(id, entry); };
+	}
+
+	async function toggleFolderFavourite(id: PaneId, entry: ExplorerEntry) {
+		const p = paneState(id);
+		const connection = favouriteConnection(id);
+		if (!connection || p.busy || favouriteBusy.has(id)) return;
+		const favouriteId = folderFavouriteId(connection.kind, connection.connectionId, entry.id);
+		if (favourites.some((f) => f.id === favouriteId)) {
+			await removeFolderFavourite(favouriteId);
+			return;
+		}
+		const driver = activeDriver(p, id);
+		try {
+			const path = await driver.getPath(entry.id);
+			await addFolderFavourite({
+				id: favouriteId, ...connection, folderId: entry.id, name: entry.name,
+				path: `${connection.kind === 'disk' ? connection.diskRoot!.name : ''}/${path.map((folder) => folder.name).join('/')}`
+			});
+		} catch (error) {
+			showPaneError(id, error instanceof Error ? error.message : 'Could not save that favourite folder.');
+		}
+	}
+
+	async function jumpToFavourite(id: PaneId, favourite: FolderFavourite) {
+		if (paneState(id).busy || favouriteBusy.has(id)) return;
+		favouriteBusy = new Set([...favouriteBusy, id]);
+		try {
+			if (favourite.kind === 'disk') {
+				if (!favourite.diskRoot) throw new Error('This favourite needs access to its computer folder again.');
+				const driver = { ...createDiskExplorerDriver(favourite.diskRoot), connectionId: favourite.connectionId };
+				await driver.ready();
+				const p = paneState(id);
+				dropDiskDriver(p);
+				if (p.activeKind === 'b2' || p.activeKind === 'monitor') releaseRemote(p.activeKind, p.activeId);
+				diskRoots.set(favourite.connectionId, favourite.diskRoot);
+				setPane(id, {
+					role: 'disk', activeId: 'disk', activeKind: 'disk', remoteDriver: driver,
+					memoryDriver: null, diskName: favourite.diskRoot.name,
+					showB2Form: false, showMonitorForm: false, error: '', ctx: emptyCtx('disk'),
+					explorerKey: p.explorerKey + 1
+				});
+			} else {
+				const p = paneState(id);
+				if (p.activeKind !== favourite.kind || p.activeId !== favourite.connectionId ||
+					(favourite.kind !== 'local' && !p.remoteDriver)) {
+					await onSelectConnection(id, favourite.connectionId);
+					if (paneState(id).error) return;
+				}
+			}
+			const p = paneState(id);
+			if (p.activeKind !== favourite.kind || (favourite.kind !== 'disk' && p.activeId !== favourite.connectionId)) return;
+			const driver = activeDriver(p, id);
+			const path = await resolveFavouriteFolder(driver, favourite.folderId);
+			// The pane may have closed or changed connection while the backend replied.
+			if (!windows[id] || activeDriver(paneState(id), id) !== driver) return;
+			const current = paneState(id);
+			setPane(id, {
+				ctx: { ...emptyCtx(driver.id), parentId: favourite.folderId },
+				explorerKey: current.explorerKey + 1, error: ''
+			});
+			// Node IDs survive local renames; refresh their displayed name and path.
+			await addFolderFavourite({
+				...favourite, name: path.at(-1)!.name,
+				path: `${favourite.kind === 'disk' ? favourite.diskRoot!.name : ''}/${path.map((folder) => folder.name).join('/')}`
+			});
+		} catch (error) {
+			showPaneError(id, `Could not open ${favourite.name}: ${error instanceof Error ? error.message : 'Folder unavailable.'}`);
+		} finally {
+			favouriteBusy = new Set([...favouriteBusy].filter((paneId) => paneId !== id));
+		}
 	}
 
 	function paneShowsSwitcher(id: PaneId): boolean {
@@ -1861,7 +1980,12 @@
 		showMemory={switcherShowMemory}
 		showSettings={!hostSettings && !hideSettingsGear}
 		showInfo={!pairInfoInChrome}
-		busy={p.busy}
+		favourites={favourites}
+		activeFolderId={p.ctx.parentId}
+		activeFavouriteConnectionId={favouriteConnection(id)?.connectionId ?? p.activeId}
+		onSelectFavourite={(favourite) => { void jumpToFavourite(id, favourite); }}
+		onRemoveFavourite={(favouriteId) => { void removeFolderFavourite(favouriteId); }}
+		busy={p.busy || favouriteBusy.has(id)}
 		onSelect={(sel) => onSelectConnection(id, sel)}
 		onConfigure={() => (showRemoteManager = true)}
 	/>
@@ -2065,6 +2189,8 @@
 						onCopyAcrossFromClipboard={(payload, destParent) =>
 							handleClipboardCopyAcross(payload, id, destParent)}
 						onContextChange={(ctx) => applyPaneCtx(id, ctx)}
+						onToggleFolderFavourite={paneFavouriteToggle(id)}
+						isFolderFavourite={(folderId) => isFolderFavourite(id, folderId)}
 						{onQuickEditVideo}
 						{onQuickEditAudio}
 						{mediaMeta}
@@ -2138,6 +2264,8 @@
 						onCopyAcrossFromClipboard={(payload, destParent) =>
 							handleClipboardCopyAcross(payload, id, destParent)}
 						onContextChange={(ctx) => applyPaneCtx(id, ctx)}
+						onToggleFolderFavourite={paneFavouriteToggle(id)}
+						isFolderFavourite={(folderId) => isFolderFavourite(id, folderId)}
 						{onQuickEditVideo}
 						{onQuickEditAudio}
 						{mediaMeta}
@@ -2209,6 +2337,8 @@
 						onCopyAcrossFromClipboard={(payload, destParent) =>
 							handleClipboardCopyAcross(payload, id, destParent)}
 						onContextChange={(ctx) => applyPaneCtx(id, ctx)}
+						onToggleFolderFavourite={paneFavouriteToggle(id)}
+						isFolderFavourite={(folderId) => isFolderFavourite(id, folderId)}
 						{onQuickEditVideo}
 						{onQuickEditAudio}
 						{mediaMeta}
