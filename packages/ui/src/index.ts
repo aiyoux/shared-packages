@@ -7,6 +7,7 @@ export { default as ShellFrame } from './ShellFrame.svelte';
 export { default as Spinner } from './Spinner.svelte';
 export { default as TopProgressBar } from './TopProgressBar.svelte';
 export { default as Checkbox } from './Checkbox.svelte';
+export { default as UnsavedMark } from './UnsavedMark.svelte';
 export {
   CHECKBOX_STATES,
   CHECKBOX_STATE_LABELS,
