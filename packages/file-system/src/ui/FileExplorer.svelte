@@ -3235,14 +3235,23 @@
 		);
 	}
 
-	function toggleSelect(id: string, e?: Event) {
-		if (!canToggleSelect()) return;
+	/** Ctrl/Cmd-click toggles one row and leaves the rest of the selection. */
+	function isAdditiveClick(e?: MouseEvent): boolean {
+		return Boolean(e && (e.ctrlKey || e.metaKey) && !e.shiftKey);
+	}
+
+	function toggleSelected(id: string, e?: Event) {
 		e?.stopPropagation();
 		const next = new Set(selected);
 		if (next.has(id)) next.delete(id);
 		else next.add(id);
 		selected = next;
 		lastSelectedId = next.has(id) ? id : next.size ? [...next][next.size - 1]! : null;
+	}
+
+	function toggleSelect(id: string, e?: Event) {
+		if (!canToggleSelect()) return;
+		toggleSelected(id, e);
 	}
 
 	/**
@@ -3264,8 +3273,8 @@
 		| null = null;
 	let dragStarted = false;
 	let selectedOnPointerUp = false;
-	/** Skip the second pointerup of a double-click so multi-select doesn't toggle off. */
-	let lastRowActivate: { id: string; at: number } | null = null;
+	/** Skip the second pointerup of a plain double-click so multi-select doesn't toggle off. */
+	let lastRowActivate: { id: string; at: number; additive: boolean } | null = null;
 	const DBLCLICK_MS = 500;
 
 	function onRowPointerDown(e: PointerEvent, n: ExplorerEntry, i: number) {
@@ -3303,10 +3312,20 @@
 		focusIndex = focusPosById.get(start.id) ?? -1;
 		selectedOnPointerUp = true;
 		const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
-		if (lastRowActivate && lastRowActivate.id === n.id && now - lastRowActivate.at < DBLCLICK_MS) {
+		const additive = e.ctrlKey || e.metaKey;
+		// A second plain click on the same row is the double-click that opens it.
+		// A Ctrl/Cmd-click is its own toggle, and a plain click after one still
+		// selects that row.
+		if (
+			lastRowActivate &&
+			lastRowActivate.id === n.id &&
+			!lastRowActivate.additive &&
+			now - lastRowActivate.at < DBLCLICK_MS &&
+			!additive
+		) {
 			return;
 		}
-		lastRowActivate = { id: n.id, at: now };
+		lastRowActivate = { id: n.id, at: now, additive };
 		void applyRowActivate(n, e);
 	}
 
@@ -3324,6 +3343,11 @@
 	function onRowDblClick(e: MouseEvent, n: ExplorerEntry, i: number) {
 		if (isRowControl(e.target)) return;
 		if (renamingId === n.id) return;
+		if (e.ctrlKey || e.metaKey) {
+			e.preventDefault();
+			e.stopPropagation();
+			return;
+		}
 		e.preventDefault();
 		e.stopPropagation();
 		focusIndex = focusPosById.get(n.id) ?? -1;
@@ -3348,6 +3372,10 @@
 	async function applyRowActivate(n: ExplorerEntry, e?: MouseEvent) {
 		if (e?.shiftKey && (mode === 'manage' || mode === 'open')) {
 			rangeSelect(n);
+			return;
+		}
+		if (isAdditiveClick(e) && (mode === 'manage' || mode === 'open')) {
+			toggleSelected(n.id, e);
 			return;
 		}
 		if (canToggleSelect()) {

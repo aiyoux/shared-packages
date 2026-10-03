@@ -1288,6 +1288,35 @@ describe('FileExplorer component', () => {
 		expect(selNames()).toEqual(['c.txt']);
 	});
 
+	it('ctrl-click and cmd-click toggle individual rows without clearing the others', async () => {
+		await vfs.writeFile({ parentId: null, name: 'a.txt', body: 'a' });
+		await vfs.writeFile({ parentId: null, name: 'b.txt', body: 'b' });
+		await vfs.writeFile({ parentId: null, name: 'c.txt', body: 'c' });
+		render(FileExplorer, { props: { mode: 'manage', vfs, variant: 'panel' } });
+		await viWaitForRows(3);
+		const row = (name: string) => document.querySelector(`[data-testid="fe-file-row"][data-name="${name}"]`) as HTMLElement;
+		const selNames = () =>
+			(Array.from(document.querySelectorAll('.fe-row.selected')) as HTMLElement[]).map((r) => r.getAttribute('data-name'));
+
+		await fireEvent.click(row('a.txt'));
+		await fireEvent.click(row('c.txt'), { ctrlKey: true });
+		expect(selNames()).toEqual(['a.txt', 'c.txt']);
+		expect(document.querySelector('[data-fe-select-multi]')?.getAttribute('data-fe-select-multi')).toBe('off');
+
+		// Already selected: the same modifier removes only that row.
+		await fireEvent.click(row('a.txt'), { ctrlKey: true });
+		expect(selNames()).toEqual(['c.txt']);
+
+		await fireEvent.click(row('b.txt'), { metaKey: true });
+		expect(selNames()).toEqual(['b.txt', 'c.txt']);
+		await fireEvent.click(row('c.txt'), { metaKey: true });
+		expect(selNames()).toEqual(['b.txt']);
+
+		// A plain click is still one row.
+		await fireEvent.click(row('a.txt'));
+		expect(selNames()).toEqual(['a.txt']);
+	});
+
 	it('shift-click in multi mode replaces the selection with the range', async () => {
 		await vfs.writeFile({ parentId: null, name: 'a.txt', body: 'a' });
 		await vfs.writeFile({ parentId: null, name: 'b.txt', body: 'b' });
