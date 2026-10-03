@@ -8,12 +8,13 @@
   import { createLocalExplorerDriver } from './localExplorerDriver.js';
   import FeFolderPickerDialog from './FeFolderPickerDialog.svelte';
   import {
-    b2FolderSources, folderModelFiles, linkedDeviceFiles, modelDeviceSources, monitorFolderSources, onDeviceSourcesChange,
+    b2FolderSources, connectModelDevice, folderModelFiles, linkedDeviceFiles, modelDeviceSources, monitorFolderSources, onDeviceSourcesChange,
     onlineModelFiles, onlineSources, type ModelDeviceSource, type ModelFolderSource, type ModelOnlineSource
   } from '../ai/modelSources.js';
 
-  /** `onStatus` reports each store read, so an app can gate its engine on `ready`. */
-  let { def, onChanged, onStatus }: { def: ModelDef; onChanged?: () => void; onStatus?: (status: ModelStatus) => void } = $props();
+  /** `onStatus` reports each store read, so an app can gate its engine on `ready`.
+   * `showCount` is the standalone card's downloaded pill; the settings row hides it. */
+  let { def, onChanged, onStatus, showCount = true }: { def: ModelDef; onChanged?: () => void; onStatus?: (status: ModelStatus) => void; showCount?: boolean } = $props();
   let status = $state<ModelStatus | null>(null);
   let error = $state('');
   let busy = $state(false);
@@ -26,9 +27,14 @@
   let supportsFolder = $state(false);
   /** The connection whose folder picker is open, and its driver. */
   let picking = $state<{ label: string; driver: ExplorerDriver; release: () => void } | null>(null);
+  let folderOpen = $state(false);
+  let folderSourceId = $state('browser-files');
+  let onlineOpen = $state(false);
+  let peerOpen = $state(false);
+  let folderGeneration = 0;
+  const BROWSER_SOURCE = 'browser-files';
   let folderSources = $state<ModelFolderSource[]>([]);
   let online = $state<ModelOnlineSource[]>([]);
-  let onlinePick = $state('');
   let devices = $state<ModelDeviceSource[]>([]);
   /** Set while the preview is a linked device's offer: it sends the files, the card does not open them. */
   let previewDevice = $state<ModelDeviceSource | null>(null);
@@ -80,24 +86,83 @@
     if (path) { held?.(); held = null; previewDevice = null; preview = rows; sourceLabel = 'This device'; error = ''; }
     else showPreview(rows, 'This device');
   }
-  async function chooseFolder(label: string, acquire: () => Promise<ExplorerDriver>, release: () => void) {
-    error = ''; busy = true;
-    try { const driver = await acquire(); await driver.ready(); picking?.release(); picking = { label, driver, release }; }
-    catch (e) { release(); error = message(e); }
-    finally { busy = false; }
+  const folderChoices = $derived([
+    { id: BROWSER_SOURCE, label: 'Browser files' },
+    ...folderSources.map((source) => ({ id: source.id, label: source.label }))
+  ]);
+  async function acquireFolder(id: string): Promise<{ label: string; driver: ExplorerDriver; release: () => void }> {
+    if (id === BROWSER_SOURCE) {
+      const driver = createLocalExplorerDriver(getSharedVfs());
+      await driver.ready();
+      return { label: 'Browser files', driver, release: () => {} };
+    }
+    const source = folderSources.find((row) => row.id === id);
+    if (!source) throw new Error('That folder source is no longer available.');
+    const driver = await source.acquire();
+    await driver.ready();
+    return { label: source.label, driver, release: source.release };
   }
-  function browserFolder() {
-    void chooseFolder('Browser files', async () => createLocalExplorerDriver(getSharedVfs()), () => {});
+  async function openFolderPicker() {
+    onlineOpen = false; peerOpen = false; error = '';
+    const generation = ++folderGeneration;
+    busy = true;
+    try {
+      const next = await acquireFolder(BROWSER_SOURCE);
+      if (generation !== folderGeneration) { next.release(); return; }
+      picking?.release();
+      picking = next;
+      folderSourceId = BROWSER_SOURCE;
+      folderOpen = true;
+    } catch (e) { error = message(e); }
+    finally { if (generation === folderGeneration) busy = false; }
   }
-  function closePicker() { picking?.release(); picking = null; }
+  async function onFolderSource(id: string) {
+    if (id === folderSourceId || busy) return;
+    const generation = ++folderGeneration;
+    const previous = picking;
+    busy = true; error = '';
+    try {
+      const next = await acquireFolder(id);
+      if (generation !== folderGeneration) { next.release(); return; }
+      previous?.release();
+      picking = next;
+      folderSourceId = id;
+    } catch (e) {
+      error = message(e);
+    } finally { if (generation === folderGeneration) busy = false; }
+  }
+  function closePicker() { folderOpen = false; folderGeneration += 1; picking?.release(); picking = null; }
   async function previewFolder(folder: { id: string | null; name: string }) {
     const source = picking; if (!source) return;
-    picking = null; busy = true; error = '';
+    folderGeneration += 1;
+    folderOpen = false; picking = null; busy = true; error = '';
     try { showPreview(await folderModelFiles(def, source.driver, folder.id), `${source.label} · ${folder.name}`, source.release); }
     catch (e) { error = message(e); source.release(); } finally { busy = false; }
   }
+  function loadFromDevice() {
+    if (supportsFolder) folderInput?.click();
+    else fileInput?.click();
+  }
+  function startOnline() {
+    peerOpen = false;
+    if (online.length === 1) { onlineOpen = false; previewOnline(online[0]!.id); return; }
+    onlineOpen = !onlineOpen;
+  }
+  function startPeer() {
+    onlineOpen = false;
+    if (!devices.length) {
+      peerOpen = false;
+      if (!connectModelDevice()) error = 'Pair another device from Connections.';
+      return;
+    }
+    peerOpen = !peerOpen;
+  }
+  function connectAnother() {
+    peerOpen = false;
+    if (!connectModelDevice()) error = 'Pair another device from Connections.';
+  }
   function previewOnline(id: string) {
-    onlinePick = '';
+    onlineOpen = false;
     const source = online.find(row => row.id === id); if (!source) return;
     showPreview(onlineModelFiles(def, source), `Online via ${source.label}`);
   }
@@ -171,7 +236,9 @@
 </script>
 
 <div class="model-files-card" data-testid="model-files-{def.id}">
-  <p>{def.builtIn ?? (status?.ready ? 'Ready' : `${status?.present ?? 0} of ${def.files.length} files`)}</p>
+  {#if showCount && !def.builtIn}
+    <p class="count" data-testid="model-files-count">{status?.present ?? 0}/{status?.total ?? def.files.length}</p>
+  {/if}
   {#if !def.builtIn}
     <ul>
       {#each def.files as file (file.path)}
@@ -185,25 +252,27 @@
       {/each}
     </ul>
     <div class="actions">
-      <span>Load from:</span>
-      <button class="ds-btn ds-btn--sm ds-btn--secondary" disabled={busy} onclick={() => fileInput?.click()}>This device · files</button>
-      {#if supportsFolder}<button class="ds-btn ds-btn--sm ds-btn--secondary" disabled={busy} onclick={() => folderInput?.click()}>This device · folder</button>{/if}
-      <button class="ds-btn ds-btn--sm ds-btn--secondary" disabled={busy} onclick={browserFolder}>Browser files</button>
-      {#each folderSources as source (source.id)}
-        <button class="ds-btn ds-btn--sm ds-btn--secondary" disabled={busy} data-testid="model-source-{source.id}"
-          onclick={() => void chooseFolder(source.label, source.acquire, source.release)}>{source.label} · folder</button>
-      {/each}
-      {#if online.length}
-        <select aria-label="Load {def.label} online through a monitor" data-testid="model-source-online" disabled={busy}
-          value={onlinePick} onchange={(event) => previewOnline(event.currentTarget.value)}>
-          <option value="" disabled>Online via…</option>
-          {#each online as source (source.id)}<option value={source.id}>{source.label}</option>{/each}
-        </select>
+      <button class="ds-btn ds-btn--sm" data-testid="model-source-online" disabled={busy || !online.length}
+        title={online.length ? 'Load the model files online through a monitor' : 'Add a monitor to load files online'}
+        onclick={startOnline}>Online</button>
+      {#if onlineOpen}
+        <ul class="menu" data-testid="model-online-menu">
+          {#each online as source (source.id)}
+            <li><button type="button" disabled={busy} onclick={() => previewOnline(source.id)}>{source.label}</button></li>
+          {/each}
+        </ul>
       {/if}
-      {#each devices as device (device.id)}
-        <button class="ds-btn ds-btn--sm ds-btn--secondary" disabled={busy} data-testid="model-source-device-{device.id}"
-          onclick={() => void previewDeviceOffer(device)}>Copy from {device.label}</button>
-      {/each}
+      <button class="ds-btn ds-btn--sm ds-btn--secondary" disabled={busy} onclick={loadFromDevice}>This device</button>
+      <button class="ds-btn ds-btn--sm ds-btn--secondary" data-testid="model-source-folder" disabled={busy} onclick={() => void openFolderPicker()}>Choose folder</button>
+      <button class="ds-btn ds-btn--sm ds-btn--secondary" data-testid="model-source-peer" disabled={busy} onclick={startPeer}>Another device</button>
+      {#if peerOpen}
+        <ul class="menu" data-testid="model-peer-menu">
+          {#each devices as device (device.id)}
+            <li><button type="button" data-testid="model-source-device-{device.id}" disabled={busy} onclick={() => { peerOpen = false; void previewDeviceOffer(device); }}>Copy from {device.label}</button></li>
+          {/each}
+          <li><button type="button" disabled={busy} onclick={connectAnother}>Connect another device</button></li>
+        </ul>
+      {/if}
       {#if busy}<button class="ds-btn ds-btn--sm ds-btn--ghost" onclick={() => controller?.abort(new DOMException('Cancelled', 'AbortError'))} disabled={!controller}>Cancel</button>{/if}
     </div>
     {#if !hasMonitor && !devices.length}
@@ -225,15 +294,27 @@
   {#if progress}<p role="status">{progress}</p>{/if}
   {#if error}<p class="error" role="alert">{error}</p>{/if}
 </div>
-{#if picking}
-  <FeFolderPickerDialog driver={picking.driver} title="Choose {def.label} model folder on {picking.label}" confirmLabel="Preview files" onSelect={previewFolder} onCancel={closePicker} />
+{#if folderOpen && picking}
+  <FeFolderPickerDialog driver={picking.driver} sources={folderChoices} sourceId={folderSourceId} onSourceChange={(id) => void onFolderSource(id)} title="Choose a folder for {def.label}" confirmLabel="Preview files" onSelect={previewFolder} onCancel={closePicker} />
 {/if}
 <style>
   .model-files-card { width: 100%; font-size: 0.85rem; }
   ul { padding-left: 1.2rem; }
   li, .actions { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; margin: 0.4rem 0; }
+  .menu { list-style: none; display: flex; flex-direction: column; gap: 0.2rem; padding: 0; margin: 0; flex-basis: 100%; }
+  .menu button { font: inherit; font-size: 0.8rem; text-align: left; background: transparent; border: none; color: inherit; cursor: pointer; padding: 0.15rem 0; }
   code { overflow-wrap: anywhere; }
-  .preview { border: 1px solid var(--ds-border); border-radius: 6px; padding: 0.5rem; }
+  .count {
+    display: inline-flex;
+    margin: 0;
+    font-size: 0.72rem;
+    line-height: 1.5;
+    padding: 0 0.4rem;
+    border-radius: 999px;
+    border: 1px solid var(--line-hairline, currentColor);
+    color: var(--text-muted, inherit);
+  }
+  .preview { padding: 0.25rem 0; }
   .hint { color: var(--ds-text-muted, inherit); }
   .error { color: var(--ds-danger, #b91c1c); }
 </style>

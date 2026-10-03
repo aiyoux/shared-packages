@@ -32,8 +32,10 @@
 	} from '../ai/index.js';
 	import { listProfiles as listMonitorProfiles } from '../monitor/credentials.js';
 	import type { MonitorConnectionProfileV1 } from '../monitor/types.js';
+	import FeIcon from './FeIcon.svelte';
 	import ModelFilesCard from './ModelFilesCard.svelte';
 	import ModelStorageFooter from './ModelStorageFooter.svelte';
+	import type { ModelStatus } from '@shared-packages/model-store';
 	import MonitorModelsPanel from './MonitorModelsPanel.svelte';
 	import MonitorStatus from './MonitorStatus.svelte';
 	import { canConfigureNativeTask } from '../ai/nativeModelForm.js';
@@ -188,10 +190,31 @@
 	}
 
 	let inflight = $state<ReadonlySet<string>>(new Set());
+	/** Live file counts reported by an open card, keyed by row. */
+	let fileCounts = $state<Record<string, { present: number; total: number }>>({});
 	/** Which of a row's `browserModelOptions` its card shows, by row key. */
 	let pickedModels = $state<Record<string, string>>({});
 	const rowKey = (sectionId: string, row: AiLibraryModelRow) =>
 		`${sectionId}/${encodeRef(row.ref)}`;
+
+	function downloadText(row: AiLibraryModelRow, key: string): string {
+		const files = fileCounts[key] ?? row.files;
+		return files ? `${files.present}/${files.total}` : statusLabel[row.status];
+	}
+
+	function downloadLabel(row: AiLibraryModelRow, key: string): string {
+		const files = fileCounts[key] ?? row.files;
+		return files ? `${files.present} of ${files.total} files downloaded` : statusLabel[row.status];
+	}
+
+	function loadedText(row: AiLibraryModelRow): string {
+		const state = hostModels[row.ref.modelId] ?? (row.browserModel ? hostModels[row.browserModel.id] : undefined);
+		return state === 'loaded' || state === 'loading' ? state : 'not loaded';
+	}
+
+	function rememberCount(key: string, status: ModelStatus) {
+		fileCounts = { ...fileCounts, [key]: { present: status.present, total: status.total } };
+	}
 
 	async function runInstall(section: (typeof sources.sections)[number], row: AiLibraryModelRow) {
 		if (!row.install) return;
@@ -297,52 +320,58 @@
 			{/if}
 			<ul class="lib-rows">
 				{#each rows as row (rowKey(section.id, row))}
+					{@const key = rowKey(section.id, row)}
 					<li class="lib-row" data-testid="ai-lib-row-{row.ref.modelId}">
-						{#if row.ref.location === 'browser'}
-							<span class="hint">{hostModels[row.ref.modelId] ?? 'not loaded'}</span>
-						{/if}
-						<span class="lib-label">{row.label}</span>
-						{#if row.detail}<span class="hint lib-detail">{row.detail}</span>{/if}
-						<span class="chip chip--{row.status}">{statusLabel[row.status]}</span>
-						{#if row.sizeBytes}
-							<span class="hint">{sizeLabel(row.sizeBytes)}</span>
-						{/if}
-						{#if row.install && !row.browserModel}
-							<button
-								type="button"
-								class="ds-btn ds-btn--sm ds-btn--secondary"
-								data-testid="ai-lib-install-{section.id}-{row.ref.modelId}"
-								disabled={inflight.has(rowKey(section.id, row))}
-								onclick={() => void runInstall(section, row)}
-							>
-								{inflight.has(rowKey(section.id, row)) ? 'Working…' : row.installLabel ?? 'Install'}
-							</button>
-						{/if}
-						{#if row.remove && !row.browserModel}
-							<button
-								type="button"
-								class="ds-btn ds-btn--sm ds-btn--ghost"
-								data-testid="ai-lib-remove-{section.id}-{row.ref.modelId}"
-								disabled={inflight.has(rowKey(section.id, row))}
-								onclick={() => void runRemove(section, row)}
-							>
-								Remove
-							</button>
-						{/if}
-						{#if row.browserModel}
-							{@const options = row.browserModelOptions}
-							{@const picked = options?.find((model) => model.id === pickedModels[rowKey(section.id, row)]) ?? row.browserModel}
-							{#if options?.length}
-								<select aria-label="{row.label}: model" data-testid="ai-lib-pick-{row.ref.modelId}"
-									value={picked.id} onchange={(event) => pickedModels = { ...pickedModels, [rowKey(section.id, row)]: event.currentTarget.value }}>
-									{#each options as model (model.id)}<option value={model.id}>{model.label}</option>{/each}
-								</select>
-							{/if}
-							<ModelFilesCard def={picked} onChanged={() => void refreshSection(section)} />
-						{/if}
-						{#if row.note}
-							<p class="hint">{row.note}</p>
-						{/if}
+						<details>
+							<summary>
+								<span class="twist"><FeIcon name="chevron-right" size={14} /></span>
+								<span class="lib-label">{row.label}</span>
+								<span class="pill" data-testid="ai-lib-files-{row.ref.modelId}" aria-label={downloadLabel(row, key)}>{downloadText(row, key)}</span>
+								{#if row.ref.location === 'browser' && row.browserModel}
+									<span class="pill" data-testid="ai-lib-loaded-{row.ref.modelId}" aria-label="Load state: {loadedText(row)}">{loadedText(row)}</span>
+								{/if}
+							</summary>
+							<div class="lib-body">
+								{#if row.detail}<p class="hint">{row.detail}</p>{/if}
+								{#if row.sizeBytes}<p class="hint">{sizeLabel(row.sizeBytes)}</p>{/if}
+								{#if row.install && !row.browserModel}
+									<button
+										type="button"
+										class="ds-btn ds-btn--sm ds-btn--secondary"
+										data-testid="ai-lib-install-{section.id}-{row.ref.modelId}"
+										disabled={inflight.has(key)}
+										onclick={() => void runInstall(section, row)}
+									>
+										{inflight.has(key) ? 'Working…' : row.installLabel ?? 'Install'}
+									</button>
+								{/if}
+								{#if row.remove && !row.browserModel}
+									<button
+										type="button"
+										class="ds-btn ds-btn--sm ds-btn--ghost"
+										data-testid="ai-lib-remove-{section.id}-{row.ref.modelId}"
+										disabled={inflight.has(key)}
+										onclick={() => void runRemove(section, row)}
+									>
+										Remove
+									</button>
+								{/if}
+								{#if row.browserModel}
+									{@const options = row.browserModelOptions}
+									{@const picked = options?.find((model) => model.id === pickedModels[key]) ?? row.browserModel}
+									{#if options?.length}
+										<select aria-label="{row.label}: model" data-testid="ai-lib-pick-{row.ref.modelId}"
+											value={picked.id} onchange={(event) => pickedModels = { ...pickedModels, [key]: event.currentTarget.value }}>
+											{#each options as model (model.id)}<option value={model.id}>{model.label}</option>{/each}
+										</select>
+									{/if}
+									<ModelFilesCard def={picked} showCount={false} onStatus={(status) => rememberCount(key, status)} onChanged={() => void refreshSection(section)} />
+								{/if}
+								{#if row.note}
+									<p class="hint">{row.note}</p>
+								{/if}
+							</div>
+						</details>
 					</li>
 				{/each}
 			</ul>
@@ -384,9 +413,6 @@
 		<details class="host-status" data-testid="ai-browser-host">
 			<summary>Browser model status</summary>
 			<p class="hint">{hostLabel}</p>
-			{#each Object.entries(hostModels) as [model, state] (model)}
-				<p class="hint">{model}: {state === 'not-loaded' ? 'not loaded' : state}</p>
-			{/each}
 		</details>
 	</details>
 
@@ -535,25 +561,46 @@
 		padding: 0;
 		display: flex;
 		flex-direction: column;
-		gap: 0.3rem;
 	}
 	.lib-row {
+		padding: 0.15rem 0;
+		background: none;
+		border: none;
+	}
+	.lib-row details > summary {
 		display: flex;
 		flex-wrap: wrap;
 		align-items: center;
-		gap: 0.4rem;
-		padding: 0.35rem 0.45rem;
-		border: 1px solid var(--line-hairline);
+		gap: 0.45rem;
+		cursor: pointer;
+		list-style: none;
+	}
+	.lib-row summary::-webkit-details-marker { display: none; }
+	.lib-row summary::marker { content: ''; }
+	.twist {
+		display: inline-flex;
+		color: var(--text-muted);
+		transition: transform 0.12s ease;
+	}
+	.lib-row details[open] > summary .twist { transform: rotate(90deg); }
+	.lib-body {
+		display: flex;
+		flex-direction: column;
+		gap: 0.35rem;
+		padding: 0.2rem 0 0.45rem 1.15rem;
 	}
 	.lib-label {
 		font-size: 0.86rem;
 		font-weight: 600;
 	}
-	.chip {
+	.pill {
 		font-size: 0.66rem;
-		padding: 0 0.3rem;
+		line-height: 1.5;
+		padding: 0 0.4rem;
+		border-radius: 999px;
 		border: 1px solid var(--line-hairline);
 		color: var(--text-muted);
+		background: transparent;
 	}
 	.hint {
 		margin: 0;
@@ -576,5 +623,4 @@
 	.defaults > summary { cursor: pointer; font-size: 0.86rem; font-weight: 600; }
 	.host-status { font-size: 0.74rem; color: var(--text-muted); }
 	.host-status summary { cursor: pointer; }
-	.lib-detail { flex-basis: 100%; }
 </style>

@@ -15,6 +15,9 @@
 		confirmLabel = 'Use this folder',
 		driver,
 		startDirId = null,
+		sources,
+		sourceId,
+		onSourceChange,
 		testid = 'fe-folder-picker',
 		onSelect,
 		onCancel
@@ -24,6 +27,10 @@
 		driver: ExplorerDriver;
 		/** Folder to open first; null starts at the driver root. */
 		startDirId?: string | null;
+		/** When set, a source dropdown sits above the folder list. */
+		sources?: readonly { id: string; label: string }[];
+		sourceId?: string;
+		onSourceChange?: (id: string) => void;
 		testid?: string;
 		onSelect: (folder: { id: string | null; name: string }) => void | Promise<void>;
 		onCancel: () => void;
@@ -35,7 +42,13 @@
 	let busy = $state(false);
 	let error = $state('');
 
+	let loadedSource: string | undefined;
 	$effect(() => {
+		const source = sourceId;
+		if (source !== loadedSource) {
+			loadedSource = source;
+			parentId = startDirId ?? null;
+		}
 		void load(parentId);
 	});
 
@@ -83,6 +96,22 @@
 		<div class="scrim" onclick={close} role="presentation"></div>
 		<div class="card">
 			<h2 id="fe-folder-picker-title">{title}</h2>
+
+			{#if sources?.length}
+				<label class="source">
+					Source
+					<select
+						data-testid="fe-folder-picker-source"
+						aria-label="Folder source"
+						value={sourceId ?? sources[0]!.id}
+						onchange={(event) => onSourceChange?.(event.currentTarget.value)}
+					>
+						{#each sources as source (source.id)}
+							<option value={source.id}>{source.label}</option>
+						{/each}
+					</select>
+				</label>
+			{/if}
 
 			<div class="crumbs" data-testid="fe-folder-picker-crumbs">
 				<button type="button" class="ds-btn ds-btn--sm ds-btn--ghost" onclick={() => (parentId = null)}>
@@ -152,7 +181,8 @@
 	.modal-root {
 		position: fixed;
 		inset: 0;
-		z-index: 60;
+		/* Settings shells sit at 70. Confirm dialogs sit at 80, so this stays between them. */
+		z-index: 75;
 		display: flex;
 		align-items: center;
 		justify-content: center;
@@ -176,6 +206,24 @@
 	h2 {
 		margin: 0 0 0.75rem;
 		font-size: 1rem;
+	}
+	.source {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		margin: 0 0 0.65rem;
+		font-size: 0.8rem;
+		color: var(--text-muted);
+	}
+	.source select {
+		flex: 1;
+		min-width: 0;
+		padding: 0.3rem 0.45rem;
+		border-radius: var(--radius-md, 6px);
+		border: 1px solid var(--line-hairline);
+		background: var(--surface-1);
+		color: inherit;
+		font: inherit;
 	}
 	.crumbs {
 		display: flex;

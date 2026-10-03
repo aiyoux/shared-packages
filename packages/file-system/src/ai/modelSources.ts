@@ -204,6 +204,18 @@ export function onDeviceSourcesChange(fn: () => void): () => void {
 	return () => deviceListeners.delete(fn);
 }
 
+/** The hub's pair-a-device flow. The model card's "Another device" button calls it. */
+let deviceConnect: (() => void) | null = null;
+export function registerModelDeviceConnect(connect: (() => void) | null): void {
+	deviceConnect = connect;
+}
+/** Start pairing. Returns false when this app has not registered a connect flow. */
+export function connectModelDevice(): boolean {
+	if (!deviceConnect) return false;
+	deviceConnect();
+	return true;
+}
+
 /** What a device offers, against the def: a file counts only with the def's size and hash. */
 export function linkedDeviceFiles(def: ModelDef, offered: ReadonlyArray<{ path: string; bytes: number; blake3: string }>): ModelFileMatch[] {
 	return def.files.map((file): ModelFileMatch => {

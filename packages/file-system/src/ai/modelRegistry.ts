@@ -39,6 +39,8 @@ export type AiLibraryModelRow = {
 	/** Weights on disk when known; null otherwise. */
 	sizeBytes: number | null;
 	status: AiLibraryModelStatus;
+	/** Weight files already in the browser store, when this row has them. */
+	files?: { present: number; total: number };
 	/** Files managed by the dedicated browser model store. */
 	browserModel?: ModelDef;
 	/** One row over many store models (Piper's voices): the card shows the picked one, starting at `browserModel`. */

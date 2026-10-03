@@ -4,7 +4,7 @@ import type { ExplorerDriver, ExplorerEntry } from '../ui/explorerDriver.js';
 
 vi.mock('../monitor/credentials.js', () => ({ listProfiles: async () => [] }));
 vi.mock('../b2/connections.js', () => ({ listB2Connections: async () => ({ rows: [], unreachable: [] }) }));
-import { folderModelFiles, linkedDeviceFiles, onlineModelFiles, onlineUrl } from './modelSources.js';
+import { connectModelDevice, folderModelFiles, linkedDeviceFiles, onlineModelFiles, onlineUrl, registerModelDeviceConnect } from './modelSources.js';
 
 const def: ModelDef = {
 	id: 'speech:test', task: 'transcription', label: 'Test',
@@ -70,6 +70,16 @@ describe('model sources', () => {
 	it('has nothing to fetch online for a user-supplied model', () => {
 		const user: ModelDef = { id: 'scan:x', task: 'scan-detect', label: 'X', files: [{ path: 'x.onnx' }], origin: { kind: 'user' } };
 		expect(onlineModelFiles(user, { id: 'o', label: 'PC', baseUrl: 'http://pc', hosts: ['huggingface.co'] })[0]!.state).toBe('not-fetchable');
+	});
+
+	it('starts the registered device connect flow and reports when none is registered', () => {
+		expect(connectModelDevice()).toBe(false);
+		const connect = vi.fn();
+		registerModelDeviceConnect(connect);
+		expect(connectModelDevice()).toBe(true);
+		expect(connect).toHaveBeenCalledOnce();
+		registerModelDeviceConnect(null);
+		expect(connectModelDevice()).toBe(false);
 	});
 
 	it("counts a linked device's file only with the def's size and hash", () => {
