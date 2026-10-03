@@ -94,6 +94,11 @@ export function createExactBaseRuntime<Doc, Op, Frame>(
 	 * reconciled with this page (`adopt`).
 	 */
 	let rejoining = false;
+	/**
+	 * Other clients' edits numbered while a nack is answered. They are not
+	 * applied to this page until the recovery snapshot says how it goes on
+	 * (`recover`): kept with this replica's edits (`rebase`), or replaced.
+	 */
 	const held: { seq: number; ops: Op[] }[] = [];
 	const send = (frame: Frame) => {
 		if (!closed) transport.send(frame);
@@ -113,6 +118,7 @@ export function createExactBaseRuntime<Doc, Op, Frame>(
 			readOnly ||
 			!joined ||
 			rejoining ||
+			nackHead != null ||
 			inFlight
 		)
 			return;
@@ -187,8 +193,43 @@ export function createExactBaseRuntime<Doc, Op, Frame>(
 	}
 	function recover() {
 		if (nackHead == null || !latestSnapshot) return;
-		if (localSeq >= nackHead && latestSnapshot.seq >= nackHead)
-			replace(latestSnapshot.doc, latestSnapshot.seq);
+		if (localSeq >= nackHead && latestSnapshot.seq >= nackHead) {
+			const { doc, seq } = latestSnapshot;
+			if (!rebase(doc, seq)) replace(doc, seq);
+		}
+	}
+	/**
+	 * A nack refused this replica's edits because others were numbered first.
+	 * They are kept when they commute with those: the authority's document
+	 * with this replica's edits reduced onto it is exactly this page with the
+	 * others' edits reduced onto it. Then the others' edits are applied here
+	 * and this replica's are sent again on the new head. Edits that touch the
+	 * same text do not commute (an offset written against one document lands
+	 * elsewhere on the other), and the snapshot replaces the page as before.
+	 */
+	function rebase(doc: Doc, seq: number): boolean {
+		const { reduce, sameDoc } = opts;
+		if (!reduce || !sameDoc || queue.length === 0) return false;
+		const theirs = [...held].sort((a, b) => a.seq - b.seq);
+		const after = theirs.filter((item) => item.seq > seq);
+		try {
+			const head = after.reduce((acc, item) => reduce(acc, item.ops), doc);
+			const kept = queue.reduce((acc, ops) => reduce(acc, ops), head);
+			const shown = theirs.reduce((acc, item) => reduce(acc, item.ops), port.snapshot());
+			if (!sameDoc(kept, shown)) return false;
+		} catch {
+			return false;
+		}
+		nackHead = null;
+		inFlight = null;
+		held.length = 0;
+		localSeq = seq;
+		for (const item of theirs) {
+			port.apply(item.ops);
+			localSeq = Math.max(localSeq, item.seq);
+		}
+		flush();
+		return true;
 	}
 	const off = transport.subscribe((frame) => {
 		if (closed) return;
@@ -218,9 +259,12 @@ export function createExactBaseRuntime<Doc, Op, Frame>(
 					} else if (event.clientId === transport.clientId) {
 						ack(event.submissionId, event.seq);
 						recover();
+					} else if (event.seq <= 0) {
+						// Another replica's submission, on a bus every member hears: it is
+						// the authority's to admit or refuse. Its numbered echo is the edit.
 					} else if (nackHead != null) {
 						if (event.seq <= nackHead) localSeq = Math.max(localSeq, event.seq);
-						else held.push({ seq: event.seq, ops: event.ops });
+						held.push({ seq: event.seq, ops: event.ops });
 						recover();
 					} else {
 						port.apply(event.ops);
@@ -256,9 +300,10 @@ export function createExactBaseRuntime<Doc, Op, Frame>(
 					// Another submission is in flight than the one it names: that one went
 					// to an earlier authority, and `adopt` has sent it again since.
 					if (inFlight && event.submissionId !== undefined && event.submissionId !== inFlight) break;
+					// The queue stays: `recover` keeps it if it commutes with what was
+					// numbered first, and drops it with the page otherwise.
 					nackHead = event.headSeq;
 					inFlight = null;
-					queue.length = 0;
 					recover();
 					break;
 				case 'read-only':
