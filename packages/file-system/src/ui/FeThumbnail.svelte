@@ -16,6 +16,14 @@
 		readExplorerBlob
 	} from './explorerDriver.js';
 	import { mediaSrcIsEmbeddable } from './saveToDisk.js';
+	import { withLocalAddressSpace } from '../monitor/localNetwork.js';
+	import {
+		blobFromThumbSrc,
+		recallThumb,
+		rememberThumb,
+		thumbCacheKey,
+		thumbContentToken
+	} from './thumbCache.js';
 
 	let {
 		entry,
@@ -45,10 +53,15 @@
 	let loadedDriver: ExplorerDriver | null = null;
 	let loadedDim = 0;
 	let loadedName = '';
+	let loadedToken: string | null = null;
+	/** Where the current image came from. `cache` skips a rebuild on the next visit. */
+	let source = $state<'cache' | 'fresh' | ''>('');
 	const mediaId = $derived(entry.id);
 	const mediaName = $derived(entry.name);
+	const contentToken = $derived(thumbContentToken(entry));
 	/** Last id that failed. Plain let so a fail does not re-run the effect. */
 	let failedId = '';
+	let failedToken: string | null = null;
 	let shouldLoad = $derived(
 		Boolean(
 			enabled &&
@@ -63,6 +76,14 @@
 		revoke();
 	});
 
+	async function fetchHostThumb(remote: string, key: string): Promise<string> {
+		const res = await fetch(remote, withLocalAddressSpace(remote));
+		if (!res.ok) throw new Error(`Could not load media (${res.status})`);
+		const blob = await res.blob();
+		void rememberThumb(key, blob);
+		return URL.createObjectURL(blob);
+	}
+
 	function revoke() {
 		if (url && url.startsWith('blob:')) {
 			const retired = url;
@@ -72,11 +93,14 @@
 		}
 		// data: URLs don't need revocation
 		url = null;
+		source = '';
 	}
 
 	$effect(() => {
 		// Re-read entry/driver/enabled so effect re-runs on change
 		const e = { id: mediaId, name: mediaName };
+		const token = contentToken;
+		const snap = untrack(() => entry);
 		const dim = maxDim;
 		const d = driver;
 		const en = shouldLoad;
@@ -105,8 +129,8 @@
 		// its own writes. A failed decode used to loop: fail → loading=false →
 		// re-run → new blob URL → revoke → ERR_FILE_NOT_FOUND, and the row
 		// stopped taking clicks.
-		if (untrack(() => loadedId === e.id && loadedDriver === d && loadedDim === dim && loadedName === e.name && Boolean(url) && !loading)) return;
-		if (untrack(() => failedId === e.id)) return;
+		if (untrack(() => loadedId === e.id && loadedDriver === d && loadedDim === dim && loadedName === e.name && loadedToken === token && Boolean(url) && !loading)) return;
+		if (untrack(() => failedId === e.id && failedToken === token)) return;
 
 		let cancelled = false;
 		untrack(revoke);
@@ -114,8 +138,44 @@
 		failed = false;
 		loadedId = '';
 
+		function show(src: string, from: 'cache' | 'fresh') {
+			if (cancelled) {
+				if (src.startsWith('blob:')) URL.revokeObjectURL(src);
+				return false;
+			}
+			url = src;
+			source = from;
+			loadedId = e.id;
+			loadedDriver = d;
+			loadedDim = dim;
+			loadedName = e.name;
+			loadedToken = token;
+			failedId = '';
+			failedToken = null;
+			loading = false;
+			return true;
+		}
+
+		function fail() {
+			if (cancelled) return;
+			failedId = e.id;
+			failedToken = token;
+			failed = true;
+			loading = false;
+		}
+
 		(async () => {
 			try {
+				const key = await thumbCacheKey(d, snap, dim);
+				if (cancelled) return;
+				if (key) {
+					const cached = await recallThumb(key);
+					if (cancelled) return;
+					if (cached) {
+						show(URL.createObjectURL(cached), 'cache');
+						return;
+					}
+				}
 				// Only image and video have host thumbs; pdf and others would
 				// just get a benign 415 per row before the real path below.
 				if ((k === 'image' || k === 'video') && d.thumbUrl) {
@@ -123,17 +183,10 @@
 						const loc = await d.thumbUrl(e.id, { maxDim: dim });
 						if (cancelled) return;
 						if (loc?.url) {
-							const src = await embedMediaUrl(loc.url);
-							if (cancelled) {
-								if (src.startsWith('blob:')) URL.revokeObjectURL(src);
-								return;
-							}
-							url = src;
-							loadedId = e.id;
-							loadedDriver = d;
-							loadedDim = dim;
-							loadedName = e.name;
-							loading = false;
+							const src = key
+								? await fetchHostThumb(loc.url, key)
+								: await embedMediaUrl(loc.url);
+							if (!src || !show(src, 'fresh')) return;
 							return;
 						}
 					} catch {
@@ -147,9 +200,7 @@
 					// the film icon, never a whole-file download just to draw
 					// a 96px icon. (`force` is the real preview pane, where the
 					// user asked for the file.)
-					failedId = e.id;
-					failed = true;
-					loading = false;
+					fail();
 					return;
 				}
 				if (k === 'image' && d.downloadUrl) {
@@ -157,12 +208,7 @@
 						const loc = await d.downloadUrl(e.id);
 						if (cancelled) return;
 						if (loc?.url && mediaSrcIsEmbeddable(loc.url)) {
-							url = loc.url;
-							loadedId = e.id;
-							loadedDriver = d;
-							loadedDim = dim;
-							loadedName = e.name;
-							loading = false;
+							show(loc.url, 'fresh');
 							return;
 						}
 					} catch {
@@ -172,9 +218,7 @@
 				const blob = await readExplorerBlob(d, e.id);
 				if (cancelled) return;
 				if (!blob) {
-					failedId = e.id;
-					failed = true;
-					loading = false;
+					fail();
 					return;
 				}
 				const thumbUrl = await generateThumbnail(blob, k, dim, e.name);
@@ -182,19 +226,13 @@
 					if (thumbUrl.startsWith('blob:')) URL.revokeObjectURL(thumbUrl);
 					return;
 				}
-				url = thumbUrl;
-				loadedId = e.id;
-				loadedDriver = d;
-				loadedDim = dim;
-				loadedName = e.name;
-				failedId = '';
-				loading = false;
-			} catch {
-				if (!cancelled) {
-					failedId = e.id;
-					failed = true;
-					loading = false;
+				if (key) {
+					const preview = await blobFromThumbSrc(thumbUrl);
+					if (preview) void rememberThumb(key, preview);
 				}
+				show(thumbUrl, 'fresh');
+			} catch {
+				fail();
 			}
 		})();
 
@@ -216,7 +254,7 @@
 
 <div class="fe-thumb" style:--fe-thumb-max="{maxDim}px" data-testid="fe-thumb">
 	{#if url}
-		<img class="fe-thumb-img" src={url} alt={entry.name} loading="lazy" />
+		<img class="fe-thumb-img" src={url} alt={entry.name} loading="lazy" data-thumb-source={source} />
 	{:else if loading}
 		<div class="fe-thumb-loading" aria-label="Loading preview">
 			<div class="fe-thumb-spinner"></div>

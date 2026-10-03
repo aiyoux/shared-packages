@@ -9,6 +9,7 @@ import {
 	applyListCap,
 	EXPLORER_DOWNLOAD_MAX_BYTES,
 	type ExplorerCapabilities,
+	type ExplorerDiskRoot,
 	type ExplorerDriver,
 	type ExplorerEntry,
 	type ExplorerEntryId,
@@ -123,6 +124,7 @@ async function listAll(root: DiskDirHandle, parentId: string | null): Promise<Ex
 export function createDiskExplorerDriver(root: DiskDirHandle): ExplorerDriver {
 	return {
 		id: 'disk',
+		diskRoot: root as ExplorerDiskRoot,
 		capabilities: DISK_CAPS,
 
 		async ready() {

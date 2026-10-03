@@ -171,6 +171,7 @@ export async function createMonitorExplorerDriver(
 		id: 'monitor',
 		connectionId: `monitor:${profile.id}`,
 		endpointKey: endpointKeyFromUrl(transport.baseUrl || profile.baseUrl),
+		thumbScope: `monitor:${profile.id}:${rootPath}`,
 		monitorClient: transport,
 		capabilities: monitorCaps(canRename, canMkdir),
 

@@ -33,6 +33,7 @@ function toEntry(n: {
 	fileType?: import('../types.js').FileTypeId;
 	size: number;
 	updatedAt: number;
+	generation?: number;
 	contentType?: string;
 }): ExplorerEntry {
 	return {
@@ -43,6 +44,7 @@ function toEntry(n: {
 		fileType: n.fileType,
 		size: n.size,
 		updatedAt: n.updatedAt,
+		...(typeof n.generation === 'number' ? { generation: n.generation } : {}),
 		contentType: n.contentType
 	};
 }

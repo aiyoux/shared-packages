@@ -66,15 +66,35 @@ export type OpenProjectContext = {
 	rootPath?: string;
 };
 
-/** UI-facing list row — thinner than VfsNode (no generation/CAS/trash fields). */
+/**
+ * Granted computer folder carried on a disk driver. A copied driver keeps the
+ * handle, and the thumbnail cache matches it with `isSameEntry` after a refresh.
+ */
+export type ExplorerDiskRoot = {
+	kind: 'directory';
+	name: string;
+	isSameEntry?(other: ExplorerDiskRoot): Promise<boolean>;
+};
+
+/**
+ * UI-facing list row — thinner than VfsNode (no trash fields).
+ * `generation` is the local content counter when the backend has one.
+ * It bumps on a byte write and stays put across rename, so a thumbnail
+ * cache can keep the image without going stale.
+ */
 export interface ExplorerEntry extends ExplorerOpenTarget {
 	parentId: ExplorerEntryId | null;
 	size?: number;
 	updatedAt?: number;
+	/**
+	 * Content CAS. Local VFS and the in-memory list set this. Disk and monitor
+	 * leave it unset and the cache uses `size` + `updatedAt` instead.
+	 */
+	generation?: number;
 	contentType?: string;
 	/** Sibling rank when backend supports order. */
 	sortOrder?: number;
-	/** Backend-private (e.g. B2 fileId). Not for open-with. */
+	/** Backend-private (e.g. B2 fileId, monitor ino/dev). Not for open-with. */
 	meta?: Record<string, unknown>;
 }
 
@@ -157,6 +177,14 @@ export interface ExplorerDriver {
 	 * server-copy even when the saved profiles differ.
 	 */
 	readonly endpointKey?: string;
+	/**
+	 * Cache namespace for this connection when it is known up front.
+	 * Monitor sets profile id + root path. Disk resolves a grant id from
+	 * `diskRoot` instead.
+	 */
+	readonly thumbScope?: string;
+	/** Set by the disk driver so a spread copy still points at the granted folder. */
+	readonly diskRoot?: ExplorerDiskRoot;
 	readonly capabilities: ExplorerCapabilities;
 	ready(): Promise<void>;
 	list(opts: ExplorerListOptions): Promise<ExplorerListResult>;
@@ -529,6 +557,7 @@ export function nodeToEntry(n: {
 	fileType?: FileTypeId;
 	size?: number;
 	updatedAt?: number;
+	generation?: number;
 	contentType?: string;
 	sortOrder?: number;
 	meta?: Record<string, unknown>;
@@ -541,6 +570,7 @@ export function nodeToEntry(n: {
 		fileType: n.fileType,
 		size: n.size,
 		updatedAt: n.updatedAt,
+		...(typeof n.generation === 'number' ? { generation: n.generation } : {}),
 		contentType: n.contentType,
 		sortOrder: n.sortOrder,
 		meta: n.meta

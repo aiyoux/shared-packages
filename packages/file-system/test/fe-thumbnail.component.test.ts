@@ -6,6 +6,10 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, waitFor, fireEvent } from '@testing-library/svelte';
 import FeThumbnail from '../src/ui/FeThumbnail.svelte';
 import type { ExplorerDriver, ExplorerEntry } from '../src/ui/explorerDriver.ts';
+import {
+	forgetThumbMemoryForTests,
+	resetThumbCacheForTests
+} from '../src/ui/thumbCache.ts';
 
 vi.mock('../src/ui/feThumbnails.js', async (importOriginal) => {
 	const actual = await importOriginal<typeof import('../src/ui/feThumbnails.js')>();
@@ -332,5 +336,58 @@ describe('FeThumbnail', () => {
 		} finally {
 			vi.unstubAllGlobals();
 		}
+	});
+
+	it('shows a cached thumbnail after unmount and after a refresh, and rebuilds when generation changes', async () => {
+		await resetThumbCacheForTests();
+		const { generateThumbnail } = await import('../src/ui/feThumbnails.js');
+		vi.mocked(generateThumbnail).mockResolvedValue('data:image/webp;base64,QQ==');
+		let reads = 0;
+		const driver: ExplorerDriver = {
+			id: 'local',
+			capabilities: caps,
+			ready: async () => {},
+			list: async () => ({ entries: [], truncated: false }),
+			getPath: async () => [],
+			delete: async () => {},
+			readBlob: async () => {
+				reads += 1;
+				return pngBlob();
+			}
+		};
+		const entry: ExplorerEntry = {
+			id: 'pic-cache',
+			kind: 'file',
+			name: 'pic.png',
+			parentId: null,
+			fileType: 'image',
+			generation: 1,
+			size: 40,
+			updatedAt: 10
+		};
+		const first = render(FeThumbnail, { props: { entry, driver, maxDim: 32, enabled: true } });
+		await waitFor(() => {
+			expect(document.querySelector('.fe-thumb-img')?.getAttribute('data-thumb-source')).toBe('fresh');
+		});
+		expect(reads).toBe(1);
+		first.unmount();
+
+		forgetThumbMemoryForTests();
+		const second = render(FeThumbnail, { props: { entry, driver, maxDim: 32, enabled: true } });
+		await waitFor(() => {
+			expect(document.querySelector('.fe-thumb-img')?.getAttribute('data-thumb-source')).toBe('cache');
+		});
+		expect(reads).toBe(1);
+		second.unmount();
+
+		const third = render(FeThumbnail, {
+			props: { entry: { ...entry, generation: 2 }, driver, maxDim: 32, enabled: true }
+		});
+		await waitFor(() => {
+			expect(document.querySelector('.fe-thumb-img')?.getAttribute('data-thumb-source')).toBe('fresh');
+		});
+		expect(reads).toBe(2);
+		third.unmount();
+		await resetThumbCacheForTests();
 	});
 });

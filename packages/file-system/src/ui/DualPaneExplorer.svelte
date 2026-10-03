@@ -1287,7 +1287,8 @@
 		try {
 			if (favourite.kind === 'disk') {
 				if (!favourite.diskRoot) throw new Error('This favourite needs access to its computer folder again.');
-				const driver = { ...createDiskExplorerDriver(favourite.diskRoot), connectionId: favourite.connectionId };
+				const driver = createDiskExplorerDriver(favourite.diskRoot);
+				Object.assign(driver, { connectionId: favourite.connectionId });
 				await driver.ready();
 				const p = paneState(id);
 				dropDiskDriver(p);
