@@ -117,7 +117,7 @@
 	} from './systemClipboard.js';
 	import {
 		FILE_CLIPBOARD_TYPE, fileClipboardPayload, fileClipboardFromText, fileClipboardFromItems, fileClipboardForPastedImage,
-		fileClipboardFromHtml, fileClipboardFromOwnedText, fileClipboardText, copyFilesToSystem,
+		fileClipboardFromHtml, fileClipboardFromOwnedText, fileClipboardText, fileClipboardHasFolders, copyFilesToSystem,
 		fileClipboardLabel, clipboardEntries, sameClipboardSource, rememberClipboardSource, clipboardSource, markClipboardFileMoved,
 		type FileClipboardPayload
 	} from './fileClipboard.js';
@@ -3593,7 +3593,7 @@
 		const sourceDriver = driver;
 		try {
 			await appClipboard.copy(FILE_CLIPBOARD_TYPE, fileClipboardLabel(payload), payload,
-				fileClipboardText(payload), { syncWithSystem: true, systemWriter: () => image
+				fileClipboardText(payload), { syncWithSystem: !fileClipboardHasFolders(payload), systemWriter: () => image
 					? copyImageToSystem(sourceDriver, entries[0], payload) : copyFilesToSystem(payload) });
 		} catch (e) {
 			reportMessage(`Could not copy ${image ? 'image' : 'files'} to the system clipboard: ${errMsg(e)}`);
@@ -3769,6 +3769,9 @@
 	const showDeviceFilePicker = $derived(Boolean(driver.writeFile || driver.upload));
 
 	async function refreshSystemClipboard() {
+		// Folder operations deliberately leave the OS clipboard alone. Keep the app
+		// operation available across panes until the next app Copy/Cut replaces it.
+		if (fileClipboardHasFolders(clipboard)) return;
 		if (typeof navigator === 'undefined' || !navigator.clipboard) return;
 		const previous = appClipboard.current;
 		try {
@@ -3828,6 +3831,11 @@
 			if (!target || target.closest('input, textarea, [contenteditable]:not([contenteditable="false"])')) return;
 			if (!rootEl?.contains(target) && !(isTarget && target === document.body)) return;
 			if (e.defaultPrevented || !e.clipboardData) return;
+			if (fileClipboardHasFolders(clipboard)) {
+				e.preventDefault();
+				void pasteClipboard(clipboard!, true);
+				return;
+			}
 			const text = e.clipboardData.getData('text/plain');
 			let files = fileClipboardFromHtml(e.clipboardData.getData('text/html')) ??
 				fileClipboardFromText(text) ?? fileClipboardFromOwnedText(text);
@@ -4107,6 +4115,11 @@
 				e.preventDefault();
 				cutSelection();
 			}
+			return;
+		}
+		if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v' && mode === 'manage' && fileClipboardHasFolders(clipboard)) {
+			e.preventDefault();
+			void pasteClipboard(clipboard!, true);
 			return;
 		}
 		// Let Ctrl/Cmd+V dispatch a native paste event, which also exposes OS

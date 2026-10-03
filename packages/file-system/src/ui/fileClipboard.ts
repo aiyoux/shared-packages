@@ -67,6 +67,11 @@ export function fileClipboardText(payload: FileClipboardPayload): string {
 	return payload.ids.map((id) => payload.entries.find((entry) => entry.id === id)!.name).join('\n');
 }
 
+/** Folder selections stay on the app clipboard; browsers cannot export native folders. */
+export function fileClipboardHasFolders(payload: FileClipboardPayload | null): boolean {
+	return Boolean(payload?.entries.some((entry) => entry.kind === 'folder' && payload.ids.includes(entry.id)));
+}
+
 export function fileClipboardFromHtml(html: string): FileClipboardPayload | null {
 	if (!html || typeof DOMParser === 'undefined') return null;
 	try {
@@ -87,6 +92,7 @@ export function fileClipboardFromOwnedText(text: string): FileClipboardPayload |
 export async function copyFilesToSystem(payload: FileClipboardPayload): Promise<void> {
 	const files = fileClipboardPayload(payload);
 	if (!files) throw new Error('Invalid file clipboard');
+	if (fileClipboardHasFolders(payload)) return;
 	const text = fileClipboardText(files);
 	if (navigator.clipboard?.write && typeof ClipboardItem !== 'undefined') {
 		const escaped = text.replace(/[&<>"']/g, (char) => ({

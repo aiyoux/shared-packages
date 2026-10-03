@@ -96,33 +96,75 @@ describe('FileExplorer clipboard', () => {
 		return { write, setItems: (next: ClipboardItem[]) => { items = next; } };
 	}
 
-	it.each(['local', 'monitor', 'b2'])('copies %s folders with readable text and recovers references on native Paste', async (connection) => {
+	it.each(['local', 'monitor', 'b2'])('keeps %s folder Copy inside the app and leaves the system clipboard untouched', async (connection) => {
 		const { write } = imageClipboard();
+		await navigator.clipboard.writeText('Existing system clipboard');
+		writeText.mockClear();
 		const { driver, entries } = backend(connection);
 		entries.push({ id: 'folder-a', name: 'Docs & <notes>"', parentId: null, kind: 'folder' });
 		const source = await explorer(driver);
 		const dest = await explorer(driver, 'target');
 		await select(source.root, 'folder-a');
 		await fireEvent.click(source.ui.getByTestId('fe-copy'));
-		await waitFor(() => expect(systemText).toBe('Docs & <notes>"'));
+		expect(fileClipboardPayload(appClipboard.current?.data)?.ids).toEqual(['folder-a']);
+		expect(systemText).toBe('Existing system clipboard');
+		expect(write).not.toHaveBeenCalled();
 		expect(writeText).not.toHaveBeenCalled();
-		const item = (await navigator.clipboard.read())[0];
-		const html = await (await item.getType('text/html')).text();
-		expect(new DOMParser().parseFromString(html, 'text/html').body.textContent).toBe(systemText);
-		expect(fileClipboardFromHtml(html)?.ids).toEqual(['folder-a']);
-		// Native paste receives HTML metadata even when web custom formats are hidden.
-		appClipboard.clear();
-		const event = new Event('paste', { bubbles: true, cancelable: true });
-		Object.defineProperty(event, 'clipboardData', { value: {
-			files: { length: 0 }, items: [], getData: (type: string) => type === 'text/html' ? html : type === 'text/plain' ? systemText : ''
-		} });
-		dest.root.dispatchEvent(event);
+		// Focus/clipboard refresh cannot replace this app-only operation with old OS text.
+		window.dispatchEvent(new Event('focus'));
+		await fireEvent.click(dest.ui.getByTestId('fe-paste'));
 		await waitFor(() => expect(driver.copy).toHaveBeenCalledWith('folder-a', 'target'));
 		expect(driver.writeFile).not.toHaveBeenCalled();
-		// History re-copy retains formats rather than serializing the stored object.
-		expect(await appClipboard.copyToSystem(appClipboard.current!)).toBe(true);
-		expect(write).toHaveBeenCalledTimes(2);
-		expect(systemText).toBe('Docs & <notes>"');
+		await waitFor(() => expect((dest.ui.getByTestId('fe-paste') as HTMLButtonElement).disabled).toBe(false));
+		await fireEvent.keyDown(dest.root, { key: 'v', ctrlKey: true });
+		await waitFor(() => expect(driver.copy).toHaveBeenCalledTimes(2));
+		// History cannot export folder names either.
+		await appClipboard.copyToSystem(appClipboard.current!);
+		expect(write).not.toHaveBeenCalled();
+		expect(writeText).not.toHaveBeenCalled();
+		expect(systemText).toBe('Existing system clipboard');
+	});
+
+	it('keeps mixed folder/file selections internal and handles native Paste with an empty OS clipboard', async () => {
+		const { write } = imageClipboard();
+		const { driver, entries } = backend();
+		entries.push({ id: 'folder-a', name: 'Docs', parentId: null, kind: 'folder' });
+		const source = await explorer(driver);
+		const dest = await explorer(driver, 'target');
+		await select(source.root, 'folder-a');
+		await fireEvent.click(source.ui.getByTestId('fe-select-multi'));
+		await select(source.root, 'file-1');
+		await fireEvent.click(source.ui.getByTestId('fe-copy'));
+		expect(write).not.toHaveBeenCalled();
+		expect(writeText).not.toHaveBeenCalled();
+		const event = new Event('paste', { bubbles: true, cancelable: true });
+		Object.defineProperty(event, 'clipboardData', { value: {
+			files: { length: 0 }, items: [], getData: () => ''
+		} });
+		dest.root.dispatchEvent(event);
+		await waitFor(() => expect(driver.copy).toHaveBeenCalledTimes(2));
+		expect(driver.copy).toHaveBeenCalledWith('folder-a', 'target');
+		expect(driver.copy).toHaveBeenCalledWith('file-1', 'target');
+		expect(driver.writeFile).not.toHaveBeenCalled();
+		expect(systemText).toBe('');
+	});
+
+	it('keeps folder Cut internal and consumes the move without changing the system clipboard', async () => {
+		const { write } = imageClipboard();
+		await navigator.clipboard.writeText('Existing text');
+		writeText.mockClear();
+		const { driver, entries } = backend();
+		entries.push({ id: 'folder-a', name: 'Docs', parentId: null, kind: 'folder' });
+		const source = await explorer(driver);
+		const dest = await explorer(driver, 'target');
+		await select(source.root, 'folder-a');
+		await fireEvent.click(source.ui.getByTestId('fe-cut'));
+		await fireEvent.keyDown(dest.root, { key: 'v', ctrlKey: true });
+		await waitFor(() => expect(driver.move).toHaveBeenCalledWith('folder-a', 'target'));
+		await waitFor(() => expect(fileClipboardPayload(appClipboard.current?.data)?.ids).toEqual([]));
+		expect(systemText).toBe('Existing text');
+		expect(write).not.toHaveBeenCalled();
+		expect(writeText).not.toHaveBeenCalled();
 	});
 
 	it('uses HTML references across tabs when custom web formats are unsupported', async () => {
