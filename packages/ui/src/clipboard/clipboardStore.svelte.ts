@@ -3,8 +3,10 @@ import type { ClipboardItem } from './types.js';
 
 export const CLIPBOARD_SYNC_STORAGE_KEY = 'sp_clipboard_sync_system';
 const MAX_CLIPBOARD_HISTORY = 20;
+type SystemWriter = () => Promise<void>;
 
 export class ClipboardStore {
+	private systemWriters = new Map<string, SystemWriter>();
 	items = $state<ClipboardItem[]>([]);
 	syncWithSystem = $state<boolean>(false);
 	isReadingSystem = $state<boolean>(false);
@@ -47,7 +49,7 @@ export class ClipboardStore {
 		data: T,
 		textPreview?: string,
 		// Override for an explicit copy or a system read, without changing the saved preference.
-		options?: { syncWithSystem?: boolean }
+		options?: { syncWithSystem?: boolean; systemWriter?: SystemWriter }
 	): Promise<ClipboardItem<T>> {
 		const item: ClipboardItem<T> = {
 			id: 'clip_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6),
@@ -59,6 +61,14 @@ export class ClipboardStore {
 		};
 
 		this.items = [item as ClipboardItem, ...this.items.slice(0, MAX_CLIPBOARD_HISTORY - 1)];
+		if (options?.systemWriter) this.systemWriters.set(item.id, options.systemWriter);
+		for (const id of this.systemWriters.keys()) {
+			if (!this.items.some((entry) => entry.id === id)) this.systemWriters.delete(id);
+		}
+		if ((options?.syncWithSystem ?? this.syncWithSystem) && options?.systemWriter) {
+			await options.systemWriter();
+			return item;
+		}
 
 		if ((options?.syncWithSystem ?? this.syncWithSystem) && typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
 			try {
@@ -157,6 +167,11 @@ export class ClipboardStore {
 	}
 
 	async copyToSystem(item: ClipboardItem): Promise<boolean> {
+		const writer = this.systemWriters.get(item.id);
+		if (writer) {
+			try { await writer(); return true; }
+			catch { return false; }
+		}
 		if (typeof navigator === 'undefined' || !navigator.clipboard?.writeText) return false;
 		try {
 			let text = '';
@@ -175,10 +190,12 @@ export class ClipboardStore {
 	}
 
 	removeItem(id: string) {
+		this.systemWriters.delete(id);
 		this.items = this.items.filter((i) => i.id !== id);
 	}
 
 	clear() {
+		this.systemWriters.clear();
 		this.items = [];
 	}
 }

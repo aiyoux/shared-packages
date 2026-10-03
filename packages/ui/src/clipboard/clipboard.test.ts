@@ -12,6 +12,31 @@ describe('ClipboardStore', () => {
 
 	afterEach(() => vi.unstubAllGlobals());
 
+	it('uses and retains a native writer for system copy instead of serializing the payload', async () => {
+		const writeText = vi.fn(async () => {});
+		vi.stubGlobal('navigator', { clipboard: { writeText } });
+		const writer = vi.fn(async () => {});
+		const pending = store.copy('test/files', 'Folder', { ids: ['folder'] }, 'Folder', {
+			syncWithSystem: true, systemWriter: writer
+		});
+		// Invoke immediately so a native writer retains the triggering gesture.
+		expect(writer).toHaveBeenCalledTimes(1);
+		const item = await pending;
+		await store.copy('text/plain', 'New text', 'new');
+		expect(await store.copyToSystem(item)).toBe(true);
+		expect(writer).toHaveBeenCalledTimes(2);
+		expect(writeText).not.toHaveBeenCalled();
+	});
+
+	it('retains custom writers without syncing on reads and reports native write failures', async () => {
+		const writer = vi.fn(async () => { throw new Error('NotAllowedError'); });
+		const item = await store.copy('test/files', 'Folder', {}, 'Folder', { syncWithSystem: false, systemWriter: writer });
+		expect(writer).not.toHaveBeenCalled();
+		expect(await store.copyToSystem(item)).toBe(false);
+		await expect(store.copy('test/files', 'Folder', {}, 'Folder', { syncWithSystem: true, systemWriter: writer })).rejects.toThrow('NotAllowedError');
+		expect(store.current?.type).toBe('test/files');
+	});
+
 	it('lets explicit file operations sync without changing the global preference', async () => {
 		const writeText = vi.fn(async (_text: string) => {});
 		vi.stubGlobal('navigator', { clipboard: { writeText } });

@@ -117,7 +117,8 @@
 	} from './systemClipboard.js';
 	import {
 		FILE_CLIPBOARD_TYPE, fileClipboardPayload, fileClipboardFromText, fileClipboardFromItems, fileClipboardForPastedImage,
-		fileClipboardLabel, clipboardEntries, sameClipboardSource, rememberClipboardSource, markClipboardFileMoved,
+		fileClipboardFromHtml, fileClipboardFromOwnedText, fileClipboardText, copyFilesToSystem,
+		fileClipboardLabel, clipboardEntries, sameClipboardSource, rememberClipboardSource, clipboardSource, markClipboardFileMoved,
 		type FileClipboardPayload
 	} from './fileClipboard.js';
 	import { copyImageToSystem } from './imageClipboard.js';
@@ -3586,15 +3587,16 @@
 			ids: entries.map((entry) => entry.id), entries: clipboardEntries(entries)
 		};
 		const image = mode === 'copy' && entries.length === 1 && getPreviewKind(entries[0]) === 'image';
-		// Start before any await so remote downloads do not lose browser user activation.
-		const nativeWrite = image ? copyImageToSystem(driver, entries[0], payload) : null;
-		if (nativeWrite) void nativeWrite.catch(() => {});
-		await appClipboard.copy(FILE_CLIPBOARD_TYPE, fileClipboardLabel(payload), payload,
-			undefined, { syncWithSystem: !image });
 		systemClip = null;
-		if (nativeWrite) {
-			try { await nativeWrite; }
-			catch (e) { reportMessage(`Could not copy image to the system clipboard: ${errMsg(e)}`); }
+		// The store starts the native write during the click/keypress and retains it
+		// for the history popup's Copy to system action.
+		const sourceDriver = driver;
+		try {
+			await appClipboard.copy(FILE_CLIPBOARD_TYPE, fileClipboardLabel(payload), payload,
+				fileClipboardText(payload), { syncWithSystem: true, systemWriter: () => image
+					? copyImageToSystem(sourceDriver, entries[0], payload) : copyFilesToSystem(payload) });
+		} catch (e) {
+			reportMessage(`Could not copy ${image ? 'image' : 'files'} to the system clipboard: ${errMsg(e)}`);
 		}
 	}
 
@@ -3622,13 +3624,19 @@
 		if (!current || current.clipboardId !== payload.clipboardId) return;
 		let sync = false;
 		try {
-			const text = await navigator.clipboard.readText();
-			const system = fileClipboardFromText(text);
+			let system = navigator.clipboard.read ? await fileClipboardFromItems(await navigator.clipboard.read()) : null;
+			if (!system && navigator.clipboard.readText) {
+				const text = await navigator.clipboard.readText();
+				system = fileClipboardFromOwnedText(text) ?? fileClipboardFromText(text);
+			}
 			sync = Boolean(system && system.clipboardId === payload.clipboardId);
 		} catch { /* Internal clipboard remains usable without OS read permission. */ }
 		if (clipboard?.clipboardId !== payload.clipboardId) return;
-		await appClipboard.copy(FILE_CLIPBOARD_TYPE, fileClipboardLabel(payload), { ...payload },
-			undefined, { syncWithSystem: sync && payload.ids.length > 0 });
+		try {
+			await appClipboard.copy(FILE_CLIPBOARD_TYPE, fileClipboardLabel(payload), { ...payload },
+				fileClipboardText(payload), { syncWithSystem: sync && payload.ids.length > 0,
+					systemWriter: () => copyFilesToSystem(payload) });
+		} catch { /* A clipboard write failure must not interrupt the remaining file moves. */ }
 		if (sync && !payload.ids.length) {
 			try { await navigator.clipboard.writeText(''); } catch { /* Completed cuts stay consumed internally. */ }
 		}
@@ -3778,11 +3786,13 @@
 				} catch (e) {
 					if (!navigator.clipboard.readText) throw e;
 					text = await navigator.clipboard.readText();
-					next = fileClipboardFromText(text) ? null : payloadFromText(text);
+					files = fileClipboardFromOwnedText(text) ?? fileClipboardFromText(text);
+					next = files ? null : payloadFromText(text);
 				}
 			} else if (navigator.clipboard.readText) {
 				text = await navigator.clipboard.readText();
-				next = fileClipboardFromText(text) ? null : payloadFromText(text);
+				files = fileClipboardFromOwnedText(text) ?? fileClipboardFromText(text);
+				next = files ? null : payloadFromText(text);
 			} else return;
 			// A slow permission prompt must not overwrite a subsequent Copy/Cut.
 			if (appClipboard.current !== previous) return;
@@ -3797,8 +3807,11 @@
 		systemClip = files ? null : next;
 		if (files) {
 			if (JSON.stringify(files) !== JSON.stringify(clipboard)) {
+				const source = sameClipboardSource(files, driver) ? driver : clipboardSource(files);
+				const entry = files.mode === 'copy' && files.ids.length === 1 ? files.entries.find((e) => e.id === files.ids[0]) : null;
 				await appClipboard.copy(FILE_CLIPBOARD_TYPE, fileClipboardLabel(files), files,
-					undefined, { syncWithSystem: false });
+					fileClipboardText(files), { syncWithSystem: false, systemWriter: () => source && entry && getPreviewKind(entry) === 'image'
+						? copyImageToSystem(source, entry, files) : copyFilesToSystem(files) });
 			}
 		} else if (clipboard) {
 			// External clipboard changes replace the active operation; history is not a paste fallback.
@@ -3816,7 +3829,8 @@
 			if (!rootEl?.contains(target) && !(isTarget && target === document.body)) return;
 			if (e.defaultPrevented || !e.clipboardData) return;
 			const text = e.clipboardData.getData('text/plain');
-			let files = fileClipboardFromText(text);
+			let files = fileClipboardFromHtml(e.clipboardData.getData('text/html')) ??
+				fileClipboardFromText(text) ?? fileClipboardFromOwnedText(text);
 			const next = payloadFromDataTransfer(e.clipboardData);
 			e.preventDefault();
 			void (async () => {

@@ -4,7 +4,7 @@ import { appClipboard, persistKv, resetLayoutIdsForTests, toast } from '@shared-
 import FileExplorer from '../src/ui/FileExplorer.svelte';
 import DualPaneExplorer from '../src/ui/DualPaneExplorer.svelte';
 import { defaultFileWindows, saveFileWindows } from '../src/ui/fileWindows.ts';
-import { FILE_CLIPBOARD_TYPE, FILE_CLIPBOARD_WEB_TYPE, fileClipboardPayload } from '../src/ui/fileClipboard.ts';
+import { FILE_CLIPBOARD_TYPE, FILE_CLIPBOARD_WEB_TYPE, fileClipboardPayload, fileClipboardFromHtml } from '../src/ui/fileClipboard.ts';
 import type { ExplorerDriver, ExplorerEntry } from '../src/ui/explorerDriver.ts';
 
 function backend(id = 'test-source') {
@@ -84,13 +84,83 @@ describe('FileExplorer clipboard', () => {
 		const write = vi.fn(async (next: ClipboardItem[]) => {
 			for (const item of next) for (const type of item.types) await item.getType(type);
 			items = next;
+			systemText = next[0]?.types.includes('text/plain') ? await (await next[0].getType('text/plain')).text() : '';
 		});
-		const clipboard = { write, writeText, read: vi.fn(async () => items), readText: vi.fn(async () => systemText) };
+		const clipboard = { write, writeText: async (text: string) => {
+			await writeText(text);
+			items = text ? [new NativeItem({ 'text/plain': new Blob([text], { type: 'text/plain' }) }) as unknown as ClipboardItem] : [];
+		}, read: vi.fn(async () => items), readText: vi.fn(async () => systemText) };
 		vi.stubGlobal('navigator', new Proxy(navigator, {
 			get(target, key) { return key === 'clipboard' ? clipboard : Reflect.get(target, key, target); }
 		}));
 		return { write, setItems: (next: ClipboardItem[]) => { items = next; } };
 	}
+
+	it.each(['local', 'monitor', 'b2'])('copies %s folders with readable text and recovers references on native Paste', async (connection) => {
+		const { write } = imageClipboard();
+		const { driver, entries } = backend(connection);
+		entries.push({ id: 'folder-a', name: 'Docs & <notes>"', parentId: null, kind: 'folder' });
+		const source = await explorer(driver);
+		const dest = await explorer(driver, 'target');
+		await select(source.root, 'folder-a');
+		await fireEvent.click(source.ui.getByTestId('fe-copy'));
+		await waitFor(() => expect(systemText).toBe('Docs & <notes>"'));
+		expect(writeText).not.toHaveBeenCalled();
+		const item = (await navigator.clipboard.read())[0];
+		const html = await (await item.getType('text/html')).text();
+		expect(new DOMParser().parseFromString(html, 'text/html').body.textContent).toBe(systemText);
+		expect(fileClipboardFromHtml(html)?.ids).toEqual(['folder-a']);
+		// Native paste receives HTML metadata even when web custom formats are hidden.
+		appClipboard.clear();
+		const event = new Event('paste', { bubbles: true, cancelable: true });
+		Object.defineProperty(event, 'clipboardData', { value: {
+			files: { length: 0 }, items: [], getData: (type: string) => type === 'text/html' ? html : type === 'text/plain' ? systemText : ''
+		} });
+		dest.root.dispatchEvent(event);
+		await waitFor(() => expect(driver.copy).toHaveBeenCalledWith('folder-a', 'target'));
+		expect(driver.writeFile).not.toHaveBeenCalled();
+		// History re-copy retains formats rather than serializing the stored object.
+		expect(await appClipboard.copyToSystem(appClipboard.current!)).toBe(true);
+		expect(write).toHaveBeenCalledTimes(2);
+		expect(systemText).toBe('Docs & <notes>"');
+	});
+
+	it('uses HTML references across tabs when custom web formats are unsupported', async () => {
+		imageClipboard();
+		vi.spyOn(ClipboardItem, 'supports').mockReturnValue(false);
+		const { driver } = backend();
+		const source = await explorer(driver);
+		const dest = await explorer(driver, 'target');
+		await select(source.root);
+		await fireEvent.click(source.ui.getByTestId('fe-copy'));
+		await waitFor(() => expect(systemText).toBe('one.txt'));
+		expect((await navigator.clipboard.read())[0].types).toEqual(['text/plain', 'text/html']);
+		appClipboard.clear();
+		await fireEvent.click(dest.ui.getByTestId('fe-paste'));
+		await waitFor(() => expect(driver.copy).toHaveBeenCalledWith('file-1', 'target'));
+		expect(driver.writeFile).not.toHaveBeenCalled();
+	});
+
+	it('keeps native clipboard cut metadata synchronized through partial and completed moves', async () => {
+		imageClipboard();
+		const { driver } = backend();
+		const source = await explorer(driver);
+		const dest = await explorer(driver, 'target');
+		await select(source.root);
+		await fireEvent.click(source.ui.getByTestId('fe-select-multi'));
+		await select(source.root, 'file-2');
+		await fireEvent.click(source.ui.getByTestId('fe-cut'));
+		await waitFor(() => expect(systemText).toBe('one.txt\ntwo.txt'));
+		vi.mocked(driver.move!).mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('second failed'));
+		await fireEvent.click(dest.ui.getByTestId('fe-paste'));
+		await waitFor(() => expect(systemText).toBe('two.txt'));
+		expect(fileClipboardFromHtml(await (await (await navigator.clipboard.read())[0].getType('text/html')).text())?.ids).toEqual(['file-2']);
+		await waitFor(() => expect((dest.ui.getByTestId('fe-paste') as HTMLButtonElement).disabled).toBe(false));
+		await fireEvent.click(dest.ui.getByTestId('fe-paste'));
+		await waitFor(() => expect(systemText).toBe(''));
+		expect(await navigator.clipboard.read()).toEqual([]);
+		expect(fileClipboardPayload(appClipboard.current?.data)?.ids).toEqual([]);
+	});
 
 	it.each(['monitor', 'b2'])('copies actual %s image bytes and preserves the original file reference for Paste', async (connection) => {
 		const { write } = imageClipboard();
@@ -205,7 +275,7 @@ describe('FileExplorer clipboard', () => {
 		await fireEvent.click(document.querySelector('[data-testid="fe-file-preview"] [data-testid="fe-row-copy"]')!);
 		await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
 		expect(driver.copy).not.toHaveBeenCalled();
-		expect(JSON.parse(systemText).data.entries[0].name).toBe('one.txt');
+		expect(systemText).toBe('one.txt');
 		await waitFor(() => expect((dest.ui.getByTestId('fe-paste') as HTMLButtonElement).disabled).toBe(false));
 		await fireEvent.click(dest.ui.getByTestId('fe-paste'));
 		await waitFor(() => expect(driver.copy).toHaveBeenCalledTimes(1));
@@ -252,7 +322,7 @@ describe('FileExplorer clipboard', () => {
 		vi.mocked(driver.move!).mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('second failed'));
 		await fireEvent.click(dest.ui.getByTestId('fe-paste'));
 		await waitFor(() => expect(fileClipboardPayload(appClipboard.current?.data)?.ids).toEqual(['file-2']));
-		expect(JSON.parse(systemText).data.ids).toEqual(['file-2']);
+		expect(systemText).toBe('two.txt');
 	});
 
 	it('pastes the latest system text instead of an older copied file', async () => {
@@ -310,7 +380,8 @@ describe('FileExplorer clipboard', () => {
 		await select(source.root);
 		await fireEvent.keyDown(source.root, { key, ctrlKey: true });
 		await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
-		expect(JSON.parse(systemText).data.mode).toBe(key === 'x' ? 'cut' : 'copy');
+		expect(systemText).toBe('one.txt');
+		expect(fileClipboardPayload(appClipboard.current?.data)?.mode).toBe(key === 'x' ? 'cut' : 'copy');
 		const editor = document.createElement('div');
 		editor.setAttribute('contenteditable', 'true');
 		source.root.append(editor);

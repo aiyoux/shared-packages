@@ -2,6 +2,7 @@ import type { ExplorerDriver, ExplorerEntry } from './explorerDriver.js';
 
 export const FILE_CLIPBOARD_TYPE = 'application/x-scratchpad-files';
 export const FILE_CLIPBOARD_WEB_TYPE = `web ${FILE_CLIPBOARD_TYPE}`;
+const FILE_CLIPBOARD_HTML_ATTR = 'data-scratchpad-files';
 
 export type FileClipboardPayload = {
 	mode: 'copy' | 'cut';
@@ -61,12 +62,65 @@ export function fileClipboardFromText(text: string): FileClipboardPayload | null
 	}
 }
 
+/** Text targets get readable names; references belong in a separate clipboard format. */
+export function fileClipboardText(payload: FileClipboardPayload): string {
+	return payload.ids.map((id) => payload.entries.find((entry) => entry.id === id)!.name).join('\n');
+}
+
+export function fileClipboardFromHtml(html: string): FileClipboardPayload | null {
+	if (!html || typeof DOMParser === 'undefined') return null;
+	try {
+		const doc = new DOMParser().parseFromString(html, 'text/html');
+		const encoded = doc.querySelector(`[${FILE_CLIPBOARD_HTML_ATTR}]`)?.getAttribute(FILE_CLIPBOARD_HTML_ATTR);
+		return encoded ? fileClipboardPayload(JSON.parse(decodeURIComponent(encoded))) : null;
+	} catch { return null; }
+}
+
+// Older browsers expose only writeText/readText. Retain only the latest text we
+// successfully wrote, so changing the OS clipboard still replaces the operation.
+let ownedText: { text: string; payload: FileClipboardPayload } | null = null;
+
+export function fileClipboardFromOwnedText(text: string): FileClipboardPayload | null {
+	return text && ownedText?.text === text ? fileClipboardPayload(ownedText.payload) : null;
+}
+
+export async function copyFilesToSystem(payload: FileClipboardPayload): Promise<void> {
+	const files = fileClipboardPayload(payload);
+	if (!files) throw new Error('Invalid file clipboard');
+	const text = fileClipboardText(files);
+	if (navigator.clipboard?.write && typeof ClipboardItem !== 'undefined') {
+		const escaped = text.replace(/[&<>"']/g, (char) => ({
+			'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+		})[char]!);
+		const html = `<span ${FILE_CLIPBOARD_HTML_ATTR}="${encodeURIComponent(JSON.stringify(files))}">${escaped.replace(/\n/g, '<br>')}</span>`;
+		const data: Record<string, Blob> = {
+			'text/plain': new Blob([text], { type: 'text/plain' }),
+			'text/html': new Blob([html], { type: 'text/html' })
+		};
+		if (ClipboardItem.supports?.(FILE_CLIPBOARD_WEB_TYPE)) {
+			data[FILE_CLIPBOARD_WEB_TYPE] = new Blob([JSON.stringify(files)], { type: FILE_CLIPBOARD_TYPE });
+		}
+		await navigator.clipboard.write([new ClipboardItem(data)]);
+		ownedText = null;
+	} else if (navigator.clipboard?.writeText) {
+		await navigator.clipboard.writeText(text);
+		ownedText = { text, payload: files };
+	} else throw new Error('This browser cannot write to the system clipboard');
+}
+
 export async function fileClipboardFromItems(items: ClipboardItems): Promise<FileClipboardPayload | null> {
 	for (const item of items) {
 		if (!item.types.includes(FILE_CLIPBOARD_WEB_TYPE)) continue;
 		try {
 			return fileClipboardPayload(JSON.parse(await (await item.getType(FILE_CLIPBOARD_WEB_TYPE)).text()));
 		} catch { /* Malformed custom data is not a file operation. */ }
+	}
+	for (const item of items) {
+		if (!item.types.includes('text/html')) continue;
+		try {
+			const files = fileClipboardFromHtml(await (await item.getType('text/html')).text());
+			if (files) return files;
+		} catch { /* Keep native text/image paste usable when HTML cannot be read. */ }
 	}
 	return null;
 }
