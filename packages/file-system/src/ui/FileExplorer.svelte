@@ -4,7 +4,7 @@
  let ownerCtx = $state('');
 
  import { beginArchiveOp, reportFileOp as upsertProgress, attachFileOpAbort as attachTransferAbort, abortFileOp as abortTransfer } from '../services/fileOps.js';
-	import { onDestroy, onMount, tick, type Snippet } from 'svelte';
+	import { onDestroy, onMount, tick, untrack, type Snippet } from 'svelte';
 	import FileExplorer from './FileExplorer.svelte';
 	import {
 		getSharedVfs,
@@ -145,6 +145,7 @@
 	import type {
 		ExplorerMode,
 		ExplorerContext,
+		ExplorerViewSettings,
 		ExplorerNewMenuItem,
 		ExplorerPresenceDot,
 		ExplorerPerson,
@@ -163,6 +164,7 @@
 		accept?: FileTypeId[];
 		hideIncompatible?: boolean;
 		initialParentId?: string | null;
+		initialViewSettings?: ExplorerViewSettings;
 		defaultName?: string;
 		multiSelect?: boolean;
 		/** Preferred injection. If omitted, local driver from vfs. */
@@ -329,6 +331,7 @@
 		accept,
 		hideIncompatible = false,
 		initialParentId = null,
+		initialViewSettings,
 		defaultName = '',
 		multiSelect = false,
 		driver: driverProp,
@@ -385,6 +388,9 @@
 		onRevokePerson,
 		onUnlinkPerson
 	}: Props = $props();
+
+	// Initial snapshots seed independent state; later edits stay local to this panel.
+	const initialView = untrack(() => initialViewSettings);
 
 	// Resolve driver once from props (local default). Re-create if prop identity changes via effect below.
 	// svelte-ignore state_referenced_locally -- deliberate: resolve once, then
@@ -467,7 +473,7 @@
 	/** Most recently toggled-on row — Open uses this when several items are selected. */
 	let lastSelectedId = $state<string | null>(null);
 	/** Off: click selects one row. On: click toggles multi-select. */
-	let selectMulti = $state(false);
+	let selectMulti = $state(initialView?.selectMulti ?? false);
 	let previewEntry = $state<ExplorerEntry | null>(null);
 	let mediaMetaOpenId = $state<string | null>(null);
 	let previewBusy = $state(false);
@@ -524,7 +530,7 @@
 	type PreviewDock = 'off' | 'bottom' | 'right';
 	const PREVIEW_DOCK_KEY = 'fe:previewDock';
 	let previewDock = $state<PreviewDock>(
-		(() => {
+		initialView?.previewDock ?? (() => {
 			const v = persistKv.getItem(PREVIEW_DOCK_KEY);
 			if (v === 'bottom' || v === 'right') return v;
 			return 'off';
@@ -534,7 +540,7 @@
 	type TreeDock = 'off' | 'left' | 'top';
 	const TREE_DOCK_KEY = 'fe:treeDock';
 	let treeDock = $state<TreeDock>(
-		(() => {
+		initialView?.treeDock ?? (() => {
 			const v = persistKv.getItem(TREE_DOCK_KEY);
 			if (v === 'left' || v === 'top') return v;
 			return 'off';
@@ -561,8 +567,8 @@
 		}
 		return fallback;
 	}
-	let treeRatio = $state(loadRatio(TREE_RATIO_KEY, TREE_RATIO_DEFAULT));
-	let previewRatio = $state(loadRatio(PREVIEW_RATIO_KEY, PREVIEW_RATIO_DEFAULT));
+	let treeRatio = $state(initialView?.treeRatio ?? loadRatio(TREE_RATIO_KEY, TREE_RATIO_DEFAULT));
+	let previewRatio = $state(initialView?.previewRatio ?? loadRatio(PREVIEW_RATIO_KEY, PREVIEW_RATIO_DEFAULT));
 	function persistRatio(key: string, v: number) {
 		persistKv.setItem(key, String(v));
 	}
@@ -603,19 +609,19 @@
 	const VIEW_MODE_KEY = 'fe:viewMode';
 	const SHOW_PREVIEW_KEY = 'fe:showPreview';
 	let viewMode = $state<ViewMode>(
-		(() => {
+		initialView?.viewMode ?? (() => {
 			const v = persistKv.getItem(VIEW_MODE_KEY);
 			if (v === 'icons' || v === 'detailed') return v;
 			return 'list';
 		})()
 	);
-	let showPreview = $state(persistKv.getItem(SHOW_PREVIEW_KEY) === 'true');
+	let showPreview = $state(initialView?.showPreview ?? (persistKv.getItem(SHOW_PREVIEW_KEY) === 'true'));
 	const ICON_SIZE_KEY = 'fe:iconSize';
 	const ICON_SIZE_MIN = 56;
 	const ICON_SIZE_MAX = 240;
 	const ICON_SIZE_DEFAULT = 96;
 	let iconSize = $state(
-		(() => {
+		initialView?.iconSize ?? (() => {
 			const raw = Number(persistKv.getItem(ICON_SIZE_KEY));
 			if (Number.isFinite(raw) && raw > 0)
 				return Math.min(ICON_SIZE_MAX, Math.max(ICON_SIZE_MIN, Math.round(raw)));
@@ -691,8 +697,8 @@
 		}
 		return null;
 	}
-	let detailColOrder = $state<DetailCol[]>(loadColumns().order);
-	let hiddenCols = $state<DetailCol[]>(loadColumns().hidden);
+	let detailColOrder = $state<DetailCol[]>(initialView ? [...initialView.detailColOrder] : loadColumns().order);
+	let hiddenCols = $state<DetailCol[]>(initialView ? [...initialView.hiddenCols] : loadColumns().hidden);
 	/** Columns shown in the detailed header, in display order. */
 	const detailCols = $derived(detailColOrder.filter((c) => !hiddenCols.includes(c)));
 	/** Fixed cell widths shared by the header buttons and the data cells. */
@@ -719,14 +725,14 @@
 		detailColOrder = next;
 		persistColumns();
 	}
-	let foldersFirst = $state(persistKv.getItem(FOLDERS_FIRST_KEY) !== 'false');
+	let foldersFirst = $state(initialView?.foldersFirst ?? (persistKv.getItem(FOLDERS_FIRST_KEY) !== 'false'));
 	function setFoldersFirst(v: boolean) {
 		foldersFirst = v;
 		persistKv.setItem(FOLDERS_FIRST_KEY, v ? 'true' : 'false');
 	}
 	const FOLDER_STACKS_KEY = 'fe:folderStacks';
 	/** Icons view: folder icons show a deck of thumbnails from inside. */
-	let folderStacks = $state(persistKv.getItem(FOLDER_STACKS_KEY) !== 'false');
+	let folderStacks = $state(initialView?.folderStacks ?? (persistKv.getItem(FOLDER_STACKS_KEY) !== 'false'));
 	function setFolderStacks(v: boolean) {
 		folderStacks = v;
 		persistKv.setItem(FOLDER_STACKS_KEY, v ? 'true' : 'false');
@@ -736,13 +742,15 @@
 
 	const HIDDEN_FILES_KEY = 'fe:showHidden';
 	/** Leading-dot ("system") names are hidden until the user asks to see them. */
-	let showHidden = $state(persistKv.getItem(HIDDEN_FILES_KEY) === 'true');
+	let showHidden = $state(initialView?.showHidden ?? (persistKv.getItem(HIDDEN_FILES_KEY) === 'true'));
 	function setShowHidden(v: boolean) {
 		showHidden = v;
 		persistKv.setItem(HIDDEN_FILES_KEY, v ? 'true' : 'false');
 	}
 	const hiddenFilesTip = $derived(showHidden ? 'Hide system files' : 'Show system files');
-	let sortSpec = $state<{ col: SortCol; dir: SortDir } | null>(loadSort());
+	let sortSpec = $state<{ col: SortCol; dir: SortDir } | null>(
+		initialView ? initialView.sortSpec && { ...initialView.sortSpec } : loadSort()
+	);
 	/** Active sort — set from the detailed headings or the list/icons popup tools. */
 	const activeSort = $derived(sortSpec);
 	const sortDir = $derived(sortSpec?.dir ?? 'asc');
@@ -1055,14 +1063,20 @@
 	$effect(() => {
 		const ids = [...selected].sort().join(',');
 		const stamp = nodes.map((n) => `${n.id}:${n.name}:${n.kind}:${n.size ?? ''}`).join('\n');
-		const key = `${driver.id}|${parentId ?? ''}|${ids}|${stamp}`;
+		const viewSettings: ExplorerViewSettings = {
+			viewMode, showPreview, iconSize, previewDock, treeDock, previewRatio, treeRatio,
+			detailColOrder: [...detailColOrder], hiddenCols: [...hiddenCols],
+			sortSpec: sortSpec && { ...sortSpec }, foldersFirst, folderStacks, showHidden, selectMulti
+		};
+		const key = `${driver.id}|${parentId ?? ''}|${ids}|${stamp}|${JSON.stringify(viewSettings)}`;
 		if (key === lastCtxKey) return;
 		lastCtxKey = key;
 		onContextChange?.({
 			parentId,
 			selectedIds: [...selected],
 			backend: driver.id,
-			entries: nodes
+			entries: nodes,
+			viewSettings
 		});
 	});
 

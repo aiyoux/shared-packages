@@ -3,7 +3,7 @@
  * Run: npm run test:component -w @shared-packages/file-system
  */
 import { describe, it, expect, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/svelte';
+import { render, screen, fireEvent, within } from '@testing-library/svelte';
 import DualPaneExplorer from '../src/ui/DualPaneExplorer.svelte';
 import { createLocalExplorerDriver } from '../src/ui/localExplorerDriver.ts';
 import type { OpenProjectContext } from '../src/ui/explorerDriver.ts';
@@ -11,6 +11,8 @@ import { createVfs, resetSharedVfsForTests, type VfsService } from '../src/index
 import { getMemoryVfs, resetMemoryVfsForTests } from '../src/memoryVfs.ts';
 import { createLeaf, persistKv, resetLayoutIdsForTests } from '@shared-packages/ui';
 import { FE_EXPLORER_IDS_MIME } from '../src/ui/copyAcross.ts';
+import { defaultFileWindows, saveFileWindows } from '../src/ui/fileWindows.ts';
+import type { ExplorerViewSettings } from '../src/ui/componentTypes.ts';
 
 describe('DualPaneExplorer onOpenProject context', () => {
 	let vfs: VfsService;
@@ -337,6 +339,99 @@ describe('DualPaneExplorer onOpenProject context', () => {
 			() => document.querySelectorAll('[data-testid="files-window-leaf"]').length === 3
 		);
 		expect(screen.queryByTestId('files-window-edit')).toBeNull();
+	});
+
+	it('quick split copies the live folder, view and docks independently of global defaults', async () => {
+		const folder = await vfs.mkdir(null, 'Working folder');
+		await vfs.writeFile({ parentId: folder.id, name: 'inside.txt', body: 'hi' });
+		await vfs.writeFile({ parentId: folder.id, name: '.hidden.txt', body: 'hidden' });
+		const viewSettings: ExplorerViewSettings = {
+			viewMode: 'detailed', showPreview: true, iconSize: 160,
+			previewDock: 'right', treeDock: 'top', previewRatio: 0.46, treeRatio: 0.28,
+			detailColOrder: ['modified', 'size', 'type'], hiddenCols: ['type'],
+			sortSpec: { col: 'size', dir: 'desc' }, foldersFirst: false,
+			folderStacks: false, showHidden: true, selectMulti: true
+		};
+		const key = `dpe:split-view:${Math.random()}`;
+		const windows = defaultFileWindows();
+		windows.left.ctx = { ...windows.left.ctx, parentId: folder.id, viewSettings };
+		saveFileWindows(key, { root: createLeaf('left'), windows, focusedId: 'left', targetPaneId: 'left' });
+		const props = { localDriver: createLocalExplorerDriver(vfs), dualPaneKey: key };
+		const first = render(DualPaneExplorer, { props });
+		await viWaitFor(() => document.querySelector('[data-name=".hidden.txt"]') != null);
+		const source = document.querySelector('[data-pane="left"] [data-testid="file-explorer"]') as HTMLElement;
+		// Another panel changed the global defaults; split must still use this panel's snapshot.
+		persistKv.setItem('fe:viewMode', 'list');
+		persistKv.setItem('fe:previewDock', 'off');
+		persistKv.setItem('fe:treeDock', 'off');
+		persistKv.setItem('fe:iconSize', '64');
+		persistKv.setItem('fe:columns', JSON.stringify({ order: ['size', 'type', 'modified'], hidden: [] }));
+		await fireEvent.click(screen.getByTestId('fe-split-btn'));
+		await viWaitFor(() => document.querySelectorAll('[data-testid="file-explorer"]').length === 2);
+		const copy = [...document.querySelectorAll('[data-testid="file-explorer"]')].find((el) => el !== source) as HTMLElement;
+		await viWaitFor(() => copy.querySelector('[data-name="inside.txt"]') != null);
+		for (const attribute of ['data-fe-backend', 'data-fe-view-mode', 'data-fe-show-preview', 'data-fe-select-multi',
+			'data-fe-tree-dock', 'data-fe-preview-dock', 'style']) {
+			expect(copy.getAttribute(attribute)).toBe(source.getAttribute(attribute));
+		}
+		expect(copy.querySelector('[data-name=".hidden.txt"]')).toBeTruthy();
+		expect(copy.querySelector('[data-testid="fe-list"]')?.getAttribute('data-fe-icon-size')).toBe('160');
+		expect(copy.querySelector('aside[data-testid="fe-tree-dock"]')?.getAttribute('style')).toBe(
+			source.querySelector('aside[data-testid="fe-tree-dock"]')?.getAttribute('style')
+		);
+		expect(copy.querySelector('[data-testid="fe-list-head"]')?.textContent).toBe(
+			source.querySelector('[data-testid="fe-list-head"]')?.textContent
+		);
+		const copyId = copy.closest('.files-pane')!.getAttribute('data-pane')!;
+		await viWaitFor(() => JSON.parse(persistKv.getItem(key)!).windows[copyId]?.viewSettings != null);
+		expect(JSON.parse(persistKv.getItem(key)!).windows[copyId].viewSettings).toEqual(viewSettings);
+		expect(JSON.parse(persistKv.getItem(key)!).windows[copyId].parentId).toBe(folder.id);
+		await fireEvent.click(within(copy).getByTestId('fe-view-switcher-btn'));
+		await fireEvent.click(within(copy).getByTestId('fe-view-icons'));
+		expect(copy.getAttribute('data-fe-view-mode')).toBe('icons');
+		expect(source.getAttribute('data-fe-view-mode')).toBe('detailed');
+		await viWaitFor(() => JSON.parse(persistKv.getItem(key)!).windows[copyId]?.viewSettings.viewMode === 'icons');
+		// Keep the clone at root to also exercise restoration without a folder ID.
+		await fireEvent.click(within(copy).getByTestId('fe-crumb-root'));
+		await viWaitFor(() => JSON.parse(persistKv.getItem(key)!).windows[copyId]?.parentId === null);
+		first.unmount();
+		persistKv.setItem('fe:viewMode', 'list');
+		render(DualPaneExplorer, { props });
+		await viWaitFor(() => document.querySelectorAll('[data-name="inside.txt"]').length === 1
+			&& document.querySelector(`[data-pane="${copyId}"] [data-name="Working folder"]`) != null);
+		expect(document.querySelector('[data-pane="left"] [data-testid="file-explorer"]')?.getAttribute('data-fe-view-mode')).toBe('detailed');
+		expect(document.querySelector(`[data-pane="${copyId}"] [data-testid="file-explorer"]`)?.getAttribute('data-fe-view-mode')).toBe('icons');
+	});
+
+	it('quick split stays on the in-memory connection', async () => {
+		resetMemoryVfsForTests();
+		render(DualPaneExplorer, { props: {
+			localDriver: createLocalExplorerDriver(vfs), dualPaneKey: `dpe:split-memory:${Math.random()}`
+		} });
+		await viWaitFor(() => document.querySelector('[data-testid="conn-trigger"]') != null);
+		await switchPaneToMemory('left');
+		await fireEvent.click(screen.getByTestId('fe-split-btn'));
+		await viWaitFor(() => document.querySelectorAll('[data-testid="file-explorer"][data-fe-backend="memory"]').length === 2);
+		expect(document.querySelectorAll('[data-testid="file-explorer"][data-fe-backend="local"]')).toHaveLength(0);
+	});
+
+	it('quick split preserves an overridden peer connection and folder', async () => {
+		const peerFolder = await vfs.mkdir(null, 'Peer folder');
+		await vfs.writeFile({ parentId: peerFolder.id, name: 'peer-file.txt', body: 'peer' });
+		const peerDriver = { ...createLocalExplorerDriver(vfs), id: 'peer-fs', connectionId: 'peer-test' };
+		const key = `dpe:split-peer:${Math.random()}`;
+		const windows = defaultFileWindows();
+		windows.right.ctx.parentId = peerFolder.id;
+		saveFileWindows(key, {
+			root: createLeaf('right'), windows, focusedId: 'right', targetPaneId: 'right'
+		});
+		render(DualPaneExplorer, { props: {
+			localDriver: createLocalExplorerDriver(vfs), overrideRight: { driver: peerDriver, label: 'Peer' }, dualPaneKey: key
+		} });
+		await viWaitFor(() => document.querySelector('[data-name="peer-file.txt"]') != null);
+		await fireEvent.click(screen.getByTestId('fe-split-btn'));
+		await viWaitFor(() => document.querySelectorAll('[data-name="peer-file.txt"]').length === 2);
+		expect(document.querySelectorAll('[data-testid="file-explorer"][data-fe-backend="peer-fs"]')).toHaveLength(2);
 	});
 
 	it('a refresh reopens the same plain folder on the same connection', async () => {

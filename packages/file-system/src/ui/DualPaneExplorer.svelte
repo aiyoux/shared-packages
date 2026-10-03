@@ -65,7 +65,6 @@
 		leafCount,
 		listLeaves,
 		portalToPaneWindowHeader,
-		splitAppWindow,
 		splitLeaf,
 		syncLayoutIdSeq,
 		type LayoutNode,
@@ -74,6 +73,7 @@
 	} from '@shared-packages/ui';
 	import {
 		buildFileWindowRoles,
+		cloneFileWindow,
 		createFileWindowRoot,
 		defaultFileWindows,
 		emptyFileContext,
@@ -136,6 +136,8 @@
 		type ConnectionKind
 	} from '../b2/index.js';
 	import RemoteConnectionsDialog from './RemoteConnectionsDialog.svelte';
+	import { retainB2Driver } from '../b2/b2DriverCache.js';
+	import { retainMonitorDriver } from '../monitor/monitorDriverCache.js';
 	import {
 		MonitorConnectionForm,
 		acquireMonitorDriver,
@@ -579,7 +581,7 @@
 	}
 
 	function paneOpenProjectContext(id: PaneId): OpenProjectContext {
-		if (id === 'right' && overrideRight) return { kind: 'peer' };
+		if (isPeerPane(id)) return { kind: 'peer' };
 		const p = paneState(id);
 		if (p.activeKind !== 'monitor') return { kind: p.activeKind };
 		const profile = monitorProfiles.find((pr) => pr.id === p.activeId);
@@ -614,7 +616,7 @@
 			| undefined
 	) {
 		if (!fn) return undefined;
-		if (id === 'right' && overrideRight) return undefined;
+		if (isPeerPane(id)) return undefined;
 		return (rootId: ExplorerEntryId | null) =>
 			fn({
 				rootId,
@@ -632,7 +634,7 @@
 	}
 
 	function paneAllowsLocalNew(id: PaneId): boolean {
-		if (id === 'right' && overrideRight) return false;
+		if (isPeerPane(id)) return false;
 		return paneState(id).activeKind === 'local';
 	}
 
@@ -707,8 +709,12 @@
 		if (message) toast.error(message);
 	}
 
+	function isPeerPane(id: PaneId | undefined): boolean {
+		return Boolean(overrideRight && (id === 'right' || (id && windows[id]?.role === 'peer')));
+	}
+
 	function activeDriver(p: PaneState, id?: PaneId): ExplorerDriver {
-		if (id === 'right' && overrideRight) return overrideRight.driver;
+		if (isPeerPane(id)) return overrideRight!.driver;
 		if (p.activeKind === 'memory') return p.memoryDriver ?? getMemoryDriver();
 		if (p.activeKind !== 'local' && p.remoteDriver) return p.remoteDriver;
 		return localDriver;
@@ -750,12 +756,12 @@
 
 	function paneConnDot(id: PaneId): ConnDotInfo | null {
 		const p = paneState(id);
-		if (id === 'right' && overrideRight) {
+		if (isPeerPane(id)) {
 			return {
 				wrapTestId: 'peer-fs-badge',
 				status: 'connected',
 				title: 'Peer filesystem',
-				lines: [`Their · ${overrideRight.label}`]
+				lines: [`Their · ${overrideRight!.label}`]
 			};
 		}
 		if (p.busy) {
@@ -833,12 +839,12 @@
 			syncLayoutIdSeq(saved.root);
 			windowRoot = saved.root;
 			if (Object.keys(saved.windows).length > 0) {
-				// Each pane stores the folder it had open. Panes that did not
-				// change connection keys (local ones) keep their pre-restore
-				// FileExplorer mount, so bump the key to open the saved folder.
+				// Local panes keep their pre-restore mount unless its key changes.
+				// Remount to apply the saved folder and view, including at root.
 				const restored: Record<string, PaneState> = {};
 				for (const [id, w] of Object.entries(saved.windows)) {
-					restored[id] = w.ctx.parentId ? { ...w, explorerKey: w.explorerKey + 1 } : w;
+					restored[id] = w.ctx.parentId || w.ctx.viewSettings
+						? { ...w, explorerKey: w.explorerKey + 1 } : w;
 				}
 				windows = restored;
 			}
@@ -917,29 +923,29 @@
 		}
 	}
 
-	/**
-	 * Quick split — the header's third window button. Splits the focused inner
-	 * window in place (split right) and gives the new leaf an inherited role,
-	 * with no trip through the edit overlay. Mirrors AppWindows `splitAt`
-	 * against the same manager primitive.
-	 */
+	/** Split the focused panel with its live connection, folder, and view snapshot. */
 	function quickSplitWindow() {
 		const leaves = listLeaves(windowRoot);
-		const leafId = windows[focusedId] ? focusedId : leaves[leaves.length - 1]?.id;
+		const leafId = leaves.some((leaf) => leaf.id === focusedId)
+			? focusedId : leaves[leaves.length - 1]?.id;
 		if (!leafId) return;
-		const next = splitAppWindow(
-			windowRoot,
-			windows,
-			leafId,
-			'row',
-			availableRoleDefs,
-			inherit,
-			new Set(availableRoleDefs.map((r) => r.id))
-		);
-		if (!next) return;
-		windowRoot = next.root;
-		windows = next.windows;
-		focusedId = next.newId;
+		const source = paneState(leafId);
+		const split = splitLeaf(windowRoot, leafId, 'row');
+		if (!split) return;
+		const copy = cloneFileWindow(source);
+		if (isPeerPane(leafId)) {
+			copy.role = 'peer';
+			copy.activeId = 'peer';
+			copy.remoteDriver = overrideRight!.driver;
+		} else if (source.activeKind === 'b2') {
+			retainB2Driver(source.activeId);
+		} else if (source.activeKind === 'monitor') {
+			retainMonitorDriver(source.activeId);
+		}
+		windowRoot = split.root;
+		windows = { ...windows, [split.newLeaf.id]: copy };
+		focusedId = split.newLeaf.id;
+		targetPaneId = split.newLeaf.id;
 		windowEditOpen = false;
 		windowSliceOpen = false;
 	}
@@ -1225,7 +1231,7 @@
 
 	function favouriteConnection(id: PaneId): { kind: FolderFavourite['kind']; connectionId: string; diskRoot?: DiskDirHandle } | null {
 		const p = paneState(id);
-		if (p.activeKind === 'memory' || (id === 'right' && overrideRight)) return null;
+		if (p.activeKind === 'memory' || isPeerPane(id)) return null;
 		if (p.activeKind === 'disk') {
 			const connectionId = activeDriver(p, id).connectionId;
 			const root = connectionId ? diskRoots.get(connectionId) : undefined;
@@ -1667,7 +1673,7 @@
 		const p = paneState(id);
 		const drv = activeDriver(p, id);
 		const kind =
-			id === 'right' && overrideRight ? overrideRight.driver.id : p.activeKind;
+			isPeerPane(id) ? overrideRight!.driver.id : p.activeKind;
 		return {
 			side: id === 'left' ? 'Left' : id === 'right' ? 'Right' : id,
 			label: paneConnectionLabel(id),
@@ -1680,7 +1686,7 @@
 
 	function paneConnectionLabel(id: PaneId): string {
 		const p = paneState(id);
-		if (id === 'right' && overrideRight) return overrideRight.label;
+		if (isPeerPane(id)) return overrideRight!.label;
 		if (p.activeKind === 'memory') return 'In memory';
 		if (p.activeKind === 'disk') return p.diskName ? `This computer · ${p.diskName}` : 'This computer';
 		if (p.activeKind === 'local') return 'Browser files';
@@ -2159,8 +2165,8 @@
 			</div>
 		{/if}
 		<div class="pane-explorer" data-testid={hostTid}>
-			{#key `${id}-${p.explorerKey}-${p.activeKind}-${p.activeId}-${id === 'right' && overrideRight ? `peer:${overrideRight.label}` : ''}`}
-				{#if id === 'right' && overrideRight}
+			{#key `${id}-${p.explorerKey}-${p.activeKind}-${p.activeId}-${isPeerPane(id) ? `peer:${overrideRight!.label}` : ''}`}
+				{#if isPeerPane(id)}
 					<FileExplorer
 						mode={explorerMode}
 						{accept}
@@ -2168,9 +2174,10 @@
 						{openLabel}
 						variant="panel"
 						{onClose}
-						driver={overrideRight.driver}
+						driver={overrideRight!.driver}
 						showPersistence={hideToggles}
 						initialParentId={p.ctx.parentId}
+						initialViewSettings={p.ctx.viewSettings}
 						onOpen={paneOnOpen('peer')}
 						onOpenProject={paneOpenProject(id)}
 						onProjectMap={paneProjectMap(id)}
@@ -2235,6 +2242,7 @@
 						driver={localDriver}
 						showPersistence={hideToggles}
 						initialParentId={p.ctx.parentId}
+						initialViewSettings={p.ctx.viewSettings}
 						onOpen={paneFileOpen(id)}
 						onOpenProject={paneOpenProject(id)}
 						onInitProject={paneInitProject(id)}
@@ -2310,6 +2318,7 @@
 						driver={drv}
 						showPersistence={hideToggles}
 						initialParentId={p.ctx.parentId}
+						initialViewSettings={p.ctx.viewSettings}
 						onOpen={paneFileOpen(id) ?? paneOnOpen(p.activeKind)}
 						onOpenProject={paneOpenProject(id)}
 						onProjectMap={paneProjectMap(id)}
@@ -2406,7 +2415,7 @@
 {/snippet}
 
 {#snippet paneConn(id: PaneId)}
-	{@const showSwitcher = paneShowsSwitcher(id) && !(id === 'right' && overrideRight)}
+	{@const showSwitcher = paneShowsSwitcher(id) && !isPeerPane(id)}
 	{@const showStatus = paneConnDot(id) != null}
 	{#if showSwitcher || showStatus}
 		<div

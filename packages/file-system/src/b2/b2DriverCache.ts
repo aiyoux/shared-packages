@@ -121,3 +121,11 @@ export function releaseB2Driver(profileId: string | null | undefined): void {
 	e.refs = Math.max(0, e.refs - 1);
 	if (e.refs === 0) scheduleDispose(profileId);
 }
+
+/** A split panel takes another reference to the already-connected driver. */
+export function retainB2Driver(profileId: string): void {
+	const entry = cache.get(profileId);
+	if (!entry?.driver) return;
+	cancelDispose(entry);
+	entry.refs += 1;
+}

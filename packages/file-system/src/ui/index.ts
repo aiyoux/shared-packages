@@ -15,6 +15,7 @@ export {
 export type {
 	ExplorerMode,
 	ExplorerContext,
+	ExplorerViewSettings,
 	ExplorerNewMenuItem,
 	ExplorerPresenceDot,
 	ExplorerArrivalPolicy,

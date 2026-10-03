@@ -9,7 +9,7 @@ import {
 import { persistKv } from '@shared-packages/ui/persistKv';
 import type { LayoutNode, SplitDirection, AppWindowRoleDef } from '@shared-packages/ui';
 import type { ExplorerDriver } from './explorerDriver.js';
-import type { ExplorerContext } from './componentTypes.js';
+import type { ExplorerContext, ExplorerViewSettings } from './componentTypes.js';
 import type { ConnectionKind } from './connectionInfo.js';
 import type { B2ConnectionRow } from '../b2/types.js';
 import type { MonitorConnectionProfileV1 } from '../monitor/types.js';
@@ -68,6 +68,21 @@ export function createFileWindowRoot(singleOrDual: boolean | LayoutNode = false)
 		return split?.root ?? root;
 	}
 	return createLeaf('left');
+}
+
+/** Copy a panel without sharing mutable view preferences or selection. */
+export function cloneFileWindow(source: FileWindowState): FileWindowState {
+	const view = source.ctx.viewSettings;
+	return {
+		...source, busy: false, error: '', showB2Form: false, showMonitorForm: false, explorerKey: 0,
+		ctx: {
+			...source.ctx, selectedIds: [], entries: [...source.ctx.entries],
+			viewSettings: view && {
+				...view, detailColOrder: [...view.detailColOrder], hiddenCols: [...view.hiddenCols],
+				sortSpec: view.sortSpec && { ...view.sortSpec }
+			}
+		}
+	};
 }
 
 export function defaultFileWindows(
@@ -133,14 +148,15 @@ export function saveFileWindows(
 	try {
 		const serializedWindows: Record<
 			string,
-			{ role: string; activeId: string; activeKind: ConnectionKind; parentId: string | null }
+			{ role: string; activeId: string; activeKind: ConnectionKind; parentId: string | null; viewSettings?: ExplorerViewSettings }
 		> = {};
 		for (const [id, w] of Object.entries(data.windows)) {
 			serializedWindows[id] = {
 				role: w.role,
 				activeId: w.activeId,
 				activeKind: w.activeKind,
-				parentId: w.ctx.parentId ?? null
+				parentId: w.ctx.parentId ?? null,
+				viewSettings: w.ctx.viewSettings
 			};
 		}
 		persistKv.setItem(
@@ -192,6 +208,7 @@ export function loadFileWindows(
 						activeId?: string;
 						activeKind?: ConnectionKind;
 						parentId?: string | null;
+						viewSettings?: ExplorerViewSettings;
 					}
 				>
 			)) {
@@ -202,6 +219,7 @@ export function loadFileWindows(
 				// key is bumped after restore so the first listing lands here.
 				state.ctx = emptyFileContext(state.activeKind);
 				state.ctx.parentId = w.parentId ?? null;
+				state.ctx.viewSettings = w.viewSettings;
 				windows[id] = state;
 			}
 		}
@@ -215,4 +233,3 @@ export function loadFileWindows(
 		return null;
 	}
 }
-

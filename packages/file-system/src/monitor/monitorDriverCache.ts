@@ -168,3 +168,11 @@ export function releaseMonitorDriver(profileId: string): void {
 	e.refs = Math.max(0, e.refs - 1);
 	if (e.refs === 0) scheduleDispose(profileId);
 }
+
+/** Keep a connected driver alive independently for the newly split panel. */
+export function retainMonitorDriver(profileId: string): void {
+	const entry = cache.get(profileId);
+	if (!entry?.driver) return;
+	cancelDispose(entry);
+	entry.refs += 1;
+}

@@ -21,6 +21,25 @@ export type ExplorerContext = {
 	selectedIds: string[];
 	backend: string;
 	entries: ExplorerEntry[];
+	viewSettings?: ExplorerViewSettings;
+};
+
+/** Live per-panel settings, copied when splitting and restored with its folder. */
+export type ExplorerViewSettings = {
+	viewMode: 'list' | 'icons' | 'detailed';
+	showPreview: boolean;
+	iconSize: number;
+	previewDock: 'off' | 'bottom' | 'right';
+	treeDock: 'off' | 'left' | 'top';
+	previewRatio: number;
+	treeRatio: number;
+	detailColOrder: Array<'size' | 'type' | 'modified'>;
+	hiddenCols: Array<'size' | 'type' | 'modified'>;
+	sortSpec: { col: 'name' | 'size' | 'type' | 'modified'; dir: 'asc' | 'desc' } | null;
+	foldersFirst: boolean;
+	folderStacks: boolean;
+	showHidden: boolean;
+	selectMulti: boolean;
 };
 
 export type RemoteKind = 'b2' | 'monitor';
