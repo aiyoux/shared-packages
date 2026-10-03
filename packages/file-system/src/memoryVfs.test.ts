@@ -196,3 +196,48 @@ describe('MemoryVfs fail-closed flat list', () => {
 		expect(node.kind).toBe('file');
 	});
 });
+describe('MemoryVfs: an open document hears changes made through another handle', () => {
+	beforeEach(() => {
+		clearAllMemoryVfsForTests();
+	});
+
+	/** Wait for the watcher's async re-read to report. */
+	const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
+
+	it('a content write reaches a clean handle as the new generation', async () => {
+		const vfs = createMemoryVfs();
+		const node = await vfs.writeFile({ parentId: null, name: 'a.txt', body: 'one' });
+		const doc = await vfs.openDocument(node.id);
+		const heard: unknown[] = [];
+		doc.subscribe((event) => heard.push(event));
+		const written = await vfs.updateFile(node.id, 'two', { expectedGeneration: node.generation });
+		await settle();
+		expect(heard).toContainEqual({ type: 'content', generation: written.generation, conflict: false });
+		expect(doc.generation).toBe(written.generation);
+		doc.close();
+	});
+
+	it('a rename reaches the handle as a path change', async () => {
+		const vfs = createMemoryVfs();
+		const node = await vfs.writeFile({ parentId: null, name: 'a.txt', body: 'one' });
+		const doc = await vfs.openDocument(node.id);
+		const names: string[] = [];
+		doc.subscribe((event) => {
+			if (event.type === 'path') names.push(event.name);
+		});
+		await vfs.rename(node.id, 'b.txt');
+		await settle();
+		expect(names).toEqual(['b.txt']);
+		doc.close();
+	});
+
+	it('a node read before a write keeps what it read', async () => {
+		const vfs = createMemoryVfs();
+		const node = await vfs.writeFile({ parentId: null, name: 'a.txt', body: 'one' });
+		const before = await vfs.get(node.id);
+		await vfs.updateFile(node.id, 'two', { expectedGeneration: node.generation });
+		await vfs.rename(node.id, 'b.txt');
+		expect(before).toMatchObject({ name: 'a.txt', generation: node.generation });
+		expect(await vfs.get(node.id)).toMatchObject({ name: 'b.txt', generation: node.generation + 1 });
+	});
+});

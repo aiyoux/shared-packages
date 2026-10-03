@@ -228,15 +228,21 @@ export class MemoryVfsService {
 				/* ignore */
 			}
 		}
-		node.blobId = blobId;
-		node.size = bytes.byteLength;
-		node.contentType = contentType;
-		node.updatedAt = Date.now();
-		node.generation += 1;
-		if (opts.meta !== undefined) node.meta = opts.meta;
-		getState().nodes.set(id, node);
+		// A new node, never the stored one changed: a node already handed out
+		// (a watcher's last snapshot, say) must keep what it read, or the
+		// watcher sees no change, as it would on the IndexedDB VFS.
+		const next: MemoryVfsNode = {
+			...node,
+			blobId,
+			size: bytes.byteLength,
+			contentType,
+			updatedAt: Date.now(),
+			generation: node.generation + 1,
+			...(opts.meta !== undefined ? { meta: opts.meta } : {})
+		};
+		getState().nodes.set(id, next);
 		emitMemoryChange();
-		return node;
+		return next;
 	}
 
 	async readBytes(id: string): Promise<Uint8Array> {
@@ -268,11 +274,10 @@ export class MemoryVfsService {
 			finalName = forceExtension(finalName, node.fileType);
 		}
 		finalName = ensureUnique(finalName, id);
-		node.name = finalName;
-		node.updatedAt = Date.now();
-		getState().nodes.set(id, node);
+		const next: MemoryVfsNode = { ...node, name: finalName, updatedAt: Date.now() };
+		getState().nodes.set(id, next);
 		emitMemoryChange();
-		return node;
+		return next;
 	}
 
 	/** Hard delete a file and its blob. No trash/restore in the flat model. */
