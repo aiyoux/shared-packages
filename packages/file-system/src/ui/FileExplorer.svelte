@@ -4183,31 +4183,33 @@
 					</button>
 					{#each breadcrumbs as crumb (crumb.id)}
 						<span class="fe-sep">/</span>
-						<button
-							type="button"
-							class="fe-crumb"
-							class:drop-target={dropChromeActive && dndIntoId === crumb.id}
-							data-testid="fe-crumb"
-							data-id={crumb.id}
-							data-fe-drop-parent={crumb.id}
-							onclick={() => goCrumb(crumb.id)}
-							ondragover={(e) => onNavDragOver(e, crumb.id)}
-							ondrop={(e) => onNavDrop(e, crumb.id)}
-						>
-							{crumb.name}
-						</button>
+						<span class="fe-crumb-item">
+							<button
+								type="button"
+								class="fe-crumb"
+								class:drop-target={dropChromeActive && dndIntoId === crumb.id}
+								data-testid="fe-crumb"
+								data-id={crumb.id}
+								data-fe-drop-parent={crumb.id}
+								onclick={() => goCrumb(crumb.id)}
+								ondragover={(e) => onNavDragOver(e, crumb.id)}
+								ondrop={(e) => onNavDrop(e, crumb.id)}
+							>
+								{crumb.name}
+							</button>
+							{#if onToggleFolderFavourite && currentFavouriteFolder?.id === crumb.id}
+								<FeTipIconBtn
+									testid="fe-favourite-folder" icon="star"
+									tip={isFolderFavourite?.(crumb.id) ? 'Remove folder from favourites' : 'Add folder to favourites'}
+									active={isFolderFavourite?.(crumb.id)}
+									pressed={isFolderFavourite?.(crumb.id) ?? false}
+									disabled={listBusy}
+									onclick={() => onToggleFolderFavourite?.(crumb)}
+								/>
+							{/if}
+						</span>
 					{/each}
 				</nav>
-				{#if onToggleFolderFavourite && currentFavouriteFolder}
-					<FeTipIconBtn
-						testid="fe-favourite-folder" icon="star"
-						tip={isFolderFavourite?.(currentFavouriteFolder.id) ? 'Remove folder from favourites' : 'Add folder to favourites'}
-						active={isFolderFavourite?.(currentFavouriteFolder.id)}
-						pressed={isFolderFavourite?.(currentFavouriteFolder.id) ?? false}
-						disabled={listBusy}
-						onclick={() => onToggleFolderFavourite?.(currentFavouriteFolder!)}
-					/>
-				{/if}
 			{/if}
 			{#if isInsideProject || isGitEnabled}
 				<div class="fe-folder-badges" data-testid="fe-folder-badges">
@@ -6344,6 +6346,15 @@
 		padding: 2px var(--space-1);
 		font: inherit;
 		border-radius: var(--radius-sm, 3px);
+	}
+	.fe-crumb-item {
+		display: inline-flex;
+		align-items: center;
+		gap: 4px;
+		min-width: 0;
+	}
+	.fe-crumb-item :global(.fe-tip) {
+		flex-shrink: 0;
 	}
 	.fe-pathbar.drop-ready .fe-crumb {
 		outline: 1px dashed color-mix(in srgb, var(--accent, #38bdf8) 55%, transparent);
