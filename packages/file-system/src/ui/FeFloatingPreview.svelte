@@ -79,19 +79,79 @@
 	let pdfFallbackUrl = $state<string | null>(null);
 
 	let metaOpen = $state(false);
+	let bodyEl = $state<HTMLDivElement | null>(null);
+	/** Popover origin, in pixels, over the image or video box. */
+	let metaAnchor = $state<{ top: number; left: number; maxWidth: number; maxHeight: number } | null>(null);
 	let folderMeasure = $state<FolderMeasure | null>(null);
 	let folderMeasureBusy = $state(false);
 	let folderMeasureError = $state('');
 	let measureAbort: AbortController | null = null;
 
 	function entryHasMediaMeta(): boolean {
-		const k = kind;
-		if (k === 'video') return true;
-		return (
-			k === 'image' &&
-			(entry.name.toLowerCase().endsWith('.gif') || entry.contentType === 'image/gif')
-		);
+		return kind === 'video' || kind === 'image';
 	}
+
+	// Keep the metadata card on the picture. The stage is often taller than the
+	// fitted image or video, so a card pinned to the stage sits in the gap above it.
+	$effect(() => {
+		const stage = bodyEl;
+		const open = metaOpen && !multi && mediaMeta != null && entryHasMediaMeta();
+		const entryId = entry?.id;
+		if (!stage || !open || !entryId) {
+			metaAnchor = null;
+			return;
+		}
+		let mediaRo: ResizeObserver | null = null;
+		let watching: Element | null = null;
+		const place = () => {
+			const media = stage.querySelector('video.fe-float-video, img.fe-float-image');
+			if (media !== watching) {
+				mediaRo?.disconnect();
+				mediaRo = null;
+				watching = media;
+				if (media && typeof ResizeObserver !== 'undefined') {
+					mediaRo = new ResizeObserver(() => place());
+					mediaRo.observe(media);
+				}
+			}
+			if (!media) {
+				if (untrack(() => metaAnchor) !== null) metaAnchor = null;
+				return;
+			}
+			const sr = stage.getBoundingClientRect();
+			const mr = media.getBoundingClientRect();
+			if (mr.width < 2 || mr.height < 2 || sr.width < 2) return;
+			const controlRoom = media.tagName === 'VIDEO' ? 48 : 0;
+			const top = Math.round(Math.max(8, mr.top - sr.top + 8));
+			const left = Math.round(Math.max(8, mr.left - sr.left + 8));
+			const maxWidth = Math.round(Math.max(96, Math.min(mr.width - 16, sr.width - left - 8)));
+			const spare = mr.height - 16 - controlRoom;
+			const maxHeight = Math.round(
+				Math.max(48, Math.min(spare >= 48 ? spare : mr.height - 16, sr.height - top - 8))
+			);
+			const prev = untrack(() => metaAnchor);
+			if (
+				prev &&
+				prev.top === top &&
+				prev.left === left &&
+				prev.maxWidth === maxWidth &&
+				prev.maxHeight === maxHeight
+			) {
+				return;
+			}
+			metaAnchor = { top, left, maxWidth, maxHeight };
+		};
+		place();
+		const stageRo = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(() => place()) : null;
+		stageRo?.observe(stage);
+		const mo = new MutationObserver(() => place());
+		mo.observe(stage, { subtree: true, attributes: true, attributeFilter: ['style', 'class'] });
+		return () => {
+			stageRo?.disconnect();
+			mediaRo?.disconnect();
+			mo.disconnect();
+		};
+	});
 
 	// PDF page state
 	let pdfPageCount = $state(0);
@@ -443,6 +503,7 @@
 					type="button"
 					class="fe-float-meta-toggle"
 					aria-pressed={metaOpen}
+					aria-expanded={metaOpen}
 					data-testid="fe-float-meta-toggle"
 					onclick={() => (metaOpen = !metaOpen)}
 				>
@@ -500,12 +561,15 @@
 					{/if}
 				</dl>
 			</div>
-		{:else if !multi && metaOpen && mediaMeta && entryHasMediaMeta()}
-			<div class="fe-float-media-meta" data-testid="fe-float-meta">
-				{@render mediaMeta({ entry, load: () => readExplorerBlob(driver, entry.id) })}
-			</div>
 		{/if}
-		<div class="fe-float-body" class:text={!multi && kind === 'text'} class:image={!multi && kind === 'image' && !!blobUrl} class:folder={!multi && entryKind === 'folder'}>
+		<div
+			class="fe-float-body"
+			bind:this={bodyEl}
+			class:text={!multi && kind === 'text'}
+			class:image={!multi && kind === 'image' && !!blobUrl}
+			class:video={!multi && kind === 'video' && !!blobUrl}
+			class:folder={!multi && entryKind === 'folder'}
+		>
 			{#if multi}
 				<ul class="fe-float-items" data-testid="fe-file-preview-items">
 					{#each entries as n (n.id)}
@@ -589,6 +653,21 @@
 			{:else}
 				<div class="fe-float-fallback" data-testid="fe-float-fallback">
 					<FeIcon name={entry.kind === 'folder' ? 'folder' : 'file'} size={48} />
+				</div>
+			{/if}
+			{#if !multi && metaOpen && mediaMeta && entryHasMediaMeta()}
+				<div
+					class="fe-float-meta-popover"
+					data-testid="fe-float-meta"
+					role="region"
+					aria-label="Metadata"
+					style:top={metaAnchor ? `${metaAnchor.top}px` : null}
+					style:left={metaAnchor ? `${metaAnchor.left}px` : null}
+					style:max-width={metaAnchor ? `${metaAnchor.maxWidth}px` : null}
+					style:max-height={metaAnchor ? `${metaAnchor.maxHeight}px` : null}
+					style:visibility={metaAnchor ? null : 'hidden'}
+				>
+					{@render mediaMeta({ entry, load: () => readExplorerBlob(driver, entry.id) })}
 				</div>
 			{/if}
 		</div>
@@ -769,12 +848,25 @@
 			justify-content: center;
 		}
 		.fe-float-body {
+		position: relative;
 		flex: 1;
 		min-height: 0;
 		overflow: auto;
 		display: flex;
 		align-items: center;
 		justify-content: center;
+	}
+	.fe-float-meta-popover {
+		position: absolute;
+		z-index: 4;
+		top: 8px;
+		left: 8px;
+		width: min(22rem, calc(100% - 16px));
+		max-height: calc(100% - 16px);
+		overflow: auto;
+		background: var(--surface-2);
+		border: 1px solid var(--line-hairline);
+		border-radius: 6px;
 	}
 	.fe-float-body.text,
 	.fe-float-body.image,
@@ -871,7 +963,8 @@
 		margin: 0;
 		color: var(--text-primary);
 	}
-	.fe-float-body.image {
+	.fe-float-body.image,
+	.fe-float-body.video {
 		overflow: hidden;
 	}
 	.fe-float-body :global(.pz-root) {

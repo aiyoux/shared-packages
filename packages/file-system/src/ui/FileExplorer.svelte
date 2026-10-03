@@ -906,11 +906,7 @@
 	function entryHasMediaMeta(entry: ExplorerEntry): boolean {
 		if (entry.kind !== 'file') return false;
 		const kind = getPreviewKind(entry);
-		if (kind === 'video') return true;
-		return (
-			kind === 'image' &&
-			(entry.name.toLowerCase().endsWith('.gif') || entry.contentType === 'image/gif')
-		);
+		return kind === 'video' || kind === 'image';
 	}
 
 	async function loadMediaBlob(entry: ExplorerEntry): Promise<Blob> {

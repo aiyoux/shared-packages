@@ -7,7 +7,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/svelte';
 import { createRawSnippet } from 'svelte';
 import FeFloatingPreview from '../src/ui/FeFloatingPreview.svelte';
-import type { ExplorerDriver, ExplorerEntry } from '../src/ui/explorerDriver.ts';
+import type { ExplorerDriver, ExplorerEntry, MediaMetaTarget } from '../src/ui/explorerDriver.ts';
 
 vi.mock('../src/ui/feThumbnails.js', async (importOriginal) => {
 	const actual = await importOriginal<typeof import('../src/ui/feThumbnails.js')>();
@@ -339,6 +339,9 @@ describe('FeFloatingPreview', () => {
 
 		await fireEvent.click(screen.getByTestId('fe-float-meta-toggle'));
 		expect(screen.getByTestId('fe-float-meta-toggle').textContent).toBe('Hide metadata');
+		const folderMeta = screen.getByTestId('fe-folder-meta');
+		expect(folderMeta.closest('.fe-float-body')).toBeNull();
+		expect(folderMeta.closest('.fe-float-meta-popover')).toBeNull();
 		await waitFor(() => expect(screen.getByTestId('fe-folder-meta-items').textContent).toBe('2'));
 		expect(screen.getByTestId('fe-folder-meta-folders').textContent).toBe('1');
 		expect(screen.getByTestId('fe-folder-meta-files').textContent).toBe('1');
@@ -374,6 +377,62 @@ describe('FeFloatingPreview', () => {
 		});
 		expect(await screen.findByText('Preview not available for this file type')).toBeTruthy();
 		expect(screen.queryByTestId('fe-folder-preview')).toBeNull();
+	});
+
+	it.each([
+		['image', { id: 'pic-1', kind: 'file' as const, name: 'pic.png', parentId: null, contentType: 'image/png', size: 8 }],
+		['video', { id: 'vid-1', kind: 'file' as const, name: 'clip.webm', parentId: null, contentType: 'video/webm', size: 8 }]
+	])('lays %s metadata over the preview stage', async (_label, entry) => {
+		const mediaMeta = createRawSnippet<[MediaMetaTarget]>((getTarget) => ({
+			render: () => `<p data-testid="fe-meta-probe">${getTarget().entry.name}</p>`
+		}));
+		render(FeFloatingPreview, {
+			props: {
+				entry,
+				driver: driverWith(new Blob(['bytes'])),
+				onClose: () => {},
+				mediaMeta
+			}
+		});
+		const toggle = screen.getByTestId('fe-float-meta-toggle');
+		expect(toggle.getAttribute('aria-expanded')).toBe('false');
+		expect(screen.queryByTestId('fe-float-meta')).toBeNull();
+		await fireEvent.click(toggle);
+		const pop = screen.getByTestId('fe-float-meta');
+		expect(pop.classList.contains('fe-float-meta-popover')).toBe(true);
+		expect(pop.parentElement?.classList.contains('fe-float-body')).toBe(true);
+		expect(pop.getAttribute('role')).toBe('region');
+		expect(screen.getByTestId('fe-meta-probe').textContent).toBe(entry.name);
+		expect(toggle.getAttribute('aria-expanded')).toBe('true');
+		expect(getComputedStyle(pop).position).toBe('absolute');
+		await fireEvent.click(toggle);
+		expect(screen.queryByTestId('fe-float-meta')).toBeNull();
+	});
+
+	it('hides the metadata button when the host does not provide a panel', () => {
+		render(FeFloatingPreview, {
+			props: {
+				entry: { id: 'pic-2', kind: 'file', name: 'pic.png', parentId: null, contentType: 'image/png', size: 8 },
+				driver: driverWith(new Blob(['bytes'])),
+				onClose: () => {}
+			}
+		});
+		expect(screen.queryByTestId('fe-float-meta-toggle')).toBeNull();
+	});
+
+	it('does not offer media metadata for audio', () => {
+		const mediaMeta = createRawSnippet<[MediaMetaTarget]>(() => ({
+			render: () => '<p data-testid="fe-meta-probe">nope</p>'
+		}));
+		render(FeFloatingPreview, {
+			props: {
+				entry: { id: 'aud-1', kind: 'file', name: 'song.mp3', parentId: null, contentType: 'audio/mpeg', size: 8 },
+				driver: driverWith(new Blob(['bytes'])),
+				onClose: () => {},
+				mediaMeta
+			}
+		});
+		expect(screen.queryByTestId('fe-float-meta-toggle')).toBeNull();
 	});
 
 	it('falls back to an iframe when PDF rendering throws', async () => {

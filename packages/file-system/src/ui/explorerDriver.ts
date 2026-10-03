@@ -41,7 +41,7 @@ export type QuickEditVideoContext = QuickEditFileContext;
 /** Read the previewed audio and write a sibling file on the same backend. */
 export type QuickEditAudioContext = QuickEditFileContext;
 
-/** Host-provided media metadata panel target (video / GIF preview). */
+/** Host-provided media metadata panel target (still image, video, or GIF preview). */
 export type MediaMetaTarget = {
 	entry: ExplorerEntry;
 	/** Resolve the file's bytes on demand (only called while shown). */
