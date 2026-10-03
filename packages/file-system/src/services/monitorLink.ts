@@ -4,21 +4,23 @@ import { serviceContextId } from '../leaseOwner.js';
 import { createMonitorClient, type MonitorCapabilities, type MonitorHostSnapshot, type MonitorTransport } from '../monitor/client.js';
 import { createMonitorWatchStream, type MonitorWatchFsEvent, type MonitorWatchStream, type WatchFolderListener } from '../monitor/watchStream.js';
 import { createMonitorJobsClient, type MonitorJob } from '../monitor/jobs.js';
+import { openJsonSse } from '../monitor/sse.js';
 import type { WatchStreamStatus } from '../monitor/watchStream.js';
 import type { MonitorConnectionProfileV1 } from '../monitor/types.js';
 import { opsService, type OpKindId, type OpsService, type OpRecord } from './ops.js';
 import { connectionsService } from './connections.js';
 import { serviceNames } from './names.js';
 
-export type MonitorLinkStatus = { state: 'connecting' | 'reachable' | 'unreachable'; reason?: string; jobs: boolean; watchStatus?: WatchStreamStatus; ownerCtx?: string; version?: string; capabilities?: MonitorCapabilities };
+export type MonitorLinkStatus = { state: 'connecting' | 'reachable' | 'unreachable'; reason?: string; jobs: boolean; watchStatus?: WatchStreamStatus; ownerCtx?: string; version?: string; capabilities?: MonitorCapabilities; features?: string[] };
 export type MonitorLinkFrame =
  | { kind: 'hello' }
  | { kind: 'retry' }
- | { kind: 'subscriptions'; paths: string[]; host: boolean }
+ | { kind: 'subscriptions'; paths: string[]; host: boolean; terminalProfile?: boolean }
  | { kind: 'status'; term: number; status: MonitorLinkStatus }
  | { kind: 'folder'; term: number; path: string; events?: MonitorWatchFsEvent[] }
  | { kind: 'host'; term: number; snapshot: MonitorHostSnapshot }
- | { kind: 'job'; term: number; job: MonitorJob };
+ | { kind: 'job'; term: number; job: MonitorJob }
+ | { kind: 'terminalProfile'; term: number; rev: number };
 
 /** One elected tab owns the profile's streams; subscriptions remain in callers. */
 export function createMonitorLink(options: {
@@ -27,15 +29,23 @@ export function createMonitorLink(options: {
  onJob: (job: MonitorJob) => void; createWatch?: typeof createMonitorWatchStream;
  /** Leader only: a job the daemon no longer lists (landed, reaped). */
  onJobRemoved?: (id: string) => void;
+ /** Leader only: the terminal feature's profile rev stream (tests inject it). */
+ openTerminalProfileEvents?: (onRev: (rev: number) => void) => Promise<{ abort: () => void; closed: Promise<unknown> }>;
 }) {
  const { bus, election, transport } = options;
  const folders = new Map<string, Set<WatchFolderListener>>();
  const hostListeners = new Set<(snapshot: MonitorHostSnapshot) => void>();
- const remote = new Map<string, { paths: string[]; host: boolean }>();
+ const terminalProfileListeners = new Set<(rev: number) => void>();
+ const remote = new Map<string, { paths: string[]; host: boolean; terminalProfile?: boolean }>();
  const subscriptions = new Map<string, () => void>();
  const changes = new Set<() => void>();
  const knownJobs = new Map<string, MonitorJob>();
  let lastHost: MonitorHostSnapshot | undefined;
+ let lastTerminalRev: number | undefined;
+ let terminalProfile: { abort: () => void } | undefined;
+ let terminalProfileStarting = false;
+ let terminalProfileRetry: ReturnType<typeof setTimeout> | undefined;
+ let terminalProfileAttempts = 0;
  let status: MonitorLinkStatus = { state: 'connecting', jobs: false };
  let watch: MonitorWatchStream | undefined;
  let host: { abort: () => void } | undefined;
@@ -45,19 +55,22 @@ export function createMonitorLink(options: {
  let disposed = false;
  let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
  let reconnectAttempts = 0;
- const own = () => ({ paths: [...folders.keys()], host: hostListeners.size > 0 });
+ const own = () => ({ paths: [...folders.keys()], host: hostListeners.size > 0, terminalProfile: terminalProfileListeners.size > 0 });
  const notify = () => { for (const fn of changes) fn(); };
  function sendOwn() { remote.set(options.ctx, own()); bus.broadcast({ kind: 'subscriptions', ...own() }); reconcile(); }
  function publish(frame: MonitorLinkFrame) { bus.broadcast(frame); }
  function setStatus(next: MonitorLinkStatus) { status = next; notify(); if (election.isLeader) publish({ kind: 'status', term: election.term, status }); }
  function folderEvent(path: string, events?: MonitorWatchFsEvent[]) { for (const fn of folders.get(path) ?? []) fn(events); }
  function hostEvent(snapshot: MonitorHostSnapshot) { lastHost = snapshot; for (const fn of hostListeners) fn(snapshot); }
+ function terminalProfileEvent(rev: number) { lastTerminalRev = rev; for (const fn of terminalProfileListeners) fn(rev); }
+ function stopTerminalProfile() { if (terminalProfileRetry) clearTimeout(terminalProfileRetry); terminalProfileRetry = undefined; terminalProfile?.abort(); terminalProfile = undefined; terminalProfileStarting = false; }
  function stopStreams() {
   if (reconnectTimer) clearTimeout(reconnectTimer); reconnectTimer = undefined;
   controller?.abort(); controller = undefined;
   watch?.stop(); watch = undefined;
   for (const stop of subscriptions.values()) stop(); subscriptions.clear();
   host?.abort(); host = undefined; hostStarting = false; activeTerm = 0;
+  stopTerminalProfile(); terminalProfileAttempts = 0;
  }
  function streamFailed(error: unknown, ctl: AbortController) {
   if (ctl.signal.aborted || controller !== ctl) return;
@@ -83,6 +96,32 @@ export function createMonitorLink(options: {
     if (ctl.signal.aborted || election.term !== term || ![...remote.values()].some((row) => row.host)) stream.abort(); else host = stream;
    }).catch((error) => streamFailed(error, ctl)).finally(() => { if (controller === ctl) hostStarting = false; });
   }
+  // The profile stream is optional: an older daemon has no terminal feature,
+  // and a failure here retries quietly instead of calling the monitor down.
+  const wantTerminal = [...remote.values()].some((row) => row.terminalProfile) && status.features?.includes('terminal') === true;
+  if (!wantTerminal) stopTerminalProfile();
+  else if (!terminalProfile && !terminalProfileStarting && !terminalProfileRetry) {
+   terminalProfileStarting = true;
+   const onRev = (rev: number) => { if (ctl.signal.aborted || election.term !== term) return; terminalProfileAttempts = 0; terminalProfileEvent(rev); publish({ kind: 'terminalProfile', term, rev }); };
+   const retry = () => {
+    if (ctl.signal.aborted || controller !== ctl || terminalProfileRetry) return;
+    terminalProfile = undefined; terminalProfileStarting = false;
+    const delay = Math.min(1000 * 2 ** terminalProfileAttempts++, 30_000);
+    terminalProfileRetry = setTimeout(() => { terminalProfileRetry = undefined; reconcile(); }, delay);
+   };
+   void openTerminalProfile(onRev).then((stream) => {
+    if (ctl.signal.aborted || election.term !== term) { stream.abort(); return; }
+    terminalProfile = stream; terminalProfileStarting = false;
+    void stream.closed.then(() => { if (terminalProfile === stream) retry(); });
+   }).catch(() => { if (controller === ctl) retry(); });
+  }
+ }
+ function openTerminalProfile(onRev: (rev: number) => void) {
+  if (options.openTerminalProfileEvents) return options.openTerminalProfileEvents(onRev);
+  let closed!: (reason: unknown) => void;
+  const done = new Promise<unknown>((resolve) => { closed = resolve; });
+  return openJsonSse({ url: `${options.profile.baseUrl.replace(/\/+$/, '')}/v1/terminal/profile/events`, onEvent(event, data) { const rev = (data as { rev?: unknown })?.rev; if (event === 'terminal.profile' && typeof rev === 'number') onRev(rev); }, onClose: closed })
+   .then((stream) => ({ abort: stream.abort, closed: done }));
  }
  function leadership() {
   if (disposed) return;
@@ -98,7 +137,7 @@ export function createMonitorLink(options: {
     const meta = await transport.meta();
     if (ctl.signal.aborted) return;
     const supported = meta.capabilities?.jobs === true;
-    setStatus({ state: 'reachable', jobs: supported, watchStatus: status.watchStatus, ownerCtx: options.ctx, version: meta.version, capabilities: meta.capabilities });
+    setStatus({ state: 'reachable', jobs: supported, watchStatus: status.watchStatus, ownerCtx: options.ctx, version: meta.version, capabilities: meta.capabilities, features: meta.features });
     // Files watches remain independent of the jobs feed.
     reconcile();
     if (supported) {
@@ -114,13 +153,14 @@ export function createMonitorLink(options: {
  const stopBus = bus.onMessage((frame, sender) => {
   if (frame.kind === 'hello') {
    sendOwn();
-   if (election.isLeader) { publish({ kind: 'status', term: election.term, status }); for (const job of knownJobs.values()) publish({ kind: 'job', term: election.term, job }); if (lastHost) publish({ kind: 'host', term: election.term, snapshot: lastHost }); }
+   if (election.isLeader) { publish({ kind: 'status', term: election.term, status }); for (const job of knownJobs.values()) publish({ kind: 'job', term: election.term, job }); if (lastHost) publish({ kind: 'host', term: election.term, snapshot: lastHost }); if (lastTerminalRev !== undefined) publish({ kind: 'terminalProfile', term: election.term, rev: lastTerminalRev }); }
   } else if (frame.kind === 'retry') { reconnectAttempts = 0; if (election.isLeader) { stopStreams(); leadership(); } }
   else if (frame.kind === 'subscriptions') { remote.set(sender, frame); reconcile(); }
   else if (election.leader?.term === frame.term && election.leader.tabId === sender) {
    if (frame.kind === 'status') { status = frame.status; notify(); }
    else if (frame.kind === 'folder') folderEvent(frame.path, frame.events);
    else if (frame.kind === 'host') hostEvent(frame.snapshot);
+   else if (frame.kind === 'terminalProfile') terminalProfileEvent(frame.rev);
    else { knownJobs.set(frame.job.id, frame.job); options.onJob(frame.job); }
   }
  });
@@ -132,6 +172,8 @@ export function createMonitorLink(options: {
   subscribe(fn: () => void) { changes.add(fn); return () => { changes.delete(fn); }; },
   watchFolder(path: string, listener: WatchFolderListener) { let rows = folders.get(path); if (!rows) folders.set(path, rows = new Set()); rows.add(listener); sendOwn(); return () => { rows!.delete(listener); if (!rows!.size) folders.delete(path); sendOwn(); }; },
   subscribeHost(listener: (snapshot: MonitorHostSnapshot) => void) { hostListeners.add(listener); if (lastHost) listener(lastHost); sendOwn(); return () => { hostListeners.delete(listener); sendOwn(); }; },
+  /** The terminal app's shared profile changed on the daemon (`rev` only; re-read it). Needs the `terminal` feature. */
+  subscribeTerminalProfile(listener: (rev: number) => void) { terminalProfileListeners.add(listener); if (lastTerminalRev !== undefined) listener(lastTerminalRev); sendOwn(); return () => { terminalProfileListeners.delete(listener); sendOwn(); }; },
   retry() { reconnectAttempts = 0; if (election.isLeader) { stopStreams(); leadership(); } else { bus.broadcast({ kind: 'retry' }); election.resumeAcquire(); } },
   takeOwnership() { election.takeOver(); },
   dispose() { disposed = true; stopStreams(); stopElection(); stopBus(); stopGone(); changes.clear(); bus.destroy(); election.destroy(); }

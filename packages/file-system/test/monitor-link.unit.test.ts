@@ -110,3 +110,47 @@ it('a relay job ends its face link when the far device has gone', async () => {
 	assert.equal(relayJobEnded(relay('aborted')), true);
 	assert.equal(relayJobEnded({ ...relay('done'), kind: 'copy' }), false);
 });
+
+it('ten tabs share one terminal profile stream, only when the daemon has the feature, and a failure is not an outage', async () => {
+ const bus = channel(); const elected = elections();
+ let features = ['terminal']; let opens = 0; let fail = true;
+ const emitters: ((rev: number) => void)[] = []; const closers: (() => void)[] = [];
+ const transport = { meta: async () => ({ capabilities: { jobs: false }, features }) } as unknown as MonitorTransport;
+ const jobs = { events: async () => ({ abort() {} }), list: async () => [], abort: async () => {}, landed: async () => {} };
+ const openTerminalProfileEvents = async (onRev: (rev: number) => void) => {
+  opens++;
+  if (fail) { fail = false; throw new Error('404'); }
+  let close!: () => void; const closed = new Promise<unknown>((resolve) => { close = () => resolve(undefined); });
+  emitters.push(onRev); closers.push(close);
+  return { abort() {}, closed };
+ };
+ const ids = Array.from({ length: 10 }, (_, i) => (i === 0 ? 'a' : `tab-${i}`));
+ const links = ids.map((ctx) => createMonitorLink({ ctx, profile, bus: bus(ctx), election: elected.forTab(ctx), transport, jobs, onJob() {}, openTerminalProfileEvents }));
+ try {
+  await drain();
+  assert.equal(opens, 0, 'nobody asked yet');
+  const seen = links.map(() => [] as number[]);
+  const stops = links.map((link, i) => link.subscribeTerminalProfile((rev) => seen[i].push(rev)));
+  await drain();
+  assert.equal(opens, 1);
+  assert.equal(links[5].status().state, 'reachable', 'a missing profile stream does not mark the monitor unreachable');
+  await new Promise((resolve) => setTimeout(resolve, 1050)); await drain();
+  assert.equal(opens, 2, 'retried quietly');
+  emitters.at(-1)!(7); await drain();
+  for (const revs of seen) assert.deepEqual(revs, [7]);
+  // A late subscriber gets the last rev straight away.
+  let late: number | undefined; const stopLate = links[3].subscribeTerminalProfile((rev) => { late = rev; });
+  assert.equal(late, 7); stopLate();
+  // The daemon closing the stream reopens it.
+  closers.at(-1)!(); await new Promise((resolve) => setTimeout(resolve, 1050)); await drain();
+  assert.equal(opens, 3);
+  for (const stop of stops) stop();
+  await drain();
+ } finally { for (const link of links) link.dispose(); }
+
+ // A daemon without the feature never gets the request.
+ features = []; opens = 0; fail = false;
+ const bus2 = channel(); const elected2 = elections();
+ const solo = createMonitorLink({ ctx: 'a', profile, bus: bus2('a'), election: elected2.forTab('a'), transport, jobs, onJob() {}, openTerminalProfileEvents });
+ try { solo.subscribeTerminalProfile(() => {}); await drain(); assert.equal(opens, 0); } finally { solo.dispose(); }
+});
