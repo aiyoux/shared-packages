@@ -17,6 +17,13 @@ export type OrderedFrameRuntimeOpts<
 	localApplied?: boolean;
 	onRepair(): void;
 	onApplied?: (frame: F) => void;
+	/**
+	 * A replica now follows a different sequencer than it did: the last one's
+	 * tab died, or froze and was taken over. Called after that sequencer's
+	 * snapshot is applied. Frames sent to the old one and never numbered are
+	 * the caller's to send again; not called for the first sequencer followed.
+	 */
+	onSequencerChange?: () => void;
 };
 export type OrderedFrameRuntime<F> = {
 	readonly ready: boolean;
@@ -82,6 +89,7 @@ export function createFrameRuntime<F extends LogFrame & { sequencer?: string }>(
 		receive(frame) {
 			if (closed) return;
 			const snapshot = opts.isSnapshot(frame);
+			let changed = false;
 			if (opts.role === 'replica') {
 				// Ignore submissions between replicas in sequenced mode; Creative's
 				// optimistic mode detects an unnumbered frame as a bypass needing repair.
@@ -93,6 +101,7 @@ export function createFrameRuntime<F extends LogFrame & { sequencer?: string }>(
 					}
 					log.reset(0);
 					awaiting.clear();
+					changed = following !== undefined;
 					following = frame.sequencer;
 				}
 				// An echo is still part of the ordered stream. It must not skip edits
@@ -123,6 +132,7 @@ export function createFrameRuntime<F extends LogFrame & { sequencer?: string }>(
 			if (decision.action === 'applied') {
 				if (decision.broadcast)
 					opts.send({ ...decision.broadcast, sequencer: instance });
+				if (changed) opts.onSequencerChange?.();
 			}
 		},
 		close() {

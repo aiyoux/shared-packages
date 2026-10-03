@@ -213,6 +213,48 @@ describe('session engine: tabs', () => {
 	});
 });
 
+describe("session engine: the sequencer's tab dies with an edit unanswered", () => {
+	/** A leads; B is next in the lock's queue, C after it. */
+	async function three() {
+		const { tab } = browser();
+		const a = open(tab, 'r', { items: ['x'] });
+		await settle();
+		const b = open(tab, 'r');
+		await settle();
+		const c = open(tab, 'r');
+		await settle();
+		expect([a.role, b.role, c.role]).toEqual(['leader', 'follower', 'follower']);
+		return { a, b, c };
+	}
+
+	it('the tab that takes over sends its own again', async () => {
+		const { a, b, c } = await three();
+		void b.commit({ add: 'b' });
+		// Gone in the same turn: before the bus delivers the edit to it.
+		a.destroy();
+		await settle();
+		expect(b.role).toBe('leader');
+		expect(items(b)).toEqual(['b', 'x']);
+		expect(items(c)).toEqual(['b', 'x']);
+	});
+
+	it('a tab that stays a follower sends its own to the new sequencer', async () => {
+		const { a, b, c } = await three();
+		void c.commit({ add: 'c' });
+		a.destroy();
+		await settle();
+		expect(b.role).toBe('leader');
+		expect(c.role).toBe('follower');
+		expect(items(b)).toEqual(['c', 'x']);
+		expect(items(c)).toEqual(['c', 'x']);
+		// Once only: later edits number after it, nothing lands twice.
+		await c.commit({ add: 'd' });
+		await settle();
+		expect(items(b)).toEqual(['c', 'd', 'x']);
+		expect(items(c)).toEqual(items(b));
+	});
+});
+
 describe('session engine: peers', () => {
 	/**
 	 * Device A (host) with tabs A1 (holds the call) and A2; device B (guest)

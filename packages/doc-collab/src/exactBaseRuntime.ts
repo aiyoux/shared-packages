@@ -2,7 +2,8 @@ import type { CollabRole, CollabTransport } from './docRuntime.js';
 
 /** Wire vocabulary belongs to the codec; admission and recovery belong here. */
 export type ExactBaseEvent<Doc, Op> =
-	| { kind: 'hello'; clientId: string }
+	/** `sequencer`: an authority announcing itself; its numbering starts again. */
+	| { kind: 'hello'; clientId: string; sequencer?: boolean }
 	| {
 			kind: 'ops';
 			documentId: string;
@@ -13,7 +14,8 @@ export type ExactBaseEvent<Doc, Op> =
 	  }
 	| { kind: 'snapshot'; documentId: string; seq: number; doc: Doc }
 	| { kind: 'ack'; submissionId: string; seq: number }
-	| { kind: 'nack'; headSeq: number }
+	/** `submissionId`, when the wire names it: a nack of any other is stale. */
+	| { kind: 'nack'; headSeq: number; submissionId?: string }
 	| { kind: 'read-only' }
 	| { kind: 'resync'; documentId: string; replace: boolean };
 
@@ -42,6 +44,15 @@ export type ExactBaseRuntimeOpts<Doc, Op, Frame> = {
 		replace(doc: Doc): Frame;
 	} | null;
 	canSubmit?: () => boolean;
+	/**
+	 * The document after `ops`, as the authority reduces it, and document
+	 * equality. Together they let a replica keep what it shows across a new
+	 * authority (`adopt`); without them that authority's snapshot replaces it.
+	 */
+	reduce?: (doc: Doc, ops: Op[]) => Doc;
+	sameDoc?: (a: Doc, b: Doc) => boolean;
+	/** Submissions an earlier runtime of this session never had confirmed. */
+	carried?: Op[][];
 	onStatus?: (readOnly: boolean) => void;
 	onFrame?: (frame: Frame) => void;
 	onHello?: () => void;
@@ -51,6 +62,8 @@ export type ExactBaseRuntime<Doc, Op> = {
 	readonly ready: boolean;
 	readonly role: CollabRole;
 	submit(ops: Op[]): void;
+	/** This replica's submissions not yet confirmed, oldest first. Answers after `close`. */
+	pending(): Op[][];
 	replaceDocument(doc: Doc): void;
 	close(): void;
 };
@@ -67,8 +80,20 @@ export function createExactBaseRuntime<Doc, Op, Frame>(
 	let localSeq = 0;
 	let nackHead: number | null = null;
 	let latestSnapshot: { seq: number; doc: Doc } | null = null;
+	/** The id `queue[0]` went out under, until it is answered. */
 	let inFlight: string | null = null;
-	const outbox: Op[][] = [];
+	/**
+	 * This replica's submissions the authority has not confirmed, oldest first.
+	 * An authority applies its own at once, so it holds none.
+	 */
+	const queue: Op[][] = authority ? [] : [...(opts.carried ?? [])];
+	/**
+	 * Another authority said hello: the one this replica followed is gone (its
+	 * tab died, froze and was taken over, or rebuilt for a new member) and the
+	 * new one numbers from its own head. Nothing is sent until its snapshot is
+	 * reconciled with this page (`adopt`).
+	 */
+	let rejoining = false;
 	const held: { seq: number; ops: Op[] }[] = [];
 	const send = (frame: Frame) => {
 		if (!closed) transport.send(frame);
@@ -87,17 +112,21 @@ export function createExactBaseRuntime<Doc, Op, Frame>(
 			closed ||
 			readOnly ||
 			!joined ||
+			rejoining ||
 			inFlight
 		)
 			return;
-		const ops = outbox.shift();
+		const ops = queue[0];
 		if (!ops) return;
 		const id = newId();
 		inFlight = id;
 		send(codec.ops(documentId, ops, id, localSeq));
 	}
 	function ack(id: string, seq: number) {
-		if (inFlight === id) inFlight = null;
+		if (inFlight === id) {
+			inFlight = null;
+			queue.shift();
+		}
 		localSeq = Math.max(localSeq, seq);
 		flush();
 	}
@@ -106,7 +135,7 @@ export function createExactBaseRuntime<Doc, Op, Frame>(
 		localSeq = seq;
 		nackHead = null;
 		inFlight = null;
-		outbox.length = 0;
+		queue.length = 0;
 		const later = held
 			.splice(0)
 			.filter((item) => item.seq > seq)
@@ -115,6 +144,45 @@ export function createExactBaseRuntime<Doc, Op, Frame>(
 		for (const item of later) {
 			port.apply(item.ops);
 			localSeq = item.seq;
+		}
+	}
+	/**
+	 * A new authority's first snapshot, or the join snapshot of a runtime that
+	 * carried submissions. Its numbering is not this replica's, so `localSeq`
+	 * becomes the snapshot's. The page is kept only when that is sound:
+	 *
+	 *  - the snapshot is this page: it already holds every queued edit (or
+	 *    there were none). Nothing is replaced or re-sent.
+	 *  - the snapshot with the queue reduced onto it, in order, is this page:
+	 *    the queue was written against exactly that document, so it is sent
+	 *    again on the snapshot's head.
+	 *  - otherwise the snapshot replaces the page, as a nack's does. An op
+	 *    indexes the document it was written against; on any other it lands in
+	 *    the wrong place, so it is not replayed.
+	 */
+	function adopt(doc: Doc, seq: number) {
+		const same = opts.sameDoc;
+		const mine = port.snapshot();
+		if (same && same(doc, mine)) queue.length = 0;
+		else if (!same || queue.length === 0 || !foldsTo(doc, mine, same)) {
+			replace(doc, seq);
+			return;
+		}
+		localSeq = seq;
+		nackHead = null;
+		inFlight = null;
+		held.length = 0;
+	}
+	function foldsTo(doc: Doc, mine: Doc, same: (a: Doc, b: Doc) => boolean) {
+		const reduce = opts.reduce;
+		if (!reduce) return false;
+		try {
+			return same(
+				queue.reduce((acc, ops) => reduce(acc, ops), doc),
+				mine
+			);
+		} catch {
+			return false;
 		}
 	}
 	function recover() {
@@ -130,6 +198,7 @@ export function createExactBaseRuntime<Doc, Op, Frame>(
 				case 'hello':
 					if (event.clientId !== transport.clientId) {
 						if (authority) emit(authority.handle(frame));
+						else if (event.sequencer && joined) rejoining = true;
 						opts.onHello?.();
 					}
 					break;
@@ -160,13 +229,16 @@ export function createExactBaseRuntime<Doc, Op, Frame>(
 					break;
 				case 'snapshot': {
 					const joining = transport.role === 'replica' && !joined;
-					if (!joining && event.documentId !== documentId) break;
-					if (joining) documentId = event.documentId;
+					const rejoin = rejoining;
+					if (!joining && !rejoin && event.documentId !== documentId) break;
+					if (joining || rejoin) documentId = event.documentId;
 					latestSnapshot = { seq: event.seq, doc: event.doc };
-					if (joining) {
+					if (joining || rejoin) {
 						joined = true;
+						rejoining = false;
 						readOnly = false;
-						replace(event.doc, event.seq);
+						if (rejoin || queue.length > 0) adopt(event.doc, event.seq);
+						else replace(event.doc, event.seq);
 						status();
 						flush();
 					} else {
@@ -181,9 +253,12 @@ export function createExactBaseRuntime<Doc, Op, Frame>(
 					recover();
 					break;
 				case 'nack':
+					// Another submission is in flight than the one it names: that one went
+					// to an earlier authority, and `adopt` has sent it again since.
+					if (inFlight && event.submissionId !== undefined && event.submissionId !== inFlight) break;
 					nackHead = event.headSeq;
 					inFlight = null;
-					outbox.length = 0;
+					queue.length = 0;
 					recover();
 					break;
 				case 'read-only':
@@ -223,10 +298,11 @@ export function createExactBaseRuntime<Doc, Op, Frame>(
 				);
 				localSeq = authority.head;
 			} else if (joined) {
-				outbox.push(ops);
+				queue.push(ops);
 				flush();
 			}
 		},
+		pending: () => queue.map((ops) => [...ops]),
 		replaceDocument(doc) {
 			if (!authority || closed) return;
 			const frame = authority.replace(doc);
@@ -238,7 +314,6 @@ export function createExactBaseRuntime<Doc, Op, Frame>(
 			if (closed) return;
 			closed = true;
 			off();
-			outbox.length = 0;
 			held.length = 0;
 			transport.close();
 		}

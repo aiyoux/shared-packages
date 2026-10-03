@@ -66,6 +66,11 @@ export type CollabPort<Doc> = {
 	appliedIds?: () => string[];
 	/** False means this edit does not fit the document we hold. */
 	apply: (frame: CollabDocFrame<Doc>) => boolean;
+	/**
+	 * A replica follows a new sequencer, whose snapshot it now holds. Edits
+	 * the old one never numbered are the port's to submit again.
+	 */
+	sequencerChanged?: () => void;
 };
 
 export type CollabRuntime = {
@@ -164,7 +169,8 @@ function createOrderedRuntime<Doc>(
 			}
 			return port.apply(frame as CollabDocFrame<Doc>);
 		},
-		onRepair: resync
+		onRepair: resync,
+		onSequencerChange: () => port.sequencerChanged?.()
 	});
 	const off = transport.subscribe((frame) => {
 		if (closed || !frame || typeof frame !== 'object') return;

@@ -100,10 +100,10 @@ export function createDocSession<Doc, Op>(opts: DocSessionOpts<Doc, Op>): DocSes
 	const held: CollabDocFrame<unknown>[] = [];
 	/**
 	 * Our edits not yet applied in the sequencer's order, oldest first, by
-	 * frame id. A runtime is thrown away when the role changes (the sequencer's
-	 * tab died, froze and was taken over, or a peer came or went), and with it
-	 * whatever it was waiting on; these go to the next runtime, under the same
-	 * ids, so an edit sent to a sequencer that died is not lost.
+	 * frame id. When the sequencer's tab dies (or froze and was taken over),
+	 * these go to the new one under the same ids, so an edit sent to it is not
+	 * lost: to the next runtime when this tab's role changes, and to the same
+	 * runtime once it follows the new sequencer when it does not.
 	 */
 	const unconfirmed = new Map<string, CollabDocFrame<unknown>>();
 	/**
@@ -172,6 +172,11 @@ export function createDocSession<Doc, Op>(opts: DocSessionOpts<Doc, Op>): DocSes
 						noteApplied(frame.frameId);
 						emit(frame.clientId === clientId ? 'local' : 'remote');
 						return true;
+					},
+					// The sequencer's tab died (or froze and was taken over) and this
+					// replica's runtime outlived it: no rebuild resends for us here.
+					sequencerChanged() {
+						for (const frame of unconfirmed.values()) if (!applied.has(frame.frameId)) engine.runtime?.submit(frame);
 					}
 				}
 			}),
