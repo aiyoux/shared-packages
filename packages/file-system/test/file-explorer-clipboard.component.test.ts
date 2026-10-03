@@ -104,8 +104,12 @@ describe('FileExplorer clipboard', () => {
 		entries.push({ id: 'folder-a', name: 'Docs & <notes>"', parentId: null, kind: 'folder' });
 		const source = await explorer(driver);
 		const dest = await explorer(driver, 'target');
+		const success = vi.spyOn(toast, 'success');
+		const failure = vi.spyOn(toast, 'error');
 		await select(source.root, 'folder-a');
 		await fireEvent.click(source.ui.getByTestId('fe-copy'));
+		await waitFor(() => expect(success).toHaveBeenCalledWith('Copied to clipboard'));
+		expect(failure).not.toHaveBeenCalledWith('Cannot copy');
 		expect(fileClipboardPayload(appClipboard.current?.data)?.ids).toEqual(['folder-a']);
 		expect(systemText).toBe('Existing system clipboard');
 		expect(write).not.toHaveBeenCalled();
@@ -240,6 +244,28 @@ describe('FileExplorer clipboard', () => {
 		expect(driver.writeFile).not.toHaveBeenCalled();
 	});
 
+	it('refuses a folder the connection cannot copy, from the header and the preview', async () => {
+		const failure = vi.spyOn(toast, 'error');
+		const success = vi.spyOn(toast, 'success');
+		const { driver, entries } = backend('monitor');
+		driver.capabilities = { ...driver.capabilities, supportsFolderCopy: false };
+		entries.push({ id: 'folder-a', name: 'Docs', parentId: null, kind: 'folder' });
+		const source = await explorer(driver);
+		await select(source.root, 'folder-a');
+		await fireEvent.click(source.ui.getByTestId('fe-copy'));
+		await waitFor(() => expect(failure).toHaveBeenCalledWith('Cannot copy'));
+		expect(success).not.toHaveBeenCalled();
+		expect(appClipboard.current).toBeNull();
+
+		failure.mockClear();
+		await fireEvent.click(source.ui.getByTestId('fe-item-details'));
+		await waitFor(() => expect(document.querySelector('[data-testid="fe-file-preview"] [data-testid="fe-row-copy"]')).toBeTruthy());
+		await fireEvent.click(document.querySelector('[data-testid="fe-file-preview"] [data-testid="fe-row-copy"]')!);
+		await waitFor(() => expect(failure).toHaveBeenCalledWith('Cannot copy'));
+		expect(success).not.toHaveBeenCalled();
+		expect(appClipboard.current).toBeNull();
+	});
+
 	it('reports image clipboard failures without replacing the image with JSON text', async () => {
 		const report = vi.spyOn(toast, 'error');
 		const { write } = imageClipboard();
@@ -314,8 +340,10 @@ describe('FileExplorer clipboard', () => {
 		await select(source.root);
 		await fireEvent.click(source.ui.getByTestId('fe-item-details'));
 		await waitFor(() => expect(document.querySelector('[data-testid="fe-file-preview"] [data-testid="fe-row-copy"]')).toBeTruthy());
+		const success = vi.spyOn(toast, 'success');
 		await fireEvent.click(document.querySelector('[data-testid="fe-file-preview"] [data-testid="fe-row-copy"]')!);
 		await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+		await waitFor(() => expect(success).toHaveBeenCalledWith('Copied to clipboard'));
 		expect(driver.copy).not.toHaveBeenCalled();
 		expect(systemText).toBe('one.txt');
 		await waitFor(() => expect((dest.ui.getByTestId('fe-paste') as HTMLButtonElement).disabled).toBe(false));
@@ -370,9 +398,11 @@ describe('FileExplorer clipboard', () => {
 	it('pastes the latest system text instead of an older copied file', async () => {
 		const { driver } = backend();
 		const source = await explorer(driver);
+		const success = vi.spyOn(toast, 'success');
 		await select(source.root);
 		await fireEvent.click(source.ui.getByTestId('fe-copy'));
 		await waitFor(() => expect(writeText).toHaveBeenCalled());
+		await waitFor(() => expect(success).toHaveBeenCalledWith('Copied to clipboard'));
 		systemText = 'new system text';
 		await fireEvent.click(source.ui.getByTestId('fe-paste'));
 		await waitFor(() => expect(driver.writeFile).toHaveBeenCalled());

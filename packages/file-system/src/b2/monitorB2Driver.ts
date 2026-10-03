@@ -23,6 +23,7 @@ export const B2_CAPS: ExplorerCapabilities = {
 	supportsRename: true,
 	supportsMove: true,
 	supportsCopy: true,
+	supportsFolderCopy: false,
 	supportsMkdir: true,
 	supportsUpload: true,
 	supportsDownload: true,

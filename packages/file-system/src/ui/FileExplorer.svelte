@@ -3604,9 +3604,18 @@
 		return n ? [n.id] : [];
 	}
 
+	function folderCopySupported(): boolean {
+		if (caps.supportsFolderCopy === false) return false;
+		return caps.supportsCopy;
+	}
+
 	async function putFilesOnClipboard(entries: ExplorerEntry[], mode: 'copy' | 'cut') {
 		if (mode === 'cut' ? !canCutFiles : !canCopyFiles) return;
 		if (!entries.length) return;
+		if (mode === 'copy' && entries.some((entry) => entry.kind === 'folder') && !folderCopySupported()) {
+			toast.error('Cannot copy');
+			return;
+		}
 		rememberClipboardSource(driver);
 		const payload: FileClipboardPayload = {
 			mode, clipboardId: generateId('clip'), sourceDriverId: driver.id,
@@ -3622,6 +3631,7 @@
 			await appClipboard.copy(FILE_CLIPBOARD_TYPE, fileClipboardLabel(payload), payload,
 				fileClipboardText(payload), { syncWithSystem: !fileClipboardHasFolders(payload), systemWriter: () => image
 					? copyImageToSystem(sourceDriver, entries[0], payload) : copyFilesToSystem(payload) });
+			if (mode === 'copy') toast.success('Copied to clipboard');
 		} catch (e) {
 			reportMessage(`Could not copy ${image ? 'image' : 'files'} to the system clipboard: ${errMsg(e)}`);
 		}

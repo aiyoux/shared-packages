@@ -40,6 +40,7 @@ function monitorCaps(rename: boolean, mkdir: boolean): ExplorerCapabilities {
 		supportsRename: rename,
 		supportsMove: rename,
 		supportsCopy: true,
+		supportsFolderCopy: false,
 		supportsMkdir: mkdir,
 		supportsUpload: true,
 		supportsDownload: true,

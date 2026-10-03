@@ -111,6 +111,11 @@ export interface ExplorerCapabilities {
 	supportsRename: boolean;
 	supportsMove: boolean;
 	supportsCopy: boolean;
+	/**
+	 * Folder copy. Omit to follow `supportsCopy`. Monitor and B2 set false
+	 * because their `copy()` rejects a folder id.
+	 */
+	supportsFolderCopy?: boolean;
 	supportsMkdir: boolean;
 	/** File input / drop. Local v1: false. B2: true. */
 	supportsUpload: boolean;
