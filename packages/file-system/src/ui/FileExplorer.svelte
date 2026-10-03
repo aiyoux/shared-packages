@@ -16,6 +16,7 @@
 	import { fileTypeMime, persistKv } from '@shared-packages/ui';
 	import { formatBytes as formatSize } from '@shared-packages/ui/files';
 	import {
+		canReadExplorerBlob,
 		readExplorerBlob,
 		type MediaMetaTarget,
 		explorerThumbsAreEager,
@@ -111,8 +112,14 @@
 	import {
 		payloadFromClipboardItems,
 		payloadFromDataTransfer,
+		payloadFromText,
 		type SystemClip
 	} from './systemClipboard.js';
+	import {
+		FILE_CLIPBOARD_TYPE, fileClipboardPayload, fileClipboardFromText,
+		fileClipboardLabel, clipboardEntries, sameClipboardSource, rememberClipboardSource, markClipboardFileMoved,
+		type FileClipboardPayload
+	} from './fileClipboard.js';
 	import '@shared-packages/design-system/button.css';
 	import '@shared-packages/design-system/tooltip.css';
 	import { SplitHandle, toast, appClipboard } from '@shared-packages/ui';
@@ -245,15 +252,9 @@
 		isTarget?: boolean;
 		/** Handle cross-driver copy across from app clipboard. */
 		onCopyAcrossFromClipboard?: (
-			payload: {
-				mode: 'copy' | 'cut';
-				sourceDriverId?: string;
-				sourceConnectionId?: string;
-				sourceParentId?: string | null;
-				ids: string[];
-				entries?: ExplorerEntry[];
-			},
-			destParentId: string | null
+			payload: FileClipboardPayload,
+			destParentId: string | null,
+			onMoved?: (id: string) => Promise<void>
 		) => Promise<void>;
 		/** Who is in which file — Documents `placePresence` marks keyed by fileId. */
 		presenceByFileId?: ReadonlyMap<string, readonly ExplorerPresenceDot[]>;
@@ -1001,7 +1002,9 @@
 	let renameValue = $state('');
 	/** Position in `focusableEntries` (display order) — never a `nodes` index. */
 	let focusIndex = $state(-1);
-	let clipboard = $state<{ mode: 'copy' | 'cut'; ids: string[] } | null>(null);
+	const clipboard = $derived(appClipboard.current?.type === FILE_CLIPBOARD_TYPE
+		? fileClipboardPayload(appClipboard.current.data) : null);
+	let pasteBusy = $state(false);
 	let systemClip = $state<SystemClip | null>(null);
 	let uploadBusy = $state(false);
 	let osDropOver = $state(false);
@@ -3166,8 +3169,19 @@
 	async function copyPreviewItem() {
 		const n = previewTarget();
 		if (!n) return;
-		await copyNode(n);
+		await putFilesOnClipboard([n], 'copy');
 		dismissPreviewPopup();
+		await tick();
+		rootEl?.focus();
+	}
+
+	async function cutPreviewItem() {
+		const n = previewTarget();
+		if (!n) return;
+		await putFilesOnClipboard([n], 'cut');
+		dismissPreviewPopup();
+		await tick();
+		rootEl?.focus();
 	}
 
 	async function deletePreviewItem() {
@@ -3547,149 +3561,101 @@
 		return n ? [n.id] : [];
 	}
 
+	async function putFilesOnClipboard(entries: ExplorerEntry[], mode: 'copy' | 'cut') {
+		if (mode === 'cut' ? !canCutFiles : !canCopyFiles) return;
+		if (!entries.length) return;
+		rememberClipboardSource(driver);
+		const payload: FileClipboardPayload = {
+			mode, clipboardId: generateId('clip'), sourceDriverId: driver.id,
+			sourceConnectionId: driver.connectionId, sourceParentId: parentId,
+			ids: entries.map((entry) => entry.id), entries: clipboardEntries(entries)
+		};
+		await appClipboard.copy(FILE_CLIPBOARD_TYPE, fileClipboardLabel(payload), payload,
+			undefined, { syncWithSystem: true });
+		systemClip = null;
+	}
+
+	function entriesForClipboard(): ExplorerEntry[] {
+		const ids = new Set(idsForClipboard());
+		return nodes.filter((entry) => ids.has(entry.id));
+	}
+
 	async function cutSelection() {
-		if (mode !== 'manage' || !caps.supportsMove) return;
-		const ids = idsForClipboard();
-		if (!ids.length) return;
-		clipboard = { mode: 'cut', ids };
-		const entries = selectedEntries;
-		const label = `Files: ${ids.length} item${ids.length === 1 ? '' : 's'} (cut)`;
-		await appClipboard.copy('application/x-scratchpad-files', label, {
-			mode: 'cut',
-			sourceDriverId: driver.id,
-			sourceConnectionId: driver.connectionId,
-			sourceParentId: parentId,
-			ids,
-			entries: entries.map((e) => ({
-				id: e.id,
-				name: e.name,
-				kind: e.kind,
-				size: e.size,
-				fileType: e.fileType
-			}))
-		});
+		if (mode !== 'manage') return;
+		await putFilesOnClipboard(entriesForClipboard(), 'cut');
 	}
 
 	async function copySelection() {
-		if (mode !== 'manage' || !caps.supportsCopy) return;
-		const ids = idsForClipboard();
-		if (!ids.length) return;
-		clipboard = { mode: 'copy', ids };
-		const entries = selectedEntries;
-		const label = `Files: ${ids.length} item${ids.length === 1 ? '' : 's'}`;
-		await appClipboard.copy('application/x-scratchpad-files', label, {
-			mode: 'copy',
-			sourceDriverId: driver.id,
-			sourceConnectionId: driver.connectionId,
-			sourceParentId: parentId,
-			ids,
-			entries: entries.map((e) => ({
-				id: e.id,
-				name: e.name,
-				kind: e.kind,
-				size: e.size,
-				fileType: e.fileType
-			}))
-		});
+		if (mode !== 'manage') return;
+		await putFilesOnClipboard(entriesForClipboard(), 'copy');
 	}
 
-	async function pasteClipboard() {
-		if (mode !== 'manage') return;
-		error = '';
+	/** Consume only completed moves, retaining failed items and newer clipboard operations. */
+	async function consumeCut(payload: FileClipboardPayload, id: string) {
+		markClipboardFileMoved(payload, id);
+		payload.ids = payload.ids.filter((next) => next !== id);
+		payload.entries = payload.entries.filter((entry) => entry.id !== id);
+		const current = clipboard;
+		if (!current || current.clipboardId !== payload.clipboardId) return;
+		let sync = false;
 		try {
-			// 1. Check appClipboard first
-			const appClip = await appClipboard.paste<{
-				mode: 'copy' | 'cut';
-				sourceDriverId?: string;
-				sourceConnectionId?: string;
-				sourceParentId?: string | null;
-				ids: string[];
-				entries?: ExplorerEntry[];
-			}>('application/x-scratchpad-files');
-
-			const payload =
-				appClip ??
-				(appClipboard.current?.type === 'application/x-scratchpad-files'
-					? (appClipboard.current.data as {
-							mode: 'copy' | 'cut';
-							sourceDriverId?: string;
-							sourceConnectionId?: string;
-							sourceParentId?: string | null;
-							ids: string[];
-							entries?: ExplorerEntry[];
-						})
-					: null);
-
-			if (payload && payload.ids && payload.ids.length > 0) {
-				const isSameDriver =
-					payload.sourceDriverId === driver.id &&
-					(payload.sourceConnectionId ?? '') === (driver.connectionId ?? '');
-				if (isSameDriver) {
-					for (const id of payload.ids) {
-						if (payload.mode === 'cut') {
-							if (!driver.move || !caps.supportsMove) throw new Error('MOVE_UNSUPPORTED');
-							await driver.move(id, parentId);
-						} else {
-							if (!driver.copy || !caps.supportsCopy) throw new Error('COPY_UNSUPPORTED');
-							await driver.copy(id, parentId);
-						}
-					}
-					if (payload.mode === 'cut') {
-						clipboard = null;
-						appClipboard.clear();
-					}
-					selected = new Set();
-					await refresh();
-					return;
-				} else if (onCopyAcrossFromClipboard) {
-					await onCopyAcrossFromClipboard(payload, parentId);
-					if (payload.mode === 'cut') {
-						// A cut across backends cannot be a move: copy-across does
-						// not delete the source, and deleting it here — after a
-						// cross-network copy this code cannot verify — would be us
-						// destroying the only remaining original on a hunch. Say
-						// what actually happened and leave the clipboard loaded,
-						// rather than clearing it so the cut looks finished.
-						toast.info('Copied. Moving between locations is not supported, so the original is still there.');
-					}
-					await refresh();
-					return;
-				}
-			}
-
-			// 2. Fallback to local clipboard state
-			if (clipboard?.ids.length) {
-				for (const id of clipboard.ids) {
-					if (clipboard.mode === 'cut') {
-						if (!driver.move || !caps.supportsMove) throw new Error('MOVE_UNSUPPORTED');
-						await driver.move(id, parentId);
-					} else {
-						if (!driver.copy || !caps.supportsCopy) throw new Error('COPY_UNSUPPORTED');
-						await driver.copy(id, parentId);
-					}
-				}
-				if (clipboard.mode === 'cut') clipboard = null;
-				selected = new Set();
-				await refresh();
-				return;
-			}
-
-			// 3. Fallback to system clipboard
-			if (canImportFromDevice) {
-				await pasteSystemClipboard();
-			}
-		} catch (e) {
-			reportError(e);
+			const text = await navigator.clipboard.readText();
+			const system = fileClipboardFromText(text);
+			sync = Boolean(system && system.clipboardId === payload.clipboardId);
+		} catch { /* Internal clipboard remains usable without OS read permission. */ }
+		if (clipboard?.clipboardId !== payload.clipboardId) return;
+		await appClipboard.copy(FILE_CLIPBOARD_TYPE, fileClipboardLabel(payload), { ...payload },
+			undefined, { syncWithSystem: sync && payload.ids.length > 0 });
+		if (sync && !payload.ids.length) {
+			try { await navigator.clipboard.writeText(''); } catch { /* Completed cuts stay consumed internally. */ }
 		}
 	}
 
-	async function copyNode(n: ExplorerEntry) {
-		if (mode !== 'manage' || !driver.copy || !caps.supportsCopy) return;
+	async function pasteClipboard(eventPayload?: FileClipboardPayload, fromEvent = false) {
+		if (mode !== 'manage' || pasteBusy) return;
+		pasteBusy = true;
+		error = '';
+		// Keep the operation bound to the destination where Paste was invoked.
+		const destDriver = driver;
+		const destParentId = parentId;
 		try {
-			await driver.copy(n.id, parentId);
-			await refresh();
+			if (!fromEvent) await refreshSystemClipboard();
+			const payload = eventPayload ?? clipboard;
+			if (payload) {
+				if (!payload.ids.length) return;
+				if (sameClipboardSource(payload, destDriver) &&
+					(payload.mode === 'cut' || destDriver.copy)) {
+					const ids = [...payload.ids];
+					for (const id of ids) {
+						if (payload.mode === 'cut') {
+							const entry = payload.entries.find((next) => next.id === id);
+							if (entry?.parentId !== destParentId) {
+								if (!destDriver.move || !destDriver.capabilities.supportsMove) throw new Error('MOVE_UNSUPPORTED');
+								await destDriver.move(id, destParentId);
+							}
+							await consumeCut(payload, id);
+						} else {
+							if (!destDriver.copy || !destDriver.capabilities.supportsCopy) throw new Error('COPY_UNSUPPORTED');
+							await destDriver.copy(id, destParentId);
+						}
+					}
+				} else if (onCopyAcrossFromClipboard) {
+					await onCopyAcrossFromClipboard(payload, destParentId,
+						(id) => consumeCut(payload, id));
+				} else {
+					throw new Error('Open the source connection in another file window to paste these items');
+				}
+				selected = new Set();
+			} else if (canImportFromDevice && systemClip?.files.length) {
+				await importDeviceFiles(systemClip.files, destParentId);
+			} else {
+				reportMessage('Clipboard is empty or not readable');
+			}
 		} catch (e) {
 			reportError(e);
+		} finally {
+			pasteBusy = false;
+			await refresh();
 		}
 	}
 
@@ -3755,6 +3721,15 @@
 	}
 
 	const canImportFromDevice = $derived(Boolean(driver.upload || driver.writeFile));
+	const canCopyFiles = $derived(caps.supportsCopy || canReadExplorerBlob(driver));
+	const canCutFiles = $derived(caps.supportsMove || (canImportFromDevice && canReadExplorerBlob(driver)));
+	const canPasteFiles = $derived(Boolean(
+		(clipboard?.ids.length && (sameClipboardSource(clipboard, driver)
+			? clipboard.mode === 'cut' ? canCutFiles : caps.supportsCopy || onCopyAcrossFromClipboard
+			: onCopyAcrossFromClipboard)) ||
+		(canImportFromDevice && (systemClip?.files.length ||
+			(typeof navigator !== 'undefined' && (navigator.clipboard?.read || navigator.clipboard?.readText))))
+	));
 	/** File-picker chrome is local writeFile only; remotes import via drop / copy-across. */
 	// osDrop takes `driver.upload ?? driver.writeFile`, so an upload-only driver
 	// (B2, monitor) can import device files perfectly well. Gating the
@@ -3763,36 +3738,66 @@
 	const showDeviceFilePicker = $derived(Boolean(driver.writeFile || driver.upload));
 
 	async function refreshSystemClipboard() {
-		if (typeof navigator === 'undefined' || !navigator.clipboard?.read) return;
+		if (typeof navigator === 'undefined' || !navigator.clipboard) return;
+		const previous = appClipboard.current;
 		try {
-			const items = await navigator.clipboard.read();
-			const next = await payloadFromClipboardItems(items);
-			if (next) systemClip = next;
+			let text = '';
+			let next: SystemClip | null = null;
+			if (navigator.clipboard.read) {
+				try {
+					const items = await navigator.clipboard.read();
+					for (const item of items) {
+						if (item.types.includes('text/plain')) text = await (await item.getType('text/plain')).text();
+					}
+					if (!fileClipboardFromText(text)) next = await payloadFromClipboardItems(items);
+				} catch (e) {
+					if (!navigator.clipboard.readText) throw e;
+					text = await navigator.clipboard.readText();
+					next = fileClipboardFromText(text) ? null : payloadFromText(text);
+				}
+			} else if (navigator.clipboard.readText) {
+				text = await navigator.clipboard.readText();
+				next = fileClipboardFromText(text) ? null : payloadFromText(text);
+			} else return;
+			// A slow permission prompt must not overwrite a subsequent Copy/Cut.
+			if (appClipboard.current !== previous) return;
+			await adoptSystemClipboard(text, next);
 		} catch {
 			/* permission / unsupported — keep last snapshot from paste */
 		}
 	}
 
-	async function pasteSystemClipboard() {
-		if (mode !== 'manage' || !canImportFromDevice) return;
-		let payload = systemClip;
-		if (!payload?.files.length) {
-			await refreshSystemClipboard();
-			payload = systemClip;
+	async function adoptSystemClipboard(text: string, next: SystemClip | null) {
+		const files = fileClipboardFromText(text);
+		systemClip = files ? null : next;
+		if (files) {
+			if (JSON.stringify(files) !== JSON.stringify(clipboard)) {
+				await appClipboard.copy(FILE_CLIPBOARD_TYPE, fileClipboardLabel(files), files,
+					undefined, { syncWithSystem: false });
+			}
+		} else if (clipboard) {
+			// External clipboard changes replace the active operation; history is not a paste fallback.
+			await appClipboard.copy('text/plain', next?.label ?? 'System clipboard', text,
+				undefined, { syncWithSystem: false });
 		}
-		if (!payload?.files.length) {
-			reportMessage('Clipboard is empty or not readable');
-			return;
-		}
-		await importDeviceFiles(payload.files, parentId);
 	}
 
 	$effect(() => {
 		if (typeof document === 'undefined') return;
 		if (mode !== 'manage') return;
 		const onPaste = (e: ClipboardEvent) => {
+			const target = e.target instanceof Element ? e.target : null;
+			if (!target || target.closest('input, textarea, [contenteditable]:not([contenteditable="false"])')) return;
+			if (!rootEl?.contains(target) && !(isTarget && target === document.body)) return;
+			if (e.defaultPrevented || !e.clipboardData) return;
+			const text = e.clipboardData.getData('text/plain');
+			const files = fileClipboardFromText(text);
 			const next = payloadFromDataTransfer(e.clipboardData);
-			if (next) systemClip = next;
+			e.preventDefault();
+			void (async () => {
+				await adoptSystemClipboard(text, files ? null : next);
+				await pasteClipboard(files ?? undefined, true);
+			})();
 		};
 		const onFocus = () => void refreshSystemClipboard();
 		const onVis = () => {
@@ -3931,7 +3936,7 @@
 
 	function onListKeydown(e: KeyboardEvent) {
 		const t = e.target as HTMLElement | null;
-		if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) return;
+		if (t?.closest('input, textarea, [contenteditable]:not([contenteditable="false"])')) return;
 
 		if (e.key === 'Escape') {
 			e.preventDefault();
@@ -4047,31 +4052,21 @@
 			return;
 		}
 		if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'c') {
-			if (mode === 'manage' && caps.supportsCopy) {
+			if (mode === 'manage' && canCopyFiles) {
 				e.preventDefault();
 				copySelection();
 			}
 			return;
 		}
 		if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'x') {
-			if (mode === 'manage' && caps.supportsMove) {
+			if (mode === 'manage' && canCutFiles) {
 				e.preventDefault();
 				cutSelection();
 			}
 			return;
 		}
-		if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v') {
-			if (mode !== 'manage') return;
-			if (clipboard?.ids.length && (caps.supportsMove || caps.supportsCopy)) {
-				e.preventDefault();
-				void pasteClipboard();
-				return;
-			}
-			if (canImportFromDevice) {
-				e.preventDefault();
-				void pasteSystemClipboard();
-			}
-		}
+		// Let Ctrl/Cmd+V dispatch a native paste event, which also exposes OS
+		// files when async clipboard read permission is unavailable.
 	}
 
 	// $derived, not const: these are props, so a plain const froze the testid at
@@ -4081,8 +4076,8 @@
 	);
 	const renameTip = $derived(selected.size === 1 ? 'Rename' : 'Select one item to rename');
 	const deleteTip = $derived(selected.size ? 'Delete' : 'Select an item to delete');
-	const cutTip = $derived(selected.size && caps.supportsMove ? 'Cut' : 'Select an item to cut');
-	const copyTip = $derived(selected.size && caps.supportsCopy ? 'Copy' : 'Select an item to copy');
+	const cutTip = $derived(selected.size && canCutFiles ? 'Cut' : 'Select an item to cut');
+	const copyTip = $derived(selected.size && canCopyFiles ? 'Copy' : 'Select an item to copy');
 	const detailsTip = $derived(selected.size ? 'Details' : 'Select an item for details');
 	const uploadTip = $derived(uploadBusy ? 'Uploading…' : 'Select file');
 	const folderUploadTip = $derived(uploadBusy ? 'Uploading…' : 'Select folder');
@@ -4101,10 +4096,8 @@
 				: 'Hide folder tree'
 	);
 	const pasteTip = $derived(
-		clipboard?.mode === 'cut' ? 'Paste (move)' : clipboard ? 'Paste (copy)' : 'Paste'
-	);
-	const systemPasteTip = $derived(
-		systemClip?.label ?? 'Paste from clipboard (file, image, or text)'
+		clipboard?.ids.length ? clipboard.mode === 'cut' ? 'Paste (move)' : 'Paste (copy)' :
+			systemClip?.label ?? 'Paste from clipboard'
 	);
 </script>
 
@@ -4562,13 +4555,6 @@
 			{#if showStorageBtn}
 				{@render actionBtn(kind, 'fe-storage-open', 'Storage map and integrity check', 'storage-map', () => (storageDialogOpen = true), { label: 'Storage' })}
 			{/if}
-			{#if mode === 'manage' && canImportFromDevice}
-				{@render actionBtn(kind, 'fe-system-paste', systemPasteTip, 'clipboard-paste', () => void pasteSystemClipboard(), {
-					disabled: !systemClip?.files.length || uploadBusy,
-					active: Boolean(systemClip?.files.length),
-					label: 'Paste from clipboard'
-				})}
-			{/if}
 			{#if showNewMenu}
 				{#if kind === 'icon'}
 					<!-- svelte-ignore a11y_click_events_have_key_events -->
@@ -4703,8 +4689,11 @@
 				{#if toolbarExtra}
 					{@render toolbarExtra({ variant: kind === 'menu' ? 'menu' : 'icon' })}
 				{/if}
-				{#if clipboard?.ids.length && (caps.supportsMove || caps.supportsCopy)}
-					{@render actionBtn(kind, 'fe-paste', pasteTip, 'clipboard', () => pasteClipboard(), { label: 'Paste' })}
+				{#if canImportFromDevice || caps.supportsMove || caps.supportsCopy || onCopyAcrossFromClipboard}
+					{@render actionBtn(kind, 'fe-paste', pasteTip, 'clipboard-paste', () => void pasteClipboard(), {
+						label: 'Paste', disabled: !canPasteFiles || pasteBusy || uploadBusy,
+						active: Boolean(clipboard?.ids.length || systemClip?.files.length)
+					})}
 				{/if}
 			{/if}
 		{/snippet}
@@ -4719,11 +4708,11 @@
 				label: 'Delete'
 			})}
 			{@render actionBtn(kind, 'fe-cut', cutTip, 'scissors', cutSelection, {
-				disabled: selected.size === 0 || !caps.supportsMove,
+				disabled: selected.size === 0 || !canCutFiles,
 				label: 'Cut'
 			})}
 			{@render actionBtn(kind, 'fe-copy', copyTip, 'copy', copySelection, {
-				disabled: selected.size === 0 || !caps.supportsCopy,
+				disabled: selected.size === 0 || !canCopyFiles,
 				label: 'Copy'
 			})}
 			{@render actionBtn(kind, 'fe-compress-selected', 'Compress', 'file-archive', () => startArchive('compress', selectedEntries), {
@@ -5147,6 +5136,8 @@
 					class:focused={!row.placeholder && focusPosById.get(n.id) === focusIndex}
 					class:fe-dnd-into={showInto}
 					class:fe-dnd-dragging={!row.placeholder && dndDraggingIds.has(n.id)}
+					class:fe-cut-pending={!row.placeholder && clipboard?.mode === 'cut' &&
+						sameClipboardSource(clipboard, driver) && clipboard.ids.includes(n.id)}
 					class:fe-row-icon={viewMode === 'icons'}
 					class:fe-row-detailed={viewMode === 'detailed'}
 					class:renaming={!row.placeholder && renamingId === n.id}
@@ -6136,14 +6127,17 @@
 				{#if !multi && caps.supportsRename}
 					{@render previewIcon('fe-rename-btn', 'Rename', 'pencil', () => renamePreviewItem(), listBusy)}
 				{/if}
-				{#if caps.supportsCopy && (multi || entry.kind === 'file')}
+				{#if canCopyFiles}
 					{@render previewIcon('fe-row-copy', 'Copy', 'copy', () => {
 						if (multi) copySelection();
 						else void copyPreviewItem();
 					}, listBusy)}
 				{/if}
-				{#if multi && caps.supportsMove}
-					{@render previewIcon('fe-cut', 'Cut', 'scissors', () => cutSelection(), listBusy)}
+				{#if canCutFiles}
+					{@render previewIcon('fe-cut', 'Cut', 'scissors', () => {
+						if (multi) void cutSelection();
+						else void cutPreviewItem();
+					}, listBusy)}
 				{/if}
 				{#if caps.supportsDownload && (multi ? canDownloadSelection : entry.kind === 'file')}
 					{@render previewIcon('fe-row-download', 'Download', 'download', () => {
@@ -6833,6 +6827,9 @@
 	.fe-row.incompatible {
 		opacity: 0.45;
 		cursor: not-allowed;
+	}
+	.fe-row.fe-cut-pending {
+		opacity: 0.5;
 	}
 	.fe-row.selected {
 		background: rgb(var(--accent-rgb) / 0.12);

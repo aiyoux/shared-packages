@@ -50,6 +50,7 @@
 		type QuickEditImageContext,
 		type QuickConvertSvgContext
 	} from './explorerDriver.js';
+	import { clipboardSource, sameClipboardSource, type FileClipboardPayload } from './fileClipboard.js';
 	import { createMemoryExplorerDriver } from './memoryExplorerDriver.js';
 	import { acceptRoomContext, type PaneId, type DualPaneTids } from './dualPaneTypes.js';
 	import { portal } from './portal.js';
@@ -60,7 +61,6 @@
 	import {
 		AppWindows,
 		AppWindowsButton,
-		appClipboard,
 		createLeaf,
 		leafCount,
 		listLeaves,
@@ -1820,64 +1820,58 @@
 	}
 
 	async function handleClipboardCopyAcross(
-		payload: {
-			mode: 'copy' | 'cut';
-			sourceDriverId?: string;
-			sourceConnectionId?: string;
-			sourceParentId?: string | null;
-			ids: string[];
-			entries?: ExplorerEntry[];
-		},
+		payload: FileClipboardPayload,
 		destPaneId: string,
-		destParentId: string | null
+		destParentId: string | null,
+		onMoved?: (id: string) => Promise<void>
 	) {
+		if (copyBusy) throw new Error('A file transfer is already in progress');
 		const dst = paneState(destPaneId);
 		const destDriver = activeDriver(dst, destPaneId);
-
-		let srcDriver: ExplorerDriver | null = null;
+		let srcDriver = clipboardSource(payload);
 		for (const [id, w] of Object.entries(windows)) {
 			const drv = activeDriver(w, id);
-			if (drv.id === payload.sourceDriverId && (drv.connectionId ?? '') === (payload.sourceConnectionId ?? '')) {
-				srcDriver = drv;
-				break;
-			}
+			if (sameClipboardSource(payload, drv)) { srcDriver = drv; break; }
 		}
-		if (!srcDriver) {
-			if (payload.sourceDriverId === 'memory') srcDriver = getMemoryDriver();
-			else srcDriver = localDriver;
+		if (!srcDriver && sameClipboardSource(payload, localDriver)) srcDriver = localDriver;
+		if (!srcDriver && payload.sourceDriverId === 'memory') {
+			const memoryDriver = getMemoryDriver();
+			if (sameClipboardSource(payload, memoryDriver)) srcDriver = memoryDriver;
 		}
+		if (!srcDriver) throw new Error('Open the source connection in another file window to paste these items');
+		if (payload.mode === 'cut' && !srcDriver.capabilities.supportsMove &&
+			!(srcDriver.upload || srcDriver.writeFile)) throw new Error('MOVE_UNSUPPORTED');
 
-		const entries: ExplorerEntry[] = payload.entries && payload.entries.length
-			? payload.entries
-			: payload.ids.map((id) => ({ id, name: id, kind: 'file' as const, parentId: null }));
-
+		const ids = [...payload.ids];
+		const entries = [...payload.entries];
 		copyBusy = true;
 		markCopyDest(destPaneId, destDriver);
 		try {
-			await copyAcross({
-				sourceDriver: srcDriver,
-				destDriver,
-				selectedIds: payload.ids,
-				sourceEntries: entries,
-				destParentId,
-				confirmDualPhase: () => askDualPhase(srcDriver?.id ?? 'source', paneConnectionLabel(destPaneId))
-			});
-			if (payload.mode === 'cut' && srcDriver && srcDriver.delete) {
-				for (const id of payload.ids) {
-					try {
-						await srcDriver.delete(id);
-					} catch {
-						/* ignore */
-					}
+			for (const id of ids) {
+				const entry = entries.find((next) => next.id === id);
+				if (!entry) throw new Error('Clipboard file is no longer available');
+				const n = await copyAcross({
+					sourceDriver: srcDriver, destDriver, selectedIds: [id],
+					sourceEntries: [entry], destParentId,
+					confirmDualPhase: () => askDualPhase(srcDriver!.id, paneConnectionLabel(destPaneId))
+				});
+				if (!n) throw new Error('File was not copied; the original has been kept');
+				if (payload.mode === 'cut') {
+					// Delete only after the full file/folder copy has succeeded.
+					await srcDriver.delete(id);
+					await onMoved?.(id);
 				}
 			}
-			if (!destDriver.subscribeChanges) {
-				setPane(destPaneId, { explorerKey: dst.explorerKey + 1 });
-			}
-			toast.success(`Pasted ${payload.ids.length} item${payload.ids.length === 1 ? '' : 's'}`);
-		} catch (e) {
-			toast.error(formatExplorerError(e));
+			toast.success(`${payload.mode === 'cut' ? 'Moved' : 'Pasted'} ${ids.length} item${ids.length === 1 ? '' : 's'}`);
 		} finally {
+			// Also refresh after a partially completed transfer or failed deletion.
+			for (const [id, w] of Object.entries(windows)) {
+				const drv = activeDriver(w, id);
+				// The receiving FileExplorer refreshes itself when this callback returns.
+				if (id !== destPaneId && !drv.subscribeChanges && sameClipboardSource(payload, drv)) {
+					setPane(id, { explorerKey: w.explorerKey + 1 });
+				}
+			}
 			copyBusy = false;
 		}
 	}
@@ -2186,8 +2180,8 @@
 						onNewMenuItem={paneNewMenuItem(id)}
 						pending={panePending(id)}
 						isTarget={id === targetPaneId && !hideTargetChrome}
-						onCopyAcrossFromClipboard={(payload, destParent) =>
-							handleClipboardCopyAcross(payload, id, destParent)}
+						onCopyAcrossFromClipboard={(payload, destParent, onMoved) =>
+							handleClipboardCopyAcross(payload, id, destParent, onMoved)}
 						onContextChange={(ctx) => applyPaneCtx(id, ctx)}
 						onToggleFolderFavourite={paneFavouriteToggle(id)}
 						isFolderFavourite={(folderId) => isFolderFavourite(id, folderId)}
@@ -2261,8 +2255,8 @@
 						}
 						pending={panePending(id)}
 						isTarget={id === targetPaneId && !hideTargetChrome}
-						onCopyAcrossFromClipboard={(payload, destParent) =>
-							handleClipboardCopyAcross(payload, id, destParent)}
+						onCopyAcrossFromClipboard={(payload, destParent, onMoved) =>
+							handleClipboardCopyAcross(payload, id, destParent, onMoved)}
 						onContextChange={(ctx) => applyPaneCtx(id, ctx)}
 						onToggleFolderFavourite={paneFavouriteToggle(id)}
 						isFolderFavourite={(folderId) => isFolderFavourite(id, folderId)}
@@ -2334,8 +2328,8 @@
 						}
 						pending={panePending(id)}
 						isTarget={id === targetPaneId && !hideTargetChrome}
-						onCopyAcrossFromClipboard={(payload, destParent) =>
-							handleClipboardCopyAcross(payload, id, destParent)}
+						onCopyAcrossFromClipboard={(payload, destParent, onMoved) =>
+							handleClipboardCopyAcross(payload, id, destParent, onMoved)}
 						onContextChange={(ctx) => applyPaneCtx(id, ctx)}
 						onToggleFolderFavourite={paneFavouriteToggle(id)}
 						isFolderFavourite={(folderId) => isFolderFavourite(id, folderId)}

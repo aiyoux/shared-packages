@@ -6,7 +6,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/svelte';
 import { packFiles } from '@shared-packages/compress';
 import { sealVault } from '@shared-packages/crypto';
-import { persistKv } from '@shared-packages/ui';
+import { persistKv, appClipboard } from '@shared-packages/ui';
 import FileExplorer from '../src/ui/FileExplorer.svelte';
 import FileExplorerToolbarExtraHarness from './FileExplorerToolbarExtraHarness.svelte';
 import { createLocalExplorerDriver } from '../src/ui/localExplorerDriver.ts';
@@ -22,6 +22,7 @@ describe('FileExplorer component', () => {
 	let vfs: VfsService;
 
 	beforeEach(async () => {
+		appClipboard.clear();
 		resetSharedVfsForTests();
 		resetTransferRegistryForTests();
 		localStorage.removeItem('fe:previewDock');
@@ -166,8 +167,8 @@ describe('FileExplorer component', () => {
 		expect(screen.getByTestId('fe-trash-view')).toBeTruthy();
 		expect(screen.getByTestId('fe-breadcrumbs')).toBeTruthy();
 		expect(screen.getByTestId('fe-header').querySelector('[data-testid="fe-breadcrumbs"]')).toBeTruthy();
-		expect(screen.getByTestId('fe-system-paste')).toBeTruthy();
-		expect((screen.getByTestId('fe-system-paste') as HTMLButtonElement).disabled).toBe(true);
+		expect(screen.getByTestId('fe-paste')).toBeTruthy();
+		expect((screen.getByTestId('fe-paste') as HTMLButtonElement).disabled).toBe(true);
 		expect(document.querySelector('[data-testid="fe-new-menu"]')).toBeNull();
 		expect(screen.getByTestId('fe-select-multi').parentElement?.getAttribute('data-tooltip')).toBe(
 			'Select multiple items'

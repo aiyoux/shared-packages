@@ -45,7 +45,9 @@ export class ClipboardStore {
 		type: string,
 		label: string,
 		data: T,
-		textPreview?: string
+		textPreview?: string,
+		// Override for an explicit copy or a system read, without changing the saved preference.
+		options?: { syncWithSystem?: boolean }
 	): Promise<ClipboardItem<T>> {
 		const item: ClipboardItem<T> = {
 			id: 'clip_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6),
@@ -58,7 +60,7 @@ export class ClipboardStore {
 
 		this.items = [item as ClipboardItem, ...this.items.slice(0, MAX_CLIPBOARD_HISTORY - 1)];
 
-		if (this.syncWithSystem && typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+		if ((options?.syncWithSystem ?? this.syncWithSystem) && typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
 			try {
 				let textToWrite = '';
 				if (typeof data === 'string') {

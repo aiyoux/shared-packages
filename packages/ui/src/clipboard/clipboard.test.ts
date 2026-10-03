@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { ClipboardStore } from './clipboardStore.svelte.js';
 
 describe('ClipboardStore', () => {
@@ -8,6 +8,21 @@ describe('ClipboardStore', () => {
 		store = new ClipboardStore();
 		store.clear();
 		store.syncWithSystem = false;
+	});
+
+	afterEach(() => vi.unstubAllGlobals());
+
+	it('lets explicit file operations sync without changing the global preference', async () => {
+		const writeText = vi.fn(async (_text: string) => {});
+		vi.stubGlobal('navigator', { clipboard: { writeText } });
+		await store.copy('test/files', 'Files', { ids: ['one'] }, undefined, { syncWithSystem: true });
+		expect(JSON.parse(writeText.mock.calls[0][0])).toEqual({
+			type: 'test/files', label: 'Files', data: { ids: ['one'] }
+		});
+		expect(store.syncWithSystem).toBe(false);
+		store.syncWithSystem = true;
+		await store.copy('text/plain', 'Read from system', 'external', undefined, { syncWithSystem: false });
+		expect(writeText).toHaveBeenCalledTimes(1);
 	});
 
 	it('starts empty with syncWithSystem false', () => {
