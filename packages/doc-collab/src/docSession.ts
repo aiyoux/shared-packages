@@ -49,7 +49,7 @@ export type DocSession<Doc, Op> = {
 	readonly engine: SessionEngine<DocSessionFrame<Doc, Op>, CollabRuntime>;
 	commit(op: Op): Promise<void>;
 	sendTransient(payload: unknown): void;
-	/** The sequencer wrote the file. Tabs in the same room adopt the generation. */
+	/** This tab wrote the file. Tabs in the same room adopt the generation. */
 	announceSaved(generation: number, fingerprint?: string): void;
 	replaceDoc(doc: Doc): void;
 	setRoom(room: string): void;
@@ -247,7 +247,9 @@ export function createDocSession<Doc, Op>(opts: DocSessionOpts<Doc, Op>): DocSes
 			engine.send({ kind: 'transient', payload, seq: 0, scope: 'doc', clientId, frameId: newId() });
 		},
 		announceSaved(generation, fingerprint) {
-			if (destroyed || engine.role !== 'sequencer') return;
+			// Any tab may have written the file: a window's Save runs in its own
+			// tab, follower or not, and every other tab adopts the generation.
+			if (destroyed) return;
 			engine.send({
 				kind: 'saved',
 				generation,

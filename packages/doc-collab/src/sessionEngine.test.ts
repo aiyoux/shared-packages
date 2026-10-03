@@ -211,6 +211,29 @@ describe('session engine: tabs', () => {
 		await settle();
 		expect(saves.sort()).toEqual(['a:7:true', 'b:7:false']);
 	});
+
+	it("a follower tab's save notice reaches the sequencer's tab and every other", async () => {
+		const { tab } = browser();
+		const saves: string[] = [];
+		const mk = (name: string) =>
+			createDocSession<Doc, Op>({
+				room: 'f',
+				tab,
+				initial: { items: [] },
+				reduce,
+				onSaved: (info) => saves.push(`${name}:${info.generation}:${info.local}`)
+			});
+		const a = mk('a');
+		await settle();
+		const b = mk('b');
+		const c = mk('c');
+		await settle();
+		expect([a.role, b.role, c.role]).toEqual(['leader', 'follower', 'follower']);
+		// Any tab may write the session's file (a window's Save runs where it is).
+		b.announceSaved(4);
+		await settle();
+		expect(saves.sort()).toEqual(['a:4:false', 'b:4:true', 'c:4:false']);
+	});
 });
 
 describe("session engine: the sequencer's tab dies with an edit unanswered", () => {
