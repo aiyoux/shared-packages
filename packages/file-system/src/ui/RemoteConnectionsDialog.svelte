@@ -25,6 +25,8 @@
 		onClose: () => void;
 		initialTab?: 'connections' | 'models';
 		appearance?: Snippet;
+		/** How documents save (autosave): the host app's setting. */
+		editing?: Snippet;
 		outputs?: Snippet;
 		agentAccess?: Snippet;
 		onConnected?: (kind: RemoteKind, profile: object) => void;
@@ -32,12 +34,13 @@
 		onDisconnected?: (kind: RemoteKind, id: string) => void;
 	}
 
-	let { onClose, initialTab = 'connections', onConnected, onDisconnected, appearance, outputs, agentAccess }: Props = $props();
+	let { onClose, initialTab = 'connections', onConnected, onDisconnected, appearance, editing, outputs, agentAccess }: Props = $props();
 
 	const TAB_ITEMS = $derived<TabItem[]>([
 		{ value: 'connections', label: 'Connections', testId: 'settings-tab-connections' },
 		{ value: 'models', label: 'AI models', testId: 'settings-tab-models' },
 		...(appearance ? [{ value: 'appearance', label: 'Appearance', testId: 'settings-tab-appearance' }] : []),
+		...(editing ? [{ value: 'editing', label: 'Editing', testId: 'settings-tab-editing' }] : []),
 		...(outputs ? [{ value: 'outputs', label: 'Outputs', testId: 'settings-tab-outputs' }] : [])
 	]);
 	type TabValue = (typeof TAB_ITEMS)[number]['value'];
@@ -96,6 +99,8 @@
 				{@render agentAccess?.()}
 			{:else if tab === 'appearance'}
 				{@render appearance?.()}
+			{:else if tab === 'editing'}
+				{@render editing?.()}
 			{:else if tab === 'outputs'}
 				{@render outputs?.()}
 			{/if}
