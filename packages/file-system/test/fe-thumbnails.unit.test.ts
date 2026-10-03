@@ -59,6 +59,14 @@ describe('getPreviewKind', () => {
 		assert.equal(getPreviewKind(file({ name: 'photo.png', fileType: 'text' })), 'image');
 	});
 
+	it('recognises JSON by extension or MIME, including generic uploads', () => {
+		assert.equal(getPreviewKind(file({ name: 'data.json', contentType: 'application/octet-stream' })), 'text');
+		assert.equal(getPreviewKind(file({ name: 'DATA.JSON', fileType: 'image' })), 'text');
+		assert.equal(getPreviewKind(file({ name: 'data', contentType: 'application/json' })), 'text');
+		assert.equal(getPreviewKind(file({ name: 'data', contentType: 'Application/JSON; charset=utf-8' })), 'text');
+		assert.equal(getPreviewKind({ id: 'f', kind: 'folder', name: 'data.json', parentId: null }), null);
+	});
+
 	it('does not raster-thumb text or audio', () => {
 		assert.equal(hasRasterThumbnail('text'), false);
 		assert.equal(hasRasterThumbnail('audio'), false);
@@ -97,6 +105,7 @@ describe('coerceMediaBlob', () => {
 		assert.equal(coerceMediaBlob(raw, 'shot.png', 'image').type, 'image/png');
 		assert.equal(coerceMediaBlob(raw, 'song.mp3', 'audio').type, 'audio/mpeg');
 		assert.equal(coerceMediaBlob(raw, 'take.wav', 'audio').type, 'audio/wav');
+		assert.equal(coerceMediaBlob(raw, 'data.JSON', 'text').type, 'application/json');
 	});
 });
 

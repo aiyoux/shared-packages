@@ -65,6 +65,35 @@ const svgEntry: ExplorerEntry = {
 };
 
 describe('FeFloatingPreview', () => {
+	it.each(['popup', 'dock'] as const)('shows JSON contents as text in the %s preview', async (variant) => {
+		const text = '{\n  "message": "<b>hello</b>",\n  "count": 9007199254740993\n}';
+		const blob = new Blob([text], { type: 'application/octet-stream' });
+		const entry: ExplorerEntry = {
+			id: 'json-1', kind: 'file', name: 'data.JSON', parentId: null,
+			contentType: 'application/octet-stream'
+		};
+		// Remote connections may expose download rather than readBlob.
+		const driver = { ...driverWith(blob), readBlob: undefined, download: vi.fn(async () => blob) };
+		render(FeFloatingPreview, { props: { entry, driver, variant, onClose: () => {} } });
+		const preview = screen.getByTestId(variant === 'dock' ? 'fe-preview-text' : 'fe-float-text');
+		await waitFor(() => expect(preview.querySelector('pre')?.textContent).toBe(text));
+		expect(preview.querySelector('b')).toBeNull();
+		expect(driver.download).toHaveBeenCalledWith(entry.id);
+	});
+
+	it('previews incomplete JSON and truncates long docked contents', async () => {
+		const text = '{"unfinished": "' + 'x'.repeat(5000);
+		render(FeFloatingPreview, {
+			props: {
+				entry: { id: 'json-2', kind: 'file', name: 'unfinished.json', parentId: null },
+				driver: driverWith(new Blob([text])), variant: 'dock', onClose: () => {}
+			}
+		});
+		const preview = screen.getByTestId('fe-preview-text');
+		await waitFor(() => expect(preview.querySelector('pre')?.textContent).toBe(text.slice(0, 4000)));
+		expect(preview.getAttribute('data-truncated')).toBe('true');
+	});
+
 	it('keeps its image blob across same-file list refreshes and retires it after unmount', async () => {
 		const readBlob = vi.fn(async () => new Blob(['image'], { type: 'image/png' }));
 		const driver = { ...driverWith(new Blob()), readBlob };

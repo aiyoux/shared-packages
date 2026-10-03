@@ -17,8 +17,8 @@ const IMAGE_EXTS = ['.png', '.jpg', '.jpeg', '.webp', '.gif', '.svg', '.avif', '
 const VIDEO_EXTS = ['.mp4', '.webm', '.mov', '.m4v', '.mkv', '.ogv'];
 const AUDIO_EXTS = ['.mp3', '.wav', '.ogg', '.oga', '.m4a', '.aac', '.flac', '.opus', '.weba', '.aiff', '.aif'];
 const PDF_EXTS = ['.pdf'];
-const TEXT_EXTS = ['.txt', '.md', '.markdown'];
-const TEXT_MIME = new Set(['text/plain', 'text/markdown', 'text/x-markdown']);
+const TEXT_EXTS = ['.txt', '.md', '.markdown', '.json'];
+const TEXT_MIME = new Set(['text/plain', 'text/markdown', 'text/x-markdown', 'application/json']);
 const AUDIO_MIME: Record<string, string> = {
 	'.mp3': 'audio/mpeg',
 	'.wav': 'audio/wav',
@@ -75,7 +75,7 @@ export function getPreviewKind(entry: ExplorerEntry): PreviewKind | null {
 	if (entry.fileType === 'audio') return 'audio';
 	if (entry.fileType === 'pdf') return 'pdf';
 	if (entry.fileType === 'text') return 'text';
-	const ct = entry.contentType ?? '';
+	const ct = (entry.contentType ?? '').split(';')[0].trim().toLowerCase();
 	if (ct.startsWith('image/')) return 'image';
 	if (ct.startsWith('video/')) return 'video';
 	if (ct.startsWith('audio/')) return 'audio';
@@ -115,6 +115,7 @@ export function previewKindIcon(kind: PreviewKind): 'image' | 'film' | 'music' |
 
 export function textMimeForName(name: string): string {
 	const e = ext(name);
+	if (e === '.json') return 'application/json';
 	return e === '.md' || e === '.markdown' ? 'text/markdown' : 'text/plain';
 }
 
