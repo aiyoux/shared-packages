@@ -4,7 +4,7 @@
  * with the spinner still up.
  */
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/svelte';
+import { fireEvent, render, screen, waitFor } from '@testing-library/svelte';
 import { createRawSnippet } from 'svelte';
 import FeFloatingPreview from '../src/ui/FeFloatingPreview.svelte';
 import type { ExplorerDriver, ExplorerEntry } from '../src/ui/explorerDriver.ts';
@@ -279,6 +279,101 @@ describe('FeFloatingPreview', () => {
 		});
 		const img = document.querySelector('.fe-float-image') as HTMLImageElement | null;
 		expect(img?.src).toBe(`${location.origin}/api/pic.png`);
+	});
+
+	it.each(['popup', 'dock'] as const)('lists a folder’s thumbnails and names in the %s preview', async (variant) => {
+		const folder: ExplorerEntry = { id: 'dir-1', kind: 'folder', name: 'Shots', parentId: null };
+		const children: ExplorerEntry[] = [
+			{ id: 'child-img', kind: 'file', name: 'frame.png', parentId: 'dir-1', fileType: 'image', contentType: 'image/png', size: 8 },
+			{ id: 'child-dir', kind: 'folder', name: 'raw', parentId: 'dir-1' },
+			{ id: 'child-txt', kind: 'file', name: 'notes.txt', parentId: 'dir-1', fileType: 'text', size: 4 }
+		];
+		const list = vi.fn(async () => ({ entries: children, truncated: true }));
+		const driver = { ...driverWith(new Blob(['x'])), list };
+		render(FeFloatingPreview, { props: { entry: folder, driver, variant, onClose: () => {} } });
+		const listing = await screen.findByTestId('fe-folder-preview');
+		expect(list).toHaveBeenCalledWith({ parentId: 'dir-1' });
+		const rows = [...listing.querySelectorAll('[data-testid="fe-folder-preview-item"]')];
+		expect(rows.map((el) => el.getAttribute('data-name'))).toEqual(['frame.png', 'raw', 'notes.txt']);
+		expect(listing.querySelectorAll('[data-testid="fe-thumb"]')).toHaveLength(3);
+		expect(screen.getByTestId('fe-folder-preview-truncated').textContent).toMatch(/not shown/);
+		expect(screen.queryByText('Preview not available for this file type')).toBeNull();
+		expect(screen.queryByText('Folder is empty')).toBeNull();
+	});
+
+	it('offers folder metadata and replaces unknown size with calculate size', async () => {
+		const folder: ExplorerEntry = {
+			id: 'dir-1', kind: 'folder', name: 'Shots', parentId: null, updatedAt: Date.UTC(2026, 0, 2, 3, 4)
+		};
+		const list = vi.fn(async ({ parentId }: { parentId: string | null }) => {
+			if (parentId === 'dir-1') {
+				return {
+					entries: [
+						{ id: 'a.txt', kind: 'file', name: 'a.txt', parentId: 'dir-1', size: 10 },
+						{ id: 'sub', kind: 'folder', name: 'sub', parentId: 'dir-1' }
+					],
+					truncated: false
+				};
+			}
+			if (parentId === 'sub') {
+				return {
+					entries: [{ id: 'b.txt', kind: 'file', name: 'b.txt', parentId: 'sub', size: 5 }],
+					truncated: false
+				};
+			}
+			return { entries: [], truncated: false };
+		});
+		const driver = { ...driverWith(new Blob()), list };
+		render(FeFloatingPreview, {
+			props: {
+				entry: folder,
+				driver,
+				infoLine: 'Unknown size · 2 Jan 2026',
+				onClose: () => {}
+			}
+		});
+		expect(screen.getByTestId('fe-float-meta-toggle').textContent).toBe('Show metadata');
+		expect(screen.getByTestId('fe-folder-calc-size').textContent).toBe('Calculate size');
+		expect(screen.queryByText(/Unknown size/)).toBeNull();
+		expect(screen.getByTestId('fe-file-preview-info').textContent).toMatch(/2 Jan 2026/);
+
+		await fireEvent.click(screen.getByTestId('fe-float-meta-toggle'));
+		expect(screen.getByTestId('fe-float-meta-toggle').textContent).toBe('Hide metadata');
+		await waitFor(() => expect(screen.getByTestId('fe-folder-meta-items').textContent).toBe('2'));
+		expect(screen.getByTestId('fe-folder-meta-folders').textContent).toBe('1');
+		expect(screen.getByTestId('fe-folder-meta-files').textContent).toBe('1');
+		expect(screen.getByTestId('fe-folder-meta-size').textContent).toBe('Not calculated');
+		expect(screen.getByTestId('fe-folder-meta-modified').textContent).toBeTruthy();
+
+		await fireEvent.click(screen.getByTestId('fe-folder-calc-size'));
+		await waitFor(() => expect(screen.getByTestId('fe-folder-size').textContent).toBe('15 B'));
+		expect(screen.queryByTestId('fe-folder-calc-size')).toBeNull();
+		expect(screen.getByTestId('fe-folder-meta-files').textContent).toBe('2');
+		expect(screen.getByTestId('fe-folder-meta-folders').textContent).toBe('1');
+		expect(screen.getByTestId('fe-folder-meta-size').textContent).toBe('15 B');
+		expect(list).toHaveBeenCalledWith({ parentId: 'sub' });
+	});
+
+	it('says a folder is empty when it has no children', async () => {
+		const folder: ExplorerEntry = { id: 'dir-empty', kind: 'folder', name: 'Empty', parentId: null };
+		render(FeFloatingPreview, {
+			props: { entry: folder, driver: driverWith(new Blob()), onClose: () => {} }
+		});
+		expect((await screen.findByTestId('fe-folder-preview-empty')).textContent).toBe('Folder is empty');
+		expect(screen.queryByText('Preview not available for this file type')).toBeNull();
+		expect(screen.queryByTestId('fe-folder-preview')).toBeNull();
+	});
+
+	it('still says preview is unavailable for a file with no preview kind', async () => {
+		render(FeFloatingPreview, {
+			props: {
+				entry: { id: 'bin-1', kind: 'file', name: 'blob.bin', parentId: null, size: 4 },
+				driver: driverWith(new Blob(['nope'])),
+				onClose: () => {}
+			}
+		});
+		expect(await screen.findByText('Preview not available for this file type')).toBeTruthy();
+		expect(screen.queryByTestId('fe-folder-preview')).toBeNull();
 	});
 
 	it('falls back to an iframe when PDF rendering throws', async () => {

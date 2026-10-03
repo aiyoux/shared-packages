@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onDestroy, tick, untrack, type Snippet } from 'svelte';
 	import FeIcon from './FeIcon.svelte';
+	import FeThumbnail from './FeThumbnail.svelte';
 	import { portalModal } from './portal.js';
 	import {
 		coerceMediaBlob,
@@ -17,6 +18,7 @@
 		type MediaMetaTarget
 	} from './explorerDriver.js';
 	import { formatPreviewReadError } from './explorerError.js';
+	import { formatFolderMeasure, measureFolderSize, type FolderMeasure } from './folderSize.js';
 	import { PanZoomViewport } from '@shared-packages/ui';
 
 	let {
@@ -60,6 +62,7 @@
 	let loading = $state(true);
 	let error = $state('');
 	let kind = $derived(getPreviewKind(entry));
+	const entryKind = $derived(entry.kind);
 	const mediaId = $derived(entry.id);
 	const mediaName = $derived(entry.name);
 	let loadedMedia: { id: string; name: string; kind: string; driver: ExplorerDriver } | null = null;
@@ -76,6 +79,10 @@
 	let pdfFallbackUrl = $state<string | null>(null);
 
 	let metaOpen = $state(false);
+	let folderMeasure = $state<FolderMeasure | null>(null);
+	let folderMeasureBusy = $state(false);
+	let folderMeasureError = $state('');
+	let measureAbort: AbortController | null = null;
 
 	function entryHasMediaMeta(): boolean {
 		const k = kind;
@@ -101,6 +108,15 @@
 	 */
 	let links = $state<Array<{ name: string; missing: boolean }>>([]);
 
+	/** Children of the selected folder. A mismatched id means the list is still for the previous folder. */
+	let folderList = $state<{
+		id: string;
+		status: 'ready' | 'error';
+		entries: ExplorerEntry[];
+		truncated: boolean;
+		error: string;
+	} | null>(null);
+
 	$effect(() => {
 		if (entries.length > 1) {
 			links = [];
@@ -116,6 +132,80 @@
 			})
 			.catch(() => {
 				// A scan that cannot run says nothing, rather than guessing.
+			});
+		return () => {
+			cancelled = true;
+		};
+	});
+
+	$effect(() => {
+		const id = entryKind === 'folder' ? mediaId : '';
+		folderMeasure = null;
+		folderMeasureBusy = false;
+		folderMeasureError = '';
+		const ac = new AbortController();
+		measureAbort = ac;
+		void id;
+		return () => {
+			ac.abort();
+			if (measureAbort === ac) measureAbort = null;
+		};
+	});
+
+	function folderInfoRest(line: string): string {
+		return line.replace(/^Unknown size(?: · )?/, '').trim();
+	}
+
+	function listedKindCount(kindName: 'file' | 'folder'): number {
+		if (!folderList || folderList.id !== entry.id || folderList.status !== 'ready') return 0;
+		return folderList.entries.reduce((n, child) => n + (child.kind === kindName ? 1 : 0), 0);
+	}
+
+	async function calculateFolderSize() {
+		if (entryKind !== 'folder' || folderMeasureBusy) return;
+		const id = mediaId;
+		const signal = measureAbort?.signal;
+		if (!signal || signal.aborted) return;
+		folderMeasureBusy = true;
+		folderMeasureError = '';
+		try {
+			const result = await measureFolderSize(driver, id, { signal });
+			if (signal.aborted || mediaId !== id) return;
+			folderMeasure = result;
+		} catch (err) {
+			if (signal.aborted || (err instanceof DOMException && err.name === 'AbortError')) return;
+			folderMeasureError = 'Could not calculate size';
+		} finally {
+			if (!signal.aborted && mediaId === id) folderMeasureBusy = false;
+		}
+	}
+
+	$effect(() => {
+		if (multi || entryKind !== 'folder') return;
+		const id = mediaId;
+		const d = driver;
+		let cancelled = false;
+		void d
+			.list({ parentId: id })
+			.then((result) => {
+				if (cancelled) return;
+				folderList = {
+					id,
+					status: 'ready',
+					entries: result.entries,
+					truncated: result.truncated,
+					error: ''
+				};
+			})
+			.catch((err) => {
+				if (cancelled) return;
+				folderList = {
+					id,
+					status: 'error',
+					entries: [],
+					truncated: false,
+					error: formatPreviewReadError(err)
+				};
 			});
 		return () => {
 			cancelled = true;
@@ -141,6 +231,12 @@
 		const k = kind;
 		const shouldLoad = loadMedia && !multi;
 		if (!shouldLoad) {
+			untrack(revokeUrl);
+			loading = false;
+			error = '';
+			return;
+		}
+		if (entryKind === 'folder') {
 			untrack(revokeUrl);
 			loading = false;
 			error = '';
@@ -316,11 +412,33 @@
 						items ·
 						<span data-testid="fe-file-preview-size">{sizeText}</span>
 					</p>
+				{:else if entryKind === 'folder'}
+					<div class="fe-float-sub" data-testid="fe-file-preview-info">
+						{#if folderMeasure}
+							<span data-testid="fe-folder-size">{formatFolderMeasure(folderMeasure)}</span>
+						{:else}
+							<button
+								type="button"
+								class="fe-folder-calc"
+								data-testid="fe-folder-calc-size"
+								disabled={folderMeasureBusy}
+								onclick={() => void calculateFolderSize()}
+							>
+								{folderMeasureBusy ? 'Calculating…' : 'Calculate size'}
+							</button>
+						{/if}
+						{#if folderMeasureError}
+							<span class="fe-folder-size-error" data-testid="fe-folder-size-error">{folderMeasureError}</span>
+						{/if}
+						{#if folderInfoRest(infoLine)}
+							<span> · {folderInfoRest(infoLine)}</span>
+						{/if}
+					</div>
 				{:else if infoLine}
 					<p class="fe-float-sub" data-testid="fe-file-preview-info">{infoLine}</p>
 				{/if}
 			</div>
-			{#if !multi && mediaMeta && entryHasMediaMeta()}
+			{#if !multi && (entryKind === 'folder' || (mediaMeta && entryHasMediaMeta()))}
 				<button
 					type="button"
 					class="fe-float-meta-toggle"
@@ -347,12 +465,47 @@
 					>{i < links.length - 1 ? ', ' : ''}{/each}
 			</p>
 		{/if}
-		{#if !multi && metaOpen && mediaMeta}
+		{#if !multi && metaOpen && entryKind === 'folder'}
+			<div class="fe-float-media-meta" data-testid="fe-folder-meta">
+				<dl class="fe-folder-meta">
+					<div class="fe-folder-meta-row">
+						<dt>Items</dt>
+						<dd data-testid="fe-folder-meta-items">
+							{#if !folderList || folderList.id !== entry.id}
+								…
+							{:else if folderList.status === 'error'}
+								—
+							{:else}
+								{folderList.entries.length}{folderList.truncated ? ' (more not shown)' : ''}
+							{/if}
+						</dd>
+					</div>
+					<div class="fe-folder-meta-row">
+						<dt>Folders</dt>
+						<dd data-testid="fe-folder-meta-folders">{folderMeasure ? folderMeasure.folders : listedKindCount('folder')}</dd>
+					</div>
+					<div class="fe-folder-meta-row">
+						<dt>Files</dt>
+						<dd data-testid="fe-folder-meta-files">{folderMeasure ? folderMeasure.files : listedKindCount('file')}</dd>
+					</div>
+					<div class="fe-folder-meta-row">
+						<dt>Size</dt>
+						<dd data-testid="fe-folder-meta-size">{folderMeasure ? formatFolderMeasure(folderMeasure) : 'Not calculated'}</dd>
+					</div>
+					{#if entry.updatedAt}
+						<div class="fe-folder-meta-row">
+							<dt>Modified</dt>
+							<dd data-testid="fe-folder-meta-modified">{new Date(entry.updatedAt).toLocaleString()}</dd>
+						</div>
+					{/if}
+				</dl>
+			</div>
+		{:else if !multi && metaOpen && mediaMeta && entryHasMediaMeta()}
 			<div class="fe-float-media-meta" data-testid="fe-float-meta">
 				{@render mediaMeta({ entry, load: () => readExplorerBlob(driver, entry.id) })}
 			</div>
 		{/if}
-		<div class="fe-float-body" class:text={!multi && kind === 'text'} class:image={!multi && kind === 'image' && !!blobUrl}>
+		<div class="fe-float-body" class:text={!multi && kind === 'text'} class:image={!multi && kind === 'image' && !!blobUrl} class:folder={!multi && entryKind === 'folder'}>
 			{#if multi}
 				<ul class="fe-float-items" data-testid="fe-file-preview-items">
 					{#each entries as n (n.id)}
@@ -362,6 +515,30 @@
 						</li>
 					{/each}
 				</ul>
+			{:else if entryKind === 'folder'}
+				{#if !folderList || folderList.id !== entry.id}
+					<div class="fe-float-loading">
+						<div class="fe-float-spinner"></div>
+					</div>
+				{:else if folderList.status === 'error'}
+					<div class="fe-float-error">{folderList.error}</div>
+				{:else if folderList.entries.length === 0}
+					<div class="fe-folder-empty" data-testid="fe-folder-preview-empty">Folder is empty</div>
+				{:else}
+					<ul class="fe-folder-preview" data-testid="fe-folder-preview">
+						{#each folderList.entries as child (child.id)}
+							<li data-testid="fe-folder-preview-item" data-name={child.name} data-kind={child.kind}>
+								<span class="fe-folder-preview-thumb">
+									<FeThumbnail entry={child} {driver} maxDim={64} />
+								</span>
+								<span class="fe-folder-preview-name">{child.name}</span>
+							</li>
+						{/each}
+						{#if folderList.truncated}
+							<li class="fe-folder-preview-more" data-testid="fe-folder-preview-truncated">More items are not shown</li>
+						{/if}
+					</ul>
+				{/if}
 			{:else if kind && !loadMedia}
 				<button type="button" class="ds-btn ds-btn--sm ds-btn--secondary" data-testid="fe-show-preview" onclick={() => onRequestMedia?.()}>
 					Show preview
@@ -600,9 +777,99 @@
 		justify-content: center;
 	}
 	.fe-float-body.text,
-	.fe-float-body.image {
+	.fe-float-body.image,
+	.fe-float-body.folder {
 		align-items: stretch;
 		justify-content: stretch;
+	}
+	.fe-folder-preview {
+		list-style: none;
+		margin: 0;
+		padding: 8px;
+		width: 100%;
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
+		align-content: start;
+	}
+	.fe-folder-preview li {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		min-width: 0;
+		padding: 4px 6px;
+	}
+	.fe-folder-preview-thumb {
+		flex: 0 0 40px;
+		width: 40px;
+		height: 40px;
+	}
+	.fe-folder-preview-thumb :global(.fe-thumb) {
+		width: 40px;
+		height: 40px;
+	}
+	.fe-folder-preview-name {
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		font-size: 0.85rem;
+	}
+	.fe-folder-preview-more {
+		color: var(--text-muted);
+		font-size: 0.75rem;
+	}
+	.fe-folder-empty {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: 100%;
+		height: 100%;
+		color: var(--text-muted);
+		text-align: center;
+		padding: 24px;
+	}
+	.fe-folder-calc {
+		margin: 0;
+		padding: 0;
+		border: 0;
+		background: none;
+		color: var(--accent);
+		font: inherit;
+		font-size: inherit;
+		cursor: pointer;
+		text-decoration: underline;
+	}
+	.fe-folder-calc:disabled {
+		color: var(--text-muted);
+		cursor: default;
+		text-decoration: none;
+	}
+	.fe-folder-size-error {
+		color: var(--cat-red-soft);
+	}
+	.fe-folder-meta {
+		margin: 0;
+		display: grid;
+		gap: 4px 16px;
+		padding: 10px 12px;
+		border: 1px solid var(--line-hairline);
+		border-radius: 6px;
+		background: var(--surface-3);
+		font-size: 0.78rem;
+		text-align: left;
+	}
+	.fe-folder-meta-row {
+		display: grid;
+		grid-template-columns: max-content 1fr;
+		gap: 16px;
+	}
+	.fe-folder-meta dt {
+		color: var(--text-secondary);
+		font-weight: 600;
+	}
+	.fe-folder-meta dd {
+		margin: 0;
+		color: var(--text-primary);
 	}
 	.fe-float-body.image {
 		overflow: hidden;

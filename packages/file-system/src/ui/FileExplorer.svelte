@@ -2647,7 +2647,10 @@
 	}
 
 	function previewInfoLine(entry: ExplorerEntry): string {
-		const parts = [formatBytes(entry.size)];
+		const parts: string[] = [];
+		// Folder totals are not on the row. The preview offers Calculate size
+		// instead of printing "Unknown size".
+		if (entry.kind !== 'folder') parts.push(formatBytes(entry.size));
 		if (entry.fileType) parts.push(entry.fileType);
 		if (entry.updatedAt) {
 			const when = formatWhen(entry.updatedAt);
