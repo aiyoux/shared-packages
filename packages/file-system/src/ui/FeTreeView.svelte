@@ -36,11 +36,15 @@
 		dropActive = false,
 		dropTargetId = undefined as ExplorerEntryId | null | undefined,
 		onDropInto,
-		onDragOverInto
+		onDragOverInto,
+		showHidden = true
 	}: {
 		driver: ExplorerDriver;
 		activeId: ExplorerEntryId | null;
 		treeVersion?: number;
+		/** Leading-dot rows shown when true. Standalone reuse shows everything;
+		 *  FileExplorer passes its system-files toggle here. */
+		showHidden?: boolean;
 		onNavigate: (id: ExplorerEntryId | null) => void;
 		/** When true, list files as well as folders. FileExplorer dock stays folders-only. */
 		includeFiles?: boolean;
@@ -119,11 +123,19 @@
 	/** Rows a node renders — folders only, unless the tree includes files. */
 	function rowsFor(entries: ExplorerEntry[]): ExplorerEntry[] {
 		return entries
-			.filter((e) => includeFiles || e.kind === 'folder')
+			.filter((e) => (includeFiles || e.kind === 'folder'))
 			.sort((a, b) => {
 				if (a.kind !== b.kind) return a.kind === 'folder' ? -1 : 1;
 				return a.name.localeCompare(b.name);
 			});
+	}
+
+	/** Rows displayed to the user: leading-dot names hidden until revealed.
+	 *  Storage (`children`/`listed`) keeps the raw entries, so mark probing
+	 *  still reads `.git` inside a parent the tree only shows bare. */
+	function visibleRows(entries: ExplorerEntry[]): ExplorerEntry[] {
+		if (showHidden) return entries;
+		return entries.filter((e) => !e.name.startsWith('.'));
 	}
 
 	/** Fetch one folder only. A probe must never start another level of probes. */
@@ -309,11 +321,12 @@
 	{@const isOpen = isFolder && expanded.has(entry.id)}
 	{@const isActive = activeId === entry.id}
 	{@const kids = children.get(entry.id)}
+	{@const shown = visibleRows(kids ?? [])}
 	{@const isLoading = loading.has(entry.id)}
 	{@const folderMark = isFolder ? markFor(entry) : 'plain'}
 	<!-- A folder with a known-empty child list gets no chevron: there is
 		nothing to expand. Unknown (not yet probed) keeps the chevron. -->
-	{@const expandable = !isFolder || kids === undefined || kids.length > 0}
+	{@const expandable = !isFolder || kids === undefined || shown.length > 0}
 	<div class="fe-tree-row-wrap">
 		<!-- svelte-ignore a11y_click_events_have_key_events -->
 		<!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -371,8 +384,8 @@
 						<span class="fe-tree-toggle invisible" aria-hidden="true"></span>
 						Loading…
 					</div>
-				{:else if kids && kids.length > 0}
-					{#each kids as child (child.id)}
+				{:else if shown.length > 0}
+					{#each shown as child (child.id)}
 						{@render node(child, depth + 1)}
 					{/each}
 				{/if}
@@ -415,7 +428,7 @@
 				Loading…
 			</div>
 		{:else}
-			{#each children.get(keyFor(rootId)) ?? [] as child (child.id)}
+			{#each visibleRows(children.get(keyFor(rootId)) ?? []) as child (child.id)}
 				{@render node(child, 1)}
 			{/each}
 		{/if}

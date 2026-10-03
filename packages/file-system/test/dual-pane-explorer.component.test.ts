@@ -9,7 +9,7 @@ import { createLocalExplorerDriver } from '../src/ui/localExplorerDriver.ts';
 import type { OpenProjectContext } from '../src/ui/explorerDriver.ts';
 import { createVfs, resetSharedVfsForTests, type VfsService } from '../src/index.ts';
 import { getMemoryVfs, resetMemoryVfsForTests } from '../src/memoryVfs.ts';
-import { resetLayoutIdsForTests } from '@shared-packages/ui';
+import { createLeaf, persistKv, resetLayoutIdsForTests } from '@shared-packages/ui';
 import { FE_EXPLORER_IDS_MIME } from '../src/ui/copyAcross.ts';
 
 describe('DualPaneExplorer onOpenProject context', () => {
@@ -307,6 +307,167 @@ describe('DualPaneExplorer onOpenProject context', () => {
 		expect(Number(getComputedStyle(overlay).zIndex)).toBeGreaterThan(0);
 		expect(header.contains(overlay)).toBe(false);
 		expect(overlay.contains(header)).toBe(false);
+	});
+
+	it('the quick split button adds an inner window in one click, no edit overlay', async () => {
+		render(DualPaneExplorer, {
+			props: {
+				localDriver: createLocalExplorerDriver(vfs),
+				dualPaneKey: `dpe:quicksplit:${Math.random()}`
+			}
+		});
+		await viWaitFor(() => document.querySelectorAll('[data-testid="files-window-leaf"]').length >= 1);
+
+		// Plain background click first: quick split from a single window.
+		const splitBtn = screen.getByTestId('fe-split-btn');
+		expect(splitBtn).toBeTruthy();
+		await fireEvent.click(splitBtn);
+		await viWaitFor(
+			() => document.querySelectorAll('[data-testid="files-window-leaf"]').length === 2
+		);
+		// The action bypasses the edit overlay entirely.
+		expect(screen.queryByTestId('files-window-edit')).toBeNull();
+		expect(
+			document.querySelector('[data-testid="fe-windows-btn"][aria-pressed="true"]')
+		).toBeNull();
+
+		// The focus followed the new leaf, so the next split targets that one.
+		await fireEvent.click(splitBtn);
+		await viWaitFor(
+			() => document.querySelectorAll('[data-testid="files-window-leaf"]').length === 3
+		);
+		expect(screen.queryByTestId('files-window-edit')).toBeNull();
+	});
+
+	it('a refresh reopens the same plain folder on the same connection', async () => {
+		await vfs.writeFile({ parentId: null, name: 'outside.txt', body: 'x' });
+		const folder = await vfs.mkdir(null, 'Reentry');
+		await vfs.writeFile({ parentId: folder.id, name: 'inside.txt', body: 'hi' });
+
+		const key = `dpe:restore:${Math.random()}`;
+		const first = render(DualPaneExplorer, {
+			props: {
+				localDriver: createLocalExplorerDriver(vfs),
+				dualPaneKey: key
+			}
+		});
+		await viWaitFor(() => document.querySelectorAll('[data-testid="fe-file-row"]').length >= 1);
+
+		const folderRow = [...document.querySelectorAll('[data-testid="fe-folder-row"]')].find(
+			(el) => el.textContent?.includes('Reentry')
+		) as HTMLElement;
+		expect(folderRow).toBeTruthy();
+		await fireEvent.dblClick(folderRow);
+		await viWaitFor(
+			() =>
+				(document.querySelector('[data-testid="fe-file-row"]')?.textContent ?? '').includes(
+					'inside.txt'
+				)
+		);
+		first.unmount();
+
+		// Simulated refresh: same persist key, a fresh explorer.
+		render(DualPaneExplorer, {
+			props: {
+				localDriver: createLocalExplorerDriver(vfs),
+				dualPaneKey: key
+			}
+		});
+		await viWaitFor(
+			() =>
+				(document.querySelector('[data-testid="fe-file-row"]')?.textContent ?? '').includes(
+					'inside.txt'
+				)
+		);
+		const names = [...document.querySelectorAll('[data-testid="fe-file-row"]')].map(
+			(el) => el.textContent ?? ''
+		);
+		expect(names.join(' ')).not.toContain('outside.txt');
+	});
+
+	it('a refresh brings the memory pane back onto the memory connection', async () => {
+		const mem = getMemoryVfs();
+		await mem.writeFile({ parentId: null, name: 'kept-in-mem.txt', body: 'keep' });
+		await vfs.writeFile({ parentId: null, name: 'only-local.txt', body: 'x' });
+
+		const key = `dpe:restore-mem:${Math.random()}`;
+		const first = render(DualPaneExplorer, {
+			props: {
+				localDriver: createLocalExplorerDriver(vfs),
+				dualPaneKey: key
+			}
+		});
+		await viWaitFor(() => document.querySelectorAll('[data-testid="fe-file-row"]').length >= 1);
+		await switchPaneToMemory('left');
+		await viWaitFor(() =>
+			[...document.querySelectorAll('[data-testid="fe-file-row"]')].some((el) =>
+				el.textContent?.includes('kept-in-mem.txt')
+			)
+		);
+		first.unmount();
+
+		render(DualPaneExplorer, {
+			props: {
+				localDriver: createLocalExplorerDriver(vfs),
+				dualPaneKey: key
+			}
+		});
+		// Connection restored: the trigger says Memory...
+		await viWaitFor(() => {
+			const label = document.querySelector('[data-testid="conn-trigger"]')?.textContent ?? '';
+			return /memory/i.test(label);
+		});
+		// ...and the listing is the memory one, not the local fallback.
+		await viWaitFor(() =>
+			[...document.querySelectorAll('[data-testid="fe-file-row"]')].some((el) =>
+				el.textContent?.includes('kept-in-mem.txt')
+			)
+		);
+		const names = [...document.querySelectorAll('[data-testid="fe-file-row"]')].map(
+			(el) => el.textContent ?? ''
+		);
+		expect(names.join(' ')).not.toContain('only-local.txt');
+	});
+
+	it('a saved gone connection falls back to local after refresh', async () => {
+		await vfs.writeFile({ parentId: null, name: 'fresh-local.txt', body: 'x' });
+		const key = `dpe:restore-gone:${Math.random()}`;
+		// Hand-write a saved pane pointing at a b2 connection that no longer
+		// exists — reconnectSavedPanes must land it on local.
+		const root = createLeaf('win-a');
+		const winId = 'win-a';
+		persistKv.setItem(
+			key,
+			JSON.stringify({
+				root,
+				windows: {
+					[winId]: {
+						role: 'b2:gone-row',
+						activeId: 'gone-row',
+						activeKind: 'b2',
+						parentId: null
+					}
+				},
+				focusedId: winId,
+				targetPaneId: winId
+			})
+		);
+
+		render(DualPaneExplorer, {
+			props: {
+				localDriver: createLocalExplorerDriver(vfs),
+				dualPaneKey: key
+			}
+		});
+		// The pane lists the local root: no B2 form, no stale remote label.
+		await viWaitFor(() =>
+			[...document.querySelectorAll('[data-testid="fe-file-row"]')].some((el) =>
+				el.textContent?.includes('fresh-local.txt')
+			)
+		);
+		expect(document.querySelector('[data-testid^="b2-form-wrap-"]')).toBeNull();
+		const label = document.querySelector('[data-testid="conn-trigger"]')?.textContent ?? '';
+		expect(label).not.toMatch(/b2/i);
 	});
 });
 

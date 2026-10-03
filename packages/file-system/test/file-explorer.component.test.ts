@@ -32,6 +32,9 @@ describe('FileExplorer component', () => {
 		persistKv.removeItem('fe:sort');
 		persistKv.removeItem('fe:columns');
 		persistKv.removeItem('fe:foldersFirst');
+		persistKv.removeItem('fe:showPreview');
+		persistKv.removeItem('fe:folderStacks');
+		persistKv.removeItem('fe:showHidden');
 		Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1280 });
 		vfs = createVfs({
 			dbName: `fe-comp-${Date.now()}-${Math.random()}`,
@@ -810,6 +813,9 @@ describe('FileExplorer component', () => {
 		const proj = await vfs.mkdir(null, 'myproj');
 		await vfs.mkdir(proj.id, '.git');
 		await vfs.mkdir(null, 'plain');
+		// This test is about project open/enter — show system files so the
+		// entered folder's .git row is visible (hidden otherwise by default).
+		persistKv.setItem('fe:showHidden', 'true');
 		const opened: string[] = [];
 		render(FileExplorer, {
 			props: {
@@ -1195,6 +1201,211 @@ describe('FileExplorer component', () => {
 		expect(aRow.classList.contains('focused')).toBe(false);
 		expect(bRow.classList.contains('focused')).toBe(false);
 		expect((screen.getByTestId('fe-trash-selected') as HTMLButtonElement).disabled).toBe(true);
+	});
+
+	it('view popup orders options list, detailed, icons and offers slider + sort tools in list mode', async () => {
+		persistKv.removeItem('fe:sort');
+		await vfs.writeFile({ parentId: null, name: 'Banana', body: 'x'.repeat(12) });
+		await vfs.writeFile({ parentId: null, name: 'apple', body: 'x'.repeat(4) });
+		await vfs.writeFile({ parentId: null, name: 'Cherry', body: 'x' });
+		render(FileExplorer, { props: { mode: 'manage', vfs, variant: 'panel' } });
+		await viWaitForRows(3);
+		await fireEvent.click(screen.getByTestId('fe-view-switcher-btn'));
+		await screen.findByTestId('fe-view-popup');
+
+		// Options read list, detailed, icons.
+		const order = Array.from(document.querySelectorAll('.fe-view-popup .fe-view-option')).map(
+			(b) => b.getAttribute('data-testid')
+		);
+		expect(order.slice(0, 3)).toEqual(['fe-view-list', 'fe-view-detailed', 'fe-view-icons']);
+
+		// List mode gets the thumbnail slider and the sort tools.
+		expect(screen.getByTestId('fe-icon-size-slider-wrap')).toBeTruthy();
+		expect(screen.getByTestId('fe-view-folders-first')).toBeTruthy();
+		const list = screen.getByTestId('fe-list');
+		const pxAt = (testid: string) =>
+			Number(
+				((screen.getByTestId(testid) as HTMLElement).style.getPropertyValue('--fe-row-icon-px') || '').replace('px', '')
+			);
+		expect(pxAt('fe-list')).toBeGreaterThan(0);
+
+		const fileNames = () =>
+			(
+				Array.from(document.querySelectorAll('[data-testid="fe-file-row"]')) as HTMLElement[]
+			).map((r) => r.getAttribute('data-name'));
+
+		// No sort yet: driver order, "Reverse order" disabled, no chip.
+		expect(fileNames()).toEqual(['Banana', 'apple', 'Cherry']);
+		expect((screen.getByTestId('fe-sort-dir') as HTMLButtonElement).disabled).toBe(true);
+		expect((screen.getByTestId('fe-view-clear-sort') as HTMLButtonElement).disabled).toBe(true);
+		expect(document.querySelector('[data-testid="fe-sort-chip"]')).toBeNull();
+
+		// Sort by size ascending from the popup: Cherry (1), apple (4), Banana (12).
+		await fireEvent.click(screen.getByTestId('fe-view-sort-size'));
+		expect(fileNames()).toEqual(['Cherry', 'apple', 'Banana']);
+		expect(document.querySelector('[data-testid="fe-sort-chip"]')!.textContent).toMatch(/Sorted by Size/);
+		expect((screen.getByTestId('fe-sort-dir') as HTMLButtonElement).disabled).toBe(false);
+
+		// Same tool again → descending, matching heading behaviour.
+		await fireEvent.click(screen.getByTestId('fe-view-sort-size'));
+		expect(fileNames()).toEqual(['Banana', 'apple', 'Cherry']);
+
+		// Reverse order flips direction without touching the column.
+		await fireEvent.click(screen.getByTestId('fe-sort-dir'));
+		expect(fileNames()).toEqual(['Cherry', 'apple', 'Banana']);
+		expect(screen.getByTestId('fe-view-sort-size').textContent).toMatch(/↑/);
+
+		// The popup's clear option is the way back to manual order.
+		await fireEvent.click(screen.getByTestId('fe-view-clear-sort'));
+		await viWaitFor(() => fileNames().join() === 'Banana,apple,Cherry');
+		expect(persistKv.getItem('fe:sort')).toBeNull();
+		expect((screen.getByTestId('fe-sort-dir') as HTMLButtonElement).disabled).toBe(true);
+	});
+
+	it('shift-click selects the display range between the anchor row and the clicked row', async () => {
+		await vfs.writeFile({ parentId: null, name: 'a.txt', body: 'a' });
+		await vfs.writeFile({ parentId: null, name: 'b.txt', body: 'b' });
+		await vfs.writeFile({ parentId: null, name: 'c.txt', body: 'c' });
+		render(FileExplorer, { props: { mode: 'manage', vfs, variant: 'panel' } });
+		await viWaitForRows(3);
+		const row = (name: string) => document.querySelector(`[data-testid="fe-file-row"][data-name="${name}"]`) as HTMLElement;
+		const selNames = () =>
+			(Array.from(document.querySelectorAll('.fe-row.selected')) as HTMLElement[]).map((r) => r.getAttribute('data-name'));
+
+		// Anchor on a, then shift-click c: the whole a..c range.
+		await fireEvent.click(row('a.txt'));
+		expect(selNames()).toEqual(['a.txt']);
+		await fireEvent.click(row('c.txt'), { shiftKey: true });
+		expect(selNames()).toEqual(['a.txt', 'b.txt', 'c.txt']);
+
+		// Shift-clicking back to b narrows the range from the same anchor.
+		await fireEvent.click(row('b.txt'), { shiftKey: true });
+		expect(selNames()).toEqual(['a.txt', 'b.txt']);
+
+		// A plain click is still exclusive.
+		await fireEvent.click(row('c.txt'));
+		expect(selNames()).toEqual(['c.txt']);
+	});
+
+	it('shift-click in multi mode replaces the selection with the range', async () => {
+		await vfs.writeFile({ parentId: null, name: 'a.txt', body: 'a' });
+		await vfs.writeFile({ parentId: null, name: 'b.txt', body: 'b' });
+		await vfs.writeFile({ parentId: null, name: 'c.txt', body: 'c' });
+		render(FileExplorer, { props: { mode: 'manage', vfs, variant: 'panel' } });
+		await viWaitForRows(3);
+		const row = (name: string) => document.querySelector(`[data-testid="fe-file-row"][data-name="${name}"]`) as HTMLElement;
+		const selNames = () =>
+			(Array.from(document.querySelectorAll('.fe-row.selected')) as HTMLElement[]).map((r) => r.getAttribute('data-name'));
+		await fireEvent.click(screen.getByTestId('fe-select-multi'));
+		await fireEvent.click(row('a.txt'));
+		await fireEvent.click(row('c.txt'));
+		expect(selNames()).toEqual(['a.txt', 'c.txt']);
+		// Shift-click b: range from the anchor c (the last toggle-on) replaces
+		// the loose toggles — old behaviour left a.txt selected alongside.
+		await fireEvent.click(row('b.txt'), { shiftKey: true });
+		expect(selNames()).toEqual(['b.txt', 'c.txt']);
+	});
+
+	it('dragging on the empty list background box-selects rows (auto multi-select)', async () => {
+		await vfs.writeFile({ parentId: null, name: 'a.txt', body: 'a' });
+		await vfs.writeFile({ parentId: null, name: 'b.txt', body: 'b' });
+		await vfs.writeFile({ parentId: null, name: 'c.txt', body: 'c' });
+		render(FileExplorer, { props: { mode: 'manage', vfs, variant: 'panel' } });
+		await viWaitForRows(3);
+		const selNames = () =>
+			(Array.from(document.querySelectorAll('.fe-row.selected')) as HTMLElement[]).map((r) => r.getAttribute('data-name'));
+		const rows = Array.from(document.querySelectorAll('[data-testid="fe-file-row"]')) as HTMLElement[];
+		// Viewport rects one row below the other; jsdom's are all zero.
+		rows.forEach((r, i) => {
+			const y = 10 + i * 40;
+			vi.spyOn(r, 'getBoundingClientRect').mockReturnValue({
+				x: 0, y, left: 0, top: y, width: 100, height: 30, right: 100, bottom: y + 30,
+				toJSON: () => ({})
+			} as DOMRect);
+		});
+		const list = screen.getByTestId('fe-list');
+		expect(selNames()).toEqual([]);
+
+		// Drag from bare background down over rows a and b. Move/up target the
+		// list like a real pointer over it — document-capture listeners see them.
+		firePointer('pointerdown', list, { clientX: 5, clientY: 5 });
+		firePointer('pointermove', list, { clientX: 120, clientY: 75 });
+		await afterDispatch();
+		expect(document.querySelector('[data-testid="fe-marquee"]')).toBeTruthy();
+		expect(selNames()).toEqual(['a.txt', 'b.txt']);
+
+		// Release keeps the box selection. The anchor lands on the furthest
+		// hit (b), so shift-click on c extends the range from there.
+		firePointer('pointerup', list, { clientX: 120, clientY: 75 });
+		await afterDispatch();
+		expect(document.querySelector('[data-testid="fe-marquee"]')).toBeNull();
+		expect(selNames()).toEqual(['a.txt', 'b.txt']);
+		await fireEvent.click(rows[2]!, { shiftKey: true });
+		expect(selNames()).toEqual(['b.txt', 'c.txt']);
+	});
+
+	it('a click on the empty background without dragging clears the selection', async () => {
+		await vfs.writeFile({ parentId: null, name: 'a.txt', body: 'a' });
+		render(FileExplorer, { props: { mode: 'manage', vfs, variant: 'panel' } });
+		await viWaitForRows(1);
+		await fireEvent.click(document.querySelector('[data-testid="fe-file-row"]') as HTMLElement);
+		expect(document.querySelectorAll('.fe-row.selected').length).toBe(1);
+		const list = screen.getByTestId('fe-list');
+		firePointer('pointerdown', list, { clientX: 5, clientY: 5 });
+		firePointer('pointerup', list, { clientX: 5, clientY: 5 });
+		await afterDispatch();
+		expect(document.querySelectorAll('.fe-row.selected').length).toBe(0);
+	});
+
+	it('the thumbnail slider follows into detailed and icons modes and resizes rows live', async () => {
+		persistKv.removeItem('fe:iconSize');
+		persistKv.removeItem('fe:viewMode');
+		await vfs.writeFile({ parentId: null, name: 'Banana', body: 'x' });
+		const { unmount } = render(FileExplorer, { props: { mode: 'manage', vfs, variant: 'panel' } });
+		await viWaitForRows(1);
+
+		// Detailed mode: slider present, row icons take --fe-row-icon-px.
+		await fireEvent.click(screen.getByTestId('fe-view-switcher-btn'));
+		await fireEvent.input(await screen.findByTestId('fe-icon-size-slider'), { target: { value: '240' } });
+		expect(persistKv.getItem('fe:iconSize')).toBe('240');
+		expect((screen.getByTestId('fe-list') as HTMLElement).style.getPropertyValue('--fe-row-icon-px')).toBe('64px');
+		await fireEvent.click(screen.getByTestId('fe-view-switcher-btn'));
+		expect(screen.queryByTestId('fe-icon-size-slider')).toBeNull();
+
+		// Icons mode keeps its own --fe-icon-size plumbing on the same stored value.
+		await fireEvent.click(screen.getByTestId('fe-view-switcher-btn'));
+		await screen.findByTestId('fe-view-icons');
+		expect(screen.getByTestId('fe-list').getAttribute('data-fe-icon-size')).toBe('240');
+		unmount();
+
+		// List mode: slider present again; a fresh explorer keeps the stored size.
+		persistKv.setItem('fe:viewMode', 'list');
+		render(FileExplorer, { props: { mode: 'manage', vfs, variant: 'panel' } });
+		await viWaitForRows(1);
+		await fireEvent.click(screen.getByTestId('fe-view-switcher-btn'));
+		await screen.findByTestId('fe-icon-size-slider');
+		expect(Number((screen.getByTestId('fe-icon-size-slider') as HTMLInputElement).value)).toBe(240);
+	});
+
+	it('the focus outline follows the clicked row when display order differs from driver order', async () => {
+		await vfs.writeFile({ parentId: null, name: 'a.txt', body: 'alpha' });
+		await vfs.writeFile({ parentId: null, name: 'b.txt', body: 'beta' });
+		await vfs.writeFile({ parentId: null, name: 'c.txt', body: 'gamma' });
+		persistKv.setItem('fe:viewMode', 'detailed');
+		render(FileExplorer, { props: { mode: 'manage', vfs, variant: 'panel' } });
+		await viWaitFor(() => document.querySelectorAll('[data-testid="fe-file-row"]').length === 3);
+		// Name descending: display order c, b, a — the reverse of driver order.
+		await fireEvent.click(screen.getByTestId('fe-head-name'));
+		await fireEvent.click(screen.getByTestId('fe-head-name'));
+		const names = () =>
+			Array.from(document.querySelectorAll('[data-testid="fe-file-row"]')).map((r) => r.getAttribute('data-name'));
+		expect(names()).toEqual(['c.txt', 'b.txt', 'a.txt']);
+		const cRow = document.querySelector('[data-testid="fe-file-row"][data-name="c.txt"]') as HTMLElement;
+		await fireEvent.click(cRow);
+		const marked = (cls: string) =>
+			Array.from(document.querySelectorAll(`[data-testid="fe-file-row"].${cls}`)).map((r) => r.getAttribute('data-name'));
+		expect(marked('selected')).toEqual(['c.txt']);
+		expect(marked('focused')).toEqual(['c.txt']);
 	});
 
 	it('delete does not leave the next row looking selected', async () => {
@@ -2017,6 +2228,116 @@ describe('FileExplorer component', () => {
 			return JSON.stringify(n) === JSON.stringify(['apple.txt', 'Docs', 'mud.png']);
 		});
 	});
+
+	it('icons view stacks first-preview children inside folder icons; other views never stack', async () => {
+		persistKv.setItem('fe:showPreview', 'true');
+		const album = await vfs.mkdir(null, 'Album');
+		await vfs.writeFile({ parentId: album.id, name: 'pic.png', body: 'p' });
+		await vfs.writeFile({ parentId: album.id, name: 'note.txt', body: 'n' });
+		await vfs.mkdir(null, 'Empty');
+		render(FileExplorer, { props: { mode: 'manage', vfs, variant: 'panel' } });
+		await viWaitFor(() => document.querySelectorAll('[data-testid="fe-folder-row"]').length === 2);
+		// Default list view: plain rows, no stacks.
+		expect(document.querySelectorAll('[data-testid="fe-folder-stack"]').length).toBe(0);
+
+		await fireEvent.click(screen.getByTestId('fe-view-switcher-btn'));
+		await fireEvent.click(screen.getByTestId('fe-view-icons'));
+		// The Album deck fills from the folder's own listing, capped at 3 tiles.
+		const albumStack = () =>
+			document.querySelector(`[data-testid="fe-folder-stack"][data-stack-for="${album.id}"]`) as HTMLElement;
+		await viWaitFor(() => !!albumStack() && albumStack().querySelectorAll('.fe-stack-tile').length > 0);
+		expect(albumStack().querySelectorAll('.fe-stack-tile').length).toBe(2);
+		// An empty folder keeps the plain fallback icon, no tiles.
+		const emptyStack = document.querySelector(
+			`[data-testid="fe-folder-stack"]:not([data-stack-for="${album.id}"])`
+		) as HTMLElement;
+		expect(emptyStack).toBeTruthy();
+		expect(emptyStack.querySelectorAll('.fe-stack-tile').length).toBe(0);
+		expect(emptyStack.classList.contains('empty')).toBe(true);
+
+		// Detailed view never stacks folders.
+		await fireEvent.click(screen.getByTestId('fe-view-detailed'));
+		await afterDispatch();
+		expect(document.querySelectorAll('[data-testid="fe-folder-stack"]').length).toBe(0);
+	});
+
+	it('the folder stacks toggle turns stacks off and the choice persists across renders', async () => {
+		persistKv.setItem('fe:showPreview', 'true');
+		persistKv.setItem('fe:viewMode', 'icons');
+		const album = await vfs.mkdir(null, 'Album');
+		await vfs.writeFile({ parentId: album.id, name: 'pic.png', body: 'p' });
+		const { unmount } = render(FileExplorer, { props: { mode: 'manage', vfs, variant: 'panel' } });
+		await viWaitFor(
+			() =>
+				document.querySelectorAll(
+					`[data-testid="fe-folder-stack"][data-stack-for="${album.id}"] .fe-stack-tile`
+				).length > 0
+		);
+
+		await fireEvent.click(screen.getByTestId('fe-view-switcher-btn'));
+		await fireEvent.click(screen.getByTestId('fe-view-folder-stacks'));
+		await afterDispatch();
+		expect(document.querySelectorAll('[data-testid="fe-folder-stack"]').length).toBe(0);
+		expect(persistKv.getItem('fe:folderStacks')).toBe('false');
+		unmount();
+
+		// A fresh explorer with the persisted 'false' shows plain folder icons
+		// and the popup checkmark unchecked.
+		render(FileExplorer, { props: { mode: 'manage', vfs, variant: 'panel' } });
+		await viWaitFor(() => document.querySelectorAll('[data-testid="fe-folder-row"]').length === 1);
+		expect(document.querySelectorAll('[data-testid="fe-folder-stack"]').length).toBe(0);
+		await fireEvent.click(screen.getByTestId('fe-view-switcher-btn'));
+		const toggle = screen.getByTestId('fe-view-folder-stacks') as HTMLElement;
+		expect(toggle.classList.contains('active')).toBe(false);
+		expect((toggle.querySelector('.fe-view-check') as HTMLElement).textContent).toBe('');
+
+		// Toggling back on re-stacks and re-persists.
+		await fireEvent.click(toggle);
+		await afterDispatch();
+		expect(
+			document.querySelectorAll(`[data-testid="fe-folder-stack"][data-stack-for="${album.id}"]`).length
+		).toBe(1);
+		expect(persistKv.getItem('fe:folderStacks')).toBe('true');
+	});
+
+	it('the system-files button reveals leading-dot names in list and tree, and persists', async () => {
+		await vfs.writeFile({ parentId: null, name: 'notes.txt', body: 'n' });
+		const git = await vfs.mkdir(null, '.git');
+		await vfs.writeFile({ parentId: git.id, name: 'config', body: 'c' });
+		const { unmount } = render(FileExplorer, { props: { mode: 'manage', vfs, variant: 'panel' } });
+		await viWaitForRows(1);
+		// Default: dot names hidden from the main list (and from pending rows).
+		expect(document.querySelectorAll('[data-testid="fe-folder-row"]').length).toBe(0);
+
+		// The tree dock hides them with the list.
+		await fireEvent.click(screen.getByTestId('fe-tree-dock'));
+		await viWaitFor(() => document.querySelector('[data-testid="fe-tree-row-root"]') != null);
+		expect(document.querySelector('[data-testid="fe-tree-row"][data-name=".git"]')).toBeNull();
+
+		// Reveal: the eye button lights up, the list and tree show .git.
+		await fireEvent.click(screen.getByTestId('fe-hidden-files'));
+		await afterDispatch();
+		await viWaitFor(
+			() => document.querySelector('[data-testid="fe-folder-row"][data-name=".git"]') != null
+		);
+		expect(persistKv.getItem('fe:showHidden')).toBe('true');
+		await viWaitFor(
+			() => document.querySelector('[data-testid="fe-tree-row"][data-name=".git"]') != null
+		);
+
+		// A fresh explorer with the persisted 'true' shows dot names by default.
+		unmount();
+		render(FileExplorer, { props: { mode: 'manage', vfs, variant: 'panel' } });
+		await viWaitFor(
+			() => document.querySelector('[data-testid="fe-folder-row"][data-name=".git"]') != null
+		);
+		// Back off: hidden again, choice persisted.
+		await fireEvent.click(screen.getByTestId('fe-hidden-files'));
+		await afterDispatch();
+		expect(document.querySelector('[data-testid="fe-folder-row"][data-name=".git"]')).toBeNull();
+		expect(document.querySelector('[data-testid="fe-file-row"][data-name="notes.txt"]')).toBeTruthy();
+		expect(persistKv.getItem('fe:showHidden')).toBe('false');
+	});
 });
 
 async function viWaitForRows(min: number, ms = 4000) {
@@ -2026,6 +2347,29 @@ async function viWaitForRows(min: number, ms = 4000) {
 		await new Promise((r) => setTimeout(r, 40));
 	}
 	throw new Error(`expected >= ${min} file rows`);
+}
+
+/** jsdom's PointerEvent drops clientX/button — dispatch a MouseEvent instead. */
+/** Await after dispatching: Svelte 5 flushes state in a microtask. */
+function afterDispatch() {
+	return new Promise((r) => setTimeout(r, 0));
+}
+
+function firePointer(
+	type: 'pointerdown' | 'pointermove' | 'pointerup',
+	target: EventTarget,
+	init: { clientX: number; clientY: number; pointerId?: number; button?: number }
+) {
+	const e = new MouseEvent(type, {
+		bubbles: true,
+		cancelable: true,
+		clientX: init.clientX,
+		clientY: init.clientY,
+		button: init.button ?? 0
+	});
+	Object.defineProperty(e, 'pointerId', { value: init.pointerId ?? 1 });
+	Object.defineProperty(e, 'pointerType', { value: 'mouse' });
+	target.dispatchEvent(e);
 }
 
 /** Predicate may be async — two callers await the VFS inside it. */

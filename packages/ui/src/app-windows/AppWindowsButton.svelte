@@ -5,20 +5,26 @@
 	let {
 		editing = $bindable(false),
 		slicing = $bindable(false),
+		onsplit,
 		portalTarget = '',
 		testid = 'app-windows-btn',
 		sliceTestid = '',
+		splitTestid = '',
 		class: customClass = ''
 	}: {
 		editing?: boolean;
 		slicing?: boolean;
+		/** One-shot action: split the focused inner window, no edit overlay. */
+		onsplit?: () => void;
 		portalTarget?: string;
 		testid?: string;
 		sliceTestid?: string;
+		splitTestid?: string;
 		class?: string;
 	} = $props();
 
 	const sliceId = $derived(sliceTestid || testid.replace(/windows-btn$/, 'slice-btn'));
+	const splitId = $derived(splitTestid || testid.replace(/windows-btn$/, 'split-btn'));
 
 	function portalAction(node: HTMLElement) {
 		if (portalTarget) {
@@ -97,6 +103,32 @@
 			<line x1="20" x2="8.12" y1="4" y2="15.88" />
 			<line x1="14.47" x2="20" y1="14.48" y2="20" />
 			<line x1="8.12" x2="12" y1="8.12" y2="12" />
+		</svg>
+	</button>
+	<button
+		type="button"
+		class="aw-windows-btn {customClass}"
+		data-testid={splitId}
+		title="Quick split"
+		aria-label="Quick split window"
+		data-tooltip="Quick split window"
+		data-tooltip-pos="bottom-right"
+		onclick={() => onsplit?.()}
+	>
+		<svg
+			xmlns="http://www.w3.org/2000/svg"
+			width="16"
+			height="16"
+			viewBox="0 0 24 24"
+			fill="none"
+			stroke="currentColor"
+			stroke-width="2"
+			stroke-linecap="round"
+			stroke-linejoin="round"
+			aria-hidden="true"
+		>
+			<rect width="14" height="14" x="8" y="8" rx="2" />
+			<path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />
 		</svg>
 	</button>
 </div>

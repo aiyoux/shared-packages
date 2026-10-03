@@ -131,12 +131,16 @@ export function saveFileWindows(
 	}
 ) {
 	try {
-		const serializedWindows: Record<string, { role: string; activeId: string; activeKind: ConnectionKind }> = {};
+		const serializedWindows: Record<
+			string,
+			{ role: string; activeId: string; activeKind: ConnectionKind; parentId: string | null }
+		> = {};
 		for (const [id, w] of Object.entries(data.windows)) {
 			serializedWindows[id] = {
 				role: w.role,
 				activeId: w.activeId,
-				activeKind: w.activeKind
+				activeKind: w.activeKind,
+				parentId: w.ctx.parentId ?? null
 			};
 		}
 		persistKv.setItem(
@@ -181,10 +185,23 @@ export function loadFileWindows(
 		const windows: Record<string, FileWindowState> = {};
 		if (parsed.windows && typeof parsed.windows === 'object') {
 			for (const [id, w] of Object.entries(
-				parsed.windows as Record<string, { role?: string; activeId?: string; activeKind?: ConnectionKind }>
+				parsed.windows as Record<
+					string,
+					{
+						role?: string;
+						activeId?: string;
+						activeKind?: ConnectionKind;
+						parentId?: string | null;
+					}
+				>
 			)) {
 				const state = emptyFileWindowState(w.activeKind || 'local', w.role || 'local');
 				if (w.activeId) state.activeId = w.activeId;
+				// The open folder rides along with the connection: FileExplorer
+				// mounts fresh on remount (`initialParentId`), and the pane's
+				// key is bumped after restore so the first listing lands here.
+				state.ctx = emptyFileContext(state.activeKind);
+				state.ctx.parentId = w.parentId ?? null;
 				windows[id] = state;
 			}
 		}

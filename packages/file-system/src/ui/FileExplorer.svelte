@@ -117,6 +117,7 @@
 	import '@shared-packages/design-system/tooltip.css';
 	import { SplitHandle, toast, appClipboard } from '@shared-packages/ui';
 	import FeThumbnail from './FeThumbnail.svelte';
+	import FeFolderStack from './FeFolderStack.svelte';
 	import FeTreeView from './FeTreeView.svelte';
 	import FeFloatingPreview from './FeFloatingPreview.svelte';
 	import {
@@ -487,6 +488,7 @@
 		void innerFs?.dispose();
 		clearDragOutCache();
 		teardownPointerDrag();
+		stopMarquee();
 	});
 	/** off → below (horizontal split) → beside (vertical split) → off. */
 	type PreviewDock = 'off' | 'bottom' | 'right';
@@ -592,6 +594,13 @@
 	);
 	/** Thumbnail fetch resolution — quantised so sliding never refetches per tick. */
 	const thumbFetchDim = $derived(Math.max(128, Math.ceil(iconSize / 64) * 64));
+	/** List/detailed rows carry the same thumbnail knob, scaled into a band a
+	 * row can hold (16px at the slider's minimum, 64px at its maximum). */
+	const rowIconPx = $derived(
+		Math.round(16 + ((iconSize - ICON_SIZE_MIN) / (ICON_SIZE_MAX - ICON_SIZE_MIN)) * 48)
+	);
+	/** Fetch buckets for list/detailed thumbs — coarse so sliding never refetches per tick. */
+	const rowThumbDim = $derived(rowIconPx > 48 ? 128 : rowIconPx > 32 ? 64 : 32);
 	function setIconSize(v: number) {
 		if (!Number.isFinite(v)) return;
 		iconSize = Math.min(ICON_SIZE_MAX, Math.max(ICON_SIZE_MIN, Math.round(v)));
@@ -685,9 +694,27 @@
 		foldersFirst = v;
 		persistKv.setItem(FOLDERS_FIRST_KEY, v ? 'true' : 'false');
 	}
+	const FOLDER_STACKS_KEY = 'fe:folderStacks';
+	/** Icons view: folder icons show a deck of thumbnails from inside. */
+	let folderStacks = $state(persistKv.getItem(FOLDER_STACKS_KEY) !== 'false');
+	function setFolderStacks(v: boolean) {
+		folderStacks = v;
+		persistKv.setItem(FOLDER_STACKS_KEY, v ? 'true' : 'false');
+	}
+	/** Stacks fetch children previews silently — auto-download drivers only. */
+	const folderStacksOk = $derived(explorerThumbsAreEager(driver));
+
+	const HIDDEN_FILES_KEY = 'fe:showHidden';
+	/** Leading-dot ("system") names are hidden until the user asks to see them. */
+	let showHidden = $state(persistKv.getItem(HIDDEN_FILES_KEY) === 'true');
+	function setShowHidden(v: boolean) {
+		showHidden = v;
+		persistKv.setItem(HIDDEN_FILES_KEY, v ? 'true' : 'false');
+	}
+	const hiddenFilesTip = $derived(showHidden ? 'Hide system files' : 'Show system files');
 	let sortSpec = $state<{ col: SortCol; dir: SortDir } | null>(loadSort());
-	/** Sort applies to the detailed view only; other views keep manual/driver order. */
-	const activeSort = $derived(viewMode === 'detailed' ? sortSpec : null);
+	/** Active sort — set from the detailed headings or the list/icons popup tools. */
+	const activeSort = $derived(sortSpec);
 	const sortDir = $derived(sortSpec?.dir ?? 'asc');
 	function toggleSort(col: SortCol) {
 		sortSpec =
@@ -699,6 +726,13 @@
 	function clearSort() {
 		sortSpec = null;
 		persistKv.removeItem(SORT_KEY);
+	}
+	/** Popup sort tools (list/icons): the same spec the detailed headings edit. */
+	const SORT_TOOLS: SortCol[] = ['name', 'size', 'type', 'modified'];
+	function flipSortDir() {
+		if (!sortSpec) return;
+		sortSpec = { col: sortSpec.col, dir: sortSpec.dir === 'asc' ? 'desc' : 'asc' };
+		persistKv.setItem(SORT_KEY, JSON.stringify(sortSpec));
 	}
 	let viewSwitcherOpen = $state(false);
 	/**
@@ -936,6 +970,7 @@
 	let renameBlurTimer: ReturnType<typeof setTimeout> | null = null;
 	let renameBusy = false;
 	let renameValue = $state('');
+	/** Position in `focusableEntries` (display order) — never a `nodes` index. */
 	let focusIndex = $state(-1);
 	let clipboard = $state<{ mode: 'copy' | 'cut'; ids: string[] } | null>(null);
 	let systemClip = $state<SystemClip | null>(null);
@@ -2521,6 +2556,26 @@
 		void healSelected(n);
 	}
 
+	/** Shift-click: replace the selection with the display-order range from the anchor. */
+	function rangeSelect(n: ExplorerEntry) {
+		const targetPos = focusPosById.get(n.id);
+		if (targetPos == null) {
+			selectExclusive(n);
+			return;
+		}
+		const anchorPos = lastSelectedId != null ? focusPosById.get(lastSelectedId) : null;
+		const lo = Math.min(anchorPos ?? targetPos, targetPos);
+		const hi = Math.max(anchorPos ?? targetPos, targetPos);
+		const next = new Set<string>();
+		for (let i = lo; i <= hi; i++) {
+			const entry = focusableEntries[i];
+			if (entry) next.add(entry.id);
+		}
+		selected = next;
+		// Keep the anchor so further shift-clicks extend from the same start.
+		if (anchorPos == null) lastSelectedId = n.id;
+	}
+
 	/** Catalog type from the name. Never blocks select, preview, or delete. */
 	async function healSelected(n: ExplorerEntry) {
 		if (n.kind !== 'file' || !driver.healFileType) return;
@@ -3231,7 +3286,11 @@
 		if (mode === 'save') saveName = n.name;
 	}
 
-	async function applyRowActivate(n: ExplorerEntry, e?: Event) {
+	async function applyRowActivate(n: ExplorerEntry, e?: MouseEvent) {
+		if (e?.shiftKey && (mode === 'manage' || mode === 'open')) {
+			rangeSelect(n);
+			return;
+		}
 		if (canToggleSelect()) {
 			toggleSelect(n.id, e);
 			return;
@@ -3246,6 +3305,115 @@
 		selectExclusive(n);
 	}
 
+	// ── Marquee select — drag from the list's empty background to box-select ──
+	/** Mouse/pen only: touch drags from the background scroll the listing. */
+	let marquee = $state<{
+		x0: number;
+		y0: number;
+		x1: number;
+		y1: number;
+		base: Set<string>;
+		pointerId: number;
+	} | null>(null);
+	let marqueeListen = false;
+	const MARQUEE_SLOP_PX = 4;
+
+	function attachMarqueeListeners() {
+		if (marqueeListen || typeof document === 'undefined') return;
+		marqueeListen = true;
+		document.addEventListener('pointermove', onMarqueeMove, { capture: true, passive: false });
+		document.addEventListener('pointerup', onMarqueeUp, { capture: true });
+		document.addEventListener('pointercancel', onMarqueeUp, { capture: true });
+	}
+
+	function detachMarqueeListeners() {
+		if (!marqueeListen || typeof document === 'undefined') return;
+		marqueeListen = false;
+		document.removeEventListener('pointermove', onMarqueeMove, true);
+		document.removeEventListener('pointerup', onMarqueeUp, true);
+		document.removeEventListener('pointercancel', onMarqueeUp, true);
+	}
+
+	function stopMarquee() {
+		marquee = null;
+		detachMarqueeListeners();
+	}
+
+	function onListPointerDown(e: PointerEvent) {
+		// Same button quirk as onRowPointerDown: jsdom events carry no button.
+		if ((e.button != null && e.button !== 0) || e.pointerType === 'touch') return;
+		const t = e.target;
+		if (!(t instanceof Element) || !listEl?.contains(t)) return;
+		if (
+			t.closest('.fe-row, .fe-dnd-line, input, button, a, [contenteditable="true"], .fe-busy-overlay')
+		)
+			return;
+		marquee = {
+			x0: e.clientX,
+			y0: e.clientY,
+			x1: e.clientX,
+			y1: e.clientY,
+			base: new Set(selected),
+			pointerId: e.pointerId
+		};
+		attachMarqueeListeners();
+	}
+
+	/** Real row ids whose rect intersects the marquee, in display order. */
+	function marqueeHits(m: { x0: number; y0: number; x1: number; y1: number }): string[] {
+		const l = Math.min(m.x0, m.x1);
+		const t = Math.min(m.y0, m.y1);
+		const r = Math.max(m.x0, m.x1);
+		const b = Math.max(m.y0, m.y1);
+		const out: string[] = [];
+		for (const el of listEl?.querySelectorAll('[data-fe-row-id]') ?? []) {
+			const rect = el.getBoundingClientRect();
+			if (rect.right < l || rect.left > r || rect.bottom < t || rect.top > b) continue;
+			out.push(el.getAttribute('data-fe-row-id')!);
+		}
+		return out;
+	}
+
+	function onMarqueeMove(e: PointerEvent) {
+		// @ts-expect-error debug
+		globalThis.__dbg?.('move pid=' + e.pointerId + ' marquee=' + (marquee ? 'set' : 'null'));
+		if (!marquee || e.pointerId !== marquee.pointerId) return;
+		e.preventDefault();
+		marquee = { ...marquee, x1: e.clientX, y1: e.clientY };
+		if (Math.hypot(marquee.x1 - marquee.x0, marquee.y1 - marquee.y0) < MARQUEE_SLOP_PX) return;
+		const next = new Set(marquee.base);
+		for (const id of marqueeHits(marquee)) next.add(id);
+		if (next.size !== selected.size || [...next].some((id) => !selected.has(id))) selected = next;
+	}
+
+	function onMarqueeUp(e: PointerEvent) {
+		if (!marquee || e.pointerId !== marquee.pointerId) return;
+		const m = marquee;
+		stopMarquee();
+		if (Math.hypot(e.clientX - m.x0, e.clientY - m.y0) < MARQUEE_SLOP_PX) {
+			// A plain click on the empty background clears the selection.
+			if (selected.size > 0) selected = new Set();
+			lastSelectedId = null;
+			focusIndex = -1;
+			return;
+		}
+		const next = new Set(m.base);
+		for (const id of marqueeHits(m)) next.add(id);
+		selected = next;
+		// Anchor shift-click at the furthest-down-list hit, like a focus move.
+		let bestPos = -1;
+		let bestId: string | null = null;
+		for (const id of next) {
+			const p = focusPosById.get(id);
+			if (p != null && p > bestPos) {
+				bestPos = p;
+				bestId = id;
+			}
+		}
+		lastSelectedId = bestId;
+		focusIndex = bestPos;
+	}
+
 	const selectedEntries = $derived(
 		[...selected]
 			.map((id) => nodes.find((n) => n.id === id))
@@ -3258,13 +3426,19 @@
 	);
 	const listPending = $derived([...pending, ...saveOps, ...inboundOps]);
 	const listingRows = $derived(mergeListingWithPending(nodes, listPending, parentId));
+	/** System files (leading-dot names) are display-hidden by default — this
+	 *  filter only touches the rendering, so an entry the user names explicitly
+	 *  (open/save path, copy dest) still reaches the backend as before. */
+	const visibleRows = $derived(
+		showHidden ? listingRows : listingRows.filter((r) => !r.node.name.startsWith('.'))
+	);
 	/**
 	 * Detailed view may re-order the listing client-side. Unsorted (or in
 	 * other views) the rows pass through in driver order so sibling
 	 * reorder can stick; a sort always renders a stable copy.
 	 */
 	const sortedRows = $derived(
-		activeSort ? sortListingRows(listingRows, activeSort.col, activeSort.dir, foldersFirst) : listingRows
+		activeSort ? sortListingRows(visibleRows, activeSort.col, activeSort.dir, foldersFirst) : visibleRows
 	);
 	/** Reorder needs the driver's manual order — sorting it away makes before/after drops meaningless. */
 	const canReorder = $derived(caps.supportsSiblingOrder && !activeSort);
@@ -3733,6 +3907,10 @@
 		if (e.key === 'Escape') {
 			e.preventDefault();
 			e.stopPropagation();
+			if (marquee) {
+				stopMarquee();
+				return;
+			}
 			if (innerFs && variant !== 'dialog') {
 				void closeInnerFs();
 				return;
@@ -4472,6 +4650,11 @@
 						haspopup: true
 					})}
 				{/if}
+				{@render actionBtn(kind, 'fe-hidden-files', hiddenFilesTip, 'eye', () => setShowHidden(!showHidden), {
+					active: showHidden,
+					pressed: showHidden,
+					label: 'System files'
+				})}
 				{#if supportsDownload}
 					{@render actionBtn(kind, 'fe-download-selected', 'Download selected to PC', 'download', () => void downloadSelected(), {
 						disabled: downloadBusy || !canDownloadSelection,
@@ -4545,13 +4728,13 @@
 									<FeIcon name="list" size={16} />
 									<span>List</span>
 								</button>
-								<button type="button" class="fe-view-option" class:active={viewMode === 'icons'} data-testid="fe-view-icons" onclick={() => setViewMode('icons')}>
-									<FeIcon name="layout-grid" size={16} />
-									<span>Icons</span>
-								</button>
 								<button type="button" class="fe-view-option" class:active={viewMode === 'detailed'} data-testid="fe-view-detailed" onclick={() => setViewMode('detailed')}>
 									<FeIcon name="table" size={16} />
 									<span>Detailed</span>
+								</button>
+								<button type="button" class="fe-view-option" class:active={viewMode === 'icons'} data-testid="fe-view-icons" onclick={() => setViewMode('icons')}>
+									<FeIcon name="layout-grid" size={16} />
+									<span>Icons</span>
 								</button>
 								<div class="fe-view-divider"></div>
 								<button type="button" class="fe-view-option fe-view-checkbox" class:active={showPreview} data-testid="fe-view-show-preview" onclick={toggleShowPreview}>
@@ -4559,29 +4742,75 @@
 									<span>Show preview</span>
 									<span class="fe-view-check">{showPreview ? '✓' : ''}</span>
 								</button>
-								{#if viewMode === 'icons'}
-									<div class="fe-view-divider"></div>
-									<label class="fe-view-slider" data-testid="fe-icon-size-slider-wrap">
-										<span class="fe-view-slider-label">Thumbnail size</span>
-										<input
-											type="range"
-											min={ICON_SIZE_MIN}
-											max={ICON_SIZE_MAX}
-											step={4}
-											value={iconSize}
-											oninput={(e) => setIconSize(Number(e.currentTarget.value))}
-											data-testid="fe-icon-size-slider"
-											aria-label="Thumbnail size"
-										/>
-									</label>
+								<button
+									type="button"
+									class="fe-view-option fe-view-checkbox"
+									class:active={folderStacks}
+									data-testid="fe-view-folder-stacks"
+									onclick={() => setFolderStacks(!folderStacks)}
+								>
+									<FeIcon name="copy" size={16} />
+									<span>Folder stacks</span>
+									<span class="fe-view-check">{folderStacks ? '✓' : ''}</span>
+								</button>
+								<div class="fe-view-divider"></div>
+								<label class="fe-view-slider" data-testid="fe-icon-size-slider-wrap">
+									<span class="fe-view-slider-label">Thumbnail size</span>
+									<input
+										type="range"
+										min={ICON_SIZE_MIN}
+										max={ICON_SIZE_MAX}
+										step={4}
+										value={iconSize}
+										oninput={(e) => setIconSize(Number(e.currentTarget.value))}
+										data-testid="fe-icon-size-slider"
+										aria-label="Thumbnail size"
+									/>
+								</label>
+								<div class="fe-view-divider"></div>
+								<button type="button" class="fe-view-option fe-view-checkbox" class:active={foldersFirst} data-testid="fe-view-folders-first" onclick={() => setFoldersFirst(!foldersFirst)}>
+									<FeIcon name="folder" size={16} />
+									<span>Folders first</span>
+									<span class="fe-view-check">{foldersFirst ? '✓' : ''}</span>
+								</button>
+								{#if viewMode !== 'detailed'}
+									<div class="fe-view-subhead">Sort by</div>
+									{#each SORT_TOOLS as c (c)}
+										<button
+											type="button"
+											class="fe-view-option fe-view-checkbox"
+											class:active={activeSort?.col === c}
+											data-testid={`fe-view-sort-${c}`}
+											onclick={() => toggleSort(c)}
+										>
+											<span>{DETAIL_COL_META[c].label}</span>
+											<span class="fe-view-check">{activeSort?.col === c ? (activeSort.dir === 'asc' ? '↑' : '↓') : ''}</span>
+										</button>
+									{/each}
+									<button
+										type="button"
+										class="fe-view-option"
+										data-testid="fe-sort-dir"
+										aria-label="Reverse sort direction"
+										disabled={!activeSort}
+										onclick={flipSortDir}
+									>
+										<FeIcon name="arrow-left-right" size={16} />
+										<span>Reverse order</span>
+									</button>
+									<button
+										type="button"
+										class="fe-view-option"
+										data-testid="fe-view-clear-sort"
+										disabled={!activeSort}
+										onclick={clearSort}
+									>
+										<FeIcon name="x" size={16} />
+										<span>Clear sort</span>
+									</button>
 								{/if}
 								{#if viewMode === 'detailed'}
 									<div class="fe-view-divider"></div>
-									<button type="button" class="fe-view-option fe-view-checkbox" class:active={foldersFirst} data-testid="fe-view-folders-first" onclick={() => setFoldersFirst(!foldersFirst)}>
-										<FeIcon name="folder" size={16} />
-										<span>Folders first</span>
-										<span class="fe-view-check">{foldersFirst ? '✓' : ''}</span>
-									</button>
 									<div class="fe-view-subhead">Columns</div>
 									{#each detailColOrder as c (c)}
 										<div class="fe-col-row">
@@ -4753,6 +4982,7 @@
 				{driver}
 				activeId={parentId}
 				{treeVersion}
+				{showHidden}
 				onNavigate={goCrumb}
 				dropActive={dropChromeActive}
 				dropTargetId={dndIntoId}
@@ -4804,6 +5034,7 @@
 		<div
 		class="fe-list"
 		style:--fe-icon-size="{iconSize}px"
+		style:--fe-row-icon-px="{rowIconPx}px"
 		data-fe-icon-size={iconSize}
 		class:fe-list-icons={viewMode === 'icons'}
 		class:fe-list-detailed={viewMode === 'detailed'}
@@ -4815,6 +5046,7 @@
 		role="listbox"
 		aria-busy={listBusy ? 'true' : undefined}
 		class:os-drop={osDropOver || copyHoverActive}
+		onpointerdown={onListPointerDown}
 		bind:this={listEl}
 		ondragover={onListDragOver}
 		ondragleave={onListDragLeave}
@@ -4873,7 +5105,7 @@
 					class:incompatible={!actionable && n.kind === 'file'}
 					class:selected={!row.placeholder && selected.has(n.id)}
 					class:previewed={!row.placeholder && previewEntry?.id === n.id}
-					class:focused={!row.placeholder && i === focusIndex}
+					class:focused={!row.placeholder && focusPosById.get(n.id) === focusIndex}
 					class:fe-dnd-into={showInto}
 					class:fe-dnd-dragging={!row.placeholder && dndDraggingIds.has(n.id)}
 					class:fe-row-icon={viewMode === 'icons'}
@@ -4920,7 +5152,15 @@
 				>
 					{#if viewMode === 'icons'}
 						<span class="fe-row-icon-thumb">
-							{#if rasterThumb}
+							{#if !row.placeholder && n.kind === 'folder' && folderStacks && folderStacksOk}
+								<FeFolderStack
+									entry={n}
+									{driver}
+									enabled={showPreview}
+									fallbackSize={Math.round(iconSize * 0.5)}
+									maxDim={Math.max(32, Math.min(128, Math.round(iconSize * 0.5)))}
+								/>
+							{:else if rasterThumb}
 								<FeThumbnail entry={n} {driver} maxDim={thumbFetchDim} enabled={showPreview} />
 							{:else}
 								<span class="fe-row-icon-fallback">
@@ -4937,9 +5177,9 @@
 						<span class="fe-row-main">
 							<span class="fe-icon">
 								{#if rasterThumb}
-									<FeThumbnail entry={n} {driver} maxDim={32} enabled={showPreview} />
+									<FeThumbnail entry={n} {driver} maxDim={rowThumbDim} enabled={showPreview} />
 								{:else}
-									<FeIcon name={entryIcon(n)} class={entryMarkClass(n)} size={16} />
+									<FeIcon name={entryIcon(n)} class={entryMarkClass(n)} size={rowIconPx} />
 								{/if}
 							</span>
 							{#if renamingId === n.id}
@@ -4966,9 +5206,9 @@
 						<span class="fe-row-main">
 							<span class="fe-icon">
 								{#if rasterThumb}
-									<FeThumbnail entry={n} {driver} maxDim={32} enabled={showPreview} />
+									<FeThumbnail entry={n} {driver} maxDim={rowThumbDim} enabled={showPreview} />
 								{:else}
-									<FeIcon name={entryIcon(n)} class={entryMarkClass(n)} size={16} />
+									<FeIcon name={entryIcon(n)} class={entryMarkClass(n)} size={rowIconPx} />
 								{/if}
 							</span>
 							{#if renamingId === n.id}
@@ -4994,6 +5234,19 @@
 					{/if}
 				</div>
 			{/each}
+			{#if marquee}
+				{@const ml = Math.min(marquee.x0, marquee.x1)}
+				{@const mt = Math.min(marquee.y0, marquee.y1)}
+				<div
+					class="fe-marquee"
+					data-testid="fe-marquee"
+					style:left="{ml}px"
+					style:top="{mt}px"
+					style:width="{Math.abs(marquee.x1 - marquee.x0)}px"
+					style:height="{Math.abs(marquee.y1 - marquee.y0)}px"
+					aria-hidden="true"
+				></div>
+			{/if}
 			{#if dndEnabled && canReorder && dndLine && (dndZone === 'before' || dndZone === 'after')}
 				<div
 					class="fe-dnd-line"
@@ -6747,6 +7000,14 @@
 		width: 2px;
 		right: auto;
 	}
+	/* Rubber-band marquee — drawn in viewport (client) coords over the list. */
+	.fe-marquee {
+		position: fixed;
+		border: 1px solid var(--accent);
+		background: rgb(var(--accent-rgb) / 0.12);
+		pointer-events: none;
+		z-index: 6;
+	}
 	.fe-row.fe-dnd-into {
 		outline: 2px solid var(--accent);
 		outline-offset: -2px;
@@ -6778,6 +7039,16 @@
 	.fe-icon :global(.fe-thumb-fallback) {
 		width: 16px;
 		height: 16px;
+	}
+	/* List/detailed rows size icons and thumbnails from --fe-row-icon-px (the
+	   view popup slider). Icons mode tiles use --fe-icon-size instead. */
+	.fe-list .fe-row .fe-icon,
+	.fe-list .fe-row .fe-icon :global(.fe-thumb),
+	.fe-list .fe-row .fe-icon :global(.fe-thumb-img),
+	.fe-list .fe-row .fe-icon :global(.fe-thumb-loading),
+	.fe-list .fe-row .fe-icon :global(.fe-thumb-fallback) {
+		width: var(--fe-row-icon-px, 16px);
+		height: var(--fe-row-icon-px, 16px);
 	}
 	.fe-row.folder .fe-icon {
 		color: var(--accent-light);
@@ -6935,6 +7206,10 @@
 	}
 	.fe-view-option:hover {
 		background: var(--surface-3);
+	}
+	.fe-view-option:disabled {
+		opacity: 0.45;
+		cursor: not-allowed;
 	}
 	.fe-view-option.active {
 		background: rgb(var(--accent-rgb) / 0.12);
@@ -7105,8 +7380,8 @@
 	.fe-list-detailed .fe-icon,
 	.fe-list-detailed .fe-icon :global(.fe-thumb),
 	.fe-list-detailed .fe-icon :global(.fe-thumb-img) {
-		width: 16px;
-		height: 16px;
+		width: var(--fe-row-icon-px, 16px);
+		height: var(--fe-row-icon-px, 16px);
 	}
 
 	/* ── Detailed view: header row + sort ────────────────────── */

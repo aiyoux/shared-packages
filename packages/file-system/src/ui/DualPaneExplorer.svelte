@@ -60,6 +60,7 @@
 		leafCount,
 		listLeaves,
 		portalToPaneWindowHeader,
+		splitAppWindow,
 		splitLeaf,
 		syncLayoutIdSeq,
 		type LayoutNode,
@@ -822,14 +823,21 @@
 			syncLayoutIdSeq(saved.root);
 			windowRoot = saved.root;
 			if (Object.keys(saved.windows).length > 0) {
-				windows = saved.windows;
+				// Each pane stores the folder it had open. Panes that did not
+				// change connection keys (local ones) keep their pre-restore
+				// FileExplorer mount, so bump the key to open the saved folder.
+				const restored: Record<string, PaneState> = {};
+				for (const [id, w] of Object.entries(saved.windows)) {
+					restored[id] = w.ctx.parentId ? { ...w, explorerKey: w.explorerKey + 1 } : w;
+				}
+				windows = restored;
 			}
 			focusedId = saved.focusedId;
 			targetPaneId = saved.targetPaneId;
 		}
 		layoutRestored = true;
 		onDualChange?.(dualPane);
-		void reloadProfiles();
+		void reloadProfiles().then(() => reconnectSavedPanes());
 		const reloadOnTab = () => {
 			void reloadProfiles();
 		};
@@ -898,7 +906,34 @@
 		}
 	}
 
-	async function connectB2(id: PaneId, profile: B2ConnectionRow) {
+	/**
+	 * Quick split — the header's third window button. Splits the focused inner
+	 * window in place (split right) and gives the new leaf an inherited role,
+	 * with no trip through the edit overlay. Mirrors AppWindows `splitAt`
+	 * against the same manager primitive.
+	 */
+	function quickSplitWindow() {
+		const leaves = listLeaves(windowRoot);
+		const leafId = windows[focusedId] ? focusedId : leaves[leaves.length - 1]?.id;
+		if (!leafId) return;
+		const next = splitAppWindow(
+			windowRoot,
+			windows,
+			leafId,
+			'row',
+			availableRoleDefs,
+			inherit,
+			new Set(availableRoleDefs.map((r) => r.id))
+		);
+		if (!next) return;
+		windowRoot = next.root;
+		windows = next.windows;
+		focusedId = next.newId;
+		windowEditOpen = false;
+		windowSliceOpen = false;
+	}
+
+	async function connectB2(id: PaneId, profile: B2ConnectionRow, opts?: { preserveCtx?: boolean }) {
 		const p = paneState(id);
 		const prevId = p.activeId !== 'local' && p.activeId !== 'memory' ? p.activeId : null;
 		const prevKind = p.activeKind;
@@ -921,7 +956,9 @@
 				explorerKey: p.explorerKey + 1,
 				busy: false,
 				error: '',
-				ctx: emptyCtx('b2')
+				// A fresh connect lands at root; a restore-time reconnect keeps
+				// the folder the pane had open when the page last closed.
+				ctx: opts?.preserveCtx ? p.ctx : emptyCtx('b2')
 			});
 		} catch (e) {
 			const mapped = mapB2Error(e);
@@ -945,7 +982,11 @@
 		}, 400);
 	}
 
-	async function connectMonitor(id: PaneId, profile: MonitorConnectionProfileV1) {
+	async function connectMonitor(
+		id: PaneId,
+		profile: MonitorConnectionProfileV1,
+		opts?: { preserveCtx?: boolean }
+	) {
 		const p = paneState(id);
 		dropDiskDriver(p);
 		const prevId = p.activeId !== 'local' && p.activeId !== 'memory' && p.activeId !== 'disk' ? p.activeId : null;
@@ -972,7 +1013,8 @@
 				explorerKey: p.explorerKey + 1,
 				busy: false,
 				error: '',
-				ctx: emptyCtx('monitor')
+				// Fresh connect lands at root; restore-time reconnect keeps the folder.
+				ctx: opts?.preserveCtx ? p.ctx : emptyCtx('monitor')
 			});
 			startWatchStatusPoll();
 			// setPane bypasses applyPaneCtx, so Git (and anyone else listening
@@ -990,6 +1032,49 @@
 
 	function dropDiskDriver(p: PaneState) {
 		if (p.activeKind === 'disk') p.remoteDriver?.dispose?.();
+	}
+
+	/**
+	 * A refresh brings the pane's connection back: saved remote panes re-acquire
+	 * their driver from the freshly loaded profiles, keeping the folder they had
+	 * open. A saved connection that no longer exists lands on local, like a
+	 * disconnect would.
+	 */
+	async function reconnectSavedPanes() {
+		if (!layoutRestored) return;
+		for (const id of Object.keys(windows)) {
+			const p = paneState(id);
+			if (p.remoteDriver) continue;
+			if (p.activeKind === 'b2') {
+				const row = b2Rows.find((r) => r.rowId === p.activeId);
+				if (row) await connectB2(id, row, { preserveCtx: true });
+				else savedConnectionGone(id);
+			} else if (p.activeKind === 'monitor') {
+				const profile = monitorProfiles.find((mp) => mp.id === p.activeId);
+				if (profile) await connectMonitor(id, profile, { preserveCtx: true });
+				else savedConnectionGone(id);
+			}
+		}
+	}
+
+	/** Saved connection no longer exists after the reload — fall back, as if disconnected. */
+	function savedConnectionGone(id: PaneId) {
+		const p = paneState(id);
+		if (p.activeKind === 'memory') return;
+		releaseRemote(p.activeKind, p.activeId);
+		setPane(id, {
+			role: 'local',
+			activeId: 'local',
+			activeKind: 'local',
+			remoteDriver: null,
+			memoryDriver: null,
+			showB2Form: false,
+			showMonitorForm: false,
+			explorerKey: p.explorerKey + 1,
+			error: '',
+			diskName: '',
+			ctx: emptyCtx('local')
+		});
 	}
 
 	async function connectDisk(id: PaneId, opts?: { replace?: boolean }) {
@@ -2225,6 +2310,7 @@
 		<AppWindowsButton
 			bind:editing={windowEditOpen}
 			bind:slicing={windowSliceOpen}
+			onsplit={quickSplitWindow}
 			testid="fe-windows-btn"
 		/>
 		<!-- Origin storage, not the pane backend. Popups (hideToggles) show this
