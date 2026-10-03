@@ -87,8 +87,11 @@ export class FakeVideoFrame {
 
 export class FakeVideoEncoder {
 	static instances: FakeVideoEncoder[] = [];
+	/** Accept frames but emit no chunks, like an encoder that fails silently. */
+	static silent = false;
 	static reset() {
 		FakeVideoEncoder.instances = [];
+		FakeVideoEncoder.silent = false;
 	}
 
 	configureCalls: VideoEncoderConfig[] = [];
@@ -106,6 +109,7 @@ export class FakeVideoEncoder {
 
 	encode(frame: { timestamp: number }, opts?: { keyFrame?: boolean }) {
 		this.encodeCalls.push({ timestamp: frame.timestamp, keyFrame: opts?.keyFrame });
+		if (FakeVideoEncoder.silent) return;
 		const data = new Uint8Array([0, 0, 0, 1]);
 		this.init.output(
 			{

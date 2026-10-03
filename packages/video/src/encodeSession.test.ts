@@ -244,6 +244,7 @@ describe('encodeSession audio', () => {
 			transform: { sampleRate: 48_000, numberOfChannels: 1 }
 		});
 
+		session.encode(frame(0));
 		await session.flush();
 		expect(muxOrder).toEqual(['add-video-track', 'add-audio-track', 'audio-add', 'finalize']);
 		session.close();
@@ -253,8 +254,30 @@ describe('encodeSession audio', () => {
 		restoreCodecs = installCodecs();
 		const session = createEncodeSession({ width: 64, height: 64, bitrate: '1M' });
 		expect((AudioSampleSource as unknown as { instances: unknown[] }).instances).toHaveLength(0);
+		session.encode(frame(0));
 		await session.flush();
 		expect(muxOrder).toEqual(['add-video-track', 'finalize']);
+		session.close();
+	});
+});
+
+describe('encodeSession empty output', () => {
+	it('refuses to finalize when no frame was encoded', async () => {
+		restoreCodecs = installCodecs();
+		const session = createEncodeSession({ width: 64, height: 64, bitrate: '1M' });
+		await expect(session.flush()).rejects.toThrow(/No video frames were captured/);
+		expect(muxOrder).not.toContain('finalize');
+		session.close();
+	});
+
+	it('refuses to finalize when the encoder returns no data', async () => {
+		restoreCodecs = installCodecs();
+		FakeVideoEncoder.silent = true;
+		const session = createEncodeSession({ width: 64, height: 64, bitrate: '1M' });
+		session.encode(frame(0));
+		session.encode(frame(33_333));
+		await expect(session.flush()).rejects.toThrow(/encoder \(avc1\.42E0\w+, 64×64\) returned no data for 2 frames/);
+		expect(muxOrder).not.toContain('finalize');
 		session.close();
 	});
 });

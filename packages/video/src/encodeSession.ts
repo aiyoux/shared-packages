@@ -106,12 +106,14 @@ export function createEncodeSession(opts: {
 
 	let encoderError: Error | null = null;
 	let muxError: Error | null = null;
+	let packets = 0;
 	let muxChain: Promise<void> = started.then(() => undefined).catch((e) => {
 		muxError = muxError ?? (e instanceof Error ? e : new Error(String(e)));
 	});
 
 	const encoder = new VideoEncoder({
 		output: (chunk, meta) => {
+			packets += 1;
 			const packet = EncodedPacket.fromEncodedChunk(chunk);
 			muxChain = muxChain
 				.then(() => videoSource.add(packet, meta))
@@ -213,6 +215,16 @@ export function createEncodeSession(opts: {
 			await encoder.flush();
 			if (encoderError) throw encoderError;
 			closeEncoder();
+			// Finalizing with no packets writes a valid-looking 152-byte MP4
+			// with no tracks — it saves as a success and never plays.
+			if (encoded === 0) {
+				throw new Error('No video frames were captured from the source, so nothing was exported.');
+			}
+			if (packets === 0) {
+				throw new Error(
+					`The browser's H.264 encoder (${codec}, ${width}×${height}) returned no data for ${encoded} frames.`
+				);
+			}
 			await muxChain;
 			if (muxError) throw muxError;
 			await output.finalize();
