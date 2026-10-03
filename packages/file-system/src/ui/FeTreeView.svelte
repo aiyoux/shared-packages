@@ -91,14 +91,6 @@
 	let listed = $state<Map<string, ExplorerEntry[]>>(new Map());
 	let marks = $state<Map<string, FolderMark>>(new Map());
 	let expanded = $state<Set<string>>(new Set());
-	/**
-	 * Ids the reveal below opened for the active path (as opposed to the
-	 * user opening them with a chevron). Only these may be collapsed again
-	 * when navigation moves elsewhere.
-	 */
-	let autoExpanded = $state<Set<string>>(new Set());
-	/** Ids the user explicitly expanded with a chevron; navigation never collapses these. */
-	let manualExpanded = $state<Set<string>>(new Set());
 	let loading = $state<Set<string>>(new Set());
 	let generation = 0;
 	let pendingLists = new Map<string, Promise<void>>();
@@ -195,20 +187,13 @@
 				await loadChildren(d, node.id);
 				if (revision !== generation) return;
 			}
-			// Re-read the live sets right before assigning: the user may have
+			// Re-read the live set right before assigning: the user may have
 			// toggled a node while getPath / loadChildren were in flight, and
-			// a stale snapshot would undo that toggle. Collapse folders this
-			// reveal previously opened for an old location — unless the user
-			// explicitly expanded them or they are on the new path — then add
-			// the new chain. Without the collapse, childless siblings pile up
-			// open icons with no chevron to close them by.
+			// a stale snapshot would undo that toggle. Opening one folder
+			// must not collapse a sibling that is already open.
 			const next = new Set(expanded);
-			for (const prev of autoExpanded) {
-				if (!chainIds.has(prev) && !manualExpanded.has(prev)) next.delete(prev);
-			}
 			for (const nid of chainIds) next.add(nid);
 			expanded = next;
-			autoExpanded = chainIds;
 		} catch {
 			/* best-effort nav aid; ignore */
 		}
@@ -232,20 +217,12 @@
 
 	function toggleExpand(id: ExplorerEntryId): void {
 		const next = new Set(expanded);
-		const manual = new Set(manualExpanded);
-		const auto = new Set(autoExpanded);
-		if (next.has(id)) {
-			next.delete(id);
-			manual.delete(id);
-			auto.delete(id);
-		} else {
+		if (next.has(id)) next.delete(id);
+		else {
 			next.add(id);
-			manual.add(id);
 			void loadChildren(driver, id);
 		}
 		expanded = next;
-		manualExpanded = manual;
-		autoExpanded = auto;
 	}
 
 	// Driver swap (e.g. switching connections) or a new tree root: old ids
@@ -260,8 +237,6 @@
 			listed = new Map();
 			marks = new Map();
 			expanded = new Set();
-			autoExpanded = new Set();
-			manualExpanded = new Set();
 			loading = new Set();
 			void loadChildren(d, root);
 		});
@@ -325,8 +300,9 @@
 	{@const isLoading = loading.has(entry.id)}
 	{@const folderMark = isFolder ? markFor(entry) : 'plain'}
 	<!-- A folder with a known-empty child list gets no chevron: there is
-		nothing to expand. Unknown (not yet probed) keeps the chevron. -->
-	{@const expandable = !isFolder || kids === undefined || shown.length > 0}
+		nothing to expand. Unknown (not yet probed) keeps the chevron.
+		An open empty folder still shows one, so it can be collapsed. -->
+	{@const expandable = !isFolder || kids === undefined || shown.length > 0 || isOpen}
 	<div class="fe-tree-row-wrap">
 		<!-- svelte-ignore a11y_click_events_have_key_events -->
 		<!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -349,6 +325,12 @@
 			onclick={(e) => {
 				if ((e.target as HTMLElement).closest('.fe-tree-toggle')) return;
 				if (isFolder) {
+					// Navigating here opens the folder. It does not close it;
+					// the chevron is the only collapse control.
+					if (!expanded.has(entry.id)) {
+						expanded = new Set(expanded).add(entry.id);
+						void loadChildren(driver, entry.id);
+					}
 					onNavigate(entry.id);
 				} else {
 					onSelect?.(entry);

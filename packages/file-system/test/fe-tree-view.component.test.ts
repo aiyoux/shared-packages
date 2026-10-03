@@ -211,9 +211,10 @@ describe('FeTreeView', () => {
 		).toBe('plain');
 	});
 
-	it('navigating between childless siblings closes the previous folder', async () => {
+	it('navigating between siblings leaves the previous folder open', async () => {
 		await vfs.mkdir(null, 'alpha');
-		await vfs.mkdir(null, 'beta');
+		const beta = await vfs.mkdir(null, 'beta');
+		await vfs.mkdir(beta.id, 'inside');
 		const driver = createLocalExplorerDriver(vfs);
 		// The harness owns activeId like FileExplorer does: row clicks update
 		// it through props on the live instance.
@@ -223,15 +224,22 @@ describe('FeTreeView', () => {
 		const rowOpen = (name: string) =>
 			!!row(name)?.parentElement?.querySelector(':scope > .fe-tree-children');
 		await viWaitFor(() => !!row('alpha') && !!row('beta'));
-		// Open alpha: its row renders the open (children) container.
 		await fireEvent.click(await screen.findByText('alpha'));
 		await viWaitFor(() => rowOpen('alpha'));
 		expect(rowOpen('beta')).toBe(false);
-		// Open the sibling: alpha must close again even though neither folder
-		// has children (and therefore no chevron to collapse it with).
+		// Opening the sibling must not collapse alpha, even though alpha has
+		// no children of its own.
 		await fireEvent.click(await screen.findByText('beta'));
-		await viWaitFor(() => rowOpen('beta'));
-		expect(rowOpen('alpha')).toBe(false);
+		await viWaitFor(() => rowOpen('beta') && !!screen.queryByText('inside'));
+		expect(rowOpen('alpha')).toBe(true);
+		// The open empty folder grows a chevron so it can still be closed.
+		const alphaToggle = row('alpha')?.querySelector(
+			'[data-testid="fe-tree-toggle"]'
+		) as HTMLButtonElement;
+		expect(alphaToggle.classList.contains('invisible')).toBe(false);
+		await fireEvent.click(alphaToggle);
+		await viWaitFor(() => !rowOpen('alpha'));
+		expect(rowOpen('beta')).toBe(true);
 	});
 
 	it('chevron appears when a subfolder lands and hides when the last one leaves', async () => {
