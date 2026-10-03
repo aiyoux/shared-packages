@@ -328,13 +328,12 @@ export type MonitorTransport = {
 			onProgress?: (transferred: number, total?: number) => void;
 		}
 	): Promise<void>;
-	/** Daemon GET `url` to dest path. NDJSON progress; `X-Fs-Job-Token`. */
+	/** Daemon GET `url` to dest path. NDJSON progress. */
 	pull(
 		url: string,
 		to: string,
 		opts?: {
 			signal?: AbortSignal;
-			jobToken?: string;
 			onProgress?: (transferred: number, total?: number) => void;
 		}
 	): Promise<void>;
@@ -661,10 +660,12 @@ function errorMessageFromBody(parsed: unknown, fallback: string): string {
 	return code ? `[${code}] ${msg}` : msg || fallback;
 }
 
+// The daemon reads only the bearer. `X-Fs-Job-Token` is a response header: as a
+// request header it is outside the monitor's CORS allow-list, so the preflight
+// fails and every cross-origin job call reads as an unreachable monitor.
 function jobAuthHeaders(token: string, extra?: Record<string, string>): Record<string, string> {
 	return {
 		Authorization: `Bearer ${token}`,
-		'X-Fs-Job-Token': token,
 		...extra
 	};
 }
@@ -1563,9 +1564,6 @@ export function createMonitorClient(opts: {
 			});
 		},
 		async pull(pullUrl, to, opts) {
-			const jobToken = opts?.jobToken || (typeof crypto !== 'undefined' && crypto.randomUUID
-				? crypto.randomUUID()
-				: `pull_${Date.now()}`);
 			await postNdjson(
 				'/v1/fs/pull',
 				{ url: pullUrl, to },
@@ -1574,8 +1572,7 @@ export function createMonitorClient(opts: {
 					signal: opts?.signal,
 					onProgress: opts?.onProgress,
 					failLabel: 'Pull',
-					timeoutLabel: 'pull',
-					headers: { 'X-Fs-Job-Token': jobToken }
+					timeoutLabel: 'pull'
 				}
 			);
 		},

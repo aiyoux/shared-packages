@@ -273,12 +273,11 @@ describe('monitor client (direct transport)', () => {
 
 		const ticks: number[] = [];
 		await client.pull('https://f000.example/file', '/tmp/out.bin', {
-			jobToken: 'pull-tok',
 			onProgress: (n) => ticks.push(n)
 		});
 		expect(calls[0]!.url).toBe('http://127.0.0.1:8300/v1/fs/pull');
 		expect(calls[0]!.body).toEqual({ url: 'https://f000.example/file', to: '/tmp/out.bin' });
-		expect(calls[0]!.headers.get('X-Fs-Job-Token')).toBe('pull-tok');
+		expect(calls[0]!.headers.get('X-Fs-Job-Token')).toBeNull();
 		expect(ticks).toContain(2);
 
 		await client.push({
@@ -306,7 +305,7 @@ describe('monitor client (direct transport)', () => {
 		expect(calls[3]!.method).toBe('GET');
 		expect(calls[3]!.url).toBe('http://127.0.0.1:8300/v1/fs/webrtc/jobs/job-1/offer');
 		expect(calls[3]!.headers.get('Authorization')).toBe('Bearer tok-1');
-		expect(calls[3]!.headers.get('X-Fs-Job-Token')).toBe('tok-1');
+		expect(calls[3]!.headers.get('X-Fs-Job-Token')).toBeNull();
 		expect(calls[3]!.body).toBeUndefined();
 
 		const created = await client.webrtcCreateOffer('job-1', 'tok-1');
@@ -314,7 +313,7 @@ describe('monitor client (direct transport)', () => {
 		expect(calls[4]!.method).toBe('POST');
 		expect(calls[4]!.url).toBe('http://127.0.0.1:8300/v1/fs/webrtc/jobs/job-1/offer');
 		expect(calls[4]!.headers.get('Authorization')).toBe('Bearer tok-1');
-		expect(calls[4]!.headers.get('X-Fs-Job-Token')).toBe('tok-1');
+		expect(calls[4]!.headers.get('X-Fs-Job-Token')).toBeNull();
 
 		const answer = await client.webrtcPostAnswer('job-1', 'tok-1', 'o');
 		expect(answer.sdp).toBe('a');
