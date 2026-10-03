@@ -132,6 +132,7 @@
 		listB2Connections,
 		setActiveB2RowId,
 		mapB2Error,
+		parseB2RowId,
 		type B2ConnectionRow,
 		type ConnectionKind
 	} from '../b2/index.js';
@@ -494,6 +495,7 @@
 
 	/** B2 connections held by the saved monitors (never stored here). */
 	let b2Rows = $state<B2ConnectionRow[]>([]);
+	let unreachableB2Monitors = $state<string[]>([]);
 	let monitorProfiles = $state<MonitorConnectionProfileV1[]>([]);
 	const showMonitor = true;
 
@@ -536,6 +538,15 @@
 			hasPeer: Boolean(overrideRight)
 		})
 	);
+	// Saved remote roles remain valid while their profiles are fetched. Reconnect
+	// decides whether a connection is actually gone; the initial empty catalogue
+	// must not replace its panel (and saved folder) with a fresh local one.
+	const availableWindowRoles = $derived([
+		...availableRoleDefs.map((role) => role.id),
+		...Object.values(windows)
+			.filter((pane) => pane.activeKind === 'monitor' || pane.activeKind === 'b2')
+			.map((pane) => pane.role)
+	]);
 
 	function getMemoryDriver(): ExplorerDriver {
 		if (!memoryVfs) memoryVfs = getMemoryVfs();
@@ -729,7 +740,9 @@
 	async function reloadProfiles() {
 		if (showMonitor) monitorProfiles = await listMonitorProfiles();
 		else monitorProfiles = [];
-		b2Rows = (await listB2Connections()).rows;
+		const listing = await listB2Connections();
+		b2Rows = listing.rows;
+		unreachableB2Monitors = listing.unreachable.map((monitor) => monitor.monitorProfileId);
 	}
 
 	const b2Chips = $derived(
@@ -833,27 +846,22 @@
 
 
 	onMount(() => {
+		let alive = true;
 		const stopFavourites = subscribeFolderFavourites((next) => { favourites = next; });
-		const saved = loadFileWindows(persistKey, leftDefault, rightDefault);
-		if (saved) {
-			syncLayoutIdSeq(saved.root);
-			windowRoot = saved.root;
-			if (Object.keys(saved.windows).length > 0) {
-				// Local panes keep their pre-restore mount unless its key changes.
-				// Remount to apply the saved folder and view, including at root.
-				const restored: Record<string, PaneState> = {};
-				for (const [id, w] of Object.entries(saved.windows)) {
-					restored[id] = w.ctx.parentId || w.ctx.viewSettings
-						? { ...w, explorerKey: w.explorerKey + 1 } : w;
-				}
-				windows = restored;
+		void persistKv.ready().then(() => {
+			if (!alive) return;
+			const saved = loadFileWindows(persistKey, leftDefault, rightDefault);
+			if (saved) {
+				syncLayoutIdSeq(saved.root);
+				windowRoot = saved.root;
+				if (Object.keys(saved.windows).length > 0) windows = saved.windows;
+				focusedId = saved.focusedId;
+				targetPaneId = saved.targetPaneId;
 			}
-			focusedId = saved.focusedId;
-			targetPaneId = saved.targetPaneId;
-		}
-		layoutRestored = true;
-		onDualChange?.(dualPane);
-		void reloadProfiles().then(() => reconnectSavedPanes());
+			layoutRestored = true;
+			onDualChange?.(dualPane);
+			void reloadProfiles().then(() => { if (alive) return reconnectSavedPanes(); });
+		});
 		const reloadOnTab = () => {
 			void reloadProfiles();
 		};
@@ -865,7 +873,6 @@
 		const mem = getMemoryVfs();
 		memoryVfs = mem;
 		void mem.ready().then(() => installMemoryFilesHook(mem));
-  let alive = true;
   void opsService().then((service) => {
    if (!alive) return;
    ops = service;
@@ -1065,6 +1072,9 @@
 			if (p.activeKind === 'b2') {
 				const row = b2Rows.find((r) => r.rowId === p.activeId);
 				if (row) await connectB2(id, row, { preserveCtx: true });
+				else if (unreachableB2Monitors.includes(parseB2RowId(p.activeId)?.monitorProfileId ?? '')) {
+					showPaneError(id, 'Could not reach the monitor for this B2 connection. Retry to reopen the saved folder.');
+				}
 				else savedConnectionGone(id);
 			} else if (p.activeKind === 'monitor') {
 				const profile = monitorProfiles.find((mp) => mp.id === p.activeId);
@@ -2307,6 +2317,18 @@
 							{/if}
 						{/snippet}
 					</FileExplorer>
+				{:else if (p.activeKind === 'monitor' || p.activeKind === 'b2') && !p.remoteDriver}
+					<div class="pane-connecting" data-testid={scopedTid(`files-pane-connecting-${id}`)} role="status">
+						{@render paneConn(id)}
+						<p>{p.error ? 'Connection unavailable' : 'Connecting…'}</p>
+						{#if p.error}
+							<button type="button" class="ds-btn ds-btn--sm" disabled={p.busy}
+								data-testid={scopedTid(`files-pane-retry-${id}`)}
+								onclick={async () => { await reloadProfiles(); await reconnectSavedPanes(); }}>
+								Retry connection
+							</button>
+						{/if}
+					</div>
 				{:else}
 					<FileExplorer
 						mode={explorerMode}
@@ -2494,6 +2516,7 @@
 		reach it by `.files-app-windows`, not by testid.
 	-->
 	<div class="files-body" data-testid={tids.body}>
+		{#if layoutRestored}
 		<AppWindows
 			bind:root={windowRoot}
 			bind:windows
@@ -2505,6 +2528,7 @@
 			testidPrefix={scopedTid('files-window')}
 			hostClass="files-app-windows"
 			roles={availableRoleDefs}
+			availableRoles={availableWindowRoles}
 			fallbackRole="local"
 			{inherit}
 			{onSelectRole}
@@ -2532,6 +2556,9 @@
 				{@render explorerPane(id)}
 			{/snippet}
 		</AppWindows>
+		{:else}
+			<div class="pane-connecting" role="status">Loading file manager…</div>
+		{/if}
 	</div>
 	{#if dualPhasePrompt}
 		<DualPhaseConfirm
@@ -2552,6 +2579,10 @@
 </div>
 
 <style>
+	.pane-connecting {
+		padding: 0.75rem;
+		color: var(--text-secondary);
+	}
 	.dpe-pane-conn {
 		min-width: 0;
 		max-width: 100%;
