@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-	FILE_CLIPBOARD_TYPE, fileClipboardFromText, fileClipboardPayload, sameClipboardSource, markClipboardFileMoved
+	FILE_CLIPBOARD_TYPE, FILE_CLIPBOARD_WEB_TYPE, fileClipboardFromItems, fileClipboardFromText, fileClipboardPayload, sameClipboardSource, markClipboardFileMoved
 } from '../src/ui/fileClipboard.ts';
 import type { ExplorerDriver } from '../src/ui/explorerDriver.ts';
 
@@ -12,6 +12,20 @@ const payload = {
 };
 
 describe('file clipboard', () => {
+	it('reads custom image metadata and rejects malformed external references', async () => {
+		const item = (data: unknown) => ({
+			presentationStyle: 'unspecified',
+			types: ['image/png', FILE_CLIPBOARD_WEB_TYPE],
+			getType: async (type: string) => {
+				assert.equal(type, FILE_CLIPBOARD_WEB_TYPE);
+				return new Blob([JSON.stringify(data)], { type: FILE_CLIPBOARD_TYPE });
+			}
+		}) as ClipboardItem;
+		assert.equal((await fileClipboardFromItems([item(payload)]))?.sourceConnectionId, 'bucket-1');
+		assert.equal(await fileClipboardFromItems([item({ ...payload, mode: 'delete' })]), null);
+		assert.equal(await fileClipboardFromItems([{ ...item(payload), types: ['image/png'] }]), null);
+	});
+
 	it('round-trips system envelopes and restores the parent in legacy snapshots', () => {
 		const restored = fileClipboardFromText(JSON.stringify({ type: FILE_CLIPBOARD_TYPE, data: payload }));
 		assert.equal(restored?.entries[0].parentId, 'folder/');

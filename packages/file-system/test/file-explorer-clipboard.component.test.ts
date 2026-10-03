@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, waitFor, within } from '@testing-library/svelte';
-import { appClipboard, persistKv, resetLayoutIdsForTests } from '@shared-packages/ui';
+import { appClipboard, persistKv, resetLayoutIdsForTests, toast } from '@shared-packages/ui';
 import FileExplorer from '../src/ui/FileExplorer.svelte';
 import DualPaneExplorer from '../src/ui/DualPaneExplorer.svelte';
 import { defaultFileWindows, saveFileWindows } from '../src/ui/fileWindows.ts';
-import { FILE_CLIPBOARD_TYPE, fileClipboardPayload } from '../src/ui/fileClipboard.ts';
+import { FILE_CLIPBOARD_TYPE, FILE_CLIPBOARD_WEB_TYPE, fileClipboardPayload } from '../src/ui/fileClipboard.ts';
 import type { ExplorerDriver, ExplorerEntry } from '../src/ui/explorerDriver.ts';
 
 function backend(id = 'test-source') {
@@ -58,7 +58,7 @@ describe('FileExplorer clipboard', () => {
 		}));
 	});
 
-	afterEach(() => { vi.unstubAllGlobals(); appClipboard.clear(); });
+	afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); appClipboard.clear(); });
 
 	async function explorer(driver: ExplorerDriver, initialParentId: string | null = null) {
 		const view = render(FileExplorer, { props: { driver, mode: 'manage', variant: 'panel', initialParentId } });
@@ -71,6 +71,129 @@ describe('FileExplorer clipboard', () => {
 		await waitFor(() => expect(root.querySelector(`[data-id="${id}"]`)).toBeTruthy());
 		await fireEvent.click(root.querySelector(`[data-id="${id}"]`)!);
 	}
+
+	function imageClipboard() {
+		let items: ClipboardItem[] = [];
+		class NativeItem {
+			static supports(type: string) { return type === 'image/png' || type === FILE_CLIPBOARD_WEB_TYPE; }
+			readonly types: string[];
+			constructor(private data: Record<string, Blob | Promise<Blob>>) { this.types = Object.keys(data); }
+			async getType(type: string) { return this.data[type]; }
+		}
+		vi.stubGlobal('ClipboardItem', NativeItem);
+		const write = vi.fn(async (next: ClipboardItem[]) => {
+			for (const item of next) for (const type of item.types) await item.getType(type);
+			items = next;
+		});
+		const clipboard = { write, writeText, read: vi.fn(async () => items), readText: vi.fn(async () => systemText) };
+		vi.stubGlobal('navigator', new Proxy(navigator, {
+			get(target, key) { return key === 'clipboard' ? clipboard : Reflect.get(target, key, target); }
+		}));
+		return { write, setItems: (next: ClipboardItem[]) => { items = next; } };
+	}
+
+	it.each(['monitor', 'b2'])('copies actual %s image bytes and preserves the original file reference for Paste', async (connection) => {
+		const { write } = imageClipboard();
+		const { driver, entries } = backend(connection);
+		entries[0].name = 'photo.png';
+		const png = new Blob(['native PNG bytes'], { type: 'application/octet-stream' });
+		let finishDownload!: (blob: Blob) => void;
+		const download = new Promise<Blob>((resolve) => { finishDownload = resolve; });
+		delete driver.readBlob;
+		driver.download = vi.fn(async () => download);
+		const source = await explorer(driver);
+		const dest = await explorer(driver, 'target');
+		await select(source.root);
+		await fireEvent.click(source.ui.getByTestId('fe-copy'));
+		await waitFor(() => expect(write).toHaveBeenCalledTimes(1));
+		expect(fileClipboardPayload(appClipboard.current?.data)?.ids).toEqual(['file-1']);
+		finishDownload(png);
+		await waitFor(async () => expect((await navigator.clipboard.read())[0]?.types).toContain('image/png'));
+		const item = (await navigator.clipboard.read())[0];
+		expect(item.types).toEqual(['image/png', FILE_CLIPBOARD_WEB_TYPE]);
+		expect(await (await item.getType('image/png')).text()).toBe('native PNG bytes');
+		expect(driver.download).toHaveBeenCalledWith('file-1');
+		expect(writeText).not.toHaveBeenCalled();
+		await fireEvent.click(dest.ui.getByTestId('fe-paste'));
+		await waitFor(() => expect(driver.copy).toHaveBeenCalledWith('file-1', 'target'));
+		expect(driver.writeFile).not.toHaveBeenCalled();
+		// Native paste does not expose custom web MIME; recover refs from the matching image.
+		const event = new Event('paste', { bubbles: true, cancelable: true });
+		const file = new File(['native PNG bytes'], 'image.png', { type: 'image/png' });
+		Object.defineProperty(event, 'clipboardData', { value: {
+			files: { length: 1, item: () => file }, items: [], getData: () => ''
+		} });
+		dest.root.dispatchEvent(event);
+		await waitFor(() => expect(driver.copy).toHaveBeenCalledTimes(2));
+		expect(driver.writeFile).not.toHaveBeenCalled();
+	});
+
+	it('reports image clipboard failures without replacing the image with JSON text', async () => {
+		const report = vi.spyOn(toast, 'error');
+		const { write } = imageClipboard();
+		write.mockRejectedValue(new Error('NotAllowedError'));
+		const { driver, entries } = backend('monitor');
+		entries[0].name = 'photo.png';
+		driver.readBlob = vi.fn(async () => new Blob(['png'], { type: 'image/png' }));
+		const source = await explorer(driver);
+		await select(source.root);
+		await fireEvent.click(source.ui.getByTestId('fe-copy'));
+		await waitFor(() => expect(report).toHaveBeenCalledWith(expect.stringContaining('Could not copy image to the system clipboard')));
+		expect(writeText).not.toHaveBeenCalled();
+		expect(fileClipboardPayload(appClipboard.current?.data)?.ids).toEqual(['file-1']);
+	});
+
+	it('imports an external image instead of using stale image references', async () => {
+		const { write, setItems } = imageClipboard();
+		const { driver, entries } = backend();
+		entries[0].name = 'photo.png';
+		driver.readBlob = async () => new Blob(['original'], { type: 'image/png' });
+		const source = await explorer(driver);
+		await select(source.root);
+		await fireEvent.click(source.ui.getByTestId('fe-copy'));
+		await waitFor(() => expect(write).toHaveBeenCalledTimes(1));
+		await waitFor(async () => expect((await navigator.clipboard.read())[0]?.types).toContain(FILE_CLIPBOARD_WEB_TYPE));
+		setItems([new ClipboardItem({ 'image/png': new Blob(['external'], { type: 'image/png' }) })]);
+		await fireEvent.click(source.ui.getByTestId('fe-paste'));
+		await waitFor(() => expect(driver.writeFile).toHaveBeenCalledTimes(1));
+		expect(driver.copy).not.toHaveBeenCalled();
+		expect(vi.mocked(driver.writeFile!).mock.calls[0][1].type).toBe('image/png');
+	});
+
+	it('uses the native image snapshot when async clipboard metadata belongs to another image', async () => {
+		const { write } = imageClipboard();
+		const { driver, entries } = backend();
+		entries[0].name = 'photo.png';
+		driver.readBlob = async () => new Blob(['original'], { type: 'image/png' });
+		const source = await explorer(driver);
+		await select(source.root);
+		await fireEvent.click(source.ui.getByTestId('fe-copy'));
+		await waitFor(() => expect(write).toHaveBeenCalledTimes(1));
+		await waitFor(async () => expect((await navigator.clipboard.read())[0]?.types).toContain(FILE_CLIPBOARD_WEB_TYPE));
+		const event = new Event('paste', { bubbles: true, cancelable: true });
+		Object.defineProperty(event, 'clipboardData', { value: {
+			files: { length: 1, item: () => new File(['external'], 'pasted.png', { type: 'image/png' }) },
+			items: [], getData: () => ''
+		} });
+		source.root.dispatchEvent(event);
+		await waitFor(() => expect(driver.writeFile).toHaveBeenCalledTimes(1));
+		expect(driver.copy).not.toHaveBeenCalled();
+		expect(vi.mocked(driver.writeFile!).mock.calls[0][1].name).toBe('pasted.png');
+	});
+
+	it('still writes native image data when custom clipboard formats are unsupported', async () => {
+		const { write } = imageClipboard();
+		vi.spyOn(ClipboardItem, 'supports').mockImplementation((type) => type === 'image/png');
+		const { driver, entries } = backend();
+		entries[0].name = 'photo.png';
+		driver.readBlob = async () => new Blob(['original'], { type: 'image/png' });
+		const source = await explorer(driver);
+		await select(source.root);
+		await fireEvent.click(source.ui.getByTestId('fe-copy'));
+		await waitFor(async () => expect((await navigator.clipboard.read())[0]?.types).toEqual(['image/png']));
+		expect(write).toHaveBeenCalledTimes(1);
+		expect(writeText).not.toHaveBeenCalled();
+	});
 
 	it('details Copy syncs file references and Paste copies repeatedly in another pane', async () => {
 		const { driver, entries } = backend();

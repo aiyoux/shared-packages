@@ -116,10 +116,11 @@
 		type SystemClip
 	} from './systemClipboard.js';
 	import {
-		FILE_CLIPBOARD_TYPE, fileClipboardPayload, fileClipboardFromText,
+		FILE_CLIPBOARD_TYPE, fileClipboardPayload, fileClipboardFromText, fileClipboardFromItems, fileClipboardForPastedImage,
 		fileClipboardLabel, clipboardEntries, sameClipboardSource, rememberClipboardSource, markClipboardFileMoved,
 		type FileClipboardPayload
 	} from './fileClipboard.js';
+	import { copyImageToSystem } from './imageClipboard.js';
 	import '@shared-packages/design-system/button.css';
 	import '@shared-packages/design-system/tooltip.css';
 	import { SplitHandle, toast, appClipboard } from '@shared-packages/ui';
@@ -3584,9 +3585,17 @@
 			sourceConnectionId: driver.connectionId, sourceParentId: parentId,
 			ids: entries.map((entry) => entry.id), entries: clipboardEntries(entries)
 		};
+		const image = mode === 'copy' && entries.length === 1 && getPreviewKind(entries[0]) === 'image';
+		// Start before any await so remote downloads do not lose browser user activation.
+		const nativeWrite = image ? copyImageToSystem(driver, entries[0], payload) : null;
+		if (nativeWrite) void nativeWrite.catch(() => {});
 		await appClipboard.copy(FILE_CLIPBOARD_TYPE, fileClipboardLabel(payload), payload,
-			undefined, { syncWithSystem: true });
+			undefined, { syncWithSystem: !image });
 		systemClip = null;
+		if (nativeWrite) {
+			try { await nativeWrite; }
+			catch (e) { reportMessage(`Could not copy image to the system clipboard: ${errMsg(e)}`); }
+		}
 	}
 
 	function entriesForClipboard(): ExplorerEntry[] {
@@ -3757,13 +3766,15 @@
 		try {
 			let text = '';
 			let next: SystemClip | null = null;
+			let files: FileClipboardPayload | null = null;
 			if (navigator.clipboard.read) {
 				try {
 					const items = await navigator.clipboard.read();
+					files = await fileClipboardFromItems(items);
 					for (const item of items) {
 						if (item.types.includes('text/plain')) text = await (await item.getType('text/plain')).text();
 					}
-					if (!fileClipboardFromText(text)) next = await payloadFromClipboardItems(items);
+					if (!files && !fileClipboardFromText(text)) next = await payloadFromClipboardItems(items);
 				} catch (e) {
 					if (!navigator.clipboard.readText) throw e;
 					text = await navigator.clipboard.readText();
@@ -3775,14 +3786,14 @@
 			} else return;
 			// A slow permission prompt must not overwrite a subsequent Copy/Cut.
 			if (appClipboard.current !== previous) return;
-			await adoptSystemClipboard(text, next);
+			await adoptSystemClipboard(text, next, files);
 		} catch {
 			/* permission / unsupported — keep last snapshot from paste */
 		}
 	}
 
-	async function adoptSystemClipboard(text: string, next: SystemClip | null) {
-		const files = fileClipboardFromText(text);
+	async function adoptSystemClipboard(text: string, next: SystemClip | null, refs: FileClipboardPayload | null = null) {
+		const files = refs ?? fileClipboardFromText(text);
 		systemClip = files ? null : next;
 		if (files) {
 			if (JSON.stringify(files) !== JSON.stringify(clipboard)) {
@@ -3805,11 +3816,14 @@
 			if (!rootEl?.contains(target) && !(isTarget && target === document.body)) return;
 			if (e.defaultPrevented || !e.clipboardData) return;
 			const text = e.clipboardData.getData('text/plain');
-			const files = fileClipboardFromText(text);
+			let files = fileClipboardFromText(text);
 			const next = payloadFromDataTransfer(e.clipboardData);
 			e.preventDefault();
 			void (async () => {
-				await adoptSystemClipboard(text, files ? null : next);
+				if (!files && next?.kind === 'image' && next.files.length === 1) {
+					files = await fileClipboardForPastedImage(next.files[0]);
+				}
+				await adoptSystemClipboard(text, files ? null : next, files);
 				await pasteClipboard(files ?? undefined, true);
 			})();
 		};
@@ -3821,7 +3835,9 @@
 		window.addEventListener('focus', onFocus);
 		document.addEventListener('visibilitychange', onVis);
 		document.addEventListener('clipboardchange', onFocus);
-		void refreshSystemClipboard();
+		// Subscribe to lifecycle events, not internal Copy/Cut updates. A remote image
+		// download may still be writing its native clipboard representation.
+		untrack(() => void refreshSystemClipboard());
 		return () => {
 			document.removeEventListener('paste', onPaste, true);
 			window.removeEventListener('focus', onFocus);

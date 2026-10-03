@@ -4,11 +4,28 @@ import {
 	imageNameForType,
 	looksLikeUrl,
 	payloadFromDataTransfer,
+	payloadFromClipboardItems,
 	payloadFromText,
 	textFileName
 } from '../src/ui/systemClipboard.ts';
+import { FILE_CLIPBOARD_WEB_TYPE } from '../src/ui/fileClipboard.ts';
 
 describe('systemClipboard', () => {
+	it('does not import private file metadata as a file instead of the clipboard image', async () => {
+		const image = new Blob(['png'], { type: 'image/png' });
+		const clip = await payloadFromClipboardItems([{
+			presentationStyle: 'unspecified',
+			types: [FILE_CLIPBOARD_WEB_TYPE, 'image/png'],
+			getType: async (type: string) => {
+				assert.equal(type, 'image/png');
+				return image;
+			}
+		} as ClipboardItem]);
+		assert.equal(clip?.kind, 'image');
+		assert.equal(clip?.files.length, 1);
+		assert.equal(clip?.files[0].name, 'clipboard.png');
+	});
+
 	it('detects http(s) and mailto links', () => {
 		assert.equal(looksLikeUrl('https://example.com/a'), true);
 		assert.equal(looksLikeUrl('http://localhost:7990'), true);

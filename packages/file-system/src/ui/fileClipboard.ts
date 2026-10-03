@@ -1,6 +1,7 @@
 import type { ExplorerDriver, ExplorerEntry } from './explorerDriver.js';
 
 export const FILE_CLIPBOARD_TYPE = 'application/x-scratchpad-files';
+export const FILE_CLIPBOARD_WEB_TYPE = `web ${FILE_CLIPBOARD_TYPE}`;
 
 export type FileClipboardPayload = {
 	mode: 'copy' | 'cut';
@@ -58,6 +59,35 @@ export function fileClipboardFromText(text: string): FileClipboardPayload | null
 	} catch {
 		return null;
 	}
+}
+
+export async function fileClipboardFromItems(items: ClipboardItems): Promise<FileClipboardPayload | null> {
+	for (const item of items) {
+		if (!item.types.includes(FILE_CLIPBOARD_WEB_TYPE)) continue;
+		try {
+			return fileClipboardPayload(JSON.parse(await (await item.getType(FILE_CLIPBOARD_WEB_TYPE)).text()));
+		} catch { /* Malformed custom data is not a file operation. */ }
+	}
+	return null;
+}
+
+/** Native paste hides web custom formats. Only recover refs for the same image snapshot. */
+export async function fileClipboardForPastedImage(image: File): Promise<FileClipboardPayload | null> {
+	if (!navigator.clipboard?.read) return null;
+	try {
+		const items = await navigator.clipboard.read();
+		const files = await fileClipboardFromItems(items);
+		if (!files) return null;
+		for (const item of items) {
+			if (!item.types.includes(image.type)) continue;
+			const blob = await item.getType(image.type);
+			if (blob.size !== image.size) continue;
+			const [a, b] = await Promise.all([blob.arrayBuffer(), image.arrayBuffer()]);
+			const bytes = new Uint8Array(b);
+			if (new Uint8Array(a).every((byte, index) => byte === bytes[index])) return files;
+		}
+	} catch { /* Native image paste works even without async clipboard permission. */ }
+	return null;
 }
 
 export function sameClipboardSource(payload: FileClipboardPayload, driver: ExplorerDriver): boolean {

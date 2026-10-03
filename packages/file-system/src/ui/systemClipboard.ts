@@ -1,4 +1,5 @@
 /** Inspect OS clipboard contents for FileExplorer “paste into folder”. */
+import { FILE_CLIPBOARD_WEB_TYPE } from './fileClipboard.js';
 
 export type SystemClipKind = 'files' | 'image' | 'text' | 'link';
 
@@ -114,6 +115,7 @@ export async function payloadFromClipboardItems(items: ClipboardItems): Promise<
 	for (const item of items) {
 		const types = item.types ?? [];
 		for (const type of types) {
+			if (type === FILE_CLIPBOARD_WEB_TYPE) continue;
 			if (type.startsWith('image/')) {
 				const blob = await item.getType(type);
 				images.push(new File([blob], imageNameForType(type), { type }));
