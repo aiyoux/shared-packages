@@ -49,6 +49,8 @@ export {
 
 export { listSttEngines, listTtsEngines, loadSttEngine, loadTtsEngine, listTtsVoices, peekSttEngine, peekTtsEngine } from './engines.js';
 
+export { chatBrowserModelDef, chatBrowserOffers } from './chatOffers.js';
+
 export {
 	CHUNK_OVERLAP_SECONDS,
 	CHUNK_SECONDS,

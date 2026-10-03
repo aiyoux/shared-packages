@@ -23,8 +23,13 @@ import { matchAiModelRef, offerAiRef, type AiModelRef } from './selection.js';
 export const BROWSER_CHAT_MODEL = 'onnx-community/SmolLM2-135M-Instruct-ONNX';
 
 /** The browser chat model as catalog offers: CPU always, GPU when WebGPU hands
- * out an adapter. Text only. `variantId` is the device it runs on. */
-export async function browserChatOffers(): Promise<AiOffer[]> {
+ * out an adapter. Text only. `variantId` is the device it runs on.
+ *
+ * `readiness` filters offers whose model files are not loaded (an offer that
+ * fails it is left out rather than listed disabled). The offer identity is
+ * unchanged, so a saved model ref still matches the device once its files
+ * are loaded. */
+export async function browserChatOffers(readiness?: (offer: AiOffer) => Promise<boolean>): Promise<AiOffer[]> {
 	let gpu = false;
 	try {
 		const nav = navigator as Navigator & { gpu?: { requestAdapter: () => Promise<unknown> } };
@@ -35,7 +40,10 @@ export async function browserChatOffers(): Promise<AiOffer[]> {
 		location: 'browser', modelId: BROWSER_CHAT_MODEL, sourceId: 'this-browser', variantId: device,
 		deviceClass: device === 'webgpu' ? 'gpu' : 'cpu', supported: true, ready: true, available: true, reason: null
 	});
-	return gpu ? [offer('wasm'), offer('webgpu')] : [offer('wasm')];
+	const offers = gpu ? [offer('wasm'), offer('webgpu')] : [offer('wasm')];
+	if (!readiness) return offers;
+	const states = await Promise.all(offers.map(readiness));
+	return offers.filter((_, i) => states[i]);
 }
 
 /** One saved monitor profile, as a run target. */
