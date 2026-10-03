@@ -7019,8 +7019,10 @@
 	.fe-list-pointer-dnd .fe-row {
 		touch-action: none;
 	}
+	/** Focus anchor row: same weight as the selection outline, a shade
+	 *  darker — distinct on close look, not a different style. */
 	.fe-row.focused {
-		outline: 1px solid var(--accent-light);
+		outline: 1px solid color-mix(in srgb, var(--accent, #38bdf8) 75%, black);
 		outline-offset: -1px;
 	}
 	.fe-icon {
