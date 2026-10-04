@@ -1,9 +1,10 @@
 <script lang="ts">
+	import { overlay } from '@shared-packages/design-system';
 	/**
 	 * Shared B2 / monitor connection manager: list of saved profiles,
 	 * then a new or edit form. One popup, two views.
 	 */
-	import { onMount, type Snippet } from 'svelte';
+	import { type Snippet } from 'svelte';
 	import '@shared-packages/design-system/button.css';
 	import ConnectionProfileList, { type ConnectionListRow } from './ConnectionProfileList.svelte';
 	import FeConfirmDialog from './FeConfirmDialog.svelte';
@@ -91,25 +92,11 @@
 		};
 	});
 
-	onMount(() => {
-		const onKey = (e: KeyboardEvent) => {
-			if (e.key !== 'Escape') return;
-			e.preventDefault();
-			if (removePrompt) {
-				removePrompt = null;
-				return;
-			}
-			if (mode === 'list') onClose();
-			else onCancelForm();
-		};
-		window.addEventListener('keydown', onKey);
-		return () => window.removeEventListener('keydown', onKey);
-	});
 </script>
 
 <div class="portal-root" use:portal={'body'}>
-<div class="modal-root" data-testid={testid} role="dialog" aria-modal="true" aria-labelledby="{prefix}-mgr-title">
-	<div class="scrim" onclick={onClose} role="presentation"></div>
+<div class="modal-root" use:overlay={{ kind: 'modal', panel: '.card', onClose: onClose, onEscape: () => (mode === 'list' ? onClose() : onCancelForm()) }} data-testid={testid} role="dialog" aria-modal="true" aria-labelledby="{prefix}-mgr-title">
+	<div class="scrim" role="presentation"></div>
 	<div class="card">
 		<header class="head">
 			<h2 id="{prefix}-mgr-title">{mode === 'list' ? title : formTitle}</h2>

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { overlay } from '@shared-packages/design-system';
   import type { VagueYearCode, VagueMonthCode } from './date';
 
   let {
@@ -63,7 +64,7 @@
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div
     class="absolute inset-0 z-[var(--z-sticky)] flex items-center justify-center bg-[var(--color-background)]/60 backdrop-blur-sm p-4 animate-fade-in"
-    onclick={() => month_selector_open = false}
+    use:overlay={{ kind: 'modal', panel: '[role=dialog]', onClose: () => (month_selector_open = false) }}
   >
     <!-- Modal Card -->
     <div

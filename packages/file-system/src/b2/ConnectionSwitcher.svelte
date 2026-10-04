@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { anchoredPopup } from '@shared-packages/design-system';
 	import type { ExplorerCapabilities } from '../ui/explorerDriver.js';
 	import type { CopyAcrossPath } from '../ui/copyAcross.js';
 	import { capabilityRows, connectionKindNote } from '../ui/connectionInfo.js';
@@ -217,21 +218,7 @@
 		}
 	}
 
-	function onDocPointer(e: PointerEvent) {
-		if (!rootEl) return;
-		if (e.target instanceof Node && rootEl.contains(e.target)) return;
-		menuOpen = false;
-	}
-
-	function onDocKey(e: KeyboardEvent) {
-		if (e.key === 'Escape' && menuOpen) {
-			menuOpen = false;
-			rootEl?.querySelector<HTMLButtonElement>('[data-testid=conn-trigger]')?.focus();
-		}
-	}
-
 	function onMenuKey(e: KeyboardEvent) {
-		if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); onDocKey(e); return; }
 		if (e.key === 'Tab') { menuOpen = false; return; }
 		const items = [...(rootEl?.querySelectorAll<HTMLButtonElement>('[role=menuitem]:not(:disabled)') ?? [])];
 		const index = items.indexOf(document.activeElement as HTMLButtonElement);
@@ -246,15 +233,6 @@
 		items[next]?.focus();
 	}
 
-	$effect(() => {
-		if (typeof document === 'undefined') return;
-		document.addEventListener('pointerdown', onDocPointer);
-		document.addEventListener('keydown', onDocKey);
-		return () => {
-			document.removeEventListener('pointerdown', onDocPointer);
-			document.removeEventListener('keydown', onDocKey);
-		};
-	});
 </script>
 
 {#snippet favouriteRows(connectionKind: ConnectionKind, connectionId?: string)}
@@ -352,7 +330,8 @@
 		{/if}
 		</div>
 
-		<div class="conn-menu" class:open={menuOpen} data-testid="conn-menu" role="menu" aria-label="Connections and favourite folders" tabindex="-1" onkeydown={onMenuKey}>
+		{#if menuOpen}
+		<div use:anchoredPopup={{ anchor: () => rootEl?.querySelector('[data-testid=conn-trigger]'), onClose: () => (menuOpen = false), focusOnOpen: true, offset: 4 }} class="conn-menu" class:open={menuOpen} data-testid="conn-menu" role="menu" aria-label="Connections and favourite folders" tabindex="-1" onkeydown={onMenuKey}>
 			<button
 				type="button"
 				role="menuitem"
@@ -440,6 +419,7 @@
 			{/if}
 
 		</div>
+		{/if}
 	</div>
 	{/if}
 

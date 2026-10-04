@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { overlay } from '@shared-packages/design-system';
 	import FileExplorer from './FileExplorer.svelte';
 	import type { FileTypeId } from '../types.js';
 	import type { ExplorerOpenContext, ExplorerOpenTarget } from './explorerDriver.js';
@@ -25,19 +26,9 @@
 		onClose: () => void;
 	} = $props();
 
-	$effect(() => {
-		const onKey = (e: KeyboardEvent) => {
-			if (e.key !== 'Escape') return;
-			if (document.querySelector('.confirm-modal, [data-testid="fe-trash-popup"]')) return;
-			e.preventDefault();
-			onClose();
-		};
-		window.addEventListener('keydown', onKey);
-		return () => window.removeEventListener('keydown', onKey);
-	});
 </script>
 
-<div class="vfs-scrim" role="presentation" data-testid={testid} onclick={onClose}>
+<div class="vfs-scrim" use:overlay={{ kind: 'modal', portal: true, panel: '.vfs-panel', onClose: onClose }} role="presentation" data-testid={testid}>
 	<!-- svelte-ignore a11y_click_events_have_key_events -->
 	<!-- svelte-ignore a11y_no_static_element_interactions -->
 	<div class="vfs-panel" onclick={(e) => e.stopPropagation()}>

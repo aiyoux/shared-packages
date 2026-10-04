@@ -83,3 +83,6 @@ export {
 	rowFromPoint
 } from './tree-dnd.ts';
 export type { PointerDragMods, PointerDragOptions, PointerDragSession } from './tree-dnd.ts';
+
+export { overlay, registerOverlay, hasOpenOverlay, isTopOverlay, overlayDepth, overlayBaseZ, type OverlayOptions } from './overlay.ts';
+export { anchoredPopup, popupPosition, dismissDetails, type PopupOptions, type Placement } from './anchoredPopup.ts';

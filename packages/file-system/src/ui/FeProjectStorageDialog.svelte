@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { overlay } from '@shared-packages/design-system';
 	/**
 	 * ProjectStoragePanel in the same overlay chrome as FeStorageDialog.
 	 */
@@ -45,13 +46,13 @@
 
 <div class="portal-root" use:portalModal>
 <div
-	class="wrap"
+	class="wrap" use:overlay={{ kind: 'modal', panel: '.card', onClose: onClose }}
 	role="dialog"
 	aria-modal="true"
 	aria-label="Project storage"
 	data-testid="fe-project-storage-dialog"
 >
-	<button type="button" class="scrim" aria-label="Close" onclick={onClose}></button>
+	<button type="button" class="scrim" aria-label="Close"></button>
 	<div class="card">
 		<h2>Project storage</h2>
 		<ProjectStoragePanel

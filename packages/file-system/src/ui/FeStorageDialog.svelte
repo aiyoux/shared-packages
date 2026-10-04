@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { overlay } from '@shared-packages/design-system';
 	/**
 	 * Storage inspector + integrity check, in one dialog.
 	 *
@@ -139,8 +140,8 @@
 </script>
 
 <div class="portal-root" use:portalModal>
-<div class="wrap" role="dialog" aria-modal="true" aria-label={heading} data-testid="fe-storage-dialog">
-	<button type="button" class="scrim" aria-label="Close" onclick={onClose}></button>
+<div class="wrap" use:overlay={{ kind: 'modal', panel: '.card', onClose: onClose }} role="dialog" aria-modal="true" aria-label={heading} data-testid="fe-storage-dialog">
+	<button type="button" class="scrim" aria-label="Close"></button>
 	<div class="card">
 		<h2>{heading}</h2>
 

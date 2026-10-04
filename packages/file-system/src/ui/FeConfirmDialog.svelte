@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { overlay } from '@shared-packages/design-system';
 	import '@shared-packages/design-system/button.css';
 	import type { FeConfirmCopy } from './feConfirm.js';
 	import { portalModal } from './portal.js';
@@ -12,28 +12,18 @@
 
 	let { copy, onConfirm, onCancel }: Props = $props();
 
-	onMount(() => {
-		const onKey = (e: KeyboardEvent) => {
-			if (e.key === 'Escape') {
-				e.preventDefault();
-				onCancel();
-			}
-		};
-		window.addEventListener('keydown', onKey);
-		return () => window.removeEventListener('keydown', onKey);
-	});
 </script>
 
 <div class="portal-root" use:portalModal>
 <div
-	class="modal-root"
+	class="modal-root" use:overlay={{ kind: 'modal', panel: '.card', onClose: onCancel }}
 	data-testid="fe-confirm-dialog"
 	role="dialog"
 	aria-modal="true"
 	aria-labelledby="fe-confirm-title"
 	aria-describedby="fe-confirm-body"
 >
-	<div class="scrim" onclick={onCancel} role="presentation"></div>
+	<div class="scrim" role="presentation"></div>
 	<div class="card">
 		<h2 id="fe-confirm-title" data-testid="fe-confirm-title">{copy.title}</h2>
 		<p id="fe-confirm-body" data-testid="fe-confirm-body">{copy.body}</p>

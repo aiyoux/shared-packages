@@ -178,22 +178,7 @@
 		};
 	});
 
-	$effect(() => {
-		if (!open) return;
-		const onDoc = (e: MouseEvent) => {
-			if (wrapEl && e.target instanceof Node && wrapEl.contains(e.target)) return;
-			open = false;
-		};
-		const onKey = (e: KeyboardEvent) => {
-			if (e.key === 'Escape') open = false;
-		};
-		document.addEventListener('mousedown', onDoc);
-		document.addEventListener('keydown', onKey);
-		return () => {
-			document.removeEventListener('mousedown', onDoc);
-			document.removeEventListener('keydown', onKey);
-		};
-	});
+
 </script>
 
 <div class="fe-persist-wrap {className}" bind:this={wrapEl}>
@@ -228,7 +213,7 @@
 			data-status={status}
 			role="dialog"
 			aria-label={heading}
-			use:escapePaneClip
+			use:escapePaneClip={{ onClose: () => (open = false) }}
 		>
 			<p class="fe-persist-pop-title">{heading}</p>
 			<p class="fe-persist-explain" data-testid="fe-storage-persist-explain">{explanation}</p>

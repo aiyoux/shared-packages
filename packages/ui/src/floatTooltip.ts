@@ -1,3 +1,4 @@
+import { anchoredPopup } from '@shared-packages/design-system';
 /**
  * Body-portaled tooltip for `[data-tooltip]` hosts whose CSS ::after tips
  * would be clipped or stacked under siblings (overflow containers, z-0
@@ -8,6 +9,7 @@ export function createFloatTooltip(opts?: { zIndex?: number; delayMs?: number })
 	const zIndex = opts?.zIndex ?? 20000;
 	const delayMs = opts?.delayMs ?? 120;
 	let el: HTMLDivElement | null = null;
+	let popup: ReturnType<typeof anchoredPopup> | undefined;
 	let showTimer: ReturnType<typeof setTimeout> | null = null;
 
 	function ensure(): HTMLDivElement {
@@ -27,6 +29,8 @@ export function createFloatTooltip(opts?: { zIndex?: number; delayMs?: number })
 			clearTimeout(showTimer);
 			showTimer = null;
 		}
+		popup?.destroy();
+		popup = undefined;
 		if (el) {
 			el.style.opacity = '0';
 			el.style.visibility = 'hidden';
@@ -41,20 +45,19 @@ export function createFloatTooltip(opts?: { zIndex?: number; delayMs?: number })
 		tip.style.visibility = 'hidden';
 		tip.style.left = '0';
 		tip.style.top = '0';
-		const ar = anchor.getBoundingClientRect();
-		const tr = tip.getBoundingClientRect();
-		const gap = 6;
-		let top = ar.bottom + gap;
-		let left = ar.left;
-		if (pos === 'bottom-left') left = ar.right - tr.width;
-		else if (pos === 'bottom' || !pos) left = ar.left + ar.width / 2 - tr.width / 2;
-		left = Math.min(Math.max(8, left), window.innerWidth - tr.width - 8);
-		if (top + tr.height > window.innerHeight - 8) {
-			top = Math.max(8, ar.top - tr.height - gap);
-		}
-		tip.style.left = `${Math.round(left)}px`;
-		tip.style.top = `${Math.round(top)}px`;
-		tip.style.visibility = 'visible';
+		popup?.destroy();
+		popup = anchoredPopup(tip, {
+			anchor: () => anchor,
+			manageOverlay: false,
+			placement:
+				pos === 'bottom-left'
+					? 'bottom-end'
+					: pos === 'bottom-right'
+						? 'bottom-start'
+						: 'bottom-center',
+			offset: 6,
+			viewportMargin: 8
+		});
 		tip.style.opacity = '1';
 	}
 

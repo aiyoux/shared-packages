@@ -301,20 +301,8 @@
 	const connectTid = (k: RemoteKind) =>
 		k === 'monitor' ? 'monitor-connect-profile' : `${k}-profile-select`;
 
-	onMount(() => {
-		const onKey = (e: KeyboardEvent) => {
-			if (e.key !== 'Escape') return;
-			e.preventDefault();
-			if (removePrompt) {
-				removePrompt = null;
-				return;
-			}
-			if (mode === 'list') onClose();
-			else cancelForm();
-		};
-		window.addEventListener('keydown', onKey);
-		return () => window.removeEventListener('keydown', onKey);
-	});
+	export function dismiss() { if (mode === 'list') onClose(); else cancelForm(); }
+
 </script>
 
 <div class="tab-body">

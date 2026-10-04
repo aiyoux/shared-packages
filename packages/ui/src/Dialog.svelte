@@ -2,13 +2,8 @@
   import { fade, scale } from 'svelte/transition';
   import X from '@lucide/svelte/icons/x';
   import type { Snippet } from 'svelte';
-  import {
-    pushDialog,
-    popDialog,
-    isTopDialog,
-    getModalBaseZ,
-    nextDialogTitleId
-  } from './dialogStack.ts';
+  import { overlay } from '@shared-packages/design-system';
+  import { nextDialogTitleId } from './dialogStack.ts';
 
   interface Props {
     open?: boolean;
@@ -51,23 +46,9 @@
     portal = true
   }: Props = $props();
 
-  const instanceId = Symbol('dialog');
   const autoTitleId = nextDialogTitleId();
   const resolvedTitleId = $derived(titleId ?? autoTitleId);
-
-  let panelEl = $state<HTMLDivElement | null>(null);
-  let previouslyFocused: HTMLElement | null = null;
-  let depth = $state(0);
-  let zIndex = $state(2000);
-
   const sizeClass = $derived(`dialog-size-${size}`);
-
-  function getFocusable(root: HTMLElement): HTMLElement[] {
-    const nodes = root.querySelectorAll<HTMLElement>(
-      'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
-    );
-    return Array.from(nodes).filter((el) => !el.hasAttribute('disabled') && el.tabIndex !== -1);
-  }
 
   /** Move backdrop to document.body when portal is enabled. */
   function portalAction(node: HTMLElement) {
@@ -82,85 +63,17 @@
     };
   }
 
-  $effect(() => {
-    if (typeof document === 'undefined' || !open) return;
-
-    previouslyFocused = document.activeElement as HTMLElement | null;
-    depth = pushDialog(instanceId);
-    zIndex = getModalBaseZ() + depth * 10;
-
-    queueMicrotask(() => {
-      if (!panelEl) return;
-      const focusable = getFocusable(panelEl);
-      const target =
-        panelEl.querySelector<HTMLElement>('[data-autofocus]') ||
-        focusable[0] ||
-        panelEl;
-      target.focus();
-    });
-
-    return () => {
-      popDialog(instanceId);
-      previouslyFocused?.focus?.();
-      previouslyFocused = null;
-    };
-  });
-
-  /**
-   * Escape + Tab trap only when this instance is top of the nest stack.
-   * Do not intercept Space / Arrow keys — domain chrome (e.g. MediaModal play/pause) owns those.
-   */
-  function handleKeydown(e: KeyboardEvent) {
-    if (!open) return;
-    if (!isTopDialog(instanceId)) return;
-
-    if (closeOnEscape && e.key === 'Escape') {
-      e.preventDefault();
-      e.stopPropagation();
-      onClose();
-      return;
-    }
-
-    if (e.key !== 'Tab' || !panelEl) return;
-
-    const focusable = getFocusable(panelEl);
-    if (focusable.length === 0) {
-      e.preventDefault();
-      panelEl.focus();
-      return;
-    }
-    const first = focusable[0];
-    const last = focusable[focusable.length - 1];
-    const active = document.activeElement as HTMLElement | null;
-    if (e.shiftKey) {
-      if (active === first || !panelEl.contains(active)) {
-        e.preventDefault();
-        last.focus();
-      }
-    } else if (active === last || !panelEl.contains(active)) {
-      e.preventDefault();
-      first.focus();
-    }
-  }
-
-  function backdropClick() {
-    if (closeOnBackdrop && isTopDialog(instanceId)) onClose();
-  }
 </script>
-
-<svelte:window onkeydown={handleKeydown} />
 
 {#if open}
   <div
     class="dialog-backdrop"
-    style="z-index: {zIndex}"
+    use:overlay={{ kind: 'modal', panel: '.dialog-panel', onClose, closeOnBackdrop, closeOnEscape }}
     use:portalAction
     transition:fade={{ duration: 150 }}
-    onclick={backdropClick}
     role="presentation"
   >
     <div
-      bind:this={panelEl}
       class="dialog-panel {sizeClass}"
       {role}
       aria-modal="true"

@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Button } from '@shared-packages/design-system';
+	import { Button, overlay } from '@shared-packages/design-system';
 	import type { BindPromptIds, BindPromptPending, VfsBindMode } from './bindPrompt.ts';
 
 	export type { BindPromptIds, BindPromptPending, VfsBindMode };
@@ -37,6 +37,7 @@
 
 <div
 	class="prompt"
+	use:overlay={{ kind: 'popover', onClose: onCancel }}
 	class:pointer={placement === 'pointer'}
 	class:hug-bottom={hugBottom}
 	style={pointerStyle}

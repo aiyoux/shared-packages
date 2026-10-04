@@ -1252,6 +1252,21 @@ describe('FileExplorer component', () => {
 		expect((screen.getByTestId('fe-trash-selected') as HTMLButtonElement).disabled).toBe(true);
 	});
 
+	it('Escape on a view-menu trigger closes the popup before clearing the Files selection', async () => {
+		await vfs.writeFile({ parentId: null, name: 'selected.txt', body: 'x' });
+		render(FileExplorer, { props: { mode: 'manage', vfs, variant: 'panel' } });
+		await viWaitForRows(1);
+		const row = screen.getByTestId('fe-file-row');
+		await fireEvent.click(row);
+		const trigger = screen.getByTestId('fe-view-switcher-btn');
+		trigger.focus();
+		await fireEvent.click(trigger);
+		await screen.findByTestId('fe-view-popup');
+		await fireEvent.keyDown(trigger, { key: 'Escape' });
+		expect(screen.queryByTestId('fe-view-popup')).toBeNull();
+		expect(row.classList.contains('selected')).toBe(true);
+	});
+
 	it('view popup orders options list, detailed, icons and offers slider + sort tools in list mode', async () => {
 		persistKv.removeItem('fe:sort');
 		await vfs.writeFile({ parentId: null, name: 'Banana', body: 'x'.repeat(12) });

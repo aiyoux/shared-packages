@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { anchoredPopup } from '@shared-packages/design-system';
 	/**
 	 * Compact ops bar for one file-manager window. Reads the central ops list
 	 * and keeps rows whose `windowId` is this window (a hub pane), so another
@@ -51,16 +52,9 @@
 				refresh();
 			})
 			.catch((error) => console.error('Could not read operations', error));
-		const onDocPointer = (e: PointerEvent) => {
-			if (!open) return;
-			if (rootEl && e.target instanceof Node && rootEl.contains(e.target)) return;
-			open = false;
-		};
-		document.addEventListener('pointerdown', onDocPointer, true);
 		return () => {
 			dead = true;
 			stop();
-			document.removeEventListener('pointerdown', onDocPointer, true);
 		};
 	});
 
@@ -189,7 +183,7 @@
 			<span class="pct">{latest.label}</span>
 		</button>
 		{#if open}
-			<div class="menu" role="menu" data-testid="fe-op-progress-menu">
+			<div class="menu" use:anchoredPopup={{ anchor: () => rootEl?.querySelector('.chip'), onClose: () => (open = false), offset: 4 }} role="menu" data-testid="fe-op-progress-menu">
 				{#each rows as row (row.op.id)}
 					<div
 						class="menu-row"
@@ -327,7 +321,7 @@
 		z-index: 50;
 		top: calc(100% + 4px);
 		left: 0;
-		min-width: max(100%, 16rem);
+		min-width: 16rem;
 		max-width: min(24rem, 80vw);
 		max-height: min(40vh, 280px);
 		overflow: auto;

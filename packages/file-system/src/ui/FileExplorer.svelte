@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { overlay, anchoredPopup } from '@shared-packages/design-system';
  import { ownerLabel } from '../services/owner.js';
  import { serviceContextId } from '../leaseOwner.js';
  let ownerCtx = $state('');
@@ -39,6 +40,7 @@
 	import { deleteFromProject } from '../projectPack.js';
 	import { getVfsWorkerClient, vfsWorkerUnavailableReason } from '../worker/client.js';
 	import FeIcon from './FeIcon.svelte';
+	import FePreviewActionsMenu from './FePreviewActionsMenu.svelte';
 	import { folderIconName, folderMarkClass, type FeIconName } from './feIcons.js';
 	import FeTipIconBtn from './FeTipIconBtn.svelte';
 	import FeArchiveDialog from './FeArchiveDialog.svelte';
@@ -478,26 +480,6 @@
 	let favouriteMenu = $state<{ entry: ExplorerEntry; x: number; y: number } | null>(null);
 	let favouriteMenuEl = $state<HTMLDivElement | null>(null);
 
-	$effect(() => {
-		if (!favouriteMenu) return;
-		const dismiss = (event: PointerEvent) => {
-			if (event.target instanceof Node && favouriteMenuEl?.contains(event.target)) return;
-			favouriteMenu = null;
-		};
-		const escape = (event: KeyboardEvent) => {
-			if (event.key !== 'Escape') return;
-			event.preventDefault();
-			event.stopPropagation();
-			favouriteMenu = null;
-		};
-		document.addEventListener('pointerdown', dismiss);
-		document.addEventListener('keydown', escape, true);
-		favouriteMenuEl?.querySelector<HTMLButtonElement>('button')?.focus();
-		return () => {
-			document.removeEventListener('pointerdown', dismiss);
-			document.removeEventListener('keydown', escape, true);
-		};
-	});
 	let selected = $state<Set<string>>(new Set());
 	/** Most recently toggled-on row — Open uses this when several items are selected. */
 	let lastSelectedId = $state<string | null>(null);
@@ -949,7 +931,6 @@
 	 * over a popup mounted inside the pane and swallows every click in it.
 	 */
 	function closePreviewForHandoff() {
-		actionsMenuOpen = false;
 		floatingPreviewEntry = null;
 		// The details popup; a docked preview is not modal and can stay.
 		if (previewDock === 'off') previewEntry = null;
@@ -2708,15 +2689,12 @@
 		const n = selectedPrimary();
 		if (!n) return;
 		previewEntry = n;
-		actionsMenuOpen = false;
 		if (previewDock !== 'off') {
 			floatingPreviewEntry = n;
 			quickLookPinned = true;
 			quickLookPeek = false;
 		}
 	}
-
-	let actionsMenuOpen = $state(false);
 
 	function startArchive(kind: ArchiveKind, targets: ExplorerEntry[], destLocked: ArchiveDest | null = null) {
 		if (!targets.length) return;
@@ -4262,22 +4240,6 @@
 	aria-label="File explorer"
 	tabindex="0"
 	onkeydown={onListKeydown}
-	onclick={(e) => {
-		const t = e.target;
-		if (
-			t instanceof Element &&
-			t.closest(
-				'[data-testid="fe-toolbar-more-wrap"], [data-testid="fe-view-switcher"], [data-testid="fe-new-menu"], [data-testid="fe-room-chip-wrap"], [data-testid="fe-people-chip-wrap"], [data-testid="fe-people-revoke-dialog"], [data-testid="fe-people-unlink-dialog"]'
-			)
-		) {
-			return;
-		}
-		if (viewSwitcherOpen) closeViewSwitcher();
-		if (toolbarMoreOpen) closeToolbarMore();
-		if (newMenuOpen) closeNewMenu();
-		if (roomMenuOpen) closeRoomMenu();
-		if (peopleSheetOpen) closePeopleSheet();
-	}}
 >
 	<header class="fe-header" data-testid="fe-header">
 		<div class="fe-header-left">
@@ -4362,6 +4324,7 @@
 							{#if roomMenuOpen}
 								<div
 									class="fe-view-popup fe-room-menu"
+									use:anchoredPopup={{ onClose: closeRoomMenu, offset: 4 }}
 									data-testid="fe-room-menu"
 									role="menu"
 									tabindex="-1"
@@ -4472,6 +4435,7 @@
 							{#if peopleSheetOpen}
 								<div
 									class="fe-view-popup fe-people-sheet"
+									use:anchoredPopup={{ onClose: closePeopleSheet, offset: 4 }}
 									data-testid="fe-people-sheet"
 									role="dialog"
 									aria-label="People"
@@ -4721,6 +4685,7 @@
 							<!-- svelte-ignore a11y_no_static_element_interactions -->
 							<div
 								class="fe-view-popup fe-new-menu-popup"
+								use:anchoredPopup={{ onClose: closeNewMenu, offset: 4 }}
 								data-testid="fe-new-menu-popup"
 								role="menu"
 								tabindex="-1"
@@ -4894,7 +4859,7 @@
 						{#if viewSwitcherOpen}
 							<!-- svelte-ignore a11y_click_events_have_key_events -->
 							<!-- svelte-ignore a11y_no_static_element_interactions -->
-							<div class="fe-view-popup" data-testid="fe-view-popup" onclick={(e) => e.stopPropagation()}>
+							<div class="fe-view-popup" use:anchoredPopup={{ onClose: closeViewSwitcher, offset: 4 }} data-testid="fe-view-popup" onclick={(e) => e.stopPropagation()}>
 								<button type="button" class="fe-view-option" class:active={viewMode === 'list'} data-testid="fe-view-list" onclick={() => setViewMode('list')}>
 									<FeIcon name="list" size={16} />
 									<span>List</span>
@@ -5042,6 +5007,7 @@
 							<!-- svelte-ignore a11y_no_static_element_interactions -->
 							<div
 								class="fe-toolbar-more-popup"
+								use:anchoredPopup={{ onClose: closeToolbarMore, placement: 'bottom-end', offset: 4 }}
 								data-testid="fe-toolbar-more-popup"
 								role="menu"
 								tabindex="-1"
@@ -5539,7 +5505,6 @@
 			sizeText={selected.size > 1 ? selectionSizeLabel(selectedEntries) : ''}
 			projectState={previewEntry.kind === 'folder' ? previewIsProject : null}
 			onClose={() => {
-				actionsMenuOpen = false;
 				previewEntry = null;
 			}}
 			actions={previewActionBar}
@@ -5550,6 +5515,7 @@
 		<div
 			class="fe-preview-backdrop"
 			data-testid="fe-trash-popup"
+			use:overlay={{ kind: 'modal', panel: '.fe-trash-card', onClose: () => (trashOpen = false) }}
 			role="dialog"
 			aria-modal="true"
 			aria-label="Trash"
@@ -5558,7 +5524,6 @@
 				type="button"
 				class="fe-preview-scrim"
 				aria-label="Close trash"
-				onclick={() => (trashOpen = false)}
 			></button>
 			<div class="fe-trash-card" data-emptying={emptyTrashRunning ? 'true' : undefined}>
 				<div class="fe-trash-head">
@@ -5664,6 +5629,7 @@
 	{#if revokeTarget}
 		<div
 			class="fe-room-switch-root"
+			use:overlay={{ kind: 'modal', panel: '.fe-room-switch-card', onClose: () => (revokeTarget = null) }}
 			use:portalModal
 			data-testid="fe-people-revoke-dialog"
 			role="dialog"
@@ -5714,6 +5680,7 @@
 	{#if unlinkTarget}
 		<div
 			class="fe-room-switch-root"
+			use:overlay={{ kind: 'modal', panel: '.fe-room-switch-card', onClose: () => (unlinkTarget = null) }}
 			use:portalModal
 			data-testid="fe-people-unlink-dialog"
 			role="dialog"
@@ -5772,6 +5739,7 @@
 	{#if splitBrain}
 		<div
 			class="fe-room-switch-root"
+			use:overlay={{ kind: 'modal', panel: '.fe-room-switch-card', onClose: () => { void onSplitBrainChoice?.('cancel'); } }}
 			use:portalModal
 			data-testid="fe-split-brain"
 			role="dialog"
@@ -5819,6 +5787,7 @@
 	{#if combineOpen}
 		<div
 			class="fe-room-switch-root"
+			use:overlay={{ kind: 'modal', panel: '.fe-room-switch-card', onClose: () => { combineOpen = false; combineConflict = null; combinePending = null; } }}
 			use:portalModal
 			data-testid="fe-room-combine-dialog"
 			role="dialog"
@@ -5915,6 +5884,7 @@
 	{#if pendingRoomSwitch}
 		<div
 			class="fe-room-switch-root"
+			use:overlay={{ kind: 'modal', panel: '.fe-room-switch-card', onClose: () => (pendingRoomSwitch = null) }}
 			use:portalModal
 			data-testid="fe-room-switch-dirty"
 			role="dialog"
@@ -6004,6 +5974,7 @@
 	{#if innerFs}
 		<div
 			class="fe-inner-fs"
+			use:overlay={{ kind: 'modal', panel: '.fe-inner-fs-card', onClose: () => { void closeInnerFs(); } }}
 			use:portalModal
 			data-testid="fe-inner-fs-dialog"
 			role="dialog"
@@ -6053,7 +6024,6 @@
 			sizeText={selected.size > 1 ? selectionSizeLabel(selectedEntries) : ''}
 			projectState={floatingPreviewEntry.kind === 'folder' ? previewIsProject : null}
 			onClose={() => {
-				actionsMenuOpen = false;
 				floatingPreviewEntry = null;
 			}}
 			actions={previewActionBar}
@@ -6248,7 +6218,6 @@
 		aria-label={tip}
 		{disabled}
 		onclick={() => {
-			actionsMenuOpen = false;
 			onclick();
 		}}
 	>
@@ -6308,57 +6277,34 @@
 					if (multi) void trashSelected();
 					else void deletePreviewItem();
 				}, listBusy, true)}
-				<div class="fe-preview-menu-wrap">
-					<button
-						type="button"
-						class="fe-preview-icon"
-						data-testid="fe-preview-actions"
-						title="Actions"
-						aria-label="Actions"
-						aria-haspopup="menu"
-						aria-expanded={actionsMenuOpen}
-						onclick={(e) => {
-							e.stopPropagation();
-							actionsMenuOpen = !actionsMenuOpen;
-						}}
-					>
-						<FeIcon name="ellipsis" size={16} />
-						<span class="fe-sr">Actions</span>
-					</button>
-					{#if actionsMenuOpen}
-						<!-- svelte-ignore a11y_click_events_have_key_events -->
-						<!-- svelte-ignore a11y_no_static_element_interactions -->
-						<div class="fe-preview-menu" data-testid="fe-preview-actions-menu" onclick={() => (actionsMenuOpen = false)}>
-							{#if !multi}
-								{@render archiveButtons(entry)}
-								{#if onInitProject && entry.kind === 'folder' && previewIsProject !== true}
-									<button
-										type="button"
-										class="fe-preview-menu-item"
-										data-testid="fe-init-project"
-										disabled={previewBusy}
-										onclick={() => {
-											actionsMenuOpen = false;
-											void confirmInitProject();
-										}}
-									>
-										Init project
-									</button>
-								{/if}
-							{:else}
-								<button type="button" class="fe-preview-menu-item" data-testid="fe-file-preview-compress" onclick={() => { actionsMenuOpen = false; startArchive('compress', selectedEntries); }}>Compress</button>
-								<button type="button" class="fe-preview-menu-item" data-testid="fe-file-preview-encrypt" onclick={() => { actionsMenuOpen = false; startArchive('encrypt', selectedEntries); }}>Encrypt</button>
-								{#if canDecompressSelection}
-									<button type="button" class="fe-preview-menu-item" data-testid="fe-file-preview-decompress" onclick={() => { actionsMenuOpen = false; startArchive('decompress', selectedEntries); }}>Decompress</button>
-								{/if}
-								{#if canDecryptSelection}
-									<button type="button" class="fe-preview-menu-item" data-testid="fe-file-preview-decrypt" onclick={() => { actionsMenuOpen = false; startArchive('decrypt', selectedEntries); }}>Decrypt</button>
-								{/if}
-							{/if}
-							{@render detailsCopyAcross()}
-						</div>
+				<FePreviewActionsMenu subject={multi ? selectedEntries.map((item) => item.id).join('|') : entry.id}>
+					{#if !multi}
+						{@render archiveButtons(entry)}
+						{#if onInitProject && entry.kind === 'folder' && previewIsProject !== true}
+							<button
+								type="button"
+								class="fe-preview-menu-item"
+								data-testid="fe-init-project"
+								disabled={previewBusy}
+								onclick={() => {
+									void confirmInitProject();
+								}}
+							>
+								Init project
+							</button>
+						{/if}
+					{:else}
+						<button type="button" class="fe-preview-menu-item" data-testid="fe-file-preview-compress" onclick={() => { startArchive('compress', selectedEntries); }}>Compress</button>
+						<button type="button" class="fe-preview-menu-item" data-testid="fe-file-preview-encrypt" onclick={() => { startArchive('encrypt', selectedEntries); }}>Encrypt</button>
+						{#if canDecompressSelection}
+							<button type="button" class="fe-preview-menu-item" data-testid="fe-file-preview-decompress" onclick={() => { startArchive('decompress', selectedEntries); }}>Decompress</button>
+						{/if}
+						{#if canDecryptSelection}
+							<button type="button" class="fe-preview-menu-item" data-testid="fe-file-preview-decrypt" onclick={() => { startArchive('decrypt', selectedEntries); }}>Decrypt</button>
+						{/if}
 					{/if}
-				</div>
+					{@render detailsCopyAcross()}
+				</FePreviewActionsMenu>
 			{/if}
 		</div>
 	{/if}
@@ -6369,7 +6315,7 @@
 		class="fe-favourite-menu" data-testid="fe-folder-context-menu"
 		role="menu" aria-label="Folder actions" tabindex="-1"
 		style:left="{favouriteMenu.x}px" style:top="{favouriteMenu.y}px"
-		bind:this={favouriteMenuEl}
+		bind:this={favouriteMenuEl} use:anchoredPopup={{ anchorRect: () => favouriteMenu ? new DOMRect(favouriteMenu.x, favouriteMenu.y, 0, 0) : undefined, offset: 0, viewportMargin: 8, onClose: () => (favouriteMenu = null), focusOnOpen: true }}
 	>
 		<button
 			type="button" role="menuitem" class="ds-btn ds-btn--sm ds-btn--ghost"
@@ -7078,51 +7024,6 @@
 		clip: rect(0, 0, 0, 0);
 		white-space: nowrap;
 		border: 0;
-	}
-	.fe-preview-menu-wrap {
-		position: relative;
-	}
-	.fe-preview-menu {
-		position: absolute;
-		bottom: calc(100% + 4px);
-		left: 0;
-		z-index: 5;
-		min-width: 180px;
-		max-height: min(50vh, 320px);
-		overflow: auto;
-		padding: 4px;
-		background: var(--surface-2, #1c1c24);
-		border: 1px solid var(--line-hairline, #333);
-		border-radius: 4px;
-		box-shadow: 0 8px 24px rgb(0 0 0 / 0.35);
-	}
-	.fe-preview-menu-item,
-	.fe-preview-menu :global(button) {
-		display: flex;
-		width: 100%;
-		justify-content: flex-start;
-		align-items: center;
-		gap: 8px;
-		height: auto;
-		min-height: 0;
-		padding: 6px 8px;
-		background: none;
-		border: none;
-		box-shadow: none;
-		color: inherit;
-		font: inherit;
-		font-size: 0.85rem;
-		border-radius: 3px;
-		cursor: pointer;
-		text-align: left;
-	}
-	.fe-preview-menu-item:hover:not(:disabled),
-	.fe-preview-menu :global(button:hover:not(:disabled)) {
-		background: var(--surface-3, #2a2a2a);
-	}
-	.fe-preview-menu-item:disabled {
-		opacity: 0.5;
-		cursor: not-allowed;
 	}
 	.fe-trash-card {
 		position: relative;

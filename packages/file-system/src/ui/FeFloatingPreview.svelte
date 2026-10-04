@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { overlay } from '@shared-packages/design-system';
 	import { onDestroy, tick, untrack, type Snippet } from 'svelte';
 	import FeIcon from './FeIcon.svelte';
 	import FeThumbnail from './FeThumbnail.svelte';
@@ -191,6 +192,7 @@
 	let pdfFallbackUrl = $state<string | null>(null);
 
 	let metaOpen = $state(false);
+	let metaTrigger = $state<HTMLButtonElement | null>(null);
 	let bodyEl = $state<HTMLDivElement | null>(null);
 	/** Popover origin, in pixels, over the image or video box. */
 	let metaAnchor = $state<{ top: number; left: number; maxWidth: number; maxHeight: number } | null>(null);
@@ -606,10 +608,6 @@
 	}
 
 	function onKeydown(e: KeyboardEvent) {
-		if (e.key === 'Escape') {
-			onClose();
-			return;
-		}
 		// Closing on Space unsets the parent's entry mid-dispatch, while this
 		// window listener is still attached — the live prop reads null here.
 		if (!entry) return;
@@ -674,7 +672,7 @@
 			{#if !multi && (entryKind === 'folder' || (mediaMeta && entryHasMediaMeta()))}
 				<button
 					type="button"
-					class="fe-float-meta-toggle"
+					class="fe-float-meta-toggle" bind:this={metaTrigger}
 					aria-pressed={metaOpen}
 					aria-expanded={metaOpen}
 					data-testid="fe-float-meta-toggle"
@@ -843,7 +841,7 @@
 			{/if}
 			{#if !multi && metaOpen && mediaMeta && entryHasMediaMeta()}
 				<div
-					class="fe-float-meta-popover"
+					class="fe-float-meta-popover" use:overlay={{ kind: 'popover', anchor: () => metaTrigger, onClose: () => (metaOpen = false) }}
 					data-testid="fe-float-meta"
 					role="region"
 					aria-label="Metadata"
@@ -893,9 +891,9 @@
 	<div class="portal-root" use:portalModal>
 		<div
 			class="fe-float-backdrop"
+			use:overlay={{ kind: 'modal', panel: '.fe-float-card', onClose }}
 			data-testid="fe-file-preview"
 			data-multi={multi ? 'true' : undefined}
-			onclick={onClose}
 		>
 			{@render stage()}
 		</div>

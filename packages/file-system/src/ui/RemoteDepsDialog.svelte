@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { overlay } from '@shared-packages/design-system';
 	import '@shared-packages/design-system/button.css';
 	import { portalModal } from './portal.js';
 	import type { RemoteDeps, RemoteDepsChoice } from '../services/remoteCopies.js';
@@ -21,23 +22,18 @@
 
 	const files = $derived(deps.missing === 1 ? '1 file' : `${deps.missing} files`);
 
-	function onKeydown(e: KeyboardEvent) {
-		if (e.key === 'Escape') onChoice('cancel');
-	}
 </script>
-
-<svelte:window onkeydown={onKeydown} />
 
 <div class="portal-root" use:portalModal>
 	<div
-		class="modal-root"
+		class="modal-root" use:overlay={{ kind: 'modal', panel: '.card', onClose: () => onChoice('cancel') }}
 		data-testid="fe-remote-deps"
 		role="dialog"
 		aria-modal="true"
 		aria-labelledby="fe-remote-deps-title"
 	>
 		<!-- Escape and Cancel are the accessible ways out; the scrim is a convenience. -->
-		<div class="scrim" onclick={() => onChoice('cancel')} role="presentation"></div>
+		<div class="scrim" role="presentation"></div>
 		<div class="card">
 			<h2 id="fe-remote-deps-title">{deps.name} links to {files} that are not here</h2>
 			<p data-testid="fe-remote-deps-body">

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { overlay } from '@shared-packages/design-system';
 	/**
 	 * Pick an existing folder in a VFS/Explorer driver — "Use this folder"
 	 * confirm, breadcrumbs, no file rows. Used by the speech tools to point an
@@ -73,27 +74,17 @@
 		onCancel();
 	}
 
-	$effect(() => {
-		const onKey = (e: KeyboardEvent) => {
-			if (e.key !== 'Escape') return;
-			if (document.querySelector('.confirm-modal, [data-testid="fe-trash-popup"]')) return;
-			e.preventDefault();
-			close();
-		};
-		window.addEventListener('keydown', onKey);
-		return () => window.removeEventListener('keydown', onKey);
-	});
 </script>
 
 <div class="portal-root" use:portalModal>
 	<div
-		class="modal-root"
+		class="modal-root" use:overlay={{ kind: 'modal', panel: '.card', onClose: close }}
 		data-testid={testid}
 		role="dialog"
 		aria-modal="true"
 		aria-labelledby="fe-folder-picker-title"
 	>
-		<div class="scrim" onclick={close} role="presentation"></div>
+		<div class="scrim" role="presentation"></div>
 		<div class="card">
 			<h2 id="fe-folder-picker-title">{title}</h2>
 

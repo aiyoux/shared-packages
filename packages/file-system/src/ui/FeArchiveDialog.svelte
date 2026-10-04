@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { overlay } from '@shared-packages/design-system';
 	/**
 	 * Compress / decompress / encrypt / decrypt FileExplorer rows using the
 	 * same engines as the hub Compress / Hash & Vault tools.
@@ -400,7 +401,7 @@
 
 <div class="portal-root" use:portalModal>
 <div
-	class="modal-root"
+	class="modal-root" use:overlay={{ kind: 'modal', panel: '.card', onClose: () => (running ? onHide?.() : onCancel()) }}
 	data-testid="fe-archive-dialog"
 	data-kind={kind}
 	data-where={useHost ? 'host' : 'browser'}
@@ -410,7 +411,7 @@
 	aria-modal="true"
 	aria-labelledby="fe-archive-title"
 >
-	<div class="scrim" onclick={() => (running ? onHide?.() : onCancel())} role="presentation"></div>
+	<div class="scrim" role="presentation"></div>
 	<div class="card">
 		<h2 id="fe-archive-title">
 			{#if useHost}

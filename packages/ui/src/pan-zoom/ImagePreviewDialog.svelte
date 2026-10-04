@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { overlay } from '@shared-packages/design-system';
 	import PanZoomViewport from './PanZoomViewport.svelte';
 
 	let {
@@ -29,16 +30,11 @@
 		natural = { w: img.naturalWidth || 1, h: img.naturalHeight || 1 };
 	}
 
-	function onKeydown(e: KeyboardEvent) {
-		if (e.key === 'Escape') onClose();
-	}
 </script>
-
-<svelte:window onkeydown={onKeydown} />
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <!-- svelte-ignore a11y_click_events_have_key_events -->
-<div class="ipd-backdrop" data-testid="{testidPrefix}-dialog" onclick={onClose}>
+<div class="ipd-backdrop" data-testid="{testidPrefix}-dialog" use:overlay={{ kind: 'modal', panel: '.ipd-card', onClose }}>
 	<!-- svelte-ignore a11y_no_static_element_interactions -->
 	<!-- svelte-ignore a11y_click_events_have_key_events -->
 	<div

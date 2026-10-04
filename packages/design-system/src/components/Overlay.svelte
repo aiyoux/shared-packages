@@ -1,8 +1,9 @@
 <script lang="ts">
 	/**
-	 * Full-viewport scrim + HudFrame dialog. Does not manage focus or scroll lock.
+	 * Full-viewport HudFrame dialog using the shared overlay lifecycle.
 	 * Pass extra attributes (`data-testid`, …) through to the frame.
 	 */
+	import { overlay } from '../overlay.ts';
 	import HudFrame from './HudFrame.svelte';
 
 	let {
@@ -27,8 +28,8 @@
 	} = $props();
 </script>
 
-<div class="ds-overlay">
-	<button type="button" class="ds-overlay-scrim" aria-label={closeLabel} onclick={() => onclose?.()}
+<div class="ds-overlay" use:overlay={{ kind: 'modal', portal: true, panel: '.ds-overlay-panel', onClose: onclose }}>
+	<button type="button" class="ds-overlay-scrim" aria-label={closeLabel}
 	></button>
 	<div
 		class="ds-overlay-panel {wide ? 'ds-overlay-panel--wide' : ''} {className}"

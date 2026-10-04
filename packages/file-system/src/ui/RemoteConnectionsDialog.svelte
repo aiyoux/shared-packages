@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { overlay } from '@shared-packages/design-system';
 	/**
 	 * The gear-icon settings popup: one modal with two tabs.
 	 *
@@ -54,28 +55,19 @@
 		return () => { disposed = true; stop(); };
 	});
 
-	onMount(() => {
-		// ConnectionsTab owns Escape while its body shows (cancel form vs
-		// close); the shell closes only while the AI tab is showing.
-		const onKey = (e: KeyboardEvent) => {
-			if (e.key !== 'Escape' || tab === 'connections') return;
-			e.preventDefault();
-			onClose();
-		};
-		window.addEventListener('keydown', onKey);
-		return () => window.removeEventListener('keydown', onKey);
-	});
+	let connectionsTab = $state<{ dismiss: () => void }>();
+
 </script>
 
 <div class="portal-root" use:portal={'body'}>
 	<div
-		class="modal-root"
+		class="modal-root" use:overlay={{ kind: 'modal', panel: '.card', onClose, onEscape: () => tab === 'connections' ? connectionsTab?.dismiss() : onClose() }}
 		data-testid="connections-dialog"
 		role="dialog"
 		aria-modal="true"
 		aria-label="Settings"
 	>
-		<div class="scrim" onclick={onClose} role="presentation"></div>
+		<div class="scrim" role="presentation"></div>
 		<div class="card">
 			<div class="tabs-row">
 				<Tabs items={TAB_ITEMS} bind:value={tab} variant="pill" />
@@ -90,7 +82,7 @@
 			</div>
 
 			{#if tab === 'connections'}
-				<ConnectionsTab {onClose} {onConnected} {onDisconnected} />
+				<ConnectionsTab bind:this={connectionsTab} {onClose} {onConnected} {onDisconnected} />
 				{#each monitors as profile (profile.id)}
 					<section aria-label={profile.name}><strong>{profile.name}</strong><MonitorStatus {profile} /></section>
 				{/each}

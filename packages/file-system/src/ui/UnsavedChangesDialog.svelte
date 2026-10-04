@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { overlay } from '@shared-packages/design-system';
 	import '@shared-packages/design-system/button.css';
 
 	/**
@@ -22,25 +23,17 @@
 		onContinue: () => void;
 	} = $props();
 
-	function onKey(e: KeyboardEvent) {
-		if (e.key === 'Escape') {
-			e.preventDefault();
-			onContinue();
-		}
-	}
 </script>
 
-<svelte:window onkeydown={onKey} />
-
 <div
-	class="modal-root"
+	class="modal-root" use:overlay={{ kind: 'modal', panel: '.card', onClose: onContinue }}
 	data-testid="unsaved-changes-dialog"
 	role="dialog"
 	aria-modal="true"
 	aria-labelledby="ucd-title"
 	aria-describedby="ucd-body"
 >
-	<div class="scrim" onclick={onContinue} role="presentation"></div>
+	<div class="scrim" role="presentation"></div>
 	<div class="card">
 		<h2 id="ucd-title" data-testid="ucd-title">{title}</h2>
 		<p id="ucd-body" data-testid="ucd-body">

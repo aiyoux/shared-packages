@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { overlay } from '@shared-packages/design-system';
 	import '@shared-packages/design-system/button.css';
 	import { portalModal } from './portal.js';
 	import { formatSize } from './sizeTreemap.js';
@@ -28,23 +29,18 @@
 			: 'how long depends on this connection, which has not been measured yet'
 	);
 
-	function onKeydown(e: KeyboardEvent) {
-		if (e.key === 'Escape') onCancel();
-	}
 </script>
-
-<svelte:window onkeydown={onKeydown} />
 
 <div class="portal-root" use:portalModal>
 	<div
-		class="modal-root"
+		class="modal-root" use:overlay={{ kind: 'modal', panel: '.card', onClose: onCancel }}
 		data-testid="fe-remote-open-prompt"
 		role="dialog"
 		aria-modal="true"
 		aria-labelledby="fe-remote-open-title"
 	>
 		<!-- Escape and Cancel are the accessible ways out; the scrim is a convenience. -->
-		<div class="scrim" onclick={onCancel} role="presentation"></div>
+		<div class="scrim" role="presentation"></div>
 		<div class="card">
 			{#if plan.blocked}
 				<h2 id="fe-remote-open-title">Can't open {plan.name} here</h2>

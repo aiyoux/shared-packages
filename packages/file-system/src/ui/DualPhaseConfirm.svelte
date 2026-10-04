@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { overlay } from '@shared-packages/design-system';
 	import '@shared-packages/design-system/button.css';
 	import { portalModal } from './portal.js';
 
@@ -15,6 +16,7 @@
 <div class="portal-root" use:portalModal>
 <div
 	class="modal-root"
+	use:overlay={{ kind: 'modal', panel: '.card', onClose: onCancel }}
 	data-testid="fe-dual-phase-confirm"
 	role="dialog"
 	aria-modal="true"
@@ -22,7 +24,7 @@
 >
 	<!-- Backdrop dismissal is a convenience; Escape and the Cancel button are the
 	     accessible paths, so the scrim itself stays out of the a11y tree. -->
-	<div class="scrim" onclick={onCancel} role="presentation"></div>
+	<div class="scrim" role="presentation"></div>
 	<div class="card">
 		<h2 id="fe-dual-phase-title">Dual-phase transfer</h2>
 		<p>
