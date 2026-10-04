@@ -4,29 +4,25 @@
 	import type { RemoteDeps, RemoteDepsChoice } from '../services/remoteCopies.js';
 
 	/**
-	 * The question a remote Open asks when the copy it just made references
-	 * files that stayed where the file lives. Copying them in is one press,
-	 * because "your animation opened with every clip dead" is not something a
-	 * person should discover by finding grey chips. Opening as-is is also a
-	 * real choice: the references still name the connection, and resolve again
-	 * the moment its file is copied or the file is opened elsewhere.
+	 * What a remote Open says when the copy it just made links to files this
+	 * browser does not have. They cannot be fetched: a browser-file link names
+	 * the id the file had in the browser that made the document, and a copy
+	 * on a monitor or B2 keeps no record of those ids. So the person hears it
+	 * here, before the document opens with grey chips, and decides whether it
+	 * is worth opening at all.
 	 */
 
 	interface Props {
 		deps: RemoteDeps;
-		busy?: boolean;
 		onChoice: (choice: RemoteDepsChoice) => void;
 	}
 
-	let { deps, busy = false, onChoice }: Props = $props();
+	let { deps, onChoice }: Props = $props();
 
-	/** Six names read at a glance; the rest are counted, not listed. */
-	const shown = $derived(deps.entries.slice(0, 6));
-	const hidden = $derived(deps.entries.length - shown.length);
-	const name = $derived(deps.name);
+	const files = $derived(deps.missing === 1 ? '1 file' : `${deps.missing} files`);
 
 	function onKeydown(e: KeyboardEvent) {
-		if (e.key === 'Escape' && !busy) onChoice('cancel');
+		if (e.key === 'Escape') onChoice('cancel');
 	}
 </script>
 
@@ -41,34 +37,20 @@
 		aria-labelledby="fe-remote-deps-title"
 	>
 		<!-- Escape and Cancel are the accessible ways out; the scrim is a convenience. -->
-		<div class="scrim" onclick={() => !busy && onChoice('cancel')} role="presentation"></div>
+		<div class="scrim" onclick={() => onChoice('cancel')} role="presentation"></div>
 		<div class="card">
-			<h2 id="fe-remote-deps-title">Copy the files {name} links to?</h2>
-			<p>
-				{name} references files that stay on {deps.where}. Opened as-is, the copy would show them
-				as unresolvable links.
-				{#if deps.stuck.length}
-					{deps.stuck.length} more {deps.stuck.length === 1 ? 'reference is' : 'references are'}
-					on {deps.where} but beyond this folder.
-				{/if}
+			<h2 id="fe-remote-deps-title">{deps.name} links to {files} that are not here</h2>
+			<p data-testid="fe-remote-deps-body">
+				Those links name files in the browser that made {deps.name}. A copy on {deps.where} does not
+				bring them along, so they will show as broken links. Open the document where those files
+				are to keep them working.
 			</p>
-			<ul class="names" data-testid="fe-remote-deps-list">
-				{#each shown as dep (dep.key)}
-					<li>{dep.name}</li>
-				{/each}
-				{#if hidden > 0}
-					<li class="more">and {hidden} more</li>
-				{/if}
-			</ul>
 			<div class="actions">
-				<button type="button" class="ds-btn ds-btn--sm ds-btn--ghost" data-testid="fe-remote-deps-cancel" onclick={() => onChoice('cancel')} disabled={busy}>
+				<button type="button" class="ds-btn ds-btn--sm ds-btn--ghost" data-testid="fe-remote-deps-cancel" onclick={() => onChoice('cancel')}>
 					Cancel
 				</button>
-				<button type="button" class="ds-btn ds-btn--sm ds-btn--secondary" data-testid="fe-remote-deps-asis" onclick={() => onChoice('asis')} disabled={busy}>
-					Open as-is
-				</button>
-				<button type="button" class="ds-btn ds-btn--sm ds-btn--primary" data-testid="fe-remote-deps-copy" onclick={() => onChoice('copy')} disabled={busy}>
-					{busy ? 'Copying…' : `Copy them and open`}
+				<button type="button" class="ds-btn ds-btn--sm ds-btn--primary" data-testid="fe-remote-deps-asis" onclick={() => onChoice('asis')}>
+					Open anyway
 				</button>
 			</div>
 		</div>
@@ -111,19 +93,6 @@
 		margin: 0 0 0.75rem;
 		line-height: 1.45;
 		font-size: 0.92rem;
-	}
-	.names {
-		margin: 0 0 0.9rem;
-		padding: 0.45rem 0.75rem;
-		background: var(--surface-3);
-		border: 1px solid var(--line-hairline);
-		max-height: 11rem;
-		overflow: auto;
-		font-size: 0.85rem;
-		line-height: 1.7;
-	}
-	.more {
-		opacity: 0.7;
 	}
 	.actions {
 		display: flex;

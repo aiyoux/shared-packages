@@ -44,7 +44,6 @@
 	import {
 		runRemoteOpen,
 		startRemoteCopySync,
-		connectionLabel,
 		type RemoteDeps,
 		type RemoteDepsChoice,
 		type RemoteOpenAlternative,
@@ -343,17 +342,12 @@
 			driver: ExplorerDriver
 		) => void | Promise<void>;
 		/**
-		 * What the copy of a remote file references that it cannot carry, and
-		 * whether it can be copied in. The host reads the document (this
-		 * package does not know formats); the dialog and the choice are ours,
-		 * shared with the Open prompt so both stay the same words everywhere.
+		 * What the copy of a remote file links to that this browser does not
+		 * have. The host reads the document (this package does not know
+		 * formats); the dialog and the choice are ours, shared with the Open
+		 * prompt so both stay the same words everywhere.
 		 */
-		remoteDeps?: (
-			node: VfsNode,
-			entry: ExplorerEntry,
-			driver: ExplorerDriver,
-			opts: { windowId?: string }
-		) => Promise<RemoteDeps | null>;
+		remoteDeps?: (node: VfsNode, driver: ExplorerDriver) => Promise<RemoteDeps | null>;
 	};
 
 	let {
@@ -583,7 +577,6 @@
 	} | null>(null);
 	let remoteDepsPrompt = $state<{
 		/** Same file as the Open that parked here; the dialog waits for the choice. */
-		name: string;
 		deps: RemoteDeps;
 		resolve: (choice: RemoteDepsChoice) => void;
 	} | null>(null);
@@ -814,7 +807,7 @@
 
 	function askRemoteDeps(deps: RemoteDeps): Promise<RemoteDepsChoice> {
 		return new Promise((resolve) => {
-			remoteDepsPrompt = { name: deps.name, deps, resolve };
+			remoteDepsPrompt = { deps, resolve };
 		});
 	}
 
@@ -852,20 +845,6 @@
 			});
 			if (outcome.kind === 'opened' && outcome.conflict) {
 				toast.info(`${entry.name} changed where it is stored and on this device. Opened this device's copy.`);
-			}
-			if (outcome.kind === 'opened' && outcome.depsNotCopied !== undefined) {
-				// Partial is normal: some references live outside the folder this
-				// file sits in, the copy threw, or it was mid-copy. The document
-				// is open either way, with what was reached repointed.
-				const count = outcome.depsCopied ?? 0;
-				const detail = outcome.depsNotCopied.length
-					? ` Not copied: ${outcome.depsNotCopied.slice(0, 4).join(', ')}${outcome.depsNotCopied.length > 4 ? '…' : ''}`
-					: '';
-				toast.info(
-					count === 0
-						? `${entry.name} opened with no linked files copied.${detail}`
-						: `Copied ${count} linked file${count === 1 ? '' : 's'} for ${entry.name}.${detail}`
-				);
 			}
 		} catch (e) {
 			if (e instanceof Error && e.name === 'AbortError') toast.info('Open cancelled');
