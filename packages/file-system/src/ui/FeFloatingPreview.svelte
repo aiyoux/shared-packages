@@ -43,6 +43,8 @@
 		projectState = null,
 		actions,
 		showClose = true,
+		nameEditor,
+		onRename,
 		/**
 		 * Folder listing parent. Omit to list `entry.id`. `null` is the driver
 		 * root, which has no folder id of its own.
@@ -67,6 +69,9 @@
 		projectState?: boolean | null;
 		actions?: Snippet;
 		showClose?: boolean;
+		/** The explorer owns one name draft across listing and preview editors. */
+		nameEditor?: Snippet<[ExplorerEntry]>;
+		onRename?: () => void;
 		listParentId?: string | null;
 	} = $props();
 
@@ -666,9 +671,20 @@
 	>
 		<div class="fe-float-header">
 			<div class="fe-float-heading">
-				<span class="fe-float-title" data-testid="fe-file-preview-name" title={multi ? `${entries.length} items selected` : entry.name}>
-					{multi ? `${entries.length} items selected` : entry.name}
-				</span>
+				<div class="fe-float-name-row">
+					{#if !multi && nameEditor}
+						{@render nameEditor(entry)}
+					{:else}
+						<span class="fe-float-title" data-testid="fe-file-preview-name" title={multi ? `${entries.length} items selected` : entry.name}>
+							{multi ? `${entries.length} items selected` : entry.name}
+						</span>
+						{#if !multi && onRename}
+							<button type="button" class="fe-float-rename" data-testid="fe-preview-rename" aria-label="Rename" title="Rename" onclick={onRename}>
+								<FeIcon name="pencil" size={14} />
+							</button>
+						{/if}
+					{/if}
+				</div>
 				{#if multi}
 					<p class="fe-float-sub">
 						<span data-testid="fe-file-preview-count">{entries.length}</span>
@@ -982,12 +998,35 @@
 		min-width: 0;
 	}
 	.fe-float-title {
+		min-width: 0;
 		display: block;
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
 		font-weight: 600;
 		font-size: 0.9rem;
+	}
+	.fe-float-name-row {
+		display: flex;
+		align-items: center;
+		gap: 4px;
+		min-width: 0;
+	}
+	.fe-float-rename {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		flex: 0 0 auto;
+		padding: 4px;
+		border: 0;
+		border-radius: var(--radius-md);
+		background: transparent;
+		color: var(--text-muted);
+		cursor: pointer;
+	}
+	.fe-float-rename:hover {
+		background: var(--surface-3);
+		color: var(--text-primary);
 	}
 	.fe-float-sub {
 		margin: 2px 0 0;

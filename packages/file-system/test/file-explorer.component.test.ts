@@ -663,7 +663,7 @@ describe('FileExplorer component', () => {
 		expect(rows.filter((r) => /live-peer/.test(r.textContent || '')).length).toBeGreaterThanOrEqual(2);
 	});
 
-	it('creates a folder via New folder form', async () => {
+	it('creates a folder via the inline New folder row', async () => {
 		render(FileExplorer, { props: { mode: 'manage', vfs, variant: 'panel' } });
 		await screen.findByTestId('file-explorer');
 		await fireEvent.click(screen.getByTestId('fe-new-folder'));

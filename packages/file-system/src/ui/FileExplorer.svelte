@@ -95,6 +95,7 @@
 		pendingLabel,
 		pendingPercent,
 		sortListingRows,
+		type ListingRow,
 		type ListingPending
 	} from './listingPending.js';
 	import { formatExplorerError } from './explorerError.js';
@@ -530,6 +531,7 @@
 		};
 	});
 	onDestroy(() => {
+		clearRenameBlur();
 		archiveAbort?.abort();
 		emptyTrashAbort?.abort();
 		void innerFs?.dispose();
@@ -1007,12 +1009,14 @@
 	const SILENT_RETRY_MS = 1_000;
 	let silentRetryTimer: ReturnType<typeof setTimeout> | null = null;
 
-	let newFolderOpen = $state(false);
-	let newFolderName = $state('New Folder');
+	let draftFolder = $state<ExplorerEntry | null>(null);
+	let draftCreatedId = $state<string | null>(null);
 	let renamingId = $state<string | null>(null);
-	let renameRootEl = $state<HTMLElement | null>(null);
+	let renameTarget = $state<ExplorerEntry | null>(null);
+	const renameEditors = new Set<HTMLElement>();
+	let renameFocusSurface: 'listing' | 'preview' = 'listing';
 	let renameBlurTimer: ReturnType<typeof setTimeout> | null = null;
-	let renameBusy = false;
+	let renameBusy = $state(false);
 	let renameValue = $state('');
 	/** Position in `focusableEntries` (display order) — never a `nodes` index. */
 	let focusIndex = $state(-1);
@@ -2271,16 +2275,18 @@
 		}
 	}
 
-	async function createFolder() {
-		if (!driver.mkdir || !caps.supportsMkdir) return;
-		try {
-			await driver.mkdir(parentId, newFolderName || 'New Folder');
-			newFolderOpen = false;
-			newFolderName = 'New Folder';
-			await refresh();
-		} catch (e) {
-			reportError(e);
-		}
+	function startCreateFolder() {
+		if (!driver.mkdir || !caps.supportsMkdir || renameBusy) return;
+		cancelRename();
+		const draft: ExplorerEntry = { id: `draft-folder:${generateId()}`, kind: 'folder', parentId, name: 'New Folder' };
+		draftFolder = draft;
+		renameTarget = draft;
+		renameFocusSurface = 'listing';
+		renameValue = draft.name;
+		renamingId = draft.id;
+		selected = new Set();
+		lastSelectedId = null;
+		focusIndex = -1;
 	}
 
 	let confirmPrompt = $state<{
@@ -2533,26 +2539,46 @@
 	function cancelRename() {
 		clearRenameBlur();
 		renamingId = null;
+		renameTarget = null;
+		draftFolder = null;
+		draftCreatedId = null;
 	}
 
 	async function commitRename(n: ExplorerEntry) {
 		if (renamingId !== n.id || renameBusy) return;
 		clearRenameBlur();
 		const next = renameValue.trim();
-		if (!next || next === n.name) {
-			renamingId = null;
+		const creating = draftFolder?.id === n.id;
+		if (!next || (!creating && next === n.name)) {
+			cancelRename();
 			return;
 		}
-		if (!driver.rename || !caps.supportsRename) return;
+		const d = driver;
+		if (creating ? !d.mkdir || !caps.supportsMkdir : !d.rename || !caps.supportsRename) return;
 		renameBusy = true;
 		try {
-			await driver.rename(n.id, next);
-			evictDragOutFile(n.id);
-			renamingId = null;
-			error = '';
-			await refresh();
+			if (creating) {
+				const created = await d.mkdir!(n.parentId, next);
+				if (driver === d && parentId === n.parentId) {
+					if (renamingId === n.id) draftCreatedId = created.id;
+					error = '';
+					await refresh();
+					if (renamingId === n.id && !selected.size) selectExclusive(created);
+				}
+			} else {
+				const updated = await d.rename!(n.id, next);
+				evictDragOutFile(n.id);
+				if (driver === d) {
+					nodes = nodes.map((entry) => entry.id === n.id ? { ...entry, ...updated } : entry);
+					if (previewEntry?.id === n.id) previewEntry = { ...previewEntry, ...updated };
+					if (floatingPreviewEntry?.id === n.id) floatingPreviewEntry = { ...floatingPreviewEntry, ...updated };
+					error = '';
+					await refresh();
+				}
+			}
+			if (renamingId === n.id) cancelRename();
 		} catch (e) {
-			reportError(e);
+			if (driver === d && parentId === n.parentId) reportError(e);
 		} finally {
 			renameBusy = false;
 		}
@@ -2562,38 +2588,72 @@
 		clearRenameBlur();
 		renameBlurTimer = setTimeout(() => {
 			renameBlurTimer = null;
-			if (renamingId === n.id) void commitRename(n);
+			if (renamingId === n.id && !inRenameEditor(document.activeElement)) void commitRename(n);
 		}, 0);
 	}
 
-	function startRename(n: ExplorerEntry) {
-		if (mode !== 'manage' || !caps.supportsRename) return;
-		renamingId = n.id;
+	function canRename(n: ExplorerEntry): boolean {
+		return mode === 'manage' && caps.supportsRename && !!driver.rename && nodes.some((entry) => entry.id === n.id);
+	}
+
+	function startRename(n: ExplorerEntry, surface: 'listing' | 'preview' = 'listing') {
+		if (!canRename(n) || renameBusy) return;
+		cancelRename();
+		renameTarget = n;
+		renameFocusSurface = surface;
 		renameValue = n.name;
+		renamingId = n.id;
+	}
+
+	function inRenameEditor(target: EventTarget | null): boolean {
+		return target instanceof Node && [...renameEditors].some((editor) => editor.contains(target));
+	}
+
+	type RenameEditorContext = { surface: 'listing' | 'preview'; id: string; kind: ExplorerEntry['kind'] };
+	function registerRenameEditor(node: HTMLElement, context: RenameEditorContext) {
+		renameEditors.add(node);
+		const focus = () => {
+			if (context.surface !== renameFocusSurface) return;
+			void tick().then(() => {
+				if (!node.isConnected || context.id !== renamingId || renameBusy) return;
+				const input = node.querySelector('input');
+				if (!input) return;
+				node.closest('.fe-row')?.scrollIntoView?.({ block: 'nearest' });
+				input.focus();
+				const dot = input.value.lastIndexOf('.');
+				if (context.kind === 'file' && dot > 0) input.setSelectionRange(0, dot);
+				else input.select();
+			});
+		};
+		focus();
+		return {
+			update(next: RenameEditorContext) {
+				const changed = next.id !== context.id || next.surface !== context.surface;
+				context = next;
+				if (changed) focus();
+			},
+			destroy() { renameEditors.delete(node); }
+		};
 	}
 
 	$effect(() => {
 		if (!renamingId) return;
-		const id = renamingId;
 		const onPointerDown = (e: PointerEvent) => {
-			const root = renameRootEl;
-			if (root && e.target instanceof Node && root.contains(e.target)) return;
-			const n = nodes.find((x) => x.id === id);
-			if (n) void commitRename(n);
+			if (inRenameEditor(e.target)) {
+				clearRenameBlur();
+				return;
+			}
+			if (renameTarget) void commitRename(renameTarget);
 		};
 		document.addEventListener('pointerdown', onPointerDown, true);
 		return () => document.removeEventListener('pointerdown', onPointerDown, true);
 	});
 
 	$effect(() => {
-		if (!renamingId || !renameRootEl) return;
-		const input = renameRootEl.querySelector('input');
-		if (!(input instanceof HTMLInputElement)) return;
-		input.focus();
-		const v = input.value;
-		const dot = v.lastIndexOf('.');
-		if (dot > 0) input.setSelectionRange(0, dot);
-		else input.select();
+		void driver;
+		void parentId;
+		void mode;
+		untrack(cancelRename);
 	});
 
 	function canToggleSelect(): boolean {
@@ -3199,8 +3259,7 @@
 	function renamePreviewItem() {
 		const n = previewTarget();
 		if (!n) return;
-		dismissPreviewPopup();
-		startRename(n);
+		startRename(n, 'preview');
 	}
 
 	async function copyPreviewItem() {
@@ -3545,9 +3604,12 @@
 	 * other views) the rows pass through in driver order so sibling
 	 * reorder can stick; a sort always renders a stable copy.
 	 */
-	const sortedRows = $derived(
-		activeSort ? sortListingRows(visibleRows, activeSort.col, activeSort.dir, foldersFirst) : visibleRows
-	);
+	const sortedRows = $derived.by(() => {
+		const rows = activeSort ? sortListingRows(visibleRows, activeSort.col, activeSort.dir, foldersFirst) : visibleRows;
+		if (!draftFolder) return rows;
+		const draft: ListingRow = { key: draftFolder.id, node: draftFolder, pending: null, placeholder: true, nodeIndex: null };
+		return [draft, ...rows.filter((row) => row.node.id !== draftCreatedId)];
+	});
 	/** Reorder needs the driver's manual order — sorting it away makes before/after drops meaningless. */
 	const canReorder = $derived(caps.supportsSiblingOrder && !activeSort);
 	/** Real rows in display order — click focus and arrow-key nav walk this, not nodes. */
@@ -4764,7 +4826,7 @@
 			{/if}
 			{#if mode === 'manage'}
 				{#if caps.supportsMkdir}
-					{@render actionBtn(kind, 'fe-new-folder', 'New folder', 'folder-plus', () => (newFolderOpen = true))}
+					{@render actionBtn(kind, 'fe-new-folder', 'New folder', 'folder-plus', startCreateFolder)}
 				{/if}
 				{#if showDeviceFilePicker}
 					{@render actionBtn(kind, 'fe-upload', uploadTip, 'upload', () => fileInputEl?.click(), {
@@ -5089,23 +5151,6 @@
 		</div>
 	{/if}
 
-	{#if newFolderOpen && caps.supportsMkdir}
-		<div class="fe-inline-form" data-testid="fe-new-folder-form">
-			<input data-testid="fe-new-folder-input" bind:value={newFolderName} />
-			<button
-				type="button"
-				class="ds-btn ds-btn--sm ds-btn--primary"
-				data-testid="fe-new-folder-confirm"
-				onclick={createFolder}>Create</button
-			>
-			<button
-				type="button"
-				class="ds-btn ds-btn--sm ds-btn--ghost"
-				onclick={() => (newFolderOpen = false)}>Cancel</button
-			>
-		</div>
-	{/if}
-
 	<div class="fe-body" data-fe-tree-dock={treeDock !== 'off' && driver.id !== 'memory' ? treeDock : 'off'}>
 	{#if treeDock !== 'off' && driver.id !== 'memory'}
 		<aside
@@ -5213,15 +5258,16 @@
 			</div>
 			<span class="fe-pending-pct" class:on-icon={onIcon}>{pendingLabel(p)}{p.owner ? ` · ${ownerLabel(p.owner, ownerCtx)}` : ''}</span>
 		{/snippet}
-		{#if initialLoad && nodes.length === 0 && listingRows.length === 0}
+		{#if initialLoad && nodes.length === 0 && sortedRows.length === 0}
 			<div class="fe-empty" data-testid="fe-loading">Loading…</div>
-		{:else if listingRows.length === 0}
+		{:else if sortedRows.length === 0}
 			<div class="fe-empty" data-testid="fe-empty">
 				No files here
 			</div>
 		{:else}
 			{#each sortedRows as row (row.key)}
 				{@const n = row.node}
+				{@const isDraft = n.id === draftFolder?.id}
 				{@const i = row.nodeIndex ?? -1}
 				{@const p = row.pending}
 				{@const actionable = !row.placeholder && rowActionable(n)}
@@ -5240,7 +5286,7 @@
 					class:folder={n.kind === 'folder'}
 					class:file={n.kind === 'file'}
 					class:incompatible={!actionable && n.kind === 'file'}
-					class:selected={!row.placeholder && selected.has(n.id)}
+					class:selected={isDraft || (!row.placeholder && selected.has(n.id))}
 					class:previewed={!row.placeholder && previewEntry?.id === n.id}
 					class:focused={!row.placeholder && focusPosById.get(n.id) === focusIndex}
 					class:fe-dnd-into={showInto}
@@ -5249,9 +5295,9 @@
 						sameClipboardSource(clipboard, driver) && clipboard.ids.includes(n.id)}
 					class:fe-row-icon={viewMode === 'icons'}
 					class:fe-row-detailed={viewMode === 'detailed'}
-					class:renaming={!row.placeholder && renamingId === n.id}
+					class:renaming={renamingId === n.id}
 					class:fe-pending={Boolean(p)}
-					data-testid={row.placeholder && n.kind !== 'folder'
+					data-testid={isDraft ? 'fe-new-folder-row' : row.placeholder && n.kind !== 'folder'
 						? 'fe-pending-row'
 						: n.kind === 'folder'
 							? 'fe-folder-row'
@@ -5266,8 +5312,8 @@
 					data-name={n.name}
 					data-fe-folder-mark={entryMark(n)}
 					draggable={!row.placeholder && dragOutEnabled}
-					aria-disabled={row.placeholder || (!actionable && n.kind === 'file') ? 'true' : undefined}
-					aria-selected={!row.placeholder && selected.has(n.id)}
+					aria-disabled={(row.placeholder && !isDraft) || (!actionable && n.kind === 'file') ? 'true' : undefined}
+					aria-selected={isDraft || (!row.placeholder && selected.has(n.id))}
 					role="option"
 					tabindex="-1"
 					ondragstart={row.placeholder ? undefined : (e) => onRowDragStart(e, n)}
@@ -5461,6 +5507,8 @@
 				<FeFloatingPreview
 					variant="dock"
 					entry={single}
+					nameEditor={renamingId === single.id ? previewNameEditor : undefined}
+					onRename={canRename(single) ? () => startRename(single, 'preview') : undefined}
 					listParentId={selected.size === 0 ? parentId : undefined}
 					{driver}
 					{mediaMeta}
@@ -5497,6 +5545,8 @@
 		<FeFloatingPreview
 			variant="popup"
 			entry={selected.size > 1 ? selectedEntries[0]! : previewEntry}
+			nameEditor={renamingId === previewEntry.id ? previewNameEditor : undefined}
+			onRename={canRename(previewEntry) ? () => startRename(previewEntry!, 'preview') : undefined}
 			entries={selected.size > 1 ? selectedEntries : []}
 			{driver}
 			{mediaMeta}
@@ -6016,6 +6066,8 @@
 	{#if floatingPreviewEntry}
 		<FeFloatingPreview
 			entry={floatingPreviewEntry}
+			nameEditor={renamingId === floatingPreviewEntry.id ? previewNameEditor : undefined}
+			onRename={canRename(floatingPreviewEntry) ? () => startRename(floatingPreviewEntry!, 'preview') : undefined}
 			entries={selected.size > 1 && selected.has(floatingPreviewEntry.id) ? selectedEntries : []}
 			{driver}
 			{mediaMeta}
@@ -6062,19 +6114,28 @@
 	{/if}
 {/snippet}
 
-{#snippet renameEditor(n: ExplorerEntry)}
+{#snippet previewNameEditor(n: ExplorerEntry)}
+	{@render renameEditor(n, 'preview')}
+{/snippet}
+
+{#snippet renameEditor(n: ExplorerEntry, surface: 'listing' | 'preview' = 'listing')}
+	{@const creating = draftFolder?.id === n.id}
+	{@const prefix = creating ? 'fe-new-folder' : surface === 'preview' ? 'fe-preview-rename' : 'fe-rename'}
 	<!-- svelte-ignore a11y_click_events_have_key_events -->
 	<!-- svelte-ignore a11y_no_static_element_interactions -->
 	<span
 		class="fe-rename"
-		bind:this={renameRootEl}
+		use:registerRenameEditor={{ surface, id: n.id, kind: n.kind }}
+		data-rename-id={n.id}
+		aria-busy={renameBusy ? 'true' : undefined}
 		onclick={(e) => e.stopPropagation()}
 		onpointerdown={(e) => e.stopPropagation()}
 	>
 		<input
-			data-testid="fe-rename-input"
+			data-testid={`${prefix}-input`}
 			bind:value={renameValue}
-			aria-label="Rename"
+			aria-label={creating ? 'New folder name' : 'Rename'}
+			disabled={renameBusy}
 			onkeydown={(e) => {
 				if (e.key === 'Enter') {
 					e.preventDefault();
@@ -6090,8 +6151,9 @@
 		<button
 			type="button"
 			class="fe-rename-action"
-			data-testid="fe-rename-ok"
+			data-testid={`${prefix}-${creating ? 'confirm' : 'ok'}`}
 			aria-label="Save name"
+			disabled={renameBusy}
 			onpointerdown={(e) => {
 				e.preventDefault();
 				clearRenameBlur();
@@ -6103,8 +6165,9 @@
 		<button
 			type="button"
 			class="fe-rename-action fe-rename-cancel"
-			data-testid="fe-rename-cancel"
-			aria-label="Cancel rename"
+			data-testid={`${prefix}-cancel`}
+			aria-label={creating ? 'Cancel new folder' : 'Cancel rename'}
+			disabled={renameBusy}
 			onpointerdown={(e) => {
 				e.preventDefault();
 				clearRenameBlur();
@@ -7247,16 +7310,14 @@
 		color: var(--accent-amber);
 		font-size: var(--text-sm);
 	}
-	.fe-save-bar,
-	.fe-inline-form {
+	.fe-save-bar {
 		display: flex;
 		gap: 8px;
 		padding: 10px 12px;
 		border-top: 1px solid var(--line-hairline);
 		align-items: center;
 	}
-	.fe-save-bar input,
-	.fe-inline-form input {
+	.fe-save-bar input {
 		background: var(--surface-2);
 		border: 1px solid var(--line-hairline);
 		color: inherit;
@@ -7274,7 +7335,7 @@
 	}
 	.fe-rename input {
 		flex: 1 1 auto;
-		min-width: 8rem;
+		min-width: 0;
 		width: 100%;
 		background: var(--surface-2);
 		border: 1px solid var(--accent);
