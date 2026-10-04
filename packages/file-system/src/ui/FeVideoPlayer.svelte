@@ -32,7 +32,7 @@
 		timeline?: MediaTimeline;
 		/** Ask for the converted stream again from file second `at`. */
 		onRestart?: (at: number) => void;
-		onError?: () => void;
+		onError?: (source: string) => void;
 		testid?: string;
 	} = $props();
 
@@ -216,7 +216,7 @@
 			volume = video?.volume ?? 1;
 		}}
 		onratechange={() => (rate = video?.playbackRate ?? 1)}
-		onerror={() => onError?.()}
+		onerror={(event) => onError?.(event.currentTarget.getAttribute('src') ?? src)}
 	></video>
 	{#if waiting}
 		<div class="fe-vp-wait" aria-hidden="true"></div>

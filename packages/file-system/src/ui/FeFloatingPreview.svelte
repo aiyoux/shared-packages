@@ -97,6 +97,13 @@
 	/** Parent passed to `driver.list` for a folder preview. */
 	const folderListParent = $derived(listParentId === undefined ? mediaId : listParentId);
 	let loadedMedia: { id: string; name: string; kind: string; driver: ExplorerDriver } | null = null;
+	// A file can be selected again before an earlier read finishes. Its id
+	// alone does not identify the load that currently owns the preview.
+	let mediaGeneration = 0;
+	function isCurrentMedia(generation: number, d: ExplorerDriver, id: string, name: string): boolean {
+		return generation === mediaGeneration && driver === d && entry?.id === id &&
+			entry.name === name && loadMedia && !multi;
+	}
 	/**
 	 * The image viewer carries the actions in its own chrome, so the bottom bar
 	 * steps aside, but only while that viewer is on screen. An image that fails
@@ -123,8 +130,9 @@
 	async function restartAt(seconds: number) {
 		const from = streamedFrom;
 		if (!from?.converted || from.id !== entry?.id) return;
+		const generation = mediaGeneration;
 		const next = await convertedMediaSrc(from.driver, from.id, from.name, seconds).catch(() => null);
-		if (!next || entry?.id !== from.id) return;
+		if (!next || streamedFrom !== from || !isCurrentMedia(generation, from.driver, from.id, from.name)) return;
 		// The host may start a copied video on the keyframe before `seconds`.
 		converted = { duration: next.duration ?? converted?.duration, start: next.start ?? seconds };
 		blobUrl = next.src;
@@ -147,18 +155,25 @@
 	}
 
 	function startPeaks(d: ExplorerDriver, id: string, size: number | undefined, blob?: Blob) {
+		const generation = mediaGeneration;
+		const name = entry.name;
 		peaksLoading = true;
 		void peaksFor(d, id, size, blob)
 			.catch(() => null)
 			.then((p) => {
-				if (entry?.id !== id) return;
+				if (!isCurrentMedia(generation, d, id, name)) return;
 				audioPeaks = p;
 				peaksLoading = false;
 			});
 	}
 
 	/** The stream would not play: try the host's converted stream, then bytes. */
-	async function streamFailed() {
+	async function streamFailed(source: string) {
+		const owner = loadedMedia;
+		if (loading || source !== blobUrl || !owner ||
+			!isCurrentMedia(mediaGeneration, owner.driver, owner.id, owner.name)) return;
+		const generation = mediaGeneration;
+		const isCurrent = () => isCurrentMedia(generation, owner.driver, owner.id, owner.name);
 		const from = streamedFrom;
 		streamedFrom = null;
 		if (!from) {
@@ -170,7 +185,8 @@
 		try {
 			if (!from.converted) {
 				const next = await convertedMediaSrc(from.driver, from.id, from.name);
-				if (next && entry?.id === from.id) {
+				if (!isCurrent()) return;
+				if (next) {
 					streamedFrom = { ...from, converted: true };
 					converted = { duration: next.duration, start: 0 };
 					blobUrl = next.src;
@@ -178,15 +194,15 @@
 				}
 			}
 			const src = await loadExplorerMediaSrc(from.driver, from.id);
-			if (entry?.id !== from.id) {
+			if (!isCurrent()) {
 				if (src.url.startsWith('blob:')) URL.revokeObjectURL(src.url);
 				return;
 			}
 			blobUrl = src.url;
 		} catch (err) {
-			error = formatPreviewReadError(err);
+			if (isCurrent()) error = formatPreviewReadError(err);
 		} finally {
-			loading = false;
+			if (isCurrent()) loading = false;
 		}
 	}
 	let pdfFallbackUrl = $state<string | null>(null);
@@ -389,6 +405,7 @@
 	});
 
 	onDestroy(() => {
+		mediaGeneration++;
 		revokeUrl();
 		pdfDoc?.close();
 		pdfDoc = null;
@@ -409,6 +426,12 @@
 		const d = driver;
 		const k = kind;
 		const shouldLoad = loadMedia && !multi;
+		// Keep ownership across same-file metadata/list refreshes as well as
+		// the decoded media: waveform work may still be completing.
+		if (shouldLoad && entryKind === 'file' && untrack(() => loadedMedia?.id === e.id &&
+			loadedMedia.name === e.name && loadedMedia.kind === k && loadedMedia.driver === d &&
+			!!blobUrl && !loading)) return;
+		const generation = ++mediaGeneration;
 		if (!shouldLoad) {
 			untrack(revokeUrl);
 			loading = false;
@@ -439,12 +462,8 @@
 			return;
 		}
 
-		// List refreshes replace entry objects; keep the decoded media for the
-		// same file and driver instead of retiring an image still on screen.
-		if (untrack(() => loadedMedia?.id === e.id && loadedMedia.name === e.name &&
-			loadedMedia.kind === k && loadedMedia.driver === d && !!blobUrl && !loading)) return;
-
 		let cancelled = false;
+		const isActive = () => !cancelled && isCurrentMedia(generation, d, e.id, e.name);
 		// untrack: see comment above — must not make this effect depend on
 		// `blobUrl`, or assigning it after the fetch resolves would loop.
 		untrack(revokeUrl);
@@ -467,10 +486,10 @@
 						// The host renders it at the size it is shown, so a large
 						// photo is viewed without its original leaving the host.
 						const loc = await d.thumbUrl(e.id, { maxDim: stagePixels() });
-						if (cancelled) return;
+						if (!isActive()) return;
 						if (loc?.url) {
 							const src = await embedMediaUrl(loc.url);
-							if (cancelled) {
+							if (!isActive()) {
 								if (src.startsWith('blob:')) URL.revokeObjectURL(src);
 								return;
 							}
@@ -488,7 +507,7 @@
 					// container the browser cannot play goes to the converter first.
 					const conv = needsConversion(e.name) ? await convertedMediaSrc(d, e.id, e.name) : null;
 					const streamed = conv?.src ?? (await streamableMediaSrc(d, e.id, e.name));
-					if (cancelled) return;
+					if (!isActive()) return;
 					if (streamed) {
 						blobUrl = streamed;
 						streamedFrom = { id: e.id, name: e.name, driver: d, converted: conv !== null };
@@ -503,7 +522,7 @@
 				// plus what page 1 draws. A small one is cheaper read whole.
 				if (k === 'pdf' && d.rangeUrl && entrySize !== undefined && entrySize > RANGED_PDF_ABOVE_BYTES) {
 					const loc = await d.rangeUrl(e.id).catch(() => null);
-					if (cancelled) return;
+					if (!isActive()) return;
 					if (loc?.url) {
 						const url = loc.url;
 						const doc = await openPreviewPdf({
@@ -511,15 +530,16 @@
 							size: entrySize,
 							read: async (begin, end) => (await fetchByteRange(url, begin, end - 1)).bytes
 						});
-						if (cancelled) {
+						if (!isActive()) {
 							doc.close();
 							return;
 						}
 						pdfDoc = doc;
 						loading = false;
 						await tick();
-						if (cancelled || !pdfCanvas) return;
+						if (!isActive() || !pdfCanvas) return;
 						await doc.render(pdfCanvas, 0, 1000);
+						if (!isActive()) return;
 						pdfPageCount = doc.pageCount;
 						pdfCurrentPage = 0;
 						return;
@@ -527,7 +547,7 @@
 				}
 				if (k === 'image' || k === 'video' || k === 'audio') {
 					const src = await loadExplorerMediaSrc(d, e.id);
-					if (cancelled) {
+					if (!isActive()) {
 						if (src.url.startsWith('blob:')) URL.revokeObjectURL(src.url);
 						return;
 					}
@@ -539,7 +559,7 @@
 				}
 
 				const blob = await readExplorerBlob(d, e.id);
-				if (cancelled) return;
+				if (!isActive()) return;
 				if (!blob) {
 					error = 'File is empty';
 					loading = false;
@@ -552,23 +572,24 @@
 					// bind:this can attach, then wait for that DOM flush.
 					loading = false;
 					await tick();
-					if (cancelled) return;
+					if (!isActive()) return;
 					if (!pdfCanvas) {
 						pdfFallbackUrl = URL.createObjectURL(typed);
 						return;
 					}
 					try {
 						const doc = await openPreviewPdf({ blob: typed });
-						if (cancelled) {
+						if (!isActive()) {
 							doc.close();
 							return;
 						}
 						pdfDoc = doc;
 						await doc.render(pdfCanvas, 0, 1000);
+						if (!isActive()) return;
 						pdfPageCount = doc.pageCount;
 						pdfCurrentPage = 0;
 					} catch {
-						if (cancelled) return;
+						if (!isActive()) return;
 						pdfFallbackUrl = URL.createObjectURL(typed);
 						error = '';
 					}
@@ -577,7 +598,7 @@
 					loading = false;
 				}
 			} catch (err) {
-				if (!cancelled) {
+				if (isActive()) {
 					error = formatPreviewReadError(err);
 					loading = false;
 				}
@@ -590,13 +611,24 @@
 	});
 
 	async function renderPage(pageIdx: number) {
-		if (!pdfDoc || !pdfCanvas) return;
+		const doc = pdfDoc;
+		const canvas = pdfCanvas;
+		const generation = mediaGeneration;
+		if (!doc || !canvas) return;
 		try {
-			await pdfDoc.render(pdfCanvas, pageIdx, 1000);
-			pdfCurrentPage = pageIdx;
+			await doc.render(canvas, pageIdx, 1000);
+			if (generation === mediaGeneration && pdfDoc === doc) pdfCurrentPage = pageIdx;
 		} catch (err) {
-			error = err instanceof Error ? err.message : 'Failed to render page';
+			if (generation === mediaGeneration && pdfDoc === doc) {
+				error = err instanceof Error ? err.message : 'Failed to render page';
+			}
 		}
+	}
+
+	function currentImage(img: Element): boolean {
+		const owner = loadedMedia;
+		return !!owner && owner.kind === 'image' && img.getAttribute('src') === blobUrl &&
+			isCurrentMedia(mediaGeneration, owner.driver, owner.id, owner.name);
 	}
 
 	function prevPage() {
@@ -797,12 +829,13 @@
 						alt={entry.name}
 						onload={(e) => {
 							const img = e.currentTarget as HTMLImageElement;
+							if (!currentImage(img)) return;
 							imageSize = {
 								w: img.naturalWidth || 1,
 								h: img.naturalHeight || 1
 							};
 						}}
-						onerror={() => (error = 'Image failed to display')}
+						onerror={(e) => { if (currentImage(e.currentTarget)) error = 'Image failed to display'; }}
 					/>
 				</PanZoomViewport>
 			{:else if kind === 'video' && blobUrl}
@@ -811,7 +844,7 @@
 					name={entry.name}
 					timeline={mediaTimeline}
 					onRestart={(at) => void restartAt(at)}
-					onError={() => void streamFailed()}
+					onError={(source) => void streamFailed(source)}
 					testid="fe-float-video"
 				/>
 			{:else if kind === 'audio' && blobUrl}
@@ -823,7 +856,7 @@
 						{peaksLoading}
 						timeline={mediaTimeline}
 						onRestart={(at) => void restartAt(at)}
-						onError={() => void streamFailed()}
+						onError={(source) => void streamFailed(source)}
 					/>
 				</div>
 			{:else if kind === 'pdf' && pdfFallbackUrl}

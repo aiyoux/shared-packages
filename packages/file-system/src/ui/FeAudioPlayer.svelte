@@ -36,7 +36,7 @@
 		peaksLoading?: boolean;
 		timeline?: MediaTimeline;
 		onRestart?: (at: number) => void;
-		onError?: () => void;
+		onError?: (source: string) => void;
 		testid?: string;
 	} = $props();
 
@@ -202,7 +202,7 @@
 			volume = audio?.volume ?? 1;
 		}}
 		onratechange={() => (rate = audio?.playbackRate ?? 1)}
-		onerror={() => onError?.()}
+		onerror={(event) => onError?.(event.currentTarget.getAttribute('src') ?? src)}
 	></audio>
 	<div
 		class="fe-ap-wave"

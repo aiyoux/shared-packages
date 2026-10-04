@@ -3,11 +3,12 @@
  * PDF used to bind the canvas only after loading=false, then return early
  * with the spinner still up.
  */
-import { describe, it, expect, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/svelte';
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/svelte';
 import { createRawSnippet } from 'svelte';
 import FeFloatingPreview from '../src/ui/FeFloatingPreview.svelte';
 import type { ExplorerDriver, ExplorerEntry, MediaMetaTarget } from '../src/ui/explorerDriver.ts';
+import { setMediaStreamProxy } from '../src/ui/mediaStream.ts';
 
 vi.mock('../src/ui/feThumbnails.js', async (importOriginal) => {
 	const actual = await importOriginal<typeof import('../src/ui/feThumbnails.js')>();
@@ -63,6 +64,108 @@ const svgEntry: ExplorerEntry = {
 	fileType: 'image',
 	size: 40
 };
+
+function deferred<T>() {
+	let resolve!: (value: T) => void;
+	let reject!: (error: Error) => void;
+	const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
+	return { promise, resolve, reject };
+}
+
+// Read helpers await nested promises. Let those continuations finish before
+// checking that the previous selection cannot change the current one.
+const finishReads = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+describe('preview selection races', () => {
+	beforeEach(() => setMediaStreamProxy((url) => url));
+	afterEach(() => setMediaStreamProxy(null));
+
+	it.each([
+		['audio', 'resolve'], ['audio', 'reject'], ['video', 'resolve'], ['video', 'reject']
+	] as const)('ignores an old %s fallback that later %ss while the next image loads', async (kind, outcome) => {
+		const first = deferred<Blob>();
+		const second = deferred<Blob>();
+		const entry: ExplorerEntry = { id: 'first', kind: 'file', parentId: null, name: kind === 'audio' ? 'first.mp3' : 'first.webm', fileType: kind };
+		const next: ExplorerEntry = { ...svgEntry, id: 'second', name: 'second.png' };
+		const download = vi.fn((id: string) => id === entry.id ? first.promise : second.promise);
+		const driver = { ...driverWith(new Blob()), readBlob: undefined, download, rangeUrl: async (id: string) => ({ url: `${location.origin}/stream/${id}` }) };
+		const props = { entry, driver, variant: 'dock' as const, onClose: () => {} };
+		const view = render(FeFloatingPreview, { props });
+		await waitFor(() => expect(view.container.querySelector(kind)).not.toBeNull());
+		await fireEvent.error(view.container.querySelector(kind)!);
+		await waitFor(() => expect(download).toHaveBeenCalledWith(entry.id));
+		await view.rerender({ ...props, entry: next });
+		await waitFor(() => expect(download).toHaveBeenCalledWith(next.id));
+		const revoke = vi.spyOn(URL, 'revokeObjectURL');
+		try {
+			await act(async () => {
+				if (outcome === 'reject') first.reject(new Error('Preview failed'));
+				else first.resolve(new Blob(['old media']));
+				await finishReads();
+			});
+			expect(view.container.querySelector('.fe-float-spinner')).not.toBeNull();
+			expect(view.container.querySelector('.fe-float-error')).toBeNull();
+			if (outcome === 'resolve') expect(revoke).toHaveBeenCalled();
+			await act(() => second.resolve(new Blob(['new image'], { type: 'image/png' })));
+			await waitFor(() => expect(view.container.querySelector('img.fe-float-image')?.getAttribute('alt')).toBe(next.name));
+			expect(view.container.querySelector('.fe-float-error')).toBeNull();
+		} finally { revoke.mockRestore(); }
+	});
+
+	it('ignores an older fallback when the same video is selected again', async () => {
+		const oldRead = deferred<Blob>();
+		const entry: ExplorerEntry = { id: 'video', kind: 'file', parentId: null, name: 'clip.webm', fileType: 'video' };
+		const download = vi.fn(() => oldRead.promise);
+		const driver = { ...driverWith(new Blob()), readBlob: undefined, download, rangeUrl: async (id: string) => ({ url: `${location.origin}/stream/${id}` }) };
+		const props = { entry, driver, variant: 'dock' as const, onClose: () => {} };
+		const view = render(FeFloatingPreview, { props });
+		await waitFor(() => expect(view.container.querySelector('video')).not.toBeNull());
+		await fireEvent.error(view.container.querySelector('video')!);
+		await waitFor(() => expect(download).toHaveBeenCalledWith(entry.id));
+		await view.rerender({ ...props, entry: { id: 'folder', kind: 'folder', parentId: null, name: 'Folder' } });
+		await view.rerender(props);
+		await waitFor(() => expect(view.container.querySelector('video')).not.toBeNull());
+		await act(async () => {
+			oldRead.reject(new Error('Preview failed'));
+			await finishReads();
+		});
+		expect(view.container.querySelector('video')).not.toBeNull();
+		expect(view.container.querySelector('.fe-float-error')).toBeNull();
+	});
+
+	it.each(['resolve', 'reject'] as const)('ignores a pending image read that later %ss after selecting a video', async (outcome) => {
+		const first = deferred<Blob>();
+		const entry = { ...svgEntry, name: 'first.png' };
+		const readBlob = vi.fn((id: string) => id === entry.id ? first.promise : Promise.resolve(new Blob(['video'])));
+		const driver = { ...driverWith(new Blob()), readBlob };
+		const props = { entry, driver, variant: 'dock' as const, onClose: () => {} };
+		const view = render(FeFloatingPreview, { props });
+		await waitFor(() => expect(readBlob).toHaveBeenCalledWith(entry.id));
+		await view.rerender({ ...props, entry: { id: 'video', kind: 'file', parentId: null, name: 'next.webm', fileType: 'video' } });
+		await waitFor(() => expect(view.container.querySelector('video')).not.toBeNull());
+		const src = view.container.querySelector('video')!.getAttribute('src');
+		await act(async () => {
+			if (outcome === 'reject') first.reject(new Error('Preview failed'));
+			else first.resolve(new Blob(['old image']));
+			await finishReads();
+		});
+		expect(view.container.querySelector('video')!.getAttribute('src')).toBe(src);
+		expect(view.container.querySelector('.fe-float-error')).toBeNull();
+	});
+
+	it('still reports a read failure for the currently selected video', async () => {
+		const entry: ExplorerEntry = { id: 'video', kind: 'file', parentId: null, name: 'clip.webm', fileType: 'video' };
+		const driver = {
+			...driverWith(new Blob()), readBlob: undefined,
+			download: async () => { throw new Error('Preview failed'); },
+			rangeUrl: async () => ({ url: `${location.origin}/stream/video` })
+		};
+		const view = render(FeFloatingPreview, { props: { entry, driver, variant: 'dock', onClose: () => {} } });
+		await waitFor(() => expect(view.container.querySelector('video')).not.toBeNull());
+		await fireEvent.error(view.container.querySelector('video')!);
+		await waitFor(() => expect(view.container.querySelector('.fe-float-error')?.textContent).toContain('Preview failed'));
+	});
+});
 
 describe('FeFloatingPreview', () => {
 	it.each(['audio', 'video'] as const)('reports an unsupported local %s decoder instead of leaving a dead player', async (kind) => {
