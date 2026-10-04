@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, beforeAll, afterAll } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/svelte';
 import { resetSharedVfsForTests } from '../src/index.ts';
 import OverlayOwnershipHarness from './OverlayOwnershipHarness.svelte';
+import AppWindowsOverlayHarness from './AppWindowsOverlayHarness.svelte';
 
 beforeEach(() => resetSharedVfsForTests());
 const animate = HTMLElement.prototype.animate;
@@ -21,6 +22,18 @@ async function escape() {
 }
 
 describe('overlay ownership across shared components', () => {
+	it('a popup owns Escape before window slicing, even when focus stays on its trigger', async () => {
+		render(AppWindowsOverlayHarness);
+		const trigger = await screen.findByTestId('menu-trigger');
+		trigger.focus();
+		await fireEvent.click(trigger);
+		await screen.findByTestId('window-popup');
+		await escape();
+		await waitFor(() => expect(screen.queryByTestId('window-popup')).toBeNull());
+		expect(screen.getByTestId('slicing').textContent).toBe('true');
+		await escape();
+		expect(screen.getByTestId('slicing').textContent).toBe('false');
+	});
 	it('an inline Svelte edit consumes Escape before the containing Dialog', async () => {
 		render(OverlayOwnershipHarness);
 		const input = screen.getByTestId('inline-edit');

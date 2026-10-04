@@ -1,5 +1,6 @@
 <script lang="ts" generics="R extends string, S extends { role: R; unassigned?: boolean }">
 	import { tick, untrack, type Snippet } from 'svelte';
+	import { hasOpenOverlay } from '@shared-packages/design-system';
 	import { combineTargets, leafRects, type Rect } from '../pane-layout/combine.js';
 	import { findNode, listLeaves, setSplitRatio, swapLeafIds } from '../pane-layout/tree.js';
 	import type { LayoutNode, SplitDirection } from '../pane-layout/types.js';
@@ -297,6 +298,7 @@
 
 	$effect(() => {
 		const onKey = (e: KeyboardEvent) => {
+			if (hasOpenOverlay()) return;
 			if (!appWindowsOwnsShortcut(hostEl, e.target)) return;
 			const target = e.target as HTMLElement | null;
 			if (targetConsumesKey(target, e)) return;

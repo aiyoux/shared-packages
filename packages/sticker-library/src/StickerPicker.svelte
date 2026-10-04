@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { overlay } from '@shared-packages/design-system';
 	import X from '@lucide/svelte/icons/x';
 	import {
 		STICKER_MOJIS,
@@ -25,6 +26,12 @@
 	let styleFilter = $state<StickerStyleFilter>('all');
 	let mojiFilter = $state<StickerMojiFilter>('all');
 	let selectedId = $state('happy:style-1');
+	let rootEl = $state<HTMLDivElement | null>(null);
+	$effect(() => {
+		if (variant !== 'modal' || !rootEl) return;
+		const action = overlay(rootEl, { kind: 'modal', portal: true, panel: '.sheet', onClose });
+		return () => action.destroy();
+	});
 
 	const grid = $derived(stickersMatching({ styleId: styleFilter, mojiId: mojiFilter }));
 	const preview = $derived(getStickerById(selectedId) ?? grid[0] ?? null);
@@ -49,22 +56,19 @@
 		if (preview && onInsert) onInsert(preview.id);
 	}
 
-	function handleKeyDown(e: KeyboardEvent) {
-		if (e.key === 'Escape') onClose?.();
-	}
 </script>
 
-<svelte:window onkeydown={handleKeyDown} />
 
 <div
 	class="picker"
+	bind:this={rootEl}
 	class:modal={variant === 'modal'}
 	class:page={variant === 'page'}
 	data-testid="sticker-picker"
 >
 	{#if variant === 'modal'}
 		<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-		<div class="backdrop" onclick={() => onClose?.()} role="presentation"></div>
+		<div class="backdrop" role="presentation"></div>
 	{/if}
 
 	<!-- svelte-ignore a11y_click_events_have_key_events -->
@@ -73,7 +77,7 @@
 	<section
 		class="sheet"
 		onclick={(e) => e.stopPropagation()}
-		role="dialog"
+		role={variant === 'modal' ? 'dialog' : 'region'}
 		aria-modal={variant === 'modal' ? 'true' : undefined}
 		aria-label="Sticker Library"
 	>
