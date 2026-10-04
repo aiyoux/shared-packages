@@ -3,6 +3,8 @@ export type FileTypeId =
 	| 'home'
 	| 'skch'
 	| 'ob3d'
+	| 'part'
+	| 'assy'
 	| 'cari'
 	| 'expr'
 	| 'pres'
