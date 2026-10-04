@@ -91,6 +91,7 @@
 	let listed = $state<Map<string, ExplorerEntry[]>>(new Map());
 	let marks = $state<Map<string, FolderMark>>(new Map());
 	let expanded = $state<Set<string>>(new Set());
+	let revealRevision = 0;
 	let loading = $state<Set<string>>(new Set());
 	let generation = 0;
 	let pendingLists = new Map<string, Promise<void>>();
@@ -177,15 +178,16 @@
 	}
 
 	async function revealPath(d: ExplorerDriver, id: ExplorerEntryId | null): Promise<void> {
+		const request = ++revealRevision;
 		if (!id) return;
 		const revision = generation;
 		try {
 			const chain = await d.getPath(id); // root..id, inclusive of id itself
-			if (revision !== generation) return;
+			if (revision !== generation || request !== revealRevision) return;
 			const chainIds = new Set<string>(chain.map((node) => node.id));
 			for (const node of chain) {
 				await loadChildren(d, node.id);
-				if (revision !== generation) return;
+				if (revision !== generation || request !== revealRevision) return;
 			}
 			// Re-read the live set right before assigning: the user may have
 			// toggled a node while getPath / loadChildren were in flight, and
@@ -215,7 +217,9 @@
 		await visit(root);
 	}
 
+	// A manual toggle takes precedence over an in-flight navigation reveal.
 	function toggleExpand(id: ExplorerEntryId): void {
+		revealRevision += 1;
 		const next = new Set(expanded);
 		if (next.has(id)) next.delete(id);
 		else {

@@ -12,6 +12,21 @@ function session(partial: Partial<OpenSession> & Pick<OpenSession, 'id' | 'updat
 	};
 }
 
+it('Memory rows stay in this tab through durable-list merges and disappear on reload', () => {
+	let raw: string | null = null;
+	const make = () => createSessionBoard({ load: () => raw, save: (json) => { raw = json; }, tabGet: () => null, tabSet: () => {} });
+	const a = make(); const memory = a.note({ kind: 'text', fileId: 'memory:original', title: 'Ephemeral' });
+	assert.equal(a.current().sessions.length, 1);
+	assert.equal(make().current().sessions.length, 0);
+	const other = make(); other.note({ kind: 'text', fileId: 'durable', title: 'Saved' });
+	const result = a.absorb(raw);
+	assert.equal(result.publish, false);
+	assert.equal(a.current().sessions.length, 2);
+	a.forget(memory.id);
+	assert.equal(JSON.parse(raw!).sessions.length, 1);
+	assert.equal(JSON.parse(raw!).closed.length, 0);
+});
+
 describe('session list merge', () => {
 	it('does not update an unchanged row when noting without connecting', () => {
 		const row = session({ id: 'held', updatedAt: 1 });

@@ -2,6 +2,7 @@
  * The open-document list is one record for every tab. Which document this
  * tab is showing is not part of that record — a second tab must not steal it.
  */
+import { isEphemeralFileId } from './fileSourceIds.js';
 import {
 	applyClosed,
 	joinOrCreate,
@@ -41,7 +42,7 @@ function parseSessions(raw: string | null): Parsed {
 		const parsed = JSON.parse(raw) as OpenSessionIndex;
 		if (!parsed || !Array.isArray(parsed.sessions)) return { sessions: [], closed: [] };
 		return {
-			sessions: parsed.sessions,
+			sessions: parsed.sessions.filter((row) => !isEphemeralFileId(row.fileId)),
 			closed: mergeClosed(Array.isArray(parsed.closed) ? parsed.closed : []),
 			legacyConnectedId: parsed.connectedId
 		};
@@ -78,7 +79,7 @@ export function createSessionBoard(opts: SessionBoardStorage): SessionBoard {
 
 	function persist() {
 		opts.tabSet(index.connectedId ?? null);
-		opts.save(JSON.stringify({ sessions: index.sessions, closed }));
+		opts.save(JSON.stringify({ sessions: index.sessions.filter((row) => !isEphemeralFileId(row.fileId)), closed: closed.filter((item) => !item.key.startsWith('file:memory:')) }));
 	}
 
 	/** A note after a close is a new open, so it must sort after the tombstone. */
@@ -165,7 +166,7 @@ export function createSessionBoard(opts: SessionBoardStorage): SessionBoard {
 			if (changed) opts.tabSet(connected ?? null);
 			return {
 				changed,
-				publish: !sameSessions(remote.sessions, sessions) || !sameClosed(remote.closed, nextClosed),
+				publish: !sameSessions(remote.sessions, sessions.filter((row) => !isEphemeralFileId(row.fileId))) || !sameClosed(remote.closed, nextClosed.filter((item) => !item.key.startsWith('file:memory:'))),
 				closed: dropped
 			};
 		}

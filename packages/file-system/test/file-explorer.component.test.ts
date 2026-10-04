@@ -25,7 +25,7 @@ describe('FileExplorer component', () => {
 		appClipboard.clear();
 		resetSharedVfsForTests();
 		resetTransferRegistryForTests();
-		localStorage.removeItem('fe:previewDock');
+		persistKv.removeItem('fe:previewDock');
 		// viewMode/iconSize/sort/columns live in the persistKv module cache once
 		// the UI persisted them — tombstone them so later tests seed clean.
 		persistKv.removeItem('fe:viewMode');

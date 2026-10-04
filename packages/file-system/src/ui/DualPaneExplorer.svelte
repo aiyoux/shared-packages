@@ -38,6 +38,8 @@
 	import DualPhaseConfirm from './DualPhaseConfirm.svelte';
 	import RemoteOpenPrompt from './RemoteOpenPrompt.svelte';
 	import { getPreviewKind } from './feThumbnails.js';
+	import { memoryFileId } from '../fileSourceIds.js';
+	import { openDiskFile } from '../disk/fileSource.js';
 	import {
 		runRemoteOpen,
 		startRemoteCopySync,
@@ -742,8 +744,34 @@
 		if ((kind === 'monitor' || kind === 'b2') && !openRemotes && !isPeerPane(id)) {
 			return (entry: ExplorerOpenTarget) => openRemoteFile(id, entry);
 		}
-		if (kind !== 'local' && kind !== 'memory' && kind !== 'monitor') return undefined;
+		if (kind === 'disk' && !openRemotes) {
+			return async (entry: ExplorerOpenTarget) => {
+				const driver = activeDriver(paneState(id), id);
+				const root = driver.connectionId ? diskRoots.get(driver.connectionId) : undefined;
+				if (!root) return;
+				try { await onOpen({ ...entry, id: await openDiskFile(root, entry.id) }, paneOpenProjectContext(id)); }
+				catch (error) { toast.error(formatExplorerError(error)); }
+			};
+		}
+		if (kind === 'memory' && !openRemotes) return (entry: ExplorerOpenTarget) => onOpen({ ...entry, id: memoryFileId(entry.id) }, paneOpenProjectContext(id));
+		if (kind !== 'local' && kind !== 'memory' && kind !== 'monitor' && kind !== 'disk') return undefined;
 		return (entry: ExplorerOpenTarget) => onOpen(entry, paneOpenProjectContext(id));
+	}
+
+	function paneQuickEditImage(id: PaneId) {
+		if (!onQuickEditImage) return undefined;
+		return async (entry: ExplorerEntry, ctx: QuickEditImageContext) => {
+			const pane = paneState(id);
+			try {
+				if (pane.activeKind === 'memory') entry = { ...entry, id: memoryFileId(entry.id) };
+				else if (pane.activeKind === 'disk') {
+					const connectionId = activeDriver(pane, id).connectionId;
+					const root = connectionId ? diskRoots.get(connectionId) : undefined;
+					if (root) entry = { ...entry, id: await openDiskFile(root, entry.id) };
+				}
+				onQuickEditImage?.(entry, ctx);
+			} catch (error) { toast.error(formatExplorerError(error)); }
+		};
 	}
 
 	function askRemoteOpen(
@@ -2374,7 +2402,7 @@
 						{onQuickEditVideo}
 						{onQuickEditAudio}
 						{mediaMeta}
-						{onQuickEditImage}
+						onQuickEditImage={paneQuickEditImage(id)}
 						{onQuickConvertSvg}
 						{presenceByFileId}
 						{people}
@@ -2461,7 +2489,7 @@
 						{onQuickEditVideo}
 						{onQuickEditAudio}
 						{mediaMeta}
-						{onQuickEditImage}
+						onQuickEditImage={paneQuickEditImage(id)}
 						{onQuickConvertSvg}
 						{presenceByFileId}
 						{people}

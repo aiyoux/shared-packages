@@ -1,4 +1,6 @@
 import { createChangeBus } from './changeBus.js';
+import { fileSource, sourceChanges, SOURCE_FILES_CHANNEL } from './fileSources.js';
+import { getMemoryVfs } from './memoryVfs.js';
 import { notifyTabChannel, subscribeTabChannel } from './crossTab.js';
 import { ROOT_PARENT_KEY } from './db.js';
 import { SqliteCatalog, MIGRATED_KEY } from './catalog.js';
@@ -294,11 +296,17 @@ export class VfsService {
 	 * the live SAH catalog (followers RPC to the leader tab). */
 	subscribe(listener: () => void): () => void {
 		const unsubBus = this.changeBus.subscribe(listener);
+		const unsubMemory = getMemoryVfs().subscribe(listener);
+		const unsubSources = sourceChanges.subscribe(listener);
+		const unsubSourceTabs = subscribeTabChannel(SOURCE_FILES_CHANNEL, listener);
 		const unsubTab = subscribeTabChannel(this.tabChannelName(), () => {
 			void this.db.reloadFromOpfs().then(() => listener());
 		});
 		return () => {
 			unsubBus();
+			unsubMemory();
+			unsubSources();
+			unsubSourceTabs();
 			unsubTab();
 		};
 	}
@@ -356,7 +364,7 @@ export class VfsService {
 	}
 
 	async openDocument(id: string, opts?: { generation?: number }): Promise<OpenDocument> {
-		await this.ready();
+		if (!(await fileSource(id))) await this.ready();
 		return createOpenDocument(this.asDocumentHost(), id, opts);
 	}
 
@@ -507,6 +515,7 @@ export class VfsService {
 	// ── List / get ────────────────────────────────────────────────
 
 	async list(opts: VfsListOptions): Promise<VfsNode[]> {
+		const source = await fileSource(opts.parentId); if (source) return source.list(opts);
 		await this.ready();
 		const parentId = opts.parentId ?? null;
 		let rows: VfsNode[];
@@ -580,6 +589,7 @@ export class VfsService {
 	}
 
 	async get(id: string): Promise<VfsNode | undefined> {
+		const source = await fileSource(id); if (source) return source.get(id);
 		await this.ready();
 		return this.db.nodes.get(id);
 	}
@@ -596,6 +606,7 @@ export class VfsService {
 	 * must not shadow a new file that reuses its name.
 	 */
 	async childByName(parentId: string | null, name: string): Promise<VfsNode | undefined> {
+		const source = await fileSource(parentId); if (source) return (await source.list({ parentId })).find((node) => node.name === name);
 		await this.ready();
 		const node = await this.db.nodes
 			.where('[parentKey+name]')
@@ -861,6 +872,14 @@ export class VfsService {
 		excludeId?: string,
 		onConflict: 'rename' | 'error' | 'overwrite' = 'rename'
 	): Promise<string> {
+		const source = await fileSource(parentId);
+		if (source) {
+			const rows = await source.list({ parentId });
+			const taken = (candidate: string) => rows.some((node) => node.id !== excludeId && node.name === candidate);
+			if (!taken(name) || onConflict === 'overwrite') return name;
+			if (onConflict === 'error') throw new VfsError('NAME_CONFLICT');
+			for (let i = 1; ; i++) { const candidate = withNumericSuffix(name, i); if (!taken(candidate)) return candidate; }
+		}
 		// Name-probe via the [parentId+name] index instead of loading every
 		// sibling: writing thousands of extracted files used to rescan the
 		// whole folder per file (quadratic). Root keeps the scan — null parent
@@ -897,6 +916,7 @@ export class VfsService {
 		name: string,
 		opts?: { id?: string; onConflict?: 'rename' | 'error'; meta?: Record<string, unknown> }
 	): Promise<VfsNode> {
+		const source = await fileSource(parentId); if (source && parentId) return source.mkdir(parentId, name);
 		await this.ready();
 		const clean = sanitizeName(name);
 		const id = opts?.id ?? generateId('fld');
@@ -1578,6 +1598,7 @@ export class VfsService {
 	}
 
 	async writeFile(input: WriteFileInput): Promise<VfsNode> {
+		const source = await fileSource(input.parentId); if (source) return source.writeFile(input);
 		await this.ready();
 		let name = sanitizeName(input.name);
 		const fileType = input.fileType ?? inferFileTypeFromName(name);
@@ -2550,6 +2571,7 @@ export class VfsService {
 	}
 
 	async updateFile(id: string, body: unknown, opts: UpdateFileOpts): Promise<VfsNode> {
+		const source = await fileSource(id); if (source) return source.updateFile(id, body, opts);
 		await this.ready();
 		const force = 'force' in opts && opts.force === true;
 		const expected = !force ? opts.expectedGeneration : undefined;
@@ -2694,6 +2716,7 @@ export class VfsService {
 	// ── Read ──────────────────────────────────────────────────────
 
 	async readBytes(nodeId: string): Promise<Uint8Array> {
+		const source = await fileSource(nodeId); if (source) return new Uint8Array(await (await source.readBlob(nodeId)).arrayBuffer());
 		await this.ready();
 		const node = await this.db.nodes.get(nodeId);
 		if (!node) throw new VfsError('NOT_FOUND');
@@ -2892,6 +2915,7 @@ export class VfsService {
 	}
 
 	async readBlob(nodeId: string): Promise<Blob> {
+		const source = await fileSource(nodeId); if (source) return source.readBlob(nodeId);
 		await this.ready();
 		const node = await this.db.nodes.get(nodeId);
 		if (!node) throw new VfsError('NOT_FOUND');

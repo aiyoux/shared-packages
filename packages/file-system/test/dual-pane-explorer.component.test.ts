@@ -394,12 +394,9 @@ describe('DualPaneExplorer onOpenProject context', () => {
 		// Keep the clone at root to also exercise restoration without a folder ID.
 		await fireEvent.click(within(copy).getByTestId('fe-crumb-root'));
 		await viWaitFor(() => JSON.parse(persistKv.getItem(key)!).windows[copyId]?.parentId === null);
-		console.log('RESTORE_BEFORE', persistKv.getItem(key));
 		first.unmount();
 		persistKv.setItem('fe:viewMode', 'list');
 		render(DualPaneExplorer, { props });
-		await new Promise((r) => setTimeout(r, 400));
-		console.log('RESTORE_AFTER', persistKv.getItem(key), [...document.querySelectorAll('[data-testid="fe-file-row"]')].map(el => [el.getAttribute('data-name'), el.closest('.files-pane')?.getAttribute('data-pane')]), document.querySelectorAll('[data-name="inside.txt"]').length);
 		// List rows only: the docked preview of an open folder shows its files too.
 		await viWaitFor(() => document.querySelectorAll('[data-testid="fe-list"] [data-name="inside.txt"]').length === 1
 			&& document.querySelector(`[data-pane="${copyId}"] [data-testid="fe-list"] [data-name="Working folder"]`) != null);

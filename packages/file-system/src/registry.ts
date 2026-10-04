@@ -157,7 +157,7 @@ const DEFAULT_TYPES: FileTypeDef[] = [
  * when none matches). Prevents `photo.jpg` → `photo.jpg.png` for image.
  */
 const MULTI_EXT: Partial<Record<FileTypeId, readonly string[]>> = {
-	image: ['.png', '.jpg', '.jpeg', '.webp', '.gif'],
+	image: ['.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp', '.avif', '.ico', '.heic', '.heif', '.tif', '.tiff'],
 	video: ['.mp4', '.webm', '.mov', '.m4v', '.mkv', '.ogv'],
 	audio: ['.mp3', '.wav', '.ogg', '.oga', '.m4a', '.aac', '.flac', '.opus', '.weba', '.aiff', '.aif'],
 	text: ['.txt', '.md', '.markdown']

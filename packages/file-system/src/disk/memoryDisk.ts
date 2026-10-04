@@ -5,7 +5,7 @@ import type { DiskDirHandle, DiskFileHandle } from './handles.js';
 
 // `Uint8Array<ArrayBuffer>`, not the default `Uint8Array<ArrayBufferLike>`:
 // only the former is a `BlobPart`, and these bytes go straight into `new File`.
-type MemFile = { kind: 'file'; name: string; bytes: Uint8Array<ArrayBuffer>; type: string };
+type MemFile = { kind: 'file'; name: string; bytes: Uint8Array<ArrayBuffer>; type: string; lastModified: number };
 type MemDir = { kind: 'directory'; name: string; children: Map<string, MemNode> };
 type MemNode = MemFile | MemDir;
 
@@ -16,8 +16,8 @@ function fsError(name: 'NotFoundError' | 'TypeMismatchError', message: string): 
 	return e;
 }
 
-function nowFile(name: string, bytes: Uint8Array<ArrayBuffer>, type: string): File {
-	return new File([bytes], name, { type });
+function nowFile(name: string, bytes: Uint8Array<ArrayBuffer>, type: string, lastModified: number): File {
+	return new File([bytes], name, { type, lastModified });
 }
 
 function wrapFile(node: MemFile): DiskFileHandle {
@@ -25,7 +25,7 @@ function wrapFile(node: MemFile): DiskFileHandle {
 		kind: 'file',
 		name: node.name,
 		async getFile() {
-			return nowFile(node.name, node.bytes, node.type);
+			return nowFile(node.name, node.bytes, node.type, node.lastModified);
 		},
 		async createWritable() {
 			const chunks: Uint8Array[] = [];
@@ -51,6 +51,7 @@ function wrapFile(node: MemFile): DiskFileHandle {
 						o += c.byteLength;
 					}
 					node.bytes = out;
+					node.lastModified = Math.max(Date.now(), node.lastModified + 1);
 				}
 			};
 		}
@@ -80,7 +81,7 @@ function wrapDir(node: MemDir): DiskDirHandle {
 			if (existing?.kind === 'file') return wrapFile(existing);
 			if (existing) throw fsError('TypeMismatchError', 'TYPE_MISMATCH');
 			if (!opts?.create) throw fsError('NotFoundError', 'NOT_FOUND');
-			const created: MemFile = { kind: 'file', name, bytes: new Uint8Array(), type: '' };
+			const created: MemFile = { kind: 'file', name, bytes: new Uint8Array(), type: '', lastModified: Date.now() };
 			node.children.set(name, created);
 			return wrapFile(created);
 		},

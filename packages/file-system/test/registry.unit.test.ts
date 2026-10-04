@@ -11,7 +11,7 @@ import {
 describe('registry multi-ext image + forceExtension', () => {
 	it('acceptedExtensionsFor image lists common image formats', () => {
 		const exts = acceptedExtensionsFor('image');
-		for (const e of ['.png', '.jpg', '.jpeg', '.webp', '.gif']) {
+		for (const e of ['.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp', '.avif', '.ico', '.heic', '.heif', '.tif', '.tiff']) {
 			assert.ok(exts.includes(e), `expected ${e}`);
 		}
 		assert.ok(!exts.includes('.svg'), 'svg is its own file type');
@@ -40,6 +40,10 @@ describe('registry multi-ext image + forceExtension', () => {
 		assert.equal(forceExtension('anim.gif', 'image'), 'anim.gif');
 		assert.equal(forceExtension('vector.svg', 'svg'), 'vector.svg');
 		assert.equal(forceExtension('Photo.JPG', 'image'), 'Photo.JPG');
+		for (const ext of ['bmp', 'avif', 'ico', 'heic', 'heif', 'tif', 'tiff']) {
+			assert.equal(forceExtension(`source.${ext}`, 'image'), `source.${ext}`);
+			assert.equal(inferFileTypeFromName(`source.${ext}`), 'image');
+		}
 	});
 
 	it('forceExtension appends primary .png only when image has no accepted ext', () => {

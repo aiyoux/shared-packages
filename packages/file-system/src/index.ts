@@ -1,3 +1,5 @@
+export { memoryFileId, isEphemeralFileId } from './fileSourceIds.js';
+export { openDiskFile } from './disk/fileSource.js';
 export * from './types.js';
 export {
 	isLiveVfsNode,
