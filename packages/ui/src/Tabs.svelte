@@ -91,7 +91,9 @@
 
 <div
   bind:this={containerRef}
+  data-variant={variant}
   class={cn(
+    'ui-tabs',
     variant === 'pill'
       ? 'relative inline-flex items-center gap-1 rounded-[var(--radius-lg)] border border-[var(--color-border)]/60 bg-[var(--color-muted)] p-1'
       : 'relative flex items-center border-b border-[var(--color-border)]/50',
@@ -102,7 +104,7 @@
 >
   {#each items as item (item.value)}
     {@const isSelected = value === item.value}
-    <div class="relative flex items-center group/tab" data-tab-item data-value={item.value}>
+    <div class="ui-tab-item relative flex items-center group/tab" data-tab-item data-value={item.value}>
       <button
         type="button"
         role="tab"
@@ -110,6 +112,7 @@
         disabled={item.disabled}
         data-testid={item.testId}
         class={cn(
+          'ui-tab',
           variant === 'pill'
             ? 'relative rounded-[var(--radius-md)] px-3 py-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-2'
             : 'relative py-3 px-4 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-2',
@@ -126,7 +129,7 @@
       >
         {#if item.icon}
           {@const Icon = item.icon}
-          <Icon class="size-4" />
+          <Icon class="ui-tab-icon size-4" />
         {/if}
         {item.label}
       </button>
@@ -134,7 +137,7 @@
       {#if item.onClose}
         <button
           type="button"
-          class="size-5 flex items-center justify-center rounded-full hover:bg-muted text-muted-foreground hover:text-foreground transition-all mr-2 -ml-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
+          class="ui-tab-close size-5 flex items-center justify-center rounded-full hover:bg-muted text-muted-foreground hover:text-foreground transition-all mr-2 -ml-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
           onclick={(e) => {
             e.stopPropagation();
             item.onClose?.();
@@ -165,13 +168,125 @@
   {#if variant === 'underline'}
     <div
       class={cn(
-        'absolute bottom-0 h-0.5 bg-primary ease-out',
+        'ui-tab-indicator absolute bottom-0 h-0.5 bg-primary ease-out',
         indicatorHasMeasured
           ? 'transition-[left,width,opacity] duration-200'
           : 'transition-none',
         indicatorClass
       )}
+      class:measured={indicatorHasMeasured}
       style="left: {indicatorStyle.left}px; width: {indicatorStyle.width}px; opacity: {indicatorStyle.opacity};{activeIndicatorStyle ? ' ' + activeIndicatorStyle : ''}"
     ></div>
   {/if}
 </div>
+
+
+<style>
+  /* Tabs also render in hosts without Tailwind. Utilities remain available
+     for callers to override these defaults through the existing class props. */
+  @layer primitives {
+    .ui-tabs {
+      position: relative;
+      display: flex;
+      align-items: center;
+      min-width: 0;
+      border-bottom: 1px solid var(--color-border);
+    }
+
+    .ui-tabs[data-variant='pill'] {
+      display: inline-flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      padding: 4px;
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius-lg);
+      background: var(--color-muted);
+    }
+
+    .ui-tab-item {
+      position: relative;
+      display: flex;
+      align-items: center;
+      flex-shrink: 0;
+    }
+
+    .ui-tab {
+      position: relative;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 12px 16px;
+      border: 0;
+      background: transparent;
+      color: var(--color-muted-foreground);
+      font: inherit;
+      font-size: 0.875rem;
+      font-weight: 500;
+      white-space: nowrap;
+      cursor: pointer;
+      transition: color var(--dur-fast), background-color var(--dur-fast);
+    }
+
+    .ui-tabs[data-variant='pill'] .ui-tab {
+      padding: 8px 12px;
+      border-radius: var(--radius-md);
+    }
+
+    .ui-tab[aria-selected='true'],
+    .ui-tab:hover:not(:disabled),
+    .ui-tab-close:hover {
+      color: var(--color-foreground);
+    }
+
+    .ui-tabs[data-variant='pill'] .ui-tab[aria-selected='true'] {
+      background: var(--color-panel);
+    }
+
+    .ui-tab:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+
+    .ui-tab:focus-visible,
+    .ui-tab-close:focus-visible {
+      outline: 2px solid var(--color-primary);
+      outline-offset: 2px;
+    }
+
+    .ui-tab :global(.ui-tab-icon) {
+      width: 1rem;
+      height: 1rem;
+      flex-shrink: 0;
+    }
+
+    .ui-tab-close {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 20px;
+      height: 20px;
+      margin: 0 8px 0 -4px;
+      padding: 0;
+      border: 0;
+      border-radius: var(--radius-full);
+      background: transparent;
+      color: var(--color-muted-foreground);
+      cursor: pointer;
+    }
+
+    .ui-tab-close:hover {
+      background: var(--color-muted);
+    }
+
+    .ui-tab-indicator {
+      position: absolute;
+      bottom: 0;
+      height: 2px;
+      background: var(--color-primary);
+    }
+
+    .ui-tab-indicator.measured {
+      transition: left 200ms ease-out, width 200ms ease-out, opacity 200ms ease-out;
+    }
+  }
+</style>
