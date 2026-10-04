@@ -158,7 +158,7 @@ const DEFAULT_TYPES: FileTypeDef[] = [
  */
 const MULTI_EXT: Partial<Record<FileTypeId, readonly string[]>> = {
 	image: ['.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp', '.avif', '.ico', '.heic', '.heif', '.tif', '.tiff'],
-	video: ['.mp4', '.webm', '.mov', '.m4v', '.mkv', '.ogv'],
+	video: ['.mp4', '.webm', '.mov', '.m4v', '.mkv', '.ogv', '.avi', '.wmv', '.flv', '.mpeg', '.mpg', '.m2ts', '.mts', '.3gp', '.vob'],
 	audio: ['.mp3', '.wav', '.ogg', '.oga', '.m4a', '.aac', '.flac', '.opus', '.weba', '.aiff', '.aif'],
 	text: ['.txt', '.md', '.markdown']
 };

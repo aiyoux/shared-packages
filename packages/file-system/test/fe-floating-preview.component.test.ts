@@ -65,6 +65,14 @@ const svgEntry: ExplorerEntry = {
 };
 
 describe('FeFloatingPreview', () => {
+	it.each(['audio', 'video'] as const)('reports an unsupported local %s decoder instead of leaving a dead player', async (kind) => {
+		const entry: ExplorerEntry = { id: 'unsupported-media', kind: 'file', parentId: null, name: kind === 'audio' ? 'audio.aiff' : 'video.avi', fileType: kind };
+		render(FeFloatingPreview, { props: { entry, driver: driverWith(new Blob(['unsupported'])), variant: 'popup', onClose: () => {} } });
+		const container = screen.getByTestId('fe-file-preview');
+		await waitFor(() => expect(container.querySelector(kind)).not.toBeNull());
+		await fireEvent.error(container.querySelector(kind)!);
+		await waitFor(() => expect(container.querySelector('.fe-float-error')?.textContent).toContain('cannot play'));
+	});
 	it.each(['popup', 'dock'] as const)('shows JSON contents as text in the %s preview', async (variant) => {
 		const text = '{\n  "message": "<b>hello</b>",\n  "count": 9007199254740993\n}';
 		const blob = new Blob([text], { type: 'application/octet-stream' });

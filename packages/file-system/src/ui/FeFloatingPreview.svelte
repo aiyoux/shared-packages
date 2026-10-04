@@ -160,7 +160,11 @@
 	async function streamFailed() {
 		const from = streamedFrom;
 		streamedFrom = null;
-		if (!from || from.id !== entry?.id) return;
+		if (!from) {
+			error = 'This browser cannot play this audio or video format. Download it or open it in a compatible app.';
+			return;
+		}
+		if (from.id !== entry?.id) return;
 		loading = true;
 		try {
 			if (!from.converted) {

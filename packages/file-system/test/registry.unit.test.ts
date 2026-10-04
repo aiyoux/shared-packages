@@ -107,6 +107,10 @@ describe('registry multi-ext image + forceExtension', () => {
 		assert.equal(inferFileTypeFromName('a.png'), 'image');
 		assert.equal(inferFileTypeFromName('clip.mp4'), 'video');
 		assert.equal(inferFileTypeFromName('clip.webm'), 'video');
+		for (const extension of ['avi', 'wmv', 'flv', 'mpeg', 'mpg', 'm2ts', 'mts', '3gp', 'vob']) {
+			assert.equal(inferFileTypeFromName(`clip.${extension}`), 'video');
+			assert.equal(forceExtension(`clip.${extension}`, 'video'), `clip.${extension}`);
+		}
 		assert.equal(inferFileTypeFromName('song.mp3'), 'audio');
 		assert.equal(inferFileTypeFromName('take.wav'), 'audio');
 		assert.equal(inferFileTypeFromName('loop.flac'), 'audio');
