@@ -55,6 +55,13 @@ export type DocSession<Doc, Op> = {
 	sendTransient(payload: unknown): void;
 	/** This tab wrote the file. Tabs in the same room adopt the generation. */
 	announceSaved(generation: number, fingerprint?: string): void;
+	/** The file generation this session last knew: the read that seeded it,
+	 *  a save it made, or a save another tab in the room announced. CAS anchor
+	 *  for session saves — never a fresh read, which would absorb a foreign
+	 *  write into the baseline and stamp over it. Null until first anchored. */
+	readonly fileGeneration: number | null;
+	/** Seed the anchor from a fresh file read. Local: no `saved` frame. */
+	adoptFileGeneration(generation: number): void;
 	replaceDoc(doc: Doc): void;
 	setRoom(room: string): void;
 	setPeer(id: string, peer: EnginePeer<DocSessionFrame<Doc, Op>> | null): void;
@@ -82,6 +89,9 @@ export type DocSessionOpts<Doc, Op> = {
 	onTransient?: (payload: unknown, sender: string) => void;
 	onSaved?: (info: { seq: number; generation: number; local: boolean; fingerprint?: string }) => void;
 	onPersist?: (owner: boolean) => void;
+	/** The file generation the read that seeded `initial` knew, if it is a
+	 *  file's content. Anchors `fileGeneration` for save CAS. */
+	initialGeneration?: number;
 	/** Every frame from any member (numbered ones prove the sequencer runs). */
 	onFrame?: (frame: DocSessionFrame<Doc, Op>) => void;
 };
@@ -100,6 +110,10 @@ export function createDocSession<Doc, Op>(opts: DocSessionOpts<Doc, Op>): DocSes
 	const clientId = opts.clientId ?? newId();
 	let doc = opts.initial;
 	let destroyed = false;
+	/** The file generation this room's reads and saves last knew (see
+	 *  `fileGeneration` above). Seeded at bind, moved by `announceSaved` and
+	 *  a same-room 'saved' frame — never by an edit. */
+	let fileGeneration: number | null = opts.initialGeneration ?? null;
 	/** Submitted while no runtime existed, in order; sent once one does. */
 	const held: CollabDocFrame<unknown>[] = [];
 	/**
@@ -241,6 +255,7 @@ export function createDocSession<Doc, Op>(opts: DocSessionOpts<Doc, Op>): DocSes
 		if (frame.kind === 'saved' && typeof frame.generation === 'number') {
 			// Another device's save is of its own file, not ours.
 			if (!engine.room || frame.room !== engine.room) return;
+			fileGeneration = frame.generation;
 			opts.onSaved?.({ seq: frame.seq, generation: frame.generation, local: false, fingerprint: frame.fingerprint });
 		}
 	});
@@ -291,6 +306,7 @@ export function createDocSession<Doc, Op>(opts: DocSessionOpts<Doc, Op>): DocSes
 			// Any tab may have written the file: a window's Save runs in its own
 			// tab, follower or not, and every other tab adopts the generation.
 			if (destroyed) return;
+			fileGeneration = generation;
 			engine.send({
 				kind: 'saved',
 				generation,
@@ -302,6 +318,14 @@ export function createDocSession<Doc, Op>(opts: DocSessionOpts<Doc, Op>): DocSes
 				frameId: newId()
 			});
 			opts.onSaved?.({ seq: 0, generation, local: true, fingerprint });
+		},
+		get fileGeneration() {
+			return fileGeneration;
+		},
+		adoptFileGeneration(generation) {
+			if (destroyed) return;
+			if (typeof generation !== 'number') return;
+			fileGeneration = generation;
 		},
 		replaceDoc(next) {
 			if (destroyed) return;

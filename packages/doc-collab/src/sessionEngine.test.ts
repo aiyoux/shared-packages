@@ -564,3 +564,38 @@ describe('confirmed document operations', () => {
 		a.destroy(); follower.destroy();
 	});
 });
+
+describe('session engine: the save anchor (fileGeneration)', () => {
+	it('is null until a read or a saved frame anchors it, and moves with every save notice', async () => {
+		const b = browser();
+		const anchored = createDocSession<Doc, Op>({ room: 'anchor', clientId: 'a', tab: b.tab, initial: { items: [] }, reduce, initialGeneration: 3 });
+		await settle();
+		expect(anchored.fileGeneration).toBe(3);
+		const bare = createDocSession<Doc, Op>({ room: 'anchor', clientId: 'b', tab: b.tab, initial: { items: [] }, reduce });
+		await settle();
+		expect(bare.fileGeneration).toBeNull();
+		bare.announceSaved(5);
+		await settle();
+		// The announced save moves both the session's own anchor and a
+		// room-mate's, like a `saved` frame does.
+		expect(bare.fileGeneration).toBe(5);
+		expect(anchored.fileGeneration).toBe(5);
+		anchored.destroy(); bare.destroy();
+	});
+
+	it('adoptFileGeneration seeds it locally and broadcast nothing', async () => {
+		const b = browser();
+		const a = createDocSession<Doc, Op>({ room: 'adopt', clientId: 'a', tab: b.tab, initial: { items: [] }, reduce });
+		await settle();
+		const b2 = createDocSession<Doc, Op>({ room: 'adopt', clientId: 'c', tab: b.tab, initial: { items: [] }, reduce });
+		await settle();
+		a.adoptFileGeneration(9);
+		expect(a.fileGeneration).toBe(9);
+		// A fresh session that already had an anchor is not overwritten by one.
+		const d = createDocSession<Doc, Op>({ room: 'adopt-2', clientId: 'd', tab: b.tab, initial: { items: [] }, reduce, initialGeneration: 2 });
+		await settle();
+		d.adoptFileGeneration(4);
+		expect(d.fileGeneration).toBe(4);
+		a.destroy(); b2.destroy(); d.destroy();
+	});
+});
