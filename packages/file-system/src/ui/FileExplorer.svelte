@@ -2074,7 +2074,7 @@
 
 	let combineOpen = $state(false);
 	let combinePending = $state<string | null>(null);
-	let combineConflict = $state<{ label: string; roomId: string; paths: string[] } | null>(null);
+	let combineConflict = $state<{ label: string; roomId: string; paths: string[]; reasons?: Record<string, string> } | null>(null);
 	let combineMissing = $state(false);
 
 	function roomLabelOf(roomId: string): string {
@@ -2096,7 +2096,8 @@
 				combineConflict = {
 					label: roomLabelOf(fromRoomId),
 					roomId: fromRoomId,
-					paths: result.paths
+					paths: result.paths,
+					reasons: result.reasons
 				};
 				return;
 			}
@@ -5784,7 +5785,7 @@
 					<ul class="fe-room-conflict-list">
 						{#each combineConflict.paths as path (path)}
 							<li data-testid="fe-room-combine-conflict-path">
-								<span>{path}</span>
+								<span>{path}{#if combineConflict.reasons?.[path]} · {combineConflict.reasons[path]}{/if}</span>
 								{#if onReviewConflict && projectRootId}
 									<button
 										type="button"

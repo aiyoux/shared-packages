@@ -62,7 +62,7 @@ export type ExplorerCombineResult =
 	| { status: 'ok' }
 	| { status: 'dirty' }
 	| { status: 'live' }
-	| { status: 'conflict'; paths: string[] }
+	| { status: 'conflict'; paths: string[]; reasons?: Record<string, string> }
 	/** That person's copy of the room has not arrived on this device yet. */
 	| { status: 'missing' };
 

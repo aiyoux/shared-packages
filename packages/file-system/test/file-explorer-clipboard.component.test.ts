@@ -248,7 +248,7 @@ describe('FileExplorer clipboard', () => {
 		const failure = vi.spyOn(toast, 'error');
 		const success = vi.spyOn(toast, 'success');
 		const { driver, entries } = backend('monitor');
-		driver.capabilities = { ...driver.capabilities, supportsFolderCopy: false };
+		Object.assign(driver, { capabilities: { ...driver.capabilities, supportsFolderCopy: false } });
 		entries.push({ id: 'folder-a', name: 'Docs', parentId: null, kind: 'folder' });
 		const source = await explorer(driver);
 		await select(source.root, 'folder-a');

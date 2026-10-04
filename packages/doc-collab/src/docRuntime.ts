@@ -3,6 +3,7 @@ import {
 	type ExactBaseRuntime,
 	type ExactBaseRuntimeOpts
 } from './exactBaseRuntime.js';
+import type { DocCommitResult } from './commitResult.js';
 import type { LogFrame } from './seqLog.js';
 import {
 	createFrameRuntime,
@@ -52,6 +53,7 @@ export type CollabDocFrame<Doc> = LogFrame & {
 				 * a replica drops its own resent copies of them.
 				 */
 				applied?: string[];
+				results?: Record<string, DocCommitResult>;
 		  }
 		| { kind: 'edit' }
 		| { kind: 'hello'; role: CollabRole }
@@ -61,7 +63,8 @@ export type CollabDocFrame<Doc> = LogFrame & {
 export type CollabPort<Doc> = {
 	snapshot: () => Doc;
 	/** `applied`: the ids of the latest edits `doc` holds, when the snapshot says. */
-	replace: (doc: Doc, applied?: readonly string[]) => void;
+	replace: (doc: Doc, applied?: readonly string[], results?: Record<string, DocCommitResult>) => void;
+	commitResults?: () => Record<string, DocCommitResult>;
 	/** The ids of the latest edits the document holds, sent with a snapshot. */
 	appliedIds?: () => string[];
 	/** False means this edit does not fit the document we hold. */
@@ -148,6 +151,7 @@ function createOrderedRuntime<Doc>(
 			kind: 'snapshot',
 			doc: port.snapshot(),
 			...(port.appliedIds ? { applied: port.appliedIds() } : {}),
+			...(port.commitResults ? { results: port.commitResults() } : {}),
 			seq: 0,
 			scope: 'doc',
 			clientId,
@@ -164,7 +168,7 @@ function createOrderedRuntime<Doc>(
 		isSnapshot: (frame) => frame.kind === 'snapshot',
 		applyFrame(frame) {
 			if (frame.kind === 'snapshot') {
-				port.replace(frame.doc as Doc, frame.applied);
+				port.replace(frame.doc as Doc, frame.applied, frame.results);
 				return true;
 			}
 			return port.apply(frame as CollabDocFrame<Doc>);

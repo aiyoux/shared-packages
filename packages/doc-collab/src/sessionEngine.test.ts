@@ -1,3 +1,4 @@
+import { DocOpRejected } from './commitResult.js';
 import { describe, expect, it } from 'vitest';
 import { createDocSession, type DocSession, type DocSessionFrame } from './docSession.js';
 import type { Election } from './leadership.js';
@@ -525,5 +526,41 @@ describe('doc session: presence', () => {
 		a1.setPeer('invite', null);
 		await settle();
 		expect(pa2.seen().size).toBe(0);
+	});
+});
+
+
+describe('confirmed document operations', () => {
+	it('confirms follower edits, rejects domain failures without repair, and remembers results on join', async () => {
+		const b = browser();
+		const guarded = (d: Doc, op: Op) => { if ('add' in op && op.add === 'invalid') throw new DocOpRejected('Not allowed'); return reduce(d, op); };
+		const a = createDocSession<Doc, Op>({ room: 'confirmed', clientId: 'a', tab: b.tab, initial: { items: [] }, reduce: guarded });
+		const follower = createDocSession<Doc, Op>({ room: 'confirmed', clientId: 'b', tab: b.tab, initial: { items: [] }, reduce: guarded });
+		await settle();
+		let resolved = false;
+		const pending = follower.commitConfirmed({ add: 'valid' }, { requestId: 'valid-request' }).then(r => { resolved = true; return r; });
+		expect(resolved).toBe(false); await settle(); expect(await pending).toEqual({ accepted: true, changed: true });
+		const rejection = follower.commitConfirmed({ add: 'invalid' }, { requestId: 'invalid-request' });
+		await settle(); expect(await rejection).toEqual({ accepted: false, message: 'Not allowed' }); expect(a.doc).toEqual(follower.doc); expect(a.doc.items).toEqual(['valid']);
+		const c = createDocSession<Doc, Op>({ room: 'confirmed', clientId: 'c', tab: b.tab, initial: { items: [] }, reduce: guarded }); await settle();
+		expect(await c.commitConfirmed({ add: 'valid' }, { requestId: 'valid-request' })).toEqual({ accepted: true, changed: true });
+		expect(await c.commitConfirmed({ add: 'invalid' }, { requestId: 'invalid-request' })).toEqual({ accepted: false, message: 'Not allowed' });
+		expect(c.doc.items).toEqual(['valid']); a.destroy(); follower.destroy(); c.destroy();
+	});
+	it('resubmits a pending request across sequencer handoff exactly once', async () => {
+		const b = browser(); const a = createDocSession<Doc, Op>({ room: 'handoff-result', clientId: 'a', tab: b.tab, initial: { items: [] }, reduce });
+		const follower = createDocSession<Doc, Op>({ room: 'handoff-result', clientId: 'b', tab: b.tab, initial: { items: [] }, reduce }); await settle();
+		const pending = follower.commitConfirmed({ add: 'once' }, { requestId: 'handoff' }); a.destroy(); await settle();
+		expect(await pending).toEqual({ accepted: true, changed: true }); expect(follower.doc.items).toEqual(['once']);
+		await follower.commitConfirmed({ add: 'once' }, { requestId: 'handoff' }); expect(follower.doc.items).toEqual(['once']); follower.destroy();
+	});
+	it('cancels a wait without undoing its edit, and rejects pending waits when the session ends', async () => {
+		const b = browser(); const a = createDocSession<Doc, Op>({ room: 'cancel-result', clientId: 'a', tab: b.tab, initial: { items: [] }, reduce });
+		const follower = createDocSession<Doc, Op>({ room: 'cancel-result', clientId: 'b', tab: b.tab, initial: { items: [] }, reduce }); await settle();
+		const ctl = new AbortController(); const pending = follower.commitConfirmed({ add: 'applied' }, { signal: ctl.signal });
+		const asserted = expect(pending).rejects.toThrow(); ctl.abort(new Error('Cancelled')); await asserted; await settle(); expect(a.doc.items).toEqual(['applied']);
+		const queued = createDocSession<Doc, Op>({ room: 'unready', tab: b.tab, initial: { items: [] }, reduce });
+		const waiting = queued.commitConfirmed({ add: 'never' }); const ended = expect(waiting).rejects.toThrow(/session ended/); queued.destroy(); await ended;
+		a.destroy(); follower.destroy();
 	});
 });

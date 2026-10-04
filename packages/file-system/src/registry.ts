@@ -1,6 +1,7 @@
 import type { FileTypeDef, FileTypeId } from './types.js';
 
 const DEFAULT_TYPES: FileTypeDef[] = [
+	{ id: 'home', extension: '.home', mime: 'application/x-scratch-home+json', label: 'Home Maintenance', schemaVersion: 1 },
 	{
 		id: 'skch',
 		extension: '.skch',

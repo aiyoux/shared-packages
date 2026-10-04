@@ -17,6 +17,7 @@
  * a link dropping reaches the seats as a leave the engine makes up, so no app
  * sweeps them.
  */
+import { DocOpRejected, type DocCommitResult, type DocCommitOptions } from './commitResult.js';
 import { createCollabRuntime, type CollabDocFrame, type CollabRuntime } from './docRuntime.js';
 import type { Role } from './leadership.js';
 import type { LogFrame } from './seqLog.js';
@@ -34,7 +35,7 @@ import {
 } from './sessionEngine.js';
 
 export type DocSessionFrame<Doc, Op> =
-	| (CollabDocFrame<Doc> & { op?: Op })
+	| (CollabDocFrame<Doc> & { op?: Op; confirmed?: boolean })
 	| (LogFrame & { kind: 'transient'; payload: unknown })
 	| (LogFrame & { kind: 'saved'; generation: number; room: string; fingerprint?: string });
 
@@ -48,6 +49,9 @@ export type DocSession<Doc, Op> = {
 	readonly persistOwner: boolean;
 	readonly engine: SessionEngine<DocSessionFrame<Doc, Op>, CollabRuntime>;
 	commit(op: Op): Promise<void>;
+	/** Resolves only when this edit's numbered result is known. Abort cancels the wait, not an applied edit.
+	 * requestId supports retries within the retained receipt window (4,096 edits). */
+	commitConfirmed(op: Op, options?: DocCommitOptions): Promise<DocCommitResult>;
 	sendTransient(payload: unknown): void;
 	/** This tab wrote the file. Tabs in the same room adopt the generation. */
 	announceSaved(generation: number, fingerprint?: string): void;
@@ -113,6 +117,26 @@ export function createDocSession<Doc, Op>(opts: DocSessionOpts<Doc, Op>): DocSes
 	const applied = new Set<string>();
 	const APPLIED_LIMIT = 4096;
 	const SNAPSHOT_APPLIED = 256;
+	const results = new Map<string, DocCommitResult>();
+	type Waiter = ((result: DocCommitResult) => void) & { fail(error: Error): void };
+	const pending = new Map<string, Set<Waiter>>();
+	function confirmed(id: string, result: DocCommitResult) {
+		results.set(id, result);
+		if (results.size > APPLIED_LIMIT) results.delete(results.keys().next().value!);
+		unconfirmed.delete(id);
+		for (const resolve of [...(pending.get(id) ?? [])]) resolve(result);
+	}
+	function waitFor(id: string, signal?: AbortSignal): Promise<DocCommitResult> {
+		if (signal?.aborted) return Promise.reject(signal.reason ?? new Error('Edit wait cancelled'));
+		const result = results.get(id); if (result) return Promise.resolve(result);
+		return new Promise((resolve, reject) => {
+			const waiters = pending.get(id) ?? new Set<Waiter>();
+			function clean() { waiters.delete(done); if (!waiters.size) pending.delete(id); signal?.removeEventListener('abort', abort); }
+			const done: Waiter = Object.assign((value: DocCommitResult) => { clean(); resolve(value); }, { fail(error: Error) { clean(); reject(error); } });
+			function abort() { clean(); reject(signal?.reason ?? new Error('Edit wait cancelled')); }
+			waiters.add(done); pending.set(id, waiters); signal?.addEventListener('abort', abort, { once: true });
+		});
+	}
 
 	function noteApplied(frameId: string): void {
 		applied.add(frameId);
@@ -146,7 +170,8 @@ export function createDocSession<Doc, Op>(opts: DocSessionOpts<Doc, Op>): DocSes
 					// Enough to cover edits in flight across a sequencer change, and
 					// small enough to ride every snapshot.
 					appliedIds: () => [...applied].slice(-SNAPSHOT_APPLIED),
-					replace(next, ids) {
+					commitResults: () => Object.fromEntries(results),
+					replace(next, ids, receipts) {
 						doc = next;
 						if (ids) {
 							// The snapshot's document is what this one is now: what it holds
@@ -157,20 +182,28 @@ export function createDocSession<Doc, Op>(opts: DocSessionOpts<Doc, Op>): DocSes
 								unconfirmed.delete(id);
 							}
 						}
+						if (receipts) results.clear();
+						for (const [id, result] of Object.entries(receipts ?? {})) { noteApplied(id); confirmed(id, result); }
 						emit('snapshot');
 					},
 					apply(frame) {
-						const op = (frame as CollabDocFrame<Doc> & { op?: Op }).op;
+						const op = (frame as CollabDocFrame<Doc> & { op?: Op; confirmed?: boolean }).op;
 						if (frame.kind !== 'edit' || op === undefined) return true;
-						if (frame.clientId === clientId) unconfirmed.delete(frame.frameId);
-						if (applied.has(frame.frameId)) return true;
+						const known = results.get(frame.frameId);
+						if (known) { confirmed(frame.frameId, known); return true; }
+						if (applied.has(frame.frameId)) { unconfirmed.delete(frame.frameId); return true; }
 						try {
-							doc = opts.reduce(doc, op);
-						} catch {
-							return false;
+							const next = opts.reduce(doc, op); const changed = next !== doc;
+							doc = next; noteApplied(frame.frameId);
+							if (changed) emit(frame.clientId === clientId ? 'local' : 'remote');
+							if ((frame as Frame & { confirmed?: boolean }).confirmed) confirmed(frame.frameId, { accepted: true, changed });
+							else unconfirmed.delete(frame.frameId);
+						} catch (error) {
+							if (!(error instanceof DocOpRejected)) return false;
+							noteApplied(frame.frameId);
+							if ((frame as Frame & { confirmed?: boolean }).confirmed) confirmed(frame.frameId, { accepted: false, message: error.message });
+							else unconfirmed.delete(frame.frameId);
 						}
-						noteApplied(frame.frameId);
-						emit(frame.clientId === clientId ? 'local' : 'remote');
 						return true;
 					},
 					// The sequencer's tab died (or froze and was taken over) and this
@@ -242,6 +275,14 @@ export function createDocSession<Doc, Op>(opts: DocSessionOpts<Doc, Op>): DocSes
 			submit({ kind: 'edit', op, seq: 0, scope: 'doc', clientId, frameId: newId() } as CollabDocFrame<Doc>);
 			return Promise.resolve();
 		},
+		commitConfirmed(op, options = {}) {
+			if (destroyed) return Promise.reject(new Error('session destroyed'));
+			if (options.signal?.aborted) return Promise.reject(options.signal.reason ?? new Error('Edit wait cancelled'));
+			const id = options.requestId ?? newId();
+			const waiting = waitFor(id, options.signal);
+			if (!results.has(id) && !unconfirmed.has(id)) submit({ kind: 'edit', op, confirmed: true, seq: 0, scope: 'doc', clientId, frameId: id } as CollabDocFrame<Doc>);
+			return waiting;
+		},
 		sendTransient(payload) {
 			if (destroyed) return;
 			engine.send({ kind: 'transient', payload, seq: 0, scope: 'doc', clientId, frameId: newId() });
@@ -295,6 +336,7 @@ export function createDocSession<Doc, Op>(opts: DocSessionOpts<Doc, Op>): DocSes
 			if (destroyed) return;
 			for (const s of [...seats]) s.close();
 			destroyed = true;
+			for (const waiters of [...pending.values()]) for (const waiter of [...waiters]) waiter.fail(new Error('The session ended before this edit was confirmed.'));
 			offFrames();
 			held.length = 0;
 			engine.destroy();

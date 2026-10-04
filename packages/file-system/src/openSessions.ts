@@ -4,6 +4,7 @@
  */
 
 export type SessionKind =
+	| 'home'
 	| 'image'
 	| 'svg'
 	| 'pdf'
@@ -26,6 +27,7 @@ export type SessionKind =
 
 /** Which app paints this session. Absent on rows written before the shared list. */
 export type SessionApp =
+	| 'home-maintenance'
 	| 'creative'
 	| 'documents'
 	| 'diagrams'

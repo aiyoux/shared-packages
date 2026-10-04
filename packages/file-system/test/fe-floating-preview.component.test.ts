@@ -305,7 +305,7 @@ describe('FeFloatingPreview', () => {
 		const folder: ExplorerEntry = {
 			id: 'dir-1', kind: 'folder', name: 'Shots', parentId: null, updatedAt: Date.UTC(2026, 0, 2, 3, 4)
 		};
-		const list = vi.fn(async ({ parentId }: { parentId: string | null }) => {
+		const list = vi.fn(async ({ parentId }: { parentId: string | null }): Promise<{ entries: ExplorerEntry[]; truncated: boolean }> => {
 			if (parentId === 'dir-1') {
 				return {
 					entries: [

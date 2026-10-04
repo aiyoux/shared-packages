@@ -1,5 +1,6 @@
 /** File type registry ids. */
 export type FileTypeId =
+	| 'home'
 	| 'skch'
 	| 'ob3d'
 	| 'cari'
