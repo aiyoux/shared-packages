@@ -6,7 +6,8 @@ import { describe, it, expect, vi } from 'vitest';
 import {
 	coerceGitSnapshot,
 	coerceMonitorCapabilities,
-	createMonitorClient
+	createMonitorClient,
+	MonitorChangedOnHostError
 } from './client.js';
 
 const protocolDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'protocol');
@@ -120,6 +121,33 @@ describe('monitor client (direct transport)', () => {
 		expect(await blob.text()).toBe('hello');
 		expect(calls[5].url).toBe('http://192.168.1.50:8300/v1/fs/read?path=%2Ftmp%2Ffile.txt');
 		expect(calls[5].url).not.toContain('/api/monitor');
+	});
+
+	it('openDownloadStream uses the attachment read and yields one body', async () => {
+		const mockFetch = vi.fn(async (input: RequestInfo | URL) => {
+			const url = String(input);
+			if (url.includes('/v1/fs/read')) {
+				return new Response('hello-stream', {
+					status: 200,
+					headers: { 'content-type': 'application/octet-stream', 'content-length': '12' }
+				});
+			}
+			return new Response('Not found', { status: 404 });
+		});
+		const client = createMonitorClient({
+			baseUrl: 'http://192.168.1.50:8300',
+			fetchImpl: mockFetch as unknown as typeof fetch
+		});
+		const opened = await client.openDownloadStream('/tmp/file.txt', 'file.txt');
+		expect(String(mockFetch.mock.calls[0]![0])).toBe(
+			'http://192.168.1.50:8300/v1/fs/read?path=%2Ftmp%2Ffile.txt&download=file.txt'
+		);
+		expect(opened.size).toBe(12);
+		expect(opened.contentType).toContain('application/octet-stream');
+		expect(await new Response(opened.stream).text()).toBe('hello-stream');
+
+		await client.openDownloadStream('/tmp/file.txt', '   ');
+		expect(new URL(String(mockFetch.mock.calls[1]![0])).searchParams.get('download')).toBe('download');
 	});
 
 	it('hostSnapshot and gitSnapshot hit /v1/host and /v1/git', async () => {
@@ -461,7 +489,12 @@ describe('monitor client tolerant parse', () => {
 				archive: false,
 				mkdir: false,
 				thumb: false,
-				videoThumb: false
+				videoThumb: false,
+				range: false,
+				imageInfo: false,
+				uploadIfUnchanged: false,
+				videoConvert: false,
+				peaks: false
 			},
 			git: { blob: false, init: false }
 		});
@@ -720,4 +753,90 @@ describe('Maps capability compatibility', () => {
   expect(coerceMonitorCapabilities({ maps: { protomaps: 'true' } }).maps?.protomaps).toBe(false);
   expect(coerceMonitorCapabilities({ maps: { protomaps: true } }).maps?.protomaps).toBe(true);
  });
+});
+
+describe('monitor client: working copies and partial reads', () => {
+	it('reads the range, image-info and guarded-upload capabilities', () => {
+		const caps = coerceMonitorCapabilities({ fs: { range: true, imageInfo: true, uploadIfUnchanged: true } });
+		expect(caps.fs).toMatchObject({ range: true, imageInfo: true, uploadIfUnchanged: true });
+		expect(coerceMonitorCapabilities({ fs: {} }).fs).toMatchObject({
+			range: false,
+			imageInfo: false,
+			uploadIfUnchanged: false
+		});
+	});
+
+	it('asks the host for a screen-sized render, up to 4096 px', () => {
+		const client = createMonitorClient({ baseUrl: 'http://127.0.0.1:8300', fetchImpl: vi.fn() as unknown as typeof fetch });
+		expect(client.thumbUrl!('/tmp/a.jpg', 3000)).toContain('size=3000');
+		expect(client.thumbUrl!('/tmp/a.jpg', 9000)).toContain('size=4096');
+	});
+
+	it('imageInfo returns the pixel size from the host', async () => {
+		const mockFetch = vi.fn(async (_input: RequestInfo | URL) => jsonResponse({ width: 6000, height: 4000, format: 'jpeg' }));
+		const client = createMonitorClient({ baseUrl: 'http://127.0.0.1:8300', fetchImpl: mockFetch as unknown as typeof fetch });
+		expect(await client.imageInfo!('/tmp/a.jpg')).toEqual({ width: 6000, height: 4000, format: 'jpeg' });
+		expect(String(mockFetch.mock.calls[0]![0])).toBe('http://127.0.0.1:8300/v1/fs/image-info?path=%2Ftmp%2Fa.jpg');
+	});
+
+	function uploadServer(finish: () => Response) {
+		const begun: unknown[] = [];
+		const aborted: string[] = [];
+		const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+			const url = String(input);
+			if (url.endsWith('/v1/fs/upload')) {
+				begun.push(JSON.parse(String(init?.body)));
+				return jsonResponse({ jobId: 'j', token: 't' });
+			}
+			if (url.includes('/chunk')) return jsonResponse({ length: 0 });
+			if (url.endsWith('/finish')) return finish();
+			if (url.endsWith('/abort')) {
+				aborted.push(url);
+				return jsonResponse({ ok: true });
+			}
+			throw new Error(`unexpected ${url}`);
+		});
+		return { fetchImpl: fetchImpl as unknown as typeof fetch, begun, aborted };
+	}
+
+	it('a guarded write always takes the rename-at-the-end route and sends the expected mtime', async () => {
+		const s = uploadServer(() => jsonResponse({ name: 'a.txt', path: '/tmp/a.txt', kind: 'file', size: 3, mtime_ms: 9 }));
+		const client = createMonitorClient({ baseUrl: 'http://127.0.0.1:8300', fetchImpl: s.fetchImpl });
+		const st = await client.write('/tmp/a.txt', new Blob(['abc']), { expectMtimeMs: 7 });
+		expect(s.begun).toEqual([{ path: '/tmp/a.txt', size: 3, expectMtimeMs: 7 }]);
+		expect(st.mtime_ms).toBe(9);
+	});
+
+	it('a file changed on the host is a MonitorChangedOnHostError, and the job is aborted', async () => {
+		const s = uploadServer(
+			() =>
+				new Response(JSON.stringify({ error: { code: 'fs.changed_on_host', message: 'changed' } }), {
+					status: 409,
+					headers: { 'content-type': 'application/json' }
+				})
+		);
+		const client = createMonitorClient({ baseUrl: 'http://127.0.0.1:8300', fetchImpl: s.fetchImpl });
+		await expect(client.write('/tmp/a.txt', new Blob(['abc']), { expectMtimeMs: 7 })).rejects.toBeInstanceOf(
+			MonitorChangedOnHostError
+		);
+		expect(s.aborted).toEqual(['http://127.0.0.1:8300/v1/fs/upload/j/abort']);
+	});
+});
+
+describe('monitor client: converted media', () => {
+	it('builds the media URL with a start second, and reads the duration', async () => {
+		const fetchImpl = vi.fn(async (_input: RequestInfo | URL) => jsonResponse({ duration: 754.2, video: 'hevc' }));
+		const client = createMonitorClient({ baseUrl: 'http://127.0.0.1:8300', fetchImpl: fetchImpl as unknown as typeof fetch });
+		expect(client.mediaUrl!('/v/a.mkv')).toBe('http://127.0.0.1:8300/v1/fs/media?path=%2Fv%2Fa.mkv');
+		expect(client.mediaUrl!('/v/a.mkv', 88.0881)).toBe('http://127.0.0.1:8300/v1/fs/media?path=%2Fv%2Fa.mkv&t=88.088');
+		expect(await client.mediaInfo!('/v/a.mkv')).toEqual({ duration: 754.2 });
+		expect(String(fetchImpl.mock.calls[0]![0])).toBe('http://127.0.0.1:8300/v1/fs/media-info?path=%2Fv%2Fa.mkv');
+	});
+
+	it('asks where a stream starting at a second really starts', async () => {
+		const fetchImpl = vi.fn(async (_input: RequestInfo | URL) => jsonResponse({ duration: 754.2, start: 88.088 }));
+		const client = createMonitorClient({ baseUrl: 'http://127.0.0.1:8300', fetchImpl: fetchImpl as unknown as typeof fetch });
+		expect(await client.mediaInfo!('/v/a.mkv', 90)).toEqual({ duration: 754.2, start: 88.088 });
+		expect(String(fetchImpl.mock.calls[0]![0])).toBe('http://127.0.0.1:8300/v1/fs/media-info?path=%2Fv%2Fa.mkv&t=90');
+	});
 });

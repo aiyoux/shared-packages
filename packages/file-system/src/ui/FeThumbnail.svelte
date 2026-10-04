@@ -1,12 +1,12 @@
 <script lang="ts">
 	import { onDestroy, tick, untrack } from 'svelte';
 	import FeIcon from './FeIcon.svelte';
+	import FeTypeMark from './FeTypeMark.svelte';
 	import type { FeIconName } from './feIcons.js';
 	import {
 		getPreviewKind,
 		generateThumbnail,
-		previewKindIcon,
-		type PreviewKind
+		previewKindIcon
 	} from './feThumbnails.js';
 	import type { ExplorerDriver, ExplorerEntry } from './explorerDriver.js';
 	import {
@@ -244,6 +244,10 @@
 	let fallbackIcon = $derived(
 		kind ? previewKindIcon(kind) : ('file' as FeIconName)
 	);
+	/** Non-picture tiles: type glyph plus the extension, as one centered group. */
+	let typeMark = $derived(!kind || (kind !== 'image' && kind !== 'video' && kind !== 'pdf'));
+	const markIcon = $derived(Math.min(28, Math.max(14, Math.round(maxDim * 0.34))));
+	const markLabel = $derived(Math.min(13, Math.max(8, Math.round(maxDim * 0.14))));
 
 	function requestLoad(e: MouseEvent) {
 		e.stopPropagation();
@@ -255,6 +259,13 @@
 <div class="fe-thumb" style:--fe-thumb-max="{maxDim}px" data-testid="fe-thumb">
 	{#if url}
 		<img class="fe-thumb-img" src={url} alt={entry.name} loading="lazy" data-thumb-source={source} />
+		{#if kind === 'video'}
+			<span class="fe-thumb-play" data-testid="fe-thumb-play" aria-hidden="true">
+				<svg viewBox="0 0 24 24" aria-hidden="true">
+					<polygon points="9 6 18.5 12 9 18" />
+				</svg>
+			</span>
+		{/if}
 	{:else if loading}
 		<div class="fe-thumb-loading" aria-label="Loading preview">
 			<div class="fe-thumb-spinner"></div>
@@ -274,6 +285,10 @@
 		>
 			<FeIcon name={fallbackIcon} size={Math.min(maxDim * 0.4, 32)} />
 		</button>
+	{:else if typeMark && entry.kind === 'file'}
+		<div class="fe-thumb-fallback">
+			<FeTypeMark {entry} iconSize={markIcon} labelSize={markLabel} />
+		</div>
 	{:else if kind}
 		<div class="fe-thumb-fallback">
 			<FeIcon name={fallbackIcon} size={Math.min(maxDim * 0.4, 32)} />
@@ -287,6 +302,7 @@
 
 <style>
 	.fe-thumb {
+		position: relative;
 		width: 100%;
 		height: 100%;
 		max-width: var(--fe-thumb-max, 96px);
@@ -295,6 +311,29 @@
 		display: flex;
 		align-items: center;
 		justify-content: center;
+	}
+	/* Sits on the poster so a video frame is not mistaken for a still. */
+	.fe-thumb-play {
+		position: absolute;
+		left: 50%;
+		top: 50%;
+		translate: -50% -50%;
+		width: clamp(10px, 40%, 28px);
+		height: clamp(10px, 40%, 28px);
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		border-radius: 50%;
+		pointer-events: none;
+		color: white;
+		background: rgb(0 0 0 / 0.55);
+		box-shadow: 0 0 0 1px rgb(255 255 255 / 0.4);
+	}
+	.fe-thumb-play svg {
+		width: 54%;
+		height: 54%;
+		display: block;
+		fill: currentColor;
 	}
 	.fe-thumb-img {
 		width: 100%;

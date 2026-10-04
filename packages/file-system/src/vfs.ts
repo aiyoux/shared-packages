@@ -499,6 +499,11 @@ export class VfsService {
 		await this.db.meta.put({ key, value });
 	}
 
+	async deleteMeta(key: string): Promise<void> {
+		await this.ready();
+		await this.db.meta.delete(key);
+	}
+
 	// ── List / get ────────────────────────────────────────────────
 
 	async list(opts: VfsListOptions): Promise<VfsNode[]> {

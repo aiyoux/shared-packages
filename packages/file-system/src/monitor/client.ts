@@ -6,10 +6,11 @@
  * Monitor must allow CORS from the Scratch Pad origin. Requests to loopback are
  * additionally annotated for Local Network Access — see `./localNetwork`.
  */
-import { blobFromResponse } from '../readProgress.js';
+import { blobFromResponse, streamFromResponse } from '../readProgress.js';
 import { fetchPutBlob } from '../uploadProgress.js';
 import { createStallTimer } from '../stallTimer.js';
 import { withLocalAddressSpace } from './localNetwork.js';
+import { recordLinkTransfer } from '../linkSpeed.js';
 // Pure transport entry point for consumers that do not need Svelte UI.
 export { withLocalAddressSpace } from './localNetwork.js';
 import { openJsonSse } from './sse.js';
@@ -54,6 +55,16 @@ export type MonitorCapabilities = {
 		thumb?: boolean;
 		/** `/v1/fs/thumb` also extracts video poster frames (ffmpeg on the host). */
 		videoThumb?: boolean;
+		/** `/v1/fs/read` serves one `Range: bytes=`; `/v1/fs/thumb` renders up to 4096 px. */
+		range?: boolean;
+		/** `GET /v1/fs/image-info` reads pixel size from the header. */
+		imageInfo?: boolean;
+		/** `/v1/fs/upload` takes `expectMtimeMs` and refuses a changed destination. */
+		uploadIfUnchanged?: boolean;
+		/** `GET /v1/fs/media` plays video a browser cannot decode (ffmpeg on the host). */
+		videoConvert?: boolean;
+		/** `GET /v1/fs/peaks` draws waveforms (WAV always; more with ffmpeg). */
+		peaks?: boolean;
 	};
 	git?: { blob?: boolean; init?: boolean };
 	/** AI feature (`/v1/ai/**`); absent on daemons without it. */
@@ -159,8 +170,10 @@ export type MonitorNdjsonEvent = {
 	error?: string;
 	ice?: 'checking' | 'connected' | 'failed';
 	icePath?: 'host' | 'stun';
-	/** Push: `hash` while SHA1-reading the source, `upload` while PUTting to B2. */
+	/** Push: `hash` while SHA1-reading the source, `upload` while POSTing to B2. */
 	phase?: 'hash' | 'upload' | string;
+	/** SHA1 of the uploaded bytes, on the done line of `/v1/fs/push`. */
+	sha1?: string;
 };
 
 /** `relay` carries two peers' bytes; it moves no file and takes no path. */
@@ -301,10 +314,39 @@ export type MonitorTransport = {
 			maxBytes?: number;
 		}
 	): Promise<Blob>;
+	/**
+	 * GET `/v1/fs/read?download=` as a stream. The `download` parameter is what
+	 * skips the in-tab 100 MiB cap. The caller must read `stream` to completion
+	 * or cancel it; the stall timer lives until then.
+	 */
+	openDownloadStream(
+		path: string,
+		filename: string,
+		opts?: {
+			onProgress?: (transferred: number, total?: number) => void;
+			signal?: AbortSignal;
+		}
+	): Promise<{
+		stream: ReadableStream<Uint8Array>;
+		contentType?: string;
+		size?: number;
+	}>;
 	/** Absolute GET URL for `/v1/fs/read` (no extra headers). */
 	readUrl(path: string): string;
 	/** Absolute GET URL for `/v1/fs/thumb` — JPEG generated on the host. */
 	thumbUrl?(path: string, size?: number): string;
+	/** Pixel size of an image, read from its header on the host. */
+	imageInfo?(path: string): Promise<MonitorImageInfo>;
+	/** GET URL for `/v1/fs/media`: the file as a fragmented MP4 a browser plays, from `start` seconds. */
+	mediaUrl?(path: string, start?: number): string;
+	/**
+	 * `/v1/fs/media-info`: the source's duration, and with `start` the second
+	 * a stream asked to begin there really begins at (a copied video starts
+	 * on the keyframe at or before it).
+	 */
+	mediaInfo?(path: string, start?: number): Promise<{ duration?: number; start?: number }>;
+	/** `/v1/fs/peaks`: a waveform, `n` bars. */
+	peaks?(path: string, n: number): Promise<{ peaks: number[]; duration: number }>;
 	/** Absolute GET URL for `/v1/fs/zip` — Chrome downloads on drop. */
 	zipUrl(path: string, filename: string): string;
 	/** Overwrite/create a file at `path` (parent must exist). */
@@ -314,6 +356,15 @@ export type MonitorTransport = {
 		opts?: {
 			signal?: AbortSignal;
 			onProgress?: (transferred: number, total?: number) => void;
+			/**
+			 * Replace the file only if its mtime still equals this. Always takes
+			 * the chunked route, which renames over the file at the end, so a
+			 * failed send never leaves half a file. Throws
+			 * `MonitorChangedOnHostError` when the file moved on.
+			 */
+			expectMtimeMs?: number;
+			/** Always take the rename-at-the-end route, even for a small file. */
+			atomic?: boolean;
 		}
 	): Promise<MonitorStatResult>;
 	/**
@@ -337,7 +388,7 @@ export type MonitorTransport = {
 			onProgress?: (transferred: number, total?: number) => void;
 		}
 	): Promise<void>;
-	/** Daemon PUT local file to a minted upload URL (B2). NDJSON progress. */
+	/** Daemon POSTs a local file (or one byte range) to a B2 upload URL. */
 	push(
 		body: {
 			from: string;
@@ -345,6 +396,9 @@ export type MonitorTransport = {
 			token: string;
 			fileName: string;
 			contentType?: string;
+			offset?: number;
+			length?: number;
+			partNumber?: number;
 		},
 		opts?: {
 			signal?: AbortSignal;
@@ -534,8 +588,41 @@ export function coerceInoDev(v: unknown): string | undefined {
 	return undefined;
 }
 
+export type MonitorImageInfo = { width: number; height: number; format: string };
+
+/** Media info from the host: a positive duration and a non-negative start, when given. */
+export function coerceMediaInfo(raw: { duration?: unknown; start?: unknown }): { duration?: number; start?: number } {
+	const duration = Number(raw.duration);
+	const start = Number(raw.start);
+	return {
+		...(Number.isFinite(duration) && duration > 0 ? { duration } : {}),
+		...(raw.start !== undefined && raw.start !== null && Number.isFinite(start) && start >= 0 ? { start } : {})
+	};
+}
+
+/** A waveform from the host, with every bar a number in 0..1. */
+export function coercePeaks(raw: { peaks?: unknown; duration?: unknown }): { peaks: number[]; duration: number } {
+	const peaks = Array.isArray(raw.peaks)
+		? raw.peaks.map((p) => Math.max(0, Math.min(1, Number(p) || 0)))
+		: [];
+	const duration = Number(raw.duration);
+	return { peaks, duration: Number.isFinite(duration) && duration > 0 ? duration : 0 };
+}
+
+/**
+ * The monitor's copy changed (or went away) after the browser's working copy
+ * was made from it. Sending would overwrite someone else's version.
+ */
+export class MonitorChangedOnHostError extends Error {
+	readonly code = 'fs.changed_on_host' as const;
+	constructor(message = 'The file changed on the monitor since this copy was made') {
+		super(message);
+		this.name = 'MonitorChangedOnHostError';
+	}
+}
+
 const FALSE_CAPS: MonitorCapabilities = {
-	fs: { ino: false, rename: false, archive: false, mkdir: false, thumb: false, videoThumb: false },
+	fs: { ino: false, rename: false, archive: false, mkdir: false, thumb: false, videoThumb: false, range: false, imageInfo: false, uploadIfUnchanged: false, videoConvert: false, peaks: false },
 	git: { blob: false, init: false }
 };
 
@@ -555,7 +642,12 @@ export function coerceMonitorCapabilities(raw: unknown): MonitorCapabilities {
 			archive: fs.archive === true,
 			mkdir: fs.mkdir === true,
 			thumb: fs.thumb === true,
-			videoThumb: fs.videoThumb === true
+			videoThumb: fs.videoThumb === true,
+			range: fs.range === true,
+			imageInfo: fs.imageInfo === true,
+			uploadIfUnchanged: fs.uploadIfUnchanged === true,
+			videoConvert: fs.videoConvert === true,
+			peaks: fs.peaks === true
 		},
 		git: { blob: git.blob === true, init: git.init === true },
 		...(ai
@@ -713,6 +805,11 @@ class MonitorNoChunkRouteError extends Error {
 	}
 }
 
+function errorCode(parsed: unknown): string | undefined {
+	const err = (parsed as { error?: { code?: string } | string }).error;
+	return err && typeof err === 'object' && typeof err.code === 'string' ? err.code : undefined;
+}
+
 function serverMessage(parsed: unknown, fallback: string): string {
 	const err = (parsed as { error?: { message?: string } | string }).error;
 	if (typeof err === 'string') return err;
@@ -733,13 +830,20 @@ export type ChunkedUploadRoute<R> = {
 	readFinish: (res: Response) => Promise<R>;
 };
 
-function fsUploadRoute(path: string, size: number): ChunkedUploadRoute<MonitorStatResult> {
+function fsUploadRoute(
+	path: string,
+	size: number,
+	expectMtimeMs?: number
+): ChunkedUploadRoute<MonitorStatResult> {
 	return {
 		beginPath: '/v1/fs/upload',
-		beginBody: { path, size },
+		beginBody: { path, size, ...(expectMtimeMs !== undefined ? { expectMtimeMs } : {}) },
 		jobPath: '/v1/fs/upload',
 		readFinish: async (res) => {
 			const parsed = await res.json().catch(() => ({}));
+			if (res.status === 409 && errorCode(parsed) === 'fs.changed_on_host') {
+				throw new MonitorChangedOnHostError(serverMessage(parsed, 'The file changed on the monitor'));
+			}
 			if (!res.ok) {
 				// Leave the partial for a retry — a size mismatch is fixable by
 				// re-sending the tail chunk, so do not abort the job here.
@@ -788,6 +892,7 @@ export async function chunkedUpload<R>(
 			.finally(() => clearTimeout(t));
 	};
 
+	const started = performance.now();
 	// --- begin: validate + mint the job, get jobId + token -------------------
 	const beginStall = createStallTimer(MONITOR_STALL_MS, opts?.signal, 'Monitor upload begin');
 	let jobId = '';
@@ -888,10 +993,15 @@ export async function chunkedUpload<R>(
 			);
 			const result = await route.readFinish(res);
 			opts?.onProgress?.(body.size, body.size);
+			recordLinkTransfer(base, body.size, performance.now() - started);
 			return result;
 		} catch (e) {
-			// A stalled or cancelled finish cannot be completed by this tab.
-			if (e instanceof Error && (e.name === 'AbortError' || e.name === 'StallError')) {
+			// A stalled or cancelled finish cannot be completed by this tab, and
+			// a refused one (the file changed on the host) never will be.
+			if (
+				e instanceof MonitorChangedOnHostError ||
+				(e instanceof Error && (e.name === 'AbortError' || e.name === 'StallError'))
+			) {
 				abortJob(jobId, token);
 			}
 			throw e;
@@ -1423,11 +1533,36 @@ export function createMonitorClient(opts: {
 			return joinUrl(base, `/v1/fs/read?path=${encodeURIComponent(path)}`);
 		},
 		thumbUrl(path: string, size = 96) {
-			const dim = Math.max(16, Math.min(1024, Math.round(size) || 96));
+			const dim = Math.max(16, Math.min(4096, Math.round(size) || 96));
 			return joinUrl(
 				base,
 				`/v1/fs/thumb?path=${encodeURIComponent(path)}&size=${dim}`
 			);
+		},
+		mediaUrl(path: string, start?: number) {
+			const t = start && start > 0 ? `&t=${Math.round(start * 1000) / 1000}` : '';
+			return joinUrl(base, `/v1/fs/media?path=${encodeURIComponent(path)}${t}`);
+		},
+		async peaks(path: string, n: number) {
+			const raw = (await getJson(
+				`/v1/fs/peaks?path=${encodeURIComponent(path)}&n=${Math.round(n)}`
+			)) as { peaks?: unknown; duration?: unknown };
+			return coercePeaks(raw);
+		},
+		async mediaInfo(path: string, start?: number) {
+			const t = start && start > 0 ? `&t=${start}` : '';
+			const raw = (await getJson(`/v1/fs/media-info?path=${encodeURIComponent(path)}${t}`)) as {
+				duration?: unknown;
+				start?: unknown;
+			};
+			return coerceMediaInfo(raw);
+		},
+		async imageInfo(path: string) {
+			const raw = (await getJson(`/v1/fs/image-info?path=${encodeURIComponent(path)}`)) as Partial<MonitorImageInfo>;
+			const width = Number(raw.width);
+			const height = Number(raw.height);
+			if (!Number.isFinite(width) || !Number.isFinite(height)) throw new Error('Monitor sent no image size');
+			return { width, height, format: typeof raw.format === 'string' ? raw.format : '' };
 		},
 		zipUrl(path: string, filename: string) {
 			const name = filename.trim() || 'archive.zip';
@@ -1442,6 +1577,8 @@ export function createMonitorClient(opts: {
 			// stops moving aborts instead of hanging forever.
 			const stall = createStallTimer(MONITOR_STALL_MS, opts?.signal, 'Monitor download');
 			const url = joinUrl(base, `/v1/fs/read?path=${encodeURIComponent(path)}`);
+			const started = performance.now();
+			let received = 0;
 			try {
 				const res = await fetchFn(
 					url,
@@ -1451,8 +1588,9 @@ export function createMonitorClient(opts: {
 					const text = await res.text().catch(() => '');
 					throw new Error(text || `Download failed (${res.status})`);
 				}
-				return await blobFromResponse(res, {
+				const blob = await blobFromResponse(res, {
 					onProgress: (n, total) => {
+						received = n;
 						stall.bump();
 						opts?.onProgress?.(n, total);
 					},
@@ -1460,6 +1598,8 @@ export function createMonitorClient(opts: {
 					assemble: opts?.assemble,
 					maxBytes: opts?.maxBytes
 				});
+				recordLinkTransfer(base, Math.max(received, blob.size), performance.now() - started);
+				return blob;
 			} catch (e) {
 				if (e instanceof Error && e.name === 'AbortError') {
 					throw opts?.signal?.aborted ? e : new Error('Monitor download aborted');
@@ -1477,10 +1617,63 @@ export function createMonitorClient(opts: {
 				stall.dispose();
 			}
 		},
+		async openDownloadStream(path, filename, opts) {
+			const stall = createStallTimer(MONITOR_STALL_MS, opts?.signal, 'Monitor download');
+			const read = new URL(joinUrl(base, '/v1/fs/read'));
+			read.searchParams.set('path', path);
+			// `download` is the attachment form. `/read` without it refuses
+			// anything over the in-tab Blob cap before sending a body.
+			read.searchParams.set('download', filename.trim() || 'download');
+			const href = read.toString();
+			const fail = (e: unknown): never => {
+				stall.dispose();
+				if (e instanceof Error && e.name === 'AbortError') {
+					throw opts?.signal?.aborted ? e : new Error('Monitor download aborted');
+				}
+				if (e instanceof Error && e.name === 'StallError') {
+					throw new Error(`Monitor download ${e.message.replace(/^transfer /, '')}`);
+				}
+				if (e instanceof TypeError) {
+					throw new Error(
+						`Cannot reach monitor at ${base} (network/CORS). Is it running and allowing this origin?`
+					);
+				}
+				throw e;
+			};
+			try {
+				const res = await fetchFn(href, withLocalAddressSpace(href, { method: 'GET', signal: stall.signal }));
+				if (!res.ok) {
+					const text = await res.text().catch(() => '');
+					throw new Error(text || `Download failed (${res.status})`);
+				}
+				const size = Number(res.headers.get('content-length') || '') || undefined;
+				const type = res.headers.get('content-type') || undefined;
+				const started = performance.now();
+				let received = 0;
+				const stream = streamFromResponse(res, {
+					bump: () => stall.bump(),
+					signal: stall.signal,
+					onProgress: (n, total) => {
+						received = n;
+						opts?.onProgress?.(n, total);
+					},
+					onDone: () => {
+						stall.dispose();
+						if (!stall.signal.aborted) recordLinkTransfer(base, received, performance.now() - started);
+					}
+				});
+				return { stream, contentType: type, size };
+			} catch (e) {
+				return fail(e);
+			}
+		},
 		async write(path, body, opts) {
 			// Large uploads go through the daemon's chunked-upload job: unbounded
 			// size, real progress per chunk, and a stall-based abort — no fixed
 			// total timeout that would kill an active transfer.
+			if (opts?.expectMtimeMs !== undefined || opts?.atomic) {
+				return chunkedUpload(base, fsUploadRoute(path, body.size, opts.expectMtimeMs), body, opts, fetchFn);
+			}
 			if (body.size > MONITOR_CHUNK_BYTES) {
 				try {
 					return await chunkedUpload(base, fsUploadRoute(path, body.size), body, opts, fetchFn);

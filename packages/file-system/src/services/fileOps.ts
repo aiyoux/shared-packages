@@ -38,7 +38,7 @@ export function reportFileOp(progress: TransferProgress): void {
  if (baseId !== progress.id && handle) {
   const remote = latest.get(`${baseId}:remote`);
   const wire = latest.get(`${baseId}:wire`);
-  handle.progress({ done: wire?.transferred ?? 0, ahead: remote?.transferred ?? 0, total: Math.max(remote?.size ?? 0, wire?.size ?? 0), note: progress.hopNote });
+  handle.progress({ done: wire?.transferred ?? 0, ahead: remote?.transferred ?? 0, total: Math.max(remote?.size ?? 0, wire?.size ?? 0), note: progress.hopNote, route: progress.hop, ice: progress.ice, icePath: progress.icePath });
   if (progress.status === 'failed' || progress.status === 'cancelled' || (remote?.done && wire?.done)) {
    const finish = progress.status === 'failed' ? handle.fail(progress.error ?? 'Copy failed') : progress.status === 'cancelled' ? handle.cancelled() : handle.done(results.get(baseId));
    void finish.catch((error) => console.error('Could not finish operation', error));
@@ -47,7 +47,7 @@ export function reportFileOp(progress: TransferProgress): void {
   return;
  }
  if (!handle) return;
- handle.progress({ done: progress.transferred, total: progress.size, note: progress.hopNote });
+ handle.progress({ done: progress.transferred, total: progress.size, note: progress.hopNote, route: progress.hop, ice: progress.ice, icePath: progress.icePath });
  if (!progress.done && progress.status !== 'failed' && progress.status !== 'cancelled') return;
  const finish = progress.status === 'cancelled' ? handle.cancelled() : progress.status === 'failed' ? handle.fail(progress.error ?? 'Operation failed') : handle.done(results.get(progress.id));
  void finish.catch((error) => console.error('Could not finish operation', error));
@@ -56,6 +56,6 @@ export function reportFileOp(progress: TransferProgress): void {
 /** UI diagnostics and unit-adapter seam; durable/global lists always read opsService. */
 export function listFileOpProgress(): TransferProgress[] { return [...latest.values()]; }
 export function resetFileOpsForTest(next?: typeof startOp) { handles.clear(); results.clear(); latest.clear(); aborts.clear(); starter = next ?? startOp; }
-export async function beginArchiveOp(id: string, kind: OpKindId, title: string, folderId: string | null, signal: AbortSignal, options: { driverId: string; endpointKey?: string; executor: 'this-browser' | 'monitor'; note: string } = { driverId: 'local', executor: 'this-browser', note: 'This tab' }) {
- await beginFileOp(id, { kind, app: 'files', title, where: { executor: options.executor, note: options.note }, landing: options.driverId === 'local' ? { kind: 'vfs-folder', folderId, name: title } : undefined, destination: { driverId: options.driverId, endpointKey: options.endpointKey, parentId: folderId }, signal });
+export async function beginArchiveOp(id: string, kind: OpKindId, title: string, folderId: string | null, signal: AbortSignal, options: { driverId: string; endpointKey?: string; executor: 'this-browser' | 'monitor'; note: string; windowId?: string } = { driverId: 'local', executor: 'this-browser', note: 'This tab' }) {
+ await beginFileOp(id, { kind, app: 'files', title, windowId: options.windowId, where: { executor: options.executor, note: options.note }, landing: options.driverId === 'local' ? { kind: 'vfs-folder', folderId, name: title } : undefined, destination: { driverId: options.driverId, endpointKey: options.endpointKey, parentId: folderId }, signal });
 }

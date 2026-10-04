@@ -6,6 +6,7 @@
  * @see docs/design/dnd-inmem-copy.md
  */
 import { generateId } from '../id.js';
+import { childId } from '../monitor/pathIds.js';
 import { ferryWebrtcCopy, isWebrtcCopyPeer } from '../monitor/webrtcCopy.js';
 import type { CopyHop, CopyIce, CopyIcePath } from '../transferTypes.js';
 import { beginFileOp, reportFileOp, attachFileOpAbort, setFileOpResult } from '../services/fileOps.js';
@@ -190,6 +191,8 @@ export type CopyAcrossArgs = {
 	/** ICE-fail fallback: confirm dual-phase through this device. */
 	confirmDualPhase?: () => Promise<boolean>;
 	signal?: AbortSignal;
+	/** Hub window that started the copy. A pane, not the browser tab. */
+	windowId?: string;
 };
 
 function entryById(entries: ExplorerEntry[], id: string): ExplorerEntry | undefined {
@@ -222,6 +225,32 @@ async function resolveLiveEntries(
 function nonEmptyKey(d: ExplorerDriver): string | null {
 	const k = d.endpointKey;
 	return typeof k === 'string' && k !== '' ? k : null;
+}
+
+/** Backblaze's maximum for one `b2_upload_file` (5 × 2^30). Matches the daemon. */
+export const B2_SINGLE_UPLOAD_MAX_BYTES = 5 * 1024 * 1024 * 1024;
+
+/**
+ * Two drivers on one monitor. A B2 endpoint key is
+ * `b2:${monitorEndpointKey}::${connectionId}`.
+ */
+export function sameMonitorHost(a: ExplorerDriver, b: ExplorerDriver): boolean {
+	const host = (d: ExplorerDriver): string | null => {
+		const key = d.endpointKey;
+		if (!key) return null;
+		if (d.id === 'monitor') return key.startsWith('monitor:') ? key : null;
+		// `b2:${monitorEndpointKey}::${connectionId}`. A key that is not a
+		// monitor host (tests, older rows) does not count as the same machine.
+		if (d.id !== 'b2' || !key.startsWith('b2:monitor:')) return null;
+		const rest = key.slice(3);
+		const sep = rest.lastIndexOf('::');
+		if (sep <= 0) return null;
+		const hostKey = rest.slice(0, sep);
+		return hostKey.startsWith('monitor:') ? hostKey : null;
+	};
+	const left = host(a);
+	const right = host(b);
+	return Boolean(left && left === right);
 }
 
 export type CopyAcrossPathKind =
@@ -350,26 +379,31 @@ export function describeCopyAcrossPath(
 	}
 	if (kind === 'delegated') {
 		if (source.id === 'b2' && dest.id === 'b2') {
+			const same = sameMonitorHost(source, dest);
 			return {
 				kind: 'delegated',
 				summary: `Delegated: ${labels.source} → ${labels.dest}`,
-				detail:
-					"The source's monitor mints a short-lived download URL; the destination's monitor pulls it into its bucket. Keys stay on their monitors. No confirm."
+				detail: same
+					? 'Both buckets are on the same monitor. That daemon copies between them, using large-file parts when the object is big. Keys stay on their monitor. No confirm.'
+					: "The source's monitor mints a short-lived download URL; the destination's monitor pulls it into its bucket and uses large-file parts when the object is big. Keys stay on their monitors. No confirm."
 			};
 		}
 		if (source.id === 'b2' && dest.id === 'monitor') {
+			const same = sameMonitorHost(source, dest);
 			return {
 				kind: 'delegated',
 				summary: `Delegated: ${labels.source} → ${labels.dest}`,
-				detail:
-					'The B2 monitor mints a short-lived download URL; the destination monitor GETs it. Keys stay on their monitor. No confirm.'
+				detail: same
+					? 'The same monitor streams the object from B2 onto its disk. There is no 100 MiB cap. Keys stay on their monitor. No confirm.'
+					: 'The B2 monitor mints a short-lived download URL; the destination monitor streams it to disk. There is no 100 MiB cap. Keys stay on their monitor. No confirm.'
 			};
 		}
 		return {
 			kind: 'delegated',
 			summary: `Delegated: ${labels.source} → ${labels.dest}`,
-			detail:
-				'The B2 monitor mints a one-shot upload URL; the source monitor POSTs the file. Keys stay on their monitor. No confirm.'
+			detail: sameMonitorHost(source, dest)
+				? 'The same monitor uploads the file, using large-file parts when it is bigger than one part. The bytes do not enter this tab. Keys stay on their monitor. No confirm.'
+				: 'The B2 monitor mints an upload URL; the source monitor POSTs the file straight to B2 (one request up to 5 GiB, then large-file parts). The bytes do not enter this tab. Keys stay on their monitor. No confirm.'
 		};
 	}
 	if (kind === 'webrtc') {
@@ -377,7 +411,7 @@ export function describeCopyAcrossPath(
 			kind: 'webrtc',
 			summary: 'WebRTC between monitors',
 			detail:
-				'This tab only exchanges offer/answer. Each daemon copies over WebRTC. If ICE fails, a dual-phase confirm may appear and the copy can continue through this device.'
+				'This tab only exchanges offer/answer. Each daemon copies over WebRTC in 16 KiB frames, with no file-size cap. If ICE fails, a dual-phase confirm may appear and the copy can continue through this device, which stops at 100 MiB.'
 		};
 	}
 	if (kind === 'dual-phase') {
@@ -407,7 +441,8 @@ export async function copyAcross(args: CopyAcrossArgs): Promise<number> {
 		sourceEntries,
 		destParentId,
 		confirmDualPhase,
-		signal
+		signal,
+		windowId
 	} = args;
 	if (!selectedIds.length) {
 		throw new CopyAcrossError('COPY_ACROSS_NO_SELECTION', 'Select file(s) to copy');
@@ -432,7 +467,7 @@ export async function copyAcross(args: CopyAcrossArgs): Promise<number> {
 		if (entry.kind === 'folder') {
 			if (sourceDriver === destDriver && sourceDriver.id === 'local' && destDriver.copy) {
 				const progressId = generateId('copy');
-				await beginFileOp(progressId, { kind: 'copy', app: 'files', title: entry.name, where: { executor: 'this-browser', route: 'server' }, landing: { kind: 'vfs-folder', folderId: destParentId, name: entry.name }, destination: { driverId: destDriver.id, parentId: destParentId, entryKind: 'folder' }, signal });
+				await beginFileOp(progressId, { kind: 'copy', app: 'files', title: entry.name, windowId, where: { executor: 'this-browser', route: 'server' }, landing: { kind: 'vfs-folder', folderId: destParentId, name: entry.name }, destination: { driverId: destDriver.id, parentId: destParentId, entryKind: 'folder' }, signal });
 				reportCopyProgress(progressId, entry, {
 					transferred: 0, size: 0, status: 'active', hop: 'server'
 				}, destParentId);
@@ -457,10 +492,11 @@ export async function copyAcross(args: CopyAcrossArgs): Promise<number> {
 				entry,
 				destParentId,
 				confirmDualPhase,
-				signal
+				signal,
+				windowId
 			);
 		} else {
-			await copyFile(sourceDriver, destDriver, entry, destParentId, confirmDualPhase, signal);
+			await copyFile(sourceDriver, destDriver, entry, destParentId, confirmDualPhase, signal, windowId);
 			count += 1;
 		}
 	}
@@ -535,7 +571,8 @@ async function copyFile(
 	entry: ExplorerEntry,
 	destParentId: string | null,
 	confirmDualPhase?: () => Promise<boolean>,
-	signal?: AbortSignal
+	signal?: AbortSignal,
+	windowId?: string
 ): Promise<void> {
 	if (signal?.aborted) {
 		const err = new Error('Copy cancelled');
@@ -543,7 +580,14 @@ async function copyFile(
 		throw err;
 	}
 	const kind = classify(source, dest).kind;
-	const skipCap = kind === 'server' || kind === 'delegated' || kind === 'webrtc';
+	// Browser files can take the body as a stream (`writeFileStream`), so a
+	// monitor or B2 file does not have to become a Blob to land there.
+	// Dual-phase still builds a Blob and stays on the 100 MiB cap.
+	const streamIntoBrowser =
+		kind !== 'dual-phase' &&
+		typeof dest.writeFileStream === 'function' &&
+		typeof source.openDownloadStream === 'function';
+	const skipCap = kind === 'server' || kind === 'delegated' || kind === 'webrtc' || streamIntoBrowser;
 	if (!skipCap && entry.size != null && entry.size > EXPLORER_DOWNLOAD_MAX_BYTES) {
 		throw new CopyAcrossError('EXPLORER_TOO_LARGE', 'File exceeds download size cap');
 	}
@@ -553,7 +597,7 @@ async function copyFile(
  else signal?.addEventListener('abort', () => controller.abort(signal?.reason), { once: true });
  signal = controller.signal;
  await beginFileOp(opId, {
-  kind: 'copy', app: 'files', title: entry.name, signal,
+  kind: 'copy', app: 'files', title: entry.name, windowId, signal,
   where: { executor: 'this-browser', route: kind === 'idle' || kind === 'blocked' ? undefined : kind, from: { kind: source.id === 'monitor' ? 'monitor' : source.id === 'b2' ? 'b2' : 'browser', label: source.id }, to: { kind: dest.id === 'monitor' ? 'monitor' : dest.id === 'b2' ? 'b2' : 'browser', label: dest.id } },
   landing: dest.id === 'local' ? { kind: 'vfs-folder', folderId: destParentId, name: entry.name } : undefined,
   destination: { driverId: dest.id, endpointKey: dest.endpointKey ?? dest.connectionId, parentId: destParentId, entryKind: entry.kind }
@@ -708,7 +752,60 @@ async function copyFile(
 			hopNote
 		});
 		try {
-			if (source.id === 'b2' && (dest.id === 'monitor' || dest.id === 'b2')) {
+			const hostProgress = (transferred: number, total?: number) => {
+				reportCopy(opId, entry, {
+					transferred,
+					size: total ?? known ?? transferred,
+					status: 'active',
+					hop: 'delegated',
+					hopNote
+				});
+			};
+			if (
+				source.id === 'b2' &&
+				dest.id === 'monitor' &&
+				sameMonitorHost(source, dest) &&
+				source.sendToHostPath &&
+				dest.uniqueName &&
+				dest.absolutePath
+			) {
+				const name = await dest.uniqueName(destParentId, entry.name);
+				const abs = dest.absolutePath(childId(destParentId, name, false));
+				await source.sendToHostPath(entry.id, abs, { signal, onProgress: hostProgress });
+			} else if (
+				source.id === 'b2' &&
+				dest.id === 'b2' &&
+				sameMonitorHost(source, dest) &&
+				source.hostConnectionId &&
+				dest.acceptFromConnection
+			) {
+				await dest.acceptFromConnection(
+					source.hostConnectionId,
+					entry.id,
+					destParentId,
+					entry.name,
+					{ signal, onProgress: hostProgress }
+				);
+			} else if (
+				source.id === 'monitor' &&
+				dest.id === 'b2' &&
+				sameMonitorHost(source, dest) &&
+				source.absolutePath &&
+				dest.acceptHostFile
+			) {
+				await dest.acceptHostFile(source.absolutePath(entry.id), destParentId, entry.name, {
+					signal,
+					onProgress: hostProgress
+				});
+			} else if (
+				source.id === 'monitor' &&
+				dest.id === 'b2' &&
+				(entry.size ?? 0) > B2_SINGLE_UPLOAD_MAX_BYTES &&
+				dest.startLargeUpload &&
+				source.pushToUpload
+			) {
+				await pushLargeParts(source, dest, entry, destParentId, signal, hostProgress);
+			} else if (source.id === 'b2' && (dest.id === 'monitor' || dest.id === 'b2')) {
 				if (!source.mintDownloadUrl || !dest.pullFromUrl) {
 					throw new CopyAcrossError(
 						'COPY_ACROSS_NO_DEST',
@@ -900,6 +997,37 @@ async function copyFile(
 	}
 
 	try {
+		if (!dual && dest.writeFileStream && source.openDownloadStream) {
+			const opened = await source.openDownloadStream(entry.id, {
+				signal,
+				onProgress: (transferred, total) => {
+					reportCopy(opId, entry, {
+						transferred,
+						size: total ?? known ?? transferred,
+						status: 'active',
+						hop: 'direct',
+						hopNote
+					});
+				}
+			});
+			const saved = await dest.writeFileStream(destParentId, entry.name, opened.stream, {
+				signal,
+				contentType: entry.contentType || opened.contentType
+			});
+			if (dest.id === 'local' && saved.kind === 'file') {
+				setFileOpResult(opId, { kind: 'vfs-file', fileId: saved.id, name: saved.name });
+			}
+			const size = saved.size ?? known;
+			reportCopy(opId, entry, {
+				transferred: size,
+				size,
+				done: true,
+				status: 'done',
+				hop: 'direct',
+				hopNote
+			});
+			return;
+		}
 		let blob: Blob;
 		if (source.download) {
 			blob = await source.download(entry.id, {
@@ -1031,13 +1159,76 @@ async function copyFile(
 	}
 }
 
+async function pushLargeParts(
+	source: ExplorerDriver,
+	dest: ExplorerDriver,
+	entry: ExplorerEntry,
+	destParentId: string | null,
+	signal: AbortSignal | undefined,
+	onProgress: (transferred: number, total?: number) => void
+): Promise<void> {
+	if (!dest.startLargeUpload || !dest.mintPartUrl || !dest.finishLargeUpload || !source.pushToUpload) {
+		throw new CopyAcrossError(
+			'COPY_ACROSS_NO_DEST',
+			'Large B2 upload needs startLargeUpload, mintPartUrl, finishLargeUpload, and pushToUpload'
+		);
+	}
+	const total = entry.size ?? 0;
+	const started = await dest.startLargeUpload(destParentId, entry.name, entry.contentType);
+	const shas: string[] = [];
+	try {
+		const partSize = started.partSize;
+		if (!Number.isFinite(partSize) || partSize < 1) {
+			throw new CopyAcrossError('COPY_ACROSS_NO_DEST', 'Monitor did not return a part size');
+		}
+		let offset = 0;
+		let part = 1;
+		while (offset < total) {
+			const length = Math.min(partSize, total - offset);
+			const upload = await dest.mintPartUrl(started.fileId);
+			let sha1 = '';
+			await source.pushToUpload(
+				entry.id,
+				{
+					uploadUrl: upload.uploadUrl,
+					authorizationToken: upload.authorizationToken,
+					destFileName: started.destFileName,
+					contentType: started.contentType || entry.contentType,
+					offset,
+					length,
+					partNumber: part
+				},
+				{
+					signal,
+					onEvent: (ev) => {
+						if (ev.sha1) sha1 = ev.sha1;
+						const moved = ev.phase === 'upload' || ev.done ? (ev.transferred ?? 0) : 0;
+						onProgress(offset + moved, total);
+					}
+				}
+			);
+			if (!sha1) {
+				throw new CopyAcrossError('COPY_ACROSS_NO_DEST', 'Part upload did not return a SHA1');
+			}
+			shas.push(sha1);
+			offset += length;
+			part += 1;
+		}
+		await dest.finishLargeUpload(started.fileId, shas);
+	} catch (e) {
+		await dest.cancelLargeUpload?.(started.fileId).catch(() => {});
+		throw e;
+	}
+}
+
 async function copyFolderTree(
 	source: ExplorerDriver,
 	dest: ExplorerDriver,
 	folder: ExplorerEntry,
 	destParentId: string | null,
 	confirmDualPhase?: () => Promise<boolean>,
-	signal?: AbortSignal
+	signal?: AbortSignal,
+	windowId?: string
 ): Promise<number> {
 	if (!dest.mkdir) {
 		throw new CopyAcrossError('COPY_ACROSS_DEST_NO_FOLDERS', 'Destination cannot create folders');
@@ -1067,7 +1258,7 @@ async function copyFolderTree(
 		else signal?.addEventListener('abort', abort, { once: true });
 		try {
 			for (const b of batch) {
-				await beginFileOp(b.progressId, { kind: 'copy', app: 'files', title: b.entry.name, where: { executor: 'this-browser', route: 'direct' }, landing: dest.id === 'local' ? { kind: 'vfs-folder', folderId: created.id, name: b.entry.name } : undefined, destination: { driverId: dest.id, endpointKey: dest.endpointKey ?? dest.connectionId, parentId: created.id }, signal: batchAbort.signal });
+				await beginFileOp(b.progressId, { kind: 'copy', app: 'files', title: b.entry.name, windowId, where: { executor: 'this-browser', route: 'direct' }, landing: dest.id === 'local' ? { kind: 'vfs-folder', folderId: created.id, name: b.entry.name } : undefined, destination: { driverId: dest.id, endpointKey: dest.endpointKey ?? dest.connectionId, parentId: created.id }, signal: batchAbort.signal });
 				attachFileOpAbort(b.progressId, batchAbort);
 			}
 			const saved = await dest.writeFiles!(created.id, batch.map((b) => b.file), { signal: batchAbort.signal });
@@ -1082,7 +1273,7 @@ async function copyFolderTree(
 	for (const child of entries) {
 		if (child.kind === 'folder') {
 			await flush();
-			count += await copyFolderTree(source, dest, child, created.id, confirmDualPhase, signal);
+			count += await copyFolderTree(source, dest, child, created.id, confirmDualPhase, signal, windowId);
 			continue;
 		}
 		if (bulk) {
@@ -1102,7 +1293,7 @@ async function copyFolderTree(
 			if (pending.length >= WINDOW) await flush();
 			continue;
 		}
-		await copyFile(source, dest, child, created.id, confirmDualPhase, signal);
+		await copyFile(source, dest, child, created.id, confirmDualPhase, signal, windowId);
 		count += 1;
 	}
 	await flush();
@@ -1121,5 +1312,8 @@ async function copyFolderTree(
  * overhead is not what costs.
  */
 function canBulkWriteDest(source: ExplorerDriver, dest: ExplorerDriver): boolean {
+	// A monitor or B2 source streams each file into OPFS. Bulking those would
+	// pull every file into a Blob first, which is the 100 MiB path.
+	if (typeof source.openDownloadStream === 'function') return false;
 	return classify(source, dest).kind === 'direct' && typeof dest.writeFiles === 'function';
 }

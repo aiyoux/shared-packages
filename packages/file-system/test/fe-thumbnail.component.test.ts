@@ -196,6 +196,35 @@ describe('FeThumbnail', () => {
 		render(FeThumbnail, { props: { entry, driver, maxDim: 32, enabled: true } });
 		expect(document.querySelector('[data-testid="fe-thumb-load"]')).toBeNull();
 		expect(document.querySelector('.fe-thumb-img')).toBeNull();
+		const mark = document.querySelector('[data-testid="fe-type-mark"]');
+		expect(mark?.getAttribute('data-icon')).toBe('file-text');
+		expect(mark?.getAttribute('data-ext')).toBe('txt');
+		expect(mark?.textContent).toMatch(/txt/);
+	});
+
+	it('shows the music icon and wav under an audio thumbnail', async () => {
+		const driver: ExplorerDriver = {
+			id: 'local',
+			capabilities: caps,
+			ready: async () => {},
+			list: async () => ({ entries: [], truncated: false }),
+			getPath: async () => [],
+			delete: async () => {},
+			readBlob: async () => new Blob(['RIFF'], { type: 'audio/wav' })
+		};
+		const entry: ExplorerEntry = {
+			id: 'take-1',
+			kind: 'file',
+			name: 'take.WAV',
+			parentId: null,
+			fileType: 'audio'
+		};
+		render(FeThumbnail, { props: { entry, driver, maxDim: 96, enabled: true } });
+		const mark = document.querySelector('[data-testid="fe-type-mark"]');
+		expect(mark?.getAttribute('data-icon')).toBe('music');
+		expect(mark?.getAttribute('data-ext')).toBe('wav');
+		expect(mark?.textContent).toMatch(/wav/);
+		expect(document.querySelector('[data-testid="fe-thumb-load"]')).toBeNull();
 	});
 
 	it('does not auto-download a B2 image; click loads it', async () => {
@@ -298,6 +327,7 @@ describe('FeThumbnail', () => {
 			});
 			expect(download).not.toHaveBeenCalled();
 			expect(document.querySelector('.fe-thumb-img')).toBeNull();
+			expect(document.querySelector('[data-testid="fe-thumb-play"]')).toBeNull();
 		} finally {
 			vi.unstubAllGlobals();
 		}
@@ -332,10 +362,51 @@ describe('FeThumbnail', () => {
 			await waitFor(() => {
 				expect(document.querySelector('.fe-thumb-img')).toBeTruthy();
 			});
+			const mark = document.querySelector('[data-testid="fe-thumb-play"]');
+			expect(mark).toBeTruthy();
+			expect(mark?.getAttribute('aria-hidden')).toBe('true');
+			expect(getComputedStyle(mark as Element).pointerEvents).toBe('none');
 			expect(download).not.toHaveBeenCalled();
 		} finally {
 			vi.unstubAllGlobals();
 		}
+	});
+
+	it('puts a play mark on a video poster and leaves stills unmarked', async () => {
+		const driver: ExplorerDriver = {
+			id: 'local',
+			capabilities: caps,
+			ready: async () => {},
+			list: async () => ({ entries: [], truncated: false }),
+			getPath: async () => [],
+			delete: async () => {},
+			readBlob: async () => pngBlob()
+		};
+		const video: ExplorerEntry = {
+			id: 'clip-1',
+			kind: 'file',
+			name: 'clip.mp4',
+			parentId: null,
+			fileType: 'video'
+		};
+		const view = render(FeThumbnail, { props: { entry: video, driver, maxDim: 64, enabled: true } });
+		await waitFor(() => {
+			expect(document.querySelector('[data-testid="fe-thumb-play"]')).toBeTruthy();
+		});
+		view.unmount();
+
+		const still: ExplorerEntry = {
+			id: 'pic-1',
+			kind: 'file',
+			name: 'pic.png',
+			parentId: null,
+			fileType: 'image'
+		};
+		render(FeThumbnail, { props: { entry: still, driver, maxDim: 64, enabled: true } });
+		await waitFor(() => {
+			expect(document.querySelector('.fe-thumb-img')).toBeTruthy();
+		});
+		expect(document.querySelector('[data-testid="fe-thumb-play"]')).toBeNull();
 	});
 
 	it('shows a cached thumbnail after unmount and after a refresh, and rebuilds when generation changes', async () => {

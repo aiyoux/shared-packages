@@ -405,6 +405,14 @@ describe('FeFloatingPreview', () => {
 		expect(screen.getByTestId('fe-meta-probe').textContent).toBe(entry.name);
 		expect(toggle.getAttribute('aria-expanded')).toBe('true');
 		expect(getComputedStyle(pop).position).toBe('absolute');
+		const close = screen.getByTestId('fe-float-meta-close');
+		expect(pop.contains(close)).toBe(true);
+		expect(close.getAttribute('aria-label')).toBe('Close metadata');
+		await fireEvent.click(close);
+		expect(screen.queryByTestId('fe-float-meta')).toBeNull();
+		expect(toggle.getAttribute('aria-expanded')).toBe('false');
+		await fireEvent.click(toggle);
+		expect(screen.getByTestId('fe-float-meta')).toBeTruthy();
 		await fireEvent.click(toggle);
 		expect(screen.queryByTestId('fe-float-meta')).toBeNull();
 	});

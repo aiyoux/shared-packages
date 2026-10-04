@@ -55,6 +55,20 @@ describe('measureFolderSize', () => {
 		assert.equal(formatFolderMeasure(measure), '16 B');
 	});
 
+	it('measures the driver root when the folder id is null', async () => {
+		const tree = new Map<string, ExplorerEntry[]>([
+			['', [
+				{ id: 'a.txt', parentId: null, name: 'a.txt', kind: 'file', size: 4 },
+				{ id: 'sub', parentId: null, name: 'sub', kind: 'folder' }
+			]],
+			['sub', [child('b.txt', 'sub', 'file', 6)]]
+		]);
+		const measure = await measureFolderSize(driverFrom(tree), null);
+		assert.equal(measure.bytes, 10);
+		assert.equal(measure.files, 2);
+		assert.equal(measure.folders, 1);
+	});
+
 	it('ignores rows that belong to another parent and files with no size', async () => {
 		const tree = new Map<string, ExplorerEntry[]>([
 			['root', [

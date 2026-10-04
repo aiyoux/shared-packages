@@ -39,6 +39,11 @@
 			"svelte": "./src/bytes.ts",
 			"default": "./src/bytes.ts"
 		},
+		"./waveform": {
+			"types": "./src/waveform/index.ts",
+			"svelte": "./src/waveform/index.ts",
+			"default": "./src/waveform/index.ts"
+		},
 		"./subscribeStorageKey": {
 			"types": "./src/subscribeStorageKey.ts",
 			"svelte": "./src/subscribeStorageKey.ts",

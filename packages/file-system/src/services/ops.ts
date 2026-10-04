@@ -4,7 +4,7 @@ import { tabOwner, watchOwner, currentTabDirectory, type Owner } from './owner.j
 import { serviceNames } from './names.js';
 import { createRecordStore, type RecordStore } from './store.js';
 
-export type OpKindId = 'copy' | 'extract' | 'compress' | 'encrypt' | 'decrypt' | 'import' | 'send' | 'receive' | 'transcribe' | 'speak' | 'generate' | 'video' | 'audio-tool' | 'chat' | 'agent-access' | 'agent-edit' | 'model-load';
+export type OpKindId = 'copy' | 'extract' | 'compress' | 'encrypt' | 'decrypt' | 'import' | 'send' | 'receive' | 'transcribe' | 'speak' | 'generate' | 'video' | 'audio-tool' | 'chat' | 'agent-access' | 'agent-edit' | 'model-load' | 'open-copy' | 'save-back';
 export type OpState = 'queued' | 'running' | 'paused' | 'done' | 'failed' | 'cancelled' | 'stopped' | 'landed';
 export type Endpoint = { kind: 'browser' | 'monitor' | 'b2' | 'device' | 'provider'; label: string };
 export type OpWhere = { executor: 'this-browser' | 'monitor' | 'device'; from?: Endpoint; to?: Endpoint; route?: 'server' | 'delegated' | 'webrtc' | 'dual-phase' | 'direct' | 'p2p' | 'face'; note?: string };
@@ -17,10 +17,10 @@ export type LandingAddress =
 export type ResultRef = { kind: 'browser-model'; modelId: string } | { kind: 'vfs-file'; fileId: string; name?: string } | { kind: 'session'; sessionId: string } | { kind: 'monitor-path'; profileId: string; path: string } | { kind: 'opfs-file'; path: string; contentType: string };
 export type OpDestination = { driverId: string; endpointKey?: string; parentId: string | null; entryKind?: 'file' | 'folder' };
 export type ChatOpContext = { userText: string; connection: { name: string; model: string; offerId?: string } };
-export type OpRecord = { chat?: ChatOpContext; destination?: OpDestination; id: string; kind: OpKindId; app: string; title: string; owner: Owner; where: OpWhere; state: OpState; error?: string; landing?: LandingAddress; result?: ResultRef; resumable: boolean; createdAt: number; endedAt?: number; dismissed?: number; landingError?: string; monitorAcknowledged?: boolean };
-export type OpProgress = { id: string; done: number; total?: number; ahead?: number; note?: string };
+export type OpRecord = { chat?: ChatOpContext; destination?: OpDestination; id: string; kind: OpKindId; app: string; title: string; owner: Owner; windowId?: string; where: OpWhere; state: OpState; error?: string; landing?: LandingAddress; result?: ResultRef; resumable: boolean; createdAt: number; endedAt?: number; dismissed?: number; landingError?: string; monitorAcknowledged?: boolean };
+export type OpProgress = { id: string; done: number; total?: number; ahead?: number; note?: string; route?: OpWhere['route']; ice?: 'checking' | 'connected' | 'failed'; icePath?: 'host' | 'stun' };
 export type OpFrame = { kind: 'changed'; id: string } | { kind: 'progress'; progress: OpProgress } | { kind: 'cancel'; id: string } | { kind: 'hello' };
-export type StartOp = Pick<OpRecord, 'kind' | 'app' | 'title' | 'where'> & { id?: string; owner?: Owner; chat?: ChatOpContext; landing?: LandingAddress; signal?: AbortSignal; resumable?: boolean; destination?: OpDestination };
+export type StartOp = Pick<OpRecord, 'kind' | 'app' | 'title' | 'where' | 'windowId'> & { id?: string; owner?: Owner; chat?: ChatOpContext; landing?: LandingAddress; signal?: AbortSignal; resumable?: boolean; destination?: OpDestination };
 export type OpHandle = { id: string; signal: AbortSignal; progress(progress: Omit<OpProgress, 'id'>): void; done(result?: ResultRef, landed?: boolean): Promise<void>; fail(error: unknown): Promise<void>; cancelled(): Promise<void>; onCancelRequest(fn: () => void): () => void };
 export const isActiveOp = (op: OpRecord) => op.state === 'queued' || op.state === 'running' || op.state === 'paused';
 
@@ -104,7 +104,7 @@ export function createOpsService(options: {
    try {
     const op = await store.mutate(id, (current) => {
      if (current) throw new Error(`Operation ${id} already exists`);
-     return { id, kind: input.kind, app: input.app, title: input.title, where: input.where, owner, landing: input.landing, chat: input.chat, destination: input.destination, state: 'running', resumable: input.resumable ?? false, createdAt: Date.now() };
+     return { id, kind: input.kind, app: input.app, title: input.title, where: input.where, owner, windowId: input.windowId, landing: input.landing, chat: input.chat, destination: input.destination, state: 'running', resumable: input.resumable ?? false, createdAt: Date.now() };
     });
     if (!op) throw new Error('Operation was not saved');
     observe(op); notify(); bus.broadcast({ kind: 'changed', id });

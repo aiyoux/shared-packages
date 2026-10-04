@@ -134,6 +134,10 @@ export function installLockPolyfill(): LockHarness {
 				);
 				pump(name);
 			});
+		},
+		query() {
+			const names = [...held.entries()].filter(([, on]) => on).map(([name]) => ({ name }));
+			return Promise.resolve({ held: names, pending: [] as { name: string }[] });
 		}
 	};
 

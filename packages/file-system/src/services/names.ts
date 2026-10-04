@@ -12,5 +12,9 @@ export const serviceNames = {
  recordStore: 'records',
  monitorLock: (profileId: string) => `scratchpad:monitor:${profileId}`,
  monitorBus: (profileId: string) => `scratchpad:monitor:${profileId}:bus`,
- landLock: (id: string) => `scratchpad:op:${id}:land`
+ landLock: (id: string) => `scratchpad:op:${id}:land`,
+ /** Held while one tab sends a working copy back; queued tabs re-check after. */
+ remoteCopy: (nodeId: string) => `scratchpad:remote-copy:${nodeId}`,
+ remoteCopiesIndex: 'scratchpad:remote-copies:index',
+ remoteCopiesBus: 'scratchpad:remote-copies'
 } as const;

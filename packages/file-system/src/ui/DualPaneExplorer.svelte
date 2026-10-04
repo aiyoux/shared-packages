@@ -34,8 +34,17 @@
 		RemoteKind
 	} from './componentTypes.js';
 	import type { FileTypeId } from '../types.js';
-	import { requestArchiveDialogShow } from './archiveReshow.js';
+	import OpProgressChip from './OpProgressChip.svelte';
 	import DualPhaseConfirm from './DualPhaseConfirm.svelte';
+	import RemoteOpenPrompt from './RemoteOpenPrompt.svelte';
+	import { getPreviewKind } from './feThumbnails.js';
+	import {
+		runRemoteOpen,
+		startRemoteCopySync,
+		type RemoteOpenAlternative,
+		type RemoteOpenChoice,
+		type RemoteOpenPlan
+	} from '../services/remoteCopies.js';
 	import { generateId } from '../id.js';
 	import {
 		type ExplorerDriver,
@@ -313,6 +322,20 @@
 			pairingId: string,
 			drain: ExplorerUnlinkDrain
 		) => void | Promise<void>;
+		/**
+		 * Other ways to open a remote file, offered in the Open prompt beside
+		 * copying it (a PDF's first page). The host runs the one chosen.
+		 */
+		remoteOpenAlternatives?: (
+			entry: ExplorerEntry,
+			driver: ExplorerDriver,
+			plan: RemoteOpenPlan
+		) => RemoteOpenAlternative[];
+		onRemoteOpenAlternative?: (
+			id: string,
+			entry: ExplorerEntry,
+			driver: ExplorerDriver
+		) => void | Promise<void>;
 	};
 
 	let {
@@ -320,6 +343,8 @@
 		onOpen,
 		onClose,
 		openRemotes = false,
+		remoteOpenAlternatives,
+		onRemoteOpenAlternative,
 		accept,
 		hideIncompatible = false,
 		openLabel,
@@ -383,6 +408,9 @@
 	}: Props = $props();
 
 	const persistKey = $derived(instanceKey ? `${dualPaneKey}:${instanceKey}` : dualPaneKey);
+	const fallbackWindowId = crypto.randomUUID();
+	/** Pane id when the host has one. Otherwise this mount is its own window. */
+	const originWindowId = $derived(instanceKey || fallbackWindowId);
 	const windowsLayoutId = $derived(instanceKey ? `files-${instanceKey}` : 'files');
 	const hostSettings = $derived(Boolean(settingsPortal) && !hideSettingsGear);
 	const pairInfoInChrome = $derived(!hideToggles);
@@ -528,6 +556,11 @@
 		sourceLabel: string;
 		destLabel: string;
 		resolve: (ok: boolean) => void;
+	} | null>(null);
+	let remoteOpenPrompt = $state<{
+		plan: RemoteOpenPlan;
+		alternatives: RemoteOpenAlternative[];
+		resolve: (choice: RemoteOpenChoice) => void;
 	} | null>(null);
 	let osDropPane = $state<PaneId | null>(null);
 	let dualRootEl = $state<HTMLDivElement | null>(null);
@@ -703,8 +736,62 @@
 	function paneFileOpen(id: PaneId) {
 		if (!onOpen) return undefined;
 		const kind = paneState(id).activeKind;
+		// A remote file opens as a working copy in browser files, so every app
+		// opens it, edits it and saves it like a local file. Import pickers
+		// (`openRemotes`) want the bytes once and keep their own path.
+		if ((kind === 'monitor' || kind === 'b2') && !openRemotes && !isPeerPane(id)) {
+			return (entry: ExplorerOpenTarget) => openRemoteFile(id, entry);
+		}
 		if (kind !== 'local' && kind !== 'memory' && kind !== 'monitor') return undefined;
 		return (entry: ExplorerOpenTarget) => onOpen(entry, paneOpenProjectContext(id));
+	}
+
+	function askRemoteOpen(
+		plan: RemoteOpenPlan,
+		alternatives: RemoteOpenAlternative[]
+	): Promise<RemoteOpenChoice> {
+		return new Promise((resolve) => {
+			remoteOpenPrompt = { plan, alternatives, resolve };
+		});
+	}
+
+	function answerRemoteOpen(choice: RemoteOpenChoice) {
+		const resolve = remoteOpenPrompt?.resolve;
+		remoteOpenPrompt = null;
+		resolve?.(choice);
+	}
+
+	/**
+	 * Open a monitor or B2 file: ask first when the copy would be slow (or
+	 * cannot happen), copy it into browser files (or reuse the copy already
+	 * here), then hand the app the local file.
+	 */
+	async function openRemoteFile(id: PaneId, target: ExplorerOpenTarget) {
+		if (!onOpen) return;
+		const driver = activeDriver(paneState(id), id);
+		// FileExplorer hands over its row, which carries size and mtime.
+		const entry = target as ExplorerEntry;
+		if (entry.kind !== 'file') return onOpen(target, paneOpenProjectContext(id));
+		try {
+			startRemoteCopySync();
+			const outcome = await runRemoteOpen({
+				driver,
+				entry,
+				image: getPreviewKind(entry) === 'image',
+				windowId: originWindowId,
+				alternativesFor: remoteOpenAlternatives,
+				ask: askRemoteOpen,
+				onAlternative: onRemoteOpenAlternative,
+				open: (node) =>
+					onOpen({ id: node.id, kind: 'file', name: node.name, fileType: node.fileType }, { kind: 'local' })
+			});
+			if (outcome.kind === 'opened' && outcome.conflict) {
+				toast.info(`${entry.name} changed where it is stored and on this device. Opened this device's copy.`);
+			}
+		} catch (e) {
+			if (e instanceof Error && e.name === 'AbortError') toast.info('Open cancelled');
+			else toast.error(formatExplorerError(e));
+		}
 	}
 
 	function setPane(id: PaneId, patch: Partial<PaneState>) {
@@ -1392,7 +1479,7 @@
 			if (ev.entryKind !== 'folder') reporter?.onFile(ev);
 		};
 		try {
-			reporter = await createDeviceImportReporter(drv, parent);
+			reporter = await createDeviceImportReporter(drv, parent, originWindowId);
 			const nodes = await pending;
 			if (!nodes.length) { reporter.done(); return; }
 			await importOsDropToDriver(drv, parent, nodes, {
@@ -1765,7 +1852,8 @@
 				sourceEntries: src.ctx.entries,
 				destParentId: destParent,
 				confirmDualPhase: () => askDualPhase(sourceLabel, destLabel),
-				signal
+				signal,
+				windowId: originWindowId
 			});
 			if (!destDriver.subscribeChanges) {
 				setPane(destId, {
@@ -1815,7 +1903,8 @@
 				sourceEntries,
 				destParentId,
 				confirmDualPhase: () => askDualPhase(srcLabel, destLabel),
-				signal
+				signal,
+				windowId: originWindowId
 			});
 			if (!destDriver.subscribeChanges) {
 				setPane(destId, {
@@ -1870,7 +1959,8 @@
 				const n = await copyAcross({
 					sourceDriver: srcDriver, destDriver, selectedIds: [id],
 					sourceEntries: [entry], destParentId,
-					confirmDualPhase: () => askDualPhase(srcDriver!.id, paneConnectionLabel(destPaneId))
+					confirmDualPhase: () => askDualPhase(srcDriver!.id, paneConnectionLabel(destPaneId)),
+					windowId: originWindowId
 				});
 				if (!n) throw new Error('File was not copied; the original has been kept');
 				if (payload.mode === 'cut') {
@@ -2184,6 +2274,7 @@
 						{hideIncompatible}
 						{openLabel}
 						variant="panel"
+						opWindowId={originWindowId}
 						{onClose}
 						driver={overrideRight!.driver}
 						showPersistence={hideToggles}
@@ -2249,6 +2340,7 @@
 						{hideIncompatible}
 						{openLabel}
 						variant="panel"
+						opWindowId={originWindowId}
 						{onClose}
 						driver={localDriver}
 						showPersistence={hideToggles}
@@ -2337,6 +2429,7 @@
 						{hideIncompatible}
 						{openLabel}
 						variant="panel"
+						opWindowId={originWindowId}
 						{onClose}
 						driver={drv}
 						showPersistence={hideToggles}
@@ -2460,6 +2553,7 @@
 {#if !hideToggles}
 	<div
 		class="dpe-layout-cluster"
+		data-op-window={originWindowId}
 		class:portaled={Boolean(layoutPortal)}
 		use:portalLayoutCluster
 	>
@@ -2481,7 +2575,7 @@
 				idleNote={pairCopy.copyIdleNote}
 			/>
 		{/if}
-
+		<OpProgressChip windowId={originWindowId} />
 	</div>
 {/if}
 
@@ -2561,6 +2655,15 @@
 			<div class="pane-connecting" role="status">Loading file manager…</div>
 		{/if}
 	</div>
+	{#if remoteOpenPrompt}
+		<RemoteOpenPrompt
+			plan={remoteOpenPrompt.plan}
+			alternatives={remoteOpenPrompt.alternatives}
+			onCopy={() => answerRemoteOpen('copy')}
+			onAlternative={(alternative) => answerRemoteOpen({ alternative })}
+			onCancel={() => answerRemoteOpen('cancel')}
+		/>
+	{/if}
 	{#if dualPhasePrompt}
 		<DualPhaseConfirm
 			sourceLabel={dualPhasePrompt.sourceLabel}

@@ -29,7 +29,7 @@ function abortError(): DOMException {
 	return new DOMException('The operation was aborted.', 'AbortError');
 }
 
-function isDirectChild(entry: ExplorerEntry, parentId: string): boolean {
+function isDirectChild(entry: ExplorerEntry, parentId: string | null): boolean {
 	// A driver that omits parentId is scoped by the list call. One that sets
 	// it (including the flat memory list, where every row is a root) is not.
 	if (entry.parentId === undefined) return true;
@@ -39,16 +39,17 @@ function isDirectChild(entry: ExplorerEntry, parentId: string): boolean {
 /**
  * Sum file sizes under `rootId`. Nested folders are walked. Bytes are the
  * sizes already on each row — this does not read file bodies.
+ * `null` is the driver root (the listing whose parent id is null).
  */
 export async function measureFolderSize(
 	driver: ExplorerDriver,
-	rootId: string,
+	rootId: string | null,
 	opts?: { signal?: AbortSignal; maxEntries?: number }
 ): Promise<FolderMeasure> {
 	const signal = opts?.signal;
 	const maxEntries = opts?.maxEntries ?? FOLDER_SIZE_MAX_ENTRIES;
 	const seen = new Set<string>();
-	const queue = [rootId];
+	const queue: Array<string | null> = [rootId];
 	let bytes = 0;
 	let files = 0;
 	let folders = 0;

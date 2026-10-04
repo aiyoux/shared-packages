@@ -956,11 +956,15 @@ describe('FileExplorer component', () => {
 		expect(root.getAttribute('data-fe-preview-dock')).toBe('bottom');
 		const dock = await screen.findByTestId('fe-preview-dock');
 		expect(dock.getAttribute('data-placement')).toBe('bottom');
-		expect(dock.textContent).toMatch(/Select a file or folder/);
+		await viWaitFor(() => dock.querySelector('[data-testid="fe-file-preview-name"]')?.textContent === 'Root');
+		expect(dock.getAttribute('data-preview-subject')).toBe('open-folder');
+		await viWaitFor(() => /Sketch/.test(dock.querySelector('[data-testid="fe-folder-preview-item"]')?.getAttribute('data-name') || ''));
 
 		const row = document.querySelector('[data-testid="fe-file-row"]') as HTMLElement;
 		await fireEvent.click(row);
-		await viWaitFor(() => /Sketch/.test(dock.textContent || ''));
+		await viWaitFor(() => /Sketch/.test(dock.querySelector('[data-testid="fe-file-preview-name"]')?.textContent || ''));
+		expect(dock.getAttribute('data-preview-subject')).toBe('selection');
+		expect(dock.querySelector('[data-testid="fe-folder-preview"]')).toBeNull();
 		expect(screen.queryByTestId('fe-file-preview')).toBeNull();
 
 		await fireEvent.click(toggle);
@@ -970,6 +974,50 @@ describe('FileExplorer component', () => {
 		await fireEvent.click(toggle);
 		expect(root.getAttribute('data-fe-preview-dock')).toBe('off');
 		expect(screen.queryByTestId('fe-preview-dock')).toBeNull();
+	});
+
+	it('previews the open folder when nothing is selected, then the selected file', async () => {
+		const photos = await vfs.mkdir(null, 'Photos');
+		await vfs.writeFile({
+			parentId: photos.id,
+			name: 'shot.png',
+			body: Uint8Array.from([1, 2, 3]),
+			contentType: 'image/png'
+		});
+		await vfs.writeFile({
+			parentId: null,
+			name: 'notes.txt',
+			body: 'hi',
+			contentType: 'text/plain'
+		});
+		render(FileExplorer, { props: { mode: 'manage', vfs, variant: 'panel' } });
+		await viWaitForRows(1);
+		await viWaitFor(() => !!document.querySelector('[data-testid="fe-folder-row"][data-name="Photos"]'));
+		await fireEvent.click(screen.getByTestId('fe-preview-layout'));
+		const dock = await screen.findByTestId('fe-preview-dock');
+		await viWaitFor(() => dock.querySelector('[data-testid="fe-file-preview-name"]')?.textContent === 'Root');
+		await viWaitFor(() => !!dock.querySelector('[data-testid="fe-folder-preview-item"][data-name="Photos"]'));
+		expect(dock.querySelector('[data-testid="fe-folder-preview-item"][data-name="notes.txt"]')).toBeTruthy();
+		expect(dock.querySelector('[data-name="shot.png"]')).toBeNull();
+
+		const folderRow = document.querySelector('[data-testid="fe-folder-row"][data-name="Photos"]') as HTMLElement;
+		await fireEvent.dblClick(folderRow);
+		await viWaitFor(() => dock.querySelector('[data-testid="fe-file-preview-name"]')?.textContent === 'Photos');
+		expect(document.querySelector('.fe-row.selected')).toBeNull();
+		await viWaitFor(() => !!dock.querySelector('[data-testid="fe-folder-preview-item"][data-name="shot.png"]'));
+		expect(dock.querySelector('[data-name="notes.txt"]')).toBeNull();
+
+		const fileRow = document.querySelector('[data-testid="fe-file-row"][data-name="shot.png"]') as HTMLElement;
+		await fireEvent.click(fileRow);
+		await viWaitFor(() => dock.querySelector('[data-testid="fe-file-preview-name"]')?.textContent === 'shot.png');
+		expect(dock.querySelector('[data-testid="fe-folder-preview"]')).toBeNull();
+
+		const list = screen.getByTestId('fe-list');
+		firePointer('pointerdown', list, { clientX: 5, clientY: 5 });
+		firePointer('pointerup', list, { clientX: 5, clientY: 5 });
+		await viWaitFor(() => dock.querySelector('[data-testid="fe-file-preview-name"]')?.textContent === 'Photos');
+		expect(document.querySelector('.fe-row.selected')).toBeNull();
+		await viWaitFor(() => !!dock.querySelector('[data-testid="fe-folder-preview-item"][data-name="shot.png"]'));
 	});
 
 	it('shows Decompress and Open archive for a zip, and opens an inner filesystem popup', async () => {
@@ -2367,6 +2415,39 @@ describe('FileExplorer component', () => {
 		expect(document.querySelector('[data-testid="fe-folder-row"][data-name=".git"]')).toBeNull();
 		expect(document.querySelector('[data-testid="fe-file-row"][data-name="notes.txt"]')).toBeTruthy();
 		expect(persistKv.getItem('fe:showHidden')).toBe('false');
+	});
+
+	it('icon tiles show a type icon and the extension for non-picture files', async () => {
+		persistKv.setItem('fe:viewMode', 'icons');
+		persistKv.setItem('fe:showPreview', 'true');
+		await vfs.writeFile({ parentId: null, name: 'take.WAV', body: 'RIFFxxxx' });
+		await vfs.writeFile({ parentId: null, name: 'notes.txt', body: 'hi' });
+		await vfs.writeFile({ parentId: null, name: 'pack.zip', body: 'PK' });
+		await vfs.writeFile({ parentId: null, name: 'shot.png', body: 'png' });
+		const album = await vfs.mkdir(null, 'Album');
+		await vfs.writeFile({ parentId: album.id, name: 'song.mp3', body: 'ID3' });
+		render(FileExplorer, { props: { mode: 'manage', vfs, variant: 'panel' } });
+		await viWaitForRows(4);
+		const mark = (name: string) =>
+			document.querySelector(
+				`[data-testid="fe-file-row"][data-name="${name}"] [data-testid="fe-type-mark"]`
+			);
+		await viWaitFor(() => mark('take.WAV') != null);
+		expect(mark('take.WAV')?.getAttribute('data-icon')).toBe('music');
+		expect(mark('take.WAV')?.getAttribute('data-ext')).toBe('wav');
+		expect(mark('take.WAV')?.textContent).toMatch(/wav/);
+		expect(mark('notes.txt')?.getAttribute('data-icon')).toBe('file-text');
+		expect(mark('notes.txt')?.getAttribute('data-ext')).toBe('txt');
+		expect(mark('pack.zip')?.getAttribute('data-icon')).toBe('file-archive');
+		expect(mark('pack.zip')?.getAttribute('data-ext')).toBe('zip');
+		const png = document.querySelector('[data-testid="fe-file-row"][data-name="shot.png"]');
+		expect(png?.querySelector('[data-testid="fe-type-mark"]')).toBeNull();
+		await viWaitFor(
+			() =>
+				document.querySelector(
+					`[data-testid="fe-folder-stack"][data-stack-for="${album.id}"] [data-testid="fe-type-mark"][data-icon="music"][data-ext="mp3"]`
+				) != null
+		);
 	});
 });
 

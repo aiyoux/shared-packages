@@ -6,8 +6,15 @@
 	import {
 		coerceMediaBlob,
 		getPreviewKind,
-		renderPdfPageToCanvas
+		openPreviewPdf,
+		type PreviewPdf
 	} from './feThumbnails.js';
+	import { convertedMediaSrc, needsConversion, streamableMediaSrc } from './mediaStream.js';
+	import { RANGED, type MediaTimeline } from './mediaClock.js';
+	import FeVideoPlayer from './FeVideoPlayer.svelte';
+	import FeAudioPlayer from './FeAudioPlayer.svelte';
+	import { peaksFromBlob } from '@shared-packages/ui/waveform';
+	import { fetchByteRange } from './rangedRead.js';
 	import FeTextPreview from './FeTextPreview.svelte';
 	import type { ExplorerDriver, ExplorerEntry } from './explorerDriver.js';
 	import {
@@ -34,7 +41,12 @@
 		sizeText = '',
 		projectState = null,
 		actions,
-		showClose = true
+		showClose = true,
+		/**
+		 * Folder listing parent. Omit to list `entry.id`. `null` is the driver
+		 * root, which has no folder id of its own.
+		 */
+		listParentId = undefined as string | null | undefined
 	}: {
 		entry: ExplorerEntry;
 		/** More than one entry replaces the media stage with the selection list. */
@@ -54,6 +66,7 @@
 		projectState?: boolean | null;
 		actions?: Snippet;
 		showClose?: boolean;
+		listParentId?: string | null;
 	} = $props();
 
 	const multi = $derived(entries.length > 1);
@@ -61,10 +74,27 @@
 	let blobUrl = $state<string | null>(null);
 	let loading = $state(true);
 	let error = $state('');
-	let kind = $derived(getPreviewKind(entry));
+	// A video the browser cannot decode still previews when the host converts it.
+	let kind = $derived(
+		getPreviewKind(entry) ??
+			(needsConversion(entry.name) && typeof driver.convertedMediaUrl === 'function' ? 'video' : null)
+	);
 	const entryKind = $derived(entry.kind);
 	const mediaId = $derived(entry.id);
 	const mediaName = $derived(entry.name);
+	const mediaSize = $derived(entry.size);
+	const RANGED_PDF_ABOVE_BYTES = 8 * 1024 * 1024;
+
+	/** Longest edge of the stage in device pixels, for a host-rendered image. */
+	function stagePixels(): number {
+		if (typeof window === 'undefined') return 1024;
+		// The docked pane is a side panel, never the whole window.
+		if (variant === 'dock') return 1024;
+		const css = Math.max(window.innerWidth, window.innerHeight);
+		return Math.min(4096, Math.max(256, Math.round(css * (window.devicePixelRatio || 1))));
+	}
+	/** Parent passed to `driver.list` for a folder preview. */
+	const folderListParent = $derived(listParentId === undefined ? mediaId : listParentId);
 	let loadedMedia: { id: string; name: string; kind: string; driver: ExplorerDriver } | null = null;
 	/**
 	 * The image viewer carries the actions in its own chrome, so the bottom bar
@@ -75,7 +105,85 @@
 	const actionsInViewer = $derived(
 		!multi && kind === 'image' && !!blobUrl && !!loadMedia && !loading && !error
 	);
-	let pdfBlob = $state<Blob | null>(null);
+	let pdfDoc = $state<PreviewPdf | null>(null);
+	/** Set while the player streams by ranges; a failed stream falls back to bytes. */
+	let streamedFrom: { id: string; name: string; driver: ExplorerDriver; converted: boolean } | null = null;
+	/**
+	 * A converted stream has no ranges: it plays from where it was started
+	 * (`start`), and a seek past what it holds restarts it there. The players
+	 * show the file's time either way (`mediaClock.ts`).
+	 */
+	let converted = $state<{ duration?: number; start: number } | null>(null);
+	const mediaTimeline = $derived<MediaTimeline>(
+		converted ? { start: converted.start, duration: converted.duration, restartable: true } : RANGED
+	);
+
+	/** Restart the converted stream at file second `seconds`; the player stays. */
+	async function restartAt(seconds: number) {
+		const from = streamedFrom;
+		if (!from?.converted || from.id !== entry?.id) return;
+		const next = await convertedMediaSrc(from.driver, from.id, from.name, seconds).catch(() => null);
+		if (!next || entry?.id !== from.id) return;
+		// The host may start a copied video on the keyframe before `seconds`.
+		converted = { duration: next.duration ?? converted?.duration, start: next.start ?? seconds };
+		blobUrl = next.src;
+	}
+
+	/** Waveform bars for the audio player. */
+	let audioPeaks = $state<number[] | null>(null);
+	let peaksLoading = $state(false);
+	/** Below this a remote file is decoded here for its waveform; above it only the host's peaks are used. */
+	const BROWSER_PEAKS_MAX_BYTES = 32 * 1024 * 1024;
+
+	async function peaksFor(d: ExplorerDriver, id: string, size: number | undefined, blob?: Blob): Promise<number[] | null> {
+		if (blob) return (await peaksFromBlob(blob, 50)).samples;
+		const host = await d.audioPeaks?.(id, { n: 1200 }).catch(() => null);
+		if (host?.peaks.length) return host.peaks;
+		if (size !== undefined && size <= BROWSER_PEAKS_MAX_BYTES && canReadExplorerBlob(d)) {
+			return (await peaksFromBlob(await readExplorerBlob(d, id), 50)).samples;
+		}
+		return null;
+	}
+
+	function startPeaks(d: ExplorerDriver, id: string, size: number | undefined, blob?: Blob) {
+		peaksLoading = true;
+		void peaksFor(d, id, size, blob)
+			.catch(() => null)
+			.then((p) => {
+				if (entry?.id !== id) return;
+				audioPeaks = p;
+				peaksLoading = false;
+			});
+	}
+
+	/** The stream would not play: try the host's converted stream, then bytes. */
+	async function streamFailed() {
+		const from = streamedFrom;
+		streamedFrom = null;
+		if (!from || from.id !== entry?.id) return;
+		loading = true;
+		try {
+			if (!from.converted) {
+				const next = await convertedMediaSrc(from.driver, from.id, from.name);
+				if (next && entry?.id === from.id) {
+					streamedFrom = { ...from, converted: true };
+					converted = { duration: next.duration, start: 0 };
+					blobUrl = next.src;
+					return;
+				}
+			}
+			const src = await loadExplorerMediaSrc(from.driver, from.id);
+			if (entry?.id !== from.id) {
+				if (src.url.startsWith('blob:')) URL.revokeObjectURL(src.url);
+				return;
+			}
+			blobUrl = src.url;
+		} catch (err) {
+			error = formatPreviewReadError(err);
+		} finally {
+			loading = false;
+		}
+	}
 	let pdfFallbackUrl = $state<string | null>(null);
 
 	let metaOpen = $state(false);
@@ -224,12 +332,13 @@
 	async function calculateFolderSize() {
 		if (entryKind !== 'folder' || folderMeasureBusy) return;
 		const id = mediaId;
+		const parent = folderListParent;
 		const signal = measureAbort?.signal;
 		if (!signal || signal.aborted) return;
 		folderMeasureBusy = true;
 		folderMeasureError = '';
 		try {
-			const result = await measureFolderSize(driver, id, { signal });
+			const result = await measureFolderSize(driver, parent, { signal });
 			if (signal.aborted || mediaId !== id) return;
 			folderMeasure = result;
 		} catch (err) {
@@ -243,10 +352,11 @@
 	$effect(() => {
 		if (multi || entryKind !== 'folder') return;
 		const id = mediaId;
+		const parent = folderListParent;
 		const d = driver;
 		let cancelled = false;
 		void d
-			.list({ parentId: id })
+			.list({ parentId: parent })
 			.then((result) => {
 				if (cancelled) return;
 				folderList = {
@@ -274,6 +384,8 @@
 
 	onDestroy(() => {
 		revokeUrl();
+		pdfDoc?.close();
+		pdfDoc = null;
 	});
 
 	function revokeUrl() {
@@ -287,6 +399,7 @@
 
 	$effect(() => {
 		const e = { id: mediaId, name: mediaName };
+		const entrySize = mediaSize;
 		const d = driver;
 		const k = kind;
 		const shouldLoad = loadMedia && !multi;
@@ -329,18 +442,25 @@
 		// untrack: see comment above — must not make this effect depend on
 		// `blobUrl`, or assigning it after the fetch resolves would loop.
 		untrack(revokeUrl);
+		streamedFrom = null;
+		converted = null;
+		audioPeaks = null;
+		peaksLoading = false;
 		loading = true;
 		error = '';
 		pdfPageCount = 0;
 		pdfCurrentPage = 0;
-		pdfBlob = null;
+		untrack(() => pdfDoc?.close());
+		pdfDoc = null;
 		imageSize = { w: 1, h: 1 };
 
 		(async () => {
 			try {
 				if (k === 'image' && d.thumbUrl) {
 					try {
-						const loc = await d.thumbUrl(e.id, { maxDim: 1024 });
+						// The host renders it at the size it is shown, so a large
+						// photo is viewed without its original leaving the host.
+						const loc = await d.thumbUrl(e.id, { maxDim: stagePixels() });
 						if (cancelled) return;
 						if (loc?.url) {
 							const src = await embedMediaUrl(loc.url);
@@ -357,6 +477,48 @@
 						/* fall through to bytes */
 					}
 				}
+				if (k === 'video' || k === 'audio') {
+					// Played by ranges: only the part around the playhead moves. A
+					// container the browser cannot play goes to the converter first.
+					const conv = needsConversion(e.name) ? await convertedMediaSrc(d, e.id, e.name) : null;
+					const streamed = conv?.src ?? (await streamableMediaSrc(d, e.id, e.name));
+					if (cancelled) return;
+					if (streamed) {
+						blobUrl = streamed;
+						streamedFrom = { id: e.id, name: e.name, driver: d, converted: conv !== null };
+						converted = conv ? { duration: conv.duration, start: 0 } : null;
+						if (k === 'audio') startPeaks(d, e.id, entrySize);
+						loadedMedia = { id: e.id, name: e.name, kind: k, driver: d };
+						loading = false;
+						return;
+					}
+				}
+				// A big PDF opens by ranges: pdf.js reads about one chunk per page
+				// plus what page 1 draws. A small one is cheaper read whole.
+				if (k === 'pdf' && d.rangeUrl && entrySize !== undefined && entrySize > RANGED_PDF_ABOVE_BYTES) {
+					const loc = await d.rangeUrl(e.id).catch(() => null);
+					if (cancelled) return;
+					if (loc?.url) {
+						const url = loc.url;
+						const doc = await openPreviewPdf({
+							url,
+							size: entrySize,
+							read: async (begin, end) => (await fetchByteRange(url, begin, end - 1)).bytes
+						});
+						if (cancelled) {
+							doc.close();
+							return;
+						}
+						pdfDoc = doc;
+						loading = false;
+						await tick();
+						if (cancelled || !pdfCanvas) return;
+						await doc.render(pdfCanvas, 0, 1000);
+						pdfPageCount = doc.pageCount;
+						pdfCurrentPage = 0;
+						return;
+					}
+				}
 				if (k === 'image' || k === 'video' || k === 'audio') {
 					const src = await loadExplorerMediaSrc(d, e.id);
 					if (cancelled) {
@@ -366,6 +528,7 @@
 					blobUrl = src.url;
 					loadedMedia = { id: e.id, name: e.name, kind: k, driver: d };
 					loading = false;
+					if (k === 'audio') startPeaks(d, e.id, entrySize, src.blob);
 					return;
 				}
 
@@ -379,7 +542,6 @@
 				const typed = coerceMediaBlob(blob, e.name, k);
 
 				if (k === 'pdf') {
-					pdfBlob = typed;
 					// Canvas is behind `{#if loading}` — drop the spinner first so
 					// bind:this can attach, then wait for that DOM flush.
 					loading = false;
@@ -390,7 +552,14 @@
 						return;
 					}
 					try {
-						pdfPageCount = await renderPdfPageToCanvas(pdfCanvas, typed, 0, 1000);
+						const doc = await openPreviewPdf({ blob: typed });
+						if (cancelled) {
+							doc.close();
+							return;
+						}
+						pdfDoc = doc;
+						await doc.render(pdfCanvas, 0, 1000);
+						pdfPageCount = doc.pageCount;
 						pdfCurrentPage = 0;
 					} catch {
 						if (cancelled) return;
@@ -415,9 +584,9 @@
 	});
 
 	async function renderPage(pageIdx: number) {
-		if (!pdfBlob || !pdfCanvas) return;
+		if (!pdfDoc || !pdfCanvas) return;
 		try {
-			await renderPdfPageToCanvas(pdfCanvas, pdfBlob, pageIdx, 1000);
+			await pdfDoc.render(pdfCanvas, pageIdx, 1000);
 			pdfCurrentPage = pageIdx;
 		} catch (err) {
 			error = err instanceof Error ? err.message : 'Failed to render page';
@@ -635,12 +804,25 @@
 					/>
 				</PanZoomViewport>
 			{:else if kind === 'video' && blobUrl}
-				<!-- svelte-ignore a11y_media_has_caption -->
-				<video class="fe-float-video" src={blobUrl} controls playsinline preload="metadata"></video>
+				<FeVideoPlayer
+					src={blobUrl}
+					name={entry.name}
+					timeline={mediaTimeline}
+					onRestart={(at) => void restartAt(at)}
+					onError={() => void streamFailed()}
+					testid="fe-float-video"
+				/>
 			{:else if kind === 'audio' && blobUrl}
 				<div class="fe-float-audio" data-testid="fe-float-audio">
-					<FeIcon name="music" size={48} />
-					<audio class="fe-float-audio-player" src={blobUrl} controls preload="metadata"></audio>
+					<FeAudioPlayer
+						src={blobUrl}
+						name={entry.name}
+						peaks={audioPeaks}
+						{peaksLoading}
+						timeline={mediaTimeline}
+						onRestart={(at) => void restartAt(at)}
+						onError={() => void streamFailed()}
+					/>
 				</div>
 			{:else if kind === 'pdf' && pdfFallbackUrl}
 				<iframe class="fe-float-pdf-frame" title={entry.name} src={pdfFallbackUrl}></iframe>
@@ -667,7 +849,18 @@
 					style:max-height={metaAnchor ? `${metaAnchor.maxHeight}px` : null}
 					style:visibility={metaAnchor ? null : 'hidden'}
 				>
-					{@render mediaMeta({ entry, load: () => readExplorerBlob(driver, entry.id) })}
+					<button
+						type="button"
+						class="fe-float-meta-close"
+						data-testid="fe-float-meta-close"
+						aria-label="Close metadata"
+						onclick={() => (metaOpen = false)}
+					>
+						<FeIcon name="x" size={14} />
+					</button>
+					<div class="fe-float-meta-body">
+						{@render mediaMeta({ entry, load: () => readExplorerBlob(driver, entry.id) })}
+					</div>
 				</div>
 			{/if}
 		</div>
@@ -861,12 +1054,36 @@
 		z-index: 4;
 		top: 8px;
 		left: 8px;
+		display: flex;
+		flex-direction: column;
 		width: min(22rem, calc(100% - 16px));
 		max-height: calc(100% - 16px);
-		overflow: auto;
+		overflow: hidden;
 		background: var(--surface-2);
 		border: 1px solid var(--line-hairline);
 		border-radius: 6px;
+	}
+	.fe-float-meta-close {
+		align-self: flex-end;
+		flex-shrink: 0;
+		margin: 2px 2px 0 0;
+		background: none;
+		border: none;
+		color: var(--text-secondary, #aaa);
+		cursor: pointer;
+		padding: 2px;
+		border-radius: 4px;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+	}
+	.fe-float-meta-close:hover {
+		background: var(--surface-3, #2a2a2a);
+		color: var(--text-primary, #fff);
+	}
+	.fe-float-meta-body {
+		min-height: 0;
+		overflow: auto;
 	}
 	.fe-float-body.text,
 	.fe-float-body.image,
@@ -1002,23 +1219,15 @@
 		object-fit: fill;
 		display: block;
 	}
-	.fe-float-video {
-		max-width: 100%;
-		max-height: 100%;
-		display: block;
-	}
 	.fe-float-audio {
 		display: flex;
 		flex-direction: column;
 		align-items: center;
 		justify-content: center;
 		gap: 1.25rem;
-		width: min(28rem, calc(100% - 2rem));
+		width: min(44rem, calc(100% - 2rem));
 		padding: 1.5rem 1rem;
 		color: var(--text-muted, #888);
-	}
-	.fe-float-audio-player {
-		width: 100%;
 	}
 	.fe-float-pdf {
 		display: flex;

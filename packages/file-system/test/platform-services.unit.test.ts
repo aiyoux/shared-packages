@@ -76,6 +76,15 @@ describe('origin operations', () => {
   await until(a, () => a.list().length === 0);
   await Promise.all([a.dispose(), b.dispose()]);
  });
+ it('records the window that started an op', async () => {
+  const { a, b } = opsPair();
+  await Promise.all([a.ready, b.ready]);
+  const handle = await a.start({ ...input, windowId: 'pane-a' });
+  assert.equal(a.get(handle.id)?.windowId, 'pane-a');
+  await until(b, () => b.get(handle.id)?.windowId === 'pane-a');
+  await handle.done();
+  await Promise.all([a.dispose(), b.dispose()]);
+ });
  it('rejects an id collision and an attempt to claim another tab as owner', async () => {
   const { a, b } = opsPair(); await Promise.all([a.ready, b.ready]);
   await a.start({ ...input, id: 'fixed' });

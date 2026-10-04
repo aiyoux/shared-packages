@@ -17,6 +17,8 @@ import {
 	canQuickConvertSvg,
 	canQuickEditRaster,
 	coerceMediaBlob,
+	fileExtensionLabel,
+	fileTypeIcon,
 	getPreviewKind,
 	hasRasterThumbnail,
 	generateImageThumbnail,
@@ -73,6 +75,25 @@ describe('getPreviewKind', () => {
 		assert.equal(hasRasterThumbnail('image'), true);
 		assert.equal(hasRasterThumbnail('pdf'), true);
 		assert.equal(hasRasterThumbnail(null), false);
+	});
+});
+
+describe('file type tiles', () => {
+	it('labels the extension and picks a type icon', () => {
+		assert.equal(fileExtensionLabel('take.WAV'), 'wav');
+		assert.equal(fileExtensionLabel('notes.txt'), 'txt');
+		assert.equal(fileExtensionLabel('pack.TAR.GZ'), 'gz');
+		assert.equal(fileExtensionLabel('README'), '');
+		assert.equal(fileExtensionLabel('.wav'), '');
+		assert.equal(fileTypeIcon(file({ name: 'take.WAV' })), 'music');
+		assert.equal(fileTypeIcon(file({ name: 'x', fileType: 'audio' })), 'music');
+		assert.equal(fileTypeIcon(file({ name: 'notes.txt' })), 'file-text');
+		assert.equal(fileTypeIcon(file({ name: 'pack.zip' })), 'file-archive');
+		assert.equal(fileTypeIcon(file({ name: 'pack.zip', contentType: 'text/plain' })), 'file-archive');
+		assert.equal(fileTypeIcon(file({ name: 'clip.webm' })), 'film');
+		assert.equal(fileTypeIcon(file({ name: 'shot.png' })), 'image');
+		assert.equal(fileTypeIcon(file({ name: 'doc.pdf' })), 'file-text');
+		assert.equal(fileTypeIcon(file({ name: 'blob.bin' })), 'file');
 	});
 });
 

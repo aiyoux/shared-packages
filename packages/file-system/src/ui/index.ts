@@ -131,6 +131,7 @@ export {
 	readExplorerBlob,
 	loadExplorerMediaSrc,
 	embedMediaUrl,
+	RemoteChangedError,
 	type ExplorerCapabilities,
 	type ExplorerDriver,
 	type ExplorerEntry,
@@ -149,6 +150,15 @@ export {
 	type QuickConvertSvgContext
 } from './explorerDriver.js';
 export { createLocalExplorerDriver, type LocalExplorerDriverOptions } from './localExplorerDriver.js';
+export { fetchByteRange, readExplorerRange, type ByteRangeResult } from './rangedRead.js';
+export {
+	convertedMediaSrc,
+	needsConversion,
+	setMediaStreamProxy,
+	streamableMediaSrc,
+	type MediaStreamProxy
+} from './mediaStream.js';
+export { default as RemoteOpenPrompt } from './RemoteOpenPrompt.svelte';
 export { portal } from './portal.js';
 export {
 	createMemoryExplorerDriver,

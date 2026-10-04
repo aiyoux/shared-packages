@@ -31,8 +31,15 @@ export function formatMonitorErrorMessage(e: unknown): string {
 			return 'Path not allowed by monitor config (check allowed_path_prefixes).';
 		case 'MONITOR_NOT_FOUND':
 			return 'Path not found on host.';
-		case 'MONITOR_TOO_LARGE':
-			return 'File too large to download (100 MiB cap).';
+		case 'MONITOR_TOO_LARGE': {
+			// In-tab `/read` is the 100 MiB Blob cap. Host copy, pull, and
+			// push reuse `fs.too_large` for their own ceilings; show those.
+			const raw = m.message.replace(/^\[[^\]]+\]\s*/, '').trim();
+			if (!raw || raw === 'MONITOR_TOO_LARGE' || /max read size/i.test(raw)) {
+				return 'File too large to download (100 MiB cap).';
+			}
+			return raw;
+		}
 		default:
 			return m.message || 'Monitor error';
 	}

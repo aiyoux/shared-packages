@@ -42,6 +42,7 @@
 	import { folderIconName, folderMarkClass, type FeIconName } from './feIcons.js';
 	import FeTipIconBtn from './FeTipIconBtn.svelte';
 	import FeArchiveDialog from './FeArchiveDialog.svelte';
+	import OpProgressChip from './OpProgressChip.svelte';
 	import { registerArchiveDialogShow, requestArchiveDialogShow } from './archiveReshow.js';
 	import {
 		createInnerFsSession,
@@ -126,12 +127,14 @@
 	import '@shared-packages/design-system/tooltip.css';
 	import { SplitHandle, toast, appClipboard } from '@shared-packages/ui';
 	import FeThumbnail from './FeThumbnail.svelte';
+	import FeTypeMark from './FeTypeMark.svelte';
 	import FeFolderStack from './FeFolderStack.svelte';
 	import FeTreeView from './FeTreeView.svelte';
 	import FeFloatingPreview from './FeFloatingPreview.svelte';
 	import {
 		canQuickConvertSvg,
 		canQuickEditRaster,
+		fileTypeIcon,
 		getPreviewKind,
 		hasRasterThumbnail
 	} from './feThumbnails.js';
@@ -252,6 +255,12 @@
 		toolbarExtra?: Snippet<[{ variant: 'icon' | 'label' | 'menu' }]>;
 		/** Leading header slot (connection dropdown for DualPaneExplorer). */
 		headerLeading?: Snippet;
+		/**
+		 * Hub window this explorer belongs to. Ops it starts are stamped with
+		 * this id, and the header bar shows only those. A pane, not the tab.
+		 * Empty means this explorer is its own window.
+		 */
+		opWindowId?: string;
 		/** Whether this explorer instance is the active TARGET window. */
 		isTarget?: boolean;
 		/** Handle cross-driver copy across from app clipboard. */
@@ -369,6 +378,7 @@
 		hideToolbarTrash = false,
 		toolbarExtra,
 		headerLeading,
+		opWindowId = '',
 		isTarget = false,
 		onCopyAcrossFromClipboard,
 		presenceByFileId,
@@ -390,6 +400,9 @@
 		onRevokePerson,
 		onUnlinkPerson
 	}: Props = $props();
+
+	const ownOpWindowId = crypto.randomUUID();
+	const originWindowId = $derived(opWindowId || ownOpWindowId);
 
 	// Initial snapshots seed independent state; later edits stay local to this panel.
 	const initialView = untrack(() => initialViewSettings);
@@ -444,6 +457,20 @@
 
 	// svelte-ignore state_referenced_locally -- `initial` prop, by contract.
 	let parentId = $state<string | null>(initialParentId);
+	/** Folder row we navigated into, so the preview can name it before breadcrumbs land. */
+	let navigatedFolder = $state<ExplorerEntry | null>(null);
+	/** Preview identity for the driver root, which has no folder row. */
+	const OPEN_ROOT_PREVIEW_ID = 'fe:open-root';
+	const openFolderEntry = $derived.by((): ExplorerEntry => {
+		if (!parentId) {
+			const name = driver.diskRoot?.name?.trim() || 'Root';
+			return { id: OPEN_ROOT_PREVIEW_ID, kind: 'folder', name, parentId: null };
+		}
+		const live = breadcrumbs.find((folder) => folder.id === parentId);
+		if (live) return live;
+		if (navigatedFolder?.id === parentId) return navigatedFolder;
+		return { id: parentId, kind: 'folder', name: 'Folder', parentId: null };
+	});
 	let nodes = $state<ExplorerEntry[]>([]);
 	let listTruncated = $state(false);
 	let breadcrumbs = $state<ExplorerEntry[]>([]);
@@ -1162,8 +1189,13 @@
 	});
 
 	$effect(() => {
-		const n = previewEntry;
-		const want = hasProjectActions && n?.kind === 'folder';
+		// The dock with an empty selection previews the open folder, so project
+		// detection follows that folder too. The driver root has no real id.
+		const n =
+			previewDock !== 'off' && !(selected.size === 0 && parentId == null) && selected.size <= 1
+				? dockedPreviewEntry()
+				: previewEntry;
+		const want = hasProjectActions && n?.kind === 'folder' && n.id !== OPEN_ROOT_PREVIEW_ID;
 		if (!want || !n) {
 			previewDetectId = null;
 			previewDetectGen++;
@@ -2022,6 +2054,7 @@
 	async function enterFolder(n: ExplorerEntry) {
 		if (n.kind !== 'folder') return;
 		trashOpen = false;
+		navigatedFolder = n;
 		parentId = n.id;
 		selected = new Set();
 		lastSelectedId = null;
@@ -2030,6 +2063,10 @@
 
 	async function goCrumb(id: string | null) {
 		trashOpen = false;
+		navigatedFolder = id
+			? breadcrumbs.find((folder) => folder.id === id) ??
+				(navigatedFolder?.id === id ? navigatedFolder : null)
+			: null;
 		parentId = id;
 		selected = new Set();
 		lastSelectedId = null;
@@ -2639,6 +2676,12 @@
 		return selectedEntries[0] ?? null;
 	}
 
+	/** What the dock shows for one item: the selection, or the open folder when nothing is selected. */
+	function dockedPreviewEntry(): ExplorerEntry | null {
+		if (selected.size > 1) return null;
+		return selectedPrimary() ?? openFolderEntry;
+	}
+
 	function previewTarget(): ExplorerEntry | null {
 		return floatingPreviewEntry ?? previewEntry;
 	}
@@ -2854,7 +2897,7 @@
 				!spec.useHost &&
 				(spec.kind === 'decompress' || spec.kind === 'decrypt');
 
-			await beginArchiveOp(id, spec.kind === 'decompress' ? 'extract' : spec.kind, spec.title, spec.destParentId ?? null, ac.signal, { driverId: driver.id, endpointKey: driver.endpointKey ?? driver.connectionId, executor: spec.useHost ? 'monitor' : 'this-browser', note: spec.useHost ? 'Monitor archive job' : workerEligible ? 'Background archive worker' : 'This tab · main thread' });
+			await beginArchiveOp(id, spec.kind === 'decompress' ? 'extract' : spec.kind, spec.title, spec.destParentId ?? null, ac.signal, { driverId: driver.id, endpointKey: driver.endpointKey ?? driver.connectionId, executor: spec.useHost ? 'monitor' : 'this-browser', note: spec.useHost ? 'Monitor archive job' : workerEligible ? 'Background archive worker' : 'This tab · main thread', windowId: originWindowId });
 
 			let result: Awaited<ReturnType<typeof runArchiveJob>> | undefined;
 			let ranOnWorker = false;
@@ -3943,7 +3986,7 @@
 			if (ev.entryKind !== 'folder') reporter?.onFile(ev);
 		};
 		try {
-			reporter = await createDeviceImportReporter(driver, destParentId);
+			reporter = await createDeviceImportReporter(driver, destParentId, originWindowId);
 			const incoming = await dropNodes;
 			if (!incoming.length) { reporter.done(); return; }
 			await importOsDropToDriver(driver, destParentId, incoming, {
@@ -4238,6 +4281,9 @@
 >
 	<header class="fe-header" data-testid="fe-header">
 		<div class="fe-header-left">
+			{#if !headerLeading}
+				<OpProgressChip windowId={originWindowId} />
+			{/if}
 			{#if headerLeading}
 				<div class="fe-header-leading" data-testid="fe-header-leading">
 					{@render headerLeading()}
@@ -5292,6 +5338,14 @@
 								/>
 							{:else if rasterThumb}
 								<FeThumbnail entry={n} {driver} maxDim={thumbFetchDim} enabled={showPreview} />
+							{:else if n.kind === 'file' && !hasRasterThumbnail(getPreviewKind(n))}
+								<span class="fe-row-icon-fallback">
+									<FeTypeMark
+										entry={n}
+										iconSize={Math.min(72, Math.max(18, Math.round(iconSize * 0.36)))}
+										labelSize={Math.min(15, Math.max(10, Math.round(iconSize * 0.13)))}
+									/>
+								</span>
 							{:else}
 								<span class="fe-row-icon-fallback">
 									<FeIcon name={entryIcon(n)} class={entryMarkClass(n)} size={Math.round(iconSize * 0.5)} />
@@ -5309,7 +5363,11 @@
 								{#if rasterThumb}
 									<FeThumbnail entry={n} {driver} maxDim={rowThumbDim} enabled={showPreview} />
 								{:else}
-									<FeIcon name={entryIcon(n)} class={entryMarkClass(n)} size={rowIconPx} />
+									<FeIcon
+										name={n.kind === 'folder' ? entryIcon(n) : fileTypeIcon(n)}
+										class={entryMarkClass(n)}
+										size={rowIconPx}
+									/>
 								{/if}
 							</span>
 							{#if renamingId === n.id}
@@ -5338,7 +5396,11 @@
 								{#if rasterThumb}
 									<FeThumbnail entry={n} {driver} maxDim={rowThumbDim} enabled={showPreview} />
 								{:else}
-									<FeIcon name={entryIcon(n)} class={entryMarkClass(n)} size={rowIconPx} />
+									<FeIcon
+										name={n.kind === 'folder' ? entryIcon(n) : fileTypeIcon(n)}
+										class={entryMarkClass(n)}
+										size={rowIconPx}
+									/>
 								{/if}
 							</span>
 							{#if renamingId === n.id}
@@ -5407,11 +5469,11 @@
 			onRatioDelta={onPreviewRatioDelta}
 		/>
 		<aside
-			class="fe-preview-dock"
-			class:filled={selected.size > 1 || !!previewEntry}
+			class="fe-preview-dock filled"
 			data-testid="fe-preview-dock"
 			data-placement={previewDock}
 			data-multi={selected.size > 1 ? 'true' : undefined}
+			data-preview-subject={selected.size === 0 ? 'open-folder' : 'selection'}
 			aria-label="File preview"
 		>
 			{#if selected.size > 1}
@@ -5428,22 +5490,22 @@
 					onClose={() => (previewEntry = null)}
 					actions={previewActionBar}
 				/>
-			{:else if previewEntry}
+			{:else if dockedPreviewEntry()}
+				{@const single = dockedPreviewEntry()!}
 				<FeFloatingPreview
 					variant="dock"
-					entry={previewEntry}
+					entry={single}
+					listParentId={selected.size === 0 ? parentId : undefined}
 					{driver}
 					{mediaMeta}
-					loadMedia={explorerThumbsAreEager(driver) || previewMediaId === previewEntry.id}
-					onRequestMedia={() => previewEntry && requestPreviewMedia(previewEntry.id)}
-					infoLine={previewInfoLine(previewEntry)}
-					projectState={previewEntry.kind === 'folder' ? previewIsProject : null}
+					loadMedia={explorerThumbsAreEager(driver) || previewMediaId === single.id}
+					onRequestMedia={() => requestPreviewMedia(single.id)}
+					infoLine={previewInfoLine(single)}
+					projectState={single.kind === 'folder' && single.id !== OPEN_ROOT_PREVIEW_ID ? previewIsProject : null}
 					showClose={false}
 					onClose={() => (previewEntry = null)}
-					actions={previewActionBar}
+					actions={selected.size === 0 ? undefined : previewActionBar}
 				/>
-			{:else}
-				<p class="fe-preview-empty">Select a file or folder</p>
 			{/if}
 		</aside>
 	{/if}
@@ -6760,11 +6822,6 @@
 		flex: 1 1 auto;
 		min-height: 0;
 	}
-	.fe-preview-empty {
-		margin: 0;
-		color: var(--text-muted);
-		font-size: var(--text-sm);
-	}
 	.fe-list {
 		position: relative;
 		flex: 1;
@@ -7510,6 +7567,11 @@
 		background: var(--surface-3);
 	}
 	.fe-row-icon-fallback {
+		width: 100%;
+		height: 100%;
+		display: flex;
+		align-items: center;
+		justify-content: center;
 		color: var(--text-muted);
 	}
 	.fe-row-icon-name {

@@ -3,6 +3,10 @@
 	import type { ExplorerDriver, ExplorerEntry } from './explorerDriver.js';
 	import { formatPreviewReadError } from './explorerError.js';
 	import { decodeTextPreview } from './feThumbnails.js';
+	import { readExplorerRange } from './rangedRead.js';
+
+	/** At least this much of a remote file is read for its preview. */
+	const RANGE_MIN_BYTES = 64 * 1024;
 
 	let {
 		entry,
@@ -39,6 +43,22 @@
 		binary = false;
 		void (async () => {
 			try {
+				// A remote file sends only its start: a character is at most 4
+				// UTF-8 bytes, so this always covers what the preview shows.
+				const want = Math.max(RANGE_MIN_BYTES, cap * 4);
+				const part = d.rangeUrl ? await readExplorerRange(d, e.id, 0, want - 1).catch(() => null) : null;
+				if (cancelled) return;
+				if (part) {
+					const more = (part.total ?? e.size ?? 0) > part.bytes.byteLength;
+					// A cut through a multi-byte character decodes as U+FFFD; drop it.
+					const decoded = await decodeTextPreview(new Blob([part.bytes]), cap);
+					if (cancelled) return;
+					text = more ? decoded.text.replace(/\uFFFD+$/, '') : decoded.text;
+					truncated = decoded.truncated || more;
+					binary = decoded.binary;
+					loading = false;
+					return;
+				}
 				const blob = await readExplorerBlob(d, e.id);
 				if (cancelled) return;
 				if (!blob) {

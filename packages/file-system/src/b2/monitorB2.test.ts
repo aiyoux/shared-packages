@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import 'fake-indexeddb/auto';
+import { EXPLORER_DOWNLOAD_MAX_BYTES, RemoteChangedError, explorerThumbsAreEager } from '../ui/explorerDriver.js';
 import { createMonitorB2Client } from './client.js';
 import { createMonitorB2Driver } from './monitorB2Driver.js';
 import { acquireB2Driver, b2DriverCacheSize, clearB2DriverCacheForTests, releaseB2Driver } from './b2DriverCache.js';
@@ -132,6 +133,55 @@ describe('monitor-held B2 driver', () => {
 		expect((await d.getPath('trip/b.jpg')).map((e) => e.id)).toEqual(['trip/']);
 	});
 
+	it('openDownloadStream skips the Blob cap and reads the download body', async () => {
+		const body = 'streamed-bytes';
+		const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+			const u = new URL(String(input));
+			if (u.pathname.endsWith('/list')) {
+				return new Response(JSON.stringify({ root: '', entries: [], truncated: false }), {
+					status: 200,
+					headers: { 'content-type': 'application/json' }
+				});
+			}
+			if (u.pathname.endsWith('/stat')) {
+				return new Response(
+					JSON.stringify({
+						id: 'big.bin',
+						name: 'big.bin',
+						kind: 'file',
+						size: EXPLORER_DOWNLOAD_MAX_BYTES + 1
+					}),
+					{ status: 200, headers: { 'content-type': 'application/json' } }
+				);
+			}
+			if (u.pathname.endsWith('/download')) {
+				return new Response(body, {
+					status: 200,
+					headers: {
+						'content-type': 'application/octet-stream',
+						'content-length': String(body.length)
+					}
+				});
+			}
+			throw new Error(`unexpected ${u.pathname}`);
+		});
+		const client = createMonitorB2Client({ baseUrl: BASE, fetchImpl: fetchImpl as unknown as typeof fetch });
+		const d = await createMonitorB2Driver({ row, client });
+		await expect(d.download!('big.bin')).rejects.toMatchObject({ code: 'B2_TOO_LARGE' });
+		const opened = await d.openDownloadStream!('big.bin');
+		expect(opened.contentType).toContain('application/octet-stream');
+		expect(opened.size).toBe(body.length);
+		expect(await new Response(opened.stream).text()).toBe(body);
+		expect(fetchImpl.mock.calls.map((c) => new URL(String(c[0])).pathname)).toEqual([
+			'/v1/b2/connections/c1/list',
+			'/v1/b2/connections/c1/stat',
+			'/v1/b2/connections/c1/download'
+		]);
+		await expect(d.openDownloadStream!('trip/')).rejects.toMatchObject({
+			code: 'B2_FOLDER_OP_UNSUPPORTED'
+		});
+	});
+
 	it('maps monitor error codes to explorer codes', async () => {
 		const m = fakeMonitor({ 'a.txt': 'hi' });
 		const client = createMonitorB2Client({ baseUrl: BASE, fetchImpl: m.fetchImpl });
@@ -157,6 +207,63 @@ describe('monitor-held B2 driver', () => {
 		expect(progress.every((p, i) => i === 0 || p >= progress[i - 1]!)).toBe(true);
 		// The key never appears in anything this tab sends.
 		expect(JSON.stringify(m.calls)).not.toMatch(/applicationKey|K00/);
+	});
+
+	it('writeBack replaces the same key and names the version it expects', async () => {
+		const m = fakeMonitor({ 'in/new.txt': 'old' });
+		const client = createMonitorB2Client({ baseUrl: BASE, fetchImpl: m.fetchImpl });
+		const d = await createMonitorB2Driver({ row, client });
+		expect(d.label).toBe('Photos');
+		expect((await d.rangeUrl!('in/new.txt'))?.url).toBe(`${BASE}/v1/b2/connections/c1/download?key=in%2Fnew.txt`);
+		await d.writeBack!('in/new.txt', new Blob(['hi']), { expectUpdatedAt: 42 });
+		const begin = m.calls.find((c) => c.url === '/v1/b2/connections/c1/upload');
+		expect(begin?.body).toMatchObject({ parent: 'in/', name: 'new.txt', replace: true, expectUpdatedAt: 42 });
+		expect(m.store.get('in/new.txt')).toBe('hi');
+	});
+
+	it('previews photos from a monitor render and never loads list thumbnails on its own', async () => {
+		const m = fakeMonitor({ 'in/p.jpg': 'jpeg', 'in/a.txt': 'x' });
+		const d = await createMonitorB2Driver({ row, client: createMonitorB2Client({ baseUrl: BASE, fetchImpl: m.fetchImpl }) });
+		expect((await d.thumbUrl!('in/p.jpg', { maxDim: 2048 }))?.url).toBe(
+			`${BASE}/v1/b2/connections/c1/thumb?key=in%2Fp.jpg&size=2048`
+		);
+		expect(await d.thumbUrl!('in/a.txt')).toBeNull();
+		expect(explorerThumbsAreEager(d)).toBe(false);
+	});
+
+	it('starts a converted object where the monitor says it really starts', async () => {
+		const m = fakeMonitor({ 'v/clip.mkv': 'x' });
+		const asked: string[] = [];
+		const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+			const u = new URL(String(input));
+			if (u.pathname === '/v1/b2/connections/c1/media-info') {
+				asked.push(u.search);
+				return new Response(JSON.stringify({ duration: 600, start: 88.088 }), { status: 200 });
+			}
+			return m.fetchImpl(input, init);
+		}) as typeof fetch;
+		const d = await createMonitorB2Driver({ row, client: createMonitorB2Client({ baseUrl: BASE, fetchImpl }) });
+		expect(await d.convertedMediaUrl!('v/clip.mkv', { start: 90 })).toEqual({
+			url: `${BASE}/v1/b2/connections/c1/media?key=v%2Fclip.mkv&t=88.088`,
+			duration: 600,
+			start: 88.088
+		});
+		expect(asked).toEqual(['?key=v%2Fclip.mkv&t=90']);
+	});
+
+	it('writeBack reports an object changed in the bucket as RemoteChangedError', async () => {
+		const m = fakeMonitor({ 'in/new.txt': 'old' });
+		const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+			if (String(input).endsWith('/v1/b2/upload/job1/finish')) {
+				return new Response(JSON.stringify({ error: { code: 'b2.changed', message: 'changed' } }), { status: 409 });
+			}
+			return m.fetchImpl(input, init);
+		}) as typeof fetch;
+		const d = await createMonitorB2Driver({ row, client: createMonitorB2Client({ baseUrl: BASE, fetchImpl }) });
+		await expect(d.writeBack!('in/new.txt', new Blob(['hi']), { expectUpdatedAt: 42 })).rejects.toBeInstanceOf(
+			RemoteChangedError
+		);
+		expect(m.store.get('in/new.txt')).toBe('old');
 	});
 
 	it('delegates: mints on the source monitor, surfaces transfer failures with codes', async () => {

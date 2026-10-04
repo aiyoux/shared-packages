@@ -1,9 +1,11 @@
 import { render } from '@testing-library/svelte';
 import { describe, it, expect } from 'vitest';
+import { installLockPolyfill } from './live-locks-harness.ts';
 import FileExplorer from '../src/ui/FileExplorer.svelte';
+
+installLockPolyfill();
 import { createMemoryExplorerDriver } from '../src/ui/memoryExplorerDriver.js';
 import { getMemoryVfs } from '../src/memoryVfs.js';
-import { listTransfers } from '../src/transferRegistry.js';
 import { toast } from '@shared-packages/ui';
 import { persistKv } from '@shared-packages/ui/persistKv';
 
@@ -65,13 +67,11 @@ describe('device import transfer rows', () => {
 			// The header chip appears while the upload is gated.
 			await waitFor(() => document.querySelector('[data-testid="fe-op-progress"]') != null);
 			const row = document.querySelector('[data-testid="fe-op-progress-row"]')!;
-			expect(row.getAttribute('data-name')).toBe('big.bin');
+			expect(row.getAttribute('data-name')).toBe('Import files');
 			expect(row.getAttribute('data-status')).toBe('active');
 
 			release();
 			await waitFor(() => row.getAttribute('data-status') === 'done');
-			const items = listTransfers().filter((t) => t.name === 'big.bin');
-			expect(items.some((t) => t.done && t.status === 'done')).toBe(true);
 		} finally {
 			persistKv.removeItem('fe:viewMode');
 			localStorage.removeItem('fe:viewMode');
@@ -98,11 +98,10 @@ describe('device import transfer rows', () => {
 			Object.defineProperty(dropEv, 'dataTransfer', { value: osFileDt(file) });
 			document.querySelector('[data-testid="fe-list"]')!.dispatchEvent(dropEv);
 
-			await waitFor(() =>
-				listTransfers().some(
-					(t) => t.name === 'huge.bin' && t.status === 'failed' && /max write size/.test(t.error ?? '')
-				)
-			);
+			await waitFor(() => {
+				const row = document.querySelector('[data-testid="fe-op-progress-row"]');
+				return row?.getAttribute('data-status') === 'failed' && /max write size/.test(row.getAttribute('title') ?? '');
+			});
 			const row = document.querySelector('[data-testid="fe-op-progress-row"]')!;
 			expect(row.getAttribute('data-status')).toBe('failed');
 		} finally {

@@ -11,7 +11,8 @@ import {
 	type ExplorerEntry,
 	type ExplorerEntryId,
 	type ExplorerListOptions,
-	type ExplorerListResult
+	type ExplorerListResult,
+	RemoteChangedError
 } from '../ui/explorerDriver.js';
 import { inferFileTypeFromName } from '../index.js';
 import { ExplorerMonitorError, mapMonitorError } from './errors.js';
@@ -25,7 +26,7 @@ import {
 	sanitizeSegment,
 	toAbsolutePath
 } from './pathIds.js';
-import type { MonitorTransport } from './client.js';
+import { MonitorChangedOnHostError, type MonitorTransport } from './client.js';
 import { normalizeMonitorRootPath, type MonitorConnectionProfileV1 } from './types.js';
 import {
 	createMonitorWatchStream,
@@ -108,6 +109,11 @@ export async function createMonitorExplorerDriver(
 	const canMkdir = meta.capabilities?.fs?.mkdir === true;
 	const canThumb = meta.capabilities?.fs?.thumb === true;
 	const canVideoThumb = meta.capabilities?.fs?.videoThumb === true;
+	const canRange = meta.capabilities?.fs?.range === true;
+	const canImageInfo = meta.capabilities?.fs?.imageInfo === true;
+	const canUploadIfUnchanged = meta.capabilities?.fs?.uploadIfUnchanged === true;
+	const canVideoConvert = meta.capabilities?.fs?.videoConvert === true;
+	const canPeaks = meta.capabilities?.fs?.peaks === true;
 
 	function ensureWatch(): MonitorWatchStream | null {
 		if (!enableWatch) return null;
@@ -170,6 +176,7 @@ export async function createMonitorExplorerDriver(
 
 	const driver: MonitorExplorerDriver = {
 		id: 'monitor',
+		label: profile.name,
 		connectionId: `monitor:${profile.id}`,
 		endpointKey: endpointKeyFromUrl(transport.baseUrl || profile.baseUrl),
 		thumbScope: `monitor:${profile.id}:${rootPath}`,
@@ -347,7 +354,14 @@ export async function createMonitorExplorerDriver(
 						uploadUrl: upload.uploadUrl,
 						token: upload.authorizationToken,
 						fileName: upload.destFileName,
-						contentType: upload.contentType
+						contentType: upload.contentType,
+						...(upload.partNumber != null
+							? {
+									offset: upload.offset,
+									length: upload.length,
+									partNumber: upload.partNumber
+								}
+							: {})
 					},
 					{
 						signal: opts?.signal,
@@ -410,6 +424,17 @@ export async function createMonitorExplorerDriver(
 			}
 		},
 
+		async openDownloadStream(id, opts) {
+			if (isFolderId(id)) {
+				throw new ExplorerMonitorError('MONITOR_ERROR', 'Cannot download a folder');
+			}
+			try {
+				return await transport.openDownloadStream(toAbsolutePath(rootPath, id), baseName(id), opts);
+			} catch (e) {
+				throw mapMonitorError(e);
+			}
+		},
+
 		async downloadUrl(id: ExplorerEntryId) {
 			const abs = toAbsolutePath(rootPath, id);
 			if (isFolderId(id)) {
@@ -430,6 +455,75 @@ export async function createMonitorExplorerDriver(
 			// the row falls back to its icon instead of downloading the file.
 			if (inferFileTypeFromName(baseName(id)) === 'video' && !canVideoThumb) return null;
 			return { url: transport.thumbUrl(abs, opts?.maxDim ?? 96) };
+		},
+
+		async rangeUrl(id: ExplorerEntryId) {
+			if (!canRange || isFolderId(id)) return null;
+			return { url: transport.readUrl(toAbsolutePath(rootPath, id)) };
+		},
+
+		async convertedMediaUrl(id: ExplorerEntryId, cOpts) {
+			if (!canVideoConvert || !transport.mediaUrl || isFolderId(id)) return null;
+			const abs = toAbsolutePath(rootPath, id);
+			// The stream has no length, so the player needs the duration
+			// separately; and a copied video can only start on a keyframe, so
+			// the host says which second it really starts at. Ask for that
+			// second exactly, and the player's clock matches the picture.
+			const info = await transport
+				.mediaInfo?.(abs, cOpts?.start)
+				.catch(() => ({}) as { duration?: number; start?: number });
+			const start = info?.start ?? cOpts?.start;
+			return { url: transport.mediaUrl(abs, start), duration: info?.duration, start };
+		},
+
+		async audioPeaks(id: ExplorerEntryId, pOpts) {
+			if (!canPeaks || !transport.peaks || isFolderId(id)) return null;
+			try {
+				const out = await transport.peaks(toAbsolutePath(rootPath, id), pOpts?.n ?? 800);
+				return out.peaks.length ? out : null;
+			} catch {
+				return null;
+			}
+		},
+
+		async imageInfo(id: ExplorerEntryId) {
+			if (!canImageInfo || !transport.imageInfo || isFolderId(id)) return null;
+			try {
+				return await transport.imageInfo(toAbsolutePath(rootPath, id));
+			} catch {
+				return null;
+			}
+		},
+
+		async writeBack(id, body, opts) {
+			if (isFolderId(id)) throw new ExplorerMonitorError('MONITOR_ERROR', 'Cannot write a folder');
+			const abs = toAbsolutePath(rootPath, id);
+			try {
+				let expectMtimeMs: number | undefined;
+				if (opts?.expectUpdatedAt !== undefined) {
+					if (canUploadIfUnchanged) {
+						expectMtimeMs = opts.expectUpdatedAt;
+					} else {
+						// An older daemon cannot check at the rename, so check
+						// just before sending. The gap is the send itself.
+						const now = await transport.stat(abs).catch(() => null);
+						if (!now || now.mtime_ms !== opts.expectUpdatedAt) throw new RemoteChangedError();
+					}
+				}
+				// A send never leaves half a file: bytes land beside it and are
+				// renamed over it at the end.
+				const st = await transport.write(abs, body, {
+					signal: opts?.signal,
+					onProgress: opts?.onProgress,
+					atomic: true,
+					...(expectMtimeMs !== undefined ? { expectMtimeMs } : {})
+				});
+				return { updatedAt: st.mtime_ms, size: st.size };
+			} catch (e) {
+				if (e instanceof RemoteChangedError) throw e;
+				if (e instanceof MonitorChangedOnHostError) throw new RemoteChangedError(e.message);
+				throw mapMonitorError(e);
+			}
 		},
 
 		subscribeChanges(listener: () => void, scope?: { parentId: ExplorerEntryId | null }) {

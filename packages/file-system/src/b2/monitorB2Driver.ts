@@ -6,8 +6,10 @@
  * prefixes ending in `/` (same shape the retired browser driver used).
  */
 import { inferFileTypeFromName } from '../index.js';
+import { coerceMediaInfo, coercePeaks, MonitorChangedOnHostError } from '../monitor/client.js';
 import {
 	EXPLORER_DOWNLOAD_MAX_BYTES,
+	RemoteChangedError,
 	type ExplorerCapabilities,
 	type ExplorerDriver,
 	type ExplorerEntry,
@@ -81,7 +83,9 @@ export async function createMonitorB2Driver(opts: MonitorB2DriverOptions): Promi
 
 	const driver: ExplorerDriver = {
 		id: 'b2',
+		label: row.name,
 		connectionId: `b2:${b2RowId(row.monitorProfileId, row.id)}`,
+		hostConnectionId: cid,
 		// Two panes on the same connection share this, and only this.
 		endpointKey: `b2:${monitorHostKey(row.monitorBaseUrl)}::${row.id}`,
 		capabilities: B2_CAPS,
@@ -151,11 +155,80 @@ export async function createMonitorB2Driver(opts: MonitorB2DriverOptions): Promi
 			return client.download(cid, id, dOpts);
 		},
 
+		async openDownloadStream(id, opts) {
+			if (id.endsWith('/')) throw folderOnly('download');
+			return client.openDownloadStream(cid, id, opts);
+		},
+
 		/** The monitor streams it; no size cap (the browser download manager takes it). */
 		async downloadUrl(id) {
 			if (id.endsWith('/')) return null;
 			const name = id.slice(id.lastIndexOf('/') + 1);
 			return { url: client.downloadUrl(cid, id), filename: name };
+		},
+
+		/**
+		 * The monitor renders an image object at the asked size, so a preview
+		 * never pulls the original. An older monitor answers 404 and the
+		 * preview reads the bytes instead. Not eager: a list of photos must
+		 * not fetch every object from the bucket (`explorerThumbsAreEager`).
+		 */
+		async thumbUrl(id, tOpts) {
+			if (id.endsWith('/') || inferFileTypeFromName(id) !== 'image') return null;
+			return { url: client.thumbUrl(cid, id, tOpts?.maxDim ?? 96) };
+		},
+
+		/** Read from the object's header on its monitor; `null` on an older monitor. */
+		async imageInfo(id) {
+			if (id.endsWith('/') || inferFileTypeFromName(id) !== 'image') return null;
+			return client.imageInfo(cid, id).catch(() => null);
+		},
+
+		/**
+		 * The monitor converts it with ffmpeg reading the object over a
+		 * short-lived URL. `null` when that monitor cannot (no ffmpeg, or too
+		 * old): media-info answers first, so the preview never tries a dead URL.
+		 */
+		async convertedMediaUrl(id, cOpts) {
+			if (id.endsWith('/')) return null;
+			const raw = await client.mediaInfo(cid, id, cOpts?.start).catch(() => null);
+			if (!raw) return null;
+			const info = coerceMediaInfo(raw);
+			const start = info.start ?? cOpts?.start;
+			return { url: client.mediaUrl(cid, id, start), duration: info.duration, start };
+		},
+
+		async audioPeaks(id, pOpts) {
+			if (id.endsWith('/')) return null;
+			const raw = await client.peaks(cid, id, pOpts?.n ?? 800).catch(() => null);
+			const out = raw ? coercePeaks(raw) : null;
+			return out && out.peaks.length ? out : null;
+		},
+
+		/** The monitor's download route forwards `Range` to B2. */
+		async rangeUrl(id) {
+			if (id.endsWith('/')) return null;
+			return { url: client.downloadUrl(cid, id) };
+		},
+
+		/** Same key, new B2 version; refused when the object moved on. */
+		async writeBack(id, body, wOpts) {
+			if (id.endsWith('/')) throw folderOnly('write');
+			const name = id.slice(id.lastIndexOf('/') + 1);
+			const parent = parentOf(id, root);
+			try {
+				const entry = await client.upload(cid, parent, body, name, {
+					signal: wOpts?.signal,
+					onProgress: wOpts?.onProgress
+						? (fraction) => wOpts.onProgress?.(Math.round(fraction * body.size), body.size)
+						: undefined,
+					replace: { expectUpdatedAt: wOpts?.expectUpdatedAt }
+				});
+				return { updatedAt: entry.updatedAt, size: entry.size };
+			} catch (e) {
+				if (e instanceof MonitorChangedOnHostError) throw new RemoteChangedError(e.message);
+				throw e;
+			}
 		},
 
 		// ── delegated copies: another monitor (or this one) talks to B2 ─────
@@ -167,6 +240,38 @@ export async function createMonitorB2Driver(opts: MonitorB2DriverOptions): Promi
 
 		async mintUploadUrl(parentId, fileName) {
 			return client.mintUpload(cid, parentId, fileName);
+		},
+
+		async acceptHostFile(absPath, parentId, fileName, opts) {
+			await client.transfer({ path: absPath }, { connection: cid, parent: parentId, name: fileName }, opts);
+		},
+
+		async sendToHostPath(key, absPath, opts) {
+			await client.transfer({ connection: cid, key }, { path: absPath }, opts);
+		},
+
+		async acceptFromConnection(sourceConnectionId, key, parentId, fileName, opts) {
+			await client.transfer(
+				{ connection: sourceConnectionId, key },
+				{ connection: cid, parent: parentId, name: fileName },
+				opts
+			);
+		},
+
+		async startLargeUpload(parentId, fileName, contentType) {
+			return client.startLarge(cid, parentId, fileName, contentType);
+		},
+
+		async mintPartUrl(fileId) {
+			return client.partUrl(cid, fileId);
+		},
+
+		async finishLargeUpload(fileId, partSha1s) {
+			await client.finishLarge(cid, fileId, partSha1s);
+		},
+
+		async cancelLargeUpload(fileId) {
+			await client.cancelLarge(cid, fileId);
 		},
 
 		/** Pull a URL another connection minted into this bucket (via this monitor). */

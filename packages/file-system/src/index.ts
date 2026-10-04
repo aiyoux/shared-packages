@@ -85,3 +85,5 @@ export * from './services/connections.js';
 export * from './services/linkProxy.js';
 
 export * from './services/handoverLinks.js';
+export * from './services/remoteCopies.js';
+export * from './linkSpeed.js';

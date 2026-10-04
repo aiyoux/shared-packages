@@ -10,6 +10,7 @@
  */
 import { withTimeout } from '@shared-packages/ui/async';
 import type { ExplorerEntry } from './explorerDriver.js';
+import type { FeIconName } from './feIcons.js';
 
 export type PreviewKind = 'image' | 'video' | 'audio' | 'pdf' | 'text';
 
@@ -111,6 +112,32 @@ export function previewKindIcon(kind: PreviewKind): 'image' | 'film' | 'music' |
 	if (kind === 'video') return 'film';
 	if (kind === 'audio') return 'music';
 	return 'file-text';
+}
+
+const ARCHIVE_EXT = new Set(['zip', 'tar', 'gz', 'tgz', 'bz2', 'xz', '7z', 'rar', 'zst']);
+
+/** Extension without the dot, lowercased. Empty when the name has none. */
+export function fileExtensionLabel(name: string): string {
+	const base = name.split(/[/\\]/).pop() ?? name;
+	const dot = base.lastIndexOf('.');
+	if (dot <= 0 || dot === base.length - 1) return '';
+	return base.slice(dot + 1).toLowerCase();
+}
+
+/**
+ * Glyph for a file that is not showing an image, video, or PDF thumbnail.
+ * Audio uses the same music note as a folder stack tile.
+ */
+export function fileTypeIcon(entry: ExplorerEntry): FeIconName {
+	const kind = getPreviewKind(entry);
+	if (kind === 'audio') return 'music';
+	if (kind === 'video') return 'film';
+	if (kind === 'image') return 'image';
+	// Extension wins over a generic text MIME. A zip body stored as text/plain
+	// is still an archive.
+	if (ARCHIVE_EXT.has(fileExtensionLabel(entry.name))) return 'file-archive';
+	if (kind === 'text' || kind === 'pdf') return 'file-text';
+	return 'file';
 }
 
 export function textMimeForName(name: string): string {
@@ -343,6 +370,39 @@ export async function renderPdfPageToCanvas(
 	} finally {
 		pdf.destroy(handle);
 	}
+}
+
+/**
+ * A PDF held open for paging through in a preview. A remote file opens by
+ * ranges (`url` honours `Range`), so showing page 1 reads only the parts of
+ * the file page 1 needs; a local one opens from its bytes.
+ */
+export type PreviewPdf = {
+	pageCount: number;
+	render(canvas: HTMLCanvasElement, pageIdx: number, maxWidth: number): Promise<void>;
+	close(): void;
+};
+
+export async function openPreviewPdf(
+	source: { blob: Blob } | { url: string; size: number; read: (begin: number, end: number) => Promise<Uint8Array> }
+): Promise<PreviewPdf> {
+	const pdf = await loadPdfEngine();
+	const handle =
+		'blob' in source
+			? await pdf.openPdf(new Uint8Array(await source.blob.arrayBuffer()))
+			: await pdf.openPdfRanged({ length: source.size, read: source.read });
+	return {
+		pageCount: pdf.pageCount(handle),
+		async render(canvas, pageIdx, maxWidth) {
+			const { width: pw } = await pdf.loadPageSize(handle, pageIdx);
+			const scale = Math.min(2, maxWidth / pw);
+			const { png } = await pdf.renderRaster(handle, pageIdx, { scale });
+			await drawPngToCanvas(canvas, png);
+		},
+		close() {
+			pdf.destroy(handle);
+		}
+	};
 }
 
 // ── Dispatcher ───────────────────────────────────────────────────

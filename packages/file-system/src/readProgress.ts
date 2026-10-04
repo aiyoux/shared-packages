@@ -68,6 +68,78 @@ export async function blobFromResponse(res: Response, opts?: ReadProgressOpts): 
 	return assemble ? new Blob(chunks as BlobPart[], { type }) : new Blob([], { type });
 }
 
+/**
+ * The response body as a stream. Each pull is one chunk, so a consumer that
+ * writes before the next read keeps only that chunk. `bump` runs on every
+ * chunk; `onProgress` is throttled the same way as {@link blobFromResponse}.
+ */
+export function streamFromResponse(
+	res: Response,
+	opts?: {
+		onProgress?: ByteProgress;
+		/** Stall timer. Called for every chunk, including ones that skip `onProgress`. */
+		bump?: () => void;
+		signal?: AbortSignal;
+		onDone?: () => void;
+	}
+): ReadableStream<Uint8Array> {
+	const body = res.body;
+	if (!body || typeof body.getReader !== 'function') {
+		opts?.onDone?.();
+		throw new Error('Response has no body');
+	}
+	const totalHeader = Number(res.headers.get('content-length') || '') || undefined;
+	const reader = body.getReader();
+	let transferred = 0;
+	let lastEmit = 0;
+	let settled = false;
+	const finish = () => {
+		if (settled) return;
+		settled = true;
+		opts?.signal?.removeEventListener('abort', onAbort);
+		opts?.onDone?.();
+	};
+	const onAbort = () => {
+		void reader.cancel(opts?.signal?.reason);
+	};
+	opts?.signal?.addEventListener('abort', onAbort, { once: true });
+	const emit = (force: boolean) => {
+		const now = Date.now();
+		if (!force && lastEmit && now - lastEmit < 80) return;
+		lastEmit = now;
+		opts?.onProgress?.(transferred, totalHeader);
+	};
+	return new ReadableStream({
+		async pull(controller) {
+			try {
+				if (opts?.signal?.aborted) {
+					finish();
+					controller.error(opts.signal.reason ?? new DOMException('Cancelled', 'AbortError'));
+					return;
+				}
+				const { done, value } = await reader.read();
+				if (done) {
+					emit(true);
+					finish();
+					controller.close();
+					return;
+				}
+				transferred += value.byteLength;
+				opts?.bump?.();
+				emit(false);
+				controller.enqueue(value);
+			} catch (e) {
+				finish();
+				controller.error(e);
+			}
+		},
+		cancel(reason) {
+			finish();
+			return reader.cancel(reason);
+		}
+	});
+}
+
 /** Slice a Blob into chunks, awaiting `onChunk` so callers can apply backpressure. */
 export async function emitBlobChunks(
 	blob: Blob,

@@ -346,6 +346,22 @@ export interface ExplorerDriver {
 	 */
 	downloadUrl?(id: ExplorerEntryId): Promise<{ url: string; filename: string } | null>;
 	/**
+	 * Uncapped body stream for a copy into browser storage. The caller pipes
+	 * it into `writeFileStream`, so the file is not assembled into a Blob.
+	 * Preview and `download()` stay on the 100 MiB Blob cap.
+	 */
+	openDownloadStream?(
+		id: ExplorerEntryId,
+		opts?: {
+			onProgress?: (transferred: number, total?: number) => void;
+			signal?: AbortSignal;
+		}
+	): Promise<{
+		stream: ReadableStream<Uint8Array>;
+		contentType?: string;
+		size?: number;
+	}>;
+	/**
 	 * Host-generated thumbnail URL (monitor `/v1/fs/thumb`). When present,
 	 * list/preview icons load this instead of downloading the original file.
 	 */
@@ -353,6 +369,45 @@ export interface ExplorerDriver {
 		id: ExplorerEntryId,
 		opts?: { maxDim?: number }
 	): Promise<{ url: string } | null>;
+	/**
+	 * A GET URL that honours one `Range: bytes=` header: monitor `/v1/fs/read`
+	 * on a daemon that advertises `fs.range`, and B2 through its monitor. A
+	 * player, pdf.js or a text preview reads only the part it needs from it.
+	 */
+	rangeUrl?(id: ExplorerEntryId): Promise<{ url: string } | null>;
+	/**
+	 * A stream a browser can play, for video it cannot decode (MKV/HEVC, AVI,
+	 * WMV): monitor `/v1/fs/media`, remuxed or re-encoded as it plays. It has
+	 * no ranges, so it plays from the start.
+	 */
+	convertedMediaUrl?(
+		id: ExplorerEntryId,
+		opts?: { start?: number }
+	): Promise<{ url: string; duration?: number; start?: number } | null>;
+	/**
+	 * A waveform computed where the file lives (monitor `/v1/fs/peaks`, B2
+	 * through its monitor), so a long recording is drawn without fetching it.
+	 */
+	audioPeaks?(id: ExplorerEntryId, opts?: { n?: number }): Promise<{ peaks: number[]; duration: number } | null>;
+	/** Pixel size of an image, read from its header where the file lives. */
+	imageInfo?(id: ExplorerEntryId): Promise<{ width: number; height: number; format: string } | null>;
+	/**
+	 * Replace a remote file with a working copy's bytes. With
+	 * `expectUpdatedAt`, refuses (`RemoteChangedError`) when the remote moved
+	 * on since that version, so a newer version elsewhere is never overwritten
+	 * silently. Returns the version the remote now holds.
+	 */
+	writeBack?(
+		id: ExplorerEntryId,
+		body: Blob,
+		opts?: {
+			expectUpdatedAt?: number;
+			onProgress?: (transferred: number, total?: number) => void;
+			signal?: AbortSignal;
+		}
+	): Promise<{ updatedAt?: number; size?: number }>;
+	/** The saved connection's name ("Office PC"), for prompts and status. */
+	readonly label?: string;
 	/** Optional: bytes for copy-across bridge (local/memory). */
 	readBlob?(id: ExplorerEntryId): Promise<Blob>;
 	/**
@@ -496,7 +551,10 @@ export interface ExplorerDriver {
 			signal?: AbortSignal;
 		}
 	): Promise<void>;
-	/** Daemon PUT source bytes to a minted upload URL (monitor → B2 push). */
+	/**
+	 * Daemon POSTs source bytes to a B2 upload URL (monitor → B2).
+	 * `partNumber` with `offset` and `length` sends one large-file part.
+	 */
 	pushToUpload?(
 		id: ExplorerEntryId,
 		upload: {
@@ -504,6 +562,9 @@ export interface ExplorerDriver {
 			authorizationToken: string;
 			destFileName: string;
 			contentType?: string;
+			offset?: number;
+			length?: number;
+			partNumber?: number;
 		},
 		opts?: {
 			onProgress?: (transferred: number, total?: number) => void;
@@ -514,10 +575,63 @@ export interface ExplorerDriver {
 				size?: number;
 				done?: boolean;
 				phase?: string;
+				sha1?: string;
 			}) => void;
 			signal?: AbortSignal;
 		}
 	): Promise<void>;
+	/**
+	 * Same-monitor path → this B2 bucket. The daemon uses large-file parts
+	 * above one recommended part. Bytes stay on the host.
+	 */
+	acceptHostFile?(
+		absPath: string,
+		parentId: ExplorerEntryId | null,
+		fileName: string,
+		opts?: {
+			onProgress?: (transferred: number, total?: number) => void;
+			signal?: AbortSignal;
+		}
+	): Promise<void>;
+	/** Same-monitor this object → an absolute path on this monitor. */
+	sendToHostPath?(
+		key: ExplorerEntryId,
+		absPath: string,
+		opts?: {
+			onProgress?: (transferred: number, total?: number) => void;
+			signal?: AbortSignal;
+		}
+	): Promise<void>;
+	/**
+	 * Same-monitor copy from another connection on this monitor.
+	 * `sourceConnectionId` is the daemon's B2 connection id.
+	 */
+	acceptFromConnection?(
+		sourceConnectionId: string,
+		key: ExplorerEntryId,
+		parentId: ExplorerEntryId | null,
+		fileName: string,
+		opts?: {
+			onProgress?: (transferred: number, total?: number) => void;
+			signal?: AbortSignal;
+		}
+	): Promise<void>;
+	/** Daemon B2 connection id (not the explorer connection id). */
+	hostConnectionId?: string;
+	/** Start a B2 large file on the monitor that holds the key. */
+	startLargeUpload?(
+		parentId: ExplorerEntryId | null,
+		fileName: string,
+		contentType?: string
+	): Promise<{
+		fileId: string;
+		destFileName: string;
+		partSize: number;
+		contentType?: string;
+	}>;
+	mintPartUrl?(fileId: string): Promise<{ uploadUrl: string; authorizationToken: string }>;
+	finishLargeUpload?(fileId: string, partSha1s: string[]): Promise<void>;
+	cancelLargeUpload?(fileId: string): Promise<void>;
 	/**
 	 * Write `file` as `exactName` under `parentId` without uniqueName.
 	 * WebRTC ICE-fail fallback uses the name already reserved.
@@ -607,6 +721,8 @@ export function isRemoteClass(driverId: string): boolean {
  */
 export function explorerThumbsAreEager(driver: Pick<ExplorerDriver, 'id' | 'thumbUrl'>): boolean {
 	if (isLocalClass(driver.id)) return true;
+	// A B2 render still downloads the object to its monitor: on demand only.
+	if (driver.id === 'b2') return false;
 	return typeof driver.thumbUrl === 'function';
 }
 
@@ -671,4 +787,16 @@ export async function embedMediaUrl(
 	const res = await fetch(url, withLocalAddressSpace(url));
 	if (!res.ok) throw new Error(`Could not load media (${res.status})`);
 	return URL.createObjectURL(await res.blob());
+}
+
+/**
+ * The remote copy moved on since the working copy was made (or was removed).
+ * Sending would overwrite a version nobody here has seen.
+ */
+export class RemoteChangedError extends Error {
+	readonly code = 'REMOTE_CHANGED' as const;
+	constructor(message = 'The file changed where it is stored since this copy was made') {
+		super(message);
+		this.name = 'RemoteChangedError';
+	}
 }

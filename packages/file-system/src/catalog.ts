@@ -877,6 +877,11 @@ class MetaTable {
 		return row.key;
 	}
 
+	async delete(key: string): Promise<void> {
+		await this.c.run('DELETE FROM kv WHERE key = ?', [key]);
+		if (!this.c.inTx()) await this.c.persist();
+	}
+
 	async clear(): Promise<void> {
 		await this.c.run('DELETE FROM kv');
 		if (!this.c.inTx()) await this.c.persist();

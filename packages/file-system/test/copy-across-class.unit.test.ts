@@ -522,7 +522,7 @@ describe('copyAcross truncated folder', () => {
 			parentId: null,
 			name: 'shot.png',
 			kind: 'file',
-			size: 8
+			size: 200 * 1024 * 1024
 		};
 		const copied: string[] = [];
 		const mon = {
@@ -1074,7 +1074,7 @@ describe('classify copy-across routing', () => {
 
 	it('two monitors different endpointKey: copyAcross ferries webrtc', async () => {
 		resetTransferRegistryForTests();
-		const file = fileEntry('note.txt', 8);
+		const file = fileEntry('note.txt', 200 * 1024 * 1024);
 		let confirmCalls = 0;
 		const srcCalls: string[] = [];
 		const dstCalls: string[] = [];
@@ -1369,4 +1369,546 @@ describe('classify copy-across routing', () => {
 			(e: unknown) => e instanceof CopyAcrossError && e.code === 'EXPLORER_TOO_LARGE'
 		);
 	});
+
+	it('same-monitor B2 and disk copy on the host, not through a minted URL', async () => {
+		resetTransferRegistryForTests();
+		const file = fileEntry('clip.mov', 200 * 1024 * 1024);
+		const host = 'monitor:http://127.0.0.1:8300';
+		const sent: string[] = [];
+		const accepted: string[] = [];
+		const b2 = {
+			id: 'b2',
+			connectionId: 'b2:row',
+			endpointKey: `b2:${host}::photos`,
+			hostConnectionId: 'photos',
+			capabilities: { supportsUpload: true },
+			async sendToHostPath(key: string, abs: string) {
+				sent.push(`${key}→${abs}`);
+			},
+			async acceptHostFile(abs: string, _parent: string | null, name: string) {
+				accepted.push(`${abs}→${name}`);
+			},
+			async mintDownloadUrl() {
+				throw new Error('must not mint when both sides are this monitor');
+			},
+			async mintUploadUrl() {
+				throw new Error('must not mint when both sides are this monitor');
+			},
+			async upload() {
+				throw new Error('must not browser-upload');
+			}
+		} as unknown as ExplorerDriver;
+		const mon = {
+			id: 'monitor',
+			connectionId: 'monitor:p',
+			endpointKey: host,
+			capabilities: { supportsUpload: true },
+			absolutePath(id: string) {
+				return `/data/${id}`;
+			},
+			async uniqueName(_parent: string | null, base: string) {
+				return base;
+			},
+			async upload() {
+				throw new Error('must not browser-upload');
+			},
+			async pullFromUrl() {
+				throw new Error('must not pull through a URL on the same monitor');
+			},
+			async pushToUpload() {
+				throw new Error('must not single-shot push on the same monitor');
+			}
+		} as unknown as ExplorerDriver;
+		assert.equal(
+			await copyAcross({
+				sourceDriver: b2,
+				destDriver: mon,
+				selectedIds: [file.id],
+				sourceEntries: [file],
+				destParentId: null
+			}),
+			1
+		);
+		assert.deepEqual(sent, ['clip.mov→/data/clip.mov']);
+		assert.equal(
+			await copyAcross({
+				sourceDriver: mon,
+				destDriver: b2,
+				selectedIds: [file.id],
+				sourceEntries: [file],
+				destParentId: 'vids/'
+			}),
+			1
+		);
+		assert.deepEqual(accepted, ['/data/clip.mov→clip.mov']);
+	});
+
+	it('cross-monitor file over 100 MiB and under 5 GiB is one push', async () => {
+		resetTransferRegistryForTests();
+		const file = fileEntry('clip.mov', 200 * 1024 * 1024);
+		let largeStarts = 0;
+		const pushed: Array<{ partNumber?: number; offset?: number }> = [];
+		const b2 = {
+			id: 'b2',
+			connectionId: 'b2:other',
+			endpointKey: 'b2:monitor:http://10.0.0.2:8300::bucket',
+			capabilities: { supportsUpload: true },
+			async startLargeUpload() {
+				largeStarts += 1;
+				throw new Error('a single b2_upload_file still fits');
+			},
+			async mintUploadUrl() {
+				return {
+					uploadUrl: 'https://pod.example/u',
+					authorizationToken: 'tok',
+					destFileName: 'clip.mov'
+				};
+			},
+			async upload() {
+				throw new Error('must not browser-upload');
+			},
+			async download() {
+				throw new Error('must not download into the tab');
+			}
+		} as unknown as ExplorerDriver;
+		const mon = {
+			id: 'monitor',
+			connectionId: 'monitor:src',
+			endpointKey: 'monitor:http://10.0.0.1:8300',
+			capabilities: { supportsUpload: true },
+			async pushToUpload(
+				_id: string,
+				upload: { partNumber?: number; offset?: number }
+			) {
+				pushed.push({ partNumber: upload.partNumber, offset: upload.offset });
+			},
+			async download() {
+				throw new Error('must not download into the tab');
+			}
+		} as unknown as ExplorerDriver;
+		assert.equal(
+			await copyAcross({
+				sourceDriver: mon,
+				destDriver: b2,
+				selectedIds: [file.id],
+				sourceEntries: [file],
+				destParentId: null
+			}),
+			1
+		);
+		assert.deepEqual(pushed, [{ partNumber: undefined, offset: undefined }]);
+		assert.equal(largeStarts, 0);
+	});
+
+	it('cross-monitor B2 download over 100 MiB streams on the destination monitor', async () => {
+		resetTransferRegistryForTests();
+		const file = fileEntry('clip.mov', 200 * 1024 * 1024);
+		const pulled: string[] = [];
+		const b2 = {
+			id: 'b2',
+			connectionId: 'b2:src',
+			endpointKey: 'b2:monitor:http://10.0.0.1:8300::bucket',
+			capabilities: { supportsUpload: true },
+			async mintDownloadUrl() {
+				return { url: 'https://f000.example/clip.mov', filename: 'clip.mov' };
+			},
+			async download() {
+				throw new Error('must not download into the tab');
+			}
+		} as unknown as ExplorerDriver;
+		const mon = {
+			id: 'monitor',
+			connectionId: 'monitor:dst',
+			endpointKey: 'monitor:http://10.0.0.2:8300',
+			capabilities: { supportsUpload: true },
+			async pullFromUrl(url: string) {
+				pulled.push(url);
+			},
+			async upload() {
+				throw new Error('must not browser-upload');
+			},
+			async download() {
+				throw new Error('must not download into the tab');
+			}
+		} as unknown as ExplorerDriver;
+		assert.equal(
+			await copyAcross({
+				sourceDriver: b2,
+				destDriver: mon,
+				selectedIds: [file.id],
+				sourceEntries: [file],
+				destParentId: null
+			}),
+			1
+		);
+		assert.deepEqual(pulled, ['https://f000.example/clip.mov']);
+	});
+
+	it('cross-monitor file over 5 GiB uploads as large-file parts', async () => {
+		resetTransferRegistryForTests();
+		const size = 5 * 1024 * 1024 * 1024 + 10;
+		const partSize = 5 * 1024 * 1024 * 1024;
+		const file = fileEntry('huge.bin', size);
+		const parts: Array<{ offset?: number; length?: number; partNumber?: number }> = [];
+		const finished: string[][] = [];
+		let cancelled = 0;
+		const b2 = {
+			id: 'b2',
+			connectionId: 'b2:other',
+			endpointKey: 'b2:monitor:http://10.0.0.2:8300::bucket',
+			capabilities: { supportsUpload: true },
+			async startLargeUpload() {
+				return { fileId: 'large-1', destFileName: 'huge.bin', partSize, contentType: 'application/octet-stream' };
+			},
+			async mintPartUrl() {
+				return { uploadUrl: 'https://pod.example/part', authorizationToken: 'tok' };
+			},
+			async finishLargeUpload(_id: string, shas: string[]) {
+				finished.push(shas);
+			},
+			async cancelLargeUpload() {
+				cancelled += 1;
+			},
+			async mintUploadUrl() {
+				throw new Error('must not use a single upload URL over 5 GiB');
+			},
+			async upload() {
+				throw new Error('must not browser-upload');
+			}
+		} as unknown as ExplorerDriver;
+		const mon = {
+			id: 'monitor',
+			connectionId: 'monitor:src',
+			endpointKey: 'monitor:http://10.0.0.1:8300',
+			capabilities: { supportsUpload: true },
+			async pushToUpload(
+				_id: string,
+				upload: { offset?: number; length?: number; partNumber?: number },
+				opts?: { onEvent?: (ev: { sha1?: string; transferred?: number; phase?: string; done?: boolean }) => void }
+			) {
+				parts.push({ offset: upload.offset, length: upload.length, partNumber: upload.partNumber });
+				opts?.onEvent?.({
+					phase: 'upload',
+					transferred: upload.length,
+					done: true,
+					sha1: `sha-${upload.partNumber}`
+				});
+			}
+		} as unknown as ExplorerDriver;
+		assert.equal(
+			await copyAcross({
+				sourceDriver: mon,
+				destDriver: b2,
+				selectedIds: [file.id],
+				sourceEntries: [file],
+				destParentId: null
+			}),
+			1
+		);
+		assert.equal(parts.length, 2);
+		assert.equal(parts[0]?.partNumber, 1);
+		assert.equal(parts[0]?.offset, 0);
+		assert.equal(parts[0]?.length, partSize);
+		assert.equal(parts[1]?.offset, partSize);
+		assert.equal(parts[1]?.partNumber, 2);
+		assert.equal(parts[1]?.length, size - partSize);
+		assert.deepEqual(finished, [parts.map((p) => `sha-${p.partNumber}`)]);
+		assert.equal(cancelled, 0);
+	});
+
+	it('monitor and B2 files stream into browser storage past the Blob cap', async () => {
+		const doneWith: unknown[] = [];
+		resetFileOpsForTest(async (input: StartOp): Promise<OpHandle> => ({
+			id: input.id!,
+			signal: new AbortController().signal,
+			progress() {},
+			done: async (result) => {
+				doneWith.push(result);
+			},
+			fail: async () => {},
+			cancelled: async () => {},
+			onCancelRequest() {
+				return () => {};
+			}
+		}));
+		const huge = fileEntry('big.bin', EXPLORER_DOWNLOAD_MAX_BYTES + 1);
+		huge.contentType = 'video/mp4';
+		const payload = ['hel', 'lo'];
+		let downloads = 0;
+		const written: Array<{ name: string; bytes: string; contentType?: string }> = [];
+		const source = {
+			id: 'monitor',
+			connectionId: 'monitor:p',
+			endpointKey: 'monitor:http://127.0.0.1:8300',
+			capabilities: { supportsUpload: true, supportsDownload: true },
+			async download() {
+				downloads += 1;
+				throw new Error('must not blob');
+			},
+			async openDownloadStream() {
+				return {
+					stream: bytesStream(payload),
+					contentType: 'application/octet-stream',
+					size: 5
+				};
+			}
+		} as unknown as ExplorerDriver;
+		const local = browserFilesDest(written);
+		assert.equal(classify(source, local).kind, 'direct');
+		assert.equal(
+			await copyAcross({
+				sourceDriver: source,
+				destDriver: local,
+				selectedIds: [huge.id],
+				sourceEntries: [huge],
+				destParentId: 'inbox'
+			}),
+			1
+		);
+		assert.equal(downloads, 0);
+		assert.deepEqual(written, [{ name: 'big.bin', bytes: 'hello', contentType: 'video/mp4' }]);
+		assert.deepEqual(doneWith, [{ kind: 'vfs-file', fileId: 'vfs-big.bin', name: 'big.bin' }]);
+		const finished = listTransfers().find((t) => t.name === 'big.bin' && t.done);
+		assert.equal(finished?.status, 'done');
+		assert.equal(finished?.hop, 'direct');
+		assert.equal(finished?.transferred, 5);
+
+		doneWith.length = 0;
+		written.length = 0;
+		const b2File = fileEntry('clip.mov', EXPLORER_DOWNLOAD_MAX_BYTES + 1);
+		const b2 = {
+			id: 'b2',
+			connectionId: 'b2:row',
+			endpointKey: 'b2:monitor:http://127.0.0.1:8300::photos',
+			capabilities: { supportsUpload: true, supportsDownload: true },
+			async download() {
+				downloads += 1;
+				throw new Error('must not blob');
+			},
+			async openDownloadStream() {
+				return { stream: bytesStream(['xy']), contentType: 'video/quicktime', size: 2 };
+			}
+		} as unknown as ExplorerDriver;
+		assert.equal(
+			await copyAcross({
+				sourceDriver: b2,
+				destDriver: local,
+				selectedIds: [b2File.id],
+				sourceEntries: [b2File],
+				destParentId: null
+			}),
+			1
+		);
+		assert.equal(downloads, 0);
+		assert.deepEqual(written, [{ name: 'clip.mov', bytes: 'xy', contentType: 'video/quicktime' }]);
+		assert.deepEqual(doneWith, [{ kind: 'vfs-file', fileId: 'vfs-clip.mov', name: 'clip.mov' }]);
+	});
+
+	it('a file under the cap still streams when the destination can take a stream', async () => {
+		resetTransferRegistryForTests();
+		const small = fileEntry('note.txt', 4);
+		let downloads = 0;
+		const written: Array<{ name: string; bytes: string; contentType?: string }> = [];
+		const source = {
+			id: 'monitor',
+			capabilities: { supportsDownload: true },
+			async download() {
+				downloads += 1;
+				return new Blob(['nope']);
+			},
+			async openDownloadStream() {
+				return { stream: bytesStream(['note']), contentType: 'text/plain' };
+			}
+		} as unknown as ExplorerDriver;
+		assert.equal(
+			await copyAcross({
+				sourceDriver: source,
+				destDriver: browserFilesDest(written),
+				selectedIds: [small.id],
+				sourceEntries: [small],
+				destParentId: null
+			}),
+			1
+		);
+		assert.equal(downloads, 0);
+		assert.deepEqual(written, [{ name: 'note.txt', bytes: 'note', contentType: 'text/plain' }]);
+	});
+
+	it('a monitor folder streams each file instead of bulk-blobbing them', async () => {
+		resetTransferRegistryForTests();
+		const folder = { id: 'pics/', parentId: null, name: 'pics', kind: 'folder' as const };
+		const child = fileEntry('big.bin', EXPLORER_DOWNLOAD_MAX_BYTES + 1);
+		child.parentId = 'pics/';
+		let downloads = 0;
+		let bulks = 0;
+		const written: Array<{ name: string; bytes: string; contentType?: string }> = [];
+		const source = {
+			id: 'monitor',
+			connectionId: 'monitor:p',
+			endpointKey: 'monitor:http://127.0.0.1:8300',
+			capabilities: { supportsDownload: true },
+			async list() {
+				return { entries: [child], truncated: false };
+			},
+			async download() {
+				downloads += 1;
+				throw new Error('must not blob');
+			},
+			async openDownloadStream(id: string) {
+				assert.equal(id, 'big.bin');
+				return { stream: bytesStream(['ab', 'c']), contentType: 'application/octet-stream' };
+			}
+		} as unknown as ExplorerDriver;
+		const local = browserFilesDest(written);
+		local.writeFiles = async () => {
+			bulks += 1;
+			return [];
+		};
+		assert.equal(
+			await copyAcross({
+				sourceDriver: source,
+				destDriver: local,
+				selectedIds: [folder.id],
+				sourceEntries: [folder],
+				destParentId: null
+			}),
+			2
+		);
+		assert.equal(downloads, 0);
+		assert.equal(bulks, 0);
+		assert.deepEqual(written, [{ name: 'big.bin', bytes: 'abc', contentType: 'application/octet-stream' }]);
+	});
+
+	it('without a stream on both sides a huge file still hits the Blob cap', async () => {
+		resetTransferRegistryForTests();
+		const huge = fileEntry('huge.bin', EXPLORER_DOWNLOAD_MAX_BYTES + 1);
+		const source = {
+			id: 'monitor',
+			capabilities: { supportsDownload: true },
+			async download() {
+				throw new Error('must not download');
+			},
+			async openDownloadStream() {
+				throw new Error('dest cannot stream');
+			}
+		} as unknown as ExplorerDriver;
+		const disk = {
+			id: 'disk',
+			capabilities: { supportsUpload: true },
+			async upload() {
+				throw new Error('must not upload');
+			}
+		} as unknown as ExplorerDriver;
+		await assert.rejects(
+			() =>
+				copyAcross({
+					sourceDriver: source,
+					destDriver: disk,
+					selectedIds: [huge.id],
+					sourceEntries: [huge],
+					destParentId: null
+				}),
+			(e: unknown) => e instanceof CopyAcrossError && e.code === 'EXPLORER_TOO_LARGE'
+		);
+
+		const plain = {
+			id: 'monitor',
+			capabilities: { supportsDownload: true },
+			async download() {
+				throw new Error('must not download');
+			}
+		} as unknown as ExplorerDriver;
+		const local = {
+			id: 'local',
+			capabilities: { supportsUpload: true },
+			async writeFile() {
+				throw new Error('must not write');
+			}
+		} as unknown as ExplorerDriver;
+		await assert.rejects(
+			() =>
+				copyAcross({
+					sourceDriver: plain,
+					destDriver: local,
+					selectedIds: [huge.id],
+					sourceEntries: [huge],
+					destParentId: null
+				}),
+			(e: unknown) => e instanceof CopyAcrossError && e.code === 'EXPLORER_TOO_LARGE'
+		);
+	});
+
+	it('dual-phase stays on the Blob cap even when both sides can stream', async () => {
+		resetTransferRegistryForTests();
+		const huge = fileEntry('huge.bin', EXPLORER_DOWNLOAD_MAX_BYTES + 1);
+		const source = {
+			id: 'peer-fs',
+			connectionId: 'peer-fs:a',
+			endpointKey: 'peer-fs:fs::/',
+			capabilities: { supportsUpload: true },
+			async openDownloadStream() {
+				throw new Error('must not stream a dual-phase copy');
+			},
+			async download() {
+				throw new Error('must not download');
+			}
+		} as unknown as ExplorerDriver;
+		const dest = {
+			id: 'peer-fs',
+			connectionId: 'peer-fs:b',
+			endpointKey: 'peer-fs:fs::other',
+			capabilities: { supportsUpload: true },
+			async upload() {
+				return { id: 'x', parentId: null, name: 'x', kind: 'file' as const };
+			},
+			async writeFileStream() {
+				throw new Error('must not stream');
+			}
+		} as unknown as ExplorerDriver;
+		assert.equal(classify(source, dest).kind, 'dual-phase');
+		await assert.rejects(
+			() =>
+				copyAcross({
+					sourceDriver: source,
+					destDriver: dest,
+					selectedIds: [huge.id],
+					sourceEntries: [huge],
+					destParentId: null
+				}),
+			(e: unknown) => e instanceof CopyAcrossError && e.code === 'EXPLORER_TOO_LARGE'
+		);
+	});
 });
+
+function bytesStream(parts: string[]): ReadableStream<Uint8Array> {
+	const enc = new TextEncoder();
+	let i = 0;
+	return new ReadableStream({
+		pull(controller) {
+			if (i >= parts.length) {
+				controller.close();
+				return;
+			}
+			controller.enqueue(enc.encode(parts[i]!));
+			i += 1;
+		}
+	});
+}
+
+function browserFilesDest(written: Array<{ name: string; bytes: string; contentType?: string }>): ExplorerDriver {
+	return {
+		id: 'local',
+		capabilities: { supportsMkdir: true, supportsUpload: true },
+		async mkdir(_parent: string | null, name: string) {
+			return { id: `local-${name}`, parentId: _parent, name, kind: 'folder' };
+		},
+		async writeFile() {
+			throw new Error('must not blob-write');
+		},
+		async writeFileStream(parentId: string | null, name: string, stream: ReadableStream<Uint8Array>, opts?: { contentType?: string }) {
+			const bytes = await new Response(stream).text();
+			written.push({ name, bytes, contentType: opts?.contentType });
+			return { id: `vfs-${name}`, parentId, name, kind: 'file', size: bytes.length };
+		}
+	} as unknown as ExplorerDriver;
+}

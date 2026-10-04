@@ -363,18 +363,18 @@ export type OsDropFileProgress = {
 };
 
 /**
- * One PC → destination import registered in the transfer registry, so it
- * shows in the explorer's top header bar like any other transfer — an import
- * from the user's computer is a transfer into the open destination, whether
- * that destination is a remote backend (monitor / b2) or a local
+ * One PC → destination import recorded on the central ops list, stamped with
+ * the window that received the drop, so that window's header bar can show it.
+ * An import from the user's computer is a transfer into the open destination,
+ * whether that destination is a remote backend (monitor / b2) or a local
  * folder. The listing keeps its pending rows; the header carries the
- * transfer-shaped view with a dismiss/cancel affordance, and a failed or
- * cancelled import marks its rows instead of leaving them spinning.
+ * transfer-shaped view, and a failed or cancelled import marks its rows
+ * instead of leaving them spinning.
  */
-export async function createDeviceImportReporter(driver: { id: string; endpointKey?: string; connectionId?: string }, parentId: string | null = null) {
+export async function createDeviceImportReporter(driver: { id: string; endpointKey?: string; connectionId?: string }, parentId: string | null = null, windowId?: string) {
 	const ac = new AbortController();
 	const id = generateId('import');
-	await beginFileOp(id, { kind: 'import', app: 'files', title: 'Import files', where: { executor: 'this-browser', from: { kind: 'browser', label: 'This computer' }, to: { kind: driver.id === 'monitor' ? 'monitor' : driver.id === 'b2' ? 'b2' : 'browser', label: driver.id } }, landing: driver.id === 'local' ? { kind: 'vfs-folder', folderId: parentId, name: 'Import files' } : undefined, destination: { driverId: driver.id, endpointKey: driver.endpointKey ?? driver.connectionId, parentId }, signal: ac.signal });
+	await beginFileOp(id, { kind: 'import', app: 'files', title: 'Import files', windowId, where: { executor: 'this-browser', from: { kind: 'browser', label: 'This computer' }, to: { kind: driver.id === 'monitor' ? 'monitor' : driver.id === 'b2' ? 'b2' : 'browser', label: driver.id } }, landing: driver.id === 'local' ? { kind: 'vfs-folder', folderId: parentId, name: 'Import files' } : undefined, destination: { driverId: driver.id, endpointKey: driver.endpointKey ?? driver.connectionId, parentId }, signal: ac.signal });
 	attachFileOpAbort(id, ac);
 	const files = new Map<string, OsDropFileProgress>();
 	function report(done = false, status?: 'failed' | 'cancelled', error?: string) {

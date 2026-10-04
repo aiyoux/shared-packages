@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { MonitorTransport } from './client.js';
 import { createMonitorExplorerDriver } from './monitorExplorerDriver.js';
+import { RemoteChangedError } from '../ui/explorerDriver.js';
 
 function transportStub(partial: Partial<MonitorTransport>): MonitorTransport {
 	return {
@@ -192,6 +193,33 @@ describe('monitor explorer driver capabilities', () => {
 		expect(loc?.url).toContain('/v1/fs/read?path=');
 		expect(loc?.url).toContain(encodeURIComponent('/tmp/a.png'));
 		expect(new URL(loc!.url).searchParams.get('download')).toBe('a.png');
+	});
+
+	it('openDownloadStream asks for the attachment read and does not blob', async () => {
+		const openDownloadStream = vi.fn(async () => ({
+			stream: new ReadableStream<Uint8Array>({
+				start(controller) {
+					controller.enqueue(new Uint8Array([1, 2]));
+					controller.close();
+				}
+			}),
+			contentType: 'application/octet-stream',
+			size: 2
+		}));
+		const download = vi.fn();
+		const driver = await createMonitorExplorerDriver({
+			profile,
+			transport: transportStub({ openDownloadStream, download, list: listingAPng() }),
+			enableWatch: false
+		});
+		const opened = await driver.openDownloadStream!('dir/a.png');
+		expect(openDownloadStream).toHaveBeenCalledWith('/tmp/dir/a.png', 'a.png', undefined);
+		expect(download).not.toHaveBeenCalled();
+		expect(new Uint8Array(await new Response(opened.stream).arrayBuffer())).toEqual(new Uint8Array([1, 2]));
+		await expect(driver.openDownloadStream!('Docs/')).rejects.toMatchObject({
+			code: 'MONITOR_ERROR',
+			message: 'Cannot download a folder'
+		});
 	});
 
 	it('downloadUrl for a folder is GET /v1/fs/zip (zip on drop)', async () => {
@@ -401,5 +429,98 @@ describe('monitor explorer driver capabilities', () => {
 		expect(list).toHaveBeenLastCalledWith('/tmp/locked', { probe: true });
 		await driver.list({ parentId: 'open/' });
 		expect(list).toHaveBeenLastCalledWith('/tmp/open');
+	});
+});
+
+describe('monitor explorer driver: working copies and partial reads', () => {
+	const caps = (fs: Record<string, boolean>) => vi.fn(async () => ({ capabilities: { fs, git: { blob: true } } }));
+
+	it('offers a range URL and image info only when the daemon advertises them', async () => {
+		const old = await createMonitorExplorerDriver({ profile, transport: transportStub({ list: listingAPng() }), enableWatch: false });
+		expect(await old.rangeUrl!('a.png')).toBeNull();
+		expect(await old.imageInfo!('a.png')).toBeNull();
+		const current = await createMonitorExplorerDriver({
+			profile,
+			transport: transportStub({
+				list: listingAPng(),
+				meta: caps({ range: true, imageInfo: true }),
+				imageInfo: vi.fn(async () => ({ width: 10, height: 20, format: 'png' }))
+			}),
+			enableWatch: false
+		});
+		expect((await current.rangeUrl!('a.png'))?.url).toBe('http://127.0.0.1:8300/v1/fs/read?path=%2Ftmp%2Fa.png');
+		expect(await current.imageInfo!('a.png')).toEqual({ width: 10, height: 20, format: 'png' });
+		expect(current.label).toBe('t');
+	});
+
+	it('writeBack lets the daemon check the version at the rename', async () => {
+		const write = vi.fn(async () => ({ name: 'a.png', path: '/tmp/a.png', kind: 'file', size: 3, mtime_ms: 50 }));
+		const driver = await createMonitorExplorerDriver({
+			profile,
+			transport: transportStub({ list: listingAPng(), meta: caps({ uploadIfUnchanged: true }), write }),
+			enableWatch: false
+		});
+		expect(await driver.writeBack!('a.png', new Blob(['abc']), { expectUpdatedAt: 40 })).toEqual({ updatedAt: 50, size: 3 });
+		expect(write).toHaveBeenCalledWith('/tmp/a.png', expect.any(Blob), expect.objectContaining({ expectMtimeMs: 40 }));
+	});
+
+	it('writeBack on an older daemon checks the version first and refuses a changed file', async () => {
+		const write = vi.fn();
+		const driver = await createMonitorExplorerDriver({
+			profile,
+			transport: transportStub({
+				list: listingAPng(),
+				stat: vi.fn(async () => ({ name: 'a.png', path: '/tmp/a.png', kind: 'file', mtime_ms: 41 })),
+				write
+			}),
+			enableWatch: false
+		});
+		await expect(driver.writeBack!('a.png', new Blob(['abc']), { expectUpdatedAt: 40 })).rejects.toBeInstanceOf(
+			RemoteChangedError
+		);
+		expect(write).not.toHaveBeenCalled();
+	});
+});
+
+describe('monitor explorer driver: converted media', () => {
+	it('offers the converted stream only when the daemon has ffmpeg', async () => {
+		const mediaUrl = (path: string) => `http://127.0.0.1:8300/v1/fs/media?path=${encodeURIComponent(path)}`;
+		const without = await createMonitorExplorerDriver({
+			profile,
+			transport: transportStub({ list: listingAPng(), mediaUrl }),
+			enableWatch: false
+		});
+		expect(await without.convertedMediaUrl!('clip.avi')).toBeNull();
+		const withFfmpeg = await createMonitorExplorerDriver({
+			profile,
+			transport: transportStub({
+				list: listingAPng(),
+				mediaUrl,
+				meta: vi.fn(async () => ({ capabilities: { fs: { videoConvert: true }, git: { blob: true } } }))
+			}),
+			enableWatch: false
+		});
+		expect((await withFfmpeg.convertedMediaUrl!('clip.avi'))?.url).toBe(
+			'http://127.0.0.1:8300/v1/fs/media?path=%2Ftmp%2Fclip.avi'
+		);
+		const jumped = await createMonitorExplorerDriver({
+			profile,
+			transport: transportStub({
+				list: listingAPng(),
+				mediaUrl: (path: string, start?: number) => `${mediaUrl(path)}${start ? `&t=${start}` : ''}`,
+				mediaInfo: vi.fn(async (_path: string, start?: number) =>
+					start === 90 ? { duration: 600, start: 88.088 } : { duration: 600 }
+				),
+				meta: vi.fn(async () => ({ capabilities: { fs: { videoConvert: true }, git: { blob: true } } }))
+			}),
+			enableWatch: false
+		});
+		// A copied video starts on the keyframe before 90 s: the stream is
+		// asked for that second, and the player is told it.
+		expect(await jumped.convertedMediaUrl!('clip.avi', { start: 90 })).toEqual({
+			url: 'http://127.0.0.1:8300/v1/fs/media?path=%2Ftmp%2Fclip.avi&t=88.088',
+			duration: 600,
+			start: 88.088
+		});
 	});
 });
