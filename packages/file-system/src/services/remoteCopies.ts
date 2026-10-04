@@ -247,7 +247,8 @@ export type RemoteOpenPlan = {
 	pixels?: { width: number; height: number };
 };
 
-function connectionLabel(driver: ExplorerDriver): string {
+/** Where a working copy came from ("Office PC", "B2"), for prompts that name it. */
+export function connectionLabel(driver: ExplorerDriver): string {
 	return driver.label?.trim() || (driver.id === 'b2' ? 'B2' : 'the monitor');
 }
 
@@ -779,9 +780,37 @@ export function setRemoteCopiesForTest(next: {
 export type RemoteOpenChoice = 'copy' | 'cancel' | { alternative: string };
 
 export type RemoteOpenOutcome =
-	| { kind: 'opened'; nodeId: string; conflict: boolean }
+	| { kind: 'opened'; nodeId: string; conflict: boolean; depsCopied?: number; depsNotCopied?: string[] }
 	| { kind: 'cancelled' }
 	| { kind: 'alternative'; id: string };
+
+/**
+ * What the copy of one remote file needs that it cannot carry itself.
+ *
+ * A document's live references name other files, and a per-file working copy
+ * has only itself — so every one of those references would resolve to nothing
+ * in this browser. The host builds this (it is the one that knows `.anim`
+ * from `.skch`; see `rebuildImportedRefs` in `explorerDriver.ts` for why):
+ * `where` is the connection's name, `entries` are the references it can copy,
+ * and `stuck` are ones it saw on the connection but could not resolve.
+ * `null` means nothing worth asking about and Open proceeds.
+ */
+export type RemoteDeps = {
+	/** The copy's own file name, for the prompt's subject line. */
+	name: string;
+	where: string;
+	entries: Array<{ key: string; name: string }>;
+	stuck: Array<{ key: string; name: string }>;
+	/**
+	 * Copy the entries — and, because a copied file may itself reference
+	 * others, everything they reach — into browser files, and repoint the
+	 * document's references at the copies. `copyAll` may partially fail:
+	 * whatever it reached is repointed, `notCopied` names the rest.
+	 */
+	copyAll: () => Promise<{ copied: number; notCopied: string[] }>;
+};
+
+export type RemoteDepsChoice = 'copy' | 'asis' | 'cancel';
 
 /**
  * Everything Files does when a monitor or B2 file is opened, in one place:
@@ -798,6 +827,19 @@ export async function runRemoteOpen(args: {
 	ask: (plan: RemoteOpenPlan, alternatives: RemoteOpenAlternative[]) => Promise<RemoteOpenChoice>;
 	onAlternative?: (id: string, entry: ExplorerEntry, driver: ExplorerDriver) => void | Promise<void>;
 	open: (node: VfsNode) => void | Promise<void>;
+	/**
+	 * The host's read of the copied file's references: null when there is
+	 * nothing the copy is missing. Checked after the copy exists — the scan
+	 * reads bytes that are local by then, so the only network cost is the
+	 * listing that finds what each reference names. Pairs with `askDeps`.
+	 */
+	depsPrompt?: (
+		node: VfsNode,
+		entry: ExplorerEntry,
+		driver: ExplorerDriver,
+		opts: { windowId?: string }
+	) => Promise<RemoteDeps | null>;
+	askDeps?: (deps: RemoteDeps) => Promise<RemoteDepsChoice>;
 }): Promise<RemoteOpenOutcome> {
 	const { driver, entry } = args;
 	const plan = await planRemoteOpen(driver, entry, { image: args.image });
@@ -813,6 +855,32 @@ export async function runRemoteOpen(args: {
 	const nodeId = await openRemoteWorkingCopy(driver, entry, plan, { windowId: args.windowId });
 	const node = await vfs().get(nodeId);
 	if (!node || node.deletedAt != null) throw new Error('The copy is no longer in browser files');
+	// The copy is one file, so its live references name things this browser
+	// does not have. Let the person decide before the document opens; a copy
+	// they declined is left alone, a later Open of the same file reuses it.
+	let depsCopied: number | undefined;
+	let depsNotCopied: string[] | undefined;
+	// A broken read never fails the Open: the document opens as-is, chips
+	// grey, and the standing report the same as any other scan that could not.
+	let deps: RemoteDeps | null = null;
+	try {
+		deps = (await args.depsPrompt?.(node, entry, driver, { windowId: args.windowId })) ?? null;
+	} catch (e) {
+		console.warn('[remoteCopies] dependency check failed; opening as-is', e);
+	}
+	if (deps && args.askDeps) {
+		const choice = await args.askDeps(deps);
+		if (choice === 'cancel') return { kind: 'cancelled' };
+		if (choice === 'copy') {
+			try {
+				const done = await deps.copyAll();
+				depsCopied = done.copied;
+				depsNotCopied = done.notCopied;
+			} catch (e) {
+				depsNotCopied = [e instanceof Error ? e.message : String(e)];
+			}
+		}
+	}
 	await args.open(node);
-	return { kind: 'opened', nodeId, conflict: plan.conflict === true };
+	return { kind: 'opened', nodeId, conflict: plan.conflict === true, depsCopied, depsNotCopied };
 }

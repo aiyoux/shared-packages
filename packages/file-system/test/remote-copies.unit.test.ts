@@ -509,3 +509,101 @@ describe('the Open flow', () => {
 		assert.deepEqual(blocked, { kind: 'cancelled' });
 	});
 });
+
+describe('Open flow: unresolved dependencies', () => {
+	const deps = () => ({
+		name: 'Show.anim',
+		where: 'Office PC',
+		entries: [{ key: 'k1', name: 'Scene.anim' }],
+		stuck: [],
+		copyAll: async () => ({ copied: 1, notCopied: [] })
+	});
+
+	it('asks about missing references before the document opens; cancel does not open', async () => {
+		const files = new Map([['Show.anim', { bytes: text('{}'), updatedAt: 1 }]]);
+		const { driver } = remoteDriver(files);
+		const opened: string[] = [];
+		const asked: number[] = [];
+		const outcome = await runRemoteOpen({
+			driver,
+			entry: entryOf('Show.anim', files.get('Show.anim')!),
+			ask: async () => 'copy',
+			depsPrompt: async () => deps(),
+			askDeps: async (prompt) => {
+				asked.push(1);
+				assert.equal(prompt.name, 'Show.anim');
+				assert.equal(prompt.where, 'Office PC');
+				return 'cancel';
+			},
+			open: (node) => void opened.push(node.name)
+		});
+		assert.deepEqual(outcome, { kind: 'cancelled' });
+		assert.deepEqual(opened, [], 'cancelled Open does not open the document');
+		assert.deepEqual(asked, [1]);
+	});
+
+	it('Open as-is opens without copying anything', async () => {
+		const files = new Map([['Show.anim', { bytes: text('{}'), updatedAt: 1 }]]);
+		const { driver } = remoteDriver(files);
+		const outcome = await runRemoteOpen({
+			driver,
+			entry: entryOf('Show.anim', files.get('Show.anim')!),
+			ask: async () => 'copy',
+			depsPrompt: async () => deps(),
+			askDeps: async () => 'asis',
+			open: () => {}
+		});
+		assert.equal(outcome.kind, 'opened');
+		assert.equal(outcome.depsCopied, undefined, 'nothing was copied');
+	});
+
+	it('copy copies first, reports the count, and still opens when it throws', async () => {
+		const files = new Map([['Show.anim', { bytes: text('{}'), updatedAt: 1 }]]);
+		const { driver } = remoteDriver(files);
+		const order: string[] = [];
+		const ok = await runRemoteOpen({
+			driver,
+			entry: entryOf('Show.anim', files.get('Show.anim')!),
+			ask: async () => 'copy',
+			depsPrompt: async () => deps(),
+			askDeps: async () => 'copy',
+			open: () => {
+				order.push('open');
+			}
+		});
+		assert.deepEqual(order, ['open']);
+		assert.equal(ok.kind, 'opened');
+		assert.equal(ok.depsCopied, 1);
+
+		const failing = ({ ...deps(), copyAll: async () => { throw new Error('link down'); } });
+		const errored = await runRemoteOpen({
+			driver,
+			entry: entryOf('Show.anim', files.get('Show.anim')!),
+			ask: async () => 'copy',
+			depsPrompt: async () => failing,
+			askDeps: async () => 'copy',
+			open: () => {
+				order.push('open');
+			}
+		});
+		assert.equal(errored.kind, 'opened', 'a failed copy still opens the document');
+		assert.equal(errored.depsCopied, undefined);
+		assert.deepEqual(errored.depsNotCopied, ['link down']);
+	});
+
+	it('no prompt and no ask when the host reads nothing missing', async () => {
+		const files = new Map([['Plain.txt', { bytes: text('hi'), updatedAt: 1 }]]);
+		const { driver } = remoteDriver(files);
+		const outcome = await runRemoteOpen({
+			driver,
+			entry: entryOf('Plain.txt', files.get('Plain.txt')!),
+			ask: async () => 'copy',
+			depsPrompt: async () => null,
+			askDeps: async () => {
+				assert.fail('nothing to ask about');
+			},
+			open: () => {}
+		});
+		assert.equal(outcome.kind, 'opened');
+	});
+});

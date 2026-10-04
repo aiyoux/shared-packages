@@ -33,16 +33,20 @@
 		ExplorerUnlinkDrain,
 		RemoteKind
 	} from './componentTypes.js';
-	import type { FileTypeId } from '../types.js';
+	import type { FileTypeId, VfsNode } from '../types.js';
 	import OpProgressChip from './OpProgressChip.svelte';
 	import DualPhaseConfirm from './DualPhaseConfirm.svelte';
 	import RemoteOpenPrompt from './RemoteOpenPrompt.svelte';
+	import RemoteDepsDialog from './RemoteDepsDialog.svelte';
 	import { getPreviewKind } from './feThumbnails.js';
 	import { memoryFileId } from '../fileSourceIds.js';
 	import { openDiskFile } from '../disk/fileSource.js';
 	import {
 		runRemoteOpen,
 		startRemoteCopySync,
+		connectionLabel,
+		type RemoteDeps,
+		type RemoteDepsChoice,
 		type RemoteOpenAlternative,
 		type RemoteOpenChoice,
 		type RemoteOpenPlan
@@ -338,6 +342,18 @@
 			entry: ExplorerEntry,
 			driver: ExplorerDriver
 		) => void | Promise<void>;
+		/**
+		 * What the copy of a remote file references that it cannot carry, and
+		 * whether it can be copied in. The host reads the document (this
+		 * package does not know formats); the dialog and the choice are ours,
+		 * shared with the Open prompt so both stay the same words everywhere.
+		 */
+		remoteDeps?: (
+			node: VfsNode,
+			entry: ExplorerEntry,
+			driver: ExplorerDriver,
+			opts: { windowId?: string }
+		) => Promise<RemoteDeps | null>;
 	};
 
 	let {
@@ -347,6 +363,7 @@
 		openRemotes = false,
 		remoteOpenAlternatives,
 		onRemoteOpenAlternative,
+		remoteDeps,
 		accept,
 		hideIncompatible = false,
 		openLabel,
@@ -563,6 +580,12 @@
 		plan: RemoteOpenPlan;
 		alternatives: RemoteOpenAlternative[];
 		resolve: (choice: RemoteOpenChoice) => void;
+	} | null>(null);
+	let remoteDepsPrompt = $state<{
+		/** Same file as the Open that parked here; the dialog waits for the choice. */
+		name: string;
+		deps: RemoteDeps;
+		resolve: (choice: RemoteDepsChoice) => void;
 	} | null>(null);
 	let osDropPane = $state<PaneId | null>(null);
 	let dualRootEl = $state<HTMLDivElement | null>(null);
@@ -789,6 +812,18 @@
 		resolve?.(choice);
 	}
 
+	function askRemoteDeps(deps: RemoteDeps): Promise<RemoteDepsChoice> {
+		return new Promise((resolve) => {
+			remoteDepsPrompt = { name: deps.name, deps, resolve };
+		});
+	}
+
+	function answerRemoteDeps(choice: RemoteDepsChoice) {
+		const resolve = remoteDepsPrompt?.resolve;
+		remoteDepsPrompt = null;
+		resolve?.(choice);
+	}
+
 	/**
 	 * Open a monitor or B2 file: ask first when the copy would be slow (or
 	 * cannot happen), copy it into browser files (or reuse the copy already
@@ -810,11 +845,27 @@
 				alternativesFor: remoteOpenAlternatives,
 				ask: askRemoteOpen,
 				onAlternative: onRemoteOpenAlternative,
+				depsPrompt: remoteDeps,
+				askDeps: askRemoteDeps,
 				open: (node) =>
 					onOpen({ id: node.id, kind: 'file', name: node.name, fileType: node.fileType }, { kind: 'local' })
 			});
 			if (outcome.kind === 'opened' && outcome.conflict) {
 				toast.info(`${entry.name} changed where it is stored and on this device. Opened this device's copy.`);
+			}
+			if (outcome.kind === 'opened' && outcome.depsNotCopied !== undefined) {
+				// Partial is normal: some references live outside the folder this
+				// file sits in, the copy threw, or it was mid-copy. The document
+				// is open either way, with what was reached repointed.
+				const count = outcome.depsCopied ?? 0;
+				const detail = outcome.depsNotCopied.length
+					? ` Not copied: ${outcome.depsNotCopied.slice(0, 4).join(', ')}${outcome.depsNotCopied.length > 4 ? '…' : ''}`
+					: '';
+				toast.info(
+					count === 0
+						? `${entry.name} opened with no linked files copied.${detail}`
+						: `Copied ${count} linked file${count === 1 ? '' : 's'} for ${entry.name}.${detail}`
+				);
 			}
 		} catch (e) {
 			if (e instanceof Error && e.name === 'AbortError') toast.info('Open cancelled');
@@ -2690,6 +2741,12 @@
 			onCopy={() => answerRemoteOpen('copy')}
 			onAlternative={(alternative) => answerRemoteOpen({ alternative })}
 			onCancel={() => answerRemoteOpen('cancel')}
+		/>
+	{/if}
+	{#if remoteDepsPrompt}
+		<RemoteDepsDialog
+			deps={remoteDepsPrompt.deps}
+			onChoice={(choice) => answerRemoteDeps(choice)}
 		/>
 	{/if}
 	{#if dualPhasePrompt}
