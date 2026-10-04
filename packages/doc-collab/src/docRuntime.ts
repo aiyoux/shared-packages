@@ -54,6 +54,12 @@ export type CollabDocFrame<Doc> = LogFrame & {
 				 */
 				applied?: string[];
 				results?: Record<string, DocCommitResult>;
+				/**
+				 * The file generation the document's content is based on, when it is
+				 * a file's (`CollabPort.fileGeneration`). A replica that takes this
+				 * document takes its base with it.
+				 */
+				fileGeneration?: number;
 		  }
 		| { kind: 'edit' }
 		| { kind: 'hello'; role: CollabRole }
@@ -63,7 +69,14 @@ export type CollabDocFrame<Doc> = LogFrame & {
 export type CollabPort<Doc> = {
 	snapshot: () => Doc;
 	/** `applied`: the ids of the latest edits `doc` holds, when the snapshot says. */
-	replace: (doc: Doc, applied?: readonly string[], results?: Record<string, DocCommitResult>) => void;
+	replace: (
+		doc: Doc,
+		applied?: readonly string[],
+		results?: Record<string, DocCommitResult>,
+		fileGeneration?: number
+	) => void;
+	/** The file generation `snapshot()` is based on, sent with a snapshot. */
+	fileGeneration?: () => number | null;
 	commitResults?: () => Record<string, DocCommitResult>;
 	/** The ids of the latest edits the document holds, sent with a snapshot. */
 	appliedIds?: () => string[];
@@ -83,6 +96,11 @@ export type CollabRuntime = {
 };
 
 type AnyFrame = CollabDocFrame<unknown>;
+
+function fileGenerationOf<D>(port: CollabPort<D>): { fileGeneration?: number } {
+	const generation = port.fileGeneration?.();
+	return typeof generation === 'number' ? { fileGeneration: generation } : {};
+}
 
 const LOG_KINDS = new Set(['snapshot', 'edit']);
 const CONTROL_KINDS = new Set(['hello', 'resync']);
@@ -152,6 +170,7 @@ function createOrderedRuntime<Doc>(
 			doc: port.snapshot(),
 			...(port.appliedIds ? { applied: port.appliedIds() } : {}),
 			...(port.commitResults ? { results: port.commitResults() } : {}),
+			...fileGenerationOf(port),
 			seq: 0,
 			scope: 'doc',
 			clientId,
@@ -168,7 +187,7 @@ function createOrderedRuntime<Doc>(
 		isSnapshot: (frame) => frame.kind === 'snapshot',
 		applyFrame(frame) {
 			if (frame.kind === 'snapshot') {
-				port.replace(frame.doc as Doc, frame.applied, frame.results);
+				port.replace(frame.doc as Doc, frame.applied, frame.results, frame.fileGeneration);
 				return true;
 			}
 			return port.apply(frame as CollabDocFrame<Doc>);

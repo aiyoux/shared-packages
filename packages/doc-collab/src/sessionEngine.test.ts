@@ -566,36 +566,61 @@ describe('confirmed document operations', () => {
 });
 
 describe('session engine: the save anchor (fileGeneration)', () => {
-	it('is null until a read or a saved frame anchors it, and moves with every save notice', async () => {
+	it('is null until a read, a snapshot or a saved frame anchors it, and moves with every save notice', async () => {
 		const b = browser();
+		const alone = createDocSession<Doc, Op>({ room: 'anchor-alone', clientId: 'z', tab: b.tab, initial: { items: [] }, reduce });
+		await settle();
+		expect(alone.fileGeneration).toBeNull();
 		const anchored = createDocSession<Doc, Op>({ room: 'anchor', clientId: 'a', tab: b.tab, initial: { items: [] }, reduce, initialGeneration: 3 });
 		await settle();
 		expect(anchored.fileGeneration).toBe(3);
-		const bare = createDocSession<Doc, Op>({ room: 'anchor', clientId: 'b', tab: b.tab, initial: { items: [] }, reduce });
+		// Joining takes the sequencer's document, and the base it came with.
+		const joined = createDocSession<Doc, Op>({ room: 'anchor', clientId: 'b', tab: b.tab, initial: { items: [] }, reduce });
 		await settle();
-		expect(bare.fileGeneration).toBeNull();
-		bare.announceSaved(5);
+		expect(joined.fileGeneration).toBe(3);
+		joined.announceSaved(5);
 		await settle();
 		// The announced save moves both the session's own anchor and a
 		// room-mate's, like a `saved` frame does.
-		expect(bare.fileGeneration).toBe(5);
+		expect(joined.fileGeneration).toBe(5);
 		expect(anchored.fileGeneration).toBe(5);
-		anchored.destroy(); bare.destroy();
+		alone.destroy(); anchored.destroy(); joined.destroy();
 	});
 
-	it('adoptFileGeneration seeds it locally and broadcast nothing', async () => {
+	it('adoptFileGeneration seeds it locally and broadcasts nothing', async () => {
 		const b = browser();
 		const a = createDocSession<Doc, Op>({ room: 'adopt', clientId: 'a', tab: b.tab, initial: { items: [] }, reduce });
 		await settle();
 		const b2 = createDocSession<Doc, Op>({ room: 'adopt', clientId: 'c', tab: b.tab, initial: { items: [] }, reduce });
 		await settle();
 		a.adoptFileGeneration(9);
+		await settle();
 		expect(a.fileGeneration).toBe(9);
-		// A fresh session that already had an anchor is not overwritten by one.
+		// No frame carries a local adoption: the room-mate still knows nothing.
+		expect(b2.fileGeneration).toBeNull();
+		// It replaces an anchor the session already had; whether to call it is
+		// the caller's decision (`windowSession` only seeds an unanchored one).
 		const d = createDocSession<Doc, Op>({ room: 'adopt-2', clientId: 'd', tab: b.tab, initial: { items: [] }, reduce, initialGeneration: 2 });
 		await settle();
 		d.adoptFileGeneration(4);
 		expect(d.fileGeneration).toBe(4);
 		a.destroy(); b2.destroy(); d.destroy();
+	});
+
+	it("a tab that takes the sequencer's document takes its file base too", async () => {
+		const b = browser();
+		// The first tab read generation 3 and edited.
+		const a = createDocSession<Doc, Op>({ room: 'base', clientId: 'a', tab: b.tab, initial: { items: ['edit'] }, reduce, initialGeneration: 3 });
+		await settle();
+		// A foreign write moved the file to 4; a second tab reads that and
+		// seeds its anchor from it before it hears the sequencer.
+		const late = createDocSession<Doc, Op>({ room: 'base', clientId: 'b', tab: b.tab, initial: { items: [] }, reduce });
+		late.adoptFileGeneration(4);
+		await settle();
+		// It shows the first tab's edits, so its save must CAS against their
+		// base: anchored at 4 it would stamp over the foreign write.
+		expect(late.doc.items).toEqual(['edit']);
+		expect(late.fileGeneration).toBe(3);
+		a.destroy(); late.destroy();
 	});
 });

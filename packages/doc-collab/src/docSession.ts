@@ -56,7 +56,8 @@ export type DocSession<Doc, Op> = {
 	/** This tab wrote the file. Tabs in the same room adopt the generation. */
 	announceSaved(generation: number, fingerprint?: string): void;
 	/** The file generation this session last knew: the read that seeded it,
-	 *  a save it made, or a save another tab in the room announced. CAS anchor
+	 *  a save it made, a save another tab in the room announced, or the base
+	 *  the sequencer's snapshot carried with its document. CAS anchor
 	 *  for session saves — never a fresh read, which would absorb a foreign
 	 *  write into the baseline and stamp over it. Null until first anchored. */
 	readonly fileGeneration: number | null;
@@ -111,8 +112,9 @@ export function createDocSession<Doc, Op>(opts: DocSessionOpts<Doc, Op>): DocSes
 	let doc = opts.initial;
 	let destroyed = false;
 	/** The file generation this room's reads and saves last knew (see
-	 *  `fileGeneration` above). Seeded at bind, moved by `announceSaved` and
-	 *  a same-room 'saved' frame — never by an edit. */
+	 *  `fileGeneration` above). Seeded at bind, moved by `announceSaved`, a
+	 *  same-room 'saved' frame and a sequencer snapshot that carries one —
+	 *  never by an edit. */
 	let fileGeneration: number | null = opts.initialGeneration ?? null;
 	/** Submitted while no runtime existed, in order; sent once one does. */
 	const held: CollabDocFrame<unknown>[] = [];
@@ -185,8 +187,16 @@ export function createDocSession<Doc, Op>(opts: DocSessionOpts<Doc, Op>): DocSes
 					// small enough to ride every snapshot.
 					appliedIds: () => [...applied].slice(-SNAPSHOT_APPLIED),
 					commitResults: () => Object.fromEntries(results),
-					replace(next, ids, receipts) {
+					fileGeneration: () => fileGeneration,
+					replace(next, ids, receipts, base) {
 						doc = next;
+						// The sequencer's document comes with the file read it is based
+						// on. A tab that seeded its own anchor from a newer read and then
+						// took this document must CAS against this one's base, or its
+						// save would stamp over the write between the two reads.
+						// A roomless session is another device's (joined over a link): the
+						// base is of that device's file, never this one's.
+						if (typeof base === 'number' && engine.room) fileGeneration = base;
 						if (ids) {
 							// The snapshot's document is what this one is now: what it holds
 							// is applied, and our copies of those edits are confirmed.
