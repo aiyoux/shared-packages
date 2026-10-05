@@ -941,7 +941,16 @@
 	<div class="portal-root" use:portalModal>
 		<div
 			class="fe-float-backdrop"
-			use:overlay={{ kind: 'modal', panel: '.fe-float-card', onClose }}
+			use:overlay={{
+				kind: 'modal',
+				panel: '.fe-float-card',
+				onClose,
+				// Quick look opens from the focused row on Space and closes on
+				// the next Space: keep focus where it was instead of moving it
+				// to the first header button (Rename). Tab still enters via
+				// the modal trap; Escape still closes via the overlay.
+				focusOnOpen: false
+			}}
 			data-testid="fe-file-preview"
 			data-multi={multi ? 'true' : undefined}
 		>

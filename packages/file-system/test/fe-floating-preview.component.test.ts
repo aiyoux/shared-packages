@@ -554,6 +554,34 @@ describe('FeFloatingPreview', () => {
 		expect(screen.queryByTestId('fe-float-meta-toggle')).toBeNull();
 	});
 
+	it('leaves focus on the opener instead of stealing it to Rename', async () => {
+		// Space opens quick look from the focused row; the modal used to move
+		// focus to the Rename pencil, so the next space renamed instead of
+		// closing the preview.
+		const opener = document.createElement('button');
+		opener.textContent = 'row';
+		document.body.appendChild(opener);
+		opener.focus();
+		try {
+			render(FeFloatingPreview, {
+				props: {
+					entry: { id: 'n1', kind: 'file', parentId: null, name: 'note.txt', fileType: 'text', contentType: 'text/plain', size: 5 },
+					driver: driverWith(new Blob(['hello'])),
+					variant: 'popup',
+					onClose: () => {},
+					onRename: () => {}
+				}
+			});
+			const pencil = await screen.findByTestId('fe-preview-rename');
+			expect(pencil).toBeTruthy();
+			// The overlay moves focus in a microtask after mount; wait past it.
+			await new Promise((r) => setTimeout(r, 50));
+			expect(document.activeElement).toBe(opener);
+		} finally {
+			opener.remove();
+		}
+	});
+
 	it('falls back to an iframe when PDF rendering throws', async () => {
 		const { renderPdfPageToCanvas } = await import('../src/ui/feThumbnails.js');
 		vi.mocked(renderPdfPageToCanvas).mockRejectedValue(new Error('no wasm'));
