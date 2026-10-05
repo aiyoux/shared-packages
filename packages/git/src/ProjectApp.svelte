@@ -1,4 +1,5 @@
 <script lang="ts">
+	import '@shared-packages/design-system/segmented.css';
 	import { untrack, type Snippet } from 'svelte';
 	import {
 		FeStorageDialog,

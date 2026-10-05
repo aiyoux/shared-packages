@@ -1,4 +1,5 @@
 <script lang="ts">
+	import '@shared-packages/design-system/button.css';
 	import { overlay } from '@shared-packages/design-system';
 	import { onDestroy, tick, untrack, type Snippet } from 'svelte';
 	import FeIcon from './FeIcon.svelte';

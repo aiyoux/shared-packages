@@ -1,4 +1,5 @@
 <script lang="ts">
+	import '@shared-packages/design-system/button.css';
 	/**
 	 * Storage controls for one project folder.
 	 *

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import '@shared-packages/design-system/button.css';
 	/**
 	 * The "AI models" tab of the settings popup: per-app default models, the
 	 * browser library, and one AI panel per saved monitor.

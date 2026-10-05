@@ -1,4 +1,5 @@
 <script lang="ts">
+  import '@shared-packages/design-system/button.css';
   import { onMount } from 'svelte';
   import { browserModelStore } from '@shared-packages/model-store';
   let estimate = $state<StorageEstimate | null>(null);

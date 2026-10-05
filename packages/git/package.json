@@ -28,6 +28,7 @@
     "check": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
+    "@shared-packages/design-system": "file:../design-system",
     "@shared-packages/file-system": "file:../file-system",
     "@shared-packages/ui": "file:../ui",
     "buffer": "^6.0.3",

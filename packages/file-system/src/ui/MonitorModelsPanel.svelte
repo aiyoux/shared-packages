@@ -1,4 +1,5 @@
 <script lang="ts">
+	import '@shared-packages/design-system/button.css';
 	/**
 	 * The AI panel for one monitor, inside the settings popup's "AI models"
 	 * tab: profile/library/native-model management and permanent setup guides. Moved

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import '@shared-packages/design-system/button.css';
 	/**
 	 * The "Connections" tab of the settings popup: B2 and monitor
 	 * list/new/edit, moved verbatim out of RemoteConnectionsDialog. Escape

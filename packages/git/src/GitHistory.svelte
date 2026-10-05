@@ -1,4 +1,5 @@
 <script lang="ts">
+	import '@shared-packages/design-system/button.css';
 	import { untrack } from 'svelte';
 	import type { GitAuthor, GitFileDiff, GitHost, GitSnapshot } from './types.js';
 	import { applySelection, type DiffHunk } from './diffLines.js';
