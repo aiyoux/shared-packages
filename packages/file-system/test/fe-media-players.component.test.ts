@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen } from '@testing-library/svelte';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/svelte';
+import type { ComponentProps } from 'svelte';
 import FeVideoPlayer from '../src/ui/FeVideoPlayer.svelte';
 import FeAudioPlayer from '../src/ui/FeAudioPlayer.svelte';
 
@@ -57,6 +58,229 @@ describe('video player', () => {
 		const video = document.querySelector('video')!;
 		await fireEvent.click(screen.getByTestId('fe-vp-rate'));
 		expect(video.playbackRate).toBe(1.25);
+	});
+});
+
+describe('live video scrubbing', () => {
+	function animationFrames() {
+		let id = 0;
+		const callbacks = new Map<number, FrameRequestCallback>();
+		vi.spyOn(globalThis, 'requestAnimationFrame').mockImplementation((callback) => {
+			callbacks.set(++id, callback);
+			return id;
+		});
+		vi.spyOn(globalThis, 'cancelAnimationFrame').mockImplementation((frame) => { callbacks.delete(frame); });
+		return {
+			callbacks,
+			async flush() {
+				await act(() => {
+					const queued = [...callbacks.values()];
+					callbacks.clear();
+					for (const callback of queued) callback(0);
+				});
+			}
+		};
+	}
+
+	async function mount(props: Partial<ComponentProps<typeof FeVideoPlayer>> = {}) {
+		const view = render(FeVideoPlayer, { props: { src: 'blob:clip', name: 'clip.mp4', ...props } });
+		const video = document.querySelector('video')!;
+		const track = screen.getByTestId('fe-vp-track');
+		let time = 0;
+		let seeking = false;
+		const seeks = vi.fn((target: number) => { time = target; seeking = true; });
+		Object.defineProperties(video, {
+			duration: { configurable: true, value: 100 },
+			readyState: { configurable: true, value: 1 },
+			currentTime: { configurable: true, get: () => time, set: seeks },
+			seeking: { configurable: true, get: () => seeking }
+		});
+		vi.spyOn(track, 'getBoundingClientRect').mockReturnValue({ left: 100, width: 200 } as DOMRect);
+		await fireEvent.loadedMetadata(video);
+		return {
+			view, video, track, seeks,
+			async pointer(type: string, clientX: number, pointerId = 1, button = 0) {
+				const event = new MouseEvent(type, { bubbles: true, cancelable: true, clientX, button });
+				Object.defineProperty(event, 'pointerId', { value: pointerId });
+				await fireEvent(track, event);
+			},
+			async decoded() {
+				seeking = false;
+				await fireEvent.seeked(video);
+			}
+		};
+	}
+
+	it('updates frames in both directions before release without aborting the frame being decoded', async () => {
+		const frames = animationFrames();
+		const player = await mount();
+		await player.pointer('pointerdown', 140);
+		expect(player.video.currentTime).toBe(20);
+		expect(document.activeElement).toBe(player.track);
+		await player.pointer('pointermove', 160);
+		await player.pointer('pointermove', 180);
+		await frames.flush();
+		expect(player.seeks).toHaveBeenCalledTimes(1);
+		expect(player.track.getAttribute('aria-valuenow')).toBe('40');
+		await player.decoded();
+		await frames.flush();
+		expect(player.video.currentTime).toBe(40);
+		await player.pointer('pointermove', 120);
+		await player.decoded();
+		await frames.flush();
+		expect(player.video.currentTime).toBe(10);
+		await player.pointer('pointerup', 175);
+		expect(player.video.currentTime).toBe(37.5);
+		await frames.flush();
+		expect(player.video.currentTime).toBe(37.5);
+		expect(play).not.toHaveBeenCalled();
+	});
+
+	it('combines rapid moves into the latest target for each animation frame', async () => {
+		const frames = animationFrames();
+		const player = await mount();
+		await player.pointer('pointerdown', 140);
+		await player.decoded();
+		await player.pointer('pointermove', 180);
+		await player.pointer('pointermove', 160);
+		await player.pointer('pointermove', 130);
+		expect(frames.callbacks.size).toBe(1);
+		await frames.flush();
+		expect(player.seeks.mock.calls.map(([target]) => target)).toEqual([20, 15]);
+	});
+
+	it('pauses during a drag and resumes playback only when it ends', async () => {
+		animationFrames();
+		const player = await mount();
+		await fireEvent.click(screen.getByTestId('fe-vp-play'));
+		await player.pointer('pointerdown', 140);
+		expect(pause).toHaveBeenCalledTimes(1);
+		expect(player.video.paused).toBe(true);
+		expect(document.querySelector('.fe-vp-bigplay')).toBeNull();
+		await player.pointer('pointermove', 180);
+		expect(play).toHaveBeenCalledTimes(1);
+		await player.pointer('pointerup', 180);
+		expect(play).toHaveBeenCalledTimes(2);
+		expect(player.video.paused).toBe(false);
+	});
+
+	it.each(['pointercancel', 'lostpointercapture'])('ends a drag on %s and ignores later moves', async (event) => {
+		const frames = animationFrames();
+		const player = await mount();
+		await fireEvent.click(screen.getByTestId('fe-vp-play'));
+		await player.pointer('pointerdown', 140);
+		await player.pointer('pointermove', 160);
+		await player.pointer(event, 160);
+		expect(player.video.currentTime).toBe(30);
+		expect(player.video.paused).toBe(false);
+		await player.pointer('pointermove', 180);
+		await frames.flush();
+		expect(player.video.currentTime).toBe(30);
+	});
+
+	it('ignores other pointers and secondary buttons and clamps captured drags outside the track', async () => {
+		animationFrames();
+		const player = await mount();
+		await player.pointer('pointerdown', 140, 2, 2);
+		expect(player.seeks).not.toHaveBeenCalled();
+		await player.pointer('pointerdown', 140);
+		await player.pointer('pointerup', 300, 2);
+		expect(player.video.currentTime).toBe(20);
+		await player.pointer('pointerup', 500);
+		expect(player.video.currentTime).toBe(100);
+		await player.pointer('pointerdown', 140);
+		await player.pointer('pointerup', -100);
+		expect(player.video.currentTime).toBe(0);
+	});
+
+	it('discards queued seeks when another source opens', async () => {
+		const frames = animationFrames();
+		const player = await mount();
+		await player.pointer('pointerdown', 140);
+		await player.pointer('pointermove', 180);
+		await player.view.rerender({ src: 'blob:next' });
+		await player.decoded();
+		await frames.flush();
+		expect(player.seeks).toHaveBeenCalledTimes(1);
+		await player.pointer('pointermove', 200);
+		await frames.flush();
+		expect(player.seeks).toHaveBeenCalledTimes(1);
+	});
+
+	it('cancels queued frame work when the player closes', async () => {
+		const frames = animationFrames();
+		const player = await mount();
+		await player.pointer('pointerdown', 140);
+		await player.pointer('pointermove', 180);
+		await player.view.unmount();
+		expect(frames.callbacks.size).toBe(0);
+		await frames.flush();
+		expect(player.seeks).toHaveBeenCalledTimes(1);
+	});
+
+	it('serializes converted-stream restarts and applies the latest drag target as frames arrive', async () => {
+		const frames = animationFrames();
+		let release!: () => void;
+		const pending = new Promise<void>((resolve) => { release = resolve; });
+		const onRestart = vi.fn(() => pending);
+		const player = await mount({ mediaKey: 'clip', timeline: { start: 0, duration: 100, restartable: true }, onRestart });
+		await player.pointer('pointerdown', 140);
+		expect(onRestart).toHaveBeenCalledExactlyOnceWith(20);
+		await player.pointer('pointermove', 160);
+		await player.pointer('pointermove', 180);
+		await frames.flush();
+		expect(onRestart).toHaveBeenCalledTimes(1);
+		Object.defineProperty(player.video, 'buffered', { configurable: true, value: { length: 1, start: () => 0, end: () => 50 } });
+		await player.view.rerender({ src: 'blob:converted', timeline: { start: 20, duration: 100, restartable: true } });
+		await act(async () => { release(); await pending; });
+		await fireEvent.loadedMetadata(player.video);
+		await frames.flush();
+		expect(onRestart).toHaveBeenCalledTimes(1);
+		expect(player.video.currentTime).toBe(20);
+		expect(player.track.getAttribute('aria-valuenow')).toBe('40');
+		await player.pointer('pointerup', 180);
+		expect(play).not.toHaveBeenCalled();
+	});
+
+	it('resumes at the release position after a converted-stream restart finishes', async () => {
+		const frames = animationFrames();
+		let release!: () => void;
+		const pending = new Promise<void>((resolve) => { release = resolve; });
+		const onRestart = vi.fn(() => pending);
+		const player = await mount({ mediaKey: 'clip', timeline: { start: 0, duration: 100, restartable: true }, onRestart });
+		await fireEvent.click(screen.getByTestId('fe-vp-play'));
+		await player.pointer('pointerdown', 140);
+		await player.pointer('pointermove', 180);
+		await player.pointer('pointerup', 190);
+		expect(player.video.paused).toBe(true);
+		expect(onRestart).toHaveBeenCalledExactlyOnceWith(20);
+		Object.defineProperty(player.video, 'buffered', { configurable: true, value: { length: 1, start: () => 0, end: () => 50 } });
+		await player.view.rerender({ src: 'blob:converted', timeline: { start: 20, duration: 100, restartable: true } });
+		await act(async () => { release(); await pending; });
+		await fireEvent.loadedMetadata(player.video);
+		await frames.flush();
+		expect(player.video.currentTime).toBe(25);
+		expect(player.track.getAttribute('aria-valuenow')).toBe('45');
+		expect(player.video.paused).toBe(false);
+		expect(play).toHaveBeenCalledTimes(2);
+		expect(onRestart).toHaveBeenCalledTimes(1);
+	});
+
+	it('ignores a converted-stream completion after another file opens', async () => {
+		const frames = animationFrames();
+		let release!: () => void;
+		const pending = new Promise<void>((resolve) => { release = resolve; });
+		const onRestart = vi.fn(() => pending);
+		const player = await mount({ mediaKey: 'clip', timeline: { start: 0, duration: 100, restartable: true }, onRestart });
+		await fireEvent.click(screen.getByTestId('fe-vp-play'));
+		await player.pointer('pointerdown', 140);
+		await player.pointer('pointermove', 180);
+		await player.view.rerender({ src: 'blob:next', mediaKey: 'next', timeline: { start: 0, restartable: false } });
+		await act(async () => { release(); await pending; });
+		await frames.flush();
+		expect(player.seeks).not.toHaveBeenCalled();
+		expect(onRestart).toHaveBeenCalledTimes(1);
+		expect(play).toHaveBeenCalledTimes(1);
 	});
 });
 

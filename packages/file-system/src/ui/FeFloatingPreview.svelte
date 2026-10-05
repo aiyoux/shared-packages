@@ -858,8 +858,9 @@
 				<FeVideoPlayer
 					src={blobUrl}
 					name={entry.name}
+					mediaKey={`${driver.id}:${entry.id}`}
 					timeline={mediaTimeline}
-					onRestart={(at) => void restartAt(at)}
+					onRestart={restartAt}
 					onError={(source) => void streamFailed(source)}
 					testid="fe-float-video"
 				/>

@@ -1,6 +1,6 @@
 <script lang="ts">
 	import '@shared-packages/design-system/button.css';
-	import { onDestroy } from 'svelte';
+	import { onDestroy, untrack } from 'svelte';
 	import { formatClock } from '@shared-packages/ui/waveform';
 	import FeIcon from './FeIcon.svelte';
 	import {
@@ -22,6 +22,7 @@
 	let {
 		src,
 		name,
+		mediaKey,
 		timeline = RANGED,
 		onRestart,
 		onError,
@@ -29,9 +30,11 @@
 	}: {
 		src: string;
 		name: string;
+		/** Stable across stream restarts, different when another file opens. */
+		mediaKey?: string;
 		timeline?: MediaTimeline;
-		/** Ask for the converted stream again from file second `at`. */
-		onRestart?: (at: number) => void;
+		/** Ask for the converted stream from `at`; a promise serializes restarts while scrubbing. */
+		onRestart?: (at: number) => void | Promise<void>;
 		onError?: (source: string) => void;
 		testid?: string;
 	} = $props();
@@ -52,10 +55,18 @@
 	let waiting = $state(false);
 	/** Resume after a converted stream restarts at a new point. */
 	let resumeAfterRestart = false;
+	let resumeAfterScrub = false;
+	let scrubPointerId: number | null = null;
+	let scrubFrame: number | null = null;
+	let pendingSeek: number | null = null;
+	let restartPending = false;
+	let seekGeneration = 0;
 
 	const duration = $derived(fileDuration(timeline, elementDuration));
 	const now = $derived(fileTime(timeline, elementTime));
 	const progress = $derived(duration ? Math.min(1, now / duration) : 0);
+	const displayedTime = $derived(scrubbing && hoverTime !== null ? hoverTime : now);
+	const seekKey = $derived(mediaKey ?? src);
 	const canPip = typeof document !== 'undefined' && 'pictureInPictureEnabled' in document && document.pictureInPictureEnabled;
 
 	function sync() {
@@ -74,14 +85,75 @@
 
 	function seekTo(target: number) {
 		if (!video) return;
+		if (restartPending) {
+			pendingSeek = target;
+			return 'restart';
+		}
 		const plan = planSeek(timeline, target, bufferedRanges(video), duration);
 		if (plan.kind === 'native') {
-			video.currentTime = plan.elementTime;
+			if (video.currentTime !== plan.elementTime) video.currentTime = plan.elementTime;
 			elementTime = plan.elementTime;
 		} else {
-			resumeAfterRestart = playing || resumeAfterRestart;
-			onRestart?.(plan.at);
+			resumeAfterRestart = (!scrubbing && playing) || resumeAfterRestart;
+			const generation = seekGeneration;
+			restartPending = true;
+			void Promise.resolve().then(() => {
+				if (generation === seekGeneration) return onRestart?.(plan.at);
+			}).catch(() => {}).finally(() => {
+				if (generation !== seekGeneration) return;
+				restartPending = false;
+				if (pendingSeek !== null) scheduleScrubSeek();
+			});
 		}
+		return plan.kind;
+	}
+
+	function cancelScrubFrame() {
+		if (scrubFrame !== null) cancelAnimationFrame(scrubFrame);
+		scrubFrame = null;
+	}
+
+	function resumeScrubPlayback(restarting = false) {
+		if (scrubbing || !resumeAfterScrub) return;
+		resumeAfterScrub = false;
+		if (restarting || restartPending) resumeAfterRestart = true;
+		else void video?.play().catch(() => {});
+	}
+
+	function flushScrubSeek(final = false) {
+		// Let a seek decode its frame before applying the latest drag position.
+		// Continually replacing an unfinished seek can leave the video frozen.
+		if (!video || pendingSeek === null || restartPending || (!final && video.seeking)) return;
+		const plan = planSeek(timeline, pendingSeek, bufferedRanges(video), duration);
+		if (plan.kind === 'native' && video.readyState === 0) return;
+		const target = pendingSeek;
+		pendingSeek = null;
+		resumeScrubPlayback(seekTo(target) === 'restart');
+	}
+
+	function scheduleScrubSeek() {
+		if (scrubFrame !== null) return;
+		scrubFrame = requestAnimationFrame(() => {
+			scrubFrame = null;
+			flushScrubSeek();
+		});
+	}
+
+	function onSeekReady() {
+		sync();
+		if (pendingSeek !== null) scheduleScrubSeek();
+	}
+
+	function resetScrub() {
+		seekGeneration += 1;
+		cancelScrubFrame();
+		pendingSeek = null;
+		restartPending = false;
+		scrubPointerId = null;
+		scrubbing = false;
+		hoverTime = null;
+		resumeAfterScrub = false;
+		resumeAfterRestart = false;
 	}
 
 	function timeAt(clientX: number): number {
@@ -91,20 +163,48 @@
 	}
 
 	function onTrackDown(e: PointerEvent) {
-		if (!duration) return;
+		if (!duration || !video || e.button !== 0 || scrubbing) return;
+		e.preventDefault();
+		track?.focus({ preventScroll: true });
 		scrubbing = true;
+		scrubPointerId = e.pointerId;
+		resumeAfterScrub = !video.paused && !video.ended;
+		if (resumeAfterScrub) video.pause();
 		(e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
 		hoverTime = timeAt(e.clientX);
+		pendingSeek = hoverTime;
+		flushScrubSeek();
 	}
 
 	function onTrackMove(e: PointerEvent) {
+		if (scrubbing && e.pointerId !== scrubPointerId) return;
 		hoverTime = timeAt(e.clientX);
+		if (scrubbing) {
+			pendingSeek = hoverTime;
+			scheduleScrubSeek();
+		}
 	}
 
 	function onTrackUp(e: PointerEvent) {
-		if (!scrubbing) return;
+		if (!scrubbing || e.pointerId !== scrubPointerId) return;
 		scrubbing = false;
-		seekTo(timeAt(e.clientX));
+		scrubPointerId = null;
+		hoverTime = timeAt(e.clientX);
+		pendingSeek = hoverTime;
+		cancelScrubFrame();
+		flushScrubSeek(true);
+		const el = e.currentTarget as HTMLElement;
+		if (el.hasPointerCapture?.(e.pointerId)) el.releasePointerCapture(e.pointerId);
+	}
+
+	function onTrackCancel(e: PointerEvent) {
+		if (!scrubbing || e.pointerId !== scrubPointerId) return;
+		scrubbing = false;
+		scrubPointerId = null;
+		cancelScrubFrame();
+		if (pendingSeek !== null) flushScrubSeek(true);
+		else resumeScrubPlayback();
+		hoverTime = null;
 	}
 
 	function onTrackKey(e: KeyboardEvent) {
@@ -161,16 +261,25 @@
 		fullscreen = document.fullscreenElement === root;
 	}
 
-	// A restarted converted stream is a new `src`: keep playing if it was.
+	$effect(() => {
+		void seekKey;
+		untrack(resetScrub);
+	});
+
+	// A restarted converted stream is a new `src`: keep playing if it was,
+	// after the drag's latest target has been applied.
 	$effect(() => {
 		void src;
-		elementTime = 0;
-		if (!video || !resumeAfterRestart) return;
-		resumeAfterRestart = false;
-		void video.play().catch(() => {});
+		untrack(() => {
+			elementTime = 0;
+			if (!video || !resumeAfterRestart || scrubbing || pendingSeek !== null) return;
+			resumeAfterRestart = false;
+			void video.play().catch(() => {});
+		});
 	});
 
 	onDestroy(() => {
+		resetScrub();
 		if (typeof document !== 'undefined' && document.pictureInPictureElement === video) {
 			void document.exitPictureInPicture().catch(() => {});
 		}
@@ -206,7 +315,8 @@
 		onended={sync}
 		ontimeupdate={sync}
 		ondurationchange={sync}
-		onloadedmetadata={sync}
+		onloadedmetadata={onSeekReady}
+		onseeked={onSeekReady}
 		onprogress={sync}
 		onwaiting={() => (waiting = true)}
 		onplaying={() => (waiting = false)}
@@ -221,7 +331,7 @@
 	{#if waiting}
 		<div class="fe-vp-wait" aria-hidden="true"></div>
 	{/if}
-	{#if !playing}
+	{#if !playing && !scrubbing}
 		<button type="button" class="fe-vp-bigplay" aria-label="Play" onclick={toggle} tabindex="-1">
 			<FeIcon name="play" size={28} />
 		</button>
@@ -235,12 +345,14 @@
 			aria-label="Seek"
 			aria-valuemin={0}
 			aria-valuemax={Math.floor(duration ?? 0)}
-			aria-valuenow={Math.floor(now)}
-			aria-valuetext={formatClock(now)}
+			aria-valuenow={Math.floor(displayedTime)}
+			aria-valuetext={formatClock(displayedTime)}
 			data-testid="fe-vp-track"
 			onpointerdown={onTrackDown}
 			onpointermove={onTrackMove}
 			onpointerup={onTrackUp}
+			onpointercancel={onTrackCancel}
+			onlostpointercapture={onTrackCancel}
 			onpointerleave={() => {
 				if (!scrubbing) hoverTime = null;
 			}}
@@ -271,7 +383,7 @@
 			<button type="button" class="ds-btn ds-btn--ghost ds-btn--icon fe-vp-btn" aria-label="Forward 10 seconds" onclick={() => seekTo(now + 10)}>
 				<FeIcon name="rotate-cw" size={15} />
 			</button>
-			<span class="fe-vp-time" data-testid="fe-vp-time">{formatClock(now)}{duration ? ` / ${formatClock(duration)}` : ''}</span>
+			<span class="fe-vp-time" data-testid="fe-vp-time">{formatClock(displayedTime)}{duration ? ` / ${formatClock(duration)}` : ''}</span>
 			<span class="fe-vp-spacer"></span>
 			<button type="button" class="ds-btn ds-btn--ghost ds-btn--icon fe-vp-btn" aria-label={muted ? 'Unmute' : 'Mute'} onclick={toggleMute}>
 				<FeIcon name={muted || volume === 0 ? 'volume-x' : 'volume-2'} size={16} />
