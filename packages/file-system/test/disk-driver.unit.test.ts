@@ -138,4 +138,85 @@ describe('diskExplorerDriver', () => {
 			true
 		);
 	});
+
+	describe('change notifications', () => {
+		/** Two panes on one picked folder: separate drivers, one connectionId. */
+		function twoPanes() {
+			const root = createMemoryDiskRoot();
+			const a = createDiskExplorerDriver(root);
+			const b = createDiskExplorerDriver(root);
+			const connectionId = `disk-test-${Math.random()}`;
+			Object.assign(a, { connectionId });
+			Object.assign(b, { connectionId });
+			return { a, b };
+		}
+
+		function watch(drv: ReturnType<typeof createDiskExplorerDriver>, parentId: string | null) {
+			const hits = { count: 0 };
+			const stop = drv.subscribeChanges!(() => {
+				hits.count += 1;
+			}, { parentId });
+			return { hits, stop };
+		}
+
+		it('a move in one pane re-lists the other pane showing the source folder', async () => {
+			const { a, b } = twoPanes();
+			const out = await a.mkdir!(null, 'Out');
+			const file = await a.writeFile!(null, new File(['x'], 'x.txt'));
+			const source = watch(b, null);
+			const dest = watch(b, out.id);
+
+			await a.move!(file.id, out.id);
+			assert.equal(source.hits.count, 1);
+			assert.equal(dest.hits.count, 1);
+			source.stop();
+			dest.stop();
+		});
+
+		it('a folder move notifies once when it ends, not per file', async () => {
+			const { a, b } = twoPanes();
+			const docs = await a.mkdir!(null, 'Docs');
+			for (const name of ['1.txt', '2.txt', '3.txt']) await a.writeFile!(docs.id, new File([name], name));
+			const out = await a.mkdir!(null, 'Out');
+			const dest = watch(b, out.id);
+			let seenMidMove = -1;
+			const root = watch(b, null);
+			const origDelete = a.delete.bind(a);
+			a.delete = async (id) => {
+				seenMidMove = dest.hits.count;
+				return origDelete(id);
+			};
+
+			await a.move!(docs.id, out.id);
+			assert.equal(seenMidMove, 0);
+			assert.equal(dest.hits.count, 1);
+			assert.equal(root.hits.count, 1);
+			dest.stop();
+			root.stop();
+		});
+
+		it('re-lists a pane inside a deleted folder, and leaves unrelated folders alone', async () => {
+			const { a, b } = twoPanes();
+			const docs = await a.mkdir!(null, 'Docs');
+			const nested = await a.mkdir!(docs.id, 'Nested');
+			const other = await a.mkdir!(null, 'Other');
+			const inside = watch(b, nested.id);
+			const unrelated = watch(b, other.id);
+
+			await a.delete(docs.id);
+			assert.equal(inside.hits.count, 1);
+			assert.equal(unrelated.hits.count, 0);
+			inside.stop();
+			unrelated.stop();
+		});
+
+		it('a different picked folder does not hear the change', async () => {
+			const { a } = twoPanes();
+			const elsewhere = createDiskExplorerDriver(createMemoryDiskRoot());
+			const w = watch(elsewhere, null);
+			await a.writeFile!(null, new File(['x'], 'x.txt'));
+			assert.equal(w.hits.count, 0);
+			w.stop();
+		});
+	});
 });

@@ -1458,6 +1458,9 @@
 		moveDragLabel = '';
 		pointerDragActive = false;
 		setPointerDragActive(false);
+		// The drop landed here, so the session registered for other panes is
+		// spent; left set, a later drop reads its ids instead of the selection.
+		clearCrossWindowDrag();
 	}
 
 	function onRowDragStart(e: DragEvent, n: ExplorerEntry) {
@@ -1893,13 +1896,28 @@
 			nodes = nextNodes;
 			listTruncated = nextTruncated;
 			breadcrumbs = nextCrumbs;
+			// Selection only ever names rows of this listing. A row that moved or
+			// was deleted out of it must leave too, or the next multi-select drag,
+			// cut or delete carries its stale id along with the new picks.
+			if (selected.size > 0) {
+				const live = new Set(nextNodes.map((row) => row.id));
+				if ([...selected].some((id) => !live.has(id))) {
+					selected = new Set([...selected].filter((id) => live.has(id)));
+				}
+			}
+			// A preview survives navigation, but not its row leaving this folder:
+			// its Rename / Cut / Delete would act on an id that is no longer here.
+			const listedParentId = parentId;
+			const belongsHere = (entry: ExplorerEntry) => entry.parentId === listedParentId;
 			if (previewEntry) {
 				const live = nextNodes.find((row) => row.id === previewEntry!.id);
 				if (live) previewEntry = live;
+				else if (belongsHere(previewEntry)) previewEntry = null;
 			}
 			if (floatingPreviewEntry) {
 				const live = nextNodes.find((row) => row.id === floatingPreviewEntry!.id);
 				if (live) floatingPreviewEntry = live;
+				else if (belongsHere(floatingPreviewEntry)) closeQuickLook();
 			}
 			// Pack membership for the rows now on screen. Best-effort and
 			// non-blocking: a listing must never fail to render because a badge
@@ -2572,6 +2590,12 @@
 				evictDragOutFile(n.id);
 				if (driver === d) {
 					nodes = nodes.map((entry) => entry.id === n.id ? { ...entry, ...updated } : entry);
+					// Path-keyed drivers (disk, monitor) give the renamed row a new id;
+					// the selection follows it rather than holding the old path.
+					if (updated.id !== n.id && selected.has(n.id)) {
+						selected = new Set([...selected].map((id) => id === n.id ? updated.id : id));
+						if (lastSelectedId === n.id) lastSelectedId = updated.id;
+					}
 					if (previewEntry?.id === n.id) previewEntry = { ...previewEntry, ...updated };
 					if (floatingPreviewEntry?.id === n.id) floatingPreviewEntry = { ...floatingPreviewEntry, ...updated };
 					error = '';
