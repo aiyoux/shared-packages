@@ -1,4 +1,5 @@
 export { processVideo } from './process.js';
+export { openVideoFrameCursor, type VideoFrameCursor } from './videoFrames.js';
 export {
 	parseBitrate,
 	createEncodeSession,

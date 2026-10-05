@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AudioSample, AudioSampleSource } from 'mediabunny';
 import { avcLevelByte, createEncodeSession, parseBitrate } from './encodeSession.js';
-import { processVideo } from './process.js';
 import {
 	FakeVideoEncoder,
 	FakeVideoFrame,
@@ -16,122 +15,11 @@ function frame(timestamp: number): VideoFrame {
 	return new FakeVideoFrame(undefined, { timestamp }) as unknown as VideoFrame;
 }
 
-async function waitFor(pred: () => boolean, label: string, timeoutMs = 1000) {
-	const start = Date.now();
-	while (!pred()) {
-		if (Date.now() - start > timeoutMs) throw new Error(`timed out waiting for ${label}`);
-		await new Promise((r) => setTimeout(r, 0));
-	}
-}
-
-function installProcessVideoDom() {
-	const currentTimeSets: number[] = [];
-	const rvfc: Array<(now: number, meta: { mediaTime: number }) => void> = [];
-	const play = vi.fn(() => Promise.resolve());
-	const load = vi.fn();
-	const revokes: string[] = [];
-	let currentTime = 0;
-	let src = '';
-	const seeked = new Set<() => void>();
-	const ended = new Set<() => void>();
-
-	const video = {
-		muted: false,
-		playsInline: false,
-		preload: '',
-		ended: false,
-		paused: true,
-		videoWidth: 640,
-		videoHeight: 360,
-		style: {} as Record<string, string>,
-		onloadedmetadata: null as null | (() => void),
-		onerror: null as null | (() => void),
-		get src() {
-			return src;
-		},
-		set src(v: string) {
-			src = v;
-			queueMicrotask(() => this.onloadedmetadata?.());
-		},
-		get currentTime() {
-			return currentTime;
-		},
-		set currentTime(v: number) {
-			currentTime = v;
-			currentTimeSets.push(v);
-			for (const fn of [...seeked]) fn();
-		},
-		addEventListener(type: string, fn: () => void) {
-			if (type === 'seeked') seeked.add(fn);
-			if (type === 'ended') ended.add(fn);
-		},
-		removeEventListener(type: string, fn: () => void) {
-			seeked.delete(fn);
-			ended.delete(fn);
-		},
-		requestVideoFrameCallback(cb: (now: number, meta: { mediaTime: number }) => void) {
-			rvfc.push(cb);
-			return rvfc.length;
-		},
-		play() {
-			this.paused = false;
-			return play();
-		},
-		pause() {
-			this.paused = true;
-		},
-		removeAttribute(name: string) {
-			if (name === 'src') src = '';
-		},
-		load() {
-			load();
-		}
-	};
-
-	const host = {
-		style: {} as Record<string, string>,
-		appendChild: vi.fn(),
-		parentNode: { removeChild: vi.fn() }
-	};
-
-	const prevDoc = globalThis.document;
-	const prevURL = globalThis.URL;
-
-	globalThis.document = {
-		createElement(tag: string) {
-			if (tag === 'video') return video;
-			return host;
-		},
-		body: { appendChild: vi.fn() }
-	} as unknown as Document;
-
-	globalThis.URL = {
-		createObjectURL: () => 'blob:fake-video',
-		revokeObjectURL: (url: string) => revokes.push(url)
-	} as unknown as typeof URL;
-
-	function deliver(mediaTime: number) {
-		const cb = rvfc.shift();
-		if (!cb) throw new Error('no pending requestVideoFrameCallback');
-		cb(0, { mediaTime });
-	}
-
-	function restore() {
-		globalThis.document = prevDoc;
-		globalThis.URL = prevURL;
-	}
-
-	return { play, rvfc, currentTimeSets, deliver, load, revokes, restore };
-}
-
 let restoreCodecs: (() => void) | undefined;
-let restoreDom: (() => void) | undefined;
 
 afterEach(() => {
 	restoreCodecs?.();
 	restoreCodecs = undefined;
-	restoreDom?.();
-	restoreDom = undefined;
 	muxOrder.length = 0;
 	(AudioSampleSource as unknown as { instances: unknown[] }).instances.length = 0;
 });
@@ -246,7 +134,7 @@ describe('encodeSession audio', () => {
 
 		session.encode(frame(0));
 		await session.flush();
-		expect(muxOrder).toEqual(['add-video-track', 'add-audio-track', 'audio-add', 'finalize']);
+		expect(muxOrder).toEqual(['add-video-track', 'add-audio-track', 'start', 'audio-add', 'video-add', 'finalize']);
 		session.close();
 	});
 
@@ -256,8 +144,47 @@ describe('encodeSession audio', () => {
 		expect((AudioSampleSource as unknown as { instances: unknown[] }).instances).toHaveLength(0);
 		session.encode(frame(0));
 		await session.flush();
-		expect(muxOrder).toEqual(['add-video-track', 'finalize']);
+		expect(muxOrder).toEqual(['add-video-track', 'start', 'video-add', 'finalize']);
 		session.close();
+	});
+
+	it('registers delayed audio before starting, even when video packets arrive first', async () => {
+		restoreCodecs = installCodecs();
+		const session = createEncodeSession({ width: 64, height: 64, bitrate: '1M', audio: {} });
+		session.encode(frame(0));
+		await Promise.resolve();
+		expect(muxOrder).toEqual(['add-video-track']);
+		const sample = new AudioSample({ data: new Uint8Array(8), format: 'f32', numberOfChannels: 2, sampleRate: 48_000, timestamp: 0 });
+		await session.addAudio(sample);
+		const blob = await session.flush();
+		expect(blob.type).toBe('video/mp4');
+		expect(muxOrder).toEqual(['add-video-track', 'add-audio-track', 'start', 'video-add', 'audio-add', 'finalize']);
+		session.close();
+	});
+
+	it('starts video-only output when an enabled audio stream finishes empty', async () => {
+		restoreCodecs = installCodecs();
+		const session = createEncodeSession({ width: 64, height: 64, bitrate: '1M', audio: {} });
+		session.encode(frame(0));
+		session.finishAudio();
+		await vi.waitFor(() => expect(muxOrder).toContain('video-add'));
+		expect(muxOrder).toEqual(['add-video-track', 'start', 'video-add']);
+		await session.flush(); session.close();
+		expect(muxOrder.filter((call) => call === 'start')).toHaveLength(1);
+	});
+
+	it('rejects audio after its stream is finished or the session is cancelled', async () => {
+		restoreCodecs = installCodecs();
+		const sample = new AudioSample({ data: new Uint8Array(8), format: 'f32', numberOfChannels: 2, sampleRate: 48_000, timestamp: 0 });
+		const finished = createEncodeSession({ width: 64, height: 64, bitrate: '1M', audio: {} });
+		finished.finishAudio();
+		await expect(finished.addAudio(sample)).rejects.toThrow(/audio is closed/);
+		finished.close();
+		const cancelled = createEncodeSession({ width: 64, height: 64, bitrate: '1M', audio: {} });
+		cancelled.encode(frame(0));
+		cancelled.close();
+		await expect(cancelled.addAudio(sample)).rejects.toThrow(/audio is closed/);
+		expect(muxOrder.filter((call) => call === 'start')).toHaveLength(1);
 	});
 });
 
@@ -279,47 +206,5 @@ describe('encodeSession empty output', () => {
 		await expect(session.flush()).rejects.toThrow(/encoder \(avc1\.42E0\w+, 64×64\) returned no data for 2 frames/);
 		expect(muxOrder).not.toContain('finalize');
 		session.close();
-	});
-});
-
-describe('processVideo capture model', () => {
-	it('plays and uses RVFC mediaTime; does not seek currentTime per frame', async () => {
-		restoreCodecs = installCodecs();
-		const dom = installProcessVideoDom();
-		restoreDom = dom.restore;
-
-		const done = processVideo(new Blob(['x'], { type: 'video/mp4' }), {
-			start: 1,
-			end: 1.1,
-			bitrate: '1M'
-		});
-
-		await waitFor(() => dom.play.mock.calls.length > 0, 'video.play');
-		expect(dom.rvfc.length).toBeGreaterThan(0);
-		expect(dom.play).toHaveBeenCalledTimes(1);
-		expect(dom.currentTimeSets).toEqual([1]);
-
-		dom.deliver(0.9);
-		dom.deliver(1.0);
-		dom.deliver(1.033);
-		dom.deliver(1.066);
-		dom.deliver(1.2);
-
-		const blob = await done;
-		expect(blob.type).toBe('video/mp4');
-		expect(dom.play).toHaveBeenCalledTimes(1);
-		expect(dom.currentTimeSets).toEqual([1]);
-
-		const enc = FakeVideoEncoder.instances[0]!;
-		expect(enc.encodeCalls.map((c) => c.timestamp)).toEqual([0, 33_000, 66_000]);
-		expect(enc.encodeCalls[0]?.keyFrame).toBe(true);
-
-		// Teardown must abort the element's media pipeline before revoking the
-		// object URL: revoking with a fetch still outstanding logs a spurious
-		// `blob:… ERR_FILE_NOT_FOUND` (and revoking "" would leak the real URL).
-		expect(dom.load).toHaveBeenCalled();
-		const revokeIdx = dom.revokes.indexOf('blob:fake-video');
-		expect(revokeIdx).toBeGreaterThanOrEqual(0);
-		expect(dom.revokes.slice(revokeIdx + 1)).toEqual([]);
 	});
 });

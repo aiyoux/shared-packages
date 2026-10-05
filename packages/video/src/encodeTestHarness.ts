@@ -17,7 +17,11 @@ export function mediabunnyMock() {
 		constructor(_opts?: unknown) {}
 	}
 	class EncodedVideoPacketSource {
-		async add() {}
+		started = false;
+		async add() {
+			if (!this.started) throw new Error('Output has not been started.');
+			muxOrder.push('video-add');
+		}
 	}
 	class EncodedPacket {
 		static fromEncodedChunk(chunk: unknown) {
@@ -34,27 +38,42 @@ export function mediabunnyMock() {
 	class AudioSampleSource {
 		static instances: AudioSampleSource[] = [];
 		adds: unknown[] = [];
+		started = false;
 		constructor(public config: unknown) {
 			(AudioSampleSource as unknown as { instances: unknown[] }).instances.push(this);
 		}
 		async add(sample: unknown) {
+			if (!this.started) throw new Error('Output has not been started.');
 			this.adds.push(sample);
 			muxOrder.push('audio-add');
 		}
 	}
 	class Output {
 		target: BufferTarget;
+		state = 'pending';
+		sources: Array<{ started: boolean }> = [];
 		constructor(opts: { target: BufferTarget }) {
 			this.target = opts.target;
 		}
-		addVideoTrack() {
+		addVideoTrack(source: EncodedVideoPacketSource) {
+			if (this.state !== 'pending') throw new Error('Cannot add track after output has been started or canceled.');
+			this.sources.push(source);
 			muxOrder.push('add-video-track');
 		}
-		addAudioTrack() {
+		addAudioTrack(source: AudioSampleSource) {
+			if (this.state !== 'pending') throw new Error('Cannot add track after output has been started or canceled.');
+			this.sources.push(source);
 			muxOrder.push('add-audio-track');
 		}
-		async start() {}
+		async start() {
+			this.state = 'started';
+			for (const source of this.sources) source.started = true;
+			muxOrder.push('start');
+		}
+		async cancel() { this.state = 'canceled'; for (const source of this.sources) source.started = false; }
 		async finalize() {
+			if (this.state !== 'started') throw new Error('Output has not been started.');
+			this.state = 'finalized';
 			muxOrder.push('finalize');
 			this.target.buffer = new Uint8Array([1, 2, 3, 4]).buffer;
 		}
@@ -76,9 +95,14 @@ export type EncodeCall = { timestamp: number; keyFrame?: boolean };
 
 export class FakeVideoFrame {
 	timestamp: number;
+	duration: number | undefined;
+	frameId: number | undefined;
 	closed = false;
-	constructor(_source?: unknown, init?: { timestamp?: number }) {
+	constructor(source?: unknown, init?: { timestamp?: number; duration?: number }) {
 		this.timestamp = init?.timestamp ?? 0;
+		this.duration = init?.duration;
+		this.frameId = (source as { id?: number; frameId?: number } | undefined)?.id
+			?? (source as { frameId?: number } | undefined)?.frameId;
 	}
 	close() {
 		this.closed = true;
@@ -96,6 +120,7 @@ export class FakeVideoEncoder {
 
 	configureCalls: VideoEncoderConfig[] = [];
 	encodeCalls: EncodeCall[] = [];
+	frames: Array<{ timestamp: number; duration?: number; frameId?: number }> = [];
 	flushCount = 0;
 	closeCount = 0;
 
@@ -108,6 +133,7 @@ export class FakeVideoEncoder {
 	}
 
 	encode(frame: { timestamp: number }, opts?: { keyFrame?: boolean }) {
+		this.frames.push(frame);
 		this.encodeCalls.push({ timestamp: frame.timestamp, keyFrame: opts?.keyFrame });
 		if (FakeVideoEncoder.silent) return;
 		const data = new Uint8Array([0, 0, 0, 1]);

@@ -74,6 +74,10 @@ export interface EncodeSession {
 		sample: AudioSample,
 		shape?: { sampleRate: number; numberOfChannels: number }
 	): Promise<void>;
+	/** Declare the audio stream complete, allowing video-only output when it was empty. */
+	finishAudio(): void;
+	/** Wait for pending encoding/muxing without finalizing, bounding offline frame queues. */
+	drain(): Promise<void>;
 	/** flush encoder + mux chain + finalize → video/mp4 Blob. */
 	flush(): Promise<Blob>;
 	close(): void;
@@ -101,8 +105,23 @@ export function createEncodeSession(opts: {
 	});
 	const videoSource = new EncodedVideoPacketSource('avc');
 	output.addVideoTrack(videoSource);
-	// Factory is sync; mux waits on start so encode() can push immediately.
-	const started = output.start();
+	// Audio is discovered asynchronously. Hold video packets until its first
+	// sample registers the track, or its stream ends without any samples.
+	let outputStarted = false;
+	let finalized = false;
+	let closed = false;
+	let audioFinished = false;
+	let resolveStarted!: () => void;
+	let rejectStarted!: (error: unknown) => void;
+	const started = new Promise<void>((resolve, reject) => {
+		resolveStarted = resolve; rejectStarted = reject;
+	});
+	const startOutput = () => {
+		if (outputStarted || closed) return;
+		outputStarted = true;
+		void output.start().then(resolveStarted, rejectStarted);
+	};
+	if (!opts.audio) startOutput();
 
 	let encoderError: Error | null = null;
 	let muxError: Error | null = null;
@@ -143,7 +162,6 @@ export function createEncodeSession(opts: {
 
 	let lastKeyframeUs = -Infinity;
 	let encoded = 0;
-	let closed = false;
 	let encoderClosed = false;
 
 	// Audio: both the source and the track are added lazily so a source
@@ -155,6 +173,7 @@ export function createEncodeSession(opts: {
 		sample: AudioSample,
 		shape?: { sampleRate: number; numberOfChannels: number }
 	): Promise<void> => {
+		if (closed || audioFinished) return Promise.reject(new Error('EncodeSession audio is closed'));
 		if (!opts.audio) return Promise.resolve();
 		if (!audioSource) {
 			audioSource = new AudioSampleSource({
@@ -165,6 +184,7 @@ export function createEncodeSession(opts: {
 					: undefined
 			});
 			output.addAudioTrack(audioSource);
+			startOutput();
 		}
 		// Serialize with the video packet adds on the same mux chain.
 		const added = muxChain.then(() => audioSource!.add(sample));
@@ -186,11 +206,24 @@ export function createEncodeSession(opts: {
 			/* already closed after flush */
 		}
 	};
+	const drain = async () => {
+		if (closed) throw new Error('EncodeSession is closed');
+		if (encoderError) throw encoderError;
+		await encoder.flush();
+		if (encoderError) throw encoderError;
+		await muxChain;
+		if (muxError) throw muxError;
+	};
 
 	return {
 		width,
 		height,
 		addAudio,
+		drain,
+		finishAudio() {
+			audioFinished = true;
+			startOutput();
+		},
 		encode(frame, encodeOpts) {
 			if (closed || encoderClosed) {
 				throw new Error('EncodeSession is closed');
@@ -212,6 +245,8 @@ export function createEncodeSession(opts: {
 		async flush() {
 			if (closed) throw new Error('EncodeSession is closed');
 			if (encoderError) throw encoderError;
+			audioFinished = true;
+			startOutput();
 			await encoder.flush();
 			if (encoderError) throw encoderError;
 			closeEncoder();
@@ -228,13 +263,17 @@ export function createEncodeSession(opts: {
 			await muxChain;
 			if (muxError) throw muxError;
 			await output.finalize();
+			finalized = true;
 			const buffer = (output.target as BufferTarget).buffer;
 			if (!buffer) throw new Error('Muxing produced no output buffer.');
 			return new Blob([buffer], { type: 'video/mp4' });
 		},
 		close() {
+			if (closed) return;
 			closed = true;
 			closeEncoder();
+			rejectStarted(new Error('EncodeSession is closed'));
+			if (!finalized) void output.cancel().catch(() => {});
 		}
 	};
 }

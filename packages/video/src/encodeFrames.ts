@@ -36,7 +36,6 @@ export async function encodeFrames(
 	// Ceil: the last frame that overlaps the kept range is kept, so a trim
 	// never drops visible content (output may run up to one frame long).
 	const frameCount = Math.max(1, Math.ceil((source.durationMs / 1000) * source.fps));
-	const dtUs = Math.round(1_000_000 / source.fps);
 
 	const drainAudio = async (): Promise<void> => {
 		if (!options.audio) return;
@@ -57,6 +56,7 @@ export async function encodeFrames(
 				sample.close();
 			}
 		}
+		session.finishAudio();
 	};
 
 	try {
@@ -69,11 +69,18 @@ export async function encodeFrames(
 		for (let i = 0; i < frameCount; i++) {
 			const tMs = (i / source.fps) * 1000;
 			const img = await source.pull(tMs);
-			const ts = i * dtUs;
-			const vf = img instanceof VideoFrame ? img : new VideoFrame(img, { timestamp: ts });
-			session.encode(vf); // session keys first frame + every 2 s of PTS
-			if (img instanceof VideoFrame === false) vf.close();
-			else img.close();
+			// Always stamp on the output grid, including decoded/retimed frames.
+			// Round each absolute time so fractional frame rates do not drift.
+			const ts = Math.round((i / source.fps) * 1_000_000);
+			const duration = Math.round(((i + 1) / source.fps) * 1_000_000) - ts;
+			const vf = new VideoFrame(img, { timestamp: ts, duration });
+			try {
+				session.encode(vf); // session keys first frame + every 2 s of PTS
+			} finally {
+				vf.close();
+				if (img instanceof VideoFrame) img.close();
+			}
+			if ((i + 1) % 32 === 0) await session.drain();
 		}
 		await audioDrain;
 		return await session.flush();
