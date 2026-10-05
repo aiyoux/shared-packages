@@ -41,6 +41,7 @@
 	import { getPreviewKind } from './feThumbnails.js';
 	import { memoryFileId } from '../fileSourceIds.js';
 	import { openDiskFile } from '../disk/fileSource.js';
+	import { getSharedVfs } from '../vfs.js';
 	import {
 		runRemoteOpen,
 		startRemoteCopySync,
@@ -778,12 +779,29 @@
 		if (!onQuickEditImage) return undefined;
 		return async (entry: ExplorerEntry, ctx: QuickEditImageContext) => {
 			const pane = paneState(id);
+			const driver = activeDriver(pane, id);
 			try {
-				if (pane.activeKind === 'memory') entry = { ...entry, id: memoryFileId(entry.id) };
-				else if (pane.activeKind === 'disk') {
-					const connectionId = activeDriver(pane, id).connectionId;
+				if (!isPeerPane(id) && (pane.activeKind === 'monitor' || pane.activeKind === 'b2') && driver.writeBack) {
+					startRemoteCopySync();
+					const outcome = await runRemoteOpen({
+						driver, entry, image: true, windowId: originWindowId, ask: askRemoteOpen,
+						open: (node) => onQuickEditImage?.({ ...entry, id: node.id }, {
+							...ctx, sourceFileId: node.id, read: () => getSharedVfs().readBlob(node.id)
+						})
+					});
+					if (outcome.kind === 'opened' && outcome.conflict) toast.info(`${entry.name} changed where it is stored and on this device. Opened this device's copy.`);
+					return;
+				}
+				if (!isPeerPane(id) && pane.activeKind === 'memory') {
+					entry = { ...entry, id: memoryFileId(entry.id) };
+					ctx = { ...ctx, sourceFileId: entry.id };
+				} else if (!isPeerPane(id) && pane.activeKind === 'disk') {
+					const connectionId = driver.connectionId;
 					const root = connectionId ? diskRoots.get(connectionId) : undefined;
-					if (root) entry = { ...entry, id: await openDiskFile(root, entry.id) };
+					if (root) {
+						entry = { ...entry, id: await openDiskFile(root, entry.id) };
+						ctx = { ...ctx, sourceFileId: entry.id };
+					}
 				}
 				onQuickEditImage?.(entry, ctx);
 			} catch (error) { toast.error(formatExplorerError(error)); }
@@ -2355,7 +2373,7 @@
 						{onQuickEditVideo}
 						{onQuickEditAudio}
 						{mediaMeta}
-						{onQuickEditImage}
+						onQuickEditImage={paneQuickEditImage(id)}
 						{onQuickConvertSvg}
 						{presenceByFileId}
 						{people}

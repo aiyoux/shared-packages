@@ -167,6 +167,8 @@
 	} from './componentTypes.js';
 	import { readProjectMeta, roomsFromMeta, type ProjectRoom } from '../projectMeta.js';
 
+	import { canSaveQuickEdit, quickEditContext } from './quickEdit.js';
+
 	interface Props {
 		mode?: ExplorerMode;
 		accept?: FileTypeId[];
@@ -6180,18 +6182,17 @@
 {/snippet}
 
 {#snippet archiveButtons(entry: ExplorerEntry)}
-	{#if driver.writeFile && ((onQuickEditVideo && getPreviewKind(entry) === 'video') || (onQuickEditAudio && getPreviewKind(entry) === 'audio') || (onQuickEditImage && canQuickEditRaster(entry)))}
+	{#if (onQuickEditVideo && getPreviewKind(entry) === 'video') || (onQuickEditAudio && getPreviewKind(entry) === 'audio') || (onQuickEditImage && canQuickEditRaster(entry))}
 		<button
 			type="button"
 			class="ds-btn ds-btn--sm ds-btn--secondary"
 			data-testid="fe-file-preview-quick-edit"
+			disabled={!canSaveQuickEdit(driver)}
+			title={canSaveQuickEdit(driver) ? undefined : 'This connection cannot save edited files.'}
 			onclick={() => {
 				const target = entry;
+				const ctx = quickEditContext(driver, target);
 				closePreviewForHandoff();
-				const ctx = {
-					read: () => readOpenTarget(target),
-					save: (file: File) => driver.writeFile!(target.parentId, file)
-				};
 				if (getPreviewKind(target) === 'video') onQuickEditVideo?.(target, ctx);
 				else if (getPreviewKind(target) === 'audio') onQuickEditAudio?.(target, ctx);
 				else onQuickEditImage?.(target, ctx);
@@ -6200,18 +6201,18 @@
 			Quick edit
 		</button>
 	{/if}
-	{#if driver.writeFile && onQuickConvertSvg && canQuickConvertSvg(entry)}
+	{#if onQuickConvertSvg && canQuickConvertSvg(entry)}
 		<button
 			type="button"
 			class="ds-btn ds-btn--sm ds-btn--secondary"
 			data-testid="fe-file-preview-convert-svg"
+			disabled={!canSaveQuickEdit(driver)}
+			title={canSaveQuickEdit(driver) ? undefined : 'This connection cannot save converted files.'}
 			onclick={() => {
 				const target = entry;
+				const ctx = quickEditContext(driver, target);
 				closePreviewForHandoff();
-				onQuickConvertSvg(target, {
-					read: () => readOpenTarget(target),
-					save: (file: File) => driver.writeFile!(target.parentId, file)
-				});
+				onQuickConvertSvg(target, ctx);
 			}}
 		>
 			Convert to SVG

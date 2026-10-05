@@ -33,6 +33,8 @@ export type ExplorerOpenContext = {
 export type QuickEditFileContext = {
 	read: () => Promise<Blob>;
 	save: (file: File) => Promise<ExplorerEntry>;
+	/** Editor-ready identity for in-place image Save; absent for unbound remote/peer files. */
+	sourceFileId?: string;
 };
 
 /** Read the previewed video and write a sibling file on the same backend. */
