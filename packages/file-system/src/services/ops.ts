@@ -17,7 +17,7 @@ export type LandingAddress =
 export type ResultRef = { kind: 'browser-model'; modelId: string } | { kind: 'vfs-file'; fileId: string; name?: string } | { kind: 'session'; sessionId: string } | { kind: 'monitor-path'; profileId: string; path: string } | { kind: 'opfs-file'; path: string; contentType: string };
 export type OpDestination = { driverId: string; endpointKey?: string; parentId: string | null; entryKind?: 'file' | 'folder' };
 export type ChatOpContext = { userText: string; connection: { name: string; model: string; offerId?: string } };
-export type OpRecord = { chat?: ChatOpContext; destination?: OpDestination; id: string; kind: OpKindId; app: string; title: string; owner: Owner; windowId?: string; where: OpWhere; state: OpState; error?: string; landing?: LandingAddress; result?: ResultRef; resumable: boolean; createdAt: number; endedAt?: number; dismissed?: number; landingError?: string; monitorAcknowledged?: boolean };
+export type OpRecord = { chat?: ChatOpContext; destination?: OpDestination; id: string; kind: OpKindId; app: string; title: string; owner: Owner; windowId?: string; where: OpWhere; state: OpState; error?: string; landing?: LandingAddress; result?: ResultRef; resumable: boolean; createdAt: number; endedAt?: number; dismissed?: number; landingError?: string; monitorAcknowledged?: boolean; cancelRequested?: number; cancelError?: string };
 export type OpProgress = { id: string; done: number; total?: number; ahead?: number; note?: string; route?: OpWhere['route']; ice?: 'checking' | 'connected' | 'failed'; icePath?: 'host' | 'stun' };
 export type OpFrame = { kind: 'changed'; id: string } | { kind: 'progress'; progress: OpProgress } | { kind: 'cancel'; id: string } | { kind: 'hello' };
 export type StartOp = Pick<OpRecord, 'kind' | 'app' | 'title' | 'where' | 'windowId'> & { id?: string; owner?: Owner; chat?: ChatOpContext; landing?: LandingAddress; signal?: AbortSignal; resumable?: boolean; destination?: OpDestination };
@@ -66,9 +66,15 @@ export function createOpsService(options: {
   const next = await store.mutate(id, (current) => current ? update(current) : undefined);
   if (next) { observe(next); notify(); bus.broadcast({ kind: 'changed', id }); }
  }
+ function dispatchCancel(id: string) {
+  const op = records.get(id);
+  if (!op || !isActiveOp(op)) return;
+  controllers.get(id)?.abort();
+  for (const fn of cancelRequests) fn(op);
+ }
  const stopBus = bus.onMessage((frame) => {
   if (frame.kind === 'progress') { progress.set(frame.progress.id, frame.progress); notify(); }
-  else if (frame.kind === 'cancel') { controllers.get(frame.id)?.abort(); const op = records.get(frame.id); if (op) for (const fn of cancelRequests) fn(op); }
+  else if (frame.kind === 'cancel') void refresh().then(() => dispatchCancel(frame.id)).catch((error) => console.error('Could not read cancellation request', error));
   else if (frame.kind === 'changed') void refresh().catch((error) => console.error('Could not read ops', error));
   else {
    for (const p of progress.values()) if (controllers.has(p.id)) bus.broadcast({ kind: 'progress', progress: p });
@@ -129,21 +135,49 @@ export function createOpsService(options: {
     onCancelRequest(fn) { cancelListeners.add(fn); if (ctl.signal.aborted) fn(); return () => { cancelListeners.delete(fn); }; }
    };
   },
-  cancel(id: string) { controllers.get(id)?.abort(); const op = records.get(id); if (op) for (const fn of cancelRequests) fn(op); bus.broadcast({ kind: 'cancel', id }); },
+  async cancel(id: string) {
+   await change(id, (op) => isActiveOp(op) ? { ...op, cancelRequested: Date.now(), cancelError: undefined } : op);
+   dispatchCancel(id); bus.broadcast({ kind: 'cancel', id });
+  },
   onCancelRequest(fn: (op: OpRecord) => void) { cancelRequests.add(fn); return () => { cancelRequests.delete(fn); }; },
   async importMonitor(record: OpRecord) {
    if (record.owner.kind !== 'monitor') throw new Error('Only monitor job records may be reconciled');
+   const owner = record.owner;
    const known = records.get(record.id);
-   if (known && (known.dismissed || known.state === 'landed' || (known.owner.kind === 'monitor' && known.owner.profileId === record.owner.profileId && known.owner.jobId === record.owner.jobId && known.state === record.state && known.error === record.error && (!record.result || known.result)))) return;
+   if (known && (known.state === 'landed' || (known.owner.kind === 'monitor' && known.owner.profileId === record.owner.profileId && known.owner.jobId === record.owner.jobId && known.state === record.state && known.error === record.error && (!record.result || known.result)))) return;
    const next = await store.mutate(record.id, (current) => {
     if (!current) return record;
-    if (current.dismissed || current.state === 'landed') return current;
-    return { ...record, ...current, owner: record.owner, state: current.state === 'done' && current.result ? current.state : record.state, result: current.result ?? record.result, error: record.error, endedAt: record.endedAt ?? current.endedAt };
+    if (current.state === 'landed' || (!isActiveOp(current) && isActiveOp(record) && current.owner.kind === 'monitor' && current.owner.profileId === owner.profileId && current.owner.jobId === owner.jobId)) return current;
+    return { ...record, ...current, owner: record.owner, state: current.state === 'done' && current.result && current.result.kind !== 'monitor-path' ? current.state : record.state, result: current.result ?? record.result, error: record.error, cancelError: isActiveOp(record) ? current.cancelError : undefined, endedAt: record.endedAt ?? current.endedAt };
    });
    if (next) { observe(next); notify(); bus.broadcast({ kind: 'changed', id: record.id }); }
   },
-  dismiss: (id: string) => change(id, (op) => isActiveOp(op) ? op : { ...op, dismissed: op.dismissed ?? Date.now() }),
-  async dismissFinished() { for (const op of records.values()) if (!isActiveOp(op)) await change(op.id, (current) => ({ ...current, dismissed: current.dismissed ?? Date.now() })); },
+  /** Hiding a row never claims that its executor has stopped. */
+  dismiss: (id: string) => change(id, (op) => ({ ...op, dismissed: op.dismissed ?? Date.now() })),
+  /** Only a successful daemon snapshot/removal proves a monitor job is gone. */
+  async reconcileMonitorJobs(profileId: string, present: ReadonlySet<string>, candidates = [...records.values()]) {
+   for (const candidate of candidates) {
+    if (candidate.owner.kind !== 'monitor' || candidate.owner.profileId !== profileId || !candidate.owner.jobId || present.has(candidate.owner.jobId) || (candidate.monitorAcknowledged && !isActiveOp(candidate))) continue;
+    const jobId = candidate.owner.jobId;
+    await change(candidate.id, (op) => {
+     if (op.owner.kind !== 'monitor' || op.owner.profileId !== profileId || op.owner.jobId !== jobId) return op;
+     return { ...op, monitorAcknowledged: true, cancelError: undefined,
+      ...(isActiveOp(op) ? { state: 'stopped' as const, endedAt: Date.now(), error: 'Stopped: the monitor no longer has this job. It may have restarted or removed the job.' }
+       : op.state === 'done' && !op.monitorAcknowledged && op.result?.kind === 'monitor-path' && /^\/v1\/(ai|tools)\/jobs\//.test(op.result.path) ? { landingError: op.landingError ?? 'The monitor no longer has this result. Dismiss this operation if it was not saved.' } : {}) };
+    });
+   }
+  },
+  async reconcileMonitorProfiles(profileIds: ReadonlySet<string>) {
+   for (const candidate of records.values()) {
+    if (candidate.owner.kind !== 'monitor' || profileIds.has(candidate.owner.profileId) || !isActiveOp(candidate)) continue;
+    await change(candidate.id, (op) => op.owner.kind === 'monitor' && !profileIds.has(op.owner.profileId) && isActiveOp(op)
+     ? { ...op, state: 'stopped', endedAt: Date.now(), error: 'Stopped tracking: its monitor connection was removed. Work may still be running on that monitor.', cancelError: undefined } : op);
+   }
+  },
+  async dismissFinished() {
+   await refresh();
+   for (const op of records.values()) if (!op.dismissed && !isActiveOp(op)) await change(op.id, (current) => isActiveOp(current) ? current : ({ ...current, dismissed: current.dismissed ?? Date.now() }));
+  },
   change,
   async dispose() { disposed = true; for (const ctl of watches.values()) ctl.abort(); watches.clear(); stopBus(); bus.destroy(); listeners.clear(); cancelRequests.clear(); await store.close(); }
  };

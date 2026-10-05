@@ -27,6 +27,7 @@
 	let tick = $state(0);
 	let open = $state(false);
 	let rootEl = $state<HTMLDivElement | null>(null);
+	let actionError = $state('');
 	const seen = new Set<string>();
 
 	function noteActive() {
@@ -135,17 +136,27 @@
 	async function dismissRow(op: OpRecord) {
 		const svc = service;
 		if (!svc) return;
-		if (isActiveOp(op)) svc.cancel(op.id);
-		else await svc.dismiss(op.id);
+		actionError = '';
+		try {
+			if (isActiveOp(op)) await svc.cancel(op.id);
+			else await svc.dismiss(op.id);
+		} catch (error) { actionError = `Could not clear operation: ${error instanceof Error ? error.message : String(error)}`; }
+	}
+	async function hideRow(op: OpRecord) {
+		try { await service?.dismiss(op.id); }
+		catch (error) { actionError = `Could not dismiss operation: ${error instanceof Error ? error.message : String(error)}`; }
 	}
 
 	async function dismissFinished() {
 		const svc = service;
 		if (!svc) return;
-		for (const row of rows) {
-			if (row.status !== 'active') await svc.dismiss(row.op.id);
-		}
-		open = false;
+		actionError = '';
+		try {
+			for (const row of rows) {
+				if (row.status !== 'active') await svc.dismiss(row.op.id);
+			}
+			open = false;
+		} catch (error) { actionError = `Could not clear finished operations: ${error instanceof Error ? error.message : String(error)}`; }
 	}
 </script>
 
@@ -184,6 +195,7 @@
 		</button>
 		{#if open}
 			<div class="menu" use:anchoredPopup={{ anchor: () => rootEl?.querySelector('.chip'), onClose: () => (open = false), offset: 4 }} role="menu" data-testid="fe-op-progress-menu">
+				{#if actionError}<p class="err" role="alert">{actionError}</p>{/if}
 				{#each rows as row (row.op.id)}
 					<div
 						class="menu-row"
@@ -207,6 +219,7 @@
 						</div>
 						<span class="name" title={row.note ?? row.name}>{row.name}</span>
 						<span class="pct">{row.label}</span>
+						{#if row.status === 'active'}<button type="button" class="clear" title="Remove from the list. Work may continue until cancellation is confirmed." onclick={() => void hideRow(row.op)}>Dismiss from list</button>{/if}
 						<button
 							type="button"
 							class="x"
@@ -220,6 +233,8 @@
 					{#if row.note}
 						<p class="hop">{row.note}</p>
 					{/if}
+					{#if row.status === 'active' && row.op.cancelError}<p class="err" role="alert">{row.op.cancelError}</p>
+					{:else if row.status === 'active' && row.op.cancelRequested}<p class="hop" role="status">Cancellation requested. Waiting for its owner to confirm it has stopped.</p>{/if}
 					{#if row.error && row.status !== 'cancelled'}
 						<p class="err">{row.error}</p>
 					{/if}

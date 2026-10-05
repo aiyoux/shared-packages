@@ -3,7 +3,7 @@ import { createLiveBus, type LiveBus } from '../live/bus.js';
 import { serviceContextId } from '../leaseOwner.js';
 import { createMonitorClient, type MonitorCapabilities, type MonitorHostSnapshot, type MonitorTransport } from '../monitor/client.js';
 import { createMonitorWatchStream, type MonitorWatchFsEvent, type MonitorWatchStream, type WatchFolderListener } from '../monitor/watchStream.js';
-import { createMonitorJobsClient, type MonitorJob } from '../monitor/jobs.js';
+import { createMonitorJobsClient, MonitorJobsRequestError, type MonitorJob } from '../monitor/jobs.js';
 import { openJsonSse } from '../monitor/sse.js';
 import type { WatchStreamStatus } from '../monitor/watchStream.js';
 import type { MonitorConnectionProfileV1 } from '../monitor/types.js';
@@ -29,6 +29,9 @@ export function createMonitorLink(options: {
  onJob: (job: MonitorJob) => void; createWatch?: typeof createMonitorWatchStream;
  /** Leader only: a job the daemon no longer lists (landed, reaped). */
  onJobRemoved?: (id: string) => void;
+ /** Capture existing ops before subscribing/listing, then reconcile a successful snapshot. */
+ onJobsListing?: () => Promise<void>;
+ onJobsListed?: (present: ReadonlySet<string>) => Promise<void>;
  /** Leader only: the terminal feature's profile rev stream (tests inject it). */
  openTerminalProfileEvents?: (onRev: (rev: number) => void) => Promise<{ abort: () => void; closed: Promise<unknown> }>;
 }) {
@@ -128,6 +131,7 @@ export function createMonitorLink(options: {
   if (!election.isLeader) { if (controller) stopStreams(); sendOwn(); return; }
   if (activeTerm === election.term && controller) return;
   stopStreams(); activeTerm = election.term; const term = activeTerm;
+  knownJobs.clear();
   const ctl = controller = new AbortController();
   remote.clear(); remote.set(options.ctx, own());
   bus.broadcast({ kind: 'hello' });
@@ -141,10 +145,16 @@ export function createMonitorLink(options: {
     // Files watches remain independent of the jobs feed.
     reconcile();
     if (supported) {
-     const receive = (job: MonitorJob) => { if (ctl.signal.aborted || election.term !== term) return; const previous = knownJobs.get(job.id); if (previous && ['done', 'failed', 'aborted', 'evicted'].includes(previous.state) && !['done', 'failed', 'aborted', 'evicted'].includes(job.state)) return; knownJobs.set(job.id, job); options.onJob(job); publish({ kind: 'job', term, job }); };
+     await options.onJobsListing?.();
+     if (ctl.signal.aborted || election.term !== term) return;
+     const removed = new Set<string>();
+     const receive = (job: MonitorJob) => { if (ctl.signal.aborted || election.term !== term || removed.has(job.id)) return; const previous = knownJobs.get(job.id); if (previous && ['done', 'failed', 'aborted', 'evicted'].includes(previous.state) && !['done', 'failed', 'aborted', 'evicted'].includes(job.state)) return; knownJobs.set(job.id, job); options.onJob(job); publish({ kind: 'job', term, job }); };
      // Subscribe before list, so a job cannot finish in a list-to-stream gap.
-     await options.jobs.events(receive, ctl.signal, (id) => { knownJobs.delete(id); options.onJobRemoved?.(id); }, (error) => streamFailed(error, ctl));
-     for (const job of await options.jobs.list(ctl.signal)) receive(job);
+     await options.jobs.events(receive, ctl.signal, (id) => { if (ctl.signal.aborted || election.term !== term) return; removed.add(id); knownJobs.delete(id); options.onJobRemoved?.(id); }, (error) => streamFailed(error, ctl));
+     const listed = await options.jobs.list(ctl.signal);
+     if (ctl.signal.aborted || election.term !== term) return;
+     for (const job of listed) receive(job);
+     await options.onJobsListed?.(new Set(knownJobs.keys()));
     }
     reconcile();
    } catch (error) { streamFailed(error, ctl); }
@@ -198,6 +208,24 @@ export function monitorJobRecord(profile: MonitorConnectionProfileV1, job: Monit
  const kind = jobKinds[job.kind] ?? 'copy';
  return { id: job.clientRequestId ?? `monitor:${profile.id}:${job.id}`, kind, app: ['transcribe', 'speak', 'generate', 'chat'].includes(kind) ? kind : 'files', title: `${job.kind} · ${profile.name}`, owner: { kind: 'monitor', profileId: profile.id, name: profile.name, jobId: job.id }, where: { executor: 'monitor', note: profile.name }, state, resumable: false, createdAt: job.createdAt, endedAt: job.finishedAt, error: job.error, result: job.result ? { kind: 'monitor-path', profileId: profile.id, path: job.result } : undefined };
 }
+/** A route-level 404 is not proof of job loss; confirm against the unified list. */
+export async function cancelMonitorOp(ops: OpsService, jobs: ReturnType<typeof createMonitorJobsClient>, op: OpRecord): Promise<void> {
+ if (op.owner.kind !== 'monitor') return;
+ const { profileId, jobId } = op.owner;
+ try {
+  if (!jobId) throw new Error('This operation has no monitor job ID. Dismiss it to stop tracking it.');
+  try { await jobs.abort(jobId); }
+  catch (error) {
+   if (!(error instanceof MonitorJobsRequestError && error.status === 404)) throw error;
+   const listed = await jobs.list();
+   if (listed.some((job) => job.id === jobId)) throw error;
+   await ops.reconcileMonitorJobs(profileId, new Set(listed.map((job) => job.id)), [op]);
+  }
+ } catch (error) {
+  await ops.change(op.id, (current) => ['queued', 'running', 'paused'].includes(current.state) && current.cancelRequested === op.cancelRequested && current.owner.kind === 'monitor' && current.owner.profileId === profileId && current.owner.jobId === jobId
+   ? { ...current, cancelError: `Could not cancel: ${error instanceof Error ? error.message : String(error)}. You can retry or dismiss this operation from the list.` } : current);
+ }
+}
 export function getMonitorLink(profile: MonitorConnectionProfileV1, transport?: MonitorTransport): Promise<MonitorLink> {
  const existing = links.get(profile.id); if (existing) return existing;
  const next = (async () => {
@@ -205,24 +233,41 @@ export function getMonitorLink(profile: MonitorConnectionProfileV1, transport?: 
   const jobs = createMonitorJobsClient(profile.baseUrl);
   const election = createElection(serviceNames.monitorLock(profile.id), { tabId: ctx });
   const acknowledged = new Set<string>();
+  let candidates: OpRecord[] = [];
+  let jobTail: Promise<void> = Promise.resolve();
   const endRelay = (jobId: string) => void connectionsService().then((links) => links.endRelay(profile.id, jobId)).catch((error) => console.error('Could not end a relayed connection', error));
   const link = createMonitorLink({ ctx, profile, election, bus: createLiveBus(serviceNames.monitorBus(profile.id), ctx), transport: transport ?? createMonitorClient({ baseUrl: profile.baseUrl }), jobs,
-  onJobRemoved(id) { if (id.startsWith('fs:')) endRelay(id.slice(3)); },
+  async onJobsListing() { await jobTail; await ops.refresh(); candidates = ops.all(); },
+  async onJobsListed(present) { await jobTail; await ops.reconcileMonitorJobs(profile.id, present, candidates); },
+  onJobRemoved(id) {
+   if (id.startsWith('fs:')) endRelay(id.slice(3));
+   jobTail = jobTail.then(async () => {
+    const removed = ops.all().filter((op) => op.owner.kind === 'monitor' && op.owner.jobId === id);
+    await ops.reconcileMonitorJobs(profile.id, new Set(), removed);
+   }).catch((error) => console.error('Could not reconcile removed monitor job', error));
+  },
   onJob(job) {
    if (!isOpJob(job)) { if (election.isLeader && relayJobEnded(job)) endRelay(job.jobId); return; }
    const record = monitorJobRecord(profile, job);
    const original = job.clientRequestId ? ops.get(job.clientRequestId) : undefined;
    if (!original || original.kind !== record.kind || original.owner.kind === 'device' || original.owner.kind === 'monitor' && (original.owner.profileId !== profile.id || original.owner.jobId !== job.id)) record.id = `monitor:${profile.id}:${job.id}`;
    // Every tab receives the same job frame, so progress stays local to each.
-   void ops.importMonitor(record).then(async () => {
+   jobTail = jobTail.then(async () => {
+    await ops.importMonitor(record);
     if (job.progress) ops.reportProgress(record.id, job.progress, { broadcast: false });
     if (!election.isLeader || !monitorJobNeedsNoLanding(job) || acknowledged.has(job.id)) return;
     acknowledged.add(job.id);
-    await jobs.landed(job.id);
-    await ops.change(record.id, (current) => ({ ...current, monitorAcknowledged: true }));
+    // Daemon acknowledgement must not block the local job transition queue.
+    void jobs.landed(job.id).then(() => ops.change(record.id, (current) => ({ ...current, monitorAcknowledged: true })))
+     .catch((error) => { acknowledged.delete(job.id); console.error('Could not acknowledge monitor job', error); });
    }).catch((error) => { acknowledged.delete(job.id); console.error('Could not reconcile monitor job', error); });
   } });
-  const stopCancel = ops.onCancelRequest((op) => { if (election.isLeader && op.owner.kind === 'monitor' && op.owner.profileId === profile.id && op.owner.jobId) void jobs.abort(op.owner.jobId).catch((error) => console.error('Could not cancel monitor job', error)); });
+  const cancelling = new Set<string>();
+  const stopCancel = ops.onCancelRequest((op) => {
+   if (!election.isLeader || op.owner.kind !== 'monitor' || op.owner.profileId !== profile.id || cancelling.has(op.id)) return;
+   cancelling.add(op.id);
+   void cancelMonitorOp(ops, jobs, op).catch((error) => console.error('Could not save cancellation failure', error)).finally(() => cancelling.delete(op.id));
+  });
   const dispose = link.dispose; link.dispose = () => { stopCancel(); dispose(); links.delete(profile.id); };
   return link;
  })().catch((error) => { links.delete(profile.id); throw error; });

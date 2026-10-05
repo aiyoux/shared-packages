@@ -2,6 +2,15 @@ import { withLocalAddressSpace } from './localNetwork.js';
 import { openJsonSse } from './sse.js';
 
 export type MonitorJob = { id: string; jobId: string; feature: 'ai' | 'tools' | 'fs' | 'b2'; kind: string; state: string; createdAt: number; finishedAt?: number; clientRequestId?: string; progress?: { done: number; total?: number; note?: string }; result?: string; error?: string };
+export class MonitorJobsRequestError extends Error {
+ readonly status: number;
+ readonly code?: string;
+ constructor(status: number, code?: string, detail?: string) {
+  super(`Monitor jobs request failed (${status})${detail ? `: ${detail}` : ''}`);
+  this.name = 'MonitorJobsRequestError';
+  this.status = status; this.code = code;
+ }
+}
 export function parseMonitorJob(raw: unknown): MonitorJob | null {
  if (!raw || typeof raw !== 'object') return null;
  const row = raw as Record<string, unknown>;
@@ -23,14 +32,22 @@ export function createMonitorJobsClient(baseUrl: string, fetchImpl: typeof fetch
  async function request(path: string, init?: RequestInit) {
   const endpoint = url(path);
   const response = await fetchImpl(endpoint, withLocalAddressSpace(endpoint, init));
-  if (!response.ok) throw new Error(`Monitor jobs request failed (${response.status})`);
+  if (!response.ok) {
+   const body = await response.json().catch(() => null);
+   throw new MonitorJobsRequestError(response.status, typeof body?.error?.code === 'string' ? body.error.code : undefined, typeof body?.error?.message === 'string' ? body.error.message : undefined);
+  }
   return response;
  }
  return {
   async list(signal?: AbortSignal): Promise<MonitorJob[]> {
    const data = await (await request('/v1/jobs', { signal })).json();
    if (!Array.isArray(data.jobs)) throw new Error('Monitor returned no jobs list');
-   return data.jobs.flatMap((raw: unknown) => { const job = parseMonitorJob(raw); return job ? [job] : []; });
+   return data.jobs.map((raw: unknown) => {
+    const job = parseMonitorJob(raw);
+    // Partial parsing cannot establish that a persisted job is absent.
+    if (!job) throw new Error('Monitor returned an invalid jobs list; job status could not be confirmed');
+    return job;
+   });
   },
   events(onJob: (job: MonitorJob) => void, signal?: AbortSignal, onRemoved?: (id: string) => void, onClose?: (error: unknown) => void) {
    return openJsonSse({ url: url('/v1/jobs/events'), fetchImpl, signal, onClose, onEvent(event, data) {
@@ -39,6 +56,12 @@ export function createMonitorJobsClient(baseUrl: string, fetchImpl: typeof fetch
    } });
   },
   async abort(id: string) { await request(`/v1/jobs/${encodeURIComponent(id)}/abort`, { method: 'POST' }); },
-  async landed(id: string) { await request(`/v1/jobs/${encodeURIComponent(id)}/landed`, { method: 'POST' }); }
+  async landed(id: string) {
+   try { await request(`/v1/jobs/${encodeURIComponent(id)}/landed`, { method: 'POST' }); }
+   catch (error) {
+    // A job already collected by another tab needs no further acknowledgement.
+    if (!(error instanceof MonitorJobsRequestError && error.status === 404 && error.code === 'jobs.not_found')) throw error;
+   }
+  }
  };
 }

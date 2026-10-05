@@ -6,6 +6,8 @@ import type { Election } from '../src/live/election.ts';
 import type { MonitorTransport } from '../src/monitor/client.ts';
 import type { MonitorWatchStream } from '../src/monitor/watchStream.ts';
 import type { WatchStreamStatus } from '../src/monitor/watchStream.ts';
+import type { OpFrame, OpRecord } from '../src/services/ops.ts';
+import type { MonitorJob } from '../src/monitor/jobs.ts';
 const profile = { v: 1 as const, id: 'p', name: 'Desktop', baseUrl: 'http://127.0.0.1:8300', rootPath: '/', createdAt: 1, updatedAt: 1 };
 function channel() {
  const clients = new Map<string, Set<(frame: MonitorLinkFrame, sender: string) => void>>();
@@ -153,4 +155,66 @@ it('ten tabs share one terminal profile stream, only when the daemon has the fea
  const bus2 = channel(); const elected2 = elections();
  const solo = createMonitorLink({ ctx: 'a', profile, bus: bus2('a'), election: elected2.forTab('a'), transport, jobs, onJob() {}, openTerminalProfileEvents });
  try { solo.subscribeTerminalProfile(() => {}); await drain(); assert.equal(opens, 0); } finally { solo.dispose(); }
+});
+
+it('reconciles only successful current-leader snapshots and respects removals during a list request', async () => {
+ const bus = channel(); const elected = elections();
+ const row = { id: 'b2:old', jobId: 'old', feature: 'b2' as const, kind: 'copy', state: 'running', createdAt: 1 };
+ const snapshots: string[][] = []; const seen: string[] = [];
+ let complete!: (jobs: typeof row[]) => void;
+ let receive!: (job: MonitorJob) => void; let remove!: (id: string) => void;
+ const jobs = { events: async (onJob: typeof receive, _signal?: AbortSignal, onRemoved?: typeof remove) => { receive = onJob; remove = onRemoved!; return { abort() {} }; }, list: () => new Promise<typeof row[]>((resolve) => { complete = resolve; }), abort: async () => {}, landed: async () => {} };
+ const transport = { meta: async () => ({ capabilities: { jobs: true } }) } as unknown as MonitorTransport;
+ const link = createMonitorLink({ ctx: 'a', profile, bus: bus('a'), election: elected.forTab('a'), transport, jobs, onJob(job) { seen.push(job.id); }, onJobsListing: async () => {}, onJobsListed: async (ids) => { snapshots.push([...ids]); } });
+ try {
+  await drain();
+  receive(row); remove(row.id);
+  receive({ ...row, id: 'ai:new', jobId: 'new', feature: 'ai' });
+  complete([row]); await drain();
+  assert.deepEqual(snapshots, [['ai:new']]);
+  assert.equal(seen.filter((id) => id === row.id).length, 1, 'the stale list does not resurrect a removed job');
+  link.retry(); await drain();
+  const obsoleteList = complete;
+  elected.switchTo('b'); obsoleteList([]); await drain();
+  assert.equal(snapshots.length, 1, 'an old leader cannot reconcile its late response');
+ } finally { link.dispose(); }
+});
+
+it('a failed job list is never treated as an empty snapshot', async () => {
+ const bus = channel(); const elected = elections(); let snapshots = 0;
+ const transport = { meta: async () => ({ capabilities: { jobs: true } }) } as unknown as MonitorTransport;
+ const jobs = { events: async () => ({ abort() {} }), list: async () => { throw new Error('Monitor offline'); }, abort: async () => {}, landed: async () => {} };
+ const link = createMonitorLink({ ctx: 'a', profile, bus: bus('a'), election: elected.forTab('a'), transport, jobs, onJob() {}, onJobsListed: async () => { snapshots++; } });
+ try { await drain(); assert.equal(snapshots, 0); assert.equal(link.status().state, 'unreachable'); }
+ finally { link.dispose(); }
+});
+
+it('cancellation confirms missing jobs but reports route, network and permission failures durably', async () => {
+ const { IDBFactory } = await import('fake-indexeddb');
+ const { createRecordStore } = await import('../src/services/store.ts');
+ const { createOpsService } = await import('../src/services/ops.ts');
+ const { createMonitorJobsClient } = await import('../src/monitor/jobs.ts');
+ const { cancelMonitorOp } = await import('../src/services/monitorLink.ts');
+ const bus = { broadcast() {}, broadcastImmediate() {}, onMessage() { return () => {}; }, onSenderGone() { return () => {}; }, destroy() {} } as LiveBus<OpFrame>;
+ const ops = createOpsService({ ctx: 'a', store: createRecordStore<OpRecord>('cancel', new IDBFactory()), bus });
+ await ops.ready;
+ const original = monitorJobRecord(profile, { id: 'b2:old', jobId: 'old', feature: 'b2', kind: 'copy', state: 'running', createdAt: 1 });
+ let mode = 'missing';
+ const jobs = createMonitorJobsClient(profile.baseUrl, async (url) => {
+  if (String(url).endsWith('/v1/jobs')) {
+   if (mode === 'offline') throw new Error('Failed to fetch');
+   return new Response(JSON.stringify({ jobs: mode === 'route' ? [{ id: 'b2:old', jobId: 'old', feature: 'b2', kind: 'copy', state: 'running', createdAt: 1 }] : [] }));
+  }
+  return new Response(JSON.stringify({ error: { code: mode === 'denied' ? 'auth.forbidden' : 'jobs.not_found', message: mode === 'denied' ? 'Permission denied' : 'Job not found' } }), { status: mode === 'denied' ? 403 : 404 });
+ });
+ try {
+  for (const current of ['route', 'offline', 'denied', 'missing']) {
+   mode = current; await ops.importMonitor(original); await ops.cancel(original.id);
+   await cancelMonitorOp(ops, jobs, ops.get(original.id)!);
+   const op = ops.get(original.id)!;
+   if (mode === 'missing') { assert.equal(op.state, 'stopped'); assert.match(op.error!, /monitor no longer has/); assert.equal(op.cancelError, undefined); }
+   else { assert.equal(op.state, 'running'); assert.match(op.cancelError!, /Could not cancel/); assert.match(op.cancelError!, mode === 'offline' ? /Failed to fetch/ : mode === 'denied' ? /Permission denied/ : /404/); }
+  }
+  await ops.dismissFinished(); assert.equal(ops.list().length, 0);
+ } finally { await ops.dispose(); }
 });

@@ -50,7 +50,7 @@ describe('origin operations', () => {
   const stored = await createRecordStore<OpRecord>('ops', factory).list();
   assert.equal('progress' in stored[0], false);
   assert.equal(stored[0].state, 'running');
-  b.cancel(handle.id);
+  await b.cancel(handle.id);
   await new Promise<void>((resolve) => { if (handle.signal.aborted) resolve(); else handle.signal.addEventListener('abort', () => resolve(), { once: true }); });
   await handle.cancelled();
   await until(b, () => b.get(handle.id)?.state === 'cancelled');
@@ -90,6 +90,93 @@ describe('origin operations', () => {
   await a.start({ ...input, id: 'fixed' });
   await assert.rejects(a.start({ ...input, id: 'fixed' }), /already exists/);
   await assert.rejects(b.start(input), /another tab/);
+  await Promise.all([a.dispose(), b.dispose()]);
+ });
+});
+
+describe('stale and dismissed operations', () => {
+ it('reconciles missing AI, tools, fs and B2 jobs across reload and keeps live jobs', async () => {
+  const { a, b, factory } = opsPair(); await Promise.all([a.ready, b.ready]);
+  const monitor = (id: string): OpRecord => ({ ...input, id, state: 'running', resumable: false, createdAt: 1,
+   owner: { kind: 'monitor', profileId: 'p', name: 'Desktop', jobId: id } });
+  for (const feature of ['ai', 'tools', 'fs', 'b2']) await a.importMonitor(monitor(`${feature}:old`));
+  await a.importMonitor(monitor('ai:live'));
+  await a.importMonitor({ ...monitor('ai:other'), owner: { kind: 'monitor', profileId: 'other', name: 'Other', jobId: 'ai:other' } });
+  await b.refresh();
+  const candidates = b.all();
+  await a.importMonitor(monitor('tools:new-during-list'));
+  await b.refresh();
+  await b.reconcileMonitorJobs('p', new Set(['ai:live']), candidates);
+  await a.refresh();
+  for (const feature of ['ai', 'tools', 'fs', 'b2']) {
+   const op = a.get(`${feature}:old`)!;
+   assert.equal(op.state, 'stopped'); assert.match(op.error!, /monitor no longer has/);
+   // A delayed running frame cannot resurrect the orphan.
+   await a.importMonitor(monitor(`${feature}:old`)); assert.equal(a.get(op.id)?.state, 'stopped');
+  }
+  assert.equal(a.get('ai:live')?.state, 'running');
+  assert.equal(a.get('ai:other')?.state, 'running');
+  assert.equal(a.get('tools:new-during-list')?.state, 'running');
+  await b.dismissFinished(); await a.refresh();
+  assert.equal(a.list().length, 3);
+  const stored = await createRecordStore<OpRecord>('ops', factory).list();
+  assert.equal(stored.filter((op) => op.dismissed).length, 4);
+  await Promise.all([a.dispose(), b.dispose()]);
+ });
+ it('lets every kind and owner be dismissed while preserving its actual lifecycle and tombstone', async () => {
+  const { a, b, factory } = opsPair(); await Promise.all([a.ready, b.ready]);
+  const kinds = ['copy', 'extract', 'compress', 'encrypt', 'decrypt', 'import', 'send', 'receive', 'transcribe', 'speak', 'generate', 'video', 'audio-tool', 'chat', 'agent-access', 'agent-edit', 'model-load', 'open-copy', 'save-back'] as const;
+  for (const kind of kinds) {
+   const handle = await a.start({ ...input, kind });
+   await b.dismiss(handle.id); await a.refresh();
+   assert.equal(a.list().some((op) => op.id === handle.id), false);
+   assert.equal(a.get(handle.id)?.state, 'running'); assert.equal(handle.signal.aborted, false);
+   await handle.fail(new Error('Failed after dismissal'));
+  }
+  const monitor: OpRecord = { ...input, id: 'monitor', state: 'running', resumable: false, createdAt: 1, owner: { kind: 'monitor', profileId: 'p', name: 'Desktop', jobId: 'ai:1' } };
+  await a.importMonitor(monitor); await b.dismiss('monitor');
+  await a.importMonitor({ ...monitor, state: 'cancelled' });
+  assert.ok(a.get('monitor')?.dismissed); assert.equal(a.get('monitor')?.state, 'cancelled');
+  const store = createRecordStore<OpRecord>('ops', factory);
+  await store.mutate('device', () => ({ ...monitor, id: 'device', owner: { kind: 'device', peerId: 'old-peer', label: 'Old device' } }));
+  await b.refresh(); await b.dismiss('device');
+  await b.refresh(); assert.equal(b.list().length, 0);
+  assert.equal((await store.list()).filter((op) => op.dismissed).length, kinds.length + 2);
+  await store.close(); await Promise.all([a.dispose(), b.dispose()]);
+ });
+ it('persists cancellation status across tabs and retries clear the previous error', async () => {
+  const { a, b } = opsPair(); await Promise.all([a.ready, b.ready]);
+  const handle = await a.start(input);
+  await b.cancel(handle.id);
+  await until(a, () => !!a.get(handle.id)?.cancelRequested);
+  await new Promise<void>((resolve) => { if (handle.signal.aborted) resolve(); else handle.signal.addEventListener('abort', () => resolve(), { once: true }); });
+  assert.equal(a.get(handle.id)?.state, 'running');
+  await a.change(handle.id, (op) => ({ ...op, cancelError: 'Owner refused' }));
+  await b.cancel(handle.id); await a.refresh();
+  assert.equal(a.get(handle.id)?.cancelError, undefined);
+  await handle.cancelled(); await b.dismissFinished();
+  assert.equal(b.list().length, 0);
+  await Promise.all([a.dispose(), b.dispose()]);
+ });
+ it('stops tracking removed monitor profiles, but leaves configured monitors and tab work alone', async () => {
+  const { a, b } = opsPair(); await Promise.all([a.ready, b.ready]);
+  const handle = await a.start(input);
+  for (const profileId of ['removed', 'configured']) await a.importMonitor({ ...input, id: profileId, state: 'running', resumable: false, createdAt: 1, owner: { kind: 'monitor', profileId, name: profileId, jobId: 'fs:1' } });
+  await a.reconcileMonitorProfiles(new Set(['configured']));
+  assert.equal(a.get('removed')?.state, 'stopped'); assert.match(a.get('removed')!.error!, /may still be running/);
+  assert.equal(a.get('configured')?.state, 'running'); assert.equal(a.get(handle.id)?.state, 'running');
+  await Promise.all([a.dispose(), b.dispose()]);
+ });
+ it('keeps collected results and explains an uncollected result removed from the monitor', async () => {
+  const { a, b } = opsPair(); await Promise.all([a.ready, b.ready]);
+  const monitor: OpRecord = { ...input, id: 'missing-result', state: 'done', resumable: false, createdAt: 1, owner: { kind: 'monitor', profileId: 'p', name: 'Desktop', jobId: 'tools:1' }, result: { kind: 'monitor-path', profileId: 'p', path: '/v1/tools/jobs/1/result' } };
+  await a.importMonitor(monitor);
+  await a.importMonitor({ ...monitor, id: 'collected', result: { kind: 'opfs-file', path: 'collected', contentType: 'video/mp4' } });
+  await a.importMonitor({ ...monitor, id: 'copied-on-monitor', owner: { kind: 'monitor', profileId: 'p', name: 'Desktop', jobId: 'fs:1' }, result: { kind: 'monitor-path', profileId: 'p', path: '/data/copied.txt' } });
+  await a.reconcileMonitorJobs('p', new Set());
+  assert.match(a.get('missing-result')!.landingError!, /no longer has this result/);
+  assert.equal(a.get('collected')?.landingError, undefined); assert.equal(a.get('collected')?.result?.kind, 'opfs-file');
+  assert.equal(a.get('copied-on-monitor')?.landingError, undefined);
   await Promise.all([a.dispose(), b.dispose()]);
  });
 });
