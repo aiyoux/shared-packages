@@ -102,6 +102,10 @@ export function createTrimTimeline(cfg: TrimTimelineConfig) {
 		const next = Math.max(0, Math.min(cfg.duration(), t));
 		headTime = next;
 		pendingSeek = next;
+		// Let an in-flight seek decode its frame before replacing it, as the
+		// preview player does; the release flush (or the next tick) applies
+		// the latest position.
+		if (cfg.media()?.seeking) return;
 		const now = performance.now();
 		if (now - lastPreviewAt < PREVIEW_MS) return;
 		lastPreviewAt = now;

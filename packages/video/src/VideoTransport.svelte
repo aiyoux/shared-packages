@@ -54,7 +54,7 @@
 	></video>
 
 	<div class="controls-overlay" class:visible={paused}>
-		<MediaControlsBar {duration} {paused} bind:currentTime bind:playbackRate onToggle={togglePlay} />
+		<MediaControlsBar {duration} {paused} bind:currentTime bind:playbackRate onToggle={togglePlay} media={videoRef} />
 	</div>
 </div>
 

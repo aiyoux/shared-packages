@@ -52,3 +52,9 @@ export {
 export { listEngines, loadEngine, peekEngine } from './engines.js';
 export { detectFormatFromName, suggestOutputName } from './detect.js';
 export { exportVideo, type ExportOptions, type ExportedVideo } from './operations.js';
+export {
+	clampScrubTarget,
+	scrubDisplayTime,
+	shouldDeferScrubSeek,
+	type ScrubElementState
+} from './scrubSeek.js';

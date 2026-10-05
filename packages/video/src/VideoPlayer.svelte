@@ -2,6 +2,7 @@
 	import { onDestroy, onMount } from 'svelte';
 	import Play from '@lucide/svelte/icons/play';
 	import Pause from '@lucide/svelte/icons/pause';
+	import { clampScrubTarget, shouldDeferScrubSeek } from './scrubSeek.js';
 
 	let {
 		src,
@@ -64,6 +65,12 @@
 	}
 
 	function handleEnded() {
+		// A scrub that lands on the last frame ends the element; the loop
+		// must not replay under the drag.
+		if (dragging) {
+			isPaused = true;
+			return;
+		}
 		if (!loopCooldownMs) {
 			isPaused = true;
 			return;
@@ -91,19 +98,122 @@
 		isCooldown = false;
 	}
 
+	// Smooth scrub, as the preview player does: moves coalesce on an
+	// animation frame, an in-flight seek decodes before it is replaced, and
+	// playback pauses for the drag and resumes at the release point.
+	let pendingSeek: number | null = null;
+	let scrubFrame: number | null = null;
+	let scrubResume = false;
+
+	function cancelScrubFrame() {
+		if (scrubFrame !== null) cancelAnimationFrame(scrubFrame);
+		scrubFrame = null;
+	}
+
+	function resumeScrubPlayback() {
+		if (dragging || !scrubResume) return;
+		scrubResume = false;
+		isPaused = false;
+		void videoElement?.play().catch(() => {});
+	}
+
+	function flushScrub(final = false) {
+		if (pendingSeek === null || !videoElement) return;
+		// Let an in-flight seek decode its frame before replacing it;
+		// continually replacing an unfinished seek leaves the frame frozen.
+		if (shouldDeferScrubSeek({ seeking: videoElement.seeking, readyState: videoElement.readyState }, final)) {
+			return;
+		}
+		const time = pendingSeek;
+		pendingSeek = null;
+		cancelCooldown();
+		try {
+			if (videoElement.currentTime !== time) videoElement.currentTime = time;
+		} catch {
+			/* seek failures resolve on the next tick */
+		}
+		currentTime = time;
+		resumeScrubPlayback();
+	}
+
+	function scheduleScrub() {
+		if (scrubFrame !== null) return;
+		scrubFrame = requestAnimationFrame(() => {
+			scrubFrame = null;
+			flushScrub();
+		});
+	}
+
 	function seekTo(pct: number) {
 		if (!videoElement) return;
-		cancelCooldown();
-		const time = pct * duration;
-		videoElement.currentTime = time;
-		currentTime = time;
+		pendingSeek = clampScrubTarget(pct * duration, duration);
+		currentTime = pendingSeek;
+		scheduleScrub();
+	}
+
+	function timeAtTrack(el: HTMLElement, clientX: number): number {
+		const rect = el.getBoundingClientRect();
+		if (rect.width <= 0 || !(duration > 0)) return 0;
+		return Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+	}
+
+	function onTrackDown(e: PointerEvent) {
+		if (!videoElement) return;
+		e.preventDefault();
+		e.stopPropagation();
+		(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+		dragging = true;
+		scrubResume = !videoElement.paused && !videoElement.ended;
+		if (scrubResume) {
+			videoElement.pause();
+			isPaused = true;
+		}
+		seekTo(timeAtTrack(e.currentTarget as HTMLElement, e.clientX));
+		flushScrub();
+	}
+
+	function onTrackMove(e: PointerEvent) {
+		if (!dragging) return;
+		e.stopPropagation();
+		seekTo(timeAtTrack(e.currentTarget as HTMLElement, e.clientX));
+	}
+
+	function onTrackUp(e: PointerEvent) {
+		if (!dragging) return;
+		e.stopPropagation();
+		dragging = false;
+		cancelScrubFrame();
+		flushScrub(true);
+		if (pendingSeek === null) resumeScrubPlayback();
+	}
+
+	function onTrackKey(e: KeyboardEvent) {
+		if (e.key === 'ArrowLeft') {
+			e.preventDefault();
+			pendingSeek = clampScrubTarget(currentTime - 5, duration);
+			currentTime = pendingSeek;
+			flushScrub(true);
+		} else if (e.key === 'ArrowRight') {
+			e.preventDefault();
+			pendingSeek = clampScrubTarget(currentTime + 5, duration);
+			currentTime = pendingSeek;
+			flushScrub(true);
+		}
+	}
+
+	function onSeekReady() {
+		if (videoElement && !dragging) currentTime = videoElement.currentTime;
+		if (pendingSeek !== null) scheduleScrub();
 	}
 
 	onMount(() => {
 		if (videoElement) videoElement.playbackRate = playbackRate;
 	});
 
-	onDestroy(() => cancelCooldown());
+	onDestroy(() => {
+		cancelCooldown();
+		cancelScrubFrame();
+	});
 </script>
 
 <div class="shared-video-player">
@@ -113,7 +223,11 @@
 				bind:this={videoElement}
 				{src}
 				ontimeupdate={handleTimeUpdate}
-				onloadedmetadata={handleLoadedMetadata}
+				onloadedmetadata={() => {
+					handleLoadedMetadata();
+					onSeekReady();
+				}}
+				onseeked={onSeekReady}
 				onended={handleEnded}
 				muted
 				playsinline
@@ -134,7 +248,11 @@
 				bind:this={videoElement}
 				{src}
 				ontimeupdate={handleTimeUpdate}
-				onloadedmetadata={handleLoadedMetadata}
+				onloadedmetadata={() => {
+					handleLoadedMetadata();
+					onSeekReady();
+				}}
+				onseeked={onSeekReady}
 				onended={handleEnded}
 				muted
 				playsinline
@@ -170,35 +288,11 @@
 			tabindex="0"
 			aria-label="Video progress"
 			aria-valuetext={`${Math.round(currentTime)}s of ${Math.round(duration)}s`}
-			onpointerdown={(e) => {
-				e.preventDefault();
-				e.stopPropagation();
-				e.currentTarget.setPointerCapture(e.pointerId);
-				dragging = true;
-				const rect = e.currentTarget.getBoundingClientRect();
-				const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-				seekTo(pct);
-			}}
-			onpointermove={(e) => {
-				if (!dragging) return;
-				e.stopPropagation();
-				const rect = e.currentTarget.getBoundingClientRect();
-				const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-				seekTo(pct);
-			}}
-			onpointerup={(e) => {
-				e.stopPropagation();
-				dragging = false;
-			}}
-			onkeydown={(e) => {
-				if (e.key === 'ArrowLeft') {
-					e.preventDefault();
-					seekTo(Math.max(0, (currentTime - 5) / (duration || 1)));
-				} else if (e.key === 'ArrowRight') {
-					e.preventDefault();
-					seekTo(Math.min(1, (currentTime + 5) / (duration || 1)));
-				}
-			}}
+			onpointerdown={onTrackDown}
+			onpointermove={onTrackMove}
+			onpointerup={onTrackUp}
+			onpointercancel={onTrackUp}
+			onkeydown={onTrackKey}
 			role="slider"
 			aria-valuenow={currentTime}
 			aria-valuemin={0}
