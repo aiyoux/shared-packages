@@ -88,10 +88,8 @@
     border: 0;
   }
 
-  /* Graph-paper ground used by HUD catalog and Connections setup screens. */
+  /* Plain ground used by HUD catalog and Connections setup screens. */
   .ds-hud-ground {
     background-color: var(--surface-ground);
-    background-image: var(--hud-grid);
-    background-size: var(--hud-grid-size);
   }
 }
