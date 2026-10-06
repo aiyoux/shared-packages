@@ -15,7 +15,14 @@ import Loader2 from '@lucide/svelte/icons/loader-2';
 		audioUpscaler = null as VideoAudioUpscaler | null,
 		onProcessStart,
 		onProcessed,
-		onError
+		onError,
+		heading = 'Export Settings',
+		actionLabel = 'Process Video',
+		actionTestId = undefined as string | undefined,
+		disabled = false,
+		prepareSource = undefined as
+			| (() => Promise<{ blob: Blob; start: number; end: number }>)
+			| undefined
 	}: {
 		sourceBlob: Blob | null;
 		trimStart: number;
@@ -32,6 +39,16 @@ import Loader2 from '@lucide/svelte/icons/loader-2';
 		/** `name` is the suggested result name (source name + stage suffixes). */
 		onProcessed: (blob: Blob, name?: string) => void;
 		onError: (message: string) => void;
+		/** Section title. Simple Video calls this post-process. */
+		heading?: string;
+		actionLabel?: string;
+		actionTestId?: string;
+		disabled?: boolean;
+		/**
+		 * When set, runs before the resize. The returned blob and range replace
+		 * `sourceBlob` / trim, so a caller can hand over an already trimmed video.
+		 */
+		prepareSource?: () => Promise<{ blob: Blob; start: number; end: number }>;
 	} = $props();
 
 	let useRife = $state(false);
@@ -199,7 +216,7 @@ import Loader2 from '@lucide/svelte/icons/loader-2';
 	}
 
 	async function handleProcess() {
-		if (!sourceBlob || isProcessing) return;
+		if (disabled || isProcessing || (!sourceBlob && !prepareSource)) return;
 		onProcessStart?.();
 		isProcessing = true;
 		progress = 0;
@@ -252,19 +269,31 @@ import Loader2 from '@lucide/svelte/icons/loader-2';
 			});
 		}
 		// The suggested result name stacks the stage suffixes on the source name.
+		let input: Blob = sourceBlob ?? new Blob();
+		let start = trimStart;
+		let end = trimEnd;
 		let resultName = sourceBlob instanceof File ? sourceBlob.name : 'video.mp4';
 
 		const trimWeight = modelStages.length === 0 ? 100 : modelStages.length === 1 ? 50 : 40;
 		const modelWeight = 100 - trimWeight;
 
 		try {
+			if (prepareSource) {
+				const prepared = await prepareSource();
+				input = prepared.blob;
+				start = prepared.start;
+				end = prepared.end;
+				if (prepared.blob instanceof File) resultName = prepared.blob.name;
+			}
+			if (!(end > start)) throw new Error('Trim end must be greater than trim start.');
 			processingStep = 'Trimming & Resizing video...';
-			let result = await processVideo(sourceBlob, {
-				start: trimStart,
-				end: trimEnd,
+			let result = await processVideo(input, {
+				start,
+				end,
 				width: exportWidth,
 				height: exportHeight,
 				bitrate: exportBitrate,
+				audio: { codec: 'aac' },
 				onProgress: (p) => {
 					progress = Math.round(p * (trimWeight / 100));
 				}
@@ -304,7 +333,7 @@ import Loader2 from '@lucide/svelte/icons/loader-2';
 
 <!-- Export Settings -->
 <div class="settings-section">
-	<h3>Export Settings</h3>
+	<h3>{heading}</h3>
 	<div class="settings-grid">
 		<div class="setting">
 			<label for="preset">Size Preset</label>
@@ -507,14 +536,15 @@ import Loader2 from '@lucide/svelte/icons/loader-2';
 	<button
 		class="btn btn-primary process-btn"
 		onclick={handleProcess}
-		disabled={isProcessing || !sourceBlob}
+		disabled={isProcessing || disabled || (!sourceBlob && !prepareSource)}
+		data-testid={actionTestId}
 	>
 		{#if isProcessing}
 			<span class="spin-wrapper"><Loader2 size={18} /></span>
 			Processing {progress}%
 		{:else}
 			<Scissors size={18} />
-			Process Video
+			{actionLabel}
 		{/if}
 	</button>
 	{#if isProcessing}
