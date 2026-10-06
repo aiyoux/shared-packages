@@ -35,9 +35,9 @@
 	/** Deeper rectangles are lighter, so nesting reads without extra chrome. */
 	function fillFor(rect: TreemapRect): string {
 		const alpha = Math.max(0.08, 0.34 - rect.depth * 0.08);
-		if (rect.group === 'pack') return `rgb(var(--accent-rgb) / ${alpha + 0.12})`;
-		if (rect.group === 'project') return `rgb(var(--accent-rgb) / ${alpha})`;
-		return `rgb(var(--text-primary-rgb, 200 200 200) / ${alpha * 0.5})`;
+		if (rect.group === 'pack') return `rgba(var(--accent-rgb), ${alpha + 0.12})`;
+		if (rect.group === 'project') return `rgba(var(--accent-rgb), ${alpha})`;
+		return `rgba(var(--text-primary-rgb, 200, 200, 200), ${alpha * 0.5})`;
 	}
 
 	function labelFits(rect: TreemapRect): boolean {

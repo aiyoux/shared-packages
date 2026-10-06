@@ -343,7 +343,7 @@
 		padding: 0.4rem 0.45rem 0.45rem;
 		border: 1px solid var(--line-hairline);
 		background: var(--surface-2);
-		box-shadow: 0 12px 32px rgb(var(--scrim-rgb) / 0.35);
+		box-shadow: 0 12px 32px rgba(var(--scrim-rgb), 0.35);
 	}
 	.menu-row {
 		display: flex;

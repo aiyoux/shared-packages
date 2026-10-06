@@ -684,7 +684,7 @@
 		align-items: center;
 		justify-content: center;
 		padding: 12px;
-		background: color-mix(in srgb, rgb(var(--scrim-rgb, 0 0 0) / 0.55) 70%, #1a1a1e);
+		background: color-mix(in srgb, rgba(var(--scrim-rgb, 0, 0, 0), 0.55) 70%, #1a1a1e);
 		backdrop-filter: blur(8px);
 		-webkit-backdrop-filter: blur(8px);
 	}
@@ -696,10 +696,10 @@
 		min-width: 12rem;
 		max-width: min(22rem, 100%);
 		padding: 12px 14px;
-		background: rgb(var(--bg-rgb, 16 16 20) / 0.88);
-		border: 1px solid rgb(var(--border-rgb, 90 90 96) / 0.75);
+		background: rgba(var(--bg-rgb, 16, 16, 20), 0.88);
+		border: 1px solid rgba(var(--border-rgb, 90, 90, 96), 0.75);
 		border-radius: var(--radius-md, 8px);
-		box-shadow: 0 10px 28px rgb(var(--scrim-rgb, 0 0 0) / 0.4);
+		box-shadow: 0 10px 28px rgba(var(--scrim-rgb, 0, 0, 0), 0.4);
 		color: var(--text-primary);
 	}
 	.aw-role {
@@ -768,7 +768,7 @@
 		margin-top: 2px;
 		border: 1px solid var(--accent, #6ea8fe);
 		border-radius: var(--radius-md, 8px);
-		background: rgb(var(--accent-rgb, 110 168 254) / 0.18);
+		background: rgba(var(--accent-rgb, 110, 168, 254), 0.18);
 		color: var(--accent, #6ea8fe);
 		cursor: pointer;
 		font-size: var(--text-xs, 12px);
@@ -778,13 +778,13 @@
 	}
 	.aw-done:hover,
 	.aw-done:focus-visible {
-		background: rgb(var(--accent-rgb, 110 168 254) / 0.3);
+		background: rgba(var(--accent-rgb, 110, 168, 254), 0.3);
 	}
 	.aw-combine-preview {
 		position: absolute;
 		z-index: 9;
 		pointer-events: none;
-		background: rgb(var(--accent-rgb, 110 168 254) / 0.28);
+		background: rgba(var(--accent-rgb, 110, 168, 254), 0.28);
 		border: 2px solid var(--accent, #6ea8fe);
 		box-sizing: border-box;
 	}
@@ -797,9 +797,9 @@
 		display: inline-flex;
 		align-items: center;
 		justify-content: center;
-		border: 1px solid rgb(var(--border-rgb, 90 90 96) / 0.8);
+		border: 1px solid rgba(var(--border-rgb, 90, 90, 96), 0.8);
 		border-radius: var(--radius-md, 8px);
-		background: rgb(var(--bg-rgb, 16 16 20) / 0.95);
+		background: rgba(var(--bg-rgb, 16, 16, 20), 0.95);
 		color: var(--text-primary);
 		cursor: pointer;
 	}
@@ -827,7 +827,7 @@
 	.aw-combine:focus-visible:not(:disabled) {
 		border-color: var(--accent, #6ea8fe);
 		color: var(--accent, #6ea8fe);
-		background: rgb(var(--accent-rgb, 110 168 254) / 0.2);
+		background: rgba(var(--accent-rgb, 110, 168, 254), 0.2);
 	}
 	.aw-combine:disabled {
 		opacity: 0.35;
@@ -842,9 +842,9 @@
 		display: inline-flex;
 		align-items: center;
 		justify-content: center;
-		border: 1px solid rgb(var(--border-rgb, 90 90 96) / 0.8);
+		border: 1px solid rgba(var(--border-rgb, 90, 90, 96), 0.8);
 		border-radius: var(--radius-md, 8px);
-		background: rgb(var(--bg-rgb, 16 16 20) / 0.95);
+		background: rgba(var(--bg-rgb, 16, 16, 20), 0.95);
 		color: var(--text-primary);
 		cursor: pointer;
 	}
@@ -872,7 +872,7 @@
 	.aw-swap:focus-visible {
 		border-color: var(--accent, #6ea8fe);
 		color: var(--accent, #6ea8fe);
-		background: rgb(var(--accent-rgb, 110 168 254) / 0.2);
+		background: rgba(var(--accent-rgb, 110, 168, 254), 0.2);
 	}
 	.aw-slice-layer {
 		position: absolute;
@@ -914,9 +914,9 @@
 		display: inline-flex;
 		align-items: center;
 		justify-content: center;
-		border: 1px solid rgb(var(--border-rgb, 90 90 96) / 0.75);
+		border: 1px solid rgba(var(--border-rgb, 90, 90, 96), 0.75);
 		border-radius: var(--radius-md, 8px);
-		background: rgb(var(--bg-rgb, 16 16 20) / 0.88);
+		background: rgba(var(--bg-rgb, 16, 16, 20), 0.88);
 		color: var(--text-primary);
 		cursor: pointer;
 	}
@@ -959,9 +959,9 @@
 	.aw-picker-list button {
 		height: 34px;
 		padding: 0 12px;
-		border: 1px solid var(--line-strong, rgb(var(--border-rgb, 90 90 96) / 0.75));
+		border: 1px solid var(--line-strong, rgba(var(--border-rgb, 90, 90, 96), 0.75));
 		border-radius: var(--radius-md, 8px);
-		background: var(--surface-2, rgb(var(--bg-rgb, 16 16 20) / 0.88));
+		background: var(--surface-2, rgba(var(--bg-rgb, 16, 16, 20), 0.88));
 		color: var(--text-primary);
 		cursor: pointer;
 		font-size: var(--text-sm, 13px);
@@ -969,7 +969,7 @@
 	.aw-picker-list button:hover,
 	.aw-picker-list button:focus-visible {
 		border-color: var(--accent);
-		background: var(--accent-glow, rgb(var(--accent-rgb, 110 168 254) / 0.18));
+		background: var(--accent-glow, rgba(var(--accent-rgb, 110, 168, 254), 0.18));
 		color: var(--accent);
 	}
 </style>

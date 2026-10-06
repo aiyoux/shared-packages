@@ -365,7 +365,7 @@
 	.fe-thumb-load:focus-visible {
 		color: var(--text-primary, #eee);
 		outline: none;
-		background: rgb(var(--overlay-rgb, 255 255 255) / 0.08);
+		background: rgba(var(--overlay-rgb, 255, 255, 255), 0.08);
 	}
 	.fe-thumb-spinner {
 		width: 20px;

@@ -264,7 +264,7 @@
 		inset: 0;
 		border: 0;
 		padding: 0;
-		background: rgb(var(--scrim-rgb) / 0.55);
+		background: rgba(var(--scrim-rgb), 0.55);
 		cursor: pointer;
 	}
 	.card {

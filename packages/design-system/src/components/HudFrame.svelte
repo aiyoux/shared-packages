@@ -36,7 +36,7 @@
 	.ds-hud {
 		position: relative;
 		border: 1px solid var(--line-strong);
-		background: rgb(var(--scrim-rgb) / 0.35);
+		background: rgba(var(--scrim-rgb), 0.35);
 		border-radius: var(--hud-radius);
 	}
 

@@ -515,7 +515,7 @@
 		border: 1px solid var(--line-hairline);
 		background: var(--surface-2);
 		color: var(--text-primary);
-		box-shadow: 0 10px 28px rgb(var(--scrim-rgb) / 0.45);
+		box-shadow: 0 10px 28px rgba(var(--scrim-rgb), 0.45);
 		font-size: 0.78rem;
 		line-height: 1.35;
 	}
@@ -678,7 +678,7 @@
 		border: 1px solid var(--line-hairline);
 		background: var(--surface-2);
 		color: var(--text-primary);
-		box-shadow: 0 10px 28px rgb(var(--scrim-rgb) / 0.45);
+		box-shadow: 0 10px 28px rgba(var(--scrim-rgb), 0.45);
 		top: calc(100% + 4px);
 		left: 0;
 	}
@@ -701,7 +701,7 @@
 	.conn-menu button.active {
 		outline: 2px solid var(--accent);
 		outline-offset: 0;
-		background: rgb(var(--accent-rgb) / 0.08);
+		background: rgba(var(--accent-rgb), 0.08);
 	}
 	.conn-favourite-row {
 		display: flex;

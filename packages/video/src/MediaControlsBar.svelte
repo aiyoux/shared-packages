@@ -439,7 +439,7 @@
 		white-space: nowrap;
 	}
 	.flat .seek-rail {
-		background: rgb(var(--border-rgb, 128 128 128) / 0.35);
+		background: rgba(var(--border-rgb, 128, 128, 128), 0.35);
 	}
 	.flat .speed-control {
 		gap: 6px;

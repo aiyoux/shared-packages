@@ -457,13 +457,13 @@
 		height: 56px;
 		border: 1px solid var(--line-strong);
 		border-radius: var(--radius-full);
-		background: rgb(var(--scrim-rgb) / 0.55);
+		background: rgba(var(--scrim-rgb), 0.55);
 		color: var(--text-primary);
 		cursor: pointer;
 		transition: background-color var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
 	}
 	.fe-vp-bigplay:hover {
-		background: rgb(var(--accent-rgb) / 0.25);
+		background: rgba(var(--accent-rgb), 0.25);
 		border-color: var(--accent);
 	}
 	.fe-vp-wait {

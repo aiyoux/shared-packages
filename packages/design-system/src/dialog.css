@@ -3,6 +3,6 @@
   position: absolute;
   inset: 0;
   display: flex;
-  background: rgb(var(--scrim-rgb, 0 0 0) / 0.6);
+  background: rgba(var(--scrim-rgb, 0, 0, 0), 0.6);
   padding: 16px;
 }

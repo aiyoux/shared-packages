@@ -60,7 +60,7 @@
 	.scrim {
 		position: absolute;
 		inset: 0;
-		background: rgb(var(--scrim-rgb) / 0.55);
+		background: rgba(var(--scrim-rgb), 0.55);
 	}
 	.card {
 		position: relative;

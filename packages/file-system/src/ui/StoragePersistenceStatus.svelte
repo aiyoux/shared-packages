@@ -279,26 +279,26 @@
 
 	.fe-persist.persistent .fe-persist-dot {
 		background: var(--cat-green-soft);
-		box-shadow: 0 0 0 2px rgb(var(--cat-green-soft-rgb) / 0.25);
+		box-shadow: 0 0 0 2px rgba(var(--cat-green-soft-rgb), 0.25);
 	}
 	.fe-persist.best-effort .fe-persist-dot,
 	.fe-persist.unsupported .fe-persist-dot {
 		background: var(--cat-red-soft);
-		box-shadow: 0 0 0 2px rgb(var(--cat-red-soft-rgb) / 0.25);
+		box-shadow: 0 0 0 2px rgba(var(--cat-red-soft-rgb), 0.25);
 	}
 	.fe-persist.loading .fe-persist-dot {
 		background: var(--text-muted);
 	}
 
 	.fe-persist.persistent {
-		border-color: rgb(var(--cat-green-soft-rgb) / 0.55);
-		background: rgb(var(--cat-green-soft-rgb) / 0.16);
+		border-color: rgba(var(--cat-green-soft-rgb), 0.55);
+		background: rgba(var(--cat-green-soft-rgb), 0.16);
 		color: var(--cat-green-soft);
 	}
 	.fe-persist.best-effort,
 	.fe-persist.unsupported {
-		border-color: rgb(var(--cat-red-soft-rgb) / 0.6);
-		background: rgb(var(--cat-red-soft-rgb) / 0.16);
+		border-color: rgba(var(--cat-red-soft-rgb), 0.6);
+		background: rgba(var(--cat-red-soft-rgb), 0.16);
 		color: var(--cat-red-soft);
 	}
 
@@ -320,7 +320,7 @@
 		border: 2px solid var(--line-hairline);
 		background: var(--surface-2);
 		color: var(--text-primary);
-		box-shadow: 0 10px 28px rgb(var(--scrim-rgb) / 0.45);
+		box-shadow: 0 10px 28px rgba(var(--scrim-rgb), 0.45);
 		font-size: 0.8rem;
 		line-height: 1.4;
 		text-align: left;
@@ -369,8 +369,8 @@
 		appearance: none;
 		display: inline-flex;
 		margin-top: 0.65rem;
-		border: 1px solid rgb(var(--cat-red-soft-rgb) / 0.55);
-		background: rgb(var(--cat-red-soft-rgb) / 0.14);
+		border: 1px solid rgba(var(--cat-red-soft-rgb), 0.55);
+		background: rgba(var(--cat-red-soft-rgb), 0.14);
 		color: var(--cat-red-soft);
 		border-radius: 999px;
 		padding: 4px 10px;
@@ -382,7 +382,7 @@
 	}
 
 	.fe-persist-request:hover:not(:disabled) {
-		background: rgb(var(--cat-red-soft-rgb) / 0.24);
+		background: rgba(var(--cat-red-soft-rgb), 0.24);
 	}
 
 	.fe-persist-request:disabled {

@@ -437,10 +437,10 @@
 		white-space: nowrap;
 	}
 	.fe-tree-row:hover {
-		background: rgb(var(--overlay-rgb) / 0.06);
+		background: rgba(var(--overlay-rgb), 0.06);
 	}
 	.fe-tree-row.active {
-		background: var(--accent-soft, rgb(var(--accent-rgb, 74 153 255) / 0.16));
+		background: var(--accent-soft, rgba(var(--accent-rgb, 74, 153, 255), 0.16));
 		color: var(--text-primary);
 	}
 	.fe-tree-row.drop-ready {
@@ -449,7 +449,7 @@
 	}
 	.fe-tree-row.drop-target {
 		outline: 1px solid var(--accent, #38bdf8);
-		background: rgb(var(--accent-rgb, 56 189 248) / 0.16);
+		background: rgba(var(--accent-rgb, 56, 189, 248), 0.16);
 		color: var(--text-primary);
 	}
 	.fe-tree-toggle {
@@ -467,7 +467,7 @@
 		border-radius: var(--radius-sm, 3px);
 	}
 	.fe-tree-toggle:hover {
-		background: rgb(var(--overlay-rgb) / 0.1);
+		background: rgba(var(--overlay-rgb), 0.1);
 	}
 	.fe-tree-toggle.invisible {
 		visibility: hidden;

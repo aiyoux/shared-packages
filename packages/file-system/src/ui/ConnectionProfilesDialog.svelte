@@ -217,7 +217,7 @@
 	.scrim {
 		position: absolute;
 		inset: 0;
-		background: rgb(var(--scrim-rgb) / 0.55);
+		background: rgba(var(--scrim-rgb), 0.55);
 	}
 	.card {
 		position: relative;
@@ -252,7 +252,7 @@
 	}
 	.err {
 		padding: 0.5rem 0.75rem;
-		background: rgb(var(--danger-rgb) / 0.16);
+		background: rgba(var(--danger-rgb), 0.16);
 		color: var(--cat-red-soft);
 		font-size: 0.9rem;
 	}

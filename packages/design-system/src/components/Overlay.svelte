@@ -61,7 +61,7 @@
 		border: 0;
 		padding: 0;
 		margin: 0;
-		background: rgb(var(--scrim-rgb) / 0.6);
+		background: rgba(var(--scrim-rgb), 0.6);
 		cursor: default;
 	}
 

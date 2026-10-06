@@ -840,7 +840,7 @@
 	.scrim {
 		position: absolute;
 		inset: 0;
-		background: rgb(var(--scrim-rgb) / 0.55);
+		background: rgba(var(--scrim-rgb), 0.55);
 	}
 	.card {
 		position: relative;
@@ -903,7 +903,7 @@
 	.path-note.shuttle {
 		border-color: var(--accent);
 		color: var(--text-primary);
-		background: rgb(var(--accent-rgb) / 0.08);
+		background: rgba(var(--accent-rgb), 0.08);
 	}
 	.path-note.host {
 		background: var(--surface-1);
@@ -919,7 +919,7 @@
 	.engine-note.fallback {
 		border-color: var(--accent);
 		color: var(--text-primary);
-		background: rgb(var(--accent-rgb) / 0.08);
+		background: rgba(var(--accent-rgb), 0.08);
 	}
 	.err {
 		margin: 0 0 0.5rem;

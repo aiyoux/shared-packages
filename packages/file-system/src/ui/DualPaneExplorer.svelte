@@ -2814,7 +2814,7 @@
 		border: 1px solid var(--line-hairline);
 		background: var(--surface-2);
 		color: var(--text-primary);
-		box-shadow: 0 10px 28px rgb(var(--scrim-rgb) / 0.45);
+		box-shadow: 0 10px 28px rgba(var(--scrim-rgb), 0.45);
 		font-size: 0.78rem;
 		line-height: 1.35;
 		white-space: nowrap;
@@ -2908,7 +2908,7 @@
 	.b2-error {
 		margin: 0;
 		padding: 0.4rem 0.65rem;
-		background: rgb(var(--danger-rgb) / 0.16);
+		background: rgba(var(--danger-rgb), 0.16);
 		color: var(--cat-red-soft);
 		font-size: 0.85rem;
 	}

@@ -58,7 +58,7 @@
 	.vfs-scrim {
 		position: absolute;
 		inset: 0;
-		background: rgb(var(--scrim-rgb) / 0.6);
+		background: rgba(var(--scrim-rgb), 0.6);
 		display: flex;
 		align-items: center;
 		justify-content: center;

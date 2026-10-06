@@ -96,7 +96,7 @@
 		border: 1px solid var(--line-hairline, #334155);
 		color: var(--text-primary, #f1f5f9);
 		font-size: 0.875rem;
-		box-shadow: 0 8px 24px rgb(var(--scrim-rgb, 0 0 0) / 0.4);
+		box-shadow: 0 8px 24px rgba(var(--scrim-rgb, 0, 0, 0), 0.4);
 		pointer-events: auto;
 		animation: toast-in 0.18s ease-out;
 	}
@@ -156,6 +156,6 @@
 	}
 	.toast-close:hover {
 		color: var(--text-primary, #f1f5f9);
-		background: rgb(var(--overlay-rgb, 255 255 255) / 0.1);
+		background: rgba(var(--overlay-rgb, 255, 255, 255), 0.1);
 	}
 </style>

@@ -180,7 +180,7 @@
 	}
 	.pair-info:hover,
 	.pair-info-wrap:focus-within .pair-info {
-		background: rgb(var(--overlay-rgb) / 0.06);
+		background: rgba(var(--overlay-rgb), 0.06);
 		color: var(--text-primary);
 	}
 	.pair-tip {
@@ -195,7 +195,7 @@
 		border: 1px solid var(--line-hairline);
 		background: var(--surface-2);
 		color: var(--text-primary);
-		box-shadow: 0 10px 28px rgb(var(--scrim-rgb) / 0.45);
+		box-shadow: 0 10px 28px rgba(var(--scrim-rgb), 0.45);
 		font-size: 0.78rem;
 		line-height: 1.35;
 	}

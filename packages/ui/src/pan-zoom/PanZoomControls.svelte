@@ -107,11 +107,11 @@
 		cursor: pointer;
 	}
 	.pz-btn:hover {
-		background: rgb(var(--border-rgb, 80 80 80) / 0.4);
+		background: rgba(var(--border-rgb, 80, 80, 80), 0.4);
 		color: var(--text-primary, #fff);
 	}
 	.pz-btn.active {
-		background: rgb(var(--accent-rgb, 56 189 248) / 0.25);
+		background: rgba(var(--accent-rgb, 56, 189, 248), 0.25);
 		color: var(--accent, #38bdf8);
 	}
 	.pz-pct {
