@@ -379,7 +379,7 @@
 		color: white;
 		font-size: 20px;
 		width: 32px;
-		transition: transform var(--transition-fast) var(--ease-default);
+		transition: transform var(--transition-fast);
 	}
 	.overlay .control-btn:hover {
 		color: var(--accent-light);

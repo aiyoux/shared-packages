@@ -506,7 +506,7 @@
 		font-size: 0.8rem;
 		font-family: inherit;
 		cursor: pointer;
-		transition: all var(--transition-fast) var(--ease-default);
+		transition: all var(--transition-fast);
 	}
 
 	.zoom-btn:hover:not(:disabled) {

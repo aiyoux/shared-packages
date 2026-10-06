@@ -86,7 +86,7 @@
 		background: linear-gradient(transparent, rgba(0, 0, 0, 0.7));
 		padding: 20px;
 		opacity: 0;
-		transition: opacity var(--transition-normal) var(--ease-default);
+		transition: opacity var(--transition-normal);
 		pointer-events: none;
 	}
 

@@ -1232,7 +1232,7 @@
 	}
 
 	.countries {
-		transition: transform var(--transition-fast, 150ms) var(--ease-out, ease-out);
+		transition: transform var(--transition-fast, 150ms);
 		transform-origin: 0 0;
 	}
 
@@ -1240,7 +1240,7 @@
 		fill: rgba(var(--overlay-rgb, 128 128 128), 0.08);
 		stroke: rgba(var(--overlay-rgb, 128 128 128), 0.15);
 		stroke-width: 0.5;
-		transition: all var(--transition-fast, 150ms) var(--ease-bounce, ease-out);
+		transition: all var(--transition-fast, 150ms);
 		cursor: pointer;
 		outline: none;
 	}
@@ -1304,7 +1304,7 @@
 		align-items: center;
 		justify-content: center;
 		cursor: pointer;
-		transition: all var(--transition-fast, 150ms) var(--ease-bounce, ease-out);
+		transition: all var(--transition-fast, 150ms);
 		box-shadow: 0 4px 12px rgba(var(--scrim-rgb, 0 0 0), 0.3);
 	}
 

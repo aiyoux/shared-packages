@@ -569,7 +569,7 @@ import Loader2 from '@lucide/svelte/icons/loader-2';
 		font-family: inherit;
 		outline: none;
 		font-size: 0.95rem;
-		transition: border-color var(--transition-fast) var(--ease-default);
+		transition: border-color var(--transition-fast);
 	}
 
 	.setting input:focus,
@@ -719,7 +719,7 @@ import Loader2 from '@lucide/svelte/icons/loader-2';
 		border-radius: var(--radius-sm);
 		color: var(--text-secondary);
 		cursor: pointer;
-		transition: all var(--transition-fast) var(--ease-default);
+		transition: all var(--transition-fast);
 	}
 
 	.check-rife-btn:hover {

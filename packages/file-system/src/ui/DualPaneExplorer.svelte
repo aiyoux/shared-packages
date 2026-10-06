@@ -2936,7 +2936,9 @@
 		min-width: 0;
 		min-height: 0;
 	}
-	.files-pane-slot {
+	/* The slot class lands on AppWindows' leaf (via leafClass), a child
+	   component's element, so a scoped selector would be dropped. */
+	.files-body :global(.files-pane-slot) {
 		min-width: 0;
 		min-height: 0;
 		width: 100%;
@@ -2944,7 +2946,7 @@
 		display: flex;
 		flex-direction: column;
 	}
-	.files-pane-slot.is-target :global(.fe-root) {
+	.files-body :global(.files-pane-slot.is-target .fe-root) {
 		border-color: var(--accent, #3b82f6);
 	}
 	.files-pane {
