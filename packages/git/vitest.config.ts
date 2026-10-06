@@ -60,7 +60,11 @@ export default defineConfig({
 				'../file-system/src/monitor/index.ts'
 			),
 			'@shared-packages/file-system': path.resolve(root, '../file-system/src/index.ts'),
-			'@shared-packages/design-system': path.resolve(root, '../design-system/src'),
+			// Deep `.svelte` subpaths (ui's Button → design-system/Button.svelte)
+			// resolve through design-system's own `exports` map. A plain prefix
+			// alias to ../design-system/src pointed them at src/Button.svelte,
+			// which does not exist, and failed the git vitest suites at baseline
+			// once the connection pickers pulled an svelte chain in.
 			// Every ui subpath, from ui's own `exports`; must precede the root alias.
 			...uiSubpathAliases(),
 			'@shared-packages/ui': path.resolve(root, '../ui/src/index.ts')

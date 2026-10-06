@@ -152,7 +152,12 @@ export function anchoredPopup(node: HTMLElement, options: PopupOptions = {}) {
 		border = appearance.border,
 		padding = appearance.padding,
 		color = appearance.color;
-	node.setAttribute('popover', 'manual');
+	// UA sheets keep `[popover]:not(:popover-open)` at display:none, and only
+	// the API's showPopover() flips it open. Where the API is absent (jsdom,
+	// older engines) nothing flips it, so the attribute itself would hide the
+	// menu for good — set it only when it can be shown.
+	const supportsPopover = typeof node.showPopover === 'function';
+	if (supportsPopover) node.setAttribute('popover', 'manual');
 	node.style.backgroundColor = background;
 	node.style.border = border;
 	node.style.padding = padding;
@@ -173,7 +178,7 @@ export function anchoredPopup(node: HTMLElement, options: PopupOptions = {}) {
 					anchor: () => options.anchor?.() ?? fallbackAnchor
 				});
 	if (options.portal) document.body.appendChild(node);
-	node.showPopover?.();
+	if (supportsPopover) node.showPopover();
 	let frame = 0;
 	let signature = '';
 	const position = () => {
