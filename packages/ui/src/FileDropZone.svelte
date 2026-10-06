@@ -15,6 +15,9 @@
 		acceptFileTypes = [],
 		testId = 'file-drop-zone',
 		inputTestId = 'file-input',
+		/** Extra classes on the root, merged before `.file-drop-zone` (tools
+		 * whose specs pin their own zone class, e.g. images-to-pdf `.drop-zone`). */
+		class: extraClass = '',
 		onfiles,
 		onExplorerIds,
 		idle
@@ -27,6 +30,7 @@
 		acceptFileTypes?: readonly string[];
 		testId?: string;
 		inputTestId?: string;
+		class?: string;
 		onfiles: (files: File[]) => void;
 		/** File Explorer row ids (application/x-fe-explorer-ids) from another pane. */
 		onExplorerIds?: (payload: ExplorerDropPayload) => void;
@@ -90,7 +94,7 @@
 <!-- svelte-ignore a11y_click_events_have_key_events -->
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
-	class="file-drop-zone"
+	class="file-drop-zone {extraClass}"
 	class:drag-over={dragOver}
 	data-testid={testId}
 	ondragenter={allowDrop}

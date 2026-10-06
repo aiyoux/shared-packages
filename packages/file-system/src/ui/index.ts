@@ -1,5 +1,8 @@
 export { default as FileExplorer } from './FileExplorer.svelte';
 export { default as FileExplorerDialog } from './FileExplorerDialog.svelte';
+export { default as ConnectionFilePicker } from './ConnectionFilePicker.svelte';
+export { default as ConnectionFilePickerDialog } from './ConnectionFilePickerDialog.svelte';
+export type { ConnectionPick, ConnectionOpenMany } from './connectionPickerTypes.js';
 export { default as FeFolderPickerDialog } from './FeFolderPickerDialog.svelte';
 export { default as RemoteDepsDialog } from './RemoteDepsDialog.svelte';
 export { default as FeTreeView } from './FeTreeView.svelte';

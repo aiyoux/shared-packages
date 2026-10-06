@@ -187,6 +187,14 @@
 		 */
 		showPersistence?: boolean;
 		onOpen?: (entry: ExplorerOpenTarget, ctx?: ExplorerOpenContext) => void | Promise<void>;
+		/** With `multiSelect`: Open on >1 picked file emits them all together.
+		 * Unset keeps the single-primary-file emit. */
+		onOpenMany?:
+			| ((
+					entries: ExplorerOpenTarget[],
+					read: (entry: ExplorerOpenTarget) => Promise<Blob>
+			  ) => void | Promise<void>)
+			| undefined;
 		/** Preview "Open project" for folders that look like git working trees. */
 		onOpenProject?: (entry: ExplorerOpenTarget) => void | Promise<void>;
 		/** Preview "Init project" for folders that are not already a git working tree. */
@@ -354,6 +362,10 @@
 		vfs: vfsProp,
 		showPersistence = true,
 		onOpen,
+		/** Batch open in multi-select: all picked files at once. When set and
+		 * more than one file is selected, Open emits them together instead of
+		 * only the primary file. */
+		onOpenMany,
 		onOpenProject,
 		projectMarker = 'any',
 		onInitProject,
@@ -3690,6 +3702,10 @@
 				: (selectedEntries.find((e) => e.kind === 'file' && looksPackedName(e.name)) ?? null);
 		if (packedFile && mode === 'manage') {
 			await openPackedEntry(packedFile);
+			return;
+		}
+		if (onOpenMany && files.length > 1 && (mode === 'open' || mode === 'manage')) {
+			await onOpenMany(files, readOpenTarget);
 			return;
 		}
 		const primaryFile =
