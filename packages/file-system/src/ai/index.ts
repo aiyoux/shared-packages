@@ -80,6 +80,7 @@ export {
 	matchAiChoice,
 	type AiChoice,
 	type AiChoiceList,
+	type AiChoiceMessage,
 	type AiTextMessage,
 	type AiMonitorStatus,
 	type AiMonitorTarget

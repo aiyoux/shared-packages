@@ -13,7 +13,7 @@
  */
 import { createMonitorClient } from '../monitor/client.js';
 import { getProfile, listProfiles } from '../monitor/credentials.js';
-import { completeAiChat, listAiOffers, runAiNativeJob, type AiCatalog, type AiOffer, type AiTask } from './catalog.js';
+import { completeAiChat, listAiOffers, runAiNativeJob, type AiCatalog, type AiChatMessage, type AiOffer, type AiTask } from './catalog.js';
 import { runBrowserAi } from './browserHost.js';
 import { AiCredentialsError } from './errors.js';
 import { listAiProfiles, type AiCapabilities } from './monitor.js';
@@ -241,6 +241,11 @@ export function aiChoiceReadsImages(choice: AiChoice): boolean {
 
 export type AiTextMessage = { role: 'system' | 'user' | 'assistant'; content: string };
 
+/** Chat messages on a choice: plain text, or multi-part (`image_url`) when a
+ * runtime that reads images is chosen (`aiChoiceReadsImages` filters lists;
+ * this guard refuses the run). */
+export type AiChoiceMessage = AiTextMessage | AiChatMessage;
+
 /** The one-shot native job takes a flat prompt; cap it like the daemon's input. */
 const NATIVE_PROMPT_MAX_BYTES = 16_000;
 
@@ -266,16 +271,30 @@ function nativePrompt(messages: readonly AiTextMessage[]): string {
  * a monitor-native model on the daemon's supervised chat runtime (or its
  * one-shot job when the daemon lacks `nativeChat`), or a provider API
  * through the monitor. The reply comes back to the caller; nothing is saved.
+ *
+ * Messages may carry `image_url` parts; only a runtime that reads images
+ * accepts them — a provider API through the monitor, or a monitor-native
+ * chat runtime whose offer declares image inputs. The browser host and
+ * one-shot native jobs are text only and the run is refused otherwise.
  */
 export async function completeAiChoiceText(
 	choice: AiChoice,
-	messages: readonly AiTextMessage[],
+	messages: readonly AiChoiceMessage[],
 	opts: { maxTokens?: number; signal?: AbortSignal; title?: string } = {}
 ): Promise<{ text: string; thinking: string | null }> {
 	const maxTokens = opts.maxTokens ?? 1200;
+	if (messages.some((message) => typeof message.content !== 'string' && message.content.some((part) => part.type === 'image_url'))) {
+		const readsImages = choice.offer.inputs
+			? choice.offer.inputs.includes('image')
+			: choice.offer.location === 'monitor-provider';
+		const runsImages = !!choice.monitor &&
+			(choice.offer.location === 'monitor-provider' || !!choice.capabilities?.nativeChat) &&
+			readsImages;
+		if (!runsImages) throw new AiCredentialsError('AI_UNSUPPORTED', 'This model cannot read images.');
+	}
 	if (!choice.monitor) {
 		const device = choice.offer.variantId === 'webgpu' ? 'webgpu' : 'wasm';
-		const text = await runBrowserAi<string>('speech:chat', 'generate', { messages, device }, choice.offer.modelId,
+		const text = await runBrowserAi<string>('speech:chat', 'generate', { messages: messages as readonly AiTextMessage[], device }, choice.offer.modelId,
 			{ preview: true, title: opts.title, signal: opts.signal }, { webgpu: device === 'webgpu' });
 		return { text: String(text).trim(), thinking: null };
 	}
@@ -286,7 +305,9 @@ export async function completeAiChoiceText(
 	if (choice.capabilities?.nativeChat) {
 		return completeAiChat(baseUrl, { model: choice.offer.id, profileId: null, messages: [...messages], maxTokens }, opts.signal);
 	}
-	const result = await runAiNativeJob(baseUrl, { offerId: choice.offer.id, prompt: nativePrompt(messages) }, { signal: opts.signal });
+	// The guard above refuses image-bearing messages here; this one-shot job
+	// is flat text only.
+	const result = await runAiNativeJob(baseUrl, { offerId: choice.offer.id, prompt: nativePrompt(messages as readonly AiTextMessage[]) }, { signal: opts.signal });
 	const text = (await result.blob.text()).trim();
 	if (!text) throw new AiCredentialsError('AI_ERROR', 'The monitor model returned an empty reply.');
 	return { text, thinking: null };
