@@ -1,0 +1,41 @@
+{
+	"name": "@shared-packages/ocr",
+	"version": "0.1.0",
+	"private": false,
+	"type": "module",
+	"description": "Unified browser OCR engine registry: Tesseract.js, PaddleOCR (PP-OCRv5 + v4 rec packs), docTR OnnxTR CRNN, plus AI vision through an injected chat transport.",
+	"exports": {
+		".": {
+			"types": "./src/index.ts",
+			"import": "./src/index.ts",
+			"default": "./src/index.ts"
+		}
+	},
+	"types": "./src/index.ts",
+	"files": [
+		"src"
+	],
+	"scripts": {
+		"test": "vitest run",
+		"check": "tsc --noEmit -p tsconfig.json"
+	},
+	"dependencies": {
+		"@paddleocr/paddleocr-js": "^0.4.2",
+		"@shared-packages/model-store": "file:../model-store",
+		"onnxruntime-web": "^1.29.0",
+		"tesseract.js": "^7.0.0"
+	},
+	"devDependencies": {
+		"@types/js-yaml": "^4.0.9",
+		"@types/node": "^26.1.1",
+		"js-yaml": "^4.1.1",
+		"typescript": "^5.7.3",
+		"vitest": "^4.1.2"
+	},
+	"engines": {
+		"node": ">=22.7.0"
+	},
+	"publishConfig": {
+		"access": "public"
+	}
+}

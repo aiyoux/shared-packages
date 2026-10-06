@@ -19,6 +19,11 @@ const pdf = await pagesToPdf([page]);
 
 `loadScanEngine()` / `commitScan()` / `recognizeText()` / `pagesToPdf()` dynamically import their libraries on first use.
 
+The OCR recognizers (`recognizeText` / `recognizeDetailed` and the engine
+registry behind them) now live in [`@shared-packages/ocr`](../ocr/README.md) —
+this package re-exports them for compatibility; the engine table, engines and
+model defs are declared there.
+
 ## Detectors
 
 ```ts

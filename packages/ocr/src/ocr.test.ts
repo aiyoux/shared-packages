@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { OCR_ASSET_PATHS, linesFromPage, recognizeDetailed, recognizeText, terminateOcr } from './ocr.ts';
+import { OCR_ASSET_PATHS, linesFromPage, recognizeDetailed, recognizeText, terminateOcr } from './tesseract.ts';
 
 const worker = vi.hoisted(() => ({ recognize: vi.fn(), terminate: vi.fn() }));
 vi.mock('tesseract.js', () => ({ createWorker: vi.fn(async () => worker) }));

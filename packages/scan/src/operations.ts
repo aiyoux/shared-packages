@@ -8,6 +8,8 @@ import { warpImageData } from './warp.js';
 export type CommitOptions = {
 	enhance?: boolean;
 	ocr?: boolean;
+	/** Reads text for the committed page. Default: the shared tesseract 'eng' runner. */
+	ocrRunner?: (blob: Blob) => Promise<string>;
 	maxEdge?: number;
 	/** JPEG quality 0–1. Default 0.92. */
 	quality?: number;
@@ -32,8 +34,13 @@ export async function commitScan(
 	const blob = await imageDataToBlob(warped, 'image/jpeg', opts.quality ?? 0.92);
 	let text: string | undefined;
 	if (opts.ocr) {
-		const { recognizeText } = await import('./ocr.js');
-		text = await recognizeText(blob);
+		// The caller picks the engine (scan's OCR reads through the shared
+		// engine selection); the default stays tesseract 'eng'.
+		const readText = opts.ocrRunner ?? (async (blob: Blob) => {
+			const { recognizeText } = await import('@shared-packages/ocr');
+			return recognizeText(blob);
+		});
+		text = await readText(blob);
 	}
 	return {
 		id: newScanId(),

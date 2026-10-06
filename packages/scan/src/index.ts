@@ -59,17 +59,29 @@ export {
 } from './cornerTune.js';
 export { applyH, destToSrcHomography, warpImageData } from './warp.js';
 export { pagesToPdf } from './pdf.js';
+// OCR moved to `@shared-packages/ocr` — scan re-exports the historical names
+// and the engine registry for consumers that resolve them through this package.
 export {
 	OCR_ASSET_PATHS,
 	linesFromPage,
 	recognizeDetailed,
 	recognizeText,
 	terminateOcr,
+	DEFAULT_OCR_ENGINE,
+	OCR_ENGINE_ORDER,
+	OCR_ENGINES,
+	resolveOcrEngineId,
 	type OcrBox,
 	type OcrDetailedResult,
+	type OcrEngine,
+	type OcrEngineId,
+	type OcrEngineMeta,
+	type OcrInput,
 	type OcrLang,
-	type OcrRegion
-} from './ocr.js';
+	type OcrResult,
+	type OcrRegion,
+	type OcrRunOptions
+} from '@shared-packages/ocr';
 export {
 	blobToImageData,
 	copyPixelBuffer,

@@ -1,21 +1,9 @@
-/** OCR language packs. `eng` is the historical default; `jpn` reads Japanese
- * (its traineddata ships next to `eng` via hub `scripts/copy-tesseract.mjs`).
- * One cached worker per language — the OCR tool's `eng` worker is untouched.
+/** The Tesseract.js runtime, lifted verbatim from `@shared-packages/scan`
+ * (the declaration point for these names is now this package; scan
+ * re-exports them). One cached worker per language — the OCR tool's `eng`
+ * worker is untouched.
  */
-export type OcrLang = 'eng' | 'jpn';
-
-/** Pixel bounding box in source-image coordinates. */
-export type OcrBox = { x0: number; y0: number; x1: number; y1: number };
-
-/** One recognized line of text with its location in the image. */
-export type OcrRegion = { text: string; box: OcrBox };
-
-export type OcrDetailedResult = {
-	/** Whole-image text (same string `recognizeText` returns). */
-	text: string;
-	/** Non-empty lines, document order. */
-	regions: OcrRegion[];
-};
+import type { OcrBox, OcrDetailedResult, OcrInput, OcrLang } from './types.js';
 
 type OcrWorker = {
 	recognize: (image: Blob, options?: Record<string, unknown>, output?: { text: boolean; blocks: boolean }) => Promise<{ data: { text?: string; blocks?: unknown } }>;
@@ -68,8 +56,8 @@ function isBox(value: unknown): value is OcrBox {
  * Collect non-empty lines from a tesseract.js page (`blocks → paragraphs →
  * lines`), tolerating missing levels. Pure — exported for tests.
  */
-export function linesFromPage(data: { blocks?: unknown }): OcrRegion[] {
-	const regions: OcrRegion[] = [];
+export function linesFromPage(data: { blocks?: unknown }): import('./types.js').OcrRegion[] {
+	const regions: import('./types.js').OcrRegion[] = [];
 	const blocks = (data as { blocks?: unknown }).blocks;
 	if (!Array.isArray(blocks)) return regions;
 	for (const block of blocks) {
@@ -90,13 +78,18 @@ export function linesFromPage(data: { blocks?: unknown }): OcrRegion[] {
 	return regions;
 }
 
-async function toBlob(source: Blob | ImageData): Promise<Blob> {
+async function toBlob(source: OcrInput): Promise<Blob> {
 	if (source instanceof Blob) return source;
+	if (source instanceof HTMLCanvasElement) {
+		const blob = await new Promise<Blob | null>((resolve) => source.toBlob(resolve, 'image/png'));
+		if (!blob) throw new Error('Canvas export produced no blob.');
+		return blob;
+	}
 	const { imageDataToBlob } = await import('./pixels.js');
 	return imageDataToBlob(source, 'image/png');
 }
 
-export async function recognizeText(source: Blob | ImageData, lang: OcrLang = 'eng'): Promise<string> {
+export async function recognizeText(source: OcrInput, lang: OcrLang = 'eng'): Promise<string> {
 	const worker = await getWorker(lang);
 	const { data } = await worker.recognize(await toBlob(source));
 	return (data.text ?? '').trim();
@@ -104,7 +97,7 @@ export async function recognizeText(source: Blob | ImageData, lang: OcrLang = 'e
 
 /** Full text plus per-line regions with bounding boxes for overlays. */
 export async function recognizeDetailed(
-	source: Blob | ImageData,
+	source: OcrInput,
 	lang: OcrLang = 'eng'
 ): Promise<OcrDetailedResult> {
 	const worker = await getWorker(lang);

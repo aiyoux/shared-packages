@@ -1,0 +1,19 @@
+{
+	"compilerOptions": {
+		"target": "ES2022",
+		"module": "ESNext",
+		"moduleResolution": "bundler",
+		"strict": true,
+		"skipLibCheck": true,
+		"declaration": true,
+		"esModuleInterop": true,
+		"isolatedModules": true,
+		"noEmit": true,
+		// Tests run under vitest from this package and import sibling modules
+		// with an explicit `.ts` (mirroring scan), which noEmit makes legal.
+		"allowImportingTsExtensions": true,
+		"lib": ["ES2022", "DOM", "DOM.Iterable"],
+		"types": ["node"]
+	},
+	"include": ["src/**/*"]
+}
