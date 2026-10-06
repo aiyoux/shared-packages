@@ -367,7 +367,7 @@
 				{viewportPx}
 				zoom={vp.zoom}
 				scrollX={vp.scrollX}
-				playheadMs={currentTime * 1000}
+				playheadMs={displayTime * 1000}
 				height={32}
 				testid="video-trim-minimap"
 				onScroll={(s) => (tl.scrollX = s)}

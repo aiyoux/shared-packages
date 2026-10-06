@@ -2,7 +2,11 @@
  * The interactive core both trim timelines share: the video one here and the
  * hub's audio one. Viewport (zoom, scroll, fit), the drag state machine
  * (start/end handles, slip, playhead scrub, Alt-drag pan), keyboard nudges,
- * playhead-to-edge buttons and the scrub preview throttle.
+ * playhead-to-edge buttons and smooth scrub previews.
+ *
+ * Scrubbing matches the preview player: drag moves coalesce on an animation
+ * frame, an in-flight seek decodes before it is replaced, playback pauses
+ * for the drag and resumes at the release point.
  *
  * Markup, CSS, test ids and what the bar draws (a waveform, a filmstrip)
  * stay in each component. Call during component init: it registers effects.
@@ -26,8 +30,6 @@ import {
 	slipRange
 } from './timelineScale.js';
 
-/** Scrub previews seek the media at most this often while dragging. */
-const PREVIEW_MS = 80;
 /** Keyboard nudge per press (one frame at 30 fps); Shift jumps a second. */
 const KEY_STEP_S = 1 / 30;
 const KEY_SHIFT_STEP_S = 1;
@@ -64,8 +66,9 @@ export function createTrimTimeline(cfg: TrimTimelineConfig) {
 	let hasMoved = false;
 	let slipOrigin = { t: 0, start: 0, end: 0 };
 	let dragOrigin = { left: 0, scrollX: 0 };
-	let lastPreviewAt = 0;
+	let scrubFrame: number | null = null;
 	let pendingSeek = -1;
+	let scrubResume = false;
 
 	const durationMs = $derived(Math.max(0, cfg.duration() * 1000));
 	const vp = $derived(createTimelineViewport({ durationMs, viewportPx, zoom, scrollX }));
@@ -98,24 +101,64 @@ export function createTrimTimeline(cfg: TrimTimelineConfig) {
 		cfg.onSeek?.(t);
 	}
 
+	function cancelScrubFrame(): void {
+		if (scrubFrame !== null) cancelAnimationFrame(scrubFrame);
+		scrubFrame = null;
+	}
+
+	function resumeScrubPlayback(): void {
+		if (isDragging || isPanning || !scrubResume) return;
+		scrubResume = false;
+		const m = cfg.media();
+		if (m) {
+			try {
+				void m.play().catch(() => {});
+			} catch {
+				/* play is best-effort after a scrub */
+			}
+		}
+	}
+
+	function flushScrub(final = false): void {
+		if (pendingSeek < 0) {
+			resumeScrubPlayback();
+			return;
+		}
+		const m = cfg.media();
+		// Let an in-flight seek decode before replacing it, as the preview
+		// player does; the release (or a finished seek) applies the latest.
+		if (m && !final && m.seeking) return;
+		const t = pendingSeek;
+		pendingSeek = -1;
+		seekMedia(t);
+		resumeScrubPlayback();
+	}
+
+	function scheduleScrub(): void {
+		if (scrubFrame !== null) return;
+		scrubFrame = requestAnimationFrame(() => {
+			scrubFrame = null;
+			flushScrub();
+		});
+	}
+
+	function pauseForScrub(): void {
+		const m = cfg.media();
+		scrubResume = !!m && !m.paused && !m.ended;
+		if (scrubResume) {
+			try {
+				m!.pause();
+			} catch {
+				scrubResume = false;
+			}
+		}
+	}
+
 	function scrubPreview(t: number): void {
 		const next = Math.max(0, Math.min(cfg.duration(), t));
 		headTime = next;
 		pendingSeek = next;
-		// Let an in-flight seek decode its frame before replacing it, as the
-		// preview player does; the release flush (or the next tick) applies
-		// the latest position.
-		if (cfg.media()?.seeking) return;
-		const now = performance.now();
-		if (now - lastPreviewAt < PREVIEW_MS) return;
-		lastPreviewAt = now;
-		seekMedia(next);
-	}
-
-	function flushScrub(): void {
-		if (pendingSeek >= 0) seekMedia(pendingSeek);
-		lastPreviewAt = 0;
-		pendingSeek = -1;
+		scheduleScrub();
 	}
 
 	function timeAt(e: PointerEvent | MouseEvent | TouchEvent): number {
@@ -174,6 +217,17 @@ export function createTrimTimeline(cfg: TrimTimelineConfig) {
 		const ro = new ResizeObserver(measure);
 		ro.observe(el);
 		return () => ro.disconnect();
+	});
+
+	// A position deferred while a seek was in flight applies when it lands.
+	$effect(() => {
+		const m = cfg.media();
+		if (!m) return;
+		const onReady = () => {
+			if (pendingSeek >= 0) scheduleScrub();
+		};
+		m.addEventListener('seeked', onReady);
+		return () => m.removeEventListener('seeked', onReady);
 	});
 
 	return {
@@ -247,7 +301,9 @@ export function createTrimTimeline(cfg: TrimTimelineConfig) {
 			const t = timeAt(e);
 			if (kind === 'start' || kind === 'end') {
 				isDragging = kind;
+				pauseForScrub();
 				scrubPreview(kind === 'start' ? cfg.trimStart() : cfg.trimEnd());
+				flushScrub();
 			} else if (kind === 'slip') {
 				isDragging = 'slip';
 				slipOrigin = { t, start: cfg.trimStart(), end: cfg.trimEnd() };
@@ -257,7 +313,9 @@ export function createTrimTimeline(cfg: TrimTimelineConfig) {
 				hasMoved = false;
 			} else {
 				isDragging = 'playhead';
+				pauseForScrub();
 				scrubPreview(t);
+				flushScrub();
 			}
 			try {
 				capture.setPointerCapture(e.pointerId);
@@ -284,10 +342,12 @@ export function createTrimTimeline(cfg: TrimTimelineConfig) {
 			if (isDragging === 'start') pendingSeek = cfg.trimStart();
 			if (isDragging === 'end') pendingSeek = cfg.trimEnd();
 			if (isDragging === 'playhead') pendingSeek = timeAt(e);
-			flushScrub();
 			isDragging = null;
 			isPanning = false;
 			hasMoved = false;
+			cancelScrubFrame();
+			// Final: the release position always applies, then playback resumes.
+			flushScrub(true);
 		}
 	};
 }
