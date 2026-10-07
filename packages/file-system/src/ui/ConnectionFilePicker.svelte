@@ -48,10 +48,17 @@
 		pickDirectory,
 		createDiskExplorerDriver,
 		type ExplorerDriver,
+		type ExplorerEntry,
 		type ExplorerOpenContext,
 		type ExplorerOpenTarget,
 		type RemoteKind
 	} from './index.js';
+	import {
+		addFolderFavourite, removeFolderFavourite, subscribeFolderFavourites,
+		folderFavouriteId, resolveFavouriteFolder, type FolderFavourite
+	} from './folderFavourites.js';
+	import type { DiskDirHandle } from '../disk/handles.js';
+	import { generateId } from '../id.js';
 	import type { FileTypeId } from '../types.js';
 	import type { ConnectionOpenMany, ConnectionPick } from './connectionPickerTypes.js';
 
@@ -99,6 +106,16 @@
 	let b2Rows = $state<B2ConnectionRow[]>([]);
 	let monitorProfiles = $state<MonitorConnectionProfileV1[]>([]);
 	let flight = 0;
+
+	/** Favourited folders, shared with the Files window (same storage/channel). */
+	let favourites = $state<FolderFavourite[]>([]);
+	let favouriteBusy = $state(false);
+	/** Parent folder the next explorer remount should open at (a favourite). */
+	let focusFolderId = $state<string | null>(null);
+	/** Where the explorer already sits, for the switcher's active-row highlight. */
+	let activeFolderId = $state<string | null>(null);
+	/** The granted computer folder behind a disk connection (for starring). */
+	let activeDiskRoot = $state<DiskDirHandle | null>(null);
 
 	const b2Chips = $derived(
 		b2Rows.map((row) => ({
@@ -156,6 +173,9 @@
 		driver = next;
 		explorerKey += 1;
 		connectError = '';
+		/* A fresh connection never opens inside the previous favourite's folder. */
+		focusFolderId = null;
+		if (own !== 'disk') activeDiskRoot = null;
 		releaseOwned(
 			prevDisk && prevDisk !== next ? prevDisk : null,
 			prevRemote && (prevRemote.kind !== ownedRemote?.kind || prevRemote.id !== ownedRemote.id)
@@ -190,12 +210,16 @@
 			const handle = await pickDirectory();
 			if (!live(ticket)) return;
 			const next = createDiskExplorerDriver(handle);
+			// Give the root a connection identity before listing so a matching
+			// favourite's rows can highlight and its folders can star.
+			await rememberDiskRoot(next, handle);
 			await next.ready();
 			if (!live(ticket)) {
 				next.dispose?.();
 				return;
 			}
 			useDriver('disk', 'disk', next, 'disk');
+			activeDiskRoot = handle;
 		} catch (err) {
 			if (!live(ticket)) return;
 			const name = err && typeof err === 'object' && 'name' in err ? String(err.name) : '';
@@ -242,6 +266,31 @@
 		}
 	}
 
+	/** The row-selection tail: monitor profile first, then B2, else stale. */
+	async function connectToId(connectionId: string, ticket: number) {
+		busy = true;
+		connectError = '';
+		try {
+			const monitor = await getMonitorProfile(connectionId).catch(() => undefined);
+			if (!live(ticket)) return;
+			if (monitor) {
+				await connectMonitor(monitor, ticket);
+				return;
+			}
+			const row = await getB2Connection(connectionId).catch(() => undefined);
+			if (!live(ticket)) return;
+			if (row) {
+				await connectB2(row, ticket);
+				return;
+			}
+			await reloadProfiles();
+			if (!live(ticket)) return;
+			connectError = 'That connection was removed. Pick another or add one in settings.';
+		} finally {
+			if (live(ticket)) busy = false;
+		}
+	}
+
 	async function onSelectConnection(selection: string) {
 		if (busy) return;
 		if (selection === 'local') {
@@ -268,26 +317,113 @@
 				? selection.slice(8)
 				: selection;
 		if ((kind === 'b2' || kind === 'monitor') && activeId === selId) return;
+		await connectToId(selId, nextFlight());
+	}
+
+	/** Give a freshly granted computer folder its favourite-matching id, else a new one. */
+	async function rememberDiskRoot(next: ExplorerDriver, root: DiskDirHandle) {
+		for (const favourite of favourites) {
+			if (favourite.kind !== 'disk' || !favourite.diskRoot) continue;
+			try {
+				if (root === favourite.diskRoot || await root.isSameEntry?.(favourite.diskRoot)) {
+					Object.assign(next, { connectionId: favourite.connectionId });
+					return;
+				}
+			} catch { /* A previously granted directory may have been removed. */ }
+		}
+		Object.assign(next, { connectionId: generateId() });
+	}
+
+	/** The connection a folder in the current explorer files under; memory has none. */
+	function favouriteConnection(): {
+		kind: FolderFavourite['kind'];
+		connectionId: string;
+		diskRoot?: DiskDirHandle;
+	} | null {
+		if (kind === 'memory') return null;
+		if (kind === 'disk') {
+			const connectionId = driver.connectionId;
+			return activeDiskRoot && connectionId
+				? { kind: 'disk', connectionId, diskRoot: activeDiskRoot }
+				: null;
+		}
+		return { kind, connectionId: activeId };
+	}
+
+	function isFolderFavourite(folderId: string) {
+		const connection = favouriteConnection();
+		if (!connection) return false;
+		return favourites.some(
+			(favourite) => favourite.id === folderFavouriteId(connection.kind, connection.connectionId, folderId)
+		);
+	}
+
+	async function toggleFolderFavourite(entry: ExplorerEntry) {
+		const connection = favouriteConnection();
+		if (!connection || busy || favouriteBusy) return;
+		const favouriteId = folderFavouriteId(connection.kind, connection.connectionId, entry.id);
+		if (favourites.some((favourite) => favourite.id === favouriteId)) {
+			await removeFolderFavourite(favouriteId);
+			return;
+		}
+		try {
+			const path = await driver.getPath(entry.id);
+			await addFolderFavourite({
+				id: favouriteId, ...connection, folderId: entry.id, name: entry.name,
+				path: `${connection.kind === 'disk' ? connection.diskRoot!.name : ''}/${path.map((folder) => folder.name).join('/')}`
+			});
+		} catch (error) {
+			connectError = error instanceof Error ? error.message : 'Could not save that favourite folder.';
+		}
+	}
+
+	/** Open the connection a favourite points at, then the folder itself. */
+	async function jumpToFavourite(favourite: FolderFavourite) {
+		if (busy || favouriteBusy) return;
+		favouriteBusy = true;
 		const ticket = nextFlight();
 		busy = true;
 		connectError = '';
+		focusFolderId = null;
 		try {
-			const monitor = await getMonitorProfile(selId).catch(() => undefined);
-			if (!live(ticket)) return;
-			if (monitor) {
-				await connectMonitor(monitor, ticket);
-				return;
+			if (favourite.kind === 'disk') {
+				if (!favourite.diskRoot) throw new Error('This favourite needs access to its computer folder again.');
+				const next = createDiskExplorerDriver(favourite.diskRoot);
+				Object.assign(next, { connectionId: favourite.connectionId });
+				await next.ready();
+				if (!live(ticket)) {
+					next.dispose?.();
+					return;
+				}
+				useDriver('disk', 'disk', next, 'disk');
+				activeDiskRoot = favourite.diskRoot;
+			} else if (favourite.kind === 'local') {
+				if (kind !== 'local') useDriver('local', 'local', localDriver, null);
+			} else if (kind !== favourite.kind || activeId !== favourite.connectionId) {
+				await connectToId(favourite.connectionId, ticket);
 			}
-			const row = await getB2Connection(selId).catch(() => undefined);
+			const onFavouredConnection = () =>
+				kind === favourite.kind &&
+				(favourite.kind === 'disk'
+					? driver.connectionId === favourite.connectionId
+					: activeId === favourite.connectionId);
+			if (!onFavouredConnection()) return;
+			const path = await resolveFavouriteFolder(driver, favourite.folderId);
+			// The connection may have changed while the backend replied.
+			if (!live(ticket) || !onFavouredConnection()) return;
+			focusFolderId = favourite.folderId;
+			explorerKey += 1;
+			activeFolderId = favourite.folderId;
+			// Node ids survive renames; keep the row's displayed name and path fresh.
+			await addFolderFavourite({
+				...favourite, name: path.at(-1)!.name,
+				path: `${favourite.kind === 'disk' ? favourite.diskRoot!.name : ''}/${path.map((folder) => folder.name).join('/')}`
+			});
+		} catch (error) {
 			if (!live(ticket)) return;
-			if (row) {
-				await connectB2(row, ticket);
-				return;
-			}
-			await reloadProfiles();
-			if (!live(ticket)) return;
-			connectError = 'That connection was removed. Pick another or add one in settings.';
+			connectError = `Could not open ${favourite.name}: ${error instanceof Error ? error.message : 'Folder unavailable.'}`;
 		} finally {
+			favouriteBusy = false;
 			if (live(ticket)) busy = false;
 		}
 	}
@@ -333,9 +469,13 @@
 				if (alive) void reloadProfiles();
 			})
 		];
+		const stopFavourites = subscribeFolderFavourites((next) => {
+			if (alive) favourites = next;
+		});
 		return () => {
 			alive = false;
 			for (const unsub of stop) unsub();
+			stopFavourites();
 		};
 	});
 
@@ -363,6 +503,10 @@
 			hideToolbarTrash
 			{multiSelect}
 			{driver}
+			initialParentId={focusFolderId}
+			onContextChange={(ctx) => (activeFolderId = ctx.parentId)}
+			onToggleFolderFavourite={(entry) => void toggleFolderFavourite(entry)}
+			{isFolderFavourite}
 			onOpen={openEntry}
 			onOpenMany={onOpenMany ? openManyEntries : undefined}
 			{onClose}
@@ -374,12 +518,17 @@
 					capabilities={driver.capabilities}
 					profiles={b2Chips}
 					monitorProfiles={monitorChips}
+					{favourites}
+					{activeFolderId}
+					activeFavouriteConnectionId={kind === 'disk' ? (driver.connectionId ?? '') : activeId}
 					showMonitor
 					showMemory
 					showSettings
 					showInfo={false}
 					{busy}
 					onSelect={(selection) => void onSelectConnection(selection)}
+					onSelectFavourite={(favourite) => void jumpToFavourite(favourite)}
+					onRemoveFavourite={(id) => void removeFolderFavourite(id)}
 					onConfigure={() => (settingsOpen = true)}
 				/>
 			{/snippet}
