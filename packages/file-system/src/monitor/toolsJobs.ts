@@ -66,6 +66,9 @@ export type MonitorToolsProbe = {
 	pytorch: boolean;
 	/** `capabilities.jobs` — the unified lifecycle (W7); false → NDJSON fallback. */
 	jobsApi: boolean;
+	/** General FFmpeg export jobs; absent on older monitors. */
+	videoExport?: boolean;
+	audioExport?: boolean;
 	/** The per-task pick this monitor was resolved from (its `modelId` names the engine). */
 	pickModelId?: string;
 	/** Daemon catalog rows include shared prerequisites such as FFmpeg. */
@@ -95,7 +98,7 @@ export async function probeToolsFeature(
 	baseUrl: string,
 	fetchImpl: typeof fetch = fetch,
 	signal?: AbortSignal
-): Promise<Pick<MonitorToolsProbe, 'rife' | 'srmd' | 'audio' | 'pytorch' | 'jobsApi' | 'toolOffers'>> {
+): Promise<Pick<MonitorToolsProbe, 'rife' | 'srmd' | 'audio' | 'pytorch' | 'jobsApi' | 'toolOffers' | 'videoExport' | 'audioExport'>> {
 	const url = `${baseUrl.replace(/\/$/, '')}/v1/meta`;
 	const res = await fetchImpl(url, withLocalAddressSpace(url, { signal }));
 	if (!res.ok) {
@@ -103,7 +106,7 @@ export async function probeToolsFeature(
 	}
 	const meta = (await res.json()) as {
 		capabilities?: {
-			tools?: { rife?: boolean; srmd?: boolean; audio?: boolean; pytorch?: boolean };
+			tools?: { rife?: boolean; srmd?: boolean; audio?: boolean; pytorch?: boolean; videoExport?: boolean; audioExport?: boolean };
 			jobs?: boolean;
 		};
 	};
@@ -114,6 +117,8 @@ export async function probeToolsFeature(
 		srmd: !!tools?.srmd,
 		audio: !!tools?.audio,
 		pytorch: !!tools?.pytorch,
+		videoExport: tools?.videoExport === true,
+		audioExport: tools?.audioExport === true,
 		jobsApi: meta.capabilities?.jobs === true
 	};
 	// New daemons publish complete availability in their catalog, including
@@ -153,9 +158,11 @@ export function toolRowKey(tool: MonitorToolId, engine?: string): string {
 }
 
 /** Whether a probed monitor has what a row needs. */
-export function toolRowPresent(monitor: Pick<MonitorToolsProbe, 'rife' | 'srmd' | 'audio' | 'pytorch' | 'toolOffers'>, key: string): boolean {
+export function toolRowPresent(monitor: Pick<MonitorToolsProbe, 'rife' | 'srmd' | 'audio' | 'pytorch' | 'toolOffers' | 'videoExport' | 'audioExport'>, key: string): boolean {
 	const row = monitor.toolOffers?.[key];
 	if (row) return row.available;
+	if (key === 'export') return monitor.videoExport === true;
+	if (key === 'audio-export') return monitor.audioExport === true;
 	if (key === 'rife') return monitor.rife;
 	if (key === 'srmd') return monitor.srmd;
 	if (key === 'audio') return monitor.audio;
@@ -295,7 +302,7 @@ export function newMonitorToolRequestId(): string {
 }
 
 /** The monitor's tool kinds (design tools-feature.md §4.1). */
-export type MonitorToolId = 'rife' | 'srmd' | 'audio';
+export type MonitorToolId = 'rife' | 'srmd' | 'audio' | 'export' | 'audio-export';
 
 /**
  * The submit URL. `params` are the tool's query parameters (fps for rife;

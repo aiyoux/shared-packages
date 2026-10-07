@@ -29,7 +29,7 @@
 
 	interface Props {
 		onClose: () => void;
-		initialTab?: 'connections' | 'models' | 'ocr';
+		initialTab?: 'connections' | 'models' | 'ocr' | 'video' | 'audio';
 		appearance?: Snippet;
 		/** How documents save (autosave): the host app's setting. */
 		editing?: Snippet;
@@ -37,17 +37,21 @@
 		agentAccess?: Snippet;
 		/** The hub's consolidated OCR settings (modules + engine models + defaults). */
 		ocr?: Snippet;
+		video?: Snippet<[{ onConfigureConnections: () => void }]>;
+		audio?: Snippet<[{ onConfigureConnections: () => void; onConfigureModels: () => void }]>;
 		onConnected?: (kind: RemoteKind, profile: object) => void;
 		/** A connection was removed; hosts detach whatever shows that id. */
 		onDisconnected?: (kind: RemoteKind, id: string) => void;
 	}
 
-	let { onClose, initialTab = 'connections', onConnected, onDisconnected, appearance, editing, outputs, agentAccess, ocr }: Props = $props();
+	let { onClose, initialTab = 'connections', onConnected, onDisconnected, appearance, editing, outputs, agentAccess, ocr, video, audio }: Props = $props();
 
 	const TAB_ITEMS = $derived<TabItem[]>([
 		{ value: 'connections', label: 'Connections', testId: 'settings-tab-connections' },
 		{ value: 'models', label: 'AI models', testId: 'settings-tab-models' },
 		...(ocr ? [{ value: 'ocr', label: 'OCR', testId: 'settings-tab-ocr' }] : []),
+		...(video ? [{ value: 'video', label: 'Video processing', testId: 'settings-tab-video' }] : []),
+		...(audio ? [{ value: 'audio', label: 'Audio processing', testId: 'settings-tab-audio' }] : []),
 		...(appearance ? [{ value: 'appearance', label: 'Appearance', testId: 'settings-tab-appearance' }] : []),
 		...(editing ? [{ value: 'editing', label: 'Editing', testId: 'settings-tab-editing' }] : []),
 		...(outputs ? [{ value: 'outputs', label: 'Outputs', testId: 'settings-tab-outputs' }] : [])
@@ -99,6 +103,10 @@
 				{@render agentAccess?.()}
 			{:else if tab === 'ocr'}
 				{@render ocr?.()}
+			{:else if tab === 'video'}
+				{@render video?.({ onConfigureConnections: () => (tab = 'connections') })}
+			{:else if tab === 'audio'}
+				{@render audio?.({ onConfigureConnections: () => (tab = 'connections'), onConfigureModels: () => (tab = 'models') })}
 			{:else if tab === 'appearance'}
 				{@render appearance?.()}
 			{:else if tab === 'editing'}

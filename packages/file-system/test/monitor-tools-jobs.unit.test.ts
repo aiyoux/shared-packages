@@ -4,6 +4,7 @@ import {
 	probeToolsFeature,
 	resolveSelectedToolsMonitor,
 	buildToolSubmitUrl,
+	toolRowPresent,
 	submitMonitorToolJob,
 	runMonitorToolLegacy,
 	readMonitorToolProgressNdjson
@@ -70,6 +71,8 @@ it('reads capabilities.tools/jobs and treats missing keys as false', async () =>
 	assert.equal(caps.srmd, false);
 	assert.equal(caps.audio, false);
 	assert.equal(caps.jobsApi, false);
+	assert.equal(caps.videoExport, false);
+	assert.equal(caps.audioExport, false);
 	assert.equal((requests[0].init as { targetAddressSpace?: string }).targetAddressSpace, 'loopback');
 });
 
@@ -525,4 +528,26 @@ it('a cancelled unavailable run closes as cancelled without submitting or failin
 	assert.equal(cancelled, 1);
 	assert.equal(failed, 0);
 	assert.equal(requests, 0);
+});
+
+
+it('only offers general export when the monitor explicitly advertises its route', async () => {
+    const caps = await probeToolsFeature('http://127.0.0.1:9847', fetchFrom([
+        { url: 'http://127.0.0.1:9847/v1/meta', res: ok({ capabilities: { tools: { videoExport: true } } }) }
+    ]));
+    assert.equal(caps.videoExport, true);
+    assert.equal(toolRowPresent({ rife: false, srmd: false, audio: false, pytorch: false, videoExport: true }, 'export'), true);
+    assert.equal(toolRowPresent({ rife: true, srmd: true, audio: true, pytorch: true }, 'export'), false);
+    assert.equal(buildToolSubmitUrl('http://127.0.0.1:9847', 'export', {}, 'job-9'), 'http://127.0.0.1:9847/v1/tools/jobs/export?id=job-9');
+});
+
+it('requires the audio export capability independently of AI upsampling', async () => {
+    const caps = await probeToolsFeature('http://127.0.0.1:9847', fetchFrom([
+        { url: 'http://127.0.0.1:9847/v1/meta', res: ok({ capabilities: { tools: { audioExport: true } } }) }
+    ]));
+    assert.equal(caps.audioExport, true);
+    assert.equal(caps.audio, false);
+    assert.equal(toolRowPresent({ rife: false, srmd: false, audio: false, pytorch: false, audioExport: true }, 'audio-export'), true);
+    assert.equal(toolRowPresent({ rife: false, srmd: false, audio: true, pytorch: true }, 'audio-export'), false);
+    assert.match(buildToolSubmitUrl('http://127.0.0.1:9847', 'audio-export', { start: '1', end: '2', format: 'flac' }, 'job-9'), /\/jobs\/audio-export\?start=1&end=2&format=flac&id=job-9$/);
 });

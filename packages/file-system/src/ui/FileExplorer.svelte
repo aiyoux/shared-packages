@@ -2973,7 +2973,7 @@
 				!spec.useHost &&
 				(spec.kind === 'decompress' || spec.kind === 'decrypt');
 
-			await beginArchiveOp(id, spec.kind === 'decompress' ? 'extract' : spec.kind, spec.title, spec.destParentId ?? null, ac.signal, { driverId: driver.id, endpointKey: driver.endpointKey ?? driver.connectionId, executor: spec.useHost ? 'monitor' : 'this-browser', note: spec.useHost ? 'Monitor archive job' : workerEligible ? 'Background archive worker' : 'This tab · main thread', windowId: originWindowId });
+			await beginArchiveOp(id, spec.kind === 'decompress' ? 'extract' : spec.kind, spec.title, spec.destParentId ?? null, ac.signal, { driverId: driver.id, endpointKey: driver.endpointKey ?? driver.connectionId, executor: spec.useHost ? 'monitor' : 'this-browser', note: spec.useHost ? 'Monitor archive job' : workerEligible ? 'Background archive worker' : workerWanted ? `Main thread · ${vfsWorkerUnavailableReason() ?? 'background file workers are unavailable'}` : 'This tab · main thread', windowId: originWindowId });
 
 			let result: Awaited<ReturnType<typeof runArchiveJob>> | undefined;
 			let ranOnWorker = false;

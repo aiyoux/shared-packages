@@ -191,7 +191,7 @@ export function createMonitorLink(options: {
 }
 export type MonitorLink = ReturnType<typeof createMonitorLink>;
 const links = new Map<string, Promise<MonitorLink>>();
-const jobKinds: Record<string, OpKindId> = { transcription: 'transcribe', 'text-to-speech': 'speak', 'image-generation': 'generate', chat: 'chat', copy: 'copy', rife: 'video', srmd: 'video', audio: 'audio-tool' };
+const jobKinds: Record<string, OpKindId> = { transcription: 'transcribe', 'text-to-speech': 'speak', 'image-generation': 'generate', chat: 'chat', copy: 'copy', rife: 'video', srmd: 'video', export: 'video', audio: 'audio-tool', 'audio-export': 'audio-tool' };
 const TERMINAL_JOB_STATES = ['done', 'failed', 'aborted', 'evicted'];
 /** Relay jobs carry a device link, not an operation: they belong to the connection registry (W9/W10). */
 export const isOpJob = (job: MonitorJob) => job.kind !== 'relay';
