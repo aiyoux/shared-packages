@@ -113,9 +113,21 @@ export class FakeVideoEncoder {
 	static instances: FakeVideoEncoder[] = [];
 	/** Accept frames but emit no chunks, like an encoder that fails silently. */
 	static silent = false;
+	/** Queue depth the session's backpressure sees; 0 = fake drains instantly. */
+	static queueDepth = 0;
+	private static dequeueSubs: Array<() => void> = [];
+	private static pendingDequeue: Array<() => void> = [];
 	static reset() {
 		FakeVideoEncoder.instances = [];
 		FakeVideoEncoder.silent = false;
+		FakeVideoEncoder.queueDepth = 0;
+		FakeVideoEncoder.dequeueSubs = [];
+		FakeVideoEncoder.pendingDequeue = [];
+	}
+	/** Set the queue depth the fake reports; 0 releases parked dequeue waiters. */
+	static setQueueDepth(depth: number) {
+		FakeVideoEncoder.queueDepth = depth;
+		if (depth === 0) FakeVideoEncoder.pendingDequeue.splice(0).forEach((s) => s());
 	}
 
 	configureCalls: VideoEncoderConfig[] = [];
@@ -123,6 +135,18 @@ export class FakeVideoEncoder {
 	frames: Array<{ timestamp: number; duration?: number; frameId?: number }> = [];
 	flushCount = 0;
 	closeCount = 0;
+
+	get encodeQueueSize() { return FakeVideoEncoder.queueDepth; }
+	addEventListener(type: string, listener: () => void) {
+		if (type !== 'dequeue') return;
+		if (FakeVideoEncoder.queueDepth === 0) queueMicrotask(listener);
+		else FakeVideoEncoder.pendingDequeue.push(listener);
+	}
+	removeEventListener(type: string, listener: () => void) {
+		if (type !== 'dequeue') return;
+		const i = FakeVideoEncoder.pendingDequeue.indexOf(listener);
+		if (i !== -1) FakeVideoEncoder.pendingDequeue.splice(i, 1);
+	}
 
 	constructor(private init: VideoEncoderInit) {
 		FakeVideoEncoder.instances.push(this);

@@ -22,6 +22,8 @@ export type EncodeGifOpts = {
 	onProgress?: (n: number) => void;
 	/** Colors per frame (GIF palette limit). Default 256. */
 	maxColors?: number;
+	/** Cancel signal: checked between frames; the export ends with an AbortError. */
+	signal?: AbortSignal;
 };
 
 /**
@@ -70,6 +72,7 @@ export async function encodeGif(
 	const encoder = GIFEncoder();
 	try {
 		for (let i = 0; i < frameCount; i++) {
+			if (opts.signal?.aborted) throw new DOMException('Export cancelled.', 'AbortError');
 			const tMs = (i / source.fps) * 1000;
 			const img = await source.pull(tMs);
 			try {

@@ -77,6 +77,8 @@ export interface ProcessOptions {
 	/** Include the source's audio, decoded and re-encoded into the output. */
 	audio?: { codec?: 'aac' | 'opus'; bitrate?: number };
 	onProgress?: (progress: number) => void;
+	/** Cancel signal: checked between frames; the export ends with an AbortError. */
+	signal?: AbortSignal;
 }
 
 export interface VideoEngine {

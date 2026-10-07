@@ -21,20 +21,26 @@ afterEach(() => {
 });
 
 describe('encodeFrames', () => {
-	it('waits for encoder batches before pulling more offline frames', async () => {
+	it('parks the producer while the encode queue is deep and resumes on dequeue', async () => {
 		restoreCodecs = installCodecs();
-		let release!: () => void;
-		const pending = new Promise<void>((resolve) => { release = resolve; });
-		const flush = vi.spyOn(FakeVideoEncoder.prototype, 'flush').mockImplementationOnce(() => pending);
+		// A stuck encoder: the queue stays over the depth bound, so backpressure
+		// must hold the producer with no flush anywhere in the chain.
+		FakeVideoEncoder.setQueueDepth(65);
 		const pull = vi.fn(async () => ({}) as CanvasImageSource);
 		const exportDone = encodeFrames({ width: 64, height: 64, durationMs: 1000, fps: 60, pull }, { bitrate: '1M' });
-		await vi.waitFor(() => expect(flush).toHaveBeenCalledTimes(1));
-		expect(pull).toHaveBeenCalledTimes(32);
+		await vi.waitFor(() => expect(pull).toHaveBeenCalledTimes(1));
+		// The producer is parked: the only thing that could pull again is a
+		// dequeue event, so this settle is deterministic, not a timing race.
+		await new Promise((resolve) => setTimeout(resolve, 30));
+		expect(pull).toHaveBeenCalledTimes(1);
+		expect(FakeVideoEncoder.instances[0]!.flushCount).toBe(0);
 		expect(muxOrder).not.toContain('finalize');
-		release();
+		FakeVideoEncoder.setQueueDepth(0);
 		await exportDone;
+		// The queue freed up exactly once and the producer ran to completion,
+		// flushing only at finalize — no intermediate flush anywhere.
 		expect(pull).toHaveBeenCalledTimes(60);
-		flush.mockRestore();
+		expect(FakeVideoEncoder.instances[0]!.flushCount).toBe(1);
 	});
 
 	it('uses the fractional output grid rather than accumulating rounded frame intervals', async () => {

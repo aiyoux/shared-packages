@@ -21,7 +21,7 @@ export type EncodeFramesAudio = {
 /** Generated-frame PULL client. Steps t = 0 .. duration at 1/fps and pushes into EncodeSession. */
 export async function encodeFrames(
 	source: FrameSource,
-	options: { bitrate: string; audio?: EncodeFramesAudio; onProgress?: (n: number) => void }
+	options: { bitrate: string; audio?: EncodeFramesAudio; onProgress?: (n: number) => void; signal?: AbortSignal }
 ): Promise<Blob> {
 	const session = createEncodeSession({
 		width: source.width,
@@ -31,7 +31,8 @@ export async function encodeFrames(
 		audio: options.audio
 			? { codec: options.audio.codec ?? 'aac', bitrate: options.audio.bitrate }
 			: undefined,
-		onProgress: options.onProgress
+		onProgress: options.onProgress,
+		signal: options.signal
 	});
 	// Ceil: the last frame that overlaps the kept range is kept, so a trim
 	// never drops visible content (output may run up to one frame long).
@@ -67,6 +68,7 @@ export async function encodeFrames(
 		const audioDrain = drainAudio();
 		audioDrain.catch(() => {});
 		for (let i = 0; i < frameCount; i++) {
+			if (options.signal?.aborted) throw new DOMException('Export cancelled.', 'AbortError');
 			const tMs = (i / source.fps) * 1000;
 			const img = await source.pull(tMs);
 			// Always stamp on the output grid, including decoded/retimed frames.
@@ -80,7 +82,7 @@ export async function encodeFrames(
 				vf.close();
 				if (img instanceof VideoFrame) img.close();
 			}
-			if ((i + 1) % 32 === 0) await session.drain();
+			await session.drain(); // backpressure only; never flushes the encoder
 		}
 		await audioDrain;
 		return await session.flush();

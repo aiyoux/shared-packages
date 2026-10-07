@@ -58,6 +58,14 @@ export function avcLevelByte(width: number, height: number): string {
 
 const KEYFRAME_INTERVAL_US = 2_000_000;
 
+/**
+ * Encode-queue depth the producer may run ahead to before `drain()` holds it.
+ * Deep enough that hardware encoders never starve from a microtask gap, small
+ * enough that a stall inside WebCodecs surfaces in tens of frames, not a
+ * whole export.
+ */
+const ENCODE_QUEUE_HIGH = 64;
+
 export interface EncodeSession {
 	readonly width: number;
 	readonly height: number;
@@ -76,7 +84,11 @@ export interface EncodeSession {
 	): Promise<void>;
 	/** Declare the audio stream complete, allowing video-only output when it was empty. */
 	finishAudio(): void;
-	/** Wait for pending encoding/muxing without finalizing, bounding offline frame queues. */
+	/**
+	 * Yield the producer while the encode queue is deep (backpressure), then
+	 * catch up on muxing; never finalizes. Cheap whenever the queue has room,
+	 * so callers may await it every frame instead of on an interval.
+	 */
 	drain(): Promise<void>;
 	/** flush encoder + mux chain + finalize → video/mp4 Blob. */
 	flush(): Promise<Blob>;
@@ -90,6 +102,8 @@ export function createEncodeSession(opts: {
 	fpsHint?: number;
 	audio?: { codec?: AudioExportCodec; bitrate?: number };
 	onProgress?: (n: number) => void;
+	/** Cancel signal: held backpressure waits release, then the session errors. */
+	signal?: AbortSignal;
 }): EncodeSession {
 	if (typeof VideoEncoder === 'undefined' || typeof VideoFrame === 'undefined') {
 		throw new Error('Video processing requires WebCodecs (modern Chromium-based browsers).');
@@ -156,7 +170,13 @@ export function createEncodeSession(opts: {
 		avc: { format: 'avc' }
 	};
 	if (typeof navigator !== 'undefined' && 'webdriver' in navigator && navigator.webdriver) {
+		// Deterministic tests: pin the software path.
 		config.hardwareAcceleration = 'prefer-software';
+	} else {
+		// Offline export wants the fixed-function encoder (QuickSync/NVENC/
+		// VAAPI). A hint, not a requirement: browsers fall back to software on
+		// their own when no hardware path is present.
+		config.hardwareAcceleration = 'prefer-hardware';
 	}
 	encoder.configure(config);
 
@@ -209,10 +229,37 @@ export function createEncodeSession(opts: {
 	const drain = async () => {
 		if (closed) throw new Error('EncodeSession is closed');
 		if (encoderError) throw encoderError;
-		await encoder.flush();
-		if (encoderError) throw encoderError;
-		await muxChain;
-		if (muxError) throw muxError;
+		// Backpressure, not a flush: holding the producer while the queue has
+		// room costs nothing, and waiting on dequeue keeps WebCodecs' internal
+		// pipeline full where a periodic flush() would empty it every 32 frames.
+		while (encoder.encodeQueueSize > ENCODE_QUEUE_HIGH) {
+			await new Promise<void>((resolve, reject) => {
+				const signal = opts.signal;
+				const onDequeue = () => {
+					cleanup();
+					resolve();
+				};
+				const onAbort = () => {
+					cleanup();
+					reject(signal!.reason instanceof Error ? signal!.reason : new DOMException('Export cancelled.', 'AbortError'));
+				};
+				const cleanup = () => {
+					encoder.removeEventListener('dequeue', onDequeue);
+					signal?.removeEventListener('abort', onAbort);
+				};
+				encoder.addEventListener('dequeue', onDequeue);
+				signal?.addEventListener('abort', onAbort);
+			});
+			if (encoderError) throw encoderError;
+		}
+		// Catch up on muxing only after the output has started. Before that
+		// (audio discovered lazily), the chain can only queue packets behind
+		// start, so blocking the producer there would stall video for as long
+		// as the audio opener takes, not for any muxer backlog that exists.
+		if (!(opts.audio && !audioSource)) {
+			await muxChain;
+			if (muxError) throw muxError;
+		}
 	};
 
 	return {

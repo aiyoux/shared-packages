@@ -1,4 +1,11 @@
 export { processVideo } from './process.js';
+export {
+	planStreamCopy,
+	trimStreamCopy,
+	type StreamCopyContainer,
+	type StreamCopyEligibility,
+	type StreamCopyResult
+} from './trimCopy.js';
 export { openVideoFrameCursor, type VideoFrameCursor } from './videoFrames.js';
 export {
 	parseBitrate,

@@ -7,6 +7,8 @@ import type { ProcessOptions } from './types.js';
 export type { ProcessOptions };
 export { parseBitrate };
 
+const ABORT = () => new DOMException('Export cancelled.', 'AbortError');
+
 /** Trim/resize with every decoded source frame and its original presentation timing. */
 export async function processVideo(inputBlob: Blob, options: ProcessOptions): Promise<Blob> {
 	if (typeof VideoEncoder === 'undefined' || typeof VideoFrame === 'undefined') {
@@ -14,6 +16,7 @@ export async function processVideo(inputBlob: Blob, options: ProcessOptions): Pr
 	}
 	const trimDuration = options.end - options.start;
 	if (!(trimDuration > 0)) throw new Error('Trim end must be greater than trim start.');
+	if (options.signal?.aborted) throw ABORT();
 
 	const decoded = await openVideoFrames(inputBlob, { poolSize: 1 });
 	let session: ReturnType<typeof createEncodeSession> | null = null;
@@ -28,7 +31,8 @@ export async function processVideo(inputBlob: Blob, options: ProcessOptions): Pr
 		session = createEncodeSession({
 			width: outWidth, height: outHeight, bitrate: options.bitrate,
 			fpsHint: options.fpsHint ?? 30,
-			audio: options.audio ? { codec: options.audio.codec ?? 'aac', bitrate: options.audio.bitrate } : undefined
+			audio: options.audio ? { codec: options.audio.codec ?? 'aac', bitrate: options.audio.bitrate } : undefined,
+			signal: options.signal
 		});
 		const encoding = session;
 		const audioDrain = options.audio
@@ -63,8 +67,8 @@ export async function processVideo(inputBlob: Blob, options: ProcessOptions): Pr
 		// frame rates above the display refresh rate. No playback capture is involved.
 		const first = await decoded.sink.getCanvas(Math.max(decoded.firstTimestamp, options.start));
 		const decodeStart = first?.timestamp ?? options.start;
-		let frameCount = 0;
 		for await (const sample of decoded.sink.canvases(decodeStart, options.end)) {
+			if (options.signal?.aborted) throw ABORT();
 			const start = Math.max(options.start, sample.timestamp);
 			// Some containers omit a packet duration (notably the final WebM
 			// frame). Keep that frame using the source-rate hint as a fallback.
@@ -80,9 +84,10 @@ export async function processVideo(inputBlob: Blob, options: ProcessOptions): Pr
 			}
 			const frame = new VideoFrame(image, { timestamp, duration });
 			try { encoding.encode(frame); } finally { frame.close(); }
-			if (++frameCount % 32 === 0) await encoding.drain();
+			await encoding.drain(); // backpressure only; never flushes the encoder
 			reportProgress(start);
 		}
+		if (options.signal?.aborted) throw ABORT();
 		if (audioDrain) await audioDrain;
 		const blob = await encoding.flush();
 		reportProgress(options.end);
