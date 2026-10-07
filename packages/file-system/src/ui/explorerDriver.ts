@@ -66,6 +66,12 @@ export type OpenProjectContext = {
 	profileId?: string;
 	baseUrl?: string;
 	rootPath?: string;
+	/**
+	 * Bytes of this file when an import picker (`openRemotes`) opened a pane
+	 * whose id is not a shared-VFS node. Absent on the Files open path, so a
+	 * monitor document still carries only `kind` for the collab handoff.
+	 */
+	read?: () => Promise<Blob>;
 };
 
 /**

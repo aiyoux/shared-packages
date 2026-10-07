@@ -53,6 +53,7 @@
 	} from '../services/remoteCopies.js';
 	import { generateId } from '../id.js';
 	import {
+		readExplorerBlob,
 		type ExplorerDriver,
 		type ExplorerEntry,
 		type ExplorerEntryId,
@@ -755,13 +756,28 @@
 	function paneFileOpen(id: PaneId) {
 		if (!onOpen) return undefined;
 		const kind = paneState(id).activeKind;
+		// Import pickers (`openRemotes`) want the bytes once. A local id is a
+		// shared-VFS node, so that pane stays `{ kind: 'local' }` with no `read`
+		// (the collab handoff keys off that shape). Every other pane's id is
+		// absent from the local catalog — a monitor path read there throws
+		// NOT_FOUND — so attach a read of that pane's driver.
+		if (openRemotes) {
+			return (entry: ExplorerOpenTarget) => {
+				const ctx = paneOpenProjectContext(id);
+				if (ctx.kind === 'local') return onOpen(entry, ctx);
+				const driver = activeDriver(paneState(id), id);
+				return onOpen(entry, {
+					...ctx,
+					read: () => readExplorerBlob(driver, entry.id)
+				});
+			};
+		}
 		// A remote file opens as a working copy in browser files, so every app
-		// opens it, edits it and saves it like a local file. Import pickers
-		// (`openRemotes`) want the bytes once and keep their own path.
-		if ((kind === 'monitor' || kind === 'b2') && !openRemotes && !isPeerPane(id)) {
+		// opens it, edits it and saves it like a local file.
+		if ((kind === 'monitor' || kind === 'b2') && !isPeerPane(id)) {
 			return (entry: ExplorerOpenTarget) => openRemoteFile(id, entry);
 		}
-		if (kind === 'disk' && !openRemotes) {
+		if (kind === 'disk') {
 			return async (entry: ExplorerOpenTarget) => {
 				const driver = activeDriver(paneState(id), id);
 				const root = driver.connectionId ? diskRoots.get(driver.connectionId) : undefined;
@@ -770,8 +786,8 @@
 				catch (error) { toast.error(formatExplorerError(error)); }
 			};
 		}
-		if (kind === 'memory' && !openRemotes) return (entry: ExplorerOpenTarget) => onOpen({ ...entry, id: memoryFileId(entry.id) }, paneOpenProjectContext(id));
-		if (kind !== 'local' && kind !== 'memory' && kind !== 'monitor' && kind !== 'disk') return undefined;
+		if (kind === 'memory') return (entry: ExplorerOpenTarget) => onOpen({ ...entry, id: memoryFileId(entry.id) }, paneOpenProjectContext(id));
+		if (kind !== 'local' && kind !== 'monitor') return undefined;
 		return (entry: ExplorerOpenTarget) => onOpen(entry, paneOpenProjectContext(id));
 	}
 

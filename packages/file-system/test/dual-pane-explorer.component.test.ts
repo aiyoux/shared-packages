@@ -68,6 +68,86 @@ describe('DualPaneExplorer onOpenProject context', () => {
 		expect(opened[0]!.ctx).toEqual({ kind: 'local' });
 	});
 
+	it('openRemotes keeps the local pane context without a read hook', async () => {
+		await vfs.writeFile({
+			parentId: null,
+			name: 'Local',
+			fileType: 'skch',
+			body: { format: 'skch', schemaVersion: 1, name: 'Local', data: {} }
+		});
+		const opened: Array<{ name: string; ctx: unknown }> = [];
+		render(DualPaneExplorer, {
+			props: {
+				localDriver: createLocalExplorerDriver(vfs),
+				hideToggles: true,
+				openRemotes: true,
+				dualPaneKey: `dpe:import-local:${Math.random()}`,
+				onOpen: (entry, ctx) => {
+					opened.push({ name: entry.name, ctx });
+				}
+			}
+		});
+		await viWaitFor(() => document.querySelectorAll('[data-testid="fe-file-row"]').length >= 1, 10_000);
+		await fireEvent.click(document.querySelector('[data-testid="fe-file-row"]') as HTMLElement);
+		await fireEvent.click(screen.getByTestId('fe-item-details'));
+		await fireEvent.click(await screen.findByTestId('fe-file-preview-open'));
+		await viWaitFor(() => opened.length === 1, 10_000);
+		expect(opened[0]).toEqual({ name: 'Local.skch', ctx: { kind: 'local' } });
+	}, 20_000);
+
+	// Memory stands in for a monitor (or B2, or disk) pane: the id is not a
+	// shared-catalog node, so openRemotes has to read that pane's driver.
+	it('openRemotes reads a non-local file from that pane', async () => {
+		const mem = getMemoryVfs();
+		await mem.ready();
+		await mem.writeFile({
+			parentId: null,
+			name: 'shot.png',
+			body: new TextEncoder().encode('png-bytes')
+		});
+		const opened: Array<{ name: string; kind?: string; bytes?: string; error?: string }> = [];
+		render(DualPaneExplorer, {
+			props: {
+				localDriver: createLocalExplorerDriver(vfs),
+				openRemotes: true,
+				dualPaneKey: `dpe:import-mem:${Math.random()}`,
+				onOpen: async (entry, ctx) => {
+					const bag = (ctx ?? {}) as { kind?: string; read?: () => Promise<Blob> };
+					const row = { name: entry.name, kind: bag.kind, bytes: 'pending' as string | undefined, error: undefined as string | undefined };
+					opened.push(row);
+					try {
+						if (bag.read) row.bytes = await (await bag.read()).text();
+						else row.bytes = undefined;
+					} catch (e) {
+						row.error = e instanceof Error ? e.message : String(e);
+					}
+				}
+			}
+		});
+		await viWaitFor(() => document.querySelector('[data-testid="conn-trigger"]') != null, 10_000);
+		await switchPaneToMemory('left');
+		await viWaitFor(
+			() =>
+				[...document.querySelectorAll('[data-testid="fe-file-row"]')].some((el) =>
+					(el.textContent ?? '').includes('shot.png')
+				),
+			10_000
+		);
+		const row = [...document.querySelectorAll('[data-testid="fe-file-row"]')].find((el) =>
+			(el.textContent ?? '').includes('shot.png')
+		) as HTMLElement;
+		await fireEvent.click(row);
+		await fireEvent.click(screen.getByTestId('fe-item-details'));
+		const preview = await screen.findByTestId('fe-file-preview');
+		expect(preview.textContent ?? '').toContain('shot');
+		await fireEvent.click(await screen.findByTestId('fe-file-preview-open'));
+		await viWaitFor(() => opened.length === 1 && opened[0]?.bytes !== 'pending', 10_000);
+		expect(opened[0]?.kind).toBe('memory');
+		expect(opened[0]?.bytes).toBe('png-bytes');
+		expect(opened[0]?.error).toBeUndefined();
+		expect(opened[0]?.name).toContain('shot');
+	}, 40_000);
+
 	it('forwards OpenProjectContext.kind from the local pane', async () => {
 		const proj = await vfs.mkdir(null, 'myproj');
 		await vfs.mkdir(proj.id, '.git');
