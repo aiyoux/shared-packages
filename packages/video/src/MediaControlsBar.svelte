@@ -2,8 +2,8 @@
 	/**
 	 * Play/pause, seek with times, and playback speed — the controls row the
 	 * video transport, the crop preview and the audio transport share. The
-	 * parent owns the media element and what play means (seek to the trim
-	 * start first); this owns the row and its two looks:
+	 * parent owns the media element and where play starts; this owns the row
+	 * and its two looks:
 	 *  - `overlay`: the glass bar a video stage fades in over the frame
 	 *  - `flat`: the inline bar under an audio clip
 	 *

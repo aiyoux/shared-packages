@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { MAX_ZOOM, MIN_ZOOM } from '@shared-packages/composition';
+	import { MAX_ZOOM } from '@shared-packages/composition';
 	import TimelineMinimap from '@shared-packages/ui/timeline/TimelineMinimap.svelte';
 	import { formatTimecode } from './time.js';
 	import { BAR_HEIGHT, TICK_ROW_HEIGHT, filmstripLayout, filmstripThumbWidth, frameCacheKey } from './timelineScale.js';
@@ -197,7 +197,7 @@
 				type="button"
 				class="zoom-btn"
 				onclick={zoomOut}
-				disabled={vp.zoom <= MIN_ZOOM}
+				disabled={vp.zoom <= vp.minZoom}
 				title="Zoom out"
 				data-testid="video-trim-zoom-out"
 			>
@@ -295,7 +295,7 @@
 					{/each}
 				</div>
 				<div class="film-bar" data-testid="video-trim-filmstrip" style="height: {BAR_HEIGHT}px">
-					{#each filmCells as cell (frameCacheKey(cell.t, thumbW, BAR_HEIGHT))}
+					{#each filmCells as cell (cell.left)}
 						{@const url = frameUrls[frameCacheKey(cell.t, thumbW, BAR_HEIGHT)]}
 						{#if url}
 							<img
@@ -366,6 +366,7 @@
 				{durationMs}
 				{viewportPx}
 				zoom={vp.zoom}
+				minZoom={vp.minZoom}
 				scrollX={vp.scrollX}
 				playheadMs={displayTime * 1000}
 				height={32}

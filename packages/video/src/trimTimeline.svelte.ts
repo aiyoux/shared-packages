@@ -23,8 +23,10 @@ import {
 import { createTimelinePan } from '@shared-packages/ui/timeline/pan';
 import {
 	MIN_TRIM_SPAN,
+	TRIM_MIN_ZOOM,
 	clampTrimEnd,
 	clampTrimStart,
+	nextTrimFit,
 	playheadNear,
 	setTrimFromPlayhead,
 	slipRange
@@ -61,6 +63,7 @@ export function createTrimTimeline(cfg: TrimTimelineConfig) {
 	let scrollX = $state(0);
 	let viewportPx = $state(0);
 	let fittedDurationMs = $state(-1);
+	let fittedWidth = $state(0);
 	let headTime = $state<number | null>(null);
 	let panStart = { x: 0, scroll: 0, clickX: 0, clickY: 0 };
 	let hasMoved = false;
@@ -71,7 +74,7 @@ export function createTrimTimeline(cfg: TrimTimelineConfig) {
 	let scrubResume = false;
 
 	const durationMs = $derived(Math.max(0, cfg.duration() * 1000));
-	const vp = $derived(createTimelineViewport({ durationMs, viewportPx, zoom, scrollX }));
+	const vp = $derived(createTimelineViewport({ durationMs, viewportPx, zoom, scrollX, minZoom: TRIM_MIN_ZOOM }));
 	const ticks = $derived(rulerTicks(vp));
 	const displayTime = $derived(headTime ?? cfg.currentTime());
 	const keepLeftPx = $derived(vp.timeToPx(cfg.trimStart() * 1000));
@@ -200,13 +203,18 @@ export function createTrimTimeline(cfg: TrimTimelineConfig) {
 	});
 
 	$effect(() => {
-		const d = durationMs;
-		const w = viewportPx;
-		if (d > 0 && w > 0 && d !== fittedDurationMs) {
-			fittedDurationMs = d;
-			zoom = zoomToFitDuration(d, w);
-			scrollX = 0;
-		}
+		const next = nextTrimFit({
+			durationMs,
+			viewportPx,
+			zoom,
+			fittedDurationMs,
+			fittedWidth
+		});
+		if (!next) return;
+		fittedDurationMs = next.fittedDurationMs;
+		fittedWidth = next.fittedWidth;
+		zoom = next.zoom;
+		scrollX = 0;
 	});
 
 	$effect(() => {
@@ -265,13 +273,30 @@ export function createTrimTimeline(cfg: TrimTimelineConfig) {
 		zoomIn() { applyZoom(vp.zoom * ZOOM_STEP, viewportPx / 2); },
 		zoomOut() { applyZoom(vp.zoom / ZOOM_STEP, viewportPx / 2); },
 		zoomFit() {
-			zoom = zoomToFitDuration(durationMs, viewportPx);
+			zoom = zoomToFitDuration(durationMs, viewportPx, TRIM_MIN_ZOOM);
+			fittedDurationMs = durationMs;
+			fittedWidth = viewportPx;
 			scrollX = 0;
 		},
 		zoomSelection() {
-			const next = zoomToTimeRange(durationMs, viewportPx, cfg.trimStart() * 1000, cfg.trimEnd() * 1000);
+			const next = zoomToTimeRange(durationMs, viewportPx, cfg.trimStart() * 1000, cfg.trimEnd() * 1000, 0.15, TRIM_MIN_ZOOM);
 			zoom = next.zoom;
 			scrollX = next.scrollX;
+		},
+		/** Seek the playhead. `final` false coalesces a drag; true commits it. */
+		seekTo(seconds: number, final = false) {
+			const next = Math.max(0, Math.min(cfg.duration() || 0, seconds));
+			if (!final) {
+				if (isDragging !== 'playhead') pauseForScrub();
+				isDragging = 'playhead';
+				scrubPreview(next);
+				return;
+			}
+			pendingSeek = next;
+			headTime = next;
+			isDragging = null;
+			cancelScrubFrame();
+			flushScrub(true);
 		},
 		setPlayheadAsStart() {
 			setEdges(setTrimFromPlayhead('start', displayTime, cfg.trimStart(), cfg.trimEnd(), cfg.duration()));

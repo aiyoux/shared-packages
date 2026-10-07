@@ -46,9 +46,14 @@ export interface TimelineViewportInput {
 	zoom: number;
 	/** Horizontal scroll offset in content pixels. Clamped to `[0, maxScrollX]`. */
 	scrollX: number;
+	/** Floor for this viewport's zoom clamp. Defaults to {@link MIN_ZOOM}.
+	 *  A trimmer passes a lower floor so a long clip can still fit the window. */
+	minZoom?: number;
 }
 
 export interface TimelineViewport extends TimelineViewportInput {
+	/** Floor actually applied. Always set, even when the input omitted it. */
+	minZoom: number;
 	/** Reference scale at `zoom === 1` — always {@link BASE_PX_PER_MS}. */
 	basePxPerMs: number;
 	/** Effective scale actually in use: `basePxPerMs * zoom` (0 when duration is 0). */
@@ -78,7 +83,8 @@ export function clampZoom(zoom: number): number {
 export function createTimelineViewport(input: TimelineViewportInput): TimelineViewport {
 	const durationMs = Math.max(0, input.durationMs);
 	const viewportPx = Math.max(0, input.viewportPx);
-	const zoom = clampZoom(input.zoom);
+	const minZoom = Number.isFinite(input.minZoom) ? Math.min(MIN_ZOOM, input.minZoom as number) : MIN_ZOOM;
+	const zoom = clamp(input.zoom, minZoom, MAX_ZOOM);
 	const basePxPerMs = BASE_PX_PER_MS;
 	const pxPerMs = durationMs > 0 ? basePxPerMs * zoom : 0;
 	const contentPx = durationMs * pxPerMs;
@@ -91,6 +97,7 @@ export function createTimelineViewport(input: TimelineViewportInput): TimelineVi
 		viewportPx,
 		zoom,
 		scrollX,
+		minZoom,
 		basePxPerMs,
 		pxPerMs,
 		contentPx,
@@ -107,10 +114,13 @@ export function clampScrollX(vp: TimelineViewport, scrollX: number): number {
 	return clamp(scrollX, 0, vp.maxScrollX);
 }
 
-/** Zoom that lays the whole duration into `viewportPx` (`contentPx === viewportPx`). */
-export function zoomToFitDuration(durationMs: number, viewportPx: number): number {
-	if (!(durationMs > 0) || !(viewportPx > 0)) return clampZoom(1);
-	return clampZoom(viewportPx / (durationMs * BASE_PX_PER_MS));
+/** Zoom that lays the whole duration into `viewportPx` (`contentPx === viewportPx`).
+ *  `minZoom` defaults to {@link MIN_ZOOM}; a trimmer passes a lower floor so a
+ *  long clip still fits instead of leaving the end handle off the window. */
+export function zoomToFitDuration(durationMs: number, viewportPx: number, minZoom = MIN_ZOOM): number {
+	const floor = Number.isFinite(minZoom) ? Math.min(MIN_ZOOM, minZoom) : MIN_ZOOM;
+	if (!(durationMs > 0) || !(viewportPx > 0)) return clamp(1, floor, MAX_ZOOM);
+	return clamp(viewportPx / (durationMs * BASE_PX_PER_MS), floor, MAX_ZOOM);
 }
 
 /**
@@ -124,14 +134,16 @@ export function zoomToTimeRange(
 	viewportPx: number,
 	startMs: number,
 	endMs: number,
-	padding = 0.15
+	padding = 0.15,
+	minZoom = MIN_ZOOM
 ): { zoom: number; scrollX: number } {
 	const span = Math.max(0, Math.min(durationMs, endMs) - Math.max(0, startMs));
 	if (!(durationMs > 0) || !(viewportPx > 0) || span <= 0) {
-		return { zoom: zoomToFitDuration(durationMs, viewportPx), scrollX: 0 };
+		return { zoom: zoomToFitDuration(durationMs, viewportPx, minZoom), scrollX: 0 };
 	}
-	const zoom = clampZoom(viewportPx / (span * BASE_PX_PER_MS * (1 + padding)));
-	const vp = createTimelineViewport({ durationMs, viewportPx, zoom, scrollX: 0 });
+	const floor = Number.isFinite(minZoom) ? Math.min(MIN_ZOOM, minZoom) : MIN_ZOOM;
+	const zoom = clamp(viewportPx / (span * BASE_PX_PER_MS * (1 + padding)), floor, MAX_ZOOM);
+	const vp = createTimelineViewport({ durationMs, viewportPx, zoom, scrollX: 0, minZoom: floor });
 	const spanPx = span * vp.pxPerMs;
 	const leftPad = Math.max(0, vp.viewportPx - spanPx) / 2;
 	return { zoom, scrollX: clampScrollX(vp, vp.timeToPx(Math.max(0, startMs)) - leftPad) };
@@ -147,7 +159,7 @@ export function zoomAtAnchor(
 	nextZoom: number,
 	anchorPx: number
 ): { zoom: number; scrollX: number } {
-	const zoom = clampZoom(nextZoom);
+	const zoom = clamp(nextZoom, vp.minZoom ?? MIN_ZOOM, MAX_ZOOM);
 	const nextPxPerMs = vp.durationMs > 0 ? vp.basePxPerMs * zoom : 0;
 	const timeAtAnchor = vp.pxToTime(vp.scrollX + anchorPx);
 	const nextContentPx = vp.durationMs * nextPxPerMs;

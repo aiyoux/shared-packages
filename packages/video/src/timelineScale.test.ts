@@ -8,8 +8,11 @@ import {
 	setTrimFromPlayhead,
 	filmstripThumbWidth,
 	frameCacheKey,
-	slipRange
+	nextTrimFit,
+	slipRange,
+	TRIM_MIN_ZOOM
 } from './timelineScale.js';
+import { MIN_ZOOM, zoomToFitDuration } from '@shared-packages/composition';
 
 describe('filmstripLayout', () => {
 	it('covers the visible window with cells the thumbnail width', () => {
@@ -88,5 +91,51 @@ describe('setTrimFromPlayhead', () => {
 	it('treats the playhead as near a handle within a frame', () => {
 		expect(playheadNear(1, 1.02)).toBe(true);
 		expect(playheadNear(1, 1.2)).toBe(false);
+	});
+});
+
+describe('nextTrimFit', () => {
+	it('refits when the window grows while zoom is still the earlier fit', () => {
+		const first = nextTrimFit({
+			durationMs: 10_000,
+			viewportPx: 240,
+			zoom: 1,
+			fittedDurationMs: -1,
+			fittedWidth: 0
+		});
+		expect(first).not.toBeNull();
+		const grown = nextTrimFit({
+			durationMs: 10_000,
+			viewportPx: 400,
+			zoom: first!.zoom,
+			fittedDurationMs: first!.fittedDurationMs,
+			fittedWidth: first!.fittedWidth
+		});
+		expect(grown!.zoom).toBeCloseTo(zoomToFitDuration(10_000, 400, TRIM_MIN_ZOOM));
+		expect(grown!.fittedWidth).toBe(400);
+	});
+
+	it('keeps a zoom the user chose when only the window width changes', () => {
+		expect(
+			nextTrimFit({
+				durationMs: 10_000,
+				viewportPx: 400,
+				zoom: 2,
+				fittedDurationMs: 10_000,
+				fittedWidth: 240
+			})
+		).toBeNull();
+	});
+
+	it('fits a long clip into the window instead of stopping at the shared zoom floor', () => {
+		const fit = nextTrimFit({
+			durationMs: 600_000,
+			viewportPx: 450,
+			zoom: 1,
+			fittedDurationMs: -1,
+			fittedWidth: 0
+		});
+		expect(fit!.zoom).toBeLessThan(MIN_ZOOM);
+		expect(fit!.zoom).toBeCloseTo(450 / (600_000 * 0.12));
 	});
 });

@@ -60,6 +60,13 @@ describe('createTimelineViewport', () => {
 		expect(clampZoom(Number.NaN)).toBe(MIN_ZOOM);
 	});
 
+	it('honours a lower zoom floor so a long clip can fit', () => {
+		const vp = createTimelineViewport({ ...base, durationMs: 600_000, viewportPx: 450, zoom: 0.00625, minZoom: 1e-6 });
+		expect(vp.zoom).toBeCloseTo(0.00625);
+		expect(vp.contentPx).toBeCloseTo(450);
+		expect(vp.minZoom).toBeCloseTo(1e-6);
+	});
+
 	it('degrades gracefully with a zero duration', () => {
 		const vp = createTimelineViewport({ ...base, durationMs: 0 });
 		expect(vp.pxPerMs).toBe(0);

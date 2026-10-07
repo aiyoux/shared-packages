@@ -7,6 +7,7 @@
    * agnostic about what a "clip" looks like.
    *
    * Click or drag anywhere on the strip to recentre the main view there.
+   * When `onSeekMs` is set, that same gesture moves the playhead too.
    */
   import type { Snippet } from 'svelte';
   import {
@@ -20,18 +21,22 @@
     durationMs,
     viewportPx,
     zoom,
+    minZoom,
     scrollX,
     playheadMs = null,
     height = 40,
     class: className = '',
     testid = 'tl-minimap',
     content,
-    onScroll
+    onScroll,
+    onSeekMs
   }: {
     durationMs: number;
     /** Width of the main timeline window, in px — sets the viewport rect size. */
     viewportPx: number;
     zoom: number;
+    /** Floor matching the main timeline, when it can sit below the shared minimum. */
+    minZoom?: number;
     scrollX: number;
     /** Draw a playhead marker at this time. `null` to omit. */
     playheadMs?: number | null;
@@ -42,6 +47,8 @@
     content?: Snippet<[{ toX: (ms: number) => number; width: number; height: number }]>;
     /** Commit a new main-view scroll offset (content px), already clamped. */
     onScroll: (scrollX: number) => void;
+    /** Also move the playhead to the clicked instant. `final` is the pointer release. */
+    onSeekMs?: (ms: number, final: boolean) => void;
   } = $props();
 
   let el = $state<HTMLDivElement>();
@@ -61,16 +68,26 @@
   const dur = $derived(Math.max(0, durationMs));
   const toX = $derived((ms: number) => (dur > 0 ? (Math.min(dur, Math.max(0, ms)) / dur) * width : 0));
   const win = $derived(
-    viewportWindowFraction(createTimelineViewport({ durationMs: dur, viewportPx, zoom, scrollX }))
+    viewportWindowFraction(createTimelineViewport({ durationMs: dur, viewportPx, zoom, scrollX, minZoom }))
   );
   const playheadPct = $derived(dur > 0 && playheadMs != null ? (playheadMs / dur) * 100 : null);
 
+  function fractionAt(clientX: number): number {
+    if (!el || width <= 0) return 0;
+    return Math.min(1, Math.max(0, (clientX - el.getBoundingClientRect().left) / width));
+  }
+
   function scrollToClientX(clientX: number) {
     if (!el || dur <= 0 || width <= 0) return;
-    const frac = (clientX - el.getBoundingClientRect().left) / width;
-    const vp = createTimelineViewport({ durationMs: dur, viewportPx, zoom, scrollX });
+    const frac = fractionAt(clientX);
+    const vp = createTimelineViewport({ durationMs: dur, viewportPx, zoom, scrollX, minZoom });
     // Centre the visible window on the clicked instant.
     onScroll(clampScrollX(vp, frac * vp.contentPx - viewportPx / 2));
+  }
+
+  function seekAt(clientX: number, final: boolean) {
+    if (!onSeekMs || dur <= 0) return;
+    onSeekMs(fractionAt(clientX) * dur, final);
   }
 
   function onpointerdown(e: PointerEvent) {
@@ -78,11 +95,15 @@
     dragging = true;
     el?.setPointerCapture(e.pointerId);
     scrollToClientX(e.clientX);
+    seekAt(e.clientX, false);
   }
   function onpointermove(e: PointerEvent) {
-    if (dragging) scrollToClientX(e.clientX);
+    if (!dragging) return;
+    scrollToClientX(e.clientX);
+    seekAt(e.clientX, false);
   }
   function onpointerup(e: PointerEvent) {
+    if (dragging) seekAt(e.clientX, true);
     dragging = false;
     el?.releasePointerCapture?.(e.pointerId);
   }

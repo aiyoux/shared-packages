@@ -1,6 +1,10 @@
+import { zoomToFitDuration } from '@shared-packages/composition';
+
 export const BAR_HEIGHT = 44;
 export const TICK_ROW_HEIGHT = 12;
 export const MIN_TRIM_SPAN = 0.1;
+/** Below the shared zoom floor, so a long clip can still fit the trim window. */
+export const TRIM_MIN_ZOOM = 1e-6;
 /** Gap used when Set as end lands before start (or Set as start after end). */
 export const PLAYHEAD_TRIM_GAP = 1;
 export const PLAYHEAD_NEAR_S = 0.05;
@@ -76,6 +80,39 @@ export function clampTrimEnd(
 	minSpan = MIN_TRIM_SPAN
 ): number {
 	return Math.max(trimStart + minSpan, Math.min(duration, t));
+}
+
+const FIT_ZOOM_EPS = 1e-4;
+
+/**
+ * Zoom a trim timeline should adopt for this duration and window.
+ * A new duration always refits. A width change refits only while the zoom
+ * is still the fit for the width measured last — the first layout pass is
+ * often narrower than the settled popup, and keeping that zoom parks the
+ * end handle part-way along the waveform. A zoom the user chose is kept.
+ * Returns null when nothing should change.
+ */
+export function nextTrimFit(args: {
+	durationMs: number;
+	viewportPx: number;
+	zoom: number;
+	fittedDurationMs: number;
+	fittedWidth: number;
+}): { zoom: number; fittedDurationMs: number; fittedWidth: number } | null {
+	const { durationMs, viewportPx, zoom, fittedDurationMs, fittedWidth } = args;
+	if (!(durationMs > 0) || !(viewportPx > 0)) return null;
+	const durationChanged = durationMs !== fittedDurationMs;
+	const widthChanged = Math.abs(viewportPx - fittedWidth) >= 1;
+	if (!durationChanged && !widthChanged) return null;
+	if (!durationChanged && fittedWidth > 0) {
+		const previous = zoomToFitDuration(durationMs, fittedWidth, TRIM_MIN_ZOOM);
+		if (Math.abs(zoom - previous) > FIT_ZOOM_EPS) return null;
+	}
+	return {
+		zoom: zoomToFitDuration(durationMs, viewportPx, TRIM_MIN_ZOOM),
+		fittedDurationMs: durationMs,
+		fittedWidth: viewportPx
+	};
 }
 
 export function playheadNear(t: number, at: number, eps = PLAYHEAD_NEAR_S): boolean {
