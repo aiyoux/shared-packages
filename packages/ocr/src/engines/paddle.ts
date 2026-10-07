@@ -111,13 +111,13 @@ export function japanRecConfigText(dictText: string): string {
  * always comes from the shared v5 model. */
 export async function stagePaddleArchives(lang: OcrLang = 'eng'): Promise<Map<string, Uint8Array<ArrayBuffer>>> {
 	const detEntries = await browserModelStore.readReady(PADDLE_MODEL, async (files) => {
-		const entries = [];
+		const entries: { name: string; bytes: Uint8Array<ArrayBuffer> }[] = [];
 		for (const name of ['inference.onnx', 'inference.yml']) {
 			entries.push({ name, bytes: new Uint8Array(await (await files.file(`${PADDLE_DET_MODEL}_onnx/${name}`)).arrayBuffer()) });
 		}
 		return entries;
 	});
-	let recEntries: { name: string; bytes: Uint8Array }[];
+	let recEntries: { name: string; bytes: Uint8Array<ArrayBuffer> }[];
 	if (lang === 'jpn') {
 		const dictText = await browserModelStore.readReady(PPOCR_JPN_MODEL, async (files) => (await (await files.file('japan_dict.txt')).text()));
 		const onnxBytes = await browserModelStore.readReady(PPOCR_JPN_MODEL, async (files) => new Uint8Array(await (await files.file('japan_PP-OCRv4_rec_mobile.onnx')).arrayBuffer()));
@@ -127,7 +127,7 @@ export async function stagePaddleArchives(lang: OcrLang = 'eng'): Promise<Map<st
 		];
 	} else {
 		recEntries = await browserModelStore.readReady(PADDLE_MODEL, async (files) => {
-			const entries = [];
+			const entries: { name: string; bytes: Uint8Array<ArrayBuffer> }[] = [];
 			for (const name of ['inference.onnx', 'inference.yml']) {
 				entries.push({ name, bytes: new Uint8Array(await (await files.file(`${PADDLE_REC_MODEL}_onnx/${name}`)).arrayBuffer()) });
 			}

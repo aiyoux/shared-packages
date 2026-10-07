@@ -62,8 +62,16 @@ describe('remote favourite navigation', () => {
 				folderId: folder.id, name: folder.name, path: '/Remote folder'
 			});
 			render(DualPaneExplorer, { localDriver: local, dualPaneKey: `remote-fav-pane-${Math.random()}` });
-			await screen.findByTestId(kind === 'monitor' ? 'conn-monitor-profile' : 'conn-b2-profile');
-			await fireEvent.click(screen.getByTestId('conn-trigger'));
+			// The profile rows live in the trigger's dropdown and only exist while
+			// the menu is open (ConnectionSwitcher renders them under {#if menuOpen}) —
+			// open it first; the chip then doubles as the wait for the mocked
+			// profiles to have loaded.
+			// The explorer boots asynchronously ("Loading file manager…") and the
+			// profile rows live in the trigger's dropdown, only mounted while the
+			// menu is open (ConnectionSwitcher {#if menuOpen}) — open it, then the
+			// chip doubles as the wait for the mocked profiles to have loaded.
+			await fireEvent.click(await screen.findByTestId('conn-trigger'));
+			await screen.findByTestId(kind === 'monitor' ? 'conn-monitor-profile' : 'conn-b2-profile', undefined, { timeout: 5_000 });
 			await fireEvent.click(await screen.findByTestId('conn-favourite'));
 			await waitFor(() => expect(screen.getByTestId('files-pane-left').textContent).toContain('Permission denied'));
 			expect(remote.connect).toHaveBeenCalledWith(profileId);

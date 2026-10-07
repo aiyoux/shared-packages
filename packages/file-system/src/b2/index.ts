@@ -49,8 +49,9 @@ export {
 } from './types.js';
 
 export { default as B2ConnectionForm } from './B2ConnectionForm.svelte';
-export {
-	default as ConnectionSwitcher,
-	type ConnectionKind,
-	type B2ProfileChip
-} from './ConnectionSwitcher.svelte';
+export { default as ConnectionSwitcher } from './ConnectionSwitcher.svelte';
+// The types are plain-TS imports, not re-exports from the `.svelte` module: a
+// raw tsc consumer (git's transitive check) cannot see types inside a svelte
+// module, and the union lives canonically in ui/connectionInfo.
+export type { ConnectionKind } from '../ui/connectionInfo.js';
+export type { B2ProfileChip, MonitorProfileChip } from './switcherTypes.js';

@@ -6,20 +6,13 @@
 	import FeIcon from '../ui/FeIcon.svelte';
 	import type { FolderFavourite } from '../ui/folderFavourites.js';
 	import { tick } from 'svelte';
+	// Types live in plain-TS modules: a `.svelte` module's type surface is
+	// opaque to plain-`tsc` consumers, and git's transitive check pulls this
+	// barrel. Re-exported here so svelte-module consumers keep the same surface.
+	import type { ConnectionKind } from '../ui/connectionInfo.js';
+	import type { B2ProfileChip, MonitorProfileChip } from './switcherTypes.js';
 
-	/** Storage backend kind for the hub connection switcher. */
-	export type ConnectionKind = 'local' | 'memory' | 'disk' | 'b2' | 'monitor';
-
-	export type B2ProfileChip = {
-		id: string;
-		/** Short button label */
-		name: string;
-		/** Secondary line / title */
-		detail?: string;
-	};
-
-	/** Same chip shape as B2; kept as alias for callers wiring monitor. */
-	export type MonitorProfileChip = B2ProfileChip;
+	export type { ConnectionKind, B2ProfileChip, MonitorProfileChip };
 
 	interface Props {
 		/** Active selection: local | memory | disk | profile id */
