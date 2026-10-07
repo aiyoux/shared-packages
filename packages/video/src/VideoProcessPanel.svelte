@@ -64,7 +64,14 @@ import Loader2 from '@lucide/svelte/icons/loader-2';
 	let srmdMessage = $state('');
 
 	let useAudioUpsample = $state(false);
-	let audioEngine = $state('lavasr');
+	let audioEngine = $state('');
+
+	/** Engine id inside a panel choice (`browser:novasr`, `monitor:<id>:lavasr`). */
+	function audioEngineKind(choice: string): string {
+		if (choice.startsWith('browser:')) return choice.slice('browser:'.length);
+		if (choice.startsWith('monitor:')) return choice.slice(choice.lastIndexOf(':') + 1);
+		return choice;
+	}
 	let audioEngines = $state<ReadonlyArray<{ id: string; label: string }>>([
 		{ id: 'lavasr', label: 'LavaSR (Recommended)' },
 		{ id: 'novasr', label: 'NovaSR' },
@@ -170,14 +177,18 @@ import Loader2 from '@lucide/svelte/icons/loader-2';
 			if (!data.audioPath) {
 				audioConnectionStatus = 'failed';
 				audioMessage =
-					data.audioError || 'No monitor picked for audio upsampling — choose one in Settings → AI models.';
+					data.audioError || 'No audio upsampling model is installed. Install one in Settings → AI models.';
 				return;
 			}
-			if (data.engines?.length) audioEngines = data.engines;
-			audioUnavailable = data.unavailable ?? {};
-			if (data.defaultEngine && audioEngines.some((e) => e.id === data.defaultEngine)) {
-				audioEngine = data.defaultEngine;
+			if (data.engines?.length) {
+				audioEngines = data.engines;
+				if (!data.engines.some((engine) => engine.id === audioEngine)) {
+					audioEngine = data.defaultEngine && data.engines.some((engine) => engine.id === data.defaultEngine)
+						? data.defaultEngine
+						: data.engines[0].id;
+				}
 			}
+			audioUnavailable = data.unavailable ?? {};
 			audioConnectionStatus = 'connected';
 			audioMessage = `Audio upsampler ready (${data.audioPath})`;
 		} catch (err) {
@@ -243,9 +254,10 @@ import Loader2 from '@lucide/svelte/icons/loader-2';
 		}
 		if (useAudioUpsample && audioUpscaler) {
 			const engine = audioEngine;
-			const denoise = engine === 'lavasr' && audioDenoise;
+			const denoise = audioEngineKind(engine) === 'lavasr' && audioDenoise;
+			const engineLabel = audioEngines.find((row) => row.id === engine)?.label ?? audioEngineKind(engine);
 			modelStages.push({
-				label: `Upsampling audio to 48 kHz (${engine})...`,
+				label: `Upsampling audio to 48 kHz (${engineLabel})...`,
 				suffix: '_48k',
 				run: (blob, onProgress) => {
 					const tempId = audioUpscaler.newJobId();
@@ -469,10 +481,9 @@ import Loader2 from '@lucide/svelte/icons/loader-2';
 {/if}
 
 {#if audioUpscaler}
-<!-- Audio Upsampling (Monitor) -->
 <div class="settings-section">
 	<div class="settings-header-row">
-		<h3>Audio Upsampling (Monitor)</h3>
+		<h3>Audio upsampling</h3>
 		{#if audioConnectionStatus !== 'idle'}
 			<div class="rife-connection-badge rife-connection-{audioConnectionStatus}">
 				<span class="badge-dot"></span>
@@ -520,7 +531,7 @@ import Loader2 from '@lucide/svelte/icons/loader-2';
 							type="checkbox"
 							id="audioDenoise"
 							bind:checked={audioDenoise}
-							disabled={audioEngine !== 'lavasr'}
+							disabled={audioEngineKind(audioEngine) !== 'lavasr'}
 						/>
 						<span>Run the denoise pre-pass</span>
 					</label>

@@ -453,6 +453,59 @@ it('audio status is unavailable when the catalog says FFmpeg is missing', async 
 	}
 });
 
+it('lists runnable audio engines on saved monitors and skips one that does not answer', async () => {
+	const { listRunnableAudioModels } = await import('../src/monitor/toolsJobs.ts');
+	const reason = 'ffmpeg or ffprobe is not installed. Install both commands.';
+	const requests: FetchMock = [
+		{ url: 'http://127.0.0.1:9911/v1/meta', res: ok({ capabilities: { tools: { audio: true, pytorch: true } } }) },
+		{ url: 'http://127.0.0.1:9911/v1/ai/catalog', res: ok({ offers: [
+			{ id: 'tools:audio', available: true },
+			{ id: 'tools:universr', available: false, reason },
+			{ id: 'tools:audiosr', available: true }
+		] }) },
+		{ url: 'http://127.0.0.1:9912/v1/meta', res: ok({ error: { code: 'down', message: 'down' } }, 500) }
+	];
+	const { models, unreachable } = await listRunnableAudioModels({
+		fetchImpl: fetchFrom(requests),
+		listProfilesImpl: async () => [
+			{ id: 'desktop', name: 'Desktop', baseUrl: 'http://127.0.0.1:9911' },
+			{ id: 'laptop', name: 'Laptop', baseUrl: 'http://127.0.0.1:9912' }
+		] as MonitorConnectionProfileV1[]
+	});
+	assert.deepEqual(models.map((model) => model.engineId), [
+		'lavasr', 'novasr', 'sidon', 'callenhancer', 'hifiganbwe', 'apbwe', 'flowhigh', 'audiosr'
+	]);
+	assert.equal(models[0]?.monitor.profileId, 'desktop');
+	assert.equal(models.some((model) => model.engineId === 'universr'), false);
+	assert.deepEqual(unreachable, ['Laptop']);
+});
+
+it('a pinned monitor lists its audio engines without a saved default', async () => {
+	const { createMonitorAudioTools } = await import('../src/monitor/toolsJobs.ts');
+	const status = await createMonitorAudioTools({
+		app: 'pinned-audio',
+		monitor: {
+			profileId: 'desktop',
+			name: 'Desktop',
+			baseUrl: 'http://127.0.0.1:9913',
+			rife: false,
+			srmd: false,
+			audio: true,
+			pytorch: false,
+			jobsApi: true,
+			toolOffers: {
+				audio: { available: true },
+				universr: { available: false, reason: 'no pytorch' },
+				audiosr: { available: false, reason: 'no pytorch' }
+			}
+		}
+	}).checkStatus();
+	assert.equal(status.audioPath, 'monitor:Desktop');
+	assert.equal(status.defaultEngine, 'lavasr');
+	assert.equal(status.unavailable?.lavasr, undefined);
+	assert.equal(status.unavailable?.audiosr, 'Desktop: no pytorch');
+});
+
 it('a cancelled unavailable run closes as cancelled without submitting or failing', async (context) => {
 	const { runMonitorToolJob } = await import('../src/monitor/toolsJobs.ts');
 	let requests = 0;

@@ -746,9 +746,60 @@ export const AUDIO_UPSAMPLE_ENGINES: ReadonlyArray<{ id: string; label: string }
 	{ id: 'audiosr', label: 'AudioSR (highest quality, slow, PyTorch)' }
 ];
 
+/** One engine a connected monitor can run right now. */
+export type RunnableAudioModel = {
+	monitor: MonitorToolsProbe;
+	engineId: string;
+	label: string;
+};
+
+/**
+ * Audio engines on saved monitors that can accept a job. An engine the
+ * catalog marks unavailable is omitted. A monitor that does not answer is
+ * named in `unreachable` and contributes no rows. This does not read the
+ * audio-upsampling selection cell.
+ */
+export async function listRunnableAudioModels(
+	deps: { fetchImpl?: typeof fetch; listProfilesImpl?: typeof listProfiles } = {}
+): Promise<{ models: RunnableAudioModel[]; unreachable: string[] }> {
+	let profiles: MonitorConnectionProfileV1[];
+	try {
+		profiles = await (deps.listProfilesImpl ?? listProfiles)();
+	} catch {
+		return { models: [], unreachable: [] };
+	}
+	const models: RunnableAudioModel[] = [];
+	const unreachable: string[] = [];
+	for (const profile of profiles) {
+		let caps: Awaited<ReturnType<typeof probeToolsFeature>>;
+		try {
+			caps = await probeToolsFeature(profile.baseUrl, deps.fetchImpl);
+		} catch {
+			unreachable.push(profile.name);
+			continue;
+		}
+		const monitor: MonitorToolsProbe = {
+			profileId: profile.id,
+			name: profile.name,
+			baseUrl: profile.baseUrl.replace(/\/$/, ''),
+			rife: caps.rife,
+			srmd: caps.srmd,
+			audio: caps.audio,
+			pytorch: caps.pytorch,
+			jobsApi: caps.jobsApi,
+			...(caps.toolOffers ? { toolOffers: caps.toolOffers } : {})
+		};
+		for (const engine of AUDIO_UPSAMPLE_ENGINES) {
+			if (!toolRowPresent(monitor, toolRowKey('audio', engine.id))) continue;
+			models.push({ monitor, engineId: engine.id, label: engine.label });
+		}
+	}
+	return { models, unreachable };
+}
+
 export type MonitorAudioToolsStatus = {
 	audioPath?: string;
-	/** Why no monitor resolved (no pick, dead pin). */
+	/** Why no runnable model was found, or why this monitor cannot run one. */
 	audioError?: string;
 	/** The engine the pick names (`universr`/`audiosr`), else `lavasr`. */
 	defaultEngine?: string;
@@ -768,12 +819,19 @@ export type MonitorAudioTools = {
 	cancel: (id: string) => Promise<void>;
 };
 
-export type MonitorAudioToolsOptions = MonitorVideoToolsOptions;
+export type MonitorAudioToolsOptions = MonitorVideoToolsOptions & {
+	/**
+	 * Run this monitor as given. Status and submit skip the audio-upsampling
+	 * selection cell; the caller already chose the monitor.
+	 */
+	monitor?: MonitorToolsProbe;
+};
 
 export function createMonitorAudioTools(options: MonitorAudioToolsOptions = {}): MonitorAudioTools {
 	const selectionAppId = options.app ?? 'files';
 	const app = selectionAppId;
 	async function resolve(): Promise<MonitorToolsProbe> {
+		if (options.monitor) return options.monitor;
 		return await resolveSelectedToolsMonitor('audio-upsampling', selectionAppId);
 	}
 	/** A pick of a PyTorch row names its engine; the ONNX row leaves it to the panel. */

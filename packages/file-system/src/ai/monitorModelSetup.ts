@@ -84,7 +84,7 @@ export const MONITOR_MODEL_SETUP = {
 			'Install FFmpeg and FFprobe on the computer running Monitor.',
 			'For LavaSR and NovaSR install audiosronnx in your Python environment and put its executable on Monitor’s PATH, or set [tools.audio] path to that executable in monitor.toml and restart Monitor. Weights download on first use.',
 			'For UniverSR or AudioSR use a Python environment containing the chosen package and set [tools.pytorch] python to its absolute interpreter path in monitor.toml, then restart Monitor. Follow the engine’s installation instructions for PyTorch and device support.',
-			'Refresh and choose an engine in Simple Audio → Upsample audio, or set its default in Default models for apps.'
+			'Refresh, then pick the model in Simple Audio or Simple Video. The list shows NovaSR when it is installed in this browser, and each engine a connected monitor can run.'
 		],
 		links: [
 			{ label: 'LavaSR / NovaSR installation', url: 'https://pypi.org/project/audiosronnx/' },
