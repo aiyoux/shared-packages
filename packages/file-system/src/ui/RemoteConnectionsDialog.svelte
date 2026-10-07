@@ -1,7 +1,8 @@
 <script lang="ts">
 	import { overlay } from '@shared-packages/design-system';
 	/**
-	 * The gear-icon settings popup: one modal with two tabs.
+	 * The gear-icon settings popup: one modal with two built-in tabs plus
+	 * host-provided ones.
 	 *
 	 * - "Connections" (ConnectionsTab): B2 and monitor list/new/edit,
 	 *   unchanged behavior, kept behind that tab.
@@ -9,6 +10,10 @@
 	 *   pickers, and one AI panel per saved monitor. AI is not a browser-side
 	 *   connection kind — it is configured here instead (it used to be part
 	 *   of the monitor edit form).
+	 * - Host snippets (only shown when the host passes them): "ocr" — the
+	 *   hub's consolidated OCR settings (modules, engine weights, per-app
+	 *   defaults) — plus appearance/editing/outputs, and agentAccess renders
+	 *   under the AI models tab.
 	 */
 	import { onMount, untrack, type Snippet } from 'svelte';
 	import '@shared-packages/design-system/button.css';
@@ -24,22 +29,25 @@
 
 	interface Props {
 		onClose: () => void;
-		initialTab?: 'connections' | 'models';
+		initialTab?: 'connections' | 'models' | 'ocr';
 		appearance?: Snippet;
 		/** How documents save (autosave): the host app's setting. */
 		editing?: Snippet;
 		outputs?: Snippet;
 		agentAccess?: Snippet;
+		/** The hub's consolidated OCR settings (modules + engine models + defaults). */
+		ocr?: Snippet;
 		onConnected?: (kind: RemoteKind, profile: object) => void;
 		/** A connection was removed; hosts detach whatever shows that id. */
 		onDisconnected?: (kind: RemoteKind, id: string) => void;
 	}
 
-	let { onClose, initialTab = 'connections', onConnected, onDisconnected, appearance, editing, outputs, agentAccess }: Props = $props();
+	let { onClose, initialTab = 'connections', onConnected, onDisconnected, appearance, editing, outputs, agentAccess, ocr }: Props = $props();
 
 	const TAB_ITEMS = $derived<TabItem[]>([
 		{ value: 'connections', label: 'Connections', testId: 'settings-tab-connections' },
 		{ value: 'models', label: 'AI models', testId: 'settings-tab-models' },
+		...(ocr ? [{ value: 'ocr', label: 'OCR', testId: 'settings-tab-ocr' }] : []),
 		...(appearance ? [{ value: 'appearance', label: 'Appearance', testId: 'settings-tab-appearance' }] : []),
 		...(editing ? [{ value: 'editing', label: 'Editing', testId: 'settings-tab-editing' }] : []),
 		...(outputs ? [{ value: 'outputs', label: 'Outputs', testId: 'settings-tab-outputs' }] : [])
@@ -89,6 +97,8 @@
 			{:else if tab === 'models'}
 				<AiModelsTab onConfigureMonitor={() => (tab = 'connections')} />
 				{@render agentAccess?.()}
+			{:else if tab === 'ocr'}
+				{@render ocr?.()}
 			{:else if tab === 'appearance'}
 				{@render appearance?.()}
 			{:else if tab === 'editing'}

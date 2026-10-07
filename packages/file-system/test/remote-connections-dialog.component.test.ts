@@ -8,6 +8,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, fireEvent, within } from '@testing-library/svelte';
 import 'fake-indexeddb/auto';
 import RemoteConnectionsDialog from '../src/ui/RemoteConnectionsDialog.svelte';
+import RemoteDialogOcrHarness from './RemoteDialogOcrHarness.svelte';
 import {
 	closeCredentialsDbForTests as closeMonitor,
 	listProfiles as listMonitor,
@@ -63,6 +64,19 @@ describe('RemoteConnectionsDialog', () => {
 		await fireEvent.click(screen.getByRole('button', { name: 'Add a Monitor…' }));
 		expect(screen.queryByTestId('ai-browser')).toBeNull();
 		expect(screen.getByTestId('settings-tab-connections').getAttribute('aria-selected')).toBe('true');
+	});
+
+	it('gates the host-provided OCR tab on its snippet', async () => {
+		const bare = render(RemoteConnectionsDialog, { props: { onClose: vi.fn() } });
+		await screen.findByTestId('connections-dialog');
+		expect(screen.queryByTestId('settings-tab-ocr')).toBeNull();
+		bare.unmount();
+
+		render(RemoteDialogOcrHarness, { props: { onClose: vi.fn() } });
+		await fireEvent.click(screen.getByTestId('settings-tab-ocr'));
+		await screen.findByTestId('ocr-settings-tab-content');
+		// The built-in tabs are untouched; the OCR body replaced the models tab.
+		expect(screen.queryByTestId('ai-browser')).toBeNull();
 	});
 
 	it('groups a mixed catalog by browser and monitor device, keeps API setup per monitor, and preserves the selected device', async () => {
