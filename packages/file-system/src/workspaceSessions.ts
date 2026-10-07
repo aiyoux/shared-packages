@@ -392,15 +392,13 @@ export function peekWindowRequest(windowId: string): WorkspaceSession | null {
 }
 
 /**
- * What a window shows when it mounts: an explicit request first, then the
- * pointer this tab stored for it (a refresh), then — only when `recent` is
- * set, for a standalone build's pane-less mount — the most recent session of
- * this app that no other window here is showing. Hub windows start empty.
+ * A mount starts fresh unless the user explicitly asked this window to show
+ * a session. Stored window pointers and recent sessions remain background
+ * state; neither is an instruction to reopen a document.
  */
 export function bootWindowSession(
 	windowId: string,
-	app: SessionApp,
-	opts: { recent?: boolean } = {}
+	app: SessionApp
 ): WorkspaceSession | null {
 	const b = bag();
 	const requested = b.requests.get(windowId);
@@ -408,17 +406,8 @@ export function bootWindowSession(
 		b.requests.delete(windowId);
 		return requested;
 	}
-	const pointed = findWorkspaceSession(sessionIdForWindow(windowId));
-	if (pointed?.app === app) return pointed;
-	if (!opts.recent) return null;
-	const shown = new Set(Object.values(storage().readWindows()));
-	return (
-		// Newest first; on a tie, the row added later.
-		[...ownWorkspaceSessions()]
-			.reverse()
-			.filter((row) => row.app === app && !shown.has(row.id))
-			.sort((a, b) => b.updatedAt - a.updatedAt)[0] ?? null
-	);
+	detachWindow(windowId);
+	return null;
 }
 
 /** Test hook: a fresh list over the given storage. */
