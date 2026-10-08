@@ -16,6 +16,12 @@ describe('shouldOfferUpdate', () => {
 		expect(shouldOfferUpdate({ hasWaitingWorker: false, hasInstallingWorker: true })).toBe(true);
 	});
 
+	it('does not offer a first install: nothing was active yet', () => {
+		expect(shouldOfferUpdate({ hasWaitingWorker: false, hasInstallingWorker: true, hasActiveWorker: false })).toBe(false);
+		expect(shouldOfferUpdate({ hasWaitingWorker: true, hasActiveWorker: false })).toBe(false);
+		expect(shouldOfferUpdate({ hasWaitingWorker: true, hasActiveWorker: true })).toBe(true);
+	});
+
 	it('does not offer on version.json alone — a reload would still hit the old cache', () => {
 		expect(shouldOfferUpdate({ hasWaitingWorker: false, versionChanged: true })).toBe(false);
 	});

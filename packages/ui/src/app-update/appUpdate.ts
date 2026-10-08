@@ -15,7 +15,14 @@ export function shouldOfferUpdate(opts: {
 	 * can skipWaiting.
 	 */
 	versionChanged?: boolean;
+	/**
+	 * Is a worker already active? Without one, a waiting or installing worker
+	 * is the origin's FIRST install, not an update: offering Refresh then nags
+	 * every first-time visitor. Omitted means unknown and keeps the old answer.
+	 */
+	hasActiveWorker?: boolean;
 }): boolean {
+	if (opts.hasActiveWorker === false) return false;
 	return opts.hasWaitingWorker || !!opts.hasInstallingWorker;
 }
 

@@ -102,7 +102,8 @@ export class AppUpdateStore {
 		if (
 			shouldOfferUpdate({
 				hasWaitingWorker: !!registration?.waiting,
-				hasInstallingWorker: !!registration?.installing
+				hasInstallingWorker: !!registration?.installing,
+				hasActiveWorker: !!registration?.active
 			})
 		) {
 			this.status = 'available';
