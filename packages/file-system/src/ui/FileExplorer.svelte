@@ -10,6 +10,7 @@
 	import {
 		getSharedVfs,
 		inferFileTypeFromName,
+		forceExtension,
 		isActionable,
 		type FileTypeId,
 		type VfsService
@@ -2319,7 +2320,6 @@
 			return;
 		}
 		if (accept?.[0]) {
-			const { forceExtension } = await import('../registry.js');
 			name = forceExtension(name, accept[0]);
 		}
 		// Saving onto an existing name: confirm overwrite before delegating.
