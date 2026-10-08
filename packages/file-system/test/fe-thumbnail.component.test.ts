@@ -461,4 +461,109 @@ describe('FeThumbnail', () => {
 		third.unmount();
 		await resetThumbCacheForTests();
 	});
+	it('defers offscreen tiles, shares visible requests, and aborts when they leave', async () => {
+		await resetThumbCacheForTests();
+		let notify!: IntersectionObserverCallback;
+		vi.stubGlobal('IntersectionObserver', class {
+			constructor(callback: IntersectionObserverCallback) { notify = callback; }
+			observe() {} unobserve() {} disconnect() {}
+		});
+		let signal!: AbortSignal;
+		const fetchMock = vi.fn((_url: string, options: RequestInit) => {
+			signal = options.signal!;
+			return new Promise<Response>((_, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }));
+		});
+		vi.stubGlobal('fetch', fetchMock);
+		const driver: ExplorerDriver = {
+			id: 'monitor', thumbScope: 'viewport', capabilities: caps, ready: async () => {},
+			list: async () => ({ entries: [], truncated: false }), getPath: async () => [], delete: async () => {},
+			thumbUrl: async () => ({ url: 'http://localhost/thumb' })
+		};
+		const entry: ExplorerEntry = { id: 'video', kind: 'file', name: 'video.mp4', parentId: null, size: 100, updatedAt: 1 };
+		const first = render(FeThumbnail, { props: { entry, driver } });
+		const second = render(FeThumbnail, { props: { entry, driver } });
+		const nodes = [...document.querySelectorAll('[data-testid="fe-thumb"]')];
+		const intersect = (target: Element, isIntersecting: boolean) => notify([{ target, isIntersecting } as IntersectionObserverEntry], {} as IntersectionObserver);
+		try {
+			await new Promise((r) => setTimeout(r, 30));
+			expect(fetchMock).not.toHaveBeenCalled();
+			for (const node of nodes) intersect(node, true);
+			await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+			intersect(nodes[0], false);
+			await new Promise((r) => setTimeout(r, 10));
+			expect(signal.aborted).toBe(false);
+			intersect(nodes[1], false);
+			await waitFor(() => expect(signal.aborted).toBe(true));
+		} finally { first.unmount(); second.unmount(); vi.unstubAllGlobals(); }
+	});
+
+	it('downloads remote PDFs only on request, then reuses their cached thumbnails', async () => {
+		await resetThumbCacheForTests();
+		const download = vi.fn(async () => new Blob(['pdf']));
+		const driver: ExplorerDriver = {
+			id: 'monitor', thumbScope: 'pdfs', capabilities: caps, ready: async () => {},
+			list: async () => ({ entries: [], truncated: false }), getPath: async () => [], delete: async () => {},
+			thumbUrl: async () => null, download
+		};
+		const entry: ExplorerEntry = { id: 'doc.pdf', kind: 'file', name: 'doc.pdf', parentId: null, size: 100, updatedAt: 1 };
+		const first = render(FeThumbnail, { props: { entry, driver } });
+		await waitFor(() => expect(document.querySelector('[data-testid="fe-thumb-load"]')).toBeTruthy());
+		expect(download).not.toHaveBeenCalled();
+		await fireEvent.click(document.querySelector('[data-testid="fe-thumb-load"]')!);
+		await waitFor(() => expect(document.querySelector('.fe-thumb-img')).toBeTruthy());
+		expect(download).toHaveBeenCalledTimes(1);
+		first.unmount(); forgetThumbMemoryForTests();
+		const second = render(FeThumbnail, { props: { entry, driver } });
+		await waitFor(() => expect(document.querySelector('.fe-thumb-img')?.getAttribute('data-thumb-source')).toBe('cache'));
+		expect(download).toHaveBeenCalledTimes(1);
+		second.unmount();
+	});
+
+	it('remembers unavailable host posters across remounts without downloading originals', async () => {
+		await resetThumbCacheForTests();
+		const fetchMock = vi.fn(async () => new Response('unavailable', { status: 415 }));
+		vi.stubGlobal('fetch', fetchMock);
+		const download = vi.fn();
+		const driver: ExplorerDriver = {
+			id: 'monitor', thumbScope: 'failures', capabilities: caps, ready: async () => {},
+			list: async () => ({ entries: [], truncated: false }), getPath: async () => [], delete: async () => {},
+			thumbUrl: async () => ({ url: 'http://localhost/thumb' }), download
+		};
+		const entry: ExplorerEntry = { id: 'bad.mov', kind: 'file', name: 'bad.mov', parentId: null, size: 100, updatedAt: 1 };
+		const first = render(FeThumbnail, { props: { entry, driver } });
+		try {
+			await waitFor(() => expect(document.querySelector('[data-testid="fe-thumb-retry"]')).toBeTruthy());
+			first.unmount(); forgetThumbMemoryForTests();
+			const second = render(FeThumbnail, { props: { entry, driver } });
+			await waitFor(() => expect(document.querySelector('[data-testid="fe-thumb-retry"]')).toBeTruthy());
+			expect(fetchMock).toHaveBeenCalledTimes(1);
+			expect(download).not.toHaveBeenCalled();
+			second.unmount();
+		} finally { first.unmount(); vi.unstubAllGlobals(); }
+	});
+
+	it('waits for changing files to settle and versions the HTTP thumbnail URL', async () => {
+		await resetThumbCacheForTests();
+		const fetchMock = vi.fn(async (_url: string, _options: RequestInit) => new Response(pngBlob()));
+		vi.stubGlobal('fetch', fetchMock);
+		const driver: ExplorerDriver = {
+			id: 'monitor', thumbScope: 'changing', capabilities: caps, ready: async () => {},
+			list: async () => ({ entries: [], truncated: false }), getPath: async () => [], delete: async () => {},
+			thumbUrl: async () => ({ url: 'http://localhost/thumb?path=clip.mp4' })
+		};
+		const entry: ExplorerEntry = { id: 'clip.mp4', name: 'clip.mp4', kind: 'file', parentId: null, size: 100, updatedAt: 1 };
+		const view = render(FeThumbnail, { props: { entry, driver } });
+		try {
+			await waitFor(() => expect(document.querySelector('.fe-thumb-img')).toBeTruthy());
+			await view.rerender({ entry: { ...entry, size: 200, updatedAt: 2 }, driver });
+			await view.rerender({ entry: { ...entry, size: 300, updatedAt: 3 }, driver });
+			await new Promise((r) => setTimeout(r, 50));
+			expect(fetchMock).toHaveBeenCalledTimes(1);
+			await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2), { timeout: 1500 });
+			const urls = fetchMock.mock.calls.map(([url]) => new URL(url));
+			expect(urls[0].searchParams.get('v')).toBe('m:100:1');
+			expect(urls[1].searchParams.get('v')).toBe('m:300:3');
+		} finally { view.unmount(); vi.unstubAllGlobals(); }
+	});
+
 });

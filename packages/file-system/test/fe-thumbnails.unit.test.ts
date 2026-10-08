@@ -36,6 +36,14 @@ function file(partial: Partial<ExplorerEntry> & Pick<ExplorerEntry, 'name'>): Ex
 }
 
 describe('getPreviewKind', () => {
+	it('recognizes KB pages by extension or catalog type without raster thumbnails', () => {
+		assert.equal(getPreviewKind(file({ name: 'index.kb', contentType: 'application/json' })), 'kb');
+		assert.equal(getPreviewKind(file({ name: 'NOTES.KB', fileType: 'image' })), 'kb');
+		assert.equal(getPreviewKind(file({ name: 'page', fileType: 'kb' })), 'kb');
+		assert.equal(getPreviewKind(file({ name: 'page.json', fileType: 'kb' })), 'text');
+		assert.equal(hasRasterThumbnail('kb'), false);
+		assert.equal(fileTypeIcon(file({ name: 'index.kb' })), 'file-text');
+	});
 	it('classifies by fileType, extension, and contentType', () => {
 		assert.equal(getPreviewKind(file({ name: 'a.bin', fileType: 'pdf' })), 'pdf');
 		assert.equal(getPreviewKind(file({ name: 'photo.SVG' })), 'image');

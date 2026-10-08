@@ -747,10 +747,12 @@ export function canReadExplorerBlob(driver: ExplorerReadDriver): boolean {
  */
 export async function readExplorerBlob(
 	driver: ExplorerReadDriver,
-	id: ExplorerEntryId
+	id: ExplorerEntryId,
+	opts?: { signal?: AbortSignal }
 ): Promise<Blob> {
+	opts?.signal?.throwIfAborted();
 	if (driver.readBlob) return driver.readBlob(id);
-	if (driver.download) return driver.download(id);
+	if (driver.download) return opts ? driver.download(id, opts) : driver.download(id);
 	throw new Error('This location cannot read files');
 }
 

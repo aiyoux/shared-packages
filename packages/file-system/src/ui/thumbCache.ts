@@ -17,31 +17,39 @@ import { generateId } from '../id.js';
 import type { ExplorerDiskRoot, ExplorerDriver, ExplorerEntry } from './explorerDriver.js';
 
 const DB_NAME = 'sp-fe-thumb-cache';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const STORE_THUMBS = 'thumbs';
 const STORE_META = 'thumbMeta';
 const STORE_GRANTS = 'diskGrants';
+const STORE_STATS = 'stats';
 
 /** Skip anything that is not a small preview. */
 const MAX_BLOB_BYTES = 512 * 1024;
-const DEFAULT_MEM_ENTRIES = 240;
+const DEFAULT_MEM_ENTRIES = 1024;
 const MEM_MAX_BYTES = 24 * 1024 * 1024;
-const IDB_MAX_ENTRIES = 800;
-const IDB_MAX_BYTES = 64 * 1024 * 1024;
+const IDB_MAX_ENTRIES = 8192;
+const IDB_MAX_BYTES = 128 * 1024 * 1024;
 
 type ThumbMeta = { key: string; bytes: number; touched: number };
-type ThumbRow = { key: string; blob: Blob };
+type ThumbRow = { key: string; blob: Blob | null; failedUntil?: number };
+type CacheStats = { key: 'totals'; count: number; bytes: number };
+export type CachedThumb = Blob | 'failed' | null;
 type DiskGrantRecord = { id: string; handle: ExplorerDiskRoot };
 
 let memMaxEntries = DEFAULT_MEM_ENTRIES;
 const memoryScope = `memory:${generateId('mem')}`;
-const mem = new Map<string, { blob: Blob; bytes: number }>();
+const mem = new Map<string, ThumbRow>();
+let memBytes = 0;
+let idbMaxEntries = IDB_MAX_ENTRIES;
+let idbMaxBytes = IDB_MAX_BYTES;
+let touchedClock = 0;
+const touchedInMemory = new Map<string, number>();
 const scopePromises = new WeakMap<ExplorerDriver, Promise<string | null>>();
 const grantInflight = new WeakMap<ExplorerDiskRoot, Promise<string>>();
 let grantChain: Promise<unknown> = Promise.resolve();
 
 let dbPromise: Promise<IDBDatabase> | null = null;
-let writeChain: Promise<void> = Promise.resolve();
+const pendingWrites = new Map<string, Promise<void>>();
 
 /** Bytes identity for a row. Null when a cached image could not be invalidated. */
 export function thumbContentToken(entry: ExplorerEntry): string | null {
@@ -62,6 +70,15 @@ export function thumbContentToken(entry: ExplorerEntry): string | null {
 	const inode =
 		typeof ino === 'string' && ino && typeof dev === 'string' && dev ? `:i:${ino}:d:${dev}` : '';
 	return `m:${entry.size}:${entry.updatedAt}${inode}`;
+}
+
+/** Match Monitor's HTTP image identity to the content version used by previews. */
+export function versionedThumbUrl(driver: Pick<ExplorerDriver, 'id'>, url: string, token: string | null): string {
+	if (driver.id !== 'monitor' || !token) return url;
+	const remote = new URL(url);
+	if (remote.protocol !== 'http:' && remote.protocol !== 'https:') return url;
+	remote.searchParams.set('v', token);
+	return remote.href;
 }
 
 export async function thumbCacheKey(
@@ -150,26 +167,46 @@ async function sameDiskRoot(live: ExplorerDiskRoot, stored: ExplorerDiskRoot): P
 	return false;
 }
 
-export async function recallThumb(key: string): Promise<Blob | null> {
-	const hot = memGet(key);
-	if (hot) return hot;
-	await writeChain;
-	const stored = await idbGet(key);
-	if (!stored) return null;
-	putMem(key, stored);
-	return stored;
+/** Reads wait only for a write of their own key, never the directory's write backlog. */
+export async function recallThumbResult(key: string): Promise<CachedThumb> {
+	let row = memGet(key);
+	if (!row) {
+		await pendingWrites.get(key);
+		row = await idbGet(key);
+		if (row) putMem(row);
+	} else if (!key.startsWith('memory:')) {
+		// A hot tile counts as a use too, without writing on every reactive refresh.
+		const last = touchedInMemory.get(key) ?? 0;
+		if (Date.now() - last > 30_000) void idbTouch(key).catch(() => {});
+	}
+	if (!row) return null;
+	if (row.blob) return row.blob;
+	return row.failedUntil && row.failedUntil > Date.now() ? 'failed' : null;
 }
 
-/** Remember a small preview. Memory is updated before this promise settles. */
+export async function recallThumb(key: string): Promise<Blob | null> {
+	const result = await recallThumbResult(key);
+	return result instanceof Blob ? result : null;
+}
+
+/** Remember a small preview. Memory is updated synchronously. Cache errors are best-effort. */
 export function rememberThumb(key: string, blob: Blob): Promise<void> {
 	if (!blob || blob.size <= 0 || blob.size > MAX_BLOB_BYTES) return Promise.resolve();
-	putMem(key, blob);
-	if (key.startsWith('memory:')) return Promise.resolve();
-	const run = writeChain.then(() => idbPut(key, blob), () => idbPut(key, blob));
-	writeChain = run.then(
-		() => undefined,
-		() => undefined
-	);
+	return rememberRow({ key, blob });
+}
+
+/** Briefly remember failures across revisits/refreshes; a changed file has a new key. */
+export function rememberThumbFailure(key: string): Promise<void> {
+	return rememberRow({ key, blob: null, failedUntil: Date.now() + 60_000 });
+}
+
+function rememberRow(row: ThumbRow): Promise<void> {
+	putMem(row);
+	if (row.key.startsWith('memory:')) return Promise.resolve();
+	const previous = pendingWrites.get(row.key) ?? Promise.resolve();
+	const run = previous.then(() => idbPut(row)).catch(() => {});
+	pendingWrites.set(row.key, run);
+	void run.then(() => { if (pendingWrites.get(row.key) === run) pendingWrites.delete(row.key); });
 	return run;
 }
 
@@ -209,26 +246,29 @@ function blobFromDataUrl(src: string): Blob | null {
 	}
 }
 
-function putMem(key: string, blob: Blob): void {
-	if (mem.has(key)) mem.delete(key);
-	mem.set(key, { blob, bytes: blob.size });
-	let bytes = 0;
-	for (const row of mem.values()) bytes += row.bytes;
-	while ((mem.size > memMaxEntries || bytes > MEM_MAX_BYTES) && mem.size > 1) {
-		const oldest = mem.keys().next().value;
-		if (oldest === undefined || oldest === key) break;
-		const row = mem.get(oldest);
+function putMem(row: ThumbRow): void {
+	const old = mem.get(row.key);
+	if (old) { memBytes -= old.blob?.size ?? 0; mem.delete(row.key); }
+	mem.set(row.key, row);
+	memBytes += row.blob?.size ?? 0;
+	while ((mem.size > memMaxEntries || memBytes > MEM_MAX_BYTES) && mem.size > 1) {
+		const oldest = mem.keys().next().value!;
+		memBytes -= mem.get(oldest)?.blob?.size ?? 0;
 		mem.delete(oldest);
-		if (row) bytes -= row.bytes;
+		touchedInMemory.delete(oldest);
 	}
 }
 
-function memGet(key: string): Blob | null {
+function memGet(key: string): ThumbRow | null {
 	const row = mem.get(key);
 	if (!row) return null;
 	mem.delete(key);
 	mem.set(key, row);
-	return row.blob;
+	return row;
+}
+
+function touched(): number {
+	return touchedClock = Math.max(Date.now(), touchedClock + 1);
 }
 
 function openDb(): Promise<IDBDatabase> {
@@ -247,6 +287,18 @@ function openDb(): Promise<IDBDatabase> {
 			}
 			if (!db.objectStoreNames.contains(STORE_GRANTS)) {
 				db.createObjectStore(STORE_GRANTS, { keyPath: 'id' });
+			}
+			if (!db.objectStoreNames.contains(STORE_STATS)) {
+				const stats = db.createObjectStore(STORE_STATS, { keyPath: 'key' });
+				// Upgrade existing caches once. Normal inserts never scan the metadata table.
+				const totals: CacheStats = { key: 'totals', count: 0, bytes: 0 };
+				const cursor = req.transaction!.objectStore(STORE_META).openCursor();
+				cursor.onsuccess = () => {
+					const row = cursor.result;
+					if (!row) { stats.put(totals); return; }
+					totals.count++; totals.bytes += (row.value as ThumbMeta).bytes;
+					row.continue();
+				};
 			}
 		};
 		req.onsuccess = () => {
@@ -269,46 +321,77 @@ function openDb(): Promise<IDBDatabase> {
 	return dbPromise;
 }
 
-async function idbGet(key: string): Promise<Blob | null> {
+async function idbGet(key: string): Promise<ThumbRow | null> {
 	try {
 		const db = await openDb();
 		return await new Promise((resolve, reject) => {
-			const tx = db.transaction(STORE_THUMBS, 'readonly');
+			const tx = db.transaction([STORE_THUMBS, STORE_META], 'readwrite');
+			let result: ThumbRow | null = null;
 			const req = tx.objectStore(STORE_THUMBS).get(key);
 			req.onsuccess = () => {
-				const row = req.result as ThumbRow | undefined;
-				resolve(row?.blob ?? null);
+				result = req.result ?? null;
+				if (result) touchMeta(tx.objectStore(STORE_META), key);
 			};
+			tx.oncomplete = () => resolve(result);
 			tx.onerror = () => reject(tx.error);
 			tx.onabort = () => reject(tx.error);
 		});
-	} catch {
-		return null;
-	}
+	} catch { return null; }
 }
 
-async function idbPut(key: string, blob: Blob): Promise<void> {
+function touchMeta(meta: IDBObjectStore, key: string) {
+	const req = meta.get(key);
+	req.onsuccess = () => {
+		if (req.result) {
+			meta.put({ ...req.result, touched: touched() });
+			if (mem.has(key)) touchedInMemory.set(key, Date.now());
+		}
+	};
+}
+
+async function idbTouch(key: string): Promise<void> {
 	const db = await openDb();
 	await new Promise<void>((resolve, reject) => {
-		const tx = db.transaction([STORE_THUMBS, STORE_META], 'readwrite');
+		const tx = db.transaction(STORE_META, 'readwrite');
+		touchMeta(tx.objectStore(STORE_META), key);
+		tx.oncomplete = () => resolve();
+		tx.onabort = () => reject(tx.error);
+		tx.onerror = () => reject(tx.error);
+	});
+}
+
+async function idbPut(row: ThumbRow): Promise<void> {
+	const db = await openDb();
+	await new Promise<void>((resolve, reject) => {
+		const tx = db.transaction([STORE_THUMBS, STORE_META, STORE_STATS], 'readwrite');
 		const thumbs = tx.objectStore(STORE_THUMBS);
 		const meta = tx.objectStore(STORE_META);
-		thumbs.put({ key, blob } satisfies ThumbRow);
-		meta.put({ key, bytes: blob.size, touched: Date.now() } satisfies ThumbMeta);
-		const all = meta.getAll();
-		all.onsuccess = () => {
-			const rows = (all.result as ThumbMeta[]).slice().sort((a, b) => a.touched - b.touched);
-			let count = rows.length;
-			let bytes = 0;
-			for (const row of rows) bytes += row.bytes;
-			for (const row of rows) {
-				if (count <= IDB_MAX_ENTRIES && bytes <= IDB_MAX_BYTES) break;
-				if (row.key === key) continue;
-				thumbs.delete(row.key);
-				meta.delete(row.key);
-				bytes -= row.bytes;
-				count -= 1;
-			}
+		const stats = tx.objectStore(STORE_STATS);
+		const old = meta.get(row.key);
+		const totalsReq = stats.get('totals');
+		totalsReq.onsuccess = () => {
+			const totals: CacheStats = totalsReq.result ?? { key: 'totals', count: 0, bytes: 0 };
+			const bytes = row.blob?.size ?? 0;
+			totals.count += old.result ? 0 : 1;
+			totals.bytes += bytes - (old.result?.bytes ?? 0);
+			thumbs.put(row);
+			meta.put({ key: row.key, bytes, touched: touched() } satisfies ThumbMeta);
+			if (mem.has(row.key)) touchedInMemory.set(row.key, Date.now());
+			if (totals.count <= idbMaxEntries && totals.bytes <= idbMaxBytes) { stats.put(totals); return; }
+			// Walk the existing recency index only as far as eviction needs.
+			const cursor = meta.index('touched').openCursor();
+			cursor.onsuccess = () => {
+				const current = cursor.result;
+				if (!current || (totals.count <= idbMaxEntries && totals.bytes <= idbMaxBytes)) {
+					stats.put(totals); return;
+				}
+				const oldest = current.value as ThumbMeta;
+				if (oldest.key !== row.key) {
+					thumbs.delete(oldest.key); current.delete();
+					totals.count--; totals.bytes -= oldest.bytes;
+				}
+				current.continue();
+			};
 		};
 		tx.oncomplete = () => resolve();
 		tx.onerror = () => reject(tx.error);
@@ -340,16 +423,23 @@ async function putGrant(record: DiskGrantRecord): Promise<void> {
 
 export function forgetThumbMemoryForTests(): void {
 	mem.clear();
+	memBytes = 0;
+	touchedInMemory.clear();
 }
 
-export function setThumbCacheLimitsForTests(opts: { memEntries?: number }): void {
+export function setThumbCacheLimitsForTests(opts: { memEntries?: number; idbEntries?: number; idbBytes?: number }): void {
 	if (opts.memEntries != null) memMaxEntries = opts.memEntries;
+	if (opts.idbEntries != null) idbMaxEntries = opts.idbEntries;
+	if (opts.idbBytes != null) idbMaxBytes = opts.idbBytes;
 }
 
 export async function resetThumbCacheForTests(): Promise<void> {
-	mem.clear();
+	await Promise.all(pendingWrites.values());
+	forgetThumbMemoryForTests();
+	pendingWrites.clear();
 	memMaxEntries = DEFAULT_MEM_ENTRIES;
-	writeChain = Promise.resolve();
+	idbMaxEntries = IDB_MAX_ENTRIES;
+	idbMaxBytes = IDB_MAX_BYTES;
 	grantChain = Promise.resolve();
 	if (dbPromise) {
 		try {

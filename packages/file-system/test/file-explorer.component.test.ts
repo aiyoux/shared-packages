@@ -1719,6 +1719,28 @@ describe('FileExplorer component', () => {
 		await viWaitFor(() => !!document.querySelector('[data-testid="fe-git-enabled-badge"]'));
 	});
 
+
+	it('refreshes a visible folder badge when a virtual child gains a Git marker', async () => {
+		const folder = await vfs.mkdir(null, 'new-repo');
+		render(FileExplorer, { props: { mode: 'manage', vfs, variant: 'panel' } });
+		const row = () => document.querySelector('[data-testid="fe-folder-row"][data-name="new-repo"]');
+		await viWaitFor(() => row()?.getAttribute('data-fe-folder-mark') === 'plain');
+		await vfs.mkdir(folder.id, '.git');
+		await viWaitFor(() => row()?.getAttribute('data-fe-folder-mark') === 'git');
+	});
+
+	it('refreshes visible folder decks when virtual children change', async () => {
+		persistKv.setItem('fe:showPreview', 'true');
+		persistKv.setItem('fe:viewMode', 'icons');
+		const folder = await vfs.mkdir(null, 'Changing album');
+		await vfs.writeFile({ parentId: folder.id, name: 'first.txt', body: 'one' });
+		render(FileExplorer, { props: { mode: 'manage', vfs, variant: 'panel' } });
+		const tiles = () => document.querySelectorAll(`[data-stack-for="${folder.id}"] .fe-stack-tile`).length;
+		await viWaitFor(() => tiles() === 1);
+		await vfs.writeFile({ parentId: folder.id, name: 'second.txt', body: 'two' });
+		await viWaitFor(() => tiles() === 2);
+	});
+
 	it('marks git, project, and combined folders in the listing', async () => {
 		const git = await vfs.mkdir(null, 'repo');
 		await vfs.mkdir(git.id, '.git');

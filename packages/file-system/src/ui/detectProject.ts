@@ -1,4 +1,5 @@
 import type { ExplorerDriver, ExplorerEntry, ExplorerEntryId } from './explorerDriver.js';
+import { previewFolderEntries } from './previewWork.js';
 
 export const PROJECT_PACK_META = 'projectPack';
 
@@ -64,15 +65,7 @@ async function markerChildren(
 	parentId: ExplorerEntryId | null
 ): Promise<ExplorerEntry[]> {
 	// Marker detection is a background probe, including folder icon classification.
-	const listed = await driver.list({ parentId, probe: true });
-	if (listed.truncated && driver.listAll) {
-		try {
-			return await driver.listAll({ parentId, probe: true });
-		} catch {
-			// A failed full listing must not hide a marker already in the visible rows.
-		}
-	}
-	return listed.entries;
+	return previewFolderEntries(driver, parentId);
 }
 
 /** Self, then parents from `getPath`, then explorer root. Deduped. */

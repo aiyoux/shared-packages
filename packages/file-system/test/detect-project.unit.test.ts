@@ -136,7 +136,7 @@ describe('detectProject', () => {
 		};
 		assert.deepEqual(await findProjectRoot(driver, 'folder', 'git'), { found: true, id: 'folder' });
 		assert.equal(await classifyFolder(driver, { id: 'folder', kind: 'folder' }), 'git');
-		assert.equal(fullLists, 2);
+		assert.equal(fullLists, 1, 'badge and project detection share the full listing');
 	});
 
 	it('is true when a child is named .git (folder)', async () => {

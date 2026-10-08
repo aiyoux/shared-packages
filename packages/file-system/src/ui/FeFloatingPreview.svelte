@@ -29,6 +29,7 @@
 	import { formatPreviewReadError } from './explorerError.js';
 	import { formatFolderMeasure, measureFolderSize, type FolderMeasure } from './folderSize.js';
 	import { PanZoomViewport } from '@shared-packages/ui';
+	import { thumbContentToken, versionedThumbUrl } from './thumbCache.js';
 
 	let {
 		entry,
@@ -90,6 +91,7 @@
 	const mediaId = $derived(entry.id);
 	const mediaName = $derived(entry.name);
 	const mediaSize = $derived(entry.size);
+	const contentToken = $derived(thumbContentToken(entry));
 	const RANGED_PDF_ABOVE_BYTES = 8 * 1024 * 1024;
 
 	/** Longest edge of the stage in device pixels, for a host-rendered image. */
@@ -102,7 +104,7 @@
 	}
 	/** Parent passed to `driver.list` for a folder preview. */
 	const folderListParent = $derived(listParentId === undefined ? mediaId : listParentId);
-	let loadedMedia: { id: string; name: string; kind: string; driver: ExplorerDriver } | null = null;
+	let loadedMedia: { id: string; name: string; kind: string; driver: ExplorerDriver; token: string | null } | null = null;
 	// A file can be selected again before an earlier read finishes. Its id
 	// alone does not identify the load that currently owns the preview.
 	let mediaGeneration = 0;
@@ -429,6 +431,7 @@
 	$effect(() => {
 		const e = { id: mediaId, name: mediaName };
 		const entrySize = mediaSize;
+		const token = contentToken;
 		const d = driver;
 		const k = kind;
 		const shouldLoad = loadMedia && !multi;
@@ -436,6 +439,7 @@
 		// the decoded media: waveform work may still be completing.
 		if (shouldLoad && entryKind === 'file' && untrack(() => loadedMedia?.id === e.id &&
 			loadedMedia.name === e.name && loadedMedia.kind === k && loadedMedia.driver === d &&
+			loadedMedia.token === token &&
 			!!blobUrl && !loading)) return;
 		const generation = ++mediaGeneration;
 		if (!shouldLoad) {
@@ -450,7 +454,7 @@
 			error = '';
 			return;
 		}
-		if (k === 'text') {
+		if (k === 'text' || k === 'kb') {
 			untrack(revokeUrl);
 			loading = false;
 			error = '';
@@ -494,13 +498,13 @@
 						const loc = await d.thumbUrl(e.id, { maxDim: stagePixels() });
 						if (!isActive()) return;
 						if (loc?.url) {
-							const src = await embedMediaUrl(loc.url);
+							const src = await embedMediaUrl(versionedThumbUrl(d, loc.url, token));
 							if (!isActive()) {
 								if (src.startsWith('blob:')) URL.revokeObjectURL(src);
 								return;
 							}
 							blobUrl = src;
-							loadedMedia = { id: e.id, name: e.name, kind: k, driver: d };
+							loadedMedia = { id: e.id, name: e.name, kind: k, driver: d, token };
 							loading = false;
 							return;
 						}
@@ -519,7 +523,7 @@
 						streamedFrom = { id: e.id, name: e.name, driver: d, converted: conv !== null };
 						converted = conv ? { duration: conv.duration, start: 0 } : null;
 						if (k === 'audio') startPeaks(d, e.id, entrySize);
-						loadedMedia = { id: e.id, name: e.name, kind: k, driver: d };
+						loadedMedia = { id: e.id, name: e.name, kind: k, driver: d, token };
 						loading = false;
 						return;
 					}
@@ -558,7 +562,7 @@
 						return;
 					}
 					blobUrl = src.url;
-					loadedMedia = { id: e.id, name: e.name, kind: k, driver: d };
+					loadedMedia = { id: e.id, name: e.name, kind: k, driver: d, token };
 					loading = false;
 					if (k === 'audio') startPeaks(d, e.id, entrySize, src.blob);
 					return;
@@ -785,7 +789,7 @@
 		<div
 			class="fe-float-body"
 			bind:this={bodyEl}
-			class:text={!multi && kind === 'text'}
+			class:text={!multi && (kind === 'text' || kind === 'kb')}
 			class:image={!multi && kind === 'image' && !!blobUrl}
 			class:video={!multi && kind === 'video' && !!blobUrl}
 			class:folder={!multi && entryKind === 'folder'}
@@ -879,8 +883,8 @@
 				</div>
 			{:else if kind === 'pdf' && pdfFallbackUrl}
 				<iframe class="fe-float-pdf-frame" title={entry.name} src={pdfFallbackUrl}></iframe>
-			{:else if kind === 'text'}
-				<FeTextPreview {entry} {driver} maxChars={variant === 'dock' ? 4_000 : 200_000} variant={variant === 'dock' ? 'snippet' : 'full'} />
+			{:else if kind === 'text' || kind === 'kb'}
+				<FeTextPreview {entry} {driver} format={kind === 'kb' ? 'kb' : 'text'} maxChars={variant === 'dock' ? 4_000 : 200_000} variant={variant === 'dock' ? 'snippet' : 'full'} />
 			{:else if kind === 'pdf'}
 				<div class="fe-float-pdf">
 					<canvas bind:this={pdfCanvas} class="fe-float-pdf-canvas"></canvas>

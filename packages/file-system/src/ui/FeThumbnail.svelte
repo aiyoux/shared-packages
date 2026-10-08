@@ -3,260 +3,143 @@
 	import FeIcon from './FeIcon.svelte';
 	import FeTypeMark from './FeTypeMark.svelte';
 	import type { FeIconName } from './feIcons.js';
-	import {
-		getPreviewKind,
-		generateThumbnail,
-		previewKindIcon
-	} from './feThumbnails.js';
+	import { getPreviewKind, generateThumbnail, previewKindIcon } from './feThumbnails.js';
 	import type { ExplorerDriver, ExplorerEntry } from './explorerDriver.js';
-	import {
-		canReadExplorerBlob,
-		embedMediaUrl,
-		explorerThumbsAreEager,
-		readExplorerBlob
-	} from './explorerDriver.js';
-	import { mediaSrcIsEmbeddable } from './saveToDisk.js';
+	import { canReadExplorerBlob, explorerThumbsAreEager, isRemoteClass, readExplorerBlob } from './explorerDriver.js';
 	import { withLocalAddressSpace } from '../monitor/localNetwork.js';
-	import {
-		blobFromThumbSrc,
-		recallThumb,
-		rememberThumb,
-		thumbCacheKey,
-		thumbContentToken
-	} from './thumbCache.js';
+	import { blobFromThumbSrc, recallThumbResult, rememberThumb, rememberThumbFailure, thumbCacheKey, thumbContentToken, versionedThumbUrl } from './thumbCache.js';
+	import { observePreviewVisibility, sharedPreviewWork } from './previewWork.js';
 
-	let {
-		entry,
-		driver,
-		maxDim = 96,
-		enabled = true,
-		/** Skip the click-to-load gate (preview pane after "Show me preview"). */
-		force = false
-	}: {
-		entry: ExplorerEntry;
-		driver: ExplorerDriver;
-		maxDim?: number;
-		enabled?: boolean;
-		force?: boolean;
+	let { entry, driver, maxDim = 96, enabled = true, force = false }: {
+		entry: ExplorerEntry; driver: ExplorerDriver; maxDim?: number; enabled?: boolean; force?: boolean;
 	} = $props();
-
 	let url = $state<string | null>(null);
 	let loading = $state(false);
 	let failed = $state(false);
+	let nearViewport = $state(false);
 	let kind = $derived(getPreviewKind(entry));
-	let eager = $derived(explorerThumbsAreEager(driver));
-	/** User clicked the mini icon (B2 — no auto-download). */
+	let eager = $derived(explorerThumbsAreEager(driver) && !(kind === 'pdf' && isRemoteClass(driver.id)));
 	let requestedId = $state<string | null>(null);
-	/** Last id we successfully rendered. Not set until the fetch finishes, so a
-	 * cancelled in-flight load can restart instead of sticking on the spinner. */
-	let loadedId = '';
-	let loadedDriver: ExplorerDriver | null = null;
-	let loadedDim = 0;
-	let loadedName = '';
-	let loadedToken: string | null = null;
-	/** Where the current image came from. `cache` skips a rebuild on the next visit. */
+	let requestVersion = $state(0);
 	let source = $state<'cache' | 'fresh' | ''>('');
 	const mediaId = $derived(entry.id);
 	const mediaName = $derived(entry.name);
 	const contentToken = $derived(thumbContentToken(entry));
-	/** Last id that failed. Plain let so a fail does not re-run the effect. */
-	let failedId = '';
-	let failedToken: string | null = null;
-	let shouldLoad = $derived(
-		Boolean(
-			enabled &&
-				kind &&
-				kind !== 'audio' &&
-				kind !== 'text' &&
-				(force || eager || requestedId === entry.id)
-		)
-	);
+	const shouldLoad = $derived(enabled && (force || eager || requestedId === mediaId));
+	let loaded: { id: string; name: string; driver: ExplorerDriver; dim: number; token: string | null } | null = null;
+	let observed: { id: string; driver: ExplorerDriver; token: string | null } | null = null;
+	let failedLoad: { id: string; driver: ExplorerDriver; dim: number; token: string | null; request: number; until: number } | null = null;
 
-	onDestroy(() => {
-		revoke();
-	});
-
-	async function fetchHostThumb(remote: string, key: string): Promise<string> {
-		const res = await fetch(remote, withLocalAddressSpace(remote));
-		if (!res.ok) throw new Error(`Could not load media (${res.status})`);
-		const blob = await res.blob();
-		void rememberThumb(key, blob);
-		return URL.createObjectURL(blob);
-	}
-
+	onDestroy(revoke);
 	function revoke() {
-		if (url && url.startsWith('blob:')) {
+		if (url?.startsWith('blob:')) {
 			const retired = url;
-			// Remove the old src before retiring it; lazy images may still be
-			// queued for loading until Svelte flushes the DOM update.
 			void tick().then(() => URL.revokeObjectURL(retired));
 		}
-		// data: URLs don't need revocation
-		url = null;
-		source = '';
+		url = null; source = ''; loaded = null;
 	}
 
 	$effect(() => {
-		// Re-read entry/driver/enabled so effect re-runs on change
 		const e = { id: mediaId, name: mediaName };
 		const token = contentToken;
 		const snap = untrack(() => entry);
 		const dim = maxDim;
 		const d = driver;
-		const en = shouldLoad;
-		// `kind` is a $derived read here, not written — writing it from inside
-		// this effect and then reading it back in the same run used to make
-		// the effect depend on its own write, forcing exactly one redundant
-		// re-run right after mount. That re-run raced with (and cancelled) the
-		// in-flight blob fetch below, and since `currentId` was already set by
-		// the first run, the redundant run bailed out without restarting the
-		// fetch — leaving the thumbnail stuck on "loading" forever.
 		const k = kind;
-
-		if (!en || !k || k === 'audio' || k === 'text' || !(canReadExplorerBlob(d) || typeof d.thumbUrl === 'function')) {
-			// untrack: revoke() reads `url`. Reading it inside this effect (even
-			// transitively) would make the effect depend on it — and the async
-			// block below writes `url` once generation resolves, which would
-			// then re-trigger this very effect, revoke the URL it just created,
-			// and regenerate forever.
-			untrack(revoke);
-			loading = false;
-			failed = false;
-			return;
+		const en = enabled;
+		const explicit = force || requestedId === e.id;
+		const allowOriginal = force || (explicit && k !== 'video');
+		const visible = nearViewport || explicit;
+		const generate = shouldLoad;
+		const request = requestVersion;
+		if (!en || !visible || !k || k === 'audio' || k === 'text' || k === 'kb' || !(canReadExplorerBlob(d) || d.thumbUrl)) {
+			untrack(revoke); loading = false; failed = false; return;
 		}
-
-		// untrack: reading `url` / `loading` here would subscribe the effect to
-		// its own writes. A failed decode used to loop: fail → loading=false →
-		// re-run → new blob URL → revoke → ERR_FILE_NOT_FOUND, and the row
-		// stopped taking clicks.
-		if (untrack(() => loadedId === e.id && loadedDriver === d && loadedDim === dim && loadedName === e.name && loadedToken === token && Boolean(url) && !loading)) return;
-		if (untrack(() => failedId === e.id && failedToken === token)) return;
-
-		let cancelled = false;
-		untrack(revoke);
-		loading = true;
-		failed = false;
-		loadedId = '';
-
-		function show(src: string, from: 'cache' | 'fresh') {
-			if (cancelled) {
-				if (src.startsWith('blob:')) URL.revokeObjectURL(src);
-				return false;
-			}
-			url = src;
-			source = from;
-			loadedId = e.id;
-			loadedDriver = d;
-			loadedDim = dim;
-			loadedName = e.name;
-			loadedToken = token;
-			failedId = '';
-			failedToken = null;
-			loading = false;
-			return true;
+		if (untrack(() => loaded?.id === e.id && loaded.driver === d && loaded.dim === dim && loaded.name === e.name && loaded.token === token && Boolean(url))) return;
+		if (failedLoad?.id === e.id && failedLoad.driver === d && failedLoad.dim === dim && failedLoad.token === token && failedLoad.request === request && failedLoad.until > Date.now()) {
+			failed = true; loading = false; return;
 		}
+		const changing = observed?.id === e.id && observed.driver === d && observed.token !== token;
+		observed = { id: e.id, driver: d, token };
+		const controller = new AbortController();
+		const signal = controller.signal;
+		loading = true; failed = false;
+		// Keep the old poster until the new stable version arrives.
+		if (untrack(() => loaded?.id !== e.id || loaded.driver !== d)) untrack(revoke);
+		const timer = setTimeout(() => { void load(); }, changing && !explicit ? 750 : 0);
 
-		function fail() {
-			if (cancelled) return;
-			failedId = e.id;
-			failedToken = token;
-			failed = true;
-			loading = false;
+		function show(blob: Blob, from: 'cache' | 'fresh') {
+			if (signal.aborted) return;
+			revoke();
+			url = URL.createObjectURL(blob); source = from;
+			loaded = { ...e, driver: d, dim, token }; loading = false; failed = false;
+			failedLoad = null;
 		}
-
-		(async () => {
+		async function load() {
+			let key: string | null = null;
 			try {
-				const key = await thumbCacheKey(d, snap, dim);
-				if (cancelled) return;
-				if (key) {
-					const cached = await recallThumb(key);
-					if (cancelled) return;
-					if (cached) {
-						show(URL.createObjectURL(cached), 'cache');
-						return;
-					}
-				}
-				// Only image and video have host thumbs; pdf and others would
-				// just get a benign 415 per row before the real path below.
-				if ((k === 'image' || k === 'video') && d.thumbUrl) {
-					try {
-						const loc = await d.thumbUrl(e.id, { maxDim: dim });
-						if (cancelled) return;
-						if (loc?.url) {
-							const src = key
-								? await fetchHostThumb(loc.url, key)
-								: await embedMediaUrl(loc.url);
-							if (!src || !show(src, 'fresh')) return;
-							return;
+				key = await thumbCacheKey(d, snap, dim);
+				if (signal.aborted) return;
+				const cached = key ? await recallThumbResult(key) : null;
+				if (signal.aborted) return;
+				if (cached instanceof Blob) { show(cached, 'cache'); return; }
+				if (cached === 'failed' && !explicit) { revoke(); failed = true; loading = false; return; }
+				if (!generate) { revoke(); loading = false; return; }
+				const blob = await sharedPreviewWork(key, signal, async (workSignal) => {
+					if ((k === 'image' || k === 'video') && d.thumbUrl) {
+						try {
+							const loc = await d.thumbUrl(e.id, { maxDim: dim });
+							workSignal.throwIfAborted();
+							if (loc?.url) {
+								// The HTTP cache must share the file-version identity of IndexedDB.
+								const remote = versionedThumbUrl(d, loc.url, token);
+								const response = await fetch(remote, { ...withLocalAddressSpace(remote), signal: workSignal });
+								if (!response.ok) throw new Error(`Could not load preview (${response.status})`);
+								const poster = await response.blob();
+								workSignal.throwIfAborted();
+								if (key) void rememberThumb(key, poster);
+								return poster;
+							}
+						} catch (err) {
+							workSignal.throwIfAborted();
+							if (!allowOriginal) throw err;
 						}
-					} catch {
-						/* fall through */
+						// A missing host poster must not download a remote original automatically.
+						if (!allowOriginal) throw new Error('No host poster');
 					}
-				}
-				if (k === 'video' && d.thumbUrl && !force) {
-					// Video row icons come from the host poster (monitor
-					// `/v1/fs/thumb` extracts one frame with ffmpeg). No poster
-					// support — cap off, ffmpeg missing, hostile clip — means
-					// the film icon, never a whole-file download just to draw
-					// a 96px icon. (`force` is the real preview pane, where the
-					// user asked for the file.)
-					fail();
-					return;
-				}
-				if (k === 'image' && d.downloadUrl) {
+					const original = await readExplorerBlob(d, e.id, { signal: workSignal });
+					workSignal.throwIfAborted();
+					const src = await generateThumbnail(original, k!, dim, e.name);
 					try {
-						const loc = await d.downloadUrl(e.id);
-						if (cancelled) return;
-						if (loc?.url && mediaSrcIsEmbeddable(loc.url)) {
-							show(loc.url, 'fresh');
-							return;
-						}
-					} catch {
-						/* fall through to bytes */
-					}
-				}
-				const blob = await readExplorerBlob(d, e.id);
-				if (cancelled) return;
-				if (!blob) {
-					fail();
-					return;
-				}
-				const thumbUrl = await generateThumbnail(blob, k, dim, e.name);
-				if (cancelled) {
-					if (thumbUrl.startsWith('blob:')) URL.revokeObjectURL(thumbUrl);
-					return;
-				}
-				if (key) {
-					const preview = await blobFromThumbSrc(thumbUrl);
-					if (preview) void rememberThumb(key, preview);
-				}
-				show(thumbUrl, 'fresh');
+						const poster = await blobFromThumbSrc(src);
+						workSignal.throwIfAborted();
+						if (!poster) throw new Error('Could not render preview');
+						if (key) void rememberThumb(key, poster);
+						return poster;
+					} finally { if (src.startsWith('blob:')) URL.revokeObjectURL(src); }
+				});
+				show(blob, 'fresh');
 			} catch {
-				fail();
+				if (signal.aborted) return;
+				if (key) void rememberThumbFailure(key);
+				failedLoad = { id: e.id, driver: d, dim, token, request, until: Date.now() + 60_000 };
+				revoke();
+				failed = true; loading = false;
 			}
-		})();
-
-		return () => {
-			cancelled = true;
-		};
+		}
+		return () => { clearTimeout(timer); controller.abort(); };
 	});
 
-	let fallbackIcon = $derived(
-		kind ? previewKindIcon(kind) : ('file' as FeIconName)
-	);
-	/** Non-picture tiles: type glyph plus the extension, as one centered group. */
+	let fallbackIcon = $derived(kind ? previewKindIcon(kind) : ('file' as FeIconName));
 	let typeMark = $derived(!kind || (kind !== 'image' && kind !== 'video' && kind !== 'pdf'));
 	const markIcon = $derived(Math.min(28, Math.max(14, Math.round(maxDim * 0.34))));
 	const markLabel = $derived(Math.min(13, Math.max(8, Math.round(maxDim * 0.14))));
-
 	function requestLoad(e: MouseEvent) {
-		e.stopPropagation();
-		e.preventDefault();
-		requestedId = entry.id;
+		e.stopPropagation(); e.preventDefault(); requestedId = entry.id; requestVersion++;
 	}
 </script>
 
-<div class="fe-thumb" style:--fe-thumb-max="{maxDim}px" data-testid="fe-thumb">
+<div class="fe-thumb" use:observePreviewVisibility={(visible) => nearViewport = visible} style:--fe-thumb-max="{maxDim}px" data-testid="fe-thumb">
 	{#if url}
 		<img class="fe-thumb-img" src={url} alt={entry.name} loading="lazy" data-thumb-source={source} />
 		{#if kind === 'video'}
@@ -271,10 +154,10 @@
 			<div class="fe-thumb-spinner"></div>
 		</div>
 	{:else if failed}
-		<div class="fe-thumb-fallback">
+		<button type="button" class="fe-thumb-load fe-thumb-fallback" data-testid="fe-thumb-retry" aria-label="Retry preview" title="Retry preview" onclick={requestLoad}>
 			<FeIcon name={fallbackIcon} size={Math.min(maxDim * 0.4, 32)} />
-		</div>
-	{:else if kind && kind !== 'text' && kind !== 'audio' && enabled && !shouldLoad}
+		</button>
+	{:else if kind && kind !== 'text' && kind !== 'audio' && kind !== 'kb' && enabled && !shouldLoad}
 		<button
 			type="button"
 			class="fe-thumb-load"

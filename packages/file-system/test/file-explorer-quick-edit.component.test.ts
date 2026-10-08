@@ -37,6 +37,37 @@ beforeEach(() => {
 });
 
 describe('preview quick-edit actions across connections', () => {
+	it('refreshes the open Monitor preview pane after Quick edit overwrites the selected image', async () => {
+		persistKv.setItem('fe:previewDock', 'bottom');
+		const { driver } = fixture('monitor', 'upload');
+		let entry: ExplorerEntry = { id: 'photo.png', name: 'photo.png', parentId: null, kind: 'file', fileType: 'image', size: 3, updatedAt: 1 };
+		let changed: (() => void) | undefined;
+		driver.list = async () => ({ entries: [entry], truncated: false });
+		driver.thumbUrl = async () => ({ url: `${location.origin}/thumb?size=1024` });
+		driver.subscribeChanges = (listener) => { changed = listener; return () => { changed = undefined; }; };
+		driver.upload = async () => {
+			entry = { ...entry, updatedAt: 2 };
+			changed?.();
+			return entry;
+		};
+		let context: QuickEditFileContext | undefined;
+		render(FileExplorer, { props: { driver, mode: 'manage', onQuickEditImage: (_entry, ctx) => { context = ctx; } } });
+		await waitFor(() => expect(document.querySelector('[data-testid="fe-file-row"][data-name="photo.png"]')).not.toBeNull());
+		await fireEvent.click(document.querySelector('[data-testid="fe-file-row"][data-name="photo.png"]')!);
+		const dock = await screen.findByTestId('fe-preview-dock');
+		const version = () => {
+			const src = dock.querySelector('img.fe-float-image')?.getAttribute('src');
+			return src ? new URL(src).searchParams.get('v') : null;
+		};
+		await waitFor(() => expect(version()).toBe('m:3:1'));
+		await fireEvent.click(within(dock).getByTestId('fe-preview-actions'));
+		await fireEvent.click(screen.getByTestId('fe-file-preview-quick-edit'));
+		expect(context).toBeDefined();
+		await context!.save(new File(['new'], 'photo.png', { type: 'image/png' }));
+		await waitFor(() => expect(version()).toBe('m:3:2'));
+		expect(screen.getByTestId('fe-preview-dock')).toBe(dock);
+	});
+
 	for (const [connection, method] of connections) {
 		for (const [name, kind] of media) {
 			it(`${connection} offers ${kind} Quick edit and saves through ${method}`, async () => {

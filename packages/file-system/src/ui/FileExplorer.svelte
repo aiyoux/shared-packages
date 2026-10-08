@@ -142,6 +142,8 @@
 		hasRasterThumbnail
 	} from './feThumbnails.js';
 	import { classifyFolder, detectProject, findProjectRoot, type FolderMark } from './detectProject.js';
+	import { observePreviewVisibility, schedulePreviewWork, seedPreviewFolderEntries, invalidatePreviewFolders, invalidatePreviewFolder } from './previewWork.js';
+	import { createListingRefresh } from './listingRefresh.js';
 	import FeConfirmDialog from './FeConfirmDialog.svelte';
 	import {
 		emptyTrashCopy,
@@ -1882,6 +1884,10 @@
 		silent = false
 	) {
 		const gen = ++refreshGen;
+		const listingDriver = driver;
+		const listingParentId = parentId;
+		const hasFolderVersions = listingDriver.id === 'monitor' || listingDriver.id === 'disk';
+		if (!silent || !hasFolderVersions) invalidatePreviewFolders(listingDriver);
 		// Any newer refresh subsumes a queued retry.
 		clearSilentRetry();
 		if (manageBusy && !silent) beginListBusy({ immediate: busyMode === 'immediate' });
@@ -1889,15 +1895,16 @@
 		if (!silent) error = '';
 		try {
 			// The SSE stream arriving *is* the liveness probe for a silent refresh.
-			if (!silent) await driver.ready();
+			if (!silent) await listingDriver.ready();
 			if (gen !== refreshGen) return;
 
-			const result = await driver.list({ parentId });
+			const result = await listingDriver.list({ parentId: listingParentId });
 			const nextNodesRaw = result.entries;
 			const nextTruncated = result.truncated;
-			const nextCrumbs = parentId ? await driver.getPath(parentId) : [];
+			const nextCrumbs = listingParentId ? await listingDriver.getPath(listingParentId) : [];
 			let nextNodes = nextNodesRaw;
 			if (gen !== refreshGen) return;
+			seedPreviewFolderEntries(listingDriver, listingParentId, result.entries, result.truncated);
 
 			if (hideIncompatible && accept?.length) {
 				nextNodes = nextNodes.filter(
@@ -1905,6 +1912,7 @@
 				);
 			}
 			// Commit data while overlay still covers the list (when shown)
+			const nodesBeforeRefresh = nodes;
 			nodes = nextNodes;
 			listTruncated = nextTruncated;
 			breadcrumbs = nextCrumbs;
@@ -1946,21 +1954,13 @@
 			} else if (packedRows.size) {
 				packedRows = new Map();
 			}
-			const folders = nextNodes.filter((n) => n.kind === 'folder');
-			const markGen = gen;
-			if (folders.length) {
-				void Promise.all(folders.map(async (f) => [f.id, await classifyFolder(driver, f)] as const))
-					.then((pairs) => {
-						if (markGen !== refreshGen) return;
-						folderMarks = new Map(pairs);
-					})
-					.catch(() => {
-						if (markGen !== refreshGen) return;
-						folderMarks = new Map();
-					});
-			} else if (folderMarks.size) {
-				folderMarks = new Map();
+			// Badges are probed only for visible rows. Keep marks for unchanged folders.
+			const oldFolders = new Map(nodesBeforeRefresh.filter((n) => n.kind === 'folder').map((n) => [n.id, n.updatedAt]));
+			const sameFolders = new Set(nextNodes.filter((n) => n.kind === 'folder' && hasFolderVersions && silent && oldFolders.has(n.id) && oldFolders.get(n.id) === n.updatedAt).map((n) => n.id));
+			for (const n of nextNodes) {
+				if (n.kind === 'folder' && !sameFolders.has(n.id)) invalidatePreviewFolder(listingDriver, n.id);
 			}
+			folderMarks = new Map([...folderMarks].filter(([id]) => sameFolders.has(id)));
 			if (focusIndex >= focusableEntries.length)
 				focusIndex = focusableEntries.length ? focusableEntries.length - 1 : -1;
 			silentRetries = 0;
@@ -2018,22 +2018,61 @@
 		const d = driver;
 		const scopeId = parentId;
 		if (!d.subscribeChanges) return;
-		const unsub = d.subscribeChanges(
-			() => {
-				// Empty trash owns its list until it finishes — live ticks were the flash.
-				if (emptyTrashRunning) return;
-				// Archive writes thousands of small files; live re-list freezes Cancel.
-				if (archiveJobRunning) return;
-				// Silent — keeps selection, and paints no busy chrome for a change the
-				// user did not initiate.
-				void refresh(true, 'delay', true);
-				if (trashOpen) void refreshTrash();
-			},
-			{ parentId: scopeId }
-		);
+		const refreshQueue = createListingRefresh(async () => {
+			if (driver !== d || parentId !== scopeId || emptyTrashRunning || archiveJobRunning) return;
+			await refresh(true, 'delay', true);
+			if (trashOpen) await refreshTrash();
+		});
+		const unsub = d.subscribeChanges(() => refreshQueue.request(), { parentId: scopeId });
 		return () => {
-			unsub();
-			clearSilentRetry();
+			unsub(); refreshQueue.stop(); clearSilentRetry();
+		};
+	});
+
+	const pendingFolderMarks = new Map<string, AbortController>();
+	const visibleFolders = new Set<string>();
+	function observeFolderMark(node: Element, options: { entry: ExplorerEntry; version: number; placeholder: boolean }) {
+		let current = options;
+		const callback = (visible: boolean) => { if (!current.placeholder) folderMarkVisibility(current.entry, visible); };
+		const observer = observePreviewVisibility(node, callback);
+		return {
+			update(next: typeof options) { current = next; observer.update(callback); },
+			destroy() { callback(false); observer.destroy(); }
+		};
+	}
+	function folderMarkVisibility(entry: ExplorerEntry, visible: boolean) {
+		if (entry.kind !== 'folder') return;
+		if (visible) { visibleFolders.add(entry.id); loadVisibleFolderMark(entry); }
+		else {
+			visibleFolders.delete(entry.id);
+			pendingFolderMarks.get(entry.id)?.abort();
+			pendingFolderMarks.delete(entry.id);
+		}
+	}
+	function loadVisibleFolderMark(entry: ExplorerEntry) {
+		if (entry.kind !== 'folder' || folderMarks.has(entry.id) || pendingFolderMarks.has(entry.id)) return;
+		const d = driver;
+		const atParent = parentId;
+		const gen = refreshGen;
+		const controller = new AbortController();
+		pendingFolderMarks.set(entry.id, controller);
+		void schedulePreviewWork(controller.signal, () => classifyFolder(d, entry)).then((mark) => {
+			if (controller.signal.aborted || gen !== refreshGen || driver !== d || parentId !== atParent || !nodes.some((n) => n.id === entry.id && n.updatedAt === entry.updatedAt)) return;
+			folderMarks = new Map(folderMarks).set(entry.id, mark);
+		}).catch(() => {}).finally(() => {
+			if (pendingFolderMarks.get(entry.id) === controller) pendingFolderMarks.delete(entry.id);
+			if (!controller.signal.aborted && gen !== refreshGen && driver === d && parentId === atParent && visibleFolders.has(entry.id)) {
+				const current = nodes.find((n) => n.id === entry.id);
+				if (current) loadVisibleFolderMark(current);
+			}
+		});
+	}
+	$effect(() => {
+		void driver; void parentId;
+		return () => {
+			for (const controller of pendingFolderMarks.values()) controller.abort();
+			pendingFolderMarks.clear();
+			visibleFolders.clear();
 		};
 	});
 
@@ -5325,6 +5364,7 @@
 				<!-- svelte-ignore a11y_no_static_element_interactions -->
 				<div
 					class="fe-row"
+					use:observeFolderMark={{ entry: n, version: treeVersion, placeholder: row.placeholder }}
 					class:folder={n.kind === 'folder'}
 					class:file={n.kind === 'file'}
 					class:incompatible={!actionable && n.kind === 'file'}
@@ -5389,7 +5429,7 @@
 									enabled={showPreview}
 									fallbackSize={Math.round(iconSize * 0.5)}
 									maxDim={Math.max(32, Math.min(128, Math.round(iconSize * 0.5)))}
-								/>
+								version={driver.id === 'monitor' || driver.id === 'disk' ? n.updatedAt : treeVersion} />
 							{:else if rasterThumb}
 								<FeThumbnail entry={n} {driver} maxDim={thumbFetchDim} enabled={showPreview} />
 							{:else if n.kind === 'file' && !hasRasterThumbnail(getPreviewKind(n))}

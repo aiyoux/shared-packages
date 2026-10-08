@@ -168,6 +168,63 @@ describe('preview selection races', () => {
 });
 
 describe('FeFloatingPreview', () => {
+	it.each(['popup', 'dock'] as const)('reloads an edited image in the %s preview while retaining unchanged content', async (variant) => {
+		const readBlob = vi.fn(async () => new Blob(['image'], { type: 'image/png' }));
+		const driver = { ...driverWith(new Blob()), readBlob };
+		const entry = { ...svgEntry, name: 'pic.png', generation: 1 };
+		const props = { entry, driver, variant, onClose: () => {} };
+		const view = render(FeFloatingPreview, { props });
+		const image = () => document.querySelector('img.fe-float-image');
+		await waitFor(() => expect(image()).not.toBeNull());
+		const original = image()!.getAttribute('src');
+		// Metadata updates do not change the bytes generation.
+		await view.rerender({ ...props, entry: { ...entry, updatedAt: 123 } });
+		expect(readBlob).toHaveBeenCalledTimes(1);
+		expect(image()!.getAttribute('src')).toBe(original);
+		await view.rerender({ ...props, entry: { ...entry, generation: 2 } });
+		await waitFor(() => expect(readBlob).toHaveBeenCalledTimes(2));
+		await waitFor(() => expect(image()?.getAttribute('src')).toBeTruthy());
+		expect(image()!.getAttribute('src')).not.toBe(original);
+	});
+
+	it.each(['popup', 'dock'] as const)('versions Monitor image URLs after a same-size overwrite in the %s preview', async (variant) => {
+		const thumbUrl = vi.fn(async () => ({ url: `${location.origin}/thumb?size=1024` }));
+		const download = vi.fn(async () => new Blob(['original']));
+		const driver = { ...driverWith(new Blob()), id: 'monitor', readBlob: undefined, download, thumbUrl };
+		const entry = { ...svgEntry, name: 'pic.png', updatedAt: 1 };
+		const props = { entry, driver, variant, onClose: () => {} };
+		const view = render(FeFloatingPreview, { props });
+		const imageUrl = () => new URL(document.querySelector('img.fe-float-image')!.getAttribute('src')!);
+		await waitFor(() => expect(document.querySelector('img.fe-float-image')).not.toBeNull());
+		expect(imageUrl().searchParams.get('v')).toBe('m:40:1');
+		expect(imageUrl().searchParams.get('size')).toBe('1024');
+		await view.rerender({ ...props, entry: { ...entry, updatedAt: 2 } });
+		await waitFor(() => expect(thumbUrl).toHaveBeenCalledTimes(2));
+		await waitFor(() => expect(imageUrl().searchParams.get('v')).toBe('m:40:2'));
+		expect(download).not.toHaveBeenCalled();
+	});
+
+	it.each(['resolve', 'reject'] as const)('ignores an older image version that later %ss', async (outcome) => {
+		const old = deferred<Blob>();
+		const edited = new Blob(['edited'], { type: 'image/png' });
+		const readBlob = vi.fn().mockReturnValueOnce(old.promise).mockResolvedValue(edited);
+		const driver = { ...driverWith(new Blob()), readBlob };
+		const props = { entry: { ...svgEntry, name: 'pic.png', generation: 1 }, driver, variant: 'dock' as const, onClose: () => {} };
+		const view = render(FeFloatingPreview, { props });
+		await waitFor(() => expect(readBlob).toHaveBeenCalledTimes(1));
+		await view.rerender({ ...props, entry: { ...props.entry, generation: 2 } });
+		await waitFor(() => expect(readBlob).toHaveBeenCalledTimes(2));
+		await waitFor(() => expect(view.container.querySelector('img.fe-float-image')).not.toBeNull());
+		const src = view.container.querySelector('img.fe-float-image')!.getAttribute('src');
+		await act(async () => {
+			if (outcome === 'resolve') old.resolve(new Blob(['old']));
+			else old.reject(new Error('Old read failed'));
+			await finishReads();
+		});
+		expect(view.container.querySelector('img.fe-float-image')!.getAttribute('src')).toBe(src);
+		expect(view.container.querySelector('.fe-float-error')).toBeNull();
+	});
+
 	it.each(['audio', 'video'] as const)('reports an unsupported local %s decoder instead of leaving a dead player', async (kind) => {
 		const entry: ExplorerEntry = { id: 'unsupported-media', kind: 'file', parentId: null, name: kind === 'audio' ? 'audio.aiff' : 'video.avi', fileType: kind };
 		render(FeFloatingPreview, { props: { entry, driver: driverWith(new Blob(['unsupported'])), variant: 'popup', onClose: () => {} } });

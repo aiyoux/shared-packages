@@ -12,15 +12,19 @@
 		entry,
 		driver,
 		maxChars = 16_000,
-		variant = 'snippet'
+		variant = 'snippet',
+		format = 'text'
 	}: {
 		entry: ExplorerEntry;
 		driver: ExplorerDriver;
 		maxChars?: number;
 		variant?: 'snippet' | 'full';
+		/** Knowledge Base pages show their title and content instead of the JSON envelope. */
+		format?: 'text' | 'kb';
 	} = $props();
 
 	let text = $state('');
+	let title = $state('');
 	let truncated = $state(false);
 	let loading = $state(true);
 	let error = $state('');
@@ -30,6 +34,7 @@
 		const e = entry;
 		const d = driver;
 		const cap = maxChars;
+		const kb = format === 'kb';
 		if (!canReadExplorerBlob(d)) {
 			loading = false;
 			error = 'Preview not available for this file type';
@@ -39,6 +44,7 @@
 		loading = true;
 		error = '';
 		text = '';
+		title = '';
 		truncated = false;
 		binary = false;
 		void (async () => {
@@ -46,7 +52,8 @@
 				// A remote file sends only its start: a character is at most 4
 				// UTF-8 bytes, so this always covers what the preview shows.
 				const want = Math.max(RANGE_MIN_BYTES, cap * 4);
-				const part = d.rangeUrl ? await readExplorerRange(d, e.id, 0, want - 1).catch(() => null) : null;
+				// A KB page needs its complete JSON tree before extracting readable content.
+				const part = !kb && d.rangeUrl ? await readExplorerRange(d, e.id, 0, want - 1).catch(() => null) : null;
 				if (cancelled) return;
 				if (part) {
 					const more = (part.total ?? e.size ?? 0) > part.bytes.byteLength;
@@ -63,6 +70,19 @@
 				if (cancelled) return;
 				if (!blob) {
 					text = '';
+					loading = false;
+					return;
+				}
+				if (kb) {
+					const { parseKb, plaintext } = await import('@shared-packages/doc-model');
+					const raw = await blob.text();
+					if (cancelled) return;
+					if (!raw.trim()) { loading = false; return; }
+					const page = parseKb(raw);
+					const body = plaintext(page);
+					title = page.title;
+					text = body.slice(0, cap);
+					truncated = body.length > cap;
 					loading = false;
 					return;
 				}
@@ -88,7 +108,9 @@
 <div
 	class="fe-text-preview"
 	class:full={variant === 'full'}
+	class:kb={format === 'kb'}
 	data-testid={variant === 'full' ? 'fe-float-text' : 'fe-preview-text'}
+	data-format={format}
 	data-truncated={truncated ? 'true' : undefined}
 	data-binary={binary ? 'true' : undefined}
 >
@@ -98,9 +120,10 @@
 		<div class="fe-text-status error">{error}</div>
 	{:else if binary}
 		<div class="fe-text-status">This file is not plain text</div>
-	{:else if !text}
+	{:else if !text && !title}
 		<div class="fe-text-status muted">Empty file</div>
 	{:else}
+		{#if title}<h2 class="fe-kb-title">{title}</h2>{/if}
 		<pre class="fe-text-body">{text}</pre>
 		{#if truncated}
 			<p class="fe-text-trunc">Showing the first {maxChars.toLocaleString()} characters</p>
@@ -143,6 +166,14 @@
 		font-size: 0.85rem;
 		color: var(--text-secondary, #aaa);
 	}
+	.fe-kb-title {
+		margin: 0;
+		padding: 0.75rem 0.65rem 0;
+		font-size: 1.1rem;
+		color: var(--text-primary, #eee);
+	}
+	.full .fe-kb-title { padding: 1rem 1.25rem 0; }
+	.kb .fe-text-body { font-family: inherit; }
 	.fe-text-status.error {
 		color: var(--cat-red-soft, #e66);
 	}

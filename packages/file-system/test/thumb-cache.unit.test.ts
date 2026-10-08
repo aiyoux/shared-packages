@@ -10,7 +10,9 @@ import {
 	resolveDiskGrantId,
 	setThumbCacheLimitsForTests,
 	thumbCacheKey,
-	thumbContentToken
+	thumbContentToken,
+	recallThumbResult,
+	rememberThumbFailure
 } from '../src/ui/thumbCache.ts';
 
 const caps: ExplorerDriver['capabilities'] = {
@@ -149,4 +151,78 @@ describe('thumb cache', () => {
 		assert.equal(await recallThumb(keys[0]!), null);
 		assert.equal(await (await recallThumb(keys[2]!))?.text(), 'c');
 	});
+	it('keeps 1000 unchanged thumbnails across a browser memory reset', async () => {
+		const blob = new Blob([new Uint8Array(1024)], { type: 'image/jpeg' });
+		await Promise.all(Array.from({ length: 1000 }, (_, i) => rememberThumb(`monitor:large:${i}`, blob)));
+		forgetThumbMemoryForTests();
+		const hits = await Promise.all(Array.from({ length: 1000 }, (_, i) => recallThumb(`monitor:large:${i}`)));
+		assert.equal(hits.filter(Boolean).length, 1000);
+	});
+
+	it('persistent reads protect recently used thumbnails from eviction', async () => {
+		setThumbCacheLimitsForTests({ idbEntries: 3 });
+		const blob = new Blob(['x']);
+		for (const key of ['a', 'b', 'c']) await rememberThumb(key, blob);
+		forgetThumbMemoryForTests();
+		assert.ok(await recallThumb('a'));
+		await rememberThumb('d', blob);
+		forgetThumbMemoryForTests();
+		assert.ok(await recallThumb('a'));
+		assert.equal(await recallThumb('b'), null);
+	});
+
+	it('accounts for replacements and enforces the persistent byte budget', async () => {
+		setThumbCacheLimitsForTests({ idbBytes: 10 });
+		await rememberThumb('a', new Blob(['1234']));
+		await rememberThumb('a', new Blob(['12']));
+		await rememberThumb('b', new Blob(['12345678']));
+		forgetThumbMemoryForTests();
+		assert.equal((await recallThumb('a'))?.size, 2);
+		await rememberThumb('c', new Blob(['123']));
+		forgetThumbMemoryForTests();
+		assert.ok(await recallThumb('a'));
+		assert.equal(await recallThumb('b'), null);
+		assert.ok(await recallThumb('c'));
+	});
+
+	it('remembers failed posters across memory resets and expires them', async (t) => {
+		const now = Date.now();
+		t.mock.timers.enable({ apis: ['Date'], now });
+		await rememberThumbFailure('monitor:bad-video');
+		forgetThumbMemoryForTests();
+		assert.equal(await recallThumbResult('monitor:bad-video'), 'failed');
+		t.mock.timers.tick(61_000);
+		assert.equal(await recallThumbResult('monitor:bad-video'), null);
+	});
+
+	it('upgrades an existing persistent cache without losing thumbnails or its byte accounting', async () => {
+		const db = await new Promise<IDBDatabase>((resolve, reject) => {
+			const req = indexedDB.open('sp-fe-thumb-cache', 1);
+			req.onupgradeneeded = () => {
+				req.result.createObjectStore('thumbs', { keyPath: 'key' });
+				const meta = req.result.createObjectStore('thumbMeta', { keyPath: 'key' });
+				meta.createIndex('touched', 'touched');
+				req.result.createObjectStore('diskGrants', { keyPath: 'id' });
+			};
+			req.onsuccess = () => resolve(req.result);
+			req.onerror = () => reject(req.error);
+		});
+		await new Promise<void>((resolve, reject) => {
+			const tx = db.transaction(['thumbs', 'thumbMeta'], 'readwrite');
+			for (const [i, key] of ['old-a', 'old-b'].entries()) {
+				tx.objectStore('thumbs').put({ key, blob: new Blob(['1234']) });
+				tx.objectStore('thumbMeta').put({ key, bytes: 4, touched: i + 1 });
+			}
+			tx.oncomplete = () => resolve(); tx.onabort = () => reject(tx.error);
+		});
+		db.close();
+		setThumbCacheLimitsForTests({ idbBytes: 8 });
+		assert.ok(await recallThumb('old-a'));
+		await rememberThumb('new', new Blob(['1234']));
+		forgetThumbMemoryForTests();
+		assert.ok(await recallThumb('old-a'));
+		assert.equal(await recallThumb('old-b'), null);
+		assert.ok(await recallThumb('new'));
+	});
+
 });

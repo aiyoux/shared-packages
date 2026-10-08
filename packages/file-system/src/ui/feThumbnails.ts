@@ -12,7 +12,7 @@ import { withTimeout } from '@shared-packages/ui/async';
 import type { ExplorerEntry } from './explorerDriver.js';
 import type { FeIconName } from './feIcons.js';
 
-export type PreviewKind = 'image' | 'video' | 'audio' | 'pdf' | 'text';
+export type PreviewKind = 'image' | 'video' | 'audio' | 'pdf' | 'text' | 'kb';
 
 const IMAGE_EXTS = ['.png', '.jpg', '.jpeg', '.webp', '.gif', '.svg', '.avif', '.bmp', '.ico'];
 const VIDEO_EXTS = ['.mp4', '.webm', '.mov', '.m4v', '.mkv', '.ogv'];
@@ -52,6 +52,7 @@ function ext(name: string): string {
 }
 
 export function previewKindFromExt(e: string): PreviewKind | null {
+	if (e === '.kb') return 'kb';
 	if (IMAGE_EXTS.includes(e)) return 'image';
 	if (VIDEO_EXTS.includes(e)) return 'video';
 	if (AUDIO_EXTS.includes(e)) return 'audio';
@@ -71,6 +72,7 @@ export function getPreviewKind(entry: ExplorerEntry): PreviewKind | null {
 	if (!entry || entry.kind !== 'file') return null;
 	const fromName = previewKindFromExt(ext(entry.name));
 	if (fromName) return fromName;
+	if (entry.fileType === 'kb') return 'kb';
 	if (entry.fileType === 'image') return 'image';
 	if (entry.fileType === 'video') return 'video';
 	if (entry.fileType === 'audio') return 'audio';
@@ -136,7 +138,7 @@ export function fileTypeIcon(entry: ExplorerEntry): FeIconName {
 	// Extension wins over a generic text MIME. A zip body stored as text/plain
 	// is still an archive.
 	if (ARCHIVE_EXT.has(fileExtensionLabel(entry.name))) return 'file-archive';
-	if (kind === 'text' || kind === 'pdf') return 'file-text';
+	if (kind === 'text' || kind === 'pdf' || kind === 'kb') return 'file-text';
 	return 'file';
 }
 
@@ -424,5 +426,7 @@ export async function generateThumbnail(
 			throw new Error('Audio has no raster thumbnail');
 		case 'text':
 			throw new Error('Text has no raster thumbnail');
+		case 'kb':
+			throw new Error('Knowledge Base pages have no raster thumbnail');
 	}
 }
