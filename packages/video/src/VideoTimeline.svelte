@@ -303,7 +303,7 @@
 								src={url}
 								alt=""
 								draggable="false"
-								style="left: {cell.left * 100}%; width: {cell.width * 100}%"
+								style="left: {cell.left * vp.contentPx}px; width: {cell.width * vp.contentPx}px"
 							/>
 						{/if}
 					{/each}
