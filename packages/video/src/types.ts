@@ -50,7 +50,7 @@ export type VideoAudioUpscaler = {
 	pollProgress: (id: string, onProgress: (n: number) => void) => () => void;
 	upsample: (
 		blob: Blob,
-		opts: { engine?: string; denoise?: boolean; id: string }
+		opts: { engine?: string; denoise?: boolean; chunkSeconds?: number; overlapSeconds?: number; id: string }
 	) => Promise<Blob>;
 };
 

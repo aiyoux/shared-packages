@@ -64,6 +64,8 @@ export type MonitorToolsProbe = {
 	audio: boolean;
 	/** `capabilities.tools.pytorch` — the UniverSR/AudioSR runtime is configured. */
 	pytorch: boolean;
+	/** UniverSR chunk settings are honored by this daemon. */
+	audioChunking?: boolean;
 	/** `capabilities.jobs` — the unified lifecycle (W7); false → NDJSON fallback. */
 	jobsApi: boolean;
 	/** General FFmpeg export jobs; absent on older monitors. */
@@ -98,7 +100,7 @@ export async function probeToolsFeature(
 	baseUrl: string,
 	fetchImpl: typeof fetch = fetch,
 	signal?: AbortSignal
-): Promise<Pick<MonitorToolsProbe, 'rife' | 'srmd' | 'audio' | 'pytorch' | 'jobsApi' | 'toolOffers' | 'videoExport' | 'audioExport'>> {
+): Promise<Pick<MonitorToolsProbe, 'rife' | 'srmd' | 'audio' | 'pytorch' | 'audioChunking' | 'jobsApi' | 'toolOffers' | 'videoExport' | 'audioExport'>> {
 	const url = `${baseUrl.replace(/\/$/, '')}/v1/meta`;
 	const res = await fetchImpl(url, withLocalAddressSpace(url, { signal }));
 	if (!res.ok) {
@@ -106,7 +108,7 @@ export async function probeToolsFeature(
 	}
 	const meta = (await res.json()) as {
 		capabilities?: {
-			tools?: { rife?: boolean; srmd?: boolean; audio?: boolean; pytorch?: boolean; videoExport?: boolean; audioExport?: boolean };
+			tools?: { rife?: boolean; srmd?: boolean; audio?: boolean; pytorch?: boolean; audio_chunking?: boolean; videoExport?: boolean; audioExport?: boolean };
 			jobs?: boolean;
 		};
 	};
@@ -117,6 +119,7 @@ export async function probeToolsFeature(
 		srmd: !!tools?.srmd,
 		audio: !!tools?.audio,
 		pytorch: !!tools?.pytorch,
+		audioChunking: tools?.audio_chunking === true,
 		videoExport: tools?.videoExport === true,
 		audioExport: tools?.audioExport === true,
 		jobsApi: meta.capabilities?.jobs === true
@@ -282,6 +285,7 @@ export async function resolveSelectedToolsMonitor(
 		srmd: caps.srmd,
 		audio: caps.audio,
 		pytorch: caps.pytorch,
+		audioChunking: caps.audioChunking,
 		jobsApi: caps.jobsApi,
 		...(caps.toolOffers ? { toolOffers: caps.toolOffers } : {}),
 		pickModelId: ref.modelId
@@ -793,6 +797,7 @@ export async function listRunnableAudioModels(
 			srmd: caps.srmd,
 			audio: caps.audio,
 			pytorch: caps.pytorch,
+			audioChunking: caps.audioChunking,
 			jobsApi: caps.jobsApi,
 			...(caps.toolOffers ? { toolOffers: caps.toolOffers } : {})
 		};
@@ -821,7 +826,7 @@ export type MonitorAudioTools = {
 	pollProgress: (id: string, onProgress: (n: number) => void) => () => void;
 	upsample: (
 		blob: Blob,
-		opts: { engine?: 'lavasr' | 'novasr' | string; denoise?: boolean; id: string; signal?: AbortSignal }
+		opts: { engine?: 'lavasr' | 'novasr' | string; denoise?: boolean; chunkSeconds?: number; overlapSeconds?: number; id: string; signal?: AbortSignal }
 	) => Promise<Blob>;
 	cancel: (id: string) => Promise<void>;
 };
@@ -846,11 +851,14 @@ export function createMonitorAudioTools(options: MonitorAudioToolsOptions = {}):
 		const id = monitor.pickModelId ?? '';
 		return (PYTORCH_AUDIO_ENGINES as readonly string[]).includes(id) ? id : 'lavasr';
 	}
-	async function upsampleBlob(blob: Blob, opts: { engine?: string; denoise?: boolean; id: string; signal?: AbortSignal }): Promise<Blob> {
+	async function upsampleBlob(blob: Blob, opts: { engine?: string; denoise?: boolean; chunkSeconds?: number; overlapSeconds?: number; id: string; signal?: AbortSignal }): Promise<Blob> {
 		opts.signal?.throwIfAborted();
 		const monitor = await resolve();
 		opts.signal?.throwIfAborted();
 		const engine = opts.engine || pickEngine(monitor);
+		if (engine === 'universr' && !monitor.audioChunking) {
+			throw new Error('Update and restart this Monitor to use UniverSR chunk processing, then refresh the model list.');
+		}
 		const handle = await startOp({
 			kind: 'audio-tool',
 			app,
@@ -864,6 +872,8 @@ export function createMonitorAudioTools(options: MonitorAudioToolsOptions = {}):
 			tool: 'audio',
 			params: {
 				engine,
+				...(engine === 'universr' && opts.chunkSeconds !== undefined ? { chunk_seconds: String(opts.chunkSeconds) } : {}),
+				...(engine === 'universr' && opts.overlapSeconds !== undefined ? { overlap_seconds: String(opts.overlapSeconds) } : {}),
 				...(opts.denoise ? { denoise: '1' } : {})
 			},
 			body: blob

@@ -1,5 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import AudioChunkControls from './AudioChunkControls.svelte';
+	import { audioChunkingError, DEFAULT_AUDIO_CHUNK_SECONDS, DEFAULT_AUDIO_OVERLAP_SECONDS } from './audioChunking.js';
 	import Scissors from '@lucide/svelte/icons/scissors';
 import Loader2 from '@lucide/svelte/icons/loader-2';
 	import { processVideo } from './process.js';
@@ -84,6 +86,10 @@ import Loader2 from '@lucide/svelte/icons/loader-2';
 	/** Engine → why the picked monitor cannot run it (install steps). */
 	let audioUnavailable = $state<Record<string, string>>({});
 	let audioDenoise = $state(false);
+	let audioChunkSeconds = $state<number | undefined>(DEFAULT_AUDIO_CHUNK_SECONDS);
+	let audioOverlapSeconds = $state<number | undefined>(DEFAULT_AUDIO_OVERLAP_SECONDS);
+	const chunkError = $derived(useAudioUpsample && audioEngineKind(audioEngine) === 'universr'
+		? audioChunkingError(audioChunkSeconds, audioOverlapSeconds) : '');
 	let audioConnectionStatus = $state<'idle' | 'checking' | 'connected' | 'failed'>('idle');
 	let audioMessage = $state('');
 
@@ -228,6 +234,7 @@ import Loader2 from '@lucide/svelte/icons/loader-2';
 
 	async function handleProcess() {
 		if (disabled || isProcessing || (!sourceBlob && !prepareSource)) return;
+		if (chunkError) { onError(chunkError); return; }
 		onProcessStart?.();
 		isProcessing = true;
 		progress = 0;
@@ -255,6 +262,8 @@ import Loader2 from '@lucide/svelte/icons/loader-2';
 		if (useAudioUpsample && audioUpscaler) {
 			const engine = audioEngine;
 			const denoise = audioEngineKind(engine) === 'lavasr' && audioDenoise;
+			const chunking = audioEngineKind(engine) === 'universr'
+				? { chunkSeconds: audioChunkSeconds, overlapSeconds: audioOverlapSeconds } : {};
 			const engineLabel = audioEngines.find((row) => row.id === engine)?.label ?? audioEngineKind(engine);
 			modelStages.push({
 				label: `Upsampling audio to 48 kHz (${engineLabel})...`,
@@ -263,7 +272,7 @@ import Loader2 from '@lucide/svelte/icons/loader-2';
 					const tempId = audioUpscaler.newJobId();
 					const stopPoll = audioUpscaler.pollProgress(tempId, onProgress);
 					return audioUpscaler
-						.upsample(blob, { engine, denoise, id: tempId })
+						.upsample(blob, { engine, denoise, ...chunking, id: tempId })
 						.finally(() => stopPoll());
 				}
 			});
@@ -537,6 +546,9 @@ import Loader2 from '@lucide/svelte/icons/loader-2';
 					</label>
 				</div>
 			</div>
+			{#if audioEngineKind(audioEngine) === 'universr'}
+				<AudioChunkControls bind:chunkSeconds={audioChunkSeconds} bind:overlapSeconds={audioOverlapSeconds} disabled={isProcessing} />
+			{/if}
 		{/if}
 	</div>
 </div>
@@ -547,7 +559,7 @@ import Loader2 from '@lucide/svelte/icons/loader-2';
 	<button
 		class="btn btn-primary process-btn"
 		onclick={handleProcess}
-		disabled={isProcessing || disabled || (!sourceBlob && !prepareSource)}
+		disabled={isProcessing || disabled || !!chunkError || (!sourceBlob && !prepareSource)}
 		data-testid={actionTestId}
 	>
 		{#if isProcessing}

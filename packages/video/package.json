@@ -21,6 +21,8 @@
     "./VideoTransport.svelte": "./src/VideoTransport.svelte",
     "./MediaControlsBar.svelte": "./src/MediaControlsBar.svelte",
     "./VideoProcessPanel.svelte": "./src/VideoProcessPanel.svelte",
+    "./AudioChunkControls.svelte": "./src/AudioChunkControls.svelte",
+    "./audioChunking": "./src/audioChunking.ts",
     "./VideoPlayer.svelte": "./src/VideoPlayer.svelte",
     "./VideoLightbox.svelte": "./src/VideoLightbox.svelte"
   },

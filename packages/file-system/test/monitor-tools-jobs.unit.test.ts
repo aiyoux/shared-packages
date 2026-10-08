@@ -70,10 +70,26 @@ it('reads capabilities.tools/jobs and treats missing keys as false', async () =>
 	assert.equal(caps.rife, true);
 	assert.equal(caps.srmd, false);
 	assert.equal(caps.audio, false);
+	assert.equal(caps.audioChunking, false);
 	assert.equal(caps.jobsApi, false);
 	assert.equal(caps.videoExport, false);
 	assert.equal(caps.audioExport, false);
 	assert.equal((requests[0].init as { targetAddressSpace?: string }).targetAddressSpace, 'loopback');
+});
+
+it('reads the UniverSR chunk capability and rejects an older monitor before uploading', async () => {
+	const caps = await probeToolsFeature('http://127.0.0.1:9847', fetchFrom([
+		{ url: 'http://127.0.0.1:9847/v1/meta', res: ok({ capabilities: { tools: { pytorch: true, audio_chunking: true } } }) }
+	]));
+	assert.equal(caps.audioChunking, true);
+	const { createMonitorAudioTools } = await import('../src/monitor/toolsJobs.ts');
+	const tools = createMonitorAudioTools({ monitor: {
+		profileId: 'old', name: 'Old monitor', baseUrl: 'http://127.0.0.1:9847',
+		rife: false, srmd: false, audio: false, pytorch: true, jobsApi: true
+	} });
+	await assert.rejects(tools.upsample(new Blob(['wav']), {
+		engine: 'universr', chunkSeconds: 2.5, overlapSeconds: 0.1, id: 'job'
+	}), /Update and restart this Monitor/);
 });
 
 it('rejects a non-ok meta with the error envelope detail', async () => {
@@ -98,6 +114,10 @@ it('builds the submit URL with the client request id and tool params', () => {
 	assert.equal(
 		buildToolSubmitUrl('http://127.0.0.1:9847', 'audio', { engine: 'novasr', denoise: '1' }, 'job-3'),
 		'http://127.0.0.1:9847/v1/tools/jobs/audio?engine=novasr&denoise=1&id=job-3'
+	);
+	assert.equal(
+		buildToolSubmitUrl('http://127.0.0.1:9847', 'audio', { engine: 'universr', chunk_seconds: '2.5', overlap_seconds: '0.1' }, 'job-4'),
+		'http://127.0.0.1:9847/v1/tools/jobs/audio?engine=universr&chunk_seconds=2.5&overlap_seconds=0.1&id=job-4'
 	);
 });
 
