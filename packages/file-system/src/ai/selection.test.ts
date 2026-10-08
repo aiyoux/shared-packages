@@ -36,6 +36,12 @@ describe('AI selection store', () => {
 		await wipeDb();
 	});
 
+	it('persists a ref handed over as a proxy (Svelte $state), not just plain objects', async () => {
+		const ref: AiModelRef = { location: 'browser', modelId: 'paddle', sourceId: null, variantId: null };
+		await setAiModelRef('ocr', 'ocr-tool', new Proxy(ref, {}));
+		expect(resolveAiModelRef(await getAiSelectionMap(), 'ocr', 'ocr-tool')).toEqual(ref);
+	});
+
 	it('reads the empty default when nothing has been saved', async () => {
 		expect(await getAiSelectionMap()).toEqual(EMPTY_SELECTION_MAP);
 		expect(resolveAiModelRef(await getAiSelectionMap(), 'chat', 'kb-chat')).toBeNull();

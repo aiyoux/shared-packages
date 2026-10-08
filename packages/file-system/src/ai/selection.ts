@@ -109,7 +109,11 @@ export async function getAiSelectionMap(): Promise<AiSelectionMap> {
 /** Persist the whole map (the settings tab writes derived views) and wake tabs.
  * Returns the stored map without the single-row id. */
 export async function setAiSelectionMap(next: AiSelectionMap): Promise<AiSelectionMap> {
-	const row = { ...asSelectionMap(next), id: 'active' as const };
+	// Plain data only: callers often hand over refs from Svelte `$state`, and
+	// IndexedDB cannot clone a proxy (DataCloneError), so the pick silently
+	// never persisted (OCR engine picker, 2026-10-08). JSON is the map's shape.
+	const plain = JSON.parse(JSON.stringify(asSelectionMap(next))) as AiSelectionMap;
+	const row = { ...plain, id: 'active' as const };
 	const db = await openDb();
 	await new Promise<void>((resolve, reject) => {
 		const tx = db.transaction(HUB_AI_STORE, 'readwrite');
