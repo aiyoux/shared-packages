@@ -69,6 +69,10 @@ type Bag = {
 	ready: Promise<void> | null;
 	hydrated: boolean;
 	heldWrite: boolean;
+	/** Was this page load a refresh (or Back/Forward onto it)? null until read. */
+	pageReopened: boolean | null;
+	/** Windows that have booted in this page load: a refresh reopens each once. */
+	bootedWindows: Set<string>;
 };
 
 function bag(): Bag {
@@ -87,7 +91,9 @@ function bag(): Bag {
 		unwatch: null,
 		ready: null,
 		hydrated: false,
-		heldWrite: false
+		heldWrite: false,
+		pageReopened: null,
+		bootedWindows: new Set()
 	};
 	if (typeof window !== 'undefined') void serviceContextId().then((ctx) => {
 		if (g.__workspaceSessions__ === b && b.joined === joined) joined.attach(createLiveBus<JoinedFrame>('workspace:joined-sessions', `${ctx}:${crypto.randomUUID()}`));
@@ -392,22 +398,53 @@ export function peekWindowRequest(windowId: string): WorkspaceSession | null {
 }
 
 /**
- * A mount starts fresh unless the user explicitly asked this window to show
- * a session. Stored window pointers and recent sessions remain background
- * state; neither is an instruction to reopen a document.
+ * Did this page load reopen the previous one: a refresh, or Back/Forward onto
+ * it? Window pointers live in sessionStorage, so they also outlive a fresh
+ * visit in the same tab, and pane ids repeat across fresh hub loads. The
+ * navigation type is what tells a refresh from a fresh open.
  */
-export function bootWindowSession(
-	windowId: string,
-	app: SessionApp
-): WorkspaceSession | null {
+function pageReopened(): boolean {
+	const b = bag();
+	if (b.pageReopened !== null) return b.pageReopened;
+	let reopened = false;
+	try {
+		const nav = performance.getEntriesByType?.('navigation')[0] as PerformanceNavigationTiming | undefined;
+		reopened = nav?.type === 'reload' || nav?.type === 'back_forward';
+	} catch {
+		reopened = false;
+	}
+	return (b.pageReopened = reopened);
+}
+
+/**
+ * What a window shows when it mounts: an explicit request first; then, after
+ * a refresh, the session this window showed before it, once per page load.
+ * Anything else starts fresh: opening an app from the hub, a link or a new
+ * visit, or mounting the same window again later in this page load. A pointer
+ * that is not reopened is dropped, and the session stays in the list.
+ */
+export function bootWindowSession(windowId: string, app: SessionApp): WorkspaceSession | null {
 	const b = bag();
 	const requested = b.requests.get(windowId);
+	const firstBoot = !b.bootedWindows.has(windowId);
+	b.bootedWindows.add(windowId);
 	if (requested?.app === app) {
 		b.requests.delete(windowId);
 		return requested;
 	}
+	if (firstBoot && pageReopened()) {
+		const pointed = findWorkspaceSession(sessionIdForWindow(windowId));
+		if (pointed?.app === app) return pointed;
+	}
 	detachWindow(windowId);
 	return null;
+}
+
+/** Test hook: treat this page load as a refresh (true) or a fresh open (false). */
+export function _setPageReopenedForTest(reopened: boolean | null): void {
+	const b = bag();
+	b.pageReopened = reopened;
+	b.bootedWindows.clear();
 }
 
 /** Test hook: a fresh list over the given storage. */
@@ -427,4 +464,6 @@ export function _resetWorkspaceSessionsForTest(next?: WorkspaceStorage): void {
 	b.changeListeners.clear();
 	b.closeListeners.clear();
 	b.showListeners.clear();
+	b.pageReopened = null;
+	b.bootedWindows.clear();
 }
