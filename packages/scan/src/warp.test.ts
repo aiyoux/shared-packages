@@ -2,6 +2,28 @@ import { describe, expect, it } from 'vitest';
 import { applyH, destToSrcHomography, homography, warpImageData } from './warp.js';
 import { orderCorners } from './geometry.js';
 
+// Node has no ImageData. warpImageData only needs its shape, so a minimal
+// stand-in lets the pure-JS warp run here instead of skipping every time.
+if (typeof globalThis.ImageData === 'undefined') {
+	class NodeImageData {
+		readonly data: Uint8ClampedArray;
+		readonly width: number;
+		readonly height: number;
+		constructor(a: Uint8ClampedArray | number, b: number, c?: number) {
+			if (typeof a === 'number') {
+				this.width = a;
+				this.height = b;
+				this.data = new Uint8ClampedArray(a * b * 4);
+			} else {
+				this.data = a;
+				this.width = b;
+				this.height = c ?? a.length / 4 / b;
+			}
+		}
+	}
+	(globalThis as { ImageData?: unknown }).ImageData = NodeImageData;
+}
+
 describe('homography', () => {
 	it('maps dest corners back to a translated rectangle', () => {
 		const src = orderCorners([
@@ -34,7 +56,7 @@ describe('homography', () => {
 });
 
 describe('warpImageData', () => {
-	it.skipIf(typeof ImageData === 'undefined')('extracts a solid-color inset without needing OpenCV', () => {
+	it('extracts a solid-color inset without needing OpenCV', () => {
 		const width = 20;
 		const height = 20;
 		const data = new Uint8ClampedArray(width * height * 4);
